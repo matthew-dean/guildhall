@@ -1,6 +1,7 @@
 import { writeManagedTextFileSync } from '@guildhall/persistence'
 
 export const FORBIDDEN_PROJECT_TASK_FIELDS = [
+  'assignedTo',
   'notes',
   'reviewVerdicts',
   'adjudications',

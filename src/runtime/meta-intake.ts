@@ -1,5 +1,4 @@
-import { writeManagedTextFileSync } from '@guildhall/persistence'
-import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
+import { readManagedTextFile, writeManagedTextFile } from '@guildhall/persistence'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { dump as yamlDump, load as yamlLoad } from 'js-yaml'
@@ -7,9 +6,11 @@ import { TaskQueue, type Task } from '@guildhall/core'
 import {
   atomicWriteText,
   getProjectSystemStatePath,
-  getProjectSystemStatePathFromMemoryDir,
   getProjectTranscriptPath,
   inferProjectRootFromMemoryDir,
+  projectStatePathFromMemoryDir,
+  readProjectStateTextFromMemoryDirAsync,
+  writeProjectStateJsonFromMemoryDirAsync,
 } from '@guildhall/sessions'
 import { readWorkspaceConfig, writeWorkspaceConfig } from '@guildhall/config'
 import { appendExploringTranscript } from '@guildhall/tools'
@@ -50,16 +51,29 @@ import {
 export const META_INTAKE_TASK_ID = 'task-meta-intake'
 export const META_INTAKE_DOMAIN = '_meta'
 
-function tasksPathFor(memoryDir: string): string {
-  return getProjectSystemStatePathFromMemoryDir(memoryDir, 'TASKS.json')
-}
-
 function agentSettingsPathFor(memoryDir: string): string {
-  return getProjectSystemStatePathFromMemoryDir(memoryDir, AGENT_SETTINGS_FILENAME)
+  return projectStatePathFromMemoryDir(memoryDir, AGENT_SETTINGS_FILENAME)
 }
 
 async function readQueue(memoryDir: string): Promise<TaskQueue> {
-  const raw = await readManagedTextFile(tasksPathFor(memoryDir), 'utf-8')
+  const raw = await readProjectStateTextFromMemoryDirAsync(memoryDir, 'TASKS.json').catch((err: unknown) => {
+    if (
+      err &&
+      typeof err === 'object' &&
+      'code' in err &&
+      (err as { code?: unknown }).code === 'ENOENT'
+    ) {
+      return null
+    }
+    throw err
+  })
+  if (raw === null) {
+    return TaskQueue.parse({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      tasks: [],
+    })
+  }
   const parsed = JSON.parse(raw)
   if (Array.isArray(parsed)) {
     return { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
@@ -68,7 +82,7 @@ async function readQueue(memoryDir: string): Promise<TaskQueue> {
 }
 
 async function writeQueue(memoryDir: string, queue: TaskQueue): Promise<void> {
-  writeManagedTextFileSync(tasksPathFor(memoryDir), JSON.stringify(queue, null, 2) + '\n')
+  await writeProjectStateJsonFromMemoryDirAsync(memoryDir, 'TASKS.json', queue)
 }
 
 const META_INTAKE_SEED = `You are bootstrapping a new Guildhall workspace. Your job in this conversation is to infer the internal routing slices the single local coordinator should use for this codebase, then infer initial lever positions from the user's project-guidance answers.

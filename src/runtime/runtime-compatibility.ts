@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { getProjectLocalHistoryDir, getProjectStateDir } from '@guildhall/sessions'
+import { getProjectLocalHistoryDir, getProjectSystemStatePath } from '@guildhall/sessions'
 
 export interface ProjectRuntimeManifest {
   version: 1
@@ -32,7 +32,7 @@ function manifestPath(projectRoot: string): string {
 }
 
 function legacyManifestPath(projectRoot: string): string {
-  return join(getProjectStateDir(projectRoot), 'runtime.json')
+  return getProjectSystemStatePath(projectRoot, 'runtime.json')
 }
 
 function parseVersion(version: string): number[] | null {

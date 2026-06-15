@@ -1,8 +1,10 @@
-import { writeManagedTextFileSync } from '@guildhall/persistence'
-import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
+import { readManagedTextFile, writeManagedTextFileSync } from '@guildhall/persistence'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
-import { appendTaskEvidence as appendStoredTaskEvidence, atomicWriteText } from '@guildhall/sessions'
+import {
+  appendTaskEvidence as appendStoredTaskEvidence,
+  getProjectSystemStatePathFromMemoryDir,
+} from '@guildhall/sessions'
 import {
   createCapabilityRequest,
   listCapabilityRequests,
@@ -22,7 +24,7 @@ export async function appendTaskEvidence(
   input: AppendTaskEvidenceInput,
 ): Promise<string> {
   const now = new Date().toISOString()
-  const progressPath = path.join(ctx.projectStateDir, 'PROGRESS.md')
+  const progressPath = getProjectSystemStatePathFromMemoryDir(ctx.projectStateDir, 'PROGRESS.md')
   const existing = await readOptional(progressPath, '# Progress\n')
   const entry = [
     '',

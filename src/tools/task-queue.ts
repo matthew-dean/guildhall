@@ -21,7 +21,7 @@ import {
   parseAcceptanceCriteriaFromSpec,
   renderStructuredSpecMarkdown,
 } from '@guildhall/core'
-import { appendTaskEvidence, atomicWriteText, inferProjectRootFromMemoryDir } from '@guildhall/sessions'
+import { appendTaskEvidence, atomicWriteText, inferProjectRootFromMemoryDir, upsertTaskRuntimeState } from '@guildhall/sessions'
 import { writeProjectTaskQueue } from '@guildhall/runtime/project-state-boundary'
 
 const TASKS_PATH_SCHEMA = z.string().describe('Absolute path to the TASKS.json file')
@@ -311,6 +311,7 @@ export async function updateTask(
     task.updatedAt = new Date().toISOString()
     queue.lastUpdated = new Date().toISOString()
 
+    await persistUpdateTaskRuntimeState(input.tasksPath, task)
     writeProjectTaskQueue(input.tasksPath, queue)
     await appendUpdateTaskEvidence({
       tasksPath: input.tasksPath,
@@ -322,6 +323,24 @@ export async function updateTask(
   } catch (err) {
     return { success: false, error: String(err) }
   }
+}
+
+function projectRootForTaskState(tasksPath: string, task: z.infer<typeof Task>): string {
+  const stateDir = path.dirname(tasksPath)
+  if (path.basename(stateDir) === 'project-state' && path.isAbsolute(task.projectPath)) {
+    return task.projectPath
+  }
+  return inferProjectRootFromMemoryDir(stateDir)
+}
+
+async function persistUpdateTaskRuntimeState(tasksPath: string, task: z.infer<typeof Task>): Promise<void> {
+  await upsertTaskRuntimeState(projectRootForTaskState(tasksPath, task), task.id, {
+    assignedTo: Object.prototype.hasOwnProperty.call(task, 'assignedTo') ? task.assignedTo ?? null : null,
+    ...(typeof task.revisionCount === 'number' ? { revisionCount: task.revisionCount } : {}),
+    ...(task.retryWindow ? { retryWindow: task.retryWindow } : {}),
+    ...(typeof task.remediationAttempts === 'number' ? { remediationAttempts: task.remediationAttempts } : {}),
+    updatedAt: task.updatedAt,
+  })
 }
 
 async function appendUpdateTaskEvidence(input: {

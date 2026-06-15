@@ -3,7 +3,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { bootstrapWorkspace } from '@guildhall/config'
-import { getProjectStateDir } from '@guildhall/sessions'
+import { getProjectStateDir, projectStatePathFromMemoryDir } from '@guildhall/sessions'
 import { buildServeApp } from '../serve.js'
 import { DESIGN_STORIES_FILE } from '../design-preview.js'
 
@@ -34,7 +34,9 @@ describe('GET /api/project/design-system/catalog', () => {
   it('returns the normalized interactable catalog packet', async () => {
     const memoryDir = getProjectStateDir(tmpDir)
     await fs.mkdir(memoryDir, { recursive: true })
-    await fs.writeFile(path.join(memoryDir, DESIGN_STORIES_FILE), [
+    const storiesPath = projectStatePathFromMemoryDir(memoryDir, DESIGN_STORIES_FILE)
+    await fs.mkdir(path.dirname(storiesPath), { recursive: true })
+    await fs.writeFile(storiesPath, [
       'version: 1',
       'stories:',
       '  - id: pantry-filter.default',

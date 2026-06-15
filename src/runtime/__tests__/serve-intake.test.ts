@@ -4,12 +4,15 @@ import path from 'node:path'
 import os from 'node:os'
 import { bootstrapWorkspace } from '@guildhall/config'
 import { TaskQueue } from '@guildhall/core'
-import { getProjectStateDir } from '@guildhall/sessions'
+import {
+  readProjectStateJsonAsync,
+  readProjectStateTextAsync,
+  writeProjectStateTextAsync,
+} from '@guildhall/sessions'
 import { buildServeApp } from '../serve.js'
 
 let tmpDir: string
 let dataDir: string
-let tasksPath: string
 let projectId: string
 
 beforeEach(async () => {
@@ -41,7 +44,6 @@ beforeEach(async () => {
       },
     ],
   }).id ?? path.basename(tmpDir)
-  tasksPath = path.join(getProjectStateDir(tmpDir), 'TASKS.json')
 })
 
 afterEach(async () => {
@@ -51,8 +53,21 @@ afterEach(async () => {
 })
 
 async function readQueue(): Promise<TaskQueue> {
-  const raw = await fs.readFile(tasksPath, 'utf-8')
-  const parsed = JSON.parse(raw)
+  const parsed = await readProjectStateJsonAsync<unknown>(tmpDir, 'TASKS.json').catch((err: unknown) => {
+    if (
+      err &&
+      typeof err === 'object' &&
+      'code' in err &&
+      (err as { code?: unknown }).code === 'ENOENT'
+    ) {
+      return {
+        version: 1,
+        lastUpdated: new Date().toISOString(),
+        tasks: [],
+      }
+    }
+    throw err
+  })
   if (Array.isArray(parsed)) {
     return { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
   }
@@ -449,13 +464,13 @@ describe('POST /api/project/request', () => {
 
 describe('project check-in bounded chat endpoints', () => {
   it('starts and answers project check-in through bounded chat', async () => {
-    await fs.writeFile(
-      path.join(getProjectStateDir(tmpDir), 'project-brief.md'),
+    await writeProjectStateTextAsync(
+      tmpDir,
+      'project-brief.md',
       [
         'Narrative Harness is fiction-writing software for building, drafting, and revising a coherent novel.',
         'The project includes author voice, reader knowledge, coherence reviewers, and quiet commercial editor direction.',
       ].join('\n'),
-      'utf-8',
     )
 
     const { app } = buildServeApp({ projectPath: tmpDir })
@@ -503,14 +518,14 @@ describe('project check-in bounded chat endpoints', () => {
   })
 
   it('reuses the same active project check-in session when reopened later', async () => {
-    await fs.writeFile(
-      path.join(getProjectStateDir(tmpDir), 'project-brief.md'),
+    await writeProjectStateTextAsync(
+      tmpDir,
+      'project-brief.md',
       [
         'Narrative Harness is fiction-writing software for building, drafting, and revising a coherent novel.',
         'The project includes author voice, reader knowledge, coherence reviewers, and quiet commercial editor direction.',
         'The UI should feel quiet and commercially credible.',
       ].join('\n'),
-      'utf-8',
     )
 
     const { app } = buildServeApp({ projectPath: tmpDir })
@@ -551,14 +566,14 @@ describe('project check-in bounded chat endpoints', () => {
   })
 
   it('closes project check-in with a persisted done receipt after the final answer', async () => {
-    await fs.writeFile(
-      path.join(getProjectStateDir(tmpDir), 'project-brief.md'),
+    await writeProjectStateTextAsync(
+      tmpDir,
+      'project-brief.md',
       [
         'Narrative Harness is fiction-writing software for building, drafting, and revising a coherent novel.',
         'The project includes author voice, reader knowledge, coherence reviewers, and quiet commercial editor direction.',
         'The UI should feel quiet and commercially credible.',
       ].join('\n'),
-      'utf-8',
     )
 
     const { app } = buildServeApp({ projectPath: tmpDir })
@@ -604,10 +619,7 @@ describe('project check-in bounded chat endpoints', () => {
       },
     })
 
-    const persistedRaw = await fs.readFile(
-      path.join(getProjectStateDir(tmpDir), 'bounded-chat', `${sessionId}.json`),
-      'utf-8',
-    )
+    const persistedRaw = await readProjectStateTextAsync(tmpDir, path.join('bounded-chat', `${sessionId}.json`))
     const persisted = JSON.parse(persistedRaw) as {
       acceptedState?: { decisions?: Array<{ decision: string }> }
       closure?: { outcome?: string; summary?: string }

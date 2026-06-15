@@ -1,10 +1,12 @@
-import { writeManagedTextFileSync } from '@guildhall/persistence'
-import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
 import { TaskQueue, TERMINAL_TASK_STATUSES, type AgentQuestion, type TaskStatus } from '@guildhall/core'
-import { atomicWriteText, getProjectSystemStatePathFromMemoryDir } from '@guildhall/sessions'
+import {
+  atomicWriteText,
+  readProjectStateTextFromMemoryDirAsync,
+  writeProjectStateJsonFromMemoryDirAsync,
+} from '@guildhall/sessions'
 
 import { approveSpec, resumeExploring } from './intake.js'
 import { reviewInProcessWorkForGuildhallImprovements } from './improvement-review.js'
@@ -309,7 +311,7 @@ async function resolveScopedAutomationBlockers(input: {
 }
 
 async function readQueue(memoryDir: string): Promise<TaskQueue> {
-  const raw = await readManagedTextFile(getProjectSystemStatePathFromMemoryDir(memoryDir, 'TASKS.json'), 'utf8')
+  const raw = await readProjectStateTextFromMemoryDirAsync(memoryDir, 'TASKS.json')
   const parsed = JSON.parse(raw)
   return Array.isArray(parsed)
     ? { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
@@ -317,7 +319,7 @@ async function readQueue(memoryDir: string): Promise<TaskQueue> {
 }
 
 async function writeQueue(memoryDir: string, queue: TaskQueue): Promise<void> {
-  writeManagedTextFileSync(getProjectSystemStatePathFromMemoryDir(memoryDir, 'TASKS.json'), `${JSON.stringify(queue, null, 2)}\n`)
+  await writeProjectStateJsonFromMemoryDirAsync(memoryDir, 'TASKS.json', queue)
 }
 
 function automaticQuestionAnswer(question: AgentQuestion, ownerIntent: string | undefined): string {

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { getProjectLocalHistoryDir } from '@guildhall/sessions'
+import { getProjectLocalHistoryDir, getProjectSystemStatePath } from '@guildhall/sessions'
 import {
   compareVersions,
   projectRuntimeCompatibilityBlocker,
@@ -33,8 +33,10 @@ describe('compareVersions', () => {
 
 describe('projectRuntimeCompatibilityBlocker', () => {
   it('blocks when the project requires a newer Guildhall or unknown state feature', async () => {
+    const runtimePath = getProjectSystemStatePath(projectRoot, 'runtime.json')
+    await fs.mkdir(path.dirname(runtimePath), { recursive: true })
     await fs.writeFile(
-      path.join(projectRoot, '.guildhall', 'runtime.json'),
+      runtimePath,
       JSON.stringify({
         version: 1,
         minGuildhallVersion: '2.0.0',
@@ -49,7 +51,7 @@ describe('projectRuntimeCompatibilityBlocker', () => {
     })
 
     await fs.writeFile(
-      path.join(projectRoot, '.guildhall', 'runtime.json'),
+      runtimePath,
       JSON.stringify({
         version: 1,
         minGuildhallVersion: '0.1.0',

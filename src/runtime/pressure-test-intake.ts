@@ -3,7 +3,14 @@ import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { z } from 'zod'
-import { atomicWriteText, getProjectSystemStatePath, inferProjectRootFromMemoryDir } from '@guildhall/sessions'
+import {
+  atomicWriteText,
+  listProjectStateDirFromMemoryDir,
+  listProjectStateDirFromMemoryDirAsync,
+  projectRootFromMemoryDir,
+  projectStatePath,
+  projectStatePathFromMemoryDir,
+} from '@guildhall/sessions'
 import { readCachedJson } from './file-read-cache.js'
 import { listBoundedChatSessions } from './bounded-chat.js'
 import {
@@ -258,13 +265,11 @@ export async function inspectPressureTestEvidence(input: {
 }
 
 export function listPressureTestIntakes(memoryDir: string): PressureTestIntake[] {
-  const dir = pressureTestDir(memoryDir)
-  if (!fs.existsSync(dir)) return []
-  return fs.readdirSync(dir)
+  return listProjectStateDirFromMemoryDir(memoryDir, 'pressure-test-intake')
     .filter(name => name.endsWith('.json'))
     .flatMap((name) => {
       try {
-        const raw = JSON.parse(readManagedTextFileSync(path.join(dir, name), 'utf-8'))
+        const raw = JSON.parse(readManagedTextFileSync(projectStatePathFromMemoryDir(memoryDir, path.join('pressure-test-intake', name)), 'utf-8'))
         return [normalizePressureTestIntake(PressureTestIntake.parse(raw))]
       } catch {
         return []
@@ -274,16 +279,12 @@ export function listPressureTestIntakes(memoryDir: string): PressureTestIntake[]
 }
 
 export async function listPressureTestIntakesAsync(memoryDir: string): Promise<PressureTestIntake[]> {
-  const dir = pressureTestDir(memoryDir)
-  const names = await fsp.readdir(dir).catch((err) => {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return []
-    throw err
-  })
+  const names = await listProjectStateDirFromMemoryDirAsync(memoryDir, 'pressure-test-intake')
   const intakes = await Promise.all(
     names
       .filter(name => name.endsWith('.json'))
       .map(async (name) => {
-        const raw = await readCachedJson<unknown>(path.join(dir, name)).catch(() => null)
+        const raw = await readCachedJson<unknown>(projectStatePathFromMemoryDir(memoryDir, path.join('pressure-test-intake', name))).catch(() => null)
         if (!raw) return null
         try {
           return normalizePressureTestIntake(PressureTestIntake.parse(raw))
@@ -364,11 +365,11 @@ export function renderPressureTestSpec(intake: PressureTestIntake): string {
 }
 
 export function pressureTestPath(memoryDir: string, intakeId: string): string {
-  return path.join(pressureTestDir(memoryDir), `${intakeId}.json`)
+  return projectStatePathFromMemoryDir(memoryDir, path.join('pressure-test-intake', `${intakeId}.json`))
 }
 
 function pressureTestDir(memoryDir: string): string {
-  return path.join(memoryDir, 'pressure-test-intake')
+  return projectStatePathFromMemoryDir(memoryDir, 'pressure-test-intake')
 }
 
 async function createProjectQuestionIntake(
@@ -531,10 +532,10 @@ async function answerProjectQuestion(
 }
 
 async function loadProjectQuestionEvidenceFiles(memoryDir: string): Promise<ProjectQuestionEvidenceFile[]> {
-  const projectRoot = inferProjectRootFromMemoryDir(memoryDir)
+  const projectRoot = projectRootFromMemoryDir(memoryDir)
   const candidates = [
-    { file: getProjectSystemStatePath(projectRoot, 'project-brief.md'), source: 'project-brief.md' },
-    { file: getProjectSystemStatePath(projectRoot, 'TASKS.json'), source: 'TASKS.json' },
+    { file: projectStatePath(projectRoot, 'project-brief.md'), source: 'project-brief.md' },
+    { file: projectStatePath(projectRoot, 'TASKS.json'), source: 'TASKS.json' },
     { file: path.join(projectRoot, 'README.md'), source: 'README.md' },
     { file: path.join(projectRoot, 'docs', 'index.md'), source: 'docs/index.md' },
   ]
@@ -941,7 +942,7 @@ function extractLanguageMapCandidates(domain: z.infer<typeof PressureTestDomain>
 
 async function inspectEvidenceFiles(memoryDir: string, projectPath: string): Promise<Array<{ fact: string; source: string }>> {
   const candidates = [
-    { file: path.join(memoryDir, 'project-brief.md'), source: 'memory/project-brief.md' },
+    { file: projectStatePathFromMemoryDir(memoryDir, 'project-brief.md'), source: 'memory/project-brief.md' },
     { file: path.join(projectPath, 'README.md'), source: 'README.md' },
     { file: path.join(projectPath, 'docs', 'README.md'), source: 'docs/README.md' },
   ]

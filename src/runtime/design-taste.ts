@@ -3,6 +3,7 @@ import path from 'node:path'
 import yaml from 'js-yaml'
 import { z } from 'zod'
 import { guildhallHomeDir } from '@guildhall/config'
+import { getProjectSystemStatePath, inferProjectRootFromMemoryDir } from '@guildhall/sessions'
 
 export const DESIGN_TASTE_FILE = 'design-taste.yaml'
 
@@ -104,6 +105,10 @@ export const EffectiveDesignTastePacket = z.object({
 export type EffectiveDesignTastePacket = z.infer<typeof EffectiveDesignTastePacket>
 
 export function designTastePath(memoryDir: string): string {
+  const base = path.basename(path.resolve(memoryDir))
+  if (base === '.guildhall' || base === 'memory') {
+    return getProjectSystemStatePath(inferProjectRootFromMemoryDir(memoryDir), DESIGN_TASTE_FILE)
+  }
   return path.join(memoryDir, DESIGN_TASTE_FILE)
 }
 

@@ -402,7 +402,7 @@ export async function rerunWorkspaceImportTask(
   queue.lastUpdated = now
   await writeQueue(input.memoryDir, queue)
 
-  const goalsPath = path.join(input.memoryDir, WORKSPACE_GOALS_FILE)
+  const goalsPath = getProjectSystemStatePathFromMemoryDir(input.memoryDir, WORKSPACE_GOALS_FILE)
   if (await fs.stat(goalsPath).then(() => true).catch(() => false)) {
     try {
       const raw = JSON.parse(await readManagedTextFile(goalsPath, 'utf-8')) as Record<string, unknown>

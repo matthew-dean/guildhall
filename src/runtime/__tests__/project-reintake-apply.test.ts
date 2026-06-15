@@ -2,6 +2,11 @@ import { describe, expect, it } from 'vitest'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import {
+  readProjectStateJsonFromMemoryDirAsync,
+  writeProjectStateJsonFromMemoryDirAsync,
+  writeProjectStateTextFromMemoryDirAsync,
+} from '@guildhall/sessions'
 
 import {
   applyProjectReintakeDraft,
@@ -39,10 +44,19 @@ function task(overrides: Record<string, unknown>) {
 }
 
 async function makeState(tasks: unknown[]) {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-reintake-'))
-  await fs.writeFile(path.join(dir, 'TASKS.json'), JSON.stringify({ version: 1, lastUpdated: now, tasks }, null, 2))
-  await fs.writeFile(path.join(dir, 'PROGRESS.md'), '# Progress\n')
-  return dir
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-reintake-'))
+  const memoryDir = path.join(projectRoot, '.guildhall')
+  await writeProjectStateJsonFromMemoryDirAsync(memoryDir, 'TASKS.json', { version: 1, lastUpdated: now, tasks })
+  await writeProjectStateTextFromMemoryDirAsync(memoryDir, 'PROGRESS.md', '# Progress\n')
+  return memoryDir
+}
+
+async function readQueue(memoryDir: string): Promise<{ tasks: Array<Record<string, any>> }> {
+  return readProjectStateJsonFromMemoryDirAsync<{ tasks: Array<Record<string, any>> }>(memoryDir, 'TASKS.json')
+}
+
+async function writeQueue(memoryDir: string, tasks: unknown[]): Promise<void> {
+  await writeProjectStateJsonFromMemoryDirAsync(memoryDir, 'TASKS.json', { version: 1, lastUpdated: now, tasks })
 }
 
 const loomaAudit = [
@@ -69,14 +83,14 @@ describe('project re-intake apply', () => {
     const result = await applyProjectReintakeDraft({ memoryDir, now })
     expect(result).toMatchObject({ success: true, appliedGroups: 1 })
 
-    const queue = JSON.parse(await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf-8'))
+    const queue = await readQueue(memoryDir)
     const reframed = queue.tasks.find((candidate: { id?: string }) => candidate.id === 'task-039')
     expect(reframed).toMatchObject({
       title: 'Build AlertDialog',
       status: 'import_draft',
       acceptanceCriteria: expect.arrayContaining([expect.objectContaining({ id: 'source-implementation' })]),
     })
-    expect(reframed.notes.some((note: { content?: string }) => note.content?.includes('Re-intake reframed this task'))).toBe(true)
+    expect(reframed!.notes.some((note: { content?: string }) => note.content?.includes('Re-intake reframed this task'))).toBe(true)
   })
 
   it('shelves stale weak pre-implementation specs instead of carrying them forward', async () => {
@@ -102,7 +116,7 @@ describe('project re-intake apply', () => {
     const result = await applyProjectReintakeDraft({ memoryDir, now })
     expect(result.success).toBe(true)
 
-    const queue = JSON.parse(await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf-8'))
+    const queue = await readQueue(memoryDir)
     expect(queue.tasks.find((candidate: { id?: string }) => candidate.id === 'task-tooltip')).toMatchObject({
       status: 'shelved',
       shelveReason: expect.objectContaining({
@@ -127,7 +141,7 @@ describe('project re-intake apply', () => {
     const result = await applyProjectReintakeDraft({ memoryDir, now })
     expect(result.success).toBe(true)
 
-    const queue = JSON.parse(await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf-8'))
+    const queue = await readQueue(memoryDir)
     expect(queue.tasks.find((candidate: { id?: string }) => candidate.id === 'task-old')).toMatchObject({
       status: 'shelved',
       shelveReason: expect.objectContaining({ code: 'no_op', source: 'policy' }),
@@ -154,7 +168,7 @@ describe('project re-intake apply', () => {
     const result = await applyProjectReintakeDraft({ memoryDir, selectedGroupIds: ['archive-unsupported'], now })
     expect(result).toMatchObject({ success: true, appliedGroups: 1 })
 
-    const queue = JSON.parse(await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf-8'))
+    const queue = await readQueue(memoryDir)
     expect(queue.tasks.some((candidate: { id?: string }) => candidate.id === 'task-alert-dialog')).toBe(false)
     expect(queue.tasks.find((candidate: { id?: string }) => candidate.id === 'task-old')?.status).toBe('shelved')
   })
@@ -167,7 +181,7 @@ describe('project re-intake apply', () => {
       tasks: [],
     })
     await writeProjectReintakeDraft(memoryDir, draft)
-    await fs.writeFile(path.join(memoryDir, 'TASKS.json'), JSON.stringify({ version: 1, lastUpdated: now, tasks: [task({ id: 'new-task' })] }, null, 2))
+    await writeQueue(memoryDir, [task({ id: 'new-task' })])
 
     const result = await applyProjectReintakeDraft({ memoryDir, now })
     expect(result).toMatchObject({

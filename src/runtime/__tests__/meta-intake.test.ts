@@ -25,7 +25,12 @@ import {
   makeDefaultSettings,
   saveLeverSettings,
 } from '@guildhall/levers'
-import { getProjectTranscriptPath } from '@guildhall/sessions'
+import {
+  getProjectTranscriptPath,
+  projectStatePathFromMemoryDir,
+  readProjectStateJsonFromMemoryDirAsync,
+  writeProjectStateJsonFromMemoryDirAsync,
+} from '@guildhall/sessions'
 
 // ---------------------------------------------------------------------------
 // FR-14 coordinator bootstrapping via meta-intake
@@ -58,12 +63,19 @@ afterEach(async () => {
 })
 
 async function readQueue(): Promise<TaskQueue> {
-  const raw = await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf-8')
-  const parsed = JSON.parse(raw)
+  const parsed = await readProjectStateJsonFromMemoryDirAsync<unknown>(memoryDir, 'TASKS.json')
   if (Array.isArray(parsed)) {
     return { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
   }
   return TaskQueue.parse(parsed)
+}
+
+async function writeQueue(queue: TaskQueue): Promise<void> {
+  await writeProjectStateJsonFromMemoryDirAsync(memoryDir, 'TASKS.json', queue)
+}
+
+function statePath(relativePath: string): string {
+  return projectStatePathFromMemoryDir(memoryDir, relativePath)
 }
 
 describe('workspaceNeedsMetaIntake', () => {
@@ -285,11 +297,7 @@ coordinators:
     const queue = await readQueue()
     const task = queue.tasks.find((t) => t.id === META_INTAKE_TASK_ID)!
     task.spec = sampleDraft
-    await fs.writeFile(
-      path.join(memoryDir, 'TASKS.json'),
-      JSON.stringify(queue, null, 2),
-      'utf-8',
-    )
+    await writeQueue(queue)
   })
 
   it('merges drafts into guildhall.yaml and closes the task', async () => {
@@ -344,11 +352,7 @@ coordinators:
   it('errors when the spec has no yaml codefence', async () => {
     const queue = await readQueue()
     queue.tasks.find((t) => t.id === META_INTAKE_TASK_ID)!.spec = 'just prose, no draft'
-    await fs.writeFile(
-      path.join(memoryDir, 'TASKS.json'),
-      JSON.stringify(queue, null, 2),
-      'utf-8',
-    )
+    await writeQueue(queue)
     const result = await approveMetaIntake({ workspacePath: tmpDir, memoryDir })
     expect(result.success).toBe(false)
     expect(result.error).toContain('codefence')
@@ -357,11 +361,7 @@ coordinators:
   it('errors when there is no meta-intake task', async () => {
     const queue = await readQueue()
     queue.tasks = queue.tasks.filter((t) => t.id !== META_INTAKE_TASK_ID)
-    await fs.writeFile(
-      path.join(memoryDir, 'TASKS.json'),
-      JSON.stringify(queue, null, 2),
-      'utf-8',
-    )
+    await writeQueue(queue)
     const result = await approveMetaIntake({ workspacePath: tmpDir, memoryDir })
     expect(result.success).toBe(false)
     expect(result.error).toContain(META_INTAKE_TASK_ID)
@@ -370,11 +370,7 @@ coordinators:
   it('errors when the meta-intake task has no spec yet', async () => {
     const queue = await readQueue()
     delete queue.tasks.find((t) => t.id === META_INTAKE_TASK_ID)!.spec
-    await fs.writeFile(
-      path.join(memoryDir, 'TASKS.json'),
-      JSON.stringify(queue, null, 2),
-      'utf-8',
-    )
+    await writeQueue(queue)
     const result = await approveMetaIntake({ workspacePath: tmpDir, memoryDir })
     expect(result.success).toBe(false)
     expect(result.error).toContain('no spec')
@@ -479,7 +475,7 @@ levers:
 describe('mergeLeverInferences', () => {
   it('writes inferred positions with setBy=spec-agent-intake and the supplied rationale', async () => {
     // Seed default settings.
-    const settingsPath = path.join(memoryDir, AGENT_SETTINGS_FILENAME)
+    const settingsPath = statePath(AGENT_SETTINGS_FILENAME)
     await fs.mkdir(memoryDir, { recursive: true })
     await saveLeverSettings({ path: settingsPath, settings: makeDefaultSettings() })
 
@@ -540,7 +536,7 @@ describe('mergeLeverInferences', () => {
   })
 
   it('rejects unknown lever names without crashing', async () => {
-    const settingsPath = path.join(memoryDir, AGENT_SETTINGS_FILENAME)
+    const settingsPath = statePath(AGENT_SETTINGS_FILENAME)
     await fs.mkdir(memoryDir, { recursive: true })
     await saveLeverSettings({ path: settingsPath, settings: makeDefaultSettings() })
     const result = await mergeLeverInferences(memoryDir, {
@@ -564,7 +560,7 @@ describe('mergeLeverInferences', () => {
   })
 
   it('throws when an inferred position fails schema validation (bad picklist value)', async () => {
-    const settingsPath = path.join(memoryDir, AGENT_SETTINGS_FILENAME)
+    const settingsPath = statePath(AGENT_SETTINGS_FILENAME)
     await fs.mkdir(memoryDir, { recursive: true })
     await saveLeverSettings({ path: settingsPath, settings: makeDefaultSettings() })
     await expect(
@@ -586,7 +582,7 @@ describe('approveMetaIntake + lever inferences (AC-14 e2e)', () => {
     await createMetaIntakeTask({ memoryDir, projectPath: tmpDir })
     // Seed default lever settings so the merge has something to load.
     await saveLeverSettings({
-      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      path: statePath(AGENT_SETTINGS_FILENAME),
       settings: makeDefaultSettings(),
     })
 
@@ -623,11 +619,7 @@ levers:
 `
     const queue = await readQueue()
     queue.tasks.find((t) => t.id === META_INTAKE_TASK_ID)!.spec = spec
-    await fs.writeFile(
-      path.join(memoryDir, 'TASKS.json'),
-      JSON.stringify(queue, null, 2),
-      'utf-8',
-    )
+    await writeQueue(queue)
 
     const result = await approveMetaIntake({ workspacePath: tmpDir, memoryDir })
     expect(result.success).toBe(true)
@@ -638,7 +630,7 @@ levers:
     expect(result.leversSet!.overrides.looma).toEqual(['reviewer_mode'])
 
     const settings = await loadLeverSettings({
-      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      path: statePath(AGENT_SETTINGS_FILENAME),
     })
     expect(settings.project.business_envelope_strictness).toMatchObject({
       position: 'strict',
@@ -670,11 +662,7 @@ coordinators:
     autonomousDecisions: []
     escalationTriggers: []
 \`\`\``
-    await fs.writeFile(
-      path.join(memoryDir, 'TASKS.json'),
-      JSON.stringify(queue, null, 2),
-      'utf-8',
-    )
+    await writeQueue(queue)
     const result = await approveMetaIntake({ workspacePath: tmpDir, memoryDir })
     expect(result.success).toBe(true)
     expect(result.leversSet).toBeUndefined()
@@ -683,7 +671,7 @@ coordinators:
   it('returns an error (and does not close the task) when an inferred lever is schema-invalid', async () => {
     await createMetaIntakeTask({ memoryDir, projectPath: tmpDir })
     await saveLeverSettings({
-      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      path: statePath(AGENT_SETTINGS_FILENAME),
       settings: makeDefaultSettings(),
     })
     const queue = await readQueue()
@@ -705,11 +693,7 @@ levers:
       position: bogus_value
       rationale: typo from the spec agent
 \`\`\``
-    await fs.writeFile(
-      path.join(memoryDir, 'TASKS.json'),
-      JSON.stringify(queue, null, 2),
-      'utf-8',
-    )
+    await writeQueue(queue)
 
     const result = await approveMetaIntake({ workspacePath: tmpDir, memoryDir })
     expect(result.success).toBe(false)
@@ -852,11 +836,7 @@ bootstrap:
 \`\`\``
     const queue = await readQueue()
     queue.tasks.find((t) => t.id === META_INTAKE_TASK_ID)!.spec = spec
-    await fs.writeFile(
-      path.join(memoryDir, 'TASKS.json'),
-      JSON.stringify(queue, null, 2),
-      'utf-8',
-    )
+    await writeQueue(queue)
 
     const result = await approveMetaIntake({ workspacePath: tmpDir, memoryDir })
     expect(result.success).toBe(true)
@@ -892,11 +872,7 @@ bootstrap:
 \`\`\``
     const queue = await readQueue()
     queue.tasks.find((t) => t.id === META_INTAKE_TASK_ID)!.spec = spec
-    await fs.writeFile(
-      path.join(memoryDir, 'TASKS.json'),
-      JSON.stringify(queue, null, 2),
-      'utf-8',
-    )
+    await writeQueue(queue)
 
     const result = await approveMetaIntake({ workspacePath: tmpDir, memoryDir })
     expect(result.success).toBe(true)
@@ -919,11 +895,7 @@ coordinators:
 \`\`\``
     const queue = await readQueue()
     queue.tasks.find((t) => t.id === META_INTAKE_TASK_ID)!.spec = spec
-    await fs.writeFile(
-      path.join(memoryDir, 'TASKS.json'),
-      JSON.stringify(queue, null, 2),
-      'utf-8',
-    )
+    await writeQueue(queue)
 
     const result = await approveMetaIntake({ workspacePath: tmpDir, memoryDir })
     expect(result.success).toBe(true)

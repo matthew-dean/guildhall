@@ -4,7 +4,12 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
-import { atomicWriteText, getProjectSystemStatePathFromMemoryDir } from '@guildhall/sessions'
+import {
+  atomicWriteText,
+  listProjectStateDirFromMemoryDir,
+  listProjectStateDirFromMemoryDirAsync,
+  projectStatePathFromMemoryDir,
+} from '@guildhall/sessions'
 import { readCachedJson } from './file-read-cache.js'
 import {
   applyBoundedChatTransition,
@@ -544,27 +549,21 @@ export async function applyBoundedChatCoordinatorAction(
 }
 
 export function listBoundedChatSessions(memoryDir: string): BoundedChatSession[] {
-  const dir = boundedChatDir(memoryDir)
-  if (!fs.existsSync(dir)) return []
-  return fs.readdirSync(dir)
+  return listProjectStateDirFromMemoryDir(memoryDir, 'bounded-chat')
     .filter(file => file.endsWith('.json'))
     .map(file => {
-      const raw = readManagedTextFileSync(path.join(dir, file), 'utf-8')
+      const raw = readManagedTextFileSync(projectStatePathFromMemoryDir(memoryDir, path.join('bounded-chat', file)), 'utf-8')
       return BoundedChatSession.parse(JSON.parse(raw))
     })
 }
 
 export async function listBoundedChatSessionsAsync(memoryDir: string): Promise<BoundedChatSession[]> {
-  const dir = boundedChatDir(memoryDir)
-  const names = await fsp.readdir(dir).catch((err) => {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return []
-    throw err
-  })
+  const names = await listProjectStateDirFromMemoryDirAsync(memoryDir, 'bounded-chat')
   const sessions = await Promise.all(
     names
       .filter(file => file.endsWith('.json'))
       .map(async (file) => {
-        const raw = await readCachedJson<unknown>(path.join(dir, file)).catch(() => null)
+        const raw = await readCachedJson<unknown>(projectStatePathFromMemoryDir(memoryDir, path.join('bounded-chat', file))).catch(() => null)
         return raw ? BoundedChatSession.parse(raw) : null
       }),
   )
@@ -572,11 +571,11 @@ export async function listBoundedChatSessionsAsync(memoryDir: string): Promise<B
 }
 
 export function boundedChatPath(memoryDir: string, sessionId: string): string {
-  return path.join(boundedChatDir(memoryDir), `${sessionId}.json`)
+  return projectStatePathFromMemoryDir(memoryDir, path.join('bounded-chat', `${sessionId}.json`))
 }
 
 function boundedChatDir(memoryDir: string): string {
-  return getProjectSystemStatePathFromMemoryDir(memoryDir, 'bounded-chat')
+  return projectStatePathFromMemoryDir(memoryDir, 'bounded-chat')
 }
 
 function buildSessionId(projectId: string, objectiveKind: BoundedChatObjectiveKind, source: string, now: string): string {

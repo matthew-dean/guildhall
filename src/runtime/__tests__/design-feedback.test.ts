@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { projectStatePathFromMemoryDir } from '@guildhall/sessions'
 import {
   buildDesignDecisionPacket,
   captureOwnerDesignFeedback,
@@ -72,7 +73,7 @@ describe('design feedback loop', () => {
         targetPackage: 'core',
         findingIds: ['finding-segmented-filter'],
       })
-      const raw = await fs.readFile(path.join(memoryDir, DESIGN_FEEDBACK_FILE), 'utf-8')
+      const raw = await fs.readFile(projectStatePathFromMemoryDir(memoryDir, DESIGN_FEEDBACK_FILE), 'utf-8')
       expect(raw).toContain('finding-segmented-filter')
     } finally {
       await fs.rm(memoryDir, { recursive: true, force: true })

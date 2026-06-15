@@ -13,7 +13,7 @@
 
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { getProjectLocalHistoryDir, getProjectStateDir, getProjectSystemStatePath } from '@guildhall/sessions'
+import { getProjectLocalHistoryDir, getProjectSystemStatePath } from '@guildhall/sessions'
 import { parse as parseYaml } from 'yaml'
 import type { Task } from '@guildhall/core'
 import { META_INTAKE_TASK_ID } from './meta-intake.js'
@@ -504,7 +504,7 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
   }
 
   // --- lever_questions -----------------------------------------------------
-  const settingsPath = join(getProjectStateDir(projectPath), 'agent-settings.yaml')
+  const settingsPath = getProjectSystemStatePath(projectPath, 'agent-settings.yaml')
   if (existsSync(settingsPath)) {
     const raw = readYamlSafe(settingsPath) as
       | {

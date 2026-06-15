@@ -13,7 +13,7 @@ vi.mock('node:os', async (importOriginal) => {
 
 const { bootstrapWorkspace, listWorkspaces, readWorkspaceConfig } = await import('@guildhall/config')
 const { buildServeApp } = await import('../serve.js')
-const { getProjectStateDir } = await import('@guildhall/sessions')
+const { getProjectSystemStatePath } = await import('@guildhall/sessions')
 
 let tmpProject: string
 
@@ -176,7 +176,7 @@ describe('POST /api/service/attach-project', () => {
       body: JSON.stringify({ name: 'Fresh Onboarding Fixture', id: 'fresh-onboarding-fixture', tags: ['fixture'] }),
     }))
     expect(setupIdentity.status).toBe(200)
-    expect(existsSync(path.join(tmpProject, '.guildhall'))).toBe(true)
+    expect(existsSync(path.join(tmpProject, 'guildhall.yaml'))).toBe(true)
 
     const providerSave = await app.fetch(new Request('http://localhost/api/setup/providers/config?projectId=fresh-onboarding-fixture', {
       method: 'POST',
@@ -378,10 +378,10 @@ describe('project-scoped API routing', () => {
       }))
       expect(saveBrief.status).toBe(200)
 
-      const secondBrief = await fs.readFile(path.join(getProjectStateDir(secondProject), 'project-brief.md'), 'utf8')
+      const secondBrief = await fs.readFile(getProjectSystemStatePath(secondProject, 'project-brief.md'), 'utf8')
       expect(secondBrief).toBe('Second brief only, and it is definitely long enough to save.\n')
 
-      const firstBriefPath = path.join(getProjectStateDir(firstProject), 'project-brief.md')
+      const firstBriefPath = getProjectSystemStatePath(firstProject, 'project-brief.md')
       expect(existsSync(firstBriefPath)).toBe(false)
 
       const unscoped = await app.fetch(new Request('http://localhost/api/project'))

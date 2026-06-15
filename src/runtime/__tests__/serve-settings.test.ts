@@ -15,7 +15,14 @@ import {
 } from '@guildhall/config'
 import { defaultAgentSettingsPath, loadLeverSettings, makeDefaultSettings } from '@guildhall/levers'
 import { proposeProjectSkill } from '@guildhall/skills'
-import { getProjectLocalHistoryDir, getProjectSystemStatePath, getProjectTranscriptPath } from '@guildhall/sessions'
+import {
+  getProjectLocalHistoryDir,
+  getProjectSystemStatePath,
+  getProjectTranscriptPath,
+  readProjectStateJsonAsync,
+  writeProjectStateJsonAsync,
+  writeProjectStateTextAsync,
+} from '@guildhall/sessions'
 import { buildServeApp } from '../serve.js'
 import { persistLearningCandidates } from '../learning.js'
 import { acceptStructuralMap, draftStructuralMap, submitStructuralMapForReview } from '../structural-map.js'
@@ -46,17 +53,23 @@ function scoped(pathname: string): string {
 }
 
 async function readTasks(tmpPath: string): Promise<Array<Record<string, any>>> {
-  const tasksPath = path.join(tmpPath, '.guildhall', 'TASKS.json')
-  const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8')) as
+  const raw = await readProjectStateJsonAsync<
     | Array<Record<string, any>>
     | { tasks?: Array<Record<string, any>> }
+  >(tmpPath, 'TASKS.json')
   return Array.isArray(raw) ? raw : raw.tasks ?? []
 }
 
 async function writeSystemTasks(queue: unknown): Promise<void> {
-  const tasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
-  await fs.mkdir(path.dirname(tasksPath), { recursive: true })
-  await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf8')
+  await writeProjectStateJsonAsync(tmpDir, 'TASKS.json', queue)
+}
+
+async function writeSystemText(relativePath: string, content: string): Promise<void> {
+  await writeProjectStateTextAsync(tmpDir, relativePath, content)
+}
+
+async function writeSystemJson(relativePath: string, value: unknown): Promise<void> {
+  await writeProjectStateJsonAsync(tmpDir, relativePath, value)
 }
 
 async function applyStorageBoundaryMigration(app: ReturnType<typeof buildServeApp>['app']): Promise<void> {
@@ -176,7 +189,7 @@ describe('GET /api/config/levers', () => {
   })
 
   it('seeds .guildhall/agent-settings.yaml on first call if missing', async () => {
-    const settingsPath = path.join(tmpDir, '.guildhall', 'agent-settings.yaml')
+    const settingsPath = getProjectSystemStatePath(tmpDir, 'agent-settings.yaml')
     await expect(fs.access(settingsPath)).rejects.toThrow()
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(new Request(scoped('/api/config/levers')))
@@ -200,7 +213,8 @@ describe('project re-intake endpoints', () => {
       ].join('\n'),
       'utf8',
     )
-    const tasksPath = path.join(tmpDir, '.guildhall', 'TASKS.json')
+    const tasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
+    await fs.mkdir(path.dirname(tasksPath), { recursive: true })
     await fs.writeFile(
       tasksPath,
       JSON.stringify({
@@ -391,8 +405,8 @@ describe('general project status endpoints', () => {
     )
     expect(body.frameworks).toContain('svelte')
 
-    await fs.writeFile(
-      path.join(tmpDir, '.guildhall', 'codebase-map.yaml'),
+    await writeSystemText(
+      'codebase-map.yaml',
       [
         'version: 1',
         'generatedAt: 2026-05-21T12:00:00.000Z',
@@ -425,7 +439,6 @@ describe('general project status endpoints', () => {
         '    - Use the semantic map before editing.',
         '  needsBroaderRead: true',
       ].join('\n'),
-      'utf8',
     )
     const semanticStatus = await app.fetch(new Request(scoped('/api/project/codebase-map/status')))
     const semanticBody = await semanticStatus.json() as Record<string, any>
@@ -592,8 +605,8 @@ describe('general project status endpoints', () => {
       anthropicApiKey: 'sk-ant-secret',
       openaiApiKey: 'sk-openai-secret',
     })
-    await fs.writeFile(
-      path.join(tmpDir, '.guildhall', 'PROGRESS.md'),
+    await writeSystemText(
+      'PROGRESS.md',
       [
         '# Progress',
         '',
@@ -607,7 +620,6 @@ describe('general project status endpoints', () => {
         'error: Exceeded maximum turn limit',
         '---',
       ].join('\n'),
-      'utf-8',
     )
     const { app } = buildServeApp({ projectPath: tmpDir })
 
@@ -818,8 +830,8 @@ describe('POST /api/project/start', () => {
   })
 
   it('blocks project mutations when project state requires a newer Guildhall runtime', async () => {
-    await fs.writeFile(
-      path.join(tmpDir, '.guildhall', 'runtime.json'),
+    await writeSystemText(
+      'runtime.json',
       JSON.stringify({
         version: 1,
         writtenByGuildhall: '999.0.0',
@@ -827,7 +839,6 @@ describe('POST /api/project/start', () => {
         stateSchema: 'future-state',
         requiredFeatures: ['future.guildhall-state.v1'],
       }, null, 2),
-      'utf8',
     )
     const { app } = buildServeApp({ projectPath: tmpDir })
 
@@ -1075,7 +1086,8 @@ describe('POST /api/project/start', () => {
   })
 
   it('points Start at imported draft review when no runnable work is available', async () => {
-    const tasksPath = path.join(tmpDir, '.guildhall', 'TASKS.json')
+    const tasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
+    await fs.mkdir(path.dirname(tasksPath), { recursive: true })
     await fs.writeFile(
       tasksPath,
       JSON.stringify({
@@ -1518,7 +1530,7 @@ describe('POST /api/project/start', () => {
 // re-seeds from defaults so the UI can recover without shelling in.
 describe('POST /api/config/levers/reset', () => {
   it('rewrites the lever file with default positions so subsequent reads succeed', async () => {
-    const settingsPath = path.join(tmpDir, '.guildhall', 'agent-settings.yaml')
+    const settingsPath = getProjectSystemStatePath(tmpDir, 'agent-settings.yaml')
     const { app } = buildServeApp({ projectPath: tmpDir })
 
     // Corrupt the file beyond self-heal (bad YAML). Missing-key corruption
@@ -1627,16 +1639,14 @@ describe('GET /api/project/facts', () => {
   })
 
   it('counts saved completed workspace-import specs in the memory check-in facts', async () => {
-    await fs.mkdir(path.join(tmpDir, '.guildhall'), { recursive: true })
-    await fs.writeFile(
-      path.join(tmpDir, '.guildhall', 'workspace-goals.json'),
-      JSON.stringify({
+    await writeSystemJson(
+      'workspace-goals.json',
+      {
         goals: [{ id: 'old-goal', title: 'Old goal' }],
-      }),
-      'utf8',
+      },
     )
-    await fs.writeFile(
-      path.join(tmpDir, '.guildhall', 'TASKS.json'),
+    await writeSystemText(
+      'TASKS.json',
       JSON.stringify(
         {
           version: 1,
@@ -1670,7 +1680,6 @@ describe('GET /api/project/facts', () => {
         null,
         2,
       ),
-      'utf8',
     )
 
     const { app } = buildServeApp({ projectPath: tmpDir })
@@ -1774,7 +1783,7 @@ describe('GET /api/stale-server', () => {
     const res = await app.fetch(new Request('http://localhost/api/stale-server'))
     expect(res.status).toBe(200)
     const body = (await res.json()) as { staleProcesses?: unknown[] }
-    expect(killProcess).toHaveBeenCalledWith(12345, 'TERM')
+    expect(killProcess).toHaveBeenCalledWith(12345, 'SIGTERM')
     expect(body.staleProcesses).toBeUndefined()
   })
 })
@@ -1801,8 +1810,7 @@ describe('GET /api/service', () => {
 
   it('includes migration summary counts for registered projects', async () => {
     registerWorkspace({ id: PROJECT_ID, name: 'Settings Test', path: tmpDir, tags: [] })
-    await fs.mkdir(path.join(tmpDir, 'memory'), { recursive: true })
-    await fs.writeFile(path.join(tmpDir, 'memory', 'PROGRESS.md'), '# Progress\n', 'utf8')
+    await writeSystemText('PROGRESS.md', '# Progress\n')
     const { app } = buildServeApp({ projectPath: tmpDir })
 
     const res = await app.fetch(new Request('http://localhost/api/service'))
@@ -1886,7 +1894,7 @@ describe('GET /api/health', () => {
 // user is never blocked on an agent round-trip.
 describe('Workspace Import review endpoints', () => {
   it('status treats missing task state as an empty existing workspace queue', async () => {
-    await fs.rm(path.join(tmpDir, '.guildhall', 'TASKS.json'), { force: true })
+    await fs.rm(getProjectSystemStatePath(tmpDir, 'TASKS.json'), { force: true })
     await fs.writeFile(
       path.join(tmpDir, 'README.md'),
       '# Existing project\n\n## Goals\n\n- Capture the current repo direction\n',
@@ -1963,9 +1971,8 @@ describe('Workspace Import review endpoints', () => {
       'utf8',
     )
     // Prime TASKS.json with the reserved importer task — empty spec.
-    await fs.mkdir(path.join(tmpDir, '.guildhall'), { recursive: true })
-    await fs.writeFile(
-      path.join(tmpDir, '.guildhall', 'TASKS.json'),
+    await writeSystemText(
+      'TASKS.json',
       JSON.stringify(
         {
           version: 1,
@@ -1991,7 +1998,6 @@ describe('Workspace Import review endpoints', () => {
         null,
         2,
       ),
-      'utf8',
     )
 
     const { app } = buildServeApp({ projectPath: tmpDir })
@@ -2117,9 +2123,8 @@ describe('Workspace Import review endpoints', () => {
       JSON.stringify({ name: 'curated-import' }),
       'utf8',
     )
-    await fs.mkdir(path.join(tmpDir, '.guildhall'), { recursive: true })
-    await fs.writeFile(
-      path.join(tmpDir, '.guildhall', 'TASKS.json'),
+    await writeSystemText(
+      'TASKS.json',
       JSON.stringify(
         {
           version: 1,
@@ -2167,7 +2172,6 @@ describe('Workspace Import review endpoints', () => {
         null,
         2,
       ),
-      'utf8',
     )
 
     const { app } = buildServeApp({ projectPath: tmpDir })
@@ -2201,9 +2205,8 @@ describe('Workspace Import review endpoints', () => {
 
   it('status counts a completed importer task from its saved curated spec', async () => {
     await fs.writeFile(path.join(tmpDir, 'package.json'), JSON.stringify({ name: 'completed-import-status' }), 'utf8')
-    await fs.mkdir(path.join(tmpDir, '.guildhall'), { recursive: true })
-    await fs.writeFile(
-      path.join(tmpDir, '.guildhall', 'TASKS.json'),
+    await writeSystemText(
+      'TASKS.json',
       JSON.stringify(
         {
           version: 1,
@@ -2249,7 +2252,6 @@ describe('Workspace Import review endpoints', () => {
         null,
         2,
       ),
-      'utf8',
     )
 
     const { app } = buildServeApp({ projectPath: tmpDir })
@@ -2338,13 +2340,12 @@ describe('Workspace Import review endpoints', () => {
       '## Next up\n\n- [ ] Turn planning docs into real intake tasks\n',
       'utf8',
     )
-    await fs.writeFile(
-      path.join(tmpDir, '.guildhall', 'workspace-goals.json'),
-      JSON.stringify({ dismissed: true, dismissedAt: '2026-01-01T00:00:00Z' }, null, 2),
-      'utf8',
+    await writeSystemJson(
+      'workspace-goals.json',
+      { dismissed: true, dismissedAt: '2026-01-01T00:00:00Z' },
     )
-    await fs.writeFile(
-      path.join(tmpDir, '.guildhall', 'TASKS.json'),
+    await writeSystemText(
+      'TASKS.json',
       JSON.stringify(
         {
           version: 1,
@@ -2378,7 +2379,6 @@ describe('Workspace Import review endpoints', () => {
         null,
         2,
       ),
-      'utf8',
     )
 
     const { app } = buildServeApp({ projectPath: tmpDir })
@@ -2398,7 +2398,7 @@ describe('Workspace Import review endpoints', () => {
     expect(importTask?.status).toBe('exploring')
 
     const goalsState = JSON.parse(
-      await fs.readFile(path.join(tmpDir, '.guildhall', 'workspace-goals.json'), 'utf8'),
+      await fs.readFile(getProjectSystemStatePath(tmpDir, 'workspace-goals.json'), 'utf8'),
     ) as { dismissed?: boolean }
     expect(goalsState.dismissed).toBeUndefined()
   })
@@ -2470,7 +2470,7 @@ describe('GET/POST /api/project/learning', () => {
   })
 
   it('lists learning records and supports accept, dismiss, reset, and make-project-wide', async () => {
-    const memoryDir = path.join(tmpDir, '.guildhall')
+    const memoryDir = getProjectSystemStatePath(tmpDir, '')
     const projectCandidate: LearningCandidate = {
       id: 'project-invite-path',
       source: 'task',
@@ -2627,8 +2627,8 @@ describe('GET/POST /api/project/learning', () => {
 
 describe('POST /api/project/meta-intake/rerun', () => {
   it('resets the reserved task back to exploring and reseeds the transcript', async () => {
-    await fs.writeFile(
-      path.join(tmpDir, '.guildhall', 'TASKS.json'),
+    await writeSystemText(
+      'TASKS.json',
       JSON.stringify(
         {
           version: 1,
@@ -2671,7 +2671,6 @@ describe('POST /api/project/meta-intake/rerun', () => {
         null,
         2,
       ),
-      'utf8',
     )
     const transcriptPath = getProjectTranscriptPath(tmpDir, 'exploring', 'task-meta-intake')
     await fs.mkdir(path.dirname(transcriptPath), { recursive: true })
@@ -2775,14 +2774,13 @@ describe('GET /api/project/inbox — blockers', () => {
         '\nbootstrap:\n  verifiedAt: "2026-04-24T00:00:00Z"\n  packageManager: pnpm\n  install: { command: "pnpm install", status: ok }\n  gates:\n    lint: { command: "pnpm lint", available: true }\n',
       'utf8',
     )
-    await fs.writeFile(
-      path.join(tmpDir, '.guildhall', 'workspace-goals.json'),
-      JSON.stringify({ goals: [] }, null, 2),
-      'utf8',
+    await writeSystemJson(
+      'workspace-goals.json',
+      { goals: [] },
     )
-    await fs.writeFile(
-      path.join(tmpDir, '.guildhall', 'TASKS.json'),
-      JSON.stringify({
+    await writeSystemJson(
+      'TASKS.json',
+      {
         version: 1,
         lastUpdated: '2026-05-31T15:00:00.000Z',
         tasks: [
@@ -2807,12 +2805,11 @@ describe('GET /api/project/inbox — blockers', () => {
             escalations: [{ id: 'esc-block', summary: 'Needs recovery.' }],
           },
         ],
-      }, null, 2),
-      'utf8',
+      },
     )
-    await fs.writeFile(
-      path.join(tmpDir, '.guildhall', 'attention.json'),
-      JSON.stringify({
+    await writeSystemJson(
+      'attention.json',
+      {
         version: 1,
         records: [
           {
@@ -2829,8 +2826,7 @@ describe('GET /api/project/inbox — blockers', () => {
             updatedAt: '2026-05-31T16:00:00.000Z',
           },
         ],
-      }, null, 2),
-      'utf8',
+      },
     )
 
     const { app } = buildServeApp({ projectPath: tmpDir })
@@ -2847,10 +2843,9 @@ describe('GET /api/project/inbox — blockers', () => {
   })
 
   it('describes project-understanding reconciliation without implying Git is missing', async () => {
-    await fs.writeFile(
-      path.join(tmpDir, '.guildhall', 'workspace-goals.json'),
-      JSON.stringify({ goals: [{ id: 'goal-1', title: 'Existing imported plan' }] }, null, 2),
-      'utf8',
+    await writeSystemJson(
+      'workspace-goals.json',
+      { goals: [{ id: 'goal-1', title: 'Existing imported plan' }] },
     )
     const { app } = buildServeApp({ projectPath: tmpDir })
 
@@ -2869,9 +2864,9 @@ describe('GET /api/project/inbox — blockers', () => {
   })
 
   it('keeps thread-owned approvals and questions out of the needs-you inbox snapshot', async () => {
-    await fs.writeFile(
-      path.join(tmpDir, '.guildhall', 'TASKS.json'),
-      JSON.stringify({
+    await writeSystemJson(
+      'TASKS.json',
+      {
         version: 1,
         lastUpdated: '2026-05-31T15:00:00.000Z',
         tasks: [
@@ -2922,8 +2917,7 @@ describe('GET /api/project/inbox — blockers', () => {
             updatedAt: '2026-05-31T14:20:00.000Z',
           },
         ],
-      }, null, 2),
-      'utf8',
+      },
     )
 
     const { app } = buildServeApp({ projectPath: tmpDir })
@@ -3015,7 +3009,8 @@ describe('GET /api/project — bootstrap status', () => {
   })
 
   it('includes the same inbox snapshot as /api/project/inbox', async () => {
-    const tasksPath = path.join(tmpDir, '.guildhall', 'TASKS.json')
+    const tasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
+    await fs.mkdir(path.dirname(tasksPath), { recursive: true })
     await fs.writeFile(
       tasksPath,
       JSON.stringify({

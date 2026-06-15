@@ -4,7 +4,11 @@ import path from 'node:path'
 import os from 'node:os'
 import { bootstrapWorkspace } from '@guildhall/config'
 import { TaskQueue } from '@guildhall/core'
-import { getProjectSystemStatePath } from '@guildhall/sessions'
+import {
+  readProjectStateJsonAsync,
+  readProjectStateTextAsync,
+  writeProjectStateJsonFromMemoryDirAsync,
+} from '@guildhall/sessions'
 import {
   createWorkspaceImportTask,
   workspaceNeedsImport,
@@ -14,7 +18,6 @@ import {
   formatDetectedDraftAsSpec,
   WORKSPACE_IMPORT_TASK_ID,
   WORKSPACE_IMPORT_DOMAIN,
-  workspaceImportTasksPath,
 } from '../workspace-importer.js'
 import { pickNextTask } from '../orchestrator-picker.js'
 import { detectWorkspaceSignals } from '../workspace-import/index.js'
@@ -41,12 +44,29 @@ afterEach(async () => {
 })
 
 async function readQueue(): Promise<TaskQueue> {
-  const raw = await fs.readFile(workspaceImportTasksPath(memoryDir), 'utf-8')
-  const parsed = JSON.parse(raw)
+  const parsed = await readProjectStateJsonAsync<unknown>(tmpDir, 'TASKS.json').catch((err: unknown) => {
+    if (
+      err &&
+      typeof err === 'object' &&
+      'code' in err &&
+      (err as { code?: unknown }).code === 'ENOENT'
+    ) {
+      return {
+        version: 1,
+        lastUpdated: new Date().toISOString(),
+        tasks: [],
+      }
+    }
+    throw err
+  })
   if (Array.isArray(parsed)) {
     return { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
   }
   return TaskQueue.parse(parsed)
+}
+
+async function writeQueue(queue: TaskQueue): Promise<void> {
+  await writeProjectStateJsonFromMemoryDirAsync(memoryDir, 'TASKS.json', queue)
 }
 
 function invWith(signals: WorkspaceSignal[]): WorkspaceInventory {
@@ -206,7 +226,7 @@ describe('workspaceNeedsImport', () => {
       createdAt: now,
       updatedAt: now,
     })
-    await fs.writeFile(workspaceImportTasksPath(memoryDir), JSON.stringify(q, null, 2))
+    await writeQueue(q)
     const res = await workspaceNeedsImport({
       memoryDir,
       projectPath: tmpDir,
@@ -359,7 +379,7 @@ describe('approveWorkspaceImport', () => {
     const q = await readQueue()
     const task = q.tasks.find((t) => t.id === WORKSPACE_IMPORT_TASK_ID)!
     task.spec = spec
-    await fs.writeFile(workspaceImportTasksPath(memoryDir), JSON.stringify(q, null, 2))
+    await writeQueue(q)
   }
 
   it('errors when the importer task is missing', async () => {
@@ -476,14 +496,13 @@ milestones:
       },
     })
 
-    const goalsRaw = await fs.readFile(getProjectSystemStatePath(tmpDir, 'workspace-goals.json'), 'utf-8')
-    const goals = JSON.parse(goalsRaw)
+    const goals = await readProjectStateJsonAsync<{ goals: Array<{ id: string; title: string }> }>(tmpDir, 'workspace-goals.json')
     expect(goals.goals[0]).toMatchObject({
       id: 'g1',
       title: 'Ship orchestrator',
     })
 
-    const progress = await fs.readFile(getProjectSystemStatePath(tmpDir, 'PROGRESS.md'), 'utf-8')
+    const progress = await readProjectStateTextAsync(tmpDir, 'PROGRESS.md')
     expect(progress).toContain('Ship v0.1.0')
     expect(progress).toContain('abc12345')
     expect(progress).toContain('MILESTONE')
@@ -688,7 +707,7 @@ tasks:
       yamlMilestoneBlock,
       '```',
     ].join('\n')
-    await fs.writeFile(workspaceImportTasksPath(memoryDir), JSON.stringify(qAfterSeed, null, 2), 'utf-8')
+    await writeQueue(qAfterSeed)
 
     // Approve → tasks merged, goals persisted, milestones logged.
     const approved = await approveWorkspaceImport({ memoryDir, projectPath: tmpDir })
@@ -714,12 +733,11 @@ tasks:
     }
 
     // workspace-goals.json persisted with every goal.
-    const goalsRaw = await fs.readFile(getProjectSystemStatePath(tmpDir, 'workspace-goals.json'), 'utf-8')
-    const goalsPersisted = JSON.parse(goalsRaw)
+    const goalsPersisted = await readProjectStateJsonAsync<{ goals: unknown[] }>(tmpDir, 'workspace-goals.json')
     expect(goalsPersisted.goals).toHaveLength(seeded.draft.goals.length)
 
     // PROGRESS.md logs every completed milestone (e.g. "Initial scaffold").
-    const progress = await fs.readFile(getProjectSystemStatePath(tmpDir, 'PROGRESS.md'), 'utf-8')
+    const progress = await readProjectStateTextAsync(tmpDir, 'PROGRESS.md')
     for (const m of seeded.draft.milestones) {
       expect(progress).toContain(m.title)
     }

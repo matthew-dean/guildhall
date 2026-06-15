@@ -26,7 +26,7 @@ import {
   requestProjectDependencyRevision,
 } from '../project-graph.js'
 import { listOwnerInputRequests } from '../owner-input-store.js'
-import { getProjectSystemStatePath } from '@guildhall/sessions'
+import { getProjectSystemStatePath, projectStateExists } from '@guildhall/sessions'
 
 let previousConfigDir: string | undefined
 let systemDir: string
@@ -829,9 +829,9 @@ describe('structural context and project graph handoffs', () => {
 
     expect(edge.stateMachine.state).toBe('submitted')
     expect(returned.stateMachine.state).toBe('revision_requested')
-    expect(fs.existsSync(path.join(providerRoot, '.guildhall', 'project-graph', 'incoming-requests', `${edge.id}.json`))).toBe(true)
-    expect(fs.existsSync(path.join(providerRoot, '.guildhall', 'project-graph', 'deliveries', `${edge.id}.json`))).toBe(true)
-    expect(fs.existsSync(path.join(consumerRoot, '.guildhall', 'project-graph', 'outgoing-requests', `${edge.id}.json`))).toBe(true)
+    expect(projectStateExists(providerRoot, path.join('project-graph', 'incoming-requests', `${edge.id}.json`))).toBe(true)
+    expect(projectStateExists(providerRoot, path.join('project-graph', 'deliveries', `${edge.id}.json`))).toBe(true)
+    expect(projectStateExists(consumerRoot, path.join('project-graph', 'outgoing-requests', `${edge.id}.json`))).toBe(true)
   })
 })
 

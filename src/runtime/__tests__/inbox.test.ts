@@ -9,7 +9,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 import { stringify as stringifyYaml } from 'yaml'
-import { getProjectLocalHistoryDir, getProjectStateDir } from '@guildhall/sessions'
+import { getProjectLocalHistoryDir, getProjectSystemStatePath } from '@guildhall/sessions'
 
 import {
   ATTENTION_OWNED_INBOX_KINDS,
@@ -24,20 +24,29 @@ let tmpDir: string
 let dataDir: string
 let projectStateDir: string
 
+function fixturePath(rel: string): string {
+  const normalized = rel.replace(/\\/g, '/')
+  if (normalized === '.guildhall') return projectStateDir
+  if (normalized.startsWith('.guildhall/')) {
+    return path.join(projectStateDir, normalized.slice('.guildhall/'.length))
+  }
+  return path.join(tmpDir, rel)
+}
+
 async function writeYaml(rel: string, value: unknown): Promise<void> {
-  const p = path.join(tmpDir, rel)
+  const p = fixturePath(rel)
   await fs.mkdir(path.dirname(p), { recursive: true })
   await fs.writeFile(p, stringifyYaml(value), 'utf8')
 }
 
 async function writeJson(rel: string, value: unknown): Promise<void> {
-  const p = path.join(tmpDir, rel)
+  const p = fixturePath(rel)
   await fs.mkdir(path.dirname(p), { recursive: true })
   await fs.writeFile(p, JSON.stringify(value, null, 2), 'utf8')
 }
 
 async function writeFile(rel: string, contents: string): Promise<void> {
-  const p = path.join(tmpDir, rel)
+  const p = fixturePath(rel)
   await fs.mkdir(path.dirname(p), { recursive: true })
   await fs.writeFile(p, contents, 'utf8')
 }
@@ -118,7 +127,7 @@ beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-inbox-'))
   dataDir = path.join(os.tmpdir(), `guildhall-data-${path.basename(tmpDir)}`)
   process.env.GUILDHALL_DATA_DIR = dataDir
-  projectStateDir = getProjectStateDir(tmpDir)
+  projectStateDir = getProjectSystemStatePath(tmpDir, '')
   await fs.mkdir(projectStateDir, { recursive: true })
 })
 

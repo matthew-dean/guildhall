@@ -2,17 +2,22 @@ import { describe, expect, it } from 'vitest'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { projectStatePath } from '@guildhall/sessions'
 
 import { buildThread } from '../thread.js'
 import { emptyWizardsState, type ProjectSnapshot } from '../wizards.js'
+
+function statePath(projectPath: string, ...parts: string[]): string {
+  return projectStatePath(projectPath, path.join(...parts))
+}
 
 describe('buildThread', () => {
   it('projects active pressure-test intake as request and question turns', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall', 'pressure-test-intake'), { recursive: true })
+      await mkdir(statePath(projectPath, 'pressure-test-intake'), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'pressure-test-intake', 'pti-guildhall-0-8-0.json'),
+        statePath(projectPath, 'pressure-test-intake', 'pti-guildhall-0-8-0.json'),
         JSON.stringify({
           id: 'pti-guildhall-0-8-0',
           rawRequest: '0.8.0 should prioritize pressure-test intake.',
@@ -153,9 +158,9 @@ describe('buildThread', () => {
   it('projects planned project check-in questions as project direction turns', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall', 'pressure-test-intake'), { recursive: true })
+      await mkdir(statePath(projectPath, 'pressure-test-intake'), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'pressure-test-intake', 'pti-narrative-harness-project-check-in.json'),
+        statePath(projectPath, 'pressure-test-intake', 'pti-narrative-harness-project-check-in.json'),
         JSON.stringify({
           id: 'pti-narrative-harness-project-check-in',
           rawRequest: 'Start a project check-in for Narrative Harness.',
@@ -235,9 +240,9 @@ describe('buildThread', () => {
   it('projects a project check-in card when the project has not answered Guildhall project questions yet', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [{
             id: 'task-done',
@@ -286,9 +291,9 @@ describe('buildThread', () => {
   it('projects an active bounded-chat project check-in instead of the old setup card', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall', 'bounded-chat'), { recursive: true })
+      await mkdir(statePath(projectPath, 'bounded-chat'), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'bounded-chat', 'bc-narrative-project-check-in.json'),
+        statePath(projectPath, 'bounded-chat', 'bc-narrative-project-check-in.json'),
         JSON.stringify({
           id: 'bc-narrative-project-check-in',
           projectId: 'narrative-harness',
@@ -383,9 +388,9 @@ describe('buildThread', () => {
   it('projects an active bounded-chat New Request clarification as the live intake turn', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall', 'bounded-chat'), { recursive: true })
+      await mkdir(statePath(projectPath, 'bounded-chat'), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'bounded-chat', 'bc-request-clarify.json'),
+        statePath(projectPath, 'bounded-chat', 'bc-request-clarify.json'),
         JSON.stringify({
           id: 'bc-request-clarify',
           projectId: 'narrative-harness',
@@ -482,9 +487,9 @@ describe('buildThread', () => {
   it('projects a pure project-question bounded chat as a conversation thread, not task intake', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall', 'bounded-chat'), { recursive: true })
+      await mkdir(statePath(projectPath, 'bounded-chat'), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'bounded-chat', 'bc-project-question.json'),
+        statePath(projectPath, 'bounded-chat', 'bc-project-question.json'),
         JSON.stringify({
           id: 'bc-project-question',
           projectId: 'fair-labor-license',
@@ -665,9 +670,9 @@ describe('buildThread', () => {
   it('prefers preloaded thread state over re-reading current disk projections', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall', 'bounded-chat'), { recursive: true })
+      await mkdir(statePath(projectPath, 'bounded-chat'), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'bounded-chat', 'bc-disk-only.json'),
+        statePath(projectPath, 'bounded-chat', 'bc-disk-only.json'),
         JSON.stringify({
           id: 'bc-disk-only',
           projectId: 'narrative-harness',
@@ -757,9 +762,9 @@ describe('buildThread', () => {
   it('projects a completed bounded-chat project check-in as a done turn', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall', 'bounded-chat'), { recursive: true })
+      await mkdir(statePath(projectPath, 'bounded-chat'), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'bounded-chat', 'bc-narrative-project-check-in.json'),
+        statePath(projectPath, 'bounded-chat', 'bc-narrative-project-check-in.json'),
         JSON.stringify({
           id: 'bc-narrative-project-check-in',
           projectId: 'narrative-harness',
@@ -872,9 +877,9 @@ describe('buildThread', () => {
   it('projects a completed bounded-chat New Request as a done turn', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall', 'bounded-chat'), { recursive: true })
+      await mkdir(statePath(projectPath, 'bounded-chat'), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'bounded-chat', 'bc-request-done.json'),
+        statePath(projectPath, 'bounded-chat', 'bc-request-done.json'),
         JSON.stringify({
           id: 'bc-request-done',
           projectId: 'narrative-harness',
@@ -966,9 +971,9 @@ describe('buildThread', () => {
   it('projects a completed bounded-chat project question as a done conversation receipt', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall', 'bounded-chat'), { recursive: true })
+      await mkdir(statePath(projectPath, 'bounded-chat'), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'bounded-chat', 'bc-project-question-done.json'),
+        statePath(projectPath, 'bounded-chat', 'bc-project-question-done.json'),
         JSON.stringify({
           id: 'bc-project-question-done',
           projectId: 'fair-labor-license',
@@ -1066,9 +1071,9 @@ describe('buildThread', () => {
   it('records routed task requests as history once the task state owns current work', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -1131,9 +1136,9 @@ describe('buildThread', () => {
   it('projects brief cleanup requests as task-thread cleanup work instead of task-intake routing', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -1232,9 +1237,9 @@ describe('buildThread', () => {
   it('surfaces active task work once setup is already complete', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -1289,10 +1294,10 @@ describe('buildThread', () => {
   it('projects construction mode onto task turns', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       const now = new Date().toISOString()
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -1342,7 +1347,7 @@ describe('buildThread', () => {
   it('advances past bootstrap setup when runtime bootstrap truth is already green', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       const snapshot: ProjectSnapshot = {
         projectPath,
         config: {
@@ -1377,7 +1382,7 @@ describe('buildThread', () => {
   it('lets the routing setup step seed meta-intake instead of linking to the project list', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       const snapshot: ProjectSnapshot = {
         projectPath,
         config: {
@@ -1411,7 +1416,7 @@ describe('buildThread', () => {
   it('does not emit generic project-list links for onboard setup steps', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       const snapshots: ProjectSnapshot[] = [
         {
           projectPath,
@@ -1499,9 +1504,9 @@ describe('buildThread', () => {
   it('keeps project direction active ahead of a large imported-draft queue and collapses the queue to one turn', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -1561,9 +1566,9 @@ describe('buildThread', () => {
   it('frames the empty-project first work item as spec shaping instead of implementation task creation', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({ tasks: [] }),
       )
       const snapshot: ProjectSnapshot = {
@@ -1600,9 +1605,9 @@ describe('buildThread', () => {
   it('keeps fresh first-spec setup ahead of stale pressure-test questions', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({ tasks: [] }),
       )
       const snapshot: ProjectSnapshot = {
@@ -1673,11 +1678,11 @@ describe('buildThread', () => {
   it('keeps a workspace-import question active ahead of later queued work', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       const earlier = new Date(Date.now() - 600_000).toISOString()
       const later = new Date(Date.now() - 60_000).toISOString()
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -1753,9 +1758,9 @@ describe('buildThread', () => {
   it('summarizes normal spec_review component tasks as queued coordinator review', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -1806,10 +1811,10 @@ describe('buildThread', () => {
   it('does not render operational receipts as answerable questions', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       const now = new Date().toISOString()
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -1867,10 +1872,10 @@ describe('buildThread', () => {
   it('does not render output promises as answerable questions', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       const now = new Date().toISOString()
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -1926,10 +1931,10 @@ describe('buildThread', () => {
   it('surfaces immediate all-terminal start-stop activity in Thread', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       const now = new Date().toISOString()
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -1990,11 +1995,11 @@ describe('buildThread', () => {
   it('prefers an in-progress worker turn over a stale review turn when neither has a live agent', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       const earlier = new Date(Date.now() - 600_000).toISOString()
       const later = new Date(Date.now() - 60_000).toISOString()
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -2059,7 +2064,7 @@ describe('buildThread', () => {
   it('drafts project direction as editable brief copy instead of inference narration', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
         path.join(projectPath, 'README.md'),
         [
@@ -2102,7 +2107,7 @@ describe('buildThread', () => {
   it('shows project direction setup as a refreshable snapshot plus durable owner input', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
         path.join(projectPath, 'README.md'),
         [
@@ -2112,7 +2117,7 @@ describe('buildThread', () => {
         ].join('\n'),
       )
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -2175,8 +2180,8 @@ describe('buildThread', () => {
   it('shows the same current snapshot before reviewing existing project work', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
-      await writeFile(path.join(projectPath, '.guildhall', 'project-brief.md'), 'Desktop font generation tool with model and app surfaces.')
+      await mkdir(statePath(projectPath), { recursive: true })
+      await writeFile(statePath(projectPath, 'project-brief.md'), 'Desktop font generation tool with model and app surfaces.')
       await writeFile(path.join(projectPath, 'README.md'), '# Font Something\n')
       const snapshot: ProjectSnapshot = {
         projectPath,
@@ -2213,7 +2218,7 @@ describe('buildThread', () => {
   it('replaces legacy generated project-direction boilerplate with the cleaner inferred brief', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
         path.join(projectPath, 'README.md'),
         [
@@ -2223,7 +2228,7 @@ describe('buildThread', () => {
         ].join('\n'),
       )
       await writeFile(
-        path.join(projectPath, '.guildhall', 'project-brief.md'),
+        statePath(projectPath, 'project-brief.md'),
         'Fair Labor License Platform is this project. From the README, the project appears to be about modern licensing platform for open-source maintainers. Guildhall should treat the main goal as helping maintainers understand, adopt, publish, and operate the Fair Labor License cleanly.',
       )
       const snapshot: ProjectSnapshot = {
@@ -2259,7 +2264,7 @@ describe('buildThread', () => {
   it('folds a lead-in line plus bullets into one readable inferred brief sentence', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
         path.join(projectPath, 'README.md'),
         [
@@ -2305,9 +2310,9 @@ describe('buildThread', () => {
   it('keeps provider setup active ahead of meta-intake when setup is still blocked', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -2357,9 +2362,9 @@ describe('buildThread', () => {
   it('collapses duplicate unanswered questions with the same prompt into one visible card', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -2427,10 +2432,10 @@ describe('buildThread', () => {
   it('collapses near-duplicate fallback questions with the same choices into one visible card', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       const now = new Date().toISOString()
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -2499,11 +2504,11 @@ describe('buildThread', () => {
   it('groups multiple open questions under one task turn with imported source context', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       const now = new Date().toISOString()
       const sourcePath = path.join(projectPath, 'knit', 'PROJECT_STATE.md')
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -2578,10 +2583,10 @@ describe('buildThread', () => {
   it('shows one task state when a draft brief also has an unanswered question', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       const now = new Date().toISOString()
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -2644,10 +2649,10 @@ describe('buildThread', () => {
   it('does not ask for recovery brief approval when a concrete spec is already saved', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       const now = new Date().toISOString()
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -2720,14 +2725,14 @@ describe('buildThread', () => {
   it('surfaces source and request milestones, preserves answered questions, and collapses repetitive recovery churn', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       const importedAt = '2026-05-10T16:40:53.757Z'
       const askedAt = '2026-05-18T19:49:46.995Z'
       const answeredAt = '2026-05-19T22:26:12.323Z'
       const reframeAt = '2026-05-31T16:52:42.757Z'
       const latestRecoveryAt = '2026-05-31T16:53:00.787Z'
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -2860,10 +2865,10 @@ describe('buildThread', () => {
   it('keeps an unanswered agent question active and demotes spec review until the question is answered', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       const now = new Date().toISOString()
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -2923,10 +2928,10 @@ describe('buildThread', () => {
   it('treats an exploring task with a concrete spec draft and approved brief as queued spec revision work', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       const now = new Date().toISOString()
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -2999,10 +3004,10 @@ describe('buildThread', () => {
   it('ignores obsolete meta-intake routing questions when a valid routing draft already exists', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       const now = new Date().toISOString()
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -3069,11 +3074,11 @@ coordinators:
   it('ignores a stale starter-task focus question once a concrete spec draft already exists', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       const askedAt = '2026-05-11T20:24:31.428Z'
       const updatedAt = '2026-05-11T20:24:50.064Z'
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -3145,9 +3150,9 @@ coordinators:
   it('projects last live-agent activity and stalled state onto in-flight turns', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -3214,9 +3219,9 @@ coordinators:
   it('reconstructs a live in-flight agent from activity after the start event ages out', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -3275,9 +3280,9 @@ coordinators:
   it('does not project stale task activity as live work once the coordinator is stopped', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -3337,9 +3342,9 @@ coordinators:
   it('labels failed live tools as failed instead of finished', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -3397,9 +3402,9 @@ coordinators:
   it('suppresses expected research-budget refusals from live activity', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -3475,9 +3480,9 @@ coordinators:
   it('does not present old exploring transcript questions as a current wait state', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -3552,9 +3557,9 @@ coordinators:
   it('rewrites internal target-file guard language before it reaches Thread', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -3633,9 +3638,9 @@ coordinators:
   it('rewrites acceptance-criteria verification jargon before it reaches Thread', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -3701,9 +3706,9 @@ coordinators:
   it('shows recent failed activity on blocked escalation turns', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -3771,9 +3776,9 @@ coordinators:
   it('surfaces blocked tasks even when only blockReason was persisted', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -3821,9 +3826,9 @@ coordinators:
   it('includes compact policy classification context on blocked escalation turns', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -3899,9 +3904,9 @@ coordinators:
   it('compresses oversized reviewer escalation details into a short task-card digest', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -3966,9 +3971,9 @@ coordinators:
   it('turns dirty repo setup blockers into an actionable recovery message', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -4021,9 +4026,9 @@ coordinators:
   it('shows a rolling excerpt while an agent is writing', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -4088,9 +4093,9 @@ coordinators:
   it('treats empty-model reply errors as warnings and retries as running activity', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -4155,9 +4160,9 @@ coordinators:
   it('shows provider overload as warning activity instead of raw task failure text', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -4226,9 +4231,9 @@ coordinators:
   it('keeps recent failed tool output visible while later writing continues', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -4296,10 +4301,10 @@ coordinators:
   it('hides stale live activity older than the task updatedAt when a task has been reset', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       const updatedAt = new Date().toISOString()
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -4355,9 +4360,9 @@ coordinators:
   it('projects imported draft tasks as shaping work instead of generic paused intake', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -4409,9 +4414,9 @@ coordinators:
   it('projects reviewer feedback as its own lifecycle turn', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -4472,9 +4477,9 @@ coordinators:
   it('numbers reviewer feedback by feedback turn instead of current task revision', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -4536,9 +4541,9 @@ coordinators:
     try {
       const reviewAt = new Date(Date.now() - 180_000).toISOString()
       const failAt = new Date(Date.now() - 30_000).toISOString()
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {
@@ -4609,9 +4614,9 @@ coordinators:
   it('does not revive a resolved escalation from a stale task blockReason', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
-      await mkdir(path.join(projectPath, '.guildhall'), { recursive: true })
+      await mkdir(statePath(projectPath), { recursive: true })
       await writeFile(
-        path.join(projectPath, '.guildhall', 'TASKS.json'),
+        statePath(projectPath, 'TASKS.json'),
         JSON.stringify({
           tasks: [
             {

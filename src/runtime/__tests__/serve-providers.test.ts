@@ -17,13 +17,19 @@ const { bootstrapWorkspace, setProvider, readGlobalProviders, globalProvidersPat
   await import('@guildhall/config')
 const { buildServeApp } = await import('../serve.js')
 const { clearProviderClientPool } = await import('../provider-client-pool.js')
+const { applyProjectMigrations } = await import('../migrations.js')
 
 let tmpProject: string
 const PROJECT_ID = 'provider-test'
+let previousCodexCredentialsPath: string | undefined
 
 function scoped(pathname: string): string {
   const separator = pathname.includes('?') ? '&' : '?'
   return `http://localhost${pathname}${separator}projectId=${encodeURIComponent(PROJECT_ID)}`
+}
+
+async function applyStorageBoundaryMigration(): Promise<void> {
+  await applyProjectMigrations({ projectRoot: tmpProject, only: ['0.10.0/project-state-storage-boundary'] })
 }
 
 function sseResponse(frames: string[]): Response {
@@ -46,19 +52,24 @@ function dataFrame(payload: unknown): string {
 
 beforeEach(async () => {
   clearProviderClientPool()
+  previousCodexCredentialsPath = process.env.CODEX_CREDENTIALS_PATH
   // Clean env vars so env-precedence doesn't mask the global store.
   delete process.env.ANTHROPIC_API_KEY
   delete process.env.OPENAI_API_KEY
   delete process.env.OPENAI_BASE_URL
   delete process.env.LLAMA_CPP_URL
   delete process.env.LM_STUDIO_BASE_URL
+  delete process.env.CODEX_CREDENTIALS_PATH
   mkdirSync(path.join(TMP_HOME, '.guildhall'), { recursive: true })
   tmpProject = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-serve-providers-proj-'))
   bootstrapWorkspace(tmpProject, { name: 'Provider Test' })
+  await applyProjectMigrations({ projectRoot: tmpProject, only: ['0.10.0/project-state-storage-boundary'] })
 })
 
 afterEach(async () => {
   clearProviderClientPool()
+  if (previousCodexCredentialsPath === undefined) delete process.env.CODEX_CREDENTIALS_PATH
+  else process.env.CODEX_CREDENTIALS_PATH = previousCodexCredentialsPath
   vi.unstubAllGlobals()
   if (existsSync(TMP_HOME)) rmSync(TMP_HOME, { recursive: true, force: true })
   await fs.rm(tmpProject, { recursive: true, force: true })
@@ -75,8 +86,10 @@ async function writeCodexCred(): Promise<void> {
     .replace(/\//g, '_')
   const fakeJwt = `header.${encoded}.sig`
   await fs.mkdir(path.join(TMP_HOME, '.codex'), { recursive: true })
+  const credentialPath = path.join(TMP_HOME, '.codex', 'auth.json')
+  process.env.CODEX_CREDENTIALS_PATH = credentialPath
   await fs.writeFile(
-    path.join(TMP_HOME, '.codex', 'auth.json'),
+    credentialPath,
     JSON.stringify({
       tokens: {
         access_token: fakeJwt,
@@ -802,12 +815,16 @@ describe('POST /api/project/start preflight', () => {
 
   it('passes preflight and starts the supervisor when an Anthropic key is stored', async () => {
     setProvider('anthropic-api', { apiKey: 'sk-ant-test' })
-    updateProjectConfig(tmpProject, { allowPaidProviderFallback: true })
+    await applyStorageBoundaryMigration()
+    updateGlobalConfig({ preferredProvider: 'anthropic-api', allowPaidProviderFallback: true })
     const { app, supervisor } = buildServeApp({ projectPath: tmpProject })
     try {
       const res = await app.fetch(
         new Request('http://localhost/api/project/start?projectId=provider-test', { method: 'POST' }),
       )
+      if (res.status !== 200) {
+        throw new Error(`start failed ${res.status}: ${JSON.stringify(await res.json())}`)
+      }
       expect(res.status).toBe(200)
       const body = (await res.json()) as { status?: string; provider?: string }
       expect(body.status).toBe('running')
@@ -820,6 +837,7 @@ describe('POST /api/project/start preflight', () => {
   it('does not fall back to a paid provider unless project/global config opts in', async () => {
     setProvider('anthropic-api', { apiKey: 'sk-ant-test' })
     updateProjectConfig(tmpProject, { preferredProvider: 'llama-cpp' })
+    await applyStorageBoundaryMigration()
     const { app } = buildServeApp({ projectPath: tmpProject })
 
     const res = await app.fetch(
@@ -837,11 +855,14 @@ describe('POST /api/project/start preflight', () => {
       preferredProvider: 'llama-cpp',
       allowPaidProviderFallback: true,
     })
+    await applyStorageBoundaryMigration()
+    updateGlobalConfig({ preferredProvider: 'llama-cpp', allowPaidProviderFallback: true })
     const { app, supervisor } = buildServeApp({ projectPath: tmpProject })
     try {
       const res = await app.fetch(
         new Request('http://localhost/api/project/start?projectId=provider-test', { method: 'POST' }),
       )
+      if (res.status !== 200) throw new Error(`start failed ${res.status}: ${JSON.stringify(await res.json())}`)
       expect(res.status).toBe(200)
       const body = (await res.json()) as {
         providerStatus?: {
@@ -909,6 +930,8 @@ describe('POST /api/project/start preflight', () => {
       preferredProvider: 'llama-cpp',
       allowPaidProviderFallback: true,
     })
+    await applyStorageBoundaryMigration()
+    updateGlobalConfig({ preferredProvider: 'llama-cpp', allowPaidProviderFallback: true })
     vi.stubGlobal(
       'fetch',
       vi.fn(async () =>
@@ -923,6 +946,9 @@ describe('POST /api/project/start preflight', () => {
       const res = await app.fetch(
         new Request('http://localhost/api/project/start?projectId=provider-test', { method: 'POST' }),
       )
+      if (res.status !== 200) {
+        throw new Error(`start failed ${res.status}: ${JSON.stringify(await res.json())}`)
+      }
       expect(res.status).toBe(200)
       const body = (await res.json()) as {
         providerStatus?: {
@@ -1237,7 +1263,8 @@ describe('POST /api/project/stop', () => {
 
   it('stops a running supervisor and reflects stopped status on refresh', async () => {
     setProvider('anthropic-api', { apiKey: 'sk-ant-test' })
-    updateProjectConfig(tmpProject, { allowPaidProviderFallback: true })
+    await applyStorageBoundaryMigration()
+    updateGlobalConfig({ preferredProvider: 'anthropic-api', allowPaidProviderFallback: true })
     const { app, supervisor } = buildServeApp({ projectPath: tmpProject })
     try {
       const startRes = await app.fetch(

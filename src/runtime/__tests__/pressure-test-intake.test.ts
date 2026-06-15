@@ -1,13 +1,13 @@
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
+import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { writeProjectStateJsonAsync, writeProjectStateTextAsync } from '@guildhall/sessions'
 import {
   answerPressureTestQuestion,
   createPressureTestIntake,
   inspectPressureTestEvidence,
   loadPressureTestIntake,
-  pressureTestPath,
   renderPressureTestSpec,
 } from '../pressure-test-intake.js'
 
@@ -58,10 +58,10 @@ describe('pressure-test intake state', () => {
 
   it('regenerates stale first questions from the structured target instead of parsing raw prose', async () => {
     const memoryDir = await mkdtemp(path.join(tmpdir(), 'guildhall-pressure-'))
-    await mkdir(path.join(memoryDir, 'pressure-test-intake'), { recursive: true })
-    await writeFile(
-      path.join(memoryDir, 'pressure-test-intake', 'pti-commerce-project-0-9-0.json'),
-      JSON.stringify({
+    await writeProjectStateJsonAsync(
+      memoryDir,
+      path.join('pressure-test-intake', 'pti-commerce-project-0-9-0.json'),
+      {
         id: 'pti-commerce-project-0-9-0',
         rawRequest: 'Pressure-test Commerce Project 0.9.0 checkout wording assumptions.',
         target: { type: 'release', id: 'commerce-project-0-9-0', title: 'Commerce Project 0.9.0' },
@@ -89,7 +89,7 @@ describe('pressure-test intake state', () => {
         outputs: { assumptions: [], decisions: [], languageMapCandidates: [], taskSplitCandidates: [] },
         createdAt: '2026-05-24T00:00:00.000Z',
         updatedAt: '2026-05-24T00:00:00.000Z',
-      }),
+      },
     )
 
     const intake = await loadPressureTestIntake({ memoryDir, intakeId: 'pti-commerce-project-0-9-0' })
@@ -116,10 +116,10 @@ describe('pressure-test intake state', () => {
 
   it('repairs stale project check-in intakes whose title was copied from status text', async () => {
     const memoryDir = await mkdtemp(path.join(tmpdir(), 'guildhall-pressure-'))
-    await mkdir(path.join(memoryDir, 'pressure-test-intake'), { recursive: true })
-    await writeFile(
-      path.join(memoryDir, 'pressure-test-intake', 'pti-project-check-in.json'),
-      JSON.stringify({
+    await writeProjectStateJsonAsync(
+      memoryDir,
+      path.join('pressure-test-intake', 'pti-project-check-in.json'),
+      {
         id: 'pti-project-check-in',
         rawRequest: 'Project check-in needed before Guildhall treats this workspace as current.',
         target: {
@@ -151,7 +151,7 @@ describe('pressure-test intake state', () => {
         outputs: { assumptions: [], decisions: [], languageMapCandidates: [], taskSplitCandidates: [] },
         createdAt: '2026-05-24T00:00:00.000Z',
         updatedAt: '2026-05-24T00:00:00.000Z',
-      }),
+      },
     )
 
     const intake = await loadPressureTestIntake({ memoryDir, intakeId: 'pti-project-check-in' })
@@ -162,13 +162,13 @@ describe('pressure-test intake state', () => {
 
   it('starts project check-in with a planned question from project evidence', async () => {
     const memoryDir = await mkdtemp(path.join(tmpdir(), 'guildhall-pressure-'))
-    await writeFile(
-      path.join(memoryDir, 'project-brief.md'),
+    await writeProjectStateTextAsync(
+      memoryDir,
+      'project-brief.md',
       [
         'Narrative Harness is fiction-writing software for building, drafting, and revising a coherent novel.',
         'The project includes author voice, reader knowledge, coherence reviewers, and quiet commercial editor direction.',
       ].join('\n'),
-      'utf-8',
     )
 
     const intake = await createPressureTestIntake({
@@ -191,10 +191,10 @@ describe('pressure-test intake state', () => {
 
   it('records confused project-check-in answers as discarded and does not ask closeout questions', async () => {
     const memoryDir = await mkdtemp(path.join(tmpdir(), 'guildhall-pressure-'))
-    await writeFile(
-      path.join(memoryDir, 'project-brief.md'),
+    await writeProjectStateTextAsync(
+      memoryDir,
+      'project-brief.md',
       'Narrative Harness is fiction-writing software for building and revising a coherent novel with author voice and reader knowledge reviewers.',
-      'utf-8',
     )
     const intake = await createPressureTestIntake({
       memoryDir,
@@ -259,7 +259,7 @@ describe('pressure-test intake state', () => {
       evidence: [],
       askedAt: intake.createdAt,
     }
-    await writeFile(pressureTestPath(memoryDir, intake.id), JSON.stringify(intake, null, 2), 'utf-8')
+    await writeProjectStateJsonAsync(memoryDir, path.join('pressure-test-intake', `${intake.id}.json`), intake)
 
     const answer = 'Should Guildhall remember? I guess it should be reader / writer friendly -- muted palette, clean lines, generous whitespace, minimalist'
     const next = await answerPressureTestQuestion({
@@ -276,10 +276,10 @@ describe('pressure-test intake state', () => {
 
   it('repairs persisted injected follow-up prompts on load', async () => {
     const memoryDir = await mkdtemp(path.join(tmpdir(), 'guildhall-pressure-'))
-    await mkdir(path.join(memoryDir, 'pressure-test-intake'), { recursive: true })
-    await writeFile(
-      path.join(memoryDir, 'pressure-test-intake', 'pti-narrative-harness-project-check-in.json'),
-      JSON.stringify({
+    await writeProjectStateJsonAsync(
+      memoryDir,
+      path.join('pressure-test-intake', 'pti-narrative-harness-project-check-in.json'),
+      {
         id: 'pti-narrative-harness-project-check-in',
         rawRequest: 'Start a project check-in for Narrative Harness.',
         target: {
@@ -316,8 +316,7 @@ describe('pressure-test intake state', () => {
         outputs: { assumptions: [], decisions: [], languageMapCandidates: [], taskSplitCandidates: [] },
         createdAt: '2026-05-31T00:53:58.947Z',
         updatedAt: '2026-05-31T00:56:17.298Z',
-      }),
-      'utf-8',
+      },
     )
 
     const loaded = await loadPressureTestIntake({ memoryDir, intakeId: 'pti-narrative-harness-project-check-in' })
@@ -492,7 +491,7 @@ describe('pressure-test intake state', () => {
       prompt: 'Is there anything else Guildhall should know about product goals before this domain closes?',
       answered: false,
     })
-    await writeFile(pressureTestPath(memoryDir, closeout.id), JSON.stringify(closeout, null, 2), 'utf-8')
+    await writeProjectStateJsonAsync(memoryDir, path.join('pressure-test-intake', `${closeout.id}.json`), closeout)
 
     const loaded = await loadPressureTestIntake({ memoryDir, intakeId: closeout.id })
 
@@ -503,11 +502,11 @@ describe('pressure-test intake state', () => {
 
   it('inspects project memory before asking questions', async () => {
     const memoryDir = await mkdtemp(path.join(tmpdir(), 'guildhall-pressure-'))
-    await import('node:fs/promises').then(fs => fs.writeFile(
-      path.join(memoryDir, 'project-brief.md'),
+    await writeProjectStateTextAsync(
+      memoryDir,
+      'project-brief.md',
       'Thread is the command surface. Pressure-Test Intake should ask one question at a time.',
-      'utf-8',
-    ))
+    )
     const intake = await createPressureTestIntake({
       memoryDir,
       target: { type: 'feature', id: 'pressure-test', title: 'Pressure-Test Intake' },

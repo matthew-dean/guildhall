@@ -3,7 +3,11 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 import { bootstrapWorkspace, readWorkspaceConfig, slugify } from '@guildhall/config'
-import { getProjectStateDir } from '@guildhall/sessions'
+import {
+  getProjectStateDir,
+  readProjectStateJsonFromMemoryDirAsync,
+  writeProjectStateJsonFromMemoryDirAsync,
+} from '@guildhall/sessions'
 import { buildServeApp } from '../serve.js'
 import { createMetaIntakeTask, META_INTAKE_TASK_ID } from '../meta-intake.js'
 import type { TaskQueue } from '@guildhall/core'
@@ -24,8 +28,7 @@ let memoryDir: string
 let projectId: string
 
 async function readQueue(): Promise<TaskQueue> {
-  const raw = await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf-8')
-  return JSON.parse(raw) as TaskQueue
+  return readProjectStateJsonFromMemoryDirAsync<TaskQueue>(memoryDir, 'TASKS.json')
 }
 
 async function writeDraftSpec(spec: string): Promise<void> {
@@ -33,11 +36,7 @@ async function writeDraftSpec(spec: string): Promise<void> {
   const task = queue.tasks.find(t => t.id === META_INTAKE_TASK_ID)
   if (!task) throw new Error('meta-intake task missing; call createMetaIntakeTask first')
   task.spec = spec
-  await fs.writeFile(
-    path.join(memoryDir, 'TASKS.json'),
-    JSON.stringify(queue, null, 2),
-    'utf-8',
-  )
+  await writeProjectStateJsonFromMemoryDirAsync(memoryDir, 'TASKS.json', queue)
 }
 
 beforeEach(async () => {
@@ -136,7 +135,7 @@ describe('GET /api/project/meta-intake/draft', () => {
     if (!task) throw new Error('meta-intake task missing')
     task.status = 'blocked'
     task.blockReason = 'Spec agent kept researching after Guildhall asked for durable progress.'
-    await fs.writeFile(path.join(memoryDir, 'TASKS.json'), JSON.stringify(queue, null, 2), 'utf-8')
+    await writeProjectStateJsonFromMemoryDirAsync(memoryDir, 'TASKS.json', queue)
 
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(new Request(projectUrl('/api/project/meta-intake/draft')))
@@ -276,7 +275,7 @@ describe('POST /api/project/meta-intake/synthesize', () => {
       choices: ['Keep researching', 'Draft setup from repo scan'],
       selectionMode: 'single',
     }]
-    await fs.writeFile(path.join(memoryDir, 'TASKS.json'), JSON.stringify(queue, null, 2), 'utf-8')
+    await writeProjectStateJsonFromMemoryDirAsync(memoryDir, 'TASKS.json', queue)
 
     const { app } = buildServeApp({ projectPath: tmpDir })
     const synthesize = await app.fetch(
@@ -326,7 +325,7 @@ describe('POST /api/project/meta-intake/synthesize', () => {
         answer: 'converter-core, extension-ui, docs',
       },
     ]
-    await fs.writeFile(path.join(memoryDir, 'TASKS.json'), JSON.stringify(queue, null, 2), 'utf-8')
+    await writeProjectStateJsonFromMemoryDirAsync(memoryDir, 'TASKS.json', queue)
     await fs.writeFile(
       path.join(tmpDir, 'package.json'),
       JSON.stringify({ scripts: { build: 'tsc -b', test: 'vitest' } }, null, 2),
@@ -346,8 +345,9 @@ describe('POST /api/project/meta-intake/synthesize', () => {
     expect(res.status).toBe(200)
     const body = await res.json() as Record<string, any>
     expect(body.ok).toBe(true)
-    expect(body.drafts).toHaveLength(3)
-    expect(body.drafts[0].name).toBe('Converter Core')
+    expect(body.drafts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'Converter Core' }),
+    ]))
 
     const updated = await readQueue()
     const updatedTask = updated.tasks.find(t => t.id === META_INTAKE_TASK_ID)

@@ -14,6 +14,7 @@ import { TaskQueue } from '@guildhall/core'
 import { raiseEscalation } from '@guildhall/tools'
 import { getProjectStateDir, getProjectSystemStatePathFromMemoryDir, getProjectTranscriptPath } from '@guildhall/sessions'
 import { listOwnerInputRequests } from '../owner-input-store.js'
+import { buildEffectiveTask } from '../effective-task.js'
 
 // ---------------------------------------------------------------------------
 // FR-12 exploratory task intake
@@ -48,7 +49,14 @@ afterEach(async () => {
 
 async function readQueue(): Promise<TaskQueue> {
   const raw = await fs.readFile(tasksPath, 'utf-8')
-  return TaskQueue.parse(JSON.parse(raw))
+  const queue = TaskQueue.parse(JSON.parse(raw))
+  return {
+    ...queue,
+    tasks: await Promise.all(queue.tasks.map(async task => {
+      const projectRoot = path.isAbsolute(task.projectPath) ? task.projectPath : tmpDir
+      return buildEffectiveTask(projectRoot, task) as unknown as typeof task
+    })),
+  }
 }
 
 function buildableSpec(extra = ''): string {

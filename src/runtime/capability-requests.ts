@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
-import { atomicWriteText } from '@guildhall/sessions'
+import { atomicWriteText, getProjectSystemStatePathFromMemoryDir } from '@guildhall/sessions'
 import { applyCapabilityRequestTransition } from './capability-request-machine.js'
 import {
   CapabilityRequest,
@@ -112,7 +112,7 @@ export async function saveCapabilityRequest(memoryDir: string, request: Capabili
 }
 
 function capabilityDir(memoryDir: string): string {
-  return path.join(memoryDir, 'capability-requests')
+  return getProjectSystemStatePathFromMemoryDir(memoryDir, 'capability-requests')
 }
 
 function slugify(value: string): string {

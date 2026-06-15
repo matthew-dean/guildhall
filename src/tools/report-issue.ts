@@ -109,7 +109,10 @@ export async function reportIssue(input: ReportIssueInput): Promise<ReportIssueR
     const task = queue.tasks.find((t) => t.id === parsed.taskId)
     if (!task) return { success: false, error: `Task ${parsed.taskId} not found` }
 
-    const projectRoot = inferProjectRootFromMemoryDir(path.dirname(parsed.tasksPath))
+    const stateDir = path.dirname(parsed.tasksPath)
+    const projectRoot = path.basename(stateDir) === 'project-state' && path.isAbsolute(task.projectPath)
+      ? task.projectPath
+      : inferProjectRootFromMemoryDir(stateDir)
     const existingIssueEvidence = await readTaskEvidence(projectRoot, task.id, { kind: 'agent_issue' })
     const now = new Date().toISOString()
     const issue: AgentIssue = {

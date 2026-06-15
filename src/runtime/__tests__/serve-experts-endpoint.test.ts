@@ -4,7 +4,9 @@ import path from 'node:path'
 import os from 'node:os'
 import yaml from 'js-yaml'
 import { bootstrapWorkspace } from '@guildhall/config'
+import { projectStatePathFromMemoryDir } from '@guildhall/sessions'
 import { buildServeApp } from '../serve.js'
+import { designSystemPath } from '../design-system-store.js'
 
 // GET /api/project/task/:id/experts — surface applicable personas, their
 // verdicts, and their namespaced gate results for the drawer's Experts tab.
@@ -17,7 +19,7 @@ async function seedTask(
   id: string,
   overrides: Record<string, any> = {},
 ): Promise<void> {
-  const tasksPath = path.join(memoryDir, 'TASKS.json')
+  const tasksPath = projectStatePathFromMemoryDir(memoryDir, 'TASKS.json')
   const queue = {
     version: 1,
     lastUpdated: new Date().toISOString(),
@@ -48,6 +50,7 @@ async function seedTask(
       },
     ],
   }
+  await fs.mkdir(path.dirname(tasksPath), { recursive: true })
   await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf8')
 }
 
@@ -80,8 +83,10 @@ async function seedDesignSystem(): Promise<void> {
       examples: [],
     },
   }
+  const designSystemFile = designSystemPath(memoryDir)
+  await fs.mkdir(path.dirname(designSystemFile), { recursive: true })
   await fs.writeFile(
-    path.join(memoryDir, 'design-system.yaml'),
+    designSystemFile,
     yaml.dump(ds),
     'utf8',
   )

@@ -11691,3 +11691,33 @@ Verification:
   scripts/release-artifacts.test.ts` passed with `78` tests.
 
 source: codex:remove-advanced-structure-flag-2026-06-14
+
+2026-06-14T22:13:50Z - Routed runtime and tests through the managed project-state layer.
+
+Finding:
+- The storage-boundary cleanup had left several runtime and test paths rebuilding
+  legacy `.guildhall/*` locations directly. That let fixtures pass through a
+  different file layout than the runtime used, especially around `TASKS.json`,
+  `PROGRESS.md`, `workspace-goals.json`, `runtime.json`, design state, memory
+  bridge state, MCP task reads, and provider-start readiness.
+- This checkout has no `.guildhall/artifacts.yaml`, so the audit entry was
+  appended directly to `internal/audits/flow-audit.md` instead of resolving
+  `artifact:flow-audit` through the registry.
+
+Repair:
+- Added a shared `src/sessions/project-state-store.ts` facade and routed runtime
+  storage helpers plus tests through managed project-state helpers instead of
+  duplicating path construction.
+- Moved MCP reader/evidence/task writes, runtime compatibility reads,
+  workspace-import rerun cleanup, re-intake draft storage, design/memory
+  fixtures, and CLI/MCP memory-bridge assertions onto the same managed layer.
+- Fixed provider start readiness to use the effective runtime provider config
+  for paid fallback, so a globally allowed fallback is honored before blocking
+  on unavailable local models.
+
+Verification:
+- `pnpm typecheck` passed.
+- `pnpm test` passed with `331` files passed, `1` skipped; `3960` tests passed,
+  `3` skipped, and `11` todo.
+
+source: codex:managed-project-state-routing-2026-06-14

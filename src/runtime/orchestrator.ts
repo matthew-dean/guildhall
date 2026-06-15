@@ -7998,6 +7998,9 @@ export class Orchestrator {
       const runtimePatch: Parameters<typeof upsertTaskRuntimeState>[2] = { updatedAt }
       const workspacePatch: Parameters<typeof upsertTaskWorkspaceState>[2] = { updatedAt }
       const evidence = removed.removedEvidence
+      if ('assignedTo' in evidence) {
+        runtimePatch.assignedTo = typeof evidence.assignedTo === 'string' ? evidence.assignedTo : null
+      }
       if (typeof evidence.revisionCount === 'number') {
         runtimePatch.revisionCount = Math.max(currentRuntime?.revisionCount ?? 0, evidence.revisionCount)
       }
@@ -8043,16 +8046,36 @@ export class Orchestrator {
     taskId: string,
     evidence: Record<string, unknown>,
   ): Promise<void> {
+    const stablePayloadKey = (value: unknown): string => {
+      if (Array.isArray(value)) return `[${value.map(stablePayloadKey).join(',')}]`
+      if (value && typeof value === 'object') {
+        const record = value as Record<string, unknown>
+        return `{${Object.keys(record).sort().map(key => `${JSON.stringify(key)}:${stablePayloadKey(record[key])}`).join(',')}}`
+      }
+      return JSON.stringify(value)
+    }
     const appendMany = async (field: string, kind: Parameters<typeof appendTaskEvidence>[2]['kind'], items: unknown[], timestampField: string): Promise<void> => {
-      const existingIds = new Set((await readTaskEvidence(projectRoot, taskId, { kind })).map(event => event.id))
+      const existing = await readTaskEvidence(projectRoot, taskId, { kind })
+      const existingIds = new Set(existing.map(event => event.id))
+      const existingPayloads = new Set(existing.map(event => stablePayloadKey(event.payload)))
       for (const [index, item] of items.entries()) {
         if (typeof item !== 'object' || item === null || Array.isArray(item)) continue
         const payload = item as Record<string, unknown>
+        const payloadKey = stablePayloadKey(payload)
+        if (existingPayloads.has(payloadKey)) continue
         const recordedAt = typeof payload[timestampField] === 'string' ? payload[timestampField] : this.now()
-        const id = typeof payload.id === 'string' ? payload.id : `${field}-${taskId}-${recordedAt.replace(/[^0-9A-Za-z]/g, '')}-${index + 1}`
-        if (existingIds.has(id)) continue
+        const baseId = typeof payload.id === 'string'
+          ? `${field}-${taskId}-${payload.id}-${recordedAt.replace(/[^0-9A-Za-z]/g, '')}`
+          : `${field}-${taskId}-${recordedAt.replace(/[^0-9A-Za-z]/g, '')}-${index + 1}`
+        let id = baseId
+        let suffix = 2
+        while (existingIds.has(id)) {
+          id = `${baseId}-${suffix}`
+          suffix += 1
+        }
         await appendTaskEvidence(projectRoot, taskId, { id, kind, recordedAt, payload })
         existingIds.add(id)
+        existingPayloads.add(payloadKey)
       }
     }
     if (Array.isArray(evidence.notes)) await appendMany('note', 'note', evidence.notes, 'timestamp')

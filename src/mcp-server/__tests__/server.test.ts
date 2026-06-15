@@ -1,7 +1,8 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { getProjectSystemStatePath } from '@guildhall/sessions'
 
 import {
   appendTaskEvidence,
@@ -34,7 +35,7 @@ describe('Guildhall MCP tools', () => {
         summary: 'External agent read the flow audit before editing.',
         source: 'claude-code',
       })
-      const progress = readFileSync(join(root, '.guildhall', 'PROGRESS.md'), 'utf8')
+      const progress = readFileSync(getProjectSystemStatePath(root, 'PROGRESS.md'), 'utf8')
       expect(progress).toContain('task-001')
       expect(progress).toContain('External agent read the flow audit')
       expect(progress).toContain('source: claude-code')
@@ -129,7 +130,9 @@ describe('Guildhall MCP tools', () => {
         escalations: [],
         agentIssues: [],
       }
-      writeFileSync(join(root, '.guildhall', 'TASKS.json'), JSON.stringify({ tasks: [task] }), 'utf8')
+      const tasksPath = getProjectSystemStatePath(root, 'TASKS.json')
+      mkdirSync(dirname(tasksPath), { recursive: true })
+      writeFileSync(tasksPath, JSON.stringify({ tasks: [task] }), 'utf8')
       const effective = await readMcpEffectiveContext(ctx, { taskId: 'task-001' })
       expect(effective).toContain('## Effective Memory')
       expect(effective).toContain('Use MCP for audit context.')
@@ -179,7 +182,7 @@ describe('Guildhall MCP tools', () => {
         updatedAt: '2026-06-03T12:05:00.000Z',
       })
       expect(reviewed).toContain('"reviewStatus": "reviewed"')
-      expect(readFileSync(join(root, '.guildhall', 'memory-store.json'), 'utf8')).toContain('external-mcp-bridge-record')
+      expect(readFileSync(getProjectSystemStatePath(root, 'memory-store.json'), 'utf8')).toContain('external-mcp-bridge-record')
 
       await importMcpExternalMemoryBridgeRecord(ctx, {
         id: 'mcp-rejected-record',
@@ -208,7 +211,7 @@ describe('Guildhall MCP tools', () => {
       })
       expect(rejected).toContain('"reviewStatus": "rejected"')
       expect(rejected).toContain('"rejectionReason": "Outdated source summary."')
-      expect(readFileSync(join(root, '.guildhall', 'memory-store.json'), 'utf8')).not.toContain('external-mcp-rejected-record')
+      expect(readFileSync(getProjectSystemStatePath(root, 'memory-store.json'), 'utf8')).not.toContain('external-mcp-rejected-record')
     } finally {
       rmSync(root, { recursive: true, force: true })
     }

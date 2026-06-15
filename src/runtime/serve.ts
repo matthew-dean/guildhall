@@ -4521,7 +4521,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         projectPath: project.path,
         resolvedConfig,
         runtimeProvider,
-        allowPaidProviderFallback: Boolean(projectCfg.allowPaidProviderFallback),
+        allowPaidProviderFallback: runtimeProvider.allowPaidProviderFallback,
         allowTaskReadinessBlocker: !body.taskId,
         ...(body.taskId ? { requestedTaskId: body.taskId } : {}),
       })

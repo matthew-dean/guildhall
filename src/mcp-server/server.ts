@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { getProjectSystemStatePathFromMemoryDir } from '@guildhall/sessions'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 
@@ -733,7 +734,7 @@ export async function createGuildhallMcpServer(ctx: GuildhallMcpContext): Promis
 }
 
 async function writeTasks(projectStateDir: string, tasks: Task[]): Promise<void> {
-  const file = path.join(projectStateDir, 'TASKS.json')
+  const file = getProjectSystemStatePathFromMemoryDir(projectStateDir, 'TASKS.json')
   let existing: unknown = null
   try {
     existing = JSON.parse(await fs.readFile(file, 'utf8')) as unknown
@@ -743,6 +744,6 @@ async function writeTasks(projectStateDir: string, tasks: Task[]): Promise<void>
   const next = existing && typeof existing === 'object' && !Array.isArray(existing)
     ? { ...existing, tasks, lastUpdated: new Date().toISOString() }
     : { tasks, lastUpdated: new Date().toISOString() }
-  await fs.mkdir(projectStateDir, { recursive: true })
+  await fs.mkdir(path.dirname(file), { recursive: true })
   await fs.writeFile(file, JSON.stringify(next, null, 2) + '\n', 'utf8')
 }

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { promises as fs } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import os from 'node:os'
 import { stringify as stringifyYaml } from 'yaml'
 
@@ -93,7 +93,7 @@ describe('loadLeverSettings', () => {
       setBy: 'user-direct',
     }
 
-    await fs.mkdir(join(tmpDir, '.guildhall'), { recursive: true })
+    await fs.mkdir(dirname(settingsPath), { recursive: true })
     await fs.writeFile(settingsPath, stringifyYaml(legacy), 'utf8')
 
     const loaded = await loadLeverSettings({ path: settingsPath })
@@ -117,7 +117,7 @@ describe('loadLeverSettings', () => {
   })
 
   it('throws LeverSettingsCorruptError on invalid YAML', async () => {
-    await fs.mkdir(join(tmpDir, '.guildhall'), { recursive: true })
+    await fs.mkdir(dirname(settingsPath), { recursive: true })
     await fs.writeFile(settingsPath, ': : : not valid yaml\n\t- [', 'utf8')
     await expect(loadLeverSettings({ path: settingsPath })).rejects.toBeInstanceOf(
       LeverSettingsCorruptError,
@@ -125,7 +125,7 @@ describe('loadLeverSettings', () => {
   })
 
   it('throws LeverSettingsCorruptError when schema-invalid', async () => {
-    await fs.mkdir(join(tmpDir, '.guildhall'), { recursive: true })
+    await fs.mkdir(dirname(settingsPath), { recursive: true })
     // Valid YAML, but the shape is wrong (wrong version).
     await fs.writeFile(settingsPath, 'version: 99\nproject: {}\ndomains: {}\n', 'utf8')
     await expect(loadLeverSettings({ path: settingsPath })).rejects.toBeInstanceOf(
@@ -156,7 +156,7 @@ describe('loadLeverSettings', () => {
   })
 
   it('still throws when the file is wrong-shaped (not just missing keys)', async () => {
-    await fs.mkdir(join(tmpDir, '.guildhall'), { recursive: true })
+    await fs.mkdir(dirname(settingsPath), { recursive: true })
     // Bad primitive type — self-heal can't recover this.
     await fs.writeFile(settingsPath, 'version: "one"\nproject: {}\ndomains: {}\n', 'utf8')
     await expect(loadLeverSettings({ path: settingsPath })).rejects.toBeInstanceOf(

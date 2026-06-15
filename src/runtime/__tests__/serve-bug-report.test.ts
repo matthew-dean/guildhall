@@ -4,6 +4,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { bootstrapWorkspace } from '@guildhall/config'
 import { TaskQueue } from '@guildhall/core'
+import { projectStatePath } from '@guildhall/sessions'
 import { buildServeApp } from '../serve.js'
 
 // Integration tests for POST /api/project/bug-report — the dashboard's
@@ -41,7 +42,7 @@ beforeEach(async () => {
       },
     ],
   }).id ?? path.basename(tmpDir)
-  tasksPath = path.join(tmpDir, '.guildhall', 'TASKS.json')
+  tasksPath = projectStatePath(tmpDir, 'TASKS.json')
 })
 
 afterEach(async () => {

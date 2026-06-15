@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { getProjectSystemStatePath } from '@guildhall/sessions'
 import {
   semanticCompletionBudget,
   semanticRepairCompletionBudget,
@@ -378,7 +379,7 @@ describe('Guildhall CLI surface', () => {
       '--json',
     ], { now: '2026-06-03T12:05:00.000Z' })) as { reviewStatus: string; reviewer: string }
     expect(reviewed).toMatchObject({ reviewStatus: 'reviewed', reviewer: 'owner' })
-    expect(readFileSync(join(project, '.guildhall', 'memory-store.json'), 'utf8')).toContain('external-cli-bridge-record')
+    expect(readFileSync(getProjectSystemStatePath(project, 'memory-store.json'), 'utf8')).toContain('external-cli-bridge-record')
 
     const rejectedFile = join(tmpHome(), 'bridge-rejected-record.json')
     writeFileSync(rejectedFile, JSON.stringify({
@@ -417,7 +418,7 @@ describe('Guildhall CLI surface', () => {
       reviewStatus: 'rejected',
       rejectionReason: 'Outdated source summary.',
     })
-    expect(readFileSync(join(project, '.guildhall', 'memory-store.json'), 'utf8')).not.toContain('external-cli-rejected-record')
+    expect(readFileSync(getProjectSystemStatePath(project, 'memory-store.json'), 'utf8')).not.toContain('external-cli-rejected-record')
   })
 
   it('validates and records the review calibration corpus through persistence', async () => {
@@ -463,7 +464,7 @@ describe('Guildhall CLI surface', () => {
         recordedAt: '2026-05-25T12:05:00.000Z',
       })
 
-      expect(result.ref.path).toContain(join(project, '.guildhall', 'persistence', 'events', 'escaped-misses'))
+      expect(result.ref.path).toContain(getProjectSystemStatePath(project, 'persistence/events/escaped-misses'))
       expect(result.payload).toMatchObject({
         taskId: 'task-1',
         missedLane: 'ux_comprehension',

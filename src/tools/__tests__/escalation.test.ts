@@ -33,7 +33,7 @@ function seedTask(overrides: Partial<Task> = {}): Task {
     title: 'Test task',
     description: 'A test task',
     domain: 'looma',
-    projectPath: '/projects/looma',
+    projectPath: tmpDir,
     status: 'in_progress',
     priority: 'normal',
     dependsOn: [],
@@ -294,12 +294,12 @@ describe('resolveEscalation', () => {
 
     const { queue } = await readTasks({ tasksPath })
     const task = queue?.tasks[0]
+    const effective = await readEffectiveTask()
     expect(task?.status).toBe('in_progress')
-    expect(task?.assignedTo).toBe('worker-agent')
+    expect(effective.assignedTo).toBe('worker-agent')
     expect(task?.blockReason).toBeUndefined()
     const raw = await readRawQueue()
     expect(raw.tasks[0]).not.toHaveProperty('escalations')
-    const effective = await readEffectiveTask()
     expect(effective.escalations[0]?.resolvedAt).toBeDefined()
     expect(effective.escalations[0]?.resolution).toBe('Use library A')
     expect(effective.escalations[0]?.resolvedBy).toBe('human')
@@ -316,8 +316,9 @@ describe('resolveEscalation', () => {
     expect(result.success).toBe(true)
 
     const { queue } = await readTasks({ tasksPath })
+    const effective = await readEffectiveTask()
     expect(queue?.tasks[0]?.status).toBe('review')
-    expect(queue?.tasks[0]?.assignedTo).toBe('reviewer-agent')
+    expect(effective.assignedTo).toBe('reviewer-agent')
   })
 
   it('starts a fresh retry window when resolving max-revisions back to active work', async () => {

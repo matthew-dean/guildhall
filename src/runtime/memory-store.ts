@@ -189,7 +189,9 @@ function readMemoryMarkdown(memoryDir: string): MemoryRecord[] {
 }
 
 function readLearningAdapters(dir: string, scope: 'project' | 'user_global'): MemoryRecord[] {
-  const file = path.join(dir, 'learning.json')
+  const file = scope === 'project'
+    ? getProjectSystemStatePathFromMemoryDir(dir, 'learning.json')
+    : path.join(dir, 'learning.json')
   if (!existsSync(file)) return []
   try {
     const parsed = JSON.parse(readManagedTextFileSync(file, 'utf8')) as {

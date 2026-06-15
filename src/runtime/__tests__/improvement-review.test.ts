@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 
 import type { Task, TaskQueue } from '@guildhall/core'
+import { projectStatePathFromMemoryDir } from '@guildhall/sessions'
 
 import { reviewInProcessWorkForGuildhallImprovements } from '../improvement-review.js'
 
@@ -240,11 +241,13 @@ async function writeQueue(memoryDir: string, tasks: Task[]): Promise<void> {
     lastUpdated: '2026-05-29T12:00:00.000Z',
     tasks,
   }
-  await fs.writeFile(path.join(memoryDir, 'TASKS.json'), JSON.stringify(queue, null, 2))
+  const tasksPath = projectStatePathFromMemoryDir(memoryDir, 'TASKS.json')
+  await fs.mkdir(path.dirname(tasksPath), { recursive: true })
+  await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2))
 }
 
 async function readQueue(memoryDir: string): Promise<TaskQueue> {
-  return JSON.parse(await fs.readFile(path.join(memoryDir, 'TASKS.json'), 'utf-8')) as TaskQueue
+  return JSON.parse(await fs.readFile(projectStatePathFromMemoryDir(memoryDir, 'TASKS.json'), 'utf-8')) as TaskQueue
 }
 
 function task(overrides: Partial<Task> & Pick<Task, 'id' | 'title' | 'description' | 'status'>): Task {

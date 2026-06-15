@@ -14,6 +14,7 @@ import {
 import { readTaskEvidence } from '@guildhall/sessions'
 import { TaskQueue } from '@guildhall/core'
 import { FORBIDDEN_PROJECT_TASK_FIELDS } from '../../runtime/project-state-boundary.js'
+import { buildEffectiveTask } from '../../runtime/effective-task.js'
 
 // ---------------------------------------------------------------------------
 // Tests for task queue tools — these are safety-critical (gate logic depends
@@ -22,8 +23,10 @@ import { FORBIDDEN_PROJECT_TASK_FIELDS } from '../../runtime/project-state-bound
 
 let tmpDir: string
 let tasksPath: string
+let seedQueue: ReturnType<typeof makeSeedQueue>
 
-const seedQueue = {
+function makeSeedQueue() {
+  return {
   version: 1,
   lastUpdated: new Date().toISOString(),
   tasks: [
@@ -32,7 +35,7 @@ const seedQueue = {
       title: 'Test task',
       description: 'A test task',
       domain: 'looma',
-      projectPath: '/projects/looma',
+      projectPath: tmpDir,
       status: 'exploring',
       priority: 'normal',
       dependsOn: [],
@@ -48,6 +51,7 @@ const seedQueue = {
       updatedAt: new Date().toISOString(),
     },
   ],
+  }
 }
 
 const ctx = { cwd: '/tmp', metadata: {} }
@@ -55,6 +59,7 @@ const ctx = { cwd: '/tmp', metadata: {} }
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-test-'))
   tasksPath = path.join(tmpDir, 'TASKS.json')
+  seedQueue = makeSeedQueue()
   await fs.writeFile(tasksPath, JSON.stringify(seedQueue), 'utf-8')
 })
 
@@ -107,8 +112,9 @@ describe('updateTask', () => {
     await updateTask({ tasksPath, taskId: 'task-001', status: 'in_progress' })
     await updateTask({ tasksPath, taskId: 'task-001', status: 'review' })
     const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    const effective = await buildEffectiveTask(tmpDir, TaskQueue.parse(raw).tasks[0]!)
     expect(raw.tasks[0].status).toBe('review')
-    expect(raw.tasks[0].assignedTo).toBe('reviewer-agent')
+    expect(effective.assignedTo).toBe('reviewer-agent')
   })
 
   it('normalizes gate-checker ownership when a task moves into gate_check', async () => {
@@ -118,8 +124,9 @@ describe('updateTask', () => {
     await updateTask({ tasksPath, taskId: 'task-001', status: 'review' })
     await updateTask({ tasksPath, taskId: 'task-001', status: 'gate_check' })
     const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    const effective = await buildEffectiveTask(tmpDir, TaskQueue.parse(raw).tasks[0]!)
     expect(raw.tasks[0].status).toBe('gate_check')
-    expect(raw.tasks[0].assignedTo).toBe('gate-checker-agent')
+    expect(effective.assignedTo).toBe('gate-checker-agent')
   })
 
   it('preserves an explicitly supplied assignee when provided alongside a status', async () => {
@@ -133,7 +140,8 @@ describe('updateTask', () => {
       assignedTo: 'custom-review-owner',
     })
     const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
-    expect(raw.tasks[0].assignedTo).toBe('custom-review-owner')
+    const effective = await buildEffectiveTask(tmpDir, TaskQueue.parse(raw).tasks[0]!)
+    expect(effective.assignedTo).toBe('custom-review-owner')
   })
 
   it('rejects impossible explicit status jumps through the transition boundary', async () => {

@@ -23,10 +23,17 @@ import {
   makeDefaultSettings,
   saveLeverSettings,
 } from '@guildhall/levers'
-import { appendTaskEvidence, getProjectContextDebugSnapshotDir } from '@guildhall/sessions'
+import {
+  appendTaskEvidence,
+  getProjectContextDebugSnapshotDir,
+  projectStatePathFromMemoryDir,
+  readProjectStateJsonFromMemoryDirAsync,
+  writeProjectStateJsonFromMemoryDirAsync,
+} from '@guildhall/sessions'
 import type { ConversationMessage, UsageSnapshot } from '@guildhall/protocol'
 import { z } from 'zod'
 import { InMemoryGitDriver } from '../git-driver.js'
+import { buildEffectiveTask } from '../effective-task.js'
 
 // ---------------------------------------------------------------------------
 // Integration test: reviewer fan-out at `review`. The Orchestrator, when
@@ -36,7 +43,6 @@ import { InMemoryGitDriver } from '../git-driver.js'
 
 let tmpDir: string
 let memoryDir: string
-let tasksPath: string
 let originalDataDir: string | undefined
 
 beforeEach(async () => {
@@ -45,7 +51,6 @@ beforeEach(async () => {
   process.env.GUILDHALL_DATA_DIR = path.join(tmpDir, 'data')
   memoryDir = path.join(tmpDir, 'memory')
   await fs.mkdir(memoryDir, { recursive: true })
-  tasksPath = path.join(memoryDir, 'TASKS.json')
 })
 
 afterEach(async () => {
@@ -111,11 +116,23 @@ async function writeQueue(tasks: Task[]): Promise<void> {
     lastUpdated: '2026-04-01T00:00:00Z',
     tasks,
   }
-  await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+  await writeProjectStateJsonFromMemoryDirAsync(memoryDir, 'TASKS.json', queue)
 }
 
 async function readQueue(): Promise<TaskQueue> {
-  return JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+  const queue = await readProjectStateJsonFromMemoryDirAsync<TaskQueue>(memoryDir, 'TASKS.json')
+  return {
+    ...queue,
+    tasks: await Promise.all(queue.tasks.map(async (task) => buildEffectiveTask(tmpDir, task))) as unknown as Task[],
+  }
+}
+
+async function readTaskDefinitionQueue(): Promise<TaskQueue> {
+  return readProjectStateJsonFromMemoryDirAsync<TaskQueue>(memoryDir, 'TASKS.json')
+}
+
+function statePath(relativePath: string): string {
+  return projectStatePathFromMemoryDir(memoryDir, relativePath)
 }
 
 function stubAgent(name: string) {
@@ -282,9 +299,10 @@ describe('Orchestrator — reviewer fan-out at review', () => {
 
     expect(observedContext).toContain('ContextMenu implementation is complete')
     expect(observedContext).toContain('test:browser passed')
-    const after = await readQueue()
-    expect(after.tasks[0]?.notes).toEqual([])
-    expect(after.tasks[0]?.status).toBe('gate_check')
+    const afterDefinition = await readTaskDefinitionQueue()
+    expect(afterDefinition.tasks[0]?.notes).toBeUndefined()
+    const afterEffective = await readQueue()
+    expect(afterEffective.tasks[0]?.status).toBe('gate_check')
   })
 
   it('default fanout reviewers inspect files from the task projectPath', async () => {
@@ -650,7 +668,7 @@ describe('Orchestrator — reviewer fan-out at review', () => {
       },
     }
     await saveLeverSettings({
-      path: path.join(memoryDir, AGENT_SETTINGS_FILENAME),
+      path: statePath(AGENT_SETTINGS_FILENAME),
       settings,
     })
 
@@ -1046,7 +1064,7 @@ describe('Orchestrator — reviewer fan-out at review', () => {
       q.tasks[0]!.status = 'gate_check'
       q.tasks[0]!.updatedAt = '2026-04-01T00:00:02Z'
       q.lastUpdated = '2026-04-01T00:00:02Z'
-      await fs.writeFile(tasksPath, JSON.stringify(q, null, 2), 'utf-8')
+      await writeProjectStateJsonFromMemoryDirAsync(memoryDir, 'TASKS.json', q)
       return { text: 'ok' }
     }
     const agents = {

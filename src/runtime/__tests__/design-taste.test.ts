@@ -55,6 +55,7 @@ describe('design taste store', () => {
           },
         },
       }), 'utf-8')
+      await fs.mkdir(path.dirname(designTastePath(memoryDir)), { recursive: true })
       await fs.writeFile(designTastePath(memoryDir), yaml.dump({
         opinions: {
           paletteStrategy: {

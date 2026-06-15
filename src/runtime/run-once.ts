@@ -5,7 +5,7 @@ import path from 'node:path'
 
 import type { ResolvedConfig } from '@guildhall/config'
 import { AGENT_SETTINGS_FILENAME, loadLeverSettings, saveLeverSettings, validateLeverSettings } from '@guildhall/levers'
-import { atomicWriteText, getProjectSystemStatePath, inferProjectRootFromMemoryDir } from '@guildhall/sessions'
+import { appendTaskEvidence, atomicWriteText, getProjectSystemStatePath, inferProjectRootFromMemoryDir } from '@guildhall/sessions'
 
 import { createExploringTask } from './intake.js'
 import { runOrchestrator, type OrchestratorRunOptions, type OrchestratorRunResult } from './orchestrator.js'
@@ -165,8 +165,7 @@ async function appendRunOnceNote(input: {
   const queue = JSON.parse(raw)
   const task = queue.tasks?.find((candidate: { id?: unknown }) => candidate.id === input.taskId)
   if (!task) throw new Error(`Task ${input.taskId} not found after run-once intake.`)
-  task.notes ??= []
-  task.notes.push({
+  const note = {
     agentId: 'run-once',
     role: 'automation',
     content: [
@@ -175,6 +174,12 @@ async function appendRunOnceNote(input: {
       'This task was created through the scriptable run-once lane; normal Guildhall pressure-test, review, gate, and handoff rules still apply.',
     ].join('\n'),
     timestamp: input.createdAt,
+  }
+  await appendTaskEvidence(inferProjectRootFromMemoryDir(input.memoryDir), input.taskId, {
+    id: `note-${input.taskId}-${input.createdAt.replace(/[^0-9A-Za-z]/g, '')}-run-once`,
+    kind: 'note',
+    recordedAt: input.createdAt,
+    payload: note,
   })
   task.updatedAt = input.createdAt
   queue.lastUpdated = input.createdAt

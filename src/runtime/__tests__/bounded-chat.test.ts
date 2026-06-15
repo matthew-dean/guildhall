@@ -3,6 +3,10 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
+  readProjectStateTextFromMemoryDirAsync,
+  writeProjectStateTextFromMemoryDirAsync,
+} from '@guildhall/sessions'
+import {
   applyBoundedChatCoordinatorAction,
   createBoundedChatSession,
   getNextBoundedChatPrompt,
@@ -330,7 +334,7 @@ describe('new request bounded chat adapter', () => {
 describe('project check-in bounded chat adapter', () => {
   it('creates a bounded chat session from project evidence', async () => {
     const memoryDir = await mkdtemp(path.join(tmpdir(), 'guildhall-bounded-chat-'))
-    await writeFile(path.join(memoryDir, 'project-brief.md'), [
+    await writeProjectStateTextFromMemoryDirAsync(memoryDir, 'project-brief.md', [
       'Narrative Harness is fiction-writing software for building, drafting, and revising a coherent novel.',
       'The project includes author voice, reader knowledge, coherence reviewers, and quiet commercial editor direction.',
     ].join('\n'))
@@ -357,7 +361,7 @@ describe('project check-in bounded chat adapter', () => {
 
   it('turns an ambiguous answer into a bounded follow-up question', async () => {
     const memoryDir = await mkdtemp(path.join(tmpdir(), 'guildhall-bounded-chat-'))
-    await writeFile(path.join(memoryDir, 'project-brief.md'), [
+    await writeProjectStateTextFromMemoryDirAsync(memoryDir, 'project-brief.md', [
       'Narrative Harness is fiction-writing software for building, drafting, and revising a coherent novel.',
       'The project includes author voice, reader knowledge, coherence reviewers, and quiet commercial editor direction.',
     ].join('\n'))
@@ -384,7 +388,7 @@ describe('project check-in bounded chat adapter', () => {
 
   it('keeps asking planned root questions until the intake plan is exhausted', async () => {
     const memoryDir = await mkdtemp(path.join(tmpdir(), 'guildhall-bounded-chat-'))
-    await writeFile(path.join(memoryDir, 'project-brief.md'), [
+    await writeProjectStateTextFromMemoryDirAsync(memoryDir, 'project-brief.md', [
       'Narrative Harness is fiction-writing software for building, drafting, and revising a coherent novel.',
       'The project includes author voice, reader knowledge, coherence reviewers, and quiet commercial editor direction.',
       'The UI should feel quiet and commercially credible.',
@@ -432,7 +436,7 @@ describe('project check-in bounded chat adapter', () => {
 
   it('persists the completed intake answers so the stored session matches what the user said', async () => {
     const memoryDir = await mkdtemp(path.join(tmpdir(), 'guildhall-bounded-chat-'))
-    await writeFile(path.join(memoryDir, 'project-brief.md'), [
+    await writeProjectStateTextFromMemoryDirAsync(memoryDir, 'project-brief.md', [
       'Narrative Harness is fiction-writing software for building, drafting, and revising a coherent novel.',
       'The project includes author voice, reader knowledge, coherence reviewers, and quiet commercial editor direction.',
       'The UI should feel quiet and commercially credible.',
@@ -457,7 +461,7 @@ describe('project check-in bounded chat adapter', () => {
     })
 
     const stored = JSON.parse(
-      await readFile(path.join(memoryDir, 'bounded-chat', `${started.id}.json`), 'utf-8'),
+      await readProjectStateTextFromMemoryDirAsync(memoryDir, path.join('bounded-chat', `${started.id}.json`)),
     ) as {
       status: string
       plannerState?: {
@@ -502,7 +506,7 @@ describe('project check-in bounded chat adapter', () => {
 
   it('records confused answers as discarded and keeps the same question open', async () => {
     const memoryDir = await mkdtemp(path.join(tmpdir(), 'guildhall-bounded-chat-'))
-    await writeFile(path.join(memoryDir, 'project-brief.md'), [
+    await writeProjectStateTextFromMemoryDirAsync(memoryDir, 'project-brief.md', [
       'Narrative Harness is fiction-writing software for building, drafting, and revising a coherent novel.',
       'The project includes author voice, reader knowledge, coherence reviewers, and quiet commercial editor direction.',
     ].join('\n'))
@@ -539,7 +543,7 @@ describe('project check-in bounded chat adapter', () => {
 
   it('reuses the same active project check-in session when the user comes back later', async () => {
     const memoryDir = await mkdtemp(path.join(tmpdir(), 'guildhall-bounded-chat-'))
-    await writeFile(path.join(memoryDir, 'project-brief.md'), [
+    await writeProjectStateTextFromMemoryDirAsync(memoryDir, 'project-brief.md', [
       'Narrative Harness is fiction-writing software for building, drafting, and revising a coherent novel.',
       'The project includes author voice, reader knowledge, coherence reviewers, and quiet commercial editor direction.',
       'The UI should feel quiet and commercially credible.',

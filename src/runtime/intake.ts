@@ -1,9 +1,13 @@
-import { writeManagedTextFileSync } from '@guildhall/persistence'
 import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { TaskQueue, type RequestIntake, type Task, type TaskRequest, type TaskStatus } from '@guildhall/core'
-import { atomicWriteText, getProjectSystemStatePathFromMemoryDir } from '@guildhall/sessions'
+import {
+  atomicWriteText,
+  projectStatePathFromMemoryDir,
+  readProjectStateTextFromMemoryDirAsync,
+  writeProjectStateJsonFromMemoryDirAsync,
+} from '@guildhall/sessions'
 import {
   appendExploringTranscript,
   isMaterializableSplitAction,
@@ -40,15 +44,32 @@ import { buildSurfaceReviewPacketsForStructuredSpec } from './contract-surfaces.
 // ---------------------------------------------------------------------------
 
 function tasksPathFor(memoryDir: string): string {
-  return getProjectSystemStatePathFromMemoryDir(memoryDir, 'TASKS.json')
+  return projectStatePathFromMemoryDir(memoryDir, 'TASKS.json')
 }
 
 function progressPathFor(memoryDir: string): string {
-  return getProjectSystemStatePathFromMemoryDir(memoryDir, 'PROGRESS.md')
+  return projectStatePathFromMemoryDir(memoryDir, 'PROGRESS.md')
 }
 
 async function readQueue(memoryDir: string): Promise<TaskQueue> {
-  const raw = await readManagedTextFile(tasksPathFor(memoryDir), 'utf-8')
+  const raw = await readProjectStateTextFromMemoryDirAsync(memoryDir, 'TASKS.json').catch((err: unknown) => {
+    if (
+      err &&
+      typeof err === 'object' &&
+      'code' in err &&
+      (err as { code?: unknown }).code === 'ENOENT'
+    ) {
+      return null
+    }
+    throw err
+  })
+  if (raw === null) {
+    return TaskQueue.parse({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      tasks: [],
+    })
+  }
   // The bootstrap seeds TASKS.json as a bare `[]` for legacy reasons, so be
   // permissive on intake: if we see a bare array, promote it to a full queue.
   const now = new Date().toISOString()
@@ -61,7 +82,7 @@ async function readQueue(memoryDir: string): Promise<TaskQueue> {
 }
 
 async function writeQueue(memoryDir: string, queue: TaskQueue): Promise<void> {
-  writeManagedTextFileSync(tasksPathFor(memoryDir), JSON.stringify(queue, null, 2) + '\n')
+  await writeProjectStateJsonFromMemoryDirAsync(memoryDir, 'TASKS.json', queue)
 }
 
 function nextTaskId(queue: TaskQueue): string {

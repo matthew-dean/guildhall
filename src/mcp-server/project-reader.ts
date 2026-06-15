@@ -10,6 +10,7 @@ import {
 import {
   getProjectContextDebugLedgerPath,
   getProjectLocalHistoryHealth,
+  getProjectSystemStatePathFromMemoryDir,
 } from '@guildhall/sessions'
 import { load as yamlLoad } from 'js-yaml'
 import {
@@ -708,7 +709,7 @@ async function renderMemory(ctx: GuildhallMcpContext): Promise<string> {
     maxBytes: 4096,
   }).catch(() => null)
   const grouped = countBy(records, (record) => `${record.scope}/${record.status}`)
-  const rawMemory = await readOptional(path.join(ctx.projectStateDir, 'MEMORY.md'), '')
+  const rawMemory = await readOptional(getProjectSystemStatePathFromMemoryDir(ctx.projectStateDir, 'MEMORY.md'), '')
   return trimForMcp(redactForMcp([
     '# Memory',
     '',
@@ -1002,7 +1003,7 @@ export async function rejectMcpExternalMemoryBridgeRecord(ctx: GuildhallMcpConte
 export async function readTasks(
   projectStateDir: string,
 ): Promise<Array<Record<string, unknown> & { id: string; title?: string; status?: string }>> {
-  const raw = await readOptional(path.join(projectStateDir, 'TASKS.json'), '{"tasks":[]}')
+  const raw = await readOptional(getProjectSystemStatePathFromMemoryDir(projectStateDir, 'TASKS.json'), '{"tasks":[]}')
   const parsed = JSON.parse(raw) as unknown
   const tasks = Array.isArray(parsed)
     ? parsed

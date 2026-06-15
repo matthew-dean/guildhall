@@ -23,6 +23,7 @@ const dataLayerModules = new Set([
   'src/runtime/thin-project-state-manifest.ts',
   'src/sessions/atomic.ts',
   'src/sessions/local-history.ts',
+  'src/sessions/project-state-store.ts',
   'src/sessions/storage.ts',
   'src/sessions/task-state-store.ts',
 ])

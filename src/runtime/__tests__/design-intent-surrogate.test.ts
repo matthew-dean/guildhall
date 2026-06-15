@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { DESIGN_STORIES_FILE } from '../design-preview.js'
 import { buildDesignIntentSurrogate } from '../design-intent-surrogate.js'
+import { projectStatePathFromMemoryDir } from '@guildhall/sessions'
 
 describe('buildDesignIntentSurrogate', () => {
   it('labels SwiftUI projects as browser-surrogate intent previews until native proof exists', async () => {
@@ -18,7 +19,9 @@ describe('buildDesignIntentSurrogate', () => {
         'import SwiftUI\n#Preview { ContentView() }\n',
         'utf-8',
       )
-      await fs.writeFile(path.join(memoryDir, DESIGN_STORIES_FILE), [
+      const storiesPath = projectStatePathFromMemoryDir(memoryDir, DESIGN_STORIES_FILE)
+      await fs.mkdir(path.dirname(storiesPath), { recursive: true })
+      await fs.writeFile(storiesPath, [
         'version: 1',
         'stories:',
         '  - id: pantry-filter.default',
@@ -52,7 +55,9 @@ describe('buildDesignIntentSurrogate', () => {
       await fs.writeFile(path.join(projectPath, 'package.json'), JSON.stringify({
         dependencies: { svelte: '^5.0.0' },
       }), 'utf-8')
-      await fs.writeFile(path.join(memoryDir, DESIGN_STORIES_FILE), [
+      const storiesPath = projectStatePathFromMemoryDir(memoryDir, DESIGN_STORIES_FILE)
+      await fs.mkdir(path.dirname(storiesPath), { recursive: true })
+      await fs.writeFile(storiesPath, [
         'version: 1',
         'stories:',
         '  - id: button.default',

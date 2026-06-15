@@ -6,6 +6,7 @@ import yaml from 'js-yaml'
 import { DESIGN_SYSTEM_FILE } from '@guildhall/core'
 import { DESIGN_STORIES_FILE } from '../design-preview.js'
 import { buildDesignSystemProfile } from '../design-system-discovery.js'
+import { projectStatePathFromMemoryDir } from '@guildhall/sessions'
 
 describe('buildDesignSystemProfile', () => {
   it('detects scoped foundation packages, Storybook, token files, and drafted Guildhall design system', async () => {
@@ -31,8 +32,10 @@ describe('buildDesignSystemProfile', () => {
       await fs.writeFile(path.join(projectPath, '.storybook', 'main.ts'), 'export default {}', 'utf-8')
       await fs.writeFile(path.join(projectPath, 'src', 'components', 'Button.stories.ts'), 'export default {}', 'utf-8')
       await fs.writeFile(path.join(projectPath, 'src', 'tokens.css'), ':root { --ui-radius-2: .5rem; }', 'utf-8')
+      const designSystemPath = projectStatePathFromMemoryDir(memoryDir, DESIGN_SYSTEM_FILE)
+      await fs.mkdir(path.dirname(designSystemPath), { recursive: true })
       await fs.writeFile(
-        path.join(memoryDir, DESIGN_SYSTEM_FILE),
+        designSystemPath,
         yaml.dump({
           version: 1,
           revision: 2,
@@ -78,8 +81,10 @@ describe('buildDesignSystemProfile', () => {
         JSON.stringify({ dependencies: { svelte: '^5.0.0' } }, null, 2),
         'utf-8',
       )
+      const storiesPath = projectStatePathFromMemoryDir(memoryDir, DESIGN_STORIES_FILE)
+      await fs.mkdir(path.dirname(storiesPath), { recursive: true })
       await fs.writeFile(
-        path.join(memoryDir, DESIGN_STORIES_FILE),
+        storiesPath,
         [
           'version: 1',
           'stories:',

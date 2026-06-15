@@ -78,7 +78,7 @@ async function readQueue(memoryDir: string): Promise<TaskQueue> {
   try {
     return TaskQueue.parse(JSON.parse(await fs.readFile(file, 'utf-8')))
   } catch {
-    return TaskQueue.parse({ version: 1, tasks: [] })
+    return TaskQueue.parse({ version: 1, lastUpdated: new Date().toISOString(), tasks: [] })
   }
 }
 

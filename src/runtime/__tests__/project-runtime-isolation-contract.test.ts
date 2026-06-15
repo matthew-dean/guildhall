@@ -6,7 +6,6 @@ import path from 'node:path'
 
 import { bootstrapWorkspace, registerWorkspace } from '@guildhall/config'
 import {
-  getProjectStateDir,
   getProjectRuntimeContainerHomeDir,
   getProjectRuntimeStatePath,
   getProjectSystemStatePath,
@@ -144,7 +143,7 @@ describe('project runtime isolation contract', () => {
       const projectRoot = await createRegisteredProject('project-a', 'Project A')
       const externalPath = path.join(tmpRoot, 'external-fixture')
       const request = await createCapabilityRequest({
-        memoryDir: getProjectStateDir(projectRoot),
+        memoryDir: getProjectSystemStatePath(projectRoot, ''),
         taskId: 'task-fixture',
         kind: 'mount_directory',
         requestedBy: 'worker-agent',
@@ -160,7 +159,7 @@ describe('project runtime isolation contract', () => {
       expect(args.some(arg => arg.includes(externalPath))).toBe(false)
 
       const approved = await approveMountDirectoryRequest({
-        memoryDir: getProjectStateDir(projectRoot),
+        memoryDir: getProjectSystemStatePath(projectRoot, ''),
         projectRoot,
         requestId: request.id,
         approvedBy: 'owner',
@@ -174,7 +173,7 @@ describe('project runtime isolation contract', () => {
       const projectRoot = await createRegisteredProject('project-a', 'Project A')
       const externalPath = path.join(tmpRoot, 'external-fixture')
       const request = await createCapabilityRequest({
-        memoryDir: getProjectStateDir(projectRoot),
+        memoryDir: getProjectSystemStatePath(projectRoot, ''),
         taskId: 'task-fixture',
         kind: 'mount_directory',
         requestedBy: 'worker-agent',
@@ -186,7 +185,7 @@ describe('project runtime isolation contract', () => {
         },
       })
       const approved = await approveMountDirectoryRequest({
-        memoryDir: getProjectStateDir(projectRoot),
+        memoryDir: getProjectSystemStatePath(projectRoot, ''),
         projectRoot,
         requestId: request.id,
         approvedBy: 'owner',
@@ -194,14 +193,14 @@ describe('project runtime isolation contract', () => {
       })
 
       await revokeCapabilityGrant({
-        memoryDir: getProjectStateDir(projectRoot),
+        memoryDir: getProjectSystemStatePath(projectRoot, ''),
         projectRoot,
         requestId: approved.id,
         revokedBy: 'owner',
         reason: 'No longer needed.',
       })
 
-      expect(capabilityGrantMounts(getProjectStateDir(projectRoot))).toEqual([])
+      expect(capabilityGrantMounts(getProjectSystemStatePath(projectRoot, ''))).toEqual([])
       expect((await podmanCreateArgs(projectRoot)).some(arg => arg.includes(externalPath))).toBe(false)
     })
 
@@ -236,10 +235,13 @@ describe('project runtime isolation contract', () => {
       const projectRoot = await createRegisteredProject('project-a', 'Project A')
       const scratchStatePath = path.join(getProjectRuntimeContainerHomeDir(projectRoot), 'TASKS.json')
       await writeProjectRuntimeState(projectRoot, defaultProjectRuntimeState(projectRoot))
+      const authoritativeTasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      await mkdir(path.dirname(authoritativeTasksPath), { recursive: true })
+      await writeFile(authoritativeTasksPath, '{"tasks":[]}')
       await mkdir(path.dirname(scratchStatePath), { recursive: true })
       await writeFile(scratchStatePath, '{"tasks":[{"id":"scratch-leak"}]}')
 
-      const authoritativeTasks = await readFile(path.join(getProjectStateDir(projectRoot), 'TASKS.json'), 'utf8')
+      const authoritativeTasks = await readFile(authoritativeTasksPath, 'utf8')
       expect(authoritativeTasks).not.toContain('scratch-leak')
       expect(await readFile(scratchStatePath, 'utf8')).toContain('scratch-leak')
     })

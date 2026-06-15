@@ -315,7 +315,7 @@ function applyChange(tasks: Array<Record<string, unknown>>, change: ReintakeChan
 }
 
 function reintakeDraftPath(memoryDir: string): string {
-  return path.join(memoryDir, 'reintake-drafts', 'current.json')
+  return getProjectSystemStatePathFromMemoryDir(memoryDir, 'reintake-drafts/current.json')
 }
 
 async function readQueueFile(queuePath: string): Promise<{ version: number; lastUpdated: string; tasks: Array<Record<string, unknown>> }> {

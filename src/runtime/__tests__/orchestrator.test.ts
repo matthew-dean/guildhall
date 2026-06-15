@@ -13,7 +13,7 @@ import {
   type ReviewerFanoutRunner,
 } from '../orchestrator.js'
 import { LivenessTracker } from '../liveness.js'
-import { upsertTaskWorkspaceState } from '../task-state-store.js'
+import { upsertTaskRuntimeState, upsertTaskWorkspaceState } from '../task-state-store.js'
 import { buildEffectiveTask } from '../effective-task.js'
 import { updateProjectConfig, type ResolvedConfig } from '@guildhall/config'
 import type { Task, TaskQueue, TaskStatus } from '@guildhall/core'
@@ -68,7 +68,7 @@ beforeEach(async () => {
   process.env.GUILDHALL_DATA_DIR = dataDir
   memoryDir = path.join(tmpDir, '.guildhall')
   await fs.mkdir(memoryDir, { recursive: true })
-  tasksPath = path.join(memoryDir, 'TASKS.json')
+  tasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
   progressPath = getProjectSystemStatePath(tmpDir, 'PROGRESS.md')
   agentSettingsPath = defaultAgentSettingsPath(tmpDir)
 
@@ -208,12 +208,10 @@ async function writeQueue(tasks: Task[]): Promise<void> {
     lastUpdated: '2026-04-01T00:00:00Z',
     tasks,
   }
+  await fs.mkdir(path.dirname(tasksPath), { recursive: true })
   const tmpPath = `${tasksPath}.tmp`
   await fs.writeFile(tmpPath, JSON.stringify(queue, null, 2), 'utf-8')
   await fs.rename(tmpPath, tasksPath)
-  const managedTasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
-  await fs.mkdir(path.dirname(managedTasksPath), { recursive: true })
-  await fs.writeFile(managedTasksPath, JSON.stringify(queue, null, 2), 'utf-8')
 }
 
 async function writeManagedQueue(tasks: Task[]): Promise<void> {
@@ -229,14 +227,21 @@ async function writeManagedQueue(tasks: Task[]): Promise<void> {
 
 async function readQueue(): Promise<TaskQueue> {
   const managedTasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
-  try {
-    const managedRaw = await fs.readFile(managedTasksPath, 'utf-8')
-    return JSON.parse(managedRaw)
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+  const raw = await fs.readFile(managedTasksPath, 'utf-8')
+  const queue = JSON.parse(raw) as TaskQueue
+  return {
+    ...queue,
+    tasks: await Promise.all(queue.tasks.map(async (task) => {
+      const effective = await buildEffectiveTask(tmpDir, task) as unknown as Task
+      effective.notes ??= []
+      effective.gateResults ??= []
+      effective.reviewVerdicts ??= []
+      effective.adjudications ??= []
+      effective.escalations ??= []
+      effective.agentIssues ??= []
+      return effective
+    })),
   }
-  const raw = await fs.readFile(tasksPath, 'utf-8')
-  return JSON.parse(raw)
 }
 
 async function readManagedQueue(): Promise<TaskQueue> {
@@ -301,10 +306,99 @@ function queueOf(tasks: Task[]): TaskQueue {
  * Mutate a task on disk as if the real agent had called the update-task tool.
  */
 async function mutateTask(id: string, patch: Partial<Task>): Promise<void> {
-  const q = await readQueue()
+  const q = await readManagedQueue()
   const t = q.tasks.find((t) => t.id === id)
   if (!t) throw new Error(`No task ${id}`)
-  Object.assign(t, patch)
+
+  const {
+    assignedTo,
+    revisionCount,
+    retryWindow,
+    remediationAttempts,
+    handoffStep,
+    worktreePath,
+    branchName,
+    baseBranch,
+    notes,
+    gateResults,
+    reviewVerdicts,
+    adjudications,
+    escalations,
+    agentIssues,
+    mergeRecord,
+    ...definitionPatch
+  } = patch
+  Object.assign(t, definitionPatch)
+
+  const updatedAt = patch.updatedAt ?? t.updatedAt ?? '2026-04-01T00:00:00Z'
+  const runtimePatch = {
+    ...(Object.prototype.hasOwnProperty.call(patch, 'assignedTo') ? { assignedTo } : {}),
+    ...(Object.prototype.hasOwnProperty.call(patch, 'revisionCount') ? { revisionCount } : {}),
+    ...(Object.prototype.hasOwnProperty.call(patch, 'retryWindow') ? { retryWindow } : {}),
+    ...(Object.prototype.hasOwnProperty.call(patch, 'remediationAttempts') ? { remediationAttempts } : {}),
+    ...(Object.prototype.hasOwnProperty.call(patch, 'handoffStep') ? { handoffStep } : {}),
+  }
+  if (Object.keys(runtimePatch).length > 0) {
+    await upsertTaskRuntimeState(tmpDir, id, { ...runtimePatch, updatedAt })
+  }
+
+  const workspacePatch = {
+    ...(Object.prototype.hasOwnProperty.call(patch, 'worktreePath') ? { worktreePath } : {}),
+    ...(Object.prototype.hasOwnProperty.call(patch, 'branchName') ? { branchName } : {}),
+    ...(Object.prototype.hasOwnProperty.call(patch, 'baseBranch') ? { baseBranch } : {}),
+  }
+  if (Object.keys(workspacePatch).length > 0) {
+    await upsertTaskWorkspaceState(tmpDir, id, { ...workspacePatch, updatedAt })
+  }
+
+  const evidence = [
+    ...(notes ?? []).map((payload, index) => ({
+      id: `note-${id}-${payload.timestamp.replace(/[^0-9A-Za-z]/g, '')}-${index + 1}`,
+      kind: 'note' as const,
+      recordedAt: payload.timestamp,
+      payload,
+    })),
+    ...(gateResults ?? []).map((payload, index) => ({
+      id: `gate-${id}-${payload.checkedAt.replace(/[^0-9A-Za-z]/g, '')}-${index + 1}`,
+      kind: 'gate_result' as const,
+      recordedAt: payload.checkedAt,
+      payload,
+    })),
+    ...(reviewVerdicts ?? []).map((payload, index) => ({
+      id: `review-${id}-${payload.recordedAt.replace(/[^0-9A-Za-z]/g, '')}-${index + 1}`,
+      kind: 'review_verdict' as const,
+      recordedAt: payload.recordedAt,
+      payload,
+    })),
+    ...(adjudications ?? []).map((payload, index) => ({
+      id: `adjudication-${id}-${payload.decidedAt.replace(/[^0-9A-Za-z]/g, '')}-${index + 1}`,
+      kind: 'adjudication' as const,
+      recordedAt: payload.decidedAt,
+      payload,
+    })),
+    ...(escalations ?? []).map((payload, index) => ({
+      id: payload.id || `escalation-${id}-${payload.raisedAt.replace(/[^0-9A-Za-z]/g, '')}-${index + 1}`,
+      kind: 'escalation' as const,
+      recordedAt: payload.resolvedAt ?? payload.raisedAt,
+      payload,
+    })),
+    ...(agentIssues ?? []).map((payload, index) => ({
+      id: payload.id || `issue-${id}-${payload.raisedAt.replace(/[^0-9A-Za-z]/g, '')}-${index + 1}`,
+      kind: 'agent_issue' as const,
+      recordedAt: payload.resolvedAt ?? payload.raisedAt,
+      payload,
+    })),
+    ...(mergeRecord ? [{
+      id: `merge-${id}-${(mergeRecord.mergedAt ?? updatedAt).replace(/[^0-9A-Za-z]/g, '')}`,
+      kind: 'merge_record' as const,
+      recordedAt: mergeRecord.mergedAt ?? updatedAt,
+      payload: mergeRecord,
+    }] : []),
+  ]
+  for (const event of evidence) {
+    await appendTaskEvidence(tmpDir, id, event)
+  }
+
   const tmpPath = `${tasksPath}.tmp`
   await fs.writeFile(tmpPath, JSON.stringify(q, null, 2), 'utf-8')
   await fs.rename(tmpPath, tasksPath)
@@ -2429,7 +2523,7 @@ describe('Orchestrator.tick — routing', () => {
     }
     expect(coord.calls).toHaveLength(0)
     expect(worker.calls).toHaveLength(0)
-    const q = await readManagedQueue()
+    const q = await readQueue()
     expect(q.tasks[0]!.status).toBe('in_progress')
     expect(q.tasks[0]!.assignedTo).toBe('worker-agent')
     expect(q.tasks[0]!.notes.at(-1)).toMatchObject({
@@ -2482,7 +2576,7 @@ describe('Orchestrator.tick — routing', () => {
     const out = await orch.tick()
 
     expect(out.kind).toBe('processed')
-    const q = await readManagedQueue()
+    const q = await readQueue()
     expect(q.tasks[0]!.status).toBe('in_progress')
     expect(q.tasks[0]!.notes.some((note) =>
       note.agentId === 'blueprint-sanity-review' &&
@@ -4465,7 +4559,7 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
 
     const queue = await readQueue()
     expect(queue.tasks[0]!.status).toBe('done')
-    expect(queue.tasks[0]!.gateResults).toHaveLength(2)
+    expect(queue.tasks[0]!.gateResults.filter((gate) => gate.type === 'hard')).toHaveLength(2)
   })
 
   it('bounces gate_check back to in_progress when fresh hard gate results include a failure', async () => {
@@ -4506,7 +4600,7 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
     const queue = await readQueue()
     expect(queue.tasks[0]!.status).toBe('in_progress')
     expect(queue.tasks[0]!.assignedTo).toBe('worker-agent')
-    expect(queue.tasks[0]!.gateResults).toHaveLength(2)
+    expect(queue.tasks[0]!.gateResults.filter((gate) => gate.type === 'hard')).toHaveLength(2)
   })
 
   it('runs acceptance command gates before gate-checker narration can mark false proof green', async () => {
@@ -10173,7 +10267,7 @@ describe('Orchestrator — FR-31 agent-issue channel', () => {
     const second = await orch.drainPendingIssues()
     expect(second).toEqual([])
 
-    const q = await readQueue()
+    const q = await readManagedQueue()
     expect(q.tasks[0]!.agentIssues.every((i) => i.broadcast === false)).toBe(true)
     const evidence = await readTaskEvidence(tmpDir, 't-1', { kind: 'agent_issue' })
     const latestById = new Map(evidence.map((event) => [
@@ -10213,7 +10307,7 @@ describe('Orchestrator — FR-31 agent-issue channel', () => {
     expect(first.map((i) => i.id)).toEqual(['iss-t-1-1'])
     expect(await orch.drainPendingIssues()).toEqual([])
 
-    const q = await readQueue()
+    const q = await readManagedQueue()
     expect(q.tasks[0]!.agentIssues).toEqual([])
     const evidence = await readTaskEvidence(tmpDir, 't-1', { kind: 'agent_issue' })
     expect(evidence.map((event) => (event.payload as { broadcast?: boolean }).broadcast)).toEqual([false, true])

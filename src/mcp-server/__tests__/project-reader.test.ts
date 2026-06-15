@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { writeProjectStateJson, writeProjectStateText } from '@guildhall/sessions'
 import { saveCodebaseMap } from '@guildhall/corpus-map'
 import { recordMemoryEvent } from '@guildhall/memory-core'
 import {
@@ -84,7 +85,7 @@ describe('Guildhall MCP project reader', () => {
       writeFileSync(join(root, 'package.json'), JSON.stringify({
         dependencies: { svelte: '^5.0.0' },
       }), 'utf8')
-      writeFileSync(join(root, '.guildhall', 'TASKS.json'), JSON.stringify({
+      writeProjectStateJson(root, 'TASKS.json', {
         tasks: [{
           id: 'task-001',
           title: 'Wire bridge',
@@ -109,7 +110,7 @@ describe('Guildhall MCP project reader', () => {
           escalations: [],
           agentIssues: [],
         }],
-      }), 'utf8')
+      })
       await writeProjectDeliveryModel(root, {
         version: 1,
         updatedAt: '2026-06-05T12:00:00.000Z',
@@ -136,8 +137,8 @@ describe('Guildhall MCP project reader', () => {
         rejectedCandidates: [],
       })
       writeFileSync(join(root, '.guildhall', 'DECISIONS.md'), '# Decisions\n\n- Use MCP.\n', 'utf8')
-      writeFileSync(join(root, '.guildhall', 'MEMORY.md'), '# Memory\n\n## Runtime\n\nProject fact. token: ghp_123456789012345678901234567890123456\n', 'utf8')
-      writeFileSync(join(root, '.guildhall', 'design-system.yaml'), [
+      writeProjectStateText(root, 'MEMORY.md', '# Memory\n\n## Runtime\n\nProject fact. token: ghp_123456789012345678901234567890123456\n')
+      writeProjectStateText(root, 'design-system.yaml', [
         'version: 1',
         'revision: 3',
         'approvedAt: "2026-05-28T00:00:00.000Z"',
@@ -160,8 +161,8 @@ describe('Guildhall MCP project reader', () => {
         '  keyboardRules: []',
         '  reducedMotionRespected: true',
         '',
-      ].join('\n'), 'utf8')
-      writeFileSync(join(root, '.guildhall', 'design-taste.yaml'), [
+      ].join('\n'))
+      writeProjectStateText(root, 'design-taste.yaml', [
         'version: 1',
         'opinions:',
         '  visualDirection:',
@@ -172,8 +173,8 @@ describe('Guildhall MCP project reader', () => {
         '    defaultMode: semantic-oklch-roles',
         '    saturationBudget: controlled',
         '',
-      ].join('\n'), 'utf8')
-      writeFileSync(join(root, '.guildhall', 'design-stories.yaml'), [
+      ].join('\n'))
+      writeProjectStateText(root, 'design-stories.yaml', [
         'version: 1',
         'stories:',
         '  - id: pantry-filter.default',
@@ -181,8 +182,8 @@ describe('Guildhall MCP project reader', () => {
         '    title: Pantry filter / Default',
         '    states: [default, selected]',
         '',
-      ].join('\n'), 'utf8')
-      writeFileSync(join(root, '.guildhall', 'learning.json'), JSON.stringify({
+      ].join('\n'))
+      writeProjectStateJson(root, 'learning.json', {
         version: 1,
         suggestedLearnings: [{
           id: 'prefer-mcp-audit',
@@ -198,7 +199,7 @@ describe('Guildhall MCP project reader', () => {
           createdAt: '2026-05-28T00:00:00.000Z',
           updatedAt: '2026-05-28T00:00:00.000Z',
         }],
-      }), 'utf8')
+      })
       writeFileSync(join(root, '.guildhall', 'artifacts.yaml'), [
         'version: 1',
         'artifacts:',
@@ -403,7 +404,7 @@ describe('Guildhall MCP project reader', () => {
       const learning = await readGuildhallResource(ctx, 'guildhall://project/learning')
       expect(learning).toContain('prefer-mcp-audit')
 
-      writeFileSync(join(root, '.guildhall', 'design-feedback.json'), JSON.stringify({
+      writeProjectStateJson(root, 'design-feedback.json', {
         version: 1,
         ownerFeedback: [{
           id: 'owner-show-all',
@@ -426,7 +427,7 @@ describe('Guildhall MCP project reader', () => {
           createdAt: '2026-05-28T00:00:00.000Z',
           updatedAt: '2026-05-28T00:00:00.000Z',
         }],
-      }, null, 2), 'utf8')
+      })
       const feedback = await readGuildhallResource(ctx, 'guildhall://project/feedback')
       expect(feedback).toContain('owner-show-all')
       expect(feedback).toContain('Show all should be a segmented filter choice.')
