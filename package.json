@@ -40,7 +40,7 @@
     "lint:data-layer": "node scripts/data-layer-guardrails.mjs",
     "lint:reductions": "node scripts/reduction-guardrails.mjs",
     "clean": "rm -rf dist",
-    "release": "node scripts/publish.mjs",
+    "release": "node scripts/publish.mjs 0.10.0",
     "release:dry": "node scripts/publish.mjs 0.10.0 --dry-run --allow-branch",
     "runtime:image:build": "node scripts/runtime-image-build.mjs",
     "runtime:image:smoke": "node scripts/runtime-image-smoke.mjs",
