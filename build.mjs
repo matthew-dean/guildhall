@@ -106,7 +106,10 @@ function writeReleaseManifest() {
 const buildOptions = {
   entryPoints: [ENTRY],
   bundle: true,
-  outfile: join(OUT_DIR, 'cli.js'),
+  outdir: OUT_DIR,
+  entryNames: '[name]',
+  chunkNames: 'chunks/[name]-[hash]',
+  splitting: true,
   platform: 'node',
   format: 'esm',
   target: 'node20',
@@ -124,8 +127,8 @@ const buildOptions = {
     ].join('\n'),
   },
   sourcemap: false,
-  minify: false,
-  logLevel: 'info',
+  minify: true,
+  logLevel: 'warning',
   plugins: [copyAssetsPlugin],
 }
 

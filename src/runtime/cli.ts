@@ -4,19 +4,12 @@ import { homedir } from 'node:os'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { confirm } from '@inquirer/prompts'
-import { runOrchestrator } from './orchestrator.js'
-import { runGuildhallTaskOnce, type RunOnceAutomationPolicy, type RunOnceProofMode } from './run-once.js'
-import { renderBakeoffMarkdown, runContextIndexerBakeoff, runModelBakeoff } from './model-bakeoff.js'
-import { migrateLegacyMemoryToLocalHistory } from './memory-migration.js'
-import {
-  applyProjectMigrations,
-  getProjectMigrationStatus,
-  type ProjectMigrationStatus,
-  type ProjectMigrationStatusItem,
-} from './migrations.js'
-import { migrateTaskState } from './task-state-migration.js'
-import { compactProjectState } from './project-state-compaction.js'
-import { projectRuntimeCompatibilityBlocker } from './runtime-compatibility.js'
+import type { RunOnceAutomationPolicy, RunOnceProofMode } from './run-once.js'
+import type { ProjectMigrationStatus, ProjectMigrationStatusItem } from './migrations.js'
+import { OpenAICompatibleClient } from '@guildhall/providers'
+import type { BenchmarkAutomationPolicy } from '@guildhall/benchmarks'
+import type { ProjectDependencyEdge } from './project-graph.js'
+import { FileBackedGuildhallPersistence } from '@guildhall/persistence'
 import {
   buildCalibrationCaseDraftFromEscapedMiss,
   recordCalibrationCorpusValidation,
@@ -30,6 +23,7 @@ import {
   recordTaskSizingFrontier,
 } from './task-sizing-calibration.js'
 import { createReviewAuditStore } from './review-audit-store.js'
+import { renderBakeoffMarkdown, runContextIndexerBakeoff, runModelBakeoff } from './model-bakeoff.js'
 import { resolveWorkspace, loadWorkspace } from './workspace-loader.js'
 import {
   configureClaudeProjectMcpBridge,
@@ -37,16 +31,10 @@ import {
   installAgentBridgeInstructions,
   type AgentBridgeTarget,
 } from './agent-bridge-install.js'
-import {
-  importExternalMemoryBridgeRecord,
-  listExternalMemoryBridgeRecords,
-  rejectExternalMemoryBridgeRecord,
-  reviewExternalMemoryBridgeRecord,
-  type ExternalMemoryBridgeRecordInput,
-  type ExternalMemoryBridgeReviewStatus,
+import type {
+  ExternalMemoryBridgeRecordInput,
+  ExternalMemoryBridgeReviewStatus,
 } from './external-agent-memory-bridge.js'
-import { runInit } from './init.js'
-import { runServe } from './serve.js'
 import {
   listWorkspaces,
   findWorkspace,
@@ -61,32 +49,8 @@ import {
 import { exec, spawn } from 'node:child_process'
 import { platform } from 'node:os'
 import { buildSemanticIndexPrompt, codebaseMapPath, refreshCodebaseMap, type CorpusSemanticIndexer } from '@guildhall/corpus-map'
-import { OpenAICompatibleClient } from '@guildhall/providers'
 import { getProjectStateDir } from '@guildhall/sessions'
-import { FileBackedGuildhallPersistence } from '@guildhall/persistence'
-import {
-  runArtifactLocalBenchmark,
-  runLifecycleBenchmark,
-  runHermesComparisonPreflight,
-  runSweLocalBenchmark,
-  runTbliteBenchmark,
-  type BenchmarkAutomationPolicy,
-} from '@guildhall/benchmarks'
-import {
-  acceptProjectDependencyDelivery,
-  beginProjectDependencyConsumerReview,
-  commitProjectDependencyDeliveryPlan,
-  deliverProjectDependency,
-  importProjectDependencyRequestForProvider,
-  projectGraphRegistryDir,
-  requestProjectDependencyRevision,
-  reviseProjectDependencyPlan,
-  writeLocalProjectGraphDraft,
-  type ConsumerReturnPacket,
-  type DeliveryReceipt,
-  type ProjectDependencyEdge,
-} from './project-graph.js'
-import { auditProjectMemoryState } from '@guildhall/memory-core'
+import type { ConsumerReturnPacket, DeliveryReceipt } from './project-graph.js'
 
 function openBrowser(url: string): void {
   const cmd = platform() === 'darwin' ? `open "${url}"`
@@ -618,6 +582,7 @@ async function cmdInit() {
   const noServe = process.argv.includes('--no-serve')
 
   if (useCliWizard) {
+    const { runInit } = await import('./init.js')
     await runInit({ targetDir })
     if (noServe) return
   }
@@ -627,8 +592,8 @@ async function cmdInit() {
   console.log(`[guildhall] Launching dashboard...`)
   console.log(`[guildhall] The setup wizard will open at http://localhost:${port}${launchRouteForProject(absPath)}`)
   console.log()
-  const opts: Parameters<typeof runServe>[0] = { projectPath: absPath, port }
-  await runServe(opts)
+  const { runServe } = await import('./serve.js')
+  await runServe({ projectPath: absPath, port })
   if (!noOpen) setTimeout(() => openBrowser(`http://localhost:${port}${launchRouteForProject(absPath)}`), 400)
 }
 
@@ -728,12 +693,14 @@ async function cmdRun() {
     process.exit(1)
   }
 
+  const { projectRuntimeCompatibilityBlocker } = await import('./runtime-compatibility.js')
   const runtimeBlocker = projectRuntimeCompatibilityBlocker({ projectRoot: workspace.root })
   if (runtimeBlocker) {
     console.error(`[guildhall] ${runtimeBlocker.message}`)
     process.exit(1)
   }
 
+  const { getProjectMigrationStatus } = await import('./migrations.js')
   const migrationStatus = await getProjectMigrationStatus({ projectRoot: workspace.root })
   if (migrationStatus.blocked.length > 0) {
     console.error('[guildhall] This project has required migrations that must run before Guildhall can start.')
@@ -744,6 +711,7 @@ async function cmdRun() {
     process.exit(1)
   }
 
+  const { runOrchestrator } = await import('./orchestrator.js')
   await runOrchestrator(workspace.config, {
     ...(domain ? { domainFilter: domain } : {}),
     maxTicks,
@@ -781,6 +749,7 @@ async function cmdTask() {
   }
 
   try {
+    const { runGuildhallTaskOnce } = await import('./run-once.js')
     const report = await runGuildhallTaskOnce({
       projectRoot: resolve(expandPath(getFlag('--project') ?? process.cwd())),
       prompt: getFlag('--from-file') ? undefined : pos.slice(1).join(' '),
@@ -852,6 +821,7 @@ async function cmdServe() {
     setTimeout(() => openBrowser(targetUrl), 400)
   }
 
+  const { runServe } = await import('./serve.js')
   await runServe({
     port: intent.port,
     ...(intent.launchProjectPath ? { preferredProjectPath: intent.launchProjectPath } : {}),
@@ -908,6 +878,7 @@ async function cmdServeInternal() {
   const serviceState = getFlag('--service-state')
   void positionals
 
+  const { runServe } = await import('./serve.js')
   await runServe({
     ...(portArg ? { port: Number(portArg) } : {}),
     ...(serviceState ? { serviceStatePath: serviceState } : {}),
@@ -924,6 +895,7 @@ async function cmdConfig() {
     targetDir = entry?.path ?? idOrPath
   }
 
+  const { runInit } = await import('./init.js')
   await runInit({ targetDir: targetDir ?? process.cwd(), reconfigure: true })
 }
 
@@ -977,6 +949,8 @@ async function cmdMemory() {
   }
   const dryRun = !args.includes('--apply')
   if (subcommand === 'migrate-0.8.0') {
+    const { migrateLegacyMemoryToLocalHistory } = await import('./memory-migration.js')
+    const { compactProjectState } = await import('./project-state-compaction.js')
     const migration = await migrateLegacyMemoryToLocalHistory({
       projectRoot: projectPath,
       dryRun,
@@ -1013,6 +987,7 @@ async function cmdMemory() {
     return
   }
   if (['compact-project-state', 'audit-project-state', 'clean-project-state'].includes(subcommand)) {
+    const { compactProjectState } = await import('./project-state-compaction.js')
     const cleanupDryRun = subcommand === 'audit-project-state'
       ? true
       : subcommand === 'clean-project-state'
@@ -1051,6 +1026,7 @@ async function cmdMemory() {
     return
   }
   if (subcommand === 'mastra-audit') {
+    const { auditProjectMemoryState } = await import('@guildhall/memory-core')
     const result = await auditProjectMemoryState({
       projectRoot: projectPath,
       apply: !dryRun,
@@ -1071,6 +1047,7 @@ async function cmdMemory() {
     }
     return
   }
+  const { migrateLegacyMemoryToLocalHistory } = await import('./memory-migration.js')
   const result = await migrateLegacyMemoryToLocalHistory({
     projectRoot: projectPath,
     dryRun,
@@ -1112,12 +1089,14 @@ async function cmdMigrate() {
     const projectPath = entry?.path ?? (idOrPath ? resolve(expandPath(idOrPath)) : process.cwd())
     const apply = args.includes('--apply') && !args.includes('--dry-run')
     if (apply) {
+      const { projectRuntimeCompatibilityBlocker } = await import('./runtime-compatibility.js')
       const runtimeBlocker = projectRuntimeCompatibilityBlocker({ projectRoot: projectPath })
       if (runtimeBlocker) {
         console.error(`[guildhall] ${runtimeBlocker.message}`)
         process.exit(1)
       }
     }
+    const { migrateTaskState } = await import('./task-state-migration.js')
     const result = await migrateTaskState({ projectRoot: projectPath, apply })
     console.log(`[guildhall] Task state migration ${apply ? 'complete' : 'dry run'}.`)
     console.log(`[guildhall] Project: ${projectPath}`)
@@ -1139,6 +1118,8 @@ async function cmdMigrate() {
   const projectArgs = pos.slice(1)
   const onlyMigration = getFlag('--migration')
   const projectPaths = resolveMigrationProjectPaths(projectArgs[0])
+  const { projectRuntimeCompatibilityBlocker } = await import('./runtime-compatibility.js')
+  const { applyProjectMigrations, getProjectMigrationStatus } = await import('./migrations.js')
   for (const projectPath of projectPaths) {
     if (subcommand === 'apply') {
       const runtimeBlocker = projectRuntimeCompatibilityBlocker({ projectRoot: projectPath })
@@ -1515,6 +1496,7 @@ async function cmdBenchmarks() {
     }
     const projectRoot = resolveBenchmarkProjectRoot(idOrPath)
     const outputDir = resolve(expandPath(getFlag('--output-dir') ?? 'internal/benchmarks/runs'))
+    const { runHermesComparisonPreflight } = await import('@guildhall/benchmarks')
     const report = await runHermesComparisonPreflight({
       projectRoot,
       outputDir,
@@ -1556,6 +1538,12 @@ async function cmdBenchmarks() {
     ...(getFlag('--model') ? { model: getFlag('--model') } : {}),
   }
 
+  const {
+    runArtifactLocalBenchmark,
+    runLifecycleBenchmark,
+    runSweLocalBenchmark,
+    runTbliteBenchmark,
+  } = await import('@guildhall/benchmarks')
   const report = benchmark === 'lifecycle'
     ? await runLifecycleBenchmark(getFlag('--fixture-set') ?? 'smoke', common)
     : benchmark === 'tblite'
@@ -1752,6 +1740,17 @@ async function cmdMcp() {
 }
 
 async function cmdGraph() {
+  const {
+    acceptProjectDependencyDelivery,
+    beginProjectDependencyConsumerReview,
+    commitProjectDependencyDeliveryPlan,
+    deliverProjectDependency,
+    importProjectDependencyRequestForProvider,
+    projectGraphRegistryDir,
+    requestProjectDependencyRevision,
+    reviseProjectDependencyPlan,
+    writeLocalProjectGraphDraft,
+  } = await import('./project-graph.js')
   const pos = positionals()
   const area = pos[0] ?? 'help'
   const action = pos[1] ?? ''
@@ -1905,6 +1904,12 @@ export async function runAgentMemoryBridgeCommand(
   const projectPath = resolveAgentMemoryProjectPath(parsed, opts.cwd ?? process.cwd())
   const memoryDir = getProjectStateDir(projectPath)
   const json = rawArgs.includes('--json') || parsed.getFlag('--format') === 'json'
+  const {
+    importExternalMemoryBridgeRecord,
+    listExternalMemoryBridgeRecords,
+    rejectExternalMemoryBridgeRecord,
+    reviewExternalMemoryBridgeRecord,
+  } = await import('./external-agent-memory-bridge.js')
 
   if (action === 'import') {
     const fromFile = parsed.getFlag('--from-file')
