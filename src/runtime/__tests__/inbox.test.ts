@@ -228,7 +228,7 @@ describe('buildInbox', () => {
       rejectedCandidates: [],
     })
 
-    const items = buildInbox({ projectPath: tmpDir, projectStateDir })
+    const items = buildInboxWithProviderSetup()
     const hit = items.find(item => item.kind === 'contract_result_review')
 
     expect(hit).toEqual(expect.objectContaining({

@@ -27,9 +27,9 @@ describe('dashboard static assets', () => {
     const { app } = buildServeApp({})
 
     const res = await app.fetch(new Request('http://localhost/icons/genfavicon-64.png'))
-    const bytes = new Uint8Array(await res.arrayBuffer())
 
     if (existsSync('dist/web/icons/genfavicon-64.png')) {
+      const bytes = new Uint8Array(await res.arrayBuffer())
       expect(res.status).toBe(200)
       expect(res.headers.get('content-type')).toContain('image/png')
       expect([...bytes.slice(0, 8)]).toEqual([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
