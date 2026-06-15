@@ -485,7 +485,7 @@ describe('buildInbox', () => {
       ],
     })
 
-    const items = buildInbox({ projectPath: tmpDir, projectStateDir })
+    const items = buildInboxWithProviderSetup()
     expect(itemKinds(items)).not.toContain('brief_approval')
     expect(itemKinds(items)).not.toContain('agent_question_pending')
     expect(itemKinds(items)).not.toContain('spec_approval')
@@ -617,7 +617,7 @@ describe('buildInbox', () => {
       ],
     })
 
-    const items = buildInbox({ projectPath: tmpDir, projectStateDir })
+    const items = buildInboxWithProviderSetup()
     expect(itemKinds(items)).not.toContain('agent_question_pending')
     expect(items.some(i => i.kind === 'import_draft_queue')).toBe(true)
   })
