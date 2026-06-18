@@ -3015,6 +3015,142 @@ tasks:
     expect(task?.status).toBe('ready')
   })
 
+  it('shapes the no-ui runner around the documented packet, privacy, and invalidation loop instead of a generic runner stub', async () => {
+    await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
+    await fs.mkdir(path.join(tmpDir, 'docs', 'specs'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'harness', 'implementation-roadmap.md'),
+      [
+        '# Implementation Roadmap',
+        '',
+        '## Stage 1: Fixture And Evaluation Harness',
+        '',
+        'Goal: build a no-UI test harness that proves the story-memory and packet contracts against small fiction fixtures before any product UI is designed.',
+        '',
+        '## Current Next Milestone',
+        '',
+        'The next milestone is Stage 1: Fixture And Evaluation Harness.',
+        '',
+        '3. Implement a no-UI runner that builds a packet from fixture records.',
+      ].join('\n'),
+      'utf-8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'harness', 'prototype-iteration-workflow.md'),
+      [
+        '# Prototype Iteration Workflow',
+        '',
+        '## Test Rounds',
+        '',
+        '### Round 1: Reader-State And Character Packet',
+        '- writer packet names what the character believes',
+        '- writer packet names what the reader knows',
+        '',
+        '### Round 4: Author Provenance Scope',
+        '- privacy manifest says what was included',
+        '- blocked provenance never appears in tool calls or output',
+        '',
+        '### Round 5: Edit Invalidation',
+        '- affected records become stale',
+        '- packet builder excludes or flags stale context',
+      ].join('\n'),
+      'utf-8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'harness', 'architecture-notes.md'),
+      [
+        '# Architecture Notes',
+        '',
+        '## Core Loop',
+        '1. Author defines book intent, genre/form expectations, themes, and voice.',
+        '2. Author builds a house: premise, world, cast, outline, chapter goals, review standards.',
+        '3. Author drafts or imports chapters.',
+        '4. The coordinator chooses reviewers based on current phase.',
+        '5. Reviewers produce evidence-backed findings.',
+        '6. The coordinator summarizes conflicts and turns them into author decisions.',
+        '7. Accepted decisions update the story bible, outline, and manuscript tasks.',
+        '',
+        '## System Records',
+        '| Record | Purpose |',
+        '| --- | --- |',
+        '| Book brief | author voice, premise, genre, themes, constraints |',
+        '| Outline | acts, chapters, scene goals, thread movement |',
+        '| Character trace | goals, beliefs, choices, consequences |',
+        '| Reader-state trace | what the reader can know at each point |',
+      ].join('\n'),
+      'utf-8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'specs', 'agent-context-packets-and-compaction.md'),
+      [
+        '# Agent Context Packets And Compaction',
+        '',
+        '## Chapter Writer Packet',
+        '- author voice constraints',
+        '- outline position and chapter goal',
+        '- cast state at chapter start',
+        '- world/story bible constraints',
+        '',
+        '## Provenance And Privacy',
+        '- packet names whether provenance material is included',
+        '- private/global/session notes appear only when allowed',
+        '',
+        '## Invalidation',
+        '- scene edits invalidate scene inventory, character state, reader state',
+        '- outline edits invalidate future-obligation summaries and writer packets',
+      ].join('\n'),
+      'utf-8',
+    )
+
+    await seedImporterWithSpec(`
+\`\`\`yaml
+tasks:
+  - id: task-runner
+    title: Implement a no-UI runner that builds a packet from fixture records.
+    description: Implement a no-UI runner that builds a packet from fixture records.
+    domain: harness
+    priority: high
+    references:
+      - docs/harness/implementation-roadmap.md
+      - docs/harness/prototype-iteration-workflow.md
+      - docs/harness/architecture-notes.md
+      - docs/specs/agent-context-packets-and-compaction.md
+\`\`\`
+`)
+
+    const approved = await approveWorkspaceImport({
+      memoryDir,
+      projectPath: tmpDir,
+    })
+    expect(approved).toMatchObject({ success: true, tasksAdded: 1 })
+
+    const q = await readQueue()
+    const task = q.tasks.find(candidate => candidate.id === 'task-runner')
+
+    expect(task?.acceptanceCriteria?.map(criterion => criterion.id)).toEqual([
+      'runner-flow',
+      'headless-boundary',
+      'packet-boundary',
+      'privacy-manifest',
+      'invalidation-boundary',
+      'deterministic-proof',
+    ])
+    expect(task?.workUnitAnalysis?.units.map(unit => unit.title)).toEqual([
+      'Load fixture inputs and canonical story records',
+      'Build the bounded writer packet instead of rereading the manuscript',
+      'Run the bounded reviewer and writer loop headlessly',
+      'Prove provenance/privacy scope in packet output',
+      'Invalidate stale packet context after source edits',
+    ])
+    expect(task?.acceptanceCriteria?.find(criterion => criterion.id === 'packet-boundary')?.description).toContain('writer packet names what the character believes')
+    expect(task?.acceptanceCriteria?.find(criterion => criterion.id === 'privacy-manifest')?.description).toContain('privacy manifest says what was included')
+    expect(task?.acceptanceCriteria?.find(criterion => criterion.id === 'invalidation-boundary')?.description).toContain('affected records become stale')
+    expect(task?.spec).toContain('Book brief')
+    expect(task?.spec).toContain('Character trace')
+    expect(task?.spec).toContain('author voice constraints')
+    expect(task?.hierarchy?.childIds).toHaveLength(5)
+  })
+
   it('materializes current milestone starter work without cloning a narrower spec echo beside it', async () => {
     await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
     await fs.mkdir(path.join(tmpDir, 'docs', 'specs'), { recursive: true })

@@ -527,6 +527,11 @@ type ImportedEvidenceDetail = {
   examples: string[]
   weightDimensions: string[]
   severityLevels: string[]
+  coreLoopSteps: string[]
+  systemRecords: string[]
+  packetFields: string[]
+  privacyRules: string[]
+  invalidationRules: string[]
 }
 
 type ImportedBlueprintSeed = {
@@ -2218,6 +2223,33 @@ function derivePrototypeTaskAcceptanceCriteria(
           source: 'inferred',
           met: false,
         },
+        ...(evidenceDetail.packetFields.length > 0 ? [{
+          id: 'packet-boundary',
+          description: `The runner builds a bounded writer packet from the documented fields: ${evidenceDetail.packetFields.join('; ')}, including writer packet names what the character believes and writer packet names what the reader knows.`,
+          scenario: 'Build one writer packet for a bounded fixture task.',
+          expectation: 'The packet uses the cited record surfaces instead of rereading the whole manuscript or pulling unrelated context.',
+          verifiedBy: 'review' as const,
+          source: 'inferred' as const,
+          met: false,
+        }] : []),
+        ...(evidenceDetail.privacyRules.length > 0 ? [{
+          id: 'privacy-manifest',
+          description: `The runner records provenance/privacy scope in packet output: ${evidenceDetail.privacyRules.join('; ')}, including privacy manifest says what was included.`,
+          scenario: 'Run one fixture that includes allowed and blocked provenance material.',
+          expectation: 'The output makes it clear which provenance entered the packet and which material stayed blocked.',
+          verifiedBy: 'review' as const,
+          source: 'inferred' as const,
+          met: false,
+        }] : []),
+        ...(evidenceDetail.invalidationRules.length > 0 ? [{
+          id: 'invalidation-boundary',
+          description: `The runner marks stale packet context after source edits: ${evidenceDetail.invalidationRules.join('; ')}, including affected records become stale.`,
+          scenario: 'Change one source input after an initial run.',
+          expectation: 'The next run flags or excludes stale derived context instead of silently reusing it.',
+          verifiedBy: 'review' as const,
+          source: 'inferred' as const,
+          met: false,
+        }] : []),
         deterministicImportedCriterion(task, proofCommand, 'The no-UI runner has deterministic proof over a bounded fixture.'),
       ]
     case 'evaluation':
@@ -2886,6 +2918,11 @@ function extractReferenceEvidenceDetail(
   const examples: string[] = []
   const weightDimensions: string[] = []
   const severityLevels: string[] = []
+  const coreLoopSteps: string[] = []
+  const systemRecords: string[] = []
+  const packetFields: string[] = []
+  const privacyRules: string[] = []
+  const invalidationRules: string[] = []
   const titleSuggestsContracts = /\b(schema|schemas|contract|trace|evaluation|fixture|expected-record|prototype-run)\b/i.test(task.title)
 
   for (const reference of task.references) {
@@ -2905,6 +2942,11 @@ function extractReferenceEvidenceDetail(
           if (!weightDimensions.includes(item)) weightDimensions.push(item)
         }
       }
+      if (/system records/i.test(section.heading)) {
+        for (const item of parseMarkdownTableFirstColumn(section.body)) {
+          if (!systemRecords.includes(item)) systemRecords.push(item)
+        }
+      }
       if (/severity levels/i.test(section.heading)) {
         for (const item of parseMarkdownTableFirstColumn(section.body)) {
           if (!severityLevels.includes(item)) severityLevels.push(item)
@@ -2922,8 +2964,20 @@ function extractReferenceEvidenceDetail(
         if (/decision tree|ordered feedback chain|grounding pass|core claim/i.test(lowerHeading)) {
           if (decisionSteps.length < 8 && !decisionSteps.includes(bullet)) decisionSteps.push(bullet)
         }
+        if (/^core loop$/i.test(lowerHeading)) {
+          if (coreLoopSteps.length < 8 && !coreLoopSteps.includes(bullet)) coreLoopSteps.push(bullet)
+        }
         if (/rules|boundary|fiction-first boundary|dialect, register, and respect|finding contract|severity levels|core claim/i.test(lowerHeading)) {
           if (rules.length < 8 && !rules.includes(bullet)) rules.push(bullet)
+        }
+        if (/\b(packet|writer packet|chapter writer packet)\b/i.test(lowerHeading)) {
+          if (packetFields.length < 8 && !packetFields.includes(bullet)) packetFields.push(bullet)
+        }
+        if (/\b(provenance|privacy)\b/i.test(lowerHeading)) {
+          if (privacyRules.length < 6 && !privacyRules.includes(bullet)) privacyRules.push(bullet)
+        }
+        if (/\binvalidation\b/i.test(lowerHeading)) {
+          if (invalidationRules.length < 6 && !invalidationRules.includes(bullet)) invalidationRules.push(bullet)
         }
         if (/examples/i.test(lowerHeading)) {
           if (examples.length < 4 && !examples.includes(bullet)) examples.push(bullet)
@@ -3028,6 +3082,11 @@ function extractReferenceEvidenceDetail(
     examples: examples.slice(0, 4),
     weightDimensions: weightDimensions.slice(0, 8),
     severityLevels: severityLevels.slice(0, 8),
+    coreLoopSteps: coreLoopSteps.slice(0, 8),
+    systemRecords: systemRecords.slice(0, 8),
+    packetFields: packetFields.slice(0, 8),
+    privacyRules: privacyRules.slice(0, 6),
+    invalidationRules: invalidationRules.slice(0, 6),
   }
 }
 
@@ -3057,6 +3116,7 @@ function importedTaskSpec(
   const assumptions = (task.assumptions ?? []).filter(Boolean)
   const missingInformation = cleanImportedMissingInformation(task.missingInformation ?? [])
   const importedContext = summarizeImportedProblemContext(task, evidenceDetail)
+  const proposedDesignBullets = importedTaskProposedDesignBullets(task, evidenceDetail)
   const proofPlan = materializedProofPaths(task, evidenceDetail).map((path) => {
     if (path.kind === 'command' && typeof path.command === 'string' && path.command.trim()) {
       return `- Run \`${path.command.trim()}\``
@@ -3088,8 +3148,8 @@ function importedTaskSpec(
       : ['- Do not broaden beyond the cited evidence, acceptance criteria, and proof plan.']),
     '',
     '## Proposed design',
-    ...(evidenceDetail.implementationBullets.length > 0
-      ? evidenceDetail.implementationBullets.map((item, index) => `${index + 1}. ${item}`)
+    ...(proposedDesignBullets.length > 0
+      ? proposedDesignBullets.map((item, index) => `${index + 1}. ${item}`)
       : [task.description.trim() || task.title]),
     '',
     '## Key decisions',
@@ -3115,6 +3175,32 @@ function importedTaskSpec(
     '',
     importedCompletionBoundary(task, evidenceDetail),
   ].join('\n')
+}
+
+function importedTaskProposedDesignBullets(
+  task: MaterializedImportTask,
+  evidenceDetail: ImportedEvidenceDetail,
+): string[] {
+  if (importedPrototypeTaskKind(task) === 'runner') {
+    const bullets: string[] = []
+    if (evidenceDetail.systemRecords.length > 0) {
+      bullets.push(`Load canonical story records for the runner: ${evidenceDetail.systemRecords.join(', ')}.`)
+    }
+    if (evidenceDetail.packetFields.length > 0) {
+      bullets.push(`Build a bounded writer packet from the documented fields: ${evidenceDetail.packetFields.join(', ')}.`)
+    }
+    if (evidenceDetail.coreLoopSteps.length > 0) {
+      bullets.push(`Keep the headless run aligned with the documented loop: ${evidenceDetail.coreLoopSteps.join(' -> ')}.`)
+    }
+    if (evidenceDetail.privacyRules.length > 0) {
+      bullets.push(`Expose provenance/privacy scope in the run output: ${evidenceDetail.privacyRules.join('; ')}.`)
+    }
+    if (evidenceDetail.invalidationRules.length > 0) {
+      bullets.push(`Mark packet context stale when source edits require it: ${evidenceDetail.invalidationRules.join('; ')}.`)
+    }
+    if (bullets.length > 0) return bullets
+  }
+  return evidenceDetail.implementationBullets.length > 0 ? evidenceDetail.implementationBullets : []
 }
 
 function importedTaskBrief(
@@ -3221,28 +3307,54 @@ function derivePrototypeTaskWorkUnits(
       return [
         {
           id: `unit-${task.id}-records`,
-          title: 'Load fixture inputs and shared records',
-          deliverable: 'The runner can ingest the bounded fixture and materialize the needed records.',
+          title: 'Load fixture inputs and canonical story records',
+          deliverable: evidenceDetail.systemRecords.length > 0
+            ? `The runner ingests the fixture and materializes canonical records such as ${evidenceDetail.systemRecords.join(', ')}.`
+            : 'The runner can ingest the bounded fixture and materialize the needed records.',
           rationale: 'The runner has to bridge from fixture inputs into deterministic packet-ready records.',
           suggestedDomain: task.domain,
           dependsOn: baseDependsOn,
         },
         {
           id: `unit-${task.id}-packet-run`,
-          title: 'Execute the packet run without UI help',
-          deliverable: 'A packet run completes headlessly and emits reproducible output.',
-          rationale: 'The Stage 1 harness is specifically a no-UI proof loop.',
+          title: 'Build the bounded writer packet instead of rereading the manuscript',
+          deliverable: evidenceDetail.packetFields.length > 0
+            ? `The runner builds a bounded packet from fields such as ${evidenceDetail.packetFields.join(', ')}.`
+            : 'The runner builds a bounded packet without whole-manuscript rereads.',
+          rationale: 'The documented harness loop is supposed to prove packet discipline, not brute-force full-manuscript prompts.',
           suggestedDomain: task.domain,
           dependsOn: [`unit-${task.id}-records`],
         },
-        ...(proofCommand ? [{
-          id: `unit-${task.id}-proof`,
-          title: 'Prove the runner over a bounded fixture',
-          deliverable: `\`${proofCommand}\` runs the bounded fixture loop successfully.`,
-          rationale: 'The runner must be demonstrably repeatable to support later reviewer and writer work.',
+        {
+          id: `unit-${task.id}-loop`,
+          title: 'Run the bounded reviewer and writer loop headlessly',
+          deliverable: evidenceDetail.coreLoopSteps.length > 0
+            ? `The headless runner preserves the documented loop: ${evidenceDetail.coreLoopSteps.join(' -> ')}.`
+            : 'A packet run completes headlessly and emits reproducible output.',
+          rationale: 'The Stage 1 harness should exercise the real review/writer loop, not a generic one-step command.',
           suggestedDomain: task.domain,
           dependsOn: [`unit-${task.id}-packet-run`],
-        }] : []),
+        },
+        {
+          id: `unit-${task.id}-privacy`,
+          title: 'Prove provenance/privacy scope in packet output',
+          deliverable: evidenceDetail.privacyRules.length > 0
+            ? `Run output makes provenance decisions explicit: ${evidenceDetail.privacyRules.join('; ')}.`
+            : 'Run output shows what provenance entered the packet and what stayed blocked.',
+          rationale: 'The docs treat provenance scope as part of the proof loop, not a later polish layer.',
+          suggestedDomain: task.domain,
+          dependsOn: [`unit-${task.id}-loop`],
+        },
+        {
+          id: `unit-${task.id}-invalidation`,
+          title: 'Invalidate stale packet context after source edits',
+          deliverable: evidenceDetail.invalidationRules.length > 0
+            ? `Edited inputs mark derived context stale according to rules like ${evidenceDetail.invalidationRules.join('; ')}.`
+            : 'The next run excludes or flags stale context after relevant source edits.',
+          rationale: 'The runner should prove stale-context handling before later phases pile more intelligence on top.',
+          suggestedDomain: task.domain,
+          dependsOn: [`unit-${task.id}-privacy`],
+        },
       ]
     case 'evaluation':
       return [
