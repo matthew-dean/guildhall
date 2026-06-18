@@ -9,13 +9,15 @@ import { CompletionHandoff, ProofPath } from './task-proof.js'
 // import_draft ┼→ exploring → spec_review → ready → in_progress → review → gate_check → done
 //              │                                                   ↘ blocked
 //              └─────────────────────────→ shelved (worker pre-rejection, FR-22)
+//              └─────────────────────────→ archived / cancelled (retained or retired without execution)
 //
 // Origination:
 //   - `exploring` — human-initiated via the Spec Agent intake (FR-12)
 //   - `proposed`  — agent-initiated (FR-21); promotion path governed by lever
 //                   `task_origination`
 //
-// Terminal states: `done`, `shelved`, `blocked`.
+// Terminal / non-actionable states: `pending_pr`, `done`, `shelved`,
+// `blocked`, `archived`, `cancelled`.
 // ---------------------------------------------------------------------------
 
 const TaskStatusValue = z.enum([
@@ -31,6 +33,8 @@ const TaskStatusValue = z.enum([
   'done',          // All gates passed — terminal
   'shelved',       // FR-22: worker pre-rejected (no_op/not_viable/low_value/duplicate/spec_wrong) — terminal
   'blocked',       // Cannot proceed — escalation required — terminal
+  'archived',      // Retained for audit/history but removed from active work
+  'cancelled',     // Explicitly retired or superseded without execution
 ])
 
 export const TaskStatus: z.ZodType<z.infer<typeof TaskStatusValue>, z.ZodTypeDef, unknown> = z.preprocess(
@@ -39,7 +43,7 @@ export const TaskStatus: z.ZodType<z.infer<typeof TaskStatusValue>, z.ZodTypeDef
 )
 export type TaskStatus = z.infer<typeof TaskStatus>
 
-export const TERMINAL_TASK_STATUSES = ['done', 'shelved', 'blocked'] as const
+export const TERMINAL_TASK_STATUSES = ['pending_pr', 'done', 'shelved', 'blocked', 'archived', 'cancelled'] as const
 
 // FR-21: origination tracks who/what put the task on the board. Affects
 // promotion routing (see lever `task_origination`) and audit trail.
@@ -1034,7 +1038,10 @@ export const Task = z.object({
   domain: z.string(),
 
   // Which project directory this task operates on (absolute path)
-  projectPath: z.string(),
+  projectPath: z.preprocess(
+    (value) => typeof value === 'string' && value.trim().length > 0 ? value : '.',
+    z.string(),
+  ),
 
   // The user-facing New request that produced this task, when it came through
   // request routing instead of direct legacy intake.
@@ -1226,7 +1233,30 @@ export const Task = z.object({
   // requeued; the `rejection_dampening` lever reads it to decide when
   // `requeue_with_dampening` should stop requeuing and let the task stay
   // shelved as "suppressed."
-  shelveReason: z
+  shelveReason: z.preprocess((value) => {
+    if (!value || typeof value !== 'object') return value
+    const sourceRecord = value as Record<string, unknown>
+    const normalizedSource =
+      sourceRecord.source === 'policy' ? 'proposal_policy' : sourceRecord.source
+    return {
+      ...sourceRecord,
+      source: normalizedSource,
+      detail:
+        typeof sourceRecord.detail === 'string' && sourceRecord.detail.trim().length > 0
+          ? sourceRecord.detail
+          : 'Legacy shelve record preserved for compatibility.',
+      rejectedBy:
+        typeof sourceRecord.rejectedBy === 'string' && sourceRecord.rejectedBy.trim().length > 0
+          ? sourceRecord.rejectedBy
+          : normalizedSource === 'proposal_policy'
+            ? 'system:proposal-policy'
+            : 'system:legacy-shelve',
+      rejectedAt:
+        typeof sourceRecord.rejectedAt === 'string' && sourceRecord.rejectedAt.trim().length > 0
+          ? sourceRecord.rejectedAt
+          : '1970-01-01T00:00:00.000Z',
+    }
+  }, z
     .object({
       code: PreRejectionCode,
       detail: z.string(),
@@ -1237,7 +1267,7 @@ export const Task = z.object({
         .optional(),
       policyApplied: z.boolean().optional(),
       requeueCount: z.number().int().nonnegative().optional(),
-    })
+    }))
     .optional(),
 
   // FR-24: set when `worktree_isolation != none` on dispatch. Persisted so

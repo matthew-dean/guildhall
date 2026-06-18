@@ -2203,6 +2203,61 @@ describe('Workspace Import review endpoints', () => {
     expect(body.draft.goals + body.draft.tasks + body.draft.milestones).toBeGreaterThan(0)
   })
 
+  it('status tolerates archived legacy task records in the saved queue', async () => {
+    const now = new Date().toISOString()
+    await writeSystemTasks({
+      version: 1,
+      lastUpdated: now,
+      tasks: [
+        {
+          id: 'task-archive-1',
+          title: 'Archived legacy import',
+          description: 'Kept only for audit history.',
+          domain: 'core',
+          status: 'archived',
+          priority: 'normal',
+          acceptanceCriteria: [],
+          outOfScope: [],
+          dependsOn: [],
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          adjudications: [],
+          escalations: [],
+          agentIssues: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          shelveReason: {
+            code: 'duplicate',
+            detail: 'Superseded by later scope shaping.',
+            source: 'policy',
+          },
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+    })
+    await fs.writeFile(
+      path.join(tmpDir, 'README.md'),
+      '# Existing project\n\n## Goals\n\n- Capture the current repo direction\n',
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'package.json'),
+      JSON.stringify({ name: 'existing-project' }),
+      'utf8',
+    )
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const status = await app.fetch(new Request(scoped('/api/project/workspace-import/status')))
+
+    const body = await status.json() as { error?: string; seeded?: boolean; taskStatus?: string | null }
+    expect(status.status).toBe(200)
+    expect(body.error).toBeUndefined()
+    expect(body.seeded).toBe(false)
+    expect(body.taskStatus).toBeNull()
+  })
+
   it('draft endpoint returns a detector block even before the importer agent runs', async () => {
     // Seed signals the detector can pick up.
     await fs.writeFile(

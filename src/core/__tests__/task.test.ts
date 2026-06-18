@@ -3,7 +3,7 @@ import { AcceptanceCriteria, Task, TaskQueue, TaskStatus } from '../task.js'
 
 describe('TaskStatus', () => {
   it('accepts all valid statuses', () => {
-    const statuses = ['import_draft', 'exploring', 'spec_review', 'ready', 'in_progress', 'review', 'gate_check', 'pending_pr', 'done', 'shelved', 'blocked']
+    const statuses = ['import_draft', 'exploring', 'spec_review', 'ready', 'in_progress', 'review', 'gate_check', 'pending_pr', 'done', 'shelved', 'blocked', 'archived', 'cancelled']
     for (const s of statuses) {
       expect(TaskStatus.parse(s)).toBe(s)
     }
@@ -55,6 +55,12 @@ describe('Task', () => {
     expect(result.priority).toBe('normal')
   })
 
+  it('defaults missing legacy projectPath to the task root marker', () => {
+    const { projectPath, ...withoutProjectPath } = validTask
+    const result = Task.parse(withoutProjectPath)
+    expect(result.projectPath).toBe('.')
+  })
+
   it('applies default empty arrays', () => {
     const result = Task.parse(validTask)
     expect(result.notes).toEqual([])
@@ -104,6 +110,26 @@ describe('Task', () => {
     expect(result.shelveReason?.source).toBeUndefined()
     expect(result.shelveReason?.policyApplied).toBeUndefined()
     expect(result.shelveReason?.requeueCount).toBeUndefined()
+  })
+
+  it('normalizes legacy policy shelves to the current proposal-policy shape', () => {
+    const result = Task.parse({
+      ...validTask,
+      status: 'archived',
+      shelveReason: {
+        code: 'duplicate',
+        detail: 'Superseded by newer scope shaping.',
+        source: 'policy',
+      },
+    })
+    expect(result.status).toBe('archived')
+    expect(result.shelveReason).toMatchObject({
+      code: 'duplicate',
+      detail: 'Superseded by newer scope shaping.',
+      source: 'proposal_policy',
+      rejectedBy: 'system:proposal-policy',
+      rejectedAt: '1970-01-01T00:00:00.000Z',
+    })
   })
 
   it('defaults pressure-test summary on legacy request intake records', () => {
