@@ -422,6 +422,11 @@ function augmentTasksWithWorkspaceImportDraft(input: {
   for (const draftTask of draft.tasks) {
     const existing = titleToTask.get(normalizeText(draftTask.title))
     const taskId = existing?.id ?? draftSyntheticTaskId(draftTask.id)
+    const importedRefs = draftTask.refs?.map(stripImportPrefix).filter(Boolean) ?? []
+
+    if (existing && (!existing.references || existing.references.length === 0) && importedRefs.length > 0) {
+      existing.references = importedRefs
+    }
 
     if (!existing) {
       const synthetic: OrientationTaskInput = {
@@ -429,6 +434,7 @@ function augmentTasksWithWorkspaceImportDraft(input: {
         title: draftTask.title,
         description: draftTask.description ?? draftTask.title,
         domain: draftTask.domain,
+        ...(importedRefs.length > 0 ? { references: importedRefs } : {}),
         status: draftTask.scope === 'later' ? 'shelved' : 'import_draft',
         updatedAt: input.now,
         workVisibility: {
@@ -778,6 +784,49 @@ function summarizeCapabilityArea(title: string, children: OrientationNode[]): st
   return `${title} project skeleton: ${count} mapped ${count === 1 ? 'capability' : 'capabilities'} from durable docs.`
 }
 
+function stripImportPrefix(ref: string): string {
+  return ref.startsWith('import:') ? ref.slice('import:'.length) : ref
+}
+
+function humanizeFileStem(stem: string): string {
+  return stem
+    .replace(/\.[^.]+$/, '')
+    .replace(/[-_]+/g, ' ')
+    .replace(/\b\w/g, char => char.toUpperCase())
+}
+
+function orientationAreaDescriptorFromRefs(
+  refs: readonly string[] | undefined,
+): { key: string; title: string } | null {
+  const normalizedRefs = (refs ?? [])
+    .map(ref => stripImportPrefix(ref).replaceAll('\\', '/'))
+    .filter(Boolean)
+  if (normalizedRefs.length === 0) return null
+
+  const hasPath = (pattern: RegExp) => normalizedRefs.some(ref => pattern.test(ref))
+  if (hasPath(/(?:^|\/)docs\/harness\/remaining-spec-decomposition-inventory\.md$/i)) {
+    return { key: 'spec-decomposition-inventory', title: 'Spec Decomposition Inventory' }
+  }
+  if (hasPath(/(?:^|\/)docs\/harness\/implementation-roadmap\.md$/i)) {
+    return { key: 'implementation-roadmap', title: 'Implementation Roadmap' }
+  }
+  if (hasPath(/(?:^|\/)docs\/harness\/architecture-notes\.md$/i)) {
+    return { key: 'architecture-notes', title: 'Architecture Notes' }
+  }
+  if (hasPath(/(?:^|\/)docs\/specs\/[^/]+\.md$/i)) {
+    return { key: 'story-intelligence-specs', title: 'Story Intelligence Specs' }
+  }
+
+  const firstDocRef = normalizedRefs.find(ref => /(?:^|\/)docs\/.+\.md$/i.test(ref))
+  if (!firstDocRef) return null
+  const stem = firstDocRef.split('/').pop()
+  if (!stem) return null
+  return {
+    key: normalizeText(stem).replace(/\s+/g, '-') || 'docs',
+    title: humanizeFileStem(stem),
+  }
+}
+
 function mergeWorkspaceImportContexts(input: {
   roots: OrientationNode[]
   byId: Map<string, OrientationNode>
@@ -792,15 +841,25 @@ function mergeWorkspaceImportContexts(input: {
 
   const grouped = new Map<string, OrientationWorkspaceImportDraftContext[]>()
   for (const context of input.contexts) {
-    const key = context.domain?.trim() || 'unsorted'
-    const list = grouped.get(key) ?? []
+    const area = orientationAreaDescriptorFromRefs(context.refs) ?? (
+      context.domain?.trim()
+        ? { key: context.domain.trim(), title: titleFromDomain(context.domain.trim()) }
+        : { key: 'unsorted', title: 'Unsorted work' }
+    )
+    const list = grouped.get(area.key) ?? []
     list.push(context)
-    grouped.set(key, list)
+    grouped.set(area.key, list)
   }
 
-  for (const [domain, contexts] of grouped) {
-    const areaId = `area:${normalizeText(domain || 'unsorted').replace(/\s+/g, '-') || 'unsorted'}`
-    const title = titleFromDomain(domain)
+  for (const [groupKey, contexts] of grouped) {
+    const areaDescriptor =
+      orientationAreaDescriptorFromRefs(contexts.flatMap(context => context.refs ?? [])) ?? (
+        contexts[0]?.domain?.trim()
+          ? { key: contexts[0].domain.trim(), title: titleFromDomain(contexts[0].domain.trim()) }
+          : { key: groupKey || 'unsorted', title: groupKey === 'unsorted' ? 'Unsorted work' : titleFromDomain(groupKey) }
+      )
+    const areaId = `area:${normalizeText(areaDescriptor.key || 'unsorted').replace(/\s+/g, '-') || 'unsorted'}`
+    const title = areaDescriptor.title
     const children = contexts.map((context) => {
       const node: OrientationNode = {
         id: capabilityNodeId(context.id),
@@ -860,14 +919,14 @@ function mergeWorkspaceImportContexts(input: {
       proof: { state: 'none', verified: [], missing: [] },
       ownerAction: null,
       blockers: [],
-      refs: {
-        taskIds: [],
-        threadIds: [],
-        artifactIds: [],
-        structuralDomainIds: domain ? [`domain:${domain}`] : [],
-        primitiveIds: [],
-        releaseCheckIds: [],
-      },
+        refs: {
+          taskIds: [],
+          threadIds: [],
+          artifactIds: [],
+          structuralDomainIds: areaDescriptor.key ? [`domain:${areaDescriptor.key}`] : [],
+          primitiveIds: [],
+          releaseCheckIds: [],
+        },
       source: {
         kind: 'inferred',
         refs: children.flatMap(child => child.source.refs),
@@ -929,17 +988,26 @@ function groupFlatRootsByDomain(
   if (roots.some(root => root.children.length > 0 || root.kind === 'feature' || root.kind === 'area')) return roots
   const tasksByNodeId = new Map(tasks.map(task => [taskNodeId(task.id), task]))
   const groups = new Map<string, OrientationNode[]>()
+  const groupMeta = new Map<string, { title: string; structuralDomainId?: string }>()
   for (const root of roots) {
     const task = tasksByNodeId.get(root.id)
-    const key = task?.domain?.trim() || 'unsorted'
+    const importedArea = orientationAreaDescriptorFromRefs(task?.references)
+    const key = importedArea?.key || task?.domain?.trim() || 'unsorted'
     const list = groups.get(key) ?? []
     list.push(root)
     groups.set(key, list)
+    if (!groupMeta.has(key)) {
+      groupMeta.set(key, {
+        title: importedArea?.title ?? titleFromDomain(task?.domain?.trim() || 'unsorted'),
+        structuralDomainId: key && key !== 'unsorted' ? `domain:${key}` : undefined,
+      })
+    }
   }
   if (groups.size < 2) return roots
   const areaRoots: OrientationNode[] = []
   for (const [domain, children] of groups) {
-    const title = titleFromDomain(domain)
+    const meta = groupMeta.get(domain)
+    const title = meta?.title ?? titleFromDomain(domain)
     const areaId = `area:${normalizeText(domain || 'unsorted').replace(/\s+/g, '-') || 'unsorted'}`
     const normalizedChildren = children.map(child => ({ ...child, parentId: areaId }))
     for (const child of normalizedChildren) byId.set(child.id, child)
@@ -970,7 +1038,7 @@ function groupFlatRootsByDomain(
         taskIds: normalizedChildren.flatMap(child => child.refs.taskIds),
         threadIds: normalizedChildren.flatMap(child => child.refs.threadIds),
         artifactIds: normalizedChildren.flatMap(child => child.refs.artifactIds),
-        structuralDomainIds: domain ? [`domain:${domain}`] : [],
+        structuralDomainIds: meta?.structuralDomainId ? [meta.structuralDomainId] : [],
         primitiveIds: normalizedChildren.flatMap(child => child.refs.primitiveIds),
         releaseCheckIds: normalizedChildren.flatMap(child => child.refs.releaseCheckIds),
       },

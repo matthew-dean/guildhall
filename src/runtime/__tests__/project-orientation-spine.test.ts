@@ -554,7 +554,76 @@ describe('buildProjectOrientationSpine', () => {
       visibility: { kind: 'supporting', countInProjectTotals: false },
       source: { refs: ['import:docs/harness/architecture-notes.md'], inferred: true },
     })
-    expect(spine.roots.map(root => root.title)).toEqual(['Coherence', 'Harness'])
+    expect(spine.roots.map(root => root.title)).toEqual([
+      'Architecture Notes',
+      'Implementation Roadmap',
+      'Spec Decomposition Inventory',
+    ])
+  })
+
+  it('groups imported Narrative Harness structure by document family instead of collapsing it into coarse domains', () => {
+    const spine = buildProjectOrientationSpine({
+      projectId: 'narrative-harness',
+      now: '2026-06-18T12:00:00.000Z',
+      workspaceImportDraft: {
+        source: {
+          kind: 'inferred',
+          refs: ['workspace-import:draft'],
+          confidence: 'medium',
+          freshness: 'fresh',
+          inferred: true,
+          refreshedAt: '2026-06-18T12:00:00.000Z',
+        },
+        tasks: [
+          {
+            id: 'task-roadmap',
+            title: 'Define fixture schemas',
+            description: 'Current roadmap work.',
+            domain: 'harness',
+            scope: 'current',
+            refs: [
+              'import:docs/harness/implementation-roadmap.md',
+              'import:docs/specs/schema-contract-roadmap.md',
+            ],
+          },
+          {
+            id: 'task-later-spec',
+            title: 'Implement dialogue reviewer lane',
+            description: 'Deferred decomposition inventory work.',
+            domain: 'coherence',
+            scope: 'later',
+            refs: [
+              'import:docs/harness/remaining-spec-decomposition-inventory.md',
+              'import:docs/specs/dialogue-and-character-voice.md',
+            ],
+          },
+        ],
+        contexts: [
+          {
+            id: 'capability-architecture',
+            title: 'Author drafts or imports chapters.',
+            description: 'Architecture core loop step.',
+            refs: ['import:docs/harness/architecture-notes.md'],
+          },
+          {
+            id: 'capability-spec',
+            title: 'Spec: Story Intelligence Overview',
+            description: 'Story intelligence framing.',
+            refs: ['import:docs/specs/story-intelligence-overview.md'],
+          },
+        ],
+      },
+    })
+
+    expect(spine.roots.map(root => root.title)).toEqual([
+      'Architecture Notes',
+      'Implementation Roadmap',
+      'Spec Decomposition Inventory',
+      'Story Intelligence Specs',
+    ])
+    expect(spine.nodes['work:workspace-import:task-roadmap']?.parentId).toBe('area:implementation-roadmap')
+    expect(spine.nodes['work:workspace-import:task-later-spec']?.parentId).toBe('area:spec-decomposition-inventory')
+    expect(spine.nodes['capability:capability-spec']?.parentId).toBe('area:story-intelligence-specs')
   })
 
   it('groups flat imported work into inferred capability lanes by domain', () => {
