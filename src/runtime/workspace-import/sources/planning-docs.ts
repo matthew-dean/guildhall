@@ -213,6 +213,29 @@ function headingSignalKind(
   return null
 }
 
+function parseStageOrdinal(label: string | null | undefined): number | null {
+  if (!label) return null
+  const match = /^stage\s+(\d+)(?:\s*:.*)?$/i.exec(label.trim())
+  if (!match?.[1]) return null
+  const value = Number.parseInt(match[1], 10)
+  return Number.isFinite(value) ? value : null
+}
+
+function stageDeliverableSignal(
+  currentSection: string,
+  currentMilestoneStage: string | null,
+): { kind: WorkspaceSignal['kind']; scopeHint?: WorkspaceSignal['scopeHint'] } {
+  const stageNumber = parseStageOrdinal(currentSection)
+  const currentStageNumber = parseStageOrdinal(currentMilestoneStage)
+  if (stageNumber != null && currentStageNumber != null && stageNumber < currentStageNumber) {
+    return { kind: 'milestone' }
+  }
+  if (stageNumber != null && currentStageNumber != null && stageNumber > currentStageNumber) {
+    return { kind: 'open_work', scopeHint: 'later' }
+  }
+  return { kind: 'open_work', scopeHint: 'current' }
+}
+
 export const planningDocsSource: TaskSource = {
   id: 'planning-docs',
   label: 'Nested planning docs and specs',
@@ -443,12 +466,12 @@ export const planningDocsSource: TaskSource = {
         if (bullet && currentSection && (OPEN_HEADING_RE.test(currentSection) || STAGE_HEADING_RE.test(currentSection))) {
           const indent = bullet[1]!.replace(/\t/g, '  ').length
           const title = cleanHeading(bullet[2]!)
-          const stageScopedKind = currentLabel === 'deliverables'
-            ? 'context'
+          const stageScopedSignal = currentLabel === 'deliverables'
+            ? stageDeliverableSignal(currentSection, currentMilestoneStage)
             : currentLabel === 'success_gates'
-              ? 'context'
+              ? { kind: 'context' as const }
               : currentLabel === 'do_not_start'
-                ? 'context'
+                ? { kind: 'context' as const }
                 : null
           while (bulletStack.length > 0 && bulletStack[bulletStack.length - 1]!.indent >= indent) {
             bulletStack.pop()
@@ -467,7 +490,7 @@ export const planningDocsSource: TaskSource = {
               confidence: 'medium',
             })
           } else if (!grouping) {
-            const kind: WorkspaceSignal['kind'] = stageScopedKind ?? (
+            const kind: WorkspaceSignal['kind'] = stageScopedSignal?.kind ?? (
               isProjectStateCurrentFocus(fileBase, currentSection) ||
               (parent && indent > parent.indent && !parent.grouping)
                 ? 'context'
@@ -479,6 +502,7 @@ export const planningDocsSource: TaskSource = {
               title,
               evidence: `${rel}: ${line.trim()}`.slice(0, 240),
               references: [abs],
+              ...(stageScopedSignal?.scopeHint ? { scopeHint: stageScopedSignal.scopeHint } : {}),
               ...(domainHint ? { domainHint } : {}),
               confidence: 'medium',
             })
@@ -513,7 +537,7 @@ export const planningDocsSource: TaskSource = {
 
 function detectCurrentMilestoneStage(contents: Iterable<string>): string | null {
   for (const raw of contents) {
-    const match = raw.match(/##\s+Current Next Milestone[\s\S]{0,400}?The next milestone is\s+(Stage\s+\d+)/i)
+    const match = raw.match(/##\s+Current Next Milestone[\s\S]*?The next milestone is\s+(Stage\s+\d+)/i)
     if (match?.[1]) {
       return normalizeStageLabel(match[1])
     }

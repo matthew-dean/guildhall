@@ -410,7 +410,65 @@ describe('planningDocsSource', () => {
       })),
     })
 
-    expect(sigs).toEqual([])
+    expect(sigs.filter((signal) => signal.kind === 'open_work' || signal.kind === 'milestone')).toEqual([])
+  })
+
+  it('treats roadmap deliverables in the current milestone stage as current open work and future stages as later work', async () => {
+    mkdirSync(join(dir, 'docs', 'harness'), { recursive: true })
+    writeFileSync(
+      join(dir, 'docs', 'harness', 'implementation-roadmap.md'),
+      `# Implementation Roadmap
+
+## Stage 1: Fixture And Evaluation Harness
+
+Deliverables:
+
+- fixture directory shape for at least one small story fixture
+- typed fixture and expected-record contracts
+
+## Stage 2: Mastra Agent Prototype
+
+Deliverables:
+
+- Mastra workflow for the prototype iteration loop
+- specialist editor agent calls for the first review lanes
+
+## Current Next Milestone
+
+The next milestone is Stage 1: Fixture And Evaluation Harness.
+`,
+    )
+
+    const sigs = await planningDocsSource.detect({
+      projectPath: dir,
+      exec: fakeExec(() => ({
+        stdout: ['docs/harness/implementation-roadmap.md'].join('\n'),
+        code: 0,
+      })),
+    })
+
+    expect(sigs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'open_work',
+        title: 'fixture directory shape for at least one small story fixture',
+        scopeHint: 'current',
+      }),
+      expect.objectContaining({
+        kind: 'open_work',
+        title: 'typed fixture and expected-record contracts',
+        scopeHint: 'current',
+      }),
+      expect.objectContaining({
+        kind: 'open_work',
+        title: 'Mastra workflow for the prototype iteration loop',
+        scopeHint: 'later',
+      }),
+      expect.objectContaining({
+        kind: 'open_work',
+        title: 'specialist editor agent calls for the first review lanes',
+        scopeHint: 'later',
+      }),
+    ]))
   })
 
   it('keeps nested explanatory bullets under a task candidate out of open work', async () => {

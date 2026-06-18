@@ -9,6 +9,9 @@ import { loadLeverSettings, defaultAgentSettingsPath } from '@guildhall/levers'
 import {
   detectWorkspaceSignals,
   formWorkspaceHypothesis,
+  type DraftGoal,
+  type DraftMilestone,
+  type DraftTask,
   type WorkspaceImportDraft,
   type WorkspaceInventory,
 } from './workspace-import/index.js'
@@ -519,7 +522,7 @@ function iterateYamlFences(spec: string): Generator<Record<string, unknown> | un
   })()
 }
 
-function workspaceImportYamlErrors(spec: string): string[] {
+export function workspaceImportYamlErrors(spec: string): string[] {
   const errors: string[] = []
   const fence = /```ya?ml\s*\n([\s\S]*?)```/gi
   let match: RegExpExecArray | null
@@ -552,6 +555,160 @@ function normalizeImportText(value: string): string {
 
 function supportingText(title: string, value: string): string {
   return normalizeImportText(title) === normalizeImportText(value) ? '' : value
+}
+
+function mergeImportReferences(
+  left: readonly string[] | undefined,
+  right: readonly string[] | undefined,
+): string[] | undefined {
+  const refs = new Set<string>()
+  for (const ref of left ?? []) {
+    const trimmed = ref.trim()
+    if (trimmed) refs.add(trimmed)
+  }
+  for (const ref of right ?? []) {
+    const trimmed = ref.trim()
+    if (trimmed) refs.add(trimmed)
+  }
+  return refs.size > 0 ? [...refs] : undefined
+}
+
+export function mergeWorkspaceImportDraft(
+  detected: WorkspaceImportDraft,
+  parsed: ParsedImport | null,
+): WorkspaceImportDraft {
+  if (!parsed) return detected
+
+  const mergedGoals: DraftGoal[] = []
+  const parsedGoalsByTitle = new Map(
+    parsed.goals.map(goal => [normalizeImportText(goal.title), goal] as const),
+  )
+  const usedGoalTitles = new Set<string>()
+  for (const goal of detected.goals) {
+    const normalizedTitle = normalizeImportText(goal.title)
+    const parsedGoal = parsedGoalsByTitle.get(normalizedTitle)
+    if (parsedGoal) {
+      usedGoalTitles.add(normalizedTitle)
+      mergedGoals.push({
+        ...goal,
+        id: parsedGoal.id,
+        title: parsedGoal.title,
+        rationale: parsedGoal.rationale || goal.rationale,
+      })
+      continue
+    }
+    mergedGoals.push(goal)
+  }
+  for (const goal of parsed.goals) {
+    const normalizedTitle = normalizeImportText(goal.title)
+    if (usedGoalTitles.has(normalizedTitle)) continue
+    mergedGoals.push({
+      id: goal.id,
+      title: goal.title,
+      rationale: goal.rationale,
+      source: 'workspace-importer',
+      confidence: 'medium',
+    })
+  }
+
+  const mergedTasks: DraftTask[] = []
+  const parsedTasksByTitle = new Map(
+    parsed.tasks.map(task => [normalizeImportText(task.title), task] as const),
+  )
+  const usedTaskTitles = new Set<string>()
+  for (const task of detected.tasks) {
+    const normalizedTitle = normalizeImportText(task.title)
+    const parsedTask = parsedTasksByTitle.get(normalizedTitle)
+    if (parsedTask) {
+      usedTaskTitles.add(normalizedTitle)
+      mergedTasks.push({
+        ...task,
+        suggestedId: parsedTask.id,
+        title: parsedTask.title,
+        description: parsedTask.description || task.description,
+        ...(parsedTask.whyThisMayMatter
+          ? { whyThisMayMatter: parsedTask.whyThisMayMatter }
+          : task.whyThisMayMatter
+            ? { whyThisMayMatter: task.whyThisMayMatter }
+            : {}),
+        ...(parsedTask.assumptions && parsedTask.assumptions.length > 0
+          ? { assumptions: [...parsedTask.assumptions] }
+          : task.assumptions
+            ? { assumptions: [...task.assumptions] }
+            : {}),
+        ...(parsedTask.missingInformation && parsedTask.missingInformation.length > 0
+          ? { missingInformation: [...parsedTask.missingInformation] }
+          : task.missingInformation
+            ? { missingInformation: [...task.missingInformation] }
+            : {}),
+        domain: parsedTask.domain || task.domain,
+        scope: parsedTask.scope === 'later' ? 'later' : task.scope,
+        priority: parsedTask.priority || task.priority,
+        references: mergeImportReferences(task.references, parsedTask.references),
+      })
+      continue
+    }
+    mergedTasks.push(task)
+  }
+  for (const task of parsed.tasks) {
+    const normalizedTitle = normalizeImportText(task.title)
+    if (usedTaskTitles.has(normalizedTitle)) continue
+    mergedTasks.push({
+      suggestedId: task.id,
+      title: task.title,
+      description: task.description,
+      ...(task.whyThisMayMatter ? { whyThisMayMatter: task.whyThisMayMatter } : {}),
+      ...(task.assumptions && task.assumptions.length > 0
+        ? { assumptions: [...task.assumptions] }
+        : {}),
+      ...(task.missingInformation && task.missingInformation.length > 0
+        ? { missingInformation: [...task.missingInformation] }
+        : {}),
+      domain: task.domain,
+      scope: task.scope === 'later' ? 'later' : 'current',
+      priority: task.priority,
+      source: 'workspace-importer',
+      ...(task.references.length > 0 ? { references: [...task.references] } : {}),
+      confidence: 'medium',
+    })
+  }
+
+  const mergedMilestones: DraftMilestone[] = []
+  const parsedMilestonesByTitle = new Map(
+    parsed.milestones.map(milestone => [normalizeImportText(milestone.title), milestone] as const),
+  )
+  const usedMilestoneTitles = new Set<string>()
+  for (const milestone of detected.milestones) {
+    const normalizedTitle = normalizeImportText(milestone.title)
+    const parsedMilestone = parsedMilestonesByTitle.get(normalizedTitle)
+    if (parsedMilestone) {
+      usedMilestoneTitles.add(normalizedTitle)
+      mergedMilestones.push({
+        ...milestone,
+        title: parsedMilestone.title,
+        evidence: parsedMilestone.evidence || milestone.evidence,
+      })
+      continue
+    }
+    mergedMilestones.push(milestone)
+  }
+  for (const milestone of parsed.milestones) {
+    const normalizedTitle = normalizeImportText(milestone.title)
+    if (usedMilestoneTitles.has(normalizedTitle)) continue
+    mergedMilestones.push({
+      title: milestone.title,
+      evidence: milestone.evidence,
+      source: 'workspace-importer',
+    })
+  }
+
+  return {
+    goals: mergedGoals,
+    tasks: mergedTasks,
+    milestones: mergedMilestones,
+    context: [...detected.context],
+    stats: detected.stats,
+  }
 }
 
 function normalizeImportedReferenceForTask(

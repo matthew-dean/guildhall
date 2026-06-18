@@ -229,11 +229,12 @@ import {
   maybeSeedWorkspaceImport,
   approveWorkspaceImport,
   createWorkspaceImportTask,
+  mergeWorkspaceImportDraft,
   parseWorkspaceImport,
   rerunWorkspaceImportTask,
   workspaceNeedsImport,
+  workspaceImportYamlErrors,
   WORKSPACE_IMPORT_TASK_ID,
-  formatDetectedDraftAsSpec,
   workspaceImportTasksPath,
 } from './workspace-importer.js'
 import {
@@ -6205,11 +6206,21 @@ export function buildServeApp(opts: ServeOptions = {}): {
       } catch {
         /* detector best-effort */
       }
+      const detectedDraft = detected
+        ? {
+            goals: detected.goals,
+            tasks: detected.tasks,
+            milestones: detected.milestones,
+            context: detected.context,
+            stats: detected.stats,
+          }
+        : null
       if (!existsSync(tasksPath)) {
         return c.json({
           taskExists: false,
           specReady: false,
           parsed: null,
+          effective: detectedDraft,
           detected,
           dismissed,
           anchors,
@@ -6227,6 +6238,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           taskExists: false,
           specReady: false,
           parsed: null,
+          effective: detectedDraft,
           detected,
           dismissed,
           anchors,
@@ -6239,6 +6251,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           specReady: false,
           taskStatus: task.status ?? null,
           parsed: null,
+          effective: detectedDraft,
           detected,
           dismissed,
           anchors,
@@ -6247,11 +6260,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const parsed = parseWorkspaceImport(spec)
       const specReady =
         parsed.goals.length + parsed.tasks.length + parsed.milestones.length > 0
+      const effective = detectedDraft ? mergeWorkspaceImportDraft(detectedDraft, parsed) : null
       return c.json({
         taskExists: true,
         specReady,
         taskStatus: task.status ?? null,
         parsed,
+        effective,
         detected,
         dismissed,
         anchors,
@@ -6272,71 +6287,42 @@ export function buildServeApp(opts: ServeOptions = {}): {
         sourceKeys?: string[]
         taskIds?: string[]
       }
-      let importerTaskHasSpec = false
+      let importerTaskSpec: string | null = null
 
-      // Fallback: if the reserved task is missing or has no agent-authored
-      // spec yet, create the task (idempotent) and seed the spec from the
-      // deterministic detector output. This lets the user Approve immediately
-      // without waiting on the workspace-importer agent, and is safe because
-      // the detector draft uses the same YAML fence format the agent would
-      // have produced.
+      // Approval always needs the reserved task so the merge can mark the
+      // import complete in one place, but the detector draft itself is a
+      // first-class input. We never synthesize a fake importer spec here.
       try {
         const tasksPath = workspaceImportTasksPath(memoryDir)
-        const raw = existsSync(tasksPath)
+        let raw = existsSync(tasksPath)
           ? (JSON.parse(await readManagedTextFile(tasksPath, 'utf-8')) as
               | Array<Record<string, unknown>>
               | { tasks?: Array<Record<string, unknown>> })
           : { tasks: [] as Array<Record<string, unknown>> }
-        const list = Array.isArray(raw) ? raw : raw.tasks ?? []
+        let list = Array.isArray(raw) ? raw : raw.tasks ?? []
         let idx = list.findIndex(
           (t) => (t as { id?: string }).id === WORKSPACE_IMPORT_TASK_ID,
         )
-        // Ensure the reserved task exists. createWorkspaceImportTask is
-        // idempotent and seeds the exploring transcript.
         if (idx < 0) {
           await createWorkspaceImportTask({
             memoryDir,
             projectPath: project.path,
           })
-          // Re-read after creation.
-          const raw2 = JSON.parse(await readManagedTextFile(tasksPath, 'utf-8')) as
+          raw = JSON.parse(await readManagedTextFile(tasksPath, 'utf-8')) as
             | Array<Record<string, unknown>>
             | { tasks?: Array<Record<string, unknown>> }
-          const list2 = Array.isArray(raw2) ? raw2 : raw2.tasks ?? []
-          idx = list2.findIndex(
+          list = Array.isArray(raw) ? raw : raw.tasks ?? []
+          idx = list.findIndex(
             (t) => (t as { id?: string }).id === WORKSPACE_IMPORT_TASK_ID,
           )
-          if (idx >= 0) {
-            const task = list2[idx] as { spec?: string }
-            const inventory = await detectWorkspaceSignals({ projectPath: project.path })
-            const draft = formWorkspaceHypothesis(inventory)
-            const spec = formatDetectedDraftAsSpec(draft)
-            if (spec) {
-              task.spec = spec
-              const next = Array.isArray(raw2) ? list2 : { ...raw2, tasks: list2 }
-              await writeManagedTextFile(tasksPath, JSON.stringify(next, null, 2), 'utf-8')
-            }
-          }
-        } else {
+        }
+        if (idx >= 0) {
           const task = list[idx] as { spec?: string }
-          const specEmpty = !task.spec || task.spec.trim().length === 0
-          importerTaskHasSpec = !specEmpty
-          if (specEmpty) {
-            const inventory = await detectWorkspaceSignals({ projectPath: project.path })
-            const draft = formWorkspaceHypothesis(inventory)
-            const spec = formatDetectedDraftAsSpec(draft)
-            if (spec) {
-              task.spec = spec
-              const next = Array.isArray(raw) ? list : { ...raw, tasks: list }
-              await writeManagedTextFile(tasksPath, JSON.stringify(next, null, 2), 'utf-8')
-              importerTaskHasSpec = true
-            }
+          if (typeof task?.spec === 'string' && task.spec.trim().length > 0) {
+            importerTaskSpec = task.spec
           }
         }
       } catch (e) {
-        // Surface the underlying problem instead of swallowing it — the user
-        // would otherwise see only the generic "No workspace-import task" from
-        // approveWorkspaceImport, which hides the real failure.
         return c.json(
           { error: `Could not prepare workspace-import task: ${e instanceof Error ? e.message : String(e)}` },
           500,
@@ -6370,42 +6356,21 @@ export function buildServeApp(opts: ServeOptions = {}): {
         taskIds: selectedTaskIds,
       })
       let parsedSavedImporterSpec: ReturnType<typeof parseWorkspaceImport> | null = null
-      if (!hasExplicitNarrowing && importerTaskHasSpec) {
+      if (!hasExplicitNarrowing && importerTaskSpec) {
         try {
-          const tasksPath = workspaceImportTasksPath(memoryDir)
-          const raw = JSON.parse(await readManagedTextFile(tasksPath, 'utf-8')) as
-            | Array<Record<string, unknown>>
-            | { tasks?: Array<Record<string, unknown>> }
-          const list = Array.isArray(raw) ? raw : raw.tasks ?? []
-          const importerTask = list.find(
-            (t) => (t as { id?: string }).id === WORKSPACE_IMPORT_TASK_ID,
-          ) as { spec?: unknown } | undefined
-          if (typeof importerTask?.spec === 'string' && importerTask.spec.trim().length > 0) {
-            parsedSavedImporterSpec = parseWorkspaceImport(importerTask.spec)
+          const yamlErrors = workspaceImportYamlErrors(importerTaskSpec)
+          if (yamlErrors.length > 0) {
+            return c.json({ error: `Invalid workspace-import YAML: ${yamlErrors.join('; ')}` }, 400)
           }
+          parsedSavedImporterSpec = parseWorkspaceImport(importerTaskSpec)
         } catch {
           parsedSavedImporterSpec = null
         }
       }
-      const normalizeImportTaskTitle = (value: string): string =>
-        value
-          .trim()
-          .toLowerCase()
-          .replace(/[`*_~]/g, '')
-          .replace(/[^a-z0-9\s-]/g, ' ')
-          .replace(/\s+/g, ' ')
-          .trim()
-      const savedImporterUndercoversCurrentDraft =
-        !hasExplicitNarrowing &&
-        importerTaskHasSpec &&
-        parsedSavedImporterSpec !== null &&
-        filteredDraft.tasks.some(task => {
-          const normalized = normalizeImportTaskTitle(task.title)
-          if (!normalized) return false
-          return !parsedSavedImporterSpec!.tasks.some(savedTask =>
-            normalizeImportTaskTitle(savedTask.title) === normalized,
-          )
-        })
+      const effectiveDraft =
+        !hasExplicitNarrowing && parsedSavedImporterSpec
+          ? mergeWorkspaceImportDraft(filteredDraft, parsedSavedImporterSpec)
+          : filteredDraft
 
       const result = await approveWorkspaceImport({
         memoryDir,
@@ -6415,9 +6380,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           project.config?.coordinators ?? [],
           project.config?.projects ?? [],
         ),
-        ...(!savedImporterUndercoversCurrentDraft && !hasExplicitNarrowing && importerTaskHasSpec
-          ? {}
-          : { draftOverride: filteredDraft }),
+        draftOverride: effectiveDraft,
       })
       if (!result.success) {
         return c.json({ error: result.error ?? 'Approval failed' }, 400)

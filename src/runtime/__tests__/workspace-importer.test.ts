@@ -16,6 +16,7 @@ import {
   parseWorkspaceImport,
   maybeSeedWorkspaceImport,
   formatDetectedDraftAsSpec,
+  mergeWorkspaceImportDraft,
   WORKSPACE_IMPORT_TASK_ID,
   WORKSPACE_IMPORT_DOMAIN,
 } from '../workspace-importer.js'
@@ -854,12 +855,15 @@ tasks:
         expect.stringContaining('docs/specs/dialogue-and-character-voice.md'),
       ]),
     })
-    expect(draft.tasks.map((task) => task.title)).not.toEqual(
+    expect(draft.tasks.map((task) => task.title)).toEqual(
       expect.arrayContaining([
         'fixture directory shape for at least one small story fixture',
         'typed fixture and expected-record contracts',
       ]),
     )
+    expect(draft.tasks.find((task) => task.title === 'fixture directory shape for at least one small story fixture')).toMatchObject({
+      scope: 'current',
+    })
   })
 
   it('imports later-scope workspace tasks as shelved instead of current intake drafts', async () => {
@@ -1194,6 +1198,67 @@ tasks:
     expect(imported?.requestIntake?.assumptions).toEqual([
       'This item still reflects current project intent and has not already been completed or superseded elsewhere.',
     ])
+  })
+})
+
+describe('mergeWorkspaceImportDraft', () => {
+  it('applies importer refinements on top of detector findings without dropping detector-only tasks', () => {
+    const detected = formWorkspaceHypothesis(invWith([
+      {
+        source: 'planning-docs',
+        kind: 'open_work',
+        title: 'Build packet runner',
+        evidence: 'Stage 1 harness deliverable.',
+        confidence: 'high',
+        references: ['docs/harness/implementation-roadmap.md'],
+      },
+      {
+        source: 'planning-docs',
+        kind: 'open_work',
+        title: 'Implement reviewer lane',
+        evidence: 'Stage 2 reviewer lane.',
+        confidence: 'high',
+        scopeHint: 'later',
+        references: ['docs/harness/implementation-roadmap.md'],
+      },
+    ]))
+    const parsed = parseWorkspaceImport(`
+\`\`\`yaml
+tasks:
+  - id: task-runner
+    title: Build packet runner
+    description: Refined runner scope.
+    domain: harness
+    priority: high
+  - id: task-cli
+    title: Add CLI wrapper
+    description: Human-added CLI entrypoint.
+    domain: harness
+    priority: normal
+    references:
+      - docs/harness/prototype-iteration-workflow.md
+\`\`\`
+`)
+
+    const merged = mergeWorkspaceImportDraft(detected, parsed)
+
+    expect(merged.tasks.find(task => task.title === 'Build packet runner')).toMatchObject({
+      suggestedId: 'task-runner',
+      description: 'Refined runner scope.',
+      references: ['docs/harness/implementation-roadmap.md'],
+      source: 'planning-docs',
+    })
+    expect(merged.tasks.find(task => task.title === 'Implement reviewer lane')).toMatchObject({
+      scope: 'later',
+      source: 'planning-docs',
+    })
+    expect(merged.tasks.find(task => task.title === 'Add CLI wrapper')).toMatchObject({
+      suggestedId: 'task-cli',
+      description: 'Human-added CLI entrypoint.',
+      source: 'workspace-importer',
+      confidence: 'medium',
+      references: ['docs/harness/prototype-iteration-workflow.md'],
+    })
   })
 })
 

@@ -12108,6 +12108,45 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-06-18T05:47:00Z - Tightened Narrative Harness workspace-import truth so
+approve follows the reviewed draft instead of synthesizing a hidden one.
+
+- Work id: `codex:narrative-harness-import-truth-2026-06-17`.
+- User job: when Guildhall scans a doc-heavy project like Narrative Harness,
+  the owner should be able to review one honest import draft, approve it, and
+  trust that the merged task graph came from the visible capability chain
+  rather than a synthetic fallback path.
+- Fix:
+  - `planning-docs` now promotes current-stage and later-stage deliverables in
+    `docs/harness/implementation-roadmap.md` into `open_work` so stage
+    deliverables seed real scoped tasks instead of disappearing into reference
+    notes.
+  - The workspace-import draft route now exposes an `effective` draft that
+    overlays importer refinements onto detector findings while preserving
+    detector provenance and detector-only tasks.
+  - `/api/project/workspace-import/approve` no longer writes a synthesized
+    importer spec behind the scenes. It ensures the reserved task exists, then
+    approves the same effective draft the review surface is built from.
+- Narrative Harness installed-app proof:
+  - `GET /api/project/workspace-import/draft?projectId=narrative-harness`
+    returned `detected.tasks=44`, `parsed.tasks=44`, `effective.tasks=44`,
+    with first effective tasks preserving `source:"planning-docs"` and
+    `references:[".../docs/harness/implementation-roadmap.md"]`.
+  - `POST /api/project/workspace-import/approve?projectId=narrative-harness`
+    returned `{ ok: true, tasksAdded: 0, goalsRecorded: 7, milestonesLogged: 6
+    }`, confirming approve consumed the already-reviewed import without adding
+    a new synthetic path.
+  - `GET /api/project?projectId=narrative-harness` now reports
+    `includedCount:13`, `deferredCount:32`, and `taskCount:45`, which matches
+    the expanded import instead of the earlier under-scoped 16-task picture.
+- Verification:
+  `pnpm vitest run src/runtime/workspace-import/__tests__/detect.test.ts src/runtime/__tests__/workspace-importer.test.ts`
+  passed `71` tests; `pnpm build`; `pnpm dev:install`; `guildhall stop`;
+  `guildhall start`; `/api/stale-server` returned `stale:false` for PID
+  `25110` from `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+
+source: codex:narrative-harness-import-truth-2026-06-17
+
 2026-06-18T05:32:00Z - Tightened Narrative Harness scope truth and removed
 generic decomposition child synthesis.
 
