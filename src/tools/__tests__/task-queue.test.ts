@@ -430,9 +430,57 @@ describe('updateTask', () => {
       { id: 'ac-2', description: 'Admin API returns subscription status.', verifiedBy: 'review' as const },
       { id: 'ac-3', description: 'Migration backfills subscriptions.', verifiedBy: 'review' as const },
     ]
+    const workUnitAnalysis = {
+      summary: 'Five independently deliverable work units.',
+      units: [
+        {
+          id: 'billing-ui',
+          title: 'Implement the billing settings workflow',
+          deliverable: 'Billing settings can update subscriptions.',
+          rationale: 'The UI workflow can be reviewed separately from the API and migration work.',
+          suggestedDomain: 'frontend',
+          dependsOn: [],
+        },
+        {
+          id: 'admin-api',
+          title: 'Add the admin subscription API contract',
+          deliverable: 'Admin API returns subscription status.',
+          rationale: 'The API contract is independently verifiable.',
+          suggestedDomain: 'backend',
+          dependsOn: [],
+        },
+        {
+          id: 'migration',
+          title: 'Migrate existing workspace subscription data',
+          deliverable: 'Existing workspace subscriptions are backfilled.',
+          rationale: 'Migration safety needs its own proof loop.',
+          suggestedDomain: 'data',
+          dependsOn: ['admin-api'],
+        },
+        {
+          id: 'invite-email',
+          title: 'Implement invite email delivery',
+          deliverable: 'Invite emails are sent.',
+          rationale: 'Delivery behavior is separate from data migration.',
+          suggestedDomain: 'backend',
+          dependsOn: [],
+        },
+        {
+          id: 'analytics-rollout',
+          title: 'Update analytics documentation and rollout evidence',
+          deliverable: 'Analytics events and rollout evidence are documented.',
+          rationale: 'Docs and rollout proof should stay separate from code changes.',
+          suggestedDomain: 'docs',
+          dependsOn: [],
+        },
+      ],
+      proofOnlyItems: [],
+      createdAt: '2026-05-25T12:00:00.000Z',
+      createdBy: 'coordinator-test',
+    }
 
-    await updateTask({ tasksPath, taskId: 'task-001', status: 'ready', spec, acceptanceCriteria })
-    await updateTask({ tasksPath, taskId: 'task-001', status: 'ready', spec, acceptanceCriteria })
+    await updateTask({ tasksPath, taskId: 'task-001', status: 'ready', spec, acceptanceCriteria, workUnitAnalysis })
+    await updateTask({ tasksPath, taskId: 'task-001', status: 'ready', spec, acceptanceCriteria, workUnitAnalysis })
 
     const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
     const parent = raw.tasks.find((task: { id: string }) => task.id === 'task-001')
@@ -934,6 +982,54 @@ describe('updateTask', () => {
         { id: 'ac-2', description: 'Admin API returns subscription status.', verifiedBy: 'review' },
         { id: 'ac-3', description: 'Migration backfills subscriptions.', verifiedBy: 'review' },
       ],
+      workUnitAnalysis: {
+        summary: 'Five independently deliverable work units.',
+        units: [
+          {
+            id: 'billing-ui',
+            title: 'Implement the billing settings workflow',
+            deliverable: 'Billing settings can update subscriptions.',
+            rationale: 'The UI workflow can be reviewed separately from the API and migration work.',
+            suggestedDomain: 'frontend',
+            dependsOn: [],
+          },
+          {
+            id: 'admin-api',
+            title: 'Add the admin subscription API contract',
+            deliverable: 'Admin API returns subscription status.',
+            rationale: 'The API contract is independently verifiable.',
+            suggestedDomain: 'backend',
+            dependsOn: [],
+          },
+          {
+            id: 'migration',
+            title: 'Migrate existing workspace subscription data',
+            deliverable: 'Existing workspace subscriptions are backfilled.',
+            rationale: 'Migration safety needs its own proof loop.',
+            suggestedDomain: 'data',
+            dependsOn: ['admin-api'],
+          },
+          {
+            id: 'invite-email',
+            title: 'Implement invite email delivery',
+            deliverable: 'Invite emails are sent.',
+            rationale: 'Delivery behavior is separate from data migration.',
+            suggestedDomain: 'backend',
+            dependsOn: [],
+          },
+          {
+            id: 'analytics-rollout',
+            title: 'Update analytics documentation and rollout evidence',
+            deliverable: 'Analytics events and rollout evidence are documented.',
+            rationale: 'Docs and rollout proof should stay separate from code changes.',
+            suggestedDomain: 'docs',
+            dependsOn: [],
+          },
+        ],
+        proofOnlyItems: [],
+        createdAt: '2026-05-25T12:00:00.000Z',
+        createdBy: 'coordinator-test',
+      },
     })
 
     const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))

@@ -796,13 +796,33 @@ export function planTaskSplit(input: {
 
   const primitiveIds = new Set(input.model.primitives.map(primitive => primitive.id))
   const recommendationToPlannedId = new Map<string, string>()
+  const workUnitIdToPlannedId = new Map<string, string>()
   const children: TaskSplitChildPlan[] = []
   const recommendations = sizePlan.recommendedChildren.length > 0
     ? sizePlan.recommendedChildren
     : buildDecompositionChildDrafts({ task })
+  if (recommendations.length === 0) {
+    return {
+      parentTaskId: task.id,
+      action: sizePlan.action,
+      children: [],
+      errors: [issue(
+        `tasks.${task.id}.workUnitAnalysis`,
+        'missing_split_plan',
+        `Task ${task.id} needs explicit work-unit analysis before Guildhall can materialize a split.`,
+      )],
+      warnings,
+    }
+  }
+  const workUnits = task.workUnitAnalysis?.units ?? []
   for (const [index, recommendation] of recommendations.entries()) {
     const plannedTaskId = recommendation.createdTaskId ?? `${task.id}-split-${slugForId(recommendation.title)}`
     recommendationToPlannedId.set(normalizeKey(recommendation.title), plannedTaskId)
+    const matchingUnit =
+      workUnits[index]?.title === recommendation.title
+        ? workUnits[index]
+        : workUnits.find(unit => normalizeKey(unit.title) === normalizeKey(recommendation.title))
+    if (matchingUnit?.id) workUnitIdToPlannedId.set(matchingUnit.id, plannedTaskId)
     const explicitUses = recommendation.usesPrimitives ?? []
     const inferredUses = explicitUses.length > 0
       ? explicitUses
@@ -875,7 +895,9 @@ export function planTaskSplit(input: {
     children: children.map(child => ({
       ...child,
       dependsOn: child.dependsOn.map(dependency =>
-        recommendationToPlannedId.get(normalizeKey(dependency)) ?? dependency,
+        workUnitIdToPlannedId.get(dependency) ??
+        recommendationToPlannedId.get(normalizeKey(dependency)) ??
+        dependency,
       ),
     })),
     errors,

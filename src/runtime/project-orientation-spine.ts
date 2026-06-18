@@ -363,13 +363,19 @@ function normalizeCharter(input: BuildProjectOrientationSpineInput): ProjectOrie
 
 function defaultScope(tasks: OrientationTaskInput[]): OrientationScope | null {
   if (tasks.length === 0) return null
+  const nodeIds = tasks
+    .filter(task => task.status !== 'shelved')
+    .map(task => taskNodeId(task.id))
+  const deferredNodeIds = tasks
+    .filter(task => task.status === 'shelved')
+    .map(task => taskNodeId(task.id))
   return {
     id: 'current-work',
     label: 'Current work',
     kind: 'proposed_feature_set',
     source: 'inferred',
-    nodeIds: tasks.map(task => taskNodeId(task.id)),
-    deferredNodeIds: [],
+    nodeIds,
+    deferredNodeIds,
   }
 }
 

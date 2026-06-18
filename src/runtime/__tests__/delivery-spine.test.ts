@@ -353,7 +353,65 @@ describe('project-local delivery spine', () => {
     ]))
   })
 
-  it('plans decomposition children without persisted split recommendations', () => {
+  it('plans decomposition children from explicit work-unit analysis without persisted split recommendations', () => {
+    const parent = task({
+      id: 'task-context-menu',
+      title: 'ContextMenu package',
+      description: 'Build ContextMenu implementation and Storybook proof for the menu primitive.',
+      status: 'spec_review',
+      delivery: { driver: 'knit', provider: 'looma', usesPrimitives: ['menu'] },
+      workUnitAnalysis: {
+        summary: 'Two independently deliverable units.',
+        units: [
+          {
+            id: 'implementation',
+            title: 'ContextMenu component implementation',
+            deliverable: 'ContextMenu works against the menu primitive.',
+            rationale: 'Implementation lands before proof.',
+            dependsOn: [],
+          },
+          {
+            id: 'proof',
+            title: 'ContextMenu Storybook proof',
+            deliverable: 'Storybook demonstrates the component states.',
+            rationale: 'Proof is a separate deliverable from the component implementation.',
+            dependsOn: ['implementation'],
+          },
+        ],
+        proofOnlyItems: [],
+        createdAt: now,
+        createdBy: 'test',
+      },
+      sizePlan: {
+        taskId: 'task-context-menu',
+        score: 5,
+        band: 'large',
+        action: 'decompose_before_execution',
+        factors: [],
+        recommendedChildren: [],
+        createdAt: now,
+        createdBy: 'task-sizing',
+      },
+    })
+
+    const plan = planTaskSplit({ model, tasks: [parent], taskId: parent.id })
+
+    expect(plan.errors).toEqual([])
+    expect(plan.action).toBe('decompose_before_execution')
+    expect(plan.children).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        title: 'ContextMenu component implementation',
+        dependsOn: [],
+      }),
+      expect.objectContaining({
+        title: 'ContextMenu Storybook proof',
+        dependsOn: ['task-context-menu-split-contextmenu-component-implementation'],
+      }),
+    ]))
+    expect(plan.children.every(child => child.plannedTaskId.startsWith('task-context-menu-split-'))).toBe(true)
+  })
+
+  it('requires explicit work-unit analysis before planning decomposition children', () => {
     const parent = task({
       id: 'task-context-menu',
       title: 'ContextMenu package',
@@ -374,10 +432,13 @@ describe('project-local delivery spine', () => {
 
     const plan = planTaskSplit({ model, tasks: [parent], taskId: parent.id })
 
-    expect(plan.errors).toEqual([])
-    expect(plan.action).toBe('decompose_before_execution')
-    expect(plan.children.length).toBeGreaterThanOrEqual(2)
-    expect(plan.children.every(child => child.plannedTaskId.startsWith('task-context-menu-split-'))).toBe(true)
+    expect(plan.children).toEqual([])
+    expect(plan.errors).toEqual([
+      expect.objectContaining({
+        code: 'missing_split_plan',
+        path: 'tasks.task-context-menu.workUnitAnalysis',
+      }),
+    ])
   })
 
   it('adds primitive-proof split children for unready primitives without existing proving work', () => {

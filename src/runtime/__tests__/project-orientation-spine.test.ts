@@ -136,6 +136,42 @@ describe('buildProjectOrientationSpine', () => {
     ]))
   })
 
+  it('treats shelved tasks as deferred in the fallback current-work scope', () => {
+    const spine = buildProjectOrientationSpine({
+      projectId: 'narrative-harness',
+      now: '2026-06-18T12:00:00.000Z',
+      tasks: [
+        {
+          id: 'task-current',
+          title: 'Current harness slice',
+          description: 'Current-scope work.',
+          domain: 'harness',
+          projectPath: '/tmp/narrative-harness',
+          status: 'import_draft',
+          priority: 'normal',
+        },
+        {
+          id: 'task-later',
+          title: 'Later reviewer lane',
+          description: 'Deferred reviewer work.',
+          domain: 'coherence',
+          projectPath: '/tmp/narrative-harness',
+          status: 'shelved',
+          priority: 'normal',
+        },
+      ],
+    })
+
+    expect(spine.scope).toMatchObject({
+      id: 'current-work',
+      nodeIds: ['work:task-current'],
+      deferredNodeIds: ['work:task-later'],
+    })
+    expect(spine.summary.includedWorkCount).toBe(1)
+    expect(spine.summary.deferredWorkCount).toBe(1)
+    expect(spine.nodes['work:task-later']?.maturity).toBe('deferred')
+  })
+
   it('uses explicit non-MVP release records as the selected release container', () => {
     const spine = buildProjectOrientationSpine({
       projectId: 'jess',

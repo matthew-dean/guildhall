@@ -485,10 +485,6 @@ describe('task sizing', () => {
           'Build Finish the Knit primitive replacement wave beyond the already-migrated toast, dialog base, toolbar button, and tree menu from the current project evidence.',
         ].join('\n'),
       },
-    }).map((child) => child.title)).toEqual([
-      'Audit the remaining replacement scope',
-      'Implement the first independently verifiable replacement',
-      'Verify and update the migration record',
-    ])
+    })).toEqual([])
   })
 })

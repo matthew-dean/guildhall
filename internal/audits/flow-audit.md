@@ -12108,6 +12108,45 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-06-18T05:32:00Z - Tightened Narrative Harness scope truth and removed
+generic decomposition child synthesis.
+
+- Work id: `codex:narrative-harness-scope-truth-and-explicit-decomposition-2026-06-17`.
+- User job: after workspace import finishes, the owner should still see an
+  honest current-vs-deferred scope summary, and a split-worthy task should not
+  silently turn into synthetic `audit / implement / verify` child work unless
+  Guildhall has explicit work-unit analysis for that split.
+- Fix:
+  - `project-orientation-spine` now treats shelved tasks as deferred in the
+    inferred `Current work` scope instead of collapsing every queued task into
+    the included bucket once workspace import is done.
+  - `buildDecompositionChildDrafts()` no longer invents generic split children
+    from broad task text. Child drafts now come only from explicit
+    `workUnitAnalysis` or already-persisted child recommendations.
+  - `planTaskSplit()` now fails with a `missing_split_plan` error when a task is
+    marked `decompose_before_execution` but no explicit work-unit analysis
+    exists, and it now maps work-unit dependency ids onto planned child task
+    ids.
+- Installed-app proof:
+  - `pnpm build`
+  - `pnpm dev:install`
+  - `guildhall stop`
+  - `guildhall start`
+  - `/api/stale-server` returned `stale:false` for PID `25113` from
+    `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+- Live Narrative Harness proof:
+  - `GET /api/project?projectId=narrative-harness` now reports
+    `selectedScopeLabel: "Current work"`, `includedCount: 7`,
+    `includedWorkCount: 7`, `deferredCount: 9`, and `deferredWorkCount: 9`.
+  - This replaces the earlier false summary where the owner-facing scope said
+    all 16 tasks were included and none were deferred even though 9 later tasks
+    were shelved.
+- Verification:
+  - `pnpm vitest run src/core/__tests__/task-sizing.test.ts src/runtime/__tests__/task-decomposition.test.ts src/runtime/__tests__/delivery-spine.test.ts src/tools/__tests__/task-queue.test.ts`
+  - `pnpm vitest run src/runtime/__tests__/project-orientation-spine.test.ts src/runtime/workspace-import/__tests__/hypothesis.test.ts src/runtime/__tests__/serve-settings.test.ts`
+
+source: codex:narrative-harness-scope-truth-and-explicit-decomposition-2026-06-17
+
 2026-06-18T04:55:47Z - Preserved imported project evidence when shaping
 Narrative Harness drafts into briefs/specs.
 
