@@ -12,6 +12,7 @@ export type EvidenceWorkGraphInput = {
 
 export type EvidenceUnit = {
   name: string
+  taskTitle?: string
   need: string
   targetArea: string
   producedArtifact: string
@@ -54,6 +55,8 @@ type UnitSeed = {
   foundation: string
   consumer: string
   row: string
+  titleMode?: 'deliverable' | 'verbatim'
+  explicitTargetArea?: string
 }
 
 type ExistingTaskMatch = {
@@ -122,16 +125,17 @@ export function planEvidenceWorkGraph(input: EvidenceWorkGraphInput): EvidenceWo
 }
 
 function extractUnits(source: EvidenceSource): EvidenceUnit[] {
-  return extractTableSeeds(source).map(seed => {
+  return extractSeeds(source).map(seed => {
     const statusHint = inferStatusHint(seed.need)
     const workShape = inferWorkShape(seed)
-    const targetArea = inferTargetArea(seed.path, seed.deliverable)
+    const targetArea = inferTargetArea(seed)
     const producedArtifact = inferProducedArtifact(seed.deliverable, seed.need)
     const buildsOn = parseFoundations(seed.foundation)
     const sharedFoundations = buildsOn.map(foundationToArtifact)
 
     return {
       name: seed.deliverable,
+      ...(seed.titleMode === 'verbatim' ? { taskTitle: seed.deliverable } : {}),
       need: seed.need,
       targetArea,
       producedArtifact,
@@ -143,6 +147,14 @@ function extractUnits(source: EvidenceSource): EvidenceUnit[] {
       sourceRefs: [{ path: seed.path, snippet: seed.row }],
     }
   })
+}
+
+function extractSeeds(source: EvidenceSource): UnitSeed[] {
+  return [
+    ...extractTableSeeds(source),
+    ...extractRoadmapMilestoneSeeds(source),
+    ...extractRecommendedTaskSeeds(source),
+  ]
 }
 
 function extractTableSeeds(source: EvidenceSource): UnitSeed[] {
@@ -185,13 +197,120 @@ function extractTableSeeds(source: EvidenceSource): UnitSeed[] {
   return seeds
 }
 
+function extractRoadmapMilestoneSeeds(source: EvidenceSource): UnitSeed[] {
+  const lines = source.content.split(/\r?\n/)
+  const seeds: UnitSeed[] = []
+  let currentHeading = ''
+  let currentStage = ''
+  let inCurrentMilestone = false
+
+  for (const line of lines) {
+    const heading = /^##\s+(.+?)\s*$/.exec(line)
+    if (heading) {
+      currentHeading = heading[1]!.trim()
+      if (/^stage\s+\d+\s*:/i.test(currentHeading)) {
+        currentStage = currentHeading
+      }
+      inCurrentMilestone = /^current next milestone$/i.test(currentHeading)
+      continue
+    }
+
+    if (!inCurrentMilestone) {
+      continue
+    }
+
+    const numbered = /^\s*\d+\.\s+(.+?)\s*$/.exec(line)
+    if (!numbered) {
+      continue
+    }
+
+    const title = stripInlineCode(numbered[1]!.trim())
+    if (!title) continue
+    seeds.push({
+      path: source.path,
+      deliverable: title,
+      need: `${currentStage || 'Current next milestone'} starter task.`,
+      foundation: currentStage || 'current implementation stage',
+      consumer: '',
+      row: line.trim(),
+      titleMode: 'verbatim',
+      explicitTargetArea: inferRoadmapTargetArea(source.path),
+    })
+  }
+
+  return seeds
+}
+
+function extractRecommendedTaskSeeds(source: EvidenceSource): UnitSeed[] {
+  const lines = source.content.split(/\r?\n/)
+  const seeds: UnitSeed[] = []
+  let currentEntry = ''
+  let currentStageAlignment = ''
+  let currentDomain = ''
+  let currentRecommendedTitle = ''
+
+  const flush = () => {
+    const title = stripInlineCode(currentRecommendedTitle.trim())
+    if (!title || /^\*\(none/i.test(title) || /^none\b/i.test(title)) {
+      currentRecommendedTitle = ''
+      return
+    }
+    seeds.push({
+      path: source.path,
+      deliverable: title,
+      need: currentStageAlignment
+        ? `${currentStageAlignment}. Recommended first implementation task for ${currentEntry || 'this spec'}.`
+        : `Recommended first implementation task for ${currentEntry || 'this spec'}.`,
+      foundation: currentEntry || 'spec inventory',
+      consumer: '',
+      row: `Recommended first task title: ${title}`,
+      titleMode: 'verbatim',
+      explicitTargetArea: currentDomain && !/^\*?\(none/i.test(currentDomain) ? currentDomain : undefined,
+    })
+    currentRecommendedTitle = ''
+  }
+
+  for (const line of lines) {
+    const heading = /^###\s+(.+?)\s*$/.exec(line)
+    if (heading) {
+      flush()
+      currentEntry = heading[1]!.trim()
+      currentStageAlignment = ''
+      currentDomain = ''
+      continue
+    }
+
+    const stageAlignment = /^-\s+\*\*stage alignment:\*\*\s+(.+?)\s*$/i.exec(line.trim())
+    if (stageAlignment) {
+      currentStageAlignment = stripInlineCode(stageAlignment[1]!.trim())
+      continue
+    }
+
+    const domain = /^-\s+\*\*recommended domain:\*\*\s+(.+?)\s*$/i.exec(line.trim())
+    if (domain) {
+      currentDomain = stripInlineCode(domain[1]!.trim())
+      continue
+    }
+
+    const recommended = /^-\s+\*\*recommended first task title:\*\*\s+(.+?)\s*$/i.exec(line.trim())
+    if (!recommended) {
+      continue
+    }
+    currentRecommendedTitle = recommended[1]!.trim()
+  }
+
+  flush()
+
+  return seeds
+}
+
 function buildImplementationTask(unit: EvidenceUnit, existingMatch?: ExistingTaskMatch): EvidenceTask {
   const id = existingMatch?.id ?? `task-${slugify(unit.name)}`
   const supersedesVagueIntake = existingMatch ? !existingMatch.structuredEnough : undefined
 
   return {
     id,
-    title: `Build ${unit.name}`,
+    title: unit.taskTitle ?? `Build ${unit.name}`,
     kind: 'implementation',
     deliverableName: unit.name,
     targetArea: unit.targetArea,
@@ -384,7 +503,11 @@ function inferStatusHint(need: string): EvidenceUnit['statusHint'] {
   return 'unknown'
 }
 
-function inferTargetArea(path: string, deliverable: string): string {
+function inferTargetArea(seed: UnitSeed): string {
+  if (seed.explicitTargetArea?.trim()) {
+    return normalizeDeliverableName(seed.explicitTargetArea.trim())
+  }
+  const { path, deliverable } = seed
   const releaseFixture = path.match(/(?:^|\/)release-proof-matrix\/([^/]+)/)
   if (releaseFixture?.[1]) {
     return releaseFixture[1]
@@ -397,6 +520,12 @@ function inferTargetArea(path: string, deliverable: string): string {
     return 'Admin settings page'
   }
   return firstPathSegment ?? 'project'
+}
+
+function inferRoadmapTargetArea(path: string): string {
+  if (path.includes('/harness/')) return 'harness'
+  if (path.includes('/coherence/')) return 'coherence'
+  return 'project'
 }
 
 function inferWorkShape(seed: UnitSeed): EvidenceUnit['workShape'] {

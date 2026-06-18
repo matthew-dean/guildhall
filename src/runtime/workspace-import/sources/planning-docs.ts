@@ -13,7 +13,14 @@ const DONE_HEADING_RE =
   /^(done|shipped|complete|completed|recent progress|milestone snapshot|verification snapshot)$/i
 
 const OPEN_HEADING_RE =
-  /^(next up|in progress|blockers?(?:\s*\/\s*open questions)?|parity gaps|v1 polish(?:\s*\+\s*hardening)?|v2 priorities|later|current focus|p0|p1|p2|open defects|next in phase 1)$/i
+  /^(next up|in progress|blockers?(?:\s*\/\s*open questions)?|parity gaps|v1 polish(?:\s*\+\s*hardening)?|v2 priorities|later|current focus|p0|p1|p2|open defects|next in phase 1|current next milestone)$/i
+
+const STAGE_HEADING_RE = /^stage\s+\d+\s*:/i
+const DELIVERABLE_LABEL_RE = /^deliverables:\s*$/i
+const SUCCESS_GATES_LABEL_RE = /^success gates:\s*$/i
+const DO_NOT_START_LABEL_RE = /^do not start yet:\s*$/i
+const GOAL_LABEL_RE = /^goal:\s*(.+?)\s*$/i
+const RECOMMENDED_TASK_TITLE_RE = /^-\s+\*\*recommended first task title:\*\*\s+(.+?)\s*$/i
 
 function likelyRelevantFile(rel: string): boolean {
   return MARKDOWN_FILE_RE.test(rel) && !IGNORE_PATH_RE.test(rel)
@@ -167,6 +174,7 @@ export const planningDocsSource: TaskSource = {
       const fileBase = basename(rel)
       const domainHint = inferDomainHint(rel, multiProjectRoots)
       let currentSection: string | null = null
+      let currentLabel: 'deliverables' | 'success_gates' | 'do_not_start' | null = null
       const bulletStack: Array<{ indent: number; title: string; grouping: boolean }> = []
 
       // Treat spec files as framing even if they have no checklists.
@@ -191,6 +199,7 @@ export const planningDocsSource: TaskSource = {
         const heading = /^(#{2,4})\s+(.+?)\s*$/.exec(line)
         if (heading) {
           currentSection = cleanHeading(heading[2]!)
+          currentLabel = null
           bulletStack.length = 0
           const kind = headingSignalKind(fileBase, rel, currentSection, currentSection)
           if (kind && !DONE_HEADING_RE.test(currentSection) && !OPEN_HEADING_RE.test(currentSection)) {
@@ -202,6 +211,67 @@ export const planningDocsSource: TaskSource = {
               references: [abs],
               ...(domainHint ? { domainHint } : {}),
               confidence: kind === 'context' ? 'medium' : 'medium',
+            })
+          }
+          if (STAGE_HEADING_RE.test(currentSection)) {
+            signals.push({
+              source: 'planning-docs',
+              kind: 'context',
+              title: currentSection,
+              evidence: `${rel}: ${line.trim()}`.slice(0, 240),
+              references: [abs],
+              ...(domainHint ? { domainHint } : {}),
+              confidence: 'medium',
+            })
+          }
+          continue
+        }
+
+        const goalLabel = GOAL_LABEL_RE.exec(line.trim())
+        if (goalLabel && currentSection && STAGE_HEADING_RE.test(currentSection)) {
+          signals.push({
+            source: 'planning-docs',
+            kind: 'goal',
+            title: cleanHeading(goalLabel[1]!),
+            evidence: `${rel}: ${line.trim()}`.slice(0, 240),
+            references: [abs],
+            ...(domainHint ? { domainHint } : {}),
+            confidence: 'medium',
+          })
+          continue
+        }
+
+        const trimmedLine = line.trim()
+        if (currentSection && STAGE_HEADING_RE.test(currentSection)) {
+          if (DELIVERABLE_LABEL_RE.test(trimmedLine)) {
+            currentLabel = 'deliverables'
+            bulletStack.length = 0
+            continue
+          }
+          if (SUCCESS_GATES_LABEL_RE.test(trimmedLine)) {
+            currentLabel = 'success_gates'
+            bulletStack.length = 0
+            continue
+          }
+          if (DO_NOT_START_LABEL_RE.test(trimmedLine)) {
+            currentLabel = 'do_not_start'
+            bulletStack.length = 0
+            continue
+          }
+        }
+
+        const recommendedTask = RECOMMENDED_TASK_TITLE_RE.exec(trimmedLine)
+        if (recommendedTask && currentSection) {
+          const title = cleanHeading(recommendedTask[1]!)
+          if (title && !/^\*\(none/i.test(title)) {
+            signals.push({
+              source: 'planning-docs',
+              kind: 'open_work',
+              title,
+              evidence: `${rel}: ${currentSection}`.slice(0, 240),
+              references: [abs],
+              ...(domainHint ? { domainHint } : {}),
+              confidence: 'high',
             })
           }
           continue
@@ -244,9 +314,16 @@ export const planningDocsSource: TaskSource = {
         }
 
         const bullet = /^(\s*)[-*]\s+(.+?)\s*$/.exec(line)
-        if (bullet && currentSection && OPEN_HEADING_RE.test(currentSection)) {
+        if (bullet && currentSection && (OPEN_HEADING_RE.test(currentSection) || STAGE_HEADING_RE.test(currentSection))) {
           const indent = bullet[1]!.replace(/\t/g, '  ').length
           const title = cleanHeading(bullet[2]!)
+          const stageScopedKind = currentLabel === 'deliverables'
+            ? 'open_work'
+            : currentLabel === 'success_gates'
+              ? 'context'
+              : currentLabel === 'do_not_start'
+                ? 'context'
+                : null
           while (bulletStack.length > 0 && bulletStack[bulletStack.length - 1]!.indent >= indent) {
             bulletStack.pop()
           }
@@ -264,11 +341,12 @@ export const planningDocsSource: TaskSource = {
               confidence: 'medium',
             })
           } else if (!grouping) {
-            const kind: WorkspaceSignal['kind'] =
+            const kind: WorkspaceSignal['kind'] = stageScopedKind ?? (
               isProjectStateCurrentFocus(fileBase, currentSection) ||
               (parent && indent > parent.indent && !parent.grouping)
                 ? 'context'
                 : 'open_work'
+            )
             signals.push({
               source: 'planning-docs',
               kind,
@@ -284,7 +362,7 @@ export const planningDocsSource: TaskSource = {
         }
 
         const numbered = /^\s*\d+\.\s+(.+?)\s*$/.exec(line)
-        if (numbered && currentSection && OPEN_HEADING_RE.test(currentSection)) {
+        if (numbered && currentSection && (OPEN_HEADING_RE.test(currentSection) || /^current next milestone$/i.test(currentSection))) {
           const kind: WorkspaceSignal['kind'] = isProjectStateCurrentFocus(fileBase, currentSection)
             ? 'context'
             : 'open_work'

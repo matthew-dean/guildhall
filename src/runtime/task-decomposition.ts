@@ -6,7 +6,7 @@ import type {
   TaskDecompositionReasonCode,
   TaskKind,
 } from '@guildhall/core'
-import { buildTaskSizePlan } from '@guildhall/core'
+import { buildDecompositionChildDrafts, buildTaskSizePlan } from '@guildhall/core'
 import { assessTaskReadiness } from './task-readiness.js'
 
 export function decomposeTaskForFinishability(
@@ -187,39 +187,19 @@ function childDraftsFor(
   }
 
   if (action !== 'split') return []
-  const drafts: Array<{ title: string; kind: TaskKind; reason: string; dependsOn: string[]; definitionOfDone: DefinitionOfDone }> = []
-  if (/\b(research|compare|choose|decide)\b/i.test(taskText(task))) {
-    drafts.push({
-      title: `Research and decide ${task.title}`,
-      kind: 'research',
-      reason: 'Pull research and decision-making into a precursor.',
-      dependsOn: [],
-      definitionOfDone: {
-        items: ['Recommendation, alternatives, tradeoffs, and unresolved questions are recorded.'],
-        evidenceRequired: ['Source-backed comparison is attached.'],
-        createdBy: 'task-decomposition',
-      },
-    })
+  if (!task.workUnitAnalysis?.units?.length) {
+    return []
   }
-  drafts.push({
-    title: `Implement ${task.title}`,
-    kind: 'implementation',
-    reason: 'Keep code changes in one focused worker pass.',
-    dependsOn: drafts.map(draft => draft.title),
-    definitionOfDone,
-  })
-  drafts.push({
-    title: `Verify ${task.title}`,
-    kind: 'verification',
-    reason: 'Keep proof explicit instead of burying it in implementation.',
-    dependsOn: [`Implement ${task.title}`],
-    definitionOfDone: {
-      items: ['Verification result records expected evidence, actual evidence, and remaining uncertainty.'],
-      evidenceRequired: ['Proof path result is recorded.'],
-      createdBy: 'task-decomposition',
-    },
-  })
-  return drafts
+  const recommendations = buildDecompositionChildDrafts({ task })
+    .filter(recommendation => !isGenericOutcomePlaceholder(recommendation.title))
+
+  return recommendations.map((recommendation, index) => ({
+    title: recommendation.title,
+    kind: inferChildTaskKind(recommendation.title, index),
+    reason: recommendation.reason,
+    dependsOn: recommendation.dependsOn,
+    definitionOfDone: definitionOfDoneForRecommendation(recommendation.title, definitionOfDone),
+  }))
 }
 
 function taskText(task: Task): string {
@@ -229,4 +209,36 @@ function taskText(task: Task): string {
     task.spec,
     ...(task.acceptanceCriteria ?? []).map(ac => ac.description),
   ].filter(Boolean).join('\n')
+}
+
+function isGenericOutcomePlaceholder(title: string): boolean {
+  return /^extract the (first|second) independently verifiable outcome$/i.test(title.trim())
+}
+
+function inferChildTaskKind(title: string, index: number): TaskKind {
+  if (/\b(research|audit|investigate|compare|decide)\b/i.test(title)) return 'research'
+  if (/\b(verify|validation|proof|test)\b/i.test(title)) return 'verification'
+  if (/\b(doc|docs|documentation|record|inventory|note)\b/i.test(title)) return 'cleanup'
+  return index === 0 ? 'implementation' : 'implementation'
+}
+
+function definitionOfDoneForRecommendation(
+  title: string,
+  defaultDefinitionOfDone: DefinitionOfDone,
+): DefinitionOfDone {
+  if (/\b(research|audit|investigate|compare|decide)\b/i.test(title)) {
+    return {
+      items: ['The split records the concrete outcome, evidence, and unresolved follow-up.'],
+      evidenceRequired: ['Source-backed decomposition evidence is attached to the task.'],
+      createdBy: 'task-decomposition',
+    }
+  }
+  if (/\b(verify|validation|proof|test)\b/i.test(title)) {
+    return {
+      items: ['Verification result records expected evidence, actual evidence, and remaining uncertainty.'],
+      evidenceRequired: ['Proof path result is recorded.'],
+      createdBy: 'task-decomposition',
+    }
+  }
+  return defaultDefinitionOfDone
 }

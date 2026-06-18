@@ -38,7 +38,7 @@ function task(overrides: Partial<Task> = {}): Task {
 }
 
 describe('decomposeTaskForFinishability', () => {
-  it('persists reasons and child drafts when a task should split', () => {
+  it('persists reasons and does not invent generic split children when the task lacks explicit work units', () => {
     const broadTask = task({
       title: 'Build checkout UI, API, migration, release docs, verification, and provider setup',
       description: 'Build checkout UI, API, migration, release docs, verification, provider setup, and rollback.',
@@ -51,10 +51,7 @@ describe('decomposeTaskForFinishability', () => {
     expect(decomposition.action).toBe('split')
     expect(decomposition.reasons.map(reason => reason.code)).toContain('too_broad')
     expect(decomposition.reasons.map(reason => reason.code)).toContain('too_much_context')
-    expect(decomposition.childDrafts.map(child => child.kind)).toEqual(
-      expect.arrayContaining(['implementation', 'verification']),
-    )
-    expect(decomposition.childDrafts.every(child => child.definitionOfDone.items.length > 0)).toBe(true)
+    expect(decomposition.childDrafts).toEqual([])
   })
 
   it('creates a research precursor when research and implementation are mixed', () => {
@@ -150,6 +147,71 @@ describe('decomposeTaskForFinishability', () => {
 
     expect(decomposition.action).toBe('keep')
     expect(decomposition.childDrafts).toEqual([])
+  })
+
+  it('reuses semantic work-unit analysis when explicit split structure exists', () => {
+    const target = task({
+      title: 'Build fixture harness and review loop',
+      description: 'Implement the Stage 1 harness slice.',
+      workUnitAnalysis: {
+        summary: 'Three independently shippable work units.',
+        units: [
+          {
+            id: 'schemas',
+            title: 'Define fixture and evaluation schemas',
+            deliverable: 'Fixture and evaluation schemas exist.',
+            rationale: 'Schemas unblock every later harness proof.',
+            suggestedDomain: 'harness',
+            dependsOn: [],
+          },
+          {
+            id: 'runner',
+            title: 'Implement the no-UI packet runner',
+            deliverable: 'A script-only runner builds packets from fixture records.',
+            rationale: 'The runner is the first executable proof surface.',
+            suggestedDomain: 'harness',
+            dependsOn: ['schemas'],
+          },
+          {
+            id: 'report',
+            title: 'Generate debug reports for each run',
+            deliverable: 'Each run writes a developer-readable debug report.',
+            rationale: 'Debug reports prove why packet context was included or dropped.',
+            suggestedDomain: 'harness',
+            dependsOn: ['runner'],
+          },
+        ],
+        proofOnlyItems: [],
+        createdAt: now,
+        createdBy: 'test',
+      },
+      sizePlan: {
+        taskId: 'task-1',
+        score: 8,
+        band: 'epic',
+        action: 'decompose_before_execution',
+        factors: [],
+        recommendedChildren: [],
+        reviewBudgetHint: 'balanced',
+        reasons: ['Multiple independently verifiable work units.'],
+        createdAt: now,
+        createdBy: 'test',
+      },
+      acceptanceCriteria: [{ id: 'AC-1', description: 'Stage 1 harness is runnable.', verifiedBy: 'review', met: false }],
+    })
+
+    const decomposition = decomposeTaskForFinishability(target)
+
+    expect(decomposition.action).toBe('split')
+    expect(decomposition.childDrafts.map(child => child.title)).toEqual([
+      'Define fixture and evaluation schemas',
+      'Implement the no-UI packet runner',
+      'Generate debug reports for each run',
+    ])
+    expect(decomposition.childDrafts[1]).toMatchObject({
+      dependsOn: ['schemas'],
+      kind: 'implementation',
+    })
   })
 })
 

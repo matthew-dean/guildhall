@@ -44,6 +44,41 @@ const releaseMatrixEvidence = [
   '| Settings footer copy | rename Host-run to Runs on host in settings footer | settings footer copy | settings footer |',
 ].join('\n')
 
+const narrativeRoadmapEvidence = [
+  '# Implementation Roadmap',
+  '',
+  '## Stage 1: Fixture And Evaluation Harness',
+  '',
+  'Goal: build a no-UI test harness that proves the story-memory and packet contracts against small fiction fixtures before any product UI is designed.',
+  '',
+  '## Current Next Milestone',
+  '',
+  'The next milestone is Stage 1: Fixture And Evaluation Harness.',
+  '',
+  '1. Define fixture, expected-record, prototype-run, and evaluation schemas.',
+  '2. Add the first tiny fiction fixture and human-authored expected records.',
+  '3. Implement a no-UI runner that builds a packet from fixture records.',
+  '4. Add deterministic evaluation output that reports missing, noisy, stale, and useful context.',
+  '5. Generate a developer-readable debug report for each run.',
+  '6. Use the first run to narrow the MVP story-memory schema.',
+].join('\n')
+
+const narrativeRemainingInventoryEvidence = [
+  '# Remaining Spec Decomposition Inventory',
+  '',
+  '### 2.2 `dialogue-and-character-voice.md`',
+  '',
+  '- **Recommended first task title:** Implement dialogue-and-character-voice reviewer lane',
+  '- **Recommended domain:** coherence',
+  '- **Stage alignment:** Stage 2 (Agent Coordination)',
+  '',
+  '### 2.7 `scene-and-chapter-intelligence.md`',
+  '',
+  '- **Recommended first task title:** Implement scene-and-chapter-intelligence reviewer lane',
+  '- **Recommended domain:** coherence',
+  '- **Stage alignment:** Stage 2 (Agent Coordination)',
+].join('\n')
+
 describe('evidence-to-work-graph intake', () => {
   it('extracts deliverable units from source evidence instead of flattening them into one vague task', () => {
     const plan = planEvidenceWorkGraph({
@@ -264,5 +299,42 @@ describe('evidence-to-work-graph intake', () => {
       expect(task.proofPaths.map(proof => proof.kind)).not.toContain('browser')
       expect(JSON.stringify(task)).not.toMatch(/\b(component|design-system|look-and-feel|renders|visual|browser)\b/i)
     }
+  })
+
+  it('extracts current milestone task chains from prose roadmap docs instead of requiring deliverable tables', () => {
+    const plan = planEvidenceWorkGraph({
+      sources: [{ path: 'docs/harness/implementation-roadmap.md', content: narrativeRoadmapEvidence }],
+      existingTasks: [],
+    })
+
+    expect(plan.tasks.filter(task => task.kind === 'implementation').map(task => task.title)).toEqual([
+      'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+      'Add the first tiny fiction fixture and human-authored expected records.',
+      'Implement a no-UI runner that builds a packet from fixture records.',
+      'Add deterministic evaluation output that reports missing, noisy, stale, and useful context.',
+      'Generate a developer-readable debug report for each run.',
+      'Use the first run to narrow the MVP story-memory schema.',
+    ])
+    expect(plan.tasks.every(task => task.kind === 'implementation')).toBe(true)
+  })
+
+  it('extracts recommended implementation tasks from decomposition inventories instead of treating spec docs as inert context', () => {
+    const plan = planEvidenceWorkGraph({
+      sources: [{ path: 'docs/harness/remaining-spec-decomposition-inventory.md', content: narrativeRemainingInventoryEvidence }],
+      existingTasks: [],
+    })
+
+    expect(plan.tasks.filter(task => task.kind === 'implementation')).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          title: 'Implement dialogue-and-character-voice reviewer lane',
+          targetArea: 'Coherence',
+        }),
+        expect.objectContaining({
+          title: 'Implement scene-and-chapter-intelligence reviewer lane',
+          targetArea: 'Coherence',
+        }),
+      ]),
+    )
   })
 })

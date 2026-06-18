@@ -781,6 +781,59 @@ tasks:
     )
   })
 
+  it('detects stage deliverables, current milestone tasks, and decomposition inventory recommendations from prose docs', async () => {
+    await fs.mkdir(path.join(tmpDir, 'docs/harness'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'docs/harness/implementation-roadmap.md'),
+      [
+        '# Implementation Roadmap',
+        '',
+        '## Stage 1: Fixture And Evaluation Harness',
+        '',
+        'Goal: build a no-UI test harness that proves story-memory and packet contracts against small fiction fixtures before any product UI is designed.',
+        '',
+        'Deliverables:',
+        '',
+        '- fixture directory shape for at least one small story fixture',
+        '- typed fixture and expected-record contracts',
+        '',
+        '## Current Next Milestone',
+        '',
+        'The first Guildhall starter tasks should be:',
+        '',
+        '1. Define fixture, expected-record, prototype-run, and evaluation schemas.',
+        '2. Add the first tiny fiction fixture and human-authored expected records.',
+      ].join('\n'),
+      'utf-8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'docs/harness/remaining-spec-decomposition-inventory.md'),
+      [
+        '# Remaining Spec Decomposition Inventory',
+        '',
+        '### 2.2 `dialogue-and-character-voice.md`',
+        '',
+        '- **Recommended first task title:** Implement dialogue-and-character-voice reviewer lane',
+        '- **Recommended domain:** coherence',
+        '- **Stage alignment:** Stage 2 (Agent Coordination)',
+      ].join('\n'),
+      'utf-8',
+    )
+
+    const inventory = await detectWorkspaceSignals({ projectPath: tmpDir })
+    const draft = formWorkspaceHypothesis(inventory)
+
+    expect(draft.tasks.map((task) => task.title)).toEqual(
+      expect.arrayContaining([
+        'fixture directory shape for at least one small story fixture',
+        'typed fixture and expected-record contracts',
+        'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+        'Add the first tiny fiction fixture and human-authored expected records.',
+        'Implement dialogue-and-character-voice reviewer lane',
+      ]),
+    )
+  })
+
   it('suffixes conflicting task ids rather than overwriting', async () => {
     await seedImporterWithSpec(`
 \`\`\`yaml
