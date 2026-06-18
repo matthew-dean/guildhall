@@ -947,6 +947,45 @@ export function parseWorkspaceImport(spec: string): ParsedImport {
   return { goals, tasks, milestones }
 }
 
+export function summarizeWorkspaceImportSpec(spec: string): WorkspaceImportScopeSnapshot {
+  let goalCount = 0
+  let taskCount = 0
+  let milestoneCount = 0
+  let currentTaskCount = 0
+  let laterTaskCount = 0
+  const taskIds: string[] = []
+
+  for (const obj of iterateYamlFences(spec)) {
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) continue
+    const record = obj as Record<string, unknown>
+    if (Array.isArray(record.goals)) {
+      goalCount += record.goals.filter(Boolean).length
+    }
+    if (Array.isArray(record.tasks)) {
+      const tasks = record.tasks.filter((task): task is Record<string, unknown> => Boolean(task) && typeof task === 'object')
+      taskCount += tasks.length
+      for (const task of tasks) {
+        const id = typeof task.id === 'string' ? task.id.trim() : ''
+        if (id) taskIds.push(id)
+        if (task.scope === 'later') laterTaskCount++
+        else currentTaskCount++
+      }
+    }
+    if (Array.isArray(record.milestones)) {
+      milestoneCount += record.milestones.filter(Boolean).length
+    }
+  }
+
+  return {
+    goalCount,
+    taskCount,
+    milestoneCount,
+    currentTaskCount,
+    laterTaskCount,
+    taskIds,
+  }
+}
+
 /**
  * Serialize a deterministic `WorkspaceImportDraft` (detector output) into
  * the YAML-fence format the importer-agent would have emitted, so
@@ -1016,6 +1055,7 @@ export interface ApproveWorkspaceImportInput {
   projectPath: string
   coordinatorProjectPaths?: Record<string, string>
   draftOverride?: WorkspaceImportDraft
+  detectedDraftSnapshot?: WorkspaceImportDraft
 }
 
 export interface ApproveWorkspaceImportResult {
@@ -1027,6 +1067,149 @@ export interface ApproveWorkspaceImportResult {
 }
 
 const WORKSPACE_GOALS_FILE = 'workspace-goals.json'
+
+export interface WorkspaceImportScopeSnapshot {
+  goalCount: number
+  taskCount: number
+  milestoneCount: number
+  currentTaskCount: number
+  laterTaskCount: number
+  taskIds: string[]
+}
+
+export interface WorkspaceGoalsState {
+  version: number
+  recordedAt: string
+  goals: ParsedGoal[]
+  tasks: ParsedTask[]
+  milestones: ParsedMilestone[]
+  approved: WorkspaceImportScopeSnapshot
+  detected: WorkspaceImportScopeSnapshot | null
+  dismissed?: boolean
+  dismissedAt?: string
+}
+
+function workspaceScopeSnapshotFromParsed(parsed: ParsedImport): WorkspaceImportScopeSnapshot {
+  const taskIds = parsed.tasks
+    .map(task => task.id.trim())
+    .filter(Boolean)
+  const currentTaskCount = parsed.tasks.filter(task => task.scope !== 'later').length
+  return {
+    goalCount: parsed.goals.length,
+    taskCount: parsed.tasks.length,
+    milestoneCount: parsed.milestones.length,
+    currentTaskCount,
+    laterTaskCount: parsed.tasks.length - currentTaskCount,
+    taskIds,
+  }
+}
+
+function workspaceScopeSnapshotFromDraft(draft: WorkspaceImportDraft): WorkspaceImportScopeSnapshot {
+  const taskIds = draft.tasks
+    .map(task => task.suggestedId.trim())
+    .filter(Boolean)
+  const currentTaskCount = draft.tasks.filter(task => task.scope !== 'later').length
+  return {
+    goalCount: draft.goals.length,
+    taskCount: draft.tasks.length,
+    milestoneCount: draft.milestones.length,
+    currentTaskCount,
+    laterTaskCount: draft.tasks.length - currentTaskCount,
+    taskIds,
+  }
+}
+
+export function parseWorkspaceGoalsState(raw: unknown): WorkspaceGoalsState | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const record = raw as Record<string, unknown>
+  const dismissed = record.dismissed === true
+  const recordedAt = typeof record.recordedAt === 'string' ? record.recordedAt : new Date(0).toISOString()
+  const goals = Array.isArray(record.goals) ? record.goals.filter((goal): goal is ParsedGoal => {
+    return Boolean(goal) && typeof goal === 'object'
+      && typeof (goal as ParsedGoal).id === 'string'
+      && typeof (goal as ParsedGoal).title === 'string'
+      && typeof (goal as ParsedGoal).rationale === 'string'
+  }) : []
+  const tasks = Array.isArray(record.tasks) ? record.tasks.filter((task): task is ParsedTask => {
+    return Boolean(task) && typeof task === 'object'
+      && typeof (task as ParsedTask).id === 'string'
+      && typeof (task as ParsedTask).title === 'string'
+      && typeof (task as ParsedTask).description === 'string'
+      && typeof (task as ParsedTask).domain === 'string'
+      && typeof (task as ParsedTask).priority === 'string'
+      && Array.isArray((task as ParsedTask).references)
+  }) : []
+  const milestones = Array.isArray(record.milestones) ? record.milestones.filter((milestone): milestone is ParsedMilestone => {
+    return Boolean(milestone) && typeof milestone === 'object'
+      && typeof (milestone as ParsedMilestone).title === 'string'
+      && typeof (milestone as ParsedMilestone).evidence === 'string'
+  }) : []
+  const approved = parseWorkspaceScopeSnapshot(record.approved)
+    ?? workspaceScopeSnapshotFromParsed({ goals, tasks, milestones })
+  const detected = parseWorkspaceScopeSnapshot(record.detected)
+    ?? null
+  return {
+    version: typeof record.version === 'number' ? record.version : 1,
+    recordedAt,
+    goals,
+    tasks,
+    milestones,
+    approved,
+    detected,
+    ...(dismissed ? { dismissed: true } : {}),
+    ...(typeof record.dismissedAt === 'string' ? { dismissedAt: record.dismissedAt } : {}),
+  }
+}
+
+function parseWorkspaceScopeSnapshot(raw: unknown): WorkspaceImportScopeSnapshot | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const snapshot = raw as Record<string, unknown>
+  const taskIds = Array.isArray(snapshot.taskIds)
+    ? snapshot.taskIds.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    : []
+  const goalCount = typeof snapshot.goalCount === 'number' ? snapshot.goalCount : null
+  const taskCount = typeof snapshot.taskCount === 'number' ? snapshot.taskCount : null
+  const milestoneCount = typeof snapshot.milestoneCount === 'number' ? snapshot.milestoneCount : null
+  const currentTaskCount = typeof snapshot.currentTaskCount === 'number' ? snapshot.currentTaskCount : null
+  const laterTaskCount = typeof snapshot.laterTaskCount === 'number' ? snapshot.laterTaskCount : null
+  if (
+    goalCount === null ||
+    taskCount === null ||
+    milestoneCount === null ||
+    currentTaskCount === null ||
+    laterTaskCount === null
+  ) {
+    return null
+  }
+  return {
+    goalCount,
+    taskCount,
+    milestoneCount,
+    currentTaskCount,
+    laterTaskCount,
+    taskIds,
+  }
+}
+
+export async function readWorkspaceGoalsState(memoryDir: string): Promise<WorkspaceGoalsState | null> {
+  const goalsPath = workspaceImportStatePath(memoryDir, WORKSPACE_GOALS_FILE)
+  try {
+    const raw = JSON.parse(await readManagedTextFile(goalsPath, 'utf-8')) as unknown
+    return parseWorkspaceGoalsState(raw)
+  } catch {
+    return null
+  }
+}
+
+export function readWorkspaceGoalsStateSync(memoryDir: string): WorkspaceGoalsState | null {
+  const goalsPath = workspaceImportStatePath(memoryDir, WORKSPACE_GOALS_FILE)
+  try {
+    const raw = JSON.parse(readManagedTextFileSync(goalsPath, 'utf-8')) as unknown
+    return parseWorkspaceGoalsState(raw)
+  } catch {
+    return null
+  }
+}
 
 function uniqueTaskId(existingIds: Set<string>, suggested: string): string {
   if (!existingIds.has(suggested)) return suggested
@@ -1518,12 +1701,30 @@ export async function approveWorkspaceImport(
   await writeQueue(input.memoryDir, queue)
 
   // Persist goals (overwrites prior import — the agent is authoritative).
-  if (parsed.goals.length > 0) {
+  if (
+    parsed.goals.length > 0 ||
+    parsed.tasks.length > 0 ||
+    parsed.milestones.length > 0
+  ) {
     const goalsPath = workspaceImportStatePath(input.memoryDir, WORKSPACE_GOALS_FILE)
+    const approvedSnapshot = workspaceScopeSnapshotFromParsed(parsed)
+    const detectedSnapshot = input.detectedDraftSnapshot
+      ? workspaceScopeSnapshotFromDraft(input.detectedDraftSnapshot)
+      : input.draftOverride
+        ? workspaceScopeSnapshotFromDraft(input.draftOverride)
+        : approvedSnapshot
     await writeManagedTextFile(
       goalsPath,
       JSON.stringify(
-        { version: 1, recordedAt: now, goals: parsed.goals },
+        {
+          version: 2,
+          recordedAt: now,
+          goals: parsed.goals,
+          tasks: parsed.tasks,
+          milestones: parsed.milestones,
+          approved: approvedSnapshot,
+          detected: detectedSnapshot,
+        } satisfies WorkspaceGoalsState,
         null,
         2,
       ),

@@ -741,8 +741,21 @@ tasks:
     }
 
     // workspace-goals.json persisted with every goal.
-    const goalsPersisted = await readProjectStateJsonAsync<{ goals: unknown[] }>(tmpDir, 'workspace-goals.json')
+    const goalsPersisted = await readProjectStateJsonAsync<{
+      version: number
+      goals: unknown[]
+      tasks: unknown[]
+      milestones: unknown[]
+      approved: { taskCount: number; currentTaskCount: number; laterTaskCount: number }
+      detected: { taskCount: number; currentTaskCount: number; laterTaskCount: number } | null
+    }>(tmpDir, 'workspace-goals.json')
+    expect(goalsPersisted.version).toBe(2)
     expect(goalsPersisted.goals).toHaveLength(seeded.draft.goals.length)
+    expect(goalsPersisted.tasks).toHaveLength(seeded.draft.tasks.length)
+    expect(goalsPersisted.milestones).toHaveLength(seeded.draft.milestones.length)
+    expect(goalsPersisted.approved.taskCount).toBe(seeded.draft.tasks.length)
+    expect(goalsPersisted.approved.currentTaskCount + goalsPersisted.approved.laterTaskCount).toBe(seeded.draft.tasks.length)
+    expect(goalsPersisted.detected?.taskCount ?? 0).toBe(seeded.draft.tasks.length)
 
     // PROGRESS.md logs every completed milestone (e.g. "Initial scaffold").
     const progress = await readProjectStateTextAsync(tmpDir, 'PROGRESS.md')

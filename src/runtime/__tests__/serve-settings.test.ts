@@ -1919,7 +1919,47 @@ describe('GET /api/project/facts', () => {
     await writeSystemJson(
       'workspace-goals.json',
       {
-        goals: [{ id: 'old-goal', title: 'Old goal' }],
+        version: 2,
+        recordedAt: '2026-01-01T00:00:00.000Z',
+        goals: [{ id: 'imported-goal', title: 'Imported goal', rationale: 'Captures the imported scope baseline.' }],
+        tasks: [
+          {
+            id: 'imported-task-one',
+            title: 'First imported task',
+            description: 'README.md: First imported task.',
+            domain: 'core',
+            priority: 'normal',
+            references: [],
+          },
+          {
+            id: 'imported-task-two',
+            title: 'Second imported task',
+            description: 'README.md: Second imported task.',
+            domain: 'core',
+            priority: 'normal',
+            references: [],
+          },
+        ],
+        milestones: [
+          { title: 'First milestone', evidence: 'README.md' },
+          { title: 'Second milestone', evidence: 'README.md' },
+        ],
+        approved: {
+          goalCount: 1,
+          taskCount: 2,
+          milestoneCount: 2,
+          currentTaskCount: 2,
+          laterTaskCount: 0,
+          taskIds: ['imported-task-one', 'imported-task-two'],
+        },
+        detected: {
+          goalCount: 1,
+          taskCount: 2,
+          milestoneCount: 2,
+          currentTaskCount: 2,
+          laterTaskCount: 0,
+          taskIds: ['imported-task-one', 'imported-task-two'],
+        },
       },
     )
     await writeSystemText(
@@ -1937,18 +1977,27 @@ describe('GET /api/project/facts', () => {
                 'goals:',
                 '  - id: imported-goal',
                 '    title: Imported goal',
+                '    rationale: Captures the imported scope baseline.',
                 '```',
                 '```yaml',
                 'tasks:',
                 '  - id: imported-task-one',
                 '    title: First imported task',
+                '    description: README.md: First imported task.',
+                '    domain: core',
+                '    priority: normal',
                 '  - id: imported-task-two',
                 '    title: Second imported task',
+                '    description: README.md: Second imported task.',
+                '    domain: core',
+                '    priority: normal',
                 '```',
                 '```yaml',
                 'milestones:',
                 '  - title: First milestone',
+                '    evidence: README.md',
                 '  - title: Second milestone',
+                '    evidence: README.md',
                 '```',
               ].join('\n'),
             },
@@ -3055,6 +3104,71 @@ describe('Workspace Import review endpoints', () => {
     expect(afterBody.detected.learning.defaults.selectedSourceKeys).toEqual([loomaSource!.key])
     expect(afterBody.detected.learning.defaults.selectedTaskIds).toEqual([loomaSource!.taskIds[0]!])
     expect(afterBody.detected.learning.defaults.note).toContain('approved last time')
+  })
+
+  it('keeps approved import scope distinct from detected project breadth after a narrowed approval', async () => {
+    await fs.mkdir(path.join(tmpDir, 'looma', 'docs'), { recursive: true })
+    await fs.mkdir(path.join(tmpDir, 'knit', 'docs'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'looma', 'docs', 'component-roadmap.md'),
+      '- [ ] Listbox\n- [ ] Combobox\n',
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'knit', 'docs', 'feature-roadmap.md'),
+      '- [ ] Auth callback redirect\n- [ ] Collections parity\n',
+      'utf8',
+    )
+    await fs.writeFile(path.join(tmpDir, 'package.json'), JSON.stringify({ name: 'ws-scope-truth' }), 'utf8')
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const before = await app.fetch(new Request(scoped('/api/project/workspace-import/draft')))
+    const beforeBody = (await before.json()) as {
+      detected: {
+        review: { sourceGroups: Array<{ key: string; areaKey: string; taskIds: string[] }> }
+      }
+    }
+    const loomaSource = beforeBody.detected.review.sourceGroups.find(group => group.areaKey === 'looma')
+    expect(loomaSource).toBeDefined()
+
+    const approve = await app.fetch(
+      new Request(scoped('/api/project/workspace-import/approve'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          areaKeys: ['looma'],
+          sourceKeys: [loomaSource!.key],
+          taskIds: [loomaSource!.taskIds[0]],
+        }),
+      }),
+    )
+    expect(approve.status).toBe(200)
+
+    const status = await app.fetch(new Request(scoped('/api/project/workspace-import/status')))
+    expect(status.status).toBe(200)
+    const statusBody = (await status.json()) as {
+      approved: { taskCount: number; currentTaskCount: number }
+      detected: { taskCount: number; currentTaskCount: number }
+      draft: { tasks: number }
+    }
+    expect(statusBody.approved.taskCount).toBe(1)
+    expect(statusBody.approved.currentTaskCount).toBe(1)
+    expect(statusBody.detected.taskCount).toBeGreaterThan(statusBody.approved.taskCount)
+    expect(statusBody.detected.currentTaskCount).toBeGreaterThan(statusBody.approved.currentTaskCount)
+    expect(statusBody.draft.tasks).toBe(1)
+
+    const facts = await app.fetch(new Request(scoped('/api/project/facts')))
+    expect(facts.status).toBe(200)
+    const factsBody = (await facts.json()) as {
+      workspace: {
+        goals: {
+          approved: { taskCount: number }
+          detected: { taskCount: number } | null
+        }
+      }
+    }
+    expect(factsBody.workspace.goals.approved.taskCount).toBe(1)
+    expect((factsBody.workspace.goals.detected?.taskCount ?? 0)).toBeGreaterThan(1)
   })
 
   it('rerun reseeds the reserved import task even when the project already has tasks', async () => {

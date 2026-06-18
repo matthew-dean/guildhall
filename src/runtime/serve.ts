@@ -232,7 +232,10 @@ import {
   createWorkspaceImportTask,
   mergeWorkspaceImportDraft,
   parseWorkspaceImport,
+  readWorkspaceGoalsState,
+  readWorkspaceGoalsStateSync,
   rerunWorkspaceImportTask,
+  summarizeWorkspaceImportSpec,
   workspaceNeedsImport,
   workspaceImportYamlErrors,
   WORKSPACE_IMPORT_TASK_ID,
@@ -5968,6 +5971,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         memoryDir,
         projectPath: project.path,
       })
+      const workspaceGoalsState = await readWorkspaceGoalsState(memoryDir)
 
       // Lever read — mirror the defaulting rule in maybeSeedWorkspaceImport.
       let leverPosition: 'off' | 'suggest' | 'apply' = 'suggest'
@@ -5986,6 +5990,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       let taskStatus: string | null = null
       let specPresent = false
       let parsedSpecDraft: ReturnType<typeof parseWorkspaceImport> | null = null
+      let importerTaskSpec = ''
       if (existsSync(tasksPath)) {
         const raw = JSON.parse(await readManagedTextFile(tasksPath, 'utf-8')) as
           | { tasks?: Array<Record<string, unknown>> }
@@ -5999,10 +6004,45 @@ export function buildServeApp(opts: ServeOptions = {}): {
           specPresent =
             typeof task.spec === 'string' && task.spec.trim().length > 0
           if (specPresent && typeof task.spec === 'string') {
+            importerTaskSpec = task.spec
             parsedSpecDraft = parseWorkspaceImport(task.spec)
           }
         }
       }
+      const approvedFromSpec = parsedSpecDraft
+        ? (() => {
+            const strictSummary = {
+              goalCount: parsedSpecDraft.goals.length,
+              taskCount: parsedSpecDraft.tasks.length,
+              milestoneCount: parsedSpecDraft.milestones.length,
+              currentTaskCount: parsedSpecDraft.tasks.filter(task => task.scope !== 'later').length,
+              laterTaskCount: parsedSpecDraft.tasks.filter(task => task.scope === 'later').length,
+              taskIds: parsedSpecDraft.tasks.map(task => task.id),
+            }
+            return strictSummary.taskCount > 0 || strictSummary.milestoneCount > 0 || strictSummary.goalCount > 0
+              ? strictSummary
+              : null
+          })()
+        : null
+      const approvedSummaryFromSpec = (!approvedFromSpec && importerTaskSpec)
+        ? summarizeWorkspaceImportSpec(importerTaskSpec)
+        : null
+      const specApprovedSummary = approvedFromSpec ?? approvedSummaryFromSpec
+      const effectiveApproved = workspaceGoalsState?.approved
+        ? {
+            goalCount: Math.max(workspaceGoalsState.approved.goalCount, specApprovedSummary?.goalCount ?? 0),
+            taskCount: Math.max(workspaceGoalsState.approved.taskCount, specApprovedSummary?.taskCount ?? 0),
+            milestoneCount: Math.max(workspaceGoalsState.approved.milestoneCount, specApprovedSummary?.milestoneCount ?? 0),
+            currentTaskCount: Math.max(workspaceGoalsState.approved.currentTaskCount, specApprovedSummary?.currentTaskCount ?? 0),
+            laterTaskCount: Math.max(workspaceGoalsState.approved.laterTaskCount, specApprovedSummary?.laterTaskCount ?? 0),
+            taskIds: [
+              ...new Set([
+                ...workspaceGoalsState.approved.taskIds,
+                ...(specApprovedSummary?.taskIds ?? []),
+              ]),
+            ],
+          }
+        : specApprovedSummary
 
       return c.json({
         needed: need.needed,
@@ -6011,9 +6051,18 @@ export function buildServeApp(opts: ServeOptions = {}): {
         specPresent,
         leverPosition,
         draft: {
-          goals: parsedSpecDraft?.goals.length ?? need.draft.goals.length,
-          tasks: parsedSpecDraft?.tasks.length ?? need.draft.tasks.length,
-          milestones: parsedSpecDraft?.milestones.length ?? need.draft.milestones.length,
+          goals: effectiveApproved?.goalCount ?? need.draft.goals.length,
+          tasks: effectiveApproved?.taskCount ?? need.draft.tasks.length,
+          milestones: effectiveApproved?.milestoneCount ?? need.draft.milestones.length,
+        },
+        approved: effectiveApproved,
+        detected: workspaceGoalsState?.detected ?? {
+          goalCount: need.draft.goals.length,
+          taskCount: need.draft.tasks.length,
+          milestoneCount: need.draft.milestones.length,
+          currentTaskCount: need.draft.tasks.filter(task => task.scope !== 'later').length,
+          laterTaskCount: need.draft.tasks.filter(task => task.scope === 'later').length,
+          taskIds: need.draft.tasks.map(task => task.suggestedId),
         },
         inventory: {
           ran: need.inventory.ran,
@@ -6191,6 +6240,15 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
       let existingTasks: Array<{ title: string; status: string }> = []
       const tasksPath = projectTasksPath(project.path)
+      let liveDetectedWorkspaceScope:
+        | {
+            goalCount: number
+            taskCount: number
+            milestoneCount: number
+            currentTaskCount: number
+            laterTaskCount: number
+          }
+        | null = null
       if (existsSync(tasksPath)) {
         try {
           const raw = JSON.parse(await readManagedTextFile(tasksPath, 'utf-8')) as
@@ -6416,6 +6474,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           project.config?.projects ?? [],
         ),
         draftOverride: effectiveDraft,
+        detectedDraftSnapshot: fullDraft,
       })
       if (!result.success) {
         return c.json({ error: result.error ?? 'Approval failed' }, 400)
@@ -6474,29 +6533,63 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
 
       // Workspace goals file (imported or dismissed state).
-      const goalsPath = getProjectSystemStatePath(project.path, 'workspace-goals.json')
+      const workspaceGoalsState = readWorkspaceGoalsStateSync(memoryDir)
       let workspaceGoals:
-        | { imported: boolean; dismissed: boolean; goalCount: number; taskCount: number; milestoneCount: number }
-        | null = null
-      if (existsSync(goalsPath)) {
-        try {
-          const raw = JSON.parse(readManagedTextFileSync(goalsPath, 'utf8')) as Record<string, unknown>
-          if ((raw as { dismissed?: boolean }).dismissed) {
-            workspaceGoals = { imported: false, dismissed: true, goalCount: 0, taskCount: 0, milestoneCount: 0 }
-          } else {
-            const goals = Array.isArray(raw.goals) ? (raw.goals as unknown[]).length : 0
-            const tasks = Array.isArray(raw.tasks) ? (raw.tasks as unknown[]).length : 0
-            const milestones = Array.isArray(raw.milestones) ? (raw.milestones as unknown[]).length : 0
-            workspaceGoals = {
-              imported: true,
-              dismissed: false,
-              goalCount: goals,
-              taskCount: tasks,
-              milestoneCount: milestones,
-            }
+        | {
+            imported: boolean
+            dismissed: boolean
+            goalCount: number
+            taskCount: number
+            milestoneCount: number
+            approved: {
+              goalCount: number
+              taskCount: number
+              milestoneCount: number
+              currentTaskCount: number
+              laterTaskCount: number
+            } | null
+            detected: {
+              goalCount: number
+              taskCount: number
+              milestoneCount: number
+              currentTaskCount: number
+              laterTaskCount: number
+            } | null
           }
-        } catch {
-          /* leave null */
+        | null = null
+      if (workspaceGoalsState?.dismissed) {
+        workspaceGoals = {
+          imported: false,
+          dismissed: true,
+          goalCount: 0,
+          taskCount: 0,
+          milestoneCount: 0,
+          approved: null,
+          detected: null,
+        }
+      } else if (workspaceGoalsState) {
+        workspaceGoals = {
+          imported: true,
+          dismissed: false,
+          goalCount: workspaceGoalsState.approved.goalCount,
+          taskCount: workspaceGoalsState.approved.taskCount,
+          milestoneCount: workspaceGoalsState.approved.milestoneCount,
+          approved: {
+            goalCount: workspaceGoalsState.approved.goalCount,
+            taskCount: workspaceGoalsState.approved.taskCount,
+            milestoneCount: workspaceGoalsState.approved.milestoneCount,
+            currentTaskCount: workspaceGoalsState.approved.currentTaskCount,
+            laterTaskCount: workspaceGoalsState.approved.laterTaskCount,
+          },
+          detected: workspaceGoalsState.detected
+            ? {
+                goalCount: workspaceGoalsState.detected.goalCount,
+                taskCount: workspaceGoalsState.detected.taskCount,
+                milestoneCount: workspaceGoalsState.detected.milestoneCount,
+                currentTaskCount: workspaceGoalsState.detected.currentTaskCount,
+                laterTaskCount: workspaceGoalsState.detected.laterTaskCount,
+              }
+            : null,
         }
       }
       const tasksPath = projectTasksPath(project.path)
@@ -6516,13 +6609,49 @@ export function buildServeApp(opts: ServeOptions = {}): {
               goalCount: parsed.goals.length,
               taskCount: parsed.tasks.length,
               milestoneCount: parsed.milestones.length,
+              currentTaskCount: parsed.tasks.filter(task => task.scope !== 'later').length,
+              laterTaskCount: parsed.tasks.filter(task => task.scope === 'later').length,
+            }
+            const looseParsedCounts = summarizeWorkspaceImportSpec(spec)
+            const approvedCounts = workspaceGoalsState?.approved
+            const specApprovedCounts =
+              parsedCounts.goalCount > 0 || parsedCounts.taskCount > 0 || parsedCounts.milestoneCount > 0
+                ? parsedCounts
+                : looseParsedCounts
+            const effectiveApproved = approvedCounts
+              ? {
+                  goalCount: Math.max(approvedCounts.goalCount, specApprovedCounts.goalCount),
+                  taskCount: Math.max(approvedCounts.taskCount, specApprovedCounts.taskCount),
+                  milestoneCount: Math.max(approvedCounts.milestoneCount, specApprovedCounts.milestoneCount),
+                  currentTaskCount: Math.max(approvedCounts.currentTaskCount, specApprovedCounts.currentTaskCount),
+                  laterTaskCount: Math.max(approvedCounts.laterTaskCount, specApprovedCounts.laterTaskCount),
+                }
+              : specApprovedCounts
+            if (!workspaceGoals?.detected) {
+              try {
+                const detectedNeed = await workspaceNeedsImport({
+                  memoryDir,
+                  projectPath: project.path,
+                })
+                liveDetectedWorkspaceScope = {
+                  goalCount: detectedNeed.draft.goals.length,
+                  taskCount: detectedNeed.draft.tasks.length,
+                  milestoneCount: detectedNeed.draft.milestones.length,
+                  currentTaskCount: detectedNeed.draft.tasks.filter(task => task.scope !== 'later').length,
+                  laterTaskCount: detectedNeed.draft.tasks.filter(task => task.scope === 'later').length,
+                }
+              } catch {
+                liveDetectedWorkspaceScope = null
+              }
             }
             workspaceGoals = {
               imported: true,
               dismissed: false,
-              goalCount: Math.max(workspaceGoals?.goalCount ?? 0, parsedCounts.goalCount),
-              taskCount: Math.max(workspaceGoals?.taskCount ?? 0, parsedCounts.taskCount),
-              milestoneCount: Math.max(workspaceGoals?.milestoneCount ?? 0, parsedCounts.milestoneCount),
+              goalCount: effectiveApproved.goalCount,
+              taskCount: effectiveApproved.taskCount,
+              milestoneCount: effectiveApproved.milestoneCount,
+              approved: workspaceGoals?.approved ?? effectiveApproved,
+              detected: workspaceGoals?.detected ?? liveDetectedWorkspaceScope,
             }
           }
         } catch {
