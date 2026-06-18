@@ -97,6 +97,16 @@ describe('updateTask', () => {
     expect(raw.tasks[0].status).toBe('spec_review')
   })
 
+  it('allows spec review tasks to return to exploring when a revision is requested', async () => {
+    await updateTask({ tasksPath, taskId: 'task-001', status: 'spec_review' })
+    const result = await updateTask({ tasksPath, taskId: 'task-001', status: 'exploring' })
+
+    expect(result.success).toBe(true)
+
+    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    expect(raw.tasks[0].status).toBe('exploring')
+  })
+
   it('updates task domain for lane repair', async () => {
     await updateTask({ tasksPath, taskId: 'task-001', domain: 'harness' })
     const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))

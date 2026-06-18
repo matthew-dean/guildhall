@@ -90,6 +90,7 @@ const taskLifecycleStates: StateMachineStates<TaskTransitionState, TaskTransitio
   },
   spec_review: {
     on: {
+      recover_to_exploring: { to: 'exploring' },
       mark_spec_review: { to: 'spec_review' },
       mark_ready: { to: 'ready' },
       block,

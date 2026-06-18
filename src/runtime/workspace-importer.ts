@@ -503,6 +503,12 @@ interface MaterializedImportTask extends ParsedTask {
   evidenceGraphTask?: boolean
 }
 
+type ImportedEvidenceDetail = {
+  contractNames: string[]
+  implementationBullets: string[]
+  verificationBullets: string[]
+}
+
 type ImportedBlueprintSeed = {
   status: Task['status']
   requestIntake: Task['requestIntake']
@@ -1740,13 +1746,18 @@ function summarizeImportedVerification(task: MaterializedImportTask): string {
   return steps.join('; ')
 }
 
-function importedCompletionBoundary(task: MaterializedImportTask): string {
+function importedCompletionBoundary(
+  task: MaterializedImportTask,
+  evidenceDetail: ImportedEvidenceDetail,
+): string {
   const successMetric = summarizeImportedSuccessMetric(task)
-  const verificationEnvironment = summarizeImportedVerification(task)
+  const verificationEnvironment = evidenceDetail.verificationBullets.length > 0
+    ? `Local workspace proof using: ${evidenceDetail.verificationBullets.join('; ')}`
+    : `Local workspace proof using: ${summarizeImportedVerification(task)}`
   const missingInformation = (task.missingInformation ?? []).filter(Boolean)
   const splitOrBlock = missingInformation.length > 0
-    ? `Split or pause only if these imported gaps still change the implementation boundary: ${missingInformation.join('; ')}.`
-    : 'None expected. Split only if repo evidence shows more than one independently verifiable outcome.'
+    ? `Split only if these unresolved imported gaps still change the implementation boundary: ${missingInformation.join('; ')}. Block only for missing external credentials, unavailable services, or absent source evidence.`
+    : 'Split only if the cited work turns out to contain more than one independently verifiable deliverable. Block only for missing external credentials, unavailable services, or absent source evidence.'
   return [
     '## Completion Boundary',
     `- Product outcome: ${successMetric}`,
@@ -1759,11 +1770,102 @@ function importedCompletionBoundary(task: MaterializedImportTask): string {
   ].join('\n')
 }
 
-function importedTaskSpec(task: MaterializedImportTask): string {
+function titleKeywords(title: string): string[] {
+  return normalizeImportText(title)
+    .split(/\s+/)
+    .filter(word => word.length >= 4)
+    .filter(word => !['from', 'with', 'that', 'this', 'into', 'then', 'than', 'have', 'will', 'they', 'their', 'there', 'about', 'because', 'using', 'build', 'implement'].includes(word))
+}
+
+function splitMarkdownSections(content: string): Array<{ heading: string; body: string }> {
+  const lines = content.split(/\r?\n/)
+  const sections: Array<{ heading: string; body: string }> = []
+  let currentHeading = '(intro)'
+  let currentBody: string[] = []
+  for (const line of lines) {
+    const heading = /^#{2,6}\s+(.+?)\s*$/.exec(line)
+    if (heading) {
+      sections.push({ heading: currentHeading, body: currentBody.join('\n').trim() })
+      currentHeading = heading[1]!.trim()
+      currentBody = []
+      continue
+    }
+    currentBody.push(line)
+  }
+  sections.push({ heading: currentHeading, body: currentBody.join('\n').trim() })
+  return sections
+}
+
+function readImportedReferenceContent(
+  reference: string,
+  workspaceProjectPath: string,
+): string | null {
+  const absolute = absoluteImportedReference(reference, workspaceProjectPath)
+  try {
+    return readManagedTextFileSync(absolute, 'utf-8')
+  } catch {
+    return null
+  }
+}
+
+function extractReferenceEvidenceDetail(
+  task: MaterializedImportTask,
+  workspaceProjectPath: string,
+): ImportedEvidenceDetail {
+  const keywords = titleKeywords(task.title)
+  const contractNames = new Set<string>()
+  const implementationBullets: string[] = []
+  const verificationBullets: string[] = []
+
+  for (const reference of task.references) {
+    const content = readImportedReferenceContent(reference, workspaceProjectPath)
+    if (!content) continue
+    const sections = splitMarkdownSections(content)
+    const rankedSections = sections
+      .map(section => {
+        const haystack = normalizeImportText(`${section.heading}\n${section.body}`)
+        const score = keywords.reduce((sum, keyword) => sum + (haystack.includes(keyword) ? 1 : 0), 0)
+        return { ...section, score }
+      })
+      .filter(section => section.score > 0 || sections.length === 1)
+      .sort((left, right) => right.score - left.score)
+      .slice(0, 2)
+
+    for (const section of rankedSections) {
+      const sectionLines = section.body.split(/\r?\n/).map(line => line.trim()).filter(Boolean)
+      for (const match of section.body.matchAll(/`([^`\n]{2,80})`/g)) {
+        const name = match[1]!.trim()
+        if (/^[A-Za-z][A-Za-z0-9_-]+$/.test(name)) contractNames.add(name)
+      }
+      for (const line of sectionLines) {
+        if (!/^[-*]\s+/.test(line) && !/^\d+[.)]\s+/.test(line)) continue
+        const bullet = line.replace(/^[-*]\s+/, '').replace(/^\d+[.)]\s+/, '').trim()
+        if (!bullet) continue
+        if (/\b(verification|evaluation|rubric|expected result|run record)\b/i.test(section.heading) || /\b(run|review|evaluate|trace|proof)\b/i.test(bullet)) {
+          if (verificationBullets.length < 5) verificationBullets.push(bullet)
+          continue
+        }
+        if (implementationBullets.length < 6) implementationBullets.push(bullet)
+      }
+    }
+  }
+
+  return {
+    contractNames: [...contractNames].slice(0, 10),
+    implementationBullets: implementationBullets.slice(0, 6),
+    verificationBullets: verificationBullets.slice(0, 5),
+  }
+}
+
+function importedTaskSpec(
+  task: MaterializedImportTask,
+  workspaceProjectPath: string,
+): string {
   const references = (task.references ?? []).filter(Boolean)
   const acceptanceCriteria = materializedAcceptanceCriteria(task)
   const assumptions = (task.assumptions ?? []).filter(Boolean)
   const missingInformation = (task.missingInformation ?? []).filter(Boolean)
+  const evidenceDetail = extractReferenceEvidenceDetail(task, workspaceProjectPath)
   const proofPlan = (task.proofPaths ?? []).map((path) => {
     if (path.kind === 'command' && typeof path.command === 'string' && path.command.trim()) {
       return `- Run \`${path.command.trim()}\``
@@ -1785,6 +1887,9 @@ function importedTaskSpec(task: MaterializedImportTask): string {
     '',
     '## Goals',
     `- ${summarizeImportedSuccessMetric(task)}`,
+    ...(evidenceDetail.contractNames.length > 0
+      ? [`- Define and use the concrete contracts named in the cited docs: ${evidenceDetail.contractNames.map(name => `\`${name}\``).join(', ')}.`]
+      : []),
     '',
     '## Non-goals',
     ...(missingInformation.length > 0
@@ -1792,7 +1897,9 @@ function importedTaskSpec(task: MaterializedImportTask): string {
       : ['- Do not broaden beyond the cited evidence, acceptance criteria, and proof plan.']),
     '',
     '## Proposed design',
-    task.description.trim() || task.title,
+    ...(evidenceDetail.implementationBullets.length > 0
+      ? evidenceDetail.implementationBullets.map((item, index) => `${index + 1}. ${item}`)
+      : [task.description.trim() || task.title]),
     '',
     '## Key decisions',
     `- Stay anchored to the imported evidence for ${task.title}.`,
@@ -1809,9 +1916,13 @@ function importedTaskSpec(task: MaterializedImportTask): string {
       : ['1. The imported task is rewritten with concrete acceptance criteria before approval.']),
     '',
     '## Verification',
-    ...(proofPlan.length > 0 ? proofPlan : ['- Run the documented proof plan from the cited project evidence and record the result.']),
+    ...(proofPlan.length > 0
+      ? proofPlan
+      : evidenceDetail.verificationBullets.length > 0
+        ? evidenceDetail.verificationBullets.map(item => `- ${item}`)
+        : ['- Run the documented proof plan from the cited project evidence and record the result.']),
     '',
-    importedCompletionBoundary(task),
+    importedCompletionBoundary(task, evidenceDetail),
   ].join('\n')
 }
 
@@ -1819,11 +1930,14 @@ function importedTaskBrief(
   task: MaterializedImportTask,
   now: string,
 ): Task['productBrief'] {
+  const cleanedNonGoals = (task.missingInformation ?? [])
+    .filter(Boolean)
+    .filter(item => !/guildhall still needs to confirm scope, current relevance, and success criteria during shaping/i.test(item))
   return {
     userJob: task.whyThisMayMatter?.trim() || task.description.trim() || task.title,
     whyItMattersNow: task.whyThisMayMatter?.trim() || `Current project evidence already points at ${task.title}.`,
     successMetric: summarizeImportedSuccessMetric(task),
-    nonGoals: (task.missingInformation ?? []).filter(Boolean),
+    nonGoals: cleanedNonGoals,
     authoredBy: 'workspace-importer',
     authoredAt: now,
   }
@@ -1863,6 +1977,7 @@ function importedTaskWorkUnitAnalysis(
 function buildImportedBlueprintSeed(
   task: MaterializedImportTask,
   normalizedReferences: readonly string[],
+  workspaceProjectPath: string,
   now: string,
 ): ImportedBlueprintSeed {
   const evidenceRefs = normalizedReferences.map(ref => `import:${ref}`)
@@ -1933,7 +2048,7 @@ function buildImportedBlueprintSeed(
   }
 
   const seededProductBrief = importedTaskBrief(task, now)
-  const seededSpec = importedTaskSpec(task)
+  const seededSpec = importedTaskSpec(task, workspaceProjectPath)
   const seededWorkUnitAnalysis = importedTaskWorkUnitAnalysis(task, now)
   const shapedSeedTask: Task = applyTaskShaping({
     id: `seed:${task.id}`,
@@ -2154,7 +2269,7 @@ export async function approveWorkspaceImport(
       taskProjectPath,
     )
     const normalizedReferences = absoluteImportedReferences(imported.references, input.projectPath)
-    const seededBlueprint = buildImportedBlueprintSeed(imported, normalizedReferences, now)
+    const seededBlueprint = buildImportedBlueprintSeed(imported, normalizedReferences, input.projectPath, now)
     existing.description = normalizedDescription
     existing.domain = domain
     existing.projectPath = taskProjectPath
@@ -2221,7 +2336,7 @@ export async function approveWorkspaceImport(
       taskProjectPath,
     )
     const normalizedReferences = absoluteImportedReferences(t.references, input.projectPath)
-    const seededBlueprint = buildImportedBlueprintSeed(t, normalizedReferences, now)
+    const seededBlueprint = buildImportedBlueprintSeed(t, normalizedReferences, input.projectPath, now)
     queue.tasks.push({
       id,
       title: t.title,

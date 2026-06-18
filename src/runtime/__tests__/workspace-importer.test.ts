@@ -20,6 +20,7 @@ import {
   WORKSPACE_IMPORT_TASK_ID,
   WORKSPACE_IMPORT_DOMAIN,
 } from '../workspace-importer.js'
+import { approveSpec } from '../intake.js'
 import { pickNextTask } from '../orchestrator-picker.js'
 import { detectWorkspaceSignals } from '../workspace-import/index.js'
 import { formWorkspaceHypothesis } from '../workspace-import/hypothesis.js'
@@ -1874,6 +1875,113 @@ tasks:
       status: 'spec_review',
       domain: 'harness',
     })
+  })
+
+  it('builds import specs from cited evidence strongly enough to pass approval without boilerplate gaps', async () => {
+    await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
+    await fs.mkdir(path.join(tmpDir, 'docs', 'specs'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'harness', 'implementation-roadmap.md'),
+      [
+        '# Implementation Roadmap',
+        '',
+        '## Stage 1: Fixture And Evaluation Harness',
+        '',
+        'Goal: build a no-UI test harness that proves story-memory and packet contracts against small fiction fixtures before any product UI is designed.',
+        '',
+        '## Current Next Milestone',
+        '',
+        'The next milestone is Stage 1: Fixture And Evaluation Harness.',
+        '',
+        '1. Define fixture, expected-record, prototype-run, and evaluation schemas.',
+      ].join('\n'),
+      'utf-8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'specs', 'schema-contract-roadmap.md'),
+      [
+        '# Schema Contract Roadmap',
+        '',
+        '## Fixture And Expected-Record Schema',
+        '',
+        'Needed contracts:',
+        '- `FixtureManifest`',
+        '- `ExpectedRecordSet`',
+        '- `ExpectedSignal`',
+        '',
+        'Purpose:',
+        '- compare generated traces to human-authored ground truth',
+        '- avoid using private real manuscripts in early evals',
+        '',
+        '## Prototype Run And Evaluation Schema',
+        '',
+        'Needed contracts:',
+        '- `PrototypeRun`',
+        '- `RunEvaluation`',
+        '- `PacketQualityScore`',
+      ].join('\n'),
+      'utf-8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'harness', 'prototype-iteration-workflow.md'),
+      [
+        '# Prototype Iteration Workflow',
+        '',
+        '## Fixture Shape',
+        '',
+        'Minimum fixture:',
+        '- 2-3 short scenes',
+        '- one reader-knowledge issue',
+        '',
+        '## Iteration Round',
+        '',
+        '1. Ingest fixture manuscript and metadata.',
+        '2. Produce or load schema records.',
+        '3. Evaluate outcome against rubric.',
+      ].join('\n'),
+      'utf-8',
+    )
+
+    await seedImporterWithSpec(`
+\`\`\`yaml
+tasks:
+  - id: task-schemas
+    title: Define fixture, expected-record, prototype-run, and evaluation schemas.
+    description: Define fixture, expected-record, prototype-run, and evaluation schemas.
+    domain: harness
+    priority: high
+    references:
+      - docs/harness/implementation-roadmap.md
+      - docs/specs/schema-contract-roadmap.md
+      - docs/harness/prototype-iteration-workflow.md
+    acceptanceCriteria:
+      - id: source-implementation
+        description: Define fixture, expected-record, prototype-run, and evaluation schemas. is implemented in harness.
+        verifiedBy: review
+    proofPaths:
+      - kind: review
+        expectedEvidence:
+          - compare generated traces to human-authored ground truth
+\`\`\`
+`)
+
+    const approved = await approveWorkspaceImport({
+      memoryDir,
+      projectPath: tmpDir,
+    })
+    expect(approved).toMatchObject({ success: true, tasksAdded: 1 })
+
+    const q = await readQueue()
+    const task = q.tasks.find(candidate => candidate.id === 'task-schemas')
+    expect(task?.spec).toContain('`FixtureManifest`')
+    expect(task?.spec).toContain('`ExpectedRecordSet`')
+    expect(task?.spec).toContain('`PrototypeRun`')
+    expect(task?.spec).toContain('Verification environment: Local workspace proof using:')
+    expect(task?.spec).not.toContain('Split or pause only if these imported gaps still change the implementation boundary')
+    expect(task?.productBrief?.nonGoals ?? []).not.toContain('Guildhall still needs to confirm scope, current relevance, and success criteria during shaping.')
+
+    const specApproval = await approveSpec({ memoryDir, taskId: 'task-schemas' })
+    expect(specApproval).toMatchObject({ success: true, newStatus: 'ready' })
   })
 })
 
