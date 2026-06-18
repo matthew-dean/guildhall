@@ -316,6 +316,8 @@ describe('evidence-to-work-graph intake', () => {
       'Generate a developer-readable debug report for each run.',
       'Use the first run to narrow the MVP story-memory schema.',
     ])
+    const firstTask = plan.tasks.find(task => task.title === 'Define fixture, expected-record, prototype-run, and evaluation schemas.')
+    expect(firstTask?.buildsOn).toEqual(['Stage 1'])
     expect(plan.tasks.every(task => task.kind === 'implementation')).toBe(true)
   })
 

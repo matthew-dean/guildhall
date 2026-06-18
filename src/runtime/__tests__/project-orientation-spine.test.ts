@@ -279,6 +279,30 @@ describe('buildProjectOrientationSpine', () => {
     expect(spine.summary.headline).toBe('Current work has no actionable work.')
   })
 
+  it('lets shared start-readiness block the orientation headline before idle copy', () => {
+    const spine = buildProjectOrientationSpine({
+      projectId: 'narrative-harness',
+      now: '2026-06-17T12:00:00.000Z',
+      tasks: [{
+        id: 'task-workspace-import',
+        title: 'Review existing project work',
+        description: 'Reserved importer task.',
+        domain: '_workspace_import',
+        status: 'done',
+      }],
+      startReadiness: {
+        canStart: false,
+        code: 'workspace_import_refresh_needed',
+        message: 'Guildhall saved an under-scoped import.',
+        actionHref: '/workspace-import',
+      },
+    })
+
+    expect(spine.summary.headline).toBe('Current work needs import refresh.')
+    expect(spine.summary.topBlocker).toBe('Workspace import is under-scoped.')
+    expect(spine.summary.nextAction).toBe('Refresh the workspace import.')
+  })
+
   it('extracts a headless script-only execution boundary and proof contracts for scoped work', () => {
     const spine = buildProjectOrientationSpine({
       projectId: 'narrative-harness',

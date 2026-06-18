@@ -201,17 +201,13 @@ function extractTableSeeds(source: EvidenceSource): UnitSeed[] {
 function extractRoadmapMilestoneSeeds(source: EvidenceSource): UnitSeed[] {
   const lines = logicalMarkdownLines(source.content)
   const seeds: UnitSeed[] = []
-  let currentHeading = ''
-  let currentStage = ''
+  const currentMilestoneStage = detectCurrentMilestoneStage([{ path: source.path, content: source.content }])
   let inCurrentMilestone = false
 
   for (const line of lines) {
     const heading = /^##\s+(.+?)\s*$/.exec(line)
     if (heading) {
-      currentHeading = heading[1]!.trim()
-      if (/^stage\s+\d+\s*:/i.test(currentHeading)) {
-        currentStage = currentHeading
-      }
+      const currentHeading = heading[1]!.trim()
       inCurrentMilestone = /^current next milestone$/i.test(currentHeading)
       continue
     }
@@ -230,8 +226,8 @@ function extractRoadmapMilestoneSeeds(source: EvidenceSource): UnitSeed[] {
     seeds.push({
       path: source.path,
       deliverable: title,
-      need: `${currentStage || 'Current next milestone'} starter task.`,
-      foundation: currentStage || 'current implementation stage',
+      need: `${currentMilestoneStage ?? 'current next milestone'} starter task.`,
+      foundation: currentMilestoneStage ?? 'current implementation stage',
       consumer: '',
       row: line.trim(),
       titleMode: 'verbatim',

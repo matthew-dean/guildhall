@@ -3422,6 +3422,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         selectedReleaseId: rawQueue.selectedReleaseId,
         releases: rawQueue.releases,
         tasks: tasks as unknown as Task[],
+        startReadiness,
         sourceRefs: projectOrientationSourceRefs(project.path),
       })
       return c.json({
@@ -3482,12 +3483,14 @@ export function buildServeApp(opts: ServeOptions = {}): {
         })
       }
       const rawQueue = await readTaskQueueFileNormalized(projectTasksPath(project.path))
+      const startReadiness = await projectStartReadiness(project.path)
       const spine = buildProjectOrientationSpine({
         projectId: project.id,
         charter: inferProjectCharterFromExistingSources(project.path, project.config),
         selectedReleaseId: rawQueue.selectedReleaseId,
         releases: rawQueue.releases,
         tasks: rawQueue.tasks as Task[],
+        startReadiness,
         sourceRefs: projectOrientationSourceRefs(project.path),
       })
       return c.json({ spine })
@@ -4471,6 +4474,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
     const importDraftBlocker = await startBlockerForImportDrafts(input.projectPath)
     if (importDraftBlocker) return importDraftBlocker
 
+    const workspaceImportCoverageBlocker = await startBlockerForWorkspaceImportCoverage(input.projectPath)
+    if (workspaceImportCoverageBlocker) return workspaceImportCoverageBlocker
+
     if (input.allowTaskReadinessBlocker !== false) {
       const taskReadinessBlocker = await startBlockerForTaskReadiness(input.projectPath)
       if (taskReadinessBlocker) return taskReadinessBlocker
@@ -4757,6 +4763,46 @@ export function buildServeApp(opts: ServeOptions = {}): {
           ? `Review the imported draft "${title}" and turn it into a task brief before starting.`
           : `Review ${importDrafts.length} imported drafts before starting. Start with "${title}".`,
       actionHref: id ? `/task/${encodeURIComponent(id)}` : '/notifications',
+    }
+  }
+
+  async function startBlockerForWorkspaceImportCoverage(projectPath: string): Promise<{
+    canStart: false
+    code: 'workspace_import_refresh_needed'
+    message: string
+    actionHref: string
+  } | null> {
+    const tasksPath = projectTasksPath(projectPath)
+    if (!existsSync(tasksPath)) return null
+    const raw = JSON.parse(await readManagedTextFile(tasksPath, 'utf-8')) as
+      | { tasks?: Array<Record<string, unknown>> }
+      | Array<Record<string, unknown>>
+    const tasks = Array.isArray(raw) ? raw : raw.tasks ?? []
+    const importTask = tasks.find(task =>
+      task &&
+      typeof task === 'object' &&
+      (task as { id?: unknown }).id === WORKSPACE_IMPORT_TASK_ID,
+    ) as { status?: unknown; spec?: unknown } | undefined
+    if (!importTask) return null
+    const status = typeof importTask.status === 'string' ? importTask.status : ''
+    const spec = typeof importTask.spec === 'string' ? importTask.spec : ''
+    if (!['done', 'spec_review'].includes(status) || !spec.trim()) return null
+
+    const parsed = parseWorkspaceImport(spec)
+    if (parsed.tasks.length > 0) return null
+
+    const inventory = await detectWorkspaceSignals({ projectPath })
+    const detected = formWorkspaceHypothesis(inventory)
+    if (detected.tasks.length === 0) return null
+
+    const first = detected.tasks[0]?.title?.trim() || 'the first current-scope task'
+    return {
+      canStart: false,
+      code: 'workspace_import_refresh_needed',
+      message:
+        `Guildhall's saved import is under-scoped for the current project docs. ` +
+        `The live detector found ${detected.tasks.length} current tasks, starting with "${first}". Refresh the import before treating this project as complete.`,
+      actionHref: '/workspace-import',
     }
   }
 
@@ -6260,6 +6306,30 @@ export function buildServeApp(opts: ServeOptions = {}): {
         sourceKeys: selectedSourceKeys,
         taskIds: selectedTaskIds,
       })
+      let parsedSavedImporterSpec: ReturnType<typeof parseWorkspaceImport> | null = null
+      if (!hasExplicitNarrowing && importerTaskHasSpec) {
+        try {
+          const tasksPath = workspaceImportTasksPath(memoryDir)
+          const raw = JSON.parse(await readManagedTextFile(tasksPath, 'utf-8')) as
+            | Array<Record<string, unknown>>
+            | { tasks?: Array<Record<string, unknown>> }
+          const list = Array.isArray(raw) ? raw : raw.tasks ?? []
+          const importerTask = list.find(
+            (t) => (t as { id?: string }).id === WORKSPACE_IMPORT_TASK_ID,
+          ) as { spec?: unknown } | undefined
+          if (typeof importerTask?.spec === 'string' && importerTask.spec.trim().length > 0) {
+            parsedSavedImporterSpec = parseWorkspaceImport(importerTask.spec)
+          }
+        } catch {
+          parsedSavedImporterSpec = null
+        }
+      }
+      const savedImporterUndercoversCurrentDraft =
+        !hasExplicitNarrowing &&
+        importerTaskHasSpec &&
+        parsedSavedImporterSpec !== null &&
+        parsedSavedImporterSpec.tasks.length === 0 &&
+        filteredDraft.tasks.length > 0
 
       const result = await approveWorkspaceImport({
         memoryDir,
@@ -6269,7 +6339,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           project.config?.coordinators ?? [],
           project.config?.projects ?? [],
         ),
-        ...(!hasExplicitNarrowing && importerTaskHasSpec
+        ...(!savedImporterUndercoversCurrentDraft && !hasExplicitNarrowing && importerTaskHasSpec
           ? {}
           : { draftOverride: filteredDraft }),
       })
@@ -6665,6 +6735,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         selectedReleaseId: releaseQueue.selectedReleaseId,
         releases: releaseQueue.releases,
         tasks: state.tasks as Task[],
+        startReadiness: await projectStartReadiness(project.path),
         sourceRefs: projectOrientationSourceRefs(project.path),
       })
       timing[0]!.endedAt = Date.now()
@@ -9125,6 +9196,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         selectedReleaseId: rawQueue.selectedReleaseId,
         releases: rawQueue.releases,
         tasks: tasks as unknown as Task[],
+        startReadiness: await projectStartReadiness(project.path),
         sourceRefs: projectOrientationSourceRefs(project.path),
       })
       const release = readinessSpine.selectedRelease

@@ -258,6 +258,12 @@ export interface BuildProjectOrientationSpineInput {
     verdict?: string
     blockers?: Array<{ id?: string; label?: string; title?: string }>
   } | null
+  startReadiness?: {
+    canStart: boolean
+    code?: string
+    message?: string
+    actionHref?: string
+  } | null
   sourceConflicts?: Array<{ id: string; summary: string; refs: string[] }>
   sourceRefs?: string[]
 }
@@ -938,6 +944,44 @@ function sourceHealth(nodes: OrientationNode[], gaps: OrientationGap[]): Orienta
   }
 }
 
+function summarizeStartReadiness(input: {
+  workLabel: string | null
+  startReadiness: NonNullable<BuildProjectOrientationSpineInput['startReadiness']>
+}): { headline: string; topBlocker: string; nextAction: string } | null {
+  const { workLabel, startReadiness } = input
+  if (startReadiness.canStart) return null
+  const genericWorkLabel = workLabel ?? 'Current work'
+  const message = typeof startReadiness.message === 'string' && startReadiness.message.trim()
+    ? startReadiness.message.trim()
+    : 'Project start is blocked until the current issue is resolved.'
+  switch (startReadiness.code) {
+    case 'import_drafts_waiting':
+      return {
+        headline: `${genericWorkLabel} needs import review.`,
+        topBlocker: 'Imported drafts need review.',
+        nextAction: 'Open the first imported draft.',
+      }
+    case 'workspace_import_refresh_needed':
+      return {
+        headline: `${genericWorkLabel} needs import refresh.`,
+        topBlocker: 'Workspace import is under-scoped.',
+        nextAction: 'Refresh the workspace import.',
+      }
+    case 'no_unattended_progress':
+      return {
+        headline: `${genericWorkLabel} needs a decision.`,
+        topBlocker: message,
+        nextAction: 'Resolve the current start blocker.',
+      }
+    default:
+      return {
+        headline: `${genericWorkLabel} needs attention.`,
+        topBlocker: message,
+        nextAction: 'Resolve the current start blocker.',
+      }
+  }
+}
+
 function buildSummary(input: {
   projectId: string
   charter: ProjectOrientationCharter
@@ -946,24 +990,33 @@ function buildSummary(input: {
   progress: OrientationProgress
   pins: OrientationPin[]
   blockers: OrientationBlocker[]
+  startReadiness?: BuildProjectOrientationSpineInput['startReadiness']
 }): ProjectOrientationSummary {
   const purpose = input.charter.goal ?? `Project ${input.projectId} needs a confirmed purpose.`
   const releaseLabel = input.selectedRelease?.label ?? null
   const workLabel = releaseLabel ?? input.scope?.label ?? null
-  const topBlocker = input.blockers[0]?.label ?? null
+  const readinessSummary = input.startReadiness
+    ? summarizeStartReadiness({
+        workLabel,
+        startReadiness: input.startReadiness,
+      })
+    : null
+  const topBlocker = readinessSummary?.topBlocker ?? input.blockers[0]?.label ?? null
   const hasActionableWork =
     input.progress.ready > 0 ||
     input.progress.active > 0 ||
     input.progress.blocked > 0 ||
     input.progress.sliced > 0 ||
     input.progress.total > input.progress.done + input.progress.deferred
-  const headline = workLabel
-    ? topBlocker
-      ? `${workLabel} is blocked on proof.`
-      : hasActionableWork
-        ? `${workLabel} is being shaped.`
-        : `${workLabel} has no actionable work.`
-    : 'No current work is selected yet.'
+  const headline = readinessSummary?.headline ?? (
+    workLabel
+      ? topBlocker
+        ? `${workLabel} is blocked on proof.`
+        : hasActionableWork
+          ? `${workLabel} is being shaped.`
+          : `${workLabel} has no actionable work.`
+      : 'No current work is selected yet.'
+  )
   return {
     headline,
     purpose,
@@ -975,7 +1028,7 @@ function buildSummary(input: {
     deferredWorkCount: input.scope?.deferredNodeIds.length ?? 0,
     pinnedNow: input.pins.map(pin => pin.label),
     topBlocker,
-    nextAction: topBlocker ? `Review blocker: ${topBlocker}` : 'Review current work.',
+    nextAction: readinessSummary?.nextAction ?? (topBlocker ? `Review blocker: ${topBlocker}` : 'Review current work.'),
     progress: input.progress,
   }
 }
@@ -1050,6 +1103,7 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
       progress,
       pins,
       blockers,
+      startReadiness: input.startReadiness,
     }),
     roots,
     nodes: Object.fromEntries(byId.entries()),
