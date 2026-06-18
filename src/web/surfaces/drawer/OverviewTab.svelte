@@ -42,9 +42,9 @@
   const reviewPlan = $derived(task.reviewPlan ?? null)
   const requestIntake = $derived(task.requestIntake ?? null)
   const latestCheckpoint = $derived(task.latestCheckpoint ?? null)
-  const recommendedChildren = $derived(projectDerivedRecommendedChildren(task))
+  const plannedChildren = $derived(projectDerivedRecommendedChildren(task))
   const taskDescription = $derived(readableTaskDescription(task.description, task.title) || '(no description)')
-  const createdChildren = $derived(recommendedChildren.filter((child) => child.createdTaskId))
+  const createdChildren = $derived(plannedChildren.filter((child) => child.createdTaskId))
   const taskById = $derived(new Map([task, ...tasks].filter((candidate): candidate is Task => Boolean(candidate?.id)).map(candidate => [candidate.id, candidate])))
   const statusPresentation = $derived(taskStagePresentation(task, { tasks: [task, ...tasks] }))
   const deliveryBadge = $derived(deliveryProgressBadge(workProgress))
@@ -54,7 +54,7 @@
   const goalEnvelopeId = $derived(task.businessEnvelope?.goalId ?? null)
   const needsSplitAction = $derived(
     isDecompositionAction(sizePlan?.action) &&
-    recommendedChildren.length > 0 &&
+    plannedChildren.length > 0 &&
     createdChildren.length === 0,
   )
   const canCreateSplitChildren = $derived(
@@ -326,11 +326,11 @@
         </div>
       {/if}
 
-      {#if recommendedChildren.length > 0}
+      {#if plannedChildren.length > 0}
         <div>
           <h4>{createdChildren.length > 0 ? 'Child tasks' : 'Work to create'}</h4>
           <ul class="child-list">
-            {#each recommendedChildren as child, index (`${child.title ?? 'child'}-${index}`)}
+            {#each plannedChildren as child, index (`${child.title ?? 'child'}-${index}`)}
               <li>
                 {#if child.createdTaskId}
                   <a href={currentTaskHref(child.createdTaskId, projectId)} onclick={(event) => navigateTask(event, child.createdTaskId)}>
@@ -348,7 +348,7 @@
         </div>
       {/if}
 
-      {#if nestedWorkIds.length === 0 && blockingTaskIds.length === 0 && blockedTaskIds.length === 0 && recommendedChildren.length === 0 && usedPrimitives.length === 0 && provedPrimitives.length === 0}
+      {#if nestedWorkIds.length === 0 && blockingTaskIds.length === 0 && blockedTaskIds.length === 0 && plannedChildren.length === 0 && usedPrimitives.length === 0 && provedPrimitives.length === 0}
         <p class="muted">No linked tasks recorded.</p>
       {/if}
     </Stack>

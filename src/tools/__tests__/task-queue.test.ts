@@ -804,7 +804,7 @@ describe('updateTask', () => {
     expect(queue.tasks.find(task => task.id === 'child-audit-split-implement')?.hierarchy?.parentId).toBeUndefined()
     expect(queue.tasks.find(task => task.id === 'child-audit-split-verify')?.hierarchy?.parentId).toBeUndefined()
     expect(childAudit.sizePlan?.action).toBe('proceed_with_warning')
-    expect(childAudit.sizePlan?.reasons.at(-1)).toContain('already match existing sibling tasks')
+    expect(childAudit.sizePlan?.reasons.at(-1)).toContain('already matches existing sibling tasks')
     expect(childAudit.taskReadiness?.recommendation).toBe('ready')
     expect(childAudit.taskReadiness?.summary).toBe('This task is ready; sibling tasks already cover the split work.')
   })

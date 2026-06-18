@@ -756,7 +756,7 @@ describe('approveSpec', () => {
       'Implement the first independently verifiable replacement',
       'Verify and update the migration record',
     ])
-    expect(audit?.sizePlan?.reasons.at(-1)).toContain('already match existing sibling tasks')
+    expect(audit?.sizePlan?.reasons.at(-1)).toContain('already matches existing sibling tasks')
   })
 
   it('rewrites an approved parent that already has linked child tasks instead of keeping stale split-required copy', async () => {

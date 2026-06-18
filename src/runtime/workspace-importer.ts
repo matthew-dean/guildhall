@@ -1089,6 +1089,13 @@ export interface WorkspaceGoalsState {
   dismissedAt?: string
 }
 
+export interface WorkspaceImportSummary {
+  taskStatus: string | null
+  specPresent: boolean
+  approved: WorkspaceImportScopeSnapshot | null
+  detected: WorkspaceImportScopeSnapshot | null
+}
+
 function workspaceScopeSnapshotFromParsed(parsed: ParsedImport): WorkspaceImportScopeSnapshot {
   const taskIds = parsed.tasks
     .map(task => task.id.trim())
@@ -1208,6 +1215,76 @@ export function readWorkspaceGoalsStateSync(memoryDir: string): WorkspaceGoalsSt
     return parseWorkspaceGoalsState(raw)
   } catch {
     return null
+  }
+}
+
+export async function readWorkspaceImportSummary(input: {
+  memoryDir: string
+  projectPath: string
+  detectedDraft?: WorkspaceImportDraft
+}): Promise<WorkspaceImportSummary> {
+  const workspaceGoalsState = await readWorkspaceGoalsState(input.memoryDir)
+  const tasksPath = workspaceImportTasksPath(input.memoryDir)
+  let taskStatus: string | null = null
+  let importerTaskSpec = ''
+  let strictApprovedFromSpec: WorkspaceImportScopeSnapshot | null = null
+
+  try {
+    const raw = JSON.parse(await readManagedTextFile(tasksPath, 'utf-8')) as
+      | { tasks?: Array<Record<string, unknown>> }
+      | Array<Record<string, unknown>>
+    const list = Array.isArray(raw) ? raw : raw.tasks ?? []
+    const task = list.find(
+      entry => (entry as { id?: string }).id === WORKSPACE_IMPORT_TASK_ID,
+    ) as { status?: string; spec?: string } | undefined
+    if (task) {
+      taskStatus = task.status ?? null
+      if (typeof task.spec === 'string' && task.spec.trim().length > 0) {
+        importerTaskSpec = task.spec
+        const parsed = parseWorkspaceImport(task.spec)
+        const strictSummary = workspaceScopeSnapshotFromParsed(parsed)
+        if (
+          strictSummary.goalCount > 0 ||
+          strictSummary.taskCount > 0 ||
+          strictSummary.milestoneCount > 0
+        ) {
+          strictApprovedFromSpec = strictSummary
+        }
+      }
+    }
+  } catch {
+    taskStatus = taskStatus ?? null
+  }
+
+  const approvedFromSpec = strictApprovedFromSpec ?? (
+    importerTaskSpec ? summarizeWorkspaceImportSpec(importerTaskSpec) : null
+  )
+
+  const approved = workspaceGoalsState?.approved
+    ? {
+        goalCount: Math.max(workspaceGoalsState.approved.goalCount, approvedFromSpec?.goalCount ?? 0),
+        taskCount: Math.max(workspaceGoalsState.approved.taskCount, approvedFromSpec?.taskCount ?? 0),
+        milestoneCount: Math.max(workspaceGoalsState.approved.milestoneCount, approvedFromSpec?.milestoneCount ?? 0),
+        currentTaskCount: Math.max(workspaceGoalsState.approved.currentTaskCount, approvedFromSpec?.currentTaskCount ?? 0),
+        laterTaskCount: Math.max(workspaceGoalsState.approved.laterTaskCount, approvedFromSpec?.laterTaskCount ?? 0),
+        taskIds: [
+          ...new Set([
+            ...workspaceGoalsState.approved.taskIds,
+            ...(approvedFromSpec?.taskIds ?? []),
+          ]),
+        ],
+      }
+    : approvedFromSpec
+
+  const detected = workspaceGoalsState?.detected ?? (
+    input.detectedDraft ? workspaceScopeSnapshotFromDraft(input.detectedDraft) : null
+  )
+
+  return {
+    taskStatus,
+    specPresent: importerTaskSpec.trim().length > 0,
+    approved,
+    detected,
   }
 }
 

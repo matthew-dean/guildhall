@@ -405,16 +405,16 @@ export function materializeSplitChildren(
 ): { status: 'noop' | 'materialized' | 'already_represented'; childTaskIds: string[] } {
   const sizePlan = parent.sizePlan
   if (!sizePlan || !isMaterializableSplitAction(sizePlan.action)) return { status: 'noop', childTaskIds: [] }
-  const legacyRecommendations = sizePlan.recommendedChildren ?? []
-  const recommendations = legacyRecommendations.length > 0
-    ? legacyRecommendations
+  const savedChildPlans = sizePlan.recommendedChildren ?? []
+  const plannedChildren = savedChildPlans.length > 0
+    ? savedChildPlans
     : buildDecompositionChildDrafts({ task: parent })
-  if (recommendations.length === 0) return { status: 'noop', childTaskIds: [] }
-  const usesLegacyRecommendations = legacyRecommendations.length > 0
+  if (plannedChildren.length === 0) return { status: 'noop', childTaskIds: [] }
+  const usesSavedChildPlans = savedChildPlans.length > 0
   const splitLabel = legacySplitLabel(sizePlan.action)
   const splitNote = legacySplitNote(sizePlan.action)
 
-  const representedSplit = legacyRecommendations.length > 0
+  const representedSplit = savedChildPlans.length > 0
     ? settleAlreadyRepresentedSplitRecommendations(queue, parent, timestamp)
     : null
   if (representedSplit) {
@@ -422,26 +422,26 @@ export function materializeSplitChildren(
   }
 
   const existingChildIds = new Set(parent.hierarchy?.childIds ?? [])
-  const planned = recommendations.map((recommendation, index) => {
-    const existingById = recommendation.createdTaskId
-      ? queue.tasks.find((task) => task.id === recommendation.createdTaskId)
+  const planned = plannedChildren.map((childPlan, index) => {
+    const existingById = childPlan.createdTaskId
+      ? queue.tasks.find((task) => task.id === childPlan.createdTaskId)
       : undefined
     const existingByTitle = queue.tasks.find((task) =>
       task.id !== parent.id &&
       task.hierarchy?.parentId === parent.id &&
-      normalizeTaskTitle(task.title) === normalizeTaskTitle(recommendation.title),
+      normalizeTaskTitle(task.title) === normalizeTaskTitle(childPlan.title),
     )
     const task = existingById ?? existingByTitle ?? createSplitChildTask({
       parent,
-      title: recommendation.title,
-      reason: recommendation.reason,
-      suggestedDomain: recommendation.suggestedDomain,
+      title: childPlan.title,
+      reason: childPlan.reason,
+      suggestedDomain: childPlan.suggestedDomain,
       index,
       queue,
       timestamp,
     })
     if (!queue.tasks.some((candidate) => candidate.id === task.id)) queue.tasks.push(task)
-    if (usesLegacyRecommendations) recommendation.createdTaskId = task.id
+    if (usesSavedChildPlans) childPlan.createdTaskId = task.id
     task.hierarchy = {
       ...(task.hierarchy ?? {}),
       parentId: parent.id,
@@ -451,24 +451,24 @@ export function materializeSplitChildren(
     }
     attachInternalDeliveryStep(parent, task)
     existingChildIds.add(task.id)
-    return { recommendation, task }
+    return { childPlan, task }
   })
 
-  const titleToId = new Map(planned.map(({ recommendation, task }) => [
-    normalizeTaskTitle(recommendation.title),
+  const titleToId = new Map(planned.map(({ childPlan, task }) => [
+    normalizeTaskTitle(childPlan.title),
     task.id,
   ]))
   const workUnitIdToId = new Map<string, string>()
   const workUnits = parent.workUnitAnalysis?.units ?? []
-  planned.forEach(({ recommendation, task }, index) => {
+  planned.forEach(({ childPlan, task }, index) => {
     const matchingUnit =
-      workUnits[index]?.title === recommendation.title
+      workUnits[index]?.title === childPlan.title
         ? workUnits[index]
-        : workUnits.find((unit) => normalizeTaskTitle(unit.title) === normalizeTaskTitle(recommendation.title))
+        : workUnits.find((unit) => normalizeTaskTitle(unit.title) === normalizeTaskTitle(childPlan.title))
     if (matchingUnit?.id) workUnitIdToId.set(matchingUnit.id, task.id)
   })
-  for (const { recommendation, task } of planned) {
-    task.dependsOn = (recommendation.dependsOn ?? [])
+  for (const { childPlan, task } of planned) {
+    task.dependsOn = (childPlan.dependsOn ?? [])
       .map((dependency) => workUnitIdToId.get(dependency) ?? titleToId.get(normalizeTaskTitle(dependency)) ?? dependency)
       .filter((dependency, index, all) => dependency !== task.id && all.indexOf(dependency) === index)
     task.updatedAt = timestamp
@@ -485,7 +485,7 @@ export function materializeSplitChildren(
     childTaskIds: planned.map(({ task }) => task.id),
     timestamp,
     actor: 'task-sizing',
-    rationale: 'Legacy split sizing was materialized into linked child work.',
+    rationale: 'Planned decomposition was materialized into linked child work.',
   })
   settleMaterializedSplitParent({
     parent,
@@ -548,16 +548,16 @@ export function settleAlreadyRepresentedSplitRecommendations(
   parent: TaskRecord,
   timestamp: string,
 ): { childTaskIds: string[] } | null {
-  const recommendations = parent.sizePlan?.recommendedChildren ?? []
-  const existingSiblingIds = splitRecommendationsAlreadyRepresentedBySiblings(queue, parent, recommendations)
+  const plannedChildren = parent.sizePlan?.recommendedChildren ?? []
+  const existingSiblingIds = splitRecommendationsAlreadyRepresentedBySiblings(queue, parent, plannedChildren)
   if (!existingSiblingIds) return null
-  removeDuplicateNestedSplitChildIds(queue, parent, recommendations)
+  removeDuplicateNestedSplitChildIds(queue, parent, plannedChildren)
   settleMaterializedSplitParent({
     parent,
     timestamp,
     recommendation: 'ready',
     summary: 'This task is ready; sibling tasks already cover the split work.',
-    reason: 'Split recommendations already match existing sibling tasks under the same parent; do not split this task again unless the child structure changes.',
+    reason: 'Planned child work already matches existing sibling tasks under the same parent; do not split this task again unless the child structure changes.',
     childTaskIds: existingSiblingIds,
   })
   return { childTaskIds: existingSiblingIds }
@@ -568,32 +568,32 @@ export function settleMaterializedSplitReadiness(
   parent: TaskRecord,
   timestamp: string,
 ): { childTaskIds: string[] } | null {
-  const recommendations = parent.sizePlan?.recommendedChildren ?? []
-  const representedIds = recommendations.map(recommendation => {
-    if (recommendation.createdTaskId && queue.tasks.some(task => task.id === recommendation.createdTaskId)) {
-      return recommendation.createdTaskId
+  const plannedChildren = parent.sizePlan?.recommendedChildren ?? []
+  const representedIds = plannedChildren.map(childPlan => {
+    if (childPlan.createdTaskId && queue.tasks.some(task => task.id === childPlan.createdTaskId)) {
+      return childPlan.createdTaskId
     }
     return queue.tasks.find(task =>
       task.hierarchy?.parentId === parent.id &&
-      normalizeTaskTitle(task.title) === normalizeTaskTitle(recommendation.title),
+      normalizeTaskTitle(task.title) === normalizeTaskTitle(childPlan.title),
     )?.id
   })
   const linkedChildIds = linkedChildTaskIds(queue, parent)
-  const hasExactRecommendationCoverage = recommendations.length > 0 && representedIds.every(Boolean)
+  const hasExactRecommendationCoverage = plannedChildren.length > 0 && representedIds.every(Boolean)
   const representedChildIds = hasExactRecommendationCoverage
     ? representedIds.filter((id): id is string => Boolean(id))
     : linkedChildIds
   if (representedChildIds.length === 0) return null
   if (hasExactRecommendationCoverage) {
-    recommendations.forEach((recommendation, index) => {
-      recommendation.createdTaskId = representedChildIds[index]
+    plannedChildren.forEach((childPlan, index) => {
+      childPlan.createdTaskId = representedChildIds[index]
     })
   } else if (parent.sizePlan && isLegacySplitAction(parent.sizePlan.action)) {
     parent.sizePlan.recommendedChildren = representedChildIds.map((childTaskId) => {
       const child = queue.tasks.find(task => task.id === childTaskId)
       return {
         title: child?.title ?? childTaskId,
-        reason: 'Existing linked child task represents the parent split boundary.',
+        reason: 'Existing linked child task represents the parent decomposition boundary.',
         dependsOn: child?.dependsOn ?? [],
         suggestedDomain: child?.domain,
         createdTaskId: childTaskId,
@@ -602,7 +602,7 @@ export function settleMaterializedSplitReadiness(
   }
   const reason = hasExactRecommendationCoverage
     ? 'Split has already been materialized into linked child tasks; do not split this parent again unless the child structure changes.'
-    : 'Linked child tasks already represent this parent split; reconcile child scope instead of splitting this parent again.'
+    : 'Linked child tasks already represent this parent decomposition boundary; reconcile child scope instead of splitting this parent again.'
   settleMaterializedSplitParent({
     parent,
     timestamp,
