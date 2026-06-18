@@ -12108,6 +12108,60 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-06-18T04:55:47Z - Preserved imported project evidence when shaping
+Narrative Harness drafts into briefs/specs.
+
+- User job: when Narrative Harness imports documented MVP work and the owner
+  starts shaping one of those imported drafts, Guildhall should begin from the
+  actual documented capability, assumptions, and cited source material instead
+  of a generic placeholder transcript that forces the spec agent to re-infer
+  the project from scratch.
+- Root cause:
+  - The first import-truth fix stopped Overview/API from dropping current and
+    later work during workspace import, but imported tasks still lost most of
+    their source truth at the moment shaping began.
+  - `promoteImportDraftToExploring()` always seeded the exploring transcript
+    with the same generic sentence, even when the imported task already carried
+    importer notes, assumptions, missing-information hints, and `import:` doc
+    evidence refs.
+  - Planning-doc decomposition inventory imports also attached only the
+    inventory document itself, so shaped tasks could miss the underlying spec
+    file they were actually about.
+- Fix:
+  - `src/runtime/import-drafts.ts` now builds an `Imported draft context`
+    transcript block from the imported task itself: title, current draft,
+    assumptions, known missing information, recent importer notes, and short
+    excerpts from referenced `import:` evidence files.
+  - The shaping seed now explicitly instructs the spec agent to preserve the
+    documented intent and ask only the minimum clarifying questions needed when
+    the cited sources still leave the boundary unclear.
+  - `src/runtime/workspace-import/sources/planning-docs.ts` now resolves a
+    related spec Markdown file when decomposition inventory bullets mention one,
+    and stores both the inventory file and the spec file as references so the
+    imported task carries the right source trail before shaping starts.
+- Live installed-app proof:
+  - Rebuilt and reinstalled the current app (`pnpm build`; `pnpm dev:install`;
+    `guildhall stop`; `guildhall start`); `/api/stale-server` returned
+    `stale:false`.
+  - `POST /api/project/task/task-import-dh34s5/shape-draft?projectId=narrative-harness`
+    returned `{ "ok": true, "status": "exploring" }`.
+  - `GET /api/project/task/task-import-dh34s5?projectId=narrative-harness`
+    then returned an exploring transcript beginning with `Imported draft
+    context`, including the task title `Add the first tiny fiction fixture and
+    human-authored expected records.`, importer note text, the cited file
+    `/Users/matthew/git/oss/narrative-harness/docs/harness/implementation-roadmap.md`,
+    and an excerpt from that roadmap instead of the old generic placeholder.
+  - Earlier-shaped `task-import-9s8tkc` still shows the old generic transcript,
+    which is expected because the fix changes new shaping runs rather than
+    mutating historical transcripts.
+- Verification:
+  - `pnpm vitest run src/runtime/__tests__/workspace-importer.test.ts -t "detects stage deliverables, current milestone tasks, and decomposition inventory recommendations from prose docs"`
+  - `pnpm vitest run src/runtime/__tests__/serve-task-endpoints.test.ts -t "promotes an import draft into exploring when shaping starts"`
+  - `pnpm vitest run src/runtime/workspace-import/__tests__/hypothesis.test.ts src/runtime/__tests__/project-orientation-spine.test.ts`
+  - `pnpm vitest run src/runtime/__tests__/serve-settings.test.ts --testNamePattern='workspace import|import_drafts_waiting|under-scoped|orientation'`
+
+source: codex:narrative-harness-import-shaping-truth-2026-06-17
+
 2026-06-18T00:59:00Z - Completed the unified Releases/current-work model proof.
 
 - Work id: `codex:unified-releases-model-2026-06-17`.

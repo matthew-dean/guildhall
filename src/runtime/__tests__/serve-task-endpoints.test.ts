@@ -2159,9 +2159,40 @@ describe('POST /api/project/task/:id/resume', () => {
   })
 
   it('promotes an import draft into exploring when shaping starts', async () => {
+    await fs.mkdir(path.join(tmpDir, 'docs/specs'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'docs/specs/link-editor.md'),
+      [
+        '# Link editor',
+        '',
+        'The editor should allow inline link editing with explicit URL and label controls.',
+        'Writers should not need to leave the current surface to adjust a link.',
+      ].join('\n'),
+      'utf8',
+    )
     await seedTask('task-1', {
       status: 'import_draft',
+      title: 'Knit: add link editor controls',
+      description: 'Draft imported from planning docs.',
       acceptanceCriteria: [],
+      requestIntake: {
+        intent: 'spec_only',
+        recommendedNextAction: 'draft_spec',
+        assumptions: ['The planning doc still matches the desired editor flow.'],
+        missingInformation: ['Confirm whether inline editing also needs keyboard shortcuts.'],
+        evidenceRefs: [`import:${path.join(tmpDir, 'docs/specs/link-editor.md')}`],
+        componentStack: [],
+        pressureTestSummary: {
+          systemOwned: true,
+          degree: 'guided',
+          qualityBar: 'Imported draft shaping should stay grounded in the cited planning docs.',
+          ownerQuestionPolicy: 'Only ask when the cited docs still leave the scope boundary unclear.',
+          checks: [],
+        },
+        clarifyingQuestions: [],
+        createdAt: new Date().toISOString(),
+        createdBy: 'workspace-importer',
+      },
       notes: [
         {
           agentId: 'workspace-importer',
@@ -2186,7 +2217,11 @@ describe('POST /api/project/task/:id/resume', () => {
     expect(queue.tasks[0]!.status).toBe('exploring')
     expect(queue.tasks[0]!.notes?.at(-1)?.role).toBe('shaping-request')
     const transcript = (await readExploringTranscript({ memoryDir, taskId: 'task-1' })).content ?? ''
-    expect(transcript).toMatch(/Imported from project notes/)
+    expect(transcript).toMatch(/Imported draft context/)
+    expect(transcript).toMatch(/Knit: add link editor controls/)
+    expect(transcript).toMatch(/The planning doc still matches the desired editor flow/)
+    expect(transcript).toMatch(/docs\/specs\/link-editor\.md/)
+    expect(transcript).toMatch(/allow inline link editing with explicit URL and label controls/i)
 
     const detailRes = await app.fetch(new Request(projectUrl('/api/project/task/task-1')))
     expect(detailRes.status).toBe(200)

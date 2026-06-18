@@ -786,6 +786,7 @@ tasks:
 
   it('detects stage deliverables, current milestone tasks, and decomposition inventory recommendations from prose docs', async () => {
     await fs.mkdir(path.join(tmpDir, 'docs/harness'), { recursive: true })
+    await fs.mkdir(path.join(tmpDir, 'docs/specs'), { recursive: true })
     await fs.writeFile(
       path.join(tmpDir, 'docs/harness/implementation-roadmap.md'),
       [
@@ -825,6 +826,15 @@ tasks:
       ].join('\n'),
       'utf-8',
     )
+    await fs.writeFile(
+      path.join(tmpDir, 'docs/specs/dialogue-and-character-voice.md'),
+      [
+        '# Dialogue And Character Voice',
+        '',
+        'Protect distinct speaking patterns while preserving the author voice envelope.',
+      ].join('\n'),
+      'utf-8',
+    )
 
     const inventory = await detectWorkspaceSignals({ projectPath: tmpDir })
     const draft = formWorkspaceHypothesis(inventory)
@@ -839,6 +849,10 @@ tasks:
     expect(draft.tasks.find((task) => task.title === 'Implement dialogue-and-character-voice reviewer lane')).toMatchObject({
       scope: 'later',
       domain: 'coherence',
+      references: expect.arrayContaining([
+        expect.stringContaining('docs/harness/remaining-spec-decomposition-inventory.md'),
+        expect.stringContaining('docs/specs/dialogue-and-character-voice.md'),
+      ]),
     })
     expect(draft.tasks.map((task) => task.title)).not.toEqual(
       expect.arrayContaining([

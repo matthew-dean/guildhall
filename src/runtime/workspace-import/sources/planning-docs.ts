@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
-import { join, basename, isAbsolute, relative } from 'node:path'
+import path, { join, basename, isAbsolute, relative } from 'node:path'
 import type { TaskSource, WorkspaceSignal, TaskSourceContext } from '../types.js'
 
 type Exec = NonNullable<TaskSourceContext['exec']>
@@ -86,6 +86,43 @@ function cleanHeading(text: string): string {
 
 function cleanSpecTitle(text: string): string {
   return cleanHeading(text).replace(/^spec:\s*/i, '').trim()
+}
+
+function markdownFilenameFromHeading(text: string | null): string | null {
+  if (!text) return null
+  const codeMatch = text.match(/`([^`]+\.md)`/i)
+  if (codeMatch?.[1]) return codeMatch[1]
+  const plainMatch = text.match(/([a-z0-9][a-z0-9-]*\.md)\b/i)
+  return plainMatch?.[1] ?? null
+}
+
+function relatedSpecReference(
+  projectPath: string,
+  sourceRel: string,
+  headingRaw: string | null,
+  availableFiles: ReadonlySet<string>,
+): string | null {
+  const fileName = markdownFilenameFromHeading(headingRaw)
+  if (!fileName) return null
+  const normalized = fileName.replaceAll('\\', '/')
+  const preferredCandidates = [
+    `docs/specs/${normalized}`,
+    `specs/${normalized}`,
+    path.join(path.dirname(sourceRel), normalized).replaceAll('\\', '/'),
+  ]
+  for (const candidate of preferredCandidates) {
+    if (availableFiles.has(candidate)) {
+      return join(projectPath, candidate)
+    }
+  }
+  const basenameMatches = [...availableFiles]
+    .filter(candidate => path.basename(candidate) === normalized)
+    .sort((left, right) => {
+      const leftScore = Number(left.includes('/specs/'))
+      const rightScore = Number(right.includes('/specs/'))
+      return rightScore - leftScore || left.localeCompare(right)
+    })
+  return basenameMatches[0] ? join(projectPath, basenameMatches[0]) : null
 }
 
 function logicalMarkdownLines(raw: string): string[] {
@@ -195,6 +232,7 @@ export const planningDocsSource: TaskSource = {
           .filter((rel) => likelyRelevantFile(rel))
       : listMarkdownFiles(projectPath)
     const multiProjectRoots = detectMultiProjectRoots(relPaths)
+    const availableFiles = new Set(relPaths)
 
     const fileContents = new Map<string, string>()
     for (const rel of relPaths) {
@@ -215,9 +253,11 @@ export const planningDocsSource: TaskSource = {
       const fileBase = basename(rel)
       const domainHint = inferDomainHint(rel, multiProjectRoots)
       let currentSection: string | null = null
+      let currentSectionRaw: string | null = null
       let currentLabel: 'deliverables' | 'success_gates' | 'do_not_start' | null = null
       let pendingRecommendedTaskTitle: string | null = null
       let pendingRecommendedTaskSection: string | null = null
+      let pendingRecommendedTaskSectionRaw: string | null = null
       let currentRecommendedStageAlignment: string | null = null
       let currentRecommendedDomain: string | null = null
       const bulletStack: Array<{ indent: number; title: string; grouping: boolean }> = []
@@ -231,12 +271,22 @@ export const planningDocsSource: TaskSource = {
             currentMilestoneStage && normalizedAlignment && normalizedAlignment !== currentMilestoneStage
               ? 'later'
               : 'current'
+          const references = [abs]
+          const relatedSpec = relatedSpecReference(
+            projectPath,
+            rel,
+            pendingRecommendedTaskSectionRaw,
+            availableFiles,
+          )
+          if (relatedSpec && !references.includes(relatedSpec)) {
+            references.push(relatedSpec)
+          }
           signals.push({
             source: 'planning-docs',
             kind: 'open_work',
             title,
             evidence: `${rel}: ${pendingRecommendedTaskSection ?? currentSection ?? title}`.slice(0, 240),
-            references: [abs],
+            references,
             ...(currentRecommendedDomain ? { domainHint: currentRecommendedDomain } : domainHint ? { domainHint } : {}),
             scopeHint,
             confidence: 'high',
@@ -271,6 +321,7 @@ export const planningDocsSource: TaskSource = {
         if (heading) {
           flushPendingRecommendedTask()
           currentSection = cleanHeading(heading[2]!)
+          currentSectionRaw = heading[2]!.trim()
           currentLabel = null
           bulletStack.length = 0
           const kind = headingSignalKind(fileBase, rel, currentSection, currentSection)
@@ -348,6 +399,7 @@ export const planningDocsSource: TaskSource = {
         if (recommendedTask && currentSection) {
           pendingRecommendedTaskTitle = cleanHeading(recommendedTask[1]!)
           pendingRecommendedTaskSection = currentSection
+          pendingRecommendedTaskSectionRaw = currentSectionRaw
           continue
         }
 
