@@ -341,12 +341,11 @@ function stageDeliverableSignal(
   currentSection: string,
   currentMilestoneStage: string | null,
 ): { kind: WorkspaceSignal['kind']; scopeHint?: WorkspaceSignal['scopeHint']; role?: WorkspaceSignal['role'] } {
-  const stageNumber = parseStageOrdinal(currentSection)
-  const currentStageNumber = parseStageOrdinal(currentMilestoneStage)
-  if (stageNumber != null && currentStageNumber != null && stageNumber < currentStageNumber) {
-    return { kind: 'context', role: 'capability' }
+  return {
+    kind: 'context',
+    role: 'capability',
+    scopeHint: scopeHintForStage(currentSection, currentMilestoneStage),
   }
-  return { kind: 'open_work', scopeHint: scopeHintForStage(currentSection, currentMilestoneStage) }
 }
 
 export const planningDocsSource: TaskSource = {
@@ -622,6 +621,8 @@ export const planningDocsSource: TaskSource = {
                 ...(domainHint ? { domainHint } : {}),
                 confidence: 'medium',
               })
+              bulletStack.push({ indent, title, grouping: groupingChildrenAreTasks })
+              continue
             }
             const kind: WorkspaceSignal['kind'] = stageScopedSignal?.kind ?? (
               isProjectStateCurrentFocus(fileBase, currentSection) ||

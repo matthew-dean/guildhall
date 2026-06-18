@@ -79,10 +79,7 @@ const workGraphDomainAdapter = genericWorkGraphDomainAdapter
 
 export function planEvidenceWorkGraph(input: EvidenceWorkGraphInput): EvidenceWorkGraphPlan {
   const currentMilestoneStage = detectCurrentMilestoneStage(input.sources)
-  const suppressRoadmapStageDeliverables = Boolean(
-    currentMilestoneStage &&
-    input.sources.some(source => extractRecommendedTaskSeeds(source).length > 0),
-  )
+  const suppressRoadmapStageDeliverables = true
   const suppressedTaskTitles = suppressRoadmapStageDeliverables
     ? input.sources.flatMap(source => extractRoadmapStageDeliverableSeeds(source).map(seed => seed.deliverable))
     : []

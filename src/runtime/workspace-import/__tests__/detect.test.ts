@@ -414,7 +414,7 @@ describe('planningDocsSource', () => {
     expect(sigs.filter((signal) => signal.kind === 'open_work' || signal.kind === 'milestone')).toEqual([])
   })
 
-  it('marks roadmap deliverables from later stages as deferred when the current milestone is explicit', async () => {
+  it('keeps roadmap deliverables as capability context even when the current milestone is explicit', async () => {
     mkdirSync(join(dir, 'docs', 'harness'), { recursive: true })
     writeFileSync(
       join(dir, 'docs', 'harness', 'implementation-roadmap.md'),
@@ -450,24 +450,46 @@ The next milestone is Stage 1: Fixture And Evaluation Harness.
 
     expect(sigs).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        kind: 'open_work',
+        kind: 'context',
+        role: 'capability',
         title: 'fixture directory shape for at least one small story fixture',
         scopeHint: 'current',
       }),
       expect.objectContaining({
-        kind: 'open_work',
+        kind: 'context',
+        role: 'capability',
         title: 'typed fixture and expected-record contracts',
         scopeHint: 'current',
       }),
       expect.objectContaining({
-        kind: 'open_work',
+        kind: 'context',
+        role: 'capability',
         title: 'Mastra workflow for the prototype iteration loop',
         scopeHint: 'later',
       }),
       expect.objectContaining({
-        kind: 'open_work',
+        kind: 'context',
+        role: 'capability',
         title: 'specialist editor agent calls for the first review lanes',
         scopeHint: 'later',
+      }),
+    ]))
+    expect(sigs).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'open_work',
+        title: 'fixture directory shape for at least one small story fixture',
+      }),
+      expect.objectContaining({
+        kind: 'open_work',
+        title: 'typed fixture and expected-record contracts',
+      }),
+      expect.objectContaining({
+        kind: 'open_work',
+        title: 'Mastra workflow for the prototype iteration loop',
+      }),
+      expect.objectContaining({
+        kind: 'open_work',
+        title: 'specialist editor agent calls for the first review lanes',
       }),
     ]))
   })
@@ -519,12 +541,14 @@ The next milestone is Stage 1: Fixture And Evaluation Harness.
         title: 'Add the first tiny fiction fixture and human-authored expected records.',
       }),
       expect.objectContaining({
-        kind: 'open_work',
+        kind: 'context',
+        role: 'capability',
         title: 'Mastra workflow for the prototype iteration loop',
         scopeHint: 'later',
       }),
       expect.objectContaining({
-        kind: 'open_work',
+        kind: 'context',
+        role: 'capability',
         title: 'specialist editor agent calls for the first review lanes',
         scopeHint: 'later',
       }),
@@ -547,6 +571,14 @@ The next milestone is Stage 1: Fixture And Evaluation Harness.
       expect.objectContaining({
         kind: 'open_work',
         title: 'typed fixture and expected-record contracts',
+      }),
+      expect.objectContaining({
+        kind: 'open_work',
+        title: 'Mastra workflow for the prototype iteration loop',
+      }),
+      expect.objectContaining({
+        kind: 'open_work',
+        title: 'specialist editor agent calls for the first review lanes',
       }),
     ]))
   })
