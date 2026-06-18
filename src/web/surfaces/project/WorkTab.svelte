@@ -26,7 +26,7 @@
   import { isCompleteForWorkerHandoff, needsWorkerHandoffSpecCleanup } from '../../lib/task-state.js'
   import { taskStagePresentation, type TaskPresentationTone } from '../../lib/task-presentation.js'
   import { buildWorkHierarchy, nestedWorkCountLabel, workKindLabel } from '../../lib/work-hierarchy.js'
-  import { deliveryProgressBadge } from '../../lib/work-progress-display.js'
+  import { deliveryProgressBadge, type DeliveryProgressBadge } from '../../lib/work-progress-display.js'
   import { taskDisplayLabel, taskSourceQuestion } from '../../../shared/task-display-label.js'
   import type { ProjectDetail, Task } from '../../lib/types.js'
   import PlannerTab from './PlannerTab.svelte'
@@ -313,7 +313,25 @@
     return id ? detail.workProgress?.byTaskId?.[id] : null
   }
 
-  function taskDeliveryBadge(task: Task) {
+  function semanticUnitCount(task: Task): number {
+    return task.workUnitAnalysis?.units?.length ?? 0
+  }
+
+  function dependencyLabel(taskId: string): string {
+    const dependency = tasks.find(candidate => candidate.id === taskId)
+    return dependency ? taskDisplayLabel(dependency) : friendlyTaskId(taskId)
+  }
+
+  function taskDeliveryBadge(task: Task): DeliveryProgressBadge | null {
+    const childCount = hierarchy.byId.get(task.id)?.childIds.length ?? 0
+    const semanticUnits = semanticUnitCount(task)
+    if (childCount === 0 && semanticUnits > 0 && isPlanningTask(task)) {
+      return {
+        label: `${semanticUnits} planned ${semanticUnits === 1 ? 'unit' : 'units'}`,
+        title: `${semanticUnits} semantic work ${semanticUnits === 1 ? 'unit is' : 'units are'} already shaped for this task before proof steps begin.`,
+        tone: 'neutral',
+      }
+    }
     return deliveryProgressBadge(taskProgress(task))
   }
 
@@ -463,7 +481,11 @@
       return `${count} requirements; no contained work or decomposition proposal yet.`
     }
     const blockers = unmetDependencyIds(task, tasks)
-    if (blockers.length > 0) return `Blocked by ${blockers.map(friendlyTaskId).join(', ')}`
+    if (blockers.length > 0) return `Blocked by ${blockers.map(dependencyLabel).join(', ')}`
+    const semanticUnits = semanticUnitCount(task)
+    if (childCount === 0 && semanticUnits > 0 && isPlanningTask(task)) {
+      return `${semanticUnits} planned work ${semanticUnits === 1 ? 'unit' : 'units'} already shaped.`
+    }
     if (task.workKind) return workKindLabel(task.workKind)
     if (task.blockReason) return friendlyRuntimeMessage(task.blockReason)
     if (task.terminalSummary?.headline) return task.terminalSummary.headline

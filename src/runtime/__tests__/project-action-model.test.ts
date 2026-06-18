@@ -55,8 +55,12 @@ describe('buildProjectActionModel', () => {
       startReadiness: {
         canStart: false,
         code: 'no_unattended_progress',
-        message: 'One task needs a clearer brief and acceptance criteria before Guildhall can build unattended.',
-        actionHref: '/work',
+        message: '"Clean up the brief" needs a clearer brief before unattended work can run.',
+        actionHref: '/work?task=task-brief',
+        focusTaskId: 'task-brief',
+        focusTaskTitle: 'Clean up the brief',
+        focusKind: 'brief_cleanup',
+        count: 1,
       },
       tasks: [{
         id: 'task-brief',
@@ -71,10 +75,10 @@ describe('buildProjectActionModel', () => {
     })
     expect(briefCleanup.primaryAction).toMatchObject({
       source: 'start_readiness',
-      label: 'Needs brief cleanup',
-      detail: 'One task needs a clearer brief and acceptance criteria before Guildhall can build unattended.',
+      label: 'Clean up the brief',
+      detail: '"Clean up the brief" needs a clearer brief before unattended work can run.',
       buttonLabel: 'Review brief',
-      href: '/work',
+      href: '/work?task=task-brief',
       tone: 'warn',
     })
     expect(briefCleanup.secondaryActions[0]).toMatchObject({
@@ -88,8 +92,12 @@ describe('buildProjectActionModel', () => {
       startReadiness: {
         canStart: false,
         code: 'no_unattended_progress',
-        message: '2 specs are waiting for review before starting.',
+        message: '2 specs are waiting for review before work can start. Start with "Continue drafted spec work".',
         actionHref: '/thread?thread=task%3Atask-spec-a',
+        focusTaskId: 'task-spec-a',
+        focusTaskTitle: 'Continue drafted spec work',
+        focusKind: 'spec_review',
+        count: 2,
       },
       tasks: [],
       thread: { turns: [], activeTurnId: null },
@@ -97,11 +105,15 @@ describe('buildProjectActionModel', () => {
     })
     expect(specReview.primaryAction).toMatchObject({
       source: 'start_readiness',
-      label: 'Review waiting specs',
-      detail: '2 specs are waiting for review before starting.',
+      label: 'Continue drafted spec work',
+      detail: '2 specs are waiting for review before work can start. Start with "Continue drafted spec work".',
       buttonLabel: 'Review next spec',
       href: '/thread?thread=task%3Atask-spec-a',
       tone: 'warn',
+    })
+    expect(specReview.runControl).toMatchObject({
+      label: 'Review needed',
+      startEnabled: false,
     })
 
     const provider = buildProjectActionModel({

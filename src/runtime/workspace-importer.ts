@@ -1911,14 +1911,29 @@ function cleanImportedMissingInformation(items: readonly string[]): string[] {
 }
 
 function importedTaskLooksContractDriven(task: MaterializedImportTask): boolean {
-  return /\b(schema|schemas|trace|evaluation|fixture|expected-record|prototype-run|record contract|typed?\b|types)\b/i.test(task.title)
+  return /\b(schema|schemas|contract|contracts|typed?\b|types)\b/i.test(task.title)
+}
+
+function importedPrototypeTaskKind(
+  task: MaterializedImportTask,
+): 'fixture' | 'runner' | 'evaluation' | 'debug_report' | 'schema_prune' | null {
+  const title = task.title.trim()
+  if (/^add the first tiny fiction fixture and human-authored expected records\.?$/i.test(title)) return 'fixture'
+  if (/\bno-ui runner\b/i.test(title) || /\bbuilds a packet from fixture records\b/i.test(title)) return 'runner'
+  if (/\bdeterministic evaluation output\b/i.test(title)) return 'evaluation'
+  if (/\bdebug report\b/i.test(title)) return 'debug_report'
+  if (/\bnarrow the mvp story-memory schema\b/i.test(title)) return 'schema_prune'
+  return null
 }
 
 function importedTaskLooksReviewerLane(
   task: MaterializedImportTask,
   evidenceDetail: ImportedEvidenceDetail,
 ): boolean {
-  return /\breviewer lane\b/i.test(task.title) || evidenceDetail.reviewQuestions.length > 0
+  return /\breviewer lane\b/i.test(task.title) || (
+    evidenceDetail.reviewQuestions.length > 0 &&
+    (task.domain === 'coherence' || /\breviewer\b/i.test(task.title))
+  )
 }
 
 function importedTaskLooksWorkflowDriven(
@@ -1938,11 +1953,12 @@ function shouldDeriveImportedAcceptanceCriteria(
   evidenceDetail?: ImportedEvidenceDetail,
 ): boolean {
   if (!evidenceDetail) return false
+  if (importedPrototypeTaskKind(task)) return true
   const ids = new Set(current.map(criterion => criterion.id))
   if (!ids.has('source-implementation')) return false
+  if (importedTaskLooksWorkflowDriven(task, evidenceDetail)) return true
   if (importedTaskLooksContractDriven(task) && evidenceDetail.contractNames.length > 0) return true
   if (importedTaskLooksReviewerLane(task, evidenceDetail)) return true
-  if (importedTaskLooksWorkflowDriven(task, evidenceDetail)) return true
   return false
 }
 
@@ -1950,16 +1966,138 @@ function deriveImportedAcceptanceCriteria(
   task: MaterializedImportTask,
   evidenceDetail: ImportedEvidenceDetail,
 ): Task['acceptanceCriteria'] {
-  if (importedTaskLooksContractDriven(task)) {
-    return deriveContractDrivenAcceptanceCriteria(task, evidenceDetail)
+  const prototypeTaskKind = importedPrototypeTaskKind(task)
+  if (prototypeTaskKind) {
+    return derivePrototypeTaskAcceptanceCriteria(task, evidenceDetail, prototypeTaskKind)
   }
   if (importedTaskLooksWorkflowDriven(task, evidenceDetail)) {
     return deriveWorkflowAcceptanceCriteria(task, evidenceDetail)
+  }
+  if (importedTaskLooksContractDriven(task)) {
+    return deriveContractDrivenAcceptanceCriteria(task, evidenceDetail)
   }
   if (importedTaskLooksReviewerLane(task, evidenceDetail)) {
     return deriveReviewerLaneAcceptanceCriteria(task, evidenceDetail)
   }
   return materializedAcceptanceCriteria({ ...task, acceptanceCriteria: task.acceptanceCriteria?.filter(criterion => criterion.id !== 'source-implementation') }, undefined)
+}
+
+function derivePrototypeTaskAcceptanceCriteria(
+  task: MaterializedImportTask,
+  evidenceDetail: ImportedEvidenceDetail,
+  kind: NonNullable<ReturnType<typeof importedPrototypeTaskKind>>,
+): Task['acceptanceCriteria'] {
+  const proofCommand = firstImportedProofCommand(task)
+  switch (kind) {
+    case 'fixture':
+      return [
+        {
+          id: 'fixture-shape',
+          description: 'The fixture can represent manuscript text, book brief, author profile, project notes, expected records, and author decisions.',
+          scenario: 'Load the first bounded story fixture.',
+          expectation: 'The fixture shape is rich enough to drive repeated no-UI packet tests without ad hoc side inputs.',
+          verifiedBy: 'review',
+          met: false,
+        },
+        {
+          id: 'ground-truth-records',
+          description: 'Expected records are human-authored, stable, and reusable across repeated fixture runs.',
+          scenario: 'Compare one run against the fixture ground truth.',
+          expectation: 'Ground truth records express the intended story facts, constraints, and expected findings for the run.',
+          verifiedBy: 'review',
+          met: false,
+        },
+        deterministicImportedCriterion(task, proofCommand, 'The fixture and expected records have deterministic proof in the no-UI harness.'),
+      ]
+    case 'runner':
+      return [
+        {
+          id: 'runner-flow',
+          description: 'The runner ingests a fixture, builds records, runs a packet, and saves the run output.',
+          scenario: 'Execute one bounded fixture round through the harness.',
+          expectation: 'The run leaves a reproducible output bundle instead of manual one-off inspection.',
+          verifiedBy: 'review',
+          met: false,
+        },
+        {
+          id: 'headless-boundary',
+          description: 'The harness run works without a frontend and stays inside the no-UI prototype boundary.',
+          scenario: 'Run the harness from local commands only.',
+          expectation: 'The task proves packet execution without depending on UI/editor work.',
+          verifiedBy: 'review',
+          met: false,
+        },
+        deterministicImportedCriterion(task, proofCommand, 'The no-UI runner has deterministic proof over a bounded fixture.'),
+      ]
+    case 'evaluation':
+      return [
+        {
+          id: 'evaluation-categories',
+          description: 'Evaluation output distinguishes missing context, noisy context, stale context, useful context, schema mismatch, and model behavior.',
+          scenario: 'Inspect one failed and one successful fixture run.',
+          expectation: 'Failures are classified precisely enough to explain what kind of mistake happened.',
+          verifiedBy: 'review',
+          met: false,
+        },
+        {
+          id: 'stable-report-shape',
+          description: 'The evaluation report shape is deterministic and comparable across repeated runs.',
+          scenario: 'Compare repeated evaluation output for the same fixture.',
+          expectation: 'The report can be used to compare packet strategies and fixture revisions over time.',
+          verifiedBy: 'review',
+          met: false,
+        },
+        deterministicImportedCriterion(task, proofCommand, 'Evaluation output has deterministic proof over the bounded fixture set.'),
+      ]
+    case 'debug_report':
+      return [
+        {
+          id: 'trace-spine',
+          description: 'The debug report connects the run summary, packet, context receipts, and trace events into one reviewable spine.',
+          scenario: 'Open the debug report for one bounded fixture run.',
+          expectation: 'The report makes it obvious where a surprising result came from.',
+          verifiedBy: 'review',
+          met: false,
+        },
+        {
+          id: 'context-accounting',
+          description: 'The debug report shows why context was included, omitted, retrieved, or marked stale.',
+          scenario: 'Inspect packet/context accounting in one run report.',
+          expectation: 'The report explains context decisions rather than only showing final output.',
+          verifiedBy: 'review',
+          met: false,
+        },
+        {
+          id: 'privacy-boundary',
+          description: 'Debug traces respect the same privacy boundary as packets and redact unsafe detail when needed.',
+          scenario: 'Review a run that includes private/global/session author material.',
+          expectation: 'Traceability does not leak context the packet rules would not allow.',
+          verifiedBy: 'review',
+          met: false,
+        },
+        deterministicImportedCriterion(task, proofCommand, 'The debug report has deterministic proof over a bounded fixture run.'),
+      ]
+    case 'schema_prune':
+      return [
+        {
+          id: 'mvp-boundary-review',
+          description: 'The first run is used to judge which schema fields are truly needed for the MVP contract boundary.',
+          scenario: 'Compare the first run output against the MVP boundary questions.',
+          expectation: 'Fields that do not help answer the MVP questions are deferred instead of silently kept.',
+          verifiedBy: 'review',
+          met: false,
+        },
+        {
+          id: 'schema-pruning-record',
+          description: 'Schema narrowing records which fields stay in the MVP, which move to fixture metadata, and which remain future follow-up.',
+          scenario: 'Review the schema-pruning change after the first proof run.',
+          expectation: 'The pruning decision is explicit and tied back to fixture evidence.',
+          verifiedBy: 'review',
+          met: false,
+        },
+        deterministicImportedCriterion(task, proofCommand, 'Schema narrowing has deterministic proof tied to the first bounded run.'),
+      ]
+  }
 }
 
 function deriveContractDrivenAcceptanceCriteria(
@@ -2248,8 +2386,86 @@ function materializedProofPaths(
 ): Task['proofPaths'] {
   const current = task.proofPaths ? [...task.proofPaths] : []
   if (!evidenceDetail || current.length === 0) return current
-  if (importedTaskLooksContractDriven(task)) {
-    return deriveContractProofPaths(task, evidenceDetail)
+  const prototypeTaskKind = importedPrototypeTaskKind(task)
+  if (prototypeTaskKind) {
+    const command = firstImportedProofCommand(task)
+    switch (prototypeTaskKind) {
+      case 'fixture':
+        return [
+          ...(command ? [{
+            kind: 'command' as const,
+            command,
+            expectedEvidence: ['The bounded fixture and expected records load and compare successfully.'],
+          }] : []),
+          {
+            kind: 'review' as const,
+            expectedEvidence: [
+              'The fixture covers manuscript text, brief/profile context, notes, expected records, and author decisions.',
+              'Ground truth records are stable enough for repeated no-UI runs.',
+            ],
+          },
+        ]
+      case 'runner':
+        return [
+          ...(command ? [{
+            kind: 'command' as const,
+            command,
+            expectedEvidence: ['The runner ingests the fixture, builds records, runs a packet, and saves output.'],
+          }] : []),
+          {
+            kind: 'review' as const,
+            expectedEvidence: [
+              'The run stays inside the no-UI harness boundary.',
+              'Saved run output is traceable back to the fixture inputs.',
+            ],
+          },
+        ]
+      case 'evaluation':
+        return [
+          ...(command ? [{
+            kind: 'command' as const,
+            command,
+            expectedEvidence: ['Evaluation output classifies missing, noisy, stale, useful, schema, and model-behavior outcomes.'],
+          }] : []),
+          {
+            kind: 'review' as const,
+            expectedEvidence: [
+              'Evaluation reports are comparable across repeated runs.',
+              'Failure categories are specific enough to guide packet and schema fixes.',
+            ],
+          },
+        ]
+      case 'debug_report':
+        return [
+          ...(command ? [{
+            kind: 'command' as const,
+            command,
+            expectedEvidence: ['The debug report records the run summary, packet/context receipts, and trace spine.'],
+          }] : []),
+          {
+            kind: 'review' as const,
+            expectedEvidence: [
+              'The report explains why context was included, omitted, retrieved, or marked stale.',
+              'Trace detail respects the same privacy boundary as packets.',
+            ],
+          },
+        ]
+      case 'schema_prune':
+        return [
+          ...(command ? [{
+            kind: 'command' as const,
+            command,
+            expectedEvidence: ['The first bounded run still passes after schema narrowing.'],
+          }] : []),
+          {
+            kind: 'review' as const,
+            expectedEvidence: [
+              'The narrowed schema is justified by the MVP contract boundary questions.',
+              'Deferred fields are explicitly recorded instead of silently kept.',
+            ],
+          },
+        ]
+    }
   }
   if (importedTaskLooksWorkflowDriven(task, evidenceDetail)) {
     const command = firstImportedProofCommand(task)
@@ -2275,6 +2491,9 @@ function materializedProofPaths(
         ],
       },
     ]
+  }
+  if (importedTaskLooksContractDriven(task)) {
+    return deriveContractProofPaths(task, evidenceDetail)
   }
   if (importedTaskLooksReviewerLane(task, evidenceDetail)) {
     const command = firstImportedProofCommand(task)
@@ -2717,16 +2936,166 @@ function deriveImportedWorkUnits(
   task: MaterializedImportTask,
   evidenceDetail: ImportedEvidenceDetail,
 ): NonNullable<Task['workUnitAnalysis']>['units'] {
-  if (importedTaskLooksContractDriven(task)) {
-    return deriveContractWorkUnits(task, evidenceDetail)
+  const prototypeTaskKind = importedPrototypeTaskKind(task)
+  if (prototypeTaskKind) {
+    return derivePrototypeTaskWorkUnits(task, evidenceDetail, prototypeTaskKind)
   }
   if (importedTaskLooksWorkflowDriven(task, evidenceDetail)) {
     return deriveWorkflowWorkUnits(task, evidenceDetail)
+  }
+  if (importedTaskLooksContractDriven(task)) {
+    return deriveContractWorkUnits(task, evidenceDetail)
   }
   if (importedTaskLooksReviewerLane(task, evidenceDetail)) {
     return deriveReviewerLaneWorkUnits(task, evidenceDetail)
   }
   return [defaultImportedWorkUnit(task, evidenceDetail)]
+}
+
+function derivePrototypeTaskWorkUnits(
+  task: MaterializedImportTask,
+  evidenceDetail: ImportedEvidenceDetail,
+  kind: NonNullable<ReturnType<typeof importedPrototypeTaskKind>>,
+): NonNullable<Task['workUnitAnalysis']>['units'] {
+  const baseDependsOn = [...(task.dependsOn ?? [])]
+  const proofCommand = firstImportedProofCommand(task)
+  switch (kind) {
+    case 'fixture':
+      return [
+        {
+          id: `unit-${task.id}-fixture-shape`,
+          title: 'Author the first bounded fiction fixture',
+          deliverable: 'The fixture carries manuscript text, brief, profile, notes, expected records, and author decisions.',
+          rationale: 'The no-UI harness needs a stable story fixture before packet and review proofs mean anything.',
+          suggestedDomain: task.domain,
+          dependsOn: baseDependsOn,
+        },
+        {
+          id: `unit-${task.id}-ground-truth`,
+          title: 'Record human-authored expected outputs',
+          deliverable: 'Expected records capture the intended story facts and reviewable outcomes for repeated runs.',
+          rationale: 'The harness needs explicit ground truth so it can compare generated records and findings deterministically.',
+          suggestedDomain: task.domain,
+          dependsOn: [`unit-${task.id}-fixture-shape`],
+        },
+        ...(proofCommand ? [{
+          id: `unit-${task.id}-proof`,
+          title: 'Prove fixture repeatability in the no-UI harness',
+          deliverable: `\`${proofCommand}\` passes against the bounded fixture and expected records.`,
+          rationale: 'Fixture work is only trustworthy once the same fixture can drive repeated proof runs.',
+          suggestedDomain: task.domain,
+          dependsOn: [`unit-${task.id}-ground-truth`],
+        }] : []),
+      ]
+    case 'runner':
+      return [
+        {
+          id: `unit-${task.id}-records`,
+          title: 'Load fixture inputs and shared records',
+          deliverable: 'The runner can ingest the bounded fixture and materialize the needed records.',
+          rationale: 'The runner has to bridge from fixture inputs into deterministic packet-ready records.',
+          suggestedDomain: task.domain,
+          dependsOn: baseDependsOn,
+        },
+        {
+          id: `unit-${task.id}-packet-run`,
+          title: 'Execute the packet run without UI help',
+          deliverable: 'A packet run completes headlessly and emits reproducible output.',
+          rationale: 'The Stage 1 harness is specifically a no-UI proof loop.',
+          suggestedDomain: task.domain,
+          dependsOn: [`unit-${task.id}-records`],
+        },
+        ...(proofCommand ? [{
+          id: `unit-${task.id}-proof`,
+          title: 'Prove the runner over a bounded fixture',
+          deliverable: `\`${proofCommand}\` runs the bounded fixture loop successfully.`,
+          rationale: 'The runner must be demonstrably repeatable to support later reviewer and writer work.',
+          suggestedDomain: task.domain,
+          dependsOn: [`unit-${task.id}-packet-run`],
+        }] : []),
+      ]
+    case 'evaluation':
+      return [
+        {
+          id: `unit-${task.id}-classification`,
+          title: 'Classify evaluation outcomes',
+          deliverable: 'Evaluation output distinguishes missing, noisy, stale, useful, schema, and model-behavior outcomes.',
+          rationale: 'The harness needs precise failure categories to learn from runs instead of logging generic pass/fail.',
+          suggestedDomain: task.domain,
+          dependsOn: baseDependsOn,
+        },
+        {
+          id: `unit-${task.id}-report-shape`,
+          title: 'Emit a stable evaluation report',
+          deliverable: 'Repeated runs produce comparable evaluation output.',
+          rationale: 'The output should support side-by-side comparison as the harness changes.',
+          suggestedDomain: task.domain,
+          dependsOn: [`unit-${task.id}-classification`],
+        },
+        ...(proofCommand ? [{
+          id: `unit-${task.id}-proof`,
+          title: 'Prove deterministic evaluation output',
+          deliverable: `\`${proofCommand}\` records stable evaluation output for the bounded fixture.`,
+          rationale: 'Evaluation logic needs deterministic proof before it can drive schema or packet decisions.',
+          suggestedDomain: task.domain,
+          dependsOn: [`unit-${task.id}-report-shape`],
+        }] : []),
+      ]
+    case 'debug_report':
+      return [
+        {
+          id: `unit-${task.id}-trace-spine`,
+          title: 'Connect packet, context, and trace into one report spine',
+          deliverable: 'The report ties the run summary back to packet receipts and trace events.',
+          rationale: 'Debuggability depends on following one surprising result back through the whole run.',
+          suggestedDomain: task.domain,
+          dependsOn: baseDependsOn,
+        },
+        {
+          id: `unit-${task.id}-context-accounting`,
+          title: 'Explain why context was included or dropped',
+          deliverable: 'The report shows include/omit/retrieve/stale decisions for meaningful context items.',
+          rationale: 'The harness should explain packet composition instead of only showing final output.',
+          suggestedDomain: task.domain,
+          dependsOn: [`unit-${task.id}-trace-spine`],
+        },
+        ...(proofCommand ? [{
+          id: `unit-${task.id}-proof`,
+          title: 'Prove the debug report over a bounded run',
+          deliverable: `\`${proofCommand}\` emits the traceable debug report for a fixture run.`,
+          rationale: 'Traceability needs the same deterministic proof discipline as the rest of the harness.',
+          suggestedDomain: task.domain,
+          dependsOn: [`unit-${task.id}-context-accounting`],
+        }] : []),
+      ]
+    case 'schema_prune':
+      return [
+        {
+          id: `unit-${task.id}-boundary`,
+          title: 'Compare the first run against the MVP contract boundary',
+          deliverable: 'The run is reviewed against the MVP questions that justify schema inclusion.',
+          rationale: 'The docs explicitly say extra fields should stay out until a prototype run proves they matter.',
+          suggestedDomain: task.domain,
+          dependsOn: baseDependsOn,
+        },
+        {
+          id: `unit-${task.id}-prune`,
+          title: 'Record which schema fields stay, defer, or move to fixture metadata',
+          deliverable: 'Schema narrowing is explicit and evidence-backed.',
+          rationale: 'The MVP should keep only the fields the first run can justify.',
+          suggestedDomain: task.domain,
+          dependsOn: [`unit-${task.id}-boundary`],
+        },
+        ...(proofCommand ? [{
+          id: `unit-${task.id}-proof`,
+          title: 'Prove the pruned schema against the first run',
+          deliverable: `\`${proofCommand}\` passes after schema narrowing.`,
+          rationale: 'The narrowed schema should still support the bounded proof loop.',
+          suggestedDomain: task.domain,
+          dependsOn: [`unit-${task.id}-prune`],
+        }] : []),
+      ]
+  }
 }
 
 function defaultImportedWorkUnit(

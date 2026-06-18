@@ -203,6 +203,56 @@ function ownerInputTickerMessage(message: string | undefined): string {
   return 'Waiting on your input'
 }
 
+function readinessTicker(detail: ProjectDetail | null | undefined): ProjectActivityLine | null {
+  const readiness = detail?.startReadiness
+  if (!readiness || readiness.canStart) return null
+  if (readiness.code === 'owner_input_required') {
+    return {
+      tone: 'warn',
+      pulse: false,
+      actorLabel: 'Needs you',
+      label: 'Needs you',
+      message: ownerInputTickerMessage(readiness.message),
+      timeLabel: null,
+    }
+  }
+  if (readiness.code === 'required_migration_pending') {
+    return {
+      tone: 'warn',
+      pulse: false,
+      actorLabel: 'Needs migration',
+      label: 'Needs migration',
+      message: readiness.message || 'Run the required migration before starting this project.',
+      timeLabel: null,
+    }
+  }
+  if (readiness.code === 'no_unattended_progress') {
+    if (readiness.focusKind === 'spec_review' && readiness.focusTaskTitle) {
+      return {
+        tone: 'warn',
+        pulse: false,
+        actorLabel: 'Review',
+        label: 'Review',
+        message: readiness.focusTaskTitle,
+        detail: readiness.count && readiness.count > 1 ? `${readiness.count - 1} more waiting behind it` : 'Waiting for spec review',
+        timeLabel: null,
+      }
+    }
+    if (readiness.focusKind === 'brief_cleanup' && readiness.focusTaskTitle) {
+      return {
+        tone: 'warn',
+        pulse: false,
+        actorLabel: 'Needs brief',
+        label: 'Needs brief',
+        message: readiness.focusTaskTitle,
+        detail: readiness.count && readiness.count > 1 ? `${readiness.count - 1} more briefs still need shaping` : 'Needs a fuller brief before it can run',
+        timeLabel: null,
+      }
+    }
+  }
+  return null
+}
+
 export function buildProjectTicker(
   detail: ProjectDetail | null | undefined,
   latestEvent: EventEnvelope | null,
@@ -219,27 +269,8 @@ export function buildProjectTicker(
     }
   }
 
-  if (detail?.startReadiness?.code === 'owner_input_required') {
-    return {
-      tone: 'warn',
-      pulse: false,
-      actorLabel: 'Needs you',
-      label: 'Needs you',
-      message: ownerInputTickerMessage(detail.startReadiness.message),
-      timeLabel: null,
-    }
-  }
-
-  if (detail?.startReadiness?.code === 'required_migration_pending') {
-    return {
-      tone: 'warn',
-      pulse: false,
-      actorLabel: 'Needs migration',
-      label: 'Needs migration',
-      message: detail.startReadiness.message || 'Run the required migration before starting this project.',
-      timeLabel: null,
-    }
-  }
+  const readinessLine = readinessTicker(detail)
+  if (readinessLine) return readinessLine
 
   if (detail?.run?.status === 'error') {
     return {
@@ -374,6 +405,14 @@ export function buildProjectCardTicker(project: ServiceProjectSummary): ProjectA
       pulse: false,
       label: 'Needs you',
       message: project.startReadiness.message ?? 'Waiting on your input.',
+    }
+  }
+  if (project.startReadiness?.code === 'no_unattended_progress' && project.startReadiness.focusTaskTitle) {
+    return {
+      tone: 'warn',
+      pulse: false,
+      label: project.startReadiness.focusKind === 'spec_review' ? 'Review' : 'Needs brief',
+      message: project.startReadiness.focusTaskTitle,
     }
   }
   if (project.run?.status === 'running') {

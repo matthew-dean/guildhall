@@ -445,8 +445,12 @@ describe('ProjectOverviewTab', () => {
         startReadiness: {
           canStart: false,
           code: 'no_unattended_progress',
-          message: 'One task needs a clearer brief and acceptance criteria before unattended work can run.',
-          actionHref: '/thread',
+          message: '"Set FLL overhead charge policy" needs a clearer brief before unattended work can run.',
+          actionHref: '/work?task=task-006',
+          focusTaskId: 'task-006',
+          focusTaskTitle: 'Set FLL overhead charge policy',
+          focusKind: 'brief_cleanup',
+          count: 1,
         },
         tasks: [
           {

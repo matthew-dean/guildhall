@@ -241,6 +241,79 @@ describe('WorkTab', () => {
     expect(screen.getByText('Import review flow')).toBeInTheDocument()
   })
 
+  it('prefers shaped work units over proof-step badges for planning work and names blockers by task title', async () => {
+    render(WorkTab, {
+      props: {
+        detail: detail([
+          task({
+            id: 'task-fixture',
+            title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+            status: 'spec_review',
+            domain: 'harness',
+          }),
+          task({
+            id: 'task-runner',
+            title: 'Implement a no-UI runner that builds a packet from fixture records.',
+            status: 'spec_review',
+            domain: 'harness',
+            dependsOn: ['task-fixture'],
+            workUnitAnalysis: {
+              units: [
+                { id: 'unit-1', title: 'Load fixture inputs and shared records' },
+                { id: 'unit-2', title: 'Execute the packet run without UI help' },
+                { id: 'unit-3', title: 'Prove the runner over a bounded fixture' },
+              ],
+            },
+          }),
+        ], {
+          workProgress: {
+            counts: {
+              visibleTotal: 2,
+              visibleActive: 2,
+              visibleBlocked: 0,
+              visibleDone: 0,
+              visibleShelved: 0,
+              deliveryTotal: 2,
+              deliveryRequired: 2,
+              deliveryDone: 0,
+              deliveryBlocked: 0,
+            },
+            byTaskId: {
+              'task-runner': {
+                id: 'task-runner',
+                title: 'Implement a no-UI runner that builds a packet from fixture records.',
+                status: 'spec_review',
+                visibility: { kind: 'primary', countInProjectTotals: true },
+                deliverySteps: [
+                  { id: 'proof:1', title: 'Proof 1', status: 'todo', required: true, blocksCompletion: true },
+                  { id: 'proof:2', title: 'Proof 2', status: 'todo', required: true, blocksCompletion: true },
+                ],
+                rollup: {
+                  primaryState: 'active',
+                  visibleChildCount: 0,
+                  visibleChildDoneCount: 0,
+                  internalStepCount: 0,
+                  requiredStepCount: 2,
+                  doneStepCount: 0,
+                  blockedStepCount: 0,
+                },
+              },
+            },
+          },
+        }),
+      },
+    })
+
+    await screen.findByText('3 planned units')
+    const runnerRow = screen.getByRole('button', { name: /inspect work implement a no-ui runner that builds a packet from fixture records/i })
+    expect(runnerRow).toHaveTextContent('Blocked by Define fixture, expected-record, prototype-run, and evaluation schemas.')
+    expect(runnerRow).not.toHaveTextContent('0/2 delivery steps')
+
+    await userEvent.click(runnerRow)
+    const inspector = screen.getByLabelText('Selected work inspector')
+    expect(within(inspector).getAllByText('3 planned work units are already shaped for this item.')).toHaveLength(2)
+  })
+
   it('shows the orientation spine path on work rows', async () => {
     render(WorkTab, {
       props: {

@@ -444,6 +444,9 @@ describe('evidence-to-work-graph intake', () => {
         'Implement scene-and-chapter-intelligence reviewer lane',
       ]),
     )
+    const milestoneTerminal = plan.tasks.find(task => task.title === 'Use the first run to narrow the MVP story-memory schema.')
+    const dialogue = plan.tasks.find(task => task.title === 'Implement dialogue-and-character-voice reviewer lane')
+    expect(dialogue?.dependsOn).toContain(milestoneTerminal?.id)
   })
 
   it('suppresses coarse later-stage roadmap deliverable bullets when a current milestone already has decomposed spec tasks', () => {

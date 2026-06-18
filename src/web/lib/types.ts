@@ -520,6 +520,20 @@ export interface Task {
   definitionOfDone?: { items?: string[]; evidenceRequired?: string[]; updatedAt?: string; createdBy?: string }
   blockerPlans?: Array<{ if?: string; then?: string; owner?: string; reason?: string }>
   contextBudget?: { estimatedTokens?: number; risk?: string; fitsInOneWorkerBrief?: boolean; reasons?: string[] }
+  workUnitAnalysis?: {
+    summary?: string
+    units?: Array<{
+      id?: string
+      title?: string
+      deliverable?: string
+      rationale?: string
+      suggestedDomain?: string
+      dependsOn?: string[]
+    }>
+    proofOnlyItems?: string[]
+    createdAt?: string
+    createdBy?: string
+  }
   decomposition?: Record<string, unknown>
   coordinatorReflections?: Array<Record<string, unknown>>
   createdAt?: string
@@ -1213,6 +1227,10 @@ export interface StartReadiness {
   code?: string
   message?: string
   actionHref?: string
+  focusTaskId?: string
+  focusTaskTitle?: string
+  focusKind?: string
+  count?: number
 }
 
 export interface ProjectAvailability {

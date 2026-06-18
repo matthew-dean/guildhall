@@ -536,6 +536,10 @@ interface ServiceProjectSummary {
     code?: string
     message?: string
     actionHref?: string
+    focusTaskId?: string
+    focusTaskTitle?: string
+    focusKind?: string
+    count?: number
   } | null
   migrationSummary?: {
     pending: number
@@ -5103,6 +5107,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
     code: 'no_unattended_progress'
     message: string
     actionHref: string
+    focusTaskId?: string
+    focusTaskTitle?: string
+    focusKind?: string
+    count?: number
   } | null> {
     const tasksPath = projectTasksPath(projectPath)
     if (!existsSync(tasksPath)) return null
@@ -5114,8 +5122,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
     let runnable = 0
     let needsBriefCleanup = 0
+    let firstBriefCleanupTaskId: string | null = null
+    let firstBriefCleanupTaskTitle: string | null = null
     let waitingForApproval = 0
     let firstWaitingSpecTaskId: string | null = null
+    let firstWaitingSpecTaskTitle: string | null = null
     let terminal = 0
     for (const task of tasks) {
       if (!task || typeof task !== 'object') continue
@@ -5127,11 +5138,15 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (status === 'spec_review') {
         const id = (task as { id?: unknown }).id
         const taskId = typeof id === 'string' && id.trim() ? id.trim() : null
+        const title = typeof (task as { title?: unknown }).title === 'string' && (task as { title: string }).title.trim()
+          ? (task as { title: string }).title.trim()
+          : null
         const hasSpecDraft = typeof (task as { spec?: unknown }).spec === 'string' && (task as { spec: string }).spec.trim().length > 0
         if (taskId && (hasSpecDraft || specReviewRequiresOwnerApproval({ id: taskId }))) {
           waitingForApproval += 1
           if (!firstWaitingSpecTaskId) {
             firstWaitingSpecTaskId = taskId
+            firstWaitingSpecTaskTitle = title
           }
           continue
         }
@@ -5140,6 +5155,14 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
       if (status === 'ready' && !isReadyForWorkerHandoffRecord(task)) {
         needsBriefCleanup += 1
+        if (!firstBriefCleanupTaskId) {
+          const id = (task as { id?: unknown }).id
+          firstBriefCleanupTaskId = typeof id === 'string' && id.trim() ? id.trim() : null
+          firstBriefCleanupTaskTitle =
+            typeof (task as { title?: unknown }).title === 'string' && (task as { title: string }).title.trim()
+              ? (task as { title: string }).title.trim()
+              : null
+        }
         continue
       }
       if (['proposed', 'exploring', 'ready', 'in_progress', 'review', 'gate_check'].includes(status)) {
@@ -5149,27 +5172,37 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
     if (runnable > 0 || terminal === tasks.length) return null
     if (needsBriefCleanup > 0) {
+      const focusTitle = firstBriefCleanupTaskTitle ?? 'the first task'
       return {
         canStart: false,
         code: 'no_unattended_progress',
         message:
           needsBriefCleanup === 1
-            ? 'One task needs a clearer brief and acceptance criteria before unattended work can run.'
-            : `${needsBriefCleanup} tasks need clearer briefs and acceptance criteria before unattended work can run.`,
-        actionHref: '/work',
+            ? `"${focusTitle}" needs a clearer brief before unattended work can run.`
+            : `${needsBriefCleanup} tasks still need fuller briefs before unattended work can run. Start with "${focusTitle}".`,
+        actionHref: firstBriefCleanupTaskId ? `/work?task=${encodeURIComponent(firstBriefCleanupTaskId)}` : '/work',
+        focusTaskId: firstBriefCleanupTaskId ?? undefined,
+        focusTaskTitle: firstBriefCleanupTaskTitle ?? undefined,
+        focusKind: 'brief_cleanup',
+        count: needsBriefCleanup,
       }
     }
     if (waitingForApproval > 0) {
+      const focusTitle = firstWaitingSpecTaskTitle ?? 'the first spec'
       return {
         canStart: false,
         code: 'no_unattended_progress',
         message:
           waitingForApproval === 1
-            ? 'One spec is waiting for review before starting.'
-            : `${waitingForApproval} specs are waiting for review before starting.`,
+            ? `"${focusTitle}" is waiting for review before work can start.`
+            : `${waitingForApproval} specs are waiting for review before work can start. Start with "${focusTitle}".`,
         actionHref: firstWaitingSpecTaskId
           ? `/thread?thread=${encodeURIComponent(`task:${firstWaitingSpecTaskId}`)}`
           : '/thread',
+        focusTaskId: firstWaitingSpecTaskId ?? undefined,
+        focusTaskTitle: firstWaitingSpecTaskTitle ?? undefined,
+        focusKind: 'spec_review',
+        count: waitingForApproval,
       }
     }
     return null

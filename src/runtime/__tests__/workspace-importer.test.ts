@@ -457,6 +457,52 @@ describe('workspaceNeedsImport', () => {
           ],
         },
         {
+          suggestedId: 'task-evaluation',
+          title: 'Add deterministic evaluation output that reports missing, noisy, stale, and useful context.',
+          description: 'Deterministic evaluation output for bounded fixture runs.',
+          domain: 'harness',
+          scope: 'current',
+          priority: 'high' as const,
+          references: [
+            'docs/harness/implementation-roadmap.md',
+          ],
+          source: 'workspace-importer' as const,
+          confidence: 'high' as const,
+          acceptanceCriteria: [
+            { id: 'source-implementation', description: 'placeholder' },
+          ],
+          proofPaths: [
+            {
+              kind: 'command' as const,
+              command: 'pnpm test -- add-deterministic-evaluation-output',
+              expectedEvidence: ['placeholder'],
+            },
+          ],
+        },
+        {
+          suggestedId: 'task-debug-report',
+          title: 'Generate a developer-readable debug report for each run.',
+          description: 'Debuggability and traceability proof for bounded fixture runs.',
+          domain: 'harness',
+          scope: 'current',
+          priority: 'high' as const,
+          references: [
+            'docs/harness/implementation-roadmap.md',
+          ],
+          source: 'workspace-importer' as const,
+          confidence: 'high' as const,
+          acceptanceCriteria: [
+            { id: 'source-implementation', description: 'placeholder' },
+          ],
+          proofPaths: [
+            {
+              kind: 'command' as const,
+              command: 'pnpm test -- generate-a-developer-readable-debug-report',
+              expectedEvidence: ['placeholder'],
+            },
+          ],
+        },
+        {
           suggestedId: 'task-feedback-chain',
           title: 'Implement editor-writer feedback chain contract and weighted-feedback pipeline',
           description: 'Weighted feedback workflow.',
@@ -495,22 +541,29 @@ describe('workspaceNeedsImport', () => {
 
     const runner = materialized.tasks.find(task => task.title === 'Implement a no-UI runner that builds a packet from fixture records.')
     const dialogue = materialized.tasks.find(task => task.title === 'Implement dialogue-and-character-voice reviewer lane')
+    const evaluation = materialized.tasks.find(task => task.title === 'Add deterministic evaluation output that reports missing, noisy, stale, and useful context.')
+    const debugReport = materialized.tasks.find(task => task.title === 'Generate a developer-readable debug report for each run.')
     const workflow = materialized.tasks.find(task => task.title === 'Implement editor-writer feedback chain contract and weighted-feedback pipeline')
 
     expect(runner?.proofPaths).toEqual([
       expect.objectContaining({
         kind: 'command',
         expectedEvidence: [
-          'Run one bounded fixture through packet assembly, trace capture, and evaluation output review',
+          'The runner ingests the fixture, builds records, runs a packet, and saves output.',
         ],
       }),
       expect.objectContaining({
         kind: 'review',
         expectedEvidence: expect.arrayContaining([
-          'The imported contract surface explicitly names and uses `BookBrief`, `ManuscriptUnit`, `GlobalAuthorProfile`.',
-          'The imported schema layer exposes the cited fixture and run contracts without ad hoc gaps',
+          'The run stays inside the no-UI harness boundary.',
+          'Saved run output is traceable back to the fixture inputs.',
         ]),
       }),
+    ])
+    expect(runner?.acceptanceCriteria?.map((criterion) => criterion.id)).toEqual([
+      'runner-flow',
+      'headless-boundary',
+      'deterministic-proof',
     ])
     expect(dialogue?.proofPaths?.[0]).toEqual(expect.objectContaining({
       kind: 'command',
@@ -519,6 +572,29 @@ describe('workspaceNeedsImport', () => {
     expect(dialogue?.acceptanceCriteria?.[0]?.description).not.toContain('Recommended first task title')
     expect(dialogue?.acceptanceCriteria?.[0]?.description).not.toContain('MISSING')
     expect(dialogue?.acceptanceCriteria?.[0]?.description).not.toContain('contract surfaces')
+    expect(evaluation?.acceptanceCriteria?.map((criterion) => criterion.id)).toEqual([
+      'evaluation-categories',
+      'stable-report-shape',
+      'deterministic-proof',
+    ])
+    expect(evaluation?.proofPaths?.[0]).toEqual(expect.objectContaining({
+      kind: 'command',
+      expectedEvidence: [
+        'Evaluation output classifies missing, noisy, stale, useful, schema, and model-behavior outcomes.',
+      ],
+    }))
+    expect(debugReport?.acceptanceCriteria?.map((criterion) => criterion.id)).toEqual([
+      'trace-spine',
+      'context-accounting',
+      'privacy-boundary',
+      'deterministic-proof',
+    ])
+    expect(debugReport?.proofPaths?.[0]).toEqual(expect.objectContaining({
+      kind: 'command',
+      expectedEvidence: [
+        'The debug report records the run summary, packet/context receipts, and trace spine.',
+      ],
+    }))
     expect(workflow?.proofPaths?.[0]).toEqual(expect.objectContaining({
       kind: 'command',
       expectedEvidence: ['Replay one bounded set of findings into the weighted packet output'],
@@ -2282,6 +2358,10 @@ tasks:
       'deterministic retrieval tools over structured story records',
       'specialist editor agent calls for the first review lanes',
     ]))
+    const milestoneTerminal = materialized.tasks.find(task => task.title === 'Define fixture, expected-record, prototype-run, and evaluation schemas.')
+    expect(
+      materialized.tasks.find(task => task.title === 'Implement dialogue-and-character-voice reviewer lane')?.dependsOn ?? [],
+    ).toContain(milestoneTerminal?.suggestedId)
   })
 
   it('re-expands import scope from detected planning evidence even when the approved starter draft cites only one roadmap doc', async () => {

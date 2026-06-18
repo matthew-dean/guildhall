@@ -440,6 +440,51 @@ describe('buildProjectTicker', () => {
     })
   })
 
+  it('names the concrete readiness blocker when spec review is the stop reason', () => {
+    const detail: ProjectDetail = {
+      startReadiness: {
+        canStart: false,
+        code: 'no_unattended_progress',
+        message: '2 specs are waiting for review before work can start. Start with "Continue drafted spec work".',
+        focusTaskId: 'task-spec-a',
+        focusTaskTitle: 'Continue drafted spec work',
+        focusKind: 'spec_review',
+        count: 2,
+      },
+    }
+
+    expect(buildProjectTicker(detail, null, now)).toMatchObject({
+      tone: 'warn',
+      actorLabel: 'Review',
+      label: 'Review',
+      message: 'Continue drafted spec work',
+      detail: '1 more waiting behind it',
+    })
+  })
+
+  it('names the concrete readiness blocker when a brief still needs shaping', () => {
+    const detail: ProjectDetail = {
+      startReadiness: {
+        canStart: false,
+        code: 'no_unattended_progress',
+        message: '"Thin ready task" needs a clearer brief before unattended work can run.',
+        focusTaskId: 'task-thin-ready',
+        focusTaskTitle: 'Thin ready task',
+        focusKind: 'brief_cleanup',
+        count: 1,
+      },
+      tasks: [{ id: 'task-thin-ready', status: 'ready', title: 'Thin ready task' }],
+    }
+
+    expect(buildProjectTicker(detail, null, now)).toMatchObject({
+      tone: 'warn',
+      actorLabel: 'Needs brief',
+      label: 'Needs brief',
+      message: 'Thin ready task',
+      detail: 'Needs a fuller brief before it can run',
+    })
+  })
+
   it('lets current actionable draft state beat stale stopped-event copy', () => {
     const detail: ProjectDetail = {
       run: { status: 'stopped' },

@@ -56,6 +56,10 @@
     return visibility?.kind !== 'internal_step' && visibility?.kind !== 'hidden'
   }
 
+  function semanticUnitCount(task: Task): number {
+    return task.workUnitAnalysis?.units?.length ?? 0
+  }
+
   function deliveryStepsFor(task: Task): NonNullable<ProjectDetail['workProgress']>['byTaskId'][string]['deliverySteps'] {
     return workProgress?.byTaskId?.[task.id]?.deliverySteps ?? []
   }
@@ -108,6 +112,11 @@
   }
 
   function primaryText(task: Task): string {
+    const semanticUnits = semanticUnitCount(task)
+    const childCount = childTasksFor(task).length
+    if (childCount === 0 && semanticUnits > 0 && ['proposed', 'import_draft', 'exploring', 'spec_review', 'ready'].includes(task.status ?? '')) {
+      return `${semanticUnits} planned work ${semanticUnits === 1 ? 'unit is' : 'units are'} already shaped for this item.`
+    }
     const steps = deliveryStepsFor(task)
     if (steps.length > 0) {
       const required = steps.filter(step => step.required).length || steps.length
@@ -195,6 +204,7 @@
   {#if selectedTask}
     {@const rollup = rollupFor(selectedTask)}
     {@const deliverySteps = deliveryStepsFor(selectedTask)}
+    {@const plannedUnits = semanticUnitCount(selectedTask)}
     <div class="inspector-head">
       <div>
         <p class="details-context">{containedWork.length ? 'Containing work' : 'Selected work'}</p>
@@ -226,6 +236,8 @@
             </button>
           {/each}
         </div>
+      {:else if plannedUnits > 0}
+        <p class="subtle">{plannedUnits} planned work unit{plannedUnits === 1 ? '' : 's'} are already shaped for this item.</p>
       {:else if deliverySteps.length > 0}
         <p class="subtle">This item has tracked delivery steps and no contained work.</p>
       {:else if needsBreakdownReview(selectedTask)}

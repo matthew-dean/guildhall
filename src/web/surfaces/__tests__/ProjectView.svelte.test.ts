@@ -547,8 +547,12 @@ describe('ProjectView', () => {
       startReadiness: {
         canStart: false,
         code: 'no_unattended_progress',
-        message: '2 specs are waiting for review before starting.',
+        message: '2 specs are waiting for review before work can start. Start with "Spec A".',
         actionHref: '/thread',
+        focusTaskId: 'task-spec-a',
+        focusTaskTitle: 'Spec A',
+        focusKind: 'spec_review',
+        count: 2,
       },
       tasks: [
         task({ id: 'task-spec-a', title: 'Spec A', status: 'spec_review' }),
@@ -569,7 +573,7 @@ describe('ProjectView', () => {
     await renderProjectView('overview', null, 'looma-knit', projectPayload)
 
     const alerts = screen.getAllByRole('alert')
-    const specAlerts = alerts.filter(alert => within(alert).queryByText('2 specs are waiting for review before starting.'))
+    const specAlerts = alerts.filter(alert => within(alert).queryByText('2 specs are waiting for review before work can start. Start with "Spec A".'))
     const idleAlerts = alerts.filter(alert => within(alert).queryByText('Waiting on input: 2 awaiting approval.'))
 
     expect(specAlerts).toHaveLength(1)
@@ -961,8 +965,12 @@ describe('ProjectView', () => {
       startReadiness: {
         canStart: false,
         code: 'no_unattended_progress',
-        message: '1 task needs a clearer brief and acceptance criteria before Guildhall can build unattended.',
-        actionHref: '/thread',
+        message: '"Set FLL overhead charge policy" needs a clearer brief before unattended work can run.',
+        actionHref: '/work?task=task-needs-brief',
+        focusTaskId: 'task-needs-brief',
+        focusTaskTitle: 'Set FLL overhead charge policy',
+        focusKind: 'brief_cleanup',
+        count: 1,
       },
       tasks: [
         task({

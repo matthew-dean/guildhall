@@ -1458,8 +1458,13 @@ describe('POST /api/project/start', () => {
     expect(projectBody.startReadiness).toMatchObject({
       canStart: false,
       code: 'no_unattended_progress',
-      actionHref: '/work',
+      actionHref: '/work?task=task-thin-ready',
+      focusTaskId: 'task-thin-ready',
+      focusTaskTitle: 'Thin ready task',
+      focusKind: 'brief_cleanup',
+      count: 1,
     })
+    expect(projectBody.startReadiness?.message).toContain('Thin ready task')
     expect(projectBody.startReadiness?.message).toContain('clearer brief')
   })
 
@@ -2385,7 +2390,7 @@ describe('Workspace Import review endpoints', () => {
     const schemaTask = beforeBody.detected?.tasks.find(task => task.title === 'Define fixture, expected-record, prototype-run, and evaluation schemas.')
     const fixtureTask = beforeBody.detected?.tasks.find(task => task.title === 'Add the first tiny fiction fixture and human-authored expected records.')
     expect(schemaTask).toMatchObject({
-      domain: 'core',
+      domain: 'harness',
       acceptanceCriteria: expect.arrayContaining([
         expect.objectContaining({ id: 'source-implementation' }),
         expect.objectContaining({ id: 'automated-proof' }),
@@ -4295,8 +4300,12 @@ describe('GET /api/project — bootstrap status', () => {
 
     expect(body.startReadiness).toMatchObject({
       canStart: false,
-      message: 'One spec is waiting for review before starting.',
+      message: '"Continue drafted spec work" is waiting for review before work can start.',
       actionHref: '/thread?thread=task%3Atask-spec-a',
+      focusTaskId: 'task-spec-a',
+      focusTaskTitle: 'Continue drafted spec work',
+      focusKind: 'spec_review',
+      count: 1,
     })
   })
 
@@ -4306,18 +4315,18 @@ describe('GET /api/project — bootstrap status', () => {
     await writeSystemTasks({
       tasks: [
         {
-          id: 'task-meta-intake',
+          id: 'task-spec-a',
           title: 'Approve first spec',
-          domain: '_meta',
+          domain: 'core',
           status: 'spec_review',
           spec: 'Draft spec',
           createdAt: '2026-06-11T15:00:00.000Z',
           updatedAt: '2026-06-11T15:00:00.000Z',
         },
         {
-          id: 'task-workspace-import',
+          id: 'task-spec-b',
           title: 'Approve second spec',
-          domain: '_workspace_import',
+          domain: 'core',
           status: 'spec_review',
           spec: 'Draft spec',
           createdAt: '2026-06-11T15:01:00.000Z',
@@ -4325,6 +4334,8 @@ describe('GET /api/project — bootstrap status', () => {
         },
       ],
     })
+    setProvider('anthropic-api', { apiKey: 'sk-ant-test' })
+    updateGlobalConfig({ preferredProvider: 'anthropic-api' })
     const { app } = buildServeApp({ projectPath: tmpDir })
 
     const res = await app.fetch(new Request(scoped('/api/project')))
@@ -4335,8 +4346,12 @@ describe('GET /api/project — bootstrap status', () => {
 
     expect(body.startReadiness).toMatchObject({
       canStart: false,
-      message: '2 specs are waiting for review before starting.',
-      actionHref: '/thread?thread=task%3Atask-meta-intake',
+      message: '2 specs are waiting for review before work can start. Start with "Approve first spec".',
+      actionHref: '/thread?thread=task%3Atask-spec-a',
+      focusTaskId: 'task-spec-a',
+      focusTaskTitle: 'Approve first spec',
+      focusKind: 'spec_review',
+      count: 2,
     })
   })
 

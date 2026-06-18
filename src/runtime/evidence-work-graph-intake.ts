@@ -24,6 +24,7 @@ export type EvidenceUnit = {
   sourceRefs: Array<{ path: string; snippet: string }>
   sequenceGroup?: string
   sequenceIndex?: number
+  stageAlignment?: string
 }
 
 export type EvidenceTask = {
@@ -63,6 +64,7 @@ type UnitSeed = {
   explicitTargetArea?: string
   sequenceGroup?: string
   sequenceIndex?: number
+  stageAlignment?: string
 }
 
 type ExistingTaskMatch = {
@@ -167,6 +169,7 @@ function extractUnits(
       sourceRefs: [{ path: seed.path, snippet: seed.row }],
       ...(seed.sequenceGroup ? { sequenceGroup: seed.sequenceGroup } : {}),
       ...(typeof seed.sequenceIndex === 'number' ? { sequenceIndex: seed.sequenceIndex } : {}),
+      ...(seed.stageAlignment ? { stageAlignment: seed.stageAlignment } : {}),
     }
   })
 }
@@ -368,6 +371,7 @@ function extractRecommendedTaskSeeds(source: EvidenceSource): UnitSeed[] {
       row: `Recommended first task title: ${title}`,
       titleMode: 'verbatim',
       explicitTargetArea: currentDomain && !/^\*?\(none/i.test(currentDomain) ? currentDomain : undefined,
+      ...(currentStageAlignment ? { stageAlignment: normalizeStageLabel(currentStageAlignment) } : {}),
     })
     currentRecommendedTitle = ''
   }
@@ -418,6 +422,11 @@ function detectCurrentMilestoneStage(sources: readonly EvidenceSource[]): string
 
 function normalizeStageLabel(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, ' ')
+}
+
+function stageNumber(value: string): number | null {
+  const match = /^stage\s+(\d+)\b/i.exec(value.trim())
+  return match?.[1] ? Number(match[1]) : null
 }
 
 function logicalMarkdownLines(raw: string): string[] {
@@ -567,7 +576,53 @@ function dependenciesFor(
     }
   }
 
+  const currentMilestoneDependency = dependencyForLaterStageUnit(unit, units, implementationByDeliverable)
+  if (currentMilestoneDependency && !taskIds.includes(currentMilestoneDependency.taskId)) {
+    taskIds.push(currentMilestoneDependency.taskId)
+    relatedTasks.push({
+      taskId: currentMilestoneDependency.taskId,
+      relationship: 'blocks',
+      reason: currentMilestoneDependency.reason,
+    })
+  }
+
   return { taskIds: unique(taskIds), dependsOn: unique(taskIds), relatedTasks }
+}
+
+function dependencyForLaterStageUnit(
+  unit: EvidenceUnit,
+  units: EvidenceUnit[],
+  implementationByDeliverable: Map<string, EvidenceTask>,
+): { taskId: string; reason: string } | null {
+  if (!unit.stageAlignment) return null
+  const alignedStageNumber = stageNumber(unit.stageAlignment)
+  if (alignedStageNumber === null) return null
+
+  const milestoneUnits = units
+    .filter(candidate => candidate.sequenceGroup?.includes('#current-next-milestone') && typeof candidate.sequenceIndex === 'number')
+    .sort((left, right) => (left.sequenceIndex ?? 0) - (right.sequenceIndex ?? 0))
+  if (milestoneUnits.length === 0) return null
+
+  const milestoneStageLabels = unique(
+    milestoneUnits
+      .flatMap(candidate => candidate.buildsOn)
+      .map(label => normalizeStageLabel(label))
+      .filter(label => stageNumber(label) !== null),
+  )
+  const activeMilestoneStage = milestoneStageLabels[0] ?? null
+  const activeMilestoneStageNumber = activeMilestoneStage ? stageNumber(activeMilestoneStage) : null
+  if (activeMilestoneStageNumber === null || alignedStageNumber <= activeMilestoneStageNumber) {
+    return null
+  }
+
+  const terminalMilestoneUnit = milestoneUnits[milestoneUnits.length - 1]
+  if (!terminalMilestoneUnit) return null
+  const terminalTask = implementationByDeliverable.get(terminalMilestoneUnit.name)
+  if (!terminalTask) return null
+  return {
+    taskId: terminalTask.id,
+    reason: `${unit.name} is stage-aligned after the current milestone and should wait for ${terminalMilestoneUnit.name}.`,
+  }
 }
 
 function implementationAcceptanceCriteria(unit: EvidenceUnit): EvidenceTask['acceptanceCriteria'] {
