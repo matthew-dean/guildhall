@@ -23,6 +23,7 @@ const GOAL_LABEL_RE = /^goal:\s*(.+?)\s*$/i
 const RECOMMENDED_TASK_TITLE_RE = /^-\s+\*\*recommended first task title:\*\*\s+(.+?)\s*$/i
 const RECOMMENDED_DOMAIN_RE = /^-\s+\*\*recommended domain:\*\*\s+(.+?)\s*$/i
 const CORE_LOOP_HEADING_RE = /^core loop$/i
+const MARKDOWN_TABLE_ROW_RE = /^\|.+\|\s*$/
 
 function likelyRelevantFile(rel: string): boolean {
   return MARKDOWN_FILE_RE.test(rel) && !IGNORE_PATH_RE.test(rel)
@@ -191,6 +192,74 @@ function summarizeMarkdownAfterTitle(raw: string): string {
     if (lines.join(' ').length >= 220) break
   }
   return cleanHeading(lines.join(' ')).slice(0, 240).trim()
+}
+
+function humanizeSpecStem(fileName: string): string {
+  return fileName
+    .replace(/\.md$/i, '')
+    .split('-')
+    .filter(Boolean)
+    .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ')
+}
+
+function splitMarkdownTableRow(line: string): string[] | null {
+  if (!MARKDOWN_TABLE_ROW_RE.test(line.trim())) return null
+  const trimmed = line.trim().replace(/^\|/, '').replace(/\|$/, '')
+  const cells = trimmed.split('|').map(cell => cleanHeading(cell.trim()))
+  return cells.length > 0 ? cells : null
+}
+
+function parseLinkedTaskHints(cell: string): string[] {
+  const normalized = cleanHeading(cell)
+  if (!normalized || /^\*?\(?none\b/i.test(normalized) || normalized === '—') return []
+  const codeMatches = [...cell.matchAll(/`([^`]+)`/g)].map(match => cleanHeading(match[1] ?? ''))
+  const raw = codeMatches.length > 0 ? codeMatches : normalized.split(/,\s*/)
+  return raw
+    .map(entry => cleanHeading(entry))
+    .filter(entry => entry.length > 0 && entry !== '—')
+}
+
+function specCoverageSignalsForFile(input: {
+  projectPath: string
+  sourceRel: string
+  sourceAbs: string
+  raw: string
+  availableFiles: ReadonlySet<string>
+  domainHint?: string
+}): WorkspaceSignal[] {
+  const signals: WorkspaceSignal[] = []
+  const seen = new Set<string>()
+  for (const line of input.raw.split('\n')) {
+    const cells = splitMarkdownTableRow(line)
+    if (!cells || cells.length < 2) continue
+    const specFile = markdownFilenameFromHeading(cells[0] ?? '')
+    if (!specFile || /^index\.md$/i.test(specFile)) continue
+    const linkedTaskHints = parseLinkedTaskHints(cells[1] ?? '')
+    if (linkedTaskHints.length === 0) continue
+    const specRef = relatedSpecReference(
+      input.projectPath,
+      input.sourceRel,
+      `\`${specFile}\``,
+      input.availableFiles,
+    )
+    if (!specRef) continue
+    const dedupeKey = `${specRef}::${linkedTaskHints.join('::')}`
+    if (seen.has(dedupeKey)) continue
+    seen.add(dedupeKey)
+    signals.push({
+      source: 'planning-docs',
+      kind: 'context',
+      title: `Spec coverage: ${humanizeSpecStem(specFile)}`,
+      evidence: `${input.sourceRel}: ${cleanHeading(cells[1] ?? '')}`.slice(0, 240),
+      references: [specRef, input.sourceAbs],
+      role: 'reference',
+      linkedTaskHints,
+      ...(input.domainHint ? { domainHint: input.domainHint } : {}),
+      confidence: 'medium',
+    })
+  }
+  return signals
 }
 
 function fileLooksLikeTaskList(fileBase: string, rel: string): boolean {
@@ -366,6 +435,14 @@ export const planningDocsSource: TaskSource = {
           })
         }
       }
+      signals.push(...specCoverageSignalsForFile({
+        projectPath,
+        sourceRel: rel,
+        sourceAbs: abs,
+        raw,
+        availableFiles,
+        ...(domainHint ? { domainHint } : {}),
+      }))
 
       for (const line of logicalMarkdownLines(raw)) {
         const heading = /^(#{2,4})\s+(.+?)\s*$/.exec(line)

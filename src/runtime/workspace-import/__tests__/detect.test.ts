@@ -607,6 +607,62 @@ The next milestone is Stage 1: Fixture And Evaluation Harness.
     ]))
   })
 
+  it('extracts explicit spec-to-task coverage links from decomposition inventory tables', async () => {
+    mkdirSync(join(dir, 'docs', 'harness'), { recursive: true })
+    mkdirSync(join(dir, 'docs', 'specs'), { recursive: true })
+    writeFileSync(join(dir, 'docs', 'specs', 'author-voice-system.md'), '# Author Voice System\n')
+    writeFileSync(join(dir, 'docs', 'specs', 'world-and-object-continuity.md'), '# World And Object Continuity\n')
+    writeFileSync(
+      join(dir, 'docs', 'harness', 'remaining-spec-decomposition-inventory.md'),
+      `# Remaining Spec Decomposition Inventory
+
+## 1. Already-Decomposed Specs (Reference)
+
+| Spec File | Matching Task(s) | Notes |
+|-----------|------------------|-------|
+| \`author-voice-system.md\` | \`author-voice-loop-mvp\` | done |
+| \`world-and-object-continuity.md\` | \`coherence-reviewer-mvp\` | done |
+| \`index.md\` | *(table of contents)* | ignore |
+`,
+    )
+
+    const sigs = await planningDocsSource.detect({
+      projectPath: dir,
+      exec: fakeExec(() => ({
+        stdout: [
+          'docs/harness/remaining-spec-decomposition-inventory.md',
+          'docs/specs/author-voice-system.md',
+          'docs/specs/world-and-object-continuity.md',
+        ].join('\n'),
+        code: 0,
+      })),
+    })
+
+    expect(sigs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'context',
+        role: 'reference',
+        title: 'Spec coverage: Author Voice System',
+        linkedTaskHints: ['author-voice-loop-mvp'],
+        references: [
+          join(dir, 'docs', 'specs', 'author-voice-system.md'),
+          join(dir, 'docs', 'harness', 'remaining-spec-decomposition-inventory.md'),
+        ],
+      }),
+      expect.objectContaining({
+        kind: 'context',
+        role: 'reference',
+        title: 'Spec coverage: World And Object Continuity',
+        linkedTaskHints: ['coherence-reviewer-mvp'],
+        references: [
+          join(dir, 'docs', 'specs', 'world-and-object-continuity.md'),
+          join(dir, 'docs', 'harness', 'remaining-spec-decomposition-inventory.md'),
+        ],
+      }),
+    ]))
+    expect(sigs.some((signal) => signal.title === 'Spec coverage: Index')).toBe(false)
+  })
+
   it('keeps full wrapped stage goals and every stage heading from one roadmap file', async () => {
     mkdirSync(join(dir, 'docs', 'harness'), { recursive: true })
     writeFileSync(

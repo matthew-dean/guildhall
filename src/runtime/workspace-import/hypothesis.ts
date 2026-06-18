@@ -73,6 +73,7 @@ export interface DraftContext {
   references?: readonly string[]
   domain?: string
   role?: 'capability' | 'reference'
+  linkedTaskHints?: readonly string[]
 }
 
 export interface WorkspaceImportDraft {
@@ -479,6 +480,7 @@ function addContext(
     ...(sig.references ? { references: sig.references } : {}),
     ...(sig.domainHint ? { domain: sig.domainHint } : {}),
     ...(sig.role ? { role: sig.role } : {}),
+    ...(sig.linkedTaskHints?.length ? { linkedTaskHints: [...sig.linkedTaskHints] } : {}),
   })
 }
 

@@ -37,6 +37,12 @@ export interface WorkspaceSignal {
    */
   role?: 'capability' | 'reference'
   /**
+   * Optional explicit task ids/titles documented as owning this signal's
+   * reference. This lets durable planning docs state "spec X is covered by
+   * task Y" without forcing downstream consumers to guess from title overlap.
+   */
+  linkedTaskHints?: string[]
+  /**
    * Optional project-area hint inferred from the evidence path, such as
    * `knit` or `looma`. This lets the hypothesis former keep nested repo
    * structure instead of flattening everything into a generic core bucket.

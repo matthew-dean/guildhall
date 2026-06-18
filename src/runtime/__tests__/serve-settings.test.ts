@@ -3256,6 +3256,99 @@ describe('Workspace Import review endpoints', () => {
     expect(body.startReadiness?.message).toContain('Spec: World And Object Continuity')
   })
 
+  it('treats documented spec-to-task coverage links as real structural coverage', async () => {
+    await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
+    await fs.mkdir(path.join(tmpDir, 'docs', 'specs'), { recursive: true })
+    await fs.writeFile(path.join(tmpDir, 'docs', 'specs', 'author-voice-system.md'), '# Author Voice System\n', 'utf8')
+    await fs.writeFile(path.join(tmpDir, 'docs', 'specs', 'world-and-object-continuity.md'), '# World And Object Continuity\n', 'utf8')
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'harness', 'remaining-spec-decomposition-inventory.md'),
+      [
+        '# Remaining Spec Decomposition Inventory',
+        '',
+        '## 1. Already-Decomposed Specs (Reference)',
+        '',
+        '| Spec File | Matching Task(s) | Notes |',
+        '|-----------|------------------|-------|',
+        '| `author-voice-system.md` | `author-voice-loop-mvp` | done |',
+        '| `world-and-object-continuity.md` | `coherence-reviewer-mvp` | done |',
+      ].join('\n'),
+      'utf8',
+    )
+    await fs.writeFile(path.join(tmpDir, 'package.json'), JSON.stringify({ name: 'spec-coverage-links' }), 'utf8')
+    await writeSystemText(
+      'TASKS.json',
+      JSON.stringify(
+        {
+          version: 1,
+          lastUpdated: '2026-01-01T00:00:00.000Z',
+          tasks: [
+            {
+              id: 'task-workspace-import',
+              title: 'Review existing project work',
+              description: 'Reserved importer',
+              domain: '_workspace_import',
+              projectPath: tmpDir,
+              status: 'done',
+              priority: 'normal',
+              acceptanceCriteria: [],
+              dependsOn: [],
+              outOfScope: [],
+              spec: [
+                '```yaml',
+                'milestones:',
+                '  - title: "Import reviewed"',
+                '    evidence: "Approved."',
+                '```',
+              ].join('\n'),
+              createdAt: '2026-01-01T00:00:00.000Z',
+              updatedAt: '2026-01-01T00:00:00.000Z',
+            },
+            {
+              id: 'author-voice-loop-mvp',
+              title: 'Build author voice loop MVP',
+              description: 'Implements the author voice loop.',
+              domain: 'harness',
+              projectPath: tmpDir,
+              status: 'done',
+              priority: 'high',
+              acceptanceCriteria: [],
+              dependsOn: [],
+              outOfScope: [],
+              createdAt: '2026-01-01T00:00:00.000Z',
+              updatedAt: '2026-01-01T00:00:00.000Z',
+            },
+            {
+              id: 'coherence-reviewer-mvp',
+              title: 'Build coherence reviewer MVP',
+              description: 'Implements the coherence reviewer lane.',
+              domain: 'coherence',
+              projectPath: tmpDir,
+              status: 'done',
+              priority: 'high',
+              acceptanceCriteria: [],
+              dependsOn: [],
+              outOfScope: [],
+              createdAt: '2026-01-01T00:00:00.000Z',
+              updatedAt: '2026-01-01T00:00:00.000Z',
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+    )
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(scoped('/api/project')))
+    expect(res.status).toBe(200)
+    const body = await res.json() as {
+      startReadiness?: { canStart?: boolean; code?: string; message?: string; actionHref?: string }
+    }
+    expect(body.startReadiness?.code).not.toBe('workspace_import_refresh_needed')
+    expect(body.startReadiness?.message ?? '').not.toContain('Spec: World And Object Continuity')
+  })
+
   it('does not let archived stale imports satisfy workspace-import coverage', async () => {
     await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
     await fs.writeFile(

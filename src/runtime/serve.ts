@@ -5014,6 +5014,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     const coveredTitles = new Set<string>()
     const currentScopeCoveredTitles = new Set<string>()
     const coveredRefs = new Set<string>()
+    const activeTaskHints = new Set<string>()
     for (const task of parsed.tasks) {
       if (typeof task.title === 'string' && task.title.trim().length > 0) {
         const normalized = normalizeImportTitle(task.title)
@@ -5032,14 +5033,30 @@ export function buildServeApp(opts: ServeOptions = {}): {
         ? (task as { status: string }).status
         : ''
       if (status === 'archived' || status === 'cancelled') continue
+      const id = typeof (task as { id?: unknown }).id === 'string'
+        ? (task as { id: string }).id
+        : ''
+      if (id.trim()) activeTaskHints.add(normalizeImportTitle(id))
       const title = typeof (task as { title?: unknown }).title === 'string'
         ? (task as { title: string }).title
         : ''
       if (!title.trim()) continue
       const normalized = normalizeImportTitle(title)
+      activeTaskHints.add(normalized)
       coveredTitles.add(normalized)
       if (status !== 'shelved') currentScopeCoveredTitles.add(normalized)
       for (const ref of refsFromRecord(task)) coveredRefs.add(ref)
+    }
+    for (const context of detected.context) {
+      if (context.role !== 'reference') continue
+      const linkedTaskHints = Array.isArray(context.linkedTaskHints)
+        ? context.linkedTaskHints
+            .filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+            .map(normalizeImportTitle)
+        : []
+      if (linkedTaskHints.length === 0) continue
+      if (!linkedTaskHints.some(hint => activeTaskHints.has(hint))) continue
+      for (const ref of refsFromRecord(context)) coveredRefs.add(ref)
     }
 
     const missing = detected.tasks.filter(task => {
