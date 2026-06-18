@@ -2666,10 +2666,10 @@ describe('Workspace Import review endpoints', () => {
     }
 
     expect(body.ok).toBe(true)
-    expect(body.tasksAdded).toBe(4)
+    expect(body.tasksAdded).toBe(3)
 
     const tasks = await readTasks(tmpDir)
-    expect(tasks.some(task => task.id === 'curated-first-task')).toBe(true)
+    expect(tasks.some(task => task.id === 'curated-first-task')).toBe(false)
     expect(tasks.some(task => task.title === 'Detector task one')).toBe(true)
     expect(tasks.some(task => task.title === 'Detector task two')).toBe(true)
     expect(tasks.some(task => task.title === 'Detector task three')).toBe(true)
@@ -2746,6 +2746,127 @@ describe('Workspace Import review endpoints', () => {
     const tasks = await readTasks(tmpDir)
     expect(tasks.some(task => task.title === 'Define fixture, expected-record, prototype-run, and evaluation schemas.')).toBe(true)
     expect(tasks.some(task => task.title === 'Add the first tiny fiction fixture and human-authored expected records.')).toBe(true)
+  })
+
+  it('treats posting the full detected defaults as a full refresh and archives stale importer residue', async () => {
+    await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'harness', 'implementation-roadmap.md'),
+      [
+        '# Implementation Roadmap',
+        '',
+        '## Current Next Milestone',
+        '',
+        '1. Define fixture, expected-record, prototype-run, and evaluation schemas.',
+      ].join('\n'),
+      'utf8',
+    )
+    await fs.writeFile(path.join(tmpDir, 'package.json'), JSON.stringify({ name: 'full-refresh-defaults' }), 'utf8')
+    await writeSystemText(
+      'TASKS.json',
+      JSON.stringify(
+        {
+          version: 1,
+          lastUpdated: '2026-01-01T00:00:00.000Z',
+          tasks: [
+            {
+              id: 'task-workspace-import',
+              title: 'Review existing project work',
+              description: 'Reserved importer',
+              domain: '_workspace_import',
+              projectPath: tmpDir,
+              status: 'spec_review',
+              priority: 'normal',
+              acceptanceCriteria: [],
+              dependsOn: [],
+              outOfScope: [],
+              spec: '',
+              createdAt: '2026-01-01T00:00:00.000Z',
+              updatedAt: '2026-01-01T00:00:00.000Z',
+            },
+            {
+              id: 'task-stale-import',
+              title: '*(none — umbrella doc, covered by child specs)*',
+              description: 'Old importer residue.',
+              domain: 'core',
+              projectPath: tmpDir,
+              status: 'import_draft',
+              priority: 'normal',
+              acceptanceCriteria: [],
+              dependsOn: [],
+              outOfScope: [],
+              notes: [],
+              gateResults: [],
+              reviewVerdicts: [],
+              adjudications: [],
+              escalations: [],
+              agentIssues: [],
+              revisionCount: 0,
+              remediationAttempts: 0,
+              origination: 'human',
+              requestIntake: {
+                intent: 'spec_only',
+                recommendedNextAction: 'draft_spec',
+                componentStack: [],
+                assumptions: [],
+                missingInformation: [],
+                evidenceRefs: [],
+                pressureTestSummary: {
+                  systemOwned: true,
+                  degree: 'guided',
+                  qualityBar:
+                    'Treat imported drafts as candidate work that must be reshaped against current evidence before implementation starts.',
+                  ownerQuestionPolicy:
+                    'Only ask when the imported evidence is no longer enough to choose a trustworthy task boundary or success condition.',
+                  checks: [],
+                },
+                clarifyingQuestions: [],
+                createdAt: '2026-01-01T00:00:00.000Z',
+                createdBy: 'workspace-importer',
+              },
+              createdAt: '2026-01-01T00:00:00.000Z',
+              updatedAt: '2026-01-01T00:00:00.000Z',
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+    )
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const draft = await app.fetch(new Request(scoped('/api/project/workspace-import/draft')))
+    expect(draft.status).toBe(200)
+    const draftBody = (await draft.json()) as {
+      detected: {
+        learning: {
+          defaults: {
+            selectedAreaKeys: string[]
+            selectedSourceKeys: string[]
+            selectedTaskIds: string[]
+          }
+        }
+      }
+    }
+
+    const approve = await app.fetch(
+      new Request(scoped('/api/project/workspace-import/approve'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          areaKeys: draftBody.detected.learning.defaults.selectedAreaKeys,
+          sourceKeys: draftBody.detected.learning.defaults.selectedSourceKeys,
+          taskIds: draftBody.detected.learning.defaults.selectedTaskIds,
+        }),
+      }),
+    )
+    const approveBody = await approve.json()
+    if (approve.status !== 200) {
+      throw new Error(`approve failed: status=${approve.status} body=${JSON.stringify(approveBody)}`)
+    }
+
+    const tasks = await readTasks(tmpDir)
+    expect(tasks.find(task => task.id === 'task-stale-import')?.status).toBe('archived')
   })
 
   it('blocks all-terminal readiness when the saved import is under-scoped for the current docs', async () => {

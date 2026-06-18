@@ -9,6 +9,7 @@ import { loadLeverSettings, defaultAgentSettingsPath } from '@guildhall/levers'
 import {
   detectWorkspaceSignals,
   formWorkspaceHypothesis,
+  isFormattingDebris,
   type DraftGoal,
   type DraftMilestone,
   type DraftTask,
@@ -583,8 +584,12 @@ function mergeImportReferences(
 export function mergeWorkspaceImportDraft(
   detected: WorkspaceImportDraft,
   parsed: ParsedImport | null,
+  options: {
+    retainParsedOnlyTasks?: boolean
+  } = {},
 ): WorkspaceImportDraft {
   if (!parsed) return detected
+  const retainParsedOnlyTasks = options.retainParsedOnlyTasks ?? true
   const parsedTasks = suppressShadowedParsedCurrentMilestoneDeliverables(parsed.tasks)
 
   const mergedGoals: DraftGoal[] = []
@@ -662,6 +667,7 @@ export function mergeWorkspaceImportDraft(
   for (const task of parsedTasks) {
     const normalizedTitle = normalizeImportText(task.title)
     if (usedTaskTitles.has(normalizedTitle)) continue
+    if (!retainParsedOnlyTasks) continue
     mergedTasks.push({
       suggestedId: task.id,
       title: task.title,
@@ -1056,6 +1062,7 @@ export interface ApproveWorkspaceImportInput {
   coordinatorProjectPaths?: Record<string, string>
   draftOverride?: WorkspaceImportDraft
   detectedDraftSnapshot?: WorkspaceImportDraft
+  replacePreviouslyImportedTasks?: boolean
 }
 
 export interface ApproveWorkspaceImportResult {
@@ -1412,7 +1419,7 @@ async function materializeEvidenceWorkGraphTasks(
     task,
     parsedTasksById.get(task.id)
       ?? parsedTasksByTitle.get(normalizeImportText(task.title)),
-  ))
+  )).filter(task => !isFormattingDebris({ title: task.title }))
   const shadowedImports = new Set(
     detectShadowedCurrentMilestoneDeliverableImports(sources).map(candidate =>
       `${candidate.sourcePath}::${candidate.title}`,
@@ -1538,6 +1545,7 @@ export async function approveWorkspaceImport(
   const approvedSpec = input.draftOverride
     ? formatDetectedDraftAsSpec(input.draftOverride)
     : null
+  const approvedTaskTitles = new Set(parsed.tasks.map(task => normalizeImportText(task.title)))
 
   const now = new Date().toISOString()
   const materializedTasks = await materializeEvidenceWorkGraphTasks({
@@ -1686,6 +1694,29 @@ export async function approveWorkspaceImport(
     if (imported.proofPaths) existing.proofPaths = [...imported.proofPaths]
     else delete existing.proofPaths
     existing.updatedAt = now
+  }
+
+  if (input.replacePreviouslyImportedTasks) {
+    for (const existingTask of queue.tasks) {
+      if (existingTask.id === WORKSPACE_IMPORT_TASK_ID) continue
+      if (existingTask.status !== 'import_draft' && existingTask.status !== 'shelved') continue
+      if (existingTask.origination !== 'human') continue
+      if (existingTask.requestIntake?.createdBy !== 'workspace-importer') continue
+      const normalizedTitle = normalizeImportText(existingTask.title)
+      if (!normalizedTitle || approvedTaskTitles.has(normalizedTitle)) continue
+      existingTask.status = 'archived'
+      existingTask.updatedAt = now
+      existingTask.notes = [
+        ...(existingTask.notes ?? []),
+        {
+          agentId: 'workspace-importer',
+          role: 'system',
+          timestamp: now,
+          content:
+            'Workspace import refresh archived this draft because it is no longer part of the approved import scope.',
+        },
+      ]
+    }
   }
 
   let tasksAdded = 0

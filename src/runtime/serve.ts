@@ -167,7 +167,7 @@ import {
   recordExternalAgentLink,
 } from './external-agent-links.js'
 import { deriveProjectWorkProgress, type ProjectWorkProgress } from './work-progress.js'
-import { buildProjectOrientationSpine, type ProjectOrientationCharter } from './project-orientation-spine.js'
+import { buildProjectOrientationSpine, taskEligibleForSelectedScope, type ProjectOrientationCharter } from './project-orientation-spine.js'
 import type { SurfaceReviewPacket } from './contract-surfaces.js'
 import {
   acceptProjectDependencyDelivery,
@@ -6410,10 +6410,6 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const inventory = await detectWorkspaceSignals({ projectPath: project.path })
       const fullDraft = formWorkspaceHypothesis(inventory)
       const review = buildWorkspaceImportReview(fullDraft, [], project.path)
-      const hasExplicitNarrowing =
-        Array.isArray(body.areaKeys) ||
-        Array.isArray(body.sourceKeys) ||
-        Array.isArray(body.taskIds)
       const selectedSourceKeys = Array.isArray(body.sourceKeys)
         ? body.sourceKeys
         : review.sourceGroups.filter(group => group.taskCount > 0).map(group => group.key)
@@ -6429,6 +6425,23 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const selectedTaskIds = Array.isArray(body.taskIds)
         ? body.taskIds
         : fullDraft.tasks.map(task => task.suggestedId)
+      const defaultSourceKeys = review.sourceGroups
+        .filter(group => group.taskCount > 0)
+        .map(group => group.key)
+      const defaultAreaKeys = review.areaGroups
+        .filter(area =>
+          review.sourceGroups.some(
+            group => group.taskCount > 0 && group.areaKey === area.key,
+          ),
+        )
+        .map(area => area.key)
+      const hasExplicitNarrowing =
+        selectedTaskIds.length !== fullDraft.tasks.length ||
+        selectedSourceKeys.length !== defaultSourceKeys.length ||
+        selectedAreaKeys.length !== defaultAreaKeys.length ||
+        selectedTaskIds.some(taskId => !fullDraft.tasks.some(task => task.suggestedId === taskId)) ||
+        selectedSourceKeys.some(sourceKey => !defaultSourceKeys.includes(sourceKey)) ||
+        selectedAreaKeys.some(areaKey => !defaultAreaKeys.includes(areaKey))
       const filteredDraft = filterWorkspaceImportDraft(fullDraft, {
         sourceKeys: selectedSourceKeys,
         taskIds: selectedTaskIds,
@@ -6447,7 +6460,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
       const effectiveDraft =
         !hasExplicitNarrowing && parsedSavedImporterSpec
-          ? mergeWorkspaceImportDraft(filteredDraft, parsedSavedImporterSpec)
+          ? mergeWorkspaceImportDraft(filteredDraft, parsedSavedImporterSpec, {
+              retainParsedOnlyTasks: false,
+            })
           : filteredDraft
 
       const result = await approveWorkspaceImport({
@@ -6460,6 +6475,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         ),
         draftOverride: effectiveDraft,
         detectedDraftSnapshot: fullDraft,
+        replacePreviouslyImportedTasks: !hasExplicitNarrowing,
       })
       if (!result.success) {
         return c.json({ error: result.error ?? 'Approval failed' }, 400)
@@ -9422,6 +9438,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const dirtyCheckout = await guildhallOwnedDirtyCheckout(project.path)
       const gitStory = await buildProjectGitStorySummary(project.path, tasks)
 
+      const scopedTasks = tasks.filter(task => taskEligibleForSelectedScope(task, readinessSpine.scope).eligible)
       const statusCounts: Record<string, number> = {}
       const openEscalations: Array<{ taskId: string; taskTitle: string; escalationId: string; reason: string; summary: string }> = []
       const incompleteBriefs: Array<{ id: string; title: string; reason: string }> = []
@@ -9432,7 +9449,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const terminalStatuses = new Set(['done', 'shelved', 'cancelled', 'archived', 'pending_pr'])
       let unfinishedCount = 0
 
-      for (const t of tasks) {
+      for (const t of scopedTasks) {
         const status = String((t as { status?: string }).status ?? 'unknown')
         statusCounts[status] = (statusCounts[status] ?? 0) + 1
         if (!terminalStatuses.has(status)) unfinishedCount += 1
@@ -9473,12 +9490,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
         }
       }
 
-      const humanBlockingCount =
-        openEscalations.length
-        + incompleteBriefs.length
-        + unapprovedBriefs.length
-        + unapprovedSpecs.length
-        + blockedByAgent.length
+      const humanBlockingKeys = new Set<string>()
+      for (const escalation of openEscalations) humanBlockingKeys.add(`task:${escalation.taskId}`)
+      for (const brief of incompleteBriefs) humanBlockingKeys.add(`task:${brief.id}`)
+      for (const brief of unapprovedBriefs) humanBlockingKeys.add(`task:${brief.id}`)
+      for (const spec of unapprovedSpecs) humanBlockingKeys.add(`task:${spec.id}`)
+      for (const blocked of blockedByAgent) humanBlockingKeys.add(`task:${blocked.id}`)
+      const humanBlockingCount = humanBlockingKeys.size
       const designSystemBlockingCount = tasks.length > 0 && !designSystem.approved ? 1 : 0
       const dirtyCheckoutBlockingCount = dirtyCheckout.ownedCount > 0 || dirtyCheckout.error ? 1 : 0
       const gitStoryBlockingCount = gitStory.blockers.length
@@ -9492,8 +9510,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
       return c.json({
         release,
         scope: readinessScope,
-        ready: tasks.length > 0 && blockingCount === 0,
-        ...(tasks.length === 0 ? { notReadyReason: 'No tasks in this project yet.' } : {}),
+        ready: scopedTasks.length > 0 && blockingCount === 0,
+        ...(scopedTasks.length === 0 ? { notReadyReason: 'No tasks in this scope yet.' } : {}),
         statusCounts,
         openEscalations,
         incompleteBriefs,
@@ -9505,7 +9523,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         dirtyCheckout,
         gitStory,
         totals: {
-          tasks: tasks.length,
+          tasks: scopedTasks.length,
           blockingCount,
           humanBlockingCount,
           incompleteBriefBlockingCount: incompleteBriefs.length,

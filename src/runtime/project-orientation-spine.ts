@@ -562,6 +562,15 @@ function taskTitle(task: OrientationTaskInput): string {
   return taskDisplayLabel(task, task.id)
 }
 
+function taskCountsTowardScopeProgress(
+  task: Pick<OrientationTaskInput, 'id'>,
+  scope: OrientationScope | null,
+): boolean {
+  if (!scope) return true
+  const nodeId = taskNodeId(task.id)
+  return scope.nodeIds.includes(nodeId) || scope.deferredNodeIds.includes(nodeId)
+}
+
 function hasSpec(task: OrientationTaskInput): boolean {
   return Boolean(task.spec?.trim()) || task.structuredSpec != null || task.status === 'spec_review'
 }
@@ -685,8 +694,16 @@ function buildNodes(
       .map(childId => tasksById.get(childId))
       .filter((child): child is OrientationTaskInput => Boolean(child))
       .map(build)
-    const childProgress = children.reduce((progress, child) => addProgress(progress, child.progress), emptyProgress(scope?.id ?? null))
-    const ownProgress = progressForTask(task, maturity, scope?.id ?? null)
+    const visibility = visibilityForTask(task)
+    const childProgress = children.reduce(
+      (progress, child) => child.visibility.countInProjectTotals
+        ? addProgress(progress, child.progress)
+        : progress,
+      emptyProgress(scope?.id ?? null),
+    )
+    const ownProgress = visibility.countInProjectTotals && taskCountsTowardScopeProgress(task, scope)
+      ? progressForTask(task, maturity, scope?.id ?? null)
+      : emptyProgress(scope?.id ?? null)
     const proof = proofForTask(task)
     const node: OrientationNode = {
       id: taskNodeId(task.id),
@@ -708,7 +725,7 @@ function buildNodes(
         inferred: false,
         refreshedAt: now,
       },
-      visibility: visibilityForTask(task),
+      visibility,
       children,
     }
     if (maturity === 'needs_breakdown') {

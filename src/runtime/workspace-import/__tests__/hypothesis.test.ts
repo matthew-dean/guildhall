@@ -270,6 +270,30 @@ describe('formWorkspaceHypothesis', () => {
     expect(draft.tasks.map((task) => task.title)).toEqual(['Fix import review affordance'])
   })
 
+  it('filters umbrella placeholders that say child specs own the real work', () => {
+    const draft = formWorkspaceHypothesis(
+      invFrom([
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: '*(none — umbrella doc, covered by child specs)*',
+          evidence: 'recommended first task title',
+          confidence: 'medium',
+        },
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'Implement packet-builder implementation for the first writer/editor packet types',
+          evidence: 'real backlog item',
+          confidence: 'high',
+        },
+      ]),
+    )
+    expect(draft.tasks.map((task) => task.title)).toEqual([
+      'Implement packet-builder implementation for the first writer/editor packet types',
+    ])
+  })
+
   it('filters colon-ended grouping headers from task backlog', () => {
     const draft = formWorkspaceHypothesis(
       invFrom([

@@ -172,6 +172,57 @@ describe('buildProjectOrientationSpine', () => {
     expect(spine.nodes['work:task-later']?.maturity).toBe('deferred')
   })
 
+  it('does not let hidden or out-of-scope leftovers bloat current-scope progress totals', () => {
+    const spine = buildProjectOrientationSpine({
+      projectId: 'narrative-harness',
+      now: '2026-06-18T12:00:00.000Z',
+      scope: {
+        id: 'current-work',
+        label: 'Current work',
+        kind: 'proposed_feature_set',
+        source: 'inferred',
+        nodeIds: ['work:task-current'],
+        deferredNodeIds: [],
+      },
+      tasks: [
+        {
+          id: 'task-current',
+          title: 'Current harness slice',
+          description: 'Current-scope work.',
+          domain: 'harness',
+          projectPath: '/tmp/narrative-harness',
+          status: 'import_draft',
+          priority: 'normal',
+        },
+        {
+          id: 'task-stale-shelved',
+          title: 'Old deferred residue',
+          description: 'Not actually part of the selected scope.',
+          domain: 'harness',
+          projectPath: '/tmp/narrative-harness',
+          status: 'shelved',
+          priority: 'normal',
+        },
+        {
+          id: 'task-archived',
+          title: 'Archived residue',
+          description: 'Historical noise.',
+          domain: 'harness',
+          projectPath: '/tmp/narrative-harness',
+          status: 'archived',
+          priority: 'normal',
+        },
+      ],
+    })
+
+    expect(spine.summary.includedWorkCount).toBe(1)
+    expect(spine.summary.deferredWorkCount).toBe(0)
+    expect(spine.summary.progress).toMatchObject({
+      total: 1,
+      deferred: 0,
+    })
+  })
+
   it('uses durable task references as first-class task source refs', () => {
     const spine = buildProjectOrientationSpine({
       projectId: 'narrative-harness',

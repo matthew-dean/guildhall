@@ -260,7 +260,11 @@ function extractRecommendedTaskSeeds(source: EvidenceSource): UnitSeed[] {
 
   const flush = () => {
     const title = stripInlineCode(currentRecommendedTitle.trim())
-    if (!title || /^\(?none\b/i.test(title)) {
+    const normalizedTitle = title
+      .toLowerCase()
+      .replace(/[`*_~]/g, '')
+      .trim()
+    if (!normalizedTitle || /^\(?none\b/i.test(normalizedTitle)) {
       currentRecommendedTitle = ''
       return
     }

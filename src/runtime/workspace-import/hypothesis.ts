@@ -215,11 +215,12 @@ function scopeFromSignal(sig: WorkspaceSignal): DraftTask['scope'] {
   return sig.scopeHint === 'later' ? 'later' : 'current'
 }
 
-function isFormattingDebris(sig: WorkspaceSignal): boolean {
+export function isFormattingDebris(sig: Pick<WorkspaceSignal, 'title'>): boolean {
   if (sig.title.trim().endsWith(':')) return true
   const title = normalize(sig.title)
   if (!title) return true
   if (title === 'none' || title === 'n a' || title === 'na' || title === 'tbd') return true
+  if (title.includes('umbrella doc') && title.includes('covered by child specs')) return true
   if (title === 'open questions if any' || title === 'out of scope') return true
   if (title === 'numbered given when then acceptance criteria') return true
   if (title === 'test mapping which ac is unit vs integration') return true

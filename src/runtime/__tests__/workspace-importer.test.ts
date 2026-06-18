@@ -998,6 +998,259 @@ tasks:
     ])
   })
 
+  it('archives stale importer-generated draft residue during a full scope replacement refresh', async () => {
+    await writeQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      tasks: [
+        {
+          id: WORKSPACE_IMPORT_TASK_ID,
+          title: 'Review existing project work',
+          description: 'Reserved importer',
+          domain: WORKSPACE_IMPORT_DOMAIN,
+          projectPath: tmpDir,
+          status: 'spec_review',
+          priority: 'high',
+          spec: '',
+          acceptanceCriteria: [],
+          dependsOn: [],
+          outOfScope: [],
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          adjudications: [],
+          escalations: [],
+          agentIssues: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          origination: 'system',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+        {
+          id: 'task-stale-import',
+          title: '*(none — umbrella doc, covered by child specs)*',
+          description: 'Old importer residue.',
+          domain: 'core',
+          projectPath: tmpDir,
+          status: 'import_draft',
+          priority: 'normal',
+          acceptanceCriteria: [],
+          dependsOn: [],
+          outOfScope: [],
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          adjudications: [],
+          escalations: [],
+          agentIssues: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          origination: 'human',
+          requestIntake: {
+            intent: 'spec_only',
+            recommendedNextAction: 'draft_spec',
+            componentStack: [],
+            assumptions: [],
+            missingInformation: [],
+            evidenceRefs: [],
+            pressureTestSummary: {
+              systemOwned: true,
+              degree: 'guided',
+              qualityBar: 'Treat imported drafts as candidate work that must be reshaped against current evidence before implementation starts.',
+              ownerQuestionPolicy: 'Only ask when the imported evidence is no longer enough to choose a trustworthy task boundary or success condition.',
+              checks: [],
+            },
+            clarifyingQuestions: [],
+            createdAt: new Date().toISOString(),
+            createdBy: 'workspace-importer',
+          },
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        } as Task,
+      ],
+    })
+
+    const draftOverride: WorkspaceImportDraft = {
+      goals: [],
+      tasks: [
+        {
+          suggestedId: 'task-import-schema',
+          title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+          description: '1. Define fixture, expected-record, prototype-run, and evaluation schemas.',
+          domain: 'harness',
+          scope: 'current',
+          priority: 'high',
+          references: ['docs/harness/implementation-roadmap.md'],
+          source: 'workspace-importer',
+          confidence: 'high',
+        },
+      ],
+      milestones: [],
+      context: [],
+      stats: {
+        inputSignals: 1,
+        drafted: 1,
+        deduped: 0,
+      },
+    }
+
+    const approved = await approveWorkspaceImport({
+      memoryDir,
+      projectPath: tmpDir,
+      draftOverride,
+      replacePreviouslyImportedTasks: true,
+    })
+    expect(approved).toMatchObject({ success: true, tasksAdded: 1 })
+
+    const q = await readQueue()
+    expect(q.tasks.find(task => task.id === 'task-stale-import')).toMatchObject({
+      status: 'archived',
+    })
+    expect(q.tasks.find(task => task.id === 'task-stale-import')?.notes?.at(-1)?.content ?? '').toContain(
+      'no longer part of the approved import scope',
+    )
+  })
+
+  it('does not let evidence-graph expansion revive umbrella placeholders during approval', async () => {
+    await fs.mkdir(path.join(tmpDir, 'docs/harness'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'docs/harness/remaining-spec-decomposition-inventory.md'),
+      [
+        '# Remaining Spec Decomposition Inventory',
+        '',
+        '### 2.8 `story-intelligence-overview.md`',
+        '',
+        '- **Recommended first task title:** *(none — umbrella doc, covered by child specs)*',
+        '- **Recommended domain:** *(none)*',
+        '- **Stage alignment:** Stage 2 (Agent Coordination)',
+        '',
+        '### 2.9 `dialogue-and-character-voice.md`',
+        '',
+        '- **Recommended first task title:** Implement dialogue-and-character-voice reviewer lane',
+        '- **Recommended domain:** coherence',
+        '- **Stage alignment:** Stage 2 (Agent Coordination)',
+      ].join('\n'),
+      'utf8',
+    )
+
+    await writeQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      tasks: [
+        {
+          id: WORKSPACE_IMPORT_TASK_ID,
+          title: 'Review existing project work',
+          description: 'Reserved importer',
+          domain: WORKSPACE_IMPORT_DOMAIN,
+          projectPath: tmpDir,
+          status: 'spec_review',
+          priority: 'high',
+          spec: '',
+          acceptanceCriteria: [],
+          dependsOn: [],
+          outOfScope: [],
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          adjudications: [],
+          escalations: [],
+          agentIssues: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          origination: 'system',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+        {
+          id: 'task-stale-import',
+          title: '*(none — umbrella doc, covered by child specs)*',
+          description: 'Old umbrella residue.',
+          domain: 'core',
+          projectPath: tmpDir,
+          status: 'import_draft',
+          priority: 'normal',
+          acceptanceCriteria: [],
+          dependsOn: [],
+          outOfScope: [],
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          adjudications: [],
+          escalations: [],
+          agentIssues: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          origination: 'human',
+          requestIntake: {
+            intent: 'spec_only',
+            recommendedNextAction: 'draft_spec',
+            componentStack: [],
+            assumptions: [],
+            missingInformation: [],
+            evidenceRefs: [],
+            pressureTestSummary: {
+              systemOwned: true,
+              degree: 'guided',
+              qualityBar: 'Treat imported drafts as candidate work that must be reshaped against current evidence before implementation starts.',
+              ownerQuestionPolicy: 'Only ask when the imported evidence is no longer enough to choose a trustworthy task boundary or success condition.',
+              checks: [],
+            },
+            clarifyingQuestions: [],
+            createdAt: new Date().toISOString(),
+            createdBy: 'workspace-importer',
+          },
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        } as Task,
+      ],
+    })
+
+    const approved = await approveWorkspaceImport({
+      memoryDir,
+      projectPath: tmpDir,
+      draftOverride: {
+        goals: [],
+        tasks: [
+          {
+            suggestedId: 'task-dialogue-lane',
+            title: 'Implement dialogue-and-character-voice reviewer lane',
+            description: 'Build the first reviewer lane from the decomposition inventory.',
+            domain: 'coherence',
+            scope: 'current',
+            priority: 'high',
+            references: ['docs/harness/remaining-spec-decomposition-inventory.md'],
+            source: 'planning-docs',
+            confidence: 'high',
+          },
+        ],
+        milestones: [],
+        context: [],
+        stats: {
+          inputSignals: 1,
+          drafted: 1,
+          deduped: 0,
+        },
+      },
+      replacePreviouslyImportedTasks: true,
+    })
+
+    expect(approved).toMatchObject({ success: true, tasksAdded: 1 })
+
+    const q = await readQueue()
+    expect(q.tasks.find(task => task.id === 'task-stale-import')).toMatchObject({
+      status: 'archived',
+    })
+    expect(
+      q.tasks
+        .filter(task => task.status !== 'archived')
+        .map(task => task.title),
+    ).not.toContain('*(none — umbrella doc, covered by child specs)*')
+    expect(q.tasks.find(task => task.id === 'task-dialogue-lane')).toMatchObject({
+      status: 'import_draft',
+    })
+  })
+
   it('does not duplicate already-imported tasks when a refreshed import includes the same title again', async () => {
     await writeQueue({
       version: 1,
@@ -1633,6 +1886,40 @@ tasks:
       description: 'docs/harness/implementation-roadmap.md: 1. Define fixture, expected-record, prototype-run, and evaluation schemas.',
     })
     expect(merged.tasks.find(task => task.title === 'fixture directory shape for at least one small story fixture')).toBeUndefined()
+  })
+
+  it('can ignore parsed-only stale tasks during a full refresh merge', () => {
+    const detected = formWorkspaceHypothesis(invWith([
+      {
+        source: 'planning-docs',
+        kind: 'open_work',
+        title: 'Build packet runner',
+        evidence: 'current task',
+        confidence: 'high',
+        references: ['docs/harness/implementation-roadmap.md'],
+      },
+    ]))
+    const parsed = parseWorkspaceImport(`
+\`\`\`yaml
+tasks:
+  - id: task-runner
+    title: Build packet runner
+    description: Refined runner scope.
+    domain: harness
+    priority: high
+  - id: task-stale
+    title: *(none — umbrella doc, covered by child specs)*
+    description: stale umbrella residue
+    domain: harness
+    priority: normal
+\`\`\`
+`)
+
+    const merged = mergeWorkspaceImportDraft(detected, parsed, {
+      retainParsedOnlyTasks: false,
+    })
+
+    expect(merged.tasks.map(task => task.title)).toEqual(['Build packet runner'])
   })
 
   it('drops stale parsed goal fragments when detected goals now contain the full wrapped sentence', () => {

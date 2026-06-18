@@ -354,6 +354,33 @@ describe('evidence-to-work-graph intake', () => {
     )
   })
 
+  it('ignores markdown-decorated none placeholders in recommended first task titles', () => {
+    const plan = planEvidenceWorkGraph({
+      sources: [{
+        path: 'docs/harness/remaining-spec-decomposition-inventory.md',
+        content: [
+          '# Remaining Spec Decomposition Inventory',
+          '',
+          '### 2.8 `story-intelligence-overview.md`',
+          '',
+          '- **Recommended first task title:** *(none — umbrella doc, covered by child specs)*',
+          '- **Recommended domain:** *(none)*',
+          '- **Stage alignment:** Stage 2 (Agent Coordination)',
+          '',
+          '### 2.9 `dialogue-and-character-voice.md`',
+          '',
+          '- **Recommended first task title:** Implement dialogue-and-character-voice reviewer lane',
+          '- **Recommended domain:** coherence',
+          '- **Stage alignment:** Stage 2 (Agent Coordination)',
+        ].join('\n'),
+      }],
+      existingTasks: [],
+    })
+
+    expect(plan.tasks.map(task => task.title)).toContain('Implement dialogue-and-character-voice reviewer lane')
+    expect(plan.tasks.map(task => task.title)).not.toContain('*(none — umbrella doc, covered by child specs)*')
+  })
+
   it('keeps later-stage inventory recommendations inside the same MVP task graph when a roadmap names the active milestone stage', () => {
     const plan = planEvidenceWorkGraph({
       sources: [

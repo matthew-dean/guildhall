@@ -134,7 +134,7 @@ describe('GET /api/project/release-readiness', () => {
     expect(body.ready).toBe(false)
     expect(body.release).toBeNull()
     expect(body.scope).toMatchObject({ id: 'current-work', label: 'Current work', kind: 'current_work' })
-    expect(body.notReadyReason).toBe('No tasks in this project yet.')
+    expect(body.notReadyReason).toBe('No tasks in this scope yet.')
     expect(body.totals.blockingCount).toBe(0)
     expect(body.openEscalations).toEqual([])
     expect(body.unapprovedBriefs).toEqual([])
@@ -173,6 +173,53 @@ describe('GET /api/project/release-readiness', () => {
       source: 'release_plan',
     })
     expect(body.scope).toMatchObject({ id: '2-0-alpha', label: '2.0 alpha' })
+  })
+
+  it('counts only the selected scope when later or stale tasks remain elsewhere in the queue', async () => {
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: 'headless-mvp',
+      releases: [{
+        id: 'headless-mvp',
+        label: 'Headless MVP',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-current'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [
+        makeTask({ id: 'task-current', title: 'Current proof lane', status: 'import_draft' }),
+        makeTask({
+          id: 'task-later',
+          title: 'Later reviewer lane',
+          status: 'shelved',
+          shelveReason: {
+            code: 'no_op',
+            detail: 'Out-of-scope legacy residue.',
+            rejectedBy: 'system:proposal-policy',
+            rejectedAt: new Date(0).toISOString(),
+            source: 'proposal_policy',
+            policyApplied: true,
+          },
+        } as any),
+        makeTask({ id: 'task-archived', title: 'Archived residue', status: 'archived' }),
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await approveDesignSystem(app)
+    await commitAndPush('scope-only release readiness')
+
+    const res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
+    const body = await res.json() as any
+
+    expect(body.scope).toMatchObject({ id: 'headless-mvp', label: 'Headless MVP' })
+    expect(body.totals.tasks).toBe(1)
+    expect(body.statusCounts).toEqual({ import_draft: 1 })
+    expect(body.shelvedUnclaimed).toEqual([])
+    expect(body.totals.unfinishedCount).toBe(1)
   })
 
   it('returns a plain release-readiness load error when task state cannot be read', async () => {
@@ -372,7 +419,7 @@ describe('GET /api/project/release-readiness', () => {
     expect(body.totals.dirtyCheckoutBlockingCount).toBe(1)
   })
 
-  it('surfaces open escalations, shelved tasks, and blocked tasks', async () => {
+  it('does not let deferred fallback-scope shelves block current work closure', async () => {
     const now = new Date().toISOString()
     await seed([
       makeTask({
@@ -415,10 +462,10 @@ describe('GET /api/project/release-readiness', () => {
       escalationId: 'esc-1',
       reason: 'spec_ambiguous',
     })
-    expect(body.shelvedUnclaimed.map((s: any) => s.id)).toEqual(['task-2'])
+    expect(body.shelvedUnclaimed).toEqual([])
     expect(body.blockedByAgent.map((b: any) => b.id)).toEqual(['task-1'])
-    expect(body.totals.humanBlockingCount).toBe(2)
-    expect(body.totals.blockingCount).toBeGreaterThan(2)
+    expect(body.totals.humanBlockingCount).toBe(1)
+    expect(body.totals.blockingCount).toBeGreaterThan(1)
   })
 
   it('reports the design-system approval state', async () => {
