@@ -2337,6 +2337,14 @@ tasks:
       'finding-shape',
       'deterministic-proof',
     ])
+    expect(dialogue?.workUnitAnalysis?.units.map(unit => unit.title)).toEqual([
+      'Define the craft lens for Implement dialogue-and-character-voice reviewer lane',
+      'Encode the spec-native review prompts',
+      'Protect the lane boundary and voice rules',
+      'Shape actionable finding output',
+      'Add deterministic fixture proof for the reviewer lane',
+    ])
+    expect(dialogue?.sizePlan?.action).toBe('decompose_before_execution')
     expect(dialogue?.acceptanceCriteria?.[1]?.description).toContain('Could the line be reassigned to another character without anyone noticing?')
     expect(dialogue?.proofPaths?.[1]?.expectedEvidence?.join(' ')).toContain('Recorded findings answer prompts')
     expect(dialogue?.spec).not.toContain('follows target-area conventions')
@@ -2348,6 +2356,13 @@ tasks:
       'fiction-boundary',
       'deterministic-proof',
     ])
+    expect(feedback?.workUnitAnalysis?.units.map(unit => unit.title)).toEqual([
+      'Preserve the workflow order for Implement editor-writer feedback chain contract and weighted-feedback pipeline',
+      'Model multidimensional finding weights',
+      'Preserve severity and fiction-first boundaries',
+      'Add deterministic proof for the workflow pipeline',
+    ])
+    expect(feedback?.sizePlan?.action).toBe('decompose_before_execution')
     expect(feedback?.acceptanceCriteria?.[1]?.description).toContain('Severity, Confidence, Voice risk')
     expect(feedback?.acceptanceCriteria?.[2]?.description).toContain('Protect')
     expect(feedback?.spec).not.toContain('exposes the expected public contract')
@@ -2455,6 +2470,13 @@ tasks:
       'run-evaluation-shape',
       'deterministic-proof',
     ])
+    expect(task?.workUnitAnalysis?.units.map(unit => unit.title)).toEqual([
+      'Define the cited contracts for Define fixture, expected-record, prototype-run, and evaluation schemas.',
+      'Shape fixture and expected-record ground truth',
+      'Capture prototype run and evaluation records',
+      'Add deterministic proof for the imported contract surface',
+    ])
+    expect(task?.sizePlan?.action).toBe('decompose_before_execution')
     expect(task?.spec).toContain('`FixtureManifest`')
     expect(task?.spec).toContain('`ExpectedRecordSet`')
     expect(task?.spec).toContain('`PrototypeRun`')

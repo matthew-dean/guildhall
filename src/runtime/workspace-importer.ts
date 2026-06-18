@@ -2672,8 +2672,8 @@ function importedTaskWorkUnitAnalysis(
   evidenceDetail: ImportedEvidenceDetail,
   now: string,
 ): Task['workUnitAnalysis'] {
+  const units = deriveImportedWorkUnits(task, evidenceDetail)
   const proofOnlyItems = [
-    ...materializedAcceptanceCriteria(task, evidenceDetail).map(criterion => criterion.description.trim()).filter(Boolean),
     ...materializedProofPaths(task, evidenceDetail).map((path) => {
       if (path.kind === 'command' && typeof path.command === 'string' && path.command.trim()) {
         return `Run ${path.command.trim()}`
@@ -2684,19 +2684,249 @@ function importedTaskWorkUnitAnalysis(
     }).filter(Boolean),
   ]
   return {
-    summary: `One imported implementation unit for ${task.title}.`,
-    units: [{
-      id: `unit-${task.id}`,
-      title: task.title,
-      deliverable: summarizeImportedSuccessMetric(task),
-      rationale: summarizeImportedProblemContext(task, evidenceDetail),
-      suggestedDomain: task.domain,
-      dependsOn: [...(task.dependsOn ?? [])],
-    }],
+    summary: units.length === 1
+      ? `One imported implementation unit for ${task.title}.`
+      : `${units.length} evidence-backed work units define ${task.title}.`,
+    units,
     proofOnlyItems,
     createdAt: now,
     createdBy: 'workspace-importer',
   }
+}
+
+function deriveImportedWorkUnits(
+  task: MaterializedImportTask,
+  evidenceDetail: ImportedEvidenceDetail,
+): NonNullable<Task['workUnitAnalysis']>['units'] {
+  if (importedTaskLooksContractDriven(task)) {
+    return deriveContractWorkUnits(task, evidenceDetail)
+  }
+  if (importedTaskLooksWorkflowDriven(task, evidenceDetail)) {
+    return deriveWorkflowWorkUnits(task, evidenceDetail)
+  }
+  if (importedTaskLooksReviewerLane(task, evidenceDetail)) {
+    return deriveReviewerLaneWorkUnits(task, evidenceDetail)
+  }
+  return [defaultImportedWorkUnit(task, evidenceDetail)]
+}
+
+function defaultImportedWorkUnit(
+  task: MaterializedImportTask,
+  evidenceDetail: ImportedEvidenceDetail,
+): NonNullable<Task['workUnitAnalysis']>['units'][number] {
+  return {
+    id: `unit-${task.id}`,
+    title: task.title,
+    deliverable: summarizeImportedSuccessMetric(task),
+    rationale: summarizeImportedProblemContext(task, evidenceDetail),
+    suggestedDomain: task.domain,
+    dependsOn: [...(task.dependsOn ?? [])],
+  }
+}
+
+function deriveContractWorkUnits(
+  task: MaterializedImportTask,
+  evidenceDetail: ImportedEvidenceDetail,
+): NonNullable<Task['workUnitAnalysis']>['units'] {
+  const units: NonNullable<Task['workUnitAnalysis']>['units'] = []
+  const fixtureContracts = evidenceDetail.contractNames.filter(name => /(fixture|expected)/i.test(name))
+  const runContracts = evidenceDetail.contractNames.filter(name => /(run|evaluation|score|trace|signal)/i.test(name))
+  const allContracts = evidenceDetail.contractNames.slice(0, 6)
+
+  if (allContracts.length > 0) {
+    units.push({
+      id: `unit-${task.id}-contracts`,
+      title: `Define the cited contracts for ${task.title}`,
+      deliverable: `Code defines and uses ${allContracts.map(name => `\`${name}\``).join(', ')}.`,
+      rationale: 'Imported contract work should materialize the named schema and record surfaces directly from the cited docs.',
+      suggestedDomain: task.domain,
+      dependsOn: [...(task.dependsOn ?? [])],
+    })
+  }
+
+  if (fixtureContracts.length > 0) {
+    units.push({
+      id: `unit-${task.id}-fixture`,
+      title: 'Shape fixture and expected-record ground truth',
+      deliverable: `${fixtureContracts.slice(0, 4).map(name => `\`${name}\``).join(', ')} cover the bounded fiction fixture and human-authored expected records.`,
+      rationale: 'The first proof loop needs explicit fixture and ground-truth records instead of ad hoc fixture shape.',
+      suggestedDomain: task.domain,
+      dependsOn: units.length > 0 ? [units[0]!.id] : [...(task.dependsOn ?? [])],
+    })
+  }
+
+  if (runContracts.length > 0) {
+    units.push({
+      id: `unit-${task.id}-run-eval`,
+      title: 'Capture prototype run and evaluation records',
+      deliverable: `${runContracts.slice(0, 5).map(name => `\`${name}\``).join(', ')} preserve the runnable evaluation story for the first proof loop.`,
+      rationale: 'The MVP needs explicit run/evaluation artifacts so packet quality can be reviewed deterministically.',
+      suggestedDomain: task.domain,
+      dependsOn: units.length > 0 ? [units[units.length - 1]!.id] : [...(task.dependsOn ?? [])],
+    })
+  }
+
+  const proofCommand = firstImportedProofCommand(task)
+  if (proofCommand) {
+    units.push({
+      id: `unit-${task.id}-proof`,
+      title: 'Add deterministic proof for the imported contract surface',
+      deliverable: `\`${proofCommand}\` passes against the imported schema and record contracts.`,
+      rationale: 'Imported contract work is not complete until the bounded local proof path runs against it.',
+      suggestedDomain: task.domain,
+      dependsOn: units.length > 0 ? [units[units.length - 1]!.id] : [...(task.dependsOn ?? [])],
+    })
+  }
+
+  return units.length > 0 ? units : [defaultImportedWorkUnit(task, evidenceDetail)]
+}
+
+function deriveReviewerLaneWorkUnits(
+  task: MaterializedImportTask,
+  evidenceDetail: ImportedEvidenceDetail,
+): NonNullable<Task['workUnitAnalysis']>['units'] {
+  const units: NonNullable<Task['workUnitAnalysis']>['units'] = []
+  const laneScope = evidenceDetail.implementationBullets[0] ?? summarizeImportedProblemContext(task, evidenceDetail)
+  const questionList = (
+    evidenceDetail.reviewQuestions.length > 0
+      ? evidenceDetail.reviewQuestions
+      : evidenceDetail.implementationBullets.filter(item => /\?$/.test(item))
+  ).slice(0, 4)
+  const ruleList = (
+    evidenceDetail.rules.length > 0
+      ? evidenceDetail.rules
+      : evidenceDetail.goalStatements
+  ).slice(0, 3)
+  const decisionSteps = (
+    evidenceDetail.decisionSteps.length > 0
+      ? evidenceDetail.decisionSteps
+      : evidenceDetail.implementationBullets
+  ).slice(0, 4)
+
+  units.push({
+    id: `unit-${task.id}-scope`,
+    title: `Define the craft lens for ${task.title}`,
+    deliverable: `The lane evaluates the documented craft surface: ${laneScope}`,
+    rationale: 'Reviewer lanes should start from the named fiction lens, not generic prose evaluation.',
+    suggestedDomain: task.domain,
+    dependsOn: [...(task.dependsOn ?? [])],
+  })
+
+  if (questionList.length > 0) {
+    units.push({
+      id: `unit-${task.id}-prompts`,
+      title: 'Encode the spec-native review prompts',
+      deliverable: `Reviewer output answers prompts such as ${questionList.join(' ')}`,
+      rationale: 'The lane needs the project’s actual questions so findings stay aligned with the authored review method.',
+      suggestedDomain: task.domain,
+      dependsOn: [units[0]!.id],
+    })
+  }
+
+  if (ruleList.length > 0) {
+    units.push({
+      id: `unit-${task.id}-boundary`,
+      title: 'Protect the lane boundary and voice rules',
+      deliverable: `The lane preserves rules like ${ruleList.join('; ')}`,
+      rationale: 'Boundary rules keep the reviewer from flattening dialect, register, or voice-specific intent.',
+      suggestedDomain: task.domain,
+      dependsOn: [units[units.length - 1]!.id],
+    })
+  }
+
+  if (decisionSteps.length > 0) {
+    units.push({
+      id: `unit-${task.id}-findings`,
+      title: 'Shape actionable finding output',
+      deliverable: `Findings follow the documented decision path: ${decisionSteps.join(' -> ')}`,
+      rationale: 'The lane should emit concrete craft findings the writer can act on, not generic comments.',
+      suggestedDomain: task.domain,
+      dependsOn: [units[units.length - 1]!.id],
+    })
+  }
+
+  const proofCommand = firstImportedProofCommand(task)
+  if (proofCommand) {
+    units.push({
+      id: `unit-${task.id}-proof`,
+      title: 'Add deterministic fixture proof for the reviewer lane',
+      deliverable: `\`${proofCommand}\` passes over a bounded fiction fixture for this lane.`,
+      rationale: 'A reviewer lane is only trustworthy once its bounded proof run is repeatable.',
+      suggestedDomain: task.domain,
+      dependsOn: [units[units.length - 1]!.id],
+    })
+  }
+
+  return units
+}
+
+function deriveWorkflowWorkUnits(
+  task: MaterializedImportTask,
+  evidenceDetail: ImportedEvidenceDetail,
+): NonNullable<Task['workUnitAnalysis']>['units'] {
+  const units: NonNullable<Task['workUnitAnalysis']>['units'] = []
+  const chainSteps = (
+    evidenceDetail.decisionSteps.length > 0
+      ? evidenceDetail.decisionSteps
+      : evidenceDetail.implementationBullets
+  ).slice(0, 7)
+  const weightDimensions = evidenceDetail.weightDimensions.slice(0, 6)
+  const severityLevels = evidenceDetail.severityLevels.slice(0, 6)
+  const boundaryRules = (
+    evidenceDetail.rules.length > 0
+      ? evidenceDetail.rules
+      : evidenceDetail.implementationBullets.filter(item => /\b(not optimize|fiction|friction|protect)\b/i.test(item))
+  ).slice(0, 3)
+
+  if (chainSteps.length > 0) {
+    units.push({
+      id: `unit-${task.id}-chain`,
+      title: `Preserve the workflow order for ${task.title}`,
+      deliverable: `The workflow keeps the documented sequence: ${chainSteps.join(' -> ')}`,
+      rationale: 'Imported workflow work should preserve the authored pipeline order instead of collapsing it into one generic implementation step.',
+      suggestedDomain: task.domain,
+      dependsOn: [...(task.dependsOn ?? [])],
+    })
+  }
+
+  if (weightDimensions.length > 0) {
+    units.push({
+      id: `unit-${task.id}-weights`,
+      title: 'Model multidimensional finding weights',
+      deliverable: `Finding records preserve ${weightDimensions.join(', ')}.`,
+      rationale: 'The cited workflow depends on structured weight fields, not a flat priority number.',
+      suggestedDomain: task.domain,
+      dependsOn: units.length > 0 ? [units[units.length - 1]!.id] : [...(task.dependsOn ?? [])],
+    })
+  }
+
+  if (severityLevels.length > 0 || boundaryRules.length > 0) {
+    units.push({
+      id: `unit-${task.id}-boundary`,
+      title: 'Preserve severity and fiction-first boundaries',
+      deliverable: [
+        severityLevels.length > 0 ? `Severity model includes ${severityLevels.join(', ')}` : '',
+        boundaryRules.length > 0 ? `Boundary rules include ${boundaryRules.join('; ')}` : '',
+      ].filter(Boolean).join('. '),
+      rationale: 'The workflow should keep protect-level findings and fiction-first constraints intact through the pipeline.',
+      suggestedDomain: task.domain,
+      dependsOn: units.length > 0 ? [units[units.length - 1]!.id] : [...(task.dependsOn ?? [])],
+    })
+  }
+
+  const proofCommand = firstImportedProofCommand(task)
+  if (proofCommand) {
+    units.push({
+      id: `unit-${task.id}-proof`,
+      title: 'Add deterministic proof for the workflow pipeline',
+      deliverable: `\`${proofCommand}\` passes using bounded findings, weights, and output records.`,
+      rationale: 'The imported workflow is only complete when the cited local proof path runs deterministically.',
+      suggestedDomain: task.domain,
+      dependsOn: units.length > 0 ? [units[units.length - 1]!.id] : [...(task.dependsOn ?? [])],
+    })
+  }
+
+  return units.length > 0 ? units : [defaultImportedWorkUnit(task, evidenceDetail)]
 }
 
 function buildImportedBlueprintSeed(
