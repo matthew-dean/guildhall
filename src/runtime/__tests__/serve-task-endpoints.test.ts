@@ -1275,7 +1275,7 @@ describe('POST /api/project/task/:id/mark-done', () => {
 })
 
 describe('POST /api/project/task/:id/start', () => {
-  it('allows a scoped spec_review task start even when the project has waiting specs', async () => {
+  it('blocks a scoped spec_review task start until the spec is approved', async () => {
     await seedTasks([
       {
         id: 'task-context-menu',
@@ -1306,13 +1306,11 @@ describe('POST /api/project/task/:id/start', () => {
       }),
     )
 
-    expect(res.status).toBe(200)
+    expect(res.status).toBe(400)
     const body = (await res.json()) as Record<string, any>
-    expect(body.scope).toEqual({ type: 'work_item', taskId: 'task-context-menu' })
-    expect(starts.at(-1)).toMatchObject({
-      preferredTaskId: 'task-context-menu',
-      stopAfterOneTask: true,
-    })
+    expect(body.code).toBe('no_unattended_progress')
+    expect(body.error ?? body.message).toMatch(/spec.*waiting for review/i)
+    expect(starts).toHaveLength(0)
   })
 
   it('starts a scoped max-revision task when an earlier LLM review already cleared the rubric', async () => {

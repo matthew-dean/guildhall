@@ -4991,7 +4991,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (status === 'spec_review') {
         const id = (task as { id?: unknown }).id
         const taskId = typeof id === 'string' && id.trim() ? id.trim() : null
-        if (taskId && specReviewRequiresOwnerApproval({ id: taskId })) {
+        const hasSpecDraft = typeof (task as { spec?: unknown }).spec === 'string' && (task as { spec: string }).spec.trim().length > 0
+        if (taskId && (hasSpecDraft || specReviewRequiresOwnerApproval({ id: taskId }))) {
           waitingForApproval += 1
           if (!firstWaitingSpecTaskId) {
             firstWaitingSpecTaskId = taskId
@@ -5124,6 +5125,20 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
       if (project.initializationNeeded) {
         return c.json({ error: 'Project not initialized. Complete /setup first.' }, 400)
+      }
+      if (body.taskId) {
+        const queueTasks = await readTasksFileNormalized(projectTasksPath(project.path)).catch(() => [])
+        const scopedTask = queueTasks.find(task => task.id === body.taskId)
+        if (scopedTask?.status === 'spec_review' && typeof scopedTask.spec === 'string' && scopedTask.spec.trim().length > 0) {
+          return c.json(
+            {
+              error: 'This spec is waiting for review before work can start.',
+              code: 'no_unattended_progress',
+              actionHref: `/thread?thread=${encodeURIComponent(`task:${body.taskId}`)}`,
+            },
+            400,
+          )
+        }
       }
       // Preflight: a run with no provider is worse than no run — the
       // orchestrator boots, every tick fails, and the UI shows "Running"

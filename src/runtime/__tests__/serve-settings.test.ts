@@ -4268,7 +4268,7 @@ describe('GET /api/project/inbox — blockers', () => {
 })
 
 describe('GET /api/project — bootstrap status', () => {
-  it('keeps normal spec_review tasks startable because coordinator/spec work can run next', async () => {
+  it('treats drafted spec_review tasks as waiting for review before project start', async () => {
     const migrationApp = buildServeApp({ projectPath: tmpDir })
     await applyStorageBoundaryMigration(migrationApp.app)
     await writeSystemTasks({
@@ -4293,7 +4293,11 @@ describe('GET /api/project — bootstrap status', () => {
       startReadiness?: { canStart?: boolean; actionHref?: string; message?: string }
     }
 
-    expect(body.startReadiness).toMatchObject({ canStart: true })
+    expect(body.startReadiness).toMatchObject({
+      canStart: false,
+      message: 'One spec is waiting for review before starting.',
+      actionHref: '/thread?thread=task%3Atask-spec-a',
+    })
   })
 
   it('targets the first waiting spec thread when spec review blocks start', async () => {
