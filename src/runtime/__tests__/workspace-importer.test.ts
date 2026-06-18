@@ -1247,7 +1247,7 @@ tasks:
         .map(task => task.title),
     ).not.toContain('*(none — umbrella doc, covered by child specs)*')
     expect(q.tasks.find(task => task.id === 'task-dialogue-lane')).toMatchObject({
-      status: 'import_draft',
+      status: 'spec_review',
     })
   })
 
@@ -1522,7 +1522,7 @@ tasks:
       title: 'Build AlertDialog',
       domain: 'looma',
       projectPath: path.join(tmpDir, 'looma'),
-      status: 'import_draft',
+      status: 'spec_review',
       dependsOn: [],
     })
     expect(alertDialog.acceptanceCriteria.map((criterion) => criterion.id)).toEqual([
@@ -1546,8 +1546,12 @@ tasks:
       dependsOn: ['task-039'],
     })
     expect(alertDialog.requestIntake).toMatchObject({
-      intent: 'spec_only',
-      recommendedNextAction: 'draft_spec',
+      intent: 'implementation',
+      recommendedNextAction: 'proceed_to_implementation_spec',
+    })
+    expect(alertDialog.spec).toContain('## Completion Boundary')
+    expect(alertDialog.productBrief).toMatchObject({
+      authoredBy: 'workspace-importer',
     })
     expect(alertDialogIntegration.acceptanceCriteria.map((criterion) => criterion.id)).toEqual([
       'public-consumer-import',
@@ -1567,6 +1571,9 @@ tasks:
         if (task.id === 'task-039') return { ...task, status: 'ready' as const }
         if (task.id === 'task-alert-dialog-integration') {
           return { ...task, status: 'ready' as const, priority: 'critical' as const }
+        }
+        if (task.status === 'spec_review') {
+          return { ...task, status: 'import_draft' as const }
         }
         return task
       }),
@@ -1828,11 +1835,11 @@ tasks:
 
     const q = await readQueue()
     expect(q.tasks.find(task => task.title === 'Mastra workflow for the prototype iteration loop')).toMatchObject({
-      status: 'import_draft',
+      status: 'spec_review',
       domain: 'harness',
     })
     expect(q.tasks.find(task => task.title === 'specialist editor agent calls for the first review lanes')).toMatchObject({
-      status: 'import_draft',
+      status: 'spec_review',
       domain: 'harness',
     })
   })

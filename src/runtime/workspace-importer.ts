@@ -502,6 +502,15 @@ interface MaterializedImportTask extends ParsedTask {
   evidenceGraphTask?: boolean
 }
 
+type ImportedBlueprintSeed = {
+  status: Task['status']
+  requestIntake: Task['requestIntake']
+  productBrief?: Task['productBrief']
+  spec?: Task['spec']
+  outOfScope: Task['outOfScope']
+  notes: Task['notes']
+}
+
 export interface ParsedMilestone {
   title: string
   evidence: string
@@ -1593,6 +1602,239 @@ function materializedAcceptanceCriteria(task: MaterializedImportTask): Task['acc
   }))
 }
 
+function importedTaskHasBlueprintSeed(task: MaterializedImportTask): boolean {
+  return (
+    Boolean(task.evidenceGraphTask) ||
+    (
+      (task.references?.length ?? 0) > 0 &&
+      (task.acceptanceCriteria?.length ?? 0) > 0 &&
+      (
+        (task.proofPaths?.length ?? 0) > 0 ||
+        typeof task.whyThisMayMatter === 'string'
+      )
+    )
+  )
+}
+
+function summarizeImportedSuccessMetric(task: MaterializedImportTask): string {
+  const acceptance = (task.acceptanceCriteria ?? [])
+    .map(criterion => criterion.description.trim())
+    .filter(Boolean)
+  if (acceptance.length === 0) {
+    return `${task.title} is delivered according to the cited project evidence and recorded proof.`
+  }
+  const first = acceptance[0]
+  const second = acceptance[1]
+  if (second) return `${first} Also: ${second}`
+  return first
+}
+
+function summarizeImportedVerification(task: MaterializedImportTask): string {
+  const steps = (task.proofPaths ?? []).map((path) => {
+    if (path.kind === 'command' && typeof path.command === 'string' && path.command.trim()) {
+      return `Run \`${path.command.trim()}\``
+    }
+    if (path.kind === 'browser') return 'Capture browser proof for the documented flow'
+    if (path.kind === 'review') {
+      const expected = Array.isArray(path.expectedEvidence) ? path.expectedEvidence.filter(Boolean).join(', ') : ''
+      return expected ? `Review recorded evidence (${expected})` : 'Review the documented proof output'
+    }
+    return null
+  }).filter((value): value is string => Boolean(value))
+  if (steps.length === 0) {
+    return 'Use the imported acceptance criteria and cited sources as the proof plan.'
+  }
+  return steps.join('; ')
+}
+
+function importedCompletionBoundary(task: MaterializedImportTask): string {
+  const successMetric = summarizeImportedSuccessMetric(task)
+  const verificationEnvironment = summarizeImportedVerification(task)
+  const missingInformation = (task.missingInformation ?? []).filter(Boolean)
+  const splitOrBlock = missingInformation.length > 0
+    ? `Split or pause only if these imported gaps still change the implementation boundary: ${missingInformation.join('; ')}.`
+    : 'None expected. Split only if repo evidence shows more than one independently verifiable outcome.'
+  return [
+    '## Completion Boundary',
+    `- Product outcome: ${successMetric}`,
+    `- What Guildhall can complete in code: Implement ${task.title} within the boundary already described by the cited sources, acceptance criteria, and proof plan.`,
+    '- External dependencies: None beyond the cited repo-local evidence and the local tooling needed to run the proof plan.',
+    '- Owner-only setup: None expected. If the imported evidence is stale or points at the wrong release boundary, reshape the task before execution instead of silently changing scope.',
+    `- Verification environment: ${verificationEnvironment}`,
+    `- What counts as done: ${successMetric} Record the proof result against the imported acceptance criteria.`,
+    `- What must be split or blocked: ${splitOrBlock}`,
+  ].join('\n')
+}
+
+function importedTaskSpec(task: MaterializedImportTask): string {
+  const references = (task.references ?? []).filter(Boolean)
+  const acceptanceCriteria = materializedAcceptanceCriteria(task)
+  const assumptions = (task.assumptions ?? []).filter(Boolean)
+  const missingInformation = (task.missingInformation ?? []).filter(Boolean)
+  const proofPlan = (task.proofPaths ?? []).map((path) => {
+    if (path.kind === 'command' && typeof path.command === 'string' && path.command.trim()) {
+      return `- Run \`${path.command.trim()}\``
+    }
+    if (path.kind === 'browser') return '- Capture browser proof for the documented flow.'
+    if (path.kind === 'review') {
+      const expected = Array.isArray(path.expectedEvidence) ? path.expectedEvidence.filter(Boolean).join(', ') : ''
+      return expected ? `- Review recorded evidence: ${expected}` : '- Review the documented proof output.'
+    }
+    return null
+  }).filter((line): line is string => Boolean(line))
+
+  return [
+    '## Summary',
+    task.description.trim() || task.title,
+    '',
+    '## Imported Evidence',
+    ...(references.length > 0 ? references.map(reference => `- ${reference}`) : ['- No explicit source path was preserved in the import draft.']),
+    ...(task.whyThisMayMatter ? ['', '## Why This Matters', task.whyThisMayMatter.trim()] : []),
+    ...(assumptions.length > 0 ? ['', '## Assumptions', ...assumptions.map(item => `- ${item}`)] : []),
+    ...(missingInformation.length > 0 ? ['', '## Known Gaps', ...missingInformation.map(item => `- ${item}`)] : []),
+    '',
+    '## Acceptance Criteria',
+    ...(acceptanceCriteria.length > 0
+      ? acceptanceCriteria.map((criterion, index) => `${index + 1}. ${criterion.description}`)
+      : ['1. The imported task is rewritten with concrete acceptance criteria before approval.']),
+    ...(proofPlan.length > 0 ? ['', '## Proof Plan', ...proofPlan] : []),
+    '',
+    importedCompletionBoundary(task),
+  ].join('\n')
+}
+
+function importedTaskBrief(
+  task: MaterializedImportTask,
+  now: string,
+): Task['productBrief'] {
+  return {
+    userJob: task.whyThisMayMatter?.trim() || task.description.trim() || task.title,
+    whyItMattersNow: task.whyThisMayMatter?.trim() || `Current project evidence already points at ${task.title}.`,
+    successMetric: summarizeImportedSuccessMetric(task),
+    nonGoals: (task.missingInformation ?? []).filter(Boolean),
+    authoredBy: 'workspace-importer',
+    authoredAt: now,
+  }
+}
+
+function buildImportedBlueprintSeed(
+  task: MaterializedImportTask,
+  normalizedReferences: readonly string[],
+  now: string,
+): ImportedBlueprintSeed {
+  const evidenceRefs = normalizedReferences.map(ref => `import:${ref}`)
+  const notes = normalizedReferences.length > 0
+    ? [{
+        agentId: 'workspace-importer',
+        role: 'importer' as const,
+        content: [
+          `Imported from: ${normalizedReferences.join(', ')}`,
+          task.whyThisMayMatter ? `Why this may matter: ${task.whyThisMayMatter}` : '',
+          task.assumptions && task.assumptions.length > 0 ? `Assumptions: ${task.assumptions.join(' | ')}` : '',
+          task.missingInformation && task.missingInformation.length > 0 ? `Missing information: ${task.missingInformation.join(' | ')}` : '',
+          task.scope === 'later' ? 'Scope: later/deferred' : '',
+        ].filter(Boolean).join('\n'),
+        timestamp: now,
+      }]
+    : []
+
+  if (!importedTaskHasBlueprintSeed(task) || task.scope === 'later') {
+    return {
+      status: task.scope === 'later' ? 'shelved' : 'import_draft',
+      outOfScope: [],
+      notes,
+      requestIntake: {
+        intent: 'spec_only',
+        recommendedNextAction: 'draft_spec',
+        assumptions: [...(task.assumptions ?? [])],
+        missingInformation: [...(task.missingInformation ?? [])],
+        ...(task.missingInformation && task.missingInformation.length > 0
+          ? {
+              ownerDecisionNeeded: 'Confirm the intended scope and success boundary if this imported draft no longer matches current project needs.',
+              whyOwnerDecisionMatters: 'Imported notes are evidence-backed candidates, but Guildhall should not treat them as current truth without reshaping.',
+            }
+          : {}),
+        evidenceRefs,
+        componentStack: [],
+        pressureTestSummary: {
+          systemOwned: true,
+          degree: 'guided',
+          qualityBar: 'Treat imported drafts as candidate work that must be reshaped against current evidence before implementation starts.',
+          ownerQuestionPolicy: 'Only ask when the imported evidence is no longer enough to choose a trustworthy task boundary or success condition.',
+          checks: [
+            {
+              id: 'source-relevance',
+              title: 'Source relevance',
+              status: 'system-check',
+              reason: 'Guildhall should verify that the imported note still matches current repo reality and project direction.',
+            },
+            {
+              id: 'scope-boundary',
+              title: 'Scope boundary',
+              status: 'needs-owner-judgment',
+              reason: 'Imported notes often name a direction but not yet the right implementation boundary.',
+            },
+            {
+              id: 'acceptance-criteria',
+              title: 'Acceptance criteria',
+              status: 'system-check',
+              reason: 'Guildhall must reshape the imported draft into concrete acceptance criteria before implementation starts.',
+            },
+          ],
+        },
+        clarifyingQuestions: [],
+        createdAt: now,
+        createdBy: 'workspace-importer',
+      },
+    }
+  }
+
+  return {
+    status: 'spec_review',
+    requestIntake: {
+      intent: 'implementation',
+      recommendedNextAction: 'proceed_to_implementation_spec',
+      assumptions: [...(task.assumptions ?? [])],
+      missingInformation: [...(task.missingInformation ?? [])],
+      evidenceRefs,
+      componentStack: [],
+      pressureTestSummary: {
+        systemOwned: true,
+        degree: 'guided',
+        qualityBar: 'Carry imported project evidence forward into a reviewable implementation blueprint before execution starts.',
+        ownerQuestionPolicy: 'Only ask when the cited evidence conflicts strongly enough to change product intent or the release boundary.',
+        checks: [
+          {
+            id: 'source-relevance',
+            title: 'Source relevance',
+            status: 'system-check',
+            reason: 'The seeded blueprint should stay anchored to the cited project evidence.',
+          },
+          {
+            id: 'acceptance-criteria',
+            title: 'Acceptance criteria',
+            status: 'system-check',
+            reason: 'Imported criteria and proof steps must survive into the seeded implementation blueprint.',
+          },
+          {
+            id: 'scope-boundary',
+            title: 'Scope boundary',
+            status: 'system-check',
+            reason: 'Imported tasks should name a concrete completion boundary before execution begins.',
+          },
+        ],
+      },
+      clarifyingQuestions: [],
+      createdAt: now,
+      createdBy: 'workspace-importer',
+    },
+    productBrief: importedTaskBrief(task, now),
+    spec: importedTaskSpec(task),
+    outOfScope: [...(task.missingInformation ?? [])],
+    notes,
+  }
+}
+
 /**
  * Consume the workspace-import draft: parse fences, append tasks as
  * `import_draft` + `origination='human'`, record milestones to PROGRESS.md,
@@ -1696,33 +1938,18 @@ export async function approveWorkspaceImport(
     }
   }
 
-  const importerNoteForTask = (
-    normalizedReferences: readonly string[],
-    task: MaterializedImportTask,
-  ) => normalizedReferences.length > 0
-    ? [
-        {
-          agentId: 'workspace-importer',
-          role: 'importer' as const,
-          content: [
-            `Imported from: ${normalizedReferences.join(', ')}`,
-            task.whyThisMayMatter ? `Why this may matter: ${task.whyThisMayMatter}` : '',
-            task.assumptions && task.assumptions.length > 0 ? `Assumptions: ${task.assumptions.join(' | ')}` : '',
-            task.missingInformation && task.missingInformation.length > 0 ? `Missing information: ${task.missingInformation.join(' | ')}` : '',
-            task.scope === 'later' ? 'Scope: later/deferred' : '',
-          ].filter(Boolean).join('\n'),
-          timestamp: now,
-        },
-      ]
-    : []
-
   const refreshedStatusForImportedTask = (
     existingStatus: Task['status'],
     importedScope: MaterializedImportTask['scope'],
+    seededStatus: Task['status'],
   ): Task['status'] => {
     if (importedScope === 'later') return 'shelved'
+    if (['blocked', 'in_progress', 'review', 'gate_check', 'done', 'pending_pr'].includes(existingStatus)) {
+      return existingStatus
+    }
+    if (seededStatus === 'spec_review') return 'spec_review'
     if (existingStatus === 'shelved' || existingStatus === 'archived' || existingStatus === 'cancelled') {
-      return 'import_draft'
+      return seededStatus
     }
     return existingStatus
   }
@@ -1742,58 +1969,27 @@ export async function approveWorkspaceImport(
       taskProjectPath,
     )
     const normalizedReferences = absoluteImportedReferences(imported.references, input.projectPath)
+    const seededBlueprint = buildImportedBlueprintSeed(imported, normalizedReferences, now)
     existing.description = normalizedDescription
     existing.domain = domain
     existing.projectPath = taskProjectPath
     existing.priority = imported.priority
     existing.dependsOn = [...(imported.dependsOn ?? [])].map(dependency => dependencyIdMap.get(dependency) ?? dependency)
     existing.acceptanceCriteria = materializedAcceptanceCriteria(imported)
-    existing.requestIntake = {
-      intent: 'spec_only',
-      recommendedNextAction: 'draft_spec',
-      assumptions: [...(imported.assumptions ?? [])],
-      missingInformation: [...(imported.missingInformation ?? [])],
-      ...(imported.missingInformation && imported.missingInformation.length > 0
-        ? {
-            ownerDecisionNeeded: 'Confirm the intended scope and success boundary if this imported draft no longer matches current project needs.',
-            whyOwnerDecisionMatters: 'Imported notes are evidence-backed candidates, but Guildhall should not treat them as current truth without reshaping.',
-          }
-        : {}),
-      evidenceRefs: normalizedReferences.map(ref => `import:${ref}`),
-      componentStack: [],
-      pressureTestSummary: {
-        systemOwned: true,
-        degree: 'guided',
-        qualityBar: 'Treat imported drafts as candidate work that must be reshaped against current evidence before implementation starts.',
-        ownerQuestionPolicy: 'Only ask when the imported evidence is no longer enough to choose a trustworthy task boundary or success condition.',
-        checks: [
-          {
-            id: 'source-relevance',
-            title: 'Source relevance',
-            status: 'system-check',
-            reason: 'Guildhall should verify that the imported note still matches current repo reality and project direction.',
-          },
-          {
-            id: 'scope-boundary',
-            title: 'Scope boundary',
-            status: 'needs-owner-judgment',
-            reason: 'Imported notes often name a direction but not yet the right implementation boundary.',
-          },
-          {
-            id: 'acceptance-criteria',
-            title: 'Acceptance criteria',
-            status: 'system-check',
-            reason: 'Guildhall must reshape the imported draft into concrete acceptance criteria before implementation starts.',
-          },
-        ],
-      },
-      clarifyingQuestions: [],
-      createdAt: now,
-      createdBy: 'workspace-importer',
-    }
+    existing.requestIntake = seededBlueprint.requestIntake
     existing.references = normalizedReferences
-    existing.notes = importerNoteForTask(normalizedReferences, imported)
-    existing.status = refreshedStatusForImportedTask(existing.status, imported.scope)
+    existing.notes = seededBlueprint.notes
+    existing.status = refreshedStatusForImportedTask(existing.status, imported.scope, seededBlueprint.status)
+    existing.outOfScope = seededBlueprint.outOfScope
+    existing.spec = seededBlueprint.spec
+    existing.productBrief = seededBlueprint.productBrief
+    existing.taskReadiness = seededBlueprint.taskReadiness
+    existing.taskKind = seededBlueprint.taskKind
+    existing.definitionOfDone = seededBlueprint.definitionOfDone
+    existing.blockerPlans = seededBlueprint.blockerPlans
+    existing.contextBudget = seededBlueprint.contextBudget
+    existing.decomposition = seededBlueprint.decomposition
+    existing.sizePlan = seededBlueprint.sizePlan
     if (imported.proofPaths) existing.proofPaths = [...imported.proofPaths]
     else delete existing.proofPaths
     existing.updatedAt = now
@@ -1839,70 +2035,35 @@ export async function approveWorkspaceImport(
       taskProjectPath,
     )
     const normalizedReferences = absoluteImportedReferences(t.references, input.projectPath)
+    const seededBlueprint = buildImportedBlueprintSeed(t, normalizedReferences, now)
     queue.tasks.push({
       id,
       title: t.title,
       description: normalizedDescription,
       domain,
       projectPath: taskProjectPath,
-      // Import approval means "yes, keep this as a candidate draft", not
-      // "this already has a complete task brief/spec." Imported notes become
-      // shaping drafts first; only after shaping do they enter normal intake.
-      status: t.scope === 'later' ? 'shelved' : 'import_draft',
+      status: seededBlueprint.status,
       priority: t.priority,
       dependsOn: [...(t.dependsOn ?? [])].map(dependency => dependencyIdMap.get(dependency) ?? dependency),
-      outOfScope: [],
+      outOfScope: seededBlueprint.outOfScope,
       acceptanceCriteria: materializedAcceptanceCriteria(t),
-      requestIntake: {
-        intent: 'spec_only',
-        recommendedNextAction: 'draft_spec',
-        assumptions: [...(t.assumptions ?? [])],
-        missingInformation: [...(t.missingInformation ?? [])],
-        ...(t.missingInformation && t.missingInformation.length > 0
-          ? {
-              ownerDecisionNeeded: 'Confirm the intended scope and success boundary if this imported draft no longer matches current project needs.',
-              whyOwnerDecisionMatters: 'Imported notes are evidence-backed candidates, but Guildhall should not treat them as current truth without reshaping.',
-            }
-          : {}),
-        evidenceRefs: normalizedReferences.map(ref => `import:${ref}`),
-        componentStack: [],
-        pressureTestSummary: {
-          systemOwned: true,
-          degree: 'guided',
-          qualityBar: 'Treat imported drafts as candidate work that must be reshaped against current evidence before implementation starts.',
-          ownerQuestionPolicy: 'Only ask when the imported evidence is no longer enough to choose a trustworthy task boundary or success condition.',
-          checks: [
-            {
-              id: 'source-relevance',
-              title: 'Source relevance',
-              status: 'system-check',
-              reason: 'Guildhall should verify that the imported note still matches current repo reality and project direction.',
-            },
-            {
-              id: 'scope-boundary',
-              title: 'Scope boundary',
-              status: 'needs-owner-judgment',
-              reason: 'Imported notes often name a direction but not yet the right implementation boundary.',
-            },
-            {
-              id: 'acceptance-criteria',
-              title: 'Acceptance criteria',
-              status: 'system-check',
-              reason: 'Guildhall must reshape the imported draft into concrete acceptance criteria before implementation starts.',
-            },
-          ],
-        },
-        clarifyingQuestions: [],
-        createdAt: now,
-        createdBy: 'workspace-importer',
-      },
+      requestIntake: seededBlueprint.requestIntake,
       references: normalizedReferences,
-      notes: importerNoteForTask(normalizedReferences, t),
+      notes: seededBlueprint.notes,
       gateResults: [],
       reviewVerdicts: [],
       adjudications: [],
       escalations: [],
       agentIssues: [],
+      ...(seededBlueprint.spec ? { spec: seededBlueprint.spec } : {}),
+      ...(seededBlueprint.productBrief ? { productBrief: seededBlueprint.productBrief } : {}),
+      ...(seededBlueprint.taskReadiness ? { taskReadiness: seededBlueprint.taskReadiness } : {}),
+      ...(seededBlueprint.taskKind ? { taskKind: seededBlueprint.taskKind } : {}),
+      ...(seededBlueprint.definitionOfDone ? { definitionOfDone: seededBlueprint.definitionOfDone } : {}),
+      ...(seededBlueprint.blockerPlans ? { blockerPlans: seededBlueprint.blockerPlans } : {}),
+      ...(seededBlueprint.contextBudget ? { contextBudget: seededBlueprint.contextBudget } : {}),
+      ...(seededBlueprint.decomposition ? { decomposition: seededBlueprint.decomposition } : {}),
+      ...(seededBlueprint.sizePlan ? { sizePlan: seededBlueprint.sizePlan } : {}),
       ...(t.proofPaths ? { proofPaths: [...t.proofPaths] } : {}),
       revisionCount: 0,
       remediationAttempts: 0,
