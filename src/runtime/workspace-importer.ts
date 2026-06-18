@@ -700,6 +700,20 @@ function importTaskReferenceBasenames(refs: readonly string[] | undefined): Set<
   )
 }
 
+function importTaskStructuralForm(
+  description: string,
+): 'numbered' | 'bullet' | null {
+  const trimmed = description.trim()
+  if (/: \d+\.\s+/.test(trimmed)) return 'numbered'
+  if (/: -\s+/.test(trimmed)) return 'bullet'
+  return null
+}
+
+function importTaskSourcePath(description: string): string | null {
+  const match = /^(.+?\.md):\s+/.exec(description.trim())
+  return match?.[1]?.trim() ?? null
+}
+
 function parsedTaskShadowsDetectedTask(
   detectedTask: DraftTask,
   parsedTask: ParsedTask,
@@ -712,10 +726,27 @@ function parsedTaskShadowsDetectedTask(
   const overlap = importTaskOverlapRatio(detectedTokens, parsedTokens)
   const sharedTokenCount = importTaskSharedTokenCount(detectedTokens, parsedTokens)
   if (overlap < 0.45) return false
+  const detectedForm = importTaskStructuralForm(detectedTask.description)
+  const parsedForm = importTaskStructuralForm(parsedTask.description)
+  const detectedSourcePath = importTaskSourcePath(detectedTask.description)
+  const parsedSourcePath = importTaskSourcePath(parsedTask.description)
+  if (
+    detectedForm &&
+    parsedForm &&
+    detectedForm !== parsedForm &&
+    detectedSourcePath &&
+    parsedSourcePath &&
+    detectedSourcePath === parsedSourcePath
+  ) {
+    return false
+  }
 
   const detectedRefs = importTaskReferenceBasenames(detectedTask.references)
   const parsedRefs = importTaskReferenceBasenames(parsedTask.references)
   const sharedRef = [...detectedRefs].some(ref => parsedRefs.has(ref))
+  if (sharedRef) {
+    if (detectedForm && parsedForm && detectedForm !== parsedForm) return false
+  }
   if (sharedRef) return true
 
   const detectedTitle = normalizeImportText(detectedTask.title)
@@ -786,7 +817,7 @@ export function mergeWorkspaceImportDraft(
   const retainParsedOnlyTasks = options.retainParsedOnlyTasks ?? true
   const retainDetectedOnlyTasks = options.retainDetectedOnlyTasks ?? true
   const preserveDetectedScope = options.preserveDetectedScope ?? false
-  const parsedTasks = suppressShadowedParsedCurrentMilestoneDeliverables(parsed.tasks)
+  const parsedTasks = parsed.tasks
 
   const mergedGoals: DraftGoal[] = []
   const parsedGoalsByTitle = new Map(
@@ -965,40 +996,6 @@ function parsedGoalIsShadowedByDetectedGoal(
     const detectedWords = detectedNormalized.split(/\s+/).filter(Boolean)
     return parsedWords.length >= 6 && detectedWords.length >= parsedWords.length + 2
   })
-}
-
-function suppressShadowedParsedCurrentMilestoneDeliverables(
-  tasks: readonly ParsedTask[],
-): ParsedTask[] {
-  const sourceKinds = new Map<string, { numbered: number; bullet: number }>()
-  for (const task of tasks) {
-    if (task.scope === 'later') continue
-    const sourcePath = parsedTaskSourcePath(task.description)
-    if (!sourcePath) continue
-    const counts = sourceKinds.get(sourcePath) ?? { numbered: 0, bullet: 0 }
-    if (/: \d+\.\s+/.test(task.description)) counts.numbered += 1
-    if (/: -\s+/.test(task.description)) counts.bullet += 1
-    sourceKinds.set(sourcePath, counts)
-  }
-
-  const shadowedSources = new Set(
-    [...sourceKinds.entries()]
-      .filter(([, counts]) => counts.numbered >= 2 && counts.bullet >= 1)
-      .map(([sourcePath]) => sourcePath),
-  )
-  if (shadowedSources.size === 0) return [...tasks]
-
-  return tasks.filter(task => {
-    if (task.scope === 'later') return true
-    const sourcePath = parsedTaskSourcePath(task.description)
-    if (!sourcePath || !shadowedSources.has(sourcePath)) return true
-    return !/: -\s+/.test(task.description)
-  })
-}
-
-function parsedTaskSourcePath(description: string): string | null {
-  const match = /^(.+?\.md):\s+/.exec(description.trim())
-  return match?.[1]?.trim() ?? null
 }
 
 function normalizeImportedReferenceForTask(

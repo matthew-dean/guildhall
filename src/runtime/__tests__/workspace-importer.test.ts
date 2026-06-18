@@ -1361,6 +1361,8 @@ tasks:
 
     expect(draft.tasks.map((task) => task.title)).toEqual(
       expect.arrayContaining([
+        'fixture directory shape for at least one small story fixture',
+        'typed fixture and expected-record contracts',
         'Define fixture, expected-record, prototype-run, and evaluation schemas.',
         'Add the first tiny fiction fixture and human-authored expected records.',
         'Implement dialogue-and-character-voice reviewer lane',
@@ -1374,12 +1376,6 @@ tasks:
         expect.stringContaining('docs/specs/dialogue-and-character-voice.md'),
       ]),
     })
-    expect(draft.tasks.map((task) => task.title)).not.toEqual(
-      expect.arrayContaining([
-        'fixture directory shape for at least one small story fixture',
-        'typed fixture and expected-record contracts',
-      ]),
-    )
   })
 
   it('imports later-scope workspace tasks as shelved instead of current intake drafts', async () => {
@@ -2826,7 +2822,7 @@ tasks:
     ])
   })
 
-  it('drops parsed deliverable bullets when the same roadmap already defines current starter tasks', async () => {
+  it('materializes numbered starter tasks from a current-milestone roadmap instead of cloning adjacent deliverable bullets into the queue', async () => {
     await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
     await fs.writeFile(
       path.join(tmpDir, 'docs', 'harness', 'implementation-roadmap.md'),
@@ -2881,8 +2877,6 @@ tasks:
       'Define fixture, expected-record, prototype-run, and evaluation schemas.',
       'Add the first tiny fiction fixture and human-authored expected records.',
     ])
-    expect(q.tasks.find(task => task.title === 'fixture directory shape for at least one small story fixture')).toBeUndefined()
-    expect(q.tasks.find(task => task.title === 'typed fixture and expected-record contracts')).toBeUndefined()
   })
 
   it('treats later roadmap stages as deferred when a current milestone bounds the active scope', async () => {
@@ -4036,7 +4030,7 @@ tasks:
     })
   })
 
-  it('suppresses stale parsed deliverable bullets when the same roadmap already names a numbered current-task sequence', () => {
+  it('suppresses parsed current-milestone deliverable echoes when the same roadmap also names a numbered current-task sequence', () => {
     const detected = formWorkspaceHypothesis(invWith([
       {
         source: 'planning-docs',
@@ -4082,7 +4076,6 @@ tasks:
 `)
 
     const merged = mergeWorkspaceImportDraft(detected, parsed)
-
     expect(merged.tasks.map(task => task.title)).toEqual([
       'Define fixture, expected-record, prototype-run, and evaluation schemas.',
       'Add the first tiny fiction fixture and human-authored expected records.',

@@ -184,6 +184,24 @@ function referenceBasenames(refs: readonly string[] | undefined): Set<string> {
   )
 }
 
+function planningDocStructuralForm(
+  item: Pick<WorkspaceSignal, 'evidence' | 'source'>,
+): 'numbered' | 'bullet' | null {
+  if (item.source !== 'planning-docs') return null
+  const evidence = item.evidence.trim()
+  if (/: \d+\.\s+/.test(evidence)) return 'numbered'
+  if (/: -\s+/.test(evidence)) return 'bullet'
+  return null
+}
+
+function planningDocSourcePath(
+  item: Pick<WorkspaceSignal, 'evidence' | 'source'>,
+): string | null {
+  if (item.source !== 'planning-docs') return null
+  const match = /^(.+?\.md):\s+/.exec(item.evidence.trim())
+  return match?.[1]?.trim() ?? null
+}
+
 function stableHash(input: string): string {
   let h = 0x811c9dc5
   for (const ch of input) {
@@ -428,9 +446,28 @@ function addTask(
       const sharedReferenceBasename = [...referenceBasenames(sig.references)].some(ref =>
         referenceBasenames(existing.references).has(ref),
       )
+      const sigStructuralForm = planningDocStructuralForm(sig)
+      const existingStructuralForm = planningDocStructuralForm({
+        source: existing.source,
+        evidence: existing.description,
+      })
+      const sigSourcePath = planningDocSourcePath(sig)
+      const existingSourcePath = planningDocSourcePath({
+        source: existing.source,
+        evidence: existing.description,
+      })
+      const keepDistinctRoadmapSlices =
+        sigStructuralForm &&
+        existingStructuralForm &&
+        sigStructuralForm !== existingStructuralForm &&
+        sigSourcePath &&
+        existingSourcePath &&
+        sigSourcePath === existingSourcePath
+      if (keepDistinctRoadmapSlices) continue
       const planningDocEcho =
         sig.source === 'planning-docs' &&
         existing.source === 'planning-docs' &&
+        sigStructuralForm === existingStructuralForm &&
         (
           (
             firstMeaningfulToken(sig.title) === firstMeaningfulToken(existing.title) &&
