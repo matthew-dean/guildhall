@@ -1272,6 +1272,64 @@ tasks:
       references: ['docs/harness/prototype-iteration-workflow.md'],
     })
   })
+
+  it('suppresses stale parsed deliverable bullets when the same roadmap already names a numbered current-task sequence', () => {
+    const detected = formWorkspaceHypothesis(invWith([
+      {
+        source: 'planning-docs',
+        kind: 'open_work',
+        title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+        evidence: 'docs/harness/implementation-roadmap.md: 1. Define fixture, expected-record, prototype-run, and evaluation schemas.',
+        confidence: 'high',
+        references: ['docs/harness/implementation-roadmap.md'],
+      },
+      {
+        source: 'planning-docs',
+        kind: 'open_work',
+        title: 'Add the first tiny fiction fixture and human-authored expected records.',
+        evidence: 'docs/harness/implementation-roadmap.md: 2. Add the first tiny fiction fixture and human-authored expected records.',
+        confidence: 'high',
+        references: ['docs/harness/implementation-roadmap.md'],
+      },
+    ]))
+    const parsed = parseWorkspaceImport(`
+\`\`\`yaml
+tasks:
+  - id: task-fixture-shape
+    title: fixture directory shape for at least one small story fixture
+    description: docs/harness/implementation-roadmap.md: - fixture directory shape for at least one small story fixture
+    domain: harness
+    priority: normal
+  - id: task-contracts
+    title: typed fixture and expected-record contracts
+    description: docs/harness/implementation-roadmap.md: - typed fixture and expected-record contracts
+    domain: harness
+    priority: normal
+  - id: task-schema
+    title: Define fixture, expected-record, prototype-run, and evaluation schemas.
+    description: docs/harness/implementation-roadmap.md: 1. Define fixture, expected-record, prototype-run, and evaluation schemas.
+    domain: harness
+    priority: high
+  - id: task-records
+    title: Add the first tiny fiction fixture and human-authored expected records.
+    description: docs/harness/implementation-roadmap.md: 2. Add the first tiny fiction fixture and human-authored expected records.
+    domain: harness
+    priority: high
+\`\`\`
+`)
+
+    const merged = mergeWorkspaceImportDraft(detected, parsed)
+
+    expect(merged.tasks.map(task => task.title)).toEqual([
+      'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+      'Add the first tiny fiction fixture and human-authored expected records.',
+    ])
+    expect(merged.tasks.find(task => task.title === 'Define fixture, expected-record, prototype-run, and evaluation schemas.')).toMatchObject({
+      source: 'planning-docs',
+      description: 'docs/harness/implementation-roadmap.md: 1. Define fixture, expected-record, prototype-run, and evaluation schemas.',
+    })
+    expect(merged.tasks.find(task => task.title === 'fixture directory shape for at least one small story fixture')).toBeUndefined()
+  })
 })
 
 // The Workspace Import tab needs to let users approve the detector's

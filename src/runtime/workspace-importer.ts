@@ -584,6 +584,7 @@ export function mergeWorkspaceImportDraft(
   parsed: ParsedImport | null,
 ): WorkspaceImportDraft {
   if (!parsed) return detected
+  const parsedTasks = suppressShadowedParsedCurrentMilestoneDeliverables(parsed.tasks)
 
   const mergedGoals: DraftGoal[] = []
   const parsedGoalsByTitle = new Map(
@@ -619,7 +620,7 @@ export function mergeWorkspaceImportDraft(
 
   const mergedTasks: DraftTask[] = []
   const parsedTasksByTitle = new Map(
-    parsed.tasks.map(task => [normalizeImportText(task.title), task] as const),
+    parsedTasks.map(task => [normalizeImportText(task.title), task] as const),
   )
   const usedTaskTitles = new Set<string>()
   for (const task of detected.tasks) {
@@ -656,7 +657,7 @@ export function mergeWorkspaceImportDraft(
     }
     mergedTasks.push(task)
   }
-  for (const task of parsed.tasks) {
+  for (const task of parsedTasks) {
     const normalizedTitle = normalizeImportText(task.title)
     if (usedTaskTitles.has(normalizedTitle)) continue
     mergedTasks.push({
@@ -715,6 +716,40 @@ export function mergeWorkspaceImportDraft(
     context: [...detected.context],
     stats: detected.stats,
   }
+}
+
+function suppressShadowedParsedCurrentMilestoneDeliverables(
+  tasks: readonly ParsedTask[],
+): ParsedTask[] {
+  const sourceKinds = new Map<string, { numbered: number; bullet: number }>()
+  for (const task of tasks) {
+    if (task.scope === 'later') continue
+    const sourcePath = parsedTaskSourcePath(task.description)
+    if (!sourcePath) continue
+    const counts = sourceKinds.get(sourcePath) ?? { numbered: 0, bullet: 0 }
+    if (/: \d+\.\s+/.test(task.description)) counts.numbered += 1
+    if (/: -\s+/.test(task.description)) counts.bullet += 1
+    sourceKinds.set(sourcePath, counts)
+  }
+
+  const shadowedSources = new Set(
+    [...sourceKinds.entries()]
+      .filter(([, counts]) => counts.numbered >= 2 && counts.bullet >= 1)
+      .map(([sourcePath]) => sourcePath),
+  )
+  if (shadowedSources.size === 0) return [...tasks]
+
+  return tasks.filter(task => {
+    if (task.scope === 'later') return true
+    const sourcePath = parsedTaskSourcePath(task.description)
+    if (!sourcePath || !shadowedSources.has(sourcePath)) return true
+    return !/: -\s+/.test(task.description)
+  })
+}
+
+function parsedTaskSourcePath(description: string): string | null {
+  const match = /^(.+?\.md):\s+/.exec(description.trim())
+  return match?.[1]?.trim() ?? null
 }
 
 function normalizeImportedReferenceForTask(
