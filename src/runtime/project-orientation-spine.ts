@@ -244,6 +244,21 @@ export interface OrientationTaskInput {
     countInProjectTotals?: boolean
   }
   updatedAt?: string
+  orientationSource?: OrientationSource
+}
+
+export interface OrientationWorkspaceImportDraftTask {
+  id: string
+  title: string
+  description?: string
+  domain?: string
+  scope: 'current' | 'later'
+  refs?: string[]
+}
+
+export interface OrientationWorkspaceImportDraft {
+  tasks: OrientationWorkspaceImportDraftTask[]
+  source: OrientationSource
 }
 
 export interface BuildProjectOrientationSpineInput {
@@ -264,6 +279,7 @@ export interface BuildProjectOrientationSpineInput {
     message?: string
     actionHref?: string
   } | null
+  workspaceImportDraft?: OrientationWorkspaceImportDraft | null
   sourceConflicts?: Array<{ id: string; summary: string; refs: string[] }>
   sourceRefs?: string[]
 }
@@ -354,6 +370,74 @@ function defaultScope(tasks: OrientationTaskInput[]): OrientationScope | null {
     source: 'inferred',
     nodeIds: tasks.map(task => taskNodeId(task.id)),
     deferredNodeIds: [],
+  }
+}
+
+function draftSyntheticTaskId(id: string): string {
+  return `workspace-import:${id}`
+}
+
+function augmentTasksWithWorkspaceImportDraft(input: {
+  tasks: OrientationTaskInput[]
+  workspaceImportDraft?: OrientationWorkspaceImportDraft | null
+  now: string
+}): { tasks: OrientationTaskInput[]; scope: OrientationScope | null } {
+  const draft = input.workspaceImportDraft
+  if (!draft || draft.tasks.length === 0) {
+    return { tasks: input.tasks, scope: null }
+  }
+
+  const augmented = [...input.tasks]
+  const titleToTask = new Map<string, OrientationTaskInput>()
+  for (const task of augmented) titleToTask.set(normalizeText(taskTitle(task)), task)
+
+  const currentNodeIds: string[] = []
+  const deferredNodeIds: string[] = []
+  const importerTask = augmented.find(task => task.id === 'task-workspace-import')
+  if (importerTask) currentNodeIds.push(taskNodeId(importerTask.id))
+
+  for (const draftTask of draft.tasks) {
+    const existing = titleToTask.get(normalizeText(draftTask.title))
+    const taskId = existing?.id ?? draftSyntheticTaskId(draftTask.id)
+
+    if (!existing) {
+      const synthetic: OrientationTaskInput = {
+        id: taskId,
+        title: draftTask.title,
+        description: draftTask.description ?? draftTask.title,
+        domain: draftTask.domain,
+        status: draftTask.scope === 'later' ? 'shelved' : 'import_draft',
+        updatedAt: input.now,
+        workVisibility: {
+          kind: draftTask.scope === 'later' ? 'supporting' : 'primary',
+          countInProjectTotals: true,
+        },
+        orientationSource: {
+          ...draft.source,
+          refs: draftTask.refs?.length ? draftTask.refs : draft.source.refs,
+          inferred: true,
+          refreshedAt: input.now,
+        },
+      }
+      augmented.push(synthetic)
+      titleToTask.set(normalizeText(draftTask.title), synthetic)
+    }
+
+    const nodeId = taskNodeId(taskId)
+    if (draftTask.scope === 'later') deferredNodeIds.push(nodeId)
+    else currentNodeIds.push(nodeId)
+  }
+
+  return {
+    tasks: augmented,
+    scope: {
+      id: 'current-work',
+      label: 'Current work',
+      kind: 'proposed_feature_set',
+      source: 'inferred',
+      nodeIds: [...new Set(currentNodeIds)],
+      deferredNodeIds: [...new Set(deferredNodeIds)],
+    },
   }
 }
 
@@ -477,11 +561,13 @@ function proofForTask(task: OrientationTaskInput): OrientationProofSummary {
     : null
   const verified = handoff?.verified ?? []
   const missing = [...(handoff?.notVerified ?? []), ...(handoff?.remainingRisks ?? [])].filter(Boolean)
-  if ((task.proofPaths?.length ?? 0) === 0 && verified.length === 0 && missing.length === 0) {
+  const plannedProof = Array.isArray(task.proofPaths) ? task.proofPaths.length : 0
+  if (plannedProof === 0 && verified.length === 0 && missing.length === 0) {
     return { state: 'needed', verified, missing: ['Verification evidence has not been attached yet.'] }
   }
   if (missing.length > 0) return { state: verified.length > 0 ? 'partial' : 'needed', verified, missing }
-  if (verified.length > 0 || (task.proofPaths?.length ?? 0) > 0) return { state: 'proven', verified, missing }
+  if (verified.length > 0) return { state: 'proven', verified, missing }
+  if (plannedProof > 0) return { state: 'needed', verified, missing: ['Planned proof exists, but no proof evidence has been attached yet.'] }
   return { state: 'none', verified, missing }
 }
 
@@ -595,7 +681,7 @@ function buildNodes(
       ownerAction: null,
       blockers: [],
       refs: emptyRefs(task.id),
-      source: {
+      source: task.orientationSource ?? {
         kind: 'task',
         refs: [`task:${task.id}`],
         confidence: 'high',
@@ -1035,10 +1121,16 @@ function buildSummary(input: {
 
 export function buildProjectOrientationSpine(input: BuildProjectOrientationSpineInput): ProjectOrientationSpine {
   const now = input.now ?? new Date().toISOString()
-  const tasks = input.tasks ?? []
+  const baseTasks = input.tasks ?? []
+  const draftAugmentation = augmentTasksWithWorkspaceImportDraft({
+    tasks: baseTasks,
+    workspaceImportDraft: input.workspaceImportDraft,
+    now,
+  })
+  const tasks = draftAugmentation.tasks
   const charter = normalizeCharter(input)
   const selectedRelease = normalizeRelease(input, tasks)
-  const scope = releaseToScope(selectedRelease) ?? normalizeScope(input, tasks)
+  const scope = releaseToScope(selectedRelease) ?? draftAugmentation.scope ?? normalizeScope(input, tasks)
   const { roots, byId, gaps: nodeGaps } = buildNodes(tasks, scope, now)
   const { blockers, gaps: blockerGaps } = attachReleaseBlockers(input.releaseReadiness?.blockers ?? [], byId)
   const executionBoundary = buildExecutionBoundary({

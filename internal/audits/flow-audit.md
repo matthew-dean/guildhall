@@ -232,6 +232,40 @@ browser proof or deterministic automated proof before a release readiness claim.
   capability-chain reconstruction from all Narrative Harness specs into a
   complete release/capability spine.
 
+### 2026-06-17 Narrative Harness Workspace-Import Orientation Truth Proof
+
+- User job: when Narrative Harness has import drafts waiting, Overview/Map/API
+  should show the real current-vs-later bounded scope before the owner
+  approves anything, and planned proof should not masquerade as completed
+  proof.
+- Installed app proof: `pnpm build && pnpm dev:install && guildhall stop &&
+  guildhall start`; `/api/stale-server` reported `stale:false` for the
+  installed app at `http://127.0.0.1:7777`.
+- API proof for
+  `/api/project/workspace-import/draft?projectId=narrative-harness`:
+  `totalCurrentTaskCandidates=6`, `totalLaterTaskCandidates=9`. Later tasks now
+  include `Implement reader-knowledge-and-revelation reviewer lane`,
+  `Implement scene-and-chapter-intelligence reviewer lane`, and
+  `Implement theme-and-meaning-review reviewer lane` in addition to the six
+  earlier deferred candidates.
+- API proof for `/api/project?projectId=narrative-harness`: orientation summary
+  now reports `includedWorkCount=7`, `deferredWorkCount=9`, `progress.total=16`,
+  `progress.deferred=9`, headline `Current work needs import review.`, and no
+  imported task is marked `proven` merely because it has planned `proofPaths`.
+- State-agreement proof:
+  - Current bounded scope: the reserved `Import project notes and plans` task
+    plus the six Stage 1 harness tasks.
+  - Deferred bounded scope: nine synthetic import-draft work nodes survive in
+    orientation instead of being collapsed together by shared boilerplate
+    wording inside `remaining-spec-decomposition-inventory.md`.
+  - Orientation roots now show the Coherence lane with five deferred reviewer
+    tasks and the Harness lane with both current Stage 1 work and later
+    coordination/schema tasks.
+- Remaining gap: this makes import-draft orientation honest, but Guildhall
+  still does not yet reconstruct the full end-to-end capability/release chain
+  from the whole Narrative Harness corpus. The deeper import/model pass remains
+  open.
+
 | Surface | Routes | User job | Core project state | API evidence | Browser evidence | Automated coverage | Status / gap |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Fleet home | `/projects`, header/nav | See registered projects, model/provider health, work mix, needs-you count, attach project, refresh without stale loading. | Multi-project fleet, blocked, ready, done-heavy, setup-pending. | `/api/service`, `/api/stale-server`. | Project cards, dashboard counts, open selected project. | Rendered UI covers desktop/mobile cards and project open. Component tests cover service cache and action controls. | Covered by fixture; live freshness still required for installed audits. |

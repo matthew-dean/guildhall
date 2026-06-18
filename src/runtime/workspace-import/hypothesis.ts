@@ -101,8 +101,35 @@ function tokenSet(text: string): Set<string> {
   )
 }
 
-function firstToken(text: string): string | undefined {
-  return normalize(text).split(' ').find(Boolean)
+const GENERIC_TASK_TOKENS = new Set([
+  'add',
+  'after',
+  'baseline',
+  'build',
+  'create',
+  'fix',
+  'implement',
+  'improve',
+  'lane',
+  'path',
+  'proof',
+  'review',
+  'reviewer',
+  'ship',
+  'simpler',
+  'stable',
+  'task',
+  'work',
+])
+
+function meaningfulTokenSet(text: string): Set<string> {
+  return new Set(
+    [...tokenSet(text)].filter((token) => !GENERIC_TASK_TOKENS.has(token)),
+  )
+}
+
+function firstMeaningfulToken(text: string): string | undefined {
+  return [...meaningfulTokenSet(text)][0] ?? normalize(text).split(' ').find(Boolean)
 }
 
 function overlapRatio(a: Set<string>, b: Set<string>): number {
@@ -337,13 +364,21 @@ function addTask(
       if (existing.domain !== sigDomain) continue
       const existingRef = existing.references?.[0]
       const overlap = overlapRatio(sigTokens, tokenSet(existing.title))
-      const sameReference = !sigRef || !existingRef || sigRef === existingRef
+      const meaningfulOverlap = overlapRatio(
+        meaningfulTokenSet(sig.title),
+        meaningfulTokenSet(existing.title),
+      )
+      const sameReference = Boolean(sigRef && existingRef && sigRef === existingRef)
       const planningDocEcho =
         sig.source === 'planning-docs' &&
         existing.source === 'planning-docs' &&
-        firstToken(sig.title) === firstToken(existing.title) &&
-        overlap >= 0.55
-      if ((sameReference && overlap >= 0.7) || planningDocEcho) {
+        firstMeaningfulToken(sig.title) === firstMeaningfulToken(existing.title) &&
+        meaningfulOverlap >= 0.5
+      const sameReferenceEcho =
+        sameReference &&
+        overlap >= 0.7 &&
+        meaningfulOverlap >= 0.34
+      if (sameReferenceEcho || planningDocEcho) {
         key = existingKey
         break
       }

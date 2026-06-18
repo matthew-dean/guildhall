@@ -345,6 +345,93 @@ describe('buildProjectOrientationSpine', () => {
     })
   })
 
+  it('does not treat planned proof paths as already proven evidence', () => {
+    const spine = buildProjectOrientationSpine({
+      projectId: 'narrative-harness',
+      now: '2026-06-18T12:00:00.000Z',
+      tasks: [{
+        id: 'task-imported',
+        title: 'Imported harness task',
+        description: 'Pending shaping and proof.',
+        domain: 'harness',
+        status: 'import_draft',
+        proofPaths: [{
+          kind: 'command',
+          command: 'pnpm test -- imported-harness-task',
+          expectedEvidence: ['Harness task proof should pass.'],
+        }],
+      }],
+    })
+
+    expect(spine.nodes['work:task-imported']?.proof).toMatchObject({
+      state: 'needed',
+      missing: ['Planned proof exists, but no proof evidence has been attached yet.'],
+    })
+    expect(spine.proofContracts[0]?.state).toBe('needed')
+  })
+
+  it('uses live workspace-import draft scope to surface current and deferred work before approval', () => {
+    const spine = buildProjectOrientationSpine({
+      projectId: 'narrative-harness',
+      now: '2026-06-18T12:00:00.000Z',
+      tasks: [{
+        id: 'task-workspace-import',
+        title: 'Import project notes and plans',
+        description: 'Reserved importer task.',
+        domain: '_workspace_import',
+        status: 'import_draft',
+      }],
+      startReadiness: {
+        canStart: false,
+        code: 'import_drafts_waiting',
+        message: 'Review imported drafts before starting.',
+        actionHref: '/workspace-import',
+      },
+      workspaceImportDraft: {
+        source: {
+          kind: 'inferred',
+          refs: ['workspace-import:draft'],
+          confidence: 'medium',
+          freshness: 'fresh',
+          inferred: true,
+          refreshedAt: '2026-06-18T12:00:00.000Z',
+        },
+        tasks: [
+          {
+            id: 'task-current',
+            title: 'Define fixture schemas',
+            description: 'Current MVP harness work.',
+            domain: 'harness',
+            scope: 'current',
+            refs: ['import:docs/harness/implementation-roadmap.md'],
+          },
+          {
+            id: 'task-later',
+            title: 'Implement dialogue reviewer lane',
+            description: 'Deferred Stage 2 reviewer work.',
+            domain: 'coherence',
+            scope: 'later',
+            refs: ['import:docs/harness/remaining-spec-decomposition-inventory.md'],
+          },
+        ],
+      },
+    })
+
+    expect(spine.scope).toMatchObject({
+      nodeIds: ['work:task-workspace-import', 'work:workspace-import:task-current'],
+      deferredNodeIds: ['work:workspace-import:task-later'],
+    })
+    expect(spine.summary.includedWorkCount).toBe(2)
+    expect(spine.summary.deferredWorkCount).toBe(1)
+    expect(spine.nodes['work:workspace-import:task-current']?.source).toMatchObject({
+      kind: 'inferred',
+      refs: ['import:docs/harness/implementation-roadmap.md'],
+      inferred: true,
+    })
+    expect(spine.nodes['work:workspace-import:task-later']?.maturity).toBe('deferred')
+    expect(spine.roots.map(root => root.title)).toEqual(['Coherence', 'Harness', 'Workspace Import'])
+  })
+
   it('groups flat imported work into inferred capability lanes by domain', () => {
     const spine = buildProjectOrientationSpine({
       projectId: 'narrative-harness',

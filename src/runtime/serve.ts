@@ -3416,6 +3416,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         runStatus: run?.status ?? 'stopped',
         availability,
       })
+      const orientationWorkspaceImportDraft = await workspaceImportDraftForOrientation(project.path, startReadiness)
       const orientationSpine = buildProjectOrientationSpine({
         projectId: project.id,
         charter: inferProjectCharterFromExistingSources(project.path, project.config),
@@ -3423,6 +3424,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         releases: rawQueue.releases,
         tasks: tasks as unknown as Task[],
         startReadiness,
+        workspaceImportDraft: orientationWorkspaceImportDraft,
         sourceRefs: projectOrientationSourceRefs(project.path),
       })
       return c.json({
@@ -3491,6 +3493,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         releases: rawQueue.releases,
         tasks: rawQueue.tasks as Task[],
         startReadiness,
+        workspaceImportDraft: await workspaceImportDraftForOrientation(project.path, startReadiness),
         sourceRefs: projectOrientationSourceRefs(project.path),
       })
       return c.json({ spine })
@@ -4803,6 +4806,33 @@ export function buildServeApp(opts: ServeOptions = {}): {
         `Guildhall's saved import is under-scoped for the current project docs. ` +
         `The live detector found ${detected.tasks.length} current tasks, starting with "${first}". Refresh the import before treating this project as complete.`,
       actionHref: '/workspace-import',
+    }
+  }
+
+  async function workspaceImportDraftForOrientation(projectPath: string, startReadiness: { code?: string } | null | undefined) {
+    if (!startReadiness || !['import_drafts_waiting', 'workspace_import_refresh_needed'].includes(startReadiness.code ?? '')) {
+      return null
+    }
+    const inventory = await detectWorkspaceSignals({ projectPath })
+    const draft = formWorkspaceHypothesis(inventory)
+    if (draft.tasks.length === 0) return null
+    return {
+      tasks: draft.tasks.map(task => ({
+        id: task.suggestedId,
+        title: task.title,
+        description: task.whyThisMayMatter ?? task.description,
+        domain: task.domain,
+        scope: task.scope,
+        refs: task.references?.map(ref => `import:${ref}`) ?? [`import:${task.source}`],
+      })),
+      source: {
+        kind: 'inferred' as const,
+        refs: ['workspace-import:draft'],
+        confidence: 'medium' as const,
+        freshness: 'fresh' as const,
+        inferred: true,
+        refreshedAt: new Date().toISOString(),
+      },
     }
   }
 
@@ -6729,13 +6759,15 @@ export function buildServeApp(opts: ServeOptions = {}): {
         runStatus: supervisor.get(project.id)?.status ?? 'stopped',
         recentEvents: supervisor.recent(project.id, undefined, project.path),
       })
+      const threadStartReadiness = await projectStartReadiness(project.path)
       const orientationSpine = buildProjectOrientationSpine({
         projectId: project.id,
         charter: inferProjectCharterFromExistingSources(project.path, project.config),
         selectedReleaseId: releaseQueue.selectedReleaseId,
         releases: releaseQueue.releases,
         tasks: state.tasks as Task[],
-        startReadiness: await projectStartReadiness(project.path),
+        startReadiness: threadStartReadiness,
+        workspaceImportDraft: await workspaceImportDraftForOrientation(project.path, threadStartReadiness),
         sourceRefs: projectOrientationSourceRefs(project.path),
       })
       timing[0]!.endedAt = Date.now()
@@ -9190,13 +9222,15 @@ export function buildServeApp(opts: ServeOptions = {}): {
       })()
       const rawTasks = rawQueue.tasks
       const tasks = await Promise.all(rawTasks.map((task) => buildEffectiveTask(project.path, task as Task)))
+      const releaseStartReadiness = await projectStartReadiness(project.path)
       const readinessSpine = buildProjectOrientationSpine({
         projectId: project.id,
         charter: inferProjectCharterFromExistingSources(project.path, project.config),
         selectedReleaseId: rawQueue.selectedReleaseId,
         releases: rawQueue.releases,
         tasks: tasks as unknown as Task[],
-        startReadiness: await projectStartReadiness(project.path),
+        startReadiness: releaseStartReadiness,
+        workspaceImportDraft: await workspaceImportDraftForOrientation(project.path, releaseStartReadiness),
         sourceRefs: projectOrientationSourceRefs(project.path),
       })
       const release = readinessSpine.selectedRelease

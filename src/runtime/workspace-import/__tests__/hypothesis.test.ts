@@ -96,6 +96,68 @@ describe('formWorkspaceHypothesis', () => {
     })
   })
 
+  it('does not collapse distinct planning-doc reviewer lanes just because they share generic wording', () => {
+    const draft = formWorkspaceHypothesis(
+      invFrom([
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'Implement dialogue-and-character-voice reviewer lane',
+          evidence: 'inventory recommendation',
+          domainHint: 'coherence',
+          scopeHint: 'later',
+          confidence: 'high',
+        },
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'Implement reader-knowledge-and-revelation reviewer lane',
+          evidence: 'inventory recommendation',
+          domainHint: 'coherence',
+          scopeHint: 'later',
+          confidence: 'high',
+        },
+      ]),
+    )
+
+    expect(draft.tasks.map(task => task.title)).toEqual([
+      'Implement dialogue-and-character-voice reviewer lane',
+      'Implement reader-knowledge-and-revelation reviewer lane',
+    ])
+  })
+
+  it('does not collapse distinct reviewer lanes that are recommended from the same planning doc', () => {
+    const draft = formWorkspaceHypothesis(
+      invFrom([
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'Implement dialogue-and-character-voice reviewer lane',
+          evidence: 'remaining inventory recommendation',
+          references: ['/repo/docs/harness/remaining-spec-decomposition-inventory.md'],
+          domainHint: 'coherence',
+          scopeHint: 'later',
+          confidence: 'high',
+        },
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'Implement reader-knowledge-and-revelation reviewer lane',
+          evidence: 'remaining inventory recommendation',
+          references: ['/repo/docs/harness/remaining-spec-decomposition-inventory.md'],
+          domainHint: 'coherence',
+          scopeHint: 'later',
+          confidence: 'high',
+        },
+      ]),
+    )
+
+    expect(draft.tasks.map(task => task.title)).toEqual([
+      'Implement dialogue-and-character-voice reviewer lane',
+      'Implement reader-knowledge-and-revelation reviewer lane',
+    ])
+  })
+
   it('does not copy identical evidence into goal rationale or task description', () => {
     const draft = formWorkspaceHypothesis(
       invFrom([
