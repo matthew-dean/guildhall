@@ -1973,11 +1973,21 @@ tasks:
 
     const q = await readQueue()
     const task = q.tasks.find(candidate => candidate.id === 'task-schemas')
+    expect(task?.acceptanceCriteria?.map(criterion => criterion.id)).toEqual([
+      'contracts-defined',
+      'fixture-ground-truth-shape',
+      'run-evaluation-shape',
+      'proof-output-support',
+      'deterministic-proof',
+    ])
     expect(task?.spec).toContain('`FixtureManifest`')
     expect(task?.spec).toContain('`ExpectedRecordSet`')
     expect(task?.spec).toContain('`PrototypeRun`')
+    expect(task?.spec).toContain('build a no-UI test harness that proves story-memory and packet contracts against small fiction fixtures before any product UI is designed.')
     expect(task?.spec).toContain('Verification environment: Local workspace proof using:')
     expect(task?.spec).not.toContain('Split or pause only if these imported gaps still change the implementation boundary')
+    expect(task?.spec).not.toContain('Guildhall still needs to confirm')
+    expect(task?.spec).not.toContain('Add the first tiny fiction fixture')
     expect(task?.productBrief?.nonGoals ?? []).not.toContain('Guildhall still needs to confirm scope, current relevance, and success criteria during shaping.')
 
     const specApproval = await approveSpec({ memoryDir, taskId: 'task-schemas' })
