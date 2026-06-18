@@ -21,6 +21,7 @@ const TaskSelectionMode = z.enum(['all', 'tight'])
 const WorkspaceImportLearningSchema = z.object({
   preferredAreaKeys: z.array(z.string()).default([]),
   preferredSourceKeys: z.array(z.string()).default([]),
+  preferredTaskIds: z.array(z.string()).default([]),
   areaSelectionCounts: z.record(z.string(), z.number().int().nonnegative()).default({}),
   sourceSelectionCounts: z.record(z.string(), z.number().int().nonnegative()).default({}),
   approvedRuns: z.number().int().nonnegative().default(0),
@@ -846,6 +847,7 @@ export async function recordWorkspaceImportApproval(
     nextProjectWI.sourceSelectionCounts,
     nextProjectWI.approvedRuns,
   )
+  nextProjectWI.preferredTaskIds = selectedTaskIds
   const nextProjectRecord = rebuildProjectSuggestions({
     ...projectRecord,
     workspaceImport: nextProjectWI,
@@ -924,15 +926,22 @@ export function buildWorkspaceImportDefaults(
       .flatMap(group => group.taskIds),
   )
   const candidateTasks = draft.tasks.filter(task => taskIdsForSelectedSources.has(task.suggestedId))
+  const projectPreferredTaskIds = projectLearning.workspaceImport.preferredTaskIds.filter(taskId =>
+    candidateTasks.some(task => task.suggestedId === taskId),
+  )
   const tightTasks = candidateTasks.filter(task =>
     task.confidence === 'high' || task.priority === 'critical' || task.priority === 'high',
   )
-  const selectedTaskIds = (effectiveMode === 'tight' && tightTasks.length > 0 ? tightTasks : candidateTasks)
-    .map(task => task.suggestedId)
+  const selectedTaskIds = projectPreferredTaskIds.length > 0
+    ? projectPreferredTaskIds
+    : (effectiveMode === 'tight' && tightTasks.length > 0 ? tightTasks : candidateTasks)
+        .map(task => task.suggestedId)
 
   let note: string | null = null
-  if (projectPreferredAreas.length > 0 || projectPreferredSources.length > 0) {
-    note = 'Guildhall reused the project parts and sources you approved last time.'
+  if (projectPreferredAreas.length > 0 || projectPreferredSources.length > 0 || projectPreferredTaskIds.length > 0) {
+    note = projectPreferredTaskIds.length > 0
+      ? 'Guildhall reused the project parts, sources, and scoped work you approved last time.'
+      : 'Guildhall reused the project parts and sources you approved last time.'
   } else if (effectiveMode === 'tight') {
     note = 'Guildhall started with a tighter task list because you usually trim broad imports.'
   }

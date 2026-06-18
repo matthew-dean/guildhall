@@ -176,8 +176,10 @@ describe('learning loop for workspace import', () => {
 
     expect(snapshot.project.workspaceImport.preferredAreaKeys).toEqual(['looma'])
     expect(snapshot.project.workspaceImport.preferredSourceKeys).toEqual(['component-roadmap'])
+    expect(snapshot.project.workspaceImport.preferredTaskIds).toEqual(['task-1'])
     expect(snapshot.effective.defaults.selectedAreaKeys).toEqual(['looma'])
     expect(snapshot.effective.defaults.selectedSourceKeys).toEqual(['component-roadmap'])
+    expect(snapshot.effective.defaults.selectedTaskIds).toEqual(['task-1'])
     expect(snapshot.effective.defaults.note).toContain('approved last time')
   })
 
@@ -206,7 +208,8 @@ describe('learning loop for workspace import', () => {
     })
 
     expect(snapshot.project.workspaceImport.taskSelectionMode).toBe('tight')
-    expect(snapshot.effective.defaults.selectedTaskIds).toEqual(['task-1', 'task-4'])
+    expect(snapshot.project.workspaceImport.preferredTaskIds).toEqual(['task-1'])
+    expect(snapshot.effective.defaults.selectedTaskIds).toEqual(['task-1'])
     expect(snapshot.effective.coordinatorSuggestions[0]?.id).toBe('workspace-import-clarity-check')
     expect(snapshot.effective.productSuggestions[0]?.id).toBe('workspace-import-tighten-defaults')
   })
