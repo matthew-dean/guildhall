@@ -2385,7 +2385,7 @@ describe('Workspace Import review endpoints', () => {
     const schemaTask = beforeBody.detected?.tasks.find(task => task.title === 'Define fixture, expected-record, prototype-run, and evaluation schemas.')
     const fixtureTask = beforeBody.detected?.tasks.find(task => task.title === 'Add the first tiny fiction fixture and human-authored expected records.')
     expect(schemaTask).toMatchObject({
-      domain: 'harness',
+      domain: 'core',
       acceptanceCriteria: expect.arrayContaining([
         expect.objectContaining({ id: 'source-implementation' }),
         expect.objectContaining({ id: 'automated-proof' }),

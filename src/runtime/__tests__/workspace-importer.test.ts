@@ -2058,7 +2058,7 @@ tasks:
 
     expect(merged.tasks.find(task => task.title === 'Implement reviewer lane')).toMatchObject({
       scope: 'current',
-      description: 'Old importer spec still says later.',
+      description: 'Stage 2 reviewer lane.',
     })
   })
 

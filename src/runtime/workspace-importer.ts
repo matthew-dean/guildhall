@@ -30,6 +30,7 @@ import {
   evidenceTaskWhyThisMayMatter,
 } from './evidence-task-import-draft.js'
 import { detectShadowedCurrentMilestoneDeliverableImports } from './current-milestone-shadowing.js'
+import { applyTaskShaping } from './task-decomposition.js'
 
 // ---------------------------------------------------------------------------
 // FR-34: reserved workspace-importer task.
@@ -509,6 +510,14 @@ type ImportedBlueprintSeed = {
   spec?: Task['spec']
   outOfScope: Task['outOfScope']
   notes: Task['notes']
+  workUnitAnalysis?: Task['workUnitAnalysis']
+  taskReadiness?: Task['taskReadiness']
+  taskKind?: Task['taskKind']
+  definitionOfDone?: Task['definitionOfDone']
+  blockerPlans?: Task['blockerPlans']
+  contextBudget?: Task['contextBudget']
+  decomposition?: Task['decomposition']
+  sizePlan?: Task['sizePlan']
 }
 
 export interface ParsedMilestone {
@@ -682,35 +691,44 @@ export function mergeWorkspaceImportDraft(
     const parsedTask = parsedTasksByTitle.get(normalizedTitle)
     if (parsedTask) {
       usedTaskTitles.add(normalizedTitle)
+      const resolvedDescription = preserveDetectedScope
+        ? task.description || parsedTask.description
+        : parsedTask.description || task.description
+      const resolvedWhyThisMayMatter = preserveDetectedScope
+        ? task.whyThisMayMatter || parsedTask.whyThisMayMatter
+        : parsedTask.whyThisMayMatter || task.whyThisMayMatter
+      const resolvedAssumptions = preserveDetectedScope
+        ? task.assumptions?.length ? task.assumptions : parsedTask.assumptions
+        : parsedTask.assumptions?.length ? parsedTask.assumptions : task.assumptions
+      const resolvedMissingInformation = preserveDetectedScope
+        ? task.missingInformation?.length ? task.missingInformation : parsedTask.missingInformation
+        : parsedTask.missingInformation?.length ? parsedTask.missingInformation : task.missingInformation
+      const resolvedAcceptanceCriteria = preserveDetectedScope
+        ? task.acceptanceCriteria ?? parsedTask.acceptanceCriteria
+        : parsedTask.acceptanceCriteria ?? task.acceptanceCriteria
+      const resolvedDependsOn = preserveDetectedScope
+        ? task.dependsOn ?? parsedTask.dependsOn
+        : parsedTask.dependsOn ?? task.dependsOn
+      const resolvedProofPaths = preserveDetectedScope
+        ? task.proofPaths ?? parsedTask.proofPaths
+        : parsedTask.proofPaths ?? task.proofPaths
       mergedTasks.push({
         ...task,
         suggestedId: parsedTask.id,
         title: parsedTask.title,
-        description: parsedTask.description || task.description,
-        ...(parsedTask.whyThisMayMatter
-          ? { whyThisMayMatter: parsedTask.whyThisMayMatter }
-          : task.whyThisMayMatter
-            ? { whyThisMayMatter: task.whyThisMayMatter }
-            : {}),
-        ...(parsedTask.assumptions && parsedTask.assumptions.length > 0
-          ? { assumptions: [...parsedTask.assumptions] }
-          : task.assumptions
-            ? { assumptions: [...task.assumptions] }
-            : {}),
-        ...(parsedTask.missingInformation && parsedTask.missingInformation.length > 0
-          ? { missingInformation: [...parsedTask.missingInformation] }
-          : task.missingInformation
-            ? { missingInformation: [...task.missingInformation] }
-            : {}),
-        domain: parsedTask.domain || task.domain,
+        description: resolvedDescription,
+        ...(resolvedWhyThisMayMatter ? { whyThisMayMatter: resolvedWhyThisMayMatter } : {}),
+        ...(resolvedAssumptions && resolvedAssumptions.length > 0 ? { assumptions: [...resolvedAssumptions] } : {}),
+        ...(resolvedMissingInformation && resolvedMissingInformation.length > 0 ? { missingInformation: [...resolvedMissingInformation] } : {}),
+        domain: preserveDetectedScope ? task.domain || parsedTask.domain : parsedTask.domain || task.domain,
         scope: preserveDetectedScope
           ? task.scope
           : parsedTask.scope === 'later' ? 'later' : task.scope,
-        priority: parsedTask.priority || task.priority,
+        priority: preserveDetectedScope ? task.priority || parsedTask.priority : parsedTask.priority || task.priority,
         references: mergeImportReferences(task.references, parsedTask.references),
-        ...(parsedTask.acceptanceCriteria ? { acceptanceCriteria: parsedTask.acceptanceCriteria } : {}),
-        ...(parsedTask.dependsOn ? { dependsOn: [...parsedTask.dependsOn] } : {}),
-        ...(parsedTask.proofPaths ? { proofPaths: [...parsedTask.proofPaths] } : {}),
+        ...(resolvedAcceptanceCriteria ? { acceptanceCriteria: resolvedAcceptanceCriteria } : {}),
+        ...(resolvedDependsOn ? { dependsOn: [...resolvedDependsOn] } : {}),
+        ...(resolvedProofPaths ? { proofPaths: [...resolvedProofPaths] } : {}),
       })
       continue
     }
@@ -1639,9 +1657,7 @@ function graphTaskToParsedTask(
     assumptions: [
       'The referenced documentation still represents intended project direction.',
     ],
-    missingInformation: [
-      'Guildhall still needs to confirm the final implementation boundary during shaping.',
-    ],
+    missingInformation: parsedTask?.missingInformation ? [...parsedTask.missingInformation] : [],
     domain: graphTaskDomain(task, parsedTask),
     scope: parsedTask?.scope === 'later' ? 'later' : 'current',
     priority: evidenceTaskPriority(task),
@@ -1761,20 +1777,39 @@ function importedTaskSpec(task: MaterializedImportTask): string {
   }).filter((line): line is string => Boolean(line))
 
   return [
-    '## Summary',
+    '## What this is',
+    task.title,
+    '',
+    '## Problem / context',
+    task.whyThisMayMatter?.trim() || task.description.trim() || `${task.title} is imported current-scope work backed by the cited project evidence.`,
+    '',
+    '## Goals',
+    `- ${summarizeImportedSuccessMetric(task)}`,
+    '',
+    '## Non-goals',
+    ...(missingInformation.length > 0
+      ? missingInformation.map(item => `- ${item}`)
+      : ['- Do not broaden beyond the cited evidence, acceptance criteria, and proof plan.']),
+    '',
+    '## Proposed design',
     task.description.trim() || task.title,
     '',
-    '## Imported Evidence',
-    ...(references.length > 0 ? references.map(reference => `- ${reference}`) : ['- No explicit source path was preserved in the import draft.']),
-    ...(task.whyThisMayMatter ? ['', '## Why This Matters', task.whyThisMayMatter.trim()] : []),
-    ...(assumptions.length > 0 ? ['', '## Assumptions', ...assumptions.map(item => `- ${item}`)] : []),
-    ...(missingInformation.length > 0 ? ['', '## Known Gaps', ...missingInformation.map(item => `- ${item}`)] : []),
+    '## Key decisions',
+    `- Stay anchored to the imported evidence for ${task.title}.`,
+    ...(assumptions.length > 0
+      ? assumptions.map(item => `- Assumption: ${item}`)
+      : ['- Reuse the documented project structure instead of inventing a new boundary.']),
     '',
-    '## Acceptance Criteria',
+    '## Imported evidence',
+    ...(references.length > 0 ? references.map(reference => `- ${reference}`) : ['- No explicit source path was preserved in the import draft.']),
+    '',
+    '## Acceptance criteria',
     ...(acceptanceCriteria.length > 0
       ? acceptanceCriteria.map((criterion, index) => `${index + 1}. ${criterion.description}`)
       : ['1. The imported task is rewritten with concrete acceptance criteria before approval.']),
-    ...(proofPlan.length > 0 ? ['', '## Proof Plan', ...proofPlan] : []),
+    '',
+    '## Verification',
+    ...(proofPlan.length > 0 ? proofPlan : ['- Run the documented proof plan from the cited project evidence and record the result.']),
     '',
     importedCompletionBoundary(task),
   ].join('\n')
@@ -1791,6 +1826,37 @@ function importedTaskBrief(
     nonGoals: (task.missingInformation ?? []).filter(Boolean),
     authoredBy: 'workspace-importer',
     authoredAt: now,
+  }
+}
+
+function importedTaskWorkUnitAnalysis(
+  task: MaterializedImportTask,
+  now: string,
+): Task['workUnitAnalysis'] {
+  const proofOnlyItems = [
+    ...(task.acceptanceCriteria ?? []).map(criterion => criterion.description.trim()).filter(Boolean),
+    ...(task.proofPaths ?? []).map((path) => {
+      if (path.kind === 'command' && typeof path.command === 'string' && path.command.trim()) {
+        return `Run ${path.command.trim()}`
+      }
+      if (path.kind === 'browser') return 'Capture browser proof for the documented flow.'
+      if (path.kind === 'review') return 'Review the recorded proof output.'
+      return ''
+    }).filter(Boolean),
+  ]
+  return {
+    summary: `One imported implementation unit for ${task.title}.`,
+    units: [{
+      id: `unit-${task.id}`,
+      title: task.title,
+      deliverable: summarizeImportedSuccessMetric(task),
+      rationale: task.whyThisMayMatter?.trim() || `${task.title} is one independently verifiable imported work unit.`,
+      suggestedDomain: task.domain,
+      dependsOn: [...(task.dependsOn ?? [])],
+    }],
+    proofOnlyItems,
+    createdAt: now,
+    createdBy: 'workspace-importer',
   }
 }
 
@@ -1866,8 +1932,20 @@ function buildImportedBlueprintSeed(
     }
   }
 
-  return {
+  const seededProductBrief = importedTaskBrief(task, now)
+  const seededSpec = importedTaskSpec(task)
+  const seededWorkUnitAnalysis = importedTaskWorkUnitAnalysis(task, now)
+  const shapedSeedTask: Task = applyTaskShaping({
+    id: `seed:${task.id}`,
+    title: task.title,
+    description: task.description,
+    domain: task.domain,
+    projectPath: '',
     status: 'spec_review',
+    priority: task.priority,
+    dependsOn: [...(task.dependsOn ?? [])],
+    outOfScope: [...(task.missingInformation ?? [])],
+    acceptanceCriteria: materializedAcceptanceCriteria(task),
     requestIntake: {
       intent: 'implementation',
       recommendedNextAction: 'proceed_to_implementation_spec',
@@ -1905,10 +1983,39 @@ function buildImportedBlueprintSeed(
       createdAt: now,
       createdBy: 'workspace-importer',
     },
-    productBrief: importedTaskBrief(task, now),
-    spec: importedTaskSpec(task),
+    references: [...normalizedReferences],
+    notes: [],
+    gateResults: [],
+    reviewVerdicts: [],
+    adjudications: [],
+    escalations: [],
+    agentIssues: [],
+    spec: seededSpec,
+    productBrief: seededProductBrief,
+    workUnitAnalysis: seededWorkUnitAnalysis,
+    proofPaths: task.proofPaths ? [...task.proofPaths] : [],
+    revisionCount: 0,
+    remediationAttempts: 0,
+    origination: 'human',
+    createdAt: now,
+    updatedAt: now,
+  }, { now, recordNote: false })
+
+  return {
+    status: 'spec_review',
+    requestIntake: shapedSeedTask.requestIntake,
+    productBrief: seededProductBrief,
+    spec: seededSpec,
     outOfScope: [...(task.missingInformation ?? [])],
     notes,
+    workUnitAnalysis: seededWorkUnitAnalysis,
+    taskReadiness: shapedSeedTask.taskReadiness,
+    taskKind: shapedSeedTask.taskKind,
+    definitionOfDone: shapedSeedTask.definitionOfDone,
+    blockerPlans: shapedSeedTask.blockerPlans,
+    contextBudget: shapedSeedTask.contextBudget,
+    decomposition: shapedSeedTask.decomposition,
+    sizePlan: shapedSeedTask.sizePlan,
   }
 }
 
@@ -2061,6 +2168,7 @@ export async function approveWorkspaceImport(
     existing.outOfScope = seededBlueprint.outOfScope
     existing.spec = seededBlueprint.spec
     existing.productBrief = seededBlueprint.productBrief
+    existing.workUnitAnalysis = seededBlueprint.workUnitAnalysis
     existing.taskReadiness = seededBlueprint.taskReadiness
     existing.taskKind = seededBlueprint.taskKind
     existing.definitionOfDone = seededBlueprint.definitionOfDone
@@ -2135,6 +2243,7 @@ export async function approveWorkspaceImport(
       agentIssues: [],
       ...(seededBlueprint.spec ? { spec: seededBlueprint.spec } : {}),
       ...(seededBlueprint.productBrief ? { productBrief: seededBlueprint.productBrief } : {}),
+      ...(seededBlueprint.workUnitAnalysis ? { workUnitAnalysis: seededBlueprint.workUnitAnalysis } : {}),
       ...(seededBlueprint.taskReadiness ? { taskReadiness: seededBlueprint.taskReadiness } : {}),
       ...(seededBlueprint.taskKind ? { taskKind: seededBlueprint.taskKind } : {}),
       ...(seededBlueprint.definitionOfDone ? { definitionOfDone: seededBlueprint.definitionOfDone } : {}),
