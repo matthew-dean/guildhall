@@ -2339,6 +2339,103 @@ describe('Workspace Import review endpoints', () => {
     expect(typeof body.detected!.stats.inputSignals).toBe('number')
   })
 
+  it('materializes detector and approved import previews into the same structured task graph used by saved imported tasks', async () => {
+    await fs.mkdir(path.join(tmpDir, 'docs/harness'), { recursive: true })
+    await fs.mkdir(path.join(tmpDir, 'docs/specs'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'docs/harness/implementation-roadmap.md'),
+      [
+        '# Implementation Roadmap',
+        '',
+        '## Stage 1: Fixture And Evaluation Harness',
+        '',
+        'Goal: build a no-UI test harness that proves story-memory and packet contracts against small fiction fixtures before any product UI is designed.',
+        '',
+        '## Current Next Milestone',
+        '',
+        'The next milestone is Stage 1: Fixture And Evaluation Harness.',
+        '',
+        '1. Define fixture, expected-record, prototype-run, and evaluation schemas.',
+        '2. Add the first tiny fiction fixture and human-authored expected records.',
+      ].join('\n'),
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'docs/specs/schema-contract-roadmap.md'),
+      '# Schema Contract Roadmap\n\nTyped fixture and expected-record contracts.\n',
+      'utf8',
+    )
+    await fs.writeFile(path.join(tmpDir, 'package.json'), JSON.stringify({ name: 'narrative-preview-shape' }), 'utf8')
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const before = await app.fetch(new Request(scoped('/api/project/workspace-import/draft')))
+    expect(before.status).toBe(200)
+    const beforeBody = (await before.json()) as {
+      detected: {
+        tasks: Array<{
+          suggestedId: string
+          title: string
+          domain: string
+          dependsOn?: string[]
+          proofPaths?: Array<{ kind: string }>
+          acceptanceCriteria?: Array<{ id: string }>
+        }>
+      } | null
+    }
+    const schemaTask = beforeBody.detected?.tasks.find(task => task.title === 'Define fixture, expected-record, prototype-run, and evaluation schemas.')
+    const fixtureTask = beforeBody.detected?.tasks.find(task => task.title === 'Add the first tiny fiction fixture and human-authored expected records.')
+    expect(schemaTask).toMatchObject({
+      domain: 'harness',
+      acceptanceCriteria: expect.arrayContaining([
+        expect.objectContaining({ id: 'source-implementation' }),
+        expect.objectContaining({ id: 'automated-proof' }),
+      ]),
+      proofPaths: expect.arrayContaining([
+        expect.objectContaining({ kind: 'command' }),
+        expect.objectContaining({ kind: 'review' }),
+      ]),
+    })
+    expect(fixtureTask?.dependsOn).toEqual([schemaTask?.suggestedId].filter(Boolean))
+
+    const approve = await app.fetch(
+      new Request(scoped('/api/project/workspace-import/approve'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({}),
+      }),
+    )
+    expect(approve.status).toBe(200)
+
+    const after = await app.fetch(new Request(scoped('/api/project/workspace-import/draft')))
+    expect(after.status).toBe(200)
+    const afterBody = (await after.json()) as {
+      parsed: {
+        tasks: Array<{
+          id: string
+          title: string
+          domain: string
+          dependsOn?: string[]
+          proofPaths?: Array<{ kind: string }>
+          acceptanceCriteria?: Array<{ id: string }>
+        }>
+      } | null
+    }
+    const parsedSchemaTask = afterBody.parsed?.tasks.find(task => task.title === 'Define fixture, expected-record, prototype-run, and evaluation schemas.')
+    const parsedFixtureTask = afterBody.parsed?.tasks.find(task => task.title === 'Add the first tiny fiction fixture and human-authored expected records.')
+    expect(parsedSchemaTask).toMatchObject({
+      domain: 'harness',
+      acceptanceCriteria: expect.arrayContaining([
+        expect.objectContaining({ id: 'source-implementation' }),
+        expect.objectContaining({ id: 'automated-proof' }),
+      ]),
+      proofPaths: expect.arrayContaining([
+        expect.objectContaining({ kind: 'command' }),
+        expect.objectContaining({ kind: 'review' }),
+      ]),
+    })
+    expect(parsedFixtureTask?.dependsOn).toEqual([parsedSchemaTask?.id].filter(Boolean))
+  })
+
   it('approve falls back to detector when the importer task has no spec', async () => {
     // Seed a README with a goal the detector will pick up.
     await fs.writeFile(

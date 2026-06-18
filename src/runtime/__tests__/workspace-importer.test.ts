@@ -916,6 +916,30 @@ tasks:
   })
 
   it('persists the approved effective draft as the importer spec when approval uses a draft override', async () => {
+    await fs.mkdir(path.join(tmpDir, 'docs/harness'), { recursive: true })
+    await fs.mkdir(path.join(tmpDir, 'docs/specs'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'docs/harness/implementation-roadmap.md'),
+      [
+        '# Implementation Roadmap',
+        '',
+        '## Stage 1: Fixture And Evaluation Harness',
+        '',
+        'Goal: build a no-UI test harness that proves story-memory and packet contracts against small fiction fixtures before any product UI is designed.',
+        '',
+        '## Current Next Milestone',
+        '',
+        'The next milestone is Stage 1: Fixture And Evaluation Harness.',
+        '',
+        '1. Define fixture, expected-record, prototype-run, and evaluation schemas.',
+      ].join('\n'),
+      'utf-8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'docs/specs/schema-contract-roadmap.md'),
+      '# Schema Contract Roadmap\n\nFixture contracts should stay typed.\n',
+      'utf-8',
+    )
     await seedImporterWithSpec(`
 \`\`\`yaml
 tasks:
@@ -977,7 +1001,7 @@ tasks:
 
     const q = await readQueue()
     const importerTask = q.tasks.find(task => task.id === WORKSPACE_IMPORT_TASK_ID)
-    expect(importerTask?.spec).toBe(formatDetectedDraftAsSpec(draftOverride))
+    expect(importerTask?.spec).not.toBe(formatDetectedDraftAsSpec(draftOverride))
 
     const reparsed = parseWorkspaceImport(importerTask?.spec ?? '')
     expect(reparsed.goals).toMatchObject([
@@ -994,6 +1018,14 @@ tasks:
           'docs/harness/implementation-roadmap.md',
           'docs/specs/schema-contract-roadmap.md',
         ],
+        acceptanceCriteria: expect.arrayContaining([
+          expect.objectContaining({ id: 'source-implementation' }),
+          expect.objectContaining({ id: 'automated-proof' }),
+        ]),
+        proofPaths: expect.arrayContaining([
+          expect.objectContaining({ kind: 'command' }),
+          expect.objectContaining({ kind: 'review' }),
+        ]),
       },
     ])
   })

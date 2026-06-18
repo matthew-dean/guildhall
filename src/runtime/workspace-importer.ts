@@ -1150,6 +1150,49 @@ export function formatDetectedDraftAsSpec(draft: WorkspaceImportDraft): string {
   return lines.join('\n')
 }
 
+function parsedImportFromDraft(draft: WorkspaceImportDraft): ParsedImport {
+  return {
+    goals: draft.goals.map(goal => ({
+      id: goal.id,
+      title: goal.title,
+      rationale: goal.rationale,
+    })),
+    tasks: draft.tasks.map(task => ({
+      id: task.suggestedId,
+      title: task.title,
+      description: task.description,
+      ...(task.whyThisMayMatter ? { whyThisMayMatter: task.whyThisMayMatter } : {}),
+      ...(task.assumptions?.length ? { assumptions: [...task.assumptions] } : {}),
+      ...(task.missingInformation?.length ? { missingInformation: [...task.missingInformation] } : {}),
+      domain: task.domain,
+      ...(task.scope === 'later' ? { scope: 'later' as const } : {}),
+      priority: task.priority,
+      references: [...(task.references ?? [])],
+      ...(task.acceptanceCriteria ? { acceptanceCriteria: [...task.acceptanceCriteria] } : {}),
+      ...(task.dependsOn ? { dependsOn: [...task.dependsOn] } : {}),
+      ...(task.proofPaths ? { proofPaths: [...task.proofPaths] } : {}),
+    })),
+    milestones: draft.milestones.map(milestone => ({
+      title: milestone.title,
+      evidence: milestone.evidence,
+    })),
+  }
+}
+
+function formatParsedImportAsSpec(parsed: ParsedImport): string {
+  return formatDetectedDraftAsSpec(mergeWorkspaceImportDraft({
+    goals: [],
+    tasks: [],
+    milestones: [],
+    context: [],
+    stats: {
+      inputSignals: 0,
+      drafted: parsed.goals.length + parsed.tasks.length + parsed.milestones.length,
+      deduped: 0,
+    },
+  }, parsed))
+}
+
 function serializeInlineYamlValue(value: unknown, _indent: number): string[] {
   if (typeof value === 'string') return [JSON.stringify(value)]
   if (typeof value === 'number' || typeof value === 'boolean') return [String(value)]
@@ -1202,6 +1245,40 @@ export interface WorkspaceImportSummary {
   specPresent: boolean
   approved: WorkspaceImportScopeSnapshot | null
   detected: WorkspaceImportScopeSnapshot | null
+}
+
+export async function materializeParsedWorkspaceImport(input: {
+  memoryDir: string
+  projectPath: string
+  parsed: ParsedImport
+}): Promise<ParsedImport> {
+  const queue = await readQueue(input.memoryDir)
+  const tasks = await materializeEvidenceWorkGraphTasks({
+    projectPath: input.projectPath,
+    queue,
+    parsedTasks: input.parsed.tasks,
+  })
+  return {
+    goals: [...input.parsed.goals],
+    tasks,
+    milestones: [...input.parsed.milestones],
+  }
+}
+
+export async function materializeWorkspaceImportDraft(input: {
+  memoryDir: string
+  projectPath: string
+  draft: WorkspaceImportDraft
+}): Promise<WorkspaceImportDraft> {
+  const parsed = parsedImportFromDraft(input.draft)
+  const materialized = await materializeParsedWorkspaceImport({
+    memoryDir: input.memoryDir,
+    projectPath: input.projectPath,
+    parsed,
+  })
+  return mergeWorkspaceImportDraft(input.draft, materialized, {
+    preserveDetectedScope: true,
+  })
 }
 
 function workspaceScopeSnapshotFromParsed(parsed: ParsedImport): WorkspaceImportScopeSnapshot {
@@ -1887,17 +1964,18 @@ export async function approveWorkspaceImport(
         'Could not find goals/tasks/milestones fences in the workspace-import spec.',
     }
   }
-  const approvedSpec = input.draftOverride
-    ? formatDetectedDraftAsSpec(input.draftOverride)
-    : null
   const approvedTaskTitles = new Set(parsed.tasks.map(task => normalizeImportText(task.title)))
 
   const now = new Date().toISOString()
-  const materializedTasks = await materializeEvidenceWorkGraphTasks({
+  const materializedParsed = await materializeParsedWorkspaceImport({
+    memoryDir: input.memoryDir,
     projectPath: input.projectPath,
-    queue,
-    parsedTasks: parsed.tasks,
+    parsed,
   })
+  const materializedTasks = materializedParsed.tasks
+  const approvedSpec = input.draftOverride
+    ? formatParsedImportAsSpec(materializedParsed)
+    : null
   const existingImportedTasksByTitle = new Map<string, Task>()
   for (const existingTask of queue.tasks) {
     if (existingTask.id === WORKSPACE_IMPORT_TASK_ID) continue
@@ -2086,12 +2164,12 @@ export async function approveWorkspaceImport(
 
   // Persist goals (overwrites prior import — the agent is authoritative).
   if (
-    parsed.goals.length > 0 ||
-    parsed.tasks.length > 0 ||
-    parsed.milestones.length > 0
+    materializedParsed.goals.length > 0 ||
+    materializedParsed.tasks.length > 0 ||
+    materializedParsed.milestones.length > 0
   ) {
     const goalsPath = workspaceImportStatePath(input.memoryDir, WORKSPACE_GOALS_FILE)
-    const approvedSnapshot = workspaceScopeSnapshotFromParsed(parsed)
+    const approvedSnapshot = workspaceScopeSnapshotFromParsed(materializedParsed)
     const detectedSnapshot = input.detectedDraftSnapshot
       ? workspaceScopeSnapshotFromDraft(input.detectedDraftSnapshot)
       : input.draftOverride
@@ -2103,9 +2181,9 @@ export async function approveWorkspaceImport(
         {
           version: 2,
           recordedAt: now,
-          goals: parsed.goals,
-          tasks: parsed.tasks,
-          milestones: parsed.milestones,
+          goals: materializedParsed.goals,
+          tasks: materializedParsed.tasks,
+          milestones: materializedParsed.milestones,
           approved: approvedSnapshot,
           detected: detectedSnapshot,
         } satisfies WorkspaceGoalsState,
@@ -2118,10 +2196,10 @@ export async function approveWorkspaceImport(
 
   // Append milestones to PROGRESS.md.
   let milestonesLogged = 0
-  if (parsed.milestones.length > 0) {
+  if (materializedParsed.milestones.length > 0) {
     const progressPath = workspaceImportStatePath(input.memoryDir, 'PROGRESS.md')
     const blocks: string[] = []
-    for (const m of parsed.milestones) {
+    for (const m of materializedParsed.milestones) {
       blocks.push(
         [
           `\n### 🏁 MILESTONE — ${now}`,

@@ -230,6 +230,8 @@ import {
   maybeSeedWorkspaceImport,
   approveWorkspaceImport,
   createWorkspaceImportTask,
+  materializeParsedWorkspaceImport,
+  materializeWorkspaceImportDraft,
   mergeWorkspaceImportDraft,
   parseWorkspaceImport,
   readWorkspaceImportSummary,
@@ -6271,7 +6273,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
       } | null = null
       try {
         const inventory = await detectWorkspaceSignals({ projectPath: project.path })
-        const draft = formWorkspaceHypothesis(inventory)
+        const draft = await materializeWorkspaceImportDraft({
+          memoryDir,
+          projectPath: project.path,
+          draft: formWorkspaceHypothesis(inventory),
+        })
         const review = buildWorkspaceImportReview(draft, existingTasks, projectPath)
         detected = {
           goals: [...draft.goals],
@@ -6340,7 +6346,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
           anchors,
         })
       }
-      const parsed = parseWorkspaceImport(spec)
+      const parsed = await materializeParsedWorkspaceImport({
+        memoryDir,
+        projectPath: project.path,
+        parsed: parseWorkspaceImport(spec),
+      })
       const specReady =
         parsed.goals.length + parsed.tasks.length + parsed.milestones.length > 0
       const effective = detectedDraft ? mergeWorkspaceImportDraft(detectedDraft, parsed, {
