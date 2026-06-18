@@ -3997,6 +3997,134 @@ describe('Workspace Import review endpoints', () => {
     expect(body.startReadiness?.message).toContain('Implement fixture-and-expected-record schemas (from schema-contract-roadmap)')
   })
 
+  it('blocks readiness when saved importer tasks only survive as brief input or structural context in the live docs', async () => {
+    await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'harness', 'implementation-roadmap.md'),
+      [
+        '# Implementation Roadmap',
+        '',
+        '## Stage 1: Fixture And Evaluation Harness',
+        '',
+        '## Current Next Milestone',
+        '',
+        'The next milestone is Stage 1: Fixture And Evaluation Harness.',
+        '',
+        '1. Define fixture, expected-record, prototype-run, and evaluation schemas.',
+      ].join('\n'),
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'harness', 'architecture-notes.md'),
+      [
+        '# Architecture Notes',
+        '',
+        '## Core Loop',
+        '',
+        '1. Author defines book intent, genre/form expectations, themes, and voice.',
+        '2. Author builds a house: premise, world, cast, outline, chapter goals, review standards.',
+        '3. Author drafts or imports chapters.',
+      ].join('\n'),
+      'utf8',
+    )
+    await fs.writeFile(path.join(tmpDir, 'package.json'), JSON.stringify({ name: 'context-ghost-gap' }), 'utf8')
+    await writeSystemText(
+      'TASKS.json',
+      JSON.stringify(
+        {
+          version: 1,
+          lastUpdated: '2026-01-01T00:00:00.000Z',
+          tasks: [
+            {
+              id: 'task-workspace-import',
+              title: 'Review existing project work',
+              description: 'Reserved importer',
+              domain: '_workspace_import',
+              projectPath: tmpDir,
+              status: 'done',
+              priority: 'normal',
+              acceptanceCriteria: [],
+              dependsOn: [],
+              outOfScope: [],
+              spec: [
+                '```yaml',
+                'tasks:',
+                '  - id: imported-one',
+                '    title: Define fixture, expected-record, prototype-run, and evaluation schemas.',
+                '    description: Saved importer task.',
+                '    domain: harness',
+                '    priority: high',
+                '    references:',
+                '      - docs/harness/implementation-roadmap.md',
+                '```',
+              ].join('\n'),
+              createdAt: '2026-01-01T00:00:00.000Z',
+              updatedAt: '2026-01-01T00:00:00.000Z',
+            },
+            {
+              id: 'task-capability-ghost',
+              title: 'Author defines book intent, genre/form expectations, themes, and voice.',
+              description: 'Old bad import turned architecture prose into runnable work.',
+              domain: 'harness',
+              projectPath: tmpDir,
+              status: 'shelved',
+              priority: 'normal',
+              acceptanceCriteria: [],
+              dependsOn: [],
+              outOfScope: [],
+              requestIntake: {
+                intent: 'spec_only',
+                recommendedNextAction: 'draft_spec',
+                componentStack: [],
+                assumptions: [],
+                missingInformation: [],
+                evidenceRefs: ['import:docs/harness/architecture-notes.md'],
+                pressureTestSummary: {
+                  systemOwned: true,
+                  degree: 'guided',
+                  qualityBar: 'Capability-map prose should not survive as runnable backlog work.',
+                  ownerQuestionPolicy: 'Do not keep architecture prose alive as deferred task work.',
+                  checks: [],
+                },
+                clarifyingQuestions: [],
+                createdAt: '2026-01-01T00:00:00.000Z',
+                createdBy: 'workspace-importer',
+              },
+              references: [path.join(tmpDir, 'docs', 'harness', 'architecture-notes.md')],
+              notes: [],
+              gateResults: [],
+              reviewVerdicts: [],
+              adjudications: [],
+              escalations: [],
+              agentIssues: [],
+              revisionCount: 0,
+              remediationAttempts: 0,
+              origination: 'human',
+              createdAt: '2026-01-01T00:00:00.000Z',
+              updatedAt: '2026-01-01T00:00:00.000Z',
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+    )
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(scoped('/api/project')))
+    expect(res.status).toBe(200)
+    const body = await res.json() as {
+      startReadiness?: { canStart?: boolean; code?: string; message?: string; actionHref?: string }
+    }
+    expect(body.startReadiness).toMatchObject({
+      canStart: false,
+      code: 'workspace_import_refresh_needed',
+      actionHref: '/workspace-import',
+    })
+    expect(body.startReadiness?.message).toContain('only as structural context or brief input')
+    expect(body.startReadiness?.message).toContain('Author defines book intent, genre/form expectations, themes, and voice.')
+  })
+
   it('surfaces workspace-import refresh ahead of draft shaping when current docs outrun the approved slice', async () => {
     await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
     await fs.writeFile(

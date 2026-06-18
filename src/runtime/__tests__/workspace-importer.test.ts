@@ -1832,7 +1832,7 @@ tasks:
     })
   })
 
-  it('shelves previously imported work that still exists in detected docs but falls outside the approved current scope', async () => {
+  it('archives previously imported work that is no longer part of the approved import set', async () => {
     await writeQueue({
       version: 1,
       lastUpdated: new Date().toISOString(),
@@ -1946,17 +1946,6 @@ tasks:
             source: 'planning-docs',
             confidence: 'high',
           },
-          {
-            suggestedId: 'task-import-stage-two',
-            title: 'Mastra workflow for the prototype iteration loop',
-            description: 'Detected Stage 2 work should remain deferred, not disappear.',
-            domain: 'harness',
-            scope: 'later',
-            priority: 'normal',
-            references: ['/repo/docs/harness/implementation-roadmap.md'],
-            source: 'planning-docs',
-            confidence: 'high',
-          },
         ],
         milestones: [],
         context: [],
@@ -1973,10 +1962,10 @@ tasks:
 
     const q = await readQueue()
     expect(q.tasks.find(task => task.id === 'task-import-stage-two')).toMatchObject({
-      status: 'shelved',
+      status: 'archived',
     })
     expect(q.tasks.find(task => task.id === 'task-import-stage-two')?.notes?.at(-1)?.content ?? '').toContain(
-      'outside the approved current scope',
+      'no longer part of the approved import scope',
     )
   })
 
@@ -2125,7 +2114,149 @@ tasks:
     )
   })
 
-  it('revives previously archived imported work back to shelved when the docs still mention it', async () => {
+  it('does not revive archived imported ghosts when the live docs only keep them as context or brief input', async () => {
+    await writeQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      tasks: [
+        {
+          id: WORKSPACE_IMPORT_TASK_ID,
+          title: 'Review existing project work',
+          description: 'Reserved importer',
+          domain: WORKSPACE_IMPORT_DOMAIN,
+          projectPath: tmpDir,
+          status: 'spec_review',
+          priority: 'high',
+          spec: '',
+          acceptanceCriteria: [],
+          dependsOn: [],
+          outOfScope: [],
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          adjudications: [],
+          escalations: [],
+          agentIssues: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          origination: 'system',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+        {
+          id: 'task-capability-ghost-archived',
+          title: 'Author defines book intent, genre/form expectations, themes, and voice.',
+          description: 'Old bad import turned architecture prose into runnable work.',
+          domain: 'harness',
+          projectPath: tmpDir,
+          status: 'archived',
+          priority: 'normal',
+          acceptanceCriteria: [],
+          dependsOn: [],
+          outOfScope: [],
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          adjudications: [],
+          escalations: [],
+          agentIssues: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          origination: 'human',
+          requestIntake: {
+            intent: 'spec_only',
+            recommendedNextAction: 'draft_spec',
+            componentStack: [],
+            assumptions: [],
+            missingInformation: [],
+            evidenceRefs: ['import:/repo/docs/harness/architecture-notes.md'],
+            pressureTestSummary: {
+              systemOwned: true,
+              degree: 'guided',
+              qualityBar: 'Capability-map prose should not come back as deferred task work.',
+              ownerQuestionPolicy: 'Do not revive architecture prose as runnable backlog work.',
+              checks: [],
+            },
+            clarifyingQuestions: [],
+            createdAt: new Date().toISOString(),
+            createdBy: 'workspace-importer',
+          },
+          references: ['/repo/docs/harness/architecture-notes.md'],
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        } as Task,
+      ],
+    })
+
+    const approved = await approveWorkspaceImport({
+      memoryDir,
+      projectPath: tmpDir,
+      draftOverride: {
+        goals: [],
+        tasks: [
+          {
+            suggestedId: 'task-import-schema',
+            title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+            description: 'Current Stage 1 slice.',
+            domain: 'harness',
+            scope: 'current',
+            priority: 'high',
+            references: ['/repo/docs/harness/implementation-roadmap.md'],
+            source: 'planning-docs',
+            confidence: 'high',
+          },
+        ],
+        milestones: [],
+        context: [],
+        stats: {
+          inputSignals: 1,
+          drafted: 1,
+          deduped: 0,
+        },
+      },
+      detectedDraftSnapshot: {
+        goals: [],
+        tasks: [
+          {
+            suggestedId: 'task-import-schema',
+            title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+            description: 'Current Stage 1 slice.',
+            domain: 'harness',
+            scope: 'current',
+            priority: 'high',
+            references: ['/repo/docs/harness/implementation-roadmap.md'],
+            source: 'planning-docs',
+            confidence: 'high',
+          },
+        ],
+        milestones: [],
+        context: [
+          {
+            label: 'Author defines book intent, genre/form expectations, themes, and voice.',
+            excerpt: 'Capability-map prose, not runnable work.',
+            source: 'planning-docs',
+            references: ['/repo/docs/harness/architecture-notes.md'],
+            role: 'brief_input',
+          },
+        ],
+        stats: {
+          inputSignals: 2,
+          drafted: 2,
+          deduped: 0,
+        },
+      },
+      replacePreviouslyImportedTasks: true,
+    })
+
+    expect(approved).toMatchObject({ success: true, tasksAdded: 1 })
+
+    const q = await readQueue()
+    expect(q.tasks.find(task => task.id === 'task-capability-ghost-archived')).toMatchObject({
+      status: 'archived',
+    })
+  })
+
+  it('keeps previously archived imported work archived when the docs only mention it outside the approved import set', async () => {
     await writeQueue({
       version: 1,
       lastUpdated: new Date().toISOString(),
@@ -2239,17 +2370,6 @@ tasks:
             source: 'planning-docs',
             confidence: 'high',
           },
-          {
-            suggestedId: 'task-import-stage-two',
-            title: 'Mastra workflow for the prototype iteration loop',
-            description: 'Detected Stage 2 work should remain deferred, not disappear.',
-            domain: 'harness',
-            scope: 'later',
-            priority: 'normal',
-            references: ['/repo/docs/harness/implementation-roadmap.md'],
-            source: 'planning-docs',
-            confidence: 'high',
-          },
         ],
         milestones: [],
         context: [],
@@ -2266,7 +2386,7 @@ tasks:
 
     const q = await readQueue()
     expect(q.tasks.find(task => task.id === 'task-import-stage-two-archived')).toMatchObject({
-      status: 'shelved',
+      status: 'archived',
     })
   })
 

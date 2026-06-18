@@ -5079,6 +5079,37 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const normalized = normalizeImportTitle(task.title)
       return normalized.length > 0 && !detectedCurrentTitles.has(normalized)
     })
+    const detectedTaskTitles = new Set(
+      detected.tasks
+        .map(task => normalizeImportTitle(typeof task.title === 'string' ? task.title : ''))
+        .filter(Boolean),
+    )
+    const contextOnlyImportedGhosts = tasks.filter(task => {
+      if (!task || typeof task !== 'object') return false
+      if ((task as { id?: unknown }).id === WORKSPACE_IMPORT_TASK_ID) return false
+      const status = typeof (task as { status?: unknown }).status === 'string'
+        ? (task as { status: string }).status
+        : ''
+      if (status === 'archived' || status === 'cancelled') return false
+      const origination = typeof (task as { origination?: unknown }).origination === 'string'
+        ? (task as { origination: string }).origination
+        : ''
+      if (origination !== 'human') return false
+      const createdBy = typeof (task as { requestIntake?: { createdBy?: unknown } }).requestIntake?.createdBy === 'string'
+        ? (task as { requestIntake: { createdBy: string } }).requestIntake.createdBy
+        : ''
+      if (createdBy !== 'workspace-importer') return false
+      const title = typeof (task as { title?: unknown }).title === 'string'
+        ? (task as { title: string }).title
+        : ''
+      const normalizedTitle = normalizeImportTitle(title)
+      if (!normalizedTitle || detectedTaskTitles.has(normalizedTitle)) return false
+      return detected.context.some(context => {
+        if (context.role !== 'capability' && context.role !== 'brief_input') return false
+        const contextTitle = normalizeImportTitle(context.label)
+        return contextTitle === normalizedTitle
+      })
+    })
     const hasExplicitDeferredScope =
       detected.tasks.some(task => task.scope === 'later') ||
       parsed.tasks.some(task => task.scope === 'later')
@@ -5095,6 +5126,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       missing.length === 0 &&
       currentScopeMissing.length === 0 &&
       staleApprovedCurrent.length === 0 &&
+      contextOnlyImportedGhosts.length === 0 &&
       uncoveredCapabilitySpecs.length === 0
     ) return null
 
@@ -5117,6 +5149,20 @@ export function buildServeApp(opts: ServeOptions = {}): {
         code: 'workspace_import_refresh_needed',
         message:
           `Guildhall's saved import still treats ${staleApprovedCurrent.length} current task${staleApprovedCurrent.length === 1 ? '' : 's'} as part of the active slice even though the live docs no longer do, starting with "${first}". Refresh the import before treating this project as complete.`,
+        actionHref: '/workspace-import',
+      }
+    }
+
+    if (contextOnlyImportedGhosts.length > 0) {
+      const firstTitle = typeof contextOnlyImportedGhosts[0]?.title === 'string'
+        ? contextOnlyImportedGhosts[0].title.trim()
+        : ''
+      const first = firstTitle || 'the first stale structural task'
+      return {
+        canStart: false,
+        code: 'workspace_import_refresh_needed',
+        message:
+          `Guildhall's saved import still contains ${contextOnlyImportedGhosts.length} importer-created task${contextOnlyImportedGhosts.length === 1 ? '' : 's'} that the live docs now support only as structural context or brief input, starting with "${first}". Refresh the import before treating this project as complete.`,
         actionHref: '/workspace-import',
       }
     }

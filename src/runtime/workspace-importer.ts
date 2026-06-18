@@ -1724,42 +1724,6 @@ function importedTaskCanBeArchivedDuringScopeRefresh(status: Task['status']): bo
   ].includes(status)
 }
 
-function normalizeDetectedImportRef(value: string): string {
-  return value.replaceAll('\\', '/').trim()
-}
-
-function detectedSnapshotStillMentionsImportedTask(
-  task: Task,
-  detectedDraftSnapshot: WorkspaceImportDraft | undefined,
-): boolean {
-  if (!detectedDraftSnapshot) return false
-  const normalizedTitle = normalizeImportText(task.title)
-  const taskRefs = new Set((task.references ?? []).map(normalizeDetectedImportRef).filter(Boolean))
-  const taskRefBasenames = new Set([...taskRefs].map(ref => path.basename(ref)))
-
-  const matchesRefs = (refs: readonly string[] | undefined): boolean => {
-    if (!refs || refs.length === 0) return false
-    return refs.some((ref) => {
-      const normalized = normalizeDetectedImportRef(ref)
-      if (!normalized) return false
-      if (taskRefs.has(normalized)) return true
-      const basename = path.basename(normalized)
-      return taskRefBasenames.has(basename)
-    })
-  }
-
-  if (detectedDraftSnapshot.tasks.some((candidate) => {
-    const candidateTitle = normalizeImportText(candidate.title)
-    return (
-      (normalizedTitle.length > 0 && candidateTitle === normalizedTitle) ||
-      matchesRefs(candidate.references)
-    )
-  })) {
-    return true
-  }
-  return false
-}
-
 async function evidenceSourcesForParsedTasks(
   projectPath: string,
   tasks: readonly ParsedTask[],
@@ -4208,7 +4172,7 @@ export async function approveWorkspaceImport(
     }
   }
   const parsed = input.draftOverride
-    ? parseWorkspaceImport(formatDetectedDraftAsSpec(input.draftOverride))
+    ? parsedImportFromDraft(input.draftOverride)
     : (!task.spec || task.spec.trim().length === 0)
         ? null
         : parseWorkspaceImport(task.spec)
@@ -4239,8 +4203,6 @@ export async function approveWorkspaceImport(
         'Could not find goals/tasks/milestones fences in the workspace-import spec.',
     }
   }
-  const approvedTaskTitles = new Set(parsed.tasks.map(task => normalizeImportText(task.title)))
-
   const now = new Date().toISOString()
   const materializedParsed = await materializeParsedWorkspaceImport({
     memoryDir: input.memoryDir,
@@ -4277,15 +4239,18 @@ export async function approveWorkspaceImport(
   const existingIds = new Set(queue.tasks.map((t) => t.id))
   const allocatedTaskIds: string[] = []
   const dependencyIdMap = new Map<string, string>()
+  const approvedQueueTaskIds = new Set<string>()
   for (const { existing, imported } of refreshableTasks) {
     if (!dependencyIdMap.has(imported.id)) {
       dependencyIdMap.set(imported.id, existing.id)
     }
+    approvedQueueTaskIds.add(existing.id)
   }
   for (const t of mergeableTasks) {
     const id = uniqueTaskId(existingIds, t.id)
     existingIds.add(id)
     allocatedTaskIds.push(id)
+    approvedQueueTaskIds.add(id)
     if (!dependencyIdMap.has(t.id)) {
       dependencyIdMap.set(t.id, id)
     }
@@ -4358,10 +4323,8 @@ export async function approveWorkspaceImport(
       if (!importedTaskCanBeArchivedDuringScopeRefresh(existingTask.status)) continue
       if (existingTask.origination !== 'human') continue
       if (existingTask.requestIntake?.createdBy !== 'workspace-importer') continue
-      const normalizedTitle = normalizeImportText(existingTask.title)
-      if (!normalizedTitle || approvedTaskTitles.has(normalizedTitle)) continue
-      const stillMentioned = detectedSnapshotStillMentionsImportedTask(existingTask, input.detectedDraftSnapshot)
-      existingTask.status = stillMentioned ? 'shelved' : 'archived'
+      if (approvedQueueTaskIds.has(existingTask.id)) continue
+      existingTask.status = 'archived'
       existingTask.updatedAt = now
       existingTask.notes = [
         ...(existingTask.notes ?? []),
@@ -4369,10 +4332,7 @@ export async function approveWorkspaceImport(
           agentId: 'workspace-importer',
           role: 'system',
           timestamp: now,
-          content:
-            stillMentioned
-              ? 'Workspace import refresh deferred this imported task because it still exists in the project evidence but is outside the approved current scope.'
-              : 'Workspace import refresh archived this draft because it is no longer part of the approved import scope.',
+          content: 'Workspace import refresh archived this draft because it is no longer part of the approved import scope.',
         },
       ]
     }
