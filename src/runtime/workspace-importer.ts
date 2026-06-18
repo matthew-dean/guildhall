@@ -1889,9 +1889,15 @@ async function materializeEvidenceWorkGraphTasks(
           parsedTaskShadowsEvidenceTask(candidate, task),
         )
     const matchedParsedTask = matchedById ?? matchedByTitle ?? matchedBySemantic
+    const shadowedByExistingParsedTask = !matchedParsedTask && input.parsedTasks.some(candidate =>
+      parsedTaskShadowsEvidenceTask(candidate, task),
+    )
     if (matchedParsedTask) {
       graphMatchedParsedIds.add(matchedParsedTask.id)
       graphMatchedParsedTitles.add(normalizeImportText(matchedParsedTask.title))
+    }
+    if (!matchedParsedTask && shadowedByExistingParsedTask && task.kind === 'implementation') {
+      return null
     }
     return graphTaskToParsedTask(
       task,
@@ -1900,7 +1906,7 @@ async function materializeEvidenceWorkGraphTasks(
       inventoryScopeByTitle.get(normalizeImportText(task.title)),
       Boolean(matchedBySemantic),
     )
-  }).filter(task => !isFormattingDebris({ title: task.title }))
+  }).filter((task): task is MaterializedImportTask => Boolean(task) && !isFormattingDebris({ title: task.title }))
   const shadowedImports = new Set(
     detectShadowedCurrentMilestoneDeliverableImports(sources).map(candidate =>
       `${candidate.sourcePath}::${candidate.title}`,

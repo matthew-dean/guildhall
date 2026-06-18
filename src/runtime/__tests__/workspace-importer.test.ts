@@ -3081,6 +3081,113 @@ tasks:
     )).toBeUndefined()
   })
 
+  it('does not resurrect stale imported queue work when materializing a parsed current slice', async () => {
+    await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
+    await fs.mkdir(path.join(tmpDir, 'docs', 'specs'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'harness', 'implementation-roadmap.md'),
+      [
+        '# Implementation Roadmap',
+        '',
+        '## Stage 1: Fixture And Evaluation Harness',
+        '',
+        'Goal: build a no-UI test harness that proves story-memory and packet contracts against small fiction fixtures before any product UI is designed.',
+        '',
+        '## Current Next Milestone',
+        '',
+        'The next milestone is Stage 1: Fixture And Evaluation Harness.',
+        '',
+        '1. Define fixture, expected-record, prototype-run, and evaluation schemas.',
+        '2. Add the first tiny fiction fixture and human-authored expected records.',
+      ].join('\n'),
+      'utf-8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'specs', 'schema-contract-roadmap.md'),
+      [
+        '# Schema Contract Roadmap',
+        '',
+        '## Fixture And Expected-Record Schema',
+        '',
+        'Needed contracts:',
+        '- `FixtureManifest`',
+        '- `ExpectedRecordSet`',
+        '',
+        '## Prototype Run And Evaluation Schema',
+        '',
+        'Needed contracts:',
+        '- `PrototypeRun`',
+        '- `RunEvaluation`',
+      ].join('\n'),
+      'utf-8',
+    )
+
+    const now = new Date().toISOString()
+    await writeQueue(TaskQueue.parse({
+      version: 1,
+      lastUpdated: now,
+      tasks: [
+        {
+          id: 'task-stale-schema-echo',
+          title: 'Implement fixture-and-expected-record schemas (from schema-contract-roadmap)',
+          description: 'Stale imported echo from an older workspace-import approval.',
+          domain: 'harness',
+          projectPath: tmpDir,
+          status: 'ready',
+          priority: 'high',
+          acceptanceCriteria: [],
+          outOfScope: [],
+          dependsOn: [],
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          adjudications: [],
+          escalations: [],
+          agentIssues: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          origination: 'human',
+          requestIntake: {
+            intent: 'spec_only',
+            recommendedNextAction: 'draft_spec',
+            componentStack: [],
+            assumptions: [],
+            missingInformation: [],
+            evidenceRefs: [],
+            pressureTestSummary: {
+              systemOwned: true,
+              degree: 'guided',
+              qualityBar: 'Imported work must stay aligned with the current roadmap slice.',
+              ownerQuestionPolicy: 'Only ask when the docs still leave the scope boundary ambiguous.',
+              checks: [],
+            },
+            clarifyingQuestions: [],
+            createdAt: now,
+            createdBy: 'workspace-importer',
+          },
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+    }))
+
+    const inventory = await detectWorkspaceSignals({ projectPath: tmpDir })
+    const draft = formWorkspaceHypothesis(inventory)
+    const materialized = await materializeWorkspaceImportDraft({
+      memoryDir,
+      projectPath: tmpDir,
+      draft,
+    })
+
+    expect(materialized.tasks.filter(task => task.scope !== 'later').map(task => task.title)).toEqual([
+      'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+      'Add the first tiny fiction fixture and human-authored expected records.',
+    ])
+    expect(materialized.tasks.find(task =>
+      task.title === 'Implement fixture-and-expected-record schemas (from schema-contract-roadmap)',
+    )).toBeUndefined()
+  })
+
 })
 
 describe('mergeWorkspaceImportDraft', () => {

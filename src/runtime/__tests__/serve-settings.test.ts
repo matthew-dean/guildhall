@@ -3023,6 +3023,214 @@ describe('Workspace Import review endpoints', () => {
     expect(tasks.find(task => task.id === 'task-stale-import')?.status).toBe('archived')
   })
 
+  it('treats an explicit full-current approval as authoritative even when a saved importer spec is stale', async () => {
+    await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'harness', 'implementation-roadmap.md'),
+      [
+        '# Implementation Roadmap',
+        '',
+        '## Current Next Milestone',
+        '',
+        '1. Define fixture, expected-record, prototype-run, and evaluation schemas.',
+      ].join('\n'),
+      'utf8',
+    )
+    await fs.writeFile(path.join(tmpDir, 'package.json'), JSON.stringify({ name: 'explicit-full-refresh' }), 'utf8')
+    await writeSystemJson('workspace-goals.json', {
+      version: 2,
+      recordedAt: '2026-01-01T00:00:00.000Z',
+      goals: [],
+      tasks: [
+        { id: 'imported-a', title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.', description: 'Current task', domain: 'core', priority: 'high', references: [] },
+        { id: 'imported-b', title: 'Implement fixture-and-expected-record schemas (from schema-contract-roadmap)', description: 'Stale task', domain: 'core', priority: 'high', references: [] },
+      ],
+      milestones: [],
+      approved: {
+        goalCount: 0,
+        taskCount: 2,
+        milestoneCount: 0,
+        currentTaskCount: 2,
+        laterTaskCount: 0,
+        taskIds: ['imported-a', 'imported-b'],
+      },
+      detected: {
+        goalCount: 0,
+        taskCount: 1,
+        milestoneCount: 0,
+        currentTaskCount: 1,
+        laterTaskCount: 0,
+        taskIds: ['imported-a'],
+      },
+    })
+    await writeSystemText(
+      'TASKS.json',
+      JSON.stringify(
+        {
+          version: 1,
+          lastUpdated: '2026-01-01T00:00:00.000Z',
+          tasks: [
+            {
+              id: 'task-workspace-import',
+              title: 'Review existing project work',
+              description: 'Reserved importer',
+              domain: '_workspace_import',
+              projectPath: tmpDir,
+              status: 'done',
+              priority: 'normal',
+              acceptanceCriteria: [],
+              dependsOn: [],
+              outOfScope: [],
+              spec: [
+                '```yaml',
+                'tasks:',
+                '  - id: imported-a',
+                '    title: Define fixture, expected-record, prototype-run, and evaluation schemas.',
+                '    description: Current task',
+                '    domain: core',
+                '    priority: high',
+                '  - id: imported-b',
+                '    title: Implement fixture-and-expected-record schemas (from schema-contract-roadmap)',
+                '    description: Stale task',
+                '    domain: core',
+                '    priority: high',
+                '```',
+              ].join('\n'),
+              createdAt: '2026-01-01T00:00:00.000Z',
+              updatedAt: '2026-01-01T00:00:00.000Z',
+            },
+            {
+              id: 'imported-a',
+              title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+              description: 'Current task',
+              domain: 'core',
+              projectPath: tmpDir,
+              status: 'ready',
+              priority: 'high',
+              acceptanceCriteria: [],
+              dependsOn: [],
+              outOfScope: [],
+              notes: [],
+              gateResults: [],
+              reviewVerdicts: [],
+              adjudications: [],
+              escalations: [],
+              agentIssues: [],
+              revisionCount: 0,
+              remediationAttempts: 0,
+              origination: 'human',
+              requestIntake: {
+                intent: 'spec_only',
+                recommendedNextAction: 'draft_spec',
+                componentStack: [],
+                assumptions: [],
+                missingInformation: [],
+                evidenceRefs: [],
+                pressureTestSummary: {
+                  systemOwned: true,
+                  degree: 'guided',
+                  qualityBar: 'Imported work must stay aligned with the current evidence slice.',
+                  ownerQuestionPolicy: 'Only ask when the cited docs still leave the task boundary ambiguous.',
+                  checks: [],
+                },
+                clarifyingQuestions: [],
+                createdAt: '2026-01-01T00:00:00.000Z',
+                createdBy: 'workspace-importer',
+              },
+              createdAt: '2026-01-01T00:00:00.000Z',
+              updatedAt: '2026-01-01T00:00:00.000Z',
+            },
+            {
+              id: 'imported-b',
+              title: 'Implement fixture-and-expected-record schemas (from schema-contract-roadmap)',
+              description: 'Stale task',
+              domain: 'core',
+              projectPath: tmpDir,
+              status: 'ready',
+              priority: 'high',
+              acceptanceCriteria: [],
+              dependsOn: [],
+              outOfScope: [],
+              notes: [],
+              gateResults: [],
+              reviewVerdicts: [],
+              adjudications: [],
+              escalations: [],
+              agentIssues: [],
+              revisionCount: 0,
+              remediationAttempts: 0,
+              origination: 'human',
+              requestIntake: {
+                intent: 'spec_only',
+                recommendedNextAction: 'draft_spec',
+                componentStack: [],
+                assumptions: [],
+                missingInformation: [],
+                evidenceRefs: [],
+                pressureTestSummary: {
+                  systemOwned: true,
+                  degree: 'guided',
+                  qualityBar: 'Imported work must stay aligned with the current evidence slice.',
+                  ownerQuestionPolicy: 'Only ask when the cited docs still leave the task boundary ambiguous.',
+                  checks: [],
+                },
+                clarifyingQuestions: [],
+                createdAt: '2026-01-01T00:00:00.000Z',
+                createdBy: 'workspace-importer',
+              },
+              createdAt: '2026-01-01T00:00:00.000Z',
+              updatedAt: '2026-01-01T00:00:00.000Z',
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+    )
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const draft = await app.fetch(new Request(scoped('/api/project/workspace-import/draft')))
+    expect(draft.status).toBe(200)
+    const draftBody = (await draft.json()) as {
+      detected: {
+        learning: {
+          defaults: {
+            selectedAreaKeys: string[]
+            selectedSourceKeys: string[]
+            selectedTaskIds: string[]
+          }
+        }
+      }
+    }
+
+    const approve = await app.fetch(
+      new Request(scoped('/api/project/workspace-import/approve'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          areaKeys: draftBody.detected.learning.defaults.selectedAreaKeys,
+          sourceKeys: draftBody.detected.learning.defaults.selectedSourceKeys,
+          taskIds: draftBody.detected.learning.defaults.selectedTaskIds,
+        }),
+      }),
+    )
+    expect(approve.status).toBe(200)
+
+    const tasks = await readTasks(tmpDir)
+    expect(tasks.find(task => task.id === 'imported-b')?.status).toBe('archived')
+
+    const importerTask = tasks.find(task => task.id === 'task-workspace-import')
+    expect(importerTask?.spec).toContain('Define fixture, expected-record, prototype-run, and evaluation schemas.')
+    expect(importerTask?.spec).not.toContain('Implement fixture-and-expected-record schemas (from schema-contract-roadmap)')
+
+    const goalsState = await readProjectStateJsonAsync<{
+      approved: { taskCount: number; currentTaskCount: number }
+      detected: { taskCount: number; currentTaskCount: number } | null
+    }>(tmpDir, 'workspace-goals.json')
+    expect(goalsState.approved).toMatchObject({ taskCount: 1, currentTaskCount: 1 })
+    expect(goalsState.detected).toMatchObject({ taskCount: 1, currentTaskCount: 1 })
+  })
+
   it('blocks all-terminal readiness when the saved import is under-scoped for the current docs', async () => {
     await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
     await fs.writeFile(

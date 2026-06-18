@@ -6731,6 +6731,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const selectedTaskIds = Array.isArray(body.taskIds)
         ? body.taskIds
         : defaultTaskIds
+      const hasExplicitSelectionEnvelope =
+        Array.isArray(body.taskIds) ||
+        Array.isArray(body.sourceKeys) ||
+        Array.isArray(body.areaKeys)
       const hasExplicitNarrowing =
         selectedTaskIds.length !== defaultTaskIds.length ||
         selectedSourceKeys.length !== defaultSourceKeys.length ||
@@ -6743,7 +6747,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         taskIds: selectedTaskIds,
       })
       let parsedSavedImporterSpec: ReturnType<typeof parseWorkspaceImport> | null = null
-      if (!hasExplicitNarrowing && importerTaskSpec) {
+      if (!hasExplicitNarrowing && !hasExplicitSelectionEnvelope && importerTaskSpec) {
         try {
           const yamlErrors = workspaceImportYamlErrors(importerTaskSpec)
           if (yamlErrors.length > 0) {
@@ -6755,7 +6759,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         }
       }
       const effectiveDraft =
-        !hasExplicitNarrowing && parsedSavedImporterSpec
+        !hasExplicitNarrowing && !hasExplicitSelectionEnvelope && parsedSavedImporterSpec
           ? mergeWorkspaceImportDraft(filteredDraft, parsedSavedImporterSpec, {
               retainParsedOnlyTasks: false,
               preserveDetectedScope: true,
