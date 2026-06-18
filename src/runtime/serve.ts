@@ -4968,6 +4968,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     message: string
     actionHref: string
   } | null> {
+    const workspaceGoalsState = await readWorkspaceGoalsState(getProjectStateDir(projectPath))
     const normalizeImportTitle = (value: string): string =>
       value
         .trim()
@@ -5068,6 +5069,26 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const title = typeof task.title === 'string' ? task.title : ''
       return title.trim().length > 0 && !currentScopeCoveredTitles.has(normalizeImportTitle(title))
     })
+    const rawCurrentDeliverableMissing = workspaceGoalsState
+      ? []
+      : (() => {
+      const seen = new Set<string>()
+      const missing: Array<{ title: string }> = []
+      for (const signal of inventory.signals) {
+        if (signal.kind !== 'open_work') continue
+        if (signal.scopeHint === 'later') continue
+        if (signal.source !== 'planning-docs') continue
+        const title = typeof signal.title === 'string' ? signal.title.trim() : ''
+        if (!title) continue
+        const evidence = typeof signal.evidence === 'string' ? signal.evidence.trim() : ''
+        if (!evidence.includes(': - ')) continue
+        const normalized = normalizeImportTitle(title)
+        if (!normalized || seen.has(normalized) || currentScopeCoveredTitles.has(normalized)) continue
+        seen.add(normalized)
+        missing.push({ title })
+      }
+      return missing
+    })()
     const detectedCurrentTitles = new Set(
       detected.tasks
         .filter(task => task.scope !== 'later')
@@ -5125,6 +5146,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     if (
       missing.length === 0 &&
       currentScopeMissing.length === 0 &&
+      rawCurrentDeliverableMissing.length === 0 &&
       staleApprovedCurrent.length === 0 &&
       contextOnlyImportedGhosts.length === 0 &&
       uncoveredCapabilitySpecs.length === 0
@@ -5138,6 +5160,18 @@ export function buildServeApp(opts: ServeOptions = {}): {
         message:
           `Guildhall's saved import is under-scoped for the current project docs. ` +
           `The live detector still treats ${currentScopeMissing.length} current task${currentScopeMissing.length === 1 ? '' : 's'} as active work outside the approved current scope, starting with "${first}". Refresh the import before treating this project as complete.`,
+        actionHref: '/workspace-import',
+      }
+    }
+
+    if (rawCurrentDeliverableMissing.length > 0) {
+      const first = rawCurrentDeliverableMissing[0]?.title?.trim() || 'the first current-scope deliverable'
+      return {
+        canStart: false,
+        code: 'workspace_import_refresh_needed',
+        message:
+          `Guildhall's saved import is under-scoped for the current project docs. ` +
+          `The live detector still treats ${rawCurrentDeliverableMissing.length} current deliverable${rawCurrentDeliverableMissing.length === 1 ? '' : 's'} as active work outside the approved current scope, starting with "${first}". Refresh the import before treating this project as complete.`,
         actionHref: '/workspace-import',
       }
     }
@@ -6549,6 +6583,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         })
       }
       const memoryDir = getProjectStateDir(project.path)
+      const savedWorkspaceGoals = await readWorkspaceGoalsState(memoryDir)
       // Dismissed state — surface it so the UI can show an "undo" affordance
       // instead of re-running the scan silently.
       let dismissed = false
@@ -6680,11 +6715,22 @@ export function buildServeApp(opts: ServeOptions = {}): {
           anchors,
         })
       }
-      const parsed = await materializeParsedWorkspaceImport({
-        memoryDir,
-        projectPath: project.path,
-        parsed: parseWorkspaceImport(spec),
-      })
+      const parsed = savedWorkspaceGoals &&
+        (
+          savedWorkspaceGoals.goals.length > 0 ||
+          savedWorkspaceGoals.tasks.length > 0 ||
+          savedWorkspaceGoals.milestones.length > 0
+        )
+        ? {
+            goals: [...savedWorkspaceGoals.goals],
+            tasks: [...savedWorkspaceGoals.tasks],
+            milestones: [...savedWorkspaceGoals.milestones],
+          }
+        : await materializeParsedWorkspaceImport({
+            memoryDir,
+            projectPath: project.path,
+            parsed: parseWorkspaceImport(spec),
+          })
       const specReady =
         parsed.goals.length + parsed.tasks.length + parsed.milestones.length > 0
       const effective = detectedDraft ? mergeWorkspaceImportDraft(detectedDraft, parsed, {

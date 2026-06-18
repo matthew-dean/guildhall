@@ -29,7 +29,10 @@ import {
   evidenceTaskReferences,
   evidenceTaskWhyThisMayMatter,
 } from './evidence-task-import-draft.js'
-import { detectShadowedCurrentMilestoneDeliverableImports } from './current-milestone-shadowing.js'
+import {
+  detectShadowedCurrentMilestoneDeliverableImports,
+  detectShadowedStageAlignedRoadmapDeliverables,
+} from './current-milestone-shadowing.js'
 import { applyTaskShaping } from './task-decomposition.js'
 import { isMaterializableSplitAction, materializeSplitChildren } from '../tools/task-queue.js'
 
@@ -772,10 +775,16 @@ function parsedTaskShadowsEvidenceTask(
   const parsedRefs = importTaskReferenceBasenames(parsedTask.references)
   const evidenceRefs = importTaskReferenceBasenames(evidenceTaskReferences(evidenceTask))
   const sharedRef = [...parsedRefs].some(ref => evidenceRefs.has(ref))
-  if (sharedRef) return true
-
   const parsedTitle = normalizeImportText(parsedTask.title)
   const evidenceTitle = normalizeImportText(evidenceTask.title)
+  if (sharedRef) {
+    return (
+      parsedTitle.includes(evidenceTitle) ||
+      evidenceTitle.includes(parsedTitle) ||
+      overlap >= 0.6 ||
+      sharedTokenCount >= 3
+    )
+  }
   return (
     parsedTitle.includes(evidenceTitle) ||
     evidenceTitle.includes(parsedTitle) ||
@@ -1866,18 +1875,15 @@ async function materializeEvidenceWorkGraphTasks(
       Boolean(matchedBySemantic),
     )
   }).filter((task): task is MaterializedImportTask => Boolean(task) && !isFormattingDebris({ title: task.title }))
-  const shadowedImports = new Set(
-    detectShadowedCurrentMilestoneDeliverableImports(sources).map(candidate =>
-      `${candidate.sourcePath}::${candidate.title}`,
-    ),
-  )
+  const shadowedImports = detectShadowedCurrentMilestoneDeliverableImports(sources)
+  const shadowedStageAlignedDeliverables = detectShadowedStageAlignedRoadmapDeliverables(sources)
   const untouchedParsedTasks = input.parsedTasks.filter(task =>
     !graphTaskIds.has(task.id) &&
     !graphMatchedParsedIds.has(task.id) &&
     !reconciledIds.has(task.id) &&
     !graphTaskTitles.has(normalizeImportText(task.title)) &&
     !graphMatchedParsedTitles.has(normalizeImportText(task.title)) &&
-    !suppressedTaskTitles.has(normalizeImportText(task.title)) &&
+    !suppressedParsedImportedTask(task, suppressedTaskTitles, shadowedStageAlignedDeliverables) &&
     !isShadowedCurrentMilestoneDeliverableTask(task, shadowedImports),
   )
 
@@ -1886,12 +1892,45 @@ async function materializeEvidenceWorkGraphTasks(
 
 function isShadowedCurrentMilestoneDeliverableTask(
   task: ParsedTask,
-  shadowedImports: ReadonlySet<string>,
+  shadowedImports: readonly { sourcePath: string; title: string }[],
 ): boolean {
-  if (shadowedImports.size === 0) return false
+  if (shadowedImports.length === 0) return false
   const description = task.description.trim()
   if (!description.includes(': - ')) return false
-  return task.references.some(reference => shadowedImports.has(`${reference}::${task.title}`))
+  return task.references.some(reference =>
+    shadowedImports.some(candidate =>
+      candidate.title === task.title &&
+      importReferenceMatchesSource(reference, candidate.sourcePath),
+    ),
+  )
+}
+
+function suppressedParsedImportedTask(
+  task: ParsedTask,
+  suppressedTaskTitles: ReadonlySet<string>,
+  shadowedStageAlignedDeliverables: readonly { sourcePath: string; title: string }[],
+): boolean {
+  const normalizedTitle = normalizeImportText(task.title)
+  if (!suppressedTaskTitles.has(normalizedTitle)) return false
+  const description = task.description.trim()
+  if (task.scope !== 'later') return true
+  if (!description.includes(': - ')) return true
+  return task.references.some(reference =>
+    shadowedStageAlignedDeliverables.some(candidate =>
+      candidate.title === task.title &&
+      importReferenceMatchesSource(reference, candidate.sourcePath),
+    ),
+  )
+}
+
+function importReferenceMatchesSource(reference: string, sourcePath: string): boolean {
+  const normalizedReference = reference.replace(/\\/g, '/')
+  const normalizedSource = sourcePath.replace(/\\/g, '/')
+  return (
+    normalizedReference === normalizedSource ||
+    normalizedReference.endsWith(`/${normalizedSource}`) ||
+    path.basename(normalizedReference) === path.basename(normalizedSource)
+  )
 }
 
 function graphTaskToParsedTask(

@@ -473,8 +473,7 @@ function addTask(
             firstMeaningfulToken(sig.title) === firstMeaningfulToken(existing.title) &&
             meaningfulOverlap >= 0.5
           ) ||
-          meaningfulOverlap >= 0.45 ||
-          sharedMeaningfulTokens >= 3
+          meaningfulOverlap >= 0.45
         )
       const sameReferenceEcho =
         sameReference &&

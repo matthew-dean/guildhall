@@ -3042,6 +3042,90 @@ tasks:
     expect(laterDialogue?.dependsOn ?? []).toContain(milestoneTerminal?.suggestedId)
   })
 
+  it('keeps later-stage roadmap deliverables when only one intermediate stage has decomposed replacements', async () => {
+    await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
+    await fs.mkdir(path.join(tmpDir, 'docs', 'specs'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'harness', 'implementation-roadmap.md'),
+      [
+        '# Implementation Roadmap',
+        '',
+        '## Stage 1: Fixture And Evaluation Harness',
+        '',
+        'Goal: build a no-UI harness.',
+        '',
+        '## Stage 2: Mastra Agent Prototype',
+        '',
+        'Deliverables:',
+        '- Mastra workflow for the prototype iteration loop',
+        '- specialist editor agent calls for the first review lanes',
+        '',
+        '## Stage 3: Model Bakeoff And Safety Policy',
+        '',
+        'Deliverables:',
+        '- provider/model registry schema',
+        '- fiction bakeoff scenarios for writer, editor, reviewer, and safety lanes',
+        '',
+        '## Stage 4: Local Authoring Shell',
+        '',
+        'Deliverables:',
+        '- manuscript import or simple editor shell',
+        '- project brief and author-provenance capture',
+        '',
+        '## Current Next Milestone',
+        '',
+        'The next milestone is Stage 1: Fixture And Evaluation Harness.',
+        '',
+        '1. Define fixture, expected-record, prototype-run, and evaluation schemas.',
+      ].join('\n'),
+      'utf-8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'harness', 'remaining-spec-decomposition-inventory.md'),
+      [
+        '# Remaining Spec Decomposition Inventory',
+        '',
+        '### 2.2 `dialogue-and-character-voice.md`',
+        '',
+        '- **Recommended first task title:** Implement dialogue-and-character-voice reviewer lane',
+        '- **Recommended domain:** coherence',
+        '- **Stage alignment:** Stage 2 (Agent Coordination)',
+      ].join('\n'),
+      'utf-8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'specs', 'dialogue-and-character-voice.md'),
+      '# Dialogue And Character Voice\n',
+      'utf-8',
+    )
+
+    const inventory = await detectWorkspaceSignals({ projectPath: tmpDir })
+    const draft = formWorkspaceHypothesis(inventory)
+    expect(draft.tasks.map(task => task.title)).toEqual(expect.arrayContaining([
+      'provider/model registry schema',
+      'fiction bakeoff scenarios for writer, editor, reviewer, and safety lanes',
+      'manuscript import or simple editor shell',
+      'project brief and author-provenance capture',
+    ]))
+    const materialized = await materializeWorkspaceImportDraft({
+      memoryDir,
+      projectPath: tmpDir,
+      draft,
+    })
+
+    expect(materialized.tasks.map(task => task.title)).toEqual(expect.arrayContaining([
+      'Implement dialogue-and-character-voice reviewer lane',
+      'provider/model registry schema',
+      'fiction bakeoff scenarios for writer, editor, reviewer, and safety lanes',
+      'manuscript import or simple editor shell',
+      'project brief and author-provenance capture',
+    ]))
+    expect(materialized.tasks.map(task => task.title)).not.toEqual(expect.arrayContaining([
+      'Mastra workflow for the prototype iteration loop',
+      'specialist editor agent calls for the first review lanes',
+    ]))
+  })
+
   it('re-expands import scope from detected planning evidence even when the approved starter draft cites only one roadmap doc', async () => {
     await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
     await fs.mkdir(path.join(tmpDir, 'docs', 'specs'), { recursive: true })

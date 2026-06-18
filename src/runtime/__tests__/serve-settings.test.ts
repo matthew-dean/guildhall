@@ -2344,6 +2344,124 @@ describe('Workspace Import review endpoints', () => {
     expect(typeof body.detected!.stats.inputSignals).toBe('number')
   })
 
+  it('draft endpoint prefers the approved workspace-goals state over a stale importer task spec', async () => {
+    await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'harness', 'implementation-roadmap.md'),
+      [
+        '# Implementation Roadmap',
+        '',
+        '## Stage 1: Fixture And Evaluation Harness',
+        '',
+        'Deliverables:',
+        '- fixture directory shape for at least one small story fixture',
+        '- typed fixture and expected-record contracts',
+        '',
+        '## Current Next Milestone',
+        '',
+        'The next milestone is Stage 1: Fixture And Evaluation Harness.',
+        '',
+        '1. Define fixture, expected-record, prototype-run, and evaluation schemas.',
+      ].join('\n'),
+      'utf8',
+    )
+    await writeSystemText(
+      'TASKS.json',
+      JSON.stringify(
+        {
+          version: 1,
+          lastUpdated: '2026-01-01T00:00:00.000Z',
+          tasks: [
+            {
+              id: 'task-workspace-import',
+              title: 'Review existing project work',
+              description: 'Reserved importer',
+              domain: '_workspace_import',
+              projectPath: tmpDir,
+              status: 'done',
+              priority: 'normal',
+              acceptanceCriteria: [],
+              dependsOn: [],
+              outOfScope: [],
+              spec: [
+                '```yaml',
+                'tasks:',
+                '  - id: imported-one',
+                '    title: Define fixture, expected-record, prototype-run, and evaluation schemas.',
+                '    description: Saved starter task.',
+                '    domain: harness',
+                '    priority: high',
+                '```',
+              ].join('\n'),
+              createdAt: '2026-01-01T00:00:00.000Z',
+              updatedAt: '2026-01-01T00:00:00.000Z',
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+    )
+    await writeSystemText(
+      'workspace-goals.json',
+      JSON.stringify(
+        {
+          version: 2,
+          recordedAt: '2026-01-01T00:00:00.000Z',
+          goals: [],
+          tasks: [
+            {
+              id: 'imported-one',
+              title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+              description: 'Saved starter task.',
+              domain: 'harness',
+              priority: 'high',
+              references: ['docs/harness/implementation-roadmap.md'],
+            },
+            {
+              id: 'imported-two',
+              title: 'fixture directory shape for at least one small story fixture',
+              description: 'Saved deliverable task.',
+              domain: 'harness',
+              priority: 'normal',
+              references: ['docs/harness/implementation-roadmap.md'],
+            },
+          ],
+          milestones: [],
+          approved: {
+            goalCount: 0,
+            taskCount: 2,
+            milestoneCount: 0,
+            currentTaskCount: 2,
+            laterTaskCount: 0,
+            taskIds: ['imported-one', 'imported-two'],
+          },
+          detected: {
+            goalCount: 0,
+            taskCount: 2,
+            milestoneCount: 0,
+            currentTaskCount: 2,
+            laterTaskCount: 0,
+            taskIds: ['imported-one', 'imported-two'],
+          },
+        },
+        null,
+        2,
+      ),
+    )
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(scoped('/api/project/workspace-import/draft')))
+    expect(res.status).toBe(200)
+    const body = await res.json() as {
+      parsed?: { tasks?: Array<{ title?: string }> }
+    }
+    expect(body.parsed?.tasks?.map(task => task.title)).toEqual(expect.arrayContaining([
+      'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+      'fixture directory shape for at least one small story fixture',
+    ]))
+  })
+
   it('materializes detector and approved import previews into the same structured task graph used by saved imported tasks', async () => {
     await fs.mkdir(path.join(tmpDir, 'docs/harness'), { recursive: true })
     await fs.mkdir(path.join(tmpDir, 'docs/specs'), { recursive: true })
