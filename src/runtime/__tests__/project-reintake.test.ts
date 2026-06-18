@@ -122,6 +122,34 @@ describe('project re-intake planner', () => {
     ]))
   })
 
+  it('preserves the real existing status when re-intake proposes a reframe', () => {
+    const draft = planProjectReintake({
+      now,
+      sources: [{ path: 'docs/harness/implementation-roadmap.md', content: narrativeRoadmap }],
+      tasks: [
+        task({
+          id: 'task-import-9s8tkc',
+          title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+          description: '1. Define fixture, expected-record, prototype-run, and evaluation schemas.',
+          status: 'import_draft',
+        }),
+      ],
+    })
+
+    const reframe = draft.groups.flatMap(group => group.changes).find(change =>
+      change.kind === 'reframe' && change.taskId === 'task-import-9s8tkc',
+    )
+    expect(reframe).toMatchObject({
+      kind: 'reframe',
+      taskId: 'task-import-9s8tkc',
+      before: {
+        id: 'task-import-9s8tkc',
+        title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+        status: 'import_draft',
+      },
+    })
+  })
+
   it('preserves completed work as progress evidence instead of recreating it', () => {
     const draft = planProjectReintake({
       now,

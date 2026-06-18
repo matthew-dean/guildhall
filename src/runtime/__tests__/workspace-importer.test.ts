@@ -963,6 +963,9 @@ tasks:
     description: Keep the existing Stage 1 schema task.
     domain: harness
     priority: normal
+    references:
+      - docs/harness/implementation-roadmap.md
+      - docs/specs/schema-contract-roadmap.md
   - id: task-later
     title: Implement dialogue-and-character-voice reviewer lane
     description: Import the later reviewer lane too.
@@ -985,6 +988,10 @@ tasks:
       description: 'Keep the existing Stage 1 schema task.',
       domain: 'harness',
       status: 'exploring',
+      references: [
+        path.join(tmpDir, 'docs/harness/implementation-roadmap.md'),
+        path.join(tmpDir, 'docs/specs/schema-contract-roadmap.md'),
+      ],
     })
     expect(q.tasks.find(task => task.id === 'task-later')?.status).toBe('shelved')
   })
@@ -1145,7 +1152,7 @@ tasks:
     expect(pickNextTask(afterImplementation)?.id).toBe('task-alert-dialog-integration')
   })
 
-  it('uses the evidence graph even when it reframes one imported task instead of adding more tasks', async () => {
+  it('preserves richer parsed references when the evidence graph reframes an existing survivor task', async () => {
     await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
     await fs.writeFile(
       path.join(tmpDir, 'docs', 'harness', 'implementation-roadmap.md'),
@@ -1162,6 +1169,58 @@ tasks:
       ].join('\n'),
       'utf-8',
     )
+    await writeQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      tasks: [
+        {
+          id: WORKSPACE_IMPORT_TASK_ID,
+          title: 'Workspace import',
+          description: 'Importer task',
+          domain: WORKSPACE_IMPORT_DOMAIN,
+          projectPath: tmpDir,
+          status: 'exploring',
+          priority: 'high',
+          acceptanceCriteria: [],
+          dependsOn: [],
+          outOfScope: [],
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          adjudications: [],
+          escalations: [],
+          agentIssues: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          origination: 'system',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+        {
+          id: 'task-existing-schema',
+          title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+          description: 'Old vague draft.',
+          domain: 'harness',
+          projectPath: tmpDir,
+          status: 'blocked',
+          priority: 'normal',
+          acceptanceCriteria: [],
+          dependsOn: [],
+          outOfScope: [],
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          adjudications: [],
+          escalations: [],
+          agentIssues: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          origination: 'human',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      ],
+    })
     await seedImporterWithSpec(`
 \`\`\`yaml
 tasks:
@@ -1173,6 +1232,8 @@ tasks:
     priority: normal
     references:
       - docs/harness/implementation-roadmap.md
+      - ${path.join(tmpDir, 'docs/harness/implementation-roadmap.md')}
+      - docs/specs/schema-contract-roadmap.md
     assumptions:
       - This item still reflects current project intent and has not already been completed or superseded elsewhere.
     missingInformation:
@@ -1184,15 +1245,19 @@ tasks:
       memoryDir,
       projectPath: tmpDir,
     })
-    expect(approved).toMatchObject({ success: true, tasksAdded: 1 })
+    expect(approved).toMatchObject({ success: true, tasksAdded: 0 })
 
     const q = await readQueue()
-    const imported = q.tasks.find(task => task.id === 'task-import-schema')
+    const imported = q.tasks.find(task => task.id === 'task-existing-schema')
     expect(imported).toMatchObject({
       title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
       description: '1. Define fixture, expected-record, prototype-run, and evaluation schemas.',
       domain: 'harness',
-      status: 'import_draft',
+      status: 'blocked',
+      references: [
+        path.join(tmpDir, 'docs/harness/implementation-roadmap.md'),
+        path.join(tmpDir, 'docs/specs/schema-contract-roadmap.md'),
+      ],
     })
     expect(imported?.acceptanceCriteria?.map(criterion => criterion.id)).toEqual([
       'source-implementation',

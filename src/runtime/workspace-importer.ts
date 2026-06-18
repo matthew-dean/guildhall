@@ -803,6 +803,21 @@ function absoluteImportedReference(
     : path.resolve(workspaceProjectPath, trimmed)
 }
 
+function absoluteImportedReferences(
+  refs: readonly string[],
+  workspaceProjectPath: string,
+): string[] {
+  const seen = new Set<string>()
+  const normalized: string[] = []
+  for (const ref of refs) {
+    const absolute = absoluteImportedReference(ref, workspaceProjectPath)
+    if (!absolute || seen.has(absolute)) continue
+    seen.add(absolute)
+    normalized.push(absolute)
+  }
+  return normalized
+}
+
 function normalizeImportedDescriptionForTask(
   description: string,
   references: readonly string[],
@@ -1127,8 +1142,17 @@ async function materializeEvidenceWorkGraphTasks(
   }
 
   const graphTaskIds = new Set(plan.tasks.map(task => task.id))
+  const graphTaskTitles = new Set(plan.tasks.map(task => normalizeImportText(task.title)).filter(Boolean))
   const reconciledIds = new Set(plan.reconciliations.map(reconciliation => reconciliation.existingTaskId))
-  const graphTasks = plan.tasks.map(task => graphTaskToParsedTask(task))
+  const parsedTasksById = new Map(input.parsedTasks.map(task => [task.id, task] as const))
+  const parsedTasksByTitle = new Map(
+    input.parsedTasks.map(task => [normalizeImportText(task.title), task] as const),
+  )
+  const graphTasks = plan.tasks.map(task => graphTaskToParsedTask(
+    task,
+    parsedTasksById.get(task.id)
+      ?? parsedTasksByTitle.get(normalizeImportText(task.title)),
+  ))
   const shadowedImports = new Set(
     detectShadowedCurrentMilestoneDeliverableImports(sources).map(candidate =>
       `${candidate.sourcePath}::${candidate.title}`,
@@ -1137,6 +1161,7 @@ async function materializeEvidenceWorkGraphTasks(
   const untouchedParsedTasks = input.parsedTasks.filter(task =>
     !graphTaskIds.has(task.id) &&
     !reconciledIds.has(task.id) &&
+    !graphTaskTitles.has(normalizeImportText(task.title)) &&
     !isShadowedCurrentMilestoneDeliverableTask(task, shadowedImports),
   )
 
@@ -1153,8 +1178,14 @@ function isShadowedCurrentMilestoneDeliverableTask(
   return task.references.some(reference => shadowedImports.has(`${reference}::${task.title}`))
 }
 
-function graphTaskToParsedTask(task: EvidenceTask): MaterializedImportTask {
-  const references = evidenceTaskReferences(task)
+function graphTaskToParsedTask(
+  task: EvidenceTask,
+  parsedTask?: ParsedTask,
+): MaterializedImportTask {
+  const references = mergeImportReferences(
+    evidenceTaskReferences(task),
+    parsedTask?.references,
+  )
   return {
     id: task.id,
     title: task.title,
@@ -1325,9 +1356,7 @@ export async function approveWorkspaceImport(
       input.projectPath,
       taskProjectPath,
     )
-    const normalizedReferences = imported.references.map((ref) =>
-      absoluteImportedReference(ref, input.projectPath),
-    )
+    const normalizedReferences = absoluteImportedReferences(imported.references, input.projectPath)
     existing.description = normalizedDescription
     existing.domain = domain
     existing.projectPath = taskProjectPath
@@ -1400,9 +1429,7 @@ export async function approveWorkspaceImport(
       input.projectPath,
       taskProjectPath,
     )
-    const normalizedReferences = t.references.map((ref) =>
-      absoluteImportedReference(ref, input.projectPath),
-    )
+    const normalizedReferences = absoluteImportedReferences(t.references, input.projectPath)
     queue.tasks.push({
       id,
       title: t.title,

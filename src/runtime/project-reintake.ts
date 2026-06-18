@@ -119,6 +119,7 @@ export function planProjectReintake(input: ProjectReintakeInput): ProjectReintak
     .map(task => graphTaskChange(
       { ...task, dependsOn: task.dependsOn.filter(dependency => !completedTaskIds.has(dependency)) },
       graphPlan.reconciliations,
+      input.tasks,
     ))
   if (graphChanges.length > 0) {
     groups.push({
@@ -354,17 +355,26 @@ async function appendReintakeProgress(memoryDir: string, draft: ProjectReintakeD
   await appendManagedTextFile(getProjectSystemStatePathFromMemoryDir(memoryDir, 'PROGRESS.md'), summary, 'utf-8').catch(() => undefined)
 }
 
-function graphTaskChange(task: EvidenceTask, reconciliations: EvidenceReconciliation[]): ReintakeChange {
+function graphTaskChange(
+  task: EvidenceTask,
+  reconciliations: EvidenceReconciliation[],
+  existingTasks: Array<Record<string, unknown>>,
+): ReintakeChange {
   const reframe = reconciliations.find(change =>
     'existingTaskId' in change && change.existingTaskId === task.id,
   ) as { existingTaskId?: string; reason?: string } | undefined
   const draft = evidenceTaskToDraft(task)
 
   if (reframe) {
+    const existing = existingTasks.find(candidate => stringField(candidate, 'id') === task.id)
     return {
       kind: 'reframe',
       taskId: task.id,
-      before: { id: task.id, title: task.title, status: 'blocked' },
+      before: {
+        id: task.id,
+        title: stringField(existing ?? {}, 'title') ?? task.title,
+        status: stringField(existing ?? {}, 'status') ?? 'unknown',
+      },
       after: draft,
       reason: `Reframe from current evidence: ${reframe.reason ?? task.title}`,
     }
