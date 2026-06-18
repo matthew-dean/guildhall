@@ -193,27 +193,13 @@
         selectedSourceKeys = (review.sourceGroups ?? []).map(group => group.key)
         selectedTaskIds = []
       } else if (defaults) {
-        selectedAreaKeys = [...defaults.selectedAreaKeys]
-        selectedSourceKeys = [...defaults.selectedSourceKeys]
-        selectedTaskIds = [...defaults.selectedTaskIds]
+        selectedAreaKeys = (review.areaGroups ?? []).map(area => area.key)
+        selectedSourceKeys = (review.sourceGroups ?? []).map(group => group.key)
+        selectedTaskIds = (j.detected?.tasks ?? []).map(task => task.suggestedId)
       } else {
-        const defaultAreas = (j.detected?.review?.areaGroups ?? []).filter(
-          area => area.taskCount > 0,
-        )
-        const fallbackReferenceAreas = (j.detected?.review?.totalTaskCandidates ?? 0) === 0
-          ? (j.detected?.review?.areaGroups ?? [])
-          : []
-        const selectedDefaults = defaultAreas.length > 0 ? defaultAreas : fallbackReferenceAreas
-        selectedAreaKeys = selectedDefaults.map(area => area.key)
-        const defaultSources = (j.detected?.review?.sourceGroups ?? []).filter(
-          group =>
-            selectedDefaults.some(area => area.key === group.areaKey) &&
-            (defaultAreas.length > 0 ? group.taskCount > 0 : true),
-        )
-        selectedSourceKeys = defaultSources.map(group => group.key)
-        selectedTaskIds = (j.detected?.tasks ?? [])
-          .filter(task => defaultSources.some(group => group.taskIds.includes(task.suggestedId)))
-          .map(task => task.suggestedId)
+        selectedAreaKeys = (j.detected?.review?.areaGroups ?? []).map(area => area.key)
+        selectedSourceKeys = (j.detected?.review?.sourceGroups ?? []).map(group => group.key)
+        selectedTaskIds = (j.detected?.tasks ?? []).map(task => task.suggestedId)
       }
       step = 'found'
       currentAreaIndex = 0

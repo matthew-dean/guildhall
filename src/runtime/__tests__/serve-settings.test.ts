@@ -2436,6 +2436,61 @@ describe('Workspace Import review endpoints', () => {
     expect(parsedFixtureTask?.dependsOn).toEqual([parsedSchemaTask?.id].filter(Boolean))
   })
 
+  it('default approval preserves goal-only and reference-bearing sources instead of shrinking to task-bearing docs', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, 'README.md'),
+      [
+        '# Narrative Harness',
+        '',
+        'Narrative Harness is a fiction-writing workspace.',
+        '',
+        '## Goals',
+        '',
+        '- Preserve author voice while making story continuity visible.',
+      ].join('\n'),
+      'utf8',
+    )
+    await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'harness', 'implementation-roadmap.md'),
+      [
+        '# Implementation Roadmap',
+        '',
+        '## Stage 1: Fixture And Evaluation Harness',
+        '',
+        '## Current Next Milestone',
+        '',
+        'The next milestone is Stage 1: Fixture And Evaluation Harness.',
+        '',
+        '1. Define fixture, expected-record, prototype-run, and evaluation schemas.',
+      ].join('\n'),
+      'utf8',
+    )
+    await fs.writeFile(path.join(tmpDir, 'package.json'), JSON.stringify({ name: 'goal-source-truth' }), 'utf8')
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const before = await app.fetch(new Request(scoped('/api/project/workspace-import/draft')))
+    const beforeBody = (await before.json()) as {
+      detected: { goals: Array<{ title: string }> } | null
+    }
+    expect(beforeBody.detected?.goals.map(goal => goal.title)).toContain('Narrative Harness')
+
+    const approve = await app.fetch(
+      new Request(scoped('/api/project/workspace-import/approve'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({}),
+      }),
+    )
+    expect(approve.status).toBe(200)
+
+    const after = await app.fetch(new Request(scoped('/api/project/workspace-import/draft')))
+    const afterBody = (await after.json()) as {
+      parsed: { goals: Array<{ title: string }> } | null
+    }
+    expect(afterBody.parsed?.goals.map(goal => goal.title)).toContain('Narrative Harness')
+  })
+
   it('approve falls back to detector when the importer task has no spec', async () => {
     // Seed a README with a goal the detector will pick up.
     await fs.writeFile(
@@ -2673,8 +2728,8 @@ describe('Workspace Import review endpoints', () => {
 
     expect(body.ok).toBe(true)
     expect(body.tasksAdded).toBe(1)
-    expect(body.goalsRecorded).toBe(1)
-    expect(body.milestonesLogged).toBe(1)
+    expect(body.goalsRecorded).toBeGreaterThanOrEqual(1)
+    expect(body.milestonesLogged).toBeGreaterThanOrEqual(1)
 
     const tasks = await readTasks(tmpDir)
     expect(tasks.some(task => task.id === 'curated-first-task')).toBe(true)
@@ -3475,7 +3530,7 @@ describe('Workspace Import review endpoints', () => {
     })
   })
 
-  it('reuses learned import defaults after a narrowed approval', async () => {
+  it('remembers learned import focus without shrinking the next default import selection', async () => {
     await fs.mkdir(path.join(tmpDir, 'looma', 'docs'), { recursive: true })
     await fs.mkdir(path.join(tmpDir, 'knit', 'docs'), { recursive: true })
     await fs.writeFile(
@@ -3517,6 +3572,10 @@ describe('Workspace Import review endpoints', () => {
     const after = await app.fetch(new Request(scoped('/api/project/workspace-import/draft')))
     const afterBody = (await after.json()) as {
       detected: {
+        review: {
+          areaGroups: Array<{ key: string }>
+          sourceGroups: Array<{ key: string }>
+        }
         learning: {
           defaults: {
             selectedAreaKeys: string[]
@@ -3527,10 +3586,14 @@ describe('Workspace Import review endpoints', () => {
         }
       }
     }
-    expect(afterBody.detected.learning.defaults.selectedAreaKeys).toEqual(['looma'])
-    expect(afterBody.detected.learning.defaults.selectedSourceKeys).toEqual([loomaSource!.key])
-    expect(afterBody.detected.learning.defaults.selectedTaskIds).toEqual(loomaSource!.taskIds)
-    expect(afterBody.detected.learning.defaults.note).toContain('approved last time')
+    expect(afterBody.detected.learning.defaults.selectedAreaKeys).toEqual(
+      afterBody.detected.review.areaGroups.map(area => area.key),
+    )
+    expect(afterBody.detected.learning.defaults.selectedSourceKeys).toEqual(
+      afterBody.detected.review.sourceGroups.map(group => group.key),
+    )
+    expect(afterBody.detected.learning.defaults.selectedTaskIds.length).toBeGreaterThan(loomaSource!.taskIds.length)
+    expect(afterBody.detected.learning.defaults.note).toContain('remembers')
   })
 
   it('keeps approved import scope distinct from detected project breadth after a narrowed approval', async () => {

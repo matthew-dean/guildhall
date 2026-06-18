@@ -144,11 +144,11 @@ const detectedDraft = {
     },
     learning: {
       defaults: {
-        selectedAreaKeys: ['knit'],
-        selectedSourceKeys: ['roadmap', 'notes'],
+        selectedAreaKeys: ['knit', 'looma'],
+        selectedSourceKeys: ['roadmap', 'notes', 'looma-notes'],
         selectedTaskIds: ['task-link-editor', 'task-link-preview'],
         taskSelectionMode: 'all',
-        note: 'Using the same import defaults you approved last time.',
+        note: 'Guildhall remembers where you focused last time, but starts from the full current import so no project context is dropped.',
       },
       coordinatorSuggestions: [],
       productSuggestions: [],
@@ -203,15 +203,18 @@ describe('WorkspaceImportTab', () => {
 
     render(WorkspaceImportTab)
     await screen.findByText(/Found planning notes in 2 project parts/)
-    expect(screen.getByText(/Using the same import defaults/)).toBeTruthy()
+    expect(screen.getByText(/starts from the full current import/)).toBeTruthy()
     expect(screen.getByText(/Nothing is saved until the final step/)).toBeTruthy()
     expect(screen.getByText(/You can resume this review later/)).toBeTruthy()
 
     await userEvent.click(screen.getByRole('button', { name: /choose parts to review/i }))
     await screen.findByText('Choose the parts for this pass')
 
-    await userEvent.click(screen.getByRole('button', { name: /review 1 selected part/i }))
+    await userEvent.click(screen.getByRole('button', { name: /review 2 selected parts/i }))
     await screen.findByText('Review notes in Knit')
+
+    await userEvent.click(screen.getByRole('button', { name: /review looma next/i }))
+    await screen.findByText('Review notes in Looma')
 
     await userEvent.click(screen.getByRole('button', { name: /review selected tasks/i }))
     await screen.findByText('Review tasks from Roadmap')
@@ -454,6 +457,7 @@ describe('WorkspaceImportTab', () => {
     await screen.findByText(/Found planning notes/)
 
     await userEvent.click(screen.getByRole('button', { name: /choose parts to review/i }))
+    await userEvent.click(screen.getAllByRole('button', { name: /^exclude$/i })[1]!)
     await userEvent.click(screen.getByRole('button', { name: /review 1 selected part/i }))
     await screen.findByText('Review notes in Knit')
 
@@ -493,6 +497,7 @@ describe('WorkspaceImportTab', () => {
     await screen.findByText(/Found planning notes/)
 
     await userEvent.click(screen.getByRole('button', { name: /choose parts to review/i }))
+    await userEvent.click(screen.getAllByRole('button', { name: /^exclude$/i })[1]!)
     await userEvent.click(screen.getByRole('button', { name: /review 1 selected part/i }))
     await userEvent.click(screen.getByRole('button', { name: /review selected tasks/i }))
     await screen.findByText('Review tasks from Roadmap')
@@ -530,6 +535,7 @@ describe('WorkspaceImportTab', () => {
     await screen.findByText(/Found planning notes/)
     await userEvent.click(screen.getByRole('button', { name: /shelve import review/i }))
     await userEvent.click(screen.getByRole('button', { name: /choose parts to review/i }))
+    await userEvent.click(screen.getAllByRole('button', { name: /^exclude$/i })[1]!)
     await userEvent.click(screen.getByRole('button', { name: /review 1 selected part/i }))
     await userEvent.click(screen.getByRole('button', { name: /review selected tasks/i }))
     await userEvent.click(screen.getByRole('button', { name: /review next source/i }))

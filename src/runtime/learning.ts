@@ -898,36 +898,9 @@ export function buildWorkspaceImportDefaults(
   projectLearning: LearningRecord,
   userLearning: LearningRecord,
 ): WorkspaceImportDefaults {
-  const taskBearingAreas = review.areaGroups.filter(area => area.taskCount > 0)
-  const taskBearingSources = review.sourceGroups.filter(group => group.taskCount > 0)
-  const projectPreferredAreas = projectLearning.workspaceImport.preferredAreaKeys.filter(key =>
-    taskBearingAreas.some(area => area.key === key),
-  )
-  const selectedAreaKeys =
-    projectPreferredAreas.length > 0
-      ? projectPreferredAreas
-      : taskBearingAreas.map(area => area.key)
-
-  const projectPreferredSources = projectLearning.workspaceImport.preferredSourceKeys.filter(key =>
-    taskBearingSources.some(group => group.key === key && selectedAreaKeys.includes(group.areaKey)),
-  )
-  const selectedSourceKeys =
-    projectPreferredSources.length > 0
-      ? projectPreferredSources
-      : taskBearingSources
-          .filter(group => selectedAreaKeys.includes(group.areaKey))
-          .map(group => group.key)
-
-  const taskIdsForSelectedSources = new Set(
-    review.sourceGroups
-      .filter(group => selectedSourceKeys.includes(group.key))
-      .flatMap(group => group.taskIds),
-  )
-  const candidateTasks = draft.tasks.filter(task => taskIdsForSelectedSources.has(task.suggestedId))
-  const currentCandidateTasks = candidateTasks.filter(task => task.scope !== 'later')
-  const selectedTaskIds = (
-    currentCandidateTasks.length > 0 ? currentCandidateTasks : candidateTasks
-  ).map(task => task.suggestedId)
+  const selectedAreaKeys = review.areaGroups.map(area => area.key)
+  const selectedSourceKeys = review.sourceGroups.map(group => group.key)
+  const selectedTaskIds = draft.tasks.map(task => task.suggestedId)
 
   const effectiveMode =
     projectLearning.workspaceImport.taskSelectionMode !== 'all'
@@ -935,10 +908,13 @@ export function buildWorkspaceImportDefaults(
       : userLearning.workspaceImport.taskSelectionMode
 
   let note: string | null = null
-  if (projectPreferredAreas.length > 0 || projectPreferredSources.length > 0) {
-    note = 'Guildhall reused the project parts and sources you approved last time.'
+  if (
+    projectLearning.workspaceImport.preferredAreaKeys.length > 0 ||
+    projectLearning.workspaceImport.preferredSourceKeys.length > 0
+  ) {
+    note = 'Guildhall remembers where you focused last time, but starts from the full current import so no project context is dropped.'
   } else if (effectiveMode === 'tight') {
-    note = 'Guildhall kept the last import focus, but it still starts from the full current task set for that scope.'
+    note = 'Guildhall still starts from the full current import, even when earlier runs used a tighter review pass.'
   }
 
   return {

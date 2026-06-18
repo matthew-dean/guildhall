@@ -6427,36 +6427,23 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const inventory = await detectWorkspaceSignals({ projectPath: project.path })
       const fullDraft = formWorkspaceHypothesis(inventory)
       const review = buildWorkspaceImportReview(fullDraft, [], project.path)
+      const defaultSourceKeys = review.sourceGroups.map(group => group.key)
+      const defaultAreaKeys = review.areaGroups.map(area => area.key)
+      const defaultTaskIds = fullDraft.tasks.map(task => task.suggestedId)
       const selectedSourceKeys = Array.isArray(body.sourceKeys)
         ? body.sourceKeys
-        : review.sourceGroups.filter(group => group.taskCount > 0).map(group => group.key)
+        : defaultSourceKeys
       const selectedAreaKeys = Array.isArray(body.areaKeys)
         ? body.areaKeys
-        : review.areaGroups
-            .filter(area =>
-              review.sourceGroups.some(
-                group => selectedSourceKeys.includes(group.key) && group.areaKey === area.key,
-              ),
-            )
-            .map(area => area.key)
+        : defaultAreaKeys
       const selectedTaskIds = Array.isArray(body.taskIds)
         ? body.taskIds
-        : fullDraft.tasks.map(task => task.suggestedId)
-      const defaultSourceKeys = review.sourceGroups
-        .filter(group => group.taskCount > 0)
-        .map(group => group.key)
-      const defaultAreaKeys = review.areaGroups
-        .filter(area =>
-          review.sourceGroups.some(
-            group => group.taskCount > 0 && group.areaKey === area.key,
-          ),
-        )
-        .map(area => area.key)
+        : defaultTaskIds
       const hasExplicitNarrowing =
-        selectedTaskIds.length !== fullDraft.tasks.length ||
+        selectedTaskIds.length !== defaultTaskIds.length ||
         selectedSourceKeys.length !== defaultSourceKeys.length ||
         selectedAreaKeys.length !== defaultAreaKeys.length ||
-        selectedTaskIds.some(taskId => !fullDraft.tasks.some(task => task.suggestedId === taskId)) ||
+        selectedTaskIds.some(taskId => !defaultTaskIds.includes(taskId)) ||
         selectedSourceKeys.some(sourceKey => !defaultSourceKeys.includes(sourceKey)) ||
         selectedAreaKeys.some(areaKey => !defaultAreaKeys.includes(areaKey))
       const filteredDraft = filterWorkspaceImportDraft(fullDraft, {
