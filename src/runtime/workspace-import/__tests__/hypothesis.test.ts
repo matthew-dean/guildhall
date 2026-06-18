@@ -158,6 +158,44 @@ describe('formWorkspaceHypothesis', () => {
     ])
   })
 
+  it('does not collapse distinct same-file checklist siblings into one task', () => {
+    const sharedReference = ['/repo/docs/roadmap.md']
+    const draft = formWorkspaceHypothesis(
+      invFrom([
+        {
+          source: 'roadmap',
+          kind: 'open_work',
+          title: 'Detector task one',
+          evidence: '- [ ] Detector task one',
+          references: sharedReference,
+          confidence: 'high',
+        },
+        {
+          source: 'roadmap',
+          kind: 'open_work',
+          title: 'Detector task two',
+          evidence: '- [ ] Detector task two',
+          references: sharedReference,
+          confidence: 'high',
+        },
+        {
+          source: 'roadmap',
+          kind: 'open_work',
+          title: 'Detector task three',
+          evidence: '- [ ] Detector task three',
+          references: sharedReference,
+          confidence: 'high',
+        },
+      ]),
+    )
+
+    expect(draft.tasks.map(task => task.title)).toEqual([
+      'Detector task one',
+      'Detector task two',
+      'Detector task three',
+    ])
+  })
+
   it('does not copy identical evidence into goal rationale or task description', () => {
     const draft = formWorkspaceHypothesis(
       invFrom([

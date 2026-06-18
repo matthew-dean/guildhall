@@ -82,6 +82,7 @@ export const ProofPath = z.preprocess((value) => {
       typeof record.summary === 'string' && record.summary.trim()
         ? record.summary.trim()
         : 'Legacy proof path carried forward until it is reshaped.',
+    source: record.source === 'inferred' ? 'inferred' : 'documented',
     createdAt: typeof record.createdAt === 'string' ? record.createdAt : LEGACY_TIMESTAMP,
     updatedAt: typeof record.updatedAt === 'string' ? record.updatedAt : LEGACY_TIMESTAMP,
     createdBy: typeof record.createdBy === 'string' && record.createdBy.trim() ? record.createdBy.trim() : 'legacy-import',
@@ -91,6 +92,7 @@ export const ProofPath = z.preprocess((value) => {
   scope: ProofPathScope,
   title: z.string(),
   summary: z.string(),
+  source: z.enum(['documented', 'inferred']).default('documented'),
   status: z.enum(['planned', 'in_progress', 'verified', 'blocked', 'stale']).default('planned'),
   launchSteps: z.array(LaunchStep).default([]),
   expectedEvidence: z.array(ExpectedEvidence).default([]),

@@ -547,13 +547,8 @@ describe('workspaceNeedsImport', () => {
 
     expect(runner?.proofPaths).toEqual([
       expect.objectContaining({
-        kind: 'command',
-        expectedEvidence: [
-          'The runner ingests the fixture, builds records, runs a packet, and saves output.',
-        ],
-      }),
-      expect.objectContaining({
         kind: 'review',
+        source: 'inferred',
         expectedEvidence: expect.arrayContaining([
           'The run stays inside the no-UI harness boundary.',
           'Saved run output is traceable back to the fixture inputs.',
@@ -566,8 +561,8 @@ describe('workspaceNeedsImport', () => {
       'deterministic-proof',
     ])
     expect(dialogue?.proofPaths?.[0]).toEqual(expect.objectContaining({
-      kind: 'command',
-      expectedEvidence: ['Run the reviewer lane against one bounded dialogue fixture and record structured findings'],
+      kind: 'review',
+      source: 'inferred',
     }))
     expect(dialogue?.acceptanceCriteria?.[0]?.description).not.toContain('Recommended first task title')
     expect(dialogue?.acceptanceCriteria?.[0]?.description).not.toContain('MISSING')
@@ -1369,10 +1364,9 @@ tasks:
           expect.objectContaining({ id: 'source-implementation' }),
           expect.objectContaining({ id: 'automated-proof' }),
         ]),
-        proofPaths: expect.arrayContaining([
-          expect.objectContaining({ kind: 'command' }),
-          expect.objectContaining({ kind: 'review' }),
-        ]),
+        proofPaths: [
+          expect.objectContaining({ kind: 'review', source: 'inferred' }),
+        ],
       },
     ])
     expect(reparsed.tasks[0]?.missingInformation ?? []).not.toContain(
@@ -2253,11 +2247,9 @@ tasks:
       'accessibility-contract',
       'automated-proof',
     ])
-    expect(alertDialog.proofPaths).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ kind: 'command', command: 'pnpm test -- alert-dialog' }),
-      ]),
-    )
+    expect(alertDialog.proofPaths).toEqual([
+      expect.objectContaining({ kind: 'review', source: 'inferred' }),
+    ])
 
     expect(alertDialogIntegration).toMatchObject({
       title: 'Integrate AlertDialog into Knit destructive confirmation flow',
@@ -2424,14 +2416,12 @@ tasks:
       'accessibility-contract',
       'automated-proof',
     ])
-    expect(imported?.proofPaths).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          kind: 'command',
-          command: 'pnpm test -- define-fixture-expected-record-prototype-run-and-evaluation-schemas',
-        }),
-      ]),
-    )
+    expect(imported?.proofPaths).toEqual([
+      expect.objectContaining({
+        kind: 'review',
+        source: 'inferred',
+      }),
+    ])
     expect(imported?.requestIntake?.assumptions).toEqual([
       'The referenced documentation still represents intended project direction.',
     ])
@@ -2850,13 +2840,12 @@ tasks:
       'Encode the spec-native review prompts',
       'Protect the lane boundary and voice rules',
       'Shape actionable finding output',
-      'Add deterministic fixture proof for the reviewer lane',
     ])
     expect(dialogue?.sizePlan?.action).toBe('proceed_with_warning')
     expect(dialogue?.taskReadiness?.recommendation).toBe('ready')
-    expect(dialogue?.hierarchy?.childIds).toHaveLength(5)
+    expect(dialogue?.hierarchy?.childIds).toHaveLength(4)
     expect(dialogue?.acceptanceCriteria?.[1]?.description).toContain('Could the line be reassigned to another character without anyone noticing?')
-    expect(dialogue?.proofPaths?.[1]?.expectedEvidence?.join(' ')).toContain('Recorded findings answer prompts')
+    expect(dialogue?.proofPaths?.[0]?.expectedEvidence?.join(' ')).toContain('Recorded findings answer prompts')
     expect(dialogue?.spec).not.toContain('follows target-area conventions')
 
     expect(feedback?.acceptanceCriteria?.map(criterion => criterion.id)).toEqual([
@@ -2870,11 +2859,10 @@ tasks:
       'Preserve the workflow order for Implement editor-writer feedback chain contract and weighted-feedback pipeline',
       'Model multidimensional finding weights',
       'Preserve severity and fiction-first boundaries',
-      'Add deterministic proof for the workflow pipeline',
     ])
     expect(feedback?.sizePlan?.action).toBe('proceed_with_warning')
     expect(feedback?.taskReadiness?.recommendation).toBe('ready')
-    expect(feedback?.hierarchy?.childIds).toHaveLength(4)
+    expect(feedback?.hierarchy?.childIds).toHaveLength(3)
     expect(feedback?.acceptanceCriteria?.[1]?.description).toContain('Severity, Confidence, Voice risk')
     expect(feedback?.acceptanceCriteria?.[2]?.description).toContain('Protect')
     expect(feedback?.spec).not.toContain('exposes the expected public contract')
@@ -2987,29 +2975,32 @@ tasks:
       'Define the cited contracts for Define fixture, expected-record, prototype-run, and evaluation schemas.',
       'Shape fixture and expected-record ground truth',
       'Capture prototype run and evaluation records',
-      'Add deterministic proof for the imported contract surface',
     ])
     expect(task?.sizePlan?.action).toBe('proceed_with_warning')
     expect(task?.spec).toContain('`FixtureManifest`')
     expect(task?.spec).toContain('`ExpectedRecordSet`')
     expect(task?.spec).toContain('`PrototypeRun`')
     expect(task?.spec).toContain('build a no-UI test harness that proves story-memory and packet contracts against small fiction fixtures before any product UI is designed.')
-    expect(task?.spec).toContain('Verification environment: Local workspace proof using:')
+    expect(task?.spec).toContain('Proof target: Add bounded local workspace proof')
+    expect(task?.spec).not.toContain('pnpm test -- define-fixture-expected-record-prototype-run-and-evaluation-schemas')
+    expect(task?.proofPaths?.some(path => path.kind === 'command')).toBe(false)
+    expect(task?.acceptanceCriteria?.find(criterion => criterion.id === 'deterministic-proof')).toMatchObject({
+      verifiedBy: 'review',
+      source: 'inferred',
+    })
     expect(task?.spec).not.toContain('Split or pause only if these imported gaps still change the implementation boundary')
     expect(task?.spec).not.toContain('Guildhall still needs to confirm')
     expect(task?.spec).not.toContain('Add the first tiny fiction fixture')
     expect(task?.productBrief?.nonGoals ?? []).not.toContain('Guildhall still needs to confirm scope, current relevance, and success criteria during shaping.')
-    expect(task?.hierarchy?.childIds).toHaveLength(4)
+    expect(task?.hierarchy?.childIds).toHaveLength(3)
     expect(task?.taskReadiness?.recommendation).toBe('ready')
     expect(task?.taskReadiness?.summary).toContain('continue through the child tasks')
     expect(childTasks.map(candidate => candidate.title)).toEqual([
       'Define the cited contracts for Define fixture, expected-record, prototype-run, and evaluation schemas.',
       'Shape fixture and expected-record ground truth',
       'Capture prototype run and evaluation records',
-      'Add deterministic proof for the imported contract surface',
     ])
     expect(childTasks.map(candidate => candidate.status)).toEqual([
-      'exploring',
       'exploring',
       'exploring',
       'exploring',
@@ -3017,8 +3008,8 @@ tasks:
     expect(childTasks[1]?.dependsOn).toEqual([
       childTasks[0]?.id,
     ])
-    expect(childTasks[3]?.dependsOn).toEqual([
-      childTasks[2]?.id,
+    expect(childTasks[2]?.dependsOn).toEqual([
+      childTasks[1]?.id,
     ])
 
     expect(task?.status).toBe('ready')

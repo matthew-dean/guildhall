@@ -445,7 +445,8 @@ function addTask(
         meaningfulOverlap >= 0.34
       const sameReferenceFamilyEcho =
         sharedReferenceBasename &&
-        meaningfulOverlap >= 0.45
+        meaningfulOverlap >= 0.45 &&
+        sharedMeaningfulTokens >= 2
       if (sameReferenceEcho || sameReferenceFamilyEcho || planningDocEcho) {
         key = existingKey
         break

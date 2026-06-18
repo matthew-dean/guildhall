@@ -146,6 +146,69 @@ describe('assessTaskReadiness', () => {
     expect(assessment.dimensions.find(dimension => dimension.id === 'context_load')?.status).toBe('blocked')
   })
 
+  it('does not treat inferred workspace-import proof as execution-ready evidence', () => {
+    const assessment = assessTaskReadiness(task({
+      title: 'Define fixture, expected-record, prototype-run, and evaluation schemas',
+      description: 'Imported task for the first headless harness slice.',
+      status: 'spec_review',
+      requestIntake: {
+        intent: 'implementation',
+        recommendedNextAction: 'proceed_to_implementation_spec',
+        assumptions: [],
+        missingInformation: [],
+        evidenceRefs: ['import:docs/harness/implementation-roadmap.md'],
+        componentStack: [],
+        pressureTestSummary: {
+          systemOwned: true,
+          degree: 'guided',
+          qualityBar: 'Imported work should be reshaped before execution.',
+          ownerQuestionPolicy: 'Ask only when the sources conflict.',
+          checks: [],
+        },
+        clarifyingQuestions: [],
+        createdAt: now,
+        createdBy: 'workspace-importer',
+      },
+      acceptanceCriteria: [
+        {
+          id: 'contracts-defined',
+          description: 'The cited contracts are defined for the first fixture loop.',
+          verifiedBy: 'review',
+          source: 'inferred',
+          met: false,
+        },
+        {
+          id: 'deterministic-proof',
+          description: 'Add a deterministic local proof path for the fixture loop.',
+          verifiedBy: 'review',
+          source: 'inferred',
+          met: false,
+        },
+      ],
+      proofPaths: [
+        {
+          id: 'imported-proof-plan',
+          scope: { type: 'task', id: 'task-1' },
+          title: 'Planned proof path',
+          summary: 'Add a bounded local proof path once the harness contracts exist.',
+          status: 'planned',
+          source: 'inferred',
+          launchSteps: [],
+          expectedEvidence: [
+            { id: 'planned-proof', kind: 'manual', description: 'The bounded fixture loop has a real local proof path.', required: true },
+          ],
+          verificationRecords: [],
+          createdAt: now,
+          updatedAt: now,
+          createdBy: 'workspace-importer',
+        },
+      ],
+    }))
+
+    expect(assessment.recommendation).toBe('needs_one_question')
+    expect(assessment.dimensions.find(dimension => dimension.id === 'proofability')?.status).toBe('blocked')
+  })
+
   it('keeps an exact single-file release-notes patch ready instead of splitting it', () => {
     const assessment = assessTaskReadiness(task({
       title: 'release-note-patch',

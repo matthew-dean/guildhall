@@ -2395,10 +2395,9 @@ describe('Workspace Import review endpoints', () => {
         expect.objectContaining({ id: 'source-implementation' }),
         expect.objectContaining({ id: 'automated-proof' }),
       ]),
-      proofPaths: expect.arrayContaining([
-        expect.objectContaining({ kind: 'command' }),
-        expect.objectContaining({ kind: 'review' }),
-      ]),
+      proofPaths: [
+        expect.objectContaining({ kind: 'review', source: 'inferred' }),
+      ],
     })
     expect(fixtureTask?.dependsOn).toEqual([schemaTask?.suggestedId].filter(Boolean))
 
@@ -2433,10 +2432,9 @@ describe('Workspace Import review endpoints', () => {
         expect.objectContaining({ id: 'source-implementation' }),
         expect.objectContaining({ id: 'automated-proof' }),
       ]),
-      proofPaths: expect.arrayContaining([
-        expect.objectContaining({ kind: 'command' }),
-        expect.objectContaining({ kind: 'review' }),
-      ]),
+      proofPaths: [
+        expect.objectContaining({ kind: 'review', source: 'inferred' }),
+      ],
     })
     expect(parsedFixtureTask?.dependsOn).toEqual([parsedSchemaTask?.id].filter(Boolean))
   })
@@ -2823,9 +2821,8 @@ describe('Workspace Import review endpoints', () => {
     }
 
     expect(body.ok).toBe(true)
-    expect(body.tasksAdded).toBe(3)
-
     const tasks = await readTasks(tmpDir)
+    expect(body.tasksAdded).toBe(3)
     expect(tasks.some(task => task.id === 'curated-first-task')).toBe(false)
     expect(tasks.some(task => task.title === 'Detector task one')).toBe(true)
     expect(tasks.some(task => task.title === 'Detector task two')).toBe(true)

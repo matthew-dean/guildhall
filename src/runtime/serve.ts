@@ -6875,27 +6875,28 @@ export function buildServeApp(opts: ServeOptions = {}): {
           detected: null,
         }
       } else if (workspaceGoalsState) {
+        const approvedGoalsForFacts =
+          importSummary.approved && (
+            importSummary.approved.taskCount > 0 ||
+            workspaceGoalsState.approved.taskCount === 0
+          )
+            ? importSummary.approved
+            : workspaceGoalsState.approved
         workspaceGoals = {
           imported: true,
           dismissed: false,
-          goalCount: importSummary.approved?.goalCount ?? workspaceGoalsState.approved.goalCount,
-          taskCount: importSummary.approved?.taskCount ?? workspaceGoalsState.approved.taskCount,
-          milestoneCount: importSummary.approved?.milestoneCount ?? workspaceGoalsState.approved.milestoneCount,
-          approved: importSummary.approved
+          goalCount: approvedGoalsForFacts.goalCount,
+          taskCount: approvedGoalsForFacts.taskCount,
+          milestoneCount: approvedGoalsForFacts.milestoneCount,
+          approved: approvedGoalsForFacts
             ? {
-                goalCount: importSummary.approved.goalCount,
-                taskCount: importSummary.approved.taskCount,
-                milestoneCount: importSummary.approved.milestoneCount,
-                currentTaskCount: importSummary.approved.currentTaskCount,
-                laterTaskCount: importSummary.approved.laterTaskCount,
+                goalCount: approvedGoalsForFacts.goalCount,
+                taskCount: approvedGoalsForFacts.taskCount,
+                milestoneCount: approvedGoalsForFacts.milestoneCount,
+                currentTaskCount: approvedGoalsForFacts.currentTaskCount,
+                laterTaskCount: approvedGoalsForFacts.laterTaskCount,
               }
-            : {
-                goalCount: workspaceGoalsState.approved.goalCount,
-                taskCount: workspaceGoalsState.approved.taskCount,
-                milestoneCount: workspaceGoalsState.approved.milestoneCount,
-                currentTaskCount: workspaceGoalsState.approved.currentTaskCount,
-                laterTaskCount: workspaceGoalsState.approved.laterTaskCount,
-              },
+            : null,
           detected: importSummary.detected
             ? {
                 goalCount: importSummary.detected.goalCount,

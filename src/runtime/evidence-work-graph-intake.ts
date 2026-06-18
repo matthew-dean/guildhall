@@ -41,7 +41,7 @@ export type EvidenceTask = {
   consumerSurface?: string
   sourceRefs: Array<{ path: string; snippet: string }>
   acceptanceCriteria: Array<{ id: string; description: string; verifiedBy?: string }>
-  proofPaths: Array<{ kind: 'command' | 'review' | 'browser'; command?: string; expectedEvidence?: string[] }>
+  proofPaths: Array<{ kind: 'command' | 'review' | 'browser'; command?: string; expectedEvidence?: string[]; source?: 'documented' | 'inferred' }>
   status?: string
   supersedesVagueIntake?: boolean
 }

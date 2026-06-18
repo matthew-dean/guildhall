@@ -262,6 +262,11 @@ function hasClearOutcome(task: Task, definitionOfDone: DefinitionOfDone): boolea
 }
 
 function hasProof(task: Task, definitionOfDone: DefinitionOfDone): boolean {
+  if (task.requestIntake?.createdBy === 'workspace-importer') {
+    if ((task.proofPaths ?? []).some(path => path.source !== 'inferred')) return true
+    if ((task.acceptanceCriteria ?? []).some(ac => ac.source !== 'inferred' && Boolean(ac.verifiedBy))) return true
+    return false
+  }
   if ((task.proofPaths?.length ?? 0) > 0) return true
   if ((task.acceptanceCriteria ?? []).some(ac => Boolean(ac.verifiedBy))) return true
   return definitionOfDone.evidenceRequired.length > 0 || /\b(test|typecheck|browser|proof|verify|screenshot|gate)\b/i.test(taskText(task))

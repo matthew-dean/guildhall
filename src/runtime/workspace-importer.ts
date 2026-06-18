@@ -504,13 +504,13 @@ export interface ParsedTask {
   scope?: 'current' | 'later'
   priority: TaskPriority
   references: readonly string[]
-  acceptanceCriteria?: Array<{ id: string; description: string; verifiedBy?: string }>
+  acceptanceCriteria?: Array<{ id: string; description: string; verifiedBy?: string; source?: 'documented' | 'inferred' }>
   dependsOn?: readonly string[]
   proofPaths?: Task['proofPaths']
 }
 
 interface MaterializedImportTask extends ParsedTask {
-  acceptanceCriteria?: Array<{ id: string; description: string; verifiedBy?: string }>
+  acceptanceCriteria?: Array<{ id: string; description: string; verifiedBy?: string; source?: 'documented' | 'inferred' }>
   dependsOn?: readonly string[]
   proofPaths?: Task['proofPaths']
   evidenceGraphTask?: boolean
@@ -601,7 +601,7 @@ function normStringList(value: unknown): string[] {
 
 function parseImportedAcceptanceCriteria(
   value: unknown,
-): Array<{ id: string; description: string; verifiedBy?: string }> | null {
+): Array<{ id: string; description: string; verifiedBy?: string; source?: 'documented' | 'inferred' }> | null {
   if (!Array.isArray(value)) return null
   const parsed = value
     .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === 'object' && !Array.isArray(entry))
@@ -609,14 +609,16 @@ function parseImportedAcceptanceCriteria(
       const id = typeof entry.id === 'string' ? entry.id.trim() : ''
       const description = typeof entry.description === 'string' ? entry.description.trim() : ''
       const verifiedBy = typeof entry.verifiedBy === 'string' ? entry.verifiedBy.trim() : ''
+      const source = entry.source === 'inferred' ? 'inferred' : entry.source === 'documented' ? 'documented' : ''
       if (!id || !description) return null
       return {
         id,
         description,
         ...(verifiedBy ? { verifiedBy } : {}),
+        ...(source ? { source } : {}),
       }
     })
-    .filter((entry): entry is { id: string; description: string; verifiedBy?: string } => Boolean(entry))
+    .filter((entry): entry is { id: string; description: string; verifiedBy?: string; source?: 'documented' | 'inferred' } => Boolean(entry))
   return parsed.length > 0 ? parsed : null
 }
 
@@ -1462,6 +1464,7 @@ export async function materializeParsedWorkspaceImport(input: {
         id: criterion.id,
         description: criterion.description,
         verifiedBy: criterion.verifiedBy,
+        source: criterion.source,
       })),
       proofPaths: materializedProofPaths(task, evidenceDetail),
     }
@@ -1982,6 +1985,7 @@ function materializedAcceptanceCriteria(
       : criterion.id.includes('automated') || criterion.id.includes('regression')
         ? 'automated'
         : 'review',
+    source: criterion.source === 'inferred' ? 'inferred' : 'documented',
     met: false,
   }))
   if (shouldDeriveImportedAcceptanceCriteria(task, normalized, evidenceDetail)) {
@@ -2039,7 +2043,7 @@ function summarizeImportedVerification(task: MaterializedImportTask): string {
     return null
   }).filter((value): value is string => Boolean(value))
   if (steps.length === 0) {
-    return 'Use the imported acceptance criteria and cited sources as the proof plan.'
+    return `Add bounded local workspace proof for ${task.title} and record the result.`
   }
   return steps.join('; ')
 }
@@ -2049,9 +2053,12 @@ function importedCompletionBoundary(
   evidenceDetail: ImportedEvidenceDetail,
 ): string {
   const successMetric = summarizeImportedSuccessMetric(task)
-  const verificationEnvironment = evidenceDetail.verificationBullets.length > 0
-    ? `Local workspace proof using: ${evidenceDetail.verificationBullets.join('; ')}`
-    : `Local workspace proof using: ${summarizeImportedVerification(task)}`
+  const proofCommand = firstImportedProofCommand(task)
+  const verificationEnvironment = proofCommand
+    ? evidenceDetail.verificationBullets.length > 0
+      ? `Local workspace proof using: ${evidenceDetail.verificationBullets.join('; ')}`
+      : `Local workspace proof using: ${summarizeImportedVerification(task)}`
+    : `Add bounded local workspace proof for ${task.title} before treating this work as execution-complete.`
   const missingInformation = cleanImportedMissingInformation(task.missingInformation ?? [])
   const splitOrBlock = missingInformation.length > 0
     ? `Split only if these unresolved imported gaps still change the implementation boundary: ${missingInformation.join('; ')}. Block only for missing external credentials, unavailable services, or absent source evidence.`
@@ -2062,7 +2069,7 @@ function importedCompletionBoundary(
     `- What Guildhall can complete in code: Implement ${task.title} within the boundary already described by the cited sources, acceptance criteria, and proof plan.`,
     '- External dependencies: None beyond the cited repo-local evidence and the local tooling needed to run the proof plan.',
     '- Owner-only setup: None expected. If the imported evidence is stale or points at the wrong release boundary, reshape the task before execution instead of silently changing scope.',
-    `- Verification environment: ${verificationEnvironment}`,
+    `- Proof target: ${verificationEnvironment}`,
     `- What counts as done: ${successMetric} Record the proof result against the imported acceptance criteria.`,
     `- What must be split or blocked: ${splitOrBlock}`,
   ].join('\n')
@@ -2171,6 +2178,7 @@ function derivePrototypeTaskAcceptanceCriteria(
           scenario: 'Load the first bounded story fixture.',
           expectation: 'The fixture shape is rich enough to drive repeated no-UI packet tests without ad hoc side inputs.',
           verifiedBy: 'review',
+          source: 'inferred',
           met: false,
         },
         {
@@ -2179,6 +2187,7 @@ function derivePrototypeTaskAcceptanceCriteria(
           scenario: 'Compare one run against the fixture ground truth.',
           expectation: 'Ground truth records express the intended story facts, constraints, and expected findings for the run.',
           verifiedBy: 'review',
+          source: 'inferred',
           met: false,
         },
         deterministicImportedCriterion(task, proofCommand, 'The fixture and expected records have deterministic proof in the no-UI harness.'),
@@ -2191,6 +2200,7 @@ function derivePrototypeTaskAcceptanceCriteria(
           scenario: 'Execute one bounded fixture round through the harness.',
           expectation: 'The run leaves a reproducible output bundle instead of manual one-off inspection.',
           verifiedBy: 'review',
+          source: 'inferred',
           met: false,
         },
         {
@@ -2199,6 +2209,7 @@ function derivePrototypeTaskAcceptanceCriteria(
           scenario: 'Run the harness from local commands only.',
           expectation: 'The task proves packet execution without depending on UI/editor work.',
           verifiedBy: 'review',
+          source: 'inferred',
           met: false,
         },
         deterministicImportedCriterion(task, proofCommand, 'The no-UI runner has deterministic proof over a bounded fixture.'),
@@ -2211,6 +2222,7 @@ function derivePrototypeTaskAcceptanceCriteria(
           scenario: 'Inspect one failed and one successful fixture run.',
           expectation: 'Failures are classified precisely enough to explain what kind of mistake happened.',
           verifiedBy: 'review',
+          source: 'inferred',
           met: false,
         },
         {
@@ -2219,6 +2231,7 @@ function derivePrototypeTaskAcceptanceCriteria(
           scenario: 'Compare repeated evaluation output for the same fixture.',
           expectation: 'The report can be used to compare packet strategies and fixture revisions over time.',
           verifiedBy: 'review',
+          source: 'inferred',
           met: false,
         },
         deterministicImportedCriterion(task, proofCommand, 'Evaluation output has deterministic proof over the bounded fixture set.'),
@@ -2231,6 +2244,7 @@ function derivePrototypeTaskAcceptanceCriteria(
           scenario: 'Open the debug report for one bounded fixture run.',
           expectation: 'The report makes it obvious where a surprising result came from.',
           verifiedBy: 'review',
+          source: 'inferred',
           met: false,
         },
         {
@@ -2239,6 +2253,7 @@ function derivePrototypeTaskAcceptanceCriteria(
           scenario: 'Inspect packet/context accounting in one run report.',
           expectation: 'The report explains context decisions rather than only showing final output.',
           verifiedBy: 'review',
+          source: 'inferred',
           met: false,
         },
         {
@@ -2247,6 +2262,7 @@ function derivePrototypeTaskAcceptanceCriteria(
           scenario: 'Review a run that includes private/global/session author material.',
           expectation: 'Traceability does not leak context the packet rules would not allow.',
           verifiedBy: 'review',
+          source: 'inferred',
           met: false,
         },
         deterministicImportedCriterion(task, proofCommand, 'The debug report has deterministic proof over a bounded fixture run.'),
@@ -2259,6 +2275,7 @@ function derivePrototypeTaskAcceptanceCriteria(
           scenario: 'Compare the first run output against the MVP boundary questions.',
           expectation: 'Fields that do not help answer the MVP questions are deferred instead of silently kept.',
           verifiedBy: 'review',
+          source: 'inferred',
           met: false,
         },
         {
@@ -2267,6 +2284,7 @@ function derivePrototypeTaskAcceptanceCriteria(
           scenario: 'Review the schema-pruning change after the first proof run.',
           expectation: 'The pruning decision is explicit and tied back to fixture evidence.',
           verifiedBy: 'review',
+          source: 'inferred',
           met: false,
         },
         deterministicImportedCriterion(task, proofCommand, 'Schema narrowing has deterministic proof tied to the first bounded run.'),
@@ -2282,9 +2300,7 @@ function deriveContractDrivenAcceptanceCriteria(
   const fixtureContracts = evidenceDetail.contractNames.filter(name => /(fixture|expected)/i.test(name))
   const runContracts = evidenceDetail.contractNames.filter(name => /(run|evaluation|score|trace|signal)/i.test(name))
   const verificationSummary = evidenceDetail.verificationBullets[0]?.replace(/\.$/, '')
-  const proofCommand = (task.proofPaths ?? []).find(
-    proof => proof.kind === 'command' && typeof proof.command === 'string' && proof.command.trim(),
-  )
+  const proofCommand = firstImportedProofCommand(task)
   const criteria: Task['acceptanceCriteria'] = [
     {
       id: 'contracts-defined',
@@ -2292,6 +2308,7 @@ function deriveContractDrivenAcceptanceCriteria(
       scenario: `Import ${task.title} from the cited project evidence.`,
       expectation: `Code can create and consume ${contractList}.`,
       verifiedBy: 'review',
+      source: 'inferred',
       met: false,
     },
   ]
@@ -2303,6 +2320,7 @@ function deriveContractDrivenAcceptanceCriteria(
       scenario: 'Load the first bounded fixture into the schema layer.',
       expectation: `${fixtureList} cover the fixture inputs and expected records without extra ad hoc shape.`,
       verifiedBy: 'review',
+      source: 'inferred',
       met: false,
     })
   }
@@ -2314,6 +2332,7 @@ function deriveContractDrivenAcceptanceCriteria(
       scenario: 'Record one prototype packet run and its evaluation output.',
       expectation: `${runList} preserve the reviewable run/evaluation story the cited docs call for.`,
       verifiedBy: 'review',
+      source: 'inferred',
       met: false,
     })
   }
@@ -2324,19 +2343,21 @@ function deriveContractDrivenAcceptanceCriteria(
       scenario: 'Run the cited verification flow against the imported schema layer.',
       expectation: verificationSummary,
       verifiedBy: 'review',
+      source: 'inferred',
       met: false,
     })
   }
   criteria.push({
     id: 'deterministic-proof',
     description: proofCommand
-      ? `The schema is covered by deterministic local proof via \`${proofCommand.command.trim()}\`.`
-      : `${task.title} has deterministic local proof tied to the cited verification plan.`,
+      ? `The schema is covered by deterministic local proof via \`${proofCommand}\`.`
+      : `Add bounded local workspace proof for ${task.title} and record the result against the cited verification plan.`,
     scenario: 'Execute the local proof path for this imported task.',
     expectation: proofCommand
-      ? `\`${proofCommand.command.trim()}\` passes against the imported schema work.`
-      : 'The cited proof path passes and is recorded with the task.',
-    verifiedBy: 'automated',
+      ? `\`${proofCommand}\` passes against the imported schema work.`
+      : 'A real local proof path exists, runs, and is recorded with the task.',
+    verifiedBy: proofCommand ? 'automated' : 'review',
+    source: proofCommand ? 'documented' : 'inferred',
     met: false,
   })
   return criteria
@@ -2379,6 +2400,7 @@ function deriveReviewerLaneAcceptanceCriteria(
       scenario: `Run ${task.title} against a bounded fiction scene or chapter.`,
       expectation: 'The lane evaluates the same craft surface the cited spec defines, rather than generic prose quality.',
       verifiedBy: 'review',
+      source: 'inferred',
       met: false,
     })
   }
@@ -2388,6 +2410,7 @@ function deriveReviewerLaneAcceptanceCriteria(
     scenario: 'Record reviewer output for one bounded proof fixture.',
     expectation: 'The reviewer output preserves the spec-native questions instead of flattening them into vague notes.',
     verifiedBy: 'review',
+    source: 'inferred',
     met: false,
   })
   criteria.push({
@@ -2396,6 +2419,7 @@ function deriveReviewerLaneAcceptanceCriteria(
     scenario: 'Inspect reviewer guidance for edge cases the spec warns about.',
     expectation: 'The lane protects the intended fiction boundary and does not apply generic smoothing rules.',
     verifiedBy: 'review',
+    source: 'inferred',
     met: false,
   })
   if (decisionSteps.length > 0 || evidenceDetail.examples.length > 0) {
@@ -2408,6 +2432,7 @@ function deriveReviewerLaneAcceptanceCriteria(
       scenario: 'Review one sample finding from the lane.',
       expectation: 'The result points to a concrete craft move, comparison, or warning the author can use.',
       verifiedBy: 'review',
+      source: 'inferred',
       met: false,
     })
   }
@@ -2441,6 +2466,7 @@ function deriveWorkflowAcceptanceCriteria(
       scenario: `Pass one set of reviewer findings through ${task.title}.`,
       expectation: 'Findings become ordered constraints and decisions in the same sequence the cited spec defines.',
       verifiedBy: 'review',
+      source: 'inferred',
       met: false,
     })
   }
@@ -2451,6 +2477,7 @@ function deriveWorkflowAcceptanceCriteria(
       scenario: 'Inspect one finding record produced by the workflow.',
       expectation: 'Weight is structured and multidimensional rather than a single flat priority number.',
       verifiedBy: 'review',
+      source: 'inferred',
       met: false,
     })
   }
@@ -2461,6 +2488,7 @@ function deriveWorkflowAcceptanceCriteria(
       scenario: 'Record at least one weighted finding with severity.',
       expectation: 'Protect-level and higher-severity findings survive the pipeline without being flattened away.',
       verifiedBy: 'review',
+      source: 'inferred',
       met: false,
     })
   }
@@ -2471,6 +2499,7 @@ function deriveWorkflowAcceptanceCriteria(
       scenario: 'Review workflow output for a scene where generic optimization would be harmful.',
       expectation: 'The workflow protects voice, ambiguity, and genre-specific intent instead of optimizing for generic prose polish.',
       verifiedBy: 'review',
+      source: 'inferred',
       met: false,
     })
   }
@@ -2480,7 +2509,11 @@ function deriveWorkflowAcceptanceCriteria(
 
 function firstImportedProofCommand(task: MaterializedImportTask): string | null {
   const proofCommand = (task.proofPaths ?? []).find(
-    proof => proof.kind === 'command' && typeof proof.command === 'string' && proof.command.trim(),
+    proof =>
+      proof.kind === 'command' &&
+      proof.source !== 'inferred' &&
+      typeof proof.command === 'string' &&
+      proof.command.trim(),
   )
   return proofCommand?.command?.trim() ?? null
 }
@@ -2492,12 +2525,13 @@ function deterministicImportedCriterion(
 ): Task['acceptanceCriteria'][number] {
   return {
     id: 'deterministic-proof',
-    description: command ? `${task.title} is covered by deterministic local proof via \`${command}\`.` : defaultDescription,
+    description: command ? `${task.title} is covered by deterministic local proof via \`${command}\`.` : `Add bounded local workspace proof for ${task.title}.`,
     scenario: 'Execute the local proof path for this imported task.',
     expectation: command
       ? `\`${command}\` passes and records evidence for the cited task boundary.`
-      : 'The cited proof path passes and is recorded with the task.',
-    verifiedBy: 'automated',
+      : 'A real local proof path exists, passes, and is recorded with the task.',
+    verifiedBy: command ? 'automated' : 'review',
+    source: command ? 'documented' : 'inferred',
     met: false,
   }
 }
@@ -2538,12 +2572,14 @@ function deriveContractProofPaths(
     ...(command ? [{
       kind: 'command' as const,
       command,
+      source: 'documented' as const,
       expectedEvidence: [
         verificationSummary,
       ],
     }] : []),
     {
       kind: 'review' as const,
+      source: 'inferred' as const,
       expectedEvidence: [
         contractList
           ? `The imported contract surface explicitly names and uses ${contractList}.`
@@ -2569,10 +2605,12 @@ function materializedProofPaths(
           ...(command ? [{
             kind: 'command' as const,
             command,
+            source: 'documented' as const,
             expectedEvidence: ['The bounded fixture and expected records load and compare successfully.'],
           }] : []),
           {
             kind: 'review' as const,
+            source: 'inferred' as const,
             expectedEvidence: [
               'The fixture covers manuscript text, brief/profile context, notes, expected records, and author decisions.',
               'Ground truth records are stable enough for repeated no-UI runs.',
@@ -2584,10 +2622,12 @@ function materializedProofPaths(
           ...(command ? [{
             kind: 'command' as const,
             command,
+            source: 'documented' as const,
             expectedEvidence: ['The runner ingests the fixture, builds records, runs a packet, and saves output.'],
           }] : []),
           {
             kind: 'review' as const,
+            source: 'inferred' as const,
             expectedEvidence: [
               'The run stays inside the no-UI harness boundary.',
               'Saved run output is traceable back to the fixture inputs.',
@@ -2599,10 +2639,12 @@ function materializedProofPaths(
           ...(command ? [{
             kind: 'command' as const,
             command,
+            source: 'documented' as const,
             expectedEvidence: ['Evaluation output classifies missing, noisy, stale, useful, schema, and model-behavior outcomes.'],
           }] : []),
           {
             kind: 'review' as const,
+            source: 'inferred' as const,
             expectedEvidence: [
               'Evaluation reports are comparable across repeated runs.',
               'Failure categories are specific enough to guide packet and schema fixes.',
@@ -2614,10 +2656,12 @@ function materializedProofPaths(
           ...(command ? [{
             kind: 'command' as const,
             command,
+            source: 'documented' as const,
             expectedEvidence: ['The debug report records the run summary, packet/context receipts, and trace spine.'],
           }] : []),
           {
             kind: 'review' as const,
+            source: 'inferred' as const,
             expectedEvidence: [
               'The report explains why context was included, omitted, retrieved, or marked stale.',
               'Trace detail respects the same privacy boundary as packets.',
@@ -2629,10 +2673,12 @@ function materializedProofPaths(
           ...(command ? [{
             kind: 'command' as const,
             command,
+            source: 'documented' as const,
             expectedEvidence: ['The first bounded run still passes after schema narrowing.'],
           }] : []),
           {
             kind: 'review' as const,
+            source: 'inferred' as const,
             expectedEvidence: [
               'The narrowed schema is justified by the MVP contract boundary questions.',
               'Deferred fields are explicitly recorded instead of silently kept.',
@@ -2651,10 +2697,12 @@ function materializedProofPaths(
       ...(command ? [{
         kind: 'command' as const,
         command,
+        source: 'documented' as const,
         expectedEvidence: [verificationSummary],
       }] : []),
       {
         kind: 'review' as const,
+        source: 'inferred' as const,
         expectedEvidence: [
           evidenceDetail.decisionSteps.length > 0
             ? `Output follows the documented chain: ${evidenceDetail.decisionSteps.slice(0, 4).join(' -> ')}`
@@ -2679,10 +2727,12 @@ function materializedProofPaths(
       ...(command ? [{
         kind: 'command' as const,
         command,
+        source: 'documented' as const,
         expectedEvidence: [verificationSummary],
       }] : []),
       {
         kind: 'review' as const,
+        source: 'inferred' as const,
         expectedEvidence: [
           evidenceDetail.reviewQuestions.length > 0
             ? `Recorded findings answer prompts such as: ${evidenceDetail.reviewQuestions.slice(0, 2).join(' ')}`

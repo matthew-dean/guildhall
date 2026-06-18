@@ -514,6 +514,7 @@ export const Checkpoint = z.object({
 export type Checkpoint = z.infer<typeof Checkpoint>
 
 const ACCEPTANCE_VERIFIERS = ['automated', 'review', 'human'] as const
+const ACCEPTANCE_SOURCES = ['documented', 'inferred'] as const
 
 function parseScenarioExpectationFromDescription(description: string): { scenario: string; expectation: string } {
   const normalized = description.trim().replace(/\s+/g, ' ')
@@ -572,6 +573,7 @@ export const AcceptanceCriteria = z.preprocess(normalizeAcceptanceCriteria, z.ob
   expectation: z.string().optional(),
   // How to verify: 'automated' = shell command, 'review' = reviewer agent judgment
   verifiedBy: z.enum(ACCEPTANCE_VERIFIERS),
+  source: z.enum(ACCEPTANCE_SOURCES).default('documented'),
   command: z.string().optional(), // for automated criteria
   evidenceHint: z.string().optional(),
   negativeCase: z.string().optional(),
