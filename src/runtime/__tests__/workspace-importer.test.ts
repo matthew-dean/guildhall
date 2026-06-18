@@ -1958,6 +1958,131 @@ tasks:
     })
   })
 
+  it('derives reviewer-lane and workflow contracts from cited fiction specs instead of generic convention filler', async () => {
+    await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
+    await fs.mkdir(path.join(tmpDir, 'docs', 'specs'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'harness', 'remaining-spec-decomposition-inventory.md'),
+      [
+        '# Remaining Spec Decomposition Inventory',
+        '',
+        '### 2.2 `dialogue-and-character-voice.md`',
+        "- **Covers:** Defines how dialogue functions as action under social pressure, with distinct character voices that serve the book's larger voice.",
+        '- **Recommended first task title:** Implement dialogue-and-character-voice reviewer lane',
+        '- **Recommended domain:** coherence',
+        '',
+        '### 2.3 `editor-writer-feedback-chain.md`',
+        '- **Covers:** Defines how weighted editor feedback moves through the harness and how the system protects distinctive fiction from generic smoothing.',
+        '- **Recommended first task title:** Implement editor-writer feedback chain contract and weighted-feedback pipeline',
+        '- **Recommended domain:** harness',
+      ].join('\n'),
+      'utf-8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'specs', 'dialogue-and-character-voice.md'),
+      [
+        '# Dialogue And Character Voice',
+        '',
+        '## Avoiding Same-Voice Dialogue',
+        '- Could the line be reassigned to another character without anyone noticing?',
+        '- Does the line reveal their social strategy?',
+        '',
+        '## Dialect, Register, And Respect',
+        '- Do not "correct" dialect into prestige grammar.',
+        '- Distinguish education from intelligence.',
+        '',
+        '## Dialogue-Agent Decision Tree',
+        '1. Identify speaker, listener, and audience.',
+        '2. Identify what the speaker wants in the exchange.',
+        '3. Compare with nearby speakers for same-voice collapse.',
+      ].join('\n'),
+      'utf-8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'specs', 'editor-writer-feedback-chain.md'),
+      [
+        '# Editor Writer Feedback Chain',
+        '',
+        '## Core Claim',
+        '1. Specialists identify lens-specific evidence.',
+        '2. Findings receive multidimensional weight.',
+        '3. The writer receives a distilled constraint stack.',
+        '',
+        '## Feedback Weight Dimensions',
+        '| Dimension | Meaning |',
+        '| --- | --- |',
+        '| Severity | How damaging the issue is if ignored |',
+        '| Confidence | How sure the editor is |',
+        "| Voice risk | Whether fixing it may flatten the book's style |",
+        '',
+        '## Severity Levels',
+        '| Level | Meaning |',
+        '| --- | --- |',
+        '| Break | Essential story failure |',
+        '| Protect | Something that should not be smoothed away |',
+        '',
+        '## Fiction-First Boundary',
+        '- It should not optimize by default for universal clarity.',
+        '- Fiction often needs friction.',
+      ].join('\n'),
+      'utf-8',
+    )
+
+    await seedImporterWithSpec(`
+\`\`\`yaml
+tasks:
+  - id: task-dialogue
+    title: Implement dialogue-and-character-voice reviewer lane
+    description: Implement dialogue-and-character-voice reviewer lane.
+    domain: coherence
+    priority: high
+    references:
+      - docs/harness/remaining-spec-decomposition-inventory.md
+      - docs/specs/dialogue-and-character-voice.md
+  - id: task-feedback
+    title: Implement editor-writer feedback chain contract and weighted-feedback pipeline
+    description: Implement editor-writer feedback chain contract and weighted-feedback pipeline.
+    domain: harness
+    priority: high
+    references:
+      - docs/harness/remaining-spec-decomposition-inventory.md
+      - docs/specs/editor-writer-feedback-chain.md
+\`\`\`
+`)
+
+    const approved = await approveWorkspaceImport({
+      memoryDir,
+      projectPath: tmpDir,
+    })
+    expect(approved).toMatchObject({ success: true, tasksAdded: 2 })
+
+    const q = await readQueue()
+    const dialogue = q.tasks.find(task => task.id === 'task-dialogue')
+    const feedback = q.tasks.find(task => task.id === 'task-feedback')
+
+    expect(dialogue?.acceptanceCriteria?.map(criterion => criterion.id)).toEqual([
+      'lane-scope',
+      'review-prompts',
+      'lane-boundary',
+      'finding-shape',
+      'deterministic-proof',
+    ])
+    expect(dialogue?.acceptanceCriteria?.[1]?.description).toContain('Could the line be reassigned to another character without anyone noticing?')
+    expect(dialogue?.proofPaths?.[1]?.expectedEvidence?.join(' ')).toContain('Recorded findings answer prompts')
+    expect(dialogue?.spec).not.toContain('follows target-area conventions')
+
+    expect(feedback?.acceptanceCriteria?.map(criterion => criterion.id)).toEqual([
+      'workflow-order',
+      'weight-profile',
+      'severity-contract',
+      'fiction-boundary',
+      'deterministic-proof',
+    ])
+    expect(feedback?.acceptanceCriteria?.[1]?.description).toContain('Severity, Confidence, Voice risk')
+    expect(feedback?.acceptanceCriteria?.[2]?.description).toContain('Protect')
+    expect(feedback?.spec).not.toContain('exposes the expected public contract')
+  })
+
   it('builds import specs from cited evidence strongly enough to pass approval without boilerplate gaps', async () => {
     await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
     await fs.mkdir(path.join(tmpDir, 'docs', 'specs'), { recursive: true })

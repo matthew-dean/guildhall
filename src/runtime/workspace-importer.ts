@@ -508,6 +508,12 @@ type ImportedEvidenceDetail = {
   implementationBullets: string[]
   verificationBullets: string[]
   goalStatements: string[]
+  reviewQuestions: string[]
+  decisionSteps: string[]
+  rules: string[]
+  examples: string[]
+  weightDimensions: string[]
+  severityLevels: string[]
 }
 
 type ImportedBlueprintSeed = {
@@ -1768,6 +1774,15 @@ function importedTaskHasBlueprintSeed(task: MaterializedImportTask): boolean {
 }
 
 function summarizeImportedSuccessMetric(task: MaterializedImportTask): string {
+  if (importedTaskLooksContractDriven(task)) {
+    return `${task.title} defines and proves the cited local contracts.`
+  }
+  if (/\breviewer lane\b/i.test(task.title)) {
+    return `${task.title} records the documented fiction-specific findings for a bounded proof fixture.`
+  }
+  if (/\b(feedback chain|pipeline|orchestration|coordinator|involvement modes|packet)\b/i.test(task.title)) {
+    return `${task.title} preserves the documented workflow, weighting, and fiction-first decision boundary.`
+  }
   const acceptance = (task.acceptanceCriteria ?? [])
     .map(criterion => criterion.description.trim())
     .filter(Boolean)
@@ -1839,7 +1854,25 @@ function cleanImportedMissingInformation(items: readonly string[]): string[] {
 }
 
 function importedTaskLooksContractDriven(task: MaterializedImportTask): boolean {
-  return /\b(schema|schemas|contract|contracts|trace|evaluation|fixture|expected-record|prototype-run)\b/i.test(task.title)
+  return /\b(schema|schemas|trace|evaluation|fixture|expected-record|prototype-run|record contract|typed?\b|types)\b/i.test(task.title)
+}
+
+function importedTaskLooksReviewerLane(
+  task: MaterializedImportTask,
+  evidenceDetail: ImportedEvidenceDetail,
+): boolean {
+  return /\breviewer lane\b/i.test(task.title) || evidenceDetail.reviewQuestions.length > 0
+}
+
+function importedTaskLooksWorkflowDriven(
+  task: MaterializedImportTask,
+  evidenceDetail: ImportedEvidenceDetail,
+): boolean {
+  return (
+    /\b(feedback chain|pipeline|orchestration|coordinator|involvement modes|packet)\b/i.test(task.title) ||
+    evidenceDetail.weightDimensions.length > 0 ||
+    evidenceDetail.severityLevels.length > 0
+  )
 }
 
 function shouldDeriveImportedAcceptanceCriteria(
@@ -1848,12 +1881,31 @@ function shouldDeriveImportedAcceptanceCriteria(
   evidenceDetail?: ImportedEvidenceDetail,
 ): boolean {
   if (!evidenceDetail) return false
-  if (!importedTaskLooksContractDriven(task)) return false
   const ids = new Set(current.map(criterion => criterion.id))
-  return ids.has('source-implementation') && evidenceDetail.contractNames.length > 0
+  if (!ids.has('source-implementation')) return false
+  if (importedTaskLooksContractDriven(task) && evidenceDetail.contractNames.length > 0) return true
+  if (importedTaskLooksReviewerLane(task, evidenceDetail)) return true
+  if (importedTaskLooksWorkflowDriven(task, evidenceDetail)) return true
+  return false
 }
 
 function deriveImportedAcceptanceCriteria(
+  task: MaterializedImportTask,
+  evidenceDetail: ImportedEvidenceDetail,
+): Task['acceptanceCriteria'] {
+  if (importedTaskLooksContractDriven(task)) {
+    return deriveContractDrivenAcceptanceCriteria(task, evidenceDetail)
+  }
+  if (importedTaskLooksReviewerLane(task, evidenceDetail)) {
+    return deriveReviewerLaneAcceptanceCriteria(task, evidenceDetail)
+  }
+  if (importedTaskLooksWorkflowDriven(task, evidenceDetail)) {
+    return deriveWorkflowAcceptanceCriteria(task, evidenceDetail)
+  }
+  return materializedAcceptanceCriteria({ ...task, acceptanceCriteria: task.acceptanceCriteria?.filter(criterion => criterion.id !== 'source-implementation') }, undefined)
+}
+
+function deriveContractDrivenAcceptanceCriteria(
   task: MaterializedImportTask,
   evidenceDetail: ImportedEvidenceDetail,
 ): Task['acceptanceCriteria'] {
@@ -1921,6 +1973,217 @@ function deriveImportedAcceptanceCriteria(
   return criteria
 }
 
+function deriveReviewerLaneAcceptanceCriteria(
+  task: MaterializedImportTask,
+  evidenceDetail: ImportedEvidenceDetail,
+): Task['acceptanceCriteria'] {
+  const laneScope = evidenceDetail.implementationBullets.slice(0, 2).join(' ')
+  const questionList = (
+    evidenceDetail.reviewQuestions.length > 0
+      ? evidenceDetail.reviewQuestions
+      : [
+          ...evidenceDetail.implementationBullets.filter(item => /\?$/.test(item)),
+          ...evidenceDetail.implementationBullets,
+        ]
+  ).slice(0, 4)
+  const ruleList = (
+    evidenceDetail.rules.length > 0
+      ? evidenceDetail.rules
+      : [
+          ...evidenceDetail.implementationBullets.filter(item => /\b(do not|distinguish|protect|respect)\b/i.test(item)),
+          ...evidenceDetail.goalStatements,
+          summarizeImportedProblemContext(task, evidenceDetail),
+        ]
+  ).slice(0, 3)
+  const decisionSteps = (
+    evidenceDetail.decisionSteps.length > 0
+      ? evidenceDetail.decisionSteps
+      : evidenceDetail.implementationBullets
+  ).slice(0, 4)
+  const proofCommand = firstImportedProofCommand(task)
+  const criteria: Task['acceptanceCriteria'] = []
+
+  if (laneScope) {
+    criteria.push({
+      id: 'lane-scope',
+      description: `${task.title} covers the documented lens: ${laneScope}`,
+      scenario: `Run ${task.title} against a bounded fiction scene or chapter.`,
+      expectation: 'The lane evaluates the same craft surface the cited spec defines, rather than generic prose quality.',
+      verifiedBy: 'review',
+      met: false,
+    })
+  }
+  criteria.push({
+    id: 'review-prompts',
+    description: `${task.title} can ask and answer the documented review prompts: ${questionList.join(' ')}`,
+    scenario: 'Record reviewer output for one bounded proof fixture.',
+    expectation: 'The reviewer output preserves the spec-native questions instead of flattening them into vague notes.',
+    verifiedBy: 'review',
+    met: false,
+  })
+  criteria.push({
+    id: 'lane-boundary',
+    description: `${task.title} respects the cited boundary and craft rules: ${ruleList.join('; ')}`,
+    scenario: 'Inspect reviewer guidance for edge cases the spec warns about.',
+    expectation: 'The lane protects the intended fiction boundary and does not apply generic smoothing rules.',
+    verifiedBy: 'review',
+    met: false,
+  })
+  if (decisionSteps.length > 0 || evidenceDetail.examples.length > 0) {
+    const proofShape = decisionSteps.length > 0
+      ? `It follows the cited decision path: ${decisionSteps.join(' -> ')}.`
+      : `It produces findings shaped like the cited examples: ${evidenceDetail.examples.slice(0, 2).join(' / ')}.`
+    criteria.push({
+      id: 'finding-shape',
+      description: `${task.title} emits actionable findings instead of generic commentary. ${proofShape}`,
+      scenario: 'Review one sample finding from the lane.',
+      expectation: 'The result points to a concrete craft move, comparison, or warning the author can use.',
+      verifiedBy: 'review',
+      met: false,
+    })
+  }
+  criteria.push(deterministicImportedCriterion(task, proofCommand, 'The reviewer lane has deterministic proof over a bounded fiction fixture.'))
+  return criteria
+}
+
+function deriveWorkflowAcceptanceCriteria(
+  task: MaterializedImportTask,
+  evidenceDetail: ImportedEvidenceDetail,
+): Task['acceptanceCriteria'] {
+  const chainSteps = (
+    evidenceDetail.decisionSteps.length > 0
+      ? evidenceDetail.decisionSteps
+      : evidenceDetail.implementationBullets
+  ).slice(0, 7)
+  const weightDimensions = evidenceDetail.weightDimensions.slice(0, 6)
+  const severityLevels = evidenceDetail.severityLevels.slice(0, 6)
+  const boundaryRules = (
+    evidenceDetail.rules.length > 0
+      ? evidenceDetail.rules
+      : evidenceDetail.implementationBullets.filter(item => /\b(not optimize|fiction|friction|protect)\b/i.test(item))
+  ).slice(0, 3)
+  const proofCommand = firstImportedProofCommand(task)
+  const criteria: Task['acceptanceCriteria'] = []
+
+  if (chainSteps.length > 0) {
+    criteria.push({
+      id: 'workflow-order',
+      description: `${task.title} preserves the documented workflow order: ${chainSteps.join(' -> ')}`,
+      scenario: `Pass one set of reviewer findings through ${task.title}.`,
+      expectation: 'Findings become ordered constraints and decisions in the same sequence the cited spec defines.',
+      verifiedBy: 'review',
+      met: false,
+    })
+  }
+  if (weightDimensions.length > 0) {
+    criteria.push({
+      id: 'weight-profile',
+      description: `Findings carry the documented weight profile fields: ${weightDimensions.join(', ')}.`,
+      scenario: 'Inspect one finding record produced by the workflow.',
+      expectation: 'Weight is structured and multidimensional rather than a single flat priority number.',
+      verifiedBy: 'review',
+      met: false,
+    })
+  }
+  if (severityLevels.length > 0) {
+    criteria.push({
+      id: 'severity-contract',
+      description: `The workflow preserves the cited severity model, including ${severityLevels.join(', ')}.`,
+      scenario: 'Record at least one weighted finding with severity.',
+      expectation: 'Protect-level and higher-severity findings survive the pipeline without being flattened away.',
+      verifiedBy: 'review',
+      met: false,
+    })
+  }
+  if (boundaryRules.length > 0) {
+    criteria.push({
+      id: 'fiction-boundary',
+      description: `${task.title} enforces the fiction-first boundary from the cited spec: ${boundaryRules.join('; ')}`,
+      scenario: 'Review workflow output for a scene where generic optimization would be harmful.',
+      expectation: 'The workflow protects voice, ambiguity, and genre-specific intent instead of optimizing for generic prose polish.',
+      verifiedBy: 'review',
+      met: false,
+    })
+  }
+  criteria.push(deterministicImportedCriterion(task, proofCommand, 'The workflow has deterministic proof using a bounded set of findings, weights, and output records.'))
+  return criteria
+}
+
+function firstImportedProofCommand(task: MaterializedImportTask): string | null {
+  const proofCommand = (task.proofPaths ?? []).find(
+    proof => proof.kind === 'command' && typeof proof.command === 'string' && proof.command.trim(),
+  )
+  return proofCommand?.command?.trim() ?? null
+}
+
+function deterministicImportedCriterion(
+  task: MaterializedImportTask,
+  command: string | null,
+  fallbackDescription: string,
+): Task['acceptanceCriteria'][number] {
+  return {
+    id: 'deterministic-proof',
+    description: command ? `${task.title} is covered by deterministic local proof via \`${command}\`.` : fallbackDescription,
+    scenario: 'Execute the local proof path for this imported task.',
+    expectation: command
+      ? `\`${command}\` passes and records evidence for the cited task boundary.`
+      : 'The cited proof path passes and is recorded with the task.',
+    verifiedBy: 'automated',
+    met: false,
+  }
+}
+
+function materializedProofPaths(
+  task: MaterializedImportTask,
+  evidenceDetail?: ImportedEvidenceDetail,
+): Task['proofPaths'] {
+  const current = task.proofPaths ? [...task.proofPaths] : []
+  if (!evidenceDetail || current.length === 0) return current
+  if (importedTaskLooksReviewerLane(task, evidenceDetail)) {
+    const command = firstImportedProofCommand(task)
+    return [
+      ...(command ? [{
+        kind: 'command' as const,
+        command,
+        expectedEvidence: ['The reviewer lane runs against a bounded fiction fixture and records structured findings.'],
+      }] : []),
+      {
+        kind: 'review' as const,
+        expectedEvidence: [
+          evidenceDetail.reviewQuestions.length > 0
+            ? `Recorded findings answer prompts such as: ${evidenceDetail.reviewQuestions.slice(0, 2).join(' ')}`
+            : 'Recorded findings stay anchored to the cited reviewer prompts.',
+          evidenceDetail.rules.length > 0
+            ? `The lane preserves the documented boundary: ${evidenceDetail.rules.slice(0, 2).join('; ')}`
+            : 'The lane preserves the cited fiction-specific boundary.',
+        ],
+      },
+    ]
+  }
+  if (importedTaskLooksWorkflowDriven(task, evidenceDetail)) {
+    const command = firstImportedProofCommand(task)
+    return [
+      ...(command ? [{
+        kind: 'command' as const,
+        command,
+        expectedEvidence: ['The workflow records deterministic finding, weighting, and packet output evidence.'],
+      }] : []),
+      {
+        kind: 'review' as const,
+        expectedEvidence: [
+          evidenceDetail.decisionSteps.length > 0
+            ? `Output follows the documented chain: ${evidenceDetail.decisionSteps.slice(0, 4).join(' -> ')}`
+            : 'Output follows the documented workflow order.',
+          evidenceDetail.weightDimensions.length > 0
+            ? `Findings preserve weight dimensions such as ${evidenceDetail.weightDimensions.slice(0, 4).join(', ')}.`
+            : 'Findings preserve the structured weight profile from the cited spec.',
+        ],
+      },
+    ]
+  }
+  return current
+}
+
 function splitMarkdownSections(content: string): Array<{ heading: string; body: string }> {
   const lines = content.split(/\r?\n/)
   const sections: Array<{ heading: string; body: string }> = []
@@ -1938,6 +2201,16 @@ function splitMarkdownSections(content: string): Array<{ heading: string; body: 
   }
   sections.push({ heading: currentHeading, body: currentBody.join('\n').trim() })
   return sections
+}
+
+function parseMarkdownTableFirstColumn(body: string): string[] {
+  return body
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(line => line.startsWith('|'))
+    .map(line => line.split('|').slice(1, -1).map(cell => cell.trim()))
+    .filter(cells => cells.length > 0 && cells[0] && !/^[-\s]+$/.test(cells[0]) && !/^(dimension|level)$/i.test(cells[0]))
+    .map(cells => cells[0]!)
 }
 
 function extractGoalStatements(content: string): string[] {
@@ -1991,6 +2264,12 @@ function extractReferenceEvidenceDetail(
   const implementationBullets: string[] = []
   const verificationBullets: string[] = []
   const goalStatements: string[] = []
+  const reviewQuestions: string[] = []
+  const decisionSteps: string[] = []
+  const rules: string[] = []
+  const examples: string[] = []
+  const weightDimensions: string[] = []
+  const severityLevels: string[] = []
   const titleSuggestsContracts = /\b(schema|schemas|contract|trace|evaluation|fixture|expected-record|prototype-run)\b/i.test(task.title)
 
   for (const reference of task.references) {
@@ -2000,6 +2279,37 @@ function extractReferenceEvidenceDetail(
       if (!goalStatements.includes(statement)) goalStatements.push(statement)
     }
     const sections = splitMarkdownSections(content)
+    for (const section of sections) {
+      const lowerHeading = section.heading.toLowerCase()
+      const sectionLines = section.body.split(/\r?\n/).map(line => line.trim()).filter(Boolean)
+      if (/feedback weight dimensions/i.test(section.heading)) {
+        for (const item of parseMarkdownTableFirstColumn(section.body)) {
+          if (!weightDimensions.includes(item)) weightDimensions.push(item)
+        }
+      }
+      if (/severity levels/i.test(section.heading)) {
+        for (const item of parseMarkdownTableFirstColumn(section.body)) {
+          if (!severityLevels.includes(item)) severityLevels.push(item)
+        }
+      }
+      for (const line of sectionLines) {
+        if (!/^[-*]\s+/.test(line) && !/^\d+[.)]\s+/.test(line)) continue
+        const bullet = line.replace(/^[-*]\s+/, '').replace(/^\d+[.)]\s+/, '').trim()
+        if (!bullet) continue
+        if (/\?$/.test(bullet) || /reviewer questions|questions/i.test(lowerHeading)) {
+          if (reviewQuestions.length < 6 && !reviewQuestions.includes(bullet)) reviewQuestions.push(bullet)
+        }
+        if (/decision tree|ordered feedback chain|grounding pass|core claim/i.test(lowerHeading)) {
+          if (decisionSteps.length < 8 && !decisionSteps.includes(bullet)) decisionSteps.push(bullet)
+        }
+        if (/rules|boundary|fiction-first boundary|dialect, register, and respect|finding contract|severity levels|core claim/i.test(lowerHeading)) {
+          if (rules.length < 8 && !rules.includes(bullet)) rules.push(bullet)
+        }
+        if (/examples/i.test(lowerHeading)) {
+          if (examples.length < 4 && !examples.includes(bullet)) examples.push(bullet)
+        }
+      }
+    }
     const rankedSections = sections
       .map(section => {
         const haystack = normalizeImportText(`${section.heading}\n${section.body}`)
@@ -2062,6 +2372,12 @@ function extractReferenceEvidenceDetail(
     goalStatements: goalStatements
       .sort((left, right) => keywordOverlapScore(right, keywords) - keywordOverlapScore(left, keywords))
       .slice(0, 4),
+    reviewQuestions: reviewQuestions.slice(0, 6),
+    decisionSteps: decisionSteps.slice(0, 8),
+    rules: rules.slice(0, 8),
+    examples: examples.slice(0, 4),
+    weightDimensions: weightDimensions.slice(0, 8),
+    severityLevels: severityLevels.slice(0, 8),
   }
 }
 
@@ -2091,7 +2407,7 @@ function importedTaskSpec(
   const assumptions = (task.assumptions ?? []).filter(Boolean)
   const missingInformation = cleanImportedMissingInformation(task.missingInformation ?? [])
   const importedContext = summarizeImportedProblemContext(task, evidenceDetail)
-  const proofPlan = (task.proofPaths ?? []).map((path) => {
+  const proofPlan = materializedProofPaths(task, evidenceDetail).map((path) => {
     if (path.kind === 'command' && typeof path.command === 'string' && path.command.trim()) {
       return `- Run \`${path.command.trim()}\``
     }
@@ -2176,7 +2492,7 @@ function importedTaskWorkUnitAnalysis(
 ): Task['workUnitAnalysis'] {
   const proofOnlyItems = [
     ...materializedAcceptanceCriteria(task, evidenceDetail).map(criterion => criterion.description.trim()).filter(Boolean),
-    ...(task.proofPaths ?? []).map((path) => {
+    ...materializedProofPaths(task, evidenceDetail).map((path) => {
       if (path.kind === 'command' && typeof path.command === 'string' && path.command.trim()) {
         return `Run ${path.command.trim()}`
       }
@@ -2207,8 +2523,12 @@ function buildImportedBlueprintSeed(
   workspaceProjectPath: string,
   now: string,
 ): ImportedBlueprintSeed {
-  const evidenceDetail = extractReferenceEvidenceDetail(task, workspaceProjectPath)
-  const acceptanceCriteria = materializedAcceptanceCriteria(task, evidenceDetail)
+  const normalizedTask: MaterializedImportTask = {
+    ...task,
+    references: [...normalizedReferences],
+  }
+  const evidenceDetail = extractReferenceEvidenceDetail(normalizedTask, workspaceProjectPath)
+  const acceptanceCriteria = materializedAcceptanceCriteria(normalizedTask, evidenceDetail)
   const evidenceRefs = normalizedReferences.map(ref => `import:${ref}`)
   const notes = normalizedReferences.length > 0
     ? [{
@@ -2216,26 +2536,26 @@ function buildImportedBlueprintSeed(
         role: 'importer' as const,
         content: [
           `Imported from: ${normalizedReferences.join(', ')}`,
-          task.whyThisMayMatter ? `Why this may matter: ${task.whyThisMayMatter}` : '',
-          task.assumptions && task.assumptions.length > 0 ? `Assumptions: ${task.assumptions.join(' | ')}` : '',
-          task.missingInformation && task.missingInformation.length > 0 ? `Missing information: ${task.missingInformation.join(' | ')}` : '',
-          task.scope === 'later' ? 'Scope: later/deferred' : '',
+          normalizedTask.whyThisMayMatter ? `Why this may matter: ${normalizedTask.whyThisMayMatter}` : '',
+          normalizedTask.assumptions && normalizedTask.assumptions.length > 0 ? `Assumptions: ${normalizedTask.assumptions.join(' | ')}` : '',
+          normalizedTask.missingInformation && normalizedTask.missingInformation.length > 0 ? `Missing information: ${normalizedTask.missingInformation.join(' | ')}` : '',
+          normalizedTask.scope === 'later' ? 'Scope: later/deferred' : '',
         ].filter(Boolean).join('\n'),
         timestamp: now,
       }]
     : []
 
-  if (!importedTaskHasBlueprintSeed(task) || task.scope === 'later') {
+  if (!importedTaskHasBlueprintSeed(normalizedTask) || normalizedTask.scope === 'later') {
     return {
-      status: task.scope === 'later' ? 'shelved' : 'import_draft',
+      status: normalizedTask.scope === 'later' ? 'shelved' : 'import_draft',
       outOfScope: [],
       notes,
       requestIntake: {
         intent: 'spec_only',
         recommendedNextAction: 'draft_spec',
-        assumptions: [...(task.assumptions ?? [])],
-        missingInformation: [...(task.missingInformation ?? [])],
-        ...(task.missingInformation && task.missingInformation.length > 0
+        assumptions: [...(normalizedTask.assumptions ?? [])],
+        missingInformation: [...(normalizedTask.missingInformation ?? [])],
+        ...(normalizedTask.missingInformation && normalizedTask.missingInformation.length > 0
           ? {
               ownerDecisionNeeded: 'Confirm the intended scope and success boundary if this imported draft no longer matches current project needs.',
               whyOwnerDecisionMatters: 'Imported notes are evidence-backed candidates, but Guildhall should not treat them as current truth without reshaping.',
@@ -2276,25 +2596,25 @@ function buildImportedBlueprintSeed(
     }
   }
 
-  const seededProductBrief = importedTaskBrief(task, evidenceDetail, now)
-  const seededSpec = importedTaskSpec(task, workspaceProjectPath)
-  const seededWorkUnitAnalysis = importedTaskWorkUnitAnalysis(task, evidenceDetail, now)
+  const seededProductBrief = importedTaskBrief(normalizedTask, evidenceDetail, now)
+  const seededSpec = importedTaskSpec(normalizedTask, workspaceProjectPath)
+  const seededWorkUnitAnalysis = importedTaskWorkUnitAnalysis(normalizedTask, evidenceDetail, now)
   const shapedSeedTask: Task = applyTaskShaping({
-    id: `seed:${task.id}`,
-    title: task.title,
-    description: task.description,
-    domain: task.domain,
+    id: `seed:${normalizedTask.id}`,
+    title: normalizedTask.title,
+    description: normalizedTask.description,
+    domain: normalizedTask.domain,
     projectPath: '',
     status: 'spec_review',
-    priority: task.priority,
-    dependsOn: [...(task.dependsOn ?? [])],
-    outOfScope: [...(task.missingInformation ?? [])],
+    priority: normalizedTask.priority,
+    dependsOn: [...(normalizedTask.dependsOn ?? [])],
+    outOfScope: [...(normalizedTask.missingInformation ?? [])],
     acceptanceCriteria,
     requestIntake: {
       intent: 'implementation',
       recommendedNextAction: 'proceed_to_implementation_spec',
-      assumptions: [...(task.assumptions ?? [])],
-      missingInformation: [...(task.missingInformation ?? [])],
+      assumptions: [...(normalizedTask.assumptions ?? [])],
+      missingInformation: [...(normalizedTask.missingInformation ?? [])],
       evidenceRefs,
       componentStack: [],
       pressureTestSummary: {
@@ -2337,7 +2657,7 @@ function buildImportedBlueprintSeed(
     spec: seededSpec,
     productBrief: seededProductBrief,
     workUnitAnalysis: seededWorkUnitAnalysis,
-    proofPaths: task.proofPaths ? [...task.proofPaths] : [],
+    proofPaths: materializedProofPaths(normalizedTask, evidenceDetail),
     revisionCount: 0,
     remediationAttempts: 0,
     origination: 'human',
@@ -2521,7 +2841,8 @@ export async function approveWorkspaceImport(
     existing.contextBudget = seededBlueprint.contextBudget
     existing.decomposition = seededBlueprint.decomposition
     existing.sizePlan = seededBlueprint.sizePlan
-    if (imported.proofPaths) existing.proofPaths = [...imported.proofPaths]
+    const materializedProof = materializedProofPaths(imported, evidenceDetail)
+    if (materializedProof.length > 0) existing.proofPaths = materializedProof
     else delete existing.proofPaths
     existing.updatedAt = now
   }
@@ -2597,7 +2918,9 @@ export async function approveWorkspaceImport(
       ...(seededBlueprint.contextBudget ? { contextBudget: seededBlueprint.contextBudget } : {}),
       ...(seededBlueprint.decomposition ? { decomposition: seededBlueprint.decomposition } : {}),
       ...(seededBlueprint.sizePlan ? { sizePlan: seededBlueprint.sizePlan } : {}),
-      ...(t.proofPaths ? { proofPaths: [...t.proofPaths] } : {}),
+      ...(materializedProofPaths(t, evidenceDetail).length > 0
+        ? { proofPaths: materializedProofPaths(t, evidenceDetail) }
+        : {}),
       revisionCount: 0,
       remediationAttempts: 0,
       origination: 'human',
