@@ -4825,6 +4825,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
     for (const task of tasks) {
       if (!task || typeof task !== 'object') continue
       if ((task as { id?: unknown }).id === WORKSPACE_IMPORT_TASK_ID) continue
+      const status = typeof (task as { status?: unknown }).status === 'string'
+        ? (task as { status: string }).status
+        : ''
+      if (status === 'archived' || status === 'cancelled') continue
       const title = typeof (task as { title?: unknown }).title === 'string'
         ? (task as { title: string }).title
         : ''

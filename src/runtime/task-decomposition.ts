@@ -172,19 +172,7 @@ function childDraftsFor(
   action: TaskDecompositionRecord['action'],
   definitionOfDone: DefinitionOfDone,
 ): TaskDecompositionRecord['childDrafts'] {
-  if (action === 'research_first') {
-    return [{
-      title: `Research ${task.title}`,
-      kind: 'research',
-      reason: 'Separate uncertainty from implementation before dispatch.',
-      dependsOn: [],
-      definitionOfDone: {
-        items: ['Research output names options, recommendation, evidence, and unresolved questions.'],
-        evidenceRequired: ['Decision-ready comparison is attached to the task.'],
-        createdBy: 'task-decomposition',
-      },
-    }]
-  }
+  if (action === 'research_first') return []
 
   if (action !== 'split') return []
   if (!task.workUnitAnalysis?.units?.length) {
