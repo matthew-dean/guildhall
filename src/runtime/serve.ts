@@ -3492,7 +3492,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         })
       }
       const rawQueue = await readTaskQueueFileNormalized(projectTasksPath(project.path))
-      const startReadiness = await projectStartReadiness(project.path)
+      const startReadiness = await projectStartReadinessForProject(project.path)
       const spine = buildProjectOrientationSpine({
         projectId: project.id,
         charter: inferProjectCharterFromExistingSources(project.path, project.config),
@@ -4481,11 +4481,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
     const ownerInputBlocker = startBlockerForOwnerInput(input.projectPath)
     if (ownerInputBlocker) return ownerInputBlocker
 
-    const importDraftBlocker = await startBlockerForImportDrafts(input.projectPath)
-    if (importDraftBlocker) return importDraftBlocker
-
     const workspaceImportCoverageBlocker = await startBlockerForWorkspaceImportCoverage(input.projectPath)
     if (workspaceImportCoverageBlocker) return workspaceImportCoverageBlocker
+
+    const importDraftBlocker = await startBlockerForImportDrafts(input.projectPath)
+    if (importDraftBlocker) return importDraftBlocker
 
     if (input.allowTaskReadinessBlocker !== false) {
       const taskReadinessBlocker = await startBlockerForTaskReadiness(input.projectPath)
@@ -4582,6 +4582,30 @@ export function buildServeApp(opts: ServeOptions = {}): {
       loadedModels,
       missingModels,
     }
+  }
+
+  async function projectStartReadinessForProject(
+    projectPath: string,
+    opts: {
+      allowTaskReadinessBlocker?: boolean
+      requestedTaskId?: string
+    } = {},
+  ) {
+    const resolvedConfig = resolveConfig({ workspacePath: projectPath })
+    const runtimeProvider = getRuntimeProviderConfig({
+      projectPath,
+      models: resolvedConfig.models,
+    })
+    return projectStartReadiness({
+      projectPath,
+      resolvedConfig,
+      runtimeProvider,
+      allowPaidProviderFallback: runtimeProvider.allowPaidProviderFallback,
+      ...(opts.allowTaskReadinessBlocker !== undefined
+        ? { allowTaskReadinessBlocker: opts.allowTaskReadinessBlocker }
+        : {}),
+      ...(opts.requestedTaskId ? { requestedTaskId: opts.requestedTaskId } : {}),
+    })
   }
 
   function blockedStartStatus(code: string | undefined): 400 | 409 {
@@ -4841,9 +4865,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
     if (detected.tasks.length === 0) return null
 
     const coveredTitles = new Set<string>()
+    const currentScopeCoveredTitles = new Set<string>()
     for (const task of parsed.tasks) {
-      if (typeof task.title === 'string' && task.title.trim()) {
-        coveredTitles.add(normalizeImportTitle(task.title))
+      if (typeof task.title === 'string' && task.title.trim().length > 0) {
+        const normalized = normalizeImportTitle(task.title)
+        coveredTitles.add(normalized)
+        if (task.scope !== 'later') currentScopeCoveredTitles.add(normalized)
       }
     }
     for (const task of tasks) {
@@ -4856,14 +4883,34 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const title = typeof (task as { title?: unknown }).title === 'string'
         ? (task as { title: string }).title
         : ''
-      if (title.trim()) coveredTitles.add(normalizeImportTitle(title))
+      if (!title.trim()) continue
+      const normalized = normalizeImportTitle(title)
+      coveredTitles.add(normalized)
+      if (status !== 'shelved') currentScopeCoveredTitles.add(normalized)
     }
 
     const missing = detected.tasks.filter(task => {
       const title = typeof task.title === 'string' ? task.title : ''
       return title.trim().length > 0 && !coveredTitles.has(normalizeImportTitle(title))
     })
-    if (missing.length === 0) return null
+    const currentScopeMissing = detected.tasks.filter(task => {
+      if (task.scope === 'later') return false
+      const title = typeof task.title === 'string' ? task.title : ''
+      return title.trim().length > 0 && !currentScopeCoveredTitles.has(normalizeImportTitle(title))
+    })
+    if (missing.length === 0 && currentScopeMissing.length === 0) return null
+
+    if (currentScopeMissing.length > 0) {
+      const first = currentScopeMissing[0]?.title?.trim() || 'the first current-scope task'
+      return {
+        canStart: false,
+        code: 'workspace_import_refresh_needed',
+        message:
+          `Guildhall's saved import is under-scoped for the current project docs. ` +
+          `The live detector still treats ${currentScopeMissing.length} current task${currentScopeMissing.length === 1 ? '' : 's'} as active work outside the approved current scope, starting with "${first}". Refresh the import before treating this project as complete.`,
+        actionHref: '/workspace-import',
+      }
+    }
 
     const currentMissing = missing.filter(task => task.scope !== 'later').length
     const laterMissing = missing.length - currentMissing
@@ -6847,7 +6894,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         runStatus: supervisor.get(project.id)?.status ?? 'stopped',
         recentEvents: supervisor.recent(project.id, undefined, project.path),
       })
-      const threadStartReadiness = await projectStartReadiness(project.path)
+      const threadStartReadiness = await projectStartReadinessForProject(project.path)
       const orientationSpine = buildProjectOrientationSpine({
         projectId: project.id,
         charter: inferProjectCharterFromExistingSources(project.path, project.config),
@@ -9310,7 +9357,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       })()
       const rawTasks = rawQueue.tasks
       const tasks = await Promise.all(rawTasks.map((task) => buildEffectiveTask(project.path, task as Task)))
-      const releaseStartReadiness = await projectStartReadiness(project.path)
+      const releaseStartReadiness = await projectStartReadinessForProject(project.path)
       const readinessSpine = buildProjectOrientationSpine({
         projectId: project.id,
         charter: inferProjectCharterFromExistingSources(project.path, project.config),
