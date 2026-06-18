@@ -5068,7 +5068,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const title = typeof task.title === 'string' ? task.title : ''
       return title.trim().length > 0 && !currentScopeCoveredTitles.has(normalizeImportTitle(title))
     })
-    const uncoveredCapabilitySpecs = detected.context.filter(context => {
+    const hasExplicitDeferredScope =
+      detected.tasks.some(task => task.scope === 'later') ||
+      parsed.tasks.some(task => task.scope === 'later')
+    const uncoveredCapabilitySpecs = hasExplicitDeferredScope
+      ? []
+      : detected.context.filter(context => {
       if (context.role !== 'capability') return false
       const refs = refsFromRecord(context)
       const specRefs = refs.filter(ref => /(^|\/)docs\/specs\//.test(ref))
