@@ -3673,6 +3673,125 @@ describe('Workspace Import review endpoints', () => {
     expect(body.startReadiness?.message).toContain('Add the first tiny fiction fixture and human-authored expected records.')
   })
 
+  it('blocks start when the saved approved current slice still contains stale imported work that live docs no longer mark current', async () => {
+    await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'harness', 'implementation-roadmap.md'),
+      [
+        '# Implementation Roadmap',
+        '',
+        '## Stage 1: Fixture And Evaluation Harness',
+        '',
+        '## Current Next Milestone',
+        '',
+        'The next milestone is Stage 1: Fixture And Evaluation Harness.',
+        '',
+        '1. Define fixture, expected-record, prototype-run, and evaluation schemas.',
+      ].join('\n'),
+      'utf8',
+    )
+    await writeSystemText(
+      'TASKS.json',
+      JSON.stringify(
+        {
+          version: 1,
+          lastUpdated: '2026-01-01T00:00:00.000Z',
+          tasks: [
+            {
+              id: 'task-workspace-import',
+              title: 'Review existing project work',
+              description: 'Reserved importer',
+              domain: '_workspace_import',
+              projectPath: tmpDir,
+              status: 'done',
+              priority: 'normal',
+              acceptanceCriteria: [],
+              dependsOn: [],
+              outOfScope: [],
+              spec: [
+                '```yaml',
+                'tasks:',
+                '  - id: imported-current',
+                '    title: Define fixture, expected-record, prototype-run, and evaluation schemas.',
+                '    description: The true current scope.',
+                '    domain: harness',
+                '    priority: high',
+                '  - id: imported-stale-current',
+                '    title: Implement fixture-and-expected-record schemas (from schema-contract-roadmap)',
+                '    description: A stale current task that no longer belongs to the active slice.',
+                '    domain: harness',
+                '    priority: high',
+                '```',
+              ].join('\n'),
+              createdAt: '2026-01-01T00:00:00.000Z',
+              updatedAt: '2026-01-01T00:00:00.000Z',
+            },
+            {
+              id: 'imported-current',
+              title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+              description: 'Still valid.',
+              domain: 'harness',
+              projectPath: tmpDir,
+              status: 'ready',
+              priority: 'high',
+              acceptanceCriteria: [],
+              dependsOn: [],
+              outOfScope: [],
+              notes: [],
+              gateResults: [],
+              reviewVerdicts: [],
+              adjudications: [],
+              escalations: [],
+              agentIssues: [],
+              revisionCount: 0,
+              remediationAttempts: 0,
+              createdAt: '2026-01-01T00:00:00.000Z',
+              updatedAt: '2026-01-01T00:00:00.000Z',
+            },
+            {
+              id: 'imported-stale-current',
+              title: 'Implement fixture-and-expected-record schemas (from schema-contract-roadmap)',
+              description: 'Stale current work that should have been removed from the active slice.',
+              domain: 'harness',
+              projectPath: tmpDir,
+              status: 'ready',
+              priority: 'high',
+              acceptanceCriteria: [],
+              dependsOn: [],
+              outOfScope: [],
+              notes: [],
+              gateResults: [],
+              reviewVerdicts: [],
+              adjudications: [],
+              escalations: [],
+              agentIssues: [],
+              revisionCount: 0,
+              remediationAttempts: 0,
+              createdAt: '2026-01-01T00:00:00.000Z',
+              updatedAt: '2026-01-01T00:00:00.000Z',
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+    )
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(scoped('/api/project')))
+    expect(res.status).toBe(200)
+    const body = await res.json() as {
+      startReadiness?: { canStart?: boolean; code?: string; message?: string; actionHref?: string }
+    }
+    expect(body.startReadiness).toMatchObject({
+      canStart: false,
+      code: 'workspace_import_refresh_needed',
+      actionHref: '/workspace-import',
+    })
+    expect(body.startReadiness?.message).toContain('live docs no longer do')
+    expect(body.startReadiness?.message).toContain('Implement fixture-and-expected-record schemas (from schema-contract-roadmap)')
+  })
+
   it('surfaces workspace-import refresh ahead of draft shaping when current docs outrun the approved slice', async () => {
     await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
     await fs.writeFile(
@@ -3984,6 +4103,114 @@ describe('Workspace Import review endpoints', () => {
     }
     expect(factsBody.workspace.goals.approved.taskCount).toBe(1)
     expect((factsBody.workspace.goals.detected?.taskCount ?? 0)).toBeGreaterThan(1)
+  })
+
+  it('lets approved import summary shrink back to the saved importer spec instead of preserving stale larger counts', async () => {
+    await fs.writeFile(path.join(tmpDir, 'package.json'), JSON.stringify({ name: 'ws-scope-shrink' }), 'utf8')
+    await writeSystemJson('workspace-goals.json', {
+      version: 2,
+      recordedAt: '2026-01-01T00:00:00.000Z',
+      goals: [],
+      tasks: [
+        { id: 'imported-a', title: 'First task', description: 'First task', domain: 'core', priority: 'high', references: [] },
+        { id: 'imported-b', title: 'Second stale task', description: 'Second stale task', domain: 'core', priority: 'high', references: [] },
+      ],
+      milestones: [],
+      approved: {
+        goalCount: 0,
+        taskCount: 2,
+        milestoneCount: 0,
+        currentTaskCount: 2,
+        laterTaskCount: 0,
+        taskIds: ['imported-a', 'imported-b'],
+      },
+      detected: {
+        goalCount: 0,
+        taskCount: 2,
+        milestoneCount: 0,
+        currentTaskCount: 2,
+        laterTaskCount: 0,
+        taskIds: ['imported-a', 'imported-b'],
+      },
+    })
+    await writeSystemText(
+      'TASKS.json',
+      JSON.stringify(
+        {
+          version: 1,
+          lastUpdated: '2026-01-01T00:00:00.000Z',
+          tasks: [
+            {
+              id: 'task-workspace-import',
+              title: 'Review existing project work',
+              description: 'Reserved importer',
+              domain: '_workspace_import',
+              projectPath: tmpDir,
+              status: 'done',
+              priority: 'normal',
+              acceptanceCriteria: [],
+              dependsOn: [],
+              outOfScope: [],
+              spec: [
+                '```yaml',
+                'tasks:',
+                '  - id: imported-a',
+                '    title: First task',
+                '    description: First task',
+                '    domain: core',
+                '    priority: high',
+                '```',
+              ].join('\n'),
+              createdAt: '2026-01-01T00:00:00.000Z',
+              updatedAt: '2026-01-01T00:00:00.000Z',
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+    )
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const facts = await app.fetch(new Request(scoped('/api/project/facts')))
+    expect(facts.status).toBe(200)
+    const factsBody = (await facts.json()) as {
+      workspace: {
+        goals: {
+          approved: { taskCount: number; currentTaskCount: number; laterTaskCount: number }
+          detected: { taskCount: number; currentTaskCount: number; laterTaskCount: number } | null
+        }
+      }
+    }
+    expect(factsBody.workspace.goals.approved).toMatchObject({
+      taskCount: 1,
+      currentTaskCount: 1,
+      laterTaskCount: 0,
+    })
+    expect(factsBody.workspace.goals.detected).toMatchObject({
+      taskCount: 0,
+      currentTaskCount: 0,
+      laterTaskCount: 0,
+    })
+
+    const status = await app.fetch(new Request(scoped('/api/project/workspace-import/status')))
+    expect(status.status).toBe(200)
+    const statusBody = (await status.json()) as {
+      approved: { taskCount: number; currentTaskCount: number; laterTaskCount: number } | null
+      detected: { taskCount: number; currentTaskCount: number; laterTaskCount: number } | null
+      draft: { tasks: number }
+    }
+    expect(statusBody.approved).toMatchObject({
+      taskCount: 1,
+      currentTaskCount: 1,
+      laterTaskCount: 0,
+    })
+    expect(statusBody.detected).toMatchObject({
+      taskCount: 0,
+      currentTaskCount: 0,
+      laterTaskCount: 0,
+    })
+    expect(statusBody.draft.tasks).toBe(1)
   })
 
   it('rerun reseeds the reserved import task even when the project already has tasks', async () => {

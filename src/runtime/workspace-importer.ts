@@ -1654,25 +1654,11 @@ export async function readWorkspaceImportSummary(input: {
     importerTaskSpec ? summarizeWorkspaceImportSpec(importerTaskSpec) : null
   )
 
-  const approved = workspaceGoalsState?.approved
-    ? {
-        goalCount: Math.max(workspaceGoalsState.approved.goalCount, approvedFromSpec?.goalCount ?? 0),
-        taskCount: Math.max(workspaceGoalsState.approved.taskCount, approvedFromSpec?.taskCount ?? 0),
-        milestoneCount: Math.max(workspaceGoalsState.approved.milestoneCount, approvedFromSpec?.milestoneCount ?? 0),
-        currentTaskCount: Math.max(workspaceGoalsState.approved.currentTaskCount, approvedFromSpec?.currentTaskCount ?? 0),
-        laterTaskCount: Math.max(workspaceGoalsState.approved.laterTaskCount, approvedFromSpec?.laterTaskCount ?? 0),
-        taskIds: [
-          ...new Set([
-            ...workspaceGoalsState.approved.taskIds,
-            ...(approvedFromSpec?.taskIds ?? []),
-          ]),
-        ],
-      }
-    : approvedFromSpec
+  const approved = approvedFromSpec ?? workspaceGoalsState?.approved ?? null
 
-  const detected = workspaceGoalsState?.detected ?? (
-    input.detectedDraft ? workspaceScopeSnapshotFromDraft(input.detectedDraft) : null
-  )
+  const detected = input.detectedDraft
+    ? workspaceScopeSnapshotFromDraft(input.detectedDraft)
+    : workspaceGoalsState?.detected ?? null
 
   return {
     taskStatus,

@@ -5068,6 +5068,17 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const title = typeof task.title === 'string' ? task.title : ''
       return title.trim().length > 0 && !currentScopeCoveredTitles.has(normalizeImportTitle(title))
     })
+    const detectedCurrentTitles = new Set(
+      detected.tasks
+        .filter(task => task.scope !== 'later')
+        .map(task => normalizeImportTitle(typeof task.title === 'string' ? task.title : ''))
+        .filter(Boolean),
+    )
+    const staleApprovedCurrent = parsed.tasks.filter(task => {
+      if (task.scope === 'later') return false
+      const normalized = normalizeImportTitle(task.title)
+      return normalized.length > 0 && !detectedCurrentTitles.has(normalized)
+    })
     const hasExplicitDeferredScope =
       detected.tasks.some(task => task.scope === 'later') ||
       parsed.tasks.some(task => task.scope === 'later')
@@ -5080,7 +5091,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (specRefs.length === 0) return false
       return specRefs.every(ref => !coveredRefs.has(ref))
     })
-    if (missing.length === 0 && currentScopeMissing.length === 0 && uncoveredCapabilitySpecs.length === 0) return null
+    if (
+      missing.length === 0 &&
+      currentScopeMissing.length === 0 &&
+      staleApprovedCurrent.length === 0 &&
+      uncoveredCapabilitySpecs.length === 0
+    ) return null
 
     if (currentScopeMissing.length > 0) {
       const first = currentScopeMissing[0]?.title?.trim() || 'the first current-scope task'
@@ -5090,6 +5106,17 @@ export function buildServeApp(opts: ServeOptions = {}): {
         message:
           `Guildhall's saved import is under-scoped for the current project docs. ` +
           `The live detector still treats ${currentScopeMissing.length} current task${currentScopeMissing.length === 1 ? '' : 's'} as active work outside the approved current scope, starting with "${first}". Refresh the import before treating this project as complete.`,
+        actionHref: '/workspace-import',
+      }
+    }
+
+    if (staleApprovedCurrent.length > 0) {
+      const first = staleApprovedCurrent[0]?.title?.trim() || 'the first stale current-scope task'
+      return {
+        canStart: false,
+        code: 'workspace_import_refresh_needed',
+        message:
+          `Guildhall's saved import still treats ${staleApprovedCurrent.length} current task${staleApprovedCurrent.length === 1 ? '' : 's'} as part of the active slice even though the live docs no longer do, starting with "${first}". Refresh the import before treating this project as complete.`,
         actionHref: '/workspace-import',
       }
     }
