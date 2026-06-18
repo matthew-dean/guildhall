@@ -6343,7 +6343,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const parsed = parseWorkspaceImport(spec)
       const specReady =
         parsed.goals.length + parsed.tasks.length + parsed.milestones.length > 0
-      const effective = detectedDraft ? mergeWorkspaceImportDraft(detectedDraft, parsed) : null
+      const effective = detectedDraft ? mergeWorkspaceImportDraft(detectedDraft, parsed, {
+        preserveDetectedScope: true,
+      }) : null
       return c.json({
         taskExists: true,
         specReady,
@@ -6467,6 +6469,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         !hasExplicitNarrowing && parsedSavedImporterSpec
           ? mergeWorkspaceImportDraft(filteredDraft, parsedSavedImporterSpec, {
               retainParsedOnlyTasks: false,
+              preserveDetectedScope: true,
             })
           : filteredDraft
 

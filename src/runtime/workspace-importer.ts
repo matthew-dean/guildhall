@@ -622,10 +622,12 @@ export function mergeWorkspaceImportDraft(
   parsed: ParsedImport | null,
   options: {
     retainParsedOnlyTasks?: boolean
+    preserveDetectedScope?: boolean
   } = {},
 ): WorkspaceImportDraft {
   if (!parsed) return detected
   const retainParsedOnlyTasks = options.retainParsedOnlyTasks ?? true
+  const preserveDetectedScope = options.preserveDetectedScope ?? false
   const parsedTasks = suppressShadowedParsedCurrentMilestoneDeliverables(parsed.tasks)
 
   const mergedGoals: DraftGoal[] = []
@@ -692,7 +694,9 @@ export function mergeWorkspaceImportDraft(
             ? { missingInformation: [...task.missingInformation] }
             : {}),
         domain: parsedTask.domain || task.domain,
-        scope: parsedTask.scope === 'later' ? 'later' : task.scope,
+        scope: preserveDetectedScope
+          ? task.scope
+          : parsedTask.scope === 'later' ? 'later' : task.scope,
         priority: parsedTask.priority || task.priority,
         references: mergeImportReferences(task.references, parsedTask.references),
         ...(parsedTask.acceptanceCriteria ? { acceptanceCriteria: parsedTask.acceptanceCriteria } : {}),

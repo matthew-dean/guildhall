@@ -865,7 +865,7 @@ tasks:
       ]),
     )
     expect(draft.tasks.find((task) => task.title === 'Implement dialogue-and-character-voice reviewer lane')).toMatchObject({
-      scope: 'later',
+      scope: 'current',
       domain: 'coherence',
       references: expect.arrayContaining([
         expect.stringContaining('docs/harness/remaining-spec-decomposition-inventory.md'),
@@ -1768,6 +1768,74 @@ tasks:
     expect(q.tasks.find(task => task.title === 'fixture directory shape for at least one small story fixture')).toBeUndefined()
     expect(q.tasks.find(task => task.title === 'typed fixture and expected-record contracts')).toBeUndefined()
   })
+
+  it('does not shelve later roadmap stages when the project has no explicit release boundary', async () => {
+    await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'harness', 'implementation-roadmap.md'),
+      [
+        '# Implementation Roadmap',
+        '',
+        '## Stage 1: Fixture And Evaluation Harness',
+        '',
+        'Deliverables:',
+        '- fixture directory shape for at least one small story fixture',
+        '- typed fixture and expected-record contracts',
+        '',
+        '## Stage 2: Mastra Agent Prototype',
+        '',
+        'Deliverables:',
+        '- Mastra workflow for the prototype iteration loop',
+        '- specialist editor agent calls for the first review lanes',
+        '',
+        '## Current Next Milestone',
+        '',
+        'The next milestone is Stage 1: Fixture And Evaluation Harness.',
+        '',
+        '1. Define fixture, expected-record, prototype-run, and evaluation schemas.',
+        '2. Add the first tiny fiction fixture and human-authored expected records.',
+      ].join('\n'),
+      'utf-8',
+    )
+
+    const inventory = await detectWorkspaceSignals({ projectPath: tmpDir })
+    const draft = formWorkspaceHypothesis(inventory)
+
+    expect(draft.tasks.map(task => ({ title: task.title, scope: task.scope }))).toEqual(expect.arrayContaining([
+      {
+        title: 'Mastra workflow for the prototype iteration loop',
+        scope: 'current',
+      },
+      {
+        title: 'specialist editor agent calls for the first review lanes',
+        scope: 'current',
+      },
+    ]))
+
+    await createWorkspaceImportTask({
+      memoryDir,
+      projectPath: tmpDir,
+      inventory,
+      draft,
+    })
+
+    const approved = await approveWorkspaceImport({
+      memoryDir,
+      projectPath: tmpDir,
+      draftOverride: draft,
+    })
+    expect(approved).toMatchObject({ success: true })
+
+    const q = await readQueue()
+    expect(q.tasks.find(task => task.title === 'Mastra workflow for the prototype iteration loop')).toMatchObject({
+      status: 'import_draft',
+      domain: 'harness',
+    })
+    expect(q.tasks.find(task => task.title === 'specialist editor agent calls for the first review lanes')).toMatchObject({
+      status: 'import_draft',
+      domain: 'harness',
+    })
+  })
 })
 
 describe('mergeWorkspaceImportDraft', () => {
@@ -1920,6 +1988,39 @@ tasks:
     })
 
     expect(merged.tasks.map(task => task.title)).toEqual(['Build packet runner'])
+  })
+
+  it('preserves detector scope during automatic refresh merges so stale importer specs cannot keep shrinking MVP scope', () => {
+    const detected = formWorkspaceHypothesis(invWith([
+      {
+        source: 'planning-docs',
+        kind: 'open_work',
+        title: 'Implement reviewer lane',
+        evidence: 'Stage 2 reviewer lane.',
+        confidence: 'high',
+        references: ['docs/harness/implementation-roadmap.md'],
+      },
+    ]))
+    const parsed = parseWorkspaceImport(`
+\`\`\`yaml
+tasks:
+  - id: task-reviewer
+    title: Implement reviewer lane
+    description: Old importer spec still says later.
+    domain: harness
+    scope: later
+    priority: normal
+\`\`\`
+`)
+
+    const merged = mergeWorkspaceImportDraft(detected, parsed, {
+      preserveDetectedScope: true,
+    })
+
+    expect(merged.tasks.find(task => task.title === 'Implement reviewer lane')).toMatchObject({
+      scope: 'current',
+      description: 'Old importer spec still says later.',
+    })
   })
 
   it('drops stale parsed goal fragments when detected goals now contain the full wrapped sentence', () => {
