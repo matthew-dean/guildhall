@@ -221,6 +221,7 @@ export interface OrientationTaskInput {
   id: string
   title?: string
   description?: string
+  references?: string[]
   domain?: string
   projectPath?: string
   status?: string
@@ -700,8 +701,8 @@ function buildNodes(
       blockers: [],
       refs: emptyRefs(task.id),
       source: task.orientationSource ?? {
-        kind: 'task',
-        refs: [`task:${task.id}`],
+        kind: (task.references ?? []).length > 0 ? 'import' : 'task',
+        refs: sourceRefsForTask(task),
         confidence: 'high',
         freshness: task.updatedAt ? 'fresh' : 'unknown',
         inferred: false,
@@ -859,6 +860,14 @@ function visibilityForTask(task: OrientationTaskInput): OrientationNode['visibil
 
 function normalizeText(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+}
+
+function sourceRefsForTask(task: OrientationTaskInput): string[] {
+  const refs = (task.references ?? [])
+    .map(ref => typeof ref === 'string' ? ref.trim() : '')
+    .filter(Boolean)
+    .map(ref => ref.startsWith('import:') ? ref : `import:${ref}`)
+  return refs.length > 0 ? refs : [`task:${task.id}`]
 }
 
 function sharedTokenCount(left: string, right: string): number {

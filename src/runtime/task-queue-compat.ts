@@ -19,6 +19,17 @@ function stringArray(value: unknown): string[] {
     : []
 }
 
+function importedReferencesFromRequestIntake(task: RecordLike): string[] {
+  if (!isRecord(task.requestIntake)) return []
+  const evidenceRefs = stringArray(task.requestIntake.evidenceRefs)
+  return evidenceRefs
+    .map((ref) => {
+      const match = /^import:(.+)$/.exec(ref.trim())
+      return match?.[1]?.trim() ?? ''
+    })
+    .filter(Boolean)
+}
+
 function taskText(task: RecordLike): string {
   const criteria = Array.isArray(task.acceptanceCriteria)
     ? task.acceptanceCriteria
@@ -237,6 +248,12 @@ export function normalizeLegacyTaskQueueShape(parsed: unknown, now = new Date().
   const normalizeTask = (task: unknown): unknown => {
     if (!isRecord(task)) return task
     const next: RecordLike = { ...task }
+    if (stringArray(task.references).length === 0) {
+      const importedReferences = importedReferencesFromRequestIntake(task)
+      if (importedReferences.length > 0) {
+        next.references = importedReferences
+      }
+    }
     if (isRecord(task.taskReadiness)) {
       next.taskReadiness = normalizeReadiness(task, task.taskReadiness, now)
     }

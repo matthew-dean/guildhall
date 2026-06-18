@@ -66,6 +66,7 @@ describe('Task', () => {
     expect(result.notes).toEqual([])
     expect(result.gateResults).toEqual([])
     expect(result.acceptanceCriteria).toEqual([])
+    expect(result.references).toEqual([])
   })
 
   it('rejects task without required fields', () => {
@@ -150,6 +151,15 @@ describe('Task', () => {
       degree: 'automatic',
     })
     expect(result.requestIntake?.pressureTestSummary.checks.map(check => check.id)).toContain('verification')
+  })
+
+  it('accepts durable source references on tasks', () => {
+    const result = Task.parse({
+      ...validTask,
+      references: ['import:/repo/docs/specs/story-memory-schemas.md'],
+    })
+
+    expect(result.references).toEqual(['import:/repo/docs/specs/story-memory-schemas.md'])
   })
 
   it('accepts a review-risk profile for calibrated review routing', () => {

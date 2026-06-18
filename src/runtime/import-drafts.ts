@@ -51,6 +51,12 @@ function hasSpecDraft(task: Task): boolean {
 
 function importedEvidencePaths(task: Task): string[] {
   const refs = new Set<string>()
+  for (const ref of task.references ?? []) {
+    if (typeof ref !== 'string') continue
+    const trimmed = ref.trim()
+    if (!trimmed) continue
+    refs.add(trimmed)
+  }
   for (const ref of task.requestIntake?.evidenceRefs ?? []) {
     if (typeof ref !== 'string') continue
     const match = /^import:(.+)$/.exec(ref.trim())

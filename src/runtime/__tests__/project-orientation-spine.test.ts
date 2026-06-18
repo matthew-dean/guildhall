@@ -172,6 +172,30 @@ describe('buildProjectOrientationSpine', () => {
     expect(spine.nodes['work:task-later']?.maturity).toBe('deferred')
   })
 
+  it('uses durable task references as first-class task source refs', () => {
+    const spine = buildProjectOrientationSpine({
+      projectId: 'narrative-harness',
+      now: '2026-06-18T12:00:00.000Z',
+      tasks: [
+        {
+          id: 'task-imported',
+          title: 'Define fixture schemas',
+          description: 'Imported harness task.',
+          references: ['/tmp/narrative-harness/docs/harness/implementation-roadmap.md'],
+          domain: 'harness',
+          status: 'import_draft',
+          priority: 'high',
+        },
+      ],
+    })
+
+    expect(spine.nodes['work:task-imported']?.source).toMatchObject({
+      kind: 'import',
+      refs: ['import:/tmp/narrative-harness/docs/harness/implementation-roadmap.md'],
+      inferred: false,
+    })
+  })
+
   it('uses explicit non-MVP release records as the selected release container', () => {
     const spine = buildProjectOrientationSpine({
       projectId: 'jess',

@@ -1047,6 +1047,7 @@ export const Task = z.object({
   // request routing instead of direct legacy intake.
   request: TaskRequest.optional(),
   requestIntake: RequestIntake.optional(),
+  references: z.array(z.string()).default([]),
 
   status: TaskStatus,
   priority: TaskPriority.default('normal'),

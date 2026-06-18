@@ -490,6 +490,7 @@ milestones:
     expect(newTask.origination).toBe('human')
     expect(newTask.domain).toBe('ui')
     expect(newTask.priority).toBe('high')
+    expect(newTask.references).toEqual([path.join(tmpDir, 'ROADMAP.md')])
     expect(newTask.notes[0]!.content).toContain('ROADMAP.md')
     expect(newTask.requestIntake).toMatchObject({
       intent: 'spec_only',
@@ -538,6 +539,7 @@ tasks:
     const newTask = q.tasks.find((t) => t.id === 't-invite-flow')!
     expect(newTask.projectPath).toBe(knitPath)
     expect(newTask.description).toBe('PROJECT_STATE.md: - [ ] Proper invite flow')
+    expect(newTask.references).toEqual([path.join(knitPath, 'PROJECT_STATE.md')])
     expect(newTask.notes[0]!.content).toBe(`Imported from: ${path.join(knitPath, 'PROJECT_STATE.md')}`)
   })
 
@@ -734,6 +736,7 @@ tasks:
       expect(landed, `task ${t.suggestedId}`).toBeDefined()
       expect(landed!.status).toBe('import_draft')
       expect(landed!.origination).toBe('human')
+      expect(landed!.references).toEqual(t.references ?? [])
     }
 
     // workspace-goals.json persisted with every goal.

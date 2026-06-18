@@ -96,6 +96,7 @@ import {
   type PreferredProviderKey,
   type ProviderName,
 } from './provider-selection.js'
+import { normalizeLegacyTaskQueueShape } from './task-queue-compat.js'
 import {
   buildSelectApiClientOptions,
   getRuntimeProviderConfig,
@@ -940,11 +941,12 @@ async function readTasksFileNormalized(
   tasksPath: string,
 ): Promise<Array<Record<string, unknown>>> {
   if (!existsSync(tasksPath)) return []
-  const parsed = await readCachedJson<
+  const rawParsed = await readCachedJson<
     | { tasks?: Array<Record<string, unknown>>; version?: unknown; lastUpdated?: unknown }
     | Array<Record<string, unknown>>
   >(tasksPath)
-  if (parsed == null) return []
+  if (rawParsed == null) return []
+  const parsed = normalizeLegacyTaskQueueShape(rawParsed)
   const cached = normalizedTasksCache.get(tasksPath)
   if (cached && sameSerializedTasks(cached.raw, parsed)) {
     return cached.tasks.map(task => ({ ...task }))
@@ -1028,11 +1030,12 @@ async function readTaskQueueFileNormalized(
   tasksPath: string,
 ): Promise<{ tasks: Array<Record<string, unknown>>; releases: ProjectRelease[]; selectedReleaseId?: string }> {
   if (!existsSync(tasksPath)) return { tasks: [], releases: [] }
-  const parsed = await readCachedJson<
+  const rawParsed = await readCachedJson<
     | { tasks?: Array<Record<string, unknown>>; releases?: ProjectRelease[]; selectedReleaseId?: string; version?: unknown; lastUpdated?: unknown }
     | Array<Record<string, unknown>>
   >(tasksPath)
-  if (parsed == null) return { tasks: [], releases: [] }
+  if (rawParsed == null) return { tasks: [], releases: [] }
+  const parsed = normalizeLegacyTaskQueueShape(rawParsed)
   const cached = normalizedTaskQueueCache.get(tasksPath)
   if (cached && sameSerializedTasks(cached.raw, parsed)) {
     return {

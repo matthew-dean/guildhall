@@ -1360,6 +1360,7 @@ export async function approveWorkspaceImport(
       createdAt: now,
       createdBy: 'workspace-importer',
     }
+    existing.references = normalizedReferences
     existing.notes = importerNoteForTask(normalizedReferences, imported)
     if (imported.proofPaths) existing.proofPaths = [...imported.proofPaths]
     else delete existing.proofPaths
@@ -1442,6 +1443,7 @@ export async function approveWorkspaceImport(
         createdAt: now,
         createdBy: 'workspace-importer',
       },
+      references: normalizedReferences,
       notes: importerNoteForTask(normalizedReferences, t),
       gateResults: [],
       reviewVerdicts: [],
