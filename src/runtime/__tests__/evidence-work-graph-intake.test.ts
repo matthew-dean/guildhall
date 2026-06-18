@@ -445,4 +445,27 @@ describe('evidence-to-work-graph intake', () => {
       ]),
     )
   })
+
+  it('suppresses coarse later-stage roadmap deliverable bullets when a current milestone already has decomposed spec tasks', () => {
+    const plan = planEvidenceWorkGraph({
+      sources: [
+        { path: 'docs/harness/implementation-roadmap.md', content: narrativeRoadmapEvidence },
+        { path: 'docs/harness/stage-two-roadmap.md', content: narrativeRoadmapStageTwoEvidence },
+        { path: 'docs/harness/remaining-spec-decomposition-inventory.md', content: narrativeRemainingInventoryEvidence },
+      ],
+      existingTasks: [],
+    })
+
+    expect(plan.tasks.map(task => task.title)).toEqual(expect.arrayContaining([
+      'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+      'Implement dialogue-and-character-voice reviewer lane',
+      'Implement scene-and-chapter-intelligence reviewer lane',
+    ]))
+    expect(plan.tasks.map(task => task.title)).not.toEqual(expect.arrayContaining([
+      'Mastra workflow for the prototype iteration loop',
+      'packet-builder implementation for the first writer/editor packet types',
+      'deterministic retrieval tools over structured story records',
+      'specialist editor agent calls for the first review lanes',
+    ]))
+  })
 })

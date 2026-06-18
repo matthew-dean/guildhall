@@ -49,6 +49,7 @@ export type EvidenceWorkGraphPlan = {
   units: EvidenceUnit[]
   tasks: EvidenceTask[]
   reconciliations: Array<{ existingTaskId: string; action: 'reframed_existing_task'; reason: string }>
+  suppressedTaskTitles: string[]
 }
 
 type UnitSeed = {
@@ -76,7 +77,16 @@ const workGraphDomainAdapter = genericWorkGraphDomainAdapter
 
 export function planEvidenceWorkGraph(input: EvidenceWorkGraphInput): EvidenceWorkGraphPlan {
   const currentMilestoneStage = detectCurrentMilestoneStage(input.sources)
-  const units = input.sources.flatMap(source => extractUnits(source, currentMilestoneStage))
+  const suppressRoadmapStageDeliverables = Boolean(
+    currentMilestoneStage &&
+    input.sources.some(source => extractRecommendedTaskSeeds(source).length > 0),
+  )
+  const suppressedTaskTitles = suppressRoadmapStageDeliverables
+    ? input.sources.flatMap(source => extractRoadmapStageDeliverableSeeds(source).map(seed => seed.deliverable))
+    : []
+  const units = input.sources.flatMap(source =>
+    extractUnits(source, currentMilestoneStage, { suppressRoadmapStageDeliverables }),
+  )
   const existingTasks = input.existingTasks ?? []
   const tasks: EvidenceTask[] = []
   const reconciliations: EvidenceWorkGraphPlan['reconciliations'] = []
@@ -127,11 +137,15 @@ export function planEvidenceWorkGraph(input: EvidenceWorkGraphInput): EvidenceWo
     tasks.push(integrationTask)
   }
 
-  return { units, tasks, reconciliations }
+  return { units, tasks, reconciliations, suppressedTaskTitles }
 }
 
-function extractUnits(source: EvidenceSource, currentMilestoneStage: string | null): EvidenceUnit[] {
-  return extractSeeds(source, currentMilestoneStage).map(seed => {
+function extractUnits(
+  source: EvidenceSource,
+  currentMilestoneStage: string | null,
+  options: { suppressRoadmapStageDeliverables: boolean },
+): EvidenceUnit[] {
+  return extractSeeds(source, currentMilestoneStage, options).map(seed => {
     const statusHint = inferStatusHint(seed.need)
     const workShape = inferWorkShape(seed)
     const targetArea = inferTargetArea(seed)
@@ -157,11 +171,15 @@ function extractUnits(source: EvidenceSource, currentMilestoneStage: string | nu
   })
 }
 
-function extractSeeds(source: EvidenceSource, currentMilestoneStage: string | null): UnitSeed[] {
+function extractSeeds(
+  source: EvidenceSource,
+  currentMilestoneStage: string | null,
+  options: { suppressRoadmapStageDeliverables: boolean },
+): UnitSeed[] {
   return [
     ...extractTableSeeds(source),
     ...extractRoadmapMilestoneSeeds(source),
-    ...extractRoadmapStageDeliverableSeeds(source),
+    ...(options.suppressRoadmapStageDeliverables ? [] : extractRoadmapStageDeliverableSeeds(source)),
     ...extractRecommendedTaskSeeds(source),
   ]
 }

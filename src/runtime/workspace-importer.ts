@@ -665,11 +665,13 @@ export function mergeWorkspaceImportDraft(
   parsed: ParsedImport | null,
   options: {
     retainParsedOnlyTasks?: boolean
+    retainDetectedOnlyTasks?: boolean
     preserveDetectedScope?: boolean
   } = {},
 ): WorkspaceImportDraft {
   if (!parsed) return detected
   const retainParsedOnlyTasks = options.retainParsedOnlyTasks ?? true
+  const retainDetectedOnlyTasks = options.retainDetectedOnlyTasks ?? true
   const preserveDetectedScope = options.preserveDetectedScope ?? false
   const parsedTasks = suppressShadowedParsedCurrentMilestoneDeliverables(parsed.tasks)
 
@@ -755,6 +757,9 @@ export function mergeWorkspaceImportDraft(
         ...(resolvedDependsOn ? { dependsOn: [...resolvedDependsOn] } : {}),
         ...(resolvedProofPaths ? { proofPaths: [...resolvedProofPaths] } : {}),
       })
+      continue
+    }
+    if (!retainDetectedOnlyTasks) {
       continue
     }
     mergedTasks.push(task)
@@ -1366,6 +1371,7 @@ export async function materializeWorkspaceImportDraft(input: {
   })
   return mergeWorkspaceImportDraft(input.draft, materialized, {
     preserveDetectedScope: false,
+    retainDetectedOnlyTasks: false,
   })
 }
 
@@ -1597,6 +1603,17 @@ function normalizeDomainRouteKey(value: string): string {
     .trim()
 }
 
+function importedTaskCanBeArchivedDuringScopeRefresh(status: Task['status']): boolean {
+  return [
+    'exploring',
+    'proposed',
+    'import_draft',
+    'spec_review',
+    'ready',
+    'shelved',
+  ].includes(status)
+}
+
 async function evidenceSourcesForParsedTasks(
   projectPath: string,
   tasks: readonly ParsedTask[],
@@ -1683,6 +1700,7 @@ async function materializeEvidenceWorkGraphTasks(
 
   const graphTaskIds = new Set(plan.tasks.map(task => task.id))
   const graphTaskTitles = new Set(plan.tasks.map(task => normalizeImportText(task.title)).filter(Boolean))
+  const suppressedTaskTitles = new Set(plan.suppressedTaskTitles.map(title => normalizeImportText(title)).filter(Boolean))
   const reconciledIds = new Set(plan.reconciliations.map(reconciliation => reconciliation.existingTaskId))
   const parsedTasksById = new Map(input.parsedTasks.map(task => [task.id, task] as const))
   const parsedTasksByTitle = new Map(
@@ -1719,6 +1737,7 @@ async function materializeEvidenceWorkGraphTasks(
     !graphTaskIds.has(task.id) &&
     !reconciledIds.has(task.id) &&
     !graphTaskTitles.has(normalizeImportText(task.title)) &&
+    !suppressedTaskTitles.has(normalizeImportText(task.title)) &&
     !isShadowedCurrentMilestoneDeliverableTask(task, shadowedImports),
   )
 
@@ -1907,7 +1926,7 @@ function importedTaskLooksWorkflowDriven(
   evidenceDetail: ImportedEvidenceDetail,
 ): boolean {
   return (
-    /\b(feedback chain|pipeline|orchestration|coordinator|involvement modes|packet)\b/i.test(task.title) ||
+    /\b(feedback chain|pipeline|workflow|orchestration|coordinator|involvement modes|packet)\b/i.test(task.title) ||
     evidenceDetail.weightDimensions.length > 0 ||
     evidenceDetail.severityLevels.length > 0
   )
@@ -3262,7 +3281,7 @@ export async function approveWorkspaceImport(
   if (input.replacePreviouslyImportedTasks) {
     for (const existingTask of queue.tasks) {
       if (existingTask.id === WORKSPACE_IMPORT_TASK_ID) continue
-      if (existingTask.status !== 'import_draft' && existingTask.status !== 'shelved') continue
+      if (!importedTaskCanBeArchivedDuringScopeRefresh(existingTask.status)) continue
       if (existingTask.origination !== 'human') continue
       if (existingTask.requestIntake?.createdBy !== 'workspace-importer') continue
       const normalizedTitle = normalizeImportText(existingTask.title)

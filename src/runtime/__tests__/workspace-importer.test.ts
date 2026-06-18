@@ -1375,6 +1375,47 @@ tasks:
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
         } as Task,
+        {
+          id: 'task-stale-spec-review',
+          title: 'Mastra workflow for the prototype iteration loop',
+          description: 'Old importer residue that already advanced to spec review.',
+          domain: 'harness',
+          projectPath: tmpDir,
+          status: 'spec_review',
+          priority: 'high',
+          acceptanceCriteria: [],
+          dependsOn: [],
+          outOfScope: [],
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          adjudications: [],
+          escalations: [],
+          agentIssues: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          origination: 'human',
+          requestIntake: {
+            intent: 'implementation',
+            recommendedNextAction: 'proceed_to_implementation_spec',
+            componentStack: [],
+            assumptions: [],
+            missingInformation: [],
+            evidenceRefs: [],
+            pressureTestSummary: {
+              systemOwned: true,
+              degree: 'guided',
+              qualityBar: 'Carry imported project evidence forward into a reviewable implementation blueprint before execution starts.',
+              ownerQuestionPolicy: 'Only ask when the cited evidence conflicts strongly enough to change product intent or the release boundary.',
+              checks: [],
+            },
+            clarifyingQuestions: [],
+            createdAt: new Date().toISOString(),
+            createdBy: 'workspace-importer',
+          },
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        } as Task,
       ],
     })
 
@@ -1412,6 +1453,9 @@ tasks:
 
     const q = await readQueue()
     expect(q.tasks.find(task => task.id === 'task-stale-import')).toMatchObject({
+      status: 'archived',
+    })
+    expect(q.tasks.find(task => task.id === 'task-stale-spec-review')).toMatchObject({
       status: 'archived',
     })
     expect(q.tasks.find(task => task.id === 'task-stale-import')?.notes?.at(-1)?.content ?? '').toContain(
@@ -2149,6 +2193,95 @@ tasks:
       status: 'spec_review',
       domain: 'harness',
     })
+  })
+
+  it('prefers decomposed spec tasks over coarse later-stage roadmap deliverables when a current milestone and inventory both exist', async () => {
+    await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
+    await fs.mkdir(path.join(tmpDir, 'docs', 'specs'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'harness', 'implementation-roadmap.md'),
+      [
+        '# Implementation Roadmap',
+        '',
+        '## Stage 1: Fixture And Evaluation Harness',
+        '',
+        'Goal: build a no-UI test harness that proves the story-memory and packet contracts against small fiction fixtures before any product UI is designed.',
+        '',
+        '## Stage 2: Mastra Agent Prototype',
+        '',
+        'Goal: use Mastra and TypeScript to prove the agent workflow: packet builder, specialist editors, writer instances, revision orchestration, and on-demand retrieval.',
+        '',
+        'Deliverables:',
+        '- Mastra workflow for the prototype iteration loop',
+        '- packet-builder implementation for the first writer/editor packet types',
+        '- deterministic retrieval tools over structured story records',
+        '- specialist editor agent calls for the first review lanes',
+        '',
+        '## Current Next Milestone',
+        '',
+        'The next milestone is Stage 1: Fixture And Evaluation Harness.',
+        '',
+        '1. Define fixture, expected-record, prototype-run, and evaluation schemas.',
+      ].join('\n'),
+      'utf-8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'harness', 'remaining-spec-decomposition-inventory.md'),
+      [
+        '# Remaining Spec Decomposition Inventory',
+        '',
+        '### 2.2 `dialogue-and-character-voice.md`',
+        '',
+        '- **Recommended first task title:** Implement dialogue-and-character-voice reviewer lane',
+        '- **Recommended domain:** coherence',
+        '- **Stage alignment:** Stage 2 (Agent Coordination)',
+        '',
+        '### 2.3 `editor-writer-feedback-chain.md`',
+        '',
+        '- **Recommended first task title:** Implement editor-writer feedback chain contract and weighted-feedback pipeline',
+        '- **Recommended domain:** harness',
+        '- **Stage alignment:** Stage 2 (Agent Coordination)',
+      ].join('\n'),
+      'utf-8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'specs', 'dialogue-and-character-voice.md'),
+      [
+        '# Dialogue And Character Voice',
+        '',
+        'Dialogue is action under social pressure.',
+      ].join('\n'),
+      'utf-8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'specs', 'editor-writer-feedback-chain.md'),
+      [
+        '# Editor Writer Feedback Chain',
+        '',
+        'Findings should be weighted before they reach the writer.',
+      ].join('\n'),
+      'utf-8',
+    )
+
+    const inventory = await detectWorkspaceSignals({ projectPath: tmpDir })
+    const draft = formWorkspaceHypothesis(inventory)
+    const materialized = await materializeWorkspaceImportDraft({
+      memoryDir,
+      projectPath: tmpDir,
+      draft,
+    })
+
+    expect(materialized.tasks.map(task => task.title)).toEqual(expect.arrayContaining([
+      'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+      'Implement dialogue-and-character-voice reviewer lane',
+      'Implement editor-writer feedback chain contract and weighted-feedback pipeline',
+    ]))
+    expect(materialized.tasks.map(task => task.title)).not.toEqual(expect.arrayContaining([
+      'Mastra workflow for the prototype iteration loop',
+      'packet-builder implementation for the first writer/editor packet types',
+      'deterministic retrieval tools over structured story records',
+      'specialist editor agent calls for the first review lanes',
+    ]))
   })
 
   it('re-expands import scope from detected planning evidence even when the approved starter draft cites only one roadmap doc', async () => {
