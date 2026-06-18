@@ -490,6 +490,9 @@ export interface ParsedTask {
   scope?: 'current' | 'later'
   priority: TaskPriority
   references: readonly string[]
+  acceptanceCriteria?: Array<{ id: string; description: string; verifiedBy?: string }>
+  dependsOn?: readonly string[]
+  proofPaths?: Task['proofPaths']
 }
 
 interface MaterializedImportTask extends ParsedTask {
@@ -550,6 +553,39 @@ export function workspaceImportYamlErrors(spec: string): string[] {
 function normStringList(value: unknown): string[] {
   if (!Array.isArray(value)) return []
   return value.filter((v): v is string => typeof v === 'string')
+}
+
+function parseImportedAcceptanceCriteria(
+  value: unknown,
+): Array<{ id: string; description: string; verifiedBy?: string }> | null {
+  if (!Array.isArray(value)) return null
+  const parsed = value
+    .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === 'object' && !Array.isArray(entry))
+    .map((entry) => {
+      const id = typeof entry.id === 'string' ? entry.id.trim() : ''
+      const description = typeof entry.description === 'string' ? entry.description.trim() : ''
+      const verifiedBy = typeof entry.verifiedBy === 'string' ? entry.verifiedBy.trim() : ''
+      if (!id || !description) return null
+      return {
+        id,
+        description,
+        ...(verifiedBy ? { verifiedBy } : {}),
+      }
+    })
+    .filter((entry): entry is { id: string; description: string; verifiedBy?: string } => Boolean(entry))
+  return parsed.length > 0 ? parsed : null
+}
+
+function parseImportedDependsOn(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+    .map((entry) => entry.trim())
+}
+
+function parseImportedProofPaths(value: unknown): Array<Record<string, unknown>> {
+  if (!Array.isArray(value)) return []
+  return value.filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === 'object' && !Array.isArray(entry))
 }
 
 function normalizeImportText(value: string): string {
@@ -659,6 +695,9 @@ export function mergeWorkspaceImportDraft(
         scope: parsedTask.scope === 'later' ? 'later' : task.scope,
         priority: parsedTask.priority || task.priority,
         references: mergeImportReferences(task.references, parsedTask.references),
+        ...(parsedTask.acceptanceCriteria ? { acceptanceCriteria: parsedTask.acceptanceCriteria } : {}),
+        ...(parsedTask.dependsOn ? { dependsOn: [...parsedTask.dependsOn] } : {}),
+        ...(parsedTask.proofPaths ? { proofPaths: [...parsedTask.proofPaths] } : {}),
       })
       continue
     }
@@ -683,6 +722,9 @@ export function mergeWorkspaceImportDraft(
       scope: task.scope === 'later' ? 'later' : 'current',
       priority: task.priority,
       source: 'workspace-importer',
+      ...(task.acceptanceCriteria ? { acceptanceCriteria: task.acceptanceCriteria } : {}),
+      ...(task.dependsOn ? { dependsOn: [...task.dependsOn] } : {}),
+      ...(task.proofPaths ? { proofPaths: [...task.proofPaths] } : {}),
       ...(task.references.length > 0 ? { references: [...task.references] } : {}),
       confidence: 'medium',
     })
@@ -887,6 +929,15 @@ export function parseWorkspaceImport(spec: string): ParsedImport {
           scope,
           priority,
           references: normStringList(t['references']),
+          ...(parseImportedAcceptanceCriteria(t['acceptanceCriteria'])
+            ? { acceptanceCriteria: parseImportedAcceptanceCriteria(t['acceptanceCriteria']) }
+            : {}),
+          ...(parseImportedDependsOn(t['dependsOn']).length > 0
+            ? { dependsOn: parseImportedDependsOn(t['dependsOn']) }
+            : {}),
+          ...(parseImportedProofPaths(t['proofPaths']).length > 0
+            ? { proofPaths: parseImportedProofPaths(t['proofPaths']) }
+            : {}),
         })
       }
       continue
@@ -934,6 +985,15 @@ export function parseWorkspaceImport(spec: string): ParsedImport {
           scope,
           priority,
           references: normStringList(t['references']),
+          ...(parseImportedAcceptanceCriteria(t['acceptanceCriteria'])
+            ? { acceptanceCriteria: parseImportedAcceptanceCriteria(t['acceptanceCriteria']) }
+            : {}),
+          ...(parseImportedDependsOn(t['dependsOn']).length > 0
+            ? { dependsOn: parseImportedDependsOn(t['dependsOn']) }
+            : {}),
+          ...(parseImportedProofPaths(t['proofPaths']).length > 0
+            ? { proofPaths: parseImportedProofPaths(t['proofPaths']) }
+            : {}),
         })
       }
     }
@@ -1034,6 +1094,27 @@ export function formatDetectedDraftAsSpec(draft: WorkspaceImportDraft): string {
         lines.push('    missingInformation:')
         for (const missing of t.missingInformation) lines.push(`      - ${escape(missing)}`)
       }
+      if (t.acceptanceCriteria && t.acceptanceCriteria.length > 0) {
+        lines.push('    acceptanceCriteria:')
+        for (const criterion of t.acceptanceCriteria) {
+          lines.push(`      - id: ${escape(criterion.id)}`)
+          lines.push(`        description: ${escape(criterion.description)}`)
+          if (criterion.verifiedBy) lines.push(`        verifiedBy: ${escape(criterion.verifiedBy)}`)
+        }
+      }
+      if (t.dependsOn && t.dependsOn.length > 0) {
+        lines.push('    dependsOn:')
+        for (const dependency of t.dependsOn) lines.push(`      - ${escape(dependency)}`)
+      }
+      if (t.proofPaths && t.proofPaths.length > 0) {
+        lines.push('    proofPaths:')
+        for (const proofPath of t.proofPaths) {
+          const yaml = serializeInlineYamlValue(proofPath, 6)
+          if (yaml.length === 0) continue
+          lines.push(`      - ${yaml[0]}`)
+          for (const extra of yaml.slice(1)) lines.push(extra)
+        }
+      }
       if (t.references && t.references.length > 0) {
         lines.push('    references:')
         for (const r of t.references) lines.push(`      - ${escape(r)}`)
@@ -1054,6 +1135,13 @@ export function formatDetectedDraftAsSpec(draft: WorkspaceImportDraft): string {
   }
 
   return lines.join('\n')
+}
+
+function serializeInlineYamlValue(value: unknown, _indent: number): string[] {
+  if (typeof value === 'string') return [JSON.stringify(value)]
+  if (typeof value === 'number' || typeof value === 'boolean') return [String(value)]
+  if (Array.isArray(value) || (value && typeof value === 'object')) return [JSON.stringify(value)]
+  return ['null']
 }
 
 export interface ApproveWorkspaceImportInput {
@@ -1465,7 +1553,7 @@ function graphTaskToParsedTask(
       'Guildhall still needs to confirm the final implementation boundary during shaping.',
     ],
     domain: task.targetArea,
-    scope: 'current',
+    scope: parsedTask?.scope === 'later' ? 'later' : 'current',
     priority: evidenceTaskPriority(task),
     references,
     acceptanceCriteria: task.acceptanceCriteria,

@@ -22,6 +22,7 @@ const DO_NOT_START_LABEL_RE = /^do not start yet:\s*$/i
 const GOAL_LABEL_RE = /^goal:\s*(.+?)\s*$/i
 const RECOMMENDED_TASK_TITLE_RE = /^-\s+\*\*recommended first task title:\*\*\s+(.+?)\s*$/i
 const RECOMMENDED_DOMAIN_RE = /^-\s+\*\*recommended domain:\*\*\s+(.+?)\s*$/i
+const CORE_LOOP_HEADING_RE = /^core loop$/i
 
 function likelyRelevantFile(rel: string): boolean {
   return MARKDOWN_FILE_RE.test(rel) && !IGNORE_PATH_RE.test(rel)
@@ -233,10 +234,23 @@ function headingSignalKind(
 
 function parseStageOrdinal(label: string | null | undefined): number | null {
   if (!label) return null
-  const match = /^stage\s+(\d+)(?:\s*:.*)?$/i.exec(label.trim())
+  const match = /^stage\s+(\d+)(?:\s*[:(].*)?$/i.exec(label.trim())
   if (!match?.[1]) return null
   const value = Number.parseInt(match[1], 10)
   return Number.isFinite(value) ? value : null
+}
+
+function scopeHintForStage(
+  stageLabel: string | null | undefined,
+  currentMilestoneStage: string | null | undefined,
+): WorkspaceSignal['scopeHint'] {
+  const stageNumber = parseStageOrdinal(stageLabel)
+  const currentStageNumber = parseStageOrdinal(currentMilestoneStage)
+  if (stageNumber != null && currentStageNumber != null) {
+    if (stageNumber > currentStageNumber) return 'later'
+    return 'current'
+  }
+  return 'current'
 }
 
 function stageDeliverableSignal(
@@ -248,7 +262,7 @@ function stageDeliverableSignal(
   if (stageNumber != null && currentStageNumber != null && stageNumber < currentStageNumber) {
     return { kind: 'milestone' }
   }
-  return { kind: 'open_work', scopeHint: 'current' }
+  return { kind: 'open_work', scopeHint: scopeHintForStage(currentSection, currentMilestoneStage) }
 }
 
 export const planningDocsSource: TaskSource = {
@@ -322,7 +336,7 @@ export const planningDocsSource: TaskSource = {
             evidence: `${rel}: ${pendingRecommendedTaskSection ?? currentSection ?? title}`.slice(0, 240),
             references,
             ...(currentRecommendedDomain ? { domainHint: currentRecommendedDomain } : domainHint ? { domainHint } : {}),
-            scopeHint: 'current',
+            scopeHint: scopeHintForStage(currentRecommendedStageAlignment, currentMilestoneStage),
             confidence: 'high',
           })
         }
@@ -539,6 +553,19 @@ export const planningDocsSource: TaskSource = {
         }
 
         const numbered = /^\s*\d+\.\s+(.+?)\s*$/.exec(line)
+        if (numbered && currentSection && CORE_LOOP_HEADING_RE.test(currentSection)) {
+          signals.push({
+            source: 'planning-docs',
+            kind: 'open_work',
+            title: cleanHeading(numbered[1]!),
+            evidence: `${rel}: ${line.trim()}`.slice(0, 240),
+            references: [abs],
+            ...(domainHint ? { domainHint } : {}),
+            scopeHint: 'current',
+            confidence: 'high',
+          })
+          continue
+        }
         if (numbered && currentSection && (OPEN_HEADING_RE.test(currentSection) || /^current next milestone$/i.test(currentSection))) {
           const kind: WorkspaceSignal['kind'] = isProjectStateCurrentFocus(fileBase, currentSection)
             ? 'context'

@@ -413,7 +413,7 @@ describe('planningDocsSource', () => {
     expect(sigs.filter((signal) => signal.kind === 'open_work' || signal.kind === 'milestone')).toEqual([])
   })
 
-  it('keeps roadmap deliverables from later stages in the same bounded work instead of auto-deferring them', async () => {
+  it('marks roadmap deliverables from later stages as deferred when a current milestone stage is explicit', async () => {
     mkdirSync(join(dir, 'docs', 'harness'), { recursive: true })
     writeFileSync(
       join(dir, 'docs', 'harness', 'implementation-roadmap.md'),
@@ -461,12 +461,12 @@ The next milestone is Stage 1: Fixture And Evaluation Harness.
       expect.objectContaining({
         kind: 'open_work',
         title: 'Mastra workflow for the prototype iteration loop',
-        scopeHint: 'current',
+        scopeHint: 'later',
       }),
       expect.objectContaining({
         kind: 'open_work',
         title: 'specialist editor agent calls for the first review lanes',
-        scopeHint: 'current',
+        scopeHint: 'later',
       }),
     ]))
   })
@@ -520,12 +520,12 @@ The next milestone is Stage 1: Fixture And Evaluation Harness.
       expect.objectContaining({
         kind: 'open_work',
         title: 'Mastra workflow for the prototype iteration loop',
-        scopeHint: 'current',
+        scopeHint: 'later',
       }),
       expect.objectContaining({
         kind: 'open_work',
         title: 'specialist editor agent calls for the first review lanes',
-        scopeHint: 'current',
+        scopeHint: 'later',
       }),
       expect.objectContaining({
         kind: 'context',
@@ -544,6 +544,56 @@ The next milestone is Stage 1: Fixture And Evaluation Harness.
       expect.objectContaining({
         kind: 'open_work',
         title: 'typed fixture and expected-record contracts',
+      }),
+    ]))
+  })
+
+  it('extracts architecture core-loop steps as current workflow capabilities', async () => {
+    mkdirSync(join(dir, 'docs', 'harness'), { recursive: true })
+    writeFileSync(
+      join(dir, 'docs', 'harness', 'architecture-notes.md'),
+      `# Architecture Notes
+
+## Core Loop
+
+1. Author defines book intent, genre/form expectations, themes, and voice.
+2. Author builds a house: premise, world, cast, outline, chapter goals, review standards.
+3. Author drafts or imports chapters.
+4. The coordinator chooses reviewers based on current phase.
+5. Reviewers produce evidence-backed findings.
+6. The coordinator summarizes conflicts and turns them into author decisions.
+7. Accepted decisions update the story bible, outline, and manuscript tasks.
+`,
+    )
+
+    const sigs = await planningDocsSource.detect({
+      projectPath: dir,
+      exec: fakeExec(() => ({
+        stdout: ['docs/harness/architecture-notes.md'].join('\n'),
+        code: 0,
+      })),
+    })
+
+    expect(sigs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'open_work',
+        title: 'Author defines book intent, genre/form expectations, themes, and voice.',
+        scopeHint: 'current',
+      }),
+      expect.objectContaining({
+        kind: 'open_work',
+        title: 'Author drafts or imports chapters.',
+        scopeHint: 'current',
+      }),
+      expect.objectContaining({
+        kind: 'open_work',
+        title: 'The coordinator chooses reviewers based on current phase.',
+        scopeHint: 'current',
+      }),
+      expect.objectContaining({
+        kind: 'open_work',
+        title: 'Accepted decisions update the story bible, outline, and manuscript tasks.',
+        scopeHint: 'current',
       }),
     ]))
   })

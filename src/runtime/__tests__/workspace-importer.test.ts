@@ -865,7 +865,7 @@ tasks:
       ]),
     )
     expect(draft.tasks.find((task) => task.title === 'Implement dialogue-and-character-voice reviewer lane')).toMatchObject({
-      scope: 'current',
+      scope: 'later',
       domain: 'coherence',
       references: expect.arrayContaining([
         expect.stringContaining('docs/harness/remaining-spec-decomposition-inventory.md'),
@@ -2033,5 +2033,59 @@ describe('formatDetectedDraftAsSpec', () => {
     expect(parsed.tasks.find((task) => task.title === 'Implement dialogue reviewer lane')).toMatchObject({
       scope: 'later',
     })
+  })
+
+  it('round-trips structured execution fields instead of dropping them from the import contract', () => {
+    const spec = formatDetectedDraftAsSpec({
+      goals: [],
+      tasks: [
+        {
+          suggestedId: 'task-runner',
+          title: 'Implement a no-UI runner that builds a packet from fixture records.',
+          description: 'Current milestone starter task.',
+          domain: 'harness',
+          scope: 'current',
+          priority: 'high',
+          acceptanceCriteria: [
+            { id: 'runner-contract', description: 'The runner builds a packet from fixture records.' },
+            { id: 'runner-proof', description: 'The runner has deterministic proof output.', verifiedBy: 'automated' },
+          ],
+          dependsOn: ['task-schema'],
+          proofPaths: [
+            {
+              kind: 'command',
+              command: 'pnpm test -- packet-runner',
+              expectedEvidence: ['Packet runner regression passes.'],
+            },
+          ],
+          references: ['docs/harness/implementation-roadmap.md'],
+          source: 'planning-docs',
+          confidence: 'high',
+        },
+      ],
+      milestones: [],
+      context: [],
+      stats: { inputSignals: 1, drafted: 1, deduped: 0 },
+    })
+
+    const parsed = parseWorkspaceImport(spec)
+    expect(parsed.tasks).toEqual([
+      expect.objectContaining({
+        id: 'task-runner',
+        title: 'Implement a no-UI runner that builds a packet from fixture records.',
+        dependsOn: ['task-schema'],
+        acceptanceCriteria: [
+          { id: 'runner-contract', description: 'The runner builds a packet from fixture records.' },
+          { id: 'runner-proof', description: 'The runner has deterministic proof output.', verifiedBy: 'automated' },
+        ],
+        proofPaths: [
+          expect.objectContaining({
+            kind: 'command',
+            command: 'pnpm test -- packet-runner',
+            expectedEvidence: ['Packet runner regression passes.'],
+          }),
+        ],
+      }),
+    ])
   })
 })
