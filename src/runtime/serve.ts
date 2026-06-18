@@ -4775,6 +4775,15 @@ export function buildServeApp(opts: ServeOptions = {}): {
     message: string
     actionHref: string
   } | null> {
+    const normalizeImportTitle = (value: string): string =>
+      value
+        .trim()
+        .toLowerCase()
+        .replace(/[`*_~]/g, '')
+        .replace(/[^a-z0-9\s-]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+
     const tasksPath = projectTasksPath(projectPath)
     if (!existsSync(tasksPath)) return null
     const raw = JSON.parse(await readManagedTextFile(tasksPath, 'utf-8')) as
@@ -4792,19 +4801,43 @@ export function buildServeApp(opts: ServeOptions = {}): {
     if (!['done', 'spec_review'].includes(status) || !spec.trim()) return null
 
     const parsed = parseWorkspaceImport(spec)
-    if (parsed.tasks.length > 0) return null
-
     const inventory = await detectWorkspaceSignals({ projectPath })
     const detected = formWorkspaceHypothesis(inventory)
     if (detected.tasks.length === 0) return null
 
-    const first = detected.tasks[0]?.title?.trim() || 'the first current-scope task'
+    const coveredTitles = new Set<string>()
+    for (const task of parsed.tasks) {
+      if (typeof task.title === 'string' && task.title.trim()) {
+        coveredTitles.add(normalizeImportTitle(task.title))
+      }
+    }
+    for (const task of tasks) {
+      if (!task || typeof task !== 'object') continue
+      if ((task as { id?: unknown }).id === WORKSPACE_IMPORT_TASK_ID) continue
+      const title = typeof (task as { title?: unknown }).title === 'string'
+        ? (task as { title: string }).title
+        : ''
+      if (title.trim()) coveredTitles.add(normalizeImportTitle(title))
+    }
+
+    const missing = detected.tasks.filter(task => {
+      const title = typeof task.title === 'string' ? task.title : ''
+      return title.trim().length > 0 && !coveredTitles.has(normalizeImportTitle(title))
+    })
+    if (missing.length === 0) return null
+
+    const currentMissing = missing.filter(task => task.scope !== 'later').length
+    const laterMissing = missing.length - currentMissing
+    const first = missing[0]?.title?.trim() || 'the first current-scope task'
+    const missingSummary = laterMissing > 0
+      ? `${missing.length} task${missing.length === 1 ? '' : 's'} (${currentMissing} now, ${laterMissing} later)`
+      : `${missing.length} current task${missing.length === 1 ? '' : 's'}`
     return {
       canStart: false,
       code: 'workspace_import_refresh_needed',
       message:
         `Guildhall's saved import is under-scoped for the current project docs. ` +
-        `The live detector found ${detected.tasks.length} current tasks, starting with "${first}". Refresh the import before treating this project as complete.`,
+        `The live detector found ${missingSummary} missing from the saved import/queue, starting with "${first}". Refresh the import before treating this project as complete.`,
       actionHref: '/workspace-import',
     }
   }
@@ -6354,12 +6387,25 @@ export function buildServeApp(opts: ServeOptions = {}): {
           parsedSavedImporterSpec = null
         }
       }
+      const normalizeImportTaskTitle = (value: string): string =>
+        value
+          .trim()
+          .toLowerCase()
+          .replace(/[`*_~]/g, '')
+          .replace(/[^a-z0-9\s-]/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim()
       const savedImporterUndercoversCurrentDraft =
         !hasExplicitNarrowing &&
         importerTaskHasSpec &&
         parsedSavedImporterSpec !== null &&
-        parsedSavedImporterSpec.tasks.length === 0 &&
-        filteredDraft.tasks.length > 0
+        filteredDraft.tasks.some(task => {
+          const normalized = normalizeImportTaskTitle(task.title)
+          if (!normalized) return false
+          return !parsedSavedImporterSpec!.tasks.some(savedTask =>
+            normalizeImportTaskTitle(savedTask.title) === normalized,
+          )
+        })
 
       const result = await approveWorkspaceImport({
         memoryDir,

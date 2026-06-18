@@ -897,6 +897,94 @@ tasks:
     expect(q.tasks.find((t) => t.id === 'task-later')?.notes?.[0]?.content ?? '').toContain('Scope: later/deferred')
   })
 
+  it('does not duplicate already-imported tasks when a refreshed import includes the same title again', async () => {
+    await writeQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      tasks: [
+        {
+          id: WORKSPACE_IMPORT_TASK_ID,
+          title: 'Review existing project work',
+          description: 'Reserved importer',
+          domain: WORKSPACE_IMPORT_DOMAIN,
+          projectPath: tmpDir,
+          status: 'spec_review',
+          priority: 'high',
+          spec: '',
+          acceptanceCriteria: [],
+          dependsOn: [],
+          outOfScope: [],
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          adjudications: [],
+          escalations: [],
+          agentIssues: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          origination: 'system',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+        {
+          id: 'task-import-existing',
+          title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+          description: 'Already imported once.',
+          domain: 'harness',
+          projectPath: tmpDir,
+          status: 'exploring',
+          priority: 'normal',
+          acceptanceCriteria: [],
+          dependsOn: [],
+          outOfScope: [],
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          adjudications: [],
+          escalations: [],
+          agentIssues: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          origination: 'human',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      ],
+    })
+    await seedImporterWithSpec(`
+\`\`\`yaml
+tasks:
+  - id: task-import-existing
+    title: Define fixture, expected-record, prototype-run, and evaluation schemas.
+    description: Keep the existing Stage 1 schema task.
+    domain: harness
+    priority: normal
+  - id: task-later
+    title: Implement dialogue-and-character-voice reviewer lane
+    description: Import the later reviewer lane too.
+    domain: coherence
+    scope: later
+    priority: normal
+\`\`\`
+`)
+
+    const res = await approveWorkspaceImport({
+      memoryDir,
+      projectPath: tmpDir,
+    })
+    expect(res.tasksAdded).toBe(1)
+
+    const q = await readQueue()
+    const existing = q.tasks.find(task => task.id === 'task-import-existing')
+    expect(q.tasks.filter(task => task.title === 'Define fixture, expected-record, prototype-run, and evaluation schemas.')).toHaveLength(1)
+    expect(existing).toMatchObject({
+      description: 'Keep the existing Stage 1 schema task.',
+      domain: 'harness',
+      status: 'exploring',
+    })
+    expect(q.tasks.find(task => task.id === 'task-later')?.status).toBe('shelved')
+  })
+
   it('suffixes conflicting task ids rather than overwriting', async () => {
     await seedImporterWithSpec(`
 \`\`\`yaml
@@ -1051,6 +1139,61 @@ tasks:
       ),
     }
     expect(pickNextTask(afterImplementation)?.id).toBe('task-alert-dialog-integration')
+  })
+
+  it('keeps explicit imported task wording when the evidence graph does not add net-new structure', async () => {
+    await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'harness', 'implementation-roadmap.md'),
+      [
+        '# Implementation Roadmap',
+        '',
+        '## Stage 1: Fixture And Evaluation Harness',
+        '',
+        '## Current Next Milestone',
+        '',
+        'The next milestone is Stage 1: Fixture And Evaluation Harness.',
+        '',
+        '1. Define fixture, expected-record, prototype-run, and evaluation schemas.',
+      ].join('\n'),
+      'utf-8',
+    )
+    await seedImporterWithSpec(`
+\`\`\`yaml
+tasks:
+  - id: task-import-schema
+    title: Define fixture, expected-record, prototype-run, and evaluation schemas.
+    description: "docs/harness/implementation-roadmap.md: 1. Define fixture, expected-record, prototype-run, and evaluation schemas."
+    whyThisMayMatter: "docs/harness/implementation-roadmap.md: 1. Define fixture, expected-record, prototype-run, and evaluation schemas."
+    domain: harness
+    priority: normal
+    references:
+      - docs/harness/implementation-roadmap.md
+    assumptions:
+      - This item still reflects current project intent and has not already been completed or superseded elsewhere.
+    missingInformation:
+      - "Guildhall still needs to confirm scope, current relevance, and success criteria during shaping."
+\`\`\`
+`)
+
+    const approved = await approveWorkspaceImport({
+      memoryDir,
+      projectPath: tmpDir,
+    })
+    expect(approved).toMatchObject({ success: true, tasksAdded: 1 })
+
+    const q = await readQueue()
+    const imported = q.tasks.find(task => task.id === 'task-import-schema')
+    expect(imported).toMatchObject({
+      title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+      description: 'docs/harness/implementation-roadmap.md: 1. Define fixture, expected-record, prototype-run, and evaluation schemas.',
+      domain: 'harness',
+      status: 'import_draft',
+    })
+    expect(imported?.acceptanceCriteria ?? []).toEqual([])
+    expect(imported?.requestIntake?.assumptions).toEqual([
+      'This item still reflects current project intent and has not already been completed or superseded elsewhere.',
+    ])
   })
 })
 

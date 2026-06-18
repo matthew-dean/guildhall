@@ -910,6 +910,14 @@ async function materializeEvidenceWorkGraphTasks(
     return [...input.parsedTasks]
   }
 
+  const parsedTaskIds = new Set(input.parsedTasks.map(task => task.id))
+  const graphAddsNetNewStructure = plan.tasks.some(task =>
+    task.kind === 'integration' || !parsedTaskIds.has(task.id),
+  )
+  if (!graphAddsNetNewStructure) {
+    return [...input.parsedTasks]
+  }
+
   const graphTaskIds = new Set(plan.tasks.map(task => task.id))
   const reconciledIds = new Set(plan.reconciliations.map(reconciliation => reconciliation.existingTaskId))
   const graphTasks = plan.tasks.map(task => graphTaskToParsedTask(task, sources))
@@ -1027,12 +1035,38 @@ export async function approveWorkspaceImport(
     queue,
     parsedTasks: parsed.tasks,
   })
+  const existingImportedTasksByTitle = new Map<string, Task>()
+  for (const existingTask of queue.tasks) {
+    if (existingTask.id === WORKSPACE_IMPORT_TASK_ID) continue
+    const normalizedTitle = normalizeImportText(existingTask.title)
+    if (!normalizedTitle || existingImportedTasksByTitle.has(normalizedTitle)) continue
+    existingImportedTasksByTitle.set(normalizedTitle, existingTask)
+  }
+  const refreshableTasks: Array<{ existing: Task; imported: MaterializedImportTask }> = []
+  const pendingTitleSeen = new Set<string>()
+  const mergeableTasks = materializedTasks.filter(task => {
+    const normalizedTitle = normalizeImportText(task.title)
+    if (!normalizedTitle) return true
+    const existing = existingImportedTasksByTitle.get(normalizedTitle)
+    if (existing) {
+      refreshableTasks.push({ existing, imported: task })
+      return false
+    }
+    if (pendingTitleSeen.has(normalizedTitle)) return false
+    pendingTitleSeen.add(normalizedTitle)
+    return true
+  })
 
   // Merge tasks into the queue as intake candidates. Dup ids get suffixed.
   const existingIds = new Set(queue.tasks.map((t) => t.id))
   const allocatedTaskIds: string[] = []
   const dependencyIdMap = new Map<string, string>()
-  for (const t of materializedTasks) {
+  for (const { existing, imported } of refreshableTasks) {
+    if (!dependencyIdMap.has(imported.id)) {
+      dependencyIdMap.set(imported.id, existing.id)
+    }
+  }
+  for (const t of mergeableTasks) {
     const id = uniqueTaskId(existingIds, t.id)
     existingIds.add(id)
     allocatedTaskIds.push(id)
@@ -1041,8 +1075,100 @@ export async function approveWorkspaceImport(
     }
   }
 
+  const importerNoteForTask = (
+    normalizedReferences: readonly string[],
+    task: MaterializedImportTask,
+  ) => normalizedReferences.length > 0
+    ? [
+        {
+          agentId: 'workspace-importer',
+          role: 'importer' as const,
+          content: [
+            `Imported from: ${normalizedReferences.join(', ')}`,
+            task.whyThisMayMatter ? `Why this may matter: ${task.whyThisMayMatter}` : '',
+            task.assumptions && task.assumptions.length > 0 ? `Assumptions: ${task.assumptions.join(' | ')}` : '',
+            task.missingInformation && task.missingInformation.length > 0 ? `Missing information: ${task.missingInformation.join(' | ')}` : '',
+            task.scope === 'later' ? 'Scope: later/deferred' : '',
+          ].filter(Boolean).join('\n'),
+          timestamp: now,
+        },
+      ]
+    : []
+
+  for (const { existing, imported } of refreshableTasks) {
+    const domain = normalizeImportedTaskDomain(imported.domain, input.coordinatorProjectPaths)
+    const taskProjectPath =
+      input.coordinatorProjectPaths?.[domain] ??
+      resolveTaskProjectPath({
+        workspaceProjectPath: input.projectPath,
+        domain,
+      })
+    const normalizedDescription = normalizeImportedDescriptionForTask(
+      imported.description,
+      imported.references,
+      input.projectPath,
+      taskProjectPath,
+    )
+    const normalizedReferences = imported.references.map((ref) =>
+      absoluteImportedReference(ref, input.projectPath),
+    )
+    existing.description = normalizedDescription
+    existing.domain = domain
+    existing.projectPath = taskProjectPath
+    existing.priority = imported.priority
+    existing.dependsOn = [...(imported.dependsOn ?? [])].map(dependency => dependencyIdMap.get(dependency) ?? dependency)
+    existing.acceptanceCriteria = materializedAcceptanceCriteria(imported)
+    existing.requestIntake = {
+      intent: 'spec_only',
+      recommendedNextAction: 'draft_spec',
+      assumptions: [...(imported.assumptions ?? [])],
+      missingInformation: [...(imported.missingInformation ?? [])],
+      ...(imported.missingInformation && imported.missingInformation.length > 0
+        ? {
+            ownerDecisionNeeded: 'Confirm the intended scope and success boundary if this imported draft no longer matches current project needs.',
+            whyOwnerDecisionMatters: 'Imported notes are evidence-backed candidates, but Guildhall should not treat them as current truth without reshaping.',
+          }
+        : {}),
+      evidenceRefs: normalizedReferences.map(ref => `import:${ref}`),
+      componentStack: [],
+      pressureTestSummary: {
+        systemOwned: true,
+        degree: 'guided',
+        qualityBar: 'Treat imported drafts as candidate work that must be reshaped against current evidence before implementation starts.',
+        ownerQuestionPolicy: 'Only ask when the imported evidence is no longer enough to choose a trustworthy task boundary or success condition.',
+        checks: [
+          {
+            id: 'source-relevance',
+            title: 'Source relevance',
+            status: 'system-check',
+            reason: 'Guildhall should verify that the imported note still matches current repo reality and project direction.',
+          },
+          {
+            id: 'scope-boundary',
+            title: 'Scope boundary',
+            status: 'needs-owner-judgment',
+            reason: 'Imported notes often name a direction but not yet the right implementation boundary.',
+          },
+          {
+            id: 'acceptance-criteria',
+            title: 'Acceptance criteria',
+            status: 'system-check',
+            reason: 'Guildhall must reshape the imported draft into concrete acceptance criteria before implementation starts.',
+          },
+        ],
+      },
+      clarifyingQuestions: [],
+      createdAt: now,
+      createdBy: 'workspace-importer',
+    }
+    existing.notes = importerNoteForTask(normalizedReferences, imported)
+    if (imported.proofPaths) existing.proofPaths = [...imported.proofPaths]
+    else delete existing.proofPaths
+    existing.updatedAt = now
+  }
+
   let tasksAdded = 0
-  for (const [index, t] of materializedTasks.entries()) {
+  for (const [index, t] of mergeableTasks.entries()) {
     const id = allocatedTaskIds[index] ?? t.id
     const domain = normalizeImportedTaskDomain(t.domain, input.coordinatorProjectPaths)
     const taskProjectPath =
@@ -1117,22 +1243,7 @@ export async function approveWorkspaceImport(
         createdAt: now,
         createdBy: 'workspace-importer',
       },
-      notes: t.references.length > 0
-        ? [
-            {
-              agentId: 'workspace-importer',
-              role: 'importer',
-              content: [
-                `Imported from: ${normalizedReferences.join(', ')}`,
-                t.whyThisMayMatter ? `Why this may matter: ${t.whyThisMayMatter}` : '',
-                t.assumptions && t.assumptions.length > 0 ? `Assumptions: ${t.assumptions.join(' | ')}` : '',
-                t.missingInformation && t.missingInformation.length > 0 ? `Missing information: ${t.missingInformation.join(' | ')}` : '',
-                t.scope === 'later' ? 'Scope: later/deferred' : '',
-              ].filter(Boolean).join('\n'),
-              timestamp: now,
-            },
-          ]
-        : [],
+      notes: importerNoteForTask(normalizedReferences, t),
       gateResults: [],
       reviewVerdicts: [],
       adjudications: [],

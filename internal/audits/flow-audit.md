@@ -12162,6 +12162,87 @@ Narrative Harness drafts into briefs/specs.
 
 source: codex:narrative-harness-import-shaping-truth-2026-06-17
 
+2026-06-18T05:15:00Z - Stopped workspace-import refresh from trusting
+partial saved specs and duplicating already-imported Narrative Harness work.
+
+- User job: when Guildhall re-runs or approves workspace import on a mature
+  docs-heavy project such as Narrative Harness, it should preserve the full
+  documented skeleton (current plus later/deferred work), refresh the saved
+  import when detector coverage has grown, and avoid cloning already-imported
+  tasks under suffixed ids.
+- Root cause:
+  - The detector/hypothesis layer now sees more of Narrative Harness than the
+    old queue preserved, but the approval/runtime lane still had two blind
+    spots:
+    1. It only treated a saved import as under-scoped when the saved spec had
+       zero tasks. A partially saved starter backlog could still hide large
+       portions of the live detector draft and pass as complete.
+    2. Re-approving a richer import added missing work, but it treated current
+       same-title tasks as id conflicts instead of the same work, so refreshes
+       could clone current tasks as `-2` duplicates.
+  - The evidence-graph materializer also rewrote explicit imported roadmap or
+    decomposition tasks even when it added no net-new structure, flattening
+    imported task wording into generic `Build X as Y` descriptions and
+    boilerplate acceptance criteria.
+- Fix:
+  - `src/runtime/serve.ts`
+    - The under-scoped import blocker now compares the live detector draft
+      against both the saved importer spec and the current queue, not only the
+      degenerate zero-task spec case.
+    - `POST /api/project/workspace-import/approve` now treats a saved importer
+      spec as stale whenever it omits live detector tasks by title, unless the
+      user explicitly narrowed the review selection.
+  - `src/runtime/workspace-importer.ts`
+    - The evidence-work-graph pass now leaves explicit imported tasks alone
+      when it is only doing a one-to-one reframe and not adding any net-new
+      structure such as extra implementation tasks or integration tasks.
+    - Refresh approval now de-dupes by imported task title, refreshes matching
+      existing imported tasks in place, and only appends genuinely missing work.
+- Verification:
+  - Focused runtime tests passed:
+    - `pnpm vitest run src/runtime/__tests__/workspace-importer.test.ts -t "imports later-scope workspace tasks as shelved instead of current intake drafts|does not duplicate already-imported tasks when a refreshed import includes the same title again|keeps explicit imported task wording when the evidence graph does not add net-new structure|materializes referenced evidence as a dependency-aware work graph that scheduling respects"`
+    - `pnpm vitest run src/runtime/__tests__/serve-settings.test.ts -t "workspace import|under-scoped|curated spec|partial import drift"`
+    - `pnpm vitest run src/runtime/workspace-import/__tests__/hypothesis.test.ts src/runtime/__tests__/workspace-importer.test.ts src/runtime/__tests__/serve-settings.test.ts src/runtime/__tests__/project-orientation-spine.test.ts`
+    - `pnpm vitest run src/runtime/__tests__/serve-task-endpoints.test.ts -t "promotes an import draft into exploring when shaping starts"`
+- Live installed-app proof:
+  - Rebuilt and reinstalled the current app (`pnpm build`; `pnpm dev:install`;
+    `guildhall stop`; `guildhall start`); `/api/stale-server` returned
+    `stale:false`.
+  - Narrative Harness before refresh:
+    - `/api/project/workspace-import/draft?projectId=narrative-harness` showed
+      `15` detected task candidates: `6` current and `9` later.
+    - The persisted queue only held the importer plus the `6` current Stage 1
+      tasks, so the project skeleton still underrepresented later reviewer and
+      coordination work.
+  - Narrative Harness after refresh:
+    - `POST /api/project/workspace-import/approve?projectId=narrative-harness`
+      returned `{ "ok": true, "tasksAdded": 15, "goalsRecorded": 7 }` on the
+      first repair run, proving the missing later skeleton was materialized.
+    - After removing the accidental duplicate `-2` rows from that one proof
+      run and re-approving on the fixed build, the same endpoint returned
+      `{ "ok": true, "tasksAdded": 0, "goalsRecorded": 7 }`, proving refresh is
+      now idempotent for already-imported titles.
+    - `/api/project/workspace-import/status?projectId=narrative-harness` now
+      reports `specPresent:true`, `draft.tasks:15`, and no missing detector
+      work relative to the saved import/queue.
+    - `/api/project?projectId=narrative-harness` now exposes `16` queue rows:
+      importer `done`, `6` current Stage 1 tasks, and `9` shelved later tasks,
+      so the docs-derived skeleton is visible in durable project state instead
+      of being trapped inside detector-only preview.
+    - Newly materialized later tasks preserve the explicit imported wording; for
+      example `task-import-lho60m` stores description
+      `docs/harness/remaining-spec-decomposition-inventory.md: 2.2 dialogue-and-character-voice.md`
+      with both the inventory file and the child spec path attached as import
+      evidence refs.
+- Caveat:
+  - Narrative Harness's six current Stage 1 tasks were originally imported by
+    older logic and still carry their earlier generic descriptions in current
+    local state. The new code prevents fresh duplication and preserves explicit
+    wording for future import refreshes, but rewriting those already-shaped
+    legacy current rows cleanly is a separate cleanup pass.
+
+source: codex:narrative-harness-import-refresh-coverage-2026-06-17
+
 2026-06-18T00:59:00Z - Completed the unified Releases/current-work model proof.
 
 - Work id: `codex:unified-releases-model-2026-06-17`.

@@ -2108,16 +2108,16 @@ describe('Workspace Import review endpoints', () => {
     await expect(fs.access(getProjectSystemStatePath(tmpDir, 'learning.json'))).resolves.toBeUndefined()
   })
 
-  it('approve preserves the importer agent curated spec when no review narrowing is supplied', async () => {
+  it('approve preserves the importer agent curated spec when it still covers the live detector output', async () => {
     await fs.mkdir(path.join(tmpDir, 'docs'), { recursive: true })
     await fs.writeFile(
       path.join(tmpDir, 'README.md'),
-      '# Broad detector bait\n\n## Goals\n\n- Ship everything\n',
+      '# Curated import\n\n## Goals\n\n- Keep the curated project direction\n',
       'utf8',
     )
     await fs.writeFile(
       path.join(tmpDir, 'docs', 'roadmap.md'),
-      '- [ ] Detector task one\n- [ ] Detector task two\n- [ ] Detector task three\n',
+      '- [ ] Build the curated first task\n',
       'utf8',
     )
     await fs.writeFile(
@@ -2202,7 +2202,98 @@ describe('Workspace Import review endpoints', () => {
 
     const tasks = await readTasks(tmpDir)
     expect(tasks.some(task => task.id === 'curated-first-task')).toBe(true)
-    expect(tasks.some(task => task.id === 'task-detector-task-one')).toBe(false)
+    expect(tasks.some(task => task.title === 'Build the curated first task')).toBe(true)
+  })
+
+  it('approve refreshes a saved curated importer spec when it undercovers the live detector draft', async () => {
+    await fs.mkdir(path.join(tmpDir, 'docs'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'README.md'),
+      '# Broad detector bait\n\n## Goals\n\n- Ship everything\n',
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'roadmap.md'),
+      '- [ ] Detector task one\n- [ ] Detector task two\n- [ ] Detector task three\n',
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'package.json'),
+      JSON.stringify({ name: 'curated-import-undercovers' }),
+      'utf8',
+    )
+    await writeSystemText(
+      'TASKS.json',
+      JSON.stringify(
+        {
+          version: 1,
+          lastUpdated: '2026-01-01T00:00:00.000Z',
+          tasks: [
+            {
+              id: 'task-workspace-import',
+              title: 'Review existing project work',
+              description: 'Reserved importer',
+              domain: '_workspace_import',
+              projectPath: tmpDir,
+              status: 'spec_review',
+              priority: 'normal',
+              acceptanceCriteria: [],
+              dependsOn: [],
+              outOfScope: [],
+              spec: [
+                '```yaml',
+                'goals:',
+                '  - id: curated-goal',
+                '    title: Keep the curated project direction',
+                '    rationale: The importer agent narrowed noisy repo notes to one useful workstream.',
+                '```',
+                '```yaml',
+                'tasks:',
+                '  - id: curated-first-task',
+                '    title: Build the curated first task',
+                '    description: Implement only the first reviewed workstream from the importer agent.',
+                '    domain: app',
+                '    priority: high',
+                '    references:',
+                '      - README.md',
+                '```',
+              ].join('\n'),
+              createdAt: '2026-01-01T00:00:00.000Z',
+              updatedAt: '2026-01-01T00:00:00.000Z',
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+    )
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const approve = await app.fetch(
+      new Request(scoped('/api/project/workspace-import/approve'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}',
+      }),
+    )
+    const body = (await approve.json()) as {
+      ok?: boolean
+      tasksAdded?: number
+      goalsRecorded?: number
+      error?: string
+    }
+    if (approve.status !== 200) {
+      throw new Error(`approve failed: status=${approve.status} body=${JSON.stringify(body)}`)
+    }
+
+    expect(body.ok).toBe(true)
+    expect(body.tasksAdded).toBe(3)
+
+    const tasks = await readTasks(tmpDir)
+    expect(tasks.some(task => task.id === 'curated-first-task')).toBe(false)
+    expect(tasks.some(task => task.title === 'Detector task one')).toBe(true)
+    expect(tasks.some(task => task.title === 'Detector task two')).toBe(true)
+    expect(tasks.some(task => task.title === 'Detector task three')).toBe(true)
   })
 
   it('approve replaces a stale importer spec that saved zero tasks while live detection finds current work', async () => {
@@ -2351,6 +2442,78 @@ describe('Workspace Import review endpoints', () => {
       topBlocker: 'Workspace import is under-scoped.',
       nextAction: 'Refresh the workspace import.',
     })
+  })
+
+  it('blocks readiness when a saved import spec covers only part of the live detector task set', async () => {
+    await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'harness', 'implementation-roadmap.md'),
+      [
+        '# Implementation Roadmap',
+        '',
+        '## Stage 1: Fixture And Evaluation Harness',
+        '',
+        '## Current Next Milestone',
+        '',
+        'The next milestone is Stage 1: Fixture And Evaluation Harness.',
+        '',
+        '1. Define fixture, expected-record, prototype-run, and evaluation schemas.',
+        '2. Add the first tiny fiction fixture and human-authored expected records.',
+      ].join('\n'),
+      'utf8',
+    )
+    await fs.writeFile(path.join(tmpDir, 'package.json'), JSON.stringify({ name: 'partial-import-drift' }), 'utf8')
+    await writeSystemText(
+      'TASKS.json',
+      JSON.stringify(
+        {
+          version: 1,
+          lastUpdated: '2026-01-01T00:00:00.000Z',
+          tasks: [
+            {
+              id: 'task-workspace-import',
+              title: 'Review existing project work',
+              description: 'Reserved importer',
+              domain: '_workspace_import',
+              projectPath: tmpDir,
+              status: 'done',
+              priority: 'normal',
+              acceptanceCriteria: [],
+              dependsOn: [],
+              outOfScope: [],
+              spec: [
+                '```yaml',
+                'tasks:',
+                '  - id: imported-one',
+                '    title: Define fixture, expected-record, prototype-run, and evaluation schemas.',
+                '    description: Keep only the first detected task.',
+                '    domain: harness',
+                '    priority: high',
+                '```',
+              ].join('\n'),
+              createdAt: '2026-01-01T00:00:00.000Z',
+              updatedAt: '2026-01-01T00:00:00.000Z',
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+    )
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(scoped('/api/project')))
+    expect(res.status).toBe(200)
+    const body = await res.json() as {
+      startReadiness?: { canStart?: boolean; code?: string; message?: string; actionHref?: string }
+    }
+    expect(body.startReadiness).toMatchObject({
+      canStart: false,
+      code: 'workspace_import_refresh_needed',
+      actionHref: '/workspace-import',
+    })
+    expect(body.startReadiness?.message).toContain('under-scoped')
+    expect(body.startReadiness?.message).toContain('Add the first tiny fiction fixture and human-authored expected records.')
   })
 
   it('status counts a completed importer task from its saved curated spec', async () => {
