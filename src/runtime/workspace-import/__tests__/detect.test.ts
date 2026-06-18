@@ -471,6 +471,83 @@ The next milestone is Stage 1: Fixture And Evaluation Harness.
     ]))
   })
 
+  it('does not duplicate current-stage deliverables as open work when the roadmap already names explicit current milestone starter tasks', async () => {
+    mkdirSync(join(dir, 'docs', 'harness'), { recursive: true })
+    writeFileSync(
+      join(dir, 'docs', 'harness', 'implementation-roadmap.md'),
+      `# Implementation Roadmap
+
+## Stage 1: Fixture And Evaluation Harness
+
+Deliverables:
+
+- fixture directory shape for at least one small story fixture
+- typed fixture and expected-record contracts
+
+## Stage 2: Mastra Agent Prototype
+
+Deliverables:
+
+- Mastra workflow for the prototype iteration loop
+- specialist editor agent calls for the first review lanes
+
+## Current Next Milestone
+
+The next milestone is Stage 1: Fixture And Evaluation Harness.
+
+1. Define fixture, expected-record, prototype-run, and evaluation schemas.
+2. Add the first tiny fiction fixture and human-authored expected records.
+`,
+    )
+
+    const sigs = await planningDocsSource.detect({
+      projectPath: dir,
+      exec: fakeExec(() => ({
+        stdout: ['docs/harness/implementation-roadmap.md'].join('\n'),
+        code: 0,
+      })),
+    })
+
+    expect(sigs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'open_work',
+        title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+      }),
+      expect.objectContaining({
+        kind: 'open_work',
+        title: 'Add the first tiny fiction fixture and human-authored expected records.',
+      }),
+      expect.objectContaining({
+        kind: 'open_work',
+        title: 'Mastra workflow for the prototype iteration loop',
+        scopeHint: 'later',
+      }),
+      expect.objectContaining({
+        kind: 'open_work',
+        title: 'specialist editor agent calls for the first review lanes',
+        scopeHint: 'later',
+      }),
+      expect.objectContaining({
+        kind: 'context',
+        title: 'fixture directory shape for at least one small story fixture',
+      }),
+      expect.objectContaining({
+        kind: 'context',
+        title: 'typed fixture and expected-record contracts',
+      }),
+    ]))
+    expect(sigs).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'open_work',
+        title: 'fixture directory shape for at least one small story fixture',
+      }),
+      expect.objectContaining({
+        kind: 'open_work',
+        title: 'typed fixture and expected-record contracts',
+      }),
+    ]))
+  })
+
   it('keeps nested explanatory bullets under a task candidate out of open work', async () => {
     mkdirSync(join(dir, 'looma', 'docs'), { recursive: true })
     writeFileSync(

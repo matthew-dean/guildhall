@@ -73,6 +73,7 @@ const INTERNAL_STEP_WORK_KINDS = new Set(['test', 'verification'])
 const TASK_DONE_STATUSES = new Set(['done'])
 const TASK_BLOCKED_STATUSES = new Set(['blocked'])
 const TASK_SHELVED_STATUSES = new Set(['shelved'])
+const TASK_HIDDEN_STATUSES = new Set(['archived', 'cancelled'])
 const TASK_ACTIVE_STATUSES = new Set([
   'ready',
   'in_progress',
@@ -165,6 +166,10 @@ function deriveTaskWorkProgress(task: TaskRecord, byId: Map<string, TaskRecord>)
 
 function deriveWorkVisibility(task: TaskRecord): WorkVisibility {
   if (isProjectSetupTask(task)) {
+    return { kind: 'hidden', countInProjectTotals: false }
+  }
+  const status = stringValue(task.status)
+  if (status && TASK_HIDDEN_STATUSES.has(status)) {
     return { kind: 'hidden', countInProjectTotals: false }
   }
   const explicit = objectValue(task.workVisibility)

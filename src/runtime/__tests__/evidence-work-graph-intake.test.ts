@@ -317,7 +317,20 @@ describe('evidence-to-work-graph intake', () => {
       'Use the first run to narrow the MVP story-memory schema.',
     ])
     const firstTask = plan.tasks.find(task => task.title === 'Define fixture, expected-record, prototype-run, and evaluation schemas.')
+    const secondTask = plan.tasks.find(task => task.title === 'Add the first tiny fiction fixture and human-authored expected records.')
+    const thirdTask = plan.tasks.find(task => task.title === 'Implement a no-UI runner that builds a packet from fixture records.')
+    const sixthTask = plan.tasks.find(task => task.title === 'Use the first run to narrow the MVP story-memory schema.')
     expect(firstTask?.buildsOn).toEqual(['Stage 1'])
+    expect(firstTask?.dependsOn).toEqual([])
+    expect(secondTask?.dependsOn).toEqual([firstTask?.id])
+    expect(thirdTask?.dependsOn).toEqual([secondTask?.id])
+    expect(sixthTask?.dependsOn).toHaveLength(1)
+    expect(sixthTask?.relatedTasks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        relationship: 'blocks',
+        reason: expect.stringContaining('comes after'),
+      }),
+    ]))
     expect(plan.tasks.every(task => task.kind === 'implementation')).toBe(true)
   })
 

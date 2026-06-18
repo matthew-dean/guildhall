@@ -68,6 +68,22 @@ const loomaAudit = [
   '| AlertDialog | missing P0 gap | builds on Dialog and Button | Knit destructive confirmation flow |',
 ].join('\n')
 
+const narrativeRoadmap = [
+  '# Implementation Roadmap',
+  '',
+  '## Stage 1: Fixture And Evaluation Harness',
+  '',
+  'Deliverables:',
+  '',
+  '- typed fixture and expected-record contracts',
+  '',
+  '## Current Next Milestone',
+  '',
+  'The next milestone is Stage 1: Fixture And Evaluation Harness.',
+  '',
+  '1. Define fixture, expected-record, prototype-run, and evaluation schemas.',
+].join('\n')
+
 describe('project re-intake apply', () => {
   it('applies reframes in place and appends a re-intake note', async () => {
     const memoryDir = await makeState([
@@ -93,7 +109,7 @@ describe('project re-intake apply', () => {
     expect(reframed!.notes.some((note: { content?: string }) => note.content?.includes('Re-intake reframed this task'))).toBe(true)
   })
 
-  it('shelves stale weak pre-implementation specs instead of carrying them forward', async () => {
+  it('archives stale weak pre-implementation specs instead of carrying them forward', async () => {
     const legacyTask = task({
       id: 'task-tooltip',
       title: 'Build Tooltip primitive',
@@ -118,10 +134,38 @@ describe('project re-intake apply', () => {
 
     const queue = await readQueue(memoryDir)
     expect(queue.tasks.find((candidate: { id?: string }) => candidate.id === 'task-tooltip')).toMatchObject({
+      status: 'archived',
+      archivedEvidence: expect.objectContaining({
+        retention: 'archive',
+        reason: expect.stringContaining('weak legacy spec shape'),
+        source: 'project-reintake',
+      }),
+    })
+  })
+
+  it('archives shadowed current-milestone deliverable imports so they stop counting as scoped work', async () => {
+    const legacyTask = task({
+      id: 'task-deliverable',
+      title: 'typed fixture and expected-record contracts',
+      description: 'docs/harness/implementation-roadmap.md: - typed fixture and expected-record contracts',
       status: 'shelved',
-      shelveReason: expect.objectContaining({
-        code: 'no_op',
-        detail: expect.stringContaining('weak legacy spec shape'),
+    })
+    const memoryDir = await makeState([legacyTask])
+    const draft = planProjectReintake({
+      now,
+      sources: [{ path: 'docs/harness/implementation-roadmap.md', content: narrativeRoadmap }],
+      tasks: [legacyTask],
+    })
+    await writeProjectReintakeDraft(memoryDir, draft)
+
+    const result = await applyProjectReintakeDraft({ memoryDir, now })
+    expect(result.success).toBe(true)
+
+    const queue = await readQueue(memoryDir)
+    expect(queue.tasks.find((candidate: { id?: string }) => candidate.id === 'task-deliverable')).toMatchObject({
+      status: 'archived',
+      archivedEvidence: expect.objectContaining({
+        reason: expect.stringContaining('starter-task sequence'),
       }),
     })
   })
@@ -143,8 +187,8 @@ describe('project re-intake apply', () => {
 
     const queue = await readQueue(memoryDir)
     expect(queue.tasks.find((candidate: { id?: string }) => candidate.id === 'task-old')).toMatchObject({
-      status: 'shelved',
-      shelveReason: expect.objectContaining({ code: 'no_op', source: 'policy' }),
+      status: 'archived',
+      archivedEvidence: expect.objectContaining({ retention: 'archive', source: 'project-reintake' }),
     })
     expect(queue.tasks.find((candidate: { id?: string }) => candidate.id === 'task-alert-dialog-integration')).toMatchObject({
       dependsOn: ['task-alert-dialog'],
@@ -170,7 +214,7 @@ describe('project re-intake apply', () => {
 
     const queue = await readQueue(memoryDir)
     expect(queue.tasks.some((candidate: { id?: string }) => candidate.id === 'task-alert-dialog')).toBe(false)
-    expect(queue.tasks.find((candidate: { id?: string }) => candidate.id === 'task-old')?.status).toBe('shelved')
+    expect(queue.tasks.find((candidate: { id?: string }) => candidate.id === 'task-old')?.status).toBe('archived')
   })
 
   it('rejects apply when TASKS changed since draft creation', async () => {

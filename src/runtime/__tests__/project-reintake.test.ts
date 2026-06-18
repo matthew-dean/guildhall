@@ -41,6 +41,30 @@ const loomaAudit = [
   '',
 ].join('\n')
 
+const narrativeRoadmap = [
+  '# Implementation Roadmap',
+  '',
+  '## Stage 1: Fixture And Evaluation Harness',
+  '',
+  'Deliverables:',
+  '',
+  '- typed fixture and expected-record contracts',
+  '- prototype run record contract',
+  '',
+  '## Stage 2: Mastra Agent Prototype',
+  '',
+  'Deliverables:',
+  '',
+  '- Mastra workflow for the prototype iteration loop',
+  '',
+  '## Current Next Milestone',
+  '',
+  'The next milestone is Stage 1: Fixture And Evaluation Harness.',
+  '',
+  '1. Define fixture, expected-record, prototype-run, and evaluation schemas.',
+  '2. Add the first tiny fiction fixture and human-authored expected records.',
+].join('\n')
+
 describe('project re-intake planner', () => {
   it('treats stale task state as evidence instead of gospel by proposing a reframe', () => {
     const draft = planProjectReintake({
@@ -204,6 +228,41 @@ describe('project re-intake planner', () => {
         reason: expect.stringContaining('weak legacy spec shape'),
       }),
     ])
+  })
+
+  it('archives old current-milestone deliverable imports when starter tasks now define that milestone', () => {
+    const draft = planProjectReintake({
+      now,
+      sources: [{ path: 'docs/harness/implementation-roadmap.md', content: narrativeRoadmap }],
+      tasks: [
+        task({
+          id: 'task-deliverable',
+          title: 'typed fixture and expected-record contracts',
+          description: 'docs/harness/implementation-roadmap.md: - typed fixture and expected-record contracts',
+          status: 'shelved',
+        }),
+        task({
+          id: 'task-later',
+          title: 'Mastra workflow for the prototype iteration loop',
+          description: 'docs/harness/implementation-roadmap.md: - Mastra workflow for the prototype iteration loop',
+          status: 'shelved',
+        }),
+      ],
+    })
+
+    expect(draft.groups.flatMap(group => group.changes)).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'archive',
+        taskId: 'task-deliverable',
+        reason: expect.stringContaining('starter-task sequence'),
+      }),
+    ]))
+    expect(draft.groups.flatMap(group => group.changes)).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'archive',
+        taskId: 'task-later',
+      }),
+    ]))
   })
 
   it('merges duplicate blocked recovery cards into one survivor', () => {

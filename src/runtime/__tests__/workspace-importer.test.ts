@@ -855,15 +855,12 @@ tasks:
         expect.stringContaining('docs/specs/dialogue-and-character-voice.md'),
       ]),
     })
-    expect(draft.tasks.map((task) => task.title)).toEqual(
+    expect(draft.tasks.map((task) => task.title)).not.toEqual(
       expect.arrayContaining([
         'fixture directory shape for at least one small story fixture',
         'typed fixture and expected-record contracts',
       ]),
     )
-    expect(draft.tasks.find((task) => task.title === 'fixture directory shape for at least one small story fixture')).toMatchObject({
-      scope: 'current',
-    })
   })
 
   it('imports later-scope workspace tasks as shelved instead of current intake drafts', async () => {

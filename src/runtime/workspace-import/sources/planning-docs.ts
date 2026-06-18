@@ -273,6 +273,7 @@ export const planningDocsSource: TaskSource = {
       const raw = fileContents.get(rel)
       if (!raw) continue
       if (!raw.trim()) continue
+      const currentMilestoneHasStarterTasks = hasExplicitCurrentMilestoneStarterTasks(raw)
       const fileBase = basename(rel)
       const domainHint = inferDomainHint(rel, multiProjectRoots)
       let currentSection: string | null = null
@@ -471,8 +472,13 @@ export const planningDocsSource: TaskSource = {
             : currentLabel === 'success_gates'
               ? { kind: 'context' as const }
               : currentLabel === 'do_not_start'
-                ? { kind: 'context' as const }
+              ? { kind: 'context' as const }
                 : null
+          const shouldSuppressCurrentStageDeliverableAsWork =
+            currentLabel === 'deliverables' &&
+            currentMilestoneHasStarterTasks &&
+            stageScopedSignal?.kind === 'open_work' &&
+            stageScopedSignal.scopeHint === 'current'
           while (bulletStack.length > 0 && bulletStack[bulletStack.length - 1]!.indent >= indent) {
             bulletStack.pop()
           }
@@ -482,7 +488,12 @@ export const planningDocsSource: TaskSource = {
           if (grouping && !groupingChildrenAreTasks) {
             signals.push({
               source: 'planning-docs',
-              kind: isProjectStateCurrentFocus(fileBase, currentSection) ? 'context' : 'open_work',
+              kind:
+                shouldSuppressCurrentStageDeliverableAsWork
+                  ? 'context'
+                  : isProjectStateCurrentFocus(fileBase, currentSection)
+                    ? 'context'
+                    : 'open_work',
               title: title.replace(/:$/, ''),
               evidence: `${rel}: ${line.trim()}`.slice(0, 240),
               references: [abs],
@@ -490,12 +501,14 @@ export const planningDocsSource: TaskSource = {
               confidence: 'medium',
             })
           } else if (!grouping) {
-            const kind: WorkspaceSignal['kind'] = stageScopedSignal?.kind ?? (
-              isProjectStateCurrentFocus(fileBase, currentSection) ||
-              (parent && indent > parent.indent && !parent.grouping)
-                ? 'context'
-                : 'open_work'
-            )
+            const kind: WorkspaceSignal['kind'] = shouldSuppressCurrentStageDeliverableAsWork
+              ? 'context'
+              : stageScopedSignal?.kind ?? (
+                isProjectStateCurrentFocus(fileBase, currentSection) ||
+                (parent && indent > parent.indent && !parent.grouping)
+                  ? 'context'
+                  : 'open_work'
+              )
             signals.push({
               source: 'planning-docs',
               kind,
@@ -548,4 +561,10 @@ function detectCurrentMilestoneStage(contents: Iterable<string>): string | null 
 function normalizeStageLabel(value: string | null | undefined): string | null {
   if (!value) return null
   return value.trim().toLowerCase().replace(/\s+/g, ' ')
+}
+
+function hasExplicitCurrentMilestoneStarterTasks(raw: string): boolean {
+  const milestoneSection = raw.match(/##\s+Current Next Milestone[\s\S]*$/i)?.[0]
+  if (!milestoneSection) return false
+  return /^\s*\d+\.\s+.+$/m.test(milestoneSection)
 }

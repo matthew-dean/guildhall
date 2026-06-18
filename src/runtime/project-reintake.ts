@@ -171,6 +171,20 @@ export function planProjectReintake(input: ProjectReintakeInput): ProjectReintak
     })
   }
 
+  const shadowedCurrentMilestoneDeliverableChanges = archiveShadowedCurrentMilestoneDeliverableTasks(
+    input.tasks,
+    usedTaskIds,
+    input.sources,
+  )
+  if (shadowedCurrentMilestoneDeliverableChanges.length > 0) {
+    groups.push({
+      id: 'archive-shadowed-current-milestone-deliverables',
+      title: 'Archive shadowed current-milestone deliverables',
+      rationale: 'If a roadmap already names the starter-task sequence for the current milestone, old deliverable-bullet task imports should not remain as competing scoped work.',
+      changes: shadowedCurrentMilestoneDeliverableChanges,
+    })
+  }
+
   return {
     id: `reintake-${now.replace(/[^0-9A-Za-z]/g, '').slice(0, 14)}`,
     createdAt: now,
@@ -289,14 +303,13 @@ function applyChange(tasks: Array<Record<string, unknown>>, change: ReintakeChan
     if (!existing) return
     const notes = Array.isArray(existing.notes) ? existing.notes : []
     Object.assign(existing, {
-      status: 'shelved',
+      status: 'archived',
       updatedAt: now,
-      shelveReason: {
-        code: 'no_op',
-        detail: change.reason,
-        source: 'policy',
-        recordedAt: now,
-        policyApplied: true,
+      archivedEvidence: {
+        retention: 'archive',
+        archivedAt: now,
+        reason: change.reason,
+        source: 'project-reintake',
       },
       notes: [
         ...notes,
@@ -458,6 +471,66 @@ function archiveUnsupportedWeakPreImplementationTasks(
       taskId: stringField(task, 'id') ?? '',
       reason: 'Pre-implementation task is unsupported by current evidence and still uses a weak legacy spec shape.',
     }))
+}
+
+function archiveShadowedCurrentMilestoneDeliverableTasks(
+  tasks: Array<Record<string, unknown>>,
+  usedTaskIds: Set<string>,
+  sources: ProjectReintakeSource[],
+): ReintakeChange[] {
+  const shadowedImports = detectShadowedCurrentMilestoneDeliverableImports(sources)
+  if (shadowedImports.length === 0) return []
+
+  return tasks
+    .filter(task => {
+      const id = stringField(task, 'id')
+      if (!id || usedTaskIds.has(id)) return false
+      const title = stringField(task, 'title')
+      const description = stringField(task, 'description') ?? ''
+      if (!title) return false
+      return shadowedImports.some(candidate =>
+        candidate.title === title &&
+        description.includes(candidate.sourcePath) &&
+        description.includes(': - '),
+      )
+    })
+    .map(task => ({
+      kind: 'archive' as const,
+      taskId: stringField(task, 'id') ?? '',
+      reason: 'Roadmap deliverable bullet was previously imported as a task, but the current milestone now defines a starter-task sequence that supersedes it.',
+    }))
+}
+
+function detectShadowedCurrentMilestoneDeliverableImports(
+  sources: ProjectReintakeSource[],
+): Array<{ sourcePath: string; title: string }> {
+  const shadowed: Array<{ sourcePath: string; title: string }> = []
+
+  for (const source of sources) {
+    const currentMilestoneMatch = source.content.match(/##\s+Current Next Milestone[\s\S]*?The next milestone is\s+(Stage\s+\d+)(?:\s*:.*)?\./i)
+    if (!currentMilestoneMatch?.[1]) continue
+    const currentMilestoneSection = source.content.match(/##\s+Current Next Milestone[\s\S]*$/i)?.[0] ?? ''
+    if (!/^\s*\d+\.\s+.+$/m.test(currentMilestoneSection)) continue
+
+    const stageNumber = currentMilestoneMatch[1].match(/Stage\s+(\d+)/i)?.[1]
+    if (!stageNumber) continue
+    const stageSection = source.content.match(
+      new RegExp(`##\\s+Stage\\s+${stageNumber}\\s*:[\\s\\S]*?(?=\\n##\\s+|$)`, 'i'),
+    )?.[0]
+    if (!stageSection) continue
+    const deliverablesMatch = stageSection.match(/Deliverables:\s*([\s\S]*?)(?=\n[A-Z][^\n]*:\s*$|\n##\s+|$)/i)
+    if (!deliverablesMatch?.[1]) continue
+
+    const deliverableTitles = [...deliverablesMatch[1].matchAll(/^\s*-\s+(.+?)\s*$/gm)]
+      .map(match => match[1]?.trim())
+      .filter((title): title is string => Boolean(title))
+
+    for (const title of deliverableTitles) {
+      shadowed.push({ sourcePath: source.path, title })
+    }
+  }
+
+  return shadowed
 }
 
 function singleEditChange(sources: ProjectReintakeSource[]): ReintakeChange | null {

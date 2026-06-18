@@ -22,6 +22,8 @@ export type EvidenceUnit = {
   sharedFoundations: string[]
   consumerSurfaces: string[]
   sourceRefs: Array<{ path: string; snippet: string }>
+  sequenceGroup?: string
+  sequenceIndex?: number
 }
 
 export type EvidenceTask = {
@@ -58,6 +60,8 @@ type UnitSeed = {
   row: string
   titleMode?: 'deliverable' | 'verbatim'
   explicitTargetArea?: string
+  sequenceGroup?: string
+  sequenceIndex?: number
 }
 
 type ExistingTaskMatch = {
@@ -109,7 +113,7 @@ export function planEvidenceWorkGraph(input: EvidenceWorkGraphInput): EvidenceWo
       continue
     }
 
-    const dependencies = dependenciesFor(unit, existingTasks, implementationByDeliverable)
+    const dependencies = dependenciesFor(unit, existingTasks, implementationByDeliverable, units)
     task.dependsOn = dependencies.taskIds
     task.relatedTasks = dependencies.relatedTasks
   }
@@ -147,6 +151,8 @@ function extractUnits(source: EvidenceSource, currentMilestoneStage: string | nu
       sharedFoundations,
       consumerSurfaces: parseConsumers(seed.consumer),
       sourceRefs: [{ path: seed.path, snippet: seed.row }],
+      ...(seed.sequenceGroup ? { sequenceGroup: seed.sequenceGroup } : {}),
+      ...(typeof seed.sequenceIndex === 'number' ? { sequenceIndex: seed.sequenceIndex } : {}),
     }
   })
 }
@@ -204,12 +210,14 @@ function extractRoadmapMilestoneSeeds(source: EvidenceSource): UnitSeed[] {
   const seeds: UnitSeed[] = []
   const currentMilestoneStage = detectCurrentMilestoneStage([{ path: source.path, content: source.content }])
   let inCurrentMilestone = false
+  let currentMilestoneTaskIndex = 0
 
   for (const line of lines) {
     const heading = /^##\s+(.+?)\s*$/.exec(line)
     if (heading) {
       const currentHeading = heading[1]!.trim()
       inCurrentMilestone = /^current next milestone$/i.test(currentHeading)
+      if (inCurrentMilestone) currentMilestoneTaskIndex = 0
       continue
     }
 
@@ -224,6 +232,7 @@ function extractRoadmapMilestoneSeeds(source: EvidenceSource): UnitSeed[] {
 
     const title = stripInlineCode(numbered[1]!.trim())
     if (!title) continue
+    currentMilestoneTaskIndex += 1
     seeds.push({
       path: source.path,
       deliverable: title,
@@ -233,6 +242,8 @@ function extractRoadmapMilestoneSeeds(source: EvidenceSource): UnitSeed[] {
       row: line.trim(),
       titleMode: 'verbatim',
       explicitTargetArea: inferRoadmapTargetArea(source.path),
+      sequenceGroup: `${source.path}#current-next-milestone`,
+      sequenceIndex: currentMilestoneTaskIndex,
     })
   }
 
@@ -421,6 +432,7 @@ function dependenciesFor(
   unit: EvidenceUnit,
   existingTasks: Array<Record<string, unknown>>,
   implementationByDeliverable: Map<string, EvidenceTask>,
+  units: EvidenceUnit[],
 ): Pick<EvidenceTask, 'dependsOn' | 'relatedTasks'> & { taskIds: string[] } {
   const taskIds: string[] = []
   const relatedTasks: EvidenceTask['relatedTasks'] = []
@@ -446,6 +458,24 @@ function dependenciesFor(
         relationship: 'blocks',
         reason: `${unit.name} builds on ${foundation}.`,
       })
+    }
+  }
+
+  if (unit.sequenceGroup && typeof unit.sequenceIndex === 'number' && unit.sequenceIndex > 1) {
+    const previousUnit = units.find(candidate =>
+      candidate.sequenceGroup === unit.sequenceGroup &&
+      candidate.sequenceIndex === unit.sequenceIndex! - 1,
+    )
+    if (previousUnit) {
+      const previousTask = implementationByDeliverable.get(previousUnit.name)
+      if (previousTask && !taskIds.includes(previousTask.id)) {
+        taskIds.push(previousTask.id)
+        relatedTasks.push({
+          taskId: previousTask.id,
+          relationship: 'blocks',
+          reason: `${unit.name} comes after ${previousUnit.name} in the roadmap starter sequence.`,
+        })
+      }
     }
   }
 

@@ -119,4 +119,29 @@ describe('deriveProjectWorkProgress', () => {
     })
     expect(progress.byTaskId['duplicate-split-child']?.rollup.primaryState).toBe('shelved')
   })
+
+  it('hides archived tasks from visible project totals', () => {
+    const progress = deriveProjectWorkProgress([
+      {
+        id: 'stale-shadow-import',
+        title: 'typed fixture and expected-record contracts',
+        status: 'archived',
+        archivedEvidence: {
+          retention: 'archive',
+          reason: 'Shadowed by current milestone starter sequence.',
+          source: 'project-reintake',
+        },
+      },
+    ])
+
+    expect(progress.counts).toMatchObject({
+      visibleTotal: 0,
+      visibleActive: 0,
+      visibleShelved: 0,
+    })
+    expect(progress.byTaskId['stale-shadow-import']?.visibility).toEqual({
+      kind: 'hidden',
+      countInProjectTotals: false,
+    })
+  })
 })
