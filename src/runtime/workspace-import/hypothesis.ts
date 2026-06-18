@@ -71,6 +71,8 @@ export interface DraftContext {
   excerpt: string
   source: string
   references?: readonly string[]
+  domain?: string
+  role?: 'capability' | 'reference'
 }
 
 export interface WorkspaceImportDraft {
@@ -475,6 +477,8 @@ function addContext(
     excerpt: sig.evidence,
     source: sig.source,
     ...(sig.references ? { references: sig.references } : {}),
+    ...(sig.domainHint ? { domain: sig.domainHint } : {}),
+    ...(sig.role ? { role: sig.role } : {}),
   })
 }
 

@@ -548,7 +548,7 @@ The next milestone is Stage 1: Fixture And Evaluation Harness.
     ]))
   })
 
-  it('extracts architecture core-loop steps as current workflow capabilities', async () => {
+  it('extracts architecture core-loop steps as capability-map context instead of runnable backlog work', async () => {
     mkdirSync(join(dir, 'docs', 'harness'), { recursive: true })
     writeFileSync(
       join(dir, 'docs', 'harness', 'architecture-notes.md'),
@@ -576,24 +576,30 @@ The next milestone is Stage 1: Fixture And Evaluation Harness.
 
     expect(sigs).toEqual(expect.arrayContaining([
       expect.objectContaining({
+        kind: 'context',
+        role: 'capability',
+        title: 'Author defines book intent, genre/form expectations, themes, and voice.',
+      }),
+      expect.objectContaining({
+        kind: 'context',
+        role: 'capability',
+        title: 'Author drafts or imports chapters.',
+      }),
+      expect.objectContaining({
+        kind: 'context',
+        role: 'capability',
+        title: 'The coordinator chooses reviewers based on current phase.',
+      }),
+      expect.objectContaining({
+        kind: 'context',
+        role: 'capability',
+        title: 'Accepted decisions update the story bible, outline, and manuscript tasks.',
+      }),
+    ]))
+    expect(sigs).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({
         kind: 'open_work',
         title: 'Author defines book intent, genre/form expectations, themes, and voice.',
-        scopeHint: 'current',
-      }),
-      expect.objectContaining({
-        kind: 'open_work',
-        title: 'Author drafts or imports chapters.',
-        scopeHint: 'current',
-      }),
-      expect.objectContaining({
-        kind: 'open_work',
-        title: 'The coordinator chooses reviewers based on current phase.',
-        scopeHint: 'current',
-      }),
-      expect.objectContaining({
-        kind: 'open_work',
-        title: 'Accepted decisions update the story bible, outline, and manuscript tasks.',
-        scopeHint: 'current',
       }),
     ]))
   })

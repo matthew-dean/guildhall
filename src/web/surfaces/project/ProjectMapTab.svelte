@@ -143,9 +143,9 @@
     return (node.children ?? []).filter(isInternalNode).length
   }
 
-  function childHref(node: ProjectOrientationNode): string {
+  function childHref(node: ProjectOrientationNode): string | null {
     const taskId = node.refs?.taskIds?.[0] ?? (node.id?.startsWith('work:') ? node.id.slice('work:'.length) : null)
-    return taskId ? currentTaskHref(taskId, activeProjectId) : currentProjectHref('/work', activeProjectId)
+    return taskId ? currentTaskHref(taskId, activeProjectId) : null
   }
 
   function contractHref(contract: { nodeId?: string; refs?: string[] }): string | null {
@@ -269,7 +269,17 @@
               {#if visibleChildren(lane).length > 0}
                 <div class="child-list">
                   {#each visibleChildren(lane) as child (child.id ?? child.title)}
-                    <CardListItem as="button" className="child-row" tone={laneTone(child)} dense onclick={() => go(childHref(child))}>
+                    <CardListItem
+                      as={childHref(child) ? 'button' : 'div'}
+                      interactive={Boolean(childHref(child))}
+                      className="child-row"
+                      tone={laneTone(child)}
+                      dense
+                      onclick={() => {
+                        const href = childHref(child)
+                        if (href) go(href)
+                      }}
+                    >
                       <span>{child.title ?? 'Untitled work'}</span>
                       <Chip label={maturityLabel(child)} tone={laneTone(child)} />
                     </CardListItem>

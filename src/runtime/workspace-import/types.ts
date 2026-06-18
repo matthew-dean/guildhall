@@ -31,6 +31,12 @@ export interface WorkspaceSignal {
   /** File paths / commit shas / URLs backing this signal. */
   references?: string[]
   /**
+   * Optional structural role for context-like signals. `capability` means
+   * "show this in the project map as part of the product skeleton" rather than
+   * "turn this into runnable queue work."
+   */
+  role?: 'capability' | 'reference'
+  /**
    * Optional project-area hint inferred from the evidence path, such as
    * `knit` or `looma`. This lets the hypothesis former keep nested repo
    * structure instead of flattening everything into a generic core bucket.

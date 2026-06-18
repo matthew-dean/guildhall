@@ -4928,13 +4928,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
   }
 
-  async function workspaceImportDraftForOrientation(projectPath: string, startReadiness: { code?: string } | null | undefined) {
-    if (!startReadiness || !['import_drafts_waiting', 'imported_scope_shaping', 'workspace_import_refresh_needed'].includes(startReadiness.code ?? '')) {
-      return null
-    }
+  async function workspaceImportDraftForOrientation(projectPath: string, _startReadiness: { code?: string } | null | undefined) {
     const inventory = await detectWorkspaceSignals({ projectPath })
     const draft = formWorkspaceHypothesis(inventory)
-    if (draft.tasks.length === 0) return null
+    const capabilityContexts = draft.context.filter(context => context.role === 'capability')
+    if (draft.tasks.length === 0 && capabilityContexts.length === 0) return null
     return {
       tasks: draft.tasks.map(task => ({
         id: task.suggestedId,
@@ -4943,6 +4941,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
         domain: task.domain,
         scope: task.scope,
         refs: task.references?.map(ref => `import:${ref}`) ?? [`import:${task.source}`],
+      })),
+      contexts: capabilityContexts.map((context, index) => ({
+        id: `capability-${index + 1}`,
+        title: context.label,
+        description: context.excerpt,
+        domain: context.domain,
+        refs: context.references?.map(ref => `import:${ref}`) ?? [`import:${context.source}`],
       })),
       source: {
         kind: 'inferred' as const,

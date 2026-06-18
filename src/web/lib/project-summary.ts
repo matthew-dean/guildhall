@@ -96,7 +96,7 @@ function readinessStage(project: ServiceProjectSummary): string | null {
     case 'provider_unavailable': return 'Needs provider'
     case 'invalid_lever_combo': return 'Settings blocked'
     case 'runtime_too_old': return 'Update Guildhall'
-    case 'all_terminal': return 'Complete'
+    case 'all_terminal': return 'Scope done'
     default: return 'Blocked'
   }
 }
@@ -106,7 +106,7 @@ function actionModelStage(project: ServiceProjectSummary): string | null {
   if (!actionModel) return null
   if (actionModel.ownerInput?.active) return 'Needs you'
   const code = actionModel.primaryAction?.code ?? project.startReadiness?.code
-  if (code === 'all_terminal') return 'Complete'
+  if (code === 'all_terminal') return 'Scope done'
   if (code === 'required_migration_pending') return 'Needs migration'
   if (code === 'no_provider' || code === 'no_loaded_model' || code === 'model_unavailable' || code === 'provider_unavailable') {
     return 'Needs provider'

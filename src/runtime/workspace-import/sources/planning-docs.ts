@@ -556,12 +556,12 @@ export const planningDocsSource: TaskSource = {
         if (numbered && currentSection && CORE_LOOP_HEADING_RE.test(currentSection)) {
           signals.push({
             source: 'planning-docs',
-            kind: 'open_work',
+            kind: 'context',
             title: cleanHeading(numbered[1]!),
             evidence: `${rel}: ${line.trim()}`.slice(0, 240),
             references: [abs],
+            role: 'capability',
             ...(domainHint ? { domainHint } : {}),
-            scopeHint: 'current',
             confidence: 'high',
           })
           continue

@@ -257,8 +257,17 @@ export interface OrientationWorkspaceImportDraftTask {
   refs?: string[]
 }
 
+export interface OrientationWorkspaceImportDraftContext {
+  id: string
+  title: string
+  description?: string
+  domain?: string
+  refs?: string[]
+}
+
 export interface OrientationWorkspaceImportDraft {
   tasks: OrientationWorkspaceImportDraftTask[]
+  contexts?: OrientationWorkspaceImportDraftContext[]
   source: OrientationSource
 }
 
@@ -393,10 +402,14 @@ function augmentTasksWithWorkspaceImportDraft(input: {
   tasks: OrientationTaskInput[]
   workspaceImportDraft?: OrientationWorkspaceImportDraft | null
   now: string
-}): { tasks: OrientationTaskInput[]; scope: OrientationScope | null } {
+}): {
+  tasks: OrientationTaskInput[]
+  scope: OrientationScope | null
+  contexts: OrientationWorkspaceImportDraftContext[]
+} {
   const draft = input.workspaceImportDraft
   if (!draft || draft.tasks.length === 0) {
-    return { tasks: input.tasks, scope: null }
+    return { tasks: input.tasks, scope: null, contexts: draft?.contexts ?? [] }
   }
 
   const augmented = [...input.tasks]
@@ -448,6 +461,7 @@ function augmentTasksWithWorkspaceImportDraft(input: {
       nodeIds: [...new Set(currentNodeIds)],
       deferredNodeIds: [...new Set(deferredNodeIds)],
     },
+    contexts: draft.contexts ?? [],
   }
 }
 
@@ -755,6 +769,124 @@ function buildNodes(
   return { roots, byId, gaps }
 }
 
+function capabilityNodeId(contextId: string): string {
+  return `capability:${contextId}`
+}
+
+function summarizeCapabilityArea(title: string, children: OrientationNode[]): string {
+  const count = children.length
+  return `${title} project skeleton: ${count} mapped ${count === 1 ? 'capability' : 'capabilities'} from durable docs.`
+}
+
+function mergeWorkspaceImportContexts(input: {
+  roots: OrientationNode[]
+  byId: Map<string, OrientationNode>
+  contexts: OrientationWorkspaceImportDraftContext[]
+  scope: OrientationScope | null
+  now: string
+}): OrientationNode[] {
+  if (input.contexts.length === 0) return input.roots
+  const roots = [...input.roots]
+  const areaIndex = new Map<string, number>()
+  roots.forEach((root, index) => areaIndex.set(root.id, index))
+
+  const grouped = new Map<string, OrientationWorkspaceImportDraftContext[]>()
+  for (const context of input.contexts) {
+    const key = context.domain?.trim() || 'unsorted'
+    const list = grouped.get(key) ?? []
+    list.push(context)
+    grouped.set(key, list)
+  }
+
+  for (const [domain, contexts] of grouped) {
+    const areaId = `area:${normalizeText(domain || 'unsorted').replace(/\s+/g, '-') || 'unsorted'}`
+    const title = titleFromDomain(domain)
+    const children = contexts.map((context) => {
+      const node: OrientationNode = {
+        id: capabilityNodeId(context.id),
+        parentId: areaId,
+        kind: 'feature',
+        title: context.title,
+        summary: context.description ?? context.title,
+        maturity: 'idea',
+        progress: emptyProgress(input.scope?.id ?? null),
+        proof: { state: 'none', verified: [], missing: [] },
+        ownerAction: null,
+        blockers: [],
+        refs: {
+          taskIds: [],
+          threadIds: [],
+          artifactIds: [],
+          structuralDomainIds: [],
+          primitiveIds: [],
+          releaseCheckIds: [],
+        },
+        source: {
+          kind: 'inferred',
+          refs: context.refs?.length ? context.refs : ['workspace-import:draft'],
+          confidence: 'medium',
+          freshness: 'fresh',
+          inferred: true,
+          refreshedAt: input.now,
+        },
+        visibility: { kind: 'supporting', countInProjectTotals: false },
+        children: [],
+      }
+      input.byId.set(node.id, node)
+      return node
+    })
+
+    const existingIndex = areaIndex.get(areaId)
+    if (existingIndex != null) {
+      const existing = roots[existingIndex]!
+      const mergedChildren = [...existing.children, ...children]
+      const updated: OrientationNode = {
+        ...existing,
+        children: mergedChildren,
+      }
+      roots[existingIndex] = updated
+      input.byId.set(updated.id, updated)
+      continue
+    }
+
+    const area: OrientationNode = {
+      id: areaId,
+      parentId: null,
+      kind: 'area',
+      title,
+      summary: summarizeCapabilityArea(title, children),
+      maturity: 'idea',
+      progress: emptyProgress(input.scope?.id ?? null),
+      proof: { state: 'none', verified: [], missing: [] },
+      ownerAction: null,
+      blockers: [],
+      refs: {
+        taskIds: [],
+        threadIds: [],
+        artifactIds: [],
+        structuralDomainIds: domain ? [`domain:${domain}`] : [],
+        primitiveIds: [],
+        releaseCheckIds: [],
+      },
+      source: {
+        kind: 'inferred',
+        refs: children.flatMap(child => child.source.refs),
+        confidence: 'medium',
+        freshness: 'fresh',
+        inferred: true,
+        refreshedAt: input.now,
+      },
+      visibility: { kind: 'supporting', countInProjectTotals: false },
+      children,
+    }
+    roots.push(area)
+    input.byId.set(area.id, area)
+    areaIndex.set(area.id, roots.length - 1)
+  }
+
+  return roots.sort((left, right) => left.title.localeCompare(right.title))
+}
+
 function titleFromDomain(domain: string | undefined): string {
   const raw = domain?.trim()
   if (!raw) return 'Unsorted work'
@@ -1038,7 +1170,10 @@ function proofContractsForNodes(
   boundary: OrientationExecutionBoundary,
 ): OrientationProofContract[] {
   return flattenNodes(roots)
-    .filter(node => node.kind === 'work' || node.kind === 'feature' || node.kind === 'slice')
+    .filter(node =>
+      (node.kind === 'work' || node.kind === 'feature' || node.kind === 'slice') &&
+      (node.refs.taskIds?.length ?? 0) > 0,
+    )
     .map(node => {
       const required = boundary.proofStyle === 'script_only'
         ? [`Script or command proof for ${node.title}.`]
@@ -1171,7 +1306,11 @@ function buildSummary(input: {
 
 export function buildProjectOrientationSpine(input: BuildProjectOrientationSpineInput): ProjectOrientationSpine {
   const now = input.now ?? new Date().toISOString()
-  const baseTasks = (input.tasks ?? []).filter(task => !isProjectSetupTask(task.id))
+  const baseTasks = (input.tasks ?? []).filter(task =>
+    !isProjectSetupTask(task.id) &&
+    task.status !== 'archived' &&
+    task.status !== 'cancelled',
+  )
   const draftAugmentation = augmentTasksWithWorkspaceImportDraft({
     tasks: baseTasks,
     workspaceImportDraft: input.workspaceImportDraft,
@@ -1182,7 +1321,15 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
   const selectedRelease = normalizeRelease(input, tasks)
   const rawScope = releaseToScope(selectedRelease) ?? draftAugmentation.scope ?? normalizeScope(input, tasks)
   const scope = rawScope ? expandScopeWithDescendants(rawScope, tasks) : null
-  const { roots, byId, gaps: nodeGaps } = buildNodes(tasks, scope, now)
+  const built = buildNodes(tasks, scope, now)
+  const roots = mergeWorkspaceImportContexts({
+    roots: built.roots,
+    byId: built.byId,
+    contexts: draftAugmentation.contexts,
+    scope,
+    now,
+  })
+  const { byId, gaps: nodeGaps } = built
   const { blockers, gaps: blockerGaps } = attachReleaseBlockers(input.releaseReadiness?.blockers ?? [], byId)
   const executionBoundary = buildExecutionBoundary({
     charter,

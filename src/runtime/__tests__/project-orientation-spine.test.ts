@@ -525,6 +525,15 @@ describe('buildProjectOrientationSpine', () => {
             refs: ['import:docs/harness/remaining-spec-decomposition-inventory.md'],
           },
         ],
+        contexts: [
+          {
+            id: 'capability-core-loop',
+            title: 'Author drafts or imports chapters.',
+            description: 'Architecture core loop step.',
+            domain: 'harness',
+            refs: ['import:docs/harness/architecture-notes.md'],
+          },
+        ],
       },
     })
 
@@ -540,6 +549,11 @@ describe('buildProjectOrientationSpine', () => {
       inferred: true,
     })
     expect(spine.nodes['work:workspace-import:task-later']?.maturity).toBe('deferred')
+    expect(spine.nodes['capability:capability-core-loop']).toMatchObject({
+      title: 'Author drafts or imports chapters.',
+      visibility: { kind: 'supporting', countInProjectTotals: false },
+      source: { refs: ['import:docs/harness/architecture-notes.md'], inferred: true },
+    })
     expect(spine.roots.map(root => root.title)).toEqual(['Coherence', 'Harness'])
   })
 
@@ -618,6 +632,62 @@ describe('buildProjectOrientationSpine', () => {
     expect(spine.gaps).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: 'source_conflict', refs: ['artifact:release-plan', 'task:broad-ready'] }),
     ]))
+  })
+
+  it('keeps archived imported drafts out of the live spine while preserving map-only capability context', () => {
+    const spine = buildProjectOrientationSpine({
+      projectId: 'narrative-harness',
+      now: '2026-06-18T12:00:00.000Z',
+      tasks: [
+        {
+          id: 'task-import-old-core-loop',
+          title: 'Author drafts or imports chapters.',
+          description: 'Old imported draft that should disappear from live scope.',
+          domain: 'core',
+          status: 'archived',
+        },
+        {
+          id: 'task-current',
+          title: 'Define fixture schemas',
+          description: 'Live current work.',
+          domain: 'harness',
+          status: 'import_draft',
+        },
+      ],
+      workspaceImportDraft: {
+        source: {
+          kind: 'inferred',
+          refs: ['workspace-import:draft'],
+          confidence: 'medium',
+          freshness: 'fresh',
+          inferred: true,
+          refreshedAt: '2026-06-18T12:00:00.000Z',
+        },
+        tasks: [
+          {
+            id: 'task-current',
+            title: 'Define fixture schemas',
+            description: 'Live current work.',
+            domain: 'harness',
+            scope: 'current',
+          },
+        ],
+        contexts: [
+          {
+            id: 'capability-core-loop',
+            title: 'Author drafts or imports chapters.',
+            description: 'Architecture capability row.',
+            refs: ['import:docs/harness/architecture-notes.md'],
+          },
+        ],
+      },
+    })
+
+    expect(spine.nodes['work:task-import-old-core-loop']).toBeUndefined()
+    expect(spine.nodes['capability:capability-core-loop']).toMatchObject({
+      title: 'Author drafts or imports chapters.',
+    })
+    expect(spine.summary.includedWorkCount).toBe(1)
   })
 
   it('keeps deferred work scheduler-ineligible unless explicitly targeted or required as a dependency', () => {

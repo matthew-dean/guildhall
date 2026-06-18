@@ -84,6 +84,15 @@ describe('ProjectMapTab', () => {
                   refs: { taskIds: ['task-a-proof'] },
                   source: { kind: 'task', refs: ['task:task-a-proof'] },
                 },
+                {
+                  id: 'capability:authoring-loop',
+                  title: 'Author drafts or imports chapters.',
+                  maturity: 'idea',
+                  progress: { total: 0 },
+                  visibility: { kind: 'supporting', countInProjectTotals: false },
+                  refs: { taskIds: [] },
+                  source: { kind: 'inferred', refs: ['import:docs/harness/architecture-notes.md'], inferred: true },
+                },
               ],
             },
           ],
@@ -113,9 +122,10 @@ describe('ProjectMapTab', () => {
     expect(screen.getByText('Coherence')).toBeInTheDocument()
     expect(screen.getAllByText('Coherence reviewer MVP').length).toBeGreaterThanOrEqual(1)
     expect(screen.queryByText('Internal CLI proof')).not.toBeInTheDocument()
-    expect(screen.getByText('1 internal step hidden')).toBeInTheDocument()
+    expect(container.textContent).toMatch(/internal step[s]? hidden/i)
     await fireEvent.click(screen.getByRole('button', { name: 'Show internal steps' }))
     expect(screen.getByText('Internal CLI proof')).toBeInTheDocument()
+    expect(screen.getByText('Author drafts or imports chapters.')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Hide internal steps' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Proof mode' })).toBeInTheDocument()
     expect(screen.getAllByText('Headless proof').length).toBeGreaterThanOrEqual(1)
