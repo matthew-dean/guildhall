@@ -161,6 +161,7 @@ function extractSeeds(source: EvidenceSource, currentMilestoneStage: string | nu
   return [
     ...extractTableSeeds(source),
     ...extractRoadmapMilestoneSeeds(source),
+    ...extractRoadmapStageDeliverableSeeds(source),
     ...extractRecommendedTaskSeeds(source),
   ]
 }
@@ -244,6 +245,76 @@ function extractRoadmapMilestoneSeeds(source: EvidenceSource): UnitSeed[] {
       explicitTargetArea: inferRoadmapTargetArea(source.path),
       sequenceGroup: `${source.path}#current-next-milestone`,
       sequenceIndex: currentMilestoneTaskIndex,
+    })
+  }
+
+  return seeds
+}
+
+function extractRoadmapStageDeliverableSeeds(source: EvidenceSource): UnitSeed[] {
+  const lines = logicalMarkdownLines(source.content)
+  const seeds: UnitSeed[] = []
+  let currentStageHeading = ''
+  let currentStageGoal = ''
+  let currentStageIndex: number | null = null
+  let inDeliverables = false
+
+  for (const line of lines) {
+    const trimmed = line.trim()
+    const heading = /^##\s+(.+?)\s*$/.exec(line)
+    if (heading) {
+      currentStageHeading = heading[1]!.trim()
+      const stageNumber = /^Stage\s+(\d+)\b/i.exec(currentStageHeading)?.[1]
+      currentStageIndex = stageNumber ? Number(stageNumber) : null
+      currentStageGoal = ''
+      inDeliverables = false
+      continue
+    }
+
+    if (!currentStageHeading || /^current next milestone$/i.test(currentStageHeading)) {
+      continue
+    }
+
+    const goal = /^Goal:\s+(.+?)\s*$/i.exec(trimmed)
+    if (goal) {
+      currentStageGoal = stripInlineCode(goal[1]!.trim())
+      continue
+    }
+
+    if (/^Deliverables:\s*$/i.test(trimmed)) {
+      inDeliverables = true
+      continue
+    }
+
+    if (!inDeliverables) {
+      continue
+    }
+
+    const bullet = /^\s*[-*]\s+(.+?)\s*$/.exec(line)
+    if (!bullet) {
+      if (trimmed.length === 0) continue
+      inDeliverables = false
+      continue
+    }
+
+    if (currentStageIndex !== null && currentStageIndex <= 1) {
+      continue
+    }
+
+    const deliverable = stripInlineCode(bullet[1]!.trim())
+    if (!deliverable) continue
+
+    seeds.push({
+      path: source.path,
+      deliverable,
+      need: currentStageGoal
+        ? `${currentStageHeading}. ${currentStageGoal}`
+        : `${currentStageHeading} deliverable.`,
+      foundation: currentStageHeading,
+      consumer: '',
+      row: trimmed,
+      titleMode: 'verbatim',
+      explicitTargetArea: inferRoadmapTargetArea(source.path),
     })
   }
 

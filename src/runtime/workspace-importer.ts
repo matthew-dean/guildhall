@@ -1552,7 +1552,7 @@ function graphTaskToParsedTask(
     missingInformation: [
       'Guildhall still needs to confirm the final implementation boundary during shaping.',
     ],
-    domain: task.targetArea,
+    domain: graphTaskDomain(task, parsedTask),
     scope: parsedTask?.scope === 'later' ? 'later' : 'current',
     priority: evidenceTaskPriority(task),
     references,
@@ -1561,6 +1561,17 @@ function graphTaskToParsedTask(
     proofPaths: task.proofPaths,
     evidenceGraphTask: true,
   }
+}
+
+function graphTaskDomain(task: EvidenceTask, parsedTask?: ParsedTask): string {
+  if (task.targetArea !== 'project' && task.targetArea !== 'unsorted') {
+    return task.targetArea
+  }
+  const parsedDomain = parsedTask?.domain?.trim()
+  if (parsedDomain) {
+    return parsedDomain
+  }
+  return task.targetArea
 }
 
 function materializedAcceptanceCriteria(task: MaterializedImportTask): Task['acceptanceCriteria'] {

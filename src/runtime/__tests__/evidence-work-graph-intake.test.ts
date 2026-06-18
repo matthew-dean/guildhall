@@ -80,6 +80,20 @@ const narrativeRemainingInventoryEvidence = [
   '- **Stage alignment:** Stage 2 (Agent Coordination)',
 ].join('\n')
 
+const narrativeRoadmapStageTwoEvidence = [
+  '# Implementation Roadmap',
+  '',
+  '## Stage 2: Agent Coordination',
+  '',
+  'Goal: connect the prototype runner to actual writer and editor flows with deterministic review contracts.',
+  '',
+  'Deliverables:',
+  '- Mastra workflow for the prototype iteration loop',
+  '- packet-builder implementation for the first writer/editor packet types',
+  '- deterministic retrieval tools over structured story records',
+  '- specialist editor agent calls for the first review lanes',
+].join('\n')
+
 describe('evidence-to-work-graph intake', () => {
   it('extracts deliverable units from source evidence instead of flattening them into one vague task', () => {
     const plan = planEvidenceWorkGraph({
@@ -352,6 +366,40 @@ describe('evidence-to-work-graph intake', () => {
         }),
       ]),
     )
+  })
+
+  it('extracts later roadmap-stage deliverables as structured implementation work', () => {
+    const plan = planEvidenceWorkGraph({
+      sources: [{ path: 'docs/harness/implementation-roadmap.md', content: narrativeRoadmapStageTwoEvidence }],
+      existingTasks: [],
+    })
+
+    expect(plan.units.map(unit => unit.name)).toEqual([
+      'Mastra workflow for the prototype iteration loop',
+      'packet-builder implementation for the first writer/editor packet types',
+      'deterministic retrieval tools over structured story records',
+      'specialist editor agent calls for the first review lanes',
+    ])
+
+    for (const title of [
+      'Mastra workflow for the prototype iteration loop',
+      'packet-builder implementation for the first writer/editor packet types',
+      'deterministic retrieval tools over structured story records',
+      'specialist editor agent calls for the first review lanes',
+    ]) {
+      expect(plan.tasks).toContainEqual(expect.objectContaining({
+        title,
+        kind: 'implementation',
+        targetArea: 'harness',
+        acceptanceCriteria: expect.arrayContaining([
+          expect.objectContaining({ id: 'source-implementation' }),
+          expect.objectContaining({ id: 'automated-proof' }),
+        ]),
+        proofPaths: expect.arrayContaining([
+          expect.objectContaining({ kind: expect.any(String) }),
+        ]),
+      }))
+    }
   })
 
   it('ignores markdown-decorated none placeholders in recommended first task titles', () => {
