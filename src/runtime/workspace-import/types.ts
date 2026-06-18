@@ -36,6 +36,11 @@ export interface WorkspaceSignal {
    * structure instead of flattening everything into a generic core bucket.
    */
   domainHint?: string
+  /**
+   * Whether the source suggests this work belongs in the currently selected
+   * bounded scope or should stay visible as later/deferred scope.
+   */
+  scopeHint?: 'current' | 'later'
   /** How confident the source is that this signal means what it claims. */
   confidence: 'high' | 'medium' | 'low'
 }

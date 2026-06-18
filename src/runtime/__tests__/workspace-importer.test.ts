@@ -298,6 +298,7 @@ milestones:
         title: 'Wire dashboard card',
         description: 'Render import preview + approve button',
         domain: 'ui',
+        scope: 'current',
         priority: 'high',
         references: ['ROADMAP.md'],
       },
@@ -354,6 +355,7 @@ tasks:
         title: 'Complete authentication flow',
         description: 'Finish registration, login, profile management, and email confirmation.',
         domain: 'auth',
+        scope: 'current',
         priority: 'high',
         references: ['docs/brief.md'],
       },
@@ -362,6 +364,7 @@ tasks:
         title: 'Build basic listing submission',
         description: '',
         domain: 'core',
+        scope: 'current',
         priority: 'normal',
         references: [],
       },
@@ -799,6 +802,8 @@ tasks:
         '',
         '## Current Next Milestone',
         '',
+        'The next milestone is Stage 1: Fixture And Evaluation Harness.',
+        '',
         'The first Guildhall starter tasks should be:',
         '',
         '1. Define fixture, expected-record, prototype-run, and evaluation schemas.',
@@ -828,15 +833,54 @@ tasks:
       expect.arrayContaining([
         'Define fixture, expected-record, prototype-run, and evaluation schemas.',
         'Add the first tiny fiction fixture and human-authored expected records.',
+        'Implement dialogue-and-character-voice reviewer lane',
       ]),
     )
+    expect(draft.tasks.find((task) => task.title === 'Implement dialogue-and-character-voice reviewer lane')).toMatchObject({
+      scope: 'later',
+      domain: 'coherence',
+    })
     expect(draft.tasks.map((task) => task.title)).not.toEqual(
       expect.arrayContaining([
         'fixture directory shape for at least one small story fixture',
         'typed fixture and expected-record contracts',
-        'Implement dialogue-and-character-voice reviewer lane',
       ]),
     )
+  })
+
+  it('imports later-scope workspace tasks as shelved instead of current intake drafts', async () => {
+    await seedImporterWithSpec(`
+\`\`\`yaml
+tasks:
+  - id: task-current
+    title: Build current packet runner
+    description: Build the current-scope packet runner.
+    domain: harness
+    priority: high
+  - id: task-later
+    title: Implement dialogue-and-character-voice reviewer lane
+    description: Implement the later reviewer lane after the current harness loop is proven.
+    domain: coherence
+    scope: later
+    priority: normal
+    references:
+      - docs/harness/remaining-spec-decomposition-inventory.md
+\`\`\`
+`)
+
+    const res = await approveWorkspaceImport({
+      memoryDir,
+      projectPath: tmpDir,
+    })
+    expect(res.tasksAdded).toBe(2)
+
+    const q = await readQueue()
+    expect(q.tasks.find((t) => t.id === 'task-current')?.status).toBe('import_draft')
+    expect(q.tasks.find((t) => t.id === 'task-later')).toMatchObject({
+      status: 'shelved',
+      origination: 'human',
+    })
+    expect(q.tasks.find((t) => t.id === 'task-later')?.notes?.[0]?.content ?? '').toContain('Scope: later/deferred')
   })
 
   it('suffixes conflicting task ids rather than overwriting', async () => {
@@ -1047,6 +1091,14 @@ describe('formatDetectedDraftAsSpec', () => {
   it('round-trips richer import-draft shaping fields', () => {
     const inventory = invWith([
       {
+        source: 'planning-docs',
+        kind: 'open_work',
+        title: 'Implement dialogue reviewer lane',
+        evidence: 'later-stage recommendation',
+        confidence: 'high',
+        scopeHint: 'later',
+      },
+      {
         source: 'roadmap',
         kind: 'open_work',
         title: 'Ship invite flow',
@@ -1058,11 +1110,15 @@ describe('formatDetectedDraftAsSpec', () => {
     const draft = formWorkspaceHypothesis(inventory)
     const spec = formatDetectedDraftAsSpec(draft)
     const parsed = parseWorkspaceImport(spec)
-    expect(parsed.tasks[0]).toMatchObject({
+    expect(parsed.tasks.find((task) => task.title === 'Ship invite flow')).toMatchObject({
       title: 'Ship invite flow',
       whyThisMayMatter: 'Complete the missing invite redirect and success state.',
       assumptions: expect.any(Array),
       missingInformation: expect.any(Array),
+      scope: 'current',
+    })
+    expect(parsed.tasks.find((task) => task.title === 'Implement dialogue reviewer lane')).toMatchObject({
+      scope: 'later',
     })
   })
 })

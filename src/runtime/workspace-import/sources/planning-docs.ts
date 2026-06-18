@@ -21,6 +21,7 @@ const SUCCESS_GATES_LABEL_RE = /^success gates:\s*$/i
 const DO_NOT_START_LABEL_RE = /^do not start yet:\s*$/i
 const GOAL_LABEL_RE = /^goal:\s*(.+?)\s*$/i
 const RECOMMENDED_TASK_TITLE_RE = /^-\s+\*\*recommended first task title:\*\*\s+(.+?)\s*$/i
+const RECOMMENDED_DOMAIN_RE = /^-\s+\*\*recommended domain:\*\*\s+(.+?)\s*$/i
 
 function likelyRelevantFile(rel: string): boolean {
   return MARKDOWN_FILE_RE.test(rel) && !IGNORE_PATH_RE.test(rel)
@@ -218,29 +219,33 @@ export const planningDocsSource: TaskSource = {
       let pendingRecommendedTaskTitle: string | null = null
       let pendingRecommendedTaskSection: string | null = null
       let currentRecommendedStageAlignment: string | null = null
+      let currentRecommendedDomain: string | null = null
       const bulletStack: Array<{ indent: number; title: string; grouping: boolean }> = []
 
       const flushPendingRecommendedTask = () => {
         if (!pendingRecommendedTaskTitle) return
         const title = pendingRecommendedTaskTitle
         const normalizedAlignment = normalizeStageLabel(currentRecommendedStageAlignment)
-        if (
-          !/^\(?none\b/i.test(title) &&
-          (!currentMilestoneStage || !normalizedAlignment || normalizedAlignment === currentMilestoneStage)
-        ) {
+        if (!/^\(?none\b/i.test(title)) {
+          const scopeHint: WorkspaceSignal['scopeHint'] =
+            currentMilestoneStage && normalizedAlignment && normalizedAlignment !== currentMilestoneStage
+              ? 'later'
+              : 'current'
           signals.push({
             source: 'planning-docs',
             kind: 'open_work',
             title,
             evidence: `${rel}: ${pendingRecommendedTaskSection ?? currentSection ?? title}`.slice(0, 240),
             references: [abs],
-            ...(domainHint ? { domainHint } : {}),
+            ...(currentRecommendedDomain ? { domainHint: currentRecommendedDomain } : domainHint ? { domainHint } : {}),
+            scopeHint,
             confidence: 'high',
           })
         }
         pendingRecommendedTaskTitle = null
         pendingRecommendedTaskSection = null
         currentRecommendedStageAlignment = null
+        currentRecommendedDomain = null
       }
 
       // Treat spec files as framing even if they have no checklists.
@@ -330,6 +335,12 @@ export const planningDocsSource: TaskSource = {
         const stageAlignment = /^-\s+\*\*stage alignment:\*\*\s+(.+?)\s*$/i.exec(trimmedLine)
         if (stageAlignment) {
           currentRecommendedStageAlignment = cleanHeading(stageAlignment[1]!)
+          continue
+        }
+
+        const recommendedDomain = RECOMMENDED_DOMAIN_RE.exec(trimmedLine)
+        if (recommendedDomain) {
+          currentRecommendedDomain = cleanHeading(recommendedDomain[1]!)
           continue
         }
 

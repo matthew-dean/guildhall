@@ -45,6 +45,7 @@ export interface DraftTask {
   assumptions?: readonly string[]
   missingInformation?: readonly string[]
   domain: string
+  scope: 'current' | 'later'
   priority: 'critical' | 'high' | 'normal' | 'low'
   source: string
   references?: readonly string[]
@@ -181,6 +182,10 @@ function domainFromSignal(sig: WorkspaceSignal): string {
     return sig.domainHint.trim()
   }
   return 'core'
+}
+
+function scopeFromSignal(sig: WorkspaceSignal): DraftTask['scope'] {
+  return sig.scopeHint === 'later' ? 'later' : 'current'
 }
 
 function isFormattingDebris(sig: WorkspaceSignal): boolean {
@@ -354,6 +359,7 @@ function addTask(
       assumptions: draftTaskAssumptions(sig),
       missingInformation: draftTaskMissingInformation(sig),
       domain: domainFromSignal(sig),
+      scope: scopeFromSignal(sig),
       priority: priorityFromConfidence(sig.confidence),
       source: sig.source,
       ...(sig.references ? { references: sig.references } : {}),
@@ -369,6 +375,10 @@ function addTask(
       existing.domain === 'core' && domainFromSignal(sig) !== 'core'
         ? domainFromSignal(sig)
         : existing.domain,
+    scope:
+      existing.scope === 'current' || scopeFromSignal(sig) === 'current'
+        ? 'current'
+        : 'later',
     priority: shouldBump
       ? priorityFromConfidence(sig.confidence)
       : existing.priority,

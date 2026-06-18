@@ -476,6 +476,7 @@ export interface ParsedTask {
   assumptions?: readonly string[]
   missingInformation?: readonly string[]
   domain: string
+  scope?: 'current' | 'later'
   priority: TaskPriority
   references: readonly string[]
 }
@@ -631,6 +632,7 @@ export function parseWorkspaceImport(spec: string): ParsedImport {
             ? t['whyThisMayMatter']
             : undefined
         const domain = typeof t['domain'] === 'string' ? t['domain'] : 'core'
+        const scope = t['scope'] === 'later' ? 'later' : 'current'
         const rawPriority = t['priority']
         const priority =
           typeof rawPriority === 'string' && PRIORITIES.has(rawPriority as TaskPriority)
@@ -645,6 +647,7 @@ export function parseWorkspaceImport(spec: string): ParsedImport {
           ...(normStringList(t['assumptions']).length > 0 ? { assumptions: normStringList(t['assumptions']) } : {}),
           ...(normStringList(t['missingInformation']).length > 0 ? { missingInformation: normStringList(t['missingInformation']) } : {}),
           domain,
+          scope,
           priority,
           references: normStringList(t['references']),
         })
@@ -676,6 +679,7 @@ export function parseWorkspaceImport(spec: string): ParsedImport {
             ? t['whyThisMayMatter']
             : undefined
         const domain = typeof t['domain'] === 'string' ? t['domain'] : 'core'
+        const scope = t['scope'] === 'later' ? 'later' : 'current'
         const rawPriority = t['priority']
         const priority =
           typeof rawPriority === 'string' && PRIORITIES.has(rawPriority as TaskPriority)
@@ -690,6 +694,7 @@ export function parseWorkspaceImport(spec: string): ParsedImport {
           ...(normStringList(t['assumptions']).length > 0 ? { assumptions: normStringList(t['assumptions']) } : {}),
           ...(normStringList(t['missingInformation']).length > 0 ? { missingInformation: normStringList(t['missingInformation']) } : {}),
           domain,
+          scope,
           priority,
           references: normStringList(t['references']),
         })
@@ -743,6 +748,7 @@ export function formatDetectedDraftAsSpec(draft: WorkspaceImportDraft): string {
       lines.push(`    description: ${escape(t.description || '')}`)
       if (t.whyThisMayMatter) lines.push(`    whyThisMayMatter: ${escape(t.whyThisMayMatter)}`)
       lines.push(`    domain: ${escape(t.domain || 'core')}`)
+      if (t.scope === 'later') lines.push('    scope: later')
       lines.push(`    priority: ${t.priority}`)
       if (t.assumptions && t.assumptions.length > 0) {
         lines.push('    assumptions:')
@@ -937,6 +943,7 @@ function graphTaskToParsedTask(task: EvidenceTask, sources: readonly EvidenceSou
       'Guildhall still needs to confirm the final success criteria and implementation boundary during shaping.',
     ],
     domain: task.targetArea,
+    scope: 'current',
     priority: task.kind === 'integration' ? 'normal' : 'high',
     references,
     acceptanceCriteria: task.acceptanceCriteria,
@@ -1062,7 +1069,7 @@ export async function approveWorkspaceImport(
       // Import approval means "yes, keep this as a candidate draft", not
       // "this already has a complete task brief/spec." Imported notes become
       // shaping drafts first; only after shaping do they enter normal intake.
-      status: 'import_draft',
+      status: t.scope === 'later' ? 'shelved' : 'import_draft',
       priority: t.priority,
       dependsOn: [...(t.dependsOn ?? [])].map(dependency => dependencyIdMap.get(dependency) ?? dependency),
       outOfScope: [],
@@ -1120,6 +1127,7 @@ export async function approveWorkspaceImport(
                 t.whyThisMayMatter ? `Why this may matter: ${t.whyThisMayMatter}` : '',
                 t.assumptions && t.assumptions.length > 0 ? `Assumptions: ${t.assumptions.join(' | ')}` : '',
                 t.missingInformation && t.missingInformation.length > 0 ? `Missing information: ${t.missingInformation.join(' | ')}` : '',
+                t.scope === 'later' ? 'Scope: later/deferred' : '',
               ].filter(Boolean).join('\n'),
               timestamp: now,
             },

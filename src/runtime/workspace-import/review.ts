@@ -19,6 +19,8 @@ export interface WorkspaceImportSourceGroup {
   areaKey: string
   areaLabel: string
   taskCount: number
+  currentTaskCount: number
+  laterTaskCount: number
   milestoneCount: number
   goalCount: number
   contextCount: number
@@ -32,6 +34,8 @@ export interface WorkspaceImportAreaGroup {
   key: string
   label: string
   taskCount: number
+  currentTaskCount: number
+  laterTaskCount: number
   milestoneCount: number
   goalCount: number
   contextCount: number
@@ -44,6 +48,8 @@ export interface WorkspaceImportReview {
   areaGroups: WorkspaceImportAreaGroup[]
   sourceGroups: WorkspaceImportSourceGroup[]
   totalTaskCandidates: number
+  totalCurrentTaskCandidates: number
+  totalLaterTaskCandidates: number
   totalMilestones: number
   totalGoals: number
 }
@@ -107,6 +113,8 @@ function normalizedTitle(value: string): string {
 
 function summarizeGroup(group: {
   taskCount: number
+  currentTaskCount?: number
+  laterTaskCount?: number
   milestoneCount: number
   goalCount: number
   contextCount: number
@@ -114,7 +122,15 @@ function summarizeGroup(group: {
 }): string {
   const parts: string[] = []
   if (group.taskCount > 0) {
-    parts.push(`${group.taskCount} candidate task${group.taskCount === 1 ? '' : 's'}`)
+    const currentTaskCount = group.currentTaskCount ?? group.taskCount
+    const laterTaskCount = group.laterTaskCount ?? 0
+    if (laterTaskCount > 0) {
+      parts.push(
+        `${group.taskCount} candidate task${group.taskCount === 1 ? '' : 's'} (${currentTaskCount} now, ${laterTaskCount} later)`,
+      )
+    } else {
+      parts.push(`${group.taskCount} candidate task${group.taskCount === 1 ? '' : 's'}`)
+    }
   }
   if (group.milestoneCount > 0) {
     parts.push(`${group.milestoneCount} milestone${group.milestoneCount === 1 ? '' : 's'}`)
@@ -170,6 +186,8 @@ export function buildWorkspaceImportReview(
         areaKey: area.key,
         areaLabel: area.label,
         taskCount: 0,
+        currentTaskCount: 0,
+        laterTaskCount: 0,
         milestoneCount: 0,
         goalCount: 0,
         contextCount: 0,
@@ -189,6 +207,8 @@ export function buildWorkspaceImportReview(
         key: group.areaKey,
         label: group.areaLabel,
         taskCount: 0,
+        currentTaskCount: 0,
+        laterTaskCount: 0,
         milestoneCount: 0,
         goalCount: 0,
         contextCount: 0,
@@ -212,6 +232,13 @@ export function buildWorkspaceImportReview(
     const area = ensureArea(group)
     group.taskCount += 1
     area.taskCount += 1
+    if (task.scope === 'later') {
+      group.laterTaskCount += 1
+      area.laterTaskCount += 1
+    } else {
+      group.currentTaskCount += 1
+      area.currentTaskCount += 1
+    }
     group.taskIds.push(task.suggestedId)
     group.taskTitles.push(task.title)
     if (existingTitles.has(normalizedTitle(task.title))) {
@@ -250,6 +277,8 @@ export function buildWorkspaceImportReview(
       areaKey: group.areaKey,
       areaLabel: group.areaLabel,
       taskCount: group.taskCount,
+      currentTaskCount: group.currentTaskCount,
+      laterTaskCount: group.laterTaskCount,
       milestoneCount: group.milestoneCount,
       goalCount: group.goalCount,
       contextCount: group.contextCount,
@@ -271,6 +300,8 @@ export function buildWorkspaceImportReview(
       key: area.key,
       label: area.label,
       taskCount: area.taskCount,
+      currentTaskCount: area.currentTaskCount,
+      laterTaskCount: area.laterTaskCount,
       milestoneCount: area.milestoneCount,
       goalCount: area.goalCount,
       contextCount: area.contextCount,
@@ -290,6 +321,8 @@ export function buildWorkspaceImportReview(
     areaGroups,
     sourceGroups,
     totalTaskCandidates: draft.tasks.length,
+    totalCurrentTaskCandidates: draft.tasks.filter(task => task.scope !== 'later').length,
+    totalLaterTaskCandidates: draft.tasks.filter(task => task.scope === 'later').length,
     totalMilestones: draft.milestones.length,
     totalGoals: draft.goals.length,
   }

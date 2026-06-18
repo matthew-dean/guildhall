@@ -70,6 +70,30 @@ describe('formWorkspaceHypothesis', () => {
     expect(draft.milestones).toHaveLength(1)
     expect(draft.context).toHaveLength(1)
     expect(draft.stats).toEqual({ inputSignals: 4, drafted: 4, deduped: 0 })
+    expect(draft.tasks[0]?.scope).toBe('current')
+  })
+
+  it('preserves later-scope planning work as deferred task candidates instead of dropping it', () => {
+    const draft = formWorkspaceHypothesis(
+      invFrom([
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'Implement dialogue-and-character-voice reviewer lane',
+          evidence: 'remaining inventory recommendation',
+          domainHint: 'coherence',
+          scopeHint: 'later',
+          confidence: 'high',
+        },
+      ]),
+    )
+
+    expect(draft.tasks).toHaveLength(1)
+    expect(draft.tasks[0]).toMatchObject({
+      title: 'Implement dialogue-and-character-voice reviewer lane',
+      domain: 'coherence',
+      scope: 'later',
+    })
   })
 
   it('does not copy identical evidence into goal rationale or task description', () => {

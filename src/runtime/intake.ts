@@ -858,7 +858,7 @@ export async function enrichTask(input: EnrichTaskInput): Promise<ReframeTaskRes
     ? 'Enrich this task by deciding whether it should become containing work with smaller linked nested work. Preserve useful existing brief/spec context, but split external setup, owner-only work, implementation, and live verification into separate nested work items when they have different owners or verification boundaries.'
     : mode === 'checklist'
       ? 'Enrich this task by adding a concrete external blocker checklist and any missing owner setup steps. Preserve useful existing brief/spec context.'
-      : 'Enrich this task with missing context, clearer next steps, and any structured checklist or split recommendations needed before implementation continues. Preserve useful existing brief/spec context.'
+      : 'Enrich this task with missing context, clearer next steps, and any structured checklist or nested work needed before implementation continues. Preserve useful existing brief/spec context.'
   const enrichmentRequest = [
     modeInstruction,
     '',

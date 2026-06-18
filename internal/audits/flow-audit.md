@@ -203,6 +203,35 @@ browser proof or deterministic automated proof before a release readiness claim.
   no false `Blocked: 3 escalated`, no proof-gaps copy, no nonzero missing
   verification, and no document-level horizontal overflow.
 
+### 2026-06-17 Narrative Harness Workspace-Import Scope Proof
+
+- User job: a user reviewing workspace import for Narrative Harness should be
+  able to tell which work belongs in the current bounded scope, which work is
+  still important but later/deferred, and which sources are only project
+  context.
+- Installed app proof: `pnpm build && pnpm dev:install && guildhall stop &&
+  guildhall start`; `/api/stale-server` reported `stale:false`.
+- API proof for
+  `/api/project/workspace-import/draft?projectId=narrative-harness` after
+  `POST /api/project/workspace-import/rerun?projectId=narrative-harness`:
+  `inputSignals=388`, `drafted=90`, `deduped=298`, `totalTaskCandidates=12`,
+  `totalCurrentTaskCandidates=6`, `totalLaterTaskCandidates=6`.
+- Source agreement proof:
+  `docs/harness/implementation-roadmap.md` contributes the six current-scope
+  harness tasks; `docs/harness/remaining-spec-decomposition-inventory.md`
+  contributes six later-scope task candidates instead of disappearing into
+  generic reference notes.
+- Task proof: current tasks include `Define fixture, expected-record,
+  prototype-run, and evaluation schemas.` and `Use the first run to narrow the
+  MVP story-memory schema.` Later tasks now remain visible as deferred scope,
+  including `Implement dialogue-and-character-voice reviewer lane`,
+  `Implement revision-orchestration coordinator contract`, and
+  `Implement fixture-and-expected-record schemas (from schema-contract-roadmap)`.
+- Remaining gap: this fixes the under-scoping bug where later planned work was
+  dropped from task shaping. It does not yet prove full end-to-end
+  capability-chain reconstruction from all Narrative Harness specs into a
+  complete release/capability spine.
+
 | Surface | Routes | User job | Core project state | API evidence | Browser evidence | Automated coverage | Status / gap |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Fleet home | `/projects`, header/nav | See registered projects, model/provider health, work mix, needs-you count, attach project, refresh without stale loading. | Multi-project fleet, blocked, ready, done-heavy, setup-pending. | `/api/service`, `/api/stale-server`. | Project cards, dashboard counts, open selected project. | Rendered UI covers desktop/mobile cards and project open. Component tests cover service cache and action controls. | Covered by fixture; live freshness still required for installed audits. |
