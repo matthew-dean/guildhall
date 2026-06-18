@@ -1605,6 +1605,17 @@ export async function approveWorkspaceImport(
       ]
     : []
 
+  const refreshedStatusForImportedTask = (
+    existingStatus: Task['status'],
+    importedScope: MaterializedImportTask['scope'],
+  ): Task['status'] => {
+    if (importedScope === 'later') return 'shelved'
+    if (existingStatus === 'shelved' || existingStatus === 'archived' || existingStatus === 'cancelled') {
+      return 'import_draft'
+    }
+    return existingStatus
+  }
+
   for (const { existing, imported } of refreshableTasks) {
     const domain = normalizeImportedTaskDomain(imported.domain, input.coordinatorProjectPaths)
     const taskProjectPath =
@@ -1671,6 +1682,7 @@ export async function approveWorkspaceImport(
     }
     existing.references = normalizedReferences
     existing.notes = importerNoteForTask(normalizedReferences, imported)
+    existing.status = refreshedStatusForImportedTask(existing.status, imported.scope)
     if (imported.proofPaths) existing.proofPaths = [...imported.proofPaths]
     else delete existing.proofPaths
     existing.updatedAt = now

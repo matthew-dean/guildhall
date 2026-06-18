@@ -176,10 +176,10 @@ describe('learning loop for workspace import', () => {
 
     expect(snapshot.project.workspaceImport.preferredAreaKeys).toEqual(['looma'])
     expect(snapshot.project.workspaceImport.preferredSourceKeys).toEqual(['component-roadmap'])
-    expect(snapshot.project.workspaceImport.preferredTaskIds).toEqual(['task-1'])
+    expect(snapshot.project.workspaceImport.preferredTaskIds).toEqual([])
     expect(snapshot.effective.defaults.selectedAreaKeys).toEqual(['looma'])
     expect(snapshot.effective.defaults.selectedSourceKeys).toEqual(['component-roadmap'])
-    expect(snapshot.effective.defaults.selectedTaskIds).toEqual(['task-1'])
+    expect(snapshot.effective.defaults.selectedTaskIds).toEqual(['task-1', 'task-2'])
     expect(snapshot.effective.defaults.note).toContain('approved last time')
   })
 
@@ -208,10 +208,37 @@ describe('learning loop for workspace import', () => {
     })
 
     expect(snapshot.project.workspaceImport.taskSelectionMode).toBe('tight')
-    expect(snapshot.project.workspaceImport.preferredTaskIds).toEqual(['task-1'])
-    expect(snapshot.effective.defaults.selectedTaskIds).toEqual(['task-1'])
+    expect(snapshot.project.workspaceImport.preferredTaskIds).toEqual([])
+    expect(snapshot.effective.defaults.selectedTaskIds).toEqual(['task-1', 'task-2', 'task-3', 'task-4'])
     expect(snapshot.effective.coordinatorSuggestions[0]?.id).toBe('workspace-import-clarity-check')
     expect(snapshot.effective.productSuggestions[0]?.id).toBe('workspace-import-tighten-defaults')
+  })
+
+  it('does not reuse stale exact task ids as future default scope', async () => {
+    const learningPath = projectLearningPath(path.join(tmpDir, 'memory'))
+    await fs.mkdir(path.dirname(learningPath), { recursive: true })
+    await fs.writeFile(
+      learningPath,
+      JSON.stringify({
+        version: 1,
+        workspaceImport: {
+          preferredAreaKeys: ['looma'],
+          preferredSourceKeys: ['component-roadmap'],
+          preferredTaskIds: ['task-1'],
+          approvedRuns: 1,
+        },
+      }),
+      'utf8',
+    )
+
+    const snapshot = buildLearningSnapshot({
+      memoryDir: path.join(tmpDir, 'memory'),
+      review: sampleReview(),
+      draft: sampleDraft(),
+    })
+
+    expect(snapshot.effective.defaults.selectedSourceKeys).toEqual(['component-roadmap'])
+    expect(snapshot.effective.defaults.selectedTaskIds).toEqual(['task-1', 'task-2'])
   })
 
   it('tracks dismissals in both project and user learning', async () => {

@@ -1093,6 +1093,86 @@ tasks:
     expect(q.tasks.find(task => task.id === 'task-later')?.status).toBe('shelved')
   })
 
+  it('reactivates previously shelved current-scope imported tasks during refresh', async () => {
+    await writeQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      tasks: [
+        {
+          id: WORKSPACE_IMPORT_TASK_ID,
+          title: 'Review existing project work',
+          description: 'Reserved importer',
+          domain: WORKSPACE_IMPORT_DOMAIN,
+          projectPath: tmpDir,
+          status: 'spec_review',
+          priority: 'high',
+          spec: '',
+          acceptanceCriteria: [],
+          dependsOn: [],
+          outOfScope: [],
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          adjudications: [],
+          escalations: [],
+          agentIssues: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          origination: 'system',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+        {
+          id: 'task-import-existing',
+          title: 'Mastra workflow for the prototype iteration loop',
+          description: 'Previously deferred.',
+          domain: 'harness',
+          projectPath: tmpDir,
+          status: 'shelved',
+          priority: 'normal',
+          acceptanceCriteria: [],
+          dependsOn: [],
+          outOfScope: [],
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          adjudications: [],
+          escalations: [],
+          agentIssues: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          origination: 'human',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      ],
+    })
+    await seedImporterWithSpec(`
+\`\`\`yaml
+tasks:
+  - id: task-import-existing
+    title: Mastra workflow for the prototype iteration loop
+    description: Keep this inside the current headless MVP.
+    domain: harness
+    priority: high
+\`\`\`
+`)
+
+    const res = await approveWorkspaceImport({
+      memoryDir,
+      projectPath: tmpDir,
+    })
+    expect(res.tasksAdded).toBe(0)
+
+    const q = await readQueue()
+    expect(q.tasks.filter(task => task.title === 'Mastra workflow for the prototype iteration loop')).toHaveLength(1)
+    expect(q.tasks.find(task => task.id === 'task-import-existing')).toMatchObject({
+      status: 'import_draft',
+      description: 'Keep this inside the current headless MVP.',
+      priority: 'high',
+    })
+  })
+
   it('suffixes conflicting task ids rather than overwriting', async () => {
     await seedImporterWithSpec(`
 \`\`\`yaml

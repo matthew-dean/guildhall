@@ -21,6 +21,9 @@ const TaskSelectionMode = z.enum(['all', 'tight'])
 const WorkspaceImportLearningSchema = z.object({
   preferredAreaKeys: z.array(z.string()).default([]),
   preferredSourceKeys: z.array(z.string()).default([]),
+  // Kept for compatibility with older learning files. Exact task-id reuse
+  // turns stale quickly as living docs evolve, so defaults no longer depend
+  // on this field.
   preferredTaskIds: z.array(z.string()).default([]),
   areaSelectionCounts: z.record(z.string(), z.number().int().nonnegative()).default({}),
   sourceSelectionCounts: z.record(z.string(), z.number().int().nonnegative()).default({}),
@@ -847,7 +850,7 @@ export async function recordWorkspaceImportApproval(
     nextProjectWI.sourceSelectionCounts,
     nextProjectWI.approvedRuns,
   )
-  nextProjectWI.preferredTaskIds = selectedTaskIds
+  nextProjectWI.preferredTaskIds = []
   const nextProjectRecord = rebuildProjectSuggestions({
     ...projectRecord,
     workspaceImport: nextProjectWI,
@@ -915,35 +918,27 @@ export function buildWorkspaceImportDefaults(
           .filter(group => selectedAreaKeys.includes(group.areaKey))
           .map(group => group.key)
 
-  const effectiveMode =
-    projectLearning.workspaceImport.taskSelectionMode !== 'all'
-      ? projectLearning.workspaceImport.taskSelectionMode
-      : userLearning.workspaceImport.taskSelectionMode
-
   const taskIdsForSelectedSources = new Set(
     review.sourceGroups
       .filter(group => selectedSourceKeys.includes(group.key))
       .flatMap(group => group.taskIds),
   )
   const candidateTasks = draft.tasks.filter(task => taskIdsForSelectedSources.has(task.suggestedId))
-  const projectPreferredTaskIds = projectLearning.workspaceImport.preferredTaskIds.filter(taskId =>
-    candidateTasks.some(task => task.suggestedId === taskId),
-  )
-  const tightTasks = candidateTasks.filter(task =>
-    task.confidence === 'high' || task.priority === 'critical' || task.priority === 'high',
-  )
-  const selectedTaskIds = projectPreferredTaskIds.length > 0
-    ? projectPreferredTaskIds
-    : (effectiveMode === 'tight' && tightTasks.length > 0 ? tightTasks : candidateTasks)
-        .map(task => task.suggestedId)
+  const currentCandidateTasks = candidateTasks.filter(task => task.scope !== 'later')
+  const selectedTaskIds = (
+    currentCandidateTasks.length > 0 ? currentCandidateTasks : candidateTasks
+  ).map(task => task.suggestedId)
+
+  const effectiveMode =
+    projectLearning.workspaceImport.taskSelectionMode !== 'all'
+      ? projectLearning.workspaceImport.taskSelectionMode
+      : userLearning.workspaceImport.taskSelectionMode
 
   let note: string | null = null
-  if (projectPreferredAreas.length > 0 || projectPreferredSources.length > 0 || projectPreferredTaskIds.length > 0) {
-    note = projectPreferredTaskIds.length > 0
-      ? 'Guildhall reused the project parts, sources, and scoped work you approved last time.'
-      : 'Guildhall reused the project parts and sources you approved last time.'
+  if (projectPreferredAreas.length > 0 || projectPreferredSources.length > 0) {
+    note = 'Guildhall reused the project parts and sources you approved last time.'
   } else if (effectiveMode === 'tight') {
-    note = 'Guildhall started with a tighter task list because you usually trim broad imports.'
+    note = 'Guildhall kept the last import focus, but it still starts from the full current task set for that scope.'
   }
 
   return {

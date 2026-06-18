@@ -3311,7 +3311,7 @@ describe('Workspace Import review endpoints', () => {
     }
     expect(afterBody.detected.learning.defaults.selectedAreaKeys).toEqual(['looma'])
     expect(afterBody.detected.learning.defaults.selectedSourceKeys).toEqual([loomaSource!.key])
-    expect(afterBody.detected.learning.defaults.selectedTaskIds).toEqual([loomaSource!.taskIds[0]!])
+    expect(afterBody.detected.learning.defaults.selectedTaskIds).toEqual(loomaSource!.taskIds)
     expect(afterBody.detected.learning.defaults.note).toContain('approved last time')
   })
 
