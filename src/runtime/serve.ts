@@ -4601,6 +4601,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
         done: number
         blocked: number
         shelved: number
+        pendingPr: number
+        archived: number
+        cancelled: number
         actionable: number
         terminal: number
       }
@@ -4630,6 +4633,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
     let done = 0
     let blocked = 0
     let shelved = 0
+    let pendingPr = 0
+    let archived = 0
+    let cancelled = 0
     let terminal = 0
     for (const task of tasks) {
       if (!task || typeof task !== 'object') return null
@@ -4643,12 +4649,21 @@ export function buildServeApp(opts: ServeOptions = {}): {
       } else if (status === 'shelved') {
         shelved += 1
         terminal += 1
+      } else if (status === 'pending_pr') {
+        pendingPr += 1
+        terminal += 1
+      } else if (status === 'archived') {
+        archived += 1
+        terminal += 1
+      } else if (status === 'cancelled') {
+        cancelled += 1
+        terminal += 1
       }
     }
     const actionable = tasks.length - terminal
     if (actionable > 0) return null
 
-    const detailMessage = `No actionable tasks remain: ${done} done, ${blocked} blocked, ${shelved} shelved.`
+    const detailMessage = `No actionable tasks remain: ${done} done, ${blocked} blocked, ${shelved} shelved, ${pendingPr} pending PR, ${archived} archived, ${cancelled} cancelled.`
     const message = done === tasks.length
       ? 'All tasks are already finished.'
       : detailMessage
@@ -4665,6 +4680,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
           done,
           blocked,
           shelved,
+          pendingPr,
+          archived,
+          cancelled,
           actionable,
           terminal,
         },
@@ -4906,7 +4924,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     for (const task of tasks) {
       if (!task || typeof task !== 'object') continue
       const status = String((task as { status?: unknown }).status ?? '')
-      if (['done', 'blocked', 'shelved', 'pending_pr'].includes(status)) {
+      if (['done', 'blocked', 'shelved', 'pending_pr', 'archived', 'cancelled'].includes(status)) {
         terminal += 1
         continue
       }

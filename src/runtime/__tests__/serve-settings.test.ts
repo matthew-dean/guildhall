@@ -1027,6 +1027,196 @@ describe('POST /api/project/start', () => {
     })
   })
 
+  it('treats archived, cancelled, and pending PR tasks as terminal for Start readiness', async () => {
+    const now = new Date().toISOString()
+    await writeSystemTasks({
+      version: 1,
+      lastUpdated: now,
+      tasks: [
+        {
+          id: 'task-done-1',
+          title: 'Done one',
+          description: 'Finished already.',
+          domain: 'core',
+          status: 'done',
+          priority: 'normal',
+          acceptanceCriteria: [],
+          outOfScope: [],
+          dependsOn: [],
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          adjudications: [],
+          escalations: [],
+          agentIssues: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          id: 'task-pr-1',
+          title: 'Pending PR one',
+          description: 'Already pushed and waiting to merge.',
+          domain: 'core',
+          status: 'pending_pr',
+          priority: 'normal',
+          acceptanceCriteria: [],
+          outOfScope: [],
+          dependsOn: [],
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          adjudications: [],
+          escalations: [],
+          agentIssues: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          id: 'task-archived-1',
+          title: 'Archived one',
+          description: 'Shadow import preserved for audit only.',
+          domain: 'core',
+          status: 'archived',
+          priority: 'normal',
+          acceptanceCriteria: [],
+          outOfScope: [],
+          dependsOn: [],
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          adjudications: [],
+          escalations: [],
+          agentIssues: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          id: 'task-cancelled-1',
+          title: 'Cancelled one',
+          description: 'Superseded and no longer actionable.',
+          domain: 'core',
+          status: 'cancelled',
+          priority: 'normal',
+          acceptanceCriteria: [],
+          outOfScope: [],
+          dependsOn: [],
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          adjudications: [],
+          escalations: [],
+          agentIssues: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+    })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await applyStorageBoundaryMigration(app)
+    const projectRes = await app.fetch(new Request(scoped('/api/project')))
+
+    expect(projectRes.status).toBe(200)
+    const projectBody = await projectRes.json() as {
+      startReadiness?: {
+        canStart?: boolean
+        code?: string
+        message?: string
+      }
+    }
+    expect(projectBody.startReadiness).toMatchObject({
+      canStart: false,
+      code: 'all_terminal',
+    })
+    expect(projectBody.startReadiness?.message).toContain('1 pending PR')
+    expect(projectBody.startReadiness?.message).toContain('1 archived')
+    expect(projectBody.startReadiness?.message).toContain('1 cancelled')
+
+    const startRes = await app.fetch(
+      new Request(scoped('/api/project/start'), { method: 'POST', body: '{}' }),
+    )
+    expect(startRes.status).toBe(200)
+    const startBody = await startRes.json() as {
+      code?: string
+      stopSummary?: {
+        counts?: {
+          done?: number
+          pendingPr?: number
+          archived?: number
+          cancelled?: number
+          actionable?: number
+          terminal?: number
+        }
+      }
+    }
+    expect(startBody).toMatchObject({
+      code: 'all_terminal',
+      stopSummary: {
+        counts: {
+          done: 1,
+          pendingPr: 1,
+          archived: 1,
+          cancelled: 1,
+          actionable: 0,
+          terminal: 4,
+        },
+      },
+    })
+  })
+
+  it('does not block Start on archived-only residue when nothing actionable remains', async () => {
+    const now = new Date().toISOString()
+    await writeSystemTasks({
+      version: 1,
+      lastUpdated: now,
+      tasks: [
+        {
+          id: 'task-archived-1',
+          title: 'Archived one',
+          description: 'Kept only for audit trail.',
+          domain: 'core',
+          status: 'archived',
+          priority: 'normal',
+          acceptanceCriteria: [],
+          outOfScope: [],
+          dependsOn: [],
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          adjudications: [],
+          escalations: [],
+          agentIssues: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+    })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await applyStorageBoundaryMigration(app)
+    const res = await app.fetch(
+      new Request(scoped('/api/project/start'), { method: 'POST', body: '{}' }),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json() as { status?: string; code?: string; stopSummary?: { reason?: string } }
+    expect(body).toMatchObject({
+      status: 'stopped',
+      code: 'all_terminal',
+      stopSummary: { reason: 'all_terminal' },
+    })
+  })
+
   it('does not treat a targeted recoverable worktree blocker as all-terminal', async () => {
     const now = new Date().toISOString()
     const taskId = 'task-recover-worktree'
