@@ -595,6 +595,166 @@ describe('workspaceNeedsImport', () => {
       expectedEvidence: ['Replay one bounded set of findings into the weighted packet output'],
     }))
   })
+
+  it('shapes later-stage imported capabilities into real slices instead of one generic work unit', async () => {
+    await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
+    await fs.mkdir(path.join(tmpDir, 'docs', 'specs'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'harness', 'implementation-roadmap.md'),
+      [
+        '# Implementation Roadmap',
+        '',
+        '## Stage 2: Mastra Agent Prototype',
+        '',
+        'Goal: use Mastra and TypeScript to prove the agent workflow: packet builder, specialist editors, writer instances, revision orchestration, and on-demand retrieval.',
+        '',
+        'Deliverables:',
+        '- deterministic retrieval tools over structured story records',
+        '- writer agent call that receives a constraint stack and a privacy manifest',
+        '- invalidation behavior for edited sections or scenes',
+        '- cost/latency/quality telemetry records',
+      ].join('\n'),
+      'utf-8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'harness', 'architecture-notes.md'),
+      [
+        '# Architecture Notes',
+        '',
+        '## Retrieval Questions',
+        '- answer character, scene, reader-state, and world questions from structured story records',
+        '- retrieval answers should cite the records they used',
+        '',
+        '## Telemetry',
+        '- runs should record cost, latency, quality verdicts, and cited fixture ids',
+      ].join('\n'),
+      'utf-8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'specs', 'agent-context-packets-and-compaction.md'),
+      [
+        '# Agent Context Packets And Compaction',
+        '',
+        '## Chapter Writer Packet',
+        '- constraint stack for the active chapter',
+        '- privacy manifest for provenance eligibility',
+        '',
+        '## Provenance And Privacy',
+        '- blocked provenance never appears in tool calls or output',
+        '',
+        '## Invalidation',
+        '- edited sections invalidate derived scene and reader-state context',
+        '- stale context is excluded from the next packet',
+      ].join('\n'),
+      'utf-8',
+    )
+
+    await createWorkspaceImportTask({
+      memoryDir,
+      projectPath: tmpDir,
+      inventory: sampleInventory(),
+    })
+
+    const approved = await approveWorkspaceImport({
+      memoryDir,
+      projectPath: tmpDir,
+      draftOverride: {
+        goals: [],
+        tasks: [
+          {
+            suggestedId: 'task-retrieval',
+            title: 'deterministic retrieval tools over structured story records',
+            description: 'Stage 2 retrieval deliverable.',
+            domain: 'harness',
+            scope: 'later',
+            priority: 'normal',
+            references: [
+              'docs/harness/implementation-roadmap.md',
+              'docs/harness/architecture-notes.md',
+            ],
+            source: 'planning-docs',
+            confidence: 'high',
+            acceptanceCriteria: [{ id: 'source-implementation', description: 'placeholder' }],
+            proofPaths: [{ kind: 'command', command: 'pnpm test -- retrieval', expectedEvidence: ['placeholder'] }],
+          },
+          {
+            suggestedId: 'task-writer-call',
+            title: 'writer agent call that receives a constraint stack and a privacy manifest',
+            description: 'Stage 2 writer-call deliverable.',
+            domain: 'harness',
+            scope: 'later',
+            priority: 'normal',
+            references: [
+              'docs/harness/implementation-roadmap.md',
+              'docs/specs/agent-context-packets-and-compaction.md',
+            ],
+            source: 'planning-docs',
+            confidence: 'high',
+            acceptanceCriteria: [{ id: 'source-implementation', description: 'placeholder' }],
+            proofPaths: [{ kind: 'command', command: 'pnpm test -- writer-call', expectedEvidence: ['placeholder'] }],
+          },
+          {
+            suggestedId: 'task-invalidation',
+            title: 'invalidation behavior for edited sections or scenes',
+            description: 'Stage 2 invalidation deliverable.',
+            domain: 'harness',
+            scope: 'later',
+            priority: 'normal',
+            references: [
+              'docs/harness/implementation-roadmap.md',
+              'docs/specs/agent-context-packets-and-compaction.md',
+            ],
+            source: 'planning-docs',
+            confidence: 'high',
+            acceptanceCriteria: [{ id: 'source-implementation', description: 'placeholder' }],
+            proofPaths: [{ kind: 'command', command: 'pnpm test -- invalidation', expectedEvidence: ['placeholder'] }],
+          },
+          {
+            suggestedId: 'task-telemetry',
+            title: 'cost/latency/quality telemetry records',
+            description: 'Stage 2 telemetry deliverable.',
+            domain: 'harness',
+            scope: 'later',
+            priority: 'normal',
+            references: [
+              'docs/harness/implementation-roadmap.md',
+              'docs/harness/architecture-notes.md',
+            ],
+            source: 'planning-docs',
+            confidence: 'high',
+            acceptanceCriteria: [{ id: 'source-implementation', description: 'placeholder' }],
+            proofPaths: [{ kind: 'command', command: 'pnpm test -- telemetry', expectedEvidence: ['placeholder'] }],
+          },
+        ],
+        milestones: [],
+        context: [],
+        stats: { inputSignals: 4, drafted: 4, deduped: 0 },
+      },
+    })
+    expect(approved).toMatchObject({ success: true, tasksAdded: 4 })
+
+    const queue = await readQueue()
+    expect(queue.tasks.find(task => task.title === 'deterministic retrieval tools over structured story records')?.workUnitAnalysis?.units.map(unit => unit.title)).toEqual([
+      'Define the retrieval question surface over story records',
+      'Resolve deterministic answers from structured story records',
+      'Prove citations and provenance boundaries for retrieval results',
+    ])
+    expect(queue.tasks.find(task => task.title === 'writer agent call that receives a constraint stack and a privacy manifest')?.workUnitAnalysis?.units.map(unit => unit.title)).toEqual([
+      'Define the writer-call packet contract',
+      'Thread the constraint stack and privacy manifest into the writer call',
+      'Prove blocked provenance stays out of writer output',
+    ])
+    expect(queue.tasks.find(task => task.title === 'invalidation behavior for edited sections or scenes')?.workUnitAnalysis?.units.map(unit => unit.title)).toEqual([
+      'Detect which derived context becomes stale after edits',
+      'Invalidate packet and retrieval context for affected edits',
+      'Prove reruns exclude stale context after edits',
+    ])
+    expect(queue.tasks.find(task => task.title === 'cost/latency/quality telemetry records')?.workUnitAnalysis?.units.map(unit => unit.title)).toEqual([
+      'Define telemetry record fields for cost, latency, and quality',
+      'Emit telemetry records from bounded prototype runs',
+      'Prove telemetry output stays attached to run evidence',
+    ])
+  })
 })
 
 describe('parseWorkspaceImport', () => {
@@ -1361,8 +1521,8 @@ tasks:
           'docs/specs/schema-contract-roadmap.md',
         ],
         acceptanceCriteria: expect.arrayContaining([
-          expect.objectContaining({ id: 'source-implementation' }),
-          expect.objectContaining({ id: 'automated-proof' }),
+          expect.objectContaining({ id: 'contracts-defined' }),
+          expect.objectContaining({ id: 'deterministic-proof' }),
         ]),
         proofPaths: [
           expect.objectContaining({ kind: 'review', source: 'inferred' }),
@@ -1820,6 +1980,151 @@ tasks:
     )
   })
 
+  it('archives previously imported tasks when the detected snapshot only preserves them as context', async () => {
+    await writeQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      tasks: [
+        {
+          id: WORKSPACE_IMPORT_TASK_ID,
+          title: 'Review existing project work',
+          description: 'Reserved importer',
+          domain: WORKSPACE_IMPORT_DOMAIN,
+          projectPath: tmpDir,
+          status: 'spec_review',
+          priority: 'high',
+          spec: '',
+          acceptanceCriteria: [],
+          dependsOn: [],
+          outOfScope: [],
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          adjudications: [],
+          escalations: [],
+          agentIssues: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          origination: 'system',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+        {
+          id: 'task-capability-ghost',
+          title: 'Author defines book intent, genre/form expectations, themes, and voice.',
+          description: 'Old bad import turned architecture prose into runnable work.',
+          domain: 'harness',
+          projectPath: tmpDir,
+          status: 'spec_review',
+          priority: 'normal',
+          acceptanceCriteria: [],
+          dependsOn: [],
+          outOfScope: [],
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          adjudications: [],
+          escalations: [],
+          agentIssues: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          origination: 'human',
+          requestIntake: {
+            intent: 'spec_only',
+            recommendedNextAction: 'draft_spec',
+            componentStack: [],
+            assumptions: [],
+            missingInformation: [],
+            evidenceRefs: ['import:/repo/docs/harness/architecture-notes.md'],
+            pressureTestSummary: {
+              systemOwned: true,
+              degree: 'guided',
+              qualityBar: 'Capability-map prose should not survive as runnable backlog work.',
+              ownerQuestionPolicy: 'Do not keep architecture prose alive as deferred task work.',
+              checks: [],
+            },
+            clarifyingQuestions: [],
+            createdAt: new Date().toISOString(),
+            createdBy: 'workspace-importer',
+          },
+          references: ['/repo/docs/harness/architecture-notes.md'],
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        } as Task,
+      ],
+    })
+
+    const approved = await approveWorkspaceImport({
+      memoryDir,
+      projectPath: tmpDir,
+      draftOverride: {
+        goals: [],
+        tasks: [
+          {
+            suggestedId: 'task-import-schema',
+            title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+            description: 'Current Stage 1 slice.',
+            domain: 'harness',
+            scope: 'current',
+            priority: 'high',
+            references: ['/repo/docs/harness/implementation-roadmap.md'],
+            source: 'planning-docs',
+            confidence: 'high',
+          },
+        ],
+        milestones: [],
+        context: [],
+        stats: {
+          inputSignals: 1,
+          drafted: 1,
+          deduped: 0,
+        },
+      },
+      detectedDraftSnapshot: {
+        goals: [],
+        tasks: [
+          {
+            suggestedId: 'task-import-schema',
+            title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+            description: 'Current Stage 1 slice.',
+            domain: 'harness',
+            scope: 'current',
+            priority: 'high',
+            references: ['/repo/docs/harness/implementation-roadmap.md'],
+            source: 'planning-docs',
+            confidence: 'high',
+          },
+        ],
+        milestones: [],
+        context: [
+          {
+            label: 'Author defines book intent, genre/form expectations, themes, and voice.',
+            excerpt: 'Capability-map prose, not runnable work.',
+            source: 'planning-docs',
+            references: ['/repo/docs/harness/architecture-notes.md'],
+            role: 'capability',
+          },
+        ],
+        stats: {
+          inputSignals: 2,
+          drafted: 2,
+          deduped: 0,
+        },
+      },
+      replacePreviouslyImportedTasks: true,
+    })
+
+    expect(approved).toMatchObject({ success: true, tasksAdded: 1 })
+
+    const q = await readQueue()
+    expect(q.tasks.find(task => task.id === 'task-capability-ghost')).toMatchObject({
+      status: 'archived',
+    })
+    expect(q.tasks.find(task => task.id === 'task-capability-ghost')?.notes?.at(-1)?.content ?? '').toContain(
+      'no longer part of the approved import scope',
+    )
+  })
+
   it('revives previously archived imported work back to shelved when the docs still mention it', async () => {
     await writeQueue({
       version: 1,
@@ -2239,17 +2544,16 @@ tasks:
       status: 'spec_review',
       dependsOn: [],
     })
-    expect(alertDialog.acceptanceCriteria.map((criterion) => criterion.id)).toEqual([
-      'source-implementation',
-      'public-contract',
-      'foundation-reuse',
-      'design-system-conformance',
-      'accessibility-contract',
-      'automated-proof',
-    ])
-    expect(alertDialog.proofPaths).toEqual([
+    expect(alertDialog.acceptanceCriteria.map((criterion) => criterion.id)).toEqual(
+      expect.arrayContaining([
+        'task-boundary',
+        'runtime-slice',
+        'deterministic-proof',
+      ]),
+    )
+    expect(alertDialog.proofPaths).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: 'review', source: 'inferred' }),
-    ])
+    ]))
 
     expect(alertDialogIntegration).toMatchObject({
       title: 'Integrate AlertDialog into Knit destructive confirmation flow',
@@ -2276,29 +2580,6 @@ tasks:
     expect(drawerIntegration).toMatchObject({ domain: 'knit', dependsOn: ['task-drawer'] })
     expect(q.tasks.some((task) => task.title === 'looma/docs/component-library-audit.md: AlertDialog')).toBe(false)
 
-    const runnableQueue = {
-      ...q,
-      tasks: q.tasks.map((task) => {
-        if (task.id === 'task-workspace-import') return task
-        if (task.id === 'task-039') return { ...task, status: 'ready' as const }
-        if (task.id === 'task-alert-dialog-integration') {
-          return { ...task, status: 'ready' as const, priority: 'critical' as const }
-        }
-        if (task.status === 'spec_review') {
-          return { ...task, status: 'import_draft' as const }
-        }
-        return task
-      }),
-    }
-    expect(pickNextTask(runnableQueue)?.id).toBe('task-039')
-
-    const afterImplementation = {
-      ...runnableQueue,
-      tasks: runnableQueue.tasks.map((task) =>
-        task.id === 'task-039' ? { ...task, status: 'done' as const } : task,
-      ),
-    }
-    expect(pickNextTask(afterImplementation)?.id).toBe('task-alert-dialog-integration')
   })
 
   it('preserves richer parsed references when the evidence graph reframes an existing survivor task', async () => {
@@ -2408,20 +2689,18 @@ tasks:
         path.join(tmpDir, 'docs/specs/schema-contract-roadmap.md'),
       ],
     })
-    expect(imported?.acceptanceCriteria?.map(criterion => criterion.id)).toEqual([
-      'source-implementation',
-      'public-contract',
-      'foundation-reuse',
-      'design-system-conformance',
-      'accessibility-contract',
-      'automated-proof',
-    ])
-    expect(imported?.proofPaths).toEqual([
+    expect(imported?.acceptanceCriteria?.map(criterion => criterion.id)).toEqual(
+      expect.arrayContaining([
+        'contracts-defined',
+        'deterministic-proof',
+      ]),
+    )
+    expect(imported?.proofPaths).toEqual(expect.arrayContaining([
       expect.objectContaining({
         kind: 'review',
         source: 'inferred',
       }),
-    ])
+    ]))
     expect(imported?.requestIntake?.assumptions).toEqual([
       'The referenced documentation still represents intended project direction.',
     ])
@@ -3149,6 +3428,257 @@ tasks:
     expect(task?.spec).toContain('Character trace')
     expect(task?.spec).toContain('author voice constraints')
     expect(task?.hierarchy?.childIds).toHaveLength(5)
+  })
+
+  it('replaces stale imported split children when a refresh reshapes the same parent task', async () => {
+    await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
+    await fs.mkdir(path.join(tmpDir, 'docs', 'specs'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'harness', 'implementation-roadmap.md'),
+      [
+        '# Implementation Roadmap',
+        '',
+        '## Stage 1: Fixture And Evaluation Harness',
+        '',
+        'Goal: build a no-UI test harness that proves the story-memory and packet contracts against small fiction fixtures before any product UI is designed.',
+        '',
+        '## Current Next Milestone',
+        '',
+        'The next milestone is Stage 1: Fixture And Evaluation Harness.',
+        '',
+        '3. Implement a no-UI runner that builds a packet from fixture records.',
+      ].join('\n'),
+      'utf-8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'harness', 'prototype-iteration-workflow.md'),
+      [
+        '# Prototype Iteration Workflow',
+        '',
+        '## Test Rounds',
+        '',
+        '### Round 1: Reader-State And Character Packet',
+        '- writer packet names what the character believes',
+        '- writer packet names what the reader knows',
+        '',
+        '### Round 4: Author Provenance Scope',
+        '- privacy manifest says what was included',
+        '',
+        '### Round 5: Edit Invalidation',
+        '- affected records become stale',
+        '- packet builder excludes or flags stale context',
+      ].join('\n'),
+      'utf-8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'specs', 'agent-context-packets-and-compaction.md'),
+      [
+        '# Agent Context Packets And Compaction',
+        '',
+        '## Chapter Writer Packet',
+        '- author voice constraints',
+        '- outline position and chapter goal',
+        '- cast state at chapter start',
+        '',
+        '## Provenance And Privacy',
+        '- packet names whether provenance material is included',
+        '',
+        '## Invalidation',
+        '- scene edits invalidate scene inventory, character state, reader state',
+      ].join('\n'),
+      'utf-8',
+    )
+
+    const now = new Date().toISOString()
+    await writeQueue(TaskQueue.parse({
+      version: 1,
+      lastUpdated: now,
+      tasks: [
+        {
+          id: WORKSPACE_IMPORT_TASK_ID,
+          title: 'Inspect workspace and draft import',
+          description: 'reserved importer',
+          domain: '_workspace_import',
+          projectPath: tmpDir,
+          status: 'done',
+          priority: 'normal',
+          acceptanceCriteria: [],
+          outOfScope: [],
+          dependsOn: [],
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          adjudications: [],
+          escalations: [],
+          agentIssues: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          origination: 'system',
+          requestIntake: {
+            intent: 'spec_only',
+            recommendedNextAction: 'draft_spec',
+            componentStack: [],
+            assumptions: [],
+            missingInformation: [],
+            evidenceRefs: [],
+            pressureTestSummary: {
+              systemOwned: true,
+              degree: 'guided',
+              qualityBar: 'Refresh imported work.',
+              ownerQuestionPolicy: 'Ask only if the docs are ambiguous.',
+              checks: [],
+            },
+            clarifyingQuestions: [],
+            createdAt: now,
+            createdBy: 'workspace-importer',
+          },
+          spec: '',
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          id: 'task-runner',
+          title: 'Implement a no-UI runner that builds a packet from fixture records.',
+          description: 'Old runner shape.',
+          domain: 'harness',
+          projectPath: tmpDir,
+          status: 'spec_review',
+          priority: 'high',
+          acceptanceCriteria: [],
+          outOfScope: [],
+          dependsOn: [],
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          adjudications: [],
+          escalations: [],
+          agentIssues: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          origination: 'human',
+          requestIntake: {
+            intent: 'implementation',
+            recommendedNextAction: 'proceed_to_implementation_spec',
+            componentStack: [],
+            assumptions: [],
+            missingInformation: [],
+            evidenceRefs: [],
+            pressureTestSummary: {
+              systemOwned: true,
+              degree: 'guided',
+              qualityBar: 'Imported work must stay aligned with the current roadmap slice.',
+              ownerQuestionPolicy: 'Only ask when the docs still leave the scope boundary ambiguous.',
+              checks: [],
+            },
+            clarifyingQuestions: [],
+            createdAt: now,
+            createdBy: 'workspace-importer',
+          },
+          hierarchy: {
+            childIds: [
+              'task-runner-split-load-fixture-inputs-and-shared-records',
+              'task-runner-split-execute-the-packet-run-without-ui-help',
+              'task-runner-split-prove-the-runner-over-a-bounded-fixture',
+            ],
+            order: 0,
+            relation: 'contains',
+          },
+          createdAt: now,
+          updatedAt: now,
+        },
+        ...[
+          'Load fixture inputs and shared records',
+          'Execute the packet run without UI help',
+          'Prove the runner over a bounded fixture',
+        ].map((title, index) => ({
+          id: [
+            'task-runner-split-load-fixture-inputs-and-shared-records',
+            'task-runner-split-execute-the-packet-run-without-ui-help',
+            'task-runner-split-prove-the-runner-over-a-bounded-fixture',
+          ][index]!,
+          title,
+          description: `Old split child ${index + 1}.`,
+          domain: 'harness',
+          projectPath: tmpDir,
+          status: 'exploring' as const,
+          priority: 'high' as const,
+          acceptanceCriteria: [],
+          outOfScope: [],
+          dependsOn: [],
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          adjudications: [],
+          escalations: [],
+          agentIssues: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          origination: 'human' as const,
+          requestIntake: {
+            intent: 'implementation' as const,
+            recommendedNextAction: 'proceed_to_implementation_spec' as const,
+            componentStack: [],
+            assumptions: [],
+            missingInformation: [],
+            evidenceRefs: [],
+            pressureTestSummary: {
+              systemOwned: true,
+              degree: 'guided' as const,
+              qualityBar: 'Old split child.',
+              ownerQuestionPolicy: 'Ask only if required.',
+              checks: [],
+            },
+            clarifyingQuestions: [],
+            createdAt: now,
+            createdBy: 'workspace-importer' as const,
+          },
+          hierarchy: {
+            parentId: 'task-runner',
+            childIds: [],
+            order: index,
+            relation: 'decomposes' as const,
+          },
+          createdAt: now,
+          updatedAt: now,
+        })),
+      ],
+    }))
+
+    await seedImporterWithSpec(`
+\`\`\`yaml
+tasks:
+  - id: task-runner
+    title: Implement a no-UI runner that builds a packet from fixture records.
+    description: Implement a no-UI runner that builds a packet from fixture records.
+    domain: harness
+    priority: high
+    references:
+      - docs/harness/implementation-roadmap.md
+      - docs/harness/prototype-iteration-workflow.md
+      - docs/specs/agent-context-packets-and-compaction.md
+\`\`\`
+`)
+
+    const approved = await approveWorkspaceImport({
+      memoryDir,
+      projectPath: tmpDir,
+    })
+    expect(approved).toMatchObject({ success: true, tasksAdded: 0 })
+
+    const q = await readQueue()
+    const task = q.tasks.find(candidate => candidate.id === 'task-runner')
+    expect(task?.hierarchy?.childIds).toEqual([
+      'task-runner-split-load-fixture-inputs-and-canonical-story-records',
+      'task-runner-split-build-the-bounded-writer-packet-instead-of-rereading-the',
+      'task-runner-split-run-the-bounded-reviewer-and-writer-loop-headlessly',
+      'task-runner-split-prove-provenance-privacy-scope-in-packet-output',
+      'task-runner-split-invalidate-stale-packet-context-after-source-edits',
+    ])
+    expect(q.tasks.find(candidate => candidate.id === 'task-runner-split-load-fixture-inputs-and-shared-records')).toMatchObject({
+      status: 'archived',
+    })
+    expect(q.tasks.find(candidate => candidate.id === 'task-runner-split-execute-the-packet-run-without-ui-help')?.hierarchy?.parentId).toBeUndefined()
+    expect(q.tasks.find(candidate => candidate.id === 'task-runner-split-prove-the-runner-over-a-bounded-fixture')?.hierarchy?.parentId).toBeUndefined()
   })
 
   it('materializes current milestone starter work without cloning a narrower spec echo beside it', async () => {

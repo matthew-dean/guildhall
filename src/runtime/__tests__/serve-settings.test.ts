@@ -2392,8 +2392,8 @@ describe('Workspace Import review endpoints', () => {
     expect(schemaTask).toMatchObject({
       domain: 'harness',
       acceptanceCriteria: expect.arrayContaining([
-        expect.objectContaining({ id: 'source-implementation' }),
-        expect.objectContaining({ id: 'automated-proof' }),
+        expect.objectContaining({ id: 'contracts-defined' }),
+        expect.objectContaining({ id: 'deterministic-proof' }),
       ]),
       proofPaths: [
         expect.objectContaining({ kind: 'review', source: 'inferred' }),
@@ -2429,8 +2429,8 @@ describe('Workspace Import review endpoints', () => {
     expect(parsedSchemaTask).toMatchObject({
       domain: 'harness',
       acceptanceCriteria: expect.arrayContaining([
-        expect.objectContaining({ id: 'source-implementation' }),
-        expect.objectContaining({ id: 'automated-proof' }),
+        expect.objectContaining({ id: 'contracts-defined' }),
+        expect.objectContaining({ id: 'deterministic-proof' }),
       ]),
       proofPaths: [
         expect.objectContaining({ kind: 'review', source: 'inferred' }),

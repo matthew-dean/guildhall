@@ -2,7 +2,7 @@ import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, wr
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { load as yamlLoad } from 'js-yaml'
-import { TaskQueue, type Task, type TaskPriority } from '@guildhall/core'
+import { TaskQueue, buildDecompositionChildDrafts, type Task, type TaskPriority } from '@guildhall/core'
 import { getProjectSystemStatePathFromMemoryDir } from '@guildhall/sessions'
 import { appendExploringTranscript } from '@guildhall/tools'
 import { loadLeverSettings, defaultAgentSettingsPath } from '@guildhall/levers'
@@ -1757,14 +1757,7 @@ function detectedSnapshotStillMentionsImportedTask(
   })) {
     return true
   }
-
-  return detectedDraftSnapshot.context.some((candidate) => {
-    const candidateTitle = normalizeImportText(candidate.label)
-    return (
-      (normalizedTitle.length > 0 && candidateTitle === normalizedTitle) ||
-      matchesRefs(candidate.references)
-    )
-  })
+  return false
 }
 
 async function evidenceSourcesForParsedTasks(
@@ -2122,9 +2115,10 @@ function importedTaskLooksReviewerLane(
   task: MaterializedImportTask,
   evidenceDetail: ImportedEvidenceDetail,
 ): boolean {
-  return /\breviewer lane\b/i.test(task.title) || (
+  return /\b(reviewer lane|reviewer|dialogue|character voice|reader knowledge|revelation|theme|meaning|scene|chapter intelligence)\b/i.test(task.title) || (
     evidenceDetail.reviewQuestions.length > 0 &&
-    (task.domain === 'coherence' || /\breviewer\b/i.test(task.title))
+    task.domain === 'coherence' &&
+    /\b(voice|dialogue|reader|theme|scene|chapter|review)\b/i.test(task.title)
   )
 }
 
@@ -2133,10 +2127,26 @@ function importedTaskLooksWorkflowDriven(
   evidenceDetail: ImportedEvidenceDetail,
 ): boolean {
   return (
-    /\b(feedback chain|pipeline|workflow|orchestration|coordinator|involvement modes|packet)\b/i.test(task.title) ||
+    /\b(feedback chain|pipeline|workflow|orchestration|coordinator|involvement modes)\b/i.test(task.title) ||
     evidenceDetail.weightDimensions.length > 0 ||
     evidenceDetail.severityLevels.length > 0
   )
+}
+
+type ImportedGeneralShapeKind =
+  | 'retrieval'
+  | 'agent_call'
+  | 'invalidation'
+  | 'telemetry'
+  | 'general'
+
+function importedGeneralShapeKind(task: MaterializedImportTask): ImportedGeneralShapeKind {
+  const title = task.title.trim()
+  if (/\b(retrieval|retrieve|askable)\b/i.test(title)) return 'retrieval'
+  if (/\b(writer agent|editor agent|specialist editor|agent call|agent calls)\b/i.test(title)) return 'agent_call'
+  if (/\b(invalidation|invalidate|stale context|edited sections?|edited scenes?|scene edits?|source edits?)\b/i.test(title)) return 'invalidation'
+  if (/\b(telemetry|cost\/latency\/quality|cost|latency|quality|usage accounting|quota)\b/i.test(title)) return 'telemetry'
+  return 'general'
 }
 
 function shouldDeriveImportedAcceptanceCriteria(
@@ -2151,7 +2161,7 @@ function shouldDeriveImportedAcceptanceCriteria(
   if (importedTaskLooksWorkflowDriven(task, evidenceDetail)) return true
   if (importedTaskLooksContractDriven(task) && evidenceDetail.contractNames.length > 0) return true
   if (importedTaskLooksReviewerLane(task, evidenceDetail)) return true
-  return false
+  return true
 }
 
 function deriveImportedAcceptanceCriteria(
@@ -2171,7 +2181,7 @@ function deriveImportedAcceptanceCriteria(
   if (importedTaskLooksReviewerLane(task, evidenceDetail)) {
     return deriveReviewerLaneAcceptanceCriteria(task, evidenceDetail)
   }
-  return materializedAcceptanceCriteria({ ...task, acceptanceCriteria: task.acceptanceCriteria?.filter(criterion => criterion.id !== 'source-implementation') }, undefined)
+  return deriveGeneralImportedAcceptanceCriteria(task)
 }
 
 function derivePrototypeTaskAcceptanceCriteria(
@@ -2545,6 +2555,133 @@ function deriveWorkflowAcceptanceCriteria(
   return criteria
 }
 
+function deriveGeneralImportedAcceptanceCriteria(
+  task: MaterializedImportTask,
+): Task['acceptanceCriteria'] {
+  const proofCommand = firstImportedProofCommand(task)
+  switch (importedGeneralShapeKind(task)) {
+    case 'retrieval':
+      return [
+        {
+          id: 'retrieval-surface',
+          description: 'The retrieval surface names the story-record questions the task is allowed to answer.',
+          scenario: `Review the intended query surface for ${task.title}.`,
+          expectation: 'Character, scene, reader-state, and world questions have explicit retrieval boundaries.',
+          verifiedBy: 'review',
+          source: 'inferred',
+          met: false,
+        },
+        {
+          id: 'deterministic-record-lookup',
+          description: 'Repeated retrieval requests over the same structured records resolve the same answers.',
+          scenario: 'Replay the same retrieval prompt against the same bounded record set.',
+          expectation: 'The task resolves through structured records instead of ad hoc manuscript rereads.',
+          verifiedBy: 'review',
+          source: 'inferred',
+          met: false,
+        },
+        {
+          id: 'retrieval-provenance',
+          description: 'Retrieval output cites the records it used and respects provenance/privacy boundaries.',
+          scenario: 'Inspect one retrieval answer that depends on multiple record types.',
+          expectation: 'Consumers can tell where the answer came from and which sources stayed blocked.',
+          verifiedBy: 'review',
+          source: 'inferred',
+          met: false,
+        },
+        deterministicImportedCriterion(task, proofCommand, 'The retrieval surface has deterministic local proof.'),
+      ]
+    case 'agent_call':
+      return [
+        {
+          id: 'agent-call-contract',
+          description: 'The agent call names the packet contract it receives before any model execution happens.',
+          scenario: `Inspect the request payload for ${task.title}.`,
+          expectation: 'Constraint stack, privacy manifest, and related bounded inputs are explicit and typed.',
+          verifiedBy: 'review',
+          source: 'inferred',
+          met: false,
+        },
+        {
+          id: 'bounded-agent-inputs',
+          description: 'The agent call receives only the bounded inputs the docs authorize.',
+          scenario: 'Run one writer/editor call with both allowed and blocked provenance in scope.',
+          expectation: 'Blocked provenance stays out of the agent call while allowed context still arrives.',
+          verifiedBy: 'review',
+          source: 'inferred',
+          met: false,
+        },
+        deterministicImportedCriterion(task, proofCommand, 'The agent call has deterministic local proof.'),
+      ]
+    case 'invalidation':
+      return [
+        {
+          id: 'stale-context-detection',
+          description: 'Edits identify which derived context is now stale.',
+          scenario: 'Edit one section or scene after an initial bounded run.',
+          expectation: 'Affected scene, reader-state, or packet-derived records are marked stale explicitly.',
+          verifiedBy: 'review',
+          source: 'inferred',
+          met: false,
+        },
+        {
+          id: 'rerun-boundary',
+          description: 'The next run excludes or refreshes stale context before reuse.',
+          scenario: 'Trigger a rerun after a source edit.',
+          expectation: 'The rerun does not silently reuse invalid packet or retrieval context.',
+          verifiedBy: 'review',
+          source: 'inferred',
+          met: false,
+        },
+        deterministicImportedCriterion(task, proofCommand, 'Invalidation behavior has deterministic local proof.'),
+      ]
+    case 'telemetry':
+      return [
+        {
+          id: 'telemetry-record-shape',
+          description: 'Telemetry records capture cost, latency, quality, and related run identifiers in a stable shape.',
+          scenario: `Inspect one recorded run for ${task.title}.`,
+          expectation: 'Operators can compare runs without reconstructing telemetry from raw logs.',
+          verifiedBy: 'review',
+          source: 'inferred',
+          met: false,
+        },
+        {
+          id: 'telemetry-emission',
+          description: 'Bounded prototype runs emit telemetry alongside their run evidence.',
+          scenario: 'Complete one local proof run.',
+          expectation: 'Telemetry stays attached to the run instead of being recorded in a disconnected stream.',
+          verifiedBy: 'review',
+          source: 'inferred',
+          met: false,
+        },
+        deterministicImportedCriterion(task, proofCommand, 'Telemetry records have deterministic local proof.'),
+      ]
+    case 'general':
+      return [
+        {
+          id: 'task-boundary',
+          description: `${task.title} has an explicit operating boundary tied to the cited project evidence.`,
+          scenario: `Review the intended boundary for ${task.title}.`,
+          expectation: 'The task names what it owns instead of standing in for a whole roadmap area.',
+          verifiedBy: 'review',
+          source: 'inferred',
+          met: false,
+        },
+        {
+          id: 'runtime-slice',
+          description: `${task.title} produces a concrete runtime or data slice inside that boundary.`,
+          scenario: 'Exercise the bounded behavior locally.',
+          expectation: 'The imported task resolves to concrete behavior rather than a planning placeholder.',
+          verifiedBy: 'review',
+          source: 'inferred',
+          met: false,
+        },
+        deterministicImportedCriterion(task, proofCommand, 'The imported task has deterministic local proof.'),
+      ]
+  }
+}
+
 function firstImportedProofCommand(task: MaterializedImportTask): string | null {
   const proofCommand = (task.proofPaths ?? []).find(
     proof =>
@@ -2782,7 +2919,79 @@ function materializedProofPaths(
       },
     ]
   }
-  return current
+  const command = firstImportedProofCommand(task)
+  switch (importedGeneralShapeKind(task)) {
+    case 'retrieval':
+      return [
+        ...(command ? [{
+          kind: 'command' as const,
+          command,
+          source: 'documented' as const,
+          expectedEvidence: ['Retrieval answers stay deterministic and cite structured story records.'],
+        }] : []),
+        {
+          kind: 'review' as const,
+          source: 'inferred' as const,
+          expectedEvidence: [
+            'Retrieval answers name the records they used.',
+            'Blocked provenance stays out of retrieval output.',
+          ],
+        },
+      ]
+    case 'agent_call':
+      return [
+        ...(command ? [{
+          kind: 'command' as const,
+          command,
+          source: 'documented' as const,
+          expectedEvidence: ['The agent call receives the bounded packet contract and keeps blocked provenance out of output.'],
+        }] : []),
+        {
+          kind: 'review' as const,
+          source: 'inferred' as const,
+          expectedEvidence: [
+            'Constraint stack and privacy manifest are visible in the call boundary.',
+            'Blocked provenance never appears in tool calls or model output.',
+          ],
+        },
+      ]
+    case 'invalidation':
+      return [
+        ...(command ? [{
+          kind: 'command' as const,
+          command,
+          source: 'documented' as const,
+          expectedEvidence: ['Edited sections or scenes invalidate stale context before reruns reuse it.'],
+        }] : []),
+        {
+          kind: 'review' as const,
+          source: 'inferred' as const,
+          expectedEvidence: [
+            'Affected derived context is marked stale after edits.',
+            'The rerun excludes or refreshes stale packet and retrieval context.',
+          ],
+        },
+      ]
+    case 'telemetry':
+      return [
+        ...(command ? [{
+          kind: 'command' as const,
+          command,
+          source: 'documented' as const,
+          expectedEvidence: ['Bounded runs emit cost, latency, quality, and run identity telemetry.'],
+        }] : []),
+        {
+          kind: 'review' as const,
+          source: 'inferred' as const,
+          expectedEvidence: [
+            'Telemetry records stay attached to the run evidence they describe.',
+            'Cost, latency, and quality can be compared across repeated runs.',
+          ],
+        },
+      ]
+    case 'general':
+      return current
+  }
 }
 
 function splitMarkdownSections(content: string): Array<{ heading: string; body: string }> {
@@ -3265,7 +3474,7 @@ function deriveImportedWorkUnits(
   if (importedTaskLooksReviewerLane(task, evidenceDetail)) {
     return deriveReviewerLaneWorkUnits(task, evidenceDetail)
   }
-  return [defaultImportedWorkUnit(task, evidenceDetail)]
+  return deriveGeneralImportedWorkUnits(task, evidenceDetail)
 }
 
 function derivePrototypeTaskWorkUnits(
@@ -3451,6 +3660,159 @@ function defaultImportedWorkUnit(
     rationale: summarizeImportedProblemContext(task, evidenceDetail),
     suggestedDomain: task.domain,
     dependsOn: [...(task.dependsOn ?? [])],
+  }
+}
+
+function deriveGeneralImportedWorkUnits(
+  task: MaterializedImportTask,
+  evidenceDetail: ImportedEvidenceDetail,
+): NonNullable<Task['workUnitAnalysis']>['units'] {
+  const proofCommand = firstImportedProofCommand(task)
+  const baseDependsOn = [...(task.dependsOn ?? [])]
+  switch (importedGeneralShapeKind(task)) {
+    case 'retrieval':
+      return [
+        {
+          id: `unit-${task.id}-retrieval-surface`,
+          title: 'Define the retrieval question surface over story records',
+          deliverable: 'The task names the allowed character, scene, reader-state, and world questions over structured records.',
+          rationale: 'Retrieval work should start by defining what may be asked from the record graph.',
+          suggestedDomain: task.domain,
+          dependsOn: baseDependsOn,
+        },
+        {
+          id: `unit-${task.id}-retrieval-resolution`,
+          title: 'Resolve deterministic answers from structured story records',
+          deliverable: 'Repeated retrieval requests return stable answers from the same bounded records.',
+          rationale: 'The retrieval path should answer from structured records instead of ad hoc manuscript rereads.',
+          suggestedDomain: task.domain,
+          dependsOn: [`unit-${task.id}-retrieval-surface`],
+        },
+        {
+          id: `unit-${task.id}-retrieval-proof`,
+          title: 'Prove citations and provenance boundaries for retrieval results',
+          deliverable: proofCommand
+            ? `\`${proofCommand}\` records cited retrieval answers with provenance boundaries intact.`
+            : 'Retrieval results cite their source records and keep blocked provenance out of answers.',
+          rationale: 'Consumers need to trust both the answer and the source/provenance boundary behind it.',
+          suggestedDomain: task.domain,
+          dependsOn: [`unit-${task.id}-retrieval-resolution`],
+        },
+      ]
+    case 'agent_call':
+      return [
+        {
+          id: `unit-${task.id}-agent-contract`,
+          title: 'Define the writer-call packet contract',
+          deliverable: 'The writer/editor call shape names the bounded packet inputs it receives.',
+          rationale: 'Agent-call work should begin by making the packet contract explicit.',
+          suggestedDomain: task.domain,
+          dependsOn: baseDependsOn,
+        },
+        {
+          id: `unit-${task.id}-agent-inputs`,
+          title: 'Thread the constraint stack and privacy manifest into the writer call',
+          deliverable: 'The bounded constraint stack and privacy manifest travel with the agent request.',
+          rationale: 'The docs treat these as first-class call inputs, not optional metadata.',
+          suggestedDomain: task.domain,
+          dependsOn: [`unit-${task.id}-agent-contract`],
+        },
+        {
+          id: `unit-${task.id}-agent-proof`,
+          title: 'Prove blocked provenance stays out of writer output',
+          deliverable: proofCommand
+            ? `\`${proofCommand}\` shows blocked provenance never enters tool calls or agent output.`
+            : 'A bounded run proves blocked provenance stays out of writer output.',
+          rationale: 'The privacy boundary is part of the runtime contract, not after-the-fact review.',
+          suggestedDomain: task.domain,
+          dependsOn: [`unit-${task.id}-agent-inputs`],
+        },
+      ]
+    case 'invalidation':
+      return [
+        {
+          id: `unit-${task.id}-stale-detection`,
+          title: 'Detect which derived context becomes stale after edits',
+          deliverable: 'Edited sections or scenes identify the records and packets they invalidate.',
+          rationale: 'The system needs explicit stale-context detection before it can rerun safely.',
+          suggestedDomain: task.domain,
+          dependsOn: baseDependsOn,
+        },
+        {
+          id: `unit-${task.id}-stale-boundary`,
+          title: 'Invalidate packet and retrieval context for affected edits',
+          deliverable: 'Affected packet and retrieval context is excluded or refreshed after edits.',
+          rationale: 'Invalidation only matters if reruns stop reusing stale derived context.',
+          suggestedDomain: task.domain,
+          dependsOn: [`unit-${task.id}-stale-detection`],
+        },
+        {
+          id: `unit-${task.id}-stale-proof`,
+          title: 'Prove reruns exclude stale context after edits',
+          deliverable: proofCommand
+            ? `\`${proofCommand}\` proves reruns drop or refresh stale context after edits.`
+            : 'A bounded rerun proves stale context is excluded after edits.',
+          rationale: 'The edit boundary has to be observable in rerun behavior.',
+          suggestedDomain: task.domain,
+          dependsOn: [`unit-${task.id}-stale-boundary`],
+        },
+      ]
+    case 'telemetry':
+      return [
+        {
+          id: `unit-${task.id}-telemetry-shape`,
+          title: 'Define telemetry record fields for cost, latency, and quality',
+          deliverable: 'Telemetry records have stable fields for cost, latency, quality, and run identity.',
+          rationale: 'Telemetry is only useful if its record shape is stable enough to compare runs.',
+          suggestedDomain: task.domain,
+          dependsOn: baseDependsOn,
+        },
+        {
+          id: `unit-${task.id}-telemetry-emission`,
+          title: 'Emit telemetry records from bounded prototype runs',
+          deliverable: 'Bounded runs emit telemetry alongside their run evidence.',
+          rationale: 'Telemetry should ride with the run it describes instead of living as disconnected log trivia.',
+          suggestedDomain: task.domain,
+          dependsOn: [`unit-${task.id}-telemetry-shape`],
+        },
+        {
+          id: `unit-${task.id}-telemetry-proof`,
+          title: 'Prove telemetry output stays attached to run evidence',
+          deliverable: proofCommand
+            ? `\`${proofCommand}\` records telemetry with the same bounded run evidence.`
+            : 'A bounded proof run records telemetry that stays attached to the run evidence.',
+          rationale: 'The proof loop should show telemetry and run evidence together.',
+          suggestedDomain: task.domain,
+          dependsOn: [`unit-${task.id}-telemetry-emission`],
+        },
+      ]
+    case 'general':
+      return [
+        {
+          id: `unit-${task.id}-boundary`,
+          title: `Define the operating boundary for ${task.title}`,
+          deliverable: `${task.title} is scoped to one concrete runtime or data boundary.`,
+          rationale: 'Imported work should become one bounded slice instead of staying as roadmap prose.',
+          suggestedDomain: task.domain,
+          dependsOn: baseDependsOn,
+        },
+        {
+          id: `unit-${task.id}-behavior`,
+          title: `Build the bounded behavior for ${task.title}`,
+          deliverable: `${task.title} exists as concrete behavior inside the cited project surface.`,
+          rationale: 'The task needs a real behavior slice, not just a planning heading.',
+          suggestedDomain: task.domain,
+          dependsOn: [`unit-${task.id}-boundary`],
+        },
+        ...(proofCommand ? [{
+          id: `unit-${task.id}-proof`,
+          title: `Prove ${task.title} in the bounded local loop`,
+          deliverable: `\`${proofCommand}\` passes for ${task.title}.`,
+          rationale: 'Imported work should end in a real local proof path.',
+          suggestedDomain: task.domain,
+          dependsOn: [`unit-${task.id}-behavior`],
+        }] : []),
+      ]
   }
 }
 
@@ -3687,7 +4049,7 @@ function buildImportedBlueprintSeed(
       }]
     : []
 
-  if (!importedTaskHasBlueprintSeed(normalizedTask) || normalizedTask.scope === 'later') {
+  if (!importedTaskHasBlueprintSeed(normalizedTask)) {
     return {
       status: normalizedTask.scope === 'later' ? 'shelved' : 'import_draft',
       outOfScope: [],
@@ -3808,7 +4170,7 @@ function buildImportedBlueprintSeed(
   }, { now, recordNote: false })
 
   return {
-    status: 'spec_review',
+    status: normalizedTask.scope === 'later' ? 'shelved' : 'spec_review',
     requestIntake: shapedSeedTask.requestIntake,
     productBrief: seededProductBrief,
     spec: seededSpec,
@@ -4177,7 +4539,73 @@ function materializeImportedSplitChildren(
   if (scope === 'later') return
   const action = task.sizePlan?.action
   if (!isMaterializableSplitAction(action)) return
+  reconcileImportedSplitChildren(queue, task, now)
   materializeSplitChildren(queue, task, now)
+}
+
+function reconcileImportedSplitChildren(
+  queue: TaskQueue,
+  task: Task,
+  now: string,
+): void {
+  const action = task.sizePlan?.action
+  if (!isMaterializableSplitAction(action)) return
+  const plannedChildren = task.sizePlan?.recommendedChildren?.length
+    ? task.sizePlan.recommendedChildren
+    : buildDecompositionChildDrafts({ task })
+  const plannedTitles = new Set(
+    plannedChildren
+      .map(child => normalizeImportText(child.title))
+      .filter(Boolean),
+  )
+  if (plannedTitles.size === 0) return
+
+  const currentChildIds = task.hierarchy?.childIds ?? []
+  if (currentChildIds.length === 0) return
+  const keptChildIds: string[] = []
+  const staleChildIds = new Set<string>()
+
+  for (const childId of currentChildIds) {
+    const child = queue.tasks.find(candidate => candidate.id === childId)
+    if (!child) continue
+    const isGeneratedSplitChild =
+      child.hierarchy?.parentId === task.id ||
+      child.id.startsWith(`${task.id}-split-`) ||
+      child.notes?.some(note => note.agentId === 'task-sizing')
+    const normalizedTitle = normalizeImportText(child.title)
+    if (!isGeneratedSplitChild || plannedTitles.has(normalizedTitle)) {
+      keptChildIds.push(childId)
+      continue
+    }
+
+    staleChildIds.add(child.id)
+    if (child.hierarchy?.parentId === task.id) {
+      const nextHierarchy = { ...(child.hierarchy ?? {}) }
+      delete nextHierarchy.parentId
+      child.hierarchy = nextHierarchy
+    }
+    if (!['done', 'pending_pr'].includes(child.status)) child.status = 'archived'
+    child.updatedAt = now
+    if (!child.notes.some(note => note.agentId === 'workspace-importer' && /superseded by a refreshed imported split/i.test(note.content))) {
+      child.notes.push({
+        agentId: 'workspace-importer',
+        role: 'system',
+        content: `Archived because this split child was superseded by a refreshed imported split for ${task.id}.`,
+        timestamp: now,
+      })
+    }
+  }
+
+  if (staleChildIds.size === 0) return
+  task.hierarchy = {
+    ...(task.hierarchy ?? {}),
+    order: task.hierarchy?.order ?? 0,
+    relation: task.hierarchy?.relation ?? 'contains',
+    childIds: keptChildIds,
+  }
+  if (task.deliverySteps?.length) {
+    task.deliverySteps = task.deliverySteps.filter(step => !step.sourceTaskId || !staleChildIds.has(step.sourceTaskId))
+  }
 }
 
 // ---------------------------------------------------------------------------
