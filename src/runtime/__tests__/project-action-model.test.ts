@@ -385,6 +385,39 @@ describe('buildProjectActionModel', () => {
     expect(model.primaryAction?.label).not.toMatch(/answer/i)
   })
 
+  it('does not treat an inflight execution turn as an owner-answer action', () => {
+    const model = buildProjectActionModel({
+      startReadiness: { canStart: true },
+      inbox: { items: [] },
+      tasks: [{
+        id: 'task-import-9s8tkc',
+        title: 'Define fixture schemas',
+        status: 'spec_review',
+        description: 'Review the seeded implementation blueprint.',
+        updatedAt: '2026-06-18T10:26:34.811Z',
+      }],
+      thread: {
+        activeTurnId: 'inflight:task-import-9s8tkc',
+        turns: [{
+          id: 'inflight:task-import-9s8tkc',
+          kind: 'inflight',
+          status: 'active',
+          actionHref: '/thread?thread=task%3Atask-import-9s8tkc',
+          title: 'Define fixture schemas',
+        }],
+      },
+      runStatus: 'running',
+    })
+
+    expect(model.ownerInput.active).toBe(false)
+    expect(model.primaryAction).toMatchObject({
+      source: 'task',
+      buttonLabel: 'Review in Thread',
+      href: '/thread?thread=task%3Atask-import-9s8tkc',
+    })
+    expect(model.secondaryActions.some(action => /answer in thread/i.test(action.label))).toBe(false)
+  })
+
   it('blocks Resume for active setup questions even when raw readiness is permissive and the project has zero tasks', () => {
     const model = buildProjectActionModel({
       startReadiness: { canStart: true },

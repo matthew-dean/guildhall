@@ -245,6 +245,10 @@ function activeThreadTurn(thread: ProjectActionThread | null | undefined): Proje
   return (thread.turns ?? []).find(turn => turn.id === thread.activeTurnId && turn.status === 'active') ?? null
 }
 
+function isOwnerQuestionTurn(turn: ProjectActionThreadTurn | null | undefined): boolean {
+  return Boolean(turn && ['bounded_chat', 'agent_question', 'pressure_test_question'].includes(turn.kind ?? ''))
+}
+
 function threadHref(turn: ProjectActionThreadTurn): string {
   return turn.actionHref ?? (turn.sessionId ? `/thread?thread=${encodeURIComponent(turn.sessionId)}` : '/thread')
 }
@@ -265,7 +269,7 @@ function ownerInputFrom(readiness: ProjectActionStartReadiness | null | undefine
       href: readiness.actionHref ?? (turn ? threadHref(turn) : '/thread'),
     }
   }
-  if (!turn || !['bounded_chat', 'agent_question', 'pressure_test_question'].includes(turn.kind ?? '')) {
+  if (!isOwnerQuestionTurn(turn)) {
     return { active: false }
   }
   return {
@@ -452,7 +456,14 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
   if (scopeAction) candidates.push(scopeAction)
   if (taskAction) candidates.push(taskAction)
   candidates.push(...inboxActions)
-  if (activeTurn && !ownerInput.active && (activeTurn.kind !== 'setup_step' || tasks.length === 0)) {
+  if (
+    activeTurn &&
+    !ownerInput.active &&
+    (
+      isOwnerQuestionTurn(activeTurn) ||
+      (activeTurn.kind === 'setup_step' && tasks.length === 0)
+    )
+  ) {
     candidates.push(threadAction(activeTurn))
   }
   if (ownerInput.active && !scopeAction && startReadiness?.canStart !== false && ownerInput.href && !setupBlocksStart) {
