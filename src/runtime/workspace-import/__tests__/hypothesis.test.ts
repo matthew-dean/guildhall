@@ -477,6 +477,56 @@ describe('formWorkspaceHypothesis', () => {
     expect(draft.tasks).toHaveLength(1)
   })
 
+  it('enriches current roadmap tasks with related spec and harness references', () => {
+    const draft = formWorkspaceHypothesis(
+      invFrom([
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+          evidence: 'docs/harness/implementation-roadmap.md: 1. Define fixture, expected-record, prototype-run, and evaluation schemas.',
+          confidence: 'high',
+          scopeHint: 'current',
+          references: ['/repo/docs/harness/implementation-roadmap.md'],
+        },
+        {
+          source: 'planning-docs',
+          kind: 'context',
+          title: 'Spec: Story Memory Schemas',
+          evidence: 'These schemas turn the story-intelligence specs into buildable contracts.',
+          confidence: 'high',
+          references: ['/repo/docs/specs/story-memory-schemas.md'],
+        },
+        {
+          source: 'planning-docs',
+          kind: 'context',
+          title: 'Spec: Schema Contract Roadmap',
+          evidence: 'Immediate schema work covers fixture, expected-record, prototype run, and evaluation contracts.',
+          confidence: 'high',
+          references: ['/repo/docs/specs/schema-contract-roadmap.md'],
+        },
+        {
+          source: 'text-corpus',
+          kind: 'context',
+          title: 'Text document (docs/harness/prototype-iteration-workflow.md): Prototype Iteration Workflow',
+          evidence: 'The first usable proof should be a harness that can test story-memory model, packet builder, editor agents, and writer agents.',
+          confidence: 'high',
+          references: ['/repo/docs/harness/prototype-iteration-workflow.md'],
+        },
+      ]),
+    )
+
+    expect(draft.tasks).toHaveLength(1)
+    expect(new Set(draft.tasks[0]!.references)).toEqual(
+      new Set([
+        '/repo/docs/harness/implementation-roadmap.md',
+        '/repo/docs/specs/story-memory-schemas.md',
+        '/repo/docs/specs/schema-contract-roadmap.md',
+        '/repo/docs/harness/prototype-iteration-workflow.md',
+      ]),
+    )
+  })
+
   it('upgrades confidence when a later signal is stronger', () => {
     const draft = formWorkspaceHypothesis(
       invFrom([
@@ -563,6 +613,34 @@ describe('formWorkspaceHypothesis', () => {
       ]),
     )
     expect(draft.context).toHaveLength(2)
+  })
+
+  it('keeps multiple context entries when they come from the same file but describe different structure', () => {
+    const draft = formWorkspaceHypothesis(
+      invFrom([
+        {
+          source: 'planning-docs',
+          kind: 'context',
+          title: 'Stage 0: Spec Baseline',
+          evidence: 'roadmap stage heading',
+          confidence: 'medium',
+          references: ['/repo/docs/harness/implementation-roadmap.md'],
+        },
+        {
+          source: 'planning-docs',
+          kind: 'context',
+          title: 'Stage 1: Fixture And Evaluation Harness',
+          evidence: 'roadmap stage heading',
+          confidence: 'medium',
+          references: ['/repo/docs/harness/implementation-roadmap.md'],
+        },
+      ]),
+    )
+
+    expect(draft.context.map((entry) => entry.label)).toEqual([
+      'Stage 0: Spec Baseline',
+      'Stage 1: Fixture And Evaluation Harness',
+    ])
   })
 
   it('ignores signals with empty titles', () => {

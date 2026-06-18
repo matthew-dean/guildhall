@@ -1330,6 +1330,36 @@ tasks:
     })
     expect(merged.tasks.find(task => task.title === 'fixture directory shape for at least one small story fixture')).toBeUndefined()
   })
+
+  it('drops stale parsed goal fragments when detected goals now contain the full wrapped sentence', () => {
+    const detected = formWorkspaceHypothesis(invWith([
+      {
+        source: 'planning-docs',
+        kind: 'goal',
+        title: 'build a no-UI test harness that proves the story-memory and packet contracts against small fiction fixtures before any product UI is designed.',
+        evidence: 'full goal',
+        confidence: 'high',
+        references: ['docs/harness/implementation-roadmap.md'],
+      },
+    ]))
+    const parsed = parseWorkspaceImport(`
+\`\`\`yaml
+goals:
+  - id: goal-old
+    title: build a no-UI test harness that proves the story-memory and packet
+    rationale: old wrapped fragment
+\`\`\`
+`)
+
+    const merged = mergeWorkspaceImportDraft(detected, parsed)
+
+    expect(merged.goals).toEqual([
+      expect.objectContaining({
+        title: 'build a no-UI test harness that proves the story-memory and packet contracts against small fiction fixtures before any product UI is designed.',
+        source: 'planning-docs',
+      }),
+    ])
+  })
 })
 
 // The Workspace Import tab needs to let users approve the detector's

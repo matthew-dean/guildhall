@@ -609,6 +609,7 @@ export function mergeWorkspaceImportDraft(
   for (const goal of parsed.goals) {
     const normalizedTitle = normalizeImportText(goal.title)
     if (usedGoalTitles.has(normalizedTitle)) continue
+    if (parsedGoalIsShadowedByDetectedGoal(goal, detected.goals)) continue
     mergedGoals.push({
       id: goal.id,
       title: goal.title,
@@ -716,6 +717,22 @@ export function mergeWorkspaceImportDraft(
     context: [...detected.context],
     stats: detected.stats,
   }
+}
+
+function parsedGoalIsShadowedByDetectedGoal(
+  goal: ParsedGoal,
+  detectedGoals: readonly DraftGoal[],
+): boolean {
+  const parsedNormalized = normalizeImportText(goal.title)
+  if (!parsedNormalized) return false
+  const parsedWords = parsedNormalized.split(/\s+/).filter(Boolean)
+  return detectedGoals.some((detectedGoal) => {
+    const detectedNormalized = normalizeImportText(detectedGoal.title)
+    if (!detectedNormalized || detectedNormalized === parsedNormalized) return false
+    if (!detectedNormalized.startsWith(parsedNormalized)) return false
+    const detectedWords = detectedNormalized.split(/\s+/).filter(Boolean)
+    return parsedWords.length >= 6 && detectedWords.length >= parsedWords.length + 2
+  })
 }
 
 function suppressShadowedParsedCurrentMilestoneDeliverables(

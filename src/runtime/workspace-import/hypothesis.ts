@@ -302,11 +302,16 @@ export function formWorkspaceHypothesis(
     goalIndex.size + taskIndex.size + milestoneIndex.size + contextIndex.size
   deduped = Math.max(0, inventory.signals.length - uniques)
 
+  const goals = [...goalIndex.values()]
+  const context = [...contextIndex.values()]
+  const tasks = enrichTasksWithRelatedContext([...taskIndex.values()], context)
+  const milestones = [...milestoneIndex.values()]
+
   return {
-    goals: [...goalIndex.values()],
-    tasks: [...taskIndex.values()],
-    milestones: [...milestoneIndex.values()],
-    context: [...contextIndex.values()],
+    goals,
+    tasks,
+    milestones,
+    context,
     stats: {
       inputSignals: inventory.signals.length,
       drafted: uniques,
@@ -455,7 +460,7 @@ function addContext(
   sig: WorkspaceSignal,
 ): void {
   const refKey = sig.references?.[0] ?? sig.title
-  const key = `${sig.source}:${refKey}`
+  const key = `${sig.source}:${refKey}:${normalize(sig.title)}`
   if (index.has(key)) return
   index.set(key, {
     label: sig.title,
@@ -463,4 +468,77 @@ function addContext(
     source: sig.source,
     ...(sig.references ? { references: sig.references } : {}),
   })
+}
+
+function enrichTasksWithRelatedContext(
+  tasks: DraftTask[],
+  context: readonly DraftContext[],
+): DraftTask[] {
+  if (tasks.length === 0 || context.length === 0) return tasks
+  return tasks.map(task => {
+    const relatedReferences = relatedContextReferences(task, context)
+    if (relatedReferences.length === 0) return task
+    return {
+      ...task,
+      references: mergeReferences(task.references, relatedReferences),
+    }
+  })
+}
+
+function relatedContextReferences(
+  task: DraftTask,
+  context: readonly DraftContext[],
+): string[] {
+  const text = `${task.title}\n${task.description}\n${task.whyThisMayMatter ?? ''}`
+  const taskTokens = meaningfulTokenSet(text)
+  const existingRefs = new Set(task.references ?? [])
+  const ranked = context
+    .map(entry => {
+      const ref = entry.references?.[0]
+      if (!ref || existingRefs.has(ref)) return null
+      const score = relatedContextScore(task, entry, taskTokens)
+      if (score < 2) return null
+      return { ref, score }
+    })
+    .filter((entry): entry is { ref: string; score: number } => Boolean(entry))
+    .sort((left, right) => right.score - left.score || left.ref.localeCompare(right.ref))
+
+  return ranked.slice(0, 4).map(entry => entry.ref)
+}
+
+function relatedContextScore(
+  task: DraftTask,
+  entry: DraftContext,
+  taskTokens: Set<string>,
+): number {
+  const contextText = `${entry.label}\n${entry.excerpt}`
+  const contextTokens = meaningfulTokenSet(contextText)
+  const overlap = overlapRatio(taskTokens, contextTokens)
+  let score = overlap * 10
+  const taskText = normalize(`${task.title} ${task.description} ${task.whyThisMayMatter ?? ''}`)
+  const contextNormalized = normalize(contextText)
+  const contextRef = entry.references?.[0] ?? ''
+
+  if (/\bschema|contract|record\b/.test(taskText) && /\bschema|contract|record\b/.test(contextNormalized)) {
+    score += 4
+  }
+  if (/\bpacket|context|compaction\b/.test(taskText) && /\bpacket|context|compaction\b/.test(contextNormalized)) {
+    score += 4
+  }
+  if (/\bfixture|expected\b/.test(taskText) && /\bfixture|expected|prototype\b/.test(contextNormalized)) {
+    score += 3
+  }
+  if (/\brunner|run|workflow\b/.test(taskText) && /\brunner|run|workflow|prototype\b/.test(contextNormalized)) {
+    score += 3
+  }
+  if (/\bdebug|trace|evaluation|report\b/.test(taskText) && /\bdebug|trace|evaluation|report\b/.test(contextNormalized)) {
+    score += 4
+  }
+  if (task.scope === 'current' && /docs\/harness\//.test(contextRef)) {
+    score += 0.5
+  }
+  if (task.scope === 'current' && /docs\/specs\//.test(contextRef)) {
+    score += 0.5
+  }
+  return score
 }

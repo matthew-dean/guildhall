@@ -131,6 +131,14 @@ function logicalMarkdownLines(raw: string): string[] {
 
   for (let index = 0; index < physicalLines.length; index += 1) {
     let line = physicalLines[index] ?? ''
+    if (startsWrappedLabel(line)) {
+      while (index + 1 < physicalLines.length && isWrappedLabelContinuationLine(physicalLines[index + 1] ?? '')) {
+        line = `${line.trimEnd()} ${(physicalLines[index + 1] ?? '').trim()}`
+        index += 1
+      }
+      logicalLines.push(line)
+      continue
+    }
     if (!startsListItem(line)) {
       logicalLines.push(line)
       continue
@@ -147,6 +155,16 @@ function logicalMarkdownLines(raw: string): string[] {
 
 function startsListItem(line: string): boolean {
   return /^\s*(?:[-*]\s+(?:\[[xX ]\]\s+)?|\d+\.\s+)/.test(line)
+}
+
+function startsWrappedLabel(line: string): boolean {
+  return /^\s*(?:goal|status|the next milestone is):\s+\S/i.test(line)
+}
+
+function isWrappedLabelContinuationLine(line: string): boolean {
+  if (!line.trim()) return false
+  const trimmed = line.trim()
+  return !/^(?:#{1,6}\s+|[-*]\s+(?:\[[xX ]\]\s+)?|\d+\.\s+|goal:\s+|status:\s+|deliverables:\s*$|success gates:\s*$|do not start yet:\s*$|the next milestone is:\s+)/i.test(trimmed)
 }
 
 function isListContinuationLine(line: string): boolean {

@@ -548,6 +548,52 @@ The next milestone is Stage 1: Fixture And Evaluation Harness.
     ]))
   })
 
+  it('keeps full wrapped stage goals and every stage heading from one roadmap file', async () => {
+    mkdirSync(join(dir, 'docs', 'harness'), { recursive: true })
+    writeFileSync(
+      join(dir, 'docs', 'harness', 'implementation-roadmap.md'),
+      `# Implementation Roadmap
+
+## Stage 0: Spec Baseline
+
+Goal: make the product architecture explicit enough that implementation agents
+can work without re-litigating the core design.
+
+## Stage 1: Fixture And Evaluation Harness
+
+Goal: build a no-UI test harness that proves the story-memory and packet
+contracts against small fiction fixtures before any product UI is designed.
+`,
+    )
+
+    const sigs = await planningDocsSource.detect({
+      projectPath: dir,
+      exec: fakeExec(() => ({
+        stdout: ['docs/harness/implementation-roadmap.md'].join('\n'),
+        code: 0,
+      })),
+    })
+
+    expect(sigs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'goal',
+        title: 'make the product architecture explicit enough that implementation agents can work without re-litigating the core design.',
+      }),
+      expect.objectContaining({
+        kind: 'goal',
+        title: 'build a no-UI test harness that proves the story-memory and packet contracts against small fiction fixtures before any product UI is designed.',
+      }),
+      expect.objectContaining({
+        kind: 'context',
+        title: 'Stage 0: Spec Baseline',
+      }),
+      expect.objectContaining({
+        kind: 'context',
+        title: 'Stage 1: Fixture And Evaluation Harness',
+      }),
+    ]))
+  })
+
   it('keeps nested explanatory bullets under a task candidate out of open work', async () => {
     mkdirSync(join(dir, 'looma', 'docs'), { recursive: true })
     writeFileSync(
