@@ -12,6 +12,7 @@ import {
 import {
   createWorkspaceImportTask,
   workspaceNeedsImport,
+  materializeWorkspaceImportDraft,
   approveWorkspaceImport,
   parseWorkspaceImport,
   maybeSeedWorkspaceImport,
@@ -253,6 +254,261 @@ describe('workspaceNeedsImport', () => {
     // After the reserved task was created the detection signal still says
     // 'needed' because the reserved task is not a user task.
     expect(res.needed).toBe(true)
+  })
+
+  it('materializes detector drafts through the evidence graph before previewing them', async () => {
+    await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
+    await fs.mkdir(path.join(tmpDir, 'docs', 'specs'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'harness', 'remaining-spec-decomposition-inventory.md'),
+      [
+        '# Remaining Spec Decomposition Inventory',
+        '',
+        '### 2.2 `dialogue-and-character-voice.md`',
+        "- **Covers:** Defines how dialogue functions as action under social pressure, with distinct character voices that serve the book's larger voice.",
+        '- **Recommended first task title:** Implement dialogue-and-character-voice reviewer lane',
+        '- **Recommended domain:** coherence',
+      ].join('\n'),
+      'utf-8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'specs', 'dialogue-and-character-voice.md'),
+      [
+        '# Dialogue And Character Voice',
+        '',
+        '## Avoiding Same-Voice Dialogue',
+        '- Could the line be reassigned to another character without anyone noticing?',
+        '',
+        '## Dialect, Register, And Respect',
+        '- Do not "correct" dialect into prestige grammar.',
+        '',
+        '## Dialogue-Agent Decision Tree',
+        '1. Identify speaker, listener, and audience.',
+        '2. Compare with nearby speakers for same-voice collapse.',
+      ].join('\n'),
+      'utf-8',
+    )
+
+    const inventory = await detectWorkspaceSignals({ projectPath: tmpDir })
+    const rawDraft = formWorkspaceHypothesis(inventory)
+    const materialized = await materializeWorkspaceImportDraft({
+      memoryDir,
+      projectPath: tmpDir,
+      draft: rawDraft,
+    })
+
+    const rawTask = rawDraft.tasks.find(task => task.title === 'Implement dialogue-and-character-voice reviewer lane')
+    const shapedTask = materialized.tasks.find(task => task.title === 'Implement dialogue-and-character-voice reviewer lane')
+
+    expect(rawTask?.acceptanceCriteria).toBeUndefined()
+    expect(shapedTask?.acceptanceCriteria?.map(criterion => criterion.id)).toEqual([
+      'lane-scope',
+      'review-prompts',
+      'lane-boundary',
+      'finding-shape',
+      'deterministic-proof',
+    ])
+    expect(shapedTask?.acceptanceCriteria?.[1]?.description).toContain('Could the line be reassigned to another character without anyone noticing?')
+  })
+
+  it('derives proof paths from cited evidence instead of generic import filler', async () => {
+    await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
+    await fs.mkdir(path.join(tmpDir, 'docs', 'specs'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'harness', 'implementation-roadmap.md'),
+      [
+        '# Implementation Roadmap',
+        '',
+        '## Current Next Milestone',
+        '1. Implement a no-UI runner that builds a packet from fixture records.',
+        '',
+        '## Run Record Verification',
+        '- Run one bounded fixture through packet assembly, trace capture, and evaluation output review.',
+      ].join('\n'),
+      'utf-8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'specs', 'schema-contract-roadmap.md'),
+      [
+        '# Schema Contract Roadmap',
+        '',
+        '## Needed Contracts',
+        '- `BookBrief`',
+        '- `ManuscriptUnit`',
+        '- `GlobalAuthorProfile`',
+      ].join('\n'),
+      'utf-8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'specs', 'story-memory-schemas.md'),
+      [
+        '# Story Memory Schemas',
+        '',
+        '## Required Shapes',
+        '- `AuthorProvenanceNote`',
+        '- `SessionCheckIn`',
+        '- `StoryFact`',
+      ].join('\n'),
+      'utf-8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'specs', 'editor-writer-feedback-chain.md'),
+      [
+        '# Editor Writer Feedback Chain',
+        '',
+        '## Planning Notes',
+        '- **Why not decomposed yet:** Requires the feedback-weight types and review-finding types first.',
+        '',
+        '## Ordered Feedback Chain',
+        '- Specialists identify lens-specific evidence.',
+        '- Findings receive multidimensional weight.',
+        '',
+        '## Verification',
+        '- Replay one bounded set of findings into the weighted packet output.',
+      ].join('\n'),
+      'utf-8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'harness', 'remaining-spec-decomposition-inventory.md'),
+      [
+        '# Remaining Spec Decomposition Inventory',
+        '',
+        '### 2.2 `dialogue-and-character-voice.md`',
+        '- **Covers:** Defines how dialogue functions as action under social pressure.',
+        '- **Recommended first task title:** Implement dialogue-and-character-voice reviewer lane',
+      ].join('\n'),
+      'utf-8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'specs', 'dialogue-and-character-voice.md'),
+      [
+        '# Dialogue And Character Voice',
+        '',
+        '## Reviewer Questions',
+        '- Could the line be reassigned to another character without anyone noticing?',
+        '',
+        '## Verification',
+        '- Run the reviewer lane against one bounded dialogue fixture and record structured findings.',
+      ].join('\n'),
+      'utf-8',
+    )
+
+    const draft = {
+      goals: [],
+      tasks: [
+        {
+          suggestedId: 'task-runner',
+          title: 'Implement a no-UI runner that builds a packet from fixture records.',
+          description: 'Current milestone runner proof.',
+          domain: 'harness',
+          scope: 'current',
+          priority: 'high' as const,
+          references: [
+            'docs/harness/implementation-roadmap.md',
+            'docs/specs/schema-contract-roadmap.md',
+            'docs/specs/story-memory-schemas.md',
+          ],
+          source: 'workspace-importer' as const,
+          confidence: 'high' as const,
+          acceptanceCriteria: [
+            { id: 'source-implementation', description: 'placeholder' },
+          ],
+          proofPaths: [
+            {
+              kind: 'command' as const,
+              command: 'pnpm test -- implement-a-no-ui-runner-that-builds-a-packet-from-fixture-records',
+              expectedEvidence: ['placeholder'],
+            },
+            {
+              kind: 'review' as const,
+              expectedEvidence: ['placeholder'],
+            },
+          ],
+        },
+        {
+          suggestedId: 'task-dialogue-reviewer',
+          title: 'Implement dialogue-and-character-voice reviewer lane',
+          description: 'Reviewer lane proof.',
+          domain: 'coherence',
+          scope: 'current',
+          priority: 'high' as const,
+          references: [
+            'docs/harness/remaining-spec-decomposition-inventory.md',
+            'docs/specs/dialogue-and-character-voice.md',
+          ],
+          source: 'workspace-importer' as const,
+          confidence: 'high' as const,
+          acceptanceCriteria: [
+            { id: 'source-implementation', description: 'placeholder' },
+          ],
+          proofPaths: [
+            {
+              kind: 'command' as const,
+              command: 'pnpm test -- implement-dialogue-and-character-voice-reviewer-lane',
+              expectedEvidence: ['placeholder'],
+            },
+          ],
+        },
+        {
+          suggestedId: 'task-feedback-chain',
+          title: 'Implement editor-writer feedback chain contract and weighted-feedback pipeline',
+          description: 'Weighted feedback workflow.',
+          domain: 'harness',
+          scope: 'current',
+          priority: 'high' as const,
+          references: ['docs/specs/editor-writer-feedback-chain.md'],
+          source: 'workspace-importer' as const,
+          confidence: 'high' as const,
+          acceptanceCriteria: [
+            { id: 'source-implementation', description: 'placeholder' },
+          ],
+          proofPaths: [
+            {
+              kind: 'command' as const,
+              command: 'pnpm test -- implement-editor-writer-feedback-chain-contract-and-weighted-feedback-pipeline',
+              expectedEvidence: ['placeholder'],
+            },
+          ],
+        },
+      ],
+      milestones: [],
+      context: [],
+      stats: { inputSignals: 1, drafted: 2, deduped: 0 },
+    } satisfies WorkspaceImportDraft
+
+    const materialized = await materializeWorkspaceImportDraft({
+      memoryDir,
+      projectPath: tmpDir,
+      draft,
+    })
+
+    const runner = materialized.tasks.find(task => task.title === 'Implement a no-UI runner that builds a packet from fixture records.')
+    const dialogue = materialized.tasks.find(task => task.title === 'Implement dialogue-and-character-voice reviewer lane')
+    const workflow = materialized.tasks.find(task => task.title === 'Implement editor-writer feedback chain contract and weighted-feedback pipeline')
+
+    expect(runner?.proofPaths).toEqual([
+      expect.objectContaining({
+        kind: 'command',
+        expectedEvidence: [
+          'Run one bounded fixture through packet assembly, trace capture, and evaluation output review',
+        ],
+      }),
+      expect.objectContaining({
+        kind: 'review',
+        expectedEvidence: expect.arrayContaining([
+          'The imported contract surface explicitly names and uses `BookBrief`, `ManuscriptUnit`, `GlobalAuthorProfile`.',
+          'The imported schema layer exposes the cited fixture and run contracts without ad hoc gaps',
+        ]),
+      }),
+    ])
+    expect(dialogue?.proofPaths?.[0]).toEqual(expect.objectContaining({
+      kind: 'command',
+      expectedEvidence: ['Run the reviewer lane against one bounded dialogue fixture and record structured findings'],
+    }))
+    expect(workflow?.proofPaths?.[0]).toEqual(expect.objectContaining({
+      kind: 'command',
+      expectedEvidence: ['Replay one bounded set of findings into the weighted packet output'],
+    }))
   })
 })
 

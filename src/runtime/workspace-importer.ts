@@ -286,7 +286,11 @@ export async function createWorkspaceImportTask(
   const inventory =
     input.inventory ??
     (await detectWorkspaceSignals({ projectPath: input.projectPath }))
-  const draft = input.draft ?? formWorkspaceHypothesis(inventory)
+  const draft = input.draft ?? await materializeWorkspaceImportDraft({
+    memoryDir: input.memoryDir,
+    projectPath: input.projectPath,
+    draft: formWorkspaceHypothesis(inventory),
+  })
 
   if (existing) {
     return {
@@ -364,7 +368,11 @@ export async function rerunWorkspaceImportTask(
   const inventory =
     input.inventory ??
     (await detectWorkspaceSignals({ projectPath: input.projectPath }))
-  const draft = input.draft ?? formWorkspaceHypothesis(inventory)
+  const draft = input.draft ?? await materializeWorkspaceImportDraft({
+    memoryDir: input.memoryDir,
+    projectPath: input.projectPath,
+    draft: formWorkspaceHypothesis(inventory),
+  })
   const now = new Date().toISOString()
   const existingIndex = queue.tasks.findIndex((t) => t.id === WORKSPACE_IMPORT_TASK_ID)
   const transcriptPath = await writeWorkspaceImportTranscript(
@@ -455,7 +463,11 @@ export async function workspaceNeedsImport(opts: {
   const inventory =
     opts.inventory ??
     (await detectWorkspaceSignals({ projectPath: opts.projectPath }))
-  const draft = formWorkspaceHypothesis(inventory)
+  const draft = await materializeWorkspaceImportDraft({
+    memoryDir: opts.memoryDir,
+    projectPath: opts.projectPath,
+    draft: formWorkspaceHypothesis(inventory),
+  })
 
   // Need an import when we found real signals AND the user hasn't already
   // started building out tasks manually.
@@ -1302,15 +1314,41 @@ export async function materializeParsedWorkspaceImport(input: {
   projectPath: string
   parsed: ParsedImport
 }): Promise<ParsedImport> {
-  const queue = await readQueue(input.memoryDir)
+  const queue = await readQueue(input.memoryDir).catch((err: unknown) => {
+    if (
+      err &&
+      typeof err === 'object' &&
+      'code' in err &&
+      (err as { code?: unknown }).code === 'ENOENT'
+    ) {
+      return {
+        version: 1,
+        lastUpdated: new Date(0).toISOString(),
+        tasks: [],
+      } satisfies TaskQueue
+    }
+    throw err
+  })
   const tasks = await materializeEvidenceWorkGraphTasks({
     projectPath: input.projectPath,
     queue,
     parsedTasks: input.parsed.tasks,
   })
+  const enrichedTasks = tasks.map((task) => {
+    const evidenceDetail = extractReferenceEvidenceDetail(task, input.projectPath)
+    return {
+      ...task,
+      acceptanceCriteria: materializedAcceptanceCriteria(task, evidenceDetail).map((criterion) => ({
+        id: criterion.id,
+        description: criterion.description,
+        verifiedBy: criterion.verifiedBy,
+      })),
+      proofPaths: materializedProofPaths(task, evidenceDetail),
+    }
+  })
   return {
     goals: [...input.parsed.goals],
-    tasks,
+    tasks: enrichedTasks,
     milestones: [...input.parsed.milestones],
   }
 }
@@ -1327,7 +1365,7 @@ export async function materializeWorkspaceImportDraft(input: {
     parsed,
   })
   return mergeWorkspaceImportDraft(input.draft, materialized, {
-    preserveDetectedScope: true,
+    preserveDetectedScope: false,
   })
 }
 
@@ -1896,11 +1934,11 @@ function deriveImportedAcceptanceCriteria(
   if (importedTaskLooksContractDriven(task)) {
     return deriveContractDrivenAcceptanceCriteria(task, evidenceDetail)
   }
-  if (importedTaskLooksReviewerLane(task, evidenceDetail)) {
-    return deriveReviewerLaneAcceptanceCriteria(task, evidenceDetail)
-  }
   if (importedTaskLooksWorkflowDriven(task, evidenceDetail)) {
     return deriveWorkflowAcceptanceCriteria(task, evidenceDetail)
+  }
+  if (importedTaskLooksReviewerLane(task, evidenceDetail)) {
+    return deriveReviewerLaneAcceptanceCriteria(task, evidenceDetail)
   }
   return materializedAcceptanceCriteria({ ...task, acceptanceCriteria: task.acceptanceCriteria?.filter(criterion => criterion.id !== 'source-implementation') }, undefined)
 }
@@ -2119,11 +2157,11 @@ function firstImportedProofCommand(task: MaterializedImportTask): string | null 
 function deterministicImportedCriterion(
   task: MaterializedImportTask,
   command: string | null,
-  fallbackDescription: string,
+  defaultDescription: string,
 ): Task['acceptanceCriteria'][number] {
   return {
     id: 'deterministic-proof',
-    description: command ? `${task.title} is covered by deterministic local proof via \`${command}\`.` : fallbackDescription,
+    description: command ? `${task.title} is covered by deterministic local proof via \`${command}\`.` : defaultDescription,
     scenario: 'Execute the local proof path for this imported task.',
     expectation: command
       ? `\`${command}\` passes and records evidence for the cited task boundary.`
@@ -2133,40 +2171,78 @@ function deterministicImportedCriterion(
   }
 }
 
+function summarizeImportedVerificationEvidence(
+  evidenceDetail: ImportedEvidenceDetail,
+  fallback: string,
+): string {
+  return evidenceDetail.verificationBullets[0]?.replace(/\.$/, '') || fallback
+}
+
+function summarizeImportedImplementationEvidence(
+  evidenceDetail: ImportedEvidenceDetail,
+  fallback: string,
+): string {
+  const first = evidenceDetail.implementationBullets[0]?.replace(/\.$/, '') || ''
+  if (!first) return fallback
+  if (/^`[^`]+`$/.test(first)) return fallback
+  if (/^[A-Z][A-Za-z0-9]+$/.test(first)) return fallback
+  return first
+}
+
+function deriveContractProofPaths(
+  task: MaterializedImportTask,
+  evidenceDetail: ImportedEvidenceDetail,
+): Task['proofPaths'] {
+  const command = firstImportedProofCommand(task)
+  const contractList = evidenceDetail.contractNames.slice(0, 4).map(name => `\`${name}\``).join(', ')
+  const verificationSummary = summarizeImportedVerificationEvidence(
+    evidenceDetail,
+    'The run/evaluation proof records the cited packet, trace, and evaluation artifacts',
+  )
+  const implementationSummary = summarizeImportedImplementationEvidence(
+    evidenceDetail,
+    'The imported schema layer exposes the cited fixture and run contracts without ad hoc gaps',
+  )
+  return [
+    ...(command ? [{
+      kind: 'command' as const,
+      command,
+      expectedEvidence: [
+        verificationSummary,
+      ],
+    }] : []),
+    {
+      kind: 'review' as const,
+      expectedEvidence: [
+        contractList
+          ? `The imported contract surface explicitly names and uses ${contractList}.`
+          : implementationSummary,
+        implementationSummary,
+      ],
+    },
+  ]
+}
+
 function materializedProofPaths(
   task: MaterializedImportTask,
   evidenceDetail?: ImportedEvidenceDetail,
 ): Task['proofPaths'] {
   const current = task.proofPaths ? [...task.proofPaths] : []
   if (!evidenceDetail || current.length === 0) return current
-  if (importedTaskLooksReviewerLane(task, evidenceDetail)) {
-    const command = firstImportedProofCommand(task)
-    return [
-      ...(command ? [{
-        kind: 'command' as const,
-        command,
-        expectedEvidence: ['The reviewer lane runs against a bounded fiction fixture and records structured findings.'],
-      }] : []),
-      {
-        kind: 'review' as const,
-        expectedEvidence: [
-          evidenceDetail.reviewQuestions.length > 0
-            ? `Recorded findings answer prompts such as: ${evidenceDetail.reviewQuestions.slice(0, 2).join(' ')}`
-            : 'Recorded findings stay anchored to the cited reviewer prompts.',
-          evidenceDetail.rules.length > 0
-            ? `The lane preserves the documented boundary: ${evidenceDetail.rules.slice(0, 2).join('; ')}`
-            : 'The lane preserves the cited fiction-specific boundary.',
-        ],
-      },
-    ]
+  if (importedTaskLooksContractDriven(task)) {
+    return deriveContractProofPaths(task, evidenceDetail)
   }
   if (importedTaskLooksWorkflowDriven(task, evidenceDetail)) {
     const command = firstImportedProofCommand(task)
+    const verificationSummary = summarizeImportedVerificationEvidence(
+      evidenceDetail,
+      'The workflow records deterministic finding, weighting, and packet output evidence',
+    )
     return [
       ...(command ? [{
         kind: 'command' as const,
         command,
-        expectedEvidence: ['The workflow records deterministic finding, weighting, and packet output evidence.'],
+        expectedEvidence: [verificationSummary],
       }] : []),
       {
         kind: 'review' as const,
@@ -2177,6 +2253,31 @@ function materializedProofPaths(
           evidenceDetail.weightDimensions.length > 0
             ? `Findings preserve weight dimensions such as ${evidenceDetail.weightDimensions.slice(0, 4).join(', ')}.`
             : 'Findings preserve the structured weight profile from the cited spec.',
+        ],
+      },
+    ]
+  }
+  if (importedTaskLooksReviewerLane(task, evidenceDetail)) {
+    const command = firstImportedProofCommand(task)
+    const verificationSummary = summarizeImportedVerificationEvidence(
+      evidenceDetail,
+      'The reviewer lane runs against a bounded fiction fixture and records structured findings',
+    )
+    return [
+      ...(command ? [{
+        kind: 'command' as const,
+        command,
+        expectedEvidence: [verificationSummary],
+      }] : []),
+      {
+        kind: 'review' as const,
+        expectedEvidence: [
+          evidenceDetail.reviewQuestions.length > 0
+            ? `Recorded findings answer prompts such as: ${evidenceDetail.reviewQuestions.slice(0, 2).join(' ')}`
+            : 'Recorded findings stay anchored to the cited reviewer prompts.',
+          evidenceDetail.rules.length > 0
+            ? `The lane preserves the documented boundary: ${evidenceDetail.rules.slice(0, 2).join('; ')}`
+            : 'The lane preserves the cited fiction-specific boundary.',
         ],
       },
     ]
@@ -2211,6 +2312,24 @@ function parseMarkdownTableFirstColumn(body: string): string[] {
     .map(line => line.split('|').slice(1, -1).map(cell => cell.trim()))
     .filter(cells => cells.length > 0 && cells[0] && !/^[-\s]+$/.test(cells[0]) && !/^(dimension|level)$/i.test(cells[0]))
     .map(cells => cells[0]!)
+}
+
+function cleanedImportedBullet(line: string): string {
+  return line
+    .replace(/^[-*]\s+/, '')
+    .replace(/^\d+[.)]\s+/, '')
+    .replace(/^\*\*([^*]+):\*\*\s*/u, '')
+    .trim()
+}
+
+function importedBulletIsPlanningMetadata(bullet: string): boolean {
+  return /^(covers|recommended first task title|recommended domain|stage alignment|why not decomposed yet|depends on|current next milestone)\b/i.test(bullet)
+}
+
+function importedBulletLooksLikeVerification(bullet: string): boolean {
+  if (importedBulletIsPlanningMetadata(bullet)) return false
+  if (/^(run|review|evaluate|replay|verify|record|capture|check|assert)\b/i.test(bullet)) return true
+  return /\b(proof flow|proof loop|deterministic proof|verification|pass signal|evaluation output|trace capture|run summary)\b/i.test(bullet)
 }
 
 function extractGoalStatements(content: string): string[] {
@@ -2260,6 +2379,7 @@ function extractReferenceEvidenceDetail(
   workspaceProjectPath: string,
 ): ImportedEvidenceDetail {
   const keywords = titleKeywords(task.title)
+  const normalizedTaskTitle = normalizeImportText(task.title)
   const contractNames = new Set<string>()
   const implementationBullets: string[] = []
   const verificationBullets: string[] = []
@@ -2294,7 +2414,7 @@ function extractReferenceEvidenceDetail(
       }
       for (const line of sectionLines) {
         if (!/^[-*]\s+/.test(line) && !/^\d+[.)]\s+/.test(line)) continue
-        const bullet = line.replace(/^[-*]\s+/, '').replace(/^\d+[.)]\s+/, '').trim()
+        const bullet = cleanedImportedBullet(line)
         if (!bullet) continue
         if (/\?$/.test(bullet) || /reviewer questions|questions/i.test(lowerHeading)) {
           if (reviewQuestions.length < 6 && !reviewQuestions.includes(bullet)) reviewQuestions.push(bullet)
@@ -2315,6 +2435,9 @@ function extractReferenceEvidenceDetail(
         const haystack = normalizeImportText(`${section.heading}\n${section.body}`)
         const score = keywords.reduce((sum, keyword) => sum + (haystack.includes(keyword) ? 1 : 0), 0)
         const heading = section.heading.toLowerCase()
+        const exactTaskTitleInSection = normalizedTaskTitle.length > 0 && haystack.includes(normalizedTaskTitle)
+        const sectionMentionsOtherRecommendedTask =
+          /recommended first task title:/i.test(section.body) && !exactTaskTitleInSection
         const contractSection =
           /\b(schema|trace|run record|fixture shape|prototype run|expected-record|needed contracts|first mvp candidate|minimum prototype requirements)\b/i.test(section.heading) ||
           /\bneeded contracts:\b/i.test(section.body)
@@ -2327,8 +2450,10 @@ function extractReferenceEvidenceDetail(
           ...section,
           score:
             score +
+            (exactTaskTitleInSection ? 12 : 0) +
             (titleSuggestsContracts && contractSection ? 6 : 0) +
             (verificationSection ? 2 : 0) -
+            (sectionMentionsOtherRecommendedTask ? 5 : 0) -
             (genericSequenceSection ? 4 : 0),
           contractSection,
           verificationSection,
@@ -2352,12 +2477,17 @@ function extractReferenceEvidenceDetail(
       }
       for (const line of sectionLines) {
         if (!/^[-*]\s+/.test(line) && !/^\d+[.)]\s+/.test(line)) continue
-        const bullet = line.replace(/^[-*]\s+/, '').replace(/^\d+[.)]\s+/, '').trim()
+        const bullet = cleanedImportedBullet(line)
         if (!bullet) continue
-        if (section.verificationSection || /\b(run|review|evaluate|trace|proof|pass signal)\b/i.test(bullet)) {
+        if (
+          section.verificationSection
+            ? importedBulletLooksLikeVerification(bullet)
+            : importedBulletLooksLikeVerification(bullet)
+        ) {
           if (verificationBullets.length < 5) verificationBullets.push(bullet)
           continue
         }
+        if (importedBulletIsPlanningMetadata(bullet)) continue
         if (section.genericSequenceSection && !section.contractSection) continue
         if (titleSuggestsContracts && !section.contractSection && /^(\d+\.|stage\s+\d+)/i.test(line)) continue
         if (implementationBullets.length < 6) implementationBullets.push(bullet)

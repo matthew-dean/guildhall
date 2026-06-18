@@ -4987,7 +4987,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
     const parsed = parseWorkspaceImport(spec)
     const inventory = await detectWorkspaceSignals({ projectPath })
-    const detected = formWorkspaceHypothesis(inventory)
+    const detected = await materializeWorkspaceImportDraft({
+      memoryDir: getProjectStateDir(projectPath),
+      projectPath,
+      draft: formWorkspaceHypothesis(inventory),
+    })
     if (detected.tasks.length === 0) return null
 
     const coveredTitles = new Set<string>()
@@ -5055,34 +5059,42 @@ export function buildServeApp(opts: ServeOptions = {}): {
   }
 
   async function workspaceImportDraftForOrientation(projectPath: string, _startReadiness: { code?: string } | null | undefined) {
-    const inventory = await detectWorkspaceSignals({ projectPath })
-    const draft = formWorkspaceHypothesis(inventory)
-    const capabilityContexts = draft.context.filter(context => context.role === 'capability')
-    if (draft.tasks.length === 0 && capabilityContexts.length === 0) return null
-    return {
-      tasks: draft.tasks.map(task => ({
-        id: task.suggestedId,
-        title: task.title,
-        description: task.whyThisMayMatter ?? task.description,
-        domain: task.domain,
-        scope: task.scope,
-        refs: task.references?.map(ref => `import:${ref}`) ?? [`import:${task.source}`],
-      })),
-      contexts: capabilityContexts.map((context, index) => ({
-        id: `capability-${index + 1}`,
-        title: context.label,
-        description: context.excerpt,
-        domain: context.domain,
-        refs: context.references?.map(ref => `import:${ref}`) ?? [`import:${context.source}`],
-      })),
-      source: {
-        kind: 'inferred' as const,
-        refs: ['workspace-import:draft'],
-        confidence: 'medium' as const,
-        freshness: 'fresh' as const,
-        inferred: true,
-        refreshedAt: new Date().toISOString(),
-      },
+    try {
+      const inventory = await detectWorkspaceSignals({ projectPath })
+      const draft = await materializeWorkspaceImportDraft({
+        memoryDir: getProjectStateDir(projectPath),
+        projectPath,
+        draft: formWorkspaceHypothesis(inventory),
+      })
+      const capabilityContexts = draft.context.filter(context => context.role === 'capability')
+      if (draft.tasks.length === 0 && capabilityContexts.length === 0) return null
+      return {
+        tasks: draft.tasks.map(task => ({
+          id: task.suggestedId,
+          title: task.title,
+          description: task.whyThisMayMatter ?? task.description,
+          domain: task.domain,
+          scope: task.scope,
+          refs: task.references?.map(ref => `import:${ref}`) ?? [`import:${task.source}`],
+        })),
+        contexts: capabilityContexts.map((context, index) => ({
+          id: `capability-${index + 1}`,
+          title: context.label,
+          description: context.excerpt,
+          domain: context.domain,
+          refs: context.references?.map(ref => `import:${ref}`) ?? [`import:${context.source}`],
+        })),
+        source: {
+          kind: 'inferred' as const,
+          refs: ['workspace-import:draft'],
+          confidence: 'medium' as const,
+          freshness: 'fresh' as const,
+          inferred: true,
+          refreshedAt: new Date().toISOString(),
+        },
+      }
+    } catch {
+      return null
     }
   }
 
@@ -6564,7 +6576,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
 
       const inventory = await detectWorkspaceSignals({ projectPath: project.path })
-      const fullDraft = formWorkspaceHypothesis(inventory)
+      const fullDraft = await materializeWorkspaceImportDraft({
+        memoryDir,
+        projectPath: project.path,
+        draft: formWorkspaceHypothesis(inventory),
+      })
       const review = buildWorkspaceImportReview(fullDraft, [], project.path)
       const defaultSourceKeys = review.sourceGroups.map(group => group.key)
       const defaultAreaKeys = review.areaGroups.map(area => area.key)
@@ -6899,7 +6915,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
       const memoryDir = getProjectStateDir(project.path)
       const inventory = await detectWorkspaceSignals({ projectPath: project.path })
-      const draft = formWorkspaceHypothesis(inventory)
+      const draft = await materializeWorkspaceImportDraft({
+        memoryDir,
+        projectPath: project.path,
+        draft: formWorkspaceHypothesis(inventory),
+      })
       const tasksPath = projectTasksPath(project.path)
       let existingTasks: Array<{ title: string; status: string }> = []
       if (existsSync(tasksPath)) {
