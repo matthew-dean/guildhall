@@ -25,6 +25,19 @@ const RECOMMENDED_DOMAIN_RE = /^-\s+\*\*recommended domain:\*\*\s+(.+?)\s*$/i
 const CORE_LOOP_HEADING_RE = /^core loop$/i
 const MARKDOWN_TABLE_ROW_RE = /^\|.+\|\s*$/
 
+function coreLoopRole(title: string): WorkspaceSignal['role'] {
+  const normalized = cleanHeading(title).toLowerCase()
+  if (
+    /^author defines\b/.test(normalized) ||
+    /^author builds a house\b/.test(normalized) ||
+    (/\bauthor\b/.test(normalized) &&
+      /\b(intent|genre|form|theme|themes|voice|audience|premise|world|cast|outline|chapter goals|review standards)\b/.test(normalized))
+  ) {
+    return 'brief_input'
+  }
+  return 'capability'
+}
+
 function likelyRelevantFile(rel: string): boolean {
   return MARKDOWN_FILE_RE.test(rel) && !IGNORE_PATH_RE.test(rel)
 }
@@ -654,7 +667,7 @@ export const planningDocsSource: TaskSource = {
             title: cleanHeading(numbered[1]!),
             evidence: `${rel}: ${line.trim()}`.slice(0, 240),
             references: [abs],
-            role: 'capability',
+            role: coreLoopRole(numbered[1]!),
             ...(domainHint ? { domainHint } : {}),
             confidence: 'high',
           })

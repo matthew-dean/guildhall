@@ -35,7 +35,7 @@ export interface WorkspaceSignal {
    * "show this in the project map as part of the product skeleton" rather than
    * "turn this into runnable queue work."
    */
-  role?: 'capability' | 'reference'
+  role?: 'capability' | 'reference' | 'brief_input'
   /**
    * Optional explicit task ids/titles documented as owning this signal's
    * reference. This lets durable planning docs state "spec X is covered by

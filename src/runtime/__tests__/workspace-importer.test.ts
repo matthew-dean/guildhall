@@ -2552,7 +2552,7 @@ tasks:
       ]),
     )
     expect(alertDialog.proofPaths).toEqual(expect.arrayContaining([
-      expect.objectContaining({ kind: 'review', source: 'inferred' }),
+      expect.objectContaining({ kind: 'command', source: 'inferred' }),
     ]))
 
     expect(alertDialogIntegration).toMatchObject({

@@ -57,6 +57,93 @@ export const genericWorkGraphDomainAdapter: WorkGraphDomainAdapter = {
   },
 
   proofPaths(unit) {
+    const deliverableSlug = commandSlug(unit.name)
+    if (unit.workShape === 'ui-component') {
+      return [
+        {
+          kind: 'command',
+          command: `pnpm test -- component-${deliverableSlug}`,
+          expectedEvidence: [
+            `${unit.name} component behavior is covered in ${unit.targetArea}.`,
+            `${unit.name} reuses ${unit.sharedFoundations.join(', ') || 'named foundations'}.`,
+          ],
+          source: 'inferred',
+        },
+      ]
+    }
+    if (unit.workShape === 'backend-api') {
+      return [
+        {
+          kind: 'command',
+          command: `pnpm test -- integration-${deliverableSlug}`,
+          expectedEvidence: [
+            `${unit.name} exposes the requested API behavior with membership, permission, or tenancy checks.`,
+          ],
+          source: 'inferred',
+        },
+      ]
+    }
+    if (unit.workShape === 'cli-tool') {
+      return [
+        {
+          kind: 'command',
+          command: `pnpm test -- ${deliverableSlug}`,
+          expectedEvidence: [
+            `${unit.name} has stable command output fixture proof.`,
+          ],
+          source: 'inferred',
+        },
+      ]
+    }
+    if (unit.workShape === 'docs') {
+      return [
+        {
+          kind: 'command',
+          command: `pnpm docs:check -- ${deliverableSlug}`,
+          expectedEvidence: [
+            `${unit.name} passes the docs check or deterministic content review.`,
+          ],
+          source: 'inferred',
+        },
+      ]
+    }
+    if (unit.workShape === 'migration') {
+      return [
+        {
+          kind: 'command',
+          command: `pnpm test -- migration-${deliverableSlug}`,
+          expectedEvidence: [
+            `${unit.name} proves rollback or downgrade behavior.`,
+            `${unit.name} validates the migrated data shape.`,
+          ],
+          source: 'inferred',
+        },
+      ]
+    }
+    if (unit.workShape === 'bugfix') {
+      return [
+        {
+          kind: 'command',
+          command: `pnpm test -- regression-${deliverableSlug}`,
+          expectedEvidence: [
+            `${unit.name} starts from a failing regression case and passes after the fix.`,
+          ],
+          source: 'inferred',
+        },
+      ]
+    }
+    if (unit.workShape === 'single-edit') {
+      return [
+        {
+          kind: 'review',
+          expectedEvidence: [
+            `${unit.name} stays bounded to the named edit.`,
+            `${unit.name} has focused diff or test proof.`,
+          ],
+          source: 'inferred',
+        },
+      ]
+    }
     return [
       {
         kind: 'review',
@@ -68,6 +155,14 @@ export const genericWorkGraphDomainAdapter: WorkGraphDomainAdapter = {
       },
     ]
   },
+}
+
+function commandSlug(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
 }
 
 function sentenceCase(value: string): string {

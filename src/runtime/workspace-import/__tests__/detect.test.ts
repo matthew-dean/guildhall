@@ -580,8 +580,13 @@ The next milestone is Stage 1: Fixture And Evaluation Harness.
     expect(sigs).toEqual(expect.arrayContaining([
       expect.objectContaining({
         kind: 'context',
-        role: 'capability',
+        role: 'brief_input',
         title: 'Author defines book intent, genre/form expectations, themes, and voice.',
+      }),
+      expect.objectContaining({
+        kind: 'context',
+        role: 'brief_input',
+        title: 'Author builds a house: premise, world, cast, outline, chapter goals, review standards.',
       }),
       expect.objectContaining({
         kind: 'context',

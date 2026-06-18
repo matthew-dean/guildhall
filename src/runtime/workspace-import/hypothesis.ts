@@ -72,7 +72,7 @@ export interface DraftContext {
   source: string
   references?: readonly string[]
   domain?: string
-  role?: 'capability' | 'reference'
+  role?: 'capability' | 'reference' | 'brief_input'
   linkedTaskHints?: readonly string[]
 }
 
