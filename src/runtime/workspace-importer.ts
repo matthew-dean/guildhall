@@ -1707,6 +1707,7 @@ async function materializeEvidenceWorkGraphTasks(
     input.parsedTasks.map(task => [normalizeImportText(task.title), task] as const),
   )
   const inventoryReferencesByTitle = new Map<string, string[]>()
+  const inventoryScopeByTitle = new Map<string, 'current' | 'later'>()
   for (const signal of inventory?.signals ?? []) {
     const key = normalizeImportText(signal.title)
     if (!key) continue
@@ -1721,12 +1722,19 @@ async function materializeEvidenceWorkGraphTasks(
       key,
       mergeImportReferences(inventoryReferencesByTitle.get(key), refs),
     )
+    const signalScope = signal.scopeHint === 'later' ? 'later' : 'current'
+    const existingScope = inventoryScopeByTitle.get(key)
+    inventoryScopeByTitle.set(
+      key,
+      existingScope === 'current' || signalScope === 'current' ? 'current' : 'later',
+    )
   }
   const graphTasks = plan.tasks.map(task => graphTaskToParsedTask(
     task,
     parsedTasksById.get(task.id)
       ?? parsedTasksByTitle.get(normalizeImportText(task.title)),
     inventoryReferencesByTitle.get(normalizeImportText(task.title)),
+    inventoryScopeByTitle.get(normalizeImportText(task.title)),
   )).filter(task => !isFormattingDebris({ title: task.title }))
   const shadowedImports = new Set(
     detectShadowedCurrentMilestoneDeliverableImports(sources).map(candidate =>
@@ -1758,6 +1766,7 @@ function graphTaskToParsedTask(
   task: EvidenceTask,
   parsedTask?: ParsedTask,
   inventoryReferences?: readonly string[],
+  detectedScope?: 'current' | 'later',
 ): MaterializedImportTask {
   const references = mergeImportReferences(
     evidenceTaskReferences(task),
@@ -1773,7 +1782,7 @@ function graphTaskToParsedTask(
     ],
     missingInformation: cleanImportedMissingInformation(parsedTask?.missingInformation ?? []),
     domain: graphTaskDomain(task, parsedTask),
-    scope: parsedTask?.scope === 'later' ? 'later' : 'current',
+    scope: detectedScope ?? (parsedTask?.scope === 'later' ? 'later' : 'current'),
     priority: evidenceTaskPriority(task),
     references,
     acceptanceCriteria: task.acceptanceCriteria,

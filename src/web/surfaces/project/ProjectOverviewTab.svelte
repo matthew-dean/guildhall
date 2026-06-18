@@ -371,6 +371,11 @@
     ]
   })
 
+  const workMixTotalCount = $derived(
+    workProgressCounts?.visibleTotal
+      ?? segments.reduce((sum, segment) => sum + segment.count, 0),
+  )
+
   const nextAction = $derived.by(() => {
     const shared = detail.actionModel?.primaryAction
     if (shared) {
@@ -908,7 +913,7 @@
 
       <Card title="Work mix" titleTag="h2" padding="compact" density="dense" className="overview-card orientation-work-mix">
         <WorkMixChart
-          ariaLabel={`Work mix: ${counts.total} tasks`}
+          ariaLabel={`Work mix: ${workMixTotalCount} tasks`}
           {segments}
           emptyLabel={emptyWorkMixLabel}
           onLegendClick={() => go(currentProjectHref('/work', activeProjectId))}

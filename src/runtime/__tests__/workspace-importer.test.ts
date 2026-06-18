@@ -1212,7 +1212,7 @@ tasks:
       ]),
     )
     expect(draft.tasks.find((task) => task.title === 'Implement dialogue-and-character-voice reviewer lane')).toMatchObject({
-      scope: 'current',
+      scope: 'later',
       domain: 'coherence',
       references: expect.arrayContaining([
         expect.stringContaining('docs/harness/remaining-spec-decomposition-inventory.md'),
@@ -2203,7 +2203,7 @@ tasks:
     expect(q.tasks.find(task => task.title === 'typed fixture and expected-record contracts')).toBeUndefined()
   })
 
-  it('does not shelve later roadmap stages when the project has no explicit release boundary', async () => {
+  it('treats later roadmap stages as deferred when a current milestone bounds the active scope', async () => {
     await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
     await fs.writeFile(
       path.join(tmpDir, 'docs', 'harness', 'implementation-roadmap.md'),
@@ -2238,11 +2238,11 @@ tasks:
     expect(draft.tasks.map(task => ({ title: task.title, scope: task.scope }))).toEqual(expect.arrayContaining([
       {
         title: 'Mastra workflow for the prototype iteration loop',
-        scope: 'current',
+        scope: 'later',
       },
       {
         title: 'specialist editor agent calls for the first review lanes',
-        scope: 'current',
+        scope: 'later',
       },
     ]))
 
@@ -2262,11 +2262,11 @@ tasks:
 
     const q = await readQueue()
     expect(q.tasks.find(task => task.title === 'Mastra workflow for the prototype iteration loop')).toMatchObject({
-      status: 'spec_review',
+      status: 'shelved',
       domain: 'harness',
     })
     expect(q.tasks.find(task => task.title === 'specialist editor agent calls for the first review lanes')).toMatchObject({
-      status: 'spec_review',
+      status: 'shelved',
       domain: 'harness',
     })
   })
@@ -2359,9 +2359,11 @@ tasks:
       'specialist editor agent calls for the first review lanes',
     ]))
     const milestoneTerminal = materialized.tasks.find(task => task.title === 'Define fixture, expected-record, prototype-run, and evaluation schemas.')
-    expect(
-      materialized.tasks.find(task => task.title === 'Implement dialogue-and-character-voice reviewer lane')?.dependsOn ?? [],
-    ).toContain(milestoneTerminal?.suggestedId)
+    const laterDialogue = materialized.tasks.find(task => task.title === 'Implement dialogue-and-character-voice reviewer lane')
+    const laterWorkflow = materialized.tasks.find(task => task.title === 'Implement editor-writer feedback chain contract and weighted-feedback pipeline')
+    expect(laterDialogue?.scope).toBe('later')
+    expect(laterWorkflow?.scope).toBe('later')
+    expect(laterDialogue?.dependsOn ?? []).toContain(milestoneTerminal?.suggestedId)
   })
 
   it('re-expands import scope from detected planning evidence even when the approved starter draft cites only one roadmap doc', async () => {
@@ -2432,7 +2434,7 @@ tasks:
       domain: 'harness',
     })
     expect(q.tasks.find(task => task.title === 'Implement dialogue-and-character-voice reviewer lane')).toMatchObject({
-      status: 'spec_review',
+      status: 'shelved',
       domain: 'coherence',
       references: expect.arrayContaining([
         path.join(tmpDir, 'docs/harness/remaining-spec-decomposition-inventory.md'),
@@ -2864,6 +2866,7 @@ tasks:
         kind: 'open_work',
         title: 'Implement reviewer lane',
         evidence: 'Stage 2 reviewer lane.',
+        scopeHint: 'later',
         confidence: 'high',
         references: ['docs/harness/implementation-roadmap.md'],
       },
@@ -2885,7 +2888,7 @@ tasks:
     })
 
     expect(merged.tasks.find(task => task.title === 'Implement reviewer lane')).toMatchObject({
-      scope: 'current',
+      scope: 'later',
       description: 'Stage 2 reviewer lane.',
     })
   })

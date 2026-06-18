@@ -1188,6 +1188,7 @@ describe('ProjectOverviewTab', () => {
     expect(screen.getByText('1 total work item')).toBeInTheDocument()
     expect(screen.getByText('1 active or shaping · 0 completed · 0 blocked.')).toBeInTheDocument()
     expect(screen.getByText('1 / 2 delivery steps done · 1 blocked.')).toBeInTheDocument()
+    expect(screen.getByLabelText('Work mix: 1 tasks')).toBeInTheDocument()
     expect(screen.queryByText('2 total tasks')).not.toBeInTheDocument()
   })
 })

@@ -247,9 +247,9 @@ function scopeHintForStage(
   const stageNumber = parseStageOrdinal(stageLabel)
   const currentStageNumber = parseStageOrdinal(currentMilestoneStage)
   if (stageNumber != null && currentStageNumber != null) {
-    // A roadmap stage beyond the current milestone is still part of the
-    // project's bounded scope unless a real release/scope container defers it.
-    // Stage order is sequencing information, not an implicit release boundary.
+    if (stageNumber > currentStageNumber) {
+      return 'later'
+    }
     return 'current'
   }
   return 'current'
