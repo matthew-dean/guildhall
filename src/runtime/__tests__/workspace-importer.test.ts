@@ -376,6 +376,12 @@ describe('workspaceNeedsImport', () => {
         '### 2.2 `dialogue-and-character-voice.md`',
         '- **Covers:** Defines how dialogue functions as action under social pressure.',
         '- **Recommended first task title:** Implement dialogue-and-character-voice reviewer lane',
+        '',
+        '### 2.10 `schema-contract-roadmap.md`',
+        '- **Covers:** A roadmap document identifying contract surfaces that need explicit treatment before implementation grows.',
+        '',
+        '## 4. Verification of First Replacement (`packages/schemas/`)',
+        '- `test -d packages/schemas` → **MISSING** (directory does not exist on disk)',
       ].join('\n'),
       'utf-8',
     )
@@ -435,6 +441,7 @@ describe('workspaceNeedsImport', () => {
           references: [
             'docs/harness/remaining-spec-decomposition-inventory.md',
             'docs/specs/dialogue-and-character-voice.md',
+            'docs/harness/implementation-roadmap.md',
           ],
           source: 'workspace-importer' as const,
           confidence: 'high' as const,
@@ -456,7 +463,11 @@ describe('workspaceNeedsImport', () => {
           domain: 'harness',
           scope: 'current',
           priority: 'high' as const,
-          references: ['docs/specs/editor-writer-feedback-chain.md'],
+          references: [
+            'docs/harness/remaining-spec-decomposition-inventory.md',
+            'docs/specs/editor-writer-feedback-chain.md',
+            'docs/harness/implementation-roadmap.md',
+          ],
           source: 'workspace-importer' as const,
           confidence: 'high' as const,
           acceptanceCriteria: [
@@ -505,6 +516,9 @@ describe('workspaceNeedsImport', () => {
       kind: 'command',
       expectedEvidence: ['Run the reviewer lane against one bounded dialogue fixture and record structured findings'],
     }))
+    expect(dialogue?.acceptanceCriteria?.[0]?.description).not.toContain('Recommended first task title')
+    expect(dialogue?.acceptanceCriteria?.[0]?.description).not.toContain('MISSING')
+    expect(dialogue?.acceptanceCriteria?.[0]?.description).not.toContain('contract surfaces')
     expect(workflow?.proofPaths?.[0]).toEqual(expect.objectContaining({
       kind: 'command',
       expectedEvidence: ['Replay one bounded set of findings into the weighted packet output'],
@@ -2439,7 +2453,6 @@ tasks:
       'contracts-defined',
       'fixture-ground-truth-shape',
       'run-evaluation-shape',
-      'proof-output-support',
       'deterministic-proof',
     ])
     expect(task?.spec).toContain('`FixtureManifest`')

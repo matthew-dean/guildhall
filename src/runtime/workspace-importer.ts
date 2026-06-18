@@ -2015,7 +2015,7 @@ function deriveReviewerLaneAcceptanceCriteria(
   task: MaterializedImportTask,
   evidenceDetail: ImportedEvidenceDetail,
 ): Task['acceptanceCriteria'] {
-  const laneScope = evidenceDetail.implementationBullets.slice(0, 2).join(' ')
+  const laneScope = evidenceDetail.implementationBullets[0] ?? ''
   const questionList = (
     evidenceDetail.reviewQuestions.length > 0
       ? evidenceDetail.reviewQuestions
@@ -2322,6 +2322,22 @@ function cleanedImportedBullet(line: string): string {
     .trim()
 }
 
+function importedRawLineIsMetadata(line: string): boolean {
+  const trimmed = line.trim()
+  return /\*\*(recommended first task title|recommended domain|stage alignment|why not decomposed yet):\*\*/i.test(trimmed)
+}
+
+function importedBulletIsAuditNoise(bullet: string): boolean {
+  return (
+    /directory does not exist on disk/i.test(bullet) ||
+    /\bcannot run\b/i.test(bullet) ||
+    /\bartifact missing\b/i.test(bullet) ||
+    /\bseparate remediation task\b/i.test(bullet) ||
+    /`test -d [^`]+`/i.test(bullet) ||
+    /\bmissing\b/i.test(bullet) && /packages\/schemas|on disk|directory/i.test(bullet)
+  )
+}
+
 function importedBulletIsPlanningMetadata(bullet: string): boolean {
   return /^(covers|recommended first task title|recommended domain|stage alignment|why not decomposed yet|depends on|current next milestone)\b/i.test(bullet)
 }
@@ -2374,12 +2390,24 @@ function keywordOverlapScore(text: string, keywords: readonly string[]): number 
   return keywords.reduce((sum, keyword) => sum + (haystack.includes(keyword) ? 1 : 0), 0)
 }
 
+function importedReferenceSlug(reference: string): string | null {
+  const normalized = reference.replace(/\\/g, '/')
+  const base = normalized.split('/').pop()?.trim() ?? ''
+  if (!base.toLowerCase().endsWith('.md')) return null
+  return normalizeImportText(base.replace(/\.md$/i, ''))
+}
+
 function extractReferenceEvidenceDetail(
   task: MaterializedImportTask,
   workspaceProjectPath: string,
 ): ImportedEvidenceDetail {
   const keywords = titleKeywords(task.title)
   const normalizedTaskTitle = normalizeImportText(task.title)
+  const referenceSlugs = [...new Set(
+    task.references
+      .map(reference => importedReferenceSlug(reference))
+      .filter((slug): slug is string => Boolean(slug)),
+  )]
   const contractNames = new Set<string>()
   const implementationBullets: string[] = []
   const verificationBullets: string[] = []
@@ -2395,6 +2423,8 @@ function extractReferenceEvidenceDetail(
   for (const reference of task.references) {
     const content = readImportedReferenceContent(reference, workspaceProjectPath)
     if (!content) continue
+    const normalizedReference = reference.replace(/\\/g, '/')
+    const inventoryStyleReference = /remaining-spec-decomposition-inventory\.md$/i.test(normalizedReference)
     for (const statement of extractGoalStatements(content)) {
       if (!goalStatements.includes(statement)) goalStatements.push(statement)
     }
@@ -2414,8 +2444,10 @@ function extractReferenceEvidenceDetail(
       }
       for (const line of sectionLines) {
         if (!/^[-*]\s+/.test(line) && !/^\d+[.)]\s+/.test(line)) continue
+        if (importedRawLineIsMetadata(line)) continue
         const bullet = cleanedImportedBullet(line)
         if (!bullet) continue
+        if (importedBulletIsAuditNoise(bullet)) continue
         if (/\?$/.test(bullet) || /reviewer questions|questions/i.test(lowerHeading)) {
           if (reviewQuestions.length < 6 && !reviewQuestions.includes(bullet)) reviewQuestions.push(bullet)
         }
@@ -2435,6 +2467,12 @@ function extractReferenceEvidenceDetail(
         const haystack = normalizeImportText(`${section.heading}\n${section.body}`)
         const score = keywords.reduce((sum, keyword) => sum + (haystack.includes(keyword) ? 1 : 0), 0)
         const heading = section.heading.toLowerCase()
+        const sectionMatchesReferenceSlug = referenceSlugs.some(slug => slug.length > 0 && haystack.includes(slug))
+        const sectionMentionsAnotherSpecSlug =
+          inventoryStyleReference &&
+          referenceSlugs.length > 0 &&
+          /\.md`?/i.test(section.heading) &&
+          !sectionMatchesReferenceSlug
         const exactTaskTitleInSection = normalizedTaskTitle.length > 0 && haystack.includes(normalizedTaskTitle)
         const sectionMentionsOtherRecommendedTask =
           /recommended first task title:/i.test(section.body) && !exactTaskTitleInSection
@@ -2451,20 +2489,26 @@ function extractReferenceEvidenceDetail(
           score:
             score +
             (exactTaskTitleInSection ? 12 : 0) +
+            (sectionMatchesReferenceSlug ? 10 : 0) +
             (titleSuggestsContracts && contractSection ? 6 : 0) +
             (verificationSection ? 2 : 0) -
+            (sectionMentionsAnotherSpecSlug ? 12 : 0) -
             (sectionMentionsOtherRecommendedTask ? 5 : 0) -
             (genericSequenceSection ? 4 : 0),
           contractSection,
           verificationSection,
           genericSequenceSection,
+          sectionMatchesReferenceSlug,
+          sectionMentionsAnotherSpecSlug,
         }
       })
       .filter(section =>
-        section.score > 0 ||
+        (!inventoryStyleReference || !section.sectionMentionsAnotherSpecSlug) && (
+          section.score > 0 ||
         section.contractSection ||
         section.verificationSection ||
-        sections.length === 1,
+          sections.length === 1
+        ),
       )
       .sort((left, right) => right.score - left.score)
       .slice(0, 6)
@@ -2477,17 +2521,21 @@ function extractReferenceEvidenceDetail(
       }
       for (const line of sectionLines) {
         if (!/^[-*]\s+/.test(line) && !/^\d+[.)]\s+/.test(line)) continue
+        if (importedRawLineIsMetadata(line)) continue
         const bullet = cleanedImportedBullet(line)
         if (!bullet) continue
+        if (importedBulletIsAuditNoise(bullet)) continue
+        const bulletKeywordScore = keywordOverlapScore(bullet, keywords)
+        const allowGenericSequenceBullet = !section.genericSequenceSection || bulletKeywordScore > 0
         if (
-          section.verificationSection
-            ? importedBulletLooksLikeVerification(bullet)
-            : importedBulletLooksLikeVerification(bullet)
+          allowGenericSequenceBullet &&
+          importedBulletLooksLikeVerification(bullet)
         ) {
           if (verificationBullets.length < 5) verificationBullets.push(bullet)
           continue
         }
         if (importedBulletIsPlanningMetadata(bullet)) continue
+        if (!allowGenericSequenceBullet) continue
         if (section.genericSequenceSection && !section.contractSection) continue
         if (titleSuggestsContracts && !section.contractSection && /^(\d+\.|stage\s+\d+)/i.test(line)) continue
         if (implementationBullets.length < 6) implementationBullets.push(bullet)
@@ -2497,8 +2545,12 @@ function extractReferenceEvidenceDetail(
 
   return {
     contractNames: [...contractNames].slice(0, 10),
-    implementationBullets: implementationBullets.slice(0, 6),
-    verificationBullets: verificationBullets.slice(0, 5),
+    implementationBullets: implementationBullets
+      .filter(item => !importedBulletIsAuditNoise(item))
+      .slice(0, 6),
+    verificationBullets: verificationBullets
+      .filter(item => !importedBulletIsAuditNoise(item))
+      .slice(0, 5),
     goalStatements: goalStatements
       .sort((left, right) => keywordOverlapScore(right, keywords) - keywordOverlapScore(left, keywords))
       .slice(0, 4),
