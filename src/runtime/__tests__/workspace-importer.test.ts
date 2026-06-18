@@ -1877,6 +1877,83 @@ tasks:
     })
   })
 
+  it('re-expands import scope from detected planning evidence even when the approved starter draft cites only one roadmap doc', async () => {
+    await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
+    await fs.mkdir(path.join(tmpDir, 'docs', 'specs'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'harness', 'implementation-roadmap.md'),
+      [
+        '# Implementation Roadmap',
+        '',
+        '## Stage 1: Fixture And Evaluation Harness',
+        '',
+        'Goal: build a no-UI test harness that proves the story-memory and packet contracts against small fiction fixtures before any product UI is designed.',
+        '',
+        '## Current Next Milestone',
+        '',
+        'The next milestone is Stage 1: Fixture And Evaluation Harness.',
+        '',
+        '1. Define fixture, expected-record, prototype-run, and evaluation schemas.',
+      ].join('\n'),
+      'utf-8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'harness', 'remaining-spec-decomposition-inventory.md'),
+      [
+        '# Remaining Spec Decomposition Inventory',
+        '',
+        '### 2.2 `dialogue-and-character-voice.md`',
+        '',
+        '- **Recommended first task title:** Implement dialogue-and-character-voice reviewer lane',
+        '- **Recommended domain:** coherence',
+        '- **Stage alignment:** Stage 2 (Agent Coordination)',
+      ].join('\n'),
+      'utf-8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'specs', 'dialogue-and-character-voice.md'),
+      [
+        '# Dialogue And Character Voice',
+        '',
+        'Protect distinct speaking patterns while preserving the author voice envelope.',
+      ].join('\n'),
+      'utf-8',
+    )
+
+    await seedImporterWithSpec(`
+\`\`\`yaml
+tasks:
+  - id: task-import-schema
+    title: Define fixture, expected-record, prototype-run, and evaluation schemas.
+    description: Define fixture, expected-record, prototype-run, and evaluation schemas.
+    domain: harness
+    priority: high
+    references:
+      - docs/harness/implementation-roadmap.md
+\`\`\`
+`)
+
+    const approved = await approveWorkspaceImport({
+      memoryDir,
+      projectPath: tmpDir,
+    })
+    expect(approved).toMatchObject({ success: true })
+
+    const q = await readQueue()
+    expect(q.tasks.find(task => task.title === 'Define fixture, expected-record, prototype-run, and evaluation schemas.')).toMatchObject({
+      status: 'spec_review',
+      domain: 'harness',
+    })
+    expect(q.tasks.find(task => task.title === 'Implement dialogue-and-character-voice reviewer lane')).toMatchObject({
+      status: 'spec_review',
+      domain: 'coherence',
+      references: expect.arrayContaining([
+        path.join(tmpDir, 'docs/harness/remaining-spec-decomposition-inventory.md'),
+        path.join(tmpDir, 'docs/specs/dialogue-and-character-voice.md'),
+      ]),
+    })
+  })
+
   it('builds import specs from cited evidence strongly enough to pass approval without boilerplate gaps', async () => {
     await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
     await fs.mkdir(path.join(tmpDir, 'docs', 'specs'), { recursive: true })

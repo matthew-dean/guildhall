@@ -169,6 +169,56 @@ describe('GET /api/project/spine', () => {
     expect(body.orientationSpine?.summary?.includedWorkCount).toBe(1)
   })
 
+  it('keeps release blockers consistent across project, spine, and thread payloads', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-spine-release-blockers-'))
+    tempDirs.push(tmpDir)
+    const projectId = bootstrapWorkspace(tmpDir, { name: `Spine Blockers ${path.basename(tmpDir)}` }).id ?? path.basename(tmpDir)
+    await seedTasks(tmpDir, [
+      makeTask(tmpDir, {
+        id: 'task-spec-review',
+        title: 'Define the packet proof contract',
+        status: 'spec_review',
+        workKind: 'feature_spec',
+        spec: 'Draft packet proof contract.',
+      }),
+    ])
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const [projectRes, spineRes, threadRes] = await Promise.all([
+      app.fetch(new Request(projectUrl(projectId, '/api/project'))),
+      app.fetch(new Request(projectUrl(projectId, '/api/project/spine'))),
+      app.fetch(new Request(projectUrl(projectId, '/api/project/thread'))),
+    ])
+
+    expect(projectRes.status).toBe(200)
+    expect(spineRes.status).toBe(200)
+    expect(threadRes.status).toBe(200)
+
+    const projectBody = await projectRes.json() as {
+      orientationSpine?: { release?: { state?: string; blockers?: Array<{ id?: string; label?: string }> } }
+    }
+    const spineBody = await spineRes.json() as {
+      spine?: { release?: { state?: string; blockers?: Array<{ id?: string; label?: string }> } }
+    }
+    const threadBody = await threadRes.json() as {
+      orientationSpine?: { release?: { state?: string; blockers?: Array<{ id?: string; label?: string }> } }
+    }
+
+    for (const payload of [
+      projectBody.orientationSpine,
+      spineBody.spine,
+      threadBody.orientationSpine,
+    ]) {
+      expect(payload?.release?.state).toBe('blocked')
+      expect(payload?.release?.blockers).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          id: 'task-spec-review',
+          label: 'Define the packet proof contract is waiting for spec review.',
+        }),
+      ]))
+    }
+  })
+
   it('infers a charter from existing project docs without requiring new intake', async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-spine-charter-'))
     tempDirs.push(tmpDir)

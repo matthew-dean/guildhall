@@ -1537,45 +1537,48 @@ function normalizeDomainRouteKey(value: string): string {
 async function evidenceSourcesForParsedTasks(
   projectPath: string,
   tasks: readonly ParsedTask[],
+  extraReferences: readonly string[] = [],
 ): Promise<EvidenceSource[]> {
   const seen = new Set<string>()
   const sources: EvidenceSource[] = []
+  const references = [
+    ...tasks.flatMap(task => task.references),
+    ...extraReferences,
+  ]
 
-  for (const task of tasks) {
-    for (const reference of task.references) {
-      const trimmed = reference.trim()
-      if (!trimmed || /^[a-z]+:\/\//i.test(trimmed)) {
-        continue
-      }
-      const absolute = path.isAbsolute(trimmed)
-        ? path.resolve(trimmed)
-        : path.resolve(projectPath, trimmed)
-      if (seen.has(absolute)) {
-        continue
-      }
-      seen.add(absolute)
-
-      let stat: Awaited<ReturnType<typeof fs.stat>>
-      try {
-        stat = await fs.stat(absolute)
-      } catch {
-        continue
-      }
-      if (!stat.isFile()) {
-        continue
-      }
-
-      const ext = path.extname(absolute).toLowerCase()
-      if (!['.md', '.markdown', '.txt'].includes(ext)) {
-        continue
-      }
-
-      const content = await readManagedTextFile(absolute, 'utf-8')
-      sources.push({
-        path: path.relative(projectPath, absolute) || path.basename(absolute),
-        content,
-      })
+  for (const reference of references) {
+    const trimmed = reference.trim()
+    if (!trimmed || /^[a-z]+:\/\//i.test(trimmed)) {
+      continue
     }
+    const absolute = path.isAbsolute(trimmed)
+      ? path.resolve(trimmed)
+      : path.resolve(projectPath, trimmed)
+    if (seen.has(absolute)) {
+      continue
+    }
+    seen.add(absolute)
+
+    let stat: Awaited<ReturnType<typeof fs.stat>>
+    try {
+      stat = await fs.stat(absolute)
+    } catch {
+      continue
+    }
+    if (!stat.isFile()) {
+      continue
+    }
+
+    const ext = path.extname(absolute).toLowerCase()
+    if (!['.md', '.markdown', '.txt'].includes(ext)) {
+      continue
+    }
+
+    const content = await readManagedTextFile(absolute, 'utf-8')
+    sources.push({
+      path: path.relative(projectPath, absolute) || path.basename(absolute),
+      content,
+    })
   }
 
   return sources
@@ -1588,7 +1591,11 @@ async function materializeEvidenceWorkGraphTasks(
     parsedTasks: readonly ParsedTask[]
   },
 ): Promise<MaterializedImportTask[]> {
-  const sources = await evidenceSourcesForParsedTasks(input.projectPath, input.parsedTasks)
+  const inventory = await detectWorkspaceSignals({ projectPath: input.projectPath }).catch(() => null)
+  const inventoryReferences = inventory
+    ? inventory.signals.flatMap(signal => signal.references ?? [])
+    : []
+  const sources = await evidenceSourcesForParsedTasks(input.projectPath, input.parsedTasks, inventoryReferences)
   if (sources.length === 0) {
     return [...input.parsedTasks]
   }
@@ -1618,10 +1625,27 @@ async function materializeEvidenceWorkGraphTasks(
   const parsedTasksByTitle = new Map(
     input.parsedTasks.map(task => [normalizeImportText(task.title), task] as const),
   )
+  const inventoryReferencesByTitle = new Map<string, string[]>()
+  for (const signal of inventory?.signals ?? []) {
+    const key = normalizeImportText(signal.title)
+    if (!key) continue
+    const refs = (signal.references ?? [])
+      .filter(Boolean)
+      .map(reference => path.relative(
+        input.projectPath,
+        absoluteImportedReference(reference, input.projectPath),
+      ) || path.basename(reference))
+    if (refs.length === 0) continue
+    inventoryReferencesByTitle.set(
+      key,
+      mergeImportReferences(inventoryReferencesByTitle.get(key), refs),
+    )
+  }
   const graphTasks = plan.tasks.map(task => graphTaskToParsedTask(
     task,
     parsedTasksById.get(task.id)
       ?? parsedTasksByTitle.get(normalizeImportText(task.title)),
+    inventoryReferencesByTitle.get(normalizeImportText(task.title)),
   )).filter(task => !isFormattingDebris({ title: task.title }))
   const shadowedImports = new Set(
     detectShadowedCurrentMilestoneDeliverableImports(sources).map(candidate =>
@@ -1651,10 +1675,11 @@ function isShadowedCurrentMilestoneDeliverableTask(
 function graphTaskToParsedTask(
   task: EvidenceTask,
   parsedTask?: ParsedTask,
+  inventoryReferences?: readonly string[],
 ): MaterializedImportTask {
   const references = mergeImportReferences(
     evidenceTaskReferences(task),
-    parsedTask?.references,
+    mergeImportReferences(parsedTask?.references, inventoryReferences),
   )
   return {
     id: task.id,

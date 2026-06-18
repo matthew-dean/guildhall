@@ -167,7 +167,13 @@ import {
   recordExternalAgentLink,
 } from './external-agent-links.js'
 import { deriveProjectWorkProgress, type ProjectWorkProgress } from './work-progress.js'
-import { buildProjectOrientationSpine, taskEligibleForSelectedScope, type ProjectOrientationCharter } from './project-orientation-spine.js'
+import {
+  buildProjectOrientationSpine,
+  taskEligibleForSelectedScope,
+  type BuildProjectOrientationSpineInput,
+  type OrientationScope,
+  type ProjectOrientationCharter,
+} from './project-orientation-spine.js'
 import type { SurfaceReviewPacket } from './contract-surfaces.js'
 import {
   acceptProjectDependencyDelivery,
@@ -1722,6 +1728,124 @@ function releaseDesignSystemStatus(
     label: 'not captured',
     reason: 'No design-system guardrail is captured yet.',
   }
+}
+
+function summarizeScopedReleaseWork(
+  tasks: Task[],
+  scope: OrientationScope | null | undefined,
+): {
+  statusCounts: Record<string, number>
+  openEscalations: Array<{ taskId: string; taskTitle: string; escalationId: string; reason: string; summary: string }>
+  incompleteBriefs: Array<{ id: string; title: string; reason: string }>
+  unapprovedBriefs: Array<{ id: string; title: string }>
+  unapprovedSpecs: Array<{ id: string; title: string }>
+  shelvedUnclaimed: Array<{ id: string; title: string; detail?: string }>
+  blockedByAgent: Array<{ id: string; title: string; reason?: string }>
+  releaseBlockers: Array<{ id: string; title: string; label: string }>
+  humanBlockingCount: number
+  unfinishedCount: number
+  scopedTasks: Task[]
+} {
+  const scopedTasks = tasks.filter(task => taskEligibleForSelectedScope(task, scope).eligible)
+  const statusCounts: Record<string, number> = {}
+  const openEscalations: Array<{ taskId: string; taskTitle: string; escalationId: string; reason: string; summary: string }> = []
+  const incompleteBriefs: Array<{ id: string; title: string; reason: string }> = []
+  const unapprovedBriefs: Array<{ id: string; title: string }> = []
+  const unapprovedSpecs: Array<{ id: string; title: string }> = []
+  const shelvedUnclaimed: Array<{ id: string; title: string; detail?: string }> = []
+  const blockedByAgent: Array<{ id: string; title: string; reason?: string }> = []
+  const releaseBlockersById = new Map<string, { id: string; title: string; label: string }>()
+  const terminalStatuses = new Set(['done', 'shelved', 'cancelled', 'archived', 'pending_pr'])
+  let unfinishedCount = 0
+
+  const addReleaseBlocker = (blocker: { id: string; title: string; label: string }) => {
+    if (!releaseBlockersById.has(blocker.id)) releaseBlockersById.set(blocker.id, blocker)
+  }
+  const blockerSubject = (title: string) => title.trim().replace(/[.?!:;,\s]+$/g, '')
+
+  for (const t of scopedTasks) {
+    const status = String((t as { status?: string }).status ?? 'unknown')
+    statusCounts[status] = (statusCounts[status] ?? 0) + 1
+    if (!terminalStatuses.has(status)) unfinishedCount += 1
+    const id = String((t as { id?: string }).id ?? '')
+    const title = String((t as { title?: string }).title ?? id)
+    const brief = (t as { productBrief?: { approvedAt?: string } }).productBrief
+    const terminal = terminalStatuses.has(status)
+    const reservedImportTask = id === WORKSPACE_IMPORT_TASK_ID
+    const approvalPendingStatus = status === 'proposed' || status === 'ready'
+    if (brief && !brief.approvedAt && approvalPendingStatus && !terminal && !reservedImportTask) {
+      if (hasCompleteProductBriefRecord(t)) {
+        unapprovedBriefs.push({ id, title })
+        addReleaseBlocker({ id, title, label: `${blockerSubject(title)} is waiting for brief approval.` })
+      } else {
+        const reason = 'Task brief needs user job, why it matters now, success metric, and at least one non-goal before approval.'
+        incompleteBriefs.push({ id, title, reason })
+        addReleaseBlocker({ id, title, label: `${blockerSubject(title)} needs brief cleanup before approval.` })
+      }
+    }
+    if (status === 'spec_review') {
+      unapprovedSpecs.push({ id, title })
+      addReleaseBlocker({ id, title, label: `${blockerSubject(title)} is waiting for spec review.` })
+    }
+    if (status === 'shelved') {
+      const reason = (t as { shelveReason?: { detail?: string } }).shelveReason
+      shelvedUnclaimed.push({ id, title, ...(reason?.detail ? { detail: reason.detail } : {}) })
+    }
+    if (status === 'blocked') {
+      const reason = (t as { blockReason?: string }).blockReason
+      blockedByAgent.push({ id, title, ...(reason ? { reason } : {}) })
+      addReleaseBlocker({ id, title, label: reason?.trim() || `${blockerSubject(title)} is blocked.` })
+    }
+    for (const e of activeEscalations(t)) {
+      openEscalations.push({
+        taskId: id,
+        taskTitle: title,
+        escalationId: e.id,
+        reason: e.reason,
+        summary: e.summary,
+      })
+      addReleaseBlocker({ id, title, label: e.summary?.trim() || `${blockerSubject(title)} has an open escalation.` })
+    }
+  }
+
+  const humanBlockingKeys = new Set<string>()
+  for (const escalation of openEscalations) humanBlockingKeys.add(`task:${escalation.taskId}`)
+  for (const brief of incompleteBriefs) humanBlockingKeys.add(`task:${brief.id}`)
+  for (const brief of unapprovedBriefs) humanBlockingKeys.add(`task:${brief.id}`)
+  for (const spec of unapprovedSpecs) humanBlockingKeys.add(`task:${spec.id}`)
+  for (const blocked of blockedByAgent) humanBlockingKeys.add(`task:${blocked.id}`)
+
+  return {
+    statusCounts,
+    openEscalations,
+    incompleteBriefs,
+    unapprovedBriefs,
+    unapprovedSpecs,
+    shelvedUnclaimed,
+    blockedByAgent,
+    releaseBlockers: [...releaseBlockersById.values()],
+    humanBlockingCount: humanBlockingKeys.size,
+    unfinishedCount,
+    scopedTasks,
+  }
+}
+
+function buildOrientationSpineWithScopedReleaseTruth(
+  input: BuildProjectOrientationSpineInput,
+): {
+  orientationSpine: ReturnType<typeof buildProjectOrientationSpine>
+  releaseTruth: ReturnType<typeof summarizeScopedReleaseWork>
+} {
+  const provisionalSpine = buildProjectOrientationSpine(input)
+  const releaseTruth = summarizeScopedReleaseWork(input.tasks ?? [], provisionalSpine.scope)
+  const orientationSpine = buildProjectOrientationSpine({
+    ...input,
+    releaseReadiness: {
+      verdict: releaseTruth.releaseBlockers.length > 0 ? 'blocked' : 'clear',
+      blockers: releaseTruth.releaseBlockers,
+    },
+  })
+  return { orientationSpine, releaseTruth }
 }
 
 async function chooseProjectFolderMacOS(): Promise<string | null> {
@@ -3426,7 +3550,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         availability,
       })
       const orientationWorkspaceImportDraft = await workspaceImportDraftForOrientation(project.path, startReadiness)
-      const orientationSpine = buildProjectOrientationSpine({
+      const { orientationSpine } = buildOrientationSpineWithScopedReleaseTruth({
         projectId: project.id,
         charter: inferProjectCharterFromExistingSources(project.path, project.config),
         selectedReleaseId: rawQueue.selectedReleaseId,
@@ -3485,17 +3609,17 @@ export function buildServeApp(opts: ServeOptions = {}): {
     try {
       if (project.initializationNeeded) {
         return c.json({
-          spine: buildProjectOrientationSpine({
+          spine: buildOrientationSpineWithScopedReleaseTruth({
             projectId: project.id,
             charter: null,
             tasks: [],
-          }),
+          }).orientationSpine,
           initializationNeeded: true,
         })
       }
       const rawQueue = await readTaskQueueFileNormalized(projectTasksPath(project.path))
       const startReadiness = await projectStartReadinessForProject(project.path)
-      const spine = buildProjectOrientationSpine({
+      const { orientationSpine: spine } = buildOrientationSpineWithScopedReleaseTruth({
         projectId: project.id,
         charter: inferProjectCharterFromExistingSources(project.path, project.config),
         selectedReleaseId: rawQueue.selectedReleaseId,
@@ -6931,7 +7055,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         recentEvents: supervisor.recent(project.id, undefined, project.path),
       })
       const threadStartReadiness = await projectStartReadinessForProject(project.path)
-      const orientationSpine = buildProjectOrientationSpine({
+      const { orientationSpine } = buildOrientationSpineWithScopedReleaseTruth({
         projectId: project.id,
         charter: inferProjectCharterFromExistingSources(project.path, project.config),
         selectedReleaseId: releaseQueue.selectedReleaseId,
@@ -9394,7 +9518,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const rawTasks = rawQueue.tasks
       const tasks = await Promise.all(rawTasks.map((task) => buildEffectiveTask(project.path, task as Task)))
       const releaseStartReadiness = await projectStartReadinessForProject(project.path)
-      const readinessSpine = buildProjectOrientationSpine({
+      const { orientationSpine: readinessSpine, releaseTruth } = buildOrientationSpineWithScopedReleaseTruth({
         projectId: project.id,
         charter: inferProjectCharterFromExistingSources(project.path, project.config),
         selectedReleaseId: rawQueue.selectedReleaseId,
@@ -9458,65 +9582,18 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const dirtyCheckout = await guildhallOwnedDirtyCheckout(project.path)
       const gitStory = await buildProjectGitStorySummary(project.path, tasks)
 
-      const scopedTasks = tasks.filter(task => taskEligibleForSelectedScope(task, readinessSpine.scope).eligible)
-      const statusCounts: Record<string, number> = {}
-      const openEscalations: Array<{ taskId: string; taskTitle: string; escalationId: string; reason: string; summary: string }> = []
-      const incompleteBriefs: Array<{ id: string; title: string; reason: string }> = []
-      const unapprovedBriefs: Array<{ id: string; title: string }> = []
-      const unapprovedSpecs: Array<{ id: string; title: string }> = []
-      const shelvedUnclaimed: Array<{ id: string; title: string; detail?: string }> = []
-      const blockedByAgent: Array<{ id: string; title: string; reason?: string }> = []
-      const terminalStatuses = new Set(['done', 'shelved', 'cancelled', 'archived', 'pending_pr'])
-      let unfinishedCount = 0
-
-      for (const t of scopedTasks) {
-        const status = String((t as { status?: string }).status ?? 'unknown')
-        statusCounts[status] = (statusCounts[status] ?? 0) + 1
-        if (!terminalStatuses.has(status)) unfinishedCount += 1
-        const id = String((t as { id?: string }).id ?? '')
-        const title = String((t as { title?: string }).title ?? id)
-        const brief = (t as { productBrief?: { approvedAt?: string } }).productBrief
-        const terminal = terminalStatuses.has(status)
-        const reservedImportTask = id === WORKSPACE_IMPORT_TASK_ID
-        const approvalPendingStatus = status === 'proposed' || status === 'ready'
-        if (brief && !brief.approvedAt && approvalPendingStatus && !terminal && !reservedImportTask) {
-          if (hasCompleteProductBriefRecord(t)) {
-            unapprovedBriefs.push({ id, title })
-          } else {
-            incompleteBriefs.push({
-              id,
-              title,
-              reason: 'Task brief needs user job, why it matters now, success metric, and at least one non-goal before approval.',
-            })
-          }
-        }
-        if (status === 'spec_review') unapprovedSpecs.push({ id, title })
-        if (status === 'shelved') {
-          const reason = (t as { shelveReason?: { detail?: string } }).shelveReason
-          shelvedUnclaimed.push({ id, title, ...(reason?.detail ? { detail: reason.detail } : {}) })
-        }
-        if (status === 'blocked') {
-          const br = (t as { blockReason?: string }).blockReason
-          blockedByAgent.push({ id, title, ...(br ? { reason: br } : {}) })
-        }
-        for (const e of activeEscalations(t as unknown as import('@guildhall/core').Task)) {
-          openEscalations.push({
-            taskId: id,
-            taskTitle: title,
-            escalationId: e.id,
-            reason: e.reason,
-            summary: e.summary,
-          })
-        }
-      }
-
-      const humanBlockingKeys = new Set<string>()
-      for (const escalation of openEscalations) humanBlockingKeys.add(`task:${escalation.taskId}`)
-      for (const brief of incompleteBriefs) humanBlockingKeys.add(`task:${brief.id}`)
-      for (const brief of unapprovedBriefs) humanBlockingKeys.add(`task:${brief.id}`)
-      for (const spec of unapprovedSpecs) humanBlockingKeys.add(`task:${spec.id}`)
-      for (const blocked of blockedByAgent) humanBlockingKeys.add(`task:${blocked.id}`)
-      const humanBlockingCount = humanBlockingKeys.size
+      const {
+        scopedTasks,
+        statusCounts,
+        openEscalations,
+        incompleteBriefs,
+        unapprovedBriefs,
+        unapprovedSpecs,
+        shelvedUnclaimed,
+        blockedByAgent,
+        humanBlockingCount,
+        unfinishedCount,
+      } = releaseTruth
       const designSystemBlockingCount = tasks.length > 0 && !designSystem.approved ? 1 : 0
       const dirtyCheckoutBlockingCount = dirtyCheckout.ownedCount > 0 || dirtyCheckout.error ? 1 : 0
       const gitStoryBlockingCount = gitStory.blockers.length
