@@ -641,6 +641,111 @@ function normalizeImportText(value: string): string {
     .trim()
 }
 
+function importTaskTokens(value: string): Set<string> {
+  return new Set(
+    normalizeImportText(value)
+      .replace(/-/g, ' ')
+      .split(/\s+/)
+      .filter(token => token.length >= 3)
+      .filter(token => ![
+        'add',
+        'and',
+        'build',
+        'define',
+        'first',
+        'from',
+        'implement',
+        'into',
+        'review',
+        'reviewer',
+        'schema',
+        'spec',
+        'task',
+        'the',
+        'use',
+        'using',
+      ].includes(token)),
+  )
+}
+
+function importTaskOverlapRatio(left: Set<string>, right: Set<string>): number {
+  if (left.size === 0 || right.size === 0) return 0
+  let shared = 0
+  for (const token of left) {
+    if (right.has(token)) shared += 1
+  }
+  return shared / Math.max(left.size, right.size)
+}
+
+function importTaskSharedTokenCount(left: Set<string>, right: Set<string>): number {
+  let shared = 0
+  for (const token of left) {
+    if (right.has(token)) shared += 1
+  }
+  return shared
+}
+
+function importTaskReferenceBasenames(refs: readonly string[] | undefined): Set<string> {
+  return new Set(
+    (refs ?? [])
+      .map(ref => path.basename(ref.trim()))
+      .filter(Boolean),
+  )
+}
+
+function parsedTaskShadowsDetectedTask(
+  detectedTask: DraftTask,
+  parsedTask: ParsedTask,
+): boolean {
+  if ((parsedTask.scope === 'later') !== (detectedTask.scope === 'later')) return false
+  if (parsedTask.domain.trim() && detectedTask.domain.trim() && parsedTask.domain !== detectedTask.domain) return false
+
+  const detectedTokens = importTaskTokens(detectedTask.title)
+  const parsedTokens = importTaskTokens(parsedTask.title)
+  const overlap = importTaskOverlapRatio(detectedTokens, parsedTokens)
+  const sharedTokenCount = importTaskSharedTokenCount(detectedTokens, parsedTokens)
+  if (overlap < 0.45) return false
+
+  const detectedRefs = importTaskReferenceBasenames(detectedTask.references)
+  const parsedRefs = importTaskReferenceBasenames(parsedTask.references)
+  const sharedRef = [...detectedRefs].some(ref => parsedRefs.has(ref))
+  if (sharedRef) return true
+
+  const detectedTitle = normalizeImportText(detectedTask.title)
+  const parsedTitle = normalizeImportText(parsedTask.title)
+  return (
+    detectedTitle.includes(parsedTitle) ||
+    parsedTitle.includes(detectedTitle) ||
+    overlap >= 0.6 ||
+    sharedTokenCount >= 3
+  )
+}
+
+function parsedTaskShadowsEvidenceTask(
+  parsedTask: ParsedTask,
+  evidenceTask: EvidenceTask,
+): boolean {
+  const parsedTokens = importTaskTokens(parsedTask.title)
+  const evidenceTokens = importTaskTokens(evidenceTask.title)
+  const overlap = importTaskOverlapRatio(parsedTokens, evidenceTokens)
+  const sharedTokenCount = importTaskSharedTokenCount(parsedTokens, evidenceTokens)
+  if (overlap < 0.45) return false
+
+  const parsedRefs = importTaskReferenceBasenames(parsedTask.references)
+  const evidenceRefs = importTaskReferenceBasenames(evidenceTaskReferences(evidenceTask))
+  const sharedRef = [...parsedRefs].some(ref => evidenceRefs.has(ref))
+  if (sharedRef) return true
+
+  const parsedTitle = normalizeImportText(parsedTask.title)
+  const evidenceTitle = normalizeImportText(evidenceTask.title)
+  return (
+    parsedTitle.includes(evidenceTitle) ||
+    evidenceTitle.includes(parsedTitle) ||
+    overlap >= 0.6 ||
+    sharedTokenCount >= 3
+  )
+}
+
 function supportingText(title: string, value: string): string {
   return normalizeImportText(title) === normalizeImportText(value) ? '' : value
 }
@@ -713,12 +818,19 @@ export function mergeWorkspaceImportDraft(
   const parsedTasksByTitle = new Map(
     parsedTasks.map(task => [normalizeImportText(task.title), task] as const),
   )
+  const usedParsedTaskIds = new Set<string>()
   const usedTaskTitles = new Set<string>()
   for (const task of detected.tasks) {
     const normalizedTitle = normalizeImportText(task.title)
     const parsedTask = parsedTasksByTitle.get(normalizedTitle)
+      ?? parsedTasks.find(candidate =>
+        !usedParsedTaskIds.has(candidate.id) &&
+        parsedTaskShadowsDetectedTask(task, candidate),
+      )
     if (parsedTask) {
       usedTaskTitles.add(normalizedTitle)
+      usedParsedTaskIds.add(parsedTask.id)
+      const exactTitleMatch = normalizeImportText(parsedTask.title) === normalizedTitle
       const resolvedDescription = preserveDetectedScope
         ? task.description || parsedTask.description
         : parsedTask.description || task.description
@@ -742,8 +854,8 @@ export function mergeWorkspaceImportDraft(
         : parsedTask.proofPaths ?? task.proofPaths
       mergedTasks.push({
         ...task,
-        suggestedId: parsedTask.id,
-        title: parsedTask.title,
+        suggestedId: exactTitleMatch ? parsedTask.id : task.suggestedId,
+        title: exactTitleMatch ? parsedTask.title : task.title,
         description: resolvedDescription,
         ...(resolvedWhyThisMayMatter ? { whyThisMayMatter: resolvedWhyThisMayMatter } : {}),
         ...(resolvedAssumptions && resolvedAssumptions.length > 0 ? { assumptions: [...resolvedAssumptions] } : {}),
@@ -767,7 +879,9 @@ export function mergeWorkspaceImportDraft(
   }
   for (const task of parsedTasks) {
     const normalizedTitle = normalizeImportText(task.title)
+    if (usedParsedTaskIds.has(task.id)) continue
     if (usedTaskTitles.has(normalizedTitle)) continue
+    if (detected.tasks.some(detectedTask => parsedTaskShadowsDetectedTask(detectedTask, task))) continue
     if (!retainParsedOnlyTasks) continue
     mergedTasks.push({
       suggestedId: task.id,
@@ -1751,6 +1865,8 @@ async function materializeEvidenceWorkGraphTasks(
   const parsedTasksByTitle = new Map(
     input.parsedTasks.map(task => [normalizeImportText(task.title), task] as const),
   )
+  const graphMatchedParsedIds = new Set<string>()
+  const graphMatchedParsedTitles = new Set<string>()
   const inventoryReferencesByTitle = new Map<string, string[]>()
   const inventoryScopeByTitle = new Map<string, 'current' | 'later'>()
   for (const signal of inventory?.signals ?? []) {
@@ -1774,13 +1890,28 @@ async function materializeEvidenceWorkGraphTasks(
       existingScope === 'current' || signalScope === 'current' ? 'current' : 'later',
     )
   }
-  const graphTasks = plan.tasks.map(task => graphTaskToParsedTask(
-    task,
-    parsedTasksById.get(task.id)
-      ?? parsedTasksByTitle.get(normalizeImportText(task.title)),
-    inventoryReferencesByTitle.get(normalizeImportText(task.title)),
-    inventoryScopeByTitle.get(normalizeImportText(task.title)),
-  )).filter(task => !isFormattingDebris({ title: task.title }))
+  const graphTasks = plan.tasks.map(task => {
+    const matchedById = parsedTasksById.get(task.id)
+    const matchedByTitle = matchedById ? undefined : parsedTasksByTitle.get(normalizeImportText(task.title))
+    const matchedBySemantic = matchedById || matchedByTitle
+      ? undefined
+      : input.parsedTasks.find(candidate =>
+          !graphMatchedParsedIds.has(candidate.id) &&
+          parsedTaskShadowsEvidenceTask(candidate, task),
+        )
+    const matchedParsedTask = matchedById ?? matchedByTitle ?? matchedBySemantic
+    if (matchedParsedTask) {
+      graphMatchedParsedIds.add(matchedParsedTask.id)
+      graphMatchedParsedTitles.add(normalizeImportText(matchedParsedTask.title))
+    }
+    return graphTaskToParsedTask(
+      task,
+      matchedParsedTask,
+      inventoryReferencesByTitle.get(normalizeImportText(task.title)),
+      inventoryScopeByTitle.get(normalizeImportText(task.title)),
+      Boolean(matchedBySemantic),
+    )
+  }).filter(task => !isFormattingDebris({ title: task.title }))
   const shadowedImports = new Set(
     detectShadowedCurrentMilestoneDeliverableImports(sources).map(candidate =>
       `${candidate.sourcePath}::${candidate.title}`,
@@ -1788,8 +1919,10 @@ async function materializeEvidenceWorkGraphTasks(
   )
   const untouchedParsedTasks = input.parsedTasks.filter(task =>
     !graphTaskIds.has(task.id) &&
+    !graphMatchedParsedIds.has(task.id) &&
     !reconciledIds.has(task.id) &&
     !graphTaskTitles.has(normalizeImportText(task.title)) &&
+    !graphMatchedParsedTitles.has(normalizeImportText(task.title)) &&
     !suppressedTaskTitles.has(normalizeImportText(task.title)) &&
     !isShadowedCurrentMilestoneDeliverableTask(task, shadowedImports),
   )
@@ -1812,14 +1945,15 @@ function graphTaskToParsedTask(
   parsedTask?: ParsedTask,
   inventoryReferences?: readonly string[],
   detectedScope?: 'current' | 'later',
+  preferParsedIdentity = false,
 ): MaterializedImportTask {
   const references = mergeImportReferences(
     evidenceTaskReferences(task),
     mergeImportReferences(parsedTask?.references, inventoryReferences),
   )
   return {
-    id: task.id,
-    title: task.title,
+    id: preferParsedIdentity && parsedTask ? parsedTask.id : task.id,
+    title: preferParsedIdentity && parsedTask ? parsedTask.title : task.title,
     description: evidenceTaskDescription(task),
     whyThisMayMatter: evidenceTaskWhyThisMayMatter(task),
     assumptions: [

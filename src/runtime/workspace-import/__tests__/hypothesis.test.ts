@@ -501,6 +501,91 @@ describe('formWorkspaceHypothesis', () => {
     expect(draft.tasks).toHaveLength(1)
   })
 
+  it('dedupes roadmap starter work with matching schema-spec implementation work', () => {
+    const draft = formWorkspaceHypothesis(
+      invFrom([
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+          evidence: 'docs/harness/implementation-roadmap.md: 1. Define fixture, expected-record, prototype-run, and evaluation schemas.',
+          references: ['/repo/docs/harness/implementation-roadmap.md'],
+          domainHint: 'harness',
+          confidence: 'high',
+          scopeHint: 'current',
+        },
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'Implement fixture-and-expected-record schemas (from schema-contract-roadmap)',
+          evidence: 'docs/specs/schema-contract-roadmap.md: Recommended next spec for the current fixture harness.',
+          references: ['/repo/docs/specs/schema-contract-roadmap.md'],
+          domainHint: 'harness',
+          confidence: 'medium',
+          scopeHint: 'current',
+        },
+      ]),
+    )
+
+    expect(draft.tasks).toHaveLength(1)
+    expect(draft.tasks[0]).toMatchObject({
+      title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+      scope: 'current',
+      domain: 'harness',
+    })
+    expect(new Set(draft.tasks[0]!.references)).toEqual(
+      new Set([
+        '/repo/docs/harness/implementation-roadmap.md',
+        '/repo/docs/specs/schema-contract-roadmap.md',
+      ]),
+    )
+  })
+
+  it('dedupes current roadmap starter work with remaining-spec inventory recommendations for the same slice', () => {
+    const draft = formWorkspaceHypothesis(
+      invFrom([
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+          evidence: 'docs/harness/implementation-roadmap.md: 1. Define fixture, expected-record, prototype-run, and evaluation schemas.',
+          references: ['/repo/docs/harness/implementation-roadmap.md'],
+          domainHint: 'harness',
+          confidence: 'high',
+          scopeHint: 'current',
+        },
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'Implement fixture-and-expected-record schemas (from schema-contract-roadmap)',
+          evidence: 'Recommended first task title: Implement fixture-and-expected-record schemas (from schema-contract-roadmap)',
+          references: [
+            '/repo/docs/harness/remaining-spec-decomposition-inventory.md',
+            '/repo/docs/specs/schema-contract-roadmap.md',
+            '/repo/docs/harness/implementation-roadmap.md',
+          ],
+          domainHint: 'harness',
+          confidence: 'high',
+          scopeHint: 'current',
+        },
+      ]),
+    )
+
+    expect(draft.tasks).toHaveLength(1)
+    expect(draft.tasks[0]).toMatchObject({
+      title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+      scope: 'current',
+      domain: 'harness',
+    })
+    expect(new Set(draft.tasks[0]!.references)).toEqual(
+      new Set([
+        '/repo/docs/harness/implementation-roadmap.md',
+        '/repo/docs/harness/remaining-spec-decomposition-inventory.md',
+        '/repo/docs/specs/schema-contract-roadmap.md',
+      ]),
+    )
+  })
+
   it('enriches current roadmap tasks with related spec and harness references', () => {
     const draft = formWorkspaceHypothesis(
       invFrom([

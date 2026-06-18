@@ -104,8 +104,10 @@ function normalize(title: string): string {
 }
 
 function tokenSet(text: string): Set<string> {
+  const normalized = normalize(text)
+  const expanded = normalized.replace(/-/g, ' ')
   return new Set(
-    normalize(text)
+    expanded
       .split(' ')
       .filter((token) => token.length >= 3),
   )
@@ -114,21 +116,36 @@ function tokenSet(text: string): Set<string> {
 const GENERIC_TASK_TOKENS = new Set([
   'add',
   'after',
+  'and',
   'baseline',
   'build',
   'create',
+  'define',
   'fix',
+  'from',
   'implement',
   'improve',
+  'into',
   'lane',
   'path',
   'proof',
   'review',
   'reviewer',
+  'resolve',
+  'schema',
+  'schemas',
   'ship',
   'simpler',
+  'split',
   'stable',
   'task',
+  'the',
+  'then',
+  'this',
+  'through',
+  'use',
+  'uses',
+  'using',
   'work',
 ])
 
@@ -149,6 +166,22 @@ function overlapRatio(a: Set<string>, b: Set<string>): number {
     if (b.has(token)) shared += 1
   }
   return shared / Math.max(a.size, b.size)
+}
+
+function sharedTokenCount(a: Set<string>, b: Set<string>): number {
+  let shared = 0
+  for (const token of a) {
+    if (b.has(token)) shared += 1
+  }
+  return shared
+}
+
+function referenceBasenames(refs: readonly string[] | undefined): Set<string> {
+  return new Set(
+    (refs ?? [])
+      .map(ref => ref.replaceAll('\\', '/').split('/').pop()?.trim() ?? '')
+      .filter(Boolean),
+  )
 }
 
 function stableHash(input: string): string {
@@ -219,6 +252,10 @@ function domainFromSignal(sig: WorkspaceSignal): string {
     return sig.domainHint.trim()
   }
   return 'core'
+}
+
+function domainsCompatibleForDedup(left: string, right: string): boolean {
+  return left === right || left === 'core' || right === 'core'
 }
 
 function scopeFromSignal(sig: WorkspaceSignal): DraftTask['scope'] {
@@ -374,27 +411,42 @@ function addTask(
   if (!key) return
   if (!index.has(key)) {
     const sigTokens = tokenSet(sig.title)
+    const sigMeaningfulTokens = meaningfulTokenSet(sig.title)
     const sigRef = sig.references?.[0]
     const sigDomain = domainFromSignal(sig)
     for (const [existingKey, existing] of index.entries()) {
-      if (existing.domain !== sigDomain) continue
+      if (!domainsCompatibleForDedup(existing.domain, sigDomain)) continue
       const existingRef = existing.references?.[0]
       const overlap = overlapRatio(sigTokens, tokenSet(existing.title))
+      const existingMeaningfulTokens = meaningfulTokenSet(existing.title)
       const meaningfulOverlap = overlapRatio(
-        meaningfulTokenSet(sig.title),
-        meaningfulTokenSet(existing.title),
+        sigMeaningfulTokens,
+        existingMeaningfulTokens,
       )
+      const sharedMeaningfulTokens = sharedTokenCount(sigMeaningfulTokens, existingMeaningfulTokens)
       const sameReference = Boolean(sigRef && existingRef && sigRef === existingRef)
+      const sharedReferenceBasename = [...referenceBasenames(sig.references)].some(ref =>
+        referenceBasenames(existing.references).has(ref),
+      )
       const planningDocEcho =
         sig.source === 'planning-docs' &&
         existing.source === 'planning-docs' &&
-        firstMeaningfulToken(sig.title) === firstMeaningfulToken(existing.title) &&
-        meaningfulOverlap >= 0.5
+        (
+          (
+            firstMeaningfulToken(sig.title) === firstMeaningfulToken(existing.title) &&
+            meaningfulOverlap >= 0.5
+          ) ||
+          meaningfulOverlap >= 0.45 ||
+          sharedMeaningfulTokens >= 3
+        )
       const sameReferenceEcho =
         sameReference &&
         overlap >= 0.7 &&
         meaningfulOverlap >= 0.34
-      if (sameReferenceEcho || planningDocEcho) {
+      const sameReferenceFamilyEcho =
+        sharedReferenceBasename &&
+        meaningfulOverlap >= 0.45
+      if (sameReferenceEcho || sameReferenceFamilyEcho || planningDocEcho) {
         key = existingKey
         break
       }

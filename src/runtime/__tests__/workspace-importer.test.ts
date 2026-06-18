@@ -3024,6 +3024,72 @@ tasks:
     expect(task?.status).toBe('ready')
   })
 
+  it('materializes current milestone starter work without cloning a narrower spec echo beside it', async () => {
+    await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
+    await fs.mkdir(path.join(tmpDir, 'docs', 'specs'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'harness', 'implementation-roadmap.md'),
+      [
+        '# Implementation Roadmap',
+        '',
+        '## Stage 1: Fixture And Evaluation Harness',
+        '',
+        'Goal: build a no-UI test harness that proves story-memory and packet contracts against small fiction fixtures before any product UI is designed.',
+        '',
+        '## Current Next Milestone',
+        '',
+        'The next milestone is Stage 1: Fixture And Evaluation Harness.',
+        '',
+        '1. Define fixture, expected-record, prototype-run, and evaluation schemas.',
+        '2. Add the first tiny fiction fixture and human-authored expected records.',
+      ].join('\n'),
+      'utf-8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'specs', 'schema-contract-roadmap.md'),
+      [
+        '# Schema Contract Roadmap',
+        '',
+        '## Fixture And Expected-Record Schema',
+        '',
+        'Needed contracts:',
+        '- `FixtureManifest`',
+        '- `ExpectedRecordSet`',
+        '',
+        '## Prototype Run And Evaluation Schema',
+        '',
+        'Needed contracts:',
+        '- `PrototypeRun`',
+        '- `RunEvaluation`',
+      ].join('\n'),
+      'utf-8',
+    )
+
+    const inventory = await detectWorkspaceSignals({ projectPath: tmpDir })
+    const draft = formWorkspaceHypothesis(inventory)
+    const materialized = await materializeWorkspaceImportDraft({
+      memoryDir,
+      projectPath: tmpDir,
+      draft,
+    })
+
+    expect(materialized.tasks.filter(task => task.scope !== 'later').map(task => task.title)).toEqual([
+      'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+      'Add the first tiny fiction fixture and human-authored expected records.',
+    ])
+    expect(
+      (materialized.tasks.find(task =>
+        task.title === 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+      )?.references ?? []).map(reference => reference.replaceAll('\\', '/')),
+    ).toEqual(expect.arrayContaining([
+      expect.stringContaining('docs/harness/implementation-roadmap.md'),
+      expect.stringContaining('docs/specs/schema-contract-roadmap.md'),
+    ]))
+    expect(materialized.tasks.find(task =>
+      task.title === 'Implement fixture-and-expected-record schemas (from schema-contract-roadmap)',
+    )).toBeUndefined()
+  })
+
 })
 
 describe('mergeWorkspaceImportDraft', () => {
@@ -3142,6 +3208,55 @@ tasks:
       description: 'docs/harness/implementation-roadmap.md: 1. Define fixture, expected-record, prototype-run, and evaluation schemas.',
     })
     expect(merged.tasks.find(task => task.title === 'fixture directory shape for at least one small story fixture')).toBeUndefined()
+  })
+
+  it('folds graph-shaped spec implementation echoes back into the current roadmap starter task', () => {
+    const detected = formWorkspaceHypothesis(invWith([
+      {
+        source: 'planning-docs',
+        kind: 'open_work',
+        title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+        evidence: 'docs/harness/implementation-roadmap.md: 1. Define fixture, expected-record, prototype-run, and evaluation schemas.',
+        confidence: 'high',
+        domainHint: 'harness',
+        references: [
+          'docs/harness/implementation-roadmap.md',
+        ],
+      },
+    ]))
+    const parsed = parseWorkspaceImport(`
+\`\`\`yaml
+tasks:
+  - id: task-schema-graph
+    title: Implement fixture-and-expected-record schemas (from schema-contract-roadmap)
+    description: Recommended first implementation task for Fixture And Expected-Record Schema.
+    domain: harness
+    priority: normal
+    references:
+      - docs/specs/schema-contract-roadmap.md
+    acceptanceCriteria:
+      - id: contracts-defined
+        description: The cited contracts are defined and proven.
+\`\`\`
+`)
+
+    const merged = mergeWorkspaceImportDraft(detected, parsed)
+
+    expect(merged.tasks).toHaveLength(1)
+    expect(merged.tasks[0]).toMatchObject({
+      title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+      suggestedId: expect.stringMatching(/^task-import-/),
+      acceptanceCriteria: [
+        {
+          id: 'contracts-defined',
+          description: 'The cited contracts are defined and proven.',
+        },
+      ],
+    })
+    expect(merged.tasks[0]?.references).toEqual([
+      'docs/harness/implementation-roadmap.md',
+      'docs/specs/schema-contract-roadmap.md',
+    ])
   })
 
   it('can ignore parsed-only stale tasks during a full refresh merge', () => {
