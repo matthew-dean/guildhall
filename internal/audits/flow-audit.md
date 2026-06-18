@@ -12045,6 +12045,81 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-06-18T00:59:00Z - Completed the unified Releases/current-work model proof.
+
+- Work id: `codex:unified-releases-model-2026-06-17`.
+- User job: a project owner should be able to tell whether Guildhall is working
+  against a named release or ordinary current work, without Guildhall inventing
+  `MVP`, `Current release`, `Selected release`, or `Closure` concepts when the
+  project has not defined them.
+- Fix:
+  - `TaskQueue` now supports optional `releases` and `selectedReleaseId`; tasks
+    support optional `releaseIds`.
+  - No-release projects use an internal hidden `Current work` boundary. The
+    orientation charter can inform purpose/proof style, but it no longer
+    manufactures an owner-facing release label.
+  - When releases exist, project Start/picking is scoped to the selected
+    release unless a specific task is explicitly started.
+  - Project Map and Release render `Current work` for no-release projects and
+    selected release labels for projects with release records.
+  - Owner-facing top navigation uses `Release`; the old `Closure` concept is no
+    longer a top-level product view.
+- Real-project installed-app proof:
+  - `pnpm build`; `pnpm dev:install`; `guildhall stop && guildhall start`;
+    `/api/stale-server` returned `stale:false` for PID `77654`.
+  - Narrative Harness
+    `/api/project/release-readiness?projectId=narrative-harness` returned
+    `release:null` and `scope:{id:"current-work", label:"Current work",
+    kind:"proposed_feature_set", source:"inferred"}`.
+  - `/projects/narrative-harness/release` at desktop `1280x720` showed
+    `Current work readiness`, `Current counts`, `Total blockers`, and no
+    `MVP boundary`, `Current release`, `Selected release`, `Closure`,
+    `release verdict`, or `Total release blockers` copy.
+  - `/projects/narrative-harness/map` at desktop `1280x720` showed
+    `Project map`, `Current work`, and `Source trail`, with no fake release
+    container copy.
+  - Mobile `390x844` proof for Release and Map had `scrollWidth ===
+    clientWidth === 390`, no horizontal overflow, and preserved the same key
+    copy.
+- Verification:
+  - `pnpm vitest run src/runtime/__tests__/project-orientation-spine.test.ts src/runtime/__tests__/orchestrator-picker.test.ts src/runtime/__tests__/serve-release-readiness.test.ts src/web/surfaces/__tests__/ProjectView.svelte.test.ts src/web/surfaces/project/__tests__/ReleaseTab.svelte.test.ts src/web/surfaces/project/__tests__/ProjectMapTab.svelte.test.ts --reporter=dot`
+    passed `100` tests.
+  - `pnpm typecheck`
+  - `pnpm lint:contracts`
+
+source: codex:unified-releases-model-2026-06-17
+
+2026-06-17T00:00:00Z - Started unified Releases model replacement for the
+Project Map / Release readiness / former Closure framing.
+
+- Work id: `codex:unified-releases-model-2026-06-17`.
+- User job: a project owner should be able to open a project and understand
+  which owner-meaningful release, milestone, or marker Guildhall is working
+  toward; which work is assigned now vs later; whether that selected release is
+  ready; and why, without seeing hard-coded MVP language or a top-level
+  `Closure` concept.
+- Failing state being replaced:
+  - Project Map says `Current scope`, and the source trail treats scope as the
+    product-level concept.
+  - `/api/project/release-readiness` returns hard-coded `Current Guildhall work`
+    and says it is not a named version or milestone selector yet.
+  - Tests still encode `Closure` as the expected project navigation label and
+    readiness heading.
+  - The orientation-spine plan/audit history overfit many projects to
+    `Current MVP`, which breaks projects whose next owner marker is `2.0
+    alpha`, migration phase work, launch hardening, or any arbitrary release
+    label.
+- Tracker:
+  - [x] Added `internal/plans/2026-06-17-unified-releases-model.md`.
+  - [x] Add persisted release records and task release assignments.
+  - [x] Add selected-release derivation to the orientation spine.
+  - [x] Make release readiness consume the selected release.
+  - [x] Update Project Map and Release UI to render the same selected release or
+    `Current work` when no release exists.
+  - [x] Prove no-release `Current work` and explicit non-MVP release labels in
+    focused runtime/API/component tests.
+  - [x] Run full verification and installed-app browser proof.
+
 2026-06-17T00:00:00Z - Planned execution-decomposition migration behavior for
 Narrative Harness and Looma + Knit.
 

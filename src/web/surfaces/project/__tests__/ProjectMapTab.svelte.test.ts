@@ -109,7 +109,7 @@ describe('ProjectMapTab', () => {
 
     expect(screen.getByRole('heading', { name: 'Project map' })).toBeInTheDocument()
     expect(screen.getByText('Build a fiction-first planning and review harness.')).toBeInTheDocument()
-    expect(screen.getByText('Current work')).toBeInTheDocument()
+    expect(screen.getAllByText('Current work').length).toBeGreaterThanOrEqual(1)
     expect(screen.getByText('Coherence')).toBeInTheDocument()
     expect(screen.getAllByText('Coherence reviewer MVP').length).toBeGreaterThanOrEqual(1)
     expect(screen.queryByText('Internal CLI proof')).not.toBeInTheDocument()

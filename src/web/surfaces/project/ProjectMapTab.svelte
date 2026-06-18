@@ -31,7 +31,9 @@
   const proofContracts = $derived((spine?.proofContracts ?? []).slice(0, 6))
   const mapHeadline = $derived(spine?.charter?.goal ?? spine?.summary?.purpose ?? `${detail.name ?? detail.id ?? 'Project'} needs a confirmed project goal.`)
   const targetAudience = $derived(spine?.charter?.targetAudience ?? null)
-  const scopeLabel = $derived(spine?.summary?.selectedScopeLabel ?? spine?.scope?.label ?? 'Current scope')
+  const selectedRelease = $derived(spine?.selectedRelease ?? null)
+  const releaseLabel = $derived(spine?.summary?.selectedReleaseLabel ?? selectedRelease?.label ?? spine?.summary?.selectedScopeLabel ?? spine?.scope?.label ?? 'Current work')
+  const workContainerTitle = $derived(selectedRelease ? 'Selected release' : 'Current work')
   const mapGaps = $derived.by(() => {
     return (spine?.gaps ?? []).slice(0, 5).map(gap => ({
       ...gap,
@@ -63,10 +65,10 @@
         tone: sourceIsInferred(spine.charter?.source) ? 'warn' as Tone : 'ok' as Tone,
       },
       {
-        label: 'Scope',
-        value: sourceLabelFor(spine.scope?.source),
-        detail: `${scopeLabel} contains ${spine.summary?.includedWorkCount ?? spine.summary?.includedCount ?? 0} current work items and ${spine.summary?.deferredWorkCount ?? spine.summary?.deferredCount ?? 0} deferred.`,
-        tone: sourceIsInferred(spine.scope?.source) ? 'warn' as Tone : 'ok' as Tone,
+        label: selectedRelease ? 'Release' : 'Work',
+        value: sourceLabelFor(selectedRelease?.source ?? spine.scope?.source),
+        detail: `${releaseLabel} contains ${spine.summary?.includedWorkCount ?? spine.summary?.includedCount ?? 0} assigned work items and ${spine.summary?.deferredWorkCount ?? spine.summary?.deferredCount ?? 0} later.`,
+        tone: sourceIsInferred(selectedRelease?.source ?? spine.scope?.source) ? 'warn' as Tone : 'ok' as Tone,
       },
       {
         label: 'Work records',
@@ -192,10 +194,10 @@
         <p class="muted">{targetAudience}</p>
       {/if}
     </div>
-    <Card title="Current scope" titleTag="h2" padding="compact" density="dense" className="map-scope-card">
+    <Card title={workContainerTitle} titleTag="h2" padding="compact" density="dense" className="map-scope-card">
       <div class="scope-stack">
-        <Chip label={scopeLabel} tone={sourceIsInferred(spine?.scope?.source) ? 'warn' : 'accent'} />
-        <strong>{countLabel(spine?.summary?.includedWorkCount ?? spine?.summary?.includedCount, 'scoped work item')}</strong>
+        <Chip label={releaseLabel} tone={sourceIsInferred(selectedRelease?.source ?? spine?.scope?.source) ? 'warn' : 'accent'} />
+        <strong>{countLabel(spine?.summary?.includedWorkCount ?? spine?.summary?.includedCount, 'assigned work item')}</strong>
         <span>{countLabel(lanes.length, 'capability lane')} · {countLabel(sourceInferredCount, 'inferred node')} · {countLabel(sourceGapCount, 'gap')}</span>
       </div>
     </Card>

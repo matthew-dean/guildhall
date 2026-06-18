@@ -69,6 +69,14 @@ async function seed(tasks: Task[]): Promise<void> {
   await writeProjectStateJsonAsync(tmpDir, 'TASKS.json', queue)
 }
 
+async function seedQueue(queue: TaskQueue): Promise<void> {
+  await writeProjectStateJsonAsync(tmpDir, 'TASKS.json', {
+    ...queue,
+    version: queue.version ?? 1,
+    lastUpdated: queue.lastUpdated ?? new Date().toISOString(),
+  })
+}
+
 function projectUrl(route: string): string {
   const url = new URL(`http://localhost${route}`)
   url.searchParams.set('projectId', projectId)
@@ -124,11 +132,47 @@ describe('GET /api/project/release-readiness', () => {
     expect(res.status).toBe(200)
     const body = await res.json() as any
     expect(body.ready).toBe(false)
+    expect(body.release).toBeNull()
+    expect(body.scope).toMatchObject({ id: 'current-work', label: 'Current work', kind: 'current_work' })
     expect(body.notReadyReason).toBe('No tasks in this project yet.')
     expect(body.totals.blockingCount).toBe(0)
     expect(body.openEscalations).toEqual([])
     expect(body.unapprovedBriefs).toEqual([])
     expect(body.unapprovedSpecs).toEqual([])
+  })
+
+  it('returns the selected named release when a project defines releases', async () => {
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: '2-0-alpha',
+      releases: [{
+        id: '2-0-alpha',
+        label: '2.0 alpha',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-alpha'],
+        deferredNodeIds: ['work:task-later'],
+        proofStyle: 'script_only',
+      }],
+      tasks: [
+        makeTask({ id: 'task-alpha', title: 'Alpha work', status: 'ready', releaseIds: ['2-0-alpha'] }),
+        makeTask({ id: 'task-later', title: 'Later work', status: 'ready' }),
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
+    const body = await res.json() as any
+
+    expect(body.release).toMatchObject({
+      id: '2-0-alpha',
+      label: '2.0 alpha',
+      kind: 'release',
+      source: 'release_plan',
+    })
+    expect(body.scope).toMatchObject({ id: '2-0-alpha', label: '2.0 alpha' })
   })
 
   it('returns a plain release-readiness load error when task state cannot be read', async () => {

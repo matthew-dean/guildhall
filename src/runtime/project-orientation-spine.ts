@@ -8,13 +8,30 @@ export type OrientationScopeKind =
   | 'area'
   | 'feature'
 
+export type OrientationReleaseKind = 'release' | 'milestone' | 'marker' | 'current_work'
+export type OrientationReleaseState = 'planned' | 'active' | 'ready' | 'shipped' | 'deferred'
+export type OrientationReleaseSource = 'owner_approved' | 'spec' | 'release_plan' | 'inferred'
+export type OrientationReleaseProofStyle = 'script_only' | 'manual' | 'mixed' | 'unspecified'
+
 export interface OrientationScope {
   id: string
   label: string
   kind: OrientationScopeKind
-  source: 'owner_approved' | 'spec' | 'release_plan' | 'inferred'
+  source: OrientationReleaseSource
   nodeIds: string[]
   deferredNodeIds: string[]
+}
+
+export interface OrientationRelease {
+  id: string
+  label: string
+  kind: OrientationReleaseKind
+  state: OrientationReleaseState
+  source: OrientationReleaseSource
+  description: string | null
+  nodeIds: string[]
+  deferredNodeIds: string[]
+  proofStyle: OrientationReleaseProofStyle
 }
 
 export interface ProjectOrientationCharter {
@@ -148,6 +165,7 @@ export interface OrientationGap {
 export interface ProjectOrientationSummary {
   headline: string
   purpose: string
+  selectedReleaseLabel: string | null
   selectedScopeLabel: string | null
   includedCount: number
   includedWorkCount: number
@@ -181,6 +199,11 @@ export interface OrientationSourceHealth {
 export interface ProjectOrientationSpine {
   projectId: string
   updatedAt: string
+  selectedRelease: OrientationRelease | null
+  /**
+   * @deprecated Compatibility alias for selectedRelease work assignment.
+   * New UI/runtime code should read selectedRelease.
+   */
   scope: OrientationScope | null
   charter: ProjectOrientationCharter
   executionBoundary: OrientationExecutionBoundary
@@ -214,6 +237,7 @@ export interface OrientationTaskInput {
   } | Record<string, unknown> | null
   hierarchy?: { parentId?: string; childIds?: string[] }
   dependsOn?: string[]
+  releaseIds?: string[]
   workKind?: string
   workVisibility?: {
     kind?: 'primary' | 'supporting' | 'internal_step' | 'hidden' | string
@@ -226,6 +250,8 @@ export interface BuildProjectOrientationSpineInput {
   projectId: string
   now?: string
   charter?: Partial<ProjectOrientationCharter> | null
+  selectedReleaseId?: string | null
+  releases?: Array<Partial<OrientationRelease>> | null
   scope?: Partial<OrientationScope> | null
   tasks?: OrientationTaskInput[]
   releaseReadiness?: {
@@ -316,8 +342,8 @@ function normalizeCharter(input: BuildProjectOrientationSpineInput): ProjectOrie
 function defaultScope(tasks: OrientationTaskInput[]): OrientationScope | null {
   if (tasks.length === 0) return null
   return {
-    id: 'current-scope',
-    label: 'Current scope',
+    id: 'current-work',
+    label: 'Current work',
     kind: 'proposed_feature_set',
     source: 'inferred',
     nodeIds: tasks.map(task => taskNodeId(task.id)),
@@ -325,12 +351,74 @@ function defaultScope(tasks: OrientationTaskInput[]): OrientationScope | null {
   }
 }
 
+function slugifyReleaseId(label: string): string {
+  const slug = label
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+  return slug || 'current-release'
+}
+
+function releaseToScope(release: OrientationRelease | null): OrientationScope | null {
+  if (!release) return null
+  const kind: OrientationScopeKind =
+    release.kind === 'milestone'
+      ? 'milestone'
+      : release.kind === 'release'
+        ? 'release'
+        : 'proposed_feature_set'
+  return {
+    id: release.id,
+    label: release.label,
+    kind,
+    source: release.source,
+    nodeIds: release.nodeIds,
+    deferredNodeIds: release.deferredNodeIds,
+  }
+}
+
+function normalizeRelease(input: BuildProjectOrientationSpineInput, tasks: OrientationTaskInput[]): OrientationRelease | null {
+  const releases = input.releases ?? []
+  const selected =
+    releases.find(release => release.id && release.id === input.selectedReleaseId) ??
+    releases.find(release => release.state === 'active') ??
+    releases.find(release => release.state === 'planned') ??
+    releases[0]
+  if (selected) {
+    const id = selected.id ?? slugifyReleaseId(selected.label ?? 'selected-release')
+    const assignedByTask = tasks
+      .filter(task => task.releaseIds?.includes(id))
+      .map(task => taskNodeId(task.id))
+    return expandReleaseWithDescendants({
+      id,
+      label: selected.label ?? 'Selected release',
+      kind: selected.kind ?? 'release',
+      state: selected.state ?? 'active',
+      source: selected.source ?? 'release_plan',
+      description: selected.description ?? null,
+      nodeIds: selected.nodeIds?.length ? selected.nodeIds : assignedByTask,
+      deferredNodeIds: selected.deferredNodeIds ?? [],
+      proofStyle: selected.proofStyle ?? 'unspecified',
+    }, tasks)
+  }
+  return null
+}
+
+function expandReleaseWithDescendants(release: OrientationRelease, tasks: OrientationTaskInput[]): OrientationRelease {
+  const scope = expandScopeWithDescendants(releaseToScope(release)!, tasks)
+  return {
+    ...release,
+    nodeIds: scope.nodeIds,
+    deferredNodeIds: scope.deferredNodeIds,
+  }
+}
+
 function normalizeScope(input: BuildProjectOrientationSpineInput, tasks: OrientationTaskInput[]): OrientationScope | null {
   if (!input.scope) return defaultScope(tasks)
   const fallback = defaultScope(tasks)
   const base = {
-    id: input.scope.id ?? fallback?.id ?? 'current-scope',
-    label: input.scope.label ?? fallback?.label ?? 'Current scope',
+    id: input.scope.id ?? fallback?.id ?? 'current-work',
+    label: input.scope.label ?? fallback?.label ?? 'Current work',
     kind: input.scope.kind ?? fallback?.kind ?? 'proposed_feature_set',
     source: input.scope.source ?? fallback?.source ?? 'inferred',
     nodeIds: input.scope.nodeIds ?? fallback?.nodeIds ?? [],
@@ -853,13 +941,15 @@ function sourceHealth(nodes: OrientationNode[], gaps: OrientationGap[]): Orienta
 function buildSummary(input: {
   projectId: string
   charter: ProjectOrientationCharter
+  selectedRelease: OrientationRelease | null
   scope: OrientationScope | null
   progress: OrientationProgress
   pins: OrientationPin[]
   blockers: OrientationBlocker[]
 }): ProjectOrientationSummary {
   const purpose = input.charter.goal ?? `Project ${input.projectId} needs a confirmed purpose.`
-  const scopeLabel = input.scope?.label ?? null
+  const releaseLabel = input.selectedRelease?.label ?? null
+  const workLabel = releaseLabel ?? input.scope?.label ?? null
   const topBlocker = input.blockers[0]?.label ?? null
   const hasActionableWork =
     input.progress.ready > 0 ||
@@ -867,17 +957,18 @@ function buildSummary(input: {
     input.progress.blocked > 0 ||
     input.progress.sliced > 0 ||
     input.progress.total > input.progress.done + input.progress.deferred
-  const headline = scopeLabel
+  const headline = workLabel
     ? topBlocker
-      ? `${scopeLabel} is blocked on proof.`
+      ? `${workLabel} is blocked on proof.`
       : hasActionableWork
-        ? `${scopeLabel} is being shaped.`
-        : `${scopeLabel} has no actionable work.`
-    : 'No bounded scope is selected yet.'
+        ? `${workLabel} is being shaped.`
+        : `${workLabel} has no actionable work.`
+    : 'No current work is selected yet.'
   return {
     headline,
     purpose,
-    selectedScopeLabel: scopeLabel,
+    selectedReleaseLabel: releaseLabel,
+    selectedScopeLabel: workLabel,
     includedCount: input.scope?.nodeIds.length ?? 0,
     includedWorkCount: input.scope?.nodeIds.length ?? 0,
     deferredCount: input.scope?.deferredNodeIds.length ?? 0,
@@ -893,7 +984,8 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
   const now = input.now ?? new Date().toISOString()
   const tasks = input.tasks ?? []
   const charter = normalizeCharter(input)
-  const scope = normalizeScope(input, tasks)
+  const selectedRelease = normalizeRelease(input, tasks)
+  const scope = releaseToScope(selectedRelease) ?? normalizeScope(input, tasks)
   const { roots, byId, gaps: nodeGaps } = buildNodes(tasks, scope, now)
   const { blockers, gaps: blockerGaps } = attachReleaseBlockers(input.releaseReadiness?.blockers ?? [], byId)
   const executionBoundary = buildExecutionBoundary({
@@ -945,6 +1037,7 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
   return {
     projectId: input.projectId,
     updatedAt: now,
+    selectedRelease,
     scope,
     charter,
     executionBoundary,
@@ -952,6 +1045,7 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
     summary: buildSummary({
       projectId: input.projectId,
       charter,
+      selectedRelease,
       scope,
       progress,
       pins,

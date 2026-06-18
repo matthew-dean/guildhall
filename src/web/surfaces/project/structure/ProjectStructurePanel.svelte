@@ -37,7 +37,7 @@
   {#if spine?.summary?.headline}
     <section class="structure-orientation" aria-label="Project orientation">
       <div class="structure-orientation-copy">
-        <span>{spine.summary.selectedScopeLabel ?? spine.scope?.label ?? 'Current scope'}</span>
+        <span>{spine.summary.selectedReleaseLabel ?? spine.summary.selectedScopeLabel ?? spine.scope?.label ?? 'Current work'}</span>
         <h2>{spine.summary.headline}</h2>
         <p>{spine.summary.purpose ?? spine.charter?.goal ?? 'Project purpose has not been pinned yet.'}</p>
       </div>

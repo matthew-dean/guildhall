@@ -32,7 +32,7 @@ describe('ReleaseTab', () => {
     cleanup()
   })
 
-  it('surfaces initialization-needed state before closure checks are available', async () => {
+  it('surfaces initialization-needed state before release checks are available', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => json({ initializationNeeded: true })))
     window.history.replaceState({}, '', '/projects/looma-knit/release')
     path.value = '/projects/looma-knit/release'
@@ -40,34 +40,49 @@ describe('ReleaseTab', () => {
     render(ReleaseTab)
 
     expect(await screen.findByText('Project not initialized yet')).toBeTruthy()
-    expect(screen.getByText('Complete the setup wizard before assessing whether the current work is closed.')).toBeTruthy()
+    expect(screen.getByText('Complete the setup wizard before assessing release readiness.')).toBeTruthy()
     expect(screen.getByRole('link', { name: 'Open setup wizard' }).getAttribute('href')).toBe('/projects/looma-knit/setup')
   })
 
-  it('surfaces closure-check load failures instead of showing a stale verdict', async () => {
+  it('surfaces release-check load failures instead of showing a stale verdict', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => json({ error: 'missing project root' })))
 
     render(ReleaseTab)
 
-    expect(await screen.findByText('Could not load closure checks')).toBeTruthy()
+    expect(await screen.findByText('Could not load release checks')).toBeTruthy()
     expect(screen.getByText('missing project root')).toBeTruthy()
   })
 
-  it('renders a closed verdict with the counts that feed it', async () => {
+  it('renders a ready verdict with the counts that feed it', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => json(readyPayload)))
 
     render(ReleaseTab)
 
-    expect(await screen.findByText('Current work closure')).toBeTruthy()
-    expect(screen.getAllByText('Closed')).toHaveLength(2)
-    expect(screen.getByText('4/4 tasks done · no open closure blockers.')).toBeTruthy()
+    expect(await screen.findByText('Current work')).toBeTruthy()
+    expect(screen.getAllByText('Ready')).toHaveLength(2)
+    expect(screen.getByText('Current work readiness')).toBeTruthy()
+    expect(screen.getByText('4/4 tasks done · no open blockers.')).toBeTruthy()
     expect(screen.getByText('Current counts')).toBeTruthy()
-    expect(screen.getByText('Total closure blockers')).toBeTruthy()
+    expect(screen.getByText('Total blockers')).toBeTruthy()
     expect(screen.getByText('Unfinished tasks')).toBeTruthy()
     expect(screen.getByText('approved · rev 4')).toBeTruthy()
   })
 
-  it('renders the shared orientation spine blocker before closure details', async () => {
+  it('uses release wording when a named release exists', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json({
+      ...readyPayload,
+      release: { id: '2-0-alpha', label: '2.0 alpha' },
+    })))
+
+    render(ReleaseTab)
+
+    expect(await screen.findByText('2.0 alpha')).toBeTruthy()
+    expect(screen.getByText('Release readiness')).toBeTruthy()
+    expect(screen.getByText('4/4 tasks done · no open release blockers.')).toBeTruthy()
+    expect(screen.getByText('Total release blockers')).toBeTruthy()
+  })
+
+  it('renders the shared orientation spine blocker before release details', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
       if (url.includes('/api/project/spine')) {
@@ -138,7 +153,7 @@ describe('ReleaseTab', () => {
 
     render(ReleaseTab, { props: { subView: 'criteria' } })
 
-    expect(await screen.findByText('Closure checks')).toBeTruthy()
+    expect(await screen.findByText('Current work checks')).toBeTruthy()
     expect(screen.getByText('Open escalations')).toBeTruthy()
     expect(screen.getAllByText('1 task still open.')).toHaveLength(2)
     expect(screen.getByText('Choose project scope')).toBeTruthy()
@@ -188,7 +203,7 @@ describe('ReleaseTab', () => {
 
     render(ReleaseTab, { props: { subView: 'criteria' } })
 
-    expect(await screen.findByText('Closure checks')).toBeTruthy()
+    expect(await screen.findByText('Current work checks')).toBeTruthy()
     expect(screen.getByText('Incomplete briefs')).toBeTruthy()
     expect(screen.getByText('Needs brief cleanup')).toBeTruthy()
     expect(screen.getByText('Task brief needs user job, why it matters now, success metric, and at least one non-goal before approval.')).toBeTruthy()
@@ -196,7 +211,7 @@ describe('ReleaseTab', () => {
     expect(screen.getByText('Ready for brief approval')).toBeTruthy()
   })
 
-  it('uses the current project route when loading closure checks', async () => {
+  it('uses the current project route when loading release checks', async () => {
     window.history.replaceState({}, '', '/projects/t-minus-t/release')
     path.value = '/projects/t-minus-t/release'
     const fetchMock = vi.fn(async () => json(readyPayload))
@@ -204,7 +219,7 @@ describe('ReleaseTab', () => {
 
     render(ReleaseTab)
 
-    await screen.findByText('Current work closure')
+    await screen.findByText('Current work')
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith('/api/project/release-readiness?projectId=t-minus-t')
     })
@@ -224,12 +239,12 @@ describe('ReleaseTab', () => {
 
     render(ReleaseTab)
 
-    expect(await screen.findByText('Current work closure')).toBeTruthy()
+    expect(await screen.findByText('Current work')).toBeTruthy()
     expect(screen.getAllByText('Blocked')).toHaveLength(2)
     expect(screen.getByText('No design-system guardrail is captured yet.')).toBeTruthy()
   })
 
-  it('prioritizes API not-ready reasons over generic design-system closure copy', async () => {
+  it('prioritizes API not-ready reasons over generic design-system readiness copy', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () =>
@@ -245,7 +260,7 @@ describe('ReleaseTab', () => {
 
     render(ReleaseTab)
 
-    expect(await screen.findByText('Current work closure')).toBeTruthy()
+    expect(await screen.findByText('Current work')).toBeTruthy()
     expect(screen.getAllByText('Blocked')).toHaveLength(2)
     expect(screen.getByText('Answer the pressure-test question before closing this work.')).toBeTruthy()
     expect(screen.queryByText('No design-system guardrail is captured yet.')).toBeNull()
@@ -270,7 +285,7 @@ describe('ReleaseTab', () => {
 
     render(ReleaseTab)
 
-    expect(await screen.findByText('Current work closure')).toBeTruthy()
+    expect(await screen.findByText('Current work')).toBeTruthy()
     expect(screen.getByText('detected in repo')).toBeTruthy()
     expect(screen.queryByText('not drafted')).toBeFalsy()
   })
@@ -290,12 +305,12 @@ describe('ReleaseTab', () => {
 
     render(ReleaseTab)
 
-    expect(await screen.findByText('Current work closure')).toBeTruthy()
+    expect(await screen.findByText('Current work')).toBeTruthy()
     expect(screen.getAllByText('Blocked')).toHaveLength(2)
     expect(screen.getByText('38 tasks still need shaping, worker execution, review, or recovery.')).toBeTruthy()
   })
 
-  it('blocks current work closure on Guildhall-owned dirty checkout residue', async () => {
+  it('blocks current work readiness on Guildhall-owned dirty checkout residue', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () =>
@@ -311,11 +326,11 @@ describe('ReleaseTab', () => {
 
     render(ReleaseTab)
 
-    expect(await screen.findByText('Current work closure')).toBeTruthy()
+    expect(await screen.findByText('Current work')).toBeTruthy()
     expect(screen.getAllByText('Blocked')).toHaveLength(2)
     expect(screen.getByText('3 Guildhall-owned project files still need cleanup or landing.')).toBeTruthy()
     expect(screen.getByText('3 Guildhall files dirty')).toBeTruthy()
-    expect(screen.getByText(/3 project-local Guildhall files need cleanup before the current work can close/)).toBeTruthy()
+    expect(screen.getByText(/3 project-local Guildhall files need cleanup before current work can be ready/)).toBeTruthy()
     expect(screen.queryByText(/memory\/TASKS.json/)).toBeNull()
   })
 
@@ -336,7 +351,7 @@ describe('ReleaseTab', () => {
 
     render(ReleaseTab)
 
-    expect(await screen.findByText('Current work closure')).toBeTruthy()
+    expect(await screen.findByText('Current work')).toBeTruthy()
     expect(screen.getByText('Could not inspect checkout')).toBeTruthy()
     expect(screen.getByText(/This checkout could not be inspected with git/)).toBeTruthy()
     expect(screen.queryByText(/fatal: not a git repository/)).toBeNull()
@@ -364,7 +379,7 @@ describe('ReleaseTab', () => {
 
     render(ReleaseTab, { props: { subView: 'criteria' } })
 
-    expect(await screen.findByText('Closure checks')).toBeTruthy()
+    expect(await screen.findByText('Current work checks')).toBeTruthy()
     expect(screen.getByText('9 unresolved git stories.')).toBeTruthy()
     expect(screen.getByText('Showing 5 of 9 git stories.')).toBeTruthy()
     expect(screen.getByText('Repo 0 needs commit or push.')).toBeTruthy()
@@ -395,7 +410,7 @@ describe('ReleaseTab', () => {
 
     render(ReleaseTab, { props: { subView: 'criteria' } })
 
-    expect(await screen.findByText('Closure checks')).toBeTruthy()
+    expect(await screen.findByText('Current work checks')).toBeTruthy()
     expect(screen.getByText('A branch needs a sharing decision.')).toBeTruthy()
     expect(screen.getByText('Push it, open a PR, or mark the work local-only/deferred if it should not be shared.')).toBeTruthy()
     expect(screen.queryByText(/has no upstream branch/)).toBeNull()
@@ -427,7 +442,7 @@ describe('ReleaseTab', () => {
 
     render(ReleaseTab, { props: { subView: 'criteria' } })
 
-    await screen.findByText('Closure checks')
+    await screen.findByText('Current work checks')
     await userEvent.click(screen.getByRole('button', { name: 'A branch needs a sharing decision.' }))
 
     expect(path.value).toBe('/projects/looma-knit/task/task-import-1y7kmp6')

@@ -72,6 +72,7 @@ import {
   needsPreRejectionPolicy,
   dependenciesSatisfied,
   taskHasUnansweredOpenQuestion,
+  selectedReleaseScopeForQueue,
 } from './orchestrator-picker.js'
 import {
   AGENT_SETTINGS_FILENAME,
@@ -193,6 +194,7 @@ import {
   META_INTAKE_TASK_ID,
   parseCoordinatorDraft,
 } from './meta-intake.js'
+import { taskEligibleForSelectedScope } from './project-orientation-spine.js'
 import {
   createOwnerInputRequest,
   waitingOwnerInputTaskIdsSync,
@@ -2580,6 +2582,7 @@ export class Orchestrator {
       dispatchCapacity: capacity,
     })
     const ownerInputBlockedTaskIds = this.waitingOwnerInputTaskIds(queueBefore)
+    const selectedReleaseScope = opts.preferredTaskId ? null : selectedReleaseScopeForQueue(queueBefore)
     const picks = pickNextTasks({
       queue: queueBefore,
       capacity,
@@ -2591,6 +2594,7 @@ export class Orchestrator {
       },
       ...(this.opts.domainFilter ? { domainFilter: this.opts.domainFilter } : {}),
       ...(opts.preferredTaskId ? { preferredTaskId: opts.preferredTaskId } : {}),
+      ...(selectedReleaseScope ? { pickerOptions: { scope: selectedReleaseScope } } : {}),
       excludeIds: ownerInputBlockedTaskIds,
     })
 
@@ -2613,6 +2617,8 @@ export class Orchestrator {
         : null
       const scopedTasks = scopedIds
         ? queueBefore.tasks.filter((task) => scopedIds.has(task.id))
+        : selectedReleaseScope
+          ? queueBefore.tasks.filter((task) => taskEligibleForSelectedScope(task, selectedReleaseScope).eligible)
         : queueBefore.tasks
       const allDone = scopedTasks.length > 0 && scopedTasks.every((t) =>
         (TERMINAL_TASK_STATUSES as readonly TaskStatus[]).includes(t.status),

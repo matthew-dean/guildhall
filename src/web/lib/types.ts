@@ -729,6 +729,17 @@ export interface ProjectOrientationSpine {
     missing?: string[]
     refs?: string[]
   }>
+  selectedRelease?: {
+    id?: string
+    label?: string
+    kind?: string
+    state?: string
+    source?: ProjectOrientationSource | 'owner_approved' | 'spec' | 'release_plan' | 'inferred' | string
+    description?: string | null
+    nodeIds?: string[]
+    deferredNodeIds?: string[]
+    proofStyle?: string
+  } | null
   scope?: {
     id?: string
     label?: string
@@ -740,6 +751,7 @@ export interface ProjectOrientationSpine {
   summary?: {
     headline?: string
     purpose?: string
+    selectedReleaseLabel?: string | null
     selectedScopeLabel?: string | null
     includedCount?: number
     includedWorkCount?: number

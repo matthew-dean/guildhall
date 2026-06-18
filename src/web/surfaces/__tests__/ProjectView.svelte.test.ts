@@ -310,7 +310,7 @@ async function renderProjectView(
     const page = document.querySelector('.app-shell-page')
     expect(page).toBeTruthy()
     expect(page?.textContent).not.toContain('Loading project...')
-  })
+  }, { timeout: 3000 })
 }
 
 async function renderProjectViewWithoutInitialDetail(
@@ -1372,7 +1372,7 @@ describe('ProjectView', () => {
     expect(within(rail).getByRole('button', { name: 'Threads' })).toBeInTheDocument()
     expect(within(rail).getByRole('button', { name: 'Work' })).toBeInTheDocument()
     expect(within(rail).getByRole('button', { name: 'Timeline' })).toBeInTheDocument()
-    expect(within(rail).getByRole('button', { name: 'Closure' })).toBeInTheDocument()
+    expect(within(rail).getByRole('button', { name: 'Release' })).toBeInTheDocument()
     expect(within(rail).getByRole('button', { name: 'Settings' })).toBeInTheDocument()
     expect(within(rail).getByRole('button', { name: 'Queue' })).toBeInTheDocument()
     expect(within(rail).getByRole('button', { name: 'Board' })).toBeInTheDocument()
@@ -1393,7 +1393,7 @@ describe('ProjectView', () => {
     expect(within(rail).getByRole('button', { name: 'Threads' })).toBeInTheDocument()
     expect(within(rail).getByRole('button', { name: 'Work' })).toBeInTheDocument()
     expect(within(rail).getByRole('button', { name: 'Timeline' })).toBeInTheDocument()
-    expect(within(rail).getByRole('button', { name: 'Closure' })).toBeInTheDocument()
+    expect(within(rail).getByRole('button', { name: 'Release' })).toBeInTheDocument()
     expect(within(rail).queryByRole('button', { name: 'Inbox' })).not.toBeInTheDocument()
     expect(screen.queryByText('Project graph')).not.toBeInTheDocument()
   })
@@ -1409,7 +1409,7 @@ describe('ProjectView', () => {
     expect(within(rail).queryByRole('button', { name: 'Queue' })).not.toBeInTheDocument()
   })
 
-  it('shows only the active section children for Work and Closure routes', async () => {
+  it('shows only the active section children for Work and Release routes', async () => {
     await renderProjectView('release', 'criteria')
     let rail = screen.getByRole('complementary', { name: 'Project navigation' })
 

@@ -997,6 +997,33 @@ export const RequestIntake = z.object({
 })
 export type RequestIntake = z.infer<typeof RequestIntake>
 
+export const ProjectReleaseKind = z.enum(['release', 'milestone', 'marker', 'current_work'])
+export type ProjectReleaseKind = z.infer<typeof ProjectReleaseKind>
+
+export const ProjectReleaseState = z.enum(['planned', 'active', 'ready', 'shipped', 'deferred'])
+export type ProjectReleaseState = z.infer<typeof ProjectReleaseState>
+
+export const ProjectReleaseSource = z.enum(['owner_approved', 'spec', 'release_plan', 'inferred'])
+export type ProjectReleaseSource = z.infer<typeof ProjectReleaseSource>
+
+export const ProjectReleaseProofStyle = z.enum(['script_only', 'manual', 'mixed', 'unspecified'])
+export type ProjectReleaseProofStyle = z.infer<typeof ProjectReleaseProofStyle>
+
+export const ProjectRelease = z.object({
+  id: z.string(),
+  label: z.string(),
+  kind: ProjectReleaseKind.default('release'),
+  state: ProjectReleaseState.default('active'),
+  source: ProjectReleaseSource.default('inferred'),
+  description: z.string().optional(),
+  nodeIds: z.array(z.string()).default([]),
+  deferredNodeIds: z.array(z.string()).default([]),
+  proofStyle: ProjectReleaseProofStyle.default('unspecified'),
+  createdAt: z.string().optional(),
+  updatedAt: z.string().optional(),
+})
+export type ProjectRelease = z.infer<typeof ProjectRelease>
+
 export const Task = z.object({
   id: z.string(),
   displayKey: z.string().optional(),
@@ -1121,6 +1148,7 @@ export const Task = z.object({
   deliverySteps: z.array(DeliveryStep).optional(),
   businessEnvelope: BusinessEnvelope.optional(),
   workKind: WorkKind.optional(),
+  releaseIds: z.array(z.string()).default([]),
   // Work containment is represented by hierarchy links, never by task status.
   // Required migration 0.10.0/task-hierarchy-links converts old status: parent
   // records before normal runtime paths parse task queues.
@@ -1263,8 +1291,9 @@ export const Task = z.object({
   completedAt: z.string().optional(),
 })
 type ParsedTask = z.infer<typeof Task>
-export type Task = Omit<ParsedTask, 'hierarchy'> & {
+export type Task = Omit<ParsedTask, 'hierarchy' | 'releaseIds'> & {
   hierarchy?: WorkHierarchy
+  releaseIds?: string[]
   /**
    * @deprecated Legacy pre-0.10 raw field. The normal Task schema no longer
    * accepts or writes task-local owner questions; use OwnerInputRequest records
@@ -1279,9 +1308,12 @@ export const TaskQueue = z.object({
   tasks: z.array(Task),
   executionPlanActions: z.array(ExecutionPlanAction).default([]),
   scopeAuthorityRequests: z.array(ScopeAuthorityRequest).default([]),
+  releases: z.array(ProjectRelease).default([]),
+  selectedReleaseId: z.string().optional(),
 })
-export type TaskQueue = Omit<z.infer<typeof TaskQueue>, 'tasks' | 'executionPlanActions' | 'scopeAuthorityRequests'> & {
+export type TaskQueue = Omit<z.infer<typeof TaskQueue>, 'tasks' | 'executionPlanActions' | 'scopeAuthorityRequests' | 'releases'> & {
   tasks: Task[]
   executionPlanActions?: ExecutionPlanAction[]
   scopeAuthorityRequests?: ScopeAuthorityRequest[]
+  releases?: ProjectRelease[]
 }

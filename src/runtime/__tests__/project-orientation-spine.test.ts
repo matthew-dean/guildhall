@@ -93,7 +93,7 @@ describe('buildProjectOrientationSpine', () => {
     expect(spine.gaps.map(gap => gap.kind)).not.toContain('source_conflict')
   })
 
-  it('defaults known proposed work into the current scope and surfaces missing charter as a gap', () => {
+  it('defaults known proposed work into current work without inventing a release', () => {
     const spine = buildProjectOrientationSpine({
       projectId: 'demo',
       now: '2026-06-15T12:00:00.000Z',
@@ -120,17 +120,75 @@ describe('buildProjectOrientationSpine', () => {
       ],
     })
 
+    expect(spine.selectedRelease).toBeNull()
     expect(spine.scope).toMatchObject({
-      id: 'current-scope',
-      label: 'Current scope',
+      id: 'current-work',
+      label: 'Current work',
       kind: 'proposed_feature_set',
       source: 'inferred',
       nodeIds: ['work:feature-a', 'work:feature-b'],
       deferredNodeIds: [],
     })
+    expect(spine.summary.selectedReleaseLabel).toBeNull()
+    expect(spine.summary.selectedScopeLabel).toBe('Current work')
     expect(spine.gaps).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: 'missing_charter' }),
     ]))
+  })
+
+  it('uses explicit non-MVP release records as the selected release container', () => {
+    const spine = buildProjectOrientationSpine({
+      projectId: 'jess',
+      now: '2026-06-17T12:00:00.000Z',
+      selectedReleaseId: '2-0-alpha',
+      releases: [{
+        id: '2-0-alpha',
+        label: '2.0 alpha',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:parser-api'],
+        deferredNodeIds: ['work:theme-editor'],
+        proofStyle: 'script_only',
+      }],
+      tasks: [
+        {
+          id: 'parser-api',
+          title: 'Stabilize parser API',
+          description: 'Lock parser API shape for alpha users.',
+          domain: 'api',
+          projectPath: '/tmp/jess',
+          status: 'ready',
+          priority: 'normal',
+          releaseIds: ['2-0-alpha'],
+        },
+        {
+          id: 'theme-editor',
+          title: 'Theme editor',
+          description: 'Later visual editor.',
+          domain: 'ui',
+          projectPath: '/tmp/jess',
+          status: 'ready',
+          priority: 'normal',
+        },
+      ],
+    })
+
+    expect(spine.selectedRelease).toMatchObject({
+      id: '2-0-alpha',
+      label: '2.0 alpha',
+      kind: 'release',
+      source: 'release_plan',
+      proofStyle: 'script_only',
+      nodeIds: ['work:parser-api'],
+      deferredNodeIds: ['work:theme-editor'],
+    })
+    expect(spine.summary.selectedReleaseLabel).toBe('2.0 alpha')
+    expect(spine.summary.headline).toBe('2.0 alpha is being shaped.')
+    expect(spine.summary.includedWorkCount).toBe(1)
+    expect(spine.summary.deferredWorkCount).toBe(1)
+    expect(spine.nodes['work:parser-api']?.maturity).not.toBe('deferred')
+    expect(spine.nodes['work:theme-editor']?.maturity).toBe('deferred')
   })
 
   it('uses action-shaped labels for question-shaped task nodes', () => {
@@ -218,7 +276,7 @@ describe('buildProjectOrientationSpine', () => {
     expect(spine.nodes['work:coherence-reviewer-mvp']?.maturity).toBe('done')
     expect(spine.gaps.map(gap => gap.kind)).not.toContain('proof_needed')
     expect(spine.summary.progress.done).toBe(1)
-    expect(spine.summary.headline).toBe('Current scope has no actionable work.')
+    expect(spine.summary.headline).toBe('Current work has no actionable work.')
   })
 
   it('extracts a headless script-only execution boundary and proof contracts for scoped work', () => {
@@ -255,6 +313,7 @@ describe('buildProjectOrientationSpine', () => {
       },
     })
     expect(spine.gaps.map(gap => gap.kind)).not.toContain('missing_execution_boundary')
+    expect(spine.selectedRelease).toBeNull()
     expect(spine.proofContracts[0]).toMatchObject({
       nodeId: 'work:coherence-reviewer-mvp',
       title: 'Build first coherence reviewer MVP',

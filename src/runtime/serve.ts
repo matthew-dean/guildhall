@@ -81,7 +81,7 @@ import {
   settleMaterializedSplitReadiness,
   updateDesignSystem,
 } from '@guildhall/tools'
-import { DesignSystem, parseAcceptanceCriteriaFromSpec, summarizeDesignSystem, TaskQueue, type DesignSystem as DesignSystemRecord, type Task } from '@guildhall/core'
+import { DesignSystem, parseAcceptanceCriteriaFromSpec, summarizeDesignSystem, TaskQueue, type DesignSystem as DesignSystemRecord, type ProjectRelease, type Task } from '@guildhall/core'
 import {
   loadProjectGuildRoster,
   selectApplicableGuilds,
@@ -929,6 +929,7 @@ function isCompletedBlockedContradiction(task: Record<string, unknown>): boolean
 }
 
 const normalizedTasksCache = new Map<string, { raw: unknown; tasks: Array<Record<string, unknown>> }>()
+const normalizedTaskQueueCache = new Map<string, { raw: unknown; queue: { tasks: Array<Record<string, unknown>>; releases: ProjectRelease[]; selectedReleaseId?: string } }>()
 
 function sameSerializedTasks(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right)
@@ -1020,6 +1021,38 @@ async function readTasksFileNormalized(
   await writeManagedTextFileSync(tasksPath, JSON.stringify(rewritten, null, 2))
   normalizedTasksCache.set(tasksPath, { raw: rewritten, tasks: tasks.map(task => ({ ...task })) })
   return tasks
+}
+
+async function readTaskQueueFileNormalized(
+  tasksPath: string,
+): Promise<{ tasks: Array<Record<string, unknown>>; releases: ProjectRelease[]; selectedReleaseId?: string }> {
+  if (!existsSync(tasksPath)) return { tasks: [], releases: [] }
+  const parsed = await readCachedJson<
+    | { tasks?: Array<Record<string, unknown>>; releases?: ProjectRelease[]; selectedReleaseId?: string; version?: unknown; lastUpdated?: unknown }
+    | Array<Record<string, unknown>>
+  >(tasksPath)
+  if (parsed == null) return { tasks: [], releases: [] }
+  const cached = normalizedTaskQueueCache.get(tasksPath)
+  if (cached && sameSerializedTasks(cached.raw, parsed)) {
+    return {
+      tasks: cached.queue.tasks.map(task => ({ ...task })),
+      releases: cached.queue.releases.map(release => ({ ...release, nodeIds: [...(release.nodeIds ?? [])], deferredNodeIds: [...(release.deferredNodeIds ?? [])] })),
+      ...(cached.queue.selectedReleaseId ? { selectedReleaseId: cached.queue.selectedReleaseId } : {}),
+    }
+  }
+  const tasks = await readTasksFileNormalized(tasksPath)
+  const releases = Array.isArray(parsed) ? [] : Array.isArray(parsed.releases) ? parsed.releases.map(release => ({ ...release })) : []
+  const selectedReleaseId = Array.isArray(parsed) ? undefined : typeof parsed.selectedReleaseId === 'string' ? parsed.selectedReleaseId : undefined
+  const queue = { tasks, releases, ...(selectedReleaseId ? { selectedReleaseId } : {}) }
+  normalizedTaskQueueCache.set(tasksPath, {
+    raw: parsed,
+    queue: {
+      tasks: tasks.map(task => ({ ...task })),
+      releases: releases.map(release => ({ ...release, nodeIds: [...(release.nodeIds ?? [])], deferredNodeIds: [...(release.deferredNodeIds ?? [])] })),
+      ...(selectedReleaseId ? { selectedReleaseId } : {}),
+    },
+  })
+  return queue
 }
 
 async function writeTasksFilePreservingQueue(
@@ -3276,7 +3309,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
         })
       }
       const tasksPath = projectTasksPath(project.path)
-      const rawTasks = await readTasksFileNormalized(tasksPath)
+      const rawQueue = await readTaskQueueFileNormalized(tasksPath)
+      const rawTasks = rawQueue.tasks
       const workProgress = deriveProjectWorkProgress(rawTasks as Array<Record<string, unknown>>)
       const tasks = await Promise.all(rawTasks.map((task) => enrichTaskForServe(project.path, task)))
       const deliveryModel = await readProjectDeliveryModel(project.path)
@@ -3385,7 +3419,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const orientationSpine = buildProjectOrientationSpine({
         projectId: project.id,
         charter: inferProjectCharterFromExistingSources(project.path, project.config),
-        tasks: tasks as Task[],
+        selectedReleaseId: rawQueue.selectedReleaseId,
+        releases: rawQueue.releases,
+        tasks: tasks as unknown as Task[],
         sourceRefs: projectOrientationSourceRefs(project.path),
       })
       return c.json({
@@ -3445,11 +3481,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
           initializationNeeded: true,
         })
       }
-      const rawTasks = await readTasksFileNormalized(projectTasksPath(project.path))
+      const rawQueue = await readTaskQueueFileNormalized(projectTasksPath(project.path))
       const spine = buildProjectOrientationSpine({
         projectId: project.id,
         charter: inferProjectCharterFromExistingSources(project.path, project.config),
-        tasks: rawTasks as Task[],
+        selectedReleaseId: rawQueue.selectedReleaseId,
+        releases: rawQueue.releases,
+        tasks: rawQueue.tasks as Task[],
         sourceRefs: projectOrientationSourceRefs(project.path),
       })
       return c.json({ spine })
@@ -6608,6 +6646,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
         /* never let stale-blocker repair break a thread read */
       }
       const state = await loadThreadProjectionState(project.path)
+      const releaseQueue = await readTaskQueueFileNormalized(projectTasksPath(project.path)).catch(
+        (): { tasks: Array<Record<string, unknown>>; releases: ProjectRelease[]; selectedReleaseId?: string } => ({ tasks: [], releases: [] }),
+      )
       const thread = buildThread({
         projectPath: project.path,
         snapshot: state.snapshot,
@@ -6621,6 +6662,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const orientationSpine = buildProjectOrientationSpine({
         projectId: project.id,
         charter: inferProjectCharterFromExistingSources(project.path, project.config),
+        selectedReleaseId: releaseQueue.selectedReleaseId,
+        releases: releaseQueue.releases,
         tasks: state.tasks as Task[],
         sourceRefs: projectOrientationSourceRefs(project.path),
       })
@@ -6974,12 +7017,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const deliveryModel = await readProjectDeliveryModel(project.path)
       const deliveryRelationships = deriveTaskRelationships({
         model: deliveryModel,
-        tasks: tasks as Task[],
+        tasks: tasks as unknown as Task[],
         taskId: id,
       })
       const deliveryContextPacket = buildTaskContextPacket({
         model: deliveryModel,
-        tasks: tasks as Task[],
+        tasks: tasks as unknown as Task[],
         taskId: id,
       })
       const recent = filterEventsForTask(supervisor.recent(project.id, undefined, project.path), id)
@@ -9038,45 +9081,62 @@ export function buildServeApp(opts: ServeOptions = {}): {
   })
 
   // -------------------------------------------------------------------------
-  // API: current work closure
+  // API: release readiness
   //
-  // Aggregates the signals that decide "is the work Guildhall is tracking
-  // currently closed enough to hand off, ship, or intentionally defer?" into a
-  // single readout. Intentionally shallow — it summarizes, it doesn't gate.
-  // The Closure view renders the sections
-  // and links back into drawers / Settings for fix-its.
+  // Aggregates the signals that decide whether the selected release, milestone,
+  // or owner-named marker is ready enough to hand off, ship, or intentionally
+  // defer. Intentionally shallow: it summarizes, it doesn't gate.
   // -------------------------------------------------------------------------
   app.get('/api/project/release-readiness', async c => {
     try {
-      const closureScope = {
+      const fallbackRelease = {
+        id: 'current-work',
         kind: 'current_work',
-        label: 'Current Guildhall work',
-        description:
-          'Guildhall is checking the work it is tracking now. This is not a named version or milestone selector yet.',
+        label: 'Current work',
+        state: 'active',
+        source: 'inferred',
+        description: 'Guildhall is checking the current work queue. No release is defined for this project yet.',
       }
-      if (project.initializationNeeded) return c.json({ initializationNeeded: true, scope: closureScope })
+      if (project.initializationNeeded) return c.json({ initializationNeeded: true, release: null, scope: fallbackRelease })
       const memoryDir = getProjectStateDir(project.path)
       const tasksPath = projectTasksPath(project.path)
-      const rawTasks: Array<Record<string, unknown>> = (() => {
-        if (!existsSync(tasksPath)) return []
-        let raw: { tasks?: Array<Record<string, unknown>> } | Array<Record<string, unknown>>
+      const rawQueue: { tasks: Array<Record<string, unknown>>; releases: ProjectRelease[]; selectedReleaseId?: string } = (() => {
+        if (!existsSync(tasksPath)) return { tasks: [], releases: [] }
+        let raw: { tasks?: Array<Record<string, unknown>>; releases?: ProjectRelease[]; selectedReleaseId?: string } | Array<Record<string, unknown>>
         try {
           raw = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')) as
-            | { tasks?: Array<Record<string, unknown>> }
+            | { tasks?: Array<Record<string, unknown>>; releases?: ProjectRelease[]; selectedReleaseId?: string }
             | Array<Record<string, unknown>>
         } catch {
-          throw new Error('Could not read the saved task state file. Fix project-state/TASKS.json, then reload closure checks.')
+          throw new Error('Could not read the saved task state file. Fix project-state/TASKS.json, then reload release checks.')
         }
-        return Array.isArray(raw) ? raw : raw.tasks ?? []
+        if (Array.isArray(raw)) return { tasks: raw, releases: [] }
+        return {
+          tasks: raw.tasks ?? [],
+          releases: Array.isArray(raw.releases) ? raw.releases : [],
+          ...(typeof raw.selectedReleaseId === 'string' ? { selectedReleaseId: raw.selectedReleaseId } : {}),
+        }
       })()
+      const rawTasks = rawQueue.tasks
       const tasks = await Promise.all(rawTasks.map((task) => buildEffectiveTask(project.path, task as Task)))
+      const readinessSpine = buildProjectOrientationSpine({
+        projectId: project.id,
+        charter: inferProjectCharterFromExistingSources(project.path, project.config),
+        selectedReleaseId: rawQueue.selectedReleaseId,
+        releases: rawQueue.releases,
+        tasks: tasks as unknown as Task[],
+        sourceRefs: projectOrientationSourceRefs(project.path),
+      })
+      const release = readinessSpine.selectedRelease
+      const readinessScope = release ?? readinessSpine.scope ?? fallbackRelease
       const activePressureTest = listPressureTestIntakes(memoryDir)
         .find(intake => intake.status === 'active' && intake.pendingQuestion)
       if (activePressureTest?.pendingQuestion) {
         return c.json({
-          scope: closureScope,
+          release,
+          scope: readinessScope,
           ready: false,
-          notReadyReason: `Guildhall has one more question for ${activePressureTest.target.title}. Answer it before judging whether the current work can close.`,
+          notReadyReason: `Guildhall has one more question for ${activePressureTest.target.title}. Answer it before judging whether current work is ready.`,
           statusCounts: {},
           openEscalations: [],
           incompleteBriefs: [],
@@ -9189,7 +9249,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
         + gitStoryBlockingCount
 
       return c.json({
-        scope: closureScope,
+        release,
+        scope: readinessScope,
         ready: tasks.length > 0 && blockingCount === 0,
         ...(tasks.length === 0 ? { notReadyReason: 'No tasks in this project yet.' } : {}),
         statusCounts,

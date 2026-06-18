@@ -28,10 +28,18 @@
     notReadyReason?: string
     initializationNeeded?: boolean
     error?: string
+    release?: {
+      id?: string
+      kind?: string
+      label?: string
+      state?: string
+      source?: string
+      description?: string | null
+    }
     scope?: {
-      kind: string
-      label: string
-      description: string
+      kind?: string
+      label?: string
+      description?: string | null
     }
     openEscalations: ReleaseItem[]
     incompleteBriefs?: ReleaseItem[]
@@ -297,6 +305,10 @@
 
   const gitStoryBlockers = $derived(dedupeGitBlockers(data?.gitStory?.blockers ?? []))
   const visibleGitStoryBlockers = $derived(gitStoryBlockers.slice(0, 5))
+  const hasNamedRelease = $derived(Boolean(data?.release?.label))
+  const readinessNoun = $derived(hasNamedRelease ? 'release' : 'current work')
+  const readinessTitle = $derived(hasNamedRelease ? 'Release readiness' : 'Current work readiness')
+  const blockerNoun = $derived(hasNamedRelease ? 'release blocker' : 'blocker')
 
   const verdict = $derived.by(() => {
     if (!data) return { label: 'Loading', tone: 'neutral' as const, reason: '' }
@@ -311,14 +323,14 @@
       return {
         label: 'Not yet',
         tone: 'warn' as const,
-        reason: 'No tracked work yet. Shape the first task before judging release readiness.',
+        reason: `No tracked work yet. Shape the first task before judging ${readinessNoun} readiness.`,
       }
     }
     if (data.totals.blockingCount === 0 && unfinishedCount === 0 && dirtyCheckoutCount === 0 && !dirtyCheckoutError && dsLabel().clear) {
       return {
         label: 'Ready',
         tone: 'ok' as const,
-        reason: `${data.totals.done}/${data.totals.tasks} tasks done · no open release blockers.`,
+        reason: `${data.totals.done}/${data.totals.tasks} tasks done · no open ${blockerNoun}s.`,
       }
     }
     if (unfinishedCount > 0) {
@@ -369,23 +381,29 @@
   const sectionCopy = $derived(
     section === 'criteria'
       ? {
-          title: 'Release checks',
-          description: 'Expand any row to inspect the tasks, approvals, or Git stories still keeping the current release from being ready.',
+          title: hasNamedRelease ? 'Release checks' : 'Current work checks',
+          description: hasNamedRelease
+            ? 'Expand any row to inspect the tasks, approvals, or Git stories still keeping the current release from being ready.'
+            : 'Expand any row to inspect the tasks, approvals, or Git stories still keeping current work from being ready.',
         }
       : {
-          title: 'Release readiness',
-          description: data?.scope?.description
-            ?? 'A quick read on whether the current release is ready to hand off, ship, or deliberately defer.',
+          title: readinessTitle,
+          description: data?.release?.description ?? data?.scope?.description
+            ?? (hasNamedRelease
+              ? 'A quick read on whether the current release is ready to hand off, ship, or deliberately defer.'
+              : 'A quick read on whether current work is ready to hand off, ship, or deliberately defer.'),
         },
   )
+  const releaseLabel = $derived(data?.release?.label ?? data?.scope?.label ?? spine?.summary?.selectedReleaseLabel ?? spine?.selectedRelease?.label ?? 'Current work')
+  const spineReleaseLabel = $derived(spine?.summary?.selectedReleaseLabel ?? spine?.selectedRelease?.label ?? spine?.summary?.selectedScopeLabel ?? spine?.scope?.label ?? 'Current work')
 
   const statusRows = $derived(
     data ? Object.entries(data.statusCounts).sort((a, b) => b[1] - a[1]) : [],
   )
   const releaseBlockerLabel = $derived(
     data
-      ? `${data.totals.blockingCount} release blocker${data.totals.blockingCount === 1 ? '' : 's'}`
-      : '0 release blockers',
+      ? `${data.totals.blockingCount} ${blockerNoun}${data.totals.blockingCount === 1 ? '' : 's'}`
+      : `0 ${blockerNoun}s`,
   )
   const taskDoneLabel = $derived(data?.totals.tasks === 0 ? 'No tracked work yet' : `${data?.totals.done ?? 0}/${data?.totals.tasks ?? 0} done`)
   const spineReleaseBlocker = $derived(spine?.release?.blockers?.[0] ?? null)
@@ -421,7 +439,7 @@
 {:else}
   <div class="release-shell">
     <SectionHeader
-      eyebrow={data.scope?.label ?? 'Current Guildhall work'}
+      eyebrow={releaseLabel}
       title={sectionCopy.title}
       description={sectionCopy.description}
       headingTag="h2"
@@ -441,7 +459,7 @@
       >
         <div class="release-spine">
           <div>
-            <span class="release-spine-label">{spine.summary.selectedScopeLabel ?? spine.scope?.label ?? 'Current scope'}</span>
+            <span class="release-spine-label">{spineReleaseLabel}</span>
             <strong>{spine.summary.headline}</strong>
             <p>{spine.summary.purpose ?? spine.charter?.goal ?? 'Project purpose has not been pinned yet.'}</p>
           </div>
@@ -478,7 +496,7 @@
         {#snippet header()}
           <SectionHeader
             title="Current counts"
-            description="A compact view of the signals feeding the release verdict."
+            description={`A compact view of the signals feeding the ${readinessNoun} verdict.`}
             headingTag="h3"
             density="dense"
           >
@@ -488,13 +506,13 @@
           </SectionHeader>
         {/snippet}
 
-        <div class="summary-grid" aria-label="Release readiness summary counts">
+        <div class="summary-grid" aria-label={`${readinessTitle} summary counts`}>
           <div class="summary-stat">
             <span class="summary-label">Tasks done</span>
             <strong>{data.totals.tasks === 0 ? 'No tracked work' : `${data.totals.done}/${data.totals.tasks}`}</strong>
           </div>
           <div class="summary-stat">
-            <span class="summary-label">Total release blockers</span>
+            <span class="summary-label">Total {hasNamedRelease ? 'release blockers' : 'blockers'}</span>
             <strong>{data.totals.blockingCount}</strong>
           </div>
           <div class="summary-stat">
@@ -526,7 +544,7 @@
         </div>
         {#if data.dirtyCheckout && dirtyCheckoutCount > 0}
           <p class="dirty-detail">
-            {dirtyCheckoutCount} project-local Guildhall {dirtyCheckoutCount === 1 ? 'file needs' : 'files need'} cleanup before the current release can be ready.
+            {dirtyCheckoutCount} project-local Guildhall {dirtyCheckoutCount === 1 ? 'file needs' : 'files need'} cleanup before {data.release?.label ? 'the current release' : 'current work'} can be ready.
             Open diagnostics if you need the exact file list.
           </p>
         {:else if dirtyCheckoutError}

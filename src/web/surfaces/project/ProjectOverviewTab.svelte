@@ -106,7 +106,7 @@
     return typeof action === 'string' ? { label: action, href: currentProjectHref('/work', activeProjectId) } : action
   })
   const orientationGap = $derived(orientationSpine?.gaps?.find(gap => gap.severity === 'high' || gap.kind === 'missing_charter' || gap.kind === 'source_conflict') ?? orientationSpine?.gaps?.[0] ?? null)
-  const orientationScopeLabel = $derived(orientationSpine?.summary?.selectedScopeLabel ?? orientationSpine?.scope?.label ?? 'Current scope')
+  const orientationScopeLabel = $derived(orientationSpine?.summary?.selectedReleaseLabel ?? orientationSpine?.summary?.selectedScopeLabel ?? orientationSpine?.scope?.label ?? 'Current work')
   const orientationIncludedCount = $derived(orientationSpine?.summary?.includedWorkCount ?? orientationSpine?.summary?.includedCount ?? 0)
   const orientationDeferredCount = $derived(
     orientationSpine?.summary?.progress?.deferred ??

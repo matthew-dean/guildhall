@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { TaskQueue } from '@guildhall/core'
-import { pickNextTask } from '../orchestrator-picker.js'
+import { pickNextTask, selectedReleaseScopeForQueue } from '../orchestrator-picker.js'
 import type { OrientationScope } from '../project-orientation-spine.js'
 
 function task(overrides: Record<string, unknown> = {}) {
@@ -38,6 +38,23 @@ function queue(tasks: Array<Record<string, unknown>>): TaskQueue {
   }
 }
 
+function queueWithRelease(tasks: Array<Record<string, unknown>>): TaskQueue {
+  return {
+    ...queue(tasks),
+    selectedReleaseId: '2-0-alpha',
+    releases: [{
+      id: '2-0-alpha',
+      label: '2.0 alpha',
+      kind: 'release',
+      state: 'active',
+      source: 'release_plan',
+      nodeIds: ['work:included'],
+      deferredNodeIds: ['work:later'],
+      proofStyle: 'script_only',
+    }],
+  }
+}
+
 const mvpScope: OrientationScope = {
   id: 'mvp',
   label: 'MVP',
@@ -48,6 +65,32 @@ const mvpScope: OrientationScope = {
 }
 
 describe('pickNextTask bounded scope eligibility', () => {
+  it('does not invent a release boundary when no releases are defined', () => {
+    const q = queue([
+      { id: 'later', title: 'High priority work', priority: 'critical' },
+      { id: 'included', title: 'Normal priority work', priority: 'normal' },
+    ])
+
+    expect(selectedReleaseScopeForQueue(q)).toBeNull()
+    expect(pickNextTask(q)?.id).toBe('later')
+  })
+
+  it('bounds unattended Start to the selected release when releases are defined', () => {
+    const q = queueWithRelease([
+      { id: 'later', title: 'Later release feature', priority: 'critical' },
+      { id: 'included', title: 'Selected release feature', priority: 'normal', releaseIds: ['2-0-alpha'] },
+    ])
+    const scope = selectedReleaseScopeForQueue(q)
+
+    expect(scope).toMatchObject({
+      id: '2-0-alpha',
+      label: '2.0 alpha',
+      nodeIds: ['work:included'],
+      deferredNodeIds: ['work:later'],
+    })
+    expect(pickNextTask(q, undefined, undefined, undefined, undefined, { scope })?.id).toBe('included')
+  })
+
   it('does not pick deferred ready work during normal unattended current-scope work', () => {
     const q = queue([
       { id: 'later', title: 'Later feature', priority: 'critical' },

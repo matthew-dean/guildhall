@@ -18,7 +18,7 @@
 
 import type { Task, TaskQueue } from '@guildhall/core'
 import type { ProjectLevers } from '@guildhall/levers'
-import { laneForTask, pickNextTask, type TaskLane } from './orchestrator-picker.js'
+import { laneForTask, pickNextTask, type PickNextTaskOptions, type TaskLane } from './orchestrator-picker.js'
 
 export type FanoutCapacity = number
 
@@ -38,6 +38,7 @@ export interface PickNextTasksInput {
   laneCapacities?: Partial<Record<TaskLane, number>>
   domainFilter?: string
   preferredTaskId?: string
+  pickerOptions?: PickNextTaskOptions
   /**
    * Ids already in flight (or claimed by an earlier pass in the same tick).
    * Those tasks are skipped during selection so the caller never dispatches
@@ -76,6 +77,7 @@ export function pickNextTasks(input: PickNextTasksInput): Task[] {
           attemptExcluded,
           undefined,
           input.preferredTaskId,
+          input.pickerOptions,
         )
         if (!candidate) break
         const lane = laneForTask(candidate)
@@ -101,6 +103,7 @@ export function pickNextTasks(input: PickNextTasksInput): Task[] {
       excluded,
       undefined,
       input.preferredTaskId,
+      input.pickerOptions,
     )
     if (!next) break
     picks.push(next)
