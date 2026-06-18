@@ -1275,6 +1275,9 @@ export async function approveWorkspaceImport(
         'Could not find goals/tasks/milestones fences in the workspace-import spec.',
     }
   }
+  const approvedSpec = input.draftOverride
+    ? formatDetectedDraftAsSpec(input.draftOverride)
+    : null
 
   const now = new Date().toISOString()
   const materializedTasks = await materializeEvidenceWorkGraphTasks({
@@ -1505,6 +1508,9 @@ export async function approveWorkspaceImport(
   }
 
   // Mark the importer task done.
+  if (approvedSpec) {
+    task.spec = approvedSpec
+  }
   task.status = 'done'
   task.updatedAt = now
   task.completedAt = now

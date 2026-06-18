@@ -25,6 +25,7 @@ import { detectWorkspaceSignals } from '../workspace-import/index.js'
 import { formWorkspaceHypothesis } from '../workspace-import/hypothesis.js'
 import type { WorkspaceInventory } from '../workspace-import/detect.js'
 import type { WorkspaceSignal } from '../workspace-import/types.js'
+import type { WorkspaceImportDraft } from '../workspace-import/index.js'
 
 let tmpDir: string
 let dataDir: string
@@ -899,6 +900,89 @@ tasks:
       origination: 'human',
     })
     expect(q.tasks.find((t) => t.id === 'task-later')?.notes?.[0]?.content ?? '').toContain('Scope: later/deferred')
+  })
+
+  it('persists the approved effective draft as the importer spec when approval uses a draft override', async () => {
+    await seedImporterWithSpec(`
+\`\`\`yaml
+tasks:
+  - id: task-stale
+    title: stale imported bullet
+    description: stale imported bullet
+    domain: core
+\`\`\`
+`)
+
+    const draftOverride: WorkspaceImportDraft = {
+      goals: [
+        {
+          id: 'goal-story-intelligence',
+          title: 'Build first headless story-intelligence MVP',
+          rationale: 'The current release is the first headless proof of the fiction workflow.',
+          source: 'workspace-importer',
+          confidence: 'high',
+        },
+      ],
+      tasks: [
+        {
+          suggestedId: 'task-import-schema',
+          title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+          description: '1. Define fixture, expected-record, prototype-run, and evaluation schemas.',
+          whyThisMayMatter: 'This is the first bounded Stage 1 proof task.',
+          domain: 'harness',
+          scope: 'current',
+          priority: 'high',
+          assumptions: ['The roadmap still defines the current milestone.'],
+          missingInformation: ['Success proof still needs to be attached after shaping.'],
+          references: ['docs/harness/implementation-roadmap.md', 'docs/specs/schema-contract-roadmap.md'],
+          source: 'workspace-importer',
+          confidence: 'high',
+        },
+      ],
+      milestones: [
+        {
+          title: 'Stage 1: Fixture And Evaluation Harness',
+          evidence: 'docs/harness/implementation-roadmap.md: The next milestone is Stage 1: Fixture And Evaluation Harness.',
+          source: 'workspace-importer',
+          confidence: 'high',
+        },
+      ],
+      context: [],
+      stats: {
+        inputSignals: 2,
+        drafted: 1,
+        deduped: 0,
+      },
+    }
+
+    const approved = await approveWorkspaceImport({
+      memoryDir,
+      projectPath: tmpDir,
+      draftOverride,
+    })
+    expect(approved).toMatchObject({ success: true, tasksAdded: 1 })
+
+    const q = await readQueue()
+    const importerTask = q.tasks.find(task => task.id === WORKSPACE_IMPORT_TASK_ID)
+    expect(importerTask?.spec).toBe(formatDetectedDraftAsSpec(draftOverride))
+
+    const reparsed = parseWorkspaceImport(importerTask?.spec ?? '')
+    expect(reparsed.goals).toMatchObject([
+      {
+        id: 'goal-story-intelligence',
+        title: 'Build first headless story-intelligence MVP',
+      },
+    ])
+    expect(reparsed.tasks).toMatchObject([
+      {
+        id: 'task-import-schema',
+        title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+        references: [
+          'docs/harness/implementation-roadmap.md',
+          'docs/specs/schema-contract-roadmap.md',
+        ],
+      },
+    ])
   })
 
   it('does not duplicate already-imported tasks when a refreshed import includes the same title again', async () => {
