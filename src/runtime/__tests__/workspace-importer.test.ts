@@ -802,7 +802,8 @@ tasks:
         'The first Guildhall starter tasks should be:',
         '',
         '1. Define fixture, expected-record, prototype-run, and evaluation schemas.',
-        '2. Add the first tiny fiction fixture and human-authored expected records.',
+        '2. Add the first tiny fiction fixture and human-authored',
+        '   expected records.',
       ].join('\n'),
       'utf-8',
     )
@@ -825,10 +826,14 @@ tasks:
 
     expect(draft.tasks.map((task) => task.title)).toEqual(
       expect.arrayContaining([
-        'fixture directory shape for at least one small story fixture',
-        'typed fixture and expected-record contracts',
         'Define fixture, expected-record, prototype-run, and evaluation schemas.',
         'Add the first tiny fiction fixture and human-authored expected records.',
+      ]),
+    )
+    expect(draft.tasks.map((task) => task.title)).not.toEqual(
+      expect.arrayContaining([
+        'fixture directory shape for at least one small story fixture',
+        'typed fixture and expected-record contracts',
         'Implement dialogue-and-character-voice reviewer lane',
       ]),
     )

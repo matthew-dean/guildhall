@@ -58,7 +58,8 @@ const narrativeRoadmapEvidence = [
   '1. Define fixture, expected-record, prototype-run, and evaluation schemas.',
   '2. Add the first tiny fiction fixture and human-authored expected records.',
   '3. Implement a no-UI runner that builds a packet from fixture records.',
-  '4. Add deterministic evaluation output that reports missing, noisy, stale, and useful context.',
+  '4. Add deterministic evaluation output that reports missing, noisy, stale, and',
+  '   useful context.',
   '5. Generate a developer-readable debug report for each run.',
   '6. Use the first run to narrow the MVP story-memory schema.',
 ].join('\n')
@@ -334,6 +335,23 @@ describe('evidence-to-work-graph intake', () => {
           title: 'Implement scene-and-chapter-intelligence reviewer lane',
           targetArea: 'Coherence',
         }),
+      ]),
+    )
+  })
+
+  it('keeps later-stage inventory recommendations out of the current task graph when a roadmap names the active milestone stage', () => {
+    const plan = planEvidenceWorkGraph({
+      sources: [
+        { path: 'docs/harness/implementation-roadmap.md', content: narrativeRoadmapEvidence },
+        { path: 'docs/harness/remaining-spec-decomposition-inventory.md', content: narrativeRemainingInventoryEvidence },
+      ],
+      existingTasks: [],
+    })
+
+    expect(plan.tasks.map(task => task.title)).not.toEqual(
+      expect.arrayContaining([
+        'Implement dialogue-and-character-voice reviewer lane',
+        'Implement scene-and-chapter-intelligence reviewer lane',
       ]),
     )
   })

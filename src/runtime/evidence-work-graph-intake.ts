@@ -70,7 +70,8 @@ const DONEISH_STATUSES = new Set(['done', 'review', 'gate_check'])
 const workGraphDomainAdapter = genericWorkGraphDomainAdapter
 
 export function planEvidenceWorkGraph(input: EvidenceWorkGraphInput): EvidenceWorkGraphPlan {
-  const units = input.sources.flatMap(source => extractUnits(source))
+  const currentMilestoneStage = detectCurrentMilestoneStage(input.sources)
+  const units = input.sources.flatMap(source => extractUnits(source, currentMilestoneStage))
   const existingTasks = input.existingTasks ?? []
   const tasks: EvidenceTask[] = []
   const reconciliations: EvidenceWorkGraphPlan['reconciliations'] = []
@@ -124,8 +125,8 @@ export function planEvidenceWorkGraph(input: EvidenceWorkGraphInput): EvidenceWo
   return { units, tasks, reconciliations }
 }
 
-function extractUnits(source: EvidenceSource): EvidenceUnit[] {
-  return extractSeeds(source).map(seed => {
+function extractUnits(source: EvidenceSource, currentMilestoneStage: string | null): EvidenceUnit[] {
+  return extractSeeds(source, currentMilestoneStage).map(seed => {
     const statusHint = inferStatusHint(seed.need)
     const workShape = inferWorkShape(seed)
     const targetArea = inferTargetArea(seed)
@@ -149,11 +150,11 @@ function extractUnits(source: EvidenceSource): EvidenceUnit[] {
   })
 }
 
-function extractSeeds(source: EvidenceSource): UnitSeed[] {
+function extractSeeds(source: EvidenceSource, currentMilestoneStage: string | null): UnitSeed[] {
   return [
     ...extractTableSeeds(source),
     ...extractRoadmapMilestoneSeeds(source),
-    ...extractRecommendedTaskSeeds(source),
+    ...extractRecommendedTaskSeeds(source, currentMilestoneStage),
   ]
 }
 
@@ -198,7 +199,7 @@ function extractTableSeeds(source: EvidenceSource): UnitSeed[] {
 }
 
 function extractRoadmapMilestoneSeeds(source: EvidenceSource): UnitSeed[] {
-  const lines = source.content.split(/\r?\n/)
+  const lines = logicalMarkdownLines(source.content)
   const seeds: UnitSeed[] = []
   let currentHeading = ''
   let currentStage = ''
@@ -241,8 +242,8 @@ function extractRoadmapMilestoneSeeds(source: EvidenceSource): UnitSeed[] {
   return seeds
 }
 
-function extractRecommendedTaskSeeds(source: EvidenceSource): UnitSeed[] {
-  const lines = source.content.split(/\r?\n/)
+function extractRecommendedTaskSeeds(source: EvidenceSource, currentMilestoneStage: string | null): UnitSeed[] {
+  const lines = logicalMarkdownLines(source.content)
   const seeds: UnitSeed[] = []
   let currentEntry = ''
   let currentStageAlignment = ''
@@ -251,7 +252,12 @@ function extractRecommendedTaskSeeds(source: EvidenceSource): UnitSeed[] {
 
   const flush = () => {
     const title = stripInlineCode(currentRecommendedTitle.trim())
-    if (!title || /^\*\(none/i.test(title) || /^none\b/i.test(title)) {
+    if (!title || /^\(?none\b/i.test(title)) {
+      currentRecommendedTitle = ''
+      return
+    }
+    const normalizedAlignment = normalizeStageLabel(currentStageAlignment)
+    if (currentMilestoneStage && normalizedAlignment && normalizedAlignment !== currentMilestoneStage) {
       currentRecommendedTitle = ''
       return
     }
@@ -302,6 +308,50 @@ function extractRecommendedTaskSeeds(source: EvidenceSource): UnitSeed[] {
   flush()
 
   return seeds
+}
+
+function detectCurrentMilestoneStage(sources: readonly EvidenceSource[]): string | null {
+  for (const source of sources) {
+    const match = source.content.match(/##\s+Current Next Milestone[\s\S]{0,400}?The next milestone is\s+(Stage\s+\d+)/i)
+    if (match?.[1]) {
+      return normalizeStageLabel(match[1])
+    }
+  }
+  return null
+}
+
+function normalizeStageLabel(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, ' ')
+}
+
+function logicalMarkdownLines(raw: string): string[] {
+  const physicalLines = raw.split(/\r?\n/)
+  const logicalLines: string[] = []
+
+  for (let index = 0; index < physicalLines.length; index += 1) {
+    let line = physicalLines[index] ?? ''
+    if (!startsListItem(line)) {
+      logicalLines.push(line)
+      continue
+    }
+    while (index + 1 < physicalLines.length && isListContinuationLine(physicalLines[index + 1] ?? '')) {
+      line = `${line.trimEnd()} ${(physicalLines[index + 1] ?? '').trim()}`
+      index += 1
+    }
+    logicalLines.push(line)
+  }
+
+  return logicalLines
+}
+
+function startsListItem(line: string): boolean {
+  return /^\s*(?:[-*]\s+(?:\[[xX ]\]\s+)?|\d+\.\s+)/.test(line)
+}
+
+function isListContinuationLine(line: string): boolean {
+  if (!/^\s{2,}\S/.test(line)) return false
+  const trimmed = line.trim()
+  return !/^(?:#{1,6}\s+|\|(?:.+)\||[-*]\s+(?:\[[xX ]\]\s+)?|\d+\.\s+)/.test(trimmed)
 }
 
 function buildImplementationTask(unit: EvidenceUnit, existingMatch?: ExistingTaskMatch): EvidenceTask {

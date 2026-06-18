@@ -87,6 +87,36 @@ function cleanSpecTitle(text: string): string {
   return cleanHeading(text).replace(/^spec:\s*/i, '').trim()
 }
 
+function logicalMarkdownLines(raw: string): string[] {
+  const physicalLines = raw.split('\n')
+  const logicalLines: string[] = []
+
+  for (let index = 0; index < physicalLines.length; index += 1) {
+    let line = physicalLines[index] ?? ''
+    if (!startsListItem(line)) {
+      logicalLines.push(line)
+      continue
+    }
+    while (index + 1 < physicalLines.length && isListContinuationLine(physicalLines[index + 1] ?? '')) {
+      line = `${line.trimEnd()} ${(physicalLines[index + 1] ?? '').trim()}`
+      index += 1
+    }
+    logicalLines.push(line)
+  }
+
+  return logicalLines
+}
+
+function startsListItem(line: string): boolean {
+  return /^\s*(?:[-*]\s+(?:\[[xX ]\]\s+)?|\d+\.\s+)/.test(line)
+}
+
+function isListContinuationLine(line: string): boolean {
+  if (!/^\s{2,}\S/.test(line)) return false
+  const trimmed = line.trim()
+  return !/^(?:#{1,6}\s+|\|(?:.+)\||[-*]\s+(?:\[[xX ]\]\s+)?|\d+\.\s+)/.test(trimmed)
+}
+
 function summarizeMarkdownAfterTitle(raw: string): string {
   const withoutTitle = raw.replace(/^#\s+.+?\s*$/m, '').trim()
   const lines: string[] = []
@@ -165,17 +195,53 @@ export const planningDocsSource: TaskSource = {
       : listMarkdownFiles(projectPath)
     const multiProjectRoots = detectMultiProjectRoots(relPaths)
 
-    const signals: WorkspaceSignal[] = []
+    const fileContents = new Map<string, string>()
     for (const rel of relPaths) {
       const abs = join(projectPath, rel)
       if (!existsSync(abs)) continue
       const raw = readFileSync(abs, 'utf-8')
       if (!raw.trim()) continue
+      fileContents.set(rel, raw)
+    }
+    const currentMilestoneStage = detectCurrentMilestoneStage(fileContents.values())
+
+    const signals: WorkspaceSignal[] = []
+    for (const rel of relPaths) {
+      const abs = join(projectPath, rel)
+      const raw = fileContents.get(rel)
+      if (!raw) continue
+      if (!raw.trim()) continue
       const fileBase = basename(rel)
       const domainHint = inferDomainHint(rel, multiProjectRoots)
       let currentSection: string | null = null
       let currentLabel: 'deliverables' | 'success_gates' | 'do_not_start' | null = null
+      let pendingRecommendedTaskTitle: string | null = null
+      let pendingRecommendedTaskSection: string | null = null
+      let currentRecommendedStageAlignment: string | null = null
       const bulletStack: Array<{ indent: number; title: string; grouping: boolean }> = []
+
+      const flushPendingRecommendedTask = () => {
+        if (!pendingRecommendedTaskTitle) return
+        const title = pendingRecommendedTaskTitle
+        const normalizedAlignment = normalizeStageLabel(currentRecommendedStageAlignment)
+        if (
+          !/^\(?none\b/i.test(title) &&
+          (!currentMilestoneStage || !normalizedAlignment || normalizedAlignment === currentMilestoneStage)
+        ) {
+          signals.push({
+            source: 'planning-docs',
+            kind: 'open_work',
+            title,
+            evidence: `${rel}: ${pendingRecommendedTaskSection ?? currentSection ?? title}`.slice(0, 240),
+            references: [abs],
+            ...(domainHint ? { domainHint } : {}),
+            confidence: 'high',
+          })
+        }
+        pendingRecommendedTaskTitle = null
+        pendingRecommendedTaskSection = null
+        currentRecommendedStageAlignment = null
+      }
 
       // Treat spec files as framing even if they have no checklists.
       if (/\/specs\/[^/]+\.md$/i.test(rel)) {
@@ -195,9 +261,10 @@ export const planningDocsSource: TaskSource = {
         }
       }
 
-      for (const line of raw.split('\n')) {
+      for (const line of logicalMarkdownLines(raw)) {
         const heading = /^(#{2,4})\s+(.+?)\s*$/.exec(line)
         if (heading) {
+          flushPendingRecommendedTask()
           currentSection = cleanHeading(heading[2]!)
           currentLabel = null
           bulletStack.length = 0
@@ -260,20 +327,16 @@ export const planningDocsSource: TaskSource = {
           }
         }
 
+        const stageAlignment = /^-\s+\*\*stage alignment:\*\*\s+(.+?)\s*$/i.exec(trimmedLine)
+        if (stageAlignment) {
+          currentRecommendedStageAlignment = cleanHeading(stageAlignment[1]!)
+          continue
+        }
+
         const recommendedTask = RECOMMENDED_TASK_TITLE_RE.exec(trimmedLine)
         if (recommendedTask && currentSection) {
-          const title = cleanHeading(recommendedTask[1]!)
-          if (title && !/^\*\(none/i.test(title)) {
-            signals.push({
-              source: 'planning-docs',
-              kind: 'open_work',
-              title,
-              evidence: `${rel}: ${currentSection}`.slice(0, 240),
-              references: [abs],
-              ...(domainHint ? { domainHint } : {}),
-              confidence: 'high',
-            })
-          }
+          pendingRecommendedTaskTitle = cleanHeading(recommendedTask[1]!)
+          pendingRecommendedTaskSection = currentSection
           continue
         }
 
@@ -318,7 +381,7 @@ export const planningDocsSource: TaskSource = {
           const indent = bullet[1]!.replace(/\t/g, '  ').length
           const title = cleanHeading(bullet[2]!)
           const stageScopedKind = currentLabel === 'deliverables'
-            ? 'open_work'
+            ? 'context'
             : currentLabel === 'success_gates'
               ? 'context'
               : currentLabel === 'do_not_start'
@@ -377,8 +440,25 @@ export const planningDocsSource: TaskSource = {
           })
         }
       }
+
+      flushPendingRecommendedTask()
     }
 
     return signals
   },
+}
+
+function detectCurrentMilestoneStage(contents: Iterable<string>): string | null {
+  for (const raw of contents) {
+    const match = raw.match(/##\s+Current Next Milestone[\s\S]{0,400}?The next milestone is\s+(Stage\s+\d+)/i)
+    if (match?.[1]) {
+      return normalizeStageLabel(match[1])
+    }
+  }
+  return null
+}
+
+function normalizeStageLabel(value: string | null | undefined): string | null {
+  if (!value) return null
+  return value.trim().toLowerCase().replace(/\s+/g, ' ')
 }
