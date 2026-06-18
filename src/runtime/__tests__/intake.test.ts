@@ -205,12 +205,21 @@ describe('createExploringTask', () => {
     expect(result.taskId).toBe('custom-id')
   })
 
-  it('keeps long asks complete in description instead of storing truncated title content', async () => {
+  it('keeps unbroken long asks complete in description instead of storing a fake cropped title', async () => {
     const long = 'x'.repeat(200)
     await createExploringTask({ memoryDir, ask: long, domain: 'looma', projectPath: '/x' })
     const queue = await readQueue()
     expect(queue.tasks[0]!.title).toBe('New request')
     expect(queue.tasks[0]!.description).toBe(long)
+  })
+
+  it('stores complete normal-language long asks instead of cropping titles', async () => {
+    const ask = 'What commands should I run to smoke test this project without changing files?'
+    await createExploringTask({ memoryDir, ask, domain: 'meta', projectPath: '/x' })
+    const queue = await readQueue()
+    expect(queue.tasks[0]!.title).toBe(ask)
+    expect(queue.tasks[0]!.title).not.toContain('...')
+    expect(queue.tasks[0]!.description).toBe(ask)
   })
 
   it('uses explicit title when provided', async () => {
@@ -606,7 +615,9 @@ describe('approveSpec', () => {
     expect(result.newStatus).toBe('ready')
     const updated = await readQueue()
     expect(updated.tasks[0]!.status).toBe('ready')
-    expect(updated.tasks[0]!.taskReadiness?.recommendation).toBe('split')
+    expect(updated.tasks[0]!.taskReadiness?.recommendation).toBe('ready')
+    expect(updated.tasks[0]!.taskReadiness?.summary).toContain('continue through the child tasks')
+    expect(updated.tasks[0]!.sizePlan?.action).toBe('proceed_with_warning')
     expect(updated.tasks.map(task => task.title)).toEqual([
       'Add ghost button',
       'Implement the billing settings workflow',
@@ -632,6 +643,226 @@ describe('approveSpec', () => {
       proposedBy: 'task-sizing',
     })
     expect(updated.tasks[2]!.dependsOn).toEqual(['task-001-split-implement-the-billing-settings-workflow'])
+  })
+
+  it('does not re-split a child task into duplicate sibling work when approved', async () => {
+    const base = {
+      description: 'Details',
+      domain: 'docs',
+      projectPath: tmpDir,
+      priority: 'high' as const,
+      acceptanceCriteria: [],
+      outOfScope: [],
+      dependsOn: [],
+      notes: [],
+      gateResults: [],
+      reviewVerdicts: [],
+      adjudications: [],
+      escalations: [],
+      agentIssues: [],
+      revisionCount: 0,
+      remediationAttempts: 0,
+      origination: 'system' as const,
+      createdAt: '2026-05-25T12:00:00.000Z',
+      updatedAt: '2026-05-25T12:00:00.000Z',
+    }
+    await fs.writeFile(tasksPath, JSON.stringify({
+      version: 1,
+      lastUpdated: '2026-05-25T12:00:00.000Z',
+      tasks: [
+        {
+          ...base,
+          id: 'parent',
+          title: 'Expand backlog into full doc-to-task decomposition',
+          status: 'ready',
+          hierarchy: {
+            childIds: ['child-audit', 'child-implement', 'child-verify'],
+            order: 0,
+          },
+        },
+        {
+          ...base,
+          id: 'child-audit',
+          title: 'Audit the remaining replacement scope',
+          status: 'spec_review',
+          hierarchy: {
+            parentId: 'parent',
+            childIds: [],
+            order: 0,
+          },
+          spec: buildableSpec(),
+          productBrief: {
+            userJob: 'Audit remaining replacement scope.',
+            successMetric: 'The inventory exists and identifies the next replacement task.',
+            antiPatterns: ['Do not create duplicate nested split work.'],
+          },
+          acceptanceCriteria: [
+            { id: 'ac-1', description: 'Inventory exists.', verifiedBy: 'review', met: false },
+          ],
+          sizePlan: {
+            taskId: 'child-audit',
+            score: 8,
+            band: 'epic',
+            action: 'split_required',
+            factors: [],
+            recommendedChildren: [
+              { title: 'Audit the remaining replacement scope', reason: 'Duplicate of current child.', dependsOn: [] },
+              { title: 'Implement the first independently verifiable replacement', reason: 'Duplicate sibling.', dependsOn: [] },
+              { title: 'Verify and update the migration record', reason: 'Duplicate sibling.', dependsOn: [] },
+            ],
+            reviewBudgetHint: 'release_critical',
+            reasons: ['Task size score: 8.'],
+            createdAt: '2026-05-25T12:00:00.000Z',
+            createdBy: 'task-sizing',
+          },
+        },
+        {
+          ...base,
+          id: 'child-implement',
+          title: 'Implement the first independently verifiable replacement',
+          status: 'exploring',
+          hierarchy: {
+            parentId: 'parent',
+            childIds: [],
+            order: 1,
+          },
+        },
+        {
+          ...base,
+          id: 'child-verify',
+          title: 'Verify and update the migration record',
+          status: 'exploring',
+          hierarchy: {
+            parentId: 'parent',
+            childIds: [],
+            order: 2,
+          },
+        },
+      ],
+    }, null, 2), 'utf-8')
+
+    const result = await approveSpec({ memoryDir, taskId: 'child-audit' })
+
+    expect(result.success).toBe(true)
+    expect(result.newStatus).toBe('ready')
+    const updated = await readQueue()
+    expect(updated.tasks).toHaveLength(4)
+    const audit = updated.tasks.find(task => task.id === 'child-audit')
+    expect(audit?.status).toBe('ready')
+    expect(audit?.taskReadiness?.recommendation).toBe('ready')
+    expect(audit?.sizePlan?.action).toBe('proceed_with_warning')
+    expect(audit?.sizePlan?.recommendedChildren.map(child => child.title)).toEqual([
+      'Audit the remaining replacement scope',
+      'Implement the first independently verifiable replacement',
+      'Verify and update the migration record',
+    ])
+    expect(audit?.sizePlan?.reasons.at(-1)).toContain('already match existing sibling tasks')
+  })
+
+  it('rewrites an approved parent that already has linked child tasks instead of keeping stale split-required copy', async () => {
+    const timestamp = '2026-06-12T00:00:00.000Z'
+    const queue = await readQueue()
+    const base = queue.tasks[0]!
+    base.id = 'parent'
+    base.title = 'Build the release scope'
+    base.description = 'Coordinate the release scope through existing child work.'
+    base.status = 'spec_review'
+    base.hierarchy = {
+      childIds: ['child-audit', 'child-implement'],
+      order: 0,
+    }
+    base.spec = [
+      '## Summary',
+      'Build the release scope.',
+      '',
+      '## Completion Boundary',
+      'Product outcome: The release scope is ready.',
+      'What Guildhall can complete in code: Coordinate linked child work.',
+      'External dependencies: None.',
+      'Owner-only setup: None.',
+      'Verification environment: Local.',
+      'What counts as done: Linked proof is recorded.',
+      'What must be split or blocked: Audit and implementation must still be split before work can proceed.',
+    ].join('\n')
+    base.sizePlan = {
+      taskId: 'parent',
+      score: 8,
+      band: 'epic',
+      action: 'split_required',
+      factors: [],
+      recommendedChildren: [
+        {
+          title: 'Stale coordinator split title',
+          reason: 'This no longer matches the real child records.',
+          dependsOn: [],
+        },
+      ],
+      reviewBudgetHint: 'release_critical',
+      reasons: ['Task size score: 8.'],
+      createdAt: timestamp,
+      createdBy: 'task-sizing',
+    }
+    base.taskReadiness = {
+      taskKind: 'implementation',
+      recommendation: 'split',
+      summary: 'Task needs to be split again.',
+      dimensions: [
+        {
+          id: 'size',
+          status: 'blocked',
+          summary: 'Too broad.',
+          evidence: ['Split required before work can continue.'],
+        },
+      ],
+      definitionOfDone: {
+        items: ['Ship the release scope.'],
+        evidenceRequired: ['Proof is recorded.'],
+        updatedAt: timestamp,
+        createdBy: 'test',
+      },
+      blockerPlans: [],
+      contextBudget: {
+        estimatedTokens: 12000,
+        risk: 'high',
+        fitsInOneWorkerBrief: false,
+        reasons: ['Too large.'],
+      },
+      assessedAt: timestamp,
+      assessedBy: 'test',
+    }
+    queue.tasks.push(
+      {
+        ...structuredClone(base),
+        id: 'child-audit',
+        title: 'Audit the remaining replacement scope',
+        status: 'exploring',
+        hierarchy: { parentId: 'parent', childIds: [], order: 0 },
+        sizePlan: undefined,
+        taskReadiness: undefined,
+      },
+      {
+        ...structuredClone(base),
+        id: 'child-implement',
+        title: 'Implement the first independently verifiable replacement',
+        status: 'exploring',
+        hierarchy: { parentId: 'parent', childIds: [], order: 1 },
+        sizePlan: undefined,
+        taskReadiness: undefined,
+      },
+    )
+    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+
+    const result = await approveSpec({ memoryDir, taskId: 'parent' })
+
+    expect(result.success).toBe(true)
+    const updated = await readQueue()
+    const parent = updated.tasks.find(task => task.id === 'parent')!
+    expect(updated.tasks.map(task => task.id)).toEqual(['parent', 'child-audit', 'child-implement'])
+    expect(parent.sizePlan?.action).toBe('proceed_with_warning')
+    expect(parent.taskReadiness?.recommendation).toBe('ready')
+    expect(parent.taskReadiness?.summary).toContain('continue through the child tasks')
+    expect(parent.spec).toContain('Already split into linked child tasks: child-audit, child-implement')
+    expect(parent.spec).not.toContain('must still be split before work can proceed')
   })
 
   it('splits a split-recommended spec into containing work and child tasks when approved', async () => {
@@ -670,7 +901,9 @@ describe('approveSpec', () => {
     expect(result.newStatus).toBe('ready')
     const updated = await readQueue()
     expect(updated.tasks[0]!.status).toBe('ready')
-    expect(updated.tasks[0]!.taskReadiness?.recommendation).toBe('split')
+    expect(updated.tasks[0]!.taskReadiness?.recommendation).toBe('ready')
+    expect(updated.tasks[0]!.taskReadiness?.summary).toContain('continue through the child tasks')
+    expect(updated.tasks[0]!.sizePlan?.action).toBe('proceed_with_warning')
     expect(updated.tasks[0]!.hierarchy?.childIds).toEqual([
       'task-001-split-component-implementation',
       'task-001-split-storybook-story',
@@ -834,8 +1067,9 @@ describe('approveSpec', () => {
     const updated = await readQueue()
     const parent = updated.tasks.find(candidate => candidate.id === task.id)
     expect(parent?.status).toBe('ready')
-    expect(parent?.taskReadiness?.recommendation).toBe('split')
-    expect(parent?.sizePlan?.action).toBe('split_required')
+    expect(parent?.taskReadiness?.recommendation).toBe('ready')
+    expect(parent?.taskReadiness?.summary).toContain('continue through the child tasks')
+    expect(parent?.sizePlan?.action).toBe('proceed_with_warning')
     expect(parent?.hierarchy?.childIds).toEqual([
       'task-import-twwvys-split-audit-the-remaining-replacement-scope',
       'task-import-twwvys-split-implement-the-first-independently-verifiable-replacement',
@@ -1099,6 +1333,29 @@ describe('resumeExploring', () => {
       'utf-8',
     )
     expect(transcript).toContain('summarize the failing test')
+  })
+
+  it('persists a steering note on a blocked task without silently returning ok', async () => {
+    let queue = await readQueue()
+    queue.tasks[0]!.status = 'blocked'
+    queue.tasks[0]!.blockReason = 'human_judgment_required: choose a retry path'
+    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2))
+
+    const result = await resumeExploring({
+      memoryDir,
+      taskId: 'task-001',
+      message: 'Retry from the partial diff and make one concrete mutation first.',
+    })
+    expect(result.success).toBe(true)
+
+    queue = await readQueue()
+    expect(queue.tasks[0]!.status).toBe('blocked')
+    expect(queue.tasks[0]!.notes.at(-1)?.content).toContain('Retry from the partial diff')
+    const transcript = await fs.readFile(
+      getProjectTranscriptPath(tmpDir, 'exploring', 'task-001'),
+      'utf-8',
+    )
+    expect(transcript).toContain('Retry from the partial diff')
   })
 
   it('resolves a pending escalation and returns task to exploring', async () => {

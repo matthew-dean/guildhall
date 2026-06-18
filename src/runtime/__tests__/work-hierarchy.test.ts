@@ -116,6 +116,29 @@ describe('work hierarchy', () => {
     expect(model.byId.get('feature-shell')?.childIds).toEqual(['implementation-child'])
   })
 
+  it('uses action-shaped labels in breadcrumbs for question-shaped work', () => {
+    const tasks = [
+      task({
+        id: 'meta',
+        title: 'Meta',
+        status: 'ready',
+        hierarchy: { childIds: ['task-smoke-test'], order: 0 },
+      }),
+      task({
+        id: 'task-smoke-test',
+        title: 'What commands should I run to smoke test this project without changing files?',
+        description: 'What commands should I run to smoke test this project without changing files?',
+        status: 'ready',
+        hierarchy: { parentId: 'meta', childIds: [], order: 0 },
+      }),
+    ]
+
+    expect(buildWorkHierarchy(tasks).byId.get('task-smoke-test')?.breadcrumb.map(item => item.title)).toEqual([
+      'Meta',
+      'Define safe smoke-test commands',
+    ])
+  })
+
   it('requires explicit completion boundaries before containing work can be complete', () => {
     const tasks = [
       task({

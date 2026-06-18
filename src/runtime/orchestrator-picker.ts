@@ -19,8 +19,15 @@ import { META_INTAKE_TASK_ID } from './meta-intake.js'
 import { WORKSPACE_IMPORT_TASK_ID } from './workspace-importer.js'
 import { taskHasUnansweredVisibleQuestion } from './question-visibility.js'
 import { workSubtreeIds } from './work-hierarchy.js'
+import { taskEligibleForSelectedScope, type OrientationScope } from './project-orientation-spine.js'
+import { deriveWorkExecutionState } from './work-execution-state.js'
 
 export type TaskLane = 'spec' | 'worker' | 'review' | 'coordinator'
+
+export interface PickNextTaskOptions {
+  scope?: OrientationScope | null
+  includedDependencyIds?: ReadonlySet<string>
+}
 
 function hasUnansweredOpenQuestion(task: Task): boolean {
   return taskHasUnansweredVisibleQuestion(task)
@@ -35,14 +42,23 @@ export function specReviewRequiresOwnerApproval(task: Pick<Task, 'id'>): boolean
 }
 
 function finishabilityAllowsDispatch(task: Task): boolean {
-  return task.status !== 'ready' || task.taskReadiness == null || task.taskReadiness.recommendation === 'ready'
+  return task.status !== 'ready' ||
+    task.taskReadiness == null ||
+    task.taskReadiness.recommendation === 'ready' ||
+    task.taskReadiness.recommendation === 'needs_research_spike' ||
+    hasCompleteWorkerHandoff(task)
 }
 
-function isContainingWorkTask(queue: TaskQueue, task: Task): boolean {
-  return workSubtreeIds(queue.tasks, task.id).length > 1 ||
-    task.workKind === 'app_spec' ||
-    task.workKind === 'feature_spec' ||
-    Boolean(task.completionBoundary)
+function hasCompleteWorkerHandoff(task: Task): boolean {
+  const brief = task.productBrief
+  const approvedBrief = typeof brief?.approvedAt === 'string' && brief.approvedAt.trim().length > 0
+  const spec = typeof task.spec === 'string' && task.spec.trim().length > 0
+  const criteria = Array.isArray(task.acceptanceCriteria) && task.acceptanceCriteria.length > 0
+  return approvedBrief && spec && criteria
+}
+
+function derivedExecutionAllowsDispatch(queue: TaskQueue, task: Task): boolean {
+  return deriveWorkExecutionState(queue.tasks, task.id).isRunnable
 }
 
 /**
@@ -111,11 +127,13 @@ export function pickNextTask(
   exclude?: ReadonlySet<string>,
   lane?: TaskLane,
   preferredTaskId?: string,
+  options: PickNextTaskOptions = {},
 ): Task | undefined {
   const priority = ['critical', 'high', 'normal', 'low'] as const
   const scopedIds = preferredTaskId
     ? new Set(workSubtreeIds(queue.tasks, preferredTaskId))
     : null
+  const explicitTargetIds = scopedIds ?? new Set<string>()
   const isExcluded = exclude
     ? (t: Task) => exclude.has(t.id)
     : (_t: Task) => false
@@ -125,6 +143,11 @@ export function pickNextTask(
   const matchesLane = lane
     ? (t: Task) => laneForTask(t) === lane
     : (_t: Task) => true
+  const matchesOrientationScope = (task: Task): boolean =>
+    taskEligibleForSelectedScope(task, options.scope, {
+      explicitTaskId: explicitTargetIds.has(task.id) ? task.id : undefined,
+      includedDependencyIds: options.includedDependencyIds,
+    }).eligible
   const matchesStatusSlot = (
     task: Task,
     status: TaskStatus,
@@ -133,13 +156,14 @@ export function pickNextTask(
   ): boolean =>
     task.status === status &&
     finishabilityAllowsDispatch(task) &&
-    !isContainingWorkTask(queue, task) &&
+    derivedExecutionAllowsDispatch(queue, task) &&
     !(task.status === 'spec_review' && Boolean(task.spec?.trim()) && specReviewRequiresOwnerApproval(task)) &&
     !((task.status === 'exploring' || task.status === 'spec_review') && hasUnansweredOpenQuestion(task)) &&
     matchesLane(task) &&
     task.priority === priorityLevel &&
     (!domain || task.domain === domain) &&
     (opts.respectScope === false || matchesScope(task)) &&
+    matchesOrientationScope(task) &&
     dependenciesSatisfied(queue, task) &&
     !hasOpenEscalation(task) &&
     !isExcluded(task)
@@ -174,6 +198,7 @@ export function pickNextTask(
         t.priority === p &&
         (!domain || t.domain === domain) &&
         matchesScope(t) &&
+        matchesOrientationScope(t) &&
         !hasOpenEscalation(t) &&
         !isExcluded(t),
     )

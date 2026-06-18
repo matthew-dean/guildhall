@@ -12,7 +12,7 @@ import {
   upsertTaskRuntimeState,
   upsertTaskWorkspaceState,
 } from '@guildhall/sessions'
-import { readExploringTranscript, writeCheckpoint } from '@guildhall/tools'
+import { activeEscalations, raiseEscalation, readExploringTranscript, writeCheckpoint } from '@guildhall/tools'
 import { buildServeApp, filterEventsForTask } from '../serve.js'
 import { OrchestratorSupervisor } from '../serve-supervisor.js'
 import { createReviewAuditStore } from '../review-audit-store.js'
@@ -355,6 +355,27 @@ describe('GET /api/project/task/:id', () => {
 
     const raw = JSON.parse(await fs.readFile(taskQueuePath(), 'utf8')) as Record<string, any>
     expect(raw.tasks[0]?.assignedTo).toBe('worker-agent')
+  })
+
+  it('heals completed tasks that were left blocked without a block reason', async () => {
+    await seedRawTaskDefinition('task-1', {
+      status: 'blocked',
+      blockReason: null,
+      completedAt: '2026-06-17T05:20:00.000Z',
+      assignedTo: null,
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(projectUrl('/api/project/task/task-1')))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, any>
+    expect(body.task?.status).toBe('done')
+    expect(body.task?.completedAt).toBe('2026-06-17T05:20:00.000Z')
+    expect(body.task?.blockReason).toBeUndefined()
+    expect(body.task?.notes.at(-1)?.content).toContain('Recovered completed task from stale blocked status')
+
+    const raw = JSON.parse(await fs.readFile(taskQueuePath(), 'utf8')) as Record<string, any>
+    expect(raw.tasks[0]?.status).toBe('done')
+    expect(raw.tasks[0]?.blockReason).toBeUndefined()
   })
 
   it('returns recent context debug records for the task', async () => {
@@ -1293,6 +1314,56 @@ describe('POST /api/project/task/:id/start', () => {
       stopAfterOneTask: true,
     })
   })
+
+  it('starts a scoped max-revision task when an earlier LLM review already cleared the rubric', async () => {
+    await seedTasks([
+      {
+        id: 'author-voice-loop-mvp',
+        title: 'Implement author voice feedback loop MVP',
+        status: 'blocked',
+        blockReason: 'max_revisions_exceeded: Exceeded maxRevisions (3). Requires human judgment.',
+        revisionCount: 4,
+        reviewVerdicts: [
+          {
+            verdict: 'revise',
+            reviewerPath: 'llm',
+            reason: 'LLM reviewer requested revision (transitioned to in_progress)',
+            reasoning: [
+              '**Rubric**',
+              '- acceptance-criteria-met: yes - all acceptance criteria are satisfied.',
+              '- no-scope-creep: yes - changes are limited to the reviewer lane.',
+              '- conventions-followed: yes - code follows project conventions.',
+              '- no-regressions: yes - focused tests pass.',
+            ].join('\n'),
+            failingSignals: [],
+            recordedAt: new Date().toISOString(),
+          },
+        ],
+      },
+    ])
+    const { supervisor, starts } = createTrackingSupervisor()
+    const { app } = buildServeApp({ projectPath: tmpDir, supervisor })
+    await applyStorageBoundaryMigration(app)
+    setProvider('anthropic-api', { apiKey: 'sk-ant-test' })
+    updateGlobalConfig({ preferredProvider: 'anthropic-api' })
+
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/author-voice-loop-mvp/start'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ mode: 'one_task', scope: 'work_item' }),
+      }),
+    )
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, any>
+    expect(body.code).not.toBe('all_terminal')
+    expect(body.scope).toEqual({ type: 'work_item', taskId: 'author-voice-loop-mvp' })
+    expect(starts.at(-1)).toMatchObject({
+      preferredTaskId: 'author-voice-loop-mvp',
+      stopAfterOneTask: true,
+    })
+  })
 })
 
 describe('POST /api/project/task/:id/approve-spec', () => {
@@ -1493,6 +1564,49 @@ describe('POST /api/project/task/:id/rerun-stage', () => {
     expect(transcript).toMatch(/fresh spec pass/i)
   })
 
+  it('reopens a falsely done task for a fresh spec pass', async () => {
+    await seedTasks([
+      {
+        id: 'task-1',
+        status: 'done',
+        spec: 'Stale spec',
+        notes: [],
+        hierarchy: { childIds: [], order: 0 },
+      },
+      {
+        id: 'task-1-split-duplicate',
+        title: 'Stale duplicate child',
+        status: 'shelved',
+        hierarchy: { parentId: 'task-1', childIds: [], order: 0 },
+      },
+      {
+        id: 'task-1-active-child',
+        title: 'Real active child',
+        status: 'ready',
+        hierarchy: { parentId: 'task-1', childIds: [], order: 1 },
+      },
+    ])
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-1/rerun-stage'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ stage: 'spec' }),
+      }),
+    )
+    expect(res.status).toBe(200)
+
+    const raw = JSON.parse(await fs.readFile(taskQueuePath(), 'utf8')) as Record<string, any>
+    const parent = raw.tasks.find((task: Record<string, any>) => task.id === 'task-1')
+    const staleChild = raw.tasks.find((task: Record<string, any>) => task.id === 'task-1-split-duplicate')
+    const activeChild = raw.tasks.find((task: Record<string, any>) => task.id === 'task-1-active-child')
+    expect(parent?.status).toBe('exploring')
+    expect(parent?.assignedTo).toBeNull()
+    expect(parent?.notes?.at(-1)?.content).toMatch(/fresh spec pass/i)
+    expect(staleChild?.hierarchy?.parentId).toBeUndefined()
+    expect(activeChild?.hierarchy?.parentId).toBe('task-1')
+  })
+
   it('re-runs review from gate_check without dropping the task out of active work', async () => {
     await seedTask('task-1', {
       status: 'gate_check',
@@ -1554,6 +1668,72 @@ describe('POST /api/project/task/:id/rerun-stage', () => {
   })
 })
 
+describe('POST /api/project/task/:id/update-dependencies', () => {
+  it('records explicit user/delegate dependency corrections', async () => {
+    await seedTasks([
+      {
+        id: 'task-a',
+        title: 'Inventory',
+        status: 'ready',
+      },
+      {
+        id: 'task-b',
+        title: 'Implementation',
+        status: 'ready',
+      },
+      {
+        id: 'task-c',
+        title: 'Verify migration record',
+        status: 'exploring',
+        dependsOn: [],
+        notes: [],
+      },
+    ])
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-c/update-dependencies'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          dependsOn: ['task-a', 'task-b', 'task-a', 'task-c'],
+          reason: 'The verification task should wait for inventory and implementation.',
+        }),
+      }),
+    )
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, any>
+    expect(body).toMatchObject({
+      ok: true,
+      taskId: 'task-c',
+      dependsOn: ['task-a', 'task-b'],
+    })
+    const raw = JSON.parse(await fs.readFile(taskQueuePath(), 'utf8')) as Record<string, any>
+    const task = raw.tasks.find((candidate: Record<string, any>) => candidate.id === 'task-c')
+    expect(task.dependsOn).toEqual(['task-a', 'task-b'])
+    expect(task.notes.at(-1).content).toContain('verification task should wait')
+  })
+
+  it('rejects unknown dependency task ids', async () => {
+    await seedTask('task-c', {
+      status: 'exploring',
+      dependsOn: [],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-c/update-dependencies'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ dependsOn: ['missing-task'] }),
+      }),
+    )
+
+    expect(res.status).toBe(400)
+    const body = (await res.json()) as Record<string, any>
+    expect(body.error).toContain('missing-task')
+  })
+})
+
 describe('POST /api/project/task/:id/create-split-children', () => {
   it('materializes stored split-required recommendations into child tasks', async () => {
     await seedTask('task-1', {
@@ -1603,7 +1783,9 @@ describe('POST /api/project/task/:id/create-split-children', () => {
     expect(raw.tasks).toHaveLength(3)
     expect(raw.tasks[0].status).toBe('ready')
     expect(raw.tasks[0].hierarchy.childIds).toEqual(body.createdTaskIds)
-    expect(raw.tasks[0].taskReadiness.recommendation).toBe('split')
+    expect(raw.tasks[0].taskReadiness.recommendation).toBe('ready')
+    expect(raw.tasks[0].taskReadiness.summary).toContain('continue through the child tasks')
+    expect(raw.tasks[0].sizePlan.action).toBe('proceed_with_warning')
     expect(raw.tasks[0].sizePlan.recommendedChildren.map((child: Record<string, unknown>) => child.createdTaskId)).toEqual(body.createdTaskIds)
     expect(raw.tasks[1]).toMatchObject({
       id: 'task-1-split-implement-the-billing-settings-workflow',
@@ -1665,8 +1847,96 @@ describe('POST /api/project/task/:id/create-split-children', () => {
     const raw = JSON.parse(await fs.readFile(taskQueuePath(), 'utf8')) as Record<string, any>
     expect(raw.tasks[0].status).toBe('ready')
     expect(raw.tasks[0].hierarchy.childIds).toEqual(body.createdTaskIds)
-    expect(raw.tasks[0].taskReadiness.summary).toBe('Split-recommended work is represented by linked child tasks.')
+    expect(raw.tasks[0].sizePlan.action).toBe('proceed_with_warning')
+    expect(raw.tasks[0].taskReadiness.recommendation).toBe('ready')
+    expect(raw.tasks[0].taskReadiness.summary).toContain('continue through the child tasks')
     expect(raw.tasks[2].dependsOn).toEqual(['task-1-split-component-implementation'])
+  })
+
+  it('repairs stale split readiness when child tasks were already materialized', async () => {
+    await seedTasks([
+      {
+        id: 'task-1',
+        title: 'Expand the imported backlog',
+        status: 'ready',
+        hierarchy: {
+          childIds: ['task-1-split-audit', 'task-1-split-build'],
+          order: 0,
+        },
+        sizePlan: {
+          taskId: 'task-1',
+          score: 8,
+          band: 'epic',
+          action: 'proceed_with_warning',
+          factors: [],
+          recommendedChildren: [
+            {
+              title: 'Audit',
+              reason: 'Inventory remaining work.',
+              createdTaskId: 'task-1-split-audit',
+              dependsOn: [],
+            },
+            {
+              title: 'Build',
+              reason: 'Implement first verified unit.',
+              createdTaskId: 'task-1-split-build',
+              dependsOn: [],
+            },
+          ],
+          reviewBudgetHint: 'release_critical',
+          reasons: ['Split has already been materialized into linked child tasks; do not split this parent again unless the child structure changes.'],
+          createdAt: '2026-06-05T12:00:00.000Z',
+          createdBy: 'task-sizing',
+        },
+        taskReadiness: {
+          taskKind: 'implementation',
+          recommendation: 'split',
+          summary: 'Split-required work is represented by linked child tasks.',
+          dimensions: [
+            {
+              id: 'size',
+              status: 'blocked',
+              summary: 'Work is too broad for one clean worker/review pass.',
+              evidence: ['The task is too large for one high-quality agent pass and should become linked child tasks.'],
+            },
+          ],
+          definitionOfDone: { items: [], evidenceRequired: [], updatedAt: '2026-06-05T12:00:00.000Z', createdBy: 'task-sizing' },
+          blockerPlans: [],
+          contextBudget: { estimatedTokens: 0, risk: 'medium', fitsInOneWorkerBrief: false, reasons: [] },
+          assessedAt: '2026-06-05T12:00:00.000Z',
+          assessedBy: 'task-sizing',
+        },
+      },
+      {
+        id: 'task-1-split-audit',
+        title: 'Audit',
+        status: 'done',
+        hierarchy: { parentId: 'task-1', order: 0, childIds: [] },
+      },
+      {
+        id: 'task-1-split-build',
+        title: 'Build',
+        status: 'ready',
+        hierarchy: { parentId: 'task-1', order: 1, childIds: [] },
+      },
+    ])
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-1/create-split-children'), { method: 'POST' }),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json() as Record<string, any>
+    expect(body.createdTaskIds).toEqual(['task-1-split-audit', 'task-1-split-build'])
+    const raw = JSON.parse(await fs.readFile(taskQueuePath(), 'utf8')) as Record<string, any>
+    expect(raw.tasks[0].taskReadiness.recommendation).toBe('ready')
+    expect(raw.tasks[0].taskReadiness.summary).toContain('continue through the child tasks')
+    expect(raw.tasks[0].taskReadiness.dimensions.find((dimension: Record<string, unknown>) => dimension.id === 'size')).toMatchObject({
+      status: 'ok',
+      summary: 'Size is handled by linked child tasks.',
+    })
+    expect(raw.tasks[0].hierarchy.childIds).toEqual(['task-1-split-audit', 'task-1-split-build'])
   })
 
   it('materializes split children with validated delivery-spine metadata', async () => {
@@ -1804,6 +2074,88 @@ describe('POST /api/project/task/:id/resume', () => {
     expect(queue.tasks[0]!.notes.at(-1)?.content).toContain('current failure')
     const transcript = (await readExploringTranscript({ memoryDir, taskId: 'task-1' })).content ?? ''
     expect(transcript).toMatch(/current failure/)
+  })
+
+  it('reopens blocked partial worker work for retry with a concrete instruction', async () => {
+    await seedTask('task-1', {
+      status: 'in_progress',
+      assignedTo: 'worker-agent',
+      notes: [],
+    })
+    const escalation = await raiseEscalation({
+      tasksPath: taskQueuePath(),
+      progressPath: getProjectSystemStatePath(tmpDir, 'PROGRESS.md'),
+      taskId: 'task-1',
+      agentId: 'worker-agent',
+      reason: 'human_judgment_required',
+      summary: 'Worker repeatedly hit its turn budget after saving partial work.',
+    })
+    expect(escalation.success).toBe(true)
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-1/retry-work'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          instruction: 'Continue from the partial diff and create the main reviewer file first.',
+        }),
+      }),
+    )
+    const body = (await res.json()) as Record<string, any>
+    expect(res.status, JSON.stringify(body)).toBe(200)
+    expect(body).toMatchObject({ ok: true, status: 'in_progress' })
+    const queue = JSON.parse(
+      await fs.readFile(taskQueuePath(), 'utf8'),
+    ) as { tasks: Array<Record<string, any>> }
+    expect(queue.tasks[0]).toMatchObject({
+      status: 'in_progress',
+      assignedTo: null,
+    })
+    expect(queue.tasks[0]?.blockReason).toBeUndefined()
+    expect(queue.tasks[0]?.notes.at(-1)?.content).toContain('partial diff')
+    const effective = await readEffectiveTask('task-1')
+    expect(activeEscalations(effective as any)).toEqual([])
+    const transcript = (await readExploringTranscript({ memoryDir, taskId: 'task-1' })).content ?? ''
+    expect(transcript).toContain('create the main reviewer file')
+  })
+
+  it('reopens blocked work when retry encounters stale missing escalation runtime state', async () => {
+    await seedTask('task-1', {
+      status: 'blocked',
+      assignedTo: null,
+      blockReason: 'human_judgment_required: Spec author stopped after hitting its turn limit.',
+      notes: [],
+    })
+    await upsertTaskRuntimeState(tmpDir, 'task-1', {
+      assignedTo: null,
+      openEscalationIds: ['esc-task-1-1'],
+      updatedAt: new Date().toISOString(),
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-1/retry-work'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          instruction: 'Continue from saved planning notes and finish the reviewable proof.',
+        }),
+      }),
+    )
+    const body = (await res.json()) as Record<string, any>
+    expect(res.status, JSON.stringify(body)).toBe(200)
+    expect(body).toMatchObject({ ok: true, status: 'in_progress' })
+    const queue = JSON.parse(
+      await fs.readFile(taskQueuePath(), 'utf8'),
+    ) as { tasks: Array<Record<string, any>> }
+    expect(queue.tasks[0]).toMatchObject({
+      status: 'in_progress',
+      assignedTo: null,
+    })
+    expect(queue.tasks[0]?.blockReason).toBeUndefined()
+    expect(queue.tasks[0]?.notes.at(-1)?.content).toContain('finish the reviewable proof')
+    const effective = await readEffectiveTask('task-1')
+    expect(activeEscalations(effective as any)).toEqual([])
+    expect(effective.runtime?.openEscalationIds).toEqual([])
   })
 
   it('promotes an import draft into exploring when shaping starts', async () => {
@@ -2360,6 +2712,136 @@ describe('POST /api/project/task/:id/approve-brief', () => {
     expect(q.tasks[0].status).toBe('spec_review')
   })
 
+  it('seeds a deterministic spec when an approved exploring brief has no concrete spec yet', async () => {
+    await seedTask('task-1', {
+      status: 'exploring',
+      spec: undefined,
+      acceptanceCriteria: [],
+      openQuestions: [],
+      productBrief: {
+        userJob: 'Verify whether the registered story specs already satisfy the current MVP decomposition.',
+        whyItMattersNow: 'Guildhall needs the owner-approved brief to become runnable work instead of another intake loop.',
+        successMetric: 'The remaining decomposition delta is reviewed, proven, and no longer asks the owner to repeat answered intake.',
+        nonGoals: ['Do not broaden into unrelated roadmap planning.'],
+        antiPatterns: [],
+        authoredBy: 'agent:spec-agent',
+        authoredAt: new Date().toISOString(),
+      },
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-1/approve-brief'), { method: 'POST' }),
+    )
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, any>
+    expect(body).toMatchObject({ ok: true, status: 'spec_review' })
+
+    const raw = await fs.readFile(taskQueuePath(), 'utf8')
+    const q = JSON.parse(raw)
+    expect(q.tasks[0].status).toBe('spec_review')
+    expect(q.tasks[0].productBrief.approvedBy).toBe('human')
+    expect(q.tasks[0].spec).toContain('## Completion Boundary')
+    expect(q.tasks[0].spec).toContain('Approved user job')
+    expect(q.tasks[0].acceptanceCriteria).toHaveLength(3)
+    expect(q.tasks[0].notes.at(-1)?.content).toContain('deterministic spec seed from the approved brief')
+  })
+
+  it('repairs stale unassigned in-progress approved brief into spec_review', async () => {
+    await seedTask('task-1', {
+      status: 'in_progress',
+      assignedTo: null,
+      spec: undefined,
+      acceptanceCriteria: [],
+      openQuestions: [],
+      productBrief: {
+        userJob: 'Verify whether the backlog decomposition is already represented by current project artifacts.',
+        whyItMattersNow: 'The approved brief should become reviewable work without making the owner restart intake.',
+        successMetric: 'The remaining decomposition delta is captured as reviewable acceptance criteria.',
+        nonGoals: ['Do not broaden into unrelated roadmap planning.'],
+        antiPatterns: [],
+        approvedBy: 'human',
+        approvedAt: new Date().toISOString(),
+        authoredBy: 'agent:spec-agent',
+        authoredAt: new Date().toISOString(),
+      },
+    })
+    await upsertTaskRuntimeState(tmpDir, 'task-1', {
+      assignedTo: null,
+      openEscalationIds: ['esc-stale-runtime-only'],
+      updatedAt: new Date().toISOString(),
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-1/approve-brief'), { method: 'POST' }),
+    )
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, any>
+    expect(body).toMatchObject({ ok: true, status: 'spec_review' })
+
+    const raw = await fs.readFile(taskQueuePath(), 'utf8')
+    const q = JSON.parse(raw)
+    expect(q.tasks[0].status).toBe('spec_review')
+    expect(q.tasks[0].assignedTo).toBeUndefined()
+    expect(q.tasks[0].spec).toContain('Approved user job')
+    expect(q.tasks[0].acceptanceCriteria).toHaveLength(3)
+    const effective = await readEffectiveTask('task-1')
+    expect(effective.runtime?.openEscalationIds).toEqual([])
+  })
+
+  it('uses effective task state when raw approved brief state is stale', async () => {
+    await seedRawTaskDefinition('task-1', {
+      status: 'in_progress',
+      assignedTo: 'spec-agent',
+      spec: undefined,
+      acceptanceCriteria: [],
+      openQuestions: [],
+      escalations: [
+        {
+          id: 'esc-task-1-1',
+          taskId: 'task-1',
+          agentId: 'spec-agent',
+          reason: 'human_judgment_required',
+          summary: 'Spec author stopped after hitting its turn limit.',
+          details: 'Exceeded maximum turn limit (8)',
+          raisedAt: '2026-05-31T00:57:20.368Z',
+        },
+      ],
+      productBrief: {
+        userJob: 'Verify whether the backlog decomposition is already represented by current project artifacts.',
+        whyItMattersNow: 'The approved brief should become reviewable work without making the owner restart intake.',
+        successMetric: 'The remaining decomposition delta is captured as reviewable acceptance criteria.',
+        nonGoals: ['Do not broaden into unrelated roadmap planning.'],
+        antiPatterns: [],
+        approvedBy: 'human',
+        approvedAt: new Date().toISOString(),
+        authoredBy: 'agent:spec-agent',
+        authoredAt: new Date().toISOString(),
+      },
+    })
+    await upsertTaskRuntimeState(tmpDir, 'task-1', {
+      assignedTo: null,
+      openEscalationIds: ['esc-task-1-1'],
+      updatedAt: new Date().toISOString(),
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-1/approve-brief'), { method: 'POST' }),
+    )
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, any>
+    expect(body).toMatchObject({ ok: true, status: 'spec_review' })
+
+    const raw = await fs.readFile(taskQueuePath(), 'utf8')
+    const q = JSON.parse(raw)
+    expect(q.tasks[0].status).toBe('spec_review')
+    expect(q.tasks[0].spec).toContain('Approved user job')
+    expect(q.tasks[0].acceptanceCriteria).toHaveLength(3)
+    expect(q.tasks[0].escalations[0].resolvedBy).toBe('system')
+    expect(activeEscalations(q.tasks[0] as any)).toEqual([])
+    const effective = await readEffectiveTask('task-1')
+    expect(effective.runtime?.openEscalationIds).toEqual([])
+  })
+
   it('rejects approve-brief when no brief is drafted', async () => {
     await seedTask('task-1', { status: 'exploring' })
     const { app } = buildServeApp({ projectPath: tmpDir })
@@ -2687,6 +3169,90 @@ describe('GET /api/project/activity', () => {
       lastActivityTone: 'danger',
     })
     expect(body.inFlight[0].lastActivityAt).toBe(now)
+  })
+
+  it('repairs phantom worker claims when the project run is stopped', async () => {
+    const now = new Date().toISOString()
+    await writeRawTaskQueue({
+      version: 1,
+      lastUpdated: now,
+      tasks: [
+        {
+          id: 't1',
+          title: 'Claimed then stopped',
+          description: '',
+          domain: 'd',
+          projectPath: tmpDir,
+          status: 'in_progress',
+          assignedTo: 'worker-agent',
+          priority: 'normal',
+          revisionCount: 0,
+          remediationAttempts: 0,
+          origination: 'human',
+          createdAt: now,
+          updatedAt: now,
+          spec: [
+            '## Summary',
+            'Do the thing.',
+            '',
+            '## Acceptance Criteria',
+            '1. Works.',
+            '',
+            '## Completion Boundary',
+            '- Product outcome: Works.',
+            '- What Guildhall can complete in code: Update local files.',
+            '- External dependencies: None.',
+            '- Owner-only setup: None.',
+            '- Verification environment: Local checkout.',
+            '- What counts as done: Verified.',
+            '- What must be split or blocked: None.',
+          ].join('\n'),
+          acceptanceCriteria: [
+            { id: 'ac-1', description: 'Works.', verifiedBy: 'review', met: false },
+          ],
+          escalations: [
+            {
+              id: 'esc-t1-1',
+              taskId: 't1',
+              agentId: 'spec-agent',
+              reason: 'human_judgment_required',
+              summary: 'Spec author stopped after hitting its turn limit.',
+              raisedAt: '2026-05-31T00:57:20.368Z',
+            },
+          ],
+          notes: [
+            {
+              agentId: 'task-claimer',
+              role: 'orchestrator',
+              content: 'Claimed ready task for worker-agent.',
+              timestamp: now,
+            },
+          ],
+        },
+      ],
+    })
+    await upsertTaskRuntimeState(tmpDir, 't1', {
+      assignedTo: 'worker-agent',
+      openEscalationIds: ['esc-t1-1'],
+      updatedAt: now,
+    })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(projectUrl('/api/project/activity')))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, any>
+    expect(body.counts.ready).toBe(1)
+    expect(body.counts.in_progress).toBeUndefined()
+    expect(body.inFlight).toEqual([])
+
+    const queue = await readTaskQueue()
+    expect(queue.tasks[0]).toMatchObject({
+      status: 'ready',
+      assignedTo: null,
+    })
+    expect(queue.tasks[0].escalations[0].resolvedBy).toBe('system')
+    const effective = await readEffectiveTask('t1')
+    expect(effective.runtime?.openEscalationIds).toEqual([])
   })
 
   it('returns empty summary when no tasks file exists yet', async () => {

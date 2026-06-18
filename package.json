@@ -39,6 +39,7 @@
     "lint:contracts": "node scripts/contract-touch-detector.mjs",
     "lint:data-layer": "node scripts/data-layer-guardrails.mjs",
     "lint:reductions": "node scripts/reduction-guardrails.mjs",
+    "audit:project-spine": "node scripts/project-orientation-spine-audit.mjs",
     "clean": "rm -rf dist",
     "release": "node scripts/publish.mjs 0.10.0",
     "release:dry": "node scripts/publish.mjs 0.10.0 --dry-run --allow-branch",

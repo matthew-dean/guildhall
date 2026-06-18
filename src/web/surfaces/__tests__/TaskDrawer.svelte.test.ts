@@ -309,7 +309,7 @@ describe('TaskDrawer', () => {
     expect(container.querySelector('.gh-drawer-head')?.textContent).toContain('1 delivery step blocked')
   })
 
-  it('makes split-required sizing visible as recommendations that are not child tasks yet', async () => {
+  it('makes decomposition sizing visible as work to create, not owner recommendations', async () => {
     const payload = drawerPayload({
       threadTurns: [],
       task: {
@@ -360,11 +360,12 @@ describe('TaskDrawer', () => {
     })
 
     await screen.findByText('Task links')
-    expect(screen.getAllByText('Split this task').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getAllByText('Split into smaller work').length).toBeGreaterThanOrEqual(1)
     expect(screen.getByText(/this stays as containing work and the nested work below is created/i)).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Split this task' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Split into smaller work' })).toBeInTheDocument()
     expect(screen.getByText('Work to create')).toBeInTheDocument()
     expect(document.body.textContent).not.toContain('recommendations, not created child tasks yet')
+    expect(document.body.textContent).not.toMatch(/split recommended|split required/i)
     expect(document.body.textContent).not.toMatch(/parent task/i)
     expect(screen.getByText('Goal envelope')).toBeInTheDocument()
     expect(screen.getByText('fll overhead policy')).toBeInTheDocument()
@@ -376,7 +377,7 @@ describe('TaskDrawer', () => {
     )
   })
 
-  it('offers a split action for recommended child work scoped to the current task', async () => {
+  it('offers a split action for decomposition child work scoped to the current task', async () => {
     const user = userEvent.setup()
     const payload = drawerPayload({
       threadTurns: [],
@@ -436,9 +437,9 @@ describe('TaskDrawer', () => {
     expect(screen.getByText('ContextMenu')).toBeInTheDocument()
     expect(screen.getByText('ContextMenu component implementation')).toBeInTheDocument()
     expect(screen.getByText('ContextMenu Storybook proof')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Split this task' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Split into smaller work' })).toBeInTheDocument()
 
-    await user.click(screen.getByRole('button', { name: 'Split this task' }))
+    await user.click(screen.getByRole('button', { name: 'Split into smaller work' }))
 
     expect(fetchMock.mock.calls.some(([input]) =>
       String(input).includes('/api/project/task/context-menu/create-split-children?projectId=looma-knit'),
@@ -490,8 +491,8 @@ describe('TaskDrawer', () => {
       onClose: vi.fn(),
     })
 
-    await screen.findByRole('button', { name: 'Split this task' })
-    await user.click(screen.getByRole('button', { name: 'Split this task' }))
+    await screen.findByRole('button', { name: 'Split into smaller work' })
+    await user.click(screen.getByRole('button', { name: 'Split into smaller work' }))
 
     expect(fetchMock.mock.calls.some(([input]) =>
       String(input).includes('/api/project/task/task-link-editor/create-split-children?projectId=looma-knit'),
@@ -1237,7 +1238,8 @@ describe('TaskDrawer', () => {
     await userEvent.click(await screen.findByRole('tab', { name: 'Journey' }))
 
     expect(screen.getByText('Large task')).toBeInTheDocument()
-    expect(screen.getByText('Split recommended')).toBeInTheDocument()
+    expect(screen.getByText('Decompose before execution')).toBeInTheDocument()
+    expect(screen.queryByText('Split recommended')).not.toBeInTheDocument()
     expect(screen.getByText('Implement toolbar controls')).toBeInTheDocument()
     expect(screen.getByText('Worker implemented toolbar controls, then UX and typecheck reviewed it.')).toBeInTheDocument()
     expect(screen.getByText('Transcript compacted')).toBeInTheDocument()

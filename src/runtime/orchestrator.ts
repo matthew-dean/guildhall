@@ -93,6 +93,7 @@ import { buildDefaultCompactor } from './compactor-builder.js'
 import { evaluateProposal, type PromotionAction } from './proposal-promotion.js'
 import { WORKSPACE_IMPORT_TASK_ID } from './workspace-importer.js'
 import { taskHasUnansweredVisibleQuestion } from './question-visibility.js'
+import { isInternalAgentNarration } from './user-facing-text.js'
 import { buildPromptCacheKey } from './prompt-cache.js'
 import { resolveModelApiPolicy, type ModelApiRole } from './model-api-policy.js'
 import { repairStaleBlockersInQueue } from './stale-blocker-repair.js'
@@ -417,6 +418,33 @@ function isIgnorableCheckpointPath(file: string): boolean {
   )
 }
 
+function isTaskStateCheckpointPath(file: string): boolean {
+  const normalized = file.replace(/\\/g, '/').replace(/^\.\//, '')
+  return (
+    normalized === 'TASKS.json' ||
+    normalized.endsWith('/TASKS.json') ||
+    normalized === 'PROGRESS.md' ||
+    normalized.endsWith('/PROGRESS.md') ||
+    normalized.includes('/project-state/') ||
+    normalized.includes('/project-state-evacuation/')
+  )
+}
+
+function isLowSignalCheckpointMutationPath(file: string): boolean {
+  const normalized = file.replace(/\\/g, '/').replace(/^\.\//, '')
+  return (
+    isTaskStateCheckpointPath(normalized) ||
+    normalized === 'package-lock.json' ||
+    normalized.endsWith('/package-lock.json') ||
+    normalized === 'npm-shrinkwrap.json' ||
+    normalized.endsWith('/npm-shrinkwrap.json') ||
+    normalized === 'pnpm-lock.yaml' ||
+    normalized.endsWith('/pnpm-lock.yaml') ||
+    normalized === 'yarn.lock' ||
+    normalized.endsWith('/yarn.lock')
+  )
+}
+
 function noteLooksLikeStructuredSelfCritique(task: Task): boolean {
   return (task.notes ?? []).some((note) =>
     note.agentId !== 'human' &&
@@ -424,6 +452,21 @@ function noteLooksLikeStructuredSelfCritique(task: Task): boolean {
     /\bself-critique\b/i.test(note.content) &&
     /\bmin(?:imum|imal|i)-scope check\b/i.test(note.content),
   )
+}
+
+function noteLooksLikeReviewProofPacket(task: Task): boolean {
+  return (task.notes ?? []).some((note) => {
+    if (note.agentId === 'human' || !isWorkerSelfCritiqueNote(note)) return false
+    const content = note.content ?? ''
+    return (
+      /\bself-critique\b/i.test(content) &&
+      /\bmin(?:imum|imal|i)-scope check\b/i.test(content) &&
+      /(?:^|\n)\s*(?:#{2,3}\s*)?(?:\*\*)?\s*review proof packet\s*:?\s*(?:\*\*)?/i.test(content) &&
+      /\bverification(?: command| commands| result| results)?\b/i.test(content) &&
+      /\b(pass|passed|green|succeed|succeeded)\b/i.test(content) &&
+      /\b(?:changed files|files changed|diff scope|scope of changes)\b/i.test(content)
+    )
+  })
 }
 
 function isRecoverableReviewHandoffToolLoop(task: Task): boolean {
@@ -442,6 +485,7 @@ function isRecoverableReviewHandoffToolLoop(task: Task): boolean {
         /transition(?:ing)? .* to review|tool validation bug prevents transitioning .* to review/i.test(
           `${summary}\n${details}`,
         ) ||
+        /update-task tool rejects the transition despite self-critique/i.test(`${summary}\n${details}`) ||
         (
           /system validator rejects passing verification/i.test(summary) &&
           /durable proof that the task passed its required verification commands/i.test(details)
@@ -463,6 +507,7 @@ function isRecoverableReviewHandoffToolLoop(task: Task): boolean {
       /Stuck in tool loop transitioning .* to review status/i.test(blockReason) ||
       /Tool validation bug prevents transitioning .* to review status/i.test(blockReason) ||
       /Cannot transition to review .* system validator rejects passing verification/i.test(blockReason) ||
+      /Cannot transition to review .* update-task tool rejects the transition despite self-critique/i.test(blockReason) ||
       /Blocked from transitioning to review .* system validator bug persists/i.test(blockReason) ||
       /Task blocked from transitioning to review despite passing all verification/i.test(blockReason) ||
       hasValidatorBugEscalation
@@ -489,10 +534,12 @@ function resolveRecoverableReviewHandoffEscalations(task: Task, resolvedAt: stri
         /Stuck in tool loop transitioning .* to review status/i.test(summary) ||
         /Tool validation bug prevents transitioning .* to review status/i.test(summary) ||
         /Cannot transition to review .* system validator rejects passing verification/i.test(summary) ||
+        /Cannot transition to review .* update-task tool rejects the transition despite self-critique/i.test(summary) ||
         /Blocked from transitioning to review .* system validator bug persists/i.test(summary) ||
         /Task blocked from transitioning to review despite passing all verification/i.test(summary) ||
         /persist a structured self-critique note via update-task first/i.test(details) ||
         /update-task tool kept rejecting status=review/i.test(details) ||
+        /note parameter does not append to the notes array/i.test(details) ||
         /durable proof that the task passed its required verification commands/i.test(details)
       )
     ) {
@@ -855,6 +902,26 @@ function reviewVerdictLooksInfrastructureOnly(verdict: Pick<ReviewVerdict, 'verd
   return /HTTP 429|Too Many Requests|rate limit|provider timeout|connection refused|Exceeded maximum turn limit \(\d+\)|temporarily unavailable|service unavailable|timed out after \d+ms|raw output retained/i.test(text)
 }
 
+function reviewReasoningHasAllYesRubric(reasoning: string | undefined): boolean {
+  const text = reasoning?.trim()
+  if (!text) return false
+  const required = [
+    'acceptance-criteria-met',
+    'no-scope-creep',
+    'conventions-followed',
+    'no-regressions',
+  ]
+  return required.every((key) => new RegExp(`${key}\\s*:\\s*yes\\b`, 'i').test(text))
+}
+
+function hasPriorAllClearLlmReview(task: Task): boolean {
+  return (task.reviewVerdicts ?? []).some((verdict) =>
+    verdict.reviewerPath === 'llm' &&
+    verdict.failingSignals.length === 0 &&
+    reviewReasoningHasAllYesRubric(verdict.reasoning),
+  )
+}
+
 function latestReviewVerdictRound(task: Task): ReviewVerdict[] {
   const verdicts = task.reviewVerdicts ?? []
   if (verdicts.length === 0) return []
@@ -1066,6 +1133,46 @@ function bestExploringAssistantFallbackTextForTurn(
   return bestExploringAssistantFallbackText(messages)
 }
 
+function combinedExploringAssistantFallbackTextForTurn(
+  messages: ReadonlyArray<{ role?: string; content?: unknown }>,
+  priorMessageCount: number,
+): string {
+  const turnMessages = priorMessageCount > 0 ? messages.slice(priorMessageCount) : messages
+  const texts: string[] = []
+  let sawSyntheticRecovery = false
+  for (const message of turnMessages) {
+    if (isSyntheticRecoveryUserMessage(message)) {
+      sawSyntheticRecovery = true
+      continue
+    }
+    if (message.role !== 'assistant') continue
+    const text = messageContentText(message.content).trim()
+    if (!text) continue
+    if (sawSyntheticRecovery && isInternalAgentNarration(text)) continue
+    texts.push(text)
+  }
+  return texts.join('\n\n---\n\n')
+}
+
+function chooseExploringFallbackTextForTurn(
+  messages: ReadonlyArray<{ role?: string; content?: unknown }>,
+  priorMessageCount: number,
+): string {
+  const best = bestExploringAssistantFallbackTextForTurn(messages, priorMessageCount)
+  const combined = combinedExploringAssistantFallbackTextForTurn(messages, priorMessageCount)
+  if (
+    combined.trim() &&
+    inferFallbackQuestionsFromPlaintext(best).length === 0 &&
+    (
+      inferFallbackQuestionsFromPlaintext(combined).length > 0 ||
+      looksLikePlaintextUserQuestion(combined)
+    )
+  ) {
+    return combined
+  }
+  return best || combined
+}
+
 // ---------------------------------------------------------------------------
 // Forge Orchestrator
 //
@@ -1162,6 +1269,7 @@ export interface OrchestratorRunOptions {
   maxTicks?: number
   tickDelayMs?: number
   stopAfterOneTask?: boolean
+  modelAssignmentOverride?: ModelAssignmentConfig
   preferredTaskId?: string
 }
 
@@ -1294,11 +1402,37 @@ function extractEmbeddedFallbackQuestion(text: string): FallbackQuestionDraft | 
     /\b(?:the\s+)?(?:key|main|top|only|focused)?\s*question(?:\s+i\s+need\s+to\s+ask|\s+we\s+need\s+to\s+answer|\s+to\s+answer)?(?:\s+before\s+[^:\n]+)?\s*(?:is|:)\s*([\s\S]*?\?)/i,
   )
   if (!match || match.index === undefined) return null
-  const rawQuestion = match[1]?.trim() ?? ''
+  const rawQuestion = (match[1]?.trim() ?? '').replace(/^[:\s]+/, '')
   if (!rawQuestion) return null
   const context = normalizeFallbackWhitespace(trimmed.slice(0, match.index))
     .replace(/^i have enough context\.?\s*/i, '')
   const subject = inferFallbackSubjectFromContext(context, rawQuestion)
+  const choices: string[] = []
+  for (const rawLine of trimmed.slice(match.index + match[0].length).split('\n')) {
+    const line = rawLine.trim()
+    if (!line) {
+      if (choices.length > 0) break
+      continue
+    }
+    const option = parseFallbackOptionLine(line)
+    if (option) {
+      choices.push(option)
+      continue
+    }
+    if (choices.length > 0) break
+  }
+  if (choices.length >= 2 && choices.length <= 6) {
+    return {
+      kind: 'choice',
+      prompt: rewriteFallbackQuestionWithSubject(rawQuestion, subject),
+      ...(subject ? { subject } : {}),
+      ...(context ? { description: context } : {}),
+      choices,
+      selectionMode: /pick all|all that apply|select all|choose all/i.test(rawQuestion)
+        ? 'multiple'
+        : 'single',
+    }
+  }
   return {
     kind: 'text',
     prompt: rewriteFallbackQuestionWithSubject(rawQuestion, subject),
@@ -1310,10 +1444,10 @@ function extractEmbeddedFallbackQuestion(text: string): FallbackQuestionDraft | 
 function parseFallbackOptionLine(line: string): string | null {
   const trimmed = line.trim()
   if (/^-\s+/.test(trimmed)) {
-    return trimmed.replace(/^-\s+/, '').replace(/^[A-Z][.)]\s*/, '').trim()
+    return trimmed.replace(/^-\s+/, '').replace(/^\(?[A-Z]\)?[.)]?\s*/, '').trim()
   }
-  if (/^[A-Z][.)]\s+/.test(trimmed)) {
-    return trimmed.replace(/^[A-Z][.)]\s+/, '').trim()
+  if (/^\(?[A-Z]\)?[.)]?\s+/.test(trimmed)) {
+    return trimmed.replace(/^\(?[A-Z]\)?[.)]?\s+/, '').trim()
   }
   return null
 }
@@ -1960,7 +2094,7 @@ function checkpointCompanionFilesFromMetadata(
   return uniqueNonEmptyStrings([...readFilePaths, ...likelyTargets])
     .filter((candidate) => {
       const resolved = path.resolve(candidate)
-      return !touched.has(resolved)
+      return !touched.has(resolved) && !isTaskStateCheckpointPath(candidate)
     })
     .slice(0, 8)
 }
@@ -1970,7 +2104,18 @@ function checkpointSafeNextMutationSurface(
   companionFiles: readonly string[],
   verification: CheckpointResumeContext['verification'] = [],
 ): string[] {
-  const primary = uniqueNonEmptyStrings(filesTouched.length > 0 ? filesTouched : companionFiles)
+  const preferredTouched = filesTouched.filter((file) => !isLowSignalCheckpointMutationPath(file))
+  const preferredCompanions = companionFiles.filter((file) => !isTaskStateCheckpointPath(file))
+  const fallbackTouched = filesTouched.filter((file) => !isTaskStateCheckpointPath(file))
+  const primary = uniqueNonEmptyStrings(
+    preferredTouched.length > 0
+      ? preferredTouched
+      : preferredCompanions.length > 0
+        ? preferredCompanions
+        : fallbackTouched.length > 0
+          ? fallbackTouched
+          : companionFiles,
+  )
   const hasFailedVerification = checkpointHasRecordedVerificationFailure(verification)
   const rank = (candidate: string): number => {
     const normalized = candidate.replace(/\\/g, '/')
@@ -2055,6 +2200,15 @@ function renderImmediateResumeInstructions(
 ): string {
   if (agentName !== 'worker-agent' || task.status !== 'in_progress') return ''
   const normalizedCheckpoint = checkpointNextAction.trim()
+  if (noteLooksLikeStructuredSelfCritique(task) && noteLooksLikeReviewProofPacket(task)) {
+    return [
+      '### Immediate Resume Instructions',
+      'You are resuming an in-progress task that already has durable verification proof and a structured self-critique.',
+      normalizedCheckpoint ? `The latest checkpoint says: ${normalizedCheckpoint}` : '',
+      'Do not reopen files first. Your first action should be the exact handoff: transition the task to review with update-task, or raise-escalation if that handoff is no longer valid.',
+      'Only return to file reads or broader verification if the handoff truly cannot be completed and you have explained why.',
+    ].filter(Boolean).join('\n')
+  }
   if (looksLikeReviewHandoffNextAction(normalizedCheckpoint)) {
     const hasSelfCritique = noteLooksLikeStructuredSelfCritique(task)
     return [
@@ -2414,6 +2568,8 @@ export class Orchestrator {
     if (pendingPrRepair.changed) await this.writeQueue(queueBefore)
     const runAutomation = await this.applyRunAutomationPolicy(queueBefore, opts.preferredTaskId)
     if (runAutomation.changed) queueBefore = await this.readQueue()
+    const satisfiedClosures = await this.completeSatisfiedTaskClosures(queueBefore)
+    if (satisfiedClosures.changed) queueBefore = await this.readQueue()
     const capacity =
       opts.dispatchLimit === undefined
         ? resolvedCapacity
@@ -2503,7 +2659,7 @@ export class Orchestrator {
   ): Promise<{ completed: boolean; childIds: string[] }> {
     const queue = await this.readQueue()
     const root = queue.tasks.find(task => task.id === preferredTaskId)
-    if (!root || isSelectedTaskClosureDone(root)) return { completed: false, childIds: [] }
+    if (!root) return { completed: false, childIds: [] }
     const subtreeIds = workSubtreeIds(queue.tasks, preferredTaskId)
     const childIds = subtreeIds.filter(id => id !== preferredTaskId)
     if (childIds.length === 0) return { completed: false, childIds: [] }
@@ -2513,6 +2669,7 @@ export class Orchestrator {
       return child ? isSelectedTaskClosureDone(child) : false
     })
     if (!childrenComplete) return { completed: false, childIds }
+    if (isSelectedTaskClosureDone(root)) return { completed: true, childIds }
 
     const now = this.now()
     root.status = 'done'
@@ -2539,6 +2696,56 @@ export class Orchestrator {
       task: root,
     })
     return { completed: true, childIds }
+  }
+
+  private async completeSatisfiedTaskClosures(
+    queue: TaskQueue,
+  ): Promise<{ changed: boolean; closedIds: string[] }> {
+    const tasksById = new Map(queue.tasks.map(task => [task.id, task]))
+    const now = this.now()
+    const closed: Array<{ root: Task; childIds: string[]; beforeStatus: TaskStatus }> = []
+
+    for (const root of queue.tasks) {
+      if (isSelectedTaskClosureDone(root)) continue
+      const childIds = workSubtreeIds(queue.tasks, root.id).filter(id => id !== root.id)
+      if (childIds.length === 0) continue
+      const childrenComplete = childIds.every(id => {
+        const child = tasksById.get(id)
+        return child ? isSelectedTaskClosureDone(child) : false
+      })
+      if (!childrenComplete) continue
+
+      const beforeStatus = root.status
+      root.status = 'done'
+      delete root.assignedTo
+      root.updatedAt = now
+      root.notes.push({
+        agentId: 'coordinator',
+        role: 'system',
+        content:
+          `Closed containing work after linked child tasks completed: ${childIds.join(', ')}.`,
+        timestamp: now,
+      })
+      closed.push({ root, childIds, beforeStatus })
+    }
+
+    if (closed.length === 0) return { changed: false, closedIds: [] }
+    queue.lastUpdated = now
+    await this.writeQueue(queue)
+    for (const { root, beforeStatus } of closed) {
+      await this.logTickProgress({
+        task: root,
+        agent: 'coordinator',
+        beforeStatus,
+        afterStatus: 'done',
+        transitioned: true,
+      })
+      await recordTaskReflection({
+        memoryDir: this.opts.config.memoryDir,
+        task: root,
+      })
+    }
+    return { changed: true, closedIds: closed.map(({ root }) => root.id) }
   }
 
   private async selectedTaskClosureBlockers(preferredTaskId: string): Promise<string[]> {
@@ -3447,7 +3654,7 @@ export class Orchestrator {
       generatedText = result.text
       if (agent.name === 'spec-agent' && beforeStatus === 'exploring') {
         const fallbackText = Array.isArray(result.messages)
-          ? bestExploringAssistantFallbackTextForTurn(
+          ? chooseExploringFallbackTextForTurn(
               result.messages,
               priorMessageCount,
             )
@@ -3608,7 +3815,7 @@ export class Orchestrator {
       if (/Exceeded maximum turn limit/.test(message)) {
         if (agent.name === 'spec-agent' && beforeStatus === 'exploring') {
           const fallbackText = Array.isArray(agent.messages)
-            ? bestExploringAssistantFallbackTextForTurn(
+            ? chooseExploringFallbackTextForTurn(
                 agent.messages,
                 priorMessageCount,
               )
@@ -3627,6 +3834,8 @@ export class Orchestrator {
           taskId: task.id,
           agentName: agent.name,
           beforeStatus,
+          beforeSpec: task.spec,
+          beforeProductBriefJson: JSON.stringify(task.productBrief ?? null),
           interruption: 'turn_limit',
         })
         if (preserved) {
@@ -3687,6 +3896,8 @@ export class Orchestrator {
           taskId: task.id,
           agentName: agent.name,
           beforeStatus,
+          beforeSpec: task.spec,
+          beforeProductBriefJson: JSON.stringify(task.productBrief ?? null),
           interruption: 'timeout',
         })
         if (preserved) {
@@ -3950,6 +4161,32 @@ export class Orchestrator {
           taskAfter.status = 'spec_review'
           taskAfter.updatedAt = this.now()
           queueAfter.lastUpdated = this.now()
+          await this.writeQueue(queueAfter)
+          afterStatus = taskAfter.status
+          transitioned = true
+        }
+
+        if (
+          agent.name === 'spec-agent' &&
+          beforeStatus === 'exploring' &&
+          taskAfter.status === 'exploring' &&
+          typeof taskAfter.spec === 'string' &&
+          taskAfter.spec.trim().length > 0 &&
+          taskAfter.spec.trim() !== (task.spec ?? '').trim() &&
+          !taskHasUnansweredVisibleQuestion(taskAfter) &&
+          !this.waitingOwnerInputTaskIds(queueAfter).has(taskAfter.id)
+        ) {
+          taskAfter.status = 'spec_review'
+          taskAfter.assignedTo = null
+          taskAfter.updatedAt = this.now()
+          taskAfter.notes.push({
+            agentId: 'coordinator-recovery',
+            role: 'system',
+            content:
+              'Guildhall promoted a saved spec draft to spec_review after the spec lane wrote durable task state without a status transition.',
+            timestamp: taskAfter.updatedAt,
+          })
+          queueAfter.lastUpdated = taskAfter.updatedAt
           await this.writeQueue(queueAfter)
           afterStatus = taskAfter.status
           transitioned = true
@@ -4763,6 +5000,50 @@ export class Orchestrator {
 
         const currentCycleRevisionCount = currentRevisionCycleCount(taskAfter)
         if (currentCycleRevisionCount > this.opts.config.maxRevisions) {
+          if (hasPriorAllClearLlmReview(taskAfter)) {
+            transitionTaskStatus({
+              task: taskAfter,
+              event: 'request_review',
+              actor: 'reviewer-llm-max-revision-recovery',
+              evidenceRefs: ['review:prior-all-clear'],
+              now: this.now(),
+            })
+            transitionTaskStatus({
+              task: taskAfter,
+              event: 'start_gate_check',
+              actor: 'reviewer-llm-max-revision-recovery',
+              evidenceRefs: ['review:prior-all-clear'],
+              now: this.now(),
+            })
+            taskAfter.assignedTo = 'gate-checker-agent'
+            taskAfter.updatedAt = this.now()
+            queueAfter.lastUpdated = taskAfter.updatedAt
+            taskAfter.notes.push({
+              agentId: 'reviewer-llm-max-revision-recovery',
+              role: 'reviewer',
+              content:
+                'Skipped max-revision block because an earlier LLM review for this revision cycle recorded all rubric checks as yes with no failing signals. Advancing to gate check so hard verification decides.',
+              timestamp: taskAfter.updatedAt,
+            })
+            await this.writeQueue(queueAfter)
+            await this.logTickProgress({
+              task: taskAfter,
+              agent: 'reviewer-llm-max-revision-recovery',
+              beforeStatus,
+              afterStatus: 'gate_check',
+              transitioned: true,
+              note: 'prior all-clear review recovered max-revision loop',
+            })
+            return {
+              kind: 'processed',
+              taskId: task.id,
+              agent: 'reviewer-llm-max-revision-recovery',
+              beforeStatus,
+              afterStatus: 'gate_check',
+              transitioned: true,
+              revisionCount: currentCycleRevisionCount,
+            } as TickOutcome
+          }
           await this.writeQueue(queueAfter)
 
           await raiseEscalation({
@@ -7648,6 +7929,40 @@ export class Orchestrator {
         queue.lastUpdated = now
         changed = true
         continue
+      } else if (/max_revisions_exceeded:/i.test(blockReason) && hasPriorAllClearLlmReview(task)) {
+        resolveRecoverableMaxRevisionEscalations(
+          task,
+          now,
+          'Superseded after an earlier LLM review recorded all rubric checks as yes with no failing signals.',
+        )
+        if (activeEscalations(task).length > 0) continue
+        transitionTaskStatus({
+          task,
+          event: 'recover_to_review',
+          actor: 'orchestrator-recovery',
+          evidenceRefs: ['task:recovery:prior-all-clear-max-revisions'],
+          now,
+        })
+        transitionTaskStatus({
+          task,
+          event: 'start_gate_check',
+          actor: 'orchestrator-recovery',
+          evidenceRefs: ['task:recovery:prior-all-clear-max-revisions'],
+          now,
+        })
+        task.assignedTo = 'gate-checker-agent'
+        task.blockReason = undefined
+        task.notes.push({
+          agentId: 'coordinator',
+          role: 'recovery',
+          content:
+            'User restarted the project after Guildhall hit the review revision cap despite an earlier all-clear LLM review. Advanced to gate check so hard verification decides.',
+          timestamp: now,
+        })
+        task.updatedAt = now
+        queue.lastUpdated = now
+        changed = true
+        continue
       } else if (isRecoverableActionableMaxRevisionBlocker(task)) {
         resolveRecoverableMaxRevisionEscalations(
           task,
@@ -8405,6 +8720,8 @@ export class Orchestrator {
     taskId: string
     agentName: string
     beforeStatus: TaskStatus
+    beforeSpec?: string
+    beforeProductBriefJson?: string
     interruption?: 'turn_limit' | 'timeout'
   }): Promise<TickOutcome | null> {
     const queue = await this.readQueue()
@@ -8412,10 +8729,13 @@ export class Orchestrator {
     if (!task) return null
 
     const hasSpec = typeof task.spec === 'string' && task.spec.trim().length > 0
+    const specChanged = (task.spec ?? '').trim() !== (input.beforeSpec ?? '').trim()
     const hasBrief =
       !!task.productBrief &&
       typeof task.productBrief.userJob === 'string' &&
       task.productBrief.userJob.trim().length > 0
+    const briefChanged =
+      JSON.stringify(task.productBrief ?? null) !== (input.beforeProductBriefJson ?? JSON.stringify(null))
     const hasOpenQuestion = taskHasUnansweredVisibleQuestion(task)
     const hasWaitingOwnerInput = this.waitingOwnerInputTaskIds(queue).has(task.id)
     const activeWorktreePath = input.beforeStatus === 'in_progress'
@@ -8428,6 +8748,7 @@ export class Orchestrator {
       input.beforeStatus === 'exploring' &&
       task.status === 'exploring' &&
       hasSpec &&
+      specChanged &&
       !hasOpenQuestion &&
       !hasWaitingOwnerInput
     ) {
@@ -8439,7 +8760,12 @@ export class Orchestrator {
 
     const transitioned = task.status !== input.beforeStatus
     const durableExploringProgress =
-      input.beforeStatus === 'exploring' && (hasSpec || hasBrief || hasOpenQuestion || hasWaitingOwnerInput)
+      input.beforeStatus === 'exploring' && (
+        (hasSpec && specChanged) ||
+        (hasBrief && briefChanged) ||
+        hasOpenQuestion ||
+        hasWaitingOwnerInput
+      )
     const durableWorkerProgress =
       input.beforeStatus === 'in_progress' &&
       task.status === 'in_progress' &&
@@ -8615,7 +8941,8 @@ export class Orchestrator {
     const beforeStatus = liveTask.status
 
     const answeredDecisions = recoverySpecSeedDecisionTexts(liveTask)
-    const sourceIntent = formatRecoverySpecSourceIntent(liveTask.description || liveTask.title)
+    const taskTitle = semanticTaskTitle(liveTask)
+    const sourceIntent = formatRecoverySpecSourceIntent(liveTask.description || taskTitle)
     const decisionLines = answeredDecisions.length > 0
       ? answeredDecisions.map((decision) => `- ${decision}`).join('\n')
       : '- No unresolved owner decisions are recorded on the task.'
@@ -8630,7 +8957,7 @@ export class Orchestrator {
       .join(' ')
     const spec = [
       '## Summary',
-      `Build ${liveTask.title} from the current project evidence, preserving the source intent: ${sourceIntent}`,
+      `Build ${taskTitle} from the current project evidence, preserving the source intent: ${sourceIntent}`,
       '',
       'Prior draft notes:',
       priorSpecSummary ? `- ${priorSpecSummary}` : '- No usable prior draft details were available.',
@@ -8639,7 +8966,7 @@ export class Orchestrator {
       decisionLines,
       '',
       '## Acceptance Criteria',
-      `1. Given the existing project conventions and source evidence, when ${liveTask.title} is implemented, then the feature appears in the appropriate repo surface without introducing a one-off parallel pattern.`,
+      `1. Given the existing project conventions and source evidence, when ${taskTitle} is implemented, then the feature appears in the appropriate repo surface without introducing a one-off parallel pattern.`,
       `2. Given the resolved owner decisions above, when the task is reviewed, then the implementation honors each recorded scope choice and leaves explicitly separate work out of this task.`,
       '3. Given the implementation is complete, when the relevant project checks or review proof run, then the commands, screenshots, or manual verification prove the behavior.',
       '',
@@ -8650,7 +8977,7 @@ export class Orchestrator {
       '- None known from the current task record. If the coordinator finds a product decision still missing, send this task back to exploring with one focused question.',
       '',
       '## Completion Boundary',
-      `- Product outcome: A user can use ${liveTask.title} in the intended project surface.`,
+      `- Product outcome: A user can use ${taskTitle} in the intended project surface.`,
       '- What Guildhall can complete in code: the repo-local component, integration, tests, docs/story evidence, and proof artifacts required by the implementation.',
       '- External dependencies: None known from the current task record.',
       '- Owner-only setup: None known.',
@@ -8662,8 +8989,8 @@ export class Orchestrator {
     liveTask.spec = spec
     liveTask.acceptanceCriteria = parseAcceptanceCriteriaFromSpec(spec)
     liveTask.productBrief ??= {
-      userJob: `I want ${liveTask.title} turned into concrete project work using the evidence and owner decisions already recorded.`,
-      successMetric: `${liveTask.title} has a reviewable spec, acceptance criteria, and a clear completion boundary before implementation starts.`,
+      userJob: `I want ${taskTitle} turned into concrete project work using the evidence and owner decisions already recorded.`,
+      successMetric: `${taskTitle} has a reviewable spec, acceptance criteria, and a clear completion boundary before implementation starts.`,
       antiPatterns: [
         'Do not preserve stale recovery-loop wording as the task brief.',
         'Do not ask the owner to re-answer decisions already recorded on the task.',
@@ -8797,7 +9124,8 @@ export class Orchestrator {
     if (taskHasUnansweredVisibleQuestion(liveTask)) return null
 
     const answeredDecisions = recoverySpecSeedDecisionTexts(liveTask)
-    const sourceIntent = formatRecoverySpecSourceIntent(liveTask.description || liveTask.title)
+    const taskTitle = semanticTaskTitle(liveTask)
+    const sourceIntent = formatRecoverySpecSourceIntent(liveTask.description || taskTitle)
     const decisionLines = answeredDecisions.length > 0
       ? answeredDecisions.map((decision) => `- ${decision}`).join('\n')
       : '- No unresolved owner decisions are recorded on the task.'
@@ -8806,13 +9134,13 @@ export class Orchestrator {
       .map((decision) => `- ${decision}`)
     const spec = [
       '## Summary',
-      `Build ${liveTask.title} from the current project evidence, preserving the source intent: ${sourceIntent}`,
+      `Build ${taskTitle} from the current project evidence, preserving the source intent: ${sourceIntent}`,
       '',
       'Resolved owner decisions:',
       decisionLines,
       '',
       '## Acceptance Criteria',
-      `1. Given the existing project conventions and source evidence, when ${liveTask.title} is implemented, then the feature appears in the appropriate repo surface without introducing a one-off parallel pattern.`,
+      `1. Given the existing project conventions and source evidence, when ${taskTitle} is implemented, then the feature appears in the appropriate repo surface without introducing a one-off parallel pattern.`,
       `2. Given the resolved owner decisions above, when the task is reviewed, then the implementation honors each recorded scope choice and leaves explicitly separate work out of this task.`,
       '3. Given the implementation is complete, when the relevant project checks or review proof run, then Guildhall records the commands, screenshots, or manual verification needed to prove the behavior.',
       '',
@@ -8823,7 +9151,7 @@ export class Orchestrator {
       '- None known from the current task record. If the coordinator finds a product decision still missing, send this task back to exploring with one focused question.',
       '',
       '## Completion Boundary',
-      `- Product outcome: A user can use ${liveTask.title} in the intended project surface.`,
+      `- Product outcome: A user can use ${taskTitle} in the intended project surface.`,
       '- What Guildhall can complete in code: the repo-local component, integration, tests, docs/story evidence, and proof artifacts required by the implementation.',
       '- External dependencies: None known from the current task record.',
       '- Owner-only setup: None known.',
@@ -8835,8 +9163,8 @@ export class Orchestrator {
     liveTask.spec = spec
     liveTask.acceptanceCriteria = parseAcceptanceCriteriaFromSpec(spec)
     liveTask.productBrief = {
-      userJob: `I want ${liveTask.title} turned into concrete project work using the evidence and owner decisions already recorded.`,
-      successMetric: `${liveTask.title} has a reviewable spec, acceptance criteria, and a clear completion boundary before implementation starts.`,
+      userJob: `I want ${taskTitle} turned into concrete project work using the evidence and owner decisions already recorded.`,
+      successMetric: `${taskTitle} has a reviewable spec, acceptance criteria, and a clear completion boundary before implementation starts.`,
       antiPatterns: [
         'Do not preserve stale recovery-loop wording as the task brief.',
         'Do not ask the owner to re-answer decisions already recorded on the task.',
@@ -10655,6 +10983,21 @@ function formatRecoverySpecSourceIntent(source: string | undefined): string {
     .replace(/`/g, '')
     .replace(/:\s*[-*]\s*/g, ': ')
     .trim()
+}
+
+function semanticTaskTitle(task: Task): string {
+  const title = normalizeFallbackWhitespace(task.title)
+  const description = normalizeFallbackWhitespace(task.description)
+  const requestRaw = typeof task.request?.raw === 'string'
+    ? normalizeFallbackWhitespace(task.request.raw)
+    : ''
+  if (title && !title.endsWith('...')) return title
+  const compactTitle = title.replace(/\.\.\.$/, '').trim().toLowerCase()
+  for (const candidate of [requestRaw, description]) {
+    if (!candidate) continue
+    if (!compactTitle || candidate.toLowerCase().startsWith(compactTitle)) return candidate
+  }
+  return title || requestRaw || description || task.id
 }
 
 function recoverySpecSeedDecisionTexts(task: Task): string[] {

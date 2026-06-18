@@ -497,7 +497,12 @@ export const shellTool = defineTool({
       !input.cwd && verificationCwd && authoritativeCommands && authoritativeCommands.length > 0
         ? verificationCwd
         : requestedCwd
-    const cdAdjustedCwd = cwdFromLeadingCdChain(input.command, authorityPreferredCwd) ?? authorityPreferredCwd
+    const worktreePath = String(ctx.metadata?.['current_task_worktree_path'] ?? '').trim()
+    const cdBaseCwd =
+      authoritativeCommands && authoritativeCommands.length > 0 && worktreePath
+        ? worktreePath
+        : authorityPreferredCwd
+    const cdAdjustedCwd = cwdFromLeadingCdChain(input.command, cdBaseCwd) ?? authorityPreferredCwd
     const reconciled = reconcileShellCommandWithAuthority(input.command, authoritativeCommands)
     const requestedKind = classifyGateCommand(input.command)
     const executableCommand = normalizePnpmScopedScriptCommand(reconciled.command)

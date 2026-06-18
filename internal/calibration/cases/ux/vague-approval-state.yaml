@@ -1,0 +1,42 @@
+id: vague-approval-state
+title: Vague approval state
+domain: ux
+productType: workflow-tool
+surfaceType: work-list
+userGoal: Know what decision is waiting, who owns it, and whether automation can continue.
+scenario: Several items say "Awaiting approval" while the primary action says "Resume spec work"; the UI does not say what needs approval or why the item cannot be queued.
+artifacts:
+  - id: approval-copy
+    kind: copy_snippet
+    description: Conflicting approval and action labels.
+    content: "Thread item: Awaiting approval. Primary action: Resume spec work. Work queue: Queued. No copy names the approval object or owner."
+reviewLanes:
+  - ux_comprehension
+  - copy_clarity
+knownFindings:
+  - id: approval-object-missing
+    lane: copy_clarity
+    severity: high
+    summary: The approval label does not name the thing awaiting approval.
+    impact: Users cannot tell whether they need to approve a brief, a spec, a migration, or a worker handoff.
+    minimumUsefulFix: Label the approval object and owner, or replace the label with the shared next-action state used by the queue.
+    matchHints:
+      - awaiting approval
+      - approval of what
+      - owner
+      - next action
+falsePositiveTraps:
+  - id: dont-only-rename-button
+    summary: Changing the button label is not enough if the item state still fails to name what approval is pending.
+source:
+  kind: production_miss
+  citation: Generalized from Guildhall Thread/work-list approval-language feedback on 2026-06-15.
+labelGovernance:
+  labeledBy: product-review
+  labeledAt: 2026-06-15T19:20:00.000Z
+  reviewStatus: seed
+privacyClassification: internal
+negativeControl: false
+stalenessPolicy:
+  reviewAfter: 2026-09-15
+  reason: Approval and spec-review language is actively changing.

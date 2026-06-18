@@ -116,15 +116,10 @@ export function compareInboxItems(
   return KIND_ORDER[a.kind] - KIND_ORDER[b.kind]
 }
 
-function truncateTitle(title: string, max = 80): string {
-  if (title.length <= max) return title
-  return title.slice(0, max - 1).trimEnd() + '...'
-}
-
 function inboxTitle(taskId: string, title: string): string {
   if (taskId === 'task-meta-intake') return 'Inspect the repo and draft starter tasks'
   if (taskId === 'task-workspace-import') return 'Review existing project work'
-  return truncateTitle(title)
+  return title
 }
 
 function inboxItemDedupeKey(item: InboxItem): string {
@@ -409,8 +404,8 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
     if (nextDraftId) {
       const queuedDetail =
         importDrafts.length === 1
-          ? `Review the imported draft "${truncateTitle(nextDraftTitle, 64)}" and decide whether to shape it now.`
-          : `Start with "${truncateTitle(nextDraftTitle, 64)}". ${importDrafts.length - 1} more imported drafts are waiting behind it.`
+          ? `Review the imported draft "${nextDraftTitle}" and decide whether to shape it now.`
+          : `Start with "${nextDraftTitle}". ${importDrafts.length - 1} more imported drafts are waiting behind it.`
       items.push({
         kind: 'import_draft_queue',
         severity: 'medium',

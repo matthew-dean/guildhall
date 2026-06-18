@@ -102,6 +102,47 @@ describe('repairStaleBlockersInQueue', () => {
     expect(q.tasks[0]?.status).toBe('blocked')
     expect(q.tasks[0]?.escalations[0]?.resolvedAt).toBeUndefined()
   })
+
+  it('reopens model/tool-use failures instead of preserving them as human blockers', () => {
+    const q = queue([
+      task({
+        id: 'task-model-failure',
+        blockReason: 'human_judgment_required: Spec author stopped after hitting its turn limit.',
+        notes: [
+          {
+            agentId: 'coordinator',
+            role: 'policy-classification',
+            timestamp: '2026-05-23T00:00:00.000Z',
+            content: JSON.stringify({
+              class: 'model_tool_use_failure',
+              confidence: 'medium',
+              scope: 'task',
+              needsHuman: true,
+              humanQuestion: 'Should Guildhall retry from the checkpoint, narrow the task, or stop?',
+              safePlaybooks: ['ask_concrete_human_question'],
+              evidence: [],
+              summary: 'The model failed to produce a usable tool call, so Guildhall should use a bounded repair prompt.',
+            }),
+          },
+        ],
+      }),
+    ])
+
+    const result = repairStaleBlockersInQueue(q, '2026-05-23T12:00:00.000Z')
+
+    expect(result.repairs).toEqual([
+      {
+        taskId: 'task-model-failure',
+        previousStatus: 'blocked',
+        nextStatus: 'exploring',
+        reason: 'model_tool_use_recovery_blocker',
+      },
+    ])
+    expect(q.tasks[0]?.status).toBe('exploring')
+    expect(q.tasks[0]?.blockReason).toBeUndefined()
+    expect(q.tasks[0]?.assignedTo).toBe('spec-agent')
+    expect(q.tasks[0]?.notes.at(-1)?.role).toBe('state-repair')
+  })
 })
 
 describe('repairStaleBlockersForProject', () => {

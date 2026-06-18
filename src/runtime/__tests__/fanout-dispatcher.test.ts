@@ -170,6 +170,61 @@ describe('pickNextTasks', () => {
     expect(picks.map((t) => t.id)).toEqual(['t-requested'])
   })
 
+  it('dispatches a ready task with complete worker handoff even when stale readiness says to research first', () => {
+    const q = queue([
+      task({
+        id: 't-stale-readiness',
+        title: 'Implement author voice feedback loop MVP',
+        status: 'ready',
+        taskKind: 'research',
+        taskReadiness: {
+          taskKind: 'research',
+          recommendation: 'needs_research_spike',
+          summary: 'Task should run research or a spike before implementation.',
+          dimensions: [],
+          definitionOfDone: {
+            items: ['Implementation satisfies acceptance criteria.'],
+            evidenceRequired: ['Acceptance criteria are checked.'],
+            updatedAt: '2026-06-16T00:00:00.000Z',
+            createdBy: 'test',
+          },
+          blockerPlans: [],
+          contextBudget: {
+            estimatedTokens: 100,
+            risk: 'low',
+            fitsInOneWorkerBrief: true,
+            reasons: [],
+          },
+          assessedAt: '2026-06-16T00:00:00.000Z',
+          assessedBy: 'test',
+        },
+        productBrief: {
+          userJob: 'Run a headless feedback pass.',
+          whyItMattersNow: 'The MVP needs a no-UI proof.',
+          successMetric: 'Structured findings are returned.',
+          nonGoals: ['No UI.'],
+          antiPatterns: ['No UI.'],
+          approvedAt: '2026-06-16T00:00:00.000Z',
+        },
+        spec: '## Summary\nImplement the no-UI runtime MVP.',
+        acceptanceCriteria: [{
+          id: 'AC-1',
+          description: 'Returns structured findings.',
+          verifiedBy: 'automated',
+          met: false,
+        }],
+      }),
+    ])
+
+    const picks = pickNextTasks({
+      queue: q,
+      capacity: 1,
+      preferredTaskId: 't-stale-readiness',
+    })
+
+    expect(picks.map((t) => t.id)).toEqual(['t-stale-readiness'])
+  })
+
   it('uses lane capacities to keep spec intake moving alongside worker progress', () => {
     const q = queue([
       task({ id: 't-progress', status: 'in_progress', priority: 'high' }),

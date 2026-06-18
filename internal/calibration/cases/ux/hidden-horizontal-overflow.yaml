@@ -1,0 +1,43 @@
+id: hidden-horizontal-overflow
+title: Hidden horizontal overflow
+domain: ux
+productType: workflow-tool
+surfaceType: dashboard
+userGoal: Read every visible work item and column without guessing that content continues offscreen.
+scenario: A work-list card uses a wide grid inside a clipped section. The right-side columns are cut off, and no named horizontal scroll region is available.
+artifacts:
+  - id: clipped-work-list
+    kind: copy_snippet
+    description: Visible work-list evidence and geometry.
+    content: "Work list: 2 shown · 8 total. Visible columns: Work, Stage, Part. Right-side columns are clipped at the card edge; DOM shows row right edge beyond card right edge and no scroll region."
+reviewLanes:
+  - ux_comprehension
+  - visual_design
+  - accessibility
+knownFindings:
+  - id: inaccessible-clipped-content
+    lane: accessibility
+    severity: high
+    summary: The work-list content is clipped without an accessible horizontal scroll region.
+    impact: Users cannot read or reach the full work-row state, so the list cannot explain what is queued or blocked.
+    minimumUsefulFix: Fit the normal split-screen layout; when overflow is unavoidable, wrap the grid in a named scroll region and prove the region contains the overflow.
+    matchHints:
+      - clipped
+      - horizontal overflow
+      - scroll region
+      - not readable
+falsePositiveTraps:
+  - id: dont-accept-visual-partial
+    summary: Do not pass the case because the first few columns are readable; the missing columns are part of the work state.
+source:
+  kind: production_miss
+  citation: Generalized from Guildhall Narrative Harness work-list overflow miss on 2026-06-15.
+labelGovernance:
+  labeledBy: product-review
+  labeledAt: 2026-06-15T19:20:00.000Z
+  reviewStatus: seed
+privacyClassification: internal
+negativeControl: false
+stalenessPolicy:
+  reviewAfter: 2026-09-15
+  reason: Work-list layout and design-system scroll primitives are actively changing.

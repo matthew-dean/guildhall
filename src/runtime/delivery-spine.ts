@@ -1,6 +1,6 @@
 import path from 'node:path'
 import { z } from 'zod'
-import type { Task } from '@guildhall/core'
+import { buildDecompositionChildDrafts, type Task } from '@guildhall/core'
 import {
   FileBackedGuildhallPersistence,
   type GuildhallPersistence,
@@ -293,7 +293,7 @@ export interface TaskSplitChildPlan {
 
 export interface TaskSplitPlan {
   parentTaskId: string
-  action: 'split_recommended' | 'split_required'
+  action: 'split_recommended' | 'split_required' | 'decompose_before_execution'
   children: TaskSplitChildPlan[]
   errors: ValidationIssue[]
   warnings: ValidationIssue[]
@@ -784,12 +784,12 @@ export function planTaskSplit(input: {
     }
   }
   const sizePlan = task.sizePlan
-  if (!sizePlan || (sizePlan.action !== 'split_recommended' && sizePlan.action !== 'split_required')) {
+  if (!sizePlan || !isDeliverySplitAction(sizePlan.action)) {
     return {
       parentTaskId: task.id,
-      action: 'split_required',
+      action: 'decompose_before_execution',
       children: [],
-      errors: [issue(`tasks.${task.id}.sizePlan`, 'missing_split_plan', `Task ${task.id} does not have materializable split recommendations.`)],
+      errors: [issue(`tasks.${task.id}.sizePlan`, 'missing_split_plan', `Task ${task.id} does not have materializable decomposition work.`)],
       warnings,
     }
   }
@@ -797,7 +797,10 @@ export function planTaskSplit(input: {
   const primitiveIds = new Set(input.model.primitives.map(primitive => primitive.id))
   const recommendationToPlannedId = new Map<string, string>()
   const children: TaskSplitChildPlan[] = []
-  for (const [index, recommendation] of sizePlan.recommendedChildren.entries()) {
+  const recommendations = sizePlan.recommendedChildren.length > 0
+    ? sizePlan.recommendedChildren
+    : buildDecompositionChildDrafts({ task })
+  for (const [index, recommendation] of recommendations.entries()) {
     const plannedTaskId = recommendation.createdTaskId ?? `${task.id}-split-${slugForId(recommendation.title)}`
     recommendationToPlannedId.set(normalizeKey(recommendation.title), plannedTaskId)
     const explicitUses = recommendation.usesPrimitives ?? []
@@ -878,6 +881,12 @@ export function planTaskSplit(input: {
     errors,
     warnings,
   }
+}
+
+function isDeliverySplitAction(action: string): action is TaskSplitPlan['action'] {
+  return action === 'split_recommended' ||
+    action === 'split_required' ||
+    action === 'decompose_before_execution'
 }
 
 export function applyFinishedWorkIntakeResult(input: {
@@ -1590,14 +1599,17 @@ export function deriveQueueCandidates(input: {
         : driverPriority.get(task.delivery?.driver ?? '') ?? 50
       const proofBoost = (task.delivery?.provesPrimitives ?? []).length > 0 ? -5 : 0
       const rank = driverRank + proofBoost + executionBlockers.length * 10 + structuralBlockers.length * 20 + index
+      const blockedByStatus = task.status === 'blocked'
       return {
         task,
-        runnable: executionBlockers.length === 0 && structuralBlockers.length === 0 && !isTerminalTaskStatus(task.status),
+        runnable: executionBlockers.length === 0 && structuralBlockers.length === 0 && !isTerminalTaskStatus(task.status) && !blockedByStatus,
         executionBlockers,
         structuralBlockers,
         suggestedPrimitiveProofTasks,
         rank,
-        why: executionBlockers.length > 0
+        why: blockedByStatus
+          ? 'Blocked by task status.'
+          : executionBlockers.length > 0
           ? `Blocked by ${executionBlockers[0]?.title ?? executionBlockers[0]?.id}.`
           : structuralBlockers.length > 0
             ? `Blocked until ${structuralBlockers[0]?.label ?? structuralBlockers[0]?.id} has proof.`

@@ -760,6 +760,28 @@ describe('buildContext — task summary', () => {
     ])
   })
 
+  it('does not treat Guildhall task-state files as likely implementation targets', () => {
+    const taskWithTaskStateReferences: Task = {
+      ...baseTask,
+      projectPath: '/projects/narrative-harness',
+      worktreePath: '/projects/narrative-harness/.guildhall/worktrees/verify-migration-record',
+      title: 'Verify and update the migration record',
+      description: 'Create the inventory and update sibling task notes through Guildhall task state.',
+      spec: [
+        '## Summary',
+        'Create `docs/harness/remaining-spec-decomposition-inventory.md` and update sibling task notes in TASKS.json.',
+        '',
+        '## Acceptance Criteria',
+        '- `docs/harness/remaining-spec-decomposition-inventory.md` exists.',
+        '- Sibling task notes are updated through Guildhall task state, not by editing `TASKS.json` in the worktree.',
+      ].join('\n'),
+    }
+
+    expect(resolveLikelyTaskFiles(taskWithTaskStateReferences)).toEqual([
+      '/projects/narrative-harness/.guildhall/worktrees/verify-migration-record/docs/harness/remaining-spec-decomposition-inventory.md',
+    ])
+  })
+
   it('falls back to backticked spec file paths when no stronger likely-target hints exist', () => {
     const taskWithBacktickedSpec: Task = {
       ...baseTask,

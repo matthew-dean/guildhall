@@ -25,6 +25,7 @@ import {
 } from './project-runtime-command.js'
 import { finalizeThinProjectStateManifest } from './thin-project-state-manifest.js'
 import { restoreEvacuatedTaskState } from './evacuated-task-state-restore.js'
+import { migrateWorkDecompositionState } from './work-decomposition-migration.js'
 
 export type MigrationScope = 'machine' | 'project' | 'workspace' | 'database'
 export type MigrationSafety = 'automatic' | 'prompt' | 'manual' | 'required'
@@ -391,6 +392,29 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
       const result = await migrateTaskDeliveryStepState({ projectRoot, apply: true })
       return {
         summary: `Marked ${result.changedTasks.length} task record${result.changedTasks.length === 1 ? '' : 's'} with explicit delivery-step metadata.`,
+        affectedPaths: result.affectedPaths,
+      }
+    },
+  },
+  {
+    id: '0.11.0/execution-planning-decomposition',
+    title: 'Convert legacy split recommendations into execution-planning records',
+    introducedIn: '0.11.0',
+    scope: 'project',
+    safety: 'prompt',
+    requirement: 'required',
+    summary: 'Turns represented legacy split recommendations into execution action audit records and routes unmaterialized recommendations to coordinator recovery.',
+    async detect(projectRoot) {
+      const result = await migrateWorkDecompositionState({ projectRoot, apply: false })
+      return {
+        needed: result.changedTasks.length > 0 || result.createdActions.length > 0,
+        affectedPaths: result.affectedPaths,
+      }
+    },
+    async apply(projectRoot) {
+      const result = await migrateWorkDecompositionState({ projectRoot, apply: true })
+      return {
+        summary: `Recorded ${result.createdActions.length} execution-planning decomposition action${result.createdActions.length === 1 ? '' : 's'} for ${result.changedTasks.length} task record${result.changedTasks.length === 1 ? '' : 's'}.`,
         affectedPaths: result.affectedPaths,
       }
     },

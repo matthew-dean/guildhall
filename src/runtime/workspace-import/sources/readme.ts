@@ -57,7 +57,7 @@ export const readmeSource: TaskSource = {
         signals.push({
           source: 'readme',
           kind: 'goal',
-          title: bullet.slice(0, 120),
+          title: bullet,
           evidence: bullet.slice(0, 240),
           references: [path],
           confidence: 'medium',

@@ -30,8 +30,190 @@ describe('ProjectOverviewTab', () => {
     vi.unstubAllGlobals()
   })
 
-  it('renders the shared primary project action instead of choosing a local inbox winner', () => {
+  it('folds orientation spine state into the existing overview sections', () => {
+    const { container } = render(ProjectOverviewTab, {
+      detail: {
+        id: 'narrative-harness',
+        name: 'Narrative Harness',
+        path: '/Users/matthew/git/oss/narrative-harness',
+        tasks: [],
+        orientationSpine: {
+          scope: { label: 'Current MVP' },
+          charter: {
+            goal: 'Build a fiction-first evaluation and reasoning harness.',
+            targetAudience: 'fiction authors and agent reviewers',
+          },
+          summary: {
+            headline: 'Current MVP is blocked on proof.',
+            purpose: 'Build a fiction-first evaluation and reasoning harness.',
+            selectedScopeLabel: 'Current MVP',
+            includedWorkCount: 3,
+            deferredWorkCount: 2,
+            progress: {
+              scopedNodeCount: 3,
+              speccedCount: 2,
+              provenCount: 1,
+              blockedCount: 1,
+              deferredCount: 2,
+            },
+            pinnedNow: [{
+              nodeId: 'work:task-anti-sameness',
+              label: 'Anti-sameness safeguards',
+              reason: 'Proof needed before release readiness.',
+              href: '/task/task-anti-sameness',
+            }],
+            topBlocker: {
+              label: 'Anti-sameness proof missing',
+              severity: 'high',
+              owner: 'guildhall',
+            },
+            nextAction: {
+              label: 'Prove anti-sameness safeguards',
+              href: '/task/task-anti-sameness',
+              reason: 'This is the active release blocker.',
+            },
+          },
+          gaps: [{
+            kind: 'proof_needed',
+            label: 'Anti-sameness proof missing',
+            severity: 'warn',
+            refs: ['task-anti-sameness'],
+          }],
+          roots: [{
+            id: 'work:task-anti-sameness',
+            title: 'Anti-sameness safeguards',
+            maturity: 'proof_needed',
+            proof: { state: 'needed' },
+            refs: { taskIds: ['task-anti-sameness'] },
+            blockers: [],
+          }],
+          nodes: {
+            'work:task-anti-sameness': {
+              id: 'work:task-anti-sameness',
+              title: 'Anti-sameness safeguards',
+              maturity: 'proof_needed',
+              proof: { state: 'needed' },
+              refs: { taskIds: ['task-anti-sameness'] },
+              blockers: [],
+            },
+          },
+          sourceHealth: { status: 'ok' },
+        },
+      },
+      inboxLoaded: true,
+      inboxItems: [],
+      projectTicker: {
+        label: 'Not running',
+        actorLabel: 'Guildhall',
+        message: 'Project is waiting for owner action.',
+        tone: 'idle',
+        pulse: false,
+      },
+      activeProjectId: 'narrative-harness',
+    })
+
+    expect(container.querySelector('.orientation-state')).toBeNull()
+    expect(screen.queryByRole('heading', { name: 'State of the Union' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Current scope map' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'What needs attention' })).not.toBeInTheDocument()
+    expect(container.querySelector('.project-map-section')).toBeNull()
+    expect(container.querySelector('.overview-orientation')).toBeTruthy()
+    expect(container.querySelector('.orientation-summary-list')).toBeTruthy()
+    expect(container.querySelector('.orientation-map-preview')).toBeTruthy()
+    expect(screen.getByText('Current MVP')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Project map' })).toBeInTheDocument()
+    expect(screen.getByText('Open map')).toBeInTheDocument()
+    expect(screen.getByText(/3 work items in view/)).toBeInTheDocument()
+    expect(screen.getByText(/1 verified/)).toBeInTheDocument()
+    expect(screen.getByText(/1 blocked/)).toBeInTheDocument()
+    expect(screen.getByText(/1 missing verification/)).toBeInTheDocument()
+    expect(screen.getByText(/2 deferred/)).toBeInTheDocument()
+    expect(screen.getByText(/Current focus: Anti-sameness safeguards/)).toBeInTheDocument()
+    expect(screen.getByText(/Anti-sameness proof missing/)).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Do this next' })).toBeInTheDocument()
+  })
+
+  it('presents all-terminal scoped work as calm finished state instead of attention needed', () => {
     render(ProjectOverviewTab, {
+      detail: {
+        id: 'narrative-harness',
+        name: 'Narrative Harness',
+        path: '/Users/matthew/git/oss/narrative-harness',
+        startReadiness: {
+          canStart: false,
+          code: 'all_terminal',
+          message: 'No actionable tasks remain: 11 done, 0 blocked, 3 shelved.',
+        },
+        actionModel: {
+          primaryAction: null,
+          secondaryActions: [],
+          runControl: {
+            label: 'No runnable tasks',
+            startEnabled: false,
+            disabledReason: 'No actionable tasks remain: 11 done, 0 blocked, 3 shelved.',
+          },
+          ownerInput: { active: false },
+          setup: { state: 'ready', freshIntakeNeeded: false },
+        },
+        tasks: [
+          { id: 'done-1', title: 'Done one', status: 'done' },
+          { id: 'shelved-1', title: 'Shelved duplicate', status: 'shelved' },
+        ],
+        orientationSpine: {
+          scope: { label: 'Current MVP' },
+          charter: {
+            goal: 'The first MVP is headless: script-only proofs of all systems.',
+            targetAudience: 'fiction authors and agent reviewers',
+          },
+          summary: {
+            headline: 'Current MVP has no actionable work.',
+            purpose: 'The first MVP is headless: script-only proofs of all systems.',
+            selectedScopeLabel: 'Current MVP',
+            includedWorkCount: 14,
+            deferredWorkCount: 0,
+            progress: {
+              total: 14,
+              specced: 11,
+              done: 11,
+              blocked: 0,
+              proven: 0,
+              deferred: 3,
+            },
+            pinnedNow: [],
+            topBlocker: null,
+            nextAction: null,
+          },
+          gaps: [],
+          roots: [],
+          nodes: {},
+          sourceHealth: { status: 'ok', gaps: 0, inferred: 0 },
+        },
+      },
+      inboxLoaded: true,
+      inboxItems: [],
+      projectTicker: {
+        label: 'Run finished',
+        actorLabel: 'Guildhall',
+        message: 'No actionable tasks remain: 11 done, 0 blocked, 3 shelved.',
+        tone: 'idle',
+        pulse: false,
+      },
+      activeProjectId: 'narrative-harness',
+    })
+
+    expect(screen.getByText('Closed scope')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Scope status' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Do this next' })).not.toBeInTheDocument()
+    expect(screen.queryByText('Needs attention')).not.toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'No actionable tasks remain: 11 done, 0 blocked, 3 shelved.' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'No runnable work' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Ready to resume' })).not.toBeInTheDocument()
+    expect(screen.getByText(/3 deferred/)).toBeInTheDocument()
+    expect(screen.getByText(/0 missing verification/)).toBeInTheDocument()
+  })
+
+  it('renders the shared primary project action instead of choosing a local inbox winner', () => {
+    const { container } = render(ProjectOverviewTab, {
       detail: {
         id: 'fair-labor-license',
         name: 'Fair Labor License',
@@ -296,7 +478,7 @@ describe('ProjectOverviewTab', () => {
     expect(screen.getByText('1 Being shaped')).toBeInTheDocument()
     expect(screen.queryByText('1 Ready')).not.toBeInTheDocument()
     expect(screen.getAllByText('Needs brief').length).toBeGreaterThan(0)
-    expect(screen.getByText('Needs brief: finish the handoff before a worker can start.')).toBeInTheDocument()
+    expect(screen.getByText('Needs brief: add enough detail before this can start.')).toBeInTheDocument()
     expect(screen.queryByText(/ready for the next worker slot/i)).not.toBeInTheDocument()
   })
 
@@ -565,8 +747,8 @@ describe('ProjectOverviewTab', () => {
     expect(screen.queryByText('Needs triage')).not.toBeInTheDocument()
   })
 
-  it('puts live work before the work mix so current motion is visible at a glance', () => {
-    render(ProjectOverviewTab, {
+  it('puts work mix in the orientation section while keeping live work in the work section', () => {
+    const { container } = render(ProjectOverviewTab, {
       detail: {
         id: 'fair-labor-license',
         name: 'Fair Labor License',
@@ -598,10 +780,14 @@ describe('ProjectOverviewTab', () => {
       activeProjectId: 'fair-labor-license',
     })
 
-    const text = document.body.textContent ?? ''
-    expect(text.indexOf('Moving now')).toBeGreaterThan(-1)
-    expect(text.indexOf('Work mix')).toBeGreaterThan(-1)
-    expect(text.indexOf('Moving now')).toBeLessThan(text.indexOf('Work mix'))
+    const orientation = container.querySelector('.overview-orientation')
+    expect(orientation?.textContent).toContain('Work mix')
+    expect(orientation?.textContent).not.toContain('Plan status')
+    expect(orientation?.querySelector('.motion-list')).toBeFalsy()
+
+    const workSection = container.querySelector('.overview-work-section')
+    expect(workSection?.textContent).toContain('Moving now')
+    expect(workSection?.querySelector('.motion-list')).toBeTruthy()
   })
 
   it('surfaces runtime health, memory health, and primary proof paths', async () => {
@@ -696,12 +882,13 @@ describe('ProjectOverviewTab', () => {
     expect(screen.getAllByText(/project repo protected/).length).toBeGreaterThan(0)
     expect(screen.getAllByText(/3 active/).length).toBeGreaterThan(0)
     expect(screen.queryByText(/active memories/)).not.toBeInTheDocument()
-    expect(screen.getByText('Primary proof paths')).toBeInTheDocument()
+    expect(screen.getByText('Signals')).toBeInTheDocument()
+    expect(screen.getByText('Verification')).toBeInTheDocument()
     expect(screen.getAllByText('Verify runtime card').length).toBeGreaterThan(0)
     expect(screen.queryByRole('button', { name: /Project graph/i })).not.toBeInTheDocument()
   })
 
-  it('condenses project knowledge into one-third overview cards', async () => {
+  it('keeps project knowledge summary compact and action-light', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => json({
       projectGraph: {
         currentProject: { id: 'narrative-harness', label: 'Narrative Harness' },
@@ -744,20 +931,20 @@ describe('ProjectOverviewTab', () => {
       activeProjectId: 'narrative-harness',
     })
 
-    expect(container.querySelectorAll('.card-list-item.knowledge-summary-item')).toHaveLength(4)
+    expect(container.querySelectorAll('.card-list-item.knowledge-summary-item')).toHaveLength(2)
     expect(container.querySelectorAll('.knowledge-card')).toHaveLength(0)
     expect(screen.getByRole('button', { name: /Work 2 total work items/i })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /Runtime Runtime healthy/i })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /Proof No proof paths yet/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /History No recent changes/i })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Runtime Runtime healthy/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Checks No verification/i })).not.toBeInTheDocument()
     expect(screen.getAllByText('Compatibility mode').length).toBeGreaterThan(0)
     expect(screen.getByText('Memory status unavailable · 4 active, 1 proposed.')).toBeInTheDocument()
     expect(screen.queryByText(/active memories/)).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /Structure Accepted/i })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Structure Accepted/i })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Project graph/i })).not.toBeInTheDocument()
   })
 
-  it('puts the primary next action in a full-width priority row before secondary overview cards', () => {
+  it('puts the primary next action beside the compact orientation summary before secondary overview cards', () => {
     const { container } = render(ProjectOverviewTab, {
       detail: {
         id: 'looma-knit',
@@ -794,16 +981,19 @@ describe('ProjectOverviewTab', () => {
       activeProjectId: 'looma-knit',
     })
 
-    const priority = container.querySelector('.overview-priority')
-    expect(priority).toBeTruthy()
-    expect(priority?.querySelector('.next-action')).toBeTruthy()
-    expect(priority?.querySelector('.motion-list')).toBeFalsy()
+    const orientation = container.querySelector('.overview-orientation')
+    expect(orientation).toBeTruthy()
+    expect(orientation?.querySelector('.next-action')).toBeTruthy()
+    expect(orientation?.querySelector('.orientation-summary-list')).toBeTruthy()
+    expect(orientation?.textContent).toContain('Work mix')
+    expect(orientation?.textContent).not.toContain('Plan status')
+    expect(orientation?.querySelector('.motion-list')).toBeFalsy()
 
-    const nextHeading = priority?.querySelector('.next-action h2')
+    const nextHeading = orientation?.querySelector('.next-action h2')
     expect(nextHeading).toHaveTextContent('Finish reviewer routing')
 
-    const firstGrid = container.querySelector('.overview-grid')
-    expect(firstGrid?.querySelector('.motion-list')).toBeTruthy()
+    const workSection = container.querySelector('.overview-work-section')
+    expect(workSection?.querySelector('.motion-list')).toBeTruthy()
   })
 
   it('routes knowledge summary sections to their logical project surfaces', async () => {
@@ -854,17 +1044,11 @@ describe('ProjectOverviewTab', () => {
     await fireEvent.click(screen.getByRole('button', { name: /Work 1 total work item/i }))
     expect(window.location.pathname).toBe('/projects/guildhall/work')
 
-    await fireEvent.click(screen.getByRole('button', { name: /Runtime Runtime stopped/i }))
-    expect(window.location.pathname).toBe('/projects/guildhall/settings/ready')
-
-    await fireEvent.click(screen.getByRole('button', { name: /Proof 1 tracked proof path/i }))
-    expect(window.location.pathname).toBe('/projects/guildhall/work')
-
     await fireEvent.click(screen.getByRole('button', { name: /History 1 recent change/i }))
     expect(window.location.pathname).toBe('/projects/guildhall/timeline')
   })
 
-  it('shows structural map controls when project map review data exists', () => {
+  it('links to Structure without exposing structural map edit controls', () => {
     render(ProjectOverviewTab, {
       detail: {
         id: 'guildhall',
@@ -909,9 +1093,10 @@ describe('ProjectOverviewTab', () => {
       activeProjectId: 'guildhall',
     })
 
-    expect(screen.getByRole('heading', { name: 'Project map' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Rename' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Package-only' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Signals' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Structure Accepted/i })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Rename' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Package-only' })).not.toBeInTheDocument()
   })
 
   it('summarizes visible work items and delivery steps from shared progress', () => {

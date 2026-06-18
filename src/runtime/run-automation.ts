@@ -159,6 +159,7 @@ async function repairScopedSpecApprovalInputs(input: {
   for (const task of queue.tasks) {
     if (scopedIds && !scopedIds.has(task.id)) continue
     if (task.status !== 'spec_review' || !task.spec?.trim()) continue
+    if (typeof task.productBrief?.approvedAt === 'string') continue
     const hasUsableBrief =
       task.productBrief?.userJob?.trim() &&
       task.productBrief?.successMetric?.trim() &&

@@ -125,6 +125,42 @@ function parseObjectString(value: unknown): Record<string, unknown> | null {
   return null
 }
 
+function shellTaskStateRefusal(
+  toolUseId: string,
+  toolName: string,
+  toolInput: Record<string, unknown>,
+  toolMetadata: Record<string, unknown> | undefined,
+): ToolResultBlock | null {
+  if (toolName !== 'shell') return null
+  const command = String(toolInput['command'] ?? '').trim()
+  if (!command) return null
+  const normalized = command.replace(/\\/g, '/')
+  const mentionsTaskStateFile =
+    /\bTASKS\.json\b/.test(normalized) ||
+    /\bPROGRESS\.md\b/.test(normalized) ||
+    /\/project-state(?:-evacuation)?\//.test(normalized)
+  if (!mentionsTaskStateFile) return null
+  const parsesTaskState =
+    /\b(?:python|node|jq|cat|sed|awk|grep|rg|head|tail|less|more)\b/i.test(normalized) ||
+    /[<>|]/.test(normalized) ||
+    /\bjson\b/i.test(normalized)
+  if (!parsesTaskState) return null
+  return {
+    type: 'tool_result',
+    tool_use_id: toolUseId,
+    content:
+      [
+        'Do not use shell to read or parse Guildhall task state files such as TASKS.json or PROGRESS.md.',
+        'Use read-tasks for task queue reads, update-task for task note/status updates, and log-progress for progress entries.',
+        'If you need sibling task context, call read-tasks and inspect the returned task records.',
+        ...(hasStructuredSelfCritiqueInMetadata(toolMetadata) && Boolean(toolMetadata?.['current_task_has_review_proof_packet'])
+          ? ['The active task already has durable verification proof and structured self-critique; transition the active task with update-task now instead of inspecting task state again.']
+          : []),
+      ].join(' '),
+    is_error: true,
+  }
+}
+
 function currentTaskDomain(
   toolMetadata: Record<string, unknown> | undefined,
 ): string {
@@ -2477,15 +2513,39 @@ function missingAuthoritativeVerificationCommands(
     .filter((entry) => entry.passed)
     .map((entry) => entry.command.trim())
     .filter(Boolean)
-  if (evidence?.taskId !== taskId) {
-    const seen = new Set(durableVerification)
-    return authoritative.filter((command) => !seen.has(command.trim()))
+  const hasSeenCommand = (seen: Set<string>, command: string): boolean => {
+    const normalized = normalizeVerificationCommandForHandoff(command)
+    return seen.has(command.trim()) || seen.has(normalized)
   }
-  const seen = new Set([
+  if (evidence?.taskId !== taskId) {
+    const seen = verificationCommandSeenSet(durableVerification)
+    return authoritative.filter((command) => !hasSeenCommand(seen, command))
+  }
+  const seen = verificationCommandSeenSet([
     ...evidence.successfulVerificationCommands.map((entry) => entry.trim()),
     ...durableVerification,
   ])
-  return authoritative.filter((command) => !seen.has(command.trim()))
+  return authoritative.filter((command) => !hasSeenCommand(seen, command))
+}
+
+function verificationCommandSeenSet(commands: string[]): Set<string> {
+  const seen = new Set<string>()
+  for (const command of commands) {
+    const trimmed = command.trim()
+    if (!trimmed) continue
+    seen.add(trimmed)
+    seen.add(normalizeVerificationCommandForHandoff(trimmed))
+  }
+  return seen
+}
+
+function normalizeVerificationCommandForHandoff(command: string): string {
+  return command
+    .trim()
+    .replace(/\s+/g, ' ')
+    .replace(/\s+(?:2>&1|1>\/dev\/null|2>\/dev\/null)\s*$/i, '')
+    .replace(/^(?:cd\s+(?:"[^"]+"|'[^']+'|[^&;]+?)\s*&&\s*)+/i, '')
+    .trim()
 }
 
 function recordReviewHandoffEvidence(
@@ -2698,6 +2758,8 @@ async function executeToolCall(
 ): Promise<ToolResultBlock> {
   const { name: toolName, id: toolUseId, input: rawToolInput } = toolCall
   const toolInput = hydrateProjectToolInput(toolName, context.cwd, rawToolInput, context.toolMetadata)
+  const taskStateShellGuard = shellTaskStateRefusal(toolUseId, toolName, toolInput, context.toolMetadata)
+  if (taskStateShellGuard) return taskStateShellGuard
   const guarded = reviewHandoffGuardResult(
     toolUseId,
     toolName,

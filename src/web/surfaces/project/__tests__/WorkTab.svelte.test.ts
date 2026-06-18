@@ -137,6 +137,65 @@ describe('WorkTab', () => {
     expect(screen.getByLabelText('Selected work inspector')).toHaveTextContent('Gamma task')
   })
 
+  it('opens the routed work item from the task query and shows the matching work slice', async () => {
+    window.history.replaceState({}, '', '/projects/looma-knit/work?task=task-smoke-test')
+    path.value = '/projects/looma-knit/work?task=task-smoke-test'
+    const scrollIntoView = vi.fn()
+    Element.prototype.scrollIntoView = scrollIntoView
+
+    render(WorkTab, {
+      props: {
+        detail: detail([
+          task({
+            id: 'task-smoke-test',
+            title: 'What commands should I run to smoke test this project without changin...',
+            description: 'What commands should I run to smoke test this project without changing files?',
+            status: 'ready',
+            productBrief: { approvedAt: '2026-06-15T18:48:51.097Z', userJob: '' },
+            spec: '',
+            acceptanceCriteria: [],
+          }),
+          task({
+            id: 'task-done',
+            title: 'Already completed work',
+            status: 'done',
+          }),
+        ]),
+      },
+    })
+
+    await screen.findByText('1 shown · 2 total')
+    expect(screen.getByRole('combobox', { name: /^show$/i })).toHaveValue('planning')
+    expect(screen.getByLabelText('Selected work inspector')).toHaveTextContent('What commands should I run')
+    await waitFor(() => expect(scrollIntoView).toHaveBeenCalledWith({ block: 'nearest', inline: 'nearest' }))
+  })
+
+  it('shows question-shaped runnable work with an action-shaped label and keeps the source question visible', async () => {
+    window.history.replaceState({}, '', '/projects/looma-knit/work?task=task-smoke-test')
+    path.value = '/projects/looma-knit/work?task=task-smoke-test'
+
+    render(WorkTab, {
+      props: {
+        detail: runningDetail([
+          task({
+            id: 'task-smoke-test',
+            title: 'What commands should I run to smoke test this project without changing files?',
+            description: 'What commands should I run to smoke test this project without changing files?',
+            status: 'in_progress',
+          }),
+        ]),
+      },
+    })
+
+    const row = await screen.findByRole('button', { name: /inspect work define safe smoke-test commands/i })
+    expect(row).toHaveTextContent('Define safe smoke-test commands')
+    expect(row).toHaveTextContent('What commands should I run to smoke test this project without changing files?')
+    const inspector = screen.getByLabelText('Selected work inspector')
+    expect(inspector).toHaveTextContent('Define safe smoke-test commands')
+    expect(inspector).toHaveTextContent('What commands should I run to smoke test this project without changing files?')
+    expect(within(inspector).getByRole('button', { name: /running/i })).toBeDisabled()
+  })
+
   it('shows delivery-step progress on visible work rows', async () => {
     render(WorkTab, {
       props: {
@@ -180,6 +239,46 @@ describe('WorkTab', () => {
 
     await screen.findByText('1 delivery step blocked')
     expect(screen.getByText('Import review flow')).toBeInTheDocument()
+  })
+
+  it('shows the orientation spine path on work rows', async () => {
+    render(WorkTab, {
+      props: {
+        detail: {
+          ...detail([
+            task({
+              id: 'task-finding-taxonomy',
+              title: 'Finding taxonomy',
+              status: 'ready',
+              description: 'Document the weighted finding taxonomy.',
+            }),
+          ]),
+          orientationSpine: {
+            scope: { label: 'Current MVP' },
+            summary: {
+              headline: 'Current MVP is being shaped.',
+              purpose: 'Build a fiction-first evaluation and reasoning harness.',
+              selectedScopeLabel: 'Current MVP',
+              includedWorkCount: 1,
+              deferredWorkCount: 0,
+            },
+            roots: [{
+              id: 'work:task-anti-sameness',
+              title: 'Anti-sameness safeguards',
+              children: [{
+                id: 'work:task-finding-taxonomy',
+                title: 'Finding taxonomy',
+                children: [],
+              }],
+            }],
+            nodes: {},
+          },
+        },
+      },
+    })
+
+    await screen.findByText('Finding taxonomy')
+    expect(screen.getByText('Anti-sameness safeguards / Finding taxonomy')).toBeInTheDocument()
   })
 
   it('can filter the mixed Looma and Knit work list by source part', async () => {
@@ -340,6 +439,8 @@ describe('WorkTab', () => {
         String(init.body).includes('"scope":"work_item"'),
       )).toBe(true)
     })
+    const runningButton = await screen.findByRole('button', { name: /running/i })
+    expect(runningButton).toBeDisabled()
   })
 
   it('does not show an empty new-request prompt when a zero-task project is blocked by migration', async () => {
@@ -870,17 +971,16 @@ describe('WorkTab', () => {
     expect(screen.queryByText('3 ready for worker')).toBeNull()
   })
 
-  it('keeps the wide work-list grid inside the clipped card at side-by-side widths', () => {
+  it('puts the wide work-list grid inside a named horizontal scroll region', () => {
     const source = readFileSync('src/web/surfaces/project/WorkTab.svelte', 'utf8')
+    const scrollBlock = source.match(/\.work-list-scroll\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? ''
     const stackBlock = source.match(/:global\(\.work-list-stack\)\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? ''
-    const headBlock = source.match(/\.list-column-head\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? ''
-    const rowBlock = source.match(/:global\(\.work-list-row\)\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? ''
 
-    expect(stackBlock).toContain('minmax(220px, 1fr)')
-    expect(stackBlock).toContain('minmax(108px, max-content)')
-    expect(stackBlock).not.toContain('minmax(280px, 1fr)')
-    expect(headBlock).toContain('gap: var(--gh-space-2)')
-    expect(rowBlock).toContain('gap: var(--gh-space-2)')
+    expect(source).toContain('class="work-list-scroll"')
+    expect(source).toContain('aria-label="Scrollable work list columns"')
+    expect(scrollBlock).toContain('overflow-x: auto')
+    expect(stackBlock).toContain('minmax(280px, 1fr)')
+    expect(stackBlock).toContain('inline-size: max(100%, 860px)')
   })
 
   it('routes imported-draft review and view-mode controls through project-scoped links', async () => {

@@ -20,13 +20,13 @@ task:
     - release_risk
 expected:
   minScore: 8
-  action: split_required
+  action: decompose_before_execution
   requiredFactors:
     - multiple_outcomes
     - many_surfaces
     - many_risk_lanes
     - migration_or_release
-  minRecommendedChildren: 3
+  minDecompositionChildren: 3
 labelGovernance:
   labeledBy: task-sizing-seed
   labeledAt: "2026-05-25"

@@ -18,7 +18,7 @@ expected:
   requiredFactors:
     - several_risk_lanes
     - migration_or_release
-  minRecommendedChildren: 0
+  minDecompositionChildren: 0
 labelGovernance:
   labeledBy: task-sizing-seed
   labeledAt: "2026-05-25"

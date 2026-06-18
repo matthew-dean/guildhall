@@ -486,6 +486,51 @@ describe('shellTool — engine-tool interface', () => {
     })
   })
 
+  it('resolves authoritative cd commands from the task worktree root even when shell cwd is already nested', async () => {
+    const worktree = fs.mkdtempSync(path.join(os.tmpdir(), 'guildhall-shell-worktree-'))
+    const schemas = path.join(worktree, 'packages', 'schemas')
+    fs.mkdirSync(schemas, { recursive: true })
+    fs.writeFileSync(
+      path.join(schemas, 'package.json'),
+      JSON.stringify(
+        {
+          name: '@fixture/schemas',
+          private: true,
+          scripts: {
+            build: "node -e \"console.log('schema-build-ran')\"",
+          },
+        },
+        null,
+        2,
+      ),
+    )
+
+    const result = await shellTool.execute(
+      {
+        command: 'cd packages/schemas && pnpm build',
+        cwd: schemas,
+        timeoutMs: 5000,
+      },
+      {
+        cwd: schemas,
+        metadata: {
+          current_task_worktree_path: worktree,
+          current_task_verification_commands: ['cd packages/schemas && pnpm build'],
+        },
+      },
+    )
+
+    expect(result.is_error).toBe(false)
+    expect(result.output).toContain('schema-build-ran')
+    expect(result.metadata).toMatchObject({
+      requestedCommand: 'cd packages/schemas && pnpm build',
+      executedCommand: 'pnpm build',
+      usedAuthoritativeCommand: true,
+      cdAdjustedCwd: schemas,
+      executedCwd: schemas,
+    })
+  })
+
   it('normalizes scoped pnpm test commands to the script form pnpm expects', async () => {
     const cwd = makeWorkspaceScriptPackage()
     const result = await shellTool.execute(

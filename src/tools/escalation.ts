@@ -94,6 +94,13 @@ function findMatchingOpenEscalation(escalations: Escalation[], input: RaiseEscal
   ) ?? null
 }
 
+function blockTaskForEscalation(task: Task, input: Pick<RaiseEscalationInput, 'reason' | 'summary'>, now: string): void {
+  task.status = 'blocked'
+  task.assignedTo = null
+  task.blockReason = `${input.reason}: ${input.summary}`
+  task.updatedAt = now
+}
+
 function projectRootForTaskState(tasksPath: string, task: Task): string {
   const stateDir = path.dirname(tasksPath)
   if (path.basename(stateDir) === 'project-state' && path.isAbsolute(task.projectPath)) {
@@ -154,6 +161,20 @@ export async function raiseEscalation(
 
     const existing = findMatchingOpenEscalation(effectiveEscalations, input)
     if (existing) {
+      const now = new Date().toISOString()
+      blockTaskForEscalation(task, input, now)
+      queue.lastUpdated = now
+      await upsertTaskRuntimeState(projectRoot, task.id, {
+        assignedTo: null,
+        ...(task.revisionCount !== undefined ? { revisionCount: task.revisionCount } : {}),
+        ...(task.retryWindow ? { retryWindow: task.retryWindow } : {}),
+        ...(task.remediationAttempts !== undefined ? { remediationAttempts: task.remediationAttempts } : {}),
+        openEscalationIds: effectiveEscalations
+          .filter((candidate) => !candidate.resolvedAt)
+          .map((candidate) => candidate.id),
+        updatedAt: now,
+      })
+      writeProjectTaskQueue(input.tasksPath, queue)
       return { success: true, escalationId: existing.id }
     }
 
@@ -168,9 +189,7 @@ export async function raiseEscalation(
       ...(input.details !== undefined ? { details: input.details } : {}),
       ...(input.externalChecklist !== undefined ? { externalChecklist: input.externalChecklist } : {}),
     }
-    task.status = 'blocked'
-    task.blockReason = `${input.reason}: ${input.summary}`
-    task.updatedAt = now
+    blockTaskForEscalation(task, input, now)
     queue.lastUpdated = now
 
     await appendTaskEvidence(projectRoot, task.id, {

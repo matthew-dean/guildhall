@@ -200,6 +200,41 @@ describe('raiseEscalation', () => {
     expect(task.escalations).toHaveLength(1)
   })
 
+  it('re-blocks a task when an existing unresolved escalation is raised again after a bad reopen', async () => {
+    const first = await raiseEscalation({
+      tasksPath,
+      taskId: 'task-001',
+      agentId: 'worker-agent',
+      reason: 'human_judgment_required',
+      summary: 'Worker repeatedly hit its turn budget after saving partial work.',
+    })
+    expect(first.success).toBe(true)
+
+    await writeSeed([
+      seedTask({
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        blockReason: undefined,
+      }),
+    ])
+
+    const second = await raiseEscalation({
+      tasksPath,
+      taskId: 'task-001',
+      agentId: 'worker-agent',
+      reason: 'human_judgment_required',
+      summary: 'Worker repeatedly hit its turn budget after saving partial work.',
+    })
+
+    expect(second.success).toBe(true)
+    expect(second.escalationId).toBe(first.escalationId)
+    const task = await readEffectiveTask()
+    expect(task.status).toBe('blocked')
+    expect(task.assignedTo).toBeNull()
+    expect(task.blockReason).toBe('human_judgment_required: Worker repeatedly hit its turn budget after saving partial work.')
+    expect(activeEscalations(task)).toHaveLength(1)
+  })
+
   it('rejects worker escalations caused by brittle edit matching instead of owner decisions', async () => {
     const result = await raiseEscalation({
       tasksPath,

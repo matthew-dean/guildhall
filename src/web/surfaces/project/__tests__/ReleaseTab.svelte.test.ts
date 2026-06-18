@@ -67,6 +67,54 @@ describe('ReleaseTab', () => {
     expect(screen.getByText('approved · rev 4')).toBeTruthy()
   })
 
+  it('renders the shared orientation spine blocker before closure details', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/api/project/spine')) {
+        return json({
+          spine: {
+            scope: { label: 'Current MVP' },
+            summary: {
+              headline: 'Current MVP is blocked on proof.',
+              purpose: 'Build a fiction-first evaluation and reasoning harness.',
+              selectedScopeLabel: 'Current MVP',
+              includedWorkCount: 3,
+              deferredWorkCount: 2,
+              topBlocker: 'Anti-sameness proof missing',
+            },
+            release: {
+              blockers: [{
+                id: 'proof:anti-sameness',
+                label: 'Anti-sameness proof missing',
+                owningNodeId: 'work:task-anti-sameness',
+              }],
+            },
+            nodes: {
+              'work:task-anti-sameness': {
+                id: 'work:task-anti-sameness',
+                title: 'Anti-sameness safeguards',
+              },
+            },
+          },
+        })
+      }
+      return json({
+        ...readyPayload,
+        ready: false,
+        notReadyReason: 'Anti-sameness proof missing',
+        totals: { blockingCount: 1, tasks: 3, done: 2 },
+      })
+    }))
+
+    render(ReleaseTab)
+
+    expect(await screen.findByText('Current MVP is blocked on proof.')).toBeTruthy()
+    expect(screen.getByText('Current MVP')).toBeTruthy()
+    expect(screen.getByText('3 included · 2 later')).toBeTruthy()
+    expect(screen.getAllByText('Anti-sameness proof missing').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getByText('Anti-sameness safeguards')).toBeTruthy()
+  })
+
   it('renders criteria blockers and the task-state tally', async () => {
     vi.stubGlobal(
       'fetch',

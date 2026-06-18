@@ -11,7 +11,7 @@ import type { Context } from 'hono'
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import { serve } from '@hono/node-server'
-import { atomicWriteText, getProjectStateDir, getProjectSystemStatePath, getProjectTranscriptPath } from '@guildhall/sessions'
+import { atomicWriteText, getProjectStateDir, getProjectSystemStatePath, getProjectTranscriptPath, upsertTaskRuntimeState } from '@guildhall/sessions'
 import { readTaskWorkspaceStore } from './task-state-store.js'
 import {
   readWorkspaceConfig,
@@ -74,11 +74,14 @@ import {
   readCheckpoint,
   readExploringTranscript,
   resolveEscalation,
+  resolveSupersededEscalations,
   isMaterializableSplitAction,
   materializeSplitChildren,
+  settleAlreadyRepresentedSplitRecommendations,
+  settleMaterializedSplitReadiness,
   updateDesignSystem,
 } from '@guildhall/tools'
-import { DesignSystem, summarizeDesignSystem, TaskQueue, type DesignSystem as DesignSystemRecord, type Task } from '@guildhall/core'
+import { DesignSystem, parseAcceptanceCriteriaFromSpec, summarizeDesignSystem, TaskQueue, type DesignSystem as DesignSystemRecord, type Task } from '@guildhall/core'
 import {
   loadProjectGuildRoster,
   selectApplicableGuilds,
@@ -163,6 +166,7 @@ import {
   recordExternalAgentLink,
 } from './external-agent-links.js'
 import { deriveProjectWorkProgress, type ProjectWorkProgress } from './work-progress.js'
+import { buildProjectOrientationSpine, type ProjectOrientationCharter } from './project-orientation-spine.js'
 import type { SurfaceReviewPacket } from './contract-surfaces.js'
 import {
   acceptProjectDependencyDelivery,
@@ -255,6 +259,7 @@ import {
   resetProjectSkillProposals,
 } from '@guildhall/skills'
 import { normalizeImportedDraftTask } from './import-drafts.js'
+import { specReviewRequiresOwnerApproval } from './orchestrator-picker.js'
 import {
   buildInbox,
   buildInboxBlockers,
@@ -320,6 +325,7 @@ import {
   resolveWorkspaceProjectPaths,
 } from './git-story-policy.js'
 import { taskHasUnansweredVisibleQuestion } from './question-visibility.js'
+import { validateSpecCompletionBoundary } from './spec-quality.js'
 import { repairStaleBlockersForProject } from './stale-blocker-repair.js'
 import {
   buildCoordinatorProjectPathMap,
@@ -787,6 +793,99 @@ async function collectProjectReintakeSources(projectPath: string): Promise<Array
 
 const execFileP = promisify(execFile)
 
+function stripMarkdownFrontMatter(content: string): string {
+  return content.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, '').trim()
+}
+
+function markdownParagraphs(content: string): string[] {
+  return stripMarkdownFrontMatter(content)
+    .split(/\r?\n\s*\r?\n/)
+    .map(paragraph =>
+      paragraph
+        .split(/\r?\n/)
+        .map(line => line.trim().replace(/^[-*]\s+/, '').replace(/^\d+\.\s+/, ''))
+        .filter(line =>
+          line.length > 0 &&
+          !line.startsWith('#') &&
+          !line.startsWith('```'),
+        )
+        .join(' ')
+        .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+        .replace(/[`*_]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim(),
+    )
+    .filter(Boolean)
+}
+
+function inferProjectCharterFromExistingSources(
+  projectPath: string,
+  config?: WorkspaceYamlConfig | null,
+): Partial<ProjectOrientationCharter> | null {
+  const councilGoal = config?.council?.mandate?.trim() || null
+  const coordinatorGoal = config?.coordinators?.map(coordinator => coordinator.mandate?.trim()).find(Boolean) || null
+  const configAudience = config?.projects?.length
+    ? config.projects
+        .map(project => [project.label, project.type].filter(Boolean).join(' '))
+        .filter(Boolean)
+        .join('; ')
+    : null
+  const candidates = [
+    projectBriefPath(projectPath),
+    join(projectPath, 'README.md'),
+    join(projectPath, 'readme.md'),
+    join(projectPath, 'docs', 'index.md'),
+  ]
+  const paragraphs = candidates.flatMap(candidate => {
+    if (!existsSync(candidate)) return []
+    try {
+      return markdownParagraphs(readFileSync(candidate, 'utf8')).map(text => ({ path: candidate, text }))
+    } catch {
+      return []
+    }
+  })
+  const goal = paragraphs.find(paragraph =>
+    /is a |is an |gathers|build|building|workspace|software|system|platform/i.test(paragraph.text),
+  )?.text
+  const weakContainerDescription = Boolean(goal && /^this is (a )?(mono)?repo containing:?$/i.test(goal))
+  const isMetadataParagraph = (text: string) => /^\s*(status|target domain|license version)\s*:/i.test(text)
+  const isNavigationParagraph = (text: string) => /^(quick links|documentation|reference documentation|essential|technical):/i.test(text)
+  const targetAudience =
+    paragraphs.find(paragraph =>
+      paragraph.text !== goal && !isMetadataParagraph(paragraph.text) && !isNavigationParagraph(paragraph.text) && /\btarget\b|\baudience\b/i.test(paragraph.text),
+    )?.text ??
+    paragraphs.find(paragraph =>
+      paragraph.text !== goal && !isMetadataParagraph(paragraph.text) && !isNavigationParagraph(paragraph.text) && /\bauthors?\b|\busers?\b|\bwriters?\b|\bdevelopers?\b|\bmaintainers?\b/i.test(paragraph.text),
+    )?.text
+  const successDefinition = paragraphs.find(paragraph =>
+    /\bshould\b|\boptimize\b|\bmake\b|\bgoal\b|\bsuccess\b/i.test(paragraph.text) &&
+    paragraph.text !== goal &&
+    paragraph.text !== targetAudience,
+  )?.text
+  const currentReleaseTarget = paragraphs.find(paragraph =>
+    /\b(mvp|release|current scope|bounded scope|first milestone|first version|headless|script[- ]only)\b/i.test(paragraph.text),
+  )?.text
+  const selectedGoal = councilGoal ?? (goal && !weakContainerDescription ? goal : coordinatorGoal ?? goal)
+  if (!selectedGoal && !configAudience && !targetAudience && !successDefinition) return null
+  return {
+    goal: selectedGoal ?? null,
+    targetAudience: configAudience ?? targetAudience ?? null,
+    currentReleaseTarget: currentReleaseTarget ?? null,
+    successDefinition: successDefinition ?? null,
+    nonGoals: [],
+    source: existsSync(projectBriefPath(projectPath)) ? 'owner_approved' : 'inferred',
+  }
+}
+
+function projectOrientationSourceRefs(projectPath: string): string[] {
+  const refs: string[] = []
+  if (existsSync(projectBriefPath(projectPath))) refs.push('project-brief.md')
+  for (const candidate of ['README.md', 'readme.md', 'docs/index.md']) {
+    if (existsSync(join(projectPath, candidate))) refs.push(candidate)
+  }
+  return refs
+}
+
 function isReviewOwnershipMismatch(task: Record<string, unknown>): boolean {
   const handoffSequence = Array.isArray(task.handoffSequence) ? task.handoffSequence : []
   const handoffStep =
@@ -820,6 +919,15 @@ function isTerminalOwnershipMismatch(task: Record<string, unknown>): boolean {
   )
 }
 
+function isCompletedBlockedContradiction(task: Record<string, unknown>): boolean {
+  return (
+    task.status === 'blocked' &&
+    typeof task.completedAt === 'string' &&
+    task.completedAt.trim().length > 0 &&
+    (typeof task.blockReason !== 'string' || task.blockReason.trim().length === 0)
+  )
+}
+
 const normalizedTasksCache = new Map<string, { raw: unknown; tasks: Array<Record<string, unknown>> }>()
 
 function sameSerializedTasks(left: unknown, right: unknown): boolean {
@@ -849,7 +957,23 @@ async function readTasksFileNormalized(
       }
       changed = true
     }
-    if (isWorkerOwnershipMismatch(task)) {
+    if (isCompletedBlockedContradiction(task)) {
+      const now = new Date().toISOString()
+      task.status = 'done'
+      task.assignedTo = null
+      delete task.blockReason
+      task.updatedAt = now
+      task.notes = [
+        ...(Array.isArray(task.notes) ? task.notes as Array<Record<string, unknown>> : []),
+        {
+          agentId: 'coordinator-recovery',
+          role: 'system',
+          content: 'Recovered completed task from stale blocked status because completedAt was set and no block reason remained.',
+          timestamp: now,
+        },
+      ]
+      changed = true
+    } else if (isWorkerOwnershipMismatch(task)) {
       task.assignedTo = 'worker-agent'
       if (typeof task.updatedAt !== 'string' || task.updatedAt.trim().length === 0) {
         task.updatedAt = new Date().toISOString()
@@ -1013,6 +1137,185 @@ function newRequestRoutingSummary(kind: string): string {
 
 function projectTasksPath(projectPath: string): string {
   return getProjectSystemStatePath(projectPath, 'TASKS.json')
+}
+
+function displayTaskTitleForRecoverySpec(task: Record<string, unknown>): string {
+  const title = typeof task.title === 'string' ? task.title.trim() : ''
+  if (title) return title
+  const id = typeof task.id === 'string' ? task.id.trim() : ''
+  return id || 'this task'
+}
+
+function briefList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    : []
+}
+
+function canPromoteApprovedBriefToSpecReview(task: Record<string, unknown> | undefined): boolean {
+  if (!task) return false
+  if (task.status === 'exploring') return true
+  return task.status === 'in_progress' && task.assignedTo == null
+}
+
+function seedSpecFromApprovedBrief(task: Record<string, unknown>, now: string): boolean {
+  const brief = task.productBrief as Record<string, unknown> | undefined
+  if (!brief || typeof brief !== 'object') return false
+  if (typeof brief.approvedAt !== 'string' || brief.approvedAt.trim().length === 0) return false
+  if (typeof task.spec === 'string' && task.spec.trim().length > 0) return false
+
+  const title = displayTaskTitleForRecoverySpec(task)
+  const description = typeof task.description === 'string' && task.description.trim().length > 0
+    ? task.description.trim()
+    : title
+  const userJob = typeof brief.userJob === 'string' && brief.userJob.trim().length > 0
+    ? brief.userJob.trim()
+    : `Complete ${title}.`
+  const whyItMattersNow = typeof brief.whyItMattersNow === 'string' && brief.whyItMattersNow.trim().length > 0
+    ? brief.whyItMattersNow.trim()
+    : 'The owner approved this brief, so Guildhall should make durable progress without asking the same intake question again.'
+  const successMetric = typeof brief.successMetric === 'string' && brief.successMetric.trim().length > 0
+    ? brief.successMetric.trim()
+    : `${title} has a reviewable spec, acceptance criteria, and proof boundary.`
+  const nonGoals = [...briefList(brief.nonGoals), ...briefList(brief.antiPatterns)]
+  const uniqueNonGoals = [...new Set(nonGoals)]
+
+  const spec = [
+    '## Summary',
+    `Complete ${title} from the approved product brief and current task evidence.`,
+    '',
+    '## Source Evidence',
+    `- Approved user job: ${userJob}`,
+    `- Why it matters now: ${whyItMattersNow}`,
+    `- Success metric: ${successMetric}`,
+    `- Existing task description: ${description}`,
+    '',
+    '## Acceptance Criteria',
+    `1. Given the approved brief, when ${title} is completed, then the delivered work satisfies the approved user job without asking the owner to repeat answered intake.`,
+    `2. Given the current task evidence, when the task is reviewed, then Guildhall records which existing artifacts, docs, tasks, or implementation changes satisfy the remaining delta.`,
+    '3. Given the work is complete, when verification runs, then Guildhall records review or command proof sufficient to explain why the task can move to done.',
+    '',
+    '## Out of Scope',
+    ...(uniqueNonGoals.length > 0
+      ? uniqueNonGoals.map((item) => `- ${item}`)
+      : ['- Work not implied by the approved brief or current task evidence.']),
+    '',
+    '## Open Questions',
+    '- None. The owner-approved brief is enough to continue; only newly discovered product decisions should return this task to exploring.',
+    '',
+    '## Completion Boundary',
+    `- Product outcome: ${successMetric}`,
+    '- What Guildhall can complete in code: the repo-local docs, artifacts, task records, implementation, tests, or proof needed by this approved brief.',
+    '- External dependencies: None known from the approved brief.',
+    '- Owner-only setup: None known after approval.',
+    '- Verification environment: the current registered project and its existing proof surfaces.',
+    '- What counts as done: the remaining delta is implemented or proven already satisfied, reviewed, and backed by recorded verification.',
+    '- What must be split or blocked: only newly discovered work that cannot be resolved from the approved brief and current task evidence.',
+  ].join('\n')
+
+  task.spec = spec
+  task.acceptanceCriteria = parseAcceptanceCriteriaFromSpec(spec)
+  const quality = validateSpecCompletionBoundary(task as unknown as Task)
+  if (!quality.ok) {
+    delete task.spec
+    task.acceptanceCriteria = []
+    return false
+  }
+  const notes = Array.isArray(task.notes) ? [...task.notes as Array<Record<string, unknown>>] : []
+  notes.push({
+    agentId: 'coordinator-recovery',
+    role: 'system',
+    content:
+      'Guildhall wrote a deterministic spec seed from the approved brief so owner-approved intake becomes reviewable work instead of another blocker.',
+    timestamp: now,
+  })
+  task.notes = notes
+  return true
+}
+
+function resolveApprovalSupersededEscalations(
+  task: Record<string, unknown>,
+  now: string,
+  resolution: string,
+): string[] {
+  return resolveSupersededEscalations(task as unknown as Task, {
+    now,
+    resolvedBy: 'system',
+    resolution,
+  })
+}
+
+function taskHasRunnableSpec(task: Record<string, unknown>): boolean {
+  return (
+    typeof task.spec === 'string' &&
+    task.spec.trim().length > 0 &&
+    Array.isArray(task.acceptanceCriteria) &&
+    task.acceptanceCriteria.length > 0
+  )
+}
+
+function lastTaskNote(task: Record<string, unknown>): Record<string, unknown> | undefined {
+  const notes = Array.isArray(task.notes) ? task.notes as Array<Record<string, unknown>> : []
+  return notes.at(-1)
+}
+
+function isPhantomWorkerClaimAfterStoppedRun(task: Record<string, unknown>): boolean {
+  if (task.status !== 'in_progress') return false
+  if (!taskHasRunnableSpec(task)) return false
+  const last = lastTaskNote(task)
+  return (
+    last?.agentId === 'task-claimer' &&
+    /Claimed ready task for worker-agent/i.test(String(last.content ?? ''))
+  )
+}
+
+async function repairStoppedRunPhantomActiveTasks(projectPath: string): Promise<number> {
+  const tasksPath = projectTasksPath(projectPath)
+  if (!existsSync(tasksPath)) return 0
+  const parsed = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')) as
+    | { tasks?: Array<Record<string, unknown>>; version?: number; lastUpdated?: string }
+    | Array<Record<string, unknown>>
+  const queue = Array.isArray(parsed)
+    ? { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
+    : { version: parsed.version ?? 1, lastUpdated: parsed.lastUpdated ?? new Date().toISOString(), tasks: parsed.tasks ?? [] }
+  const now = new Date().toISOString()
+  let repaired = 0
+  for (const task of queue.tasks) {
+    const effectiveTask = await buildEffectiveTask(projectPath, task as Task) as unknown as Record<string, unknown>
+    if (!isPhantomWorkerClaimAfterStoppedRun(effectiveTask)) continue
+    if (!taskHasRunnableSpec(task) && taskHasRunnableSpec(effectiveTask)) {
+      task.spec = effectiveTask.spec
+      task.acceptanceCriteria = effectiveTask.acceptanceCriteria
+    }
+    task.status = 'ready'
+    task.assignedTo = null
+    task.updatedAt = now
+    resolveApprovalSupersededEscalations(
+      task,
+      now,
+      'Superseded by stopped-run phantom active repair; no worker evidence followed the claim, so Guildhall will retry from the runnable spec.',
+    )
+    const notes = Array.isArray(task.notes) ? [...task.notes as Array<Record<string, unknown>>] : []
+    notes.push({
+      agentId: 'system',
+      role: 'state-repair',
+      content:
+        'Cleared a phantom worker claim after the coordinator stopped without new worker evidence. Guildhall will retry from the approved runnable spec.',
+      timestamp: now,
+    })
+    task.notes = notes
+    await upsertTaskRuntimeState(projectPath, String(task.id), {
+      assignedTo: null,
+      openEscalationIds: [],
+      updatedAt: now,
+    })
+    repaired += 1
+  }
+  if (repaired > 0) {
+    queue.lastUpdated = now
+    writeManagedTextFileSync(tasksPath, JSON.stringify(queue, null, 2) + '\n')
+  }
+  return repaired
 }
 
 function projectBriefPath(projectPath: string): string {
@@ -3079,6 +3382,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
         runStatus: run?.status ?? 'stopped',
         availability,
       })
+      const orientationSpine = buildProjectOrientationSpine({
+        projectId: project.id,
+        charter: inferProjectCharterFromExistingSources(project.path, project.config),
+        tasks: tasks as Task[],
+        sourceRefs: projectOrientationSourceRefs(project.path),
+      })
       return c.json({
         initializationNeeded: false,
         id: project.id,
@@ -3109,6 +3418,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         gitStory,
         startReadiness,
         actionModel,
+        orientationSpine,
         deliverySpine: {
           model: deliveryModel,
           validation: deliveryValidation,
@@ -3118,6 +3428,31 @@ export function buildServeApp(opts: ServeOptions = {}): {
         recentEvents: recent,
         ...(bootstrapStatus ? { bootstrapStatus } : {}),
       })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.get('/api/project/spine', async c => {
+    try {
+      if (project.initializationNeeded) {
+        return c.json({
+          spine: buildProjectOrientationSpine({
+            projectId: project.id,
+            charter: null,
+            tasks: [],
+          }),
+          initializationNeeded: true,
+        })
+      }
+      const rawTasks = await readTasksFileNormalized(projectTasksPath(project.path))
+      const spine = buildProjectOrientationSpine({
+        projectId: project.id,
+        charter: inferProjectCharterFromExistingSources(project.path, project.config),
+        tasks: rawTasks as Task[],
+        sourceRefs: projectOrientationSourceRefs(project.path),
+      })
+      return c.json({ spine })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
@@ -4103,7 +4438,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (taskReadinessBlocker) return taskReadinessBlocker
     }
 
-    const terminal = terminalStartState(input.projectPath, input.requestedTaskId)
+	    const terminal = await terminalStartState(input.projectPath, input.requestedTaskId)
     if (terminal) {
       return {
         canStart: false,
@@ -4206,10 +4541,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
   }
 
-  function terminalStartState(projectPath: string, requestedTaskId?: string): {
-    canStart: false
-    code: 'all_terminal'
-    message: string
+	  async function terminalStartState(projectPath: string, requestedTaskId?: string): Promise<{
+	    canStart: false
+	    code: 'all_terminal'
+	    message: string
     stopSummary: {
       reason: 'all_terminal'
       message: string
@@ -4222,7 +4557,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         terminal: number
       }
     }
-  } | null {
+	  } | null> {
     const tasksPath = projectTasksPath(projectPath)
     if (!existsSync(tasksPath)) return null
     let raw: unknown
@@ -4237,12 +4572,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
         ? (raw as { tasks: unknown[] }).tasks
         : []
     if (tasks.length === 0) return null
-    if (
-      requestedTaskId &&
-      tasks.some(task => isRecoverableBlockedStartTask(task, requestedTaskId))
-    ) {
-      return null
-    }
+	    if (
+	      requestedTaskId &&
+	      await hasRecoverableBlockedStartTask(projectPath, tasks, requestedTaskId)
+	    ) {
+	      return null
+	    }
 
     let done = 0
     let blocked = 0
@@ -4270,9 +4605,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
       ? 'All tasks are already finished.'
       : detailMessage
 
-    return {
-      canStart: false,
-      code: 'all_terminal',
+	    return {
+	      canStart: false,
+	      code: 'all_terminal',
       message,
       stopSummary: {
         reason: 'all_terminal',
@@ -4286,29 +4621,72 @@ export function buildServeApp(opts: ServeOptions = {}): {
           terminal,
         },
       },
-    }
-  }
+	    }
+	  }
 
-  function isRecoverableBlockedStartTask(task: unknown, requestedTaskId: string): boolean {
-    if (!task || typeof task !== 'object') return false
-    const candidate = task as {
-      id?: unknown
-      status?: unknown
-      blockReason?: unknown
-      worktreePath?: unknown
-      branchName?: unknown
-    }
-    if (candidate.id !== requestedTaskId) return false
-    if (candidate.status !== 'blocked') return false
-    const blockReason = typeof candidate.blockReason === 'string' ? candidate.blockReason : ''
-    if (
-      !blockReason.includes('Guildhall could not create a task worktree:') ||
-      !/already exists/i.test(blockReason)
-    ) {
-      return false
-    }
-    return true
-  }
+	  async function hasRecoverableBlockedStartTask(
+	    projectPath: string,
+	    tasks: unknown[],
+	    requestedTaskId: string,
+	  ): Promise<boolean> {
+	    const rawTask = tasks.find(task =>
+	      Boolean(task && typeof task === 'object' && (task as { id?: unknown }).id === requestedTaskId),
+	    )
+	    if (!rawTask) return false
+	    if (isRecoverableBlockedStartTask(rawTask, requestedTaskId)) return true
+	    try {
+	      const effectiveTask = await buildEffectiveTask(projectPath, rawTask as Task)
+	      return isRecoverableBlockedStartTask(effectiveTask, requestedTaskId)
+	    } catch {
+	      return false
+	    }
+	  }
+
+	  function isRecoverableBlockedStartTask(task: unknown, requestedTaskId: string): boolean {
+	    if (!task || typeof task !== 'object') return false
+	    const candidate = task as {
+	      id?: unknown
+	      status?: unknown
+	      blockReason?: unknown
+	      worktreePath?: unknown
+	      branchName?: unknown
+	      reviewVerdicts?: unknown
+	    }
+	    if (candidate.id !== requestedTaskId) return false
+	    if (candidate.status !== 'blocked') return false
+	    const blockReason = typeof candidate.blockReason === 'string' ? candidate.blockReason : ''
+	    if (/max_revisions_exceeded:/i.test(blockReason) && hasPriorAllClearLlmStartReview(candidate.reviewVerdicts)) {
+	      return true
+	    }
+	    if (
+	      !blockReason.includes('Guildhall could not create a task worktree:') ||
+	      !/already exists/i.test(blockReason)
+	    ) {
+	      return false
+	    }
+	    return true
+	  }
+
+	  function hasPriorAllClearLlmStartReview(reviewVerdicts: unknown): boolean {
+	    if (!Array.isArray(reviewVerdicts)) return false
+	    return reviewVerdicts.some((raw) => {
+	      if (!raw || typeof raw !== 'object') return false
+	      const verdict = raw as {
+	        reviewerPath?: unknown
+	        failingSignals?: unknown
+	        reasoning?: unknown
+	      }
+	      if (verdict.reviewerPath !== 'llm') return false
+	      if (Array.isArray(verdict.failingSignals) && verdict.failingSignals.length > 0) return false
+	      const reasoning = typeof verdict.reasoning === 'string' ? verdict.reasoning : ''
+	      return [
+	        'acceptance-criteria-met',
+	        'no-scope-creep',
+	        'conventions-followed',
+	        'no-regressions',
+	      ].every((key) => new RegExp(`${key}\\s*:\\s*yes\\b`, 'i').test(reasoning))
+	    })
+	  }
 
   async function startBlockerForImportDrafts(projectPath: string): Promise<{
     canStart: false
@@ -4371,11 +4749,16 @@ export function buildServeApp(opts: ServeOptions = {}): {
         continue
       }
       if (status === 'spec_review') {
-        waitingForApproval += 1
-        if (!firstWaitingSpecTaskId) {
-          const id = (task as { id?: unknown }).id
-          firstWaitingSpecTaskId = typeof id === 'string' && id.trim() ? id.trim() : null
+        const id = (task as { id?: unknown }).id
+        const taskId = typeof id === 'string' && id.trim() ? id.trim() : null
+        if (taskId && specReviewRequiresOwnerApproval({ id: taskId })) {
+          waitingForApproval += 1
+          if (!firstWaitingSpecTaskId) {
+            firstWaitingSpecTaskId = taskId
+          }
+          continue
         }
+        runnable += 1
         continue
       }
       if (status === 'ready' && !isReadyForWorkerHandoffRecord(task)) {
@@ -4483,14 +4866,18 @@ export function buildServeApp(opts: ServeOptions = {}): {
         taskId?: string
       }
       const existingRun = supervisor.get(project.id)
-      if (body.taskId && existingRun && (existingRun.status === 'running' || existingRun.status === 'stopping')) {
+      if (body.taskId && existingRun?.status === 'stopping') {
+        await supervisor.forceStopStaleStoppingRun(project.id, 3_000)
+      }
+      const activeRun = supervisor.get(project.id)
+      if (body.taskId && activeRun && (activeRun.status === 'running' || activeRun.status === 'stopping')) {
         return c.json(
           {
-            error: existingRun.status === 'running'
+            error: activeRun.status === 'running'
               ? 'A run is already active for this project. This task remains queued; stop the current run first if you need to restart on this exact task.'
               : 'The run is stopping. Wait for it to stop before starting this specific task.',
             code: 'run_already_active',
-            status: existingRun.status,
+            status: activeRun.status,
           },
           409,
         )
@@ -4527,7 +4914,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       })
       if (!startReadiness.canStart) {
         if (startReadiness.code === 'all_terminal') {
-          const terminal = terminalStartState(project.path, body.taskId)
+	          const terminal = await terminalStartState(project.path, body.taskId)
           if (terminal) {
             return c.json({
               status: 'stopped',
@@ -6231,9 +6618,15 @@ export function buildServeApp(opts: ServeOptions = {}): {
         runStatus: supervisor.get(project.id)?.status ?? 'stopped',
         recentEvents: supervisor.recent(project.id, undefined, project.path),
       })
+      const orientationSpine = buildProjectOrientationSpine({
+        projectId: project.id,
+        charter: inferProjectCharterFromExistingSources(project.path, project.config),
+        tasks: state.tasks as Task[],
+        sourceRefs: projectOrientationSourceRefs(project.path),
+      })
       timing[0]!.endedAt = Date.now()
       c.header('server-timing', formatServerTiming(timing))
-      return c.json(thread)
+      return c.json({ ...thread, orientationSpine })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
@@ -7270,6 +7663,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   //                        (body: {message?, resolveEscalationId?, resolution?})
   //   enrich-task        → add missing checklist/split structure while preserving useful context
   //   reframe-task       → reopen a stale/inscrutable task for fresh shaping
+  //   update-dependencies → replace task blockers from an explicit user/delegate correction
   //   create-split-children → materialize stored split-required child recommendations
   //   resolve-escalation → close a named escalation; unblocks when none remain
   //                        (body: {escalationId, resolution, nextStatus?})
@@ -7297,6 +7691,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
         'answer-question',
         'answer-questions',
         'rerun-stage',
+        'update-dependencies',
+        'retry-work',
         'shape-draft',
         'create-split-children',
       ] as const
@@ -7394,6 +7790,152 @@ export function buildServeApp(opts: ServeOptions = {}): {
         return c.json({ ok: true, status: result.newStatus })
       }
 
+      if (action === 'update-dependencies') {
+        const body = await c.req.json().catch(() => ({})) as {
+          dependsOn?: unknown
+          reason?: unknown
+        }
+        if (!Array.isArray(body.dependsOn)) {
+          return c.json({ error: 'dependsOn must be an array of task ids' }, 400)
+        }
+        const requestedDependencies = body.dependsOn
+          .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+          .map(item => item.trim())
+        const tasksPath = projectTasksPath(project.path)
+        if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
+        const parsed = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')) as
+          | { tasks?: Array<Record<string, unknown>>; version?: number; lastUpdated?: string }
+          | Array<Record<string, unknown>>
+        const queue = Array.isArray(parsed)
+          ? { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
+          : { version: parsed.version ?? 1, lastUpdated: parsed.lastUpdated ?? new Date().toISOString(), tasks: parsed.tasks ?? [] }
+        const task = queue.tasks.find(t => (t as { id?: string }).id === id) as Record<string, unknown> | undefined
+        if (!task) return c.json({ error: 'task not found' }, 404)
+        const knownIds = new Set(queue.tasks.map(t => typeof t.id === 'string' ? t.id : '').filter(Boolean))
+        const unknownDependencies = requestedDependencies.filter(dependencyId => !knownIds.has(dependencyId))
+        if (unknownDependencies.length > 0) {
+          return c.json({ error: `unknown dependency task id(s): ${unknownDependencies.join(', ')}` }, 400)
+        }
+        const dependsOn = requestedDependencies.filter((dependencyId, index, all) =>
+          dependencyId !== id && all.indexOf(dependencyId) === index,
+        )
+        const now = new Date().toISOString()
+        const previous = Array.isArray(task.dependsOn)
+          ? task.dependsOn.filter((item): item is string => typeof item === 'string')
+          : []
+        task.dependsOn = dependsOn
+        task.updatedAt = now
+        const notes = Array.isArray(task.notes) ? [...task.notes as Array<Record<string, unknown>>] : []
+        const reason = typeof body.reason === 'string' && body.reason.trim()
+          ? body.reason.trim()
+          : 'User/delegate corrected this task dependency boundary.'
+        notes.push({
+          agentId: 'system:human',
+          role: 'human',
+          content: [
+            `Updated task blockers: ${dependsOn.length > 0 ? dependsOn.join(', ') : 'none'}.`,
+            `Previous blockers: ${previous.length > 0 ? previous.join(', ') : 'none'}.`,
+            `Reason: ${reason}`,
+          ].join('\n'),
+          timestamp: now,
+        })
+        task.notes = notes
+        queue.lastUpdated = now
+        writeManagedTextFileSync(tasksPath, JSON.stringify(queue, null, 2) + '\n')
+        return c.json({ ok: true, taskId: id, dependsOn })
+      }
+
+      if (action === 'retry-work') {
+        const body = await c.req.json().catch(() => ({})) as {
+          instruction?: string
+        }
+        const tasksPath = projectTasksPath(project.path)
+        if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
+        let parsed = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')) as
+          | { tasks?: Array<Record<string, unknown>>; version?: number; lastUpdated?: string }
+          | Array<Record<string, unknown>>
+        let queue = Array.isArray(parsed)
+          ? { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
+          : { version: parsed.version ?? 1, lastUpdated: parsed.lastUpdated ?? new Date().toISOString(), tasks: parsed.tasks ?? [] }
+        let task = queue.tasks.find(t => (t as { id?: string }).id === id) as Record<string, unknown> | undefined
+        if (!task) return c.json({ error: 'task not found' }, 404)
+        if (task.status === 'done' || task.status === 'shelved' || task.status === 'pending_pr') {
+          return c.json({ error: `task is ${task.status}` }, 400)
+        }
+        const now = new Date().toISOString()
+        const instruction = body.instruction?.trim()
+        const effectiveTask = await buildEffectiveTask(project.path, task as Task) as unknown as Task & {
+          runtime?: { openEscalationIds?: string[] }
+        }
+        const openEscalations = activeEscalations(effectiveTask)
+        const hasRuntimeEscalationIds =
+          Array.isArray(effectiveTask.runtime?.openEscalationIds) &&
+          effectiveTask.runtime.openEscalationIds.length > 0
+        let shouldClearRuntimeEscalations = hasRuntimeEscalationIds
+        for (const escalation of openEscalations) {
+          const resolved = await resolveEscalation({
+            tasksPath,
+            progressPath: getProjectSystemStatePath(project.path, 'PROGRESS.md'),
+            taskId: id,
+            escalationId: escalation.id,
+            resolution: instruction
+              ? `Retrying worker pass with owner steering: ${instruction}`
+              : 'Retrying worker pass from the current saved worktree state.',
+            resolvedBy: 'human',
+            nextStatus: 'ready',
+          })
+          if (!resolved.success) {
+            if (resolved.error === `Escalation ${escalation.id} not found on ${id}`) {
+              shouldClearRuntimeEscalations = true
+              continue
+            }
+            return c.json({ error: resolved.error ?? `Could not resolve escalation ${escalation.id}` }, 400)
+          }
+        }
+        if (openEscalations.length > 0) {
+          parsed = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')) as
+            | { tasks?: Array<Record<string, unknown>>; version?: number; lastUpdated?: string }
+            | Array<Record<string, unknown>>
+          queue = Array.isArray(parsed)
+            ? { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
+            : { version: parsed.version ?? 1, lastUpdated: parsed.lastUpdated ?? new Date().toISOString(), tasks: parsed.tasks ?? [] }
+          task = queue.tasks.find(t => (t as { id?: string }).id === id) as Record<string, unknown> | undefined
+          if (!task) return c.json({ error: 'task not found after escalation resolution' }, 404)
+        }
+        const notes = Array.isArray(task.notes) ? [...task.notes as Array<Record<string, unknown>>] : []
+        notes.push({
+          agentId: 'system:human',
+          role: 'human',
+          content: instruction
+            ? `Retry partial worker pass: ${instruction}`
+            : 'Retry partial worker pass from the current saved worktree state.',
+          timestamp: now,
+        })
+        task.notes = notes
+        task.status = 'in_progress'
+        task.assignedTo = null
+        delete task.blockReason
+        task.updatedAt = now
+        queue.lastUpdated = now
+        if (shouldClearRuntimeEscalations) {
+          await upsertTaskRuntimeState(project.path, id, {
+            assignedTo: null,
+            openEscalationIds: [],
+            updatedAt: now,
+          })
+        }
+        writeManagedTextFileSync(tasksPath, JSON.stringify(queue, null, 2) + '\n')
+        if (instruction) {
+          await resumeExploring({
+            memoryDir,
+            taskId: id,
+            message: instruction,
+            preserveStatus: true,
+          })
+        }
+        return c.json({ ok: true, status: task.status })
+      }
+
       if (action === 'shape-draft') {
         const result = await shapeImportDraft({
           memoryDir,
@@ -7410,34 +7952,61 @@ export function buildServeApp(opts: ServeOptions = {}): {
         const task = queue.tasks.find(t => t.id === id)
         if (!task) return c.json({ error: 'task not found' }, 404)
         const sizePlan = task.sizePlan
-        if (!sizePlan || !isMaterializableSplitAction(sizePlan.action)) {
+        const hasSettledRepresentedSplit =
+          sizePlan?.action === 'proceed_with_warning' &&
+          task.taskReadiness?.recommendation === 'split' &&
+          (sizePlan.recommendedChildren?.length ?? 0) > 0
+        if (!sizePlan || (!isMaterializableSplitAction(sizePlan.action) && !hasSettledRepresentedSplit)) {
           return c.json({ error: 'task does not have split recommendations' }, 400)
         }
         const now = new Date().toISOString()
         const deliveryModel = await readProjectDeliveryModel(project.path)
-        const preflightPlan = planTaskSplit({
-          model: deliveryModel,
-          tasks: queue.tasks as Task[],
-          taskId: task.id,
-        })
+        const preflightPlan = isMaterializableSplitAction(sizePlan.action)
+          ? planTaskSplit({
+              model: deliveryModel,
+              tasks: queue.tasks as Task[],
+              taskId: task.id,
+            })
+          : {
+              parentTaskId: task.id,
+              action: sizePlan.action,
+              children: [],
+              errors: [],
+              warnings: [],
+            }
         if (preflightPlan.errors.length > 0) {
           return c.json({
             error: 'split plan failed validation',
             plan: preflightPlan,
           }, 400)
         }
-        materializeSplitChildren(queue, task, now)
-        const appliedPlan = planTaskSplit({
-          model: deliveryModel,
-          tasks: queue.tasks as Task[],
-          taskId: task.id,
-        })
-        for (const childPlan of appliedPlan.children) {
-          const child = queue.tasks.find(candidate => candidate.id === childPlan.plannedTaskId)
-          if (!child) continue
-          child.delivery = childPlan.delivery
-          child.dependsOn = childPlan.dependsOn
-          child.updatedAt = now
+        const repairedSettledSplit = hasSettledRepresentedSplit
+          ? settleMaterializedSplitReadiness(queue, task, now) ?? settleAlreadyRepresentedSplitRecommendations(queue, task, now)
+          : null
+        const materialized = repairedSettledSplit
+          ? { status: 'already_represented' as const, childTaskIds: repairedSettledSplit.childTaskIds }
+          : materializeSplitChildren(queue, task, now)
+        const appliedPlan = materialized.status === 'already_represented'
+          ? {
+              ...preflightPlan,
+              warnings: [
+                ...preflightPlan.warnings,
+                {
+                  path: `tasks.${task.id}.sizePlan`,
+                  code: 'split_already_represented',
+                  message: 'Split recommendations already match existing sibling tasks; no new child tasks were created.',
+                },
+              ],
+            }
+          : preflightPlan
+        if (materialized.status === 'materialized') {
+          for (const childPlan of appliedPlan.children) {
+            const child = queue.tasks.find(candidate => candidate.id === childPlan.plannedTaskId)
+            if (!child) continue
+            child.delivery = childPlan.delivery
+            child.dependsOn = childPlan.dependsOn
+            child.updatedAt = now
+          }
         }
         task.updatedAt = now
         queue.lastUpdated = now
@@ -7446,7 +8015,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
           ok: true,
           parentTaskId: task.id,
           splitPlan: appliedPlan,
-          createdTaskIds: sizePlan.recommendedChildren
+          createdTaskIds: materialized.childTaskIds.length > 0
+            ? materialized.childTaskIds
+            : sizePlan.recommendedChildren
             .map(child => child.createdTaskId)
             .filter((createdTaskId): createdTaskId is string => Boolean(createdTaskId)),
         })
@@ -7510,22 +8081,48 @@ export function buildServeApp(opts: ServeOptions = {}): {
         brief.approvedBy = 'human'
         brief.approvedAt = now
         task.productBrief = brief
-        const hasUnansweredQuestions = taskHasUnansweredVisibleQuestion(task as unknown as Task)
+        const effectiveTask = await buildEffectiveTask(project.path, task as Task)
+        const hadRuntimeOpenEscalationIds =
+          Array.isArray(effectiveTask.runtime?.openEscalationIds) &&
+          effectiveTask.runtime.openEscalationIds.length > 0
+        const hasUnansweredQuestions = taskHasUnansweredVisibleQuestion(effectiveTask as unknown as Task)
         const hasConcreteSpecDraft =
           typeof task.spec === 'string' &&
           task.spec.trim().length > 0 &&
           Array.isArray(task.acceptanceCriteria) &&
           task.acceptanceCriteria.length > 0
+        const canPromoteBrief =
+          canPromoteApprovedBriefToSpecReview(task) ||
+          canPromoteApprovedBriefToSpecReview(effectiveTask as unknown as Record<string, unknown>)
         if (
-          task.status === 'exploring' &&
+          canPromoteBrief &&
           hasConcreteSpecDraft &&
           !hasUnansweredQuestions
         ) {
           task.status = 'spec_review'
+        } else if (
+          canPromoteBrief &&
+          !hasConcreteSpecDraft &&
+          !hasUnansweredQuestions &&
+          seedSpecFromApprovedBrief(task, now)
+        ) {
+          task.status = 'spec_review'
         }
         task.updatedAt = now
+        const resolvedEscalationIds = resolveApprovalSupersededEscalations(
+          task,
+          now,
+          'Superseded by approved task intake; the approved brief/spec is enough for Guildhall to continue without owner re-intake.',
+        )
         queue.lastUpdated = now
         writeManagedTextFileSync(tasksPath, JSON.stringify(queue, null, 2) + '\n')
+        if (resolvedEscalationIds.length > 0 || hadRuntimeOpenEscalationIds) {
+          await upsertTaskRuntimeState(project.path, id, {
+            assignedTo: null,
+            openEscalationIds: [],
+            updatedAt: now,
+          })
+        }
         return c.json({ ok: true, status: task.status })
       }
 
@@ -7955,13 +8552,16 @@ export function buildServeApp(opts: ServeOptions = {}): {
   // GET /api/project/activity — counts + in-flight tasks for the always-on
   // agent-activity chip. Cheap enough to poll every few seconds from any
   // view (not just the project page).
-  app.get('/api/project/activity', c => {
+  app.get('/api/project/activity', async c => {
     try {
       if (project.initializationNeeded) return c.json({ running: false, counts: {}, inFlight: [] })
       const run = supervisor.get(project.id)
       const tasksPath = projectTasksPath(project.path)
       const empty = { running: run?.status === 'running', counts: {}, inFlight: [] as unknown[] }
       if (!existsSync(tasksPath)) return c.json(empty)
+      if (run?.status !== 'running' && run?.status !== 'stopping') {
+        await repairStoppedRunPhantomActiveTasks(project.path)
+      }
       const raw = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')) as
         | { tasks?: Array<Record<string, unknown>> }
         | Array<Record<string, unknown>>

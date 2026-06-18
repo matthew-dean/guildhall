@@ -652,6 +652,132 @@ export interface DeliverySpine {
   contextPacket?: TaskContextPacket
 }
 
+export interface ProjectOrientationSource {
+  kind?: string
+  refs?: string[]
+  confidence?: 'low' | 'medium' | 'high' | string
+  freshness?: 'unknown' | 'stale' | 'fresh' | string
+  inferred?: boolean
+  refreshedAt?: string
+}
+
+export interface ProjectOrientationNode {
+  id?: string
+  kind?: string
+  title?: string
+  summary?: string
+  maturity?: string
+  status?: string
+  progress?: {
+    total?: number
+    briefed?: number
+    specced?: number
+    sliced?: number
+    ready?: number
+    active?: number
+    proven?: number
+    done?: number
+    blocked?: number
+    deferred?: number
+  }
+  inSelectedScope?: boolean
+  deferred?: boolean
+  parentId?: string | null
+  childIds?: string[]
+  children?: ProjectOrientationNode[]
+  blockers?: Array<{ id?: string; label?: string; severity?: string; owner?: string; sourceRef?: string }>
+  proof?: { status?: string; label?: string; evidenceRefs?: string[] }
+  ownerAction?: { label?: string; href?: string; reason?: string }
+  refs?: {
+    taskIds?: string[]
+    threadIds?: string[]
+    artifactIds?: string[]
+    structuralDomainIds?: string[]
+    primitiveIds?: string[]
+    releaseCheckIds?: string[]
+  }
+  source?: ProjectOrientationSource | 'owner_approved' | 'spec' | 'release_plan' | 'inferred' | 'missing' | string
+  visibility?: {
+    kind?: 'primary' | 'supporting' | 'internal_step' | 'hidden' | string
+    countInProjectTotals?: boolean
+  }
+}
+
+export interface ProjectOrientationSpine {
+  projectId?: string
+  generatedAt?: string
+  charter?: {
+    goal?: string | null
+    targetAudience?: string | null
+    currentReleaseTarget?: string | null
+    successDefinition?: string | null
+      source?: ProjectOrientationSource | 'owner_approved' | 'spec' | 'release_plan' | 'inferred' | string
+  }
+  executionBoundary?: {
+    label?: string
+    mode?: 'headless' | 'ui' | 'mixed' | 'unspecified' | string
+    proofStyle?: 'script_only' | 'manual' | 'mixed' | 'unspecified' | string
+    detail?: string
+    source?: ProjectOrientationSource
+  }
+  proofContracts?: Array<{
+    nodeId?: string
+    title?: string
+    state?: string
+    required?: string[]
+    verified?: string[]
+    missing?: string[]
+    refs?: string[]
+  }>
+  scope?: {
+    id?: string
+    label?: string
+    kind?: string
+    source?: ProjectOrientationSource
+    nodeIds?: string[]
+    deferredNodeIds?: string[]
+  }
+  summary?: {
+    headline?: string
+    purpose?: string
+    selectedScopeLabel?: string | null
+    includedCount?: number
+    includedWorkCount?: number
+    deferredCount?: number
+    deferredWorkCount?: number
+    pinnedNow?: Array<string | { nodeId?: string; label?: string; reason?: string; href?: string }>
+    topBlocker?: string | { id?: string; label?: string; severity?: string; owner?: string; sourceRef?: string } | null
+    nextAction?: string | { label?: string; href?: string; reason?: string }
+    progress?: {
+      total?: number
+      briefed?: number
+      specced?: number
+      sliced?: number
+      ready?: number
+      active?: number
+      proven?: number
+      done?: number
+      blocked?: number
+      deferred?: number
+      scopedNodeCount?: number
+      speccedCount?: number
+      provenCount?: number
+      blockedCount?: number
+      deferredCount?: number
+    }
+  }
+  roots?: ProjectOrientationNode[]
+  nodes?: Record<string, ProjectOrientationNode>
+  activePins?: Array<{ id?: string; nodeId?: string; label?: string; kind?: string; href?: string }>
+  gaps?: Array<{ kind?: string; label?: string; detail?: string; severity?: string; nodeId?: string; refs?: string[] }>
+  sourceHealth?: {
+    status?: string
+    inferred?: number
+    gaps?: number
+    conflicts?: number | Array<{ label?: string; detail?: string; refs?: string[] }>
+  }
+}
+
 export interface ContractSurfaceReviewPacket {
   id: string
   surface: {
@@ -1249,6 +1375,7 @@ export interface ProjectDetail {
   startReadiness?: StartReadiness | null
   actionModel?: ProjectActionModel | null
   deliverySpine?: DeliverySpine | null
+  orientationSpine?: ProjectOrientationSpine | null
   bootstrapStatus?: BootstrapStatus
   recentEvents?: EventEnvelope[]
   error?: string
@@ -1370,6 +1497,7 @@ export type ProjectView =
   | 'inbox'
   | 'work'
   | 'planner'
+  | 'map'
   | 'structure'
   | 'timeline'
   | 'release'

@@ -372,6 +372,38 @@ describe('recordLlmVerdict', () => {
     expect(result?.record.verdict).toBe('approve')
     expect(result?.normalizedStatus).toBe('gate_check')
   })
+
+  it('infers approval from all-yes rubric lines when the reviewer omits an explicit verdict heading', () => {
+    const q = baseQueue()
+    q.tasks[0]!.notes.push({
+      agentId: 'reviewer-agent',
+      role: 'reviewer',
+      content: [
+        '**Review:**',
+        'AC-1: Met — implementation returns the expected result.',
+        '',
+        '**Request fit:** yes — the implementation fulfills the scoped request.',
+        '',
+        '**Rubric**',
+        '- acceptance-criteria-met: yes — all acceptance criteria are satisfied.',
+        '- no-scope-creep: yes — changes are limited to the requested files.',
+        '- conventions-followed: yes — code uses existing project style.',
+        '- no-regressions: yes — build and tests pass.',
+      ].join('\n'),
+      timestamp: 't1',
+    })
+
+    const result = recordLlmVerdict({
+      queue: q,
+      taskId: 'task-001',
+      beforeStatus: 'review',
+      afterStatus: 'in_progress',
+      now: 'now',
+    })
+
+    expect(result?.record.verdict).toBe('approve')
+    expect(result?.normalizedStatus).toBe('gate_check')
+  })
 })
 
 // ---------------------------------------------------------------------------

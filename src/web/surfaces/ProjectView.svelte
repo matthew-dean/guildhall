@@ -53,6 +53,7 @@
   const loadTimelineTab = () => import('./project/TimelineTab.svelte')
   const loadReleaseTab = () => import('./project/ReleaseTab.svelte')
   const loadSettingsTab = () => import('./project/SettingsTab.svelte')
+  const loadProjectMapTab = () => import('./project/ProjectMapTab.svelte')
   const loadProjectStructurePanel = () => import('./project/structure/ProjectStructurePanel.svelte')
 
   interface ShellAttentionNotice {
@@ -379,6 +380,7 @@
       subs: [
         { id: 'overview', label: 'Overview', path: currentProjectHref('/overview', activeProjectId) },
         { id: 'inbox', label: 'Needs you', path: currentProjectHref('/overview/inbox', activeProjectId) },
+        { id: 'map', label: 'Map', path: currentProjectHref('/map', activeProjectId) },
         { id: 'facts', label: 'Facts', path: currentProjectHref('/facts', activeProjectId) },
         { id: 'structure', label: 'Structure', path: currentProjectHref('/structure', activeProjectId) },
       ],
@@ -397,7 +399,7 @@
     { id: 'timeline', label: 'Timeline', icon: 'clock', suffix: '/timeline' },
     {
       id: 'release',
-      label: 'Closure',
+      label: 'Release',
       icon: 'check-circle-2',
       suffix: '/release',
       subs: [
@@ -423,7 +425,7 @@
   }
 
   function sectionIsActive(id: NavSectionId) {
-    if (id === 'project') return currentView === 'overview' || currentView === 'facts' || currentView === 'structure'
+    if (id === 'project') return currentView === 'overview' || currentView === 'map' || currentView === 'facts' || currentView === 'structure'
     return currentView === id
   }
 
@@ -432,6 +434,7 @@
 
     if (sectionId === 'project') {
       if (currentView === 'overview') return currentSub === 'inbox' ? subId === 'inbox' : subId === 'overview'
+      if (currentView === 'map') return subId === 'map'
       if (currentView === 'facts') return subId === 'facts'
       if (currentView === 'structure') return subId === 'structure'
     }
@@ -638,6 +641,10 @@
     )
   }
 
+  function isClosedTaskStatus(status: string): boolean {
+    return status === 'done' || status === 'shelved' || status === 'pending_pr'
+  }
+
   $effect(() => {
     latestTickerEvent = (detail?.recentEvents ?? []).reduce<EventEnvelope | null>(
       (current, candidate) => pickLatestEvent(current, candidate),
@@ -729,16 +736,18 @@
     }
     for (const task of tasks) {
       const status = task.status ?? ''
+      const closed = isClosedTaskStatus(status)
       if (hasVisibleUnansweredQuestion(task)) counts.waitingOnUser += 1
-      if ((task.escalations ?? []).some(escalation => !escalation.resolvedAt)) counts.escalated += 1
-      if (status === 'spec_review') counts.awaitingApproval += 1
-      if (status === 'import_draft') counts.draftReview += 1
+      if (!closed && (task.escalations ?? []).some(escalation => !escalation.resolvedAt)) counts.escalated += 1
+      if (!closed && status === 'spec_review') counts.awaitingApproval += 1
+      if (!closed && status === 'import_draft') counts.draftReview += 1
       if (status === 'blocked') counts.blocked += 1
       if (status === 'done') counts.done += 1
       if (status === 'shelved') counts.shelved += 1
-      if (status === 'proposed' || status === 'ready' || status === 'import_draft') counts.fresh += 1
-      if (status === 'exploring' || status === 'in_progress' || status === 'review' || status === 'gate_check') counts.active += 1
+      if (!closed && (status === 'proposed' || status === 'ready' || status === 'import_draft')) counts.fresh += 1
+      if (!closed && (status === 'exploring' || status === 'in_progress' || status === 'review' || status === 'gate_check')) counts.active += 1
       const dependencyBlocked =
+        !closed &&
         typeof task.blockReason === 'string' &&
         /dependency/i.test(task.blockReason)
       if (dependencyBlocked) counts.dependencyBlocked += 1
@@ -778,6 +787,7 @@
     const tasks = detail?.tasks ?? []
     return tasks.some((task) => {
       const status = task.status ?? ''
+      if (isClosedTaskStatus(status)) return false
       const hasUnansweredQuestion = hasVisibleUnansweredQuestion(task)
       const hasOpenEscalation = (task.escalations ?? []).some((escalation) => !escalation.resolvedAt)
       return (
@@ -1070,7 +1080,7 @@
             : 'Needs input'
     : startReadiness?.canStart === false
       ? startReadinessActionLabel(startReadiness.message)
-      : actionRunControl?.label ?? 'Resume',
+      : 'Resume',
   )
   const showAdvanceOneTaskAction = $derived(
     !allTerminalStart,
@@ -1369,16 +1379,16 @@
                   ? (runMode === 'one_task' ? 'Pause one-step run' : 'Pause')
                   : requiredMigrationBlocked
                   ? 'Migrate project'
-                  : (startDisabledReason ?? 'Resume')
+                  : (startDisabledReason ?? runButtonIdleLabel)
               }
               title={
                 runStatus === 'stopping'
-        ? 'Pausing the run'
+                  ? 'Pausing the run'
                 : runControlPauses
                   ? (runMode === 'one_task' ? 'Pause the current one-step run' : 'Pause the run')
                   : requiredMigrationBlocked
                   ? 'Migrate project'
-                  : (startDisabledReason ?? 'Let the run continue this project')
+                  : (startDisabledReason ?? runButtonIdleLabel)
               }
             >
               <Icon name={runControlPauses ? 'pause' : requiredMigrationBlocked ? 'refresh-cw' : 'sparkles'} size={16} />
@@ -1631,6 +1641,15 @@
               {@const FactsTab = module.default}
               <FactsTab />
             {/await}
+          {:else if currentView === 'map'}
+            {#await loadProjectMapTab()}
+              <div class="page-centered page-centered-inline">
+                <p class="muted">Loading project...</p>
+              </div>
+            {:then module}
+              {@const ProjectMapTab = module.default}
+              <ProjectMapTab {detail} activeProjectId={activeProjectId} />
+            {/await}
           {:else if currentView === 'structure'}
             {#await loadProjectStructurePanel()}
               <div class="page-centered page-centered-inline">
@@ -1682,9 +1701,20 @@
             {/if}
           </span>
         </div>
-        {#if projectTicker.timeLabel}
-          <span class="project-ticker-time">{projectTicker.timeLabel}</span>
-        {/if}
+        <div class="project-ticker-side">
+          {#if runStatus === 'running' || runStatus === 'stopping'}
+            <a
+              class="project-ticker-link"
+              href={currentProjectHref('/timeline', activeProjectId)}
+              onclick={(e) => { e.preventDefault(); nav(currentProjectHref('/timeline', activeProjectId)) }}
+            >
+              View live stream
+            </a>
+          {/if}
+          {#if projectTicker.timeLabel}
+            <span class="project-ticker-time">{projectTicker.timeLabel}</span>
+          {/if}
+        </div>
       </div>
     {/snippet}
 
@@ -2212,6 +2242,23 @@
     align-items: center;
     gap: var(--s-2);
   }
+  .project-ticker-side {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: var(--s-3);
+    min-width: 0;
+  }
+  .project-ticker-link {
+    color: var(--accent);
+    font-size: var(--gh-type-size-caption);
+    font-weight: var(--gh-type-weight-strong);
+    text-decoration: none;
+    white-space: nowrap;
+  }
+  .project-ticker-link:hover {
+    text-decoration: underline;
+  }
   .project-ticker-actor {
     flex: none;
     color: var(--text);
@@ -2303,6 +2350,9 @@
     }
     .project-ticker {
       padding: var(--s-2) var(--s-4);
+    }
+    .project-ticker-side {
+      display: none;
     }
     .project-ticker-message {
       white-space: normal;

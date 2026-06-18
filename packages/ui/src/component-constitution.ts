@@ -149,6 +149,16 @@ export const componentContracts: readonly ComponentContract[] = [
     maxVariantAxes: 3,
   },
   {
+    name: 'Skeleton',
+    owns: 'loading placeholder geometry for content that is still hydrating',
+    useFor: ['rectangular loading rows', 'circular avatar placeholders', 'card-local layout skeletons'],
+    doNotUseFor: ['empty states', 'real progress indicators', 'decorative gradients'],
+    accessibility: 'Decorative by default; callers provide a label only when the skeleton itself is the loading status.',
+    protectedBy: ['scripts/design-token-audit.mjs', 'packages/ui typecheck'],
+    replacementFor: ['local shimmer bars', 'bespoke loading placeholder spans'],
+    maxVariantAxes: 3,
+  },
+  {
     name: 'SectionHeader',
     owns: 'page-section and panel heading rhythm',
     useFor: ['surface section headers', 'panel headers', 'headers with compact actions'],

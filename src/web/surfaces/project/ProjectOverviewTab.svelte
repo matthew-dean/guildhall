@@ -20,7 +20,7 @@
   import { summarizeEvent } from '../../lib/events.js'
   import { friendlyTaskId } from '../../lib/identifier-labels.js'
   import { nav, path } from '../../lib/nav.svelte.js'
-  import { currentProjectHref, currentTaskHref, projectActionHref, projectFetch } from '../../lib/project-routes.js'
+  import { currentProjectHref, currentTaskHref, projectActionHref } from '../../lib/project-routes.js'
   import { inboxItemKey, type InboxItem } from '../../lib/inbox-item-key.js'
   import type { EventEnvelope, ProjectDetail, ProjectMemoryHealth, Task } from '../../lib/types.js'
   import { hasCurrentGitUnavailableStory, type ProjectActivityLine } from '../../lib/project-activity.js'
@@ -51,14 +51,6 @@
 
   type Tone = 'neutral' | 'ok' | 'warn' | 'danger' | 'accent' | 'running'
   type NextActionKind = 'navigate' | 'migration'
-  type StructuralMapAction =
-    | { kind: 'accept' }
-    | { kind: 'rename_node'; nodeId: string; label: string }
-    | { kind: 'merge_nodes'; sourceNodeId: string; targetNodeId: string; label?: string }
-    | { kind: 'split_node'; nodeId: string; newNodeId: string; label: string }
-    | { kind: 'mark_cross_cutting'; nodeId: string }
-    | { kind: 'mark_package_only'; nodeId: string }
-    | { kind: 'ignore_node'; nodeId: string; reason: string }
 
   interface BlockedRow {
     task: Task
@@ -75,31 +67,106 @@
     href: string
   }
 
-  let localStructuralMapReview = $state<ProjectDetail['structuralMapReview'] | null>(null)
-  let structuralMapActionError = $state<string | null>(null)
-  let structuralMapActionBusy = $state(false)
   const tasks = $derived(detail.tasks ?? [])
   const displayPath = $derived(formatUserPath(detail.path))
   const running = $derived(detail.run?.status === 'running')
   const actionableInbox = $derived(inboxItems.filter(item => item.severity !== 'low').slice(0, 3))
   const runtime = $derived(detail.runtime ?? null)
   const memoryHealth = $derived(detail.memoryHealth ?? null)
-  const structuralMapReview = $derived(localStructuralMapReview ?? detail.structuralMapReview ?? null)
-  const deliverySpine = $derived(detail.deliverySpine ?? null)
-  const primaryDriver = $derived(deliverySpine?.model?.drivers?.find(driver => driver.role === 'primary') ?? null)
-  const nextQueueCandidate = $derived(deliverySpine?.queue?.firstRunnable ?? null)
-  const primitiveBlockerSummary = $derived.by(() => {
-    const blockers = deliverySpine?.queue?.blocked
-      ?.flatMap(candidate => candidate.structuralBlockers ?? [])
-      .filter((primitive, index, all) => primitive.id && all.findIndex(item => item.id === primitive.id) === index)
-      .slice(0, 4) ?? []
-    return blockers
-  })
+  const structuralMapReview = $derived(detail.structuralMapReview ?? null)
+  const orientationSpine = $derived(detail.orientationSpine ?? null)
   const primaryProofPaths = $derived.by(() => {
     return tasks
       .flatMap(task => (task.proofPaths ?? []).map(proofPath => ({ task, proofPath })))
       .sort((left, right) => proofRank(left.proofPath.status) - proofRank(right.proofPath.status))
       .slice(0, 3)
+  })
+  const orientationPins = $derived.by(() => {
+    if ((orientationSpine?.activePins?.length ?? 0) > 0) {
+      return orientationSpine?.activePins?.slice(0, 3).map(pin => ({
+        nodeId: pin.nodeId,
+        label: pin.label ?? 'Pinned work',
+        reason: pin.kind ? friendlyStatus(pin.kind) : undefined,
+        href: pin.href,
+      })) ?? []
+    }
+    return orientationSpine?.summary?.pinnedNow?.slice(0, 3).map(pin => {
+      if (typeof pin === 'string') return { label: pin }
+      return pin
+    }) ?? []
+  })
+  const orientationTopBlocker = $derived.by(() => {
+    const blocker = orientationSpine?.summary?.topBlocker
+    if (!blocker) return null
+    return typeof blocker === 'string' ? { label: blocker } : blocker
+  })
+  const orientationNextAction = $derived.by(() => {
+    const action = orientationSpine?.summary?.nextAction
+    if (!action) return null
+    return typeof action === 'string' ? { label: action, href: currentProjectHref('/work', activeProjectId) } : action
+  })
+  const orientationGap = $derived(orientationSpine?.gaps?.find(gap => gap.severity === 'high' || gap.kind === 'missing_charter' || gap.kind === 'source_conflict') ?? orientationSpine?.gaps?.[0] ?? null)
+  const orientationScopeLabel = $derived(orientationSpine?.summary?.selectedScopeLabel ?? orientationSpine?.scope?.label ?? 'Current scope')
+  const orientationIncludedCount = $derived(orientationSpine?.summary?.includedWorkCount ?? orientationSpine?.summary?.includedCount ?? 0)
+  const orientationDeferredCount = $derived(
+    orientationSpine?.summary?.progress?.deferred ??
+    orientationSpine?.summary?.deferredWorkCount ??
+    orientationSpine?.summary?.deferredCount ??
+    0,
+  )
+  const orientationProofGapCount = $derived(orientationSpine?.gaps?.filter(gap => gap.kind === 'proof_needed').length ?? 0)
+  const orientationScopeTitle = $derived.by(() => {
+    if (!orientationSpine) return 'Scope not mapped yet'
+    return orientationScopeLabel
+  })
+  const orientationScopeDetail = $derived.by(() => {
+    if (!orientationSpine) return 'No bounded scope has been derived for this project yet.'
+    const proven = orientationSpine.summary?.progress?.provenCount ?? orientationSpine.summary?.progress?.proven ?? 0
+    const blocked = orientationSpine.summary?.progress?.blockedCount ?? orientationSpine.summary?.progress?.blocked ?? 0
+    const pieces = [
+      `${orientationIncludedCount} work items in view`,
+      `${orientationProofGapCount} missing verification`,
+      `${blocked} blocked`,
+      `${proven} verified`,
+      `${orientationDeferredCount} deferred`,
+    ]
+    return pieces.join(' · ')
+  })
+  const orientationScopeSecondaryDetail = $derived.by(() => {
+    if (!orientationSpine) return null
+    const pieces = [
+      orientationPins[0]?.label ? `Current focus: ${orientationPins[0].label}` : null,
+      orientationTopBlocker?.label ? `Blocking: ${orientationTopBlocker.label}` : orientationGap?.label ? `Needs attention: ${orientationGap.label}` : null,
+    ]
+    return pieces.filter(Boolean).join(' · ') || null
+  })
+  const orientationScopeTone = $derived.by((): Tone => {
+    if (!orientationSpine) return 'neutral'
+    if (orientationTopBlocker || orientationGap || orientationProofGapCount > 0) return 'warn'
+    if (orientationPins.length > 0) return 'accent'
+    return 'ok'
+  })
+  const orientationMapStatus = $derived.by(() => {
+    if (!orientationSpine) return 'No project spine has been generated yet.'
+    const roots = orientationSpine.roots?.length ?? 0
+    const inferred = orientationSpine.sourceHealth?.inferred ?? 0
+    const gaps = orientationSpine.sourceHealth?.gaps ?? orientationSpine.gaps?.length ?? 0
+    return `${roots} capability lanes · ${orientationIncludedCount} scoped work items · ${inferred} inferred nodes · ${gaps} gaps`
+  })
+  const orientationMapPreviewTitle = $derived.by(() => {
+    if (!orientationSpine) return 'Project map not generated yet'
+    return orientationSpine.charter?.goal ?? orientationSpine.summary?.purpose ?? 'Project shape is being inferred'
+  })
+  const orientationMapPreviewDetail = $derived.by(() => {
+    if (!orientationSpine) return 'Open the map when this project has imported work or confirmed planning docs.'
+    const progress = orientationSpine.summary?.progress
+    const pieces = [
+      progress?.specced ? `${progress.specced} specced` : null,
+      progress?.active ? `${progress.active} active` : null,
+      progress?.blocked ? `${progress.blocked} blocked` : null,
+      orientationProofGapCount ? `${orientationProofGapCount} proof gaps` : null,
+    ].filter(Boolean)
+    return pieces.length ? pieces.join(' · ') : orientationScopeDetail
   })
 
   const counts = $derived.by(() => {
@@ -148,7 +215,16 @@
       .slice(0, 4)
   })
   const requiredMigrationBlocked = $derived(detail.startReadiness?.code === 'required_migration_pending')
+  const allTerminalStart = $derived(detail.startReadiness?.code === 'all_terminal')
   const startBlocked = $derived(detail.startReadiness?.canStart === false)
+  const runPanelTitle = $derived(
+    running
+      ? 'Moving now'
+      : allTerminalStart
+        ? 'No runnable work'
+        : 'Ready to resume',
+  )
+  const nextActionCardTitle = $derived(allTerminalStart ? 'Scope status' : 'Do this next')
   const emptyWorkMixLabel = $derived(
     requiredMigrationBlocked
       ? 'Run the required migration before creating or running work.'
@@ -259,7 +335,7 @@
     const deliveryDetail = workProgressCounts && workProgressCounts.deliveryRequired > 0
       ? `${workProgressCounts.deliveryDone} / ${workProgressCounts.deliveryRequired} delivery steps done${workProgressCounts.deliveryBlocked ? ` · ${workProgressCounts.deliveryBlocked} blocked` : ''}.`
       : null
-    return [
+    const baseCards = [
       {
         label: 'Work',
         title: `${totalCount} total ${totalCount === 1 ? 'work item' : 'work items'}`,
@@ -269,20 +345,6 @@
         tone: blockedCount > 0 || (workProgressCounts?.deliveryBlocked ?? 0) > 0 ? 'warn' as Tone : activeCount > 0 ? 'accent' as Tone : 'neutral' as Tone,
       },
       {
-        label: 'Runtime',
-        title: runtimeHealthLabel(runtime?.status, runtime?.health?.status),
-        detail: runtimeModeLabel(runtime?.migration?.mode, runtime?.backend),
-        href: currentProjectHref('/settings/ready', activeProjectId),
-        tone: runtimeTone(runtime?.status, runtime?.health?.status),
-      },
-      {
-        label: 'Proof',
-        title: primaryProofPaths.length > 0 ? `${countLabel(primaryProofPaths.length, 'tracked proof path')}` : 'No proof paths yet',
-        detail: primaryProofPaths[0]?.proofPath.title ?? 'Proof paths appear here once verification is planned.',
-        href: currentProjectHref('/work', activeProjectId),
-        tone: primaryProofPaths.some(item => item.proofPath.status === 'blocked') ? 'warn' as Tone : primaryProofPaths.some(item => item.proofPath.status === 'verified') ? 'ok' as Tone : 'neutral' as Tone,
-      },
-      {
         label: 'History',
         title: recentEvents.length > 0 ? `${countLabel(recentEvents.length, 'recent change')}` : 'No recent changes',
         detail: recentEvents[0]?.label ?? 'Timeline will fill in as runs, reviews, and decisions are recorded.',
@@ -290,13 +352,25 @@
         tone: 'neutral' as Tone,
       },
     ]
+    if (!orientationSpine) return baseCards
+    return [
+      {
+        label: 'Scope',
+        title: orientationScopeTitle,
+        detail: orientationScopeDetail,
+        secondaryDetail: orientationScopeSecondaryDetail,
+        href: currentProjectHref('/work', activeProjectId),
+        tone: orientationScopeTone,
+      },
+      ...baseCards,
+    ]
   })
 
   const nextAction = $derived.by(() => {
     const shared = detail.actionModel?.primaryAction
     if (shared) {
       return {
-        label: shared.label ?? 'Open project action',
+        label: shared.label ?? 'Open Work',
         detail: shared.detail ?? '',
         content: shared.content,
         button: shared.buttonLabel ?? 'Open',
@@ -324,6 +398,16 @@
       }
     }
     if (detail.startReadiness?.canStart === false) {
+      if (detail.startReadiness.code === 'all_terminal') {
+        return {
+          label: detail.startReadiness.message ?? startReadinessLabel(detail.startReadiness.code),
+          detail: 'All scoped work is terminal. Open Work to inspect completed and shelved items.',
+          button: 'Open Work',
+          href: currentProjectHref('/work', activeProjectId),
+          tone: 'neutral' as Tone,
+          action: 'navigate' as NextActionKind,
+        }
+      }
       const href = detail.startReadiness.actionHref ?? currentProjectHref('/overview', activeProjectId)
       const matchingInbox = inboxItems.find(item => item.severity !== 'low' && item.actionHref === href)
       return {
@@ -345,6 +429,16 @@
         button: inboxActionLabel(inbox),
         href: inbox.actionHref ?? '/thread',
         tone: inbox.severity === 'high' ? 'danger' as Tone : 'warn' as Tone,
+        action: 'navigate' as NextActionKind,
+      }
+    }
+    if (orientationNextAction) {
+      return {
+        label: orientationNextAction.label,
+        detail: orientationNextAction.reason ?? orientationTopBlocker?.label ?? orientationGap?.label ?? 'Open the work list to review the next task.',
+        button: 'Open Work',
+        href: orientationNextAction.href ?? currentProjectHref('/work', activeProjectId),
+        tone: orientationTopBlocker || orientationGap ? 'warn' as Tone : 'accent' as Tone,
         action: 'navigate' as NextActionKind,
       }
     }
@@ -381,14 +475,24 @@
       }
     }
     return {
-      label: 'No urgent action',
-      detail: 'This project has no active task pressure right now.',
+      label: 'Nothing needs your answer',
+      detail: 'Guildhall does not see a blocking owner decision right now.',
       button: 'Open Work',
       href: currentProjectHref('/work', activeProjectId),
       tone: 'neutral' as Tone,
       action: 'navigate' as NextActionKind,
     }
   })
+  const nextActionChipLabel = $derived(
+    allTerminalStart
+      ? 'Closed scope'
+      : nextAction.tone === 'running'
+        ? 'Live'
+        : nextAction.tone === 'warn' || nextAction.tone === 'danger'
+          ? 'Needs attention'
+          : 'Ready',
+  )
+  const showHeroStatus = $derived(nextAction.tone !== 'warn' && nextAction.tone !== 'danger')
 
   function inboxActionLabel(item: InboxItem): string {
     switch (item.kind) {
@@ -444,7 +548,7 @@
     if (detail.startReadiness?.canStart === false) {
       return {
         label: shared?.label ?? startReadinessLabel(detail.startReadiness.code),
-        detail: shared?.detail ?? detail.startReadiness.message ?? 'Resolve one thing before Start can move work.',
+        detail: shared?.detail ?? detail.startReadiness.message ?? 'Resolve the blocker before starting more work.',
         href: shared?.href ?? detail.startReadiness.actionHref ?? currentProjectHref('/overview', activeProjectId),
       }
     }
@@ -479,12 +583,12 @@
       ['ready'],
       task => needsOverviewBriefCleanup(task) ? 'warn' : 'accent',
       task => needsOverviewBriefCleanup(task)
-        ? 'Needs brief: finish the handoff before a worker can start.'
-        : `${taskPresentation(task).label}: available for the next worker slot.`,
+        ? 'Needs brief: add enough detail before this can start.'
+        : `${taskPresentation(task).label}: ready to start.`,
       4,
     )
-    addTasks(['spec_review', 'import_draft'], 'warn', task => `${taskPresentation(task).label}: needs review before it can move.`, 4)
-    addTasks(['exploring'], 'neutral', task => `${taskPresentation(task).label}: awaiting the next pass.`, 4)
+    addTasks(['spec_review', 'import_draft'], 'warn', task => `${taskPresentation(task).label}: needs review.`, 4)
+    addTasks(['exploring'], 'neutral', task => `${taskPresentation(task).label}: still being shaped.`, 4)
 
     if (!rows.length && blockedRows.length > 0) {
       rows.push({
@@ -549,10 +653,6 @@
       if (expanded) return expanded
     }
     return title || friendlyTaskId(task.id)
-  }
-
-  function primitiveLabel(primitive: { id?: string; label?: string }): string {
-    return primitive.label?.trim() || primitive.id || 'Primitive'
   }
 
   function fullTitleFromDescription(title: string, description: string): string | null {
@@ -679,53 +779,6 @@
     nav(projectActionHref(href, activeProjectId), { backgroundPath: path.value })
   }
 
-  async function applyStructuralMapAction(action: StructuralMapAction): Promise<void> {
-    if (!structuralMapReview?.id || structuralMapActionBusy) return
-    structuralMapActionBusy = true
-    structuralMapActionError = null
-    try {
-      const res = await projectFetch('/api/project/structural-map/action', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ mapId: structuralMapReview.id, action }),
-      }, activeProjectId)
-      const body = await res.json().catch(() => ({})) as {
-        structuralMapReview?: ProjectDetail['structuralMapReview']
-        error?: string
-      }
-      if (!res.ok) throw new Error(body.error ?? 'Could not update the project map.')
-      localStructuralMapReview = body.structuralMapReview ?? null
-    } catch (err) {
-      structuralMapActionError = err instanceof Error ? err.message : String(err)
-    } finally {
-      structuralMapActionBusy = false
-    }
-  }
-
-  function promptStructuralRename(nodeId: string, currentLabel: string): void {
-    const label = window.prompt('Rename structural item', currentLabel)?.trim()
-    if (!label || label === currentLabel) return
-    void applyStructuralMapAction({ kind: 'rename_node', nodeId, label })
-  }
-
-  function promptStructuralSplit(nodeId: string, currentLabel: string): void {
-    const label = window.prompt('New structural item label', currentLabel)?.trim()
-    if (!label) return
-    void applyStructuralMapAction({ kind: 'split_node', nodeId, newNodeId: `domain:${label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`, label })
-  }
-
-  function promptStructuralIgnore(nodeId: string): void {
-    const reason = window.prompt('Reason to ignore this structural item')?.trim()
-    if (!reason) return
-    void applyStructuralMapAction({ kind: 'ignore_node', nodeId, reason })
-  }
-
-  function promptStructuralMerge(sourceNodeId: string): void {
-    const targetNodeId = window.prompt('Merge into structural item id')?.trim()
-    if (!targetNodeId || targetNodeId === sourceNodeId) return
-    void applyStructuralMapAction({ kind: 'merge_nodes', sourceNodeId, targetNodeId })
-  }
-
   function proofRank(status: string | undefined): number {
     switch (status) {
       case 'blocked': return 0
@@ -801,7 +854,7 @@
 </script>
 
 <div class="overview">
-  <section class="hero" aria-label="Project overview">
+  <section class="hero" class:hero-single={!showHeroStatus} aria-label="Project overview">
     <div class="hero-copy">
       <p class="eyebrow">Overview</p>
       <h1>{detail.name ?? detail.id ?? 'Project'}</h1>
@@ -809,94 +862,101 @@
         <p class="path">{displayPath}</p>
       {/if}
     </div>
-    <UtilityPanel className={`live-card live-card-${projectTicker.tone}`} tone={projectTicker.tone === 'danger' ? 'danger' : projectTicker.tone === 'warn' ? 'warn' : projectTicker.tone === 'active' || projectTicker.tone === 'running' ? 'ok' : 'accent'}>
-      <StatusDot tone={projectTicker.tone} pulse={projectTicker.pulse} size="sm" />
-      <div>
-        <strong>{projectTicker.actorLabel ?? projectTicker.label}</strong>
-        <span>{projectTicker.message}</span>
-      </div>
-      {#if projectTicker.timeLabel}
-        <small>{projectTicker.timeLabel}</small>
-      {/if}
-    </UtilityPanel>
-  </section>
-
-  <section class="knowledge-band" aria-label="Project knowledge summary">
-    {#each knowledgeCards as card (card.label)}
-      <CardListItem
-        as="button"
-        className="knowledge-summary-item"
-        tone={card.tone === 'danger' ? 'danger' : card.tone === 'warn' ? 'warn' : card.tone === 'ok' || card.tone === 'running' ? 'ok' : card.tone === 'accent' ? 'accent' : 'neutral'}
-        onclick={() => go(card.href)}
-      >
-        <Chip label={card.label} tone={card.tone === 'danger' ? 'danger' : card.tone === 'warn' ? 'warn' : card.tone === 'ok' || card.tone === 'running' ? 'ok' : card.tone === 'accent' ? 'accent' : 'neutral'} />
-        <strong>{card.title}</strong>
-        <p>{card.detail}</p>
-        {#if 'secondaryDetail' in card && card.secondaryDetail}
-          <p>{card.secondaryDetail}</p>
-        {/if}
-      </CardListItem>
-    {/each}
-  </section>
-
-  <section class="overview-priority" aria-label="Priority action">
-    <Card title="Do this next" titleTag="h2" tone={nextAction.tone === 'danger' ? 'danger' : nextAction.tone === 'warn' ? 'warn' : nextAction.tone === 'running' ? 'ok' : 'accent'} variant="callout" railStrength="strong" className="overview-card overview-priority-card">
-      <div class="next-action">
-        <Chip label={nextAction.tone === 'running' ? 'Live' : nextAction.tone === 'warn' || nextAction.tone === 'danger' ? 'Needs attention' : 'Ready'} tone={nextAction.tone === 'danger' ? 'danger' : nextAction.tone === 'warn' ? 'warn' : nextAction.tone === 'running' ? 'ok' : 'neutral'} />
-        <h2>{nextAction.label}</h2>
-        {#if nextAction.content && nextAction.content !== nextAction.label}
-          <p class="task-content">{nextAction.content}</p>
-        {/if}
-        <p>{nextAction.detail}</p>
-        <Button
-          variant={nextAction.tone === 'warn' || nextAction.tone === 'danger' ? 'human' : 'secondary'}
-          onclick={() => {
-            if (nextAction.action === 'migration') {
-              void onMigrate?.()
-              return
-            }
-            go(nextAction.href)
-          }}
-        >
-          {#if nextAction.action === 'migration'}
-            <Icon name="refresh-cw" size={16} />
-          {/if}
-          {nextAction.button}
-        </Button>
-      </div>
-    </Card>
-  </section>
-
-  {#if deliverySpine}
-    <section class="delivery-band" aria-label="Delivery spine">
-      <Card title="Delivery spine" titleTag="h2" className="overview-card">
-        <div class="delivery-summary">
-          <div>
-            <span>Driver</span>
-            <strong>{primaryDriver?.label ?? 'No primary driver set'}</strong>
-          </div>
-          <div>
-            <span>Next runnable work</span>
-            <strong>{nextQueueCandidate?.task ? taskLabel(nextQueueCandidate.task) : 'No runnable task'}</strong>
-          </div>
-          <div>
-            <span>Primitive proof blockers</span>
-            <strong>{primitiveBlockerSummary.length ? primitiveBlockerSummary.map(primitiveLabel).join(', ') : 'None'}</strong>
-          </div>
-          <div>
-            <span>Validation</span>
-            <strong>{deliverySpine.validation?.valid === false ? 'Needs review' : 'Valid'}</strong>
-          </div>
+    {#if showHeroStatus}
+      <UtilityPanel className={`live-card live-card-${projectTicker.tone}`} tone={projectTicker.tone === 'danger' ? 'danger' : projectTicker.tone === 'warn' ? 'warn' : projectTicker.tone === 'active' || projectTicker.tone === 'running' ? 'ok' : 'accent'}>
+        <StatusDot tone={projectTicker.tone} pulse={projectTicker.pulse} size="sm" />
+        <div>
+          <strong>{projectTicker.actorLabel ?? projectTicker.label}</strong>
+          <span>{projectTicker.message}</span>
         </div>
-        {#if nextQueueCandidate?.why}
-          <p class="muted">{nextQueueCandidate.why}</p>
+        {#if projectTicker.timeLabel}
+          <small>{projectTicker.timeLabel}</small>
         {/if}
-      </Card>
-    </section>
-  {/if}
+      </UtilityPanel>
+    {/if}
+  </section>
 
-  <section class="overview-grid overview-grid-main">
-    <Card title="Moving now" titleTag="h2" className="overview-card">
+  <section class="overview-orientation" aria-label="Project orientation">
+    <div class="orientation-primary-stack">
+      <Card title={nextActionCardTitle} titleTag="h2" tone={nextAction.tone === 'danger' ? 'danger' : nextAction.tone === 'warn' ? 'warn' : nextAction.tone === 'running' ? 'ok' : 'accent'} variant="callout" railStrength="strong" className="overview-card overview-priority-card">
+        <div class="next-action">
+          <Chip label={nextActionChipLabel} tone={nextAction.tone === 'danger' ? 'danger' : nextAction.tone === 'warn' ? 'warn' : nextAction.tone === 'running' ? 'ok' : 'neutral'} />
+          <h2>{nextAction.label}</h2>
+          <p>{nextAction.detail}</p>
+          <Button
+            variant={nextAction.tone === 'warn' || nextAction.tone === 'danger' ? 'human' : 'secondary'}
+            onclick={() => {
+              if (nextAction.action === 'migration') {
+                void onMigrate?.()
+                return
+              }
+              go(nextAction.href)
+            }}
+          >
+            {#if nextAction.action === 'migration'}
+              <Icon name="refresh-cw" size={16} />
+            {/if}
+            {nextAction.button}
+          </Button>
+        </div>
+      </Card>
+
+      <Card title="Work mix" titleTag="h2" padding="compact" density="dense" className="overview-card orientation-work-mix">
+        <WorkMixChart
+          ariaLabel={`Work mix: ${counts.total} tasks`}
+          {segments}
+          emptyLabel={emptyWorkMixLabel}
+          onLegendClick={() => go(currentProjectHref('/work', activeProjectId))}
+        />
+      </Card>
+
+      <Card title="Project map" titleTag="h2" padding="compact" density="dense" className="overview-card orientation-map-preview-card">
+        <CardList className="orientation-map-preview-list">
+          <CardListItem
+            as="button"
+            className="orientation-map-preview"
+            tone={orientationScopeTone === 'warn' ? 'warn' : orientationScopeTone === 'ok' ? 'ok' : 'accent'}
+            railStrength="strong"
+            onclick={() => go(currentProjectHref('/map', activeProjectId))}
+          >
+            <Icon name="package" size={18} />
+            <div>
+              <strong>{orientationMapPreviewTitle}</strong>
+              <p>{orientationMapStatus}</p>
+              <p>{orientationMapPreviewDetail}</p>
+            </div>
+            <span class="preview-action">Open map</span>
+          </CardListItem>
+        </CardList>
+      </Card>
+    </div>
+
+    <Card title="At a glance" titleTag="h2" padding="compact" density="dense" className="overview-card orientation-map-card">
+      <CardList className="orientation-summary-list">
+        {#each knowledgeCards as card (card.label)}
+          <CardListItem
+            as="button"
+            className="knowledge-summary-item orientation-summary-item"
+            tone={card.tone === 'danger' ? 'danger' : card.tone === 'warn' ? 'warn' : card.tone === 'ok' || card.tone === 'running' ? 'ok' : card.tone === 'accent' ? 'accent' : 'neutral'}
+            onclick={() => go(card.href)}
+          >
+            <Chip label={card.label} tone={card.tone === 'danger' ? 'danger' : card.tone === 'warn' ? 'warn' : card.tone === 'ok' || card.tone === 'running' ? 'ok' : card.tone === 'accent' ? 'accent' : 'neutral'} />
+            <div>
+              <strong>{card.title}</strong>
+              <p>{card.detail}</p>
+              {#if 'secondaryDetail' in card && card.secondaryDetail}
+                <p>{card.secondaryDetail}</p>
+              {/if}
+            </div>
+          </CardListItem>
+        {/each}
+      </CardList>
+    </Card>
+
+  </section>
+
+  <section class="overview-work-section">
+    <Card title={runPanelTitle} titleTag="h2" padding="compact" density="dense" className="overview-card">
       {#if movingTasks.length === 0}
         <p class="muted">{running ? 'The run is active, but no task is currently active.' : 'No task is moving right now.'}</p>
       {:else}
@@ -913,41 +973,10 @@
         </div>
       {/if}
     </Card>
-
-    <Card title="Needs you" titleTag="h2" className="overview-card">
-      {#if inboxError}
-        <p class="muted">Could not load owner actions: {inboxError}</p>
-      {:else if !inboxLoaded}
-        <p class="muted">Checking for owner actions...</p>
-      {:else if actionableInbox.length === 0}
-        <p class="muted">No owner action is blocking the project right now.</p>
-      {:else}
-        <CardList className="action-list">
-          {#each actionableInbox as item (inboxItemKey(item))}
-            <CardListItem as="button" className="action-row" onclick={() => go(item.actionHref ?? '/thread')}>
-              <span class="action-title">{item.title}</span>
-              {#if item.taskDescription && item.taskDescription !== item.title}
-                <span class="action-content">{item.taskDescription}</span>
-              {/if}
-              <span>{item.detail}</span>
-            </CardListItem>
-          {/each}
-        </CardList>
-      {/if}
-    </Card>
   </section>
 
-  <section class="overview-grid">
-    <Card title="Work mix" titleTag="h2" className="overview-card">
-      <WorkMixChart
-        ariaLabel={`Work mix: ${counts.total} tasks`}
-        {segments}
-        emptyLabel={emptyWorkMixLabel}
-        onLegendClick={() => go(currentProjectHref('/work', activeProjectId))}
-      />
-    </Card>
-
-    <Card title="Blocked work" titleTag="h2" className="overview-card">
+  <section class="overview-grid overview-planning-grid">
+    <Card title="Blocked work" titleTag="h2" padding="compact" density="dense" className="overview-card">
       {#if blockedRows.length === 0}
         <p class="muted">No blocked tasks are visible right now.</p>
       {:else}
@@ -965,7 +994,7 @@
       {/if}
     </Card>
 
-    <Card title="Next run" titleTag="h2" className="overview-card">
+    <Card title="Next run" titleTag="h2" padding="compact" density="dense" className="overview-card">
       {#if runBlocker}
         <UtilityPanel
           as="button"
@@ -1014,175 +1043,43 @@
     </Card>
   </section>
 
-  <section class="overview-grid">
-    <Card title="Runtime and memory" titleTag="h2" className="overview-card">
-      <div class="signal-list">
-        <UtilityPanel as="button" interactive className="signal-row" tone="neutral" onclick={() => go(currentProjectHref('/settings/ready', activeProjectId))}>
-          <StatusDot tone={runtimeTone(runtime?.status, runtime?.health?.status) === 'running' ? 'active' : runtimeTone(runtime?.status, runtime?.health?.status) === 'ok' ? 'ok' : runtimeTone(runtime?.status, runtime?.health?.status) === 'danger' ? 'danger' : runtimeTone(runtime?.status, runtime?.health?.status) === 'warn' ? 'warn' : 'idle'} pulse={runtime?.status === 'running'} size="sm" />
-          <div>
-            <strong>{runtimeHealthLabel(runtime?.status, runtime?.health?.status)}</strong>
-            <span>{runtimeModeLabel(runtime?.migration?.mode, runtime?.backend)}{#if runtime?.lastActivityAt} · active {formatDate(runtime.lastActivityAt)}{/if}</span>
-          </div>
-        </UtilityPanel>
-        <UtilityPanel as="button" interactive className="signal-row" tone={memoryCoreTone(memoryHealth?.memoryCore, memoryHealth)} onclick={() => go(currentProjectHref('/settings/learning', activeProjectId))}>
-          <StatusDot tone={memoryCoreTone(memoryHealth?.memoryCore, memoryHealth) === 'ok' ? 'ok' : memoryCoreTone(memoryHealth?.memoryCore, memoryHealth) === 'danger' ? 'danger' : memoryCoreTone(memoryHealth?.memoryCore, memoryHealth) === 'warn' ? 'warn' : 'idle'} size="sm" />
-          <div>
-            <strong>Memory health</strong>
-            <span>
-              {memoryCoreLabel(memoryHealth?.memoryCore)} · {memoryHealth?.active ?? 0} active · {memoryHealth?.proposed ?? 0} proposed
-            </span>
-          </div>
-        </UtilityPanel>
-      </div>
-    </Card>
-
-    {#if structuralMapReview}
-      <Card title="Project map" titleTag="h2" className="overview-card">
-        <div class="structural-map-review">
-          <div class="map-review-head">
-            <Chip label={structuralStateLabel(structuralMapReview.state)} tone={structuralMapReview.state === 'accepted' ? 'ok' : structuralMapReview.state === 'correction_requested' ? 'warn' : 'neutral'} />
-            {#if structuralMapReview.generatedAt}
-              <span>Mapped {formatDate(structuralMapReview.generatedAt)}</span>
-            {/if}
-          </div>
-          <div class="map-action-bar">
-            {#if structuralMapReview.state !== 'accepted'}
-              <Button variant="secondary" size="sm" onclick={() => void applyStructuralMapAction({ kind: 'accept' })} disabled={structuralMapActionBusy}>
-                <Icon name="check" size={14} />
-                Accept map
-              </Button>
-            {/if}
-            {#if (structuralMapReview.domains ?? [])[0]}
-              <Button variant="ghost" size="sm" onclick={() => promptStructuralRename((structuralMapReview.domains ?? [])[0].id, (structuralMapReview.domains ?? [])[0].label)} disabled={structuralMapActionBusy}>
-                Rename
-              </Button>
-              <Button variant="ghost" size="sm" onclick={() => promptStructuralMerge((structuralMapReview.domains ?? [])[0].id)} disabled={structuralMapActionBusy}>
-                Merge
-              </Button>
-              <Button variant="ghost" size="sm" onclick={() => promptStructuralSplit((structuralMapReview.domains ?? [])[0].id, (structuralMapReview.domains ?? [])[0].label)} disabled={structuralMapActionBusy}>
-                Split
-              </Button>
-              <Button variant="ghost" size="sm" onclick={() => void applyStructuralMapAction({ kind: 'mark_cross_cutting', nodeId: (structuralMapReview.domains ?? [])[0].id })} disabled={structuralMapActionBusy}>
-                Cross-cutting
-              </Button>
-              <Button variant="ghost" size="sm" onclick={() => promptStructuralIgnore((structuralMapReview.domains ?? [])[0].id)} disabled={structuralMapActionBusy}>
-                Ignore
-              </Button>
-            {/if}
-            {#if (structuralMapReview.packages ?? [])[0]}
-              <Button variant="ghost" size="sm" onclick={() => void applyStructuralMapAction({ kind: 'mark_package_only', nodeId: (structuralMapReview.packages ?? [])[0].id })} disabled={structuralMapActionBusy}>
-                Package-only
-              </Button>
-            {/if}
-          </div>
-          {#if structuralMapActionError}
-            <p class="map-action-error">{structuralMapActionError}</p>
-          {/if}
-
-          <div class="map-metrics" aria-label="Project map counts">
-            {#each structuralMapMetricRows as metric (metric)}
-              <span>{metric}</span>
-            {/each}
-          </div>
-
-          <div class="map-review-sections">
-            {#if (structuralMapReview.domains ?? []).length > 0 || (structuralMapReview.crossCuttingDomains ?? []).length > 0}
-              <div class="map-review-section">
-                <strong>Domains</strong>
-                <div class="map-token-list">
-                  {#each [...(structuralMapReview.domains ?? []), ...(structuralMapReview.crossCuttingDomains ?? [])] as item (item.id)}
-                    <span>{item.label}</span>
-                  {/each}
-                </div>
-              </div>
-            {/if}
-
-            {#if (structuralMapReview.packages ?? []).length > 0}
-              <div class="map-review-section">
-                <strong>Packages</strong>
-                <div class="map-token-list">
-                  {#each (structuralMapReview.packages ?? []).slice(0, 4) as item (item.id)}
-                    <span>{item.label}</span>
-                  {/each}
-                </div>
-              </div>
-            {/if}
-
-            {#if (structuralMapReview.executableUnits ?? []).length > 0}
-              <div class="map-review-section">
-                <strong>Executable units</strong>
-                <div class="map-token-list">
-                  {#each (structuralMapReview.executableUnits ?? []).slice(0, 3) as item (item.id)}
-                    <span>{item.command ?? item.label}</span>
-                  {/each}
-                </div>
-              </div>
-            {/if}
-
-            {#if (structuralMapReview.gitRoots ?? []).length > 0 || (structuralMapReview.ignoredGitRoots ?? []).length > 0}
-              <div class="map-review-section">
-                <strong>Git authority</strong>
-                <div class="map-token-list">
-                  {#each [...(structuralMapReview.gitRoots ?? []), ...(structuralMapReview.ignoredGitRoots ?? [])] as item (item.id)}
-                    <span>{item.path ?? item.label}</span>
-                  {/each}
-                </div>
-              </div>
-            {/if}
-
-            {#if (structuralMapReview.conflicts ?? []).length > 0}
-              <div class="map-review-section map-review-warning">
-                <strong>Conflicts</strong>
-                <span>{(structuralMapReview.conflicts ?? []).map(item => item.message).filter(Boolean).join(' ')}</span>
-              </div>
-            {/if}
-
-            {#if (structuralMapReview.questions ?? []).length > 0}
-              <div class="map-review-section map-review-warning">
-                <strong>Owner input</strong>
-                <span>{(structuralMapReview.questions ?? []).map(item => item.prompt).filter(Boolean).join(' ')}</span>
-                <a
-                  class="map-thread-link"
-                  href={currentProjectHref('/thread', activeProjectId)}
-                  onclick={(event) => {
-                    event.preventDefault()
-                    go(currentProjectHref('/thread', activeProjectId))
-                  }}
-                >Open Thread</a>
-              </div>
-            {/if}
-          </div>
-        </div>
-      </Card>
-    {/if}
-
-    <Card title="Primary proof paths" titleTag="h2" className="overview-card">
-      {#if primaryProofPaths.length === 0}
-        <p class="muted">No proof paths have been planned yet.</p>
-      {:else}
-        <div class="proof-path-list">
-          {#each primaryProofPaths as item (`${item.task.id}:${item.proofPath.id ?? item.proofPath.title}`)}
-            <UtilityPanel as="button" interactive className="proof-path-row" tone={item.proofPath.status === 'blocked' ? 'warn' : item.proofPath.status === 'verified' ? 'ok' : 'neutral'} onclick={() => go(currentTaskHref(item.task.id, activeProjectId))}>
+  <section>
+    <Card title="Signals" titleTag="h2" padding="compact" density="dense" className="overview-card overview-signals-card">
+      <div class="signals-grid">
+        {#if inboxError}
+          <UtilityPanel className="signal-row" tone="warn">
+            <Icon name="alert-triangle" size={16} />
+            <div>
+              <strong>Needs you</strong>
+              <span>Could not load owner actions: {inboxError}</span>
+            </div>
+          </UtilityPanel>
+        {:else if !inboxLoaded}
+          <UtilityPanel className="signal-row" tone="neutral">
+            <Icon name="inbox" size={16} />
+            <div>
+              <strong>Needs you</strong>
+              <span>Checking for owner actions...</span>
+            </div>
+          </UtilityPanel>
+        {:else if actionableInbox.length > 0}
+          {#each actionableInbox as item (inboxItemKey(item))}
+            <UtilityPanel as="button" interactive className="signal-row" tone="warn" onclick={() => go(item.actionHref ?? '/thread')}>
+              <Icon name="inbox" size={16} />
               <div>
-                <strong>{item.proofPath.title ?? 'Proof path'}</strong>
-                <span>{item.proofPath.summary ?? taskLabel(item.task)}</span>
+                <strong>Needs you</strong>
+                <span>{item.title}</span>
+                <span>{item.detail}</span>
               </div>
-              <Chip label={friendlyStatus(item.proofPath.status)} tone={item.proofPath.status === 'verified' ? 'ok' : item.proofPath.status === 'blocked' ? 'warn' : 'neutral'} />
             </UtilityPanel>
           {/each}
-        </div>
-      {/if}
-    </Card>
-  </section>
+        {/if}
 
-  <section class="overview-grid">
-    <Card title="Project health" titleTag="h2" className="overview-card">
-      <div class="health-list">
         {#each healthItems as item (`${item.label}:${item.detail}`)}
           <UtilityPanel
             as="button"
             interactive
-            className="health-row"
+            className="signal-row"
             tone={item.tone === 'running' ? 'ok' : item.tone === 'ok' ? 'ok' : item.tone === 'danger' ? 'danger' : item.tone === 'warn' ? 'warn' : 'neutral'}
             onclick={() => go(item.href)}
           >
@@ -1193,26 +1090,43 @@
             </div>
           </UtilityPanel>
         {/each}
-      </div>
-    </Card>
 
-    <Card title="Recent changes" titleTag="h2" className="overview-card">
-      {#if recentEvents.length === 0}
-        <p class="muted">No meaningful recent activity yet.</p>
-      {:else}
-        <div class="event-list">
-          {#each recentEvents as item (`${item.event.at ?? ''}:${item.label}`)}
-            <div class="event-row">
-              <span>{item.event.at ? item.event.at.slice(11, 16) : '--:--'}</span>
-              <p>{item.label}</p>
+        {#if structuralMapReview}
+          <UtilityPanel as="button" interactive className="signal-row" tone={(structuralMapReview.conflicts ?? []).length > 0 || (structuralMapReview.questions ?? []).length > 0 ? 'warn' : structuralMapReview.state === 'accepted' ? 'ok' : 'neutral'} onclick={() => go(currentProjectHref('/structure', activeProjectId))}>
+            <Icon name="package" size={16} />
+            <div>
+              <strong>Structure</strong>
+              <span>
+                {structuralStateLabel(structuralMapReview.state)}
+                {#if structuralMapMetricRows.length > 0}
+                  · {structuralMapMetricRows.slice(0, 3).join(' · ')}
+                {/if}
+              </span>
             </div>
-          {/each}
-        </div>
-        <Button variant="secondary" size="sm" onclick={() => go(currentProjectHref('/timeline', activeProjectId))}>
-          <Icon name="clock" size={14} />
-          Open Timeline
-        </Button>
-      {/if}
+          </UtilityPanel>
+        {/if}
+
+        <UtilityPanel as="button" interactive className="signal-row" tone={primaryProofPaths.some(item => item.proofPath.status === 'blocked') ? 'warn' : primaryProofPaths.some(item => item.proofPath.status === 'verified') ? 'ok' : 'neutral'} onclick={() => go(currentProjectHref('/work', activeProjectId))}>
+          <Icon name="check-circle-2" size={16} />
+          <div>
+            <strong>Verification</strong>
+            {#if primaryProofPaths.length === 0}
+              <span>No verification checks linked yet.</span>
+            {:else}
+              <span>{primaryProofPaths[0].proofPath.title ?? 'Verification check'}</span>
+              <span>{friendlyStatus(primaryProofPaths[0].proofPath.status)}</span>
+            {/if}
+          </div>
+        </UtilityPanel>
+
+        <UtilityPanel as="button" interactive className="signal-row" tone="neutral" onclick={() => go(currentProjectHref('/timeline', activeProjectId))}>
+          <Icon name="clock" size={16} />
+          <div>
+            <strong>Recent changes</strong>
+            <span>{recentEvents[0]?.label ?? 'No meaningful recent activity yet.'}</span>
+          </div>
+        </UtilityPanel>
+      </div>
     </Card>
   </section>
 </div>
@@ -1230,6 +1144,9 @@
     grid-template-columns: minmax(0, 1fr) minmax(260px, 420px);
     gap: var(--s-4);
     align-items: stretch;
+  }
+  .hero-single {
+    grid-template-columns: minmax(0, 1fr);
   }
   .hero-copy {
     min-width: 0;
@@ -1284,27 +1201,89 @@
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: var(--s-4);
+    align-items: start;
+  }
+  .overview-work-section {
+    display: grid;
+    gap: var(--s-4);
+    min-width: 0;
+  }
+  .overview-planning-grid {
     align-items: stretch;
   }
-  .overview-grid-main {
-    grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.75fr);
+  .overview-orientation {
+    display: grid;
+    grid-template-columns: minmax(0, 1.28fr) minmax(22rem, 0.72fr);
+    gap: var(--s-4);
+    align-items: start;
+    min-width: 0;
   }
-  .overview-priority {
+  .orientation-primary-stack {
+    display: grid;
+    gap: var(--s-4);
     min-width: 0;
   }
   :global(.overview-card) {
     min-width: 0;
   }
-  .knowledge-band {
+  :global(.orientation-map-card) {
+    grid-column: 2;
+    align-self: start;
+  }
+  :global(.orientation-work-mix .work-mix-chart) {
+    height: 1.1rem;
+  }
+  :global(.orientation-work-mix .work-mix-legend) {
+    margin-top: var(--s-2);
+    gap: var(--s-1) var(--s-3);
+  }
+  :global(.orientation-map-preview) {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
     gap: var(--s-3);
+    min-width: 0;
+  }
+  :global(.orientation-map-preview div) {
+    display: grid;
+    gap: var(--s-1);
+    min-width: 0;
+  }
+  :global(.orientation-map-preview) strong {
+    color: var(--text);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
+    overflow-wrap: anywhere;
+  }
+  :global(.orientation-map-preview) p,
+  .preview-action {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
+    overflow-wrap: anywhere;
+  }
+  .preview-action {
+    color: var(--text);
+    font-weight: var(--gh-type-weight-strong);
+    white-space: nowrap;
+  }
+  :global(.orientation-summary-list) {
+    display: grid;
+    gap: var(--s-2);
   }
   :global(.knowledge-summary-item) {
     display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
     align-content: start;
-    gap: var(--s-2);
-    min-height: 8.2rem;
+    align-items: start;
+    gap: var(--s-3);
+    min-height: 0;
+  }
+  :global(.knowledge-summary-item div) {
+    display: grid;
+    gap: var(--s-1);
+    min-width: 0;
   }
   :global(.knowledge-summary-item) strong {
     color: var(--text);
@@ -1319,10 +1298,7 @@
     line-height: var(--gh-type-line-height-body);
     overflow-wrap: anywhere;
   }
-  :global(.action-row),
-  :global(.health-row),
   :global(.signal-row),
-  :global(.proof-path-row),
   :global(.run-blocker),
   :global(.run-plan-row) {
     color: var(--text);
@@ -1338,48 +1314,33 @@
     color: var(--text);
     font-size: var(--gh-type-size-section-title);
     line-height: var(--gh-type-line-height-tight);
+    display: -webkit-box;
+    overflow: hidden;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow-wrap: anywhere;
   }
   .next-action p {
     margin: 0;
     color: var(--text-muted);
     line-height: var(--gh-type-line-height-body);
   }
-  .next-action .task-content {
-    color: var(--text);
-    overflow-wrap: anywhere;
-  }
-  :global(.action-list),
   .motion-list,
-  .health-list,
-  .signal-list,
-  .proof-path-list,
-  .event-list,
+  .signals-grid,
   .blocked-work-list,
   .run-plan-list {
     display: grid;
     gap: var(--s-2);
   }
-  :global(.action-row) {
-    display: grid;
-    gap: var(--s-1);
+  .signals-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
-  .action-title {
-    color: var(--text);
-    font-weight: var(--gh-type-weight-strong);
-  }
-  .action-content {
-    color: var(--text);
-    overflow-wrap: anywhere;
-  }
-  :global(.action-row) span:last-child,
-  :global(.health-row) span {
+  :global(.signal-row) span {
     color: var(--text-muted);
     font-size: var(--gh-type-size-meta);
     line-height: var(--gh-type-line-height-body);
   }
-  :global(.health-row),
   :global(.signal-row),
-  :global(.proof-path-row),
   :global(.run-blocker),
   :global(.run-plan-row) {
     display: grid;
@@ -1387,18 +1348,14 @@
     gap: var(--s-3);
     align-items: center;
   }
-  :global(.health-row) div,
   :global(.signal-row) div,
-  :global(.proof-path-row) div,
   :global(.run-blocker) div,
   :global(.run-plan-row) div {
     display: grid;
     gap: var(--s-1);
     min-width: 0;
   }
-  :global(.health-row) strong,
   :global(.signal-row) strong,
-  :global(.proof-path-row) strong,
   :global(.run-blocker) strong,
   :global(.run-plan-row) strong {
     color: var(--text);
@@ -1410,7 +1367,6 @@
   }
   :global(.run-blocker) span,
   :global(.signal-row) span,
-  :global(.proof-path-row) span,
   :global(.run-plan-row) span {
     color: var(--text-muted);
     font-size: var(--gh-type-size-meta);
@@ -1435,127 +1391,7 @@
   :global(.run-plan-row) {
     grid-template-columns: auto minmax(0, 1fr) auto;
   }
-  .structural-map-review,
-  .map-review-sections {
-    display: grid;
-    gap: var(--s-3);
-    min-width: 0;
-  }
-  .delivery-summary {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: var(--s-3);
-  }
-  .delivery-summary div {
-    display: grid;
-    gap: var(--s-1);
-    min-width: 0;
-  }
-  .delivery-summary span {
-    color: var(--text-muted);
-    font-size: var(--gh-type-size-meta);
-  }
-  .delivery-summary strong {
-    overflow-wrap: anywhere;
-  }
-  .map-review-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--s-2);
-    color: var(--text-muted);
-    font-size: var(--gh-type-size-meta);
-  }
-  .map-metrics {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--s-1);
-  }
-  .map-action-bar {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--s-1);
-  }
-  .map-action-error {
-    margin: 0;
-    color: var(--danger);
-    font-size: var(--gh-type-size-meta);
-    line-height: var(--gh-type-line-height-body);
-  }
-  .map-metrics span {
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    padding: 0.2rem 0.45rem;
-    color: var(--text-muted);
-    font-size: var(--gh-type-size-caption);
-    font-weight: var(--gh-type-weight-strong);
-  }
-  .map-review-section {
-    display: grid;
-    gap: var(--s-1);
-    min-width: 0;
-    padding-top: var(--s-2);
-    border-top: 1px solid var(--border);
-  }
-  .map-review-section strong {
-    color: var(--text);
-    font-size: var(--gh-type-size-meta);
-  }
-  .map-review-section span,
-  .map-token-list span {
-    color: var(--text-muted);
-    font-size: var(--gh-type-size-meta);
-    line-height: var(--gh-type-line-height-body);
-    overflow-wrap: anywhere;
-  }
-  .map-token-list {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--s-1);
-  }
-  .map-token-list span {
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    padding: 0.15rem 0.4rem;
-  }
-  .map-review-warning span {
-    color: var(--text);
-  }
-  .map-thread-link {
-    justify-self: start;
-    color: var(--accent);
-    font-size: var(--gh-type-size-meta);
-    font-weight: var(--gh-type-weight-strong);
-    text-decoration: none;
-  }
-  .map-thread-link:hover {
-    text-decoration: underline;
-  }
-  .event-row {
-    display: grid;
-    grid-template-columns: 48px minmax(0, 1fr);
-    gap: var(--s-2);
-    align-items: start;
-    padding: var(--s-2) 0;
-    border-bottom: 1px solid var(--border);
-  }
-  .event-row:last-child {
-    border-bottom: 0;
-  }
-  .event-row span {
-    color: var(--text-muted);
-    font-family: 'SF Mono', monospace;
-    font-size: var(--gh-type-size-caption);
-  }
-  .event-row p {
-    margin: 0;
-    color: var(--text);
-    line-height: var(--gh-type-line-height-body);
-    overflow-wrap: anywhere;
-  }
-  :global(.action-row:hover),
   :global(.signal-row:hover),
-  :global(.proof-path-row:hover),
   :global(.run-plan-row:hover),
   :global(.run-blocker:hover),
   :global(.overview-task-row:hover) {
@@ -1564,14 +1400,14 @@
 
   @media (max-width: 980px) {
     .hero,
-    .overview-grid,
-    .overview-grid-main {
+    .overview-orientation,
+    .overview-grid {
       grid-template-columns: 1fr;
     }
-    .knowledge-band {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
+    :global(.orientation-map-card) {
+      grid-column: auto;
     }
-    .delivery-summary {
+    .signals-grid {
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
     .overview {
@@ -1584,10 +1420,7 @@
       padding: var(--s-3);
       gap: var(--s-3);
     }
-    .knowledge-band {
-      grid-template-columns: 1fr;
-    }
-    .delivery-summary {
+    .signals-grid {
       grid-template-columns: 1fr;
     }
     :global(.live-card) {
@@ -1599,13 +1432,17 @@
     :global(.live-card) small {
       grid-column: 2;
     }
+    :global(.orientation-map-preview) {
+      grid-template-columns: auto minmax(0, 1fr);
+    }
+    .preview-action {
+      grid-column: 2;
+    }
     .next-action :global(.btn) {
       width: 100%;
     }
-    :global(.health-row),
     :global(.run-blocker),
-    :global(.run-plan-row),
-    :global(.action-row) {
+    :global(.run-plan-row) {
       padding: var(--s-2);
     }
     :global(.run-plan-row) { grid-template-columns: 1fr; }

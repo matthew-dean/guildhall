@@ -174,6 +174,18 @@ describe('recommendModelsForRole', () => {
       expect(candidate?.cachedInputPricePerMillionUsd).toBeGreaterThan(0)
     }
   })
+
+  it('tracks GLM 5.2 as a live DeepInfra bakeoff challenger', () => {
+    const glm = findModel('zai-org/GLM-5.2')
+    expect(glm).toMatchObject({
+      provider: 'deepinfra',
+      contextWindow: 1_048_576,
+      inputPricePerMillionUsd: 1.40,
+      outputPricePerMillionUsd: 4.40,
+      cachedInputPricePerMillionUsd: 0.25,
+      recommendedRoles: expect.arrayContaining(['worker', 'contextIndexer']),
+    })
+  })
 })
 
 describe('default model assignments', () => {

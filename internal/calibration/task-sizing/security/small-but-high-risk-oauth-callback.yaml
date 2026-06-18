@@ -16,7 +16,7 @@ expected:
   action: proceed_with_warning
   requiredFactors:
     - several_risk_lanes
-  minRecommendedChildren: 0
+  minDecompositionChildren: 0
 labelGovernance:
   labeledBy: task-sizing-seed
   labeledAt: "2026-05-25"

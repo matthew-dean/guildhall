@@ -197,7 +197,7 @@ export const planningDocsSource: TaskSource = {
             signals.push({
               source: 'planning-docs',
               kind,
-              title: currentSection.slice(0, 120),
+              title: currentSection,
               evidence: line.trim().slice(0, 240),
               references: [abs],
               ...(domainHint ? { domainHint } : {}),
@@ -216,7 +216,7 @@ export const planningDocsSource: TaskSource = {
           signals.push({
             source: 'planning-docs',
             kind: 'milestone',
-            title: cleanHeading(checked[1]!).slice(0, 120),
+            title: cleanHeading(checked[1]!),
             evidence: `${rel}: ${line.trim()}`.slice(0, 240),
             references: [abs],
             ...(domainHint ? { domainHint } : {}),
@@ -234,7 +234,7 @@ export const planningDocsSource: TaskSource = {
           signals.push({
             source: 'planning-docs',
             kind: 'open_work',
-            title: cleanHeading(unchecked[1]!).slice(0, 120),
+            title: cleanHeading(unchecked[1]!),
             evidence: `${rel}: ${line.trim()}`.slice(0, 240),
             references: [abs],
             ...(domainHint ? { domainHint } : {}),
@@ -246,7 +246,7 @@ export const planningDocsSource: TaskSource = {
         const bullet = /^(\s*)[-*]\s+(.+?)\s*$/.exec(line)
         if (bullet && currentSection && OPEN_HEADING_RE.test(currentSection)) {
           const indent = bullet[1]!.replace(/\t/g, '  ').length
-          const title = cleanHeading(bullet[2]!).slice(0, 120)
+          const title = cleanHeading(bullet[2]!)
           while (bulletStack.length > 0 && bulletStack[bulletStack.length - 1]!.indent >= indent) {
             bulletStack.pop()
           }
@@ -291,7 +291,7 @@ export const planningDocsSource: TaskSource = {
           signals.push({
             source: 'planning-docs',
             kind,
-            title: cleanHeading(numbered[1]!).slice(0, 120),
+            title: cleanHeading(numbered[1]!),
             evidence: `${rel}: ${line.trim()}`.slice(0, 240),
             references: [abs],
             ...(domainHint ? { domainHint } : {}),

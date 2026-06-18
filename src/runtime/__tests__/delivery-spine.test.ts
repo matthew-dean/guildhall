@@ -353,6 +353,33 @@ describe('project-local delivery spine', () => {
     ]))
   })
 
+  it('plans decomposition children without persisted split recommendations', () => {
+    const parent = task({
+      id: 'task-context-menu',
+      title: 'ContextMenu package',
+      description: 'Build ContextMenu implementation and Storybook proof for the menu primitive.',
+      status: 'spec_review',
+      delivery: { driver: 'knit', provider: 'looma', usesPrimitives: ['menu'] },
+      sizePlan: {
+        taskId: 'task-context-menu',
+        score: 5,
+        band: 'large',
+        action: 'decompose_before_execution',
+        factors: [],
+        recommendedChildren: [],
+        createdAt: now,
+        createdBy: 'task-sizing',
+      },
+    })
+
+    const plan = planTaskSplit({ model, tasks: [parent], taskId: parent.id })
+
+    expect(plan.errors).toEqual([])
+    expect(plan.action).toBe('decompose_before_execution')
+    expect(plan.children.length).toBeGreaterThanOrEqual(2)
+    expect(plan.children.every(child => child.plannedTaskId.startsWith('task-context-menu-split-'))).toBe(true)
+  })
+
   it('adds primitive-proof split children for unready primitives without existing proving work', () => {
     const parent = task({
       id: 'task-context-menu',
@@ -520,6 +547,28 @@ describe('project-local delivery spine', () => {
     expect(queue.blocked.find(candidate => candidate.task.id === 'task-component')?.executionBlockers.map(blocker => blocker.id)).toEqual(['task-menu-proof'])
     expect(queue.blocked.find(candidate => candidate.task.id === 'task-component')?.structuralBlockers.map(blocker => blocker.id)).toEqual(['menu-item'])
     expect(queue.firstRunnable?.task.id).toBe('task-menu-proof')
+  })
+
+  it('does not count blocked task status as runnable delivery work', () => {
+    const tasks = [
+      task({
+        id: 'task-active',
+        title: 'Active implementation',
+        status: 'ready',
+      }),
+      task({
+        id: 'task-blocked',
+        title: 'Blocked implementation',
+        status: 'blocked',
+        blockReason: 'Waiting on owner recovery decision.',
+      }),
+    ]
+
+    const queue = deriveQueueCandidates({ model, tasks })
+
+    expect(queue.runnable.map(candidate => candidate.task.id)).toEqual(['task-active'])
+    expect(queue.blocked.map(candidate => candidate.task.id)).toEqual(['task-blocked'])
+    expect(queue.blocked.find(candidate => candidate.task.id === 'task-blocked')?.why).toBe('Blocked by task status.')
   })
 
   it('suggests primitive-proof work when no existing proving task can unblock a structural primitive blocker', () => {

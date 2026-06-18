@@ -39,7 +39,7 @@ export const roadmapSource: TaskSource = {
           signals.push({
             source: 'roadmap',
             kind: 'milestone',
-            title: checked[1]!.slice(0, 120),
+            title: checked[1]!,
             evidence: line.trim().slice(0, 240),
             references: [p],
             confidence: 'high',
@@ -51,7 +51,7 @@ export const roadmapSource: TaskSource = {
           signals.push({
             source: 'roadmap',
             kind: 'open_work',
-            title: unchecked[1]!.slice(0, 120),
+            title: unchecked[1]!,
             evidence: line.trim().slice(0, 240),
             references: [p],
             confidence: 'high',
@@ -63,7 +63,7 @@ export const roadmapSource: TaskSource = {
           signals.push({
             source: 'roadmap',
             kind: 'open_work',
-            title: plainTop[1]!.slice(0, 120),
+            title: plainTop[1]!,
             evidence: line.trim().slice(0, 240),
             references: [p],
             confidence: 'medium',

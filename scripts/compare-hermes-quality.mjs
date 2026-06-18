@@ -114,6 +114,8 @@ export function parseArgs(argv) {
     guildhallCli: stringOption(options['guildhall-cli']) ?? path.resolve('dist/cli.js'),
     hermesBin: stringOption(options['hermes-bin']) ?? 'hermes',
     hermesHome: stringOption(options['hermes-home']) ?? process.env.HERMES_HOME ?? path.join(os.homedir(), '.hermes'),
+    provider: stringOption(options.provider),
+    model: stringOption(options.model),
     maxTicks: stringOption(options['max-ticks']) ?? '80',
     timeoutMs: Number(stringOption(options['timeout-ms']) ?? '900000'),
   }
@@ -150,6 +152,8 @@ async function runGuildhall(input) {
     reportPath,
     '--max-ticks',
     input.options.maxTicks,
+    ...(input.options.provider ? ['--provider', input.options.provider] : []),
+    ...(input.options.model ? ['--model', input.options.model] : []),
   ]
   const run = await runCommand(command[0], command.slice(1), {
     cwd: process.cwd(),
@@ -184,7 +188,13 @@ async function runGuildhall(input) {
 
 async function runHermes(input) {
   const startedAt = Date.now()
-  const command = [input.options.hermesBin, '-z', input.task.prompt]
+  const command = [
+    input.options.hermesBin,
+    '-z',
+    input.task.prompt,
+    ...(input.options.provider ? ['--provider', input.options.provider] : []),
+    ...(input.options.model ? ['--model', input.options.model] : []),
+  ]
   const run = await runCommand(command[0], command.slice(1), {
     cwd: input.projectRoot,
     env: { ...input.env, HERMES_HOME: input.options.hermesHome },

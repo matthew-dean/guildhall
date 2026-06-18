@@ -1,3 +1,5 @@
+import { taskDisplayLabel } from '../shared/task-display-label.js'
+
 export interface ProjectActionStartReadiness {
   canStart: boolean
   code?: string
@@ -56,6 +58,17 @@ export interface ProjectActionThread {
   turns?: ProjectActionThreadTurn[]
 }
 
+export interface ProjectActionScopeAuthorityRequest {
+  id: string
+  type?: string
+  status?: 'open' | 'answered' | 'withdrawn' | string
+  targetWorkId?: string
+  question?: string
+  whyItMatters?: string
+  createdAt?: string
+  createdBy?: string
+}
+
 export type ProjectActionSource = 'owner_input' | 'start_readiness' | 'task' | 'inbox' | 'thread' | 'none'
 export type ProjectActionTone = 'neutral' | 'accent' | 'warn' | 'danger' | 'running'
 
@@ -110,6 +123,7 @@ export interface BuildProjectActionModelInput {
   inbox?: { items?: ProjectActionInboxItem[] } | null
   tasks?: ProjectActionTask[]
   thread?: ProjectActionThread | null
+  scopeAuthorityRequests?: ProjectActionScopeAuthorityRequest[]
   runStatus?: string | null
   availability?: ProjectAvailabilityModel | null
 }
@@ -144,7 +158,24 @@ function needsBriefCleanup(task: ProjectActionTask): boolean {
 }
 
 function taskLabel(task: ProjectActionTask): string {
-  return task.title?.trim() || task.id
+  const recovered = recoverClippedTaskTitle(task)
+  if (recovered) return recovered
+  return taskDisplayLabel(task, task.id)
+}
+
+function recoverClippedTaskTitle(task: ProjectActionTask): string | null {
+  const title = task.title?.trim()
+  const description = task.description?.trim()
+  if (!title || !description) return null
+  const compactTitle = title.replace(/\.\.\.$/, '').trim()
+  if (!title.endsWith('...') && title.length < 60) return null
+  if (description.length <= title.length) return null
+  if (!description.toLowerCase().startsWith(compactTitle.toLowerCase())) return null
+  return description
+}
+
+function workHrefForTask(taskId: string | undefined): string {
+  return taskId ? `/work?task=${encodeURIComponent(taskId)}` : '/work'
 }
 
 function startReadinessButtonLabel(readiness: ProjectActionStartReadiness): string {
@@ -215,12 +246,19 @@ function threadHref(turn: ProjectActionThreadTurn): string {
   return turn.actionHref ?? (turn.sessionId ? `/thread?thread=${encodeURIComponent(turn.sessionId)}` : '/thread')
 }
 
+function ownerInputDetail(detail: string | null | undefined): string {
+  const normalized = detail?.trim()
+  if (!normalized) return 'Open the thread to answer the current question.'
+  if (/^from what i(?:'|’)ve seen:\s*$/i.test(normalized)) return 'Open the thread to answer the current question.'
+  return normalized
+}
+
 function ownerInputFrom(readiness: ProjectActionStartReadiness | null | undefined, turn: ProjectActionThreadTurn | null): ProjectOwnerInputModel {
   if (readiness?.code === 'owner_input_required') {
     return {
       active: true,
       label: 'Answer in Thread',
-      detail: turn?.question?.prompt ?? readiness.message,
+      detail: ownerInputDetail(turn?.question?.prompt ?? readiness.message),
       href: readiness.actionHref ?? (turn ? threadHref(turn) : '/thread'),
     }
   }
@@ -230,8 +268,33 @@ function ownerInputFrom(readiness: ProjectActionStartReadiness | null | undefine
   return {
     active: true,
     label: 'Answer in Thread',
-    detail: turn.question?.prompt ?? turn.why ?? turn.domainTitle ?? turn.title,
+    detail: ownerInputDetail(turn.question?.prompt ?? turn.why ?? turn.domainTitle ?? turn.title),
     href: threadHref(turn),
+  }
+}
+
+function scopeAuthorityAction(requests: ProjectActionScopeAuthorityRequest[]): ProjectAction | null {
+  const request = requests.find(item => item.status === 'open')
+  if (!request) return null
+  const detail = ownerInputDetail(request.question ?? request.whyItMatters ?? 'Open the decision before Guildhall changes scope.')
+  return {
+    source: 'owner_input',
+    label: 'Needs your decision',
+    detail,
+    buttonLabel: 'Open decision',
+    href: `/overview/inbox?scopeAuthority=${encodeURIComponent(request.id)}`,
+    tone: 'warn',
+  }
+}
+
+function scopeAuthorityOwnerInput(requests: ProjectActionScopeAuthorityRequest[]): ProjectOwnerInputModel | null {
+  const action = scopeAuthorityAction(requests)
+  if (!action) return null
+  return {
+    active: true,
+    label: action.label,
+    detail: action.detail,
+    href: action.href,
   }
 }
 
@@ -289,7 +352,7 @@ function bestTaskAction(tasks: ProjectActionTask[], running: boolean): ProjectAc
       ? 'Needs brief: finish the handoff before a worker can start.'
       : task.description,
     buttonLabel: task.status === 'spec_review' ? 'Review in Thread' : 'Open Work',
-    href: task.status === 'spec_review' ? threadHrefForTask(task.id) : '/work',
+    href: task.status === 'spec_review' ? threadHrefForTask(task.id) : workHrefForTask(task.id),
     tone: cleanup || task.status === 'blocked' || task.status === 'spec_review' ? 'warn' : running ? 'running' : 'accent',
     taskId: task.id,
   }
@@ -317,7 +380,7 @@ function threadAction(turn: ProjectActionThreadTurn): ProjectAction {
   return {
     source: 'thread',
     label: 'Answer in Thread',
-    detail: turn.question?.prompt ?? turn.why ?? turn.domainTitle ?? turn.title,
+    detail: ownerInputDetail(turn.question?.prompt ?? turn.why ?? turn.domainTitle ?? turn.title),
     buttonLabel: 'Open Thread',
     href: threadHref(turn),
     tone: 'warn',
@@ -350,12 +413,14 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
   const running = input.runStatus === 'running'
   const availabilityPaused = input.availability?.status === 'paused'
   const activeTurn = activeThreadTurn(input.thread)
-  const ownerInput = ownerInputFrom(startReadiness, activeTurn)
+  const scopeOwnerInput = scopeAuthorityOwnerInput(input.scopeAuthorityRequests ?? [])
+  const ownerInput = scopeOwnerInput ?? ownerInputFrom(startReadiness, activeTurn)
   const setup = setupModel(startReadiness, tasks, activeTurn)
   const setupBlocksStart = setup.state === 'blocked' && tasks.length === 0
   const inboxActions = (input.inbox?.items ?? [])
     .filter(item => item.severity !== 'low')
     .map(inboxAction)
+  const scopeAction = scopeAuthorityAction(input.scopeAuthorityRequests ?? [])
   const taskAction = bestTaskAction(tasks, running)
   const candidates: ProjectAction[] = []
 
@@ -364,7 +429,7 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
       startReadiness.code === 'owner_input_required' && ownerInput.href
         ? {
             ...startReadinessAction(startReadiness),
-            detail: activeTurn?.question?.prompt ?? startReadiness.message,
+            detail: ownerInputDetail(activeTurn?.question?.prompt ?? startReadiness.message),
             href: ownerInput.href,
             buttonLabel: 'Open Thread',
           }
@@ -381,12 +446,13 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
       tone: 'warn',
     })
   }
+  if (scopeAction) candidates.push(scopeAction)
   if (taskAction) candidates.push(taskAction)
   candidates.push(...inboxActions)
   if (activeTurn && !ownerInput.active && (activeTurn.kind !== 'setup_step' || tasks.length === 0)) {
     candidates.push(threadAction(activeTurn))
   }
-  if (ownerInput.active && startReadiness?.canStart !== false && ownerInput.href && !setupBlocksStart) {
+  if (ownerInput.active && !scopeAction && startReadiness?.canStart !== false && ownerInput.href && !setupBlocksStart) {
     candidates.unshift({
       source: 'owner_input',
       label: ownerInput.label ?? 'Answer in Thread',

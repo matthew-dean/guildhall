@@ -24,6 +24,8 @@ export interface RunOnceInput {
   automationPolicy?: RunOnceAutomationPolicy
   proof?: RunOnceProofMode
   maxTicks?: number
+  providerOverride?: string
+  modelAssignmentOverride?: OrchestratorRunOptions['modelAssignmentOverride']
   now?: () => string
   runOrchestratorImpl?: (
     config: ResolvedConfig,
@@ -85,6 +87,8 @@ export async function runGuildhallTaskOnce(input: RunOnceInput): Promise<RunOnce
   const orchestrator = await (input.runOrchestratorImpl ?? runOrchestrator)(workspace.config, {
     maxTicks: input.maxTicks ?? 80,
     preferredTaskId: intake.taskId,
+    ...(input.providerOverride ? { providerOverride: input.providerOverride } : {}),
+    ...(input.modelAssignmentOverride ? { modelAssignmentOverride: input.modelAssignmentOverride } : {}),
   })
   const scoped = await summarizeScopedRun({
     memoryDir: workspace.memoryDir,

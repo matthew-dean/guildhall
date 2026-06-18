@@ -328,6 +328,7 @@
 
   let turns = $state<Turn[]>([])
   let threadLoadRequestId = 0
+  let orientationSpine = $state<ProjectDetail['orientationSpine'] | null>(null)
   let activeTurnId = $state<string | null>(null)
   let caughtUp = $state(false)
   let loaded = $state(false)
@@ -498,7 +499,7 @@
       turnId: turn.id,
       taskId: turn.taskId,
       taskTitle: turn.taskTitle,
-      title: turn.taskId === 'task-meta-intake' ? 'Approve split' : 'Approve spec',
+      title: turn.taskId === 'task-meta-intake' ? 'Review work shape' : 'Approve spec',
       content: turn.spec.trim() || '_No spec saved yet._',
     }
   }
@@ -617,9 +618,10 @@
     try {
       const r = await scopedProjectFetch('/api/project/thread', { cache: 'no-store' })
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
-      const j = (await r.json()) as { turns?: Turn[]; activeTurnId?: string | null; caughtUp?: boolean }
+      const j = (await r.json()) as { turns?: Turn[]; activeTurnId?: string | null; caughtUp?: boolean; orientationSpine?: ProjectDetail['orientationSpine'] | null }
       if (requestId !== threadLoadRequestId) return
       turns = preserveTaskExtras(j.turns ?? [], turns)
+      orientationSpine = j.orientationSpine ?? null
       activeTurnId = j.activeTurnId ?? null
       caughtUp = !!j.caughtUp
       const nextSentReplies = { ...sentReplies }
@@ -659,6 +661,7 @@
     } catch (err) {
       loadError = err instanceof Error ? err.message : String(err)
       turns = []
+      orientationSpine = null
       devServers = []
       threadRuntime = null
       capabilityRequests = []
@@ -963,6 +966,40 @@
     return t.taskTitle
   }
 
+  function orientationPathForTaskId(taskId: string | undefined): string {
+    if (!taskId) return ''
+    const targetId = `work:${taskId}`
+    const direct = orientationSpine?.nodes?.[targetId]
+    if (direct) {
+      const path = orientationPathFromNodeId(targetId)
+      if (path) return path
+    }
+    return findOrientationPath(orientationSpine?.roots ?? [], targetId)?.join(' / ') ?? ''
+  }
+
+  function orientationPathFromNodeId(nodeId: string): string {
+    const nodes = orientationSpine?.nodes ?? {}
+    const titles: string[] = []
+    let current = nodes[nodeId]
+    const seen = new Set<string>()
+    while (current?.id && !seen.has(current.id)) {
+      seen.add(current.id)
+      titles.unshift(current.title ?? current.id)
+      current = current.parentId ? nodes[current.parentId] : undefined
+    }
+    return titles.join(' / ')
+  }
+
+  function findOrientationPath(nodes: NonNullable<ProjectDetail['orientationSpine']>['roots'], targetId: string, parents: string[] = []): string[] | null {
+    for (const node of nodes ?? []) {
+      const path = [...parents, node.title ?? node.id ?? 'Work']
+      if (node.id === targetId) return path
+      const childPath = findOrientationPath(node.children ?? [], targetId, path)
+      if (childPath) return childPath
+    }
+    return null
+  }
+
   function routingContextForTask(taskId: string | undefined): TaskRoutingContext | null {
     if (!taskId) return null
     const context = project.detail?.taskRoutingContexts?.[taskId] ?? null
@@ -1146,7 +1183,11 @@
 
   function turnIndexChip(
     turn: Turn,
+    selected: boolean,
   ): { label: string; tone: 'ok' | 'warn' | 'neutral' | 'accent' | 'running' } | null {
+    if (turn.kind === 'setup_step' && turn.status === 'active' && !selected) {
+      return { label: 'Setup', tone: 'neutral' }
+    }
     if (turn.kind === 'inflight' && turn.status !== 'done') {
       return { label: taskStateLabel(turn), tone: taskStateTone(turn) }
     }
@@ -1411,6 +1452,14 @@
     if (readinessHref) {
       const param = threadRouteParamFromHref(readinessHref)
       if (param && chains.some(chain => chain.id === param)) return param
+    }
+    const primaryTaskId = project.detail?.actionModel?.primaryAction?.taskId
+    if (startReadiness?.canStart !== false && primaryTaskId) {
+      const primaryTaskChain = chains.find(chain => chain.turns.some(turn => 'taskId' in turn && turn.taskId === primaryTaskId))
+      const activeChain = activeTurnId
+        ? chains.find(chain => chain.turns.some(turn => turn.id === activeTurnId)) ?? null
+        : null
+      if (primaryTaskChain && (!activeChain || activeChain.id === 'setup')) return primaryTaskChain.id
     }
     if (activeTurnId) {
       return chains.find(chain => chain.turns.some(turn => turn.id === activeTurnId))?.id ?? chains[0]?.id ?? null
@@ -3483,7 +3532,7 @@
             <div class="thread-index-list">
               {#each threadChains as chain (chain.id)}
                 {@const indexTurn = chain.currentTurn ?? chain.latestTurn}
-                {@const indexChip = turnIndexChip(indexTurn)}
+                {@const indexChip = turnIndexChip(indexTurn, selectedTurnId === chain.id)}
                 <CardListItem
                   as="button"
                   className="thread-index-row"
@@ -3504,6 +3553,9 @@
                       <span class="thread-index-time">{turnRelativeTime(indexTurn)}</span>
                     {/if}
                   </div>
+                  {#if 'taskId' in indexTurn && orientationPathForTaskId(indexTurn.taskId)}
+                    <span class="thread-index-spine-path">{orientationPathForTaskId(indexTurn.taskId)}</span>
+                  {/if}
                   <p>{turnIndexSummary(indexTurn)}</p>
                 </CardListItem>
               {/each}
@@ -3671,6 +3723,7 @@
                 <div class="meta">
                   {#if showHistoricalMeta(t) && 'taskTitle' in t}
                     {@const taskTitle = displayTaskTitle(t)}
+                    {@const orientationPath = orientationPathForTaskId(t.taskId)}
                     <button
                       type="button"
                       class="task-chip"
@@ -3679,6 +3732,9 @@
                     >
                       <span class="task-chip-text">{taskTitle}</span>
                     </button>
+                    {#if orientationPath}
+                      <span class="task-spine-path">{orientationPath}</span>
+                    {/if}
                   {/if}
                   {#if showHistoricalMeta(t)}
                     <span class="persona">{personaLabel(t.persona)}</span>
@@ -5056,6 +5112,12 @@
                         <div class="thread-active-dock-head">
                           <div class="thread-active-dock-copy">
                             <strong>{activeDockTitle(activeDockTurn)}</strong>
+                            {#if 'taskId' in activeDockTurn}
+                              {@const orientationPath = orientationPathForTaskId(activeDockTurn.taskId)}
+                              {#if orientationPath}
+                                <span class="task-spine-path">{orientationPath}</span>
+                              {/if}
+                            {/if}
                             {#if activeDockSummary(activeDockTurn)}
                               <p>{activeDockSummary(activeDockTurn)}</p>
                             {/if}
@@ -6513,6 +6575,19 @@
     white-space: normal;
     overflow-wrap: anywhere;
     text-align: left;
+  }
+  .task-spine-path {
+    color: var(--text-soft);
+    font-size: var(--gh-type-size-caption);
+    line-height: var(--gh-type-line-height-tight);
+    overflow-wrap: anywhere;
+  }
+  .thread-index-spine-path {
+    display: block;
+    color: var(--text-soft);
+    font-size: var(--gh-type-size-caption);
+    line-height: var(--gh-type-line-height-tight);
+    overflow-wrap: anywhere;
   }
   .prompt { margin: 0; font-size: var(--gh-type-size-panel-title); font-weight: var(--gh-type-weight-medium); line-height: var(--gh-type-line-height-tight); }
   .question-card-heading {

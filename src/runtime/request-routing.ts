@@ -248,8 +248,7 @@ function isQuestionLike(lower: string): boolean {
 
 function inferTitle(raw: string): string {
   const firstLine = raw.split(/\n/)[0]?.trim() ?? 'New request'
-  if (firstLine.length <= 72) return firstLine
-  return `${firstLine.slice(0, 69).trim()}...`
+  return firstLine || 'New request'
 }
 
 function inferVersionedTitle(raw: string, match: RegExpMatchArray): string {

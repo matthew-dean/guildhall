@@ -29,6 +29,9 @@ const BLUEPRINT_LANE =
 const MUTATION_FORCED_ON_PLANNING =
   /\b(?:create|author|mutate|write)\b/i
 
+const MODEL_TOOL_USE_RECOVERY_BLOCKER =
+  /\b(?:stopped after hitting (?:its|the) turn limit|turn budget|usable tool call|model failed|failed to produce)\b/i
+
 function taskHasUsableBlueprint(task: Task): boolean {
   return (
     typeof task.spec === 'string' &&
@@ -49,11 +52,24 @@ function blockerText(task: Task): string {
   return [task.blockReason ?? '', activeEscalationText(task)].join('\n')
 }
 
+function hasModelToolUseFailureClassification(task: Task): boolean {
+  return (task.notes ?? []).some((note) => {
+    if (note.role !== 'policy-classification') return false
+    try {
+      const parsed = JSON.parse(note.content) as Record<string, unknown>
+      return parsed['class'] === 'model_tool_use_failure'
+    } catch {
+      return false
+    }
+  })
+}
+
 function isHighConfidenceInternalBlocker(task: Task): boolean {
   const text = blockerText(task)
   if (!text.trim()) return false
 
   if (INTERNAL_TOOLING_BLOCKER.test(text)) return true
+  if (hasModelToolUseFailureClassification(task) && MODEL_TOOL_USE_RECOVERY_BLOCKER.test(text)) return true
 
   return (
     BLUEPRINT_LANE.test(text) &&
@@ -72,6 +88,7 @@ function resolveStaleEscalations(task: Task, now: string): void {
     const text = `${escalation.agentId}\n${escalation.reason}\n${escalation.summary ?? ''}\n${escalation.details ?? ''}`
     if (
       INTERNAL_TOOLING_BLOCKER.test(text) ||
+      MODEL_TOOL_USE_RECOVERY_BLOCKER.test(text) ||
       (
         BLUEPRINT_LANE.test(text) &&
         STALE_SOURCE_PATH_BLOCKER.test(text) &&
@@ -102,6 +119,9 @@ export function repairStaleBlockersInQueue(
     if (!isHighConfidenceInternalBlocker(task)) continue
     const beforeUnresolved = unresolvedEscalationCount(task)
     const previousStatus = task.status
+    const repairReason = hasModelToolUseFailureClassification(task) && MODEL_TOOL_USE_RECOVERY_BLOCKER.test(blockerText(task))
+      ? 'model_tool_use_recovery_blocker'
+      : 'stale_internal_tooling_blocker'
 
     resolveStaleEscalations(task, now)
 
@@ -109,6 +129,10 @@ export function repairStaleBlockersInQueue(
       typeof task.blockReason === 'string' &&
       (
         INTERNAL_TOOLING_BLOCKER.test(task.blockReason) ||
+        (
+          hasModelToolUseFailureClassification(task) &&
+          MODEL_TOOL_USE_RECOVERY_BLOCKER.test(task.blockReason)
+        ) ||
         (
           BLUEPRINT_LANE.test(task.blockReason) &&
           STALE_SOURCE_PATH_BLOCKER.test(task.blockReason) &&
@@ -139,7 +163,7 @@ export function repairStaleBlockersInQueue(
       taskId: task.id,
       previousStatus,
       nextStatus: task.status,
-      reason: 'stale_internal_tooling_blocker',
+      reason: repairReason,
     })
   }
 

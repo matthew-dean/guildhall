@@ -110,6 +110,31 @@ describe('getProjectMigrationStatus', () => {
     expect(after.blocked.some(item => item.id === '0.8.0/project-state-layout')).toBe(false)
     expect(after.applied.some(item => item.id === '0.8.0/project-state-layout')).toBe(true)
   })
+
+  it('reports legacy split recommendation migration as required when task state needs action audit', async () => {
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    await fs.mkdir(path.dirname(tasksPath), { recursive: true })
+    await fs.writeFile(tasksPath, JSON.stringify({
+      version: 1,
+      lastUpdated: '2026-06-17T00:00:00.000Z',
+      tasks: [{
+        id: 'parent',
+        title: 'Parent',
+        sizePlan: {
+          action: 'split_recommended',
+          recommendedChildren: [{ title: 'Child A', reason: 'Legacy child.' }],
+        },
+      }],
+    }, null, 2), 'utf8')
+
+    const status = await getProjectMigrationStatus({ projectRoot })
+    expect(status.blocked).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: '0.11.0/execution-planning-decomposition',
+        requirement: 'required',
+      }),
+    ]))
+  })
 })
 
 describe('applyProjectMigrations', () => {

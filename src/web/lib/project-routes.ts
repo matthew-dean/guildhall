@@ -78,6 +78,7 @@ export function projectActionHref(href: string, explicitProjectId?: string | nul
     url.pathname === '/work' ||
     url.pathname === '/workspace-import' ||
     url.pathname === '/structure' ||
+    url.pathname === '/map' ||
     url.pathname === '/planner' ||
     url.pathname === '/facts' ||
     url.pathname === '/timeline' ||

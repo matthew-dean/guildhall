@@ -27,6 +27,7 @@ interface TaskPresentationInput {
   taskStatus?: string
   dependsOn?: string[]
   importedDraft?: boolean
+  assignedTo?: string | null
   liveAgent?: { name?: string } | unknown
   activity?: Array<{ label: string; tone: 'neutral' | 'running' | 'ok' | 'warn' | 'danger' }>
   checklist?: unknown
@@ -62,6 +63,11 @@ function liveAgentName(input: TaskPresentationInput): string | undefined {
   if (!agent || typeof agent !== 'object') return undefined
   const name = (agent as { name?: unknown }).name
   return typeof name === 'string' ? name : undefined
+}
+
+function assignedAgentName(input: TaskPresentationInput): string | undefined {
+  const assignedTo = input.assignedTo
+  return typeof assignedTo === 'string' && assignedTo.trim().length > 0 ? assignedTo.trim() : liveAgentName(input)
 }
 
 function hasOpenQuestion(input: TaskPresentationInput): boolean {
@@ -100,7 +106,7 @@ export function taskStagePresentation(
   options: TaskPresentationOptions = {},
 ): TaskPresentation {
   const status = taskStatus(input)
-  const agentName = liveAgentName(input)
+  const agentName = assignedAgentName(input)
 
   if (input.status === 'done' || status === 'done') return { key: 'done', label: 'Done', tone: 'ok' }
   if (needsRecovery({ ...input, taskStatus: status })) return { key: 'needs_recovery', label: 'Needs recovery', tone: 'warn' }

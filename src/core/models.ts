@@ -419,6 +419,21 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
     recommendedRoles: ['contextIndexer', 'coordinator', 'reviewer'],
     notes: 'Recommended DeepInfra context-indexer model from Guildhall live bakeoffs. Strong semantic architecture summaries; keep schema repair enabled for occasional malformed JSON.',
   },
+  {
+    id: 'zai-org/GLM-5.2',
+    displayName: 'GLM 5.2',
+    provider: 'deepinfra',
+    contextWindow: 1_048_576,
+    reasoning: 3,
+    codegen: 2,
+    structuredOutput: 3,
+    speed: 2,
+    recommendedRoles: ['spec', 'coordinator', 'worker', 'reviewer', 'contextIndexer'],
+    inputPricePerMillionUsd: 1.40,
+    outputPricePerMillionUsd: 4.40,
+    cachedInputPricePerMillionUsd: 0.25,
+    notes: 'DeepInfra GLM 5.2 challenger for long-context coding and agentic role bakeoffs. Added for live Guildhall benchmark comparison before any default-role promotion.',
+  },
 ]
 
 // ---------------------------------------------------------------------------

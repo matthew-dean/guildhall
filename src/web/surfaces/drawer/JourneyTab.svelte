@@ -156,11 +156,22 @@
 
   function sizeActionText(action: string | undefined): string {
     if (!action) return 'Not sized'
-    if (action === 'split_recommended') return 'Split recommended'
-    if (action === 'split_required') return 'Split required'
+    if (isDecompositionAction(action)) return 'Decompose before execution'
     if (action === 'proceed_with_warning') return 'Proceed with warning'
     if (action === 'ask_clarifying_question') return 'Ask a question'
     return friendlyToken(action)
+  }
+
+  function isDecompositionAction(action: string | undefined): boolean {
+    return action === 'split_recommended' ||
+      action === 'split_required' ||
+      action === 'decompose_before_execution'
+  }
+
+  function sizeActionTone(action: string | undefined): 'danger' | 'warn' | 'neutral' {
+    if (action === 'split_required' || action === 'decompose_before_execution') return 'danger'
+    if (action === 'split_recommended') return 'warn'
+    return 'neutral'
   }
 
   function evidenceChipLabel(evidence: ExpectedEvidence): string {
@@ -219,8 +230,8 @@
             <section class="detail">
               <h4>Task size</h4>
               <div class="chips">
-                <Chip label={`${friendlyToken(sizePlan.band)} task`} tone={sizePlan.action === 'split_required' ? 'danger' : sizePlan.action === 'split_recommended' ? 'warn' : 'neutral'} />
-                <Chip label={sizeActionText(sizePlan.action)} tone={sizePlan.action === 'split_required' ? 'danger' : sizePlan.action === 'split_recommended' ? 'warn' : 'neutral'} />
+                <Chip label={`${friendlyToken(sizePlan.band)} task`} tone={sizeActionTone(sizePlan.action)} />
+                <Chip label={sizeActionText(sizePlan.action)} tone={sizeActionTone(sizePlan.action)} />
                 {#if sizePlan.score}
                   <Chip label={`Score ${sizePlan.score}`} tone="neutral" />
                 {/if}

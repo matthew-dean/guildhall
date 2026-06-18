@@ -153,7 +153,7 @@ export function reconcileShellCommandWithAuthority(
     )
   })
   if (exact) {
-    return { command: normalizeCommand(exact), usedAuthority: true }
+    return { command: unwrapShellCommandForAuthority(exact) || normalizeCommand(exact), usedAuthority: true }
   }
 
   const requestedKind = classifyGateCommand(unwrappedRequested)
@@ -162,7 +162,8 @@ export function reconcileShellCommandWithAuthority(
   }
   const sameKind = authoritativeCommands.filter((command) => classifyGateCommand(command) === requestedKind)
   if (sameKind.length === 1) {
-    return { command: normalizeCommand(sameKind[0]!), usedAuthority: true }
+    const command = sameKind[0]!
+    return { command: unwrapShellCommandForAuthority(command) || normalizeCommand(command), usedAuthority: true }
   }
 
   return { command: unwrappedRequested || normalizedRequested, usedAuthority: false }

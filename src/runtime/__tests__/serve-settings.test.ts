@@ -9,6 +9,8 @@ import {
   readProjectConfig,
   readWorkspaceConfig,
   registerWorkspace,
+  setProvider,
+  updateGlobalConfig,
   writeProjectConfig,
   writeWorkspaceConfig,
   type ResolvedConfig,
@@ -2935,22 +2937,52 @@ describe('GET /api/project/inbox — blockers', () => {
 })
 
 describe('GET /api/project — bootstrap status', () => {
-  it('targets the first waiting spec thread when spec review blocks start', async () => {
+  it('keeps normal spec_review tasks startable because coordinator/spec work can run next', async () => {
     const migrationApp = buildServeApp({ projectPath: tmpDir })
     await applyStorageBoundaryMigration(migrationApp.app)
     await writeSystemTasks({
       tasks: [
         {
           id: 'task-spec-a',
+          title: 'Continue drafted spec work',
+          status: 'spec_review',
+          spec: 'Draft spec',
+          createdAt: '2026-06-11T15:00:00.000Z',
+          updatedAt: '2026-06-11T15:00:00.000Z',
+        },
+      ],
+    })
+    setProvider('anthropic-api', { apiKey: 'sk-ant-test' })
+    updateGlobalConfig({ preferredProvider: 'anthropic-api' })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const res = await app.fetch(new Request(scoped('/api/project')))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      startReadiness?: { canStart?: boolean; actionHref?: string; message?: string }
+    }
+
+    expect(body.startReadiness).toMatchObject({ canStart: true })
+  })
+
+  it('targets the first waiting spec thread when spec review blocks start', async () => {
+    const migrationApp = buildServeApp({ projectPath: tmpDir })
+    await applyStorageBoundaryMigration(migrationApp.app)
+    await writeSystemTasks({
+      tasks: [
+        {
+          id: 'task-meta-intake',
           title: 'Approve first spec',
+          domain: '_meta',
           status: 'spec_review',
           spec: 'Draft spec',
           createdAt: '2026-06-11T15:00:00.000Z',
           updatedAt: '2026-06-11T15:00:00.000Z',
         },
         {
-          id: 'task-spec-b',
+          id: 'task-workspace-import',
           title: 'Approve second spec',
+          domain: '_workspace_import',
           status: 'spec_review',
           spec: 'Draft spec',
           createdAt: '2026-06-11T15:01:00.000Z',
@@ -2969,7 +3001,7 @@ describe('GET /api/project — bootstrap status', () => {
     expect(body.startReadiness).toMatchObject({
       canStart: false,
       message: '2 specs are waiting for review before starting.',
-      actionHref: '/thread?thread=task%3Atask-spec-a',
+      actionHref: '/thread?thread=task%3Atask-meta-intake',
     })
   })
 

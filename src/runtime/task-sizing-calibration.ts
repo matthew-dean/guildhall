@@ -5,6 +5,7 @@ import { z } from 'zod'
 import {
   TaskSizeAction,
   TaskSizePlan,
+  buildDecompositionChildDrafts,
   buildTaskSizePlan,
   type TaskPriority,
 } from '@guildhall/core'
@@ -27,7 +28,7 @@ export const TaskSizingCalibrationCase = z.object({
     minScore: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(5), z.literal(8)]),
     action: TaskSizeAction,
     requiredFactors: z.array(z.string().min(1)).default([]),
-    minRecommendedChildren: z.number().int().nonnegative().default(0),
+    minDecompositionChildren: z.number().int().nonnegative().default(0),
   }),
   labelGovernance: z.object({
     labeledBy: z.string().min(1),
@@ -45,7 +46,7 @@ export interface TaskSizingGrade {
   scoreMeetsMinimum: boolean
   actionMatches: boolean
   missingFactorIds: string[]
-  recommendedChildrenMeetMinimum: boolean
+  decompositionDraftsMeetMinimum: boolean
 }
 
 export interface TaskSizingFrontierVariant {
@@ -115,17 +116,29 @@ export function gradeTaskSizingCase(
   const missingFactorIds = parsedCase.expected.requiredFactors.filter((id) => !factorIds.has(id))
   const scoreMeetsMinimum = parsedPlan.score >= parsedCase.expected.minScore
   const actionMatches = parsedPlan.action === parsedCase.expected.action
-  const recommendedChildrenMeetMinimum =
-    parsedPlan.recommendedChildren.length >= parsedCase.expected.minRecommendedChildren
+  const decompositionDrafts = buildDecompositionChildDrafts({
+    task: {
+      id: parsedCase.task.id,
+      title: parsedCase.task.title,
+      description: parsedCase.task.description,
+      priority: parsedCase.task.priority,
+      acceptanceCriteria: [],
+      outOfScope: [],
+    },
+    changedFiles: parsedCase.task.changedFiles,
+    riskLanes: parsedCase.task.riskLanes,
+  })
+  const decompositionDraftsMeetMinimum =
+    decompositionDrafts.length >= parsedCase.expected.minDecompositionChildren
   const severeMiss = !scoreMeetsMinimum || !actionMatches
-  const anyMiss = severeMiss || missingFactorIds.length > 0 || !recommendedChildrenMeetMinimum
+  const anyMiss = severeMiss || missingFactorIds.length > 0 || !decompositionDraftsMeetMinimum
 
   return {
     outcome: !anyMiss ? 'pass' : severeMiss ? 'miss' : 'partial',
     scoreMeetsMinimum,
     actionMatches,
     missingFactorIds,
-    recommendedChildrenMeetMinimum,
+    decompositionDraftsMeetMinimum,
   }
 }
 

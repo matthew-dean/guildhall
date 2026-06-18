@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { buildTaskSizePlan } from '../task-sizing.js'
+import { buildDecompositionChildDrafts, buildTaskSizePlan } from '../task-sizing.js'
 
 describe('task sizing', () => {
   it('treats deterministic single-file smoke tasks as tiny', () => {
@@ -334,17 +334,81 @@ describe('task sizing', () => {
 
     expect(plan.score).toBe(8)
     expect(plan.band).toBe('epic')
-    expect(plan.action).toBe('split_required')
-    expect(plan.recommendedChildren).toHaveLength(5)
+    expect(plan.action).toBe('decompose_before_execution')
+    expect(plan.recommendedChildren).toEqual([])
     expect(plan.factors.map((factor) => factor.id)).toEqual(['semantic_work_units'])
-    expect(plan.recommendedChildren.map((child) => child.suggestedDomain)).toEqual([
+    const childDrafts = buildDecompositionChildDrafts({
+      task: {
+        id: 'task-billing',
+        title: 'Billing settings',
+        description: 'Add billing settings, create an admin API endpoint, migrate subscription data, send invite emails, and document analytics rollout.',
+        priority: 'critical',
+        workUnitAnalysis: {
+          summary: 'Five independently deliverable work units.',
+          units: [
+            {
+              id: 'unit-billing-ui',
+              title: 'Implement the billing settings workflow',
+              deliverable: 'Billing settings can update subscriptions.',
+              rationale: 'The UI workflow can be built and reviewed independently.',
+              suggestedDomain: 'frontend',
+              dependsOn: [],
+            },
+            {
+              id: 'unit-admin-api',
+              title: 'Add the admin subscription API contract',
+              deliverable: 'Admin API returns subscription status.',
+              rationale: 'The API contract can be verified independently from UI work.',
+              suggestedDomain: 'backend',
+              dependsOn: [],
+            },
+            {
+              id: 'unit-migration',
+              title: 'Migrate existing workspace subscription data',
+              deliverable: 'Existing workspace subscriptions are backfilled.',
+              rationale: 'Data migration safety needs its own proof loop.',
+              suggestedDomain: 'data',
+              dependsOn: ['unit-admin-api'],
+            },
+            {
+              id: 'unit-invite-email',
+              title: 'Implement invite email delivery',
+              deliverable: 'Invite emails are sent.',
+              rationale: 'Email delivery is a separate backend behavior.',
+              suggestedDomain: 'backend',
+              dependsOn: [],
+            },
+            {
+              id: 'unit-analytics-rollout',
+              title: 'Update analytics documentation and rollout evidence',
+              deliverable: 'Analytics events and rollout evidence are documented.',
+              rationale: 'Docs and rollout proof can be accepted separately from code changes.',
+              suggestedDomain: 'docs',
+              dependsOn: [],
+            },
+          ],
+          proofOnlyItems: [],
+          createdAt: '2026-05-25T12:00:00.000Z',
+          createdBy: 'coordinator-test',
+        },
+      },
+      changedFiles: [
+        'src/web/settings/Billing.svelte',
+        'src/api/admin/subscriptions.ts',
+        'src/email/invites.ts',
+        'migrations/20260525_workspace_subscriptions.sql',
+        'docs/reference/analytics.md',
+      ],
+      riskLanes: ['ux_comprehension', 'api_contract', 'data_integrity', 'migration_safety', 'privacy', 'release_risk'],
+    })
+    expect(childDrafts.map((child) => child.suggestedDomain)).toEqual([
       'frontend',
       'backend',
       'data',
       'backend',
       'docs',
     ])
-    expect(plan.recommendedChildren.every((child) => child.reason.trim().length > 0)).toBe(true)
+    expect(childDrafts.every((child) => child.reason.trim().length > 0)).toBe(true)
   })
 
   it('does not count out-of-scope migrations or persistence as in-scope split pressure', () => {
@@ -407,9 +471,21 @@ describe('task sizing', () => {
       createdAt: '2026-06-12T21:00:00.000Z',
     })
 
-    expect(plan.action).toBe('split_required')
+    expect(plan.action).toBe('decompose_before_execution')
     expect(plan.factors.map((factor) => factor.id)).toContain('broad_imported_program')
-    expect(plan.recommendedChildren.map((child) => child.title)).toEqual([
+    expect(plan.recommendedChildren).toEqual([])
+    expect(buildDecompositionChildDrafts({
+      task: {
+        id: 'task-import-twwvys',
+        title: 'Finish the Knit primitive replacement wave beyond the already-migrated toast, dialog base, toolbar button, and tree menu',
+        description: 'looma/PROJECT_STATE.md: 1. Finish the Knit primitive replacement wave beyond the already-migrated toast, dialog base, toolbar button, and tree menus.',
+        priority: 'normal',
+        spec: [
+          '## Summary',
+          'Build Finish the Knit primitive replacement wave beyond the already-migrated toast, dialog base, toolbar button, and tree menu from the current project evidence.',
+        ].join('\n'),
+      },
+    }).map((child) => child.title)).toEqual([
       'Audit the remaining replacement scope',
       'Implement the first independently verifiable replacement',
       'Verify and update the migration record',

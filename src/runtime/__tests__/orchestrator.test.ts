@@ -593,6 +593,58 @@ describe('pickNextTask', () => {
     expect(pickNextTask(q)?.id).toBe('t-gate')
   })
 
+  it('dispatches ready audit/research work instead of stranding it on needs_research_spike readiness', async () => {
+    const q: TaskQueue = {
+      version: 1,
+      lastUpdated: 'now',
+      tasks: [
+        mkTask({
+          id: 't-audit',
+          title: 'Audit the remaining replacement scope',
+          status: 'ready',
+          spec: [
+            '## What this is',
+            'A bounded audit that writes an inventory document.',
+            '',
+            '## Acceptance Criteria',
+            '1. Given the source specs, when the audit is complete, then every remaining spec is listed.',
+            '',
+            '## Completion Boundary',
+            '- Product outcome: The next task knows which implementation target comes first.',
+          ].join('\n'),
+          acceptanceCriteria: [{
+            id: 'ac-1',
+            description: 'Every remaining spec is listed.',
+            verifiedBy: 'review',
+            met: false,
+          }],
+          taskReadiness: {
+            taskKind: 'implementation',
+            recommendation: 'needs_research_spike',
+            summary: 'Task should run research or a spike before implementation.',
+            dimensions: [],
+            definitionOfDone: {
+              items: ['The audit inventory exists.'],
+              evidenceRequired: ['Inventory reviewed against source specs.'],
+              updatedAt: '2026-06-17T00:00:00.000Z',
+              createdBy: 'test',
+            },
+            blockerPlans: [],
+            contextBudget: {
+              estimatedTokens: 100,
+              risk: 'low',
+              fitsInOneWorkerBrief: true,
+              reasons: [],
+            },
+            assessedAt: '2026-06-17T00:00:00.000Z',
+            assessedBy: 'test',
+          },
+        }),
+      ],
+    }
+    expect(pickNextTask(q)?.id).toBe('t-audit')
+  })
+
   it('does not redispatch exploring tasks that are waiting on unanswered user questions', async () => {
     const q: TaskQueue = {
       version: 1,
@@ -1317,6 +1369,72 @@ describe('Orchestrator.tick — routing', () => {
     const task = queue.tasks[0]!
     expect(task.status).toBe('blocked')
     expect(task.blockReason).toContain('Spec agent kept researching')
+  })
+
+  it('persists a visible question from the whole spec turn before escalating durable-progress nudges', async () => {
+    await writeQueue([mkTask({ id: 'a', status: 'exploring', title: 'Verify and update the migration record' })])
+    const spec = {
+      name: 'spec-agent',
+      calls: [] as { prompt: string }[],
+      async generate(prompt: string) {
+        this.calls.push({ prompt })
+        return { text: '' }
+      },
+      async generateWithEvents(prompt: string, onEvent: (event: any) => void | Promise<void>) {
+        this.calls.push({ prompt })
+        await onEvent({
+          type: 'status',
+          message:
+            'Assistant kept researching without recording durable progress; asking it to write the brief, question, spec, or escalation now.',
+        })
+        return {
+          text: '',
+          messages: [
+            {
+              role: 'assistant',
+              content: [{
+                type: 'text',
+                text: [
+                  'The question is: what exactly should this task do now that both dependencies are done?',
+                  '- (A) Create the inventory document that was supposed to exist, then verify it',
+                  '- (B) Verify that the first replacement was correctly implemented and update the task tracking',
+                  '- (C) Both — create the missing inventory AND verify the implementation',
+                ].join('\n'),
+              }],
+            },
+            {
+              role: 'assistant',
+              content: [{
+                type: 'text',
+                text: 'I already posted my question in the previous turn. The user has not answered yet.',
+              }],
+            },
+          ],
+        }
+      },
+    }
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    expect(task.status).toBe('exploring')
+    expect(task.blockReason).toBeUndefined()
+    expect(task.openQuestions).toHaveLength(1)
+    expect(task.openQuestions?.[0]).toMatchObject({
+      kind: 'choice',
+      prompt: 'What exactly should this task do now that both dependencies are done?',
+      choices: [
+        'Create the inventory document that was supposed to exist, then verify it',
+        'Verify that the first replacement was correctly implemented and update the task tracking',
+        'Both — create the missing inventory AND verify the implementation',
+      ],
+    })
   })
 
 
@@ -2147,21 +2265,21 @@ describe('Orchestrator.tick — routing', () => {
     expect(task.blockReason).toContain('Spec shaping timed out')
   })
 
-  it('preserves an existing durable spec when the spec agent times out', async () => {
+  it('preserves newly saved durable spec progress when the spec agent times out', async () => {
+    const savedSpec = [
+      '## ContextMenu - Looma Primitive',
+      '',
+      '### Summary',
+      'A right-click context menu that opens at the pointer position.',
+      '',
+      '## Completion Boundary',
+      '- The component appears in the appropriate docs or story surface.',
+    ].join('\n')
     await writeQueue([
       mkTask({
         id: 'a',
         status: 'exploring',
         title: 'ContextMenu',
-        spec: [
-          '## ContextMenu — Looma Primitive',
-          '',
-          '### Summary',
-          'A right-click context menu that opens at the pointer position.',
-          '',
-          '## Completion Boundary',
-          '- The component appears in the appropriate docs or story surface.',
-        ].join('\n'),
       }),
     ])
     const spec = {
@@ -2169,6 +2287,14 @@ describe('Orchestrator.tick — routing', () => {
       calls: [] as Array<{ prompt: string }>,
       async generate(prompt: string) {
         this.calls.push({ prompt })
+        await writeQueue([
+          mkTask({
+            id: 'a',
+            status: 'exploring',
+            title: 'ContextMenu',
+            spec: savedSpec,
+          }),
+        ])
         throw new Error('spec-agent timed out after 120000ms of inactivity')
       },
     }
@@ -2273,6 +2399,62 @@ describe('Orchestrator.tick — routing', () => {
     expect(task.spec).not.toContain('Superseded by a task reframe request')
     expect(task.acceptanceCriteria).toHaveLength(3)
     expect(task.notes.some(note => note.content.includes('deterministic recovery spec seed'))).toBe(true)
+  })
+
+  it('does not fossilize legacy cropped task titles into recovered specs or briefs', async () => {
+    const fullTitle = 'What commands should I run to smoke test this project without changing files?'
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'exploring',
+        title: 'What commands should I run to smoke test this project without changin...',
+        description: fullTitle,
+        request: {
+          id: 'request-smoke-test',
+          raw: fullTitle,
+          kind: 'project_question',
+          title: 'What commands should I run to smoke test this project without changin...',
+          routingSummary: 'Routed to Project Question',
+          pressureTestRequired: true,
+          createdAt: '2026-06-15T18:48:51.097Z',
+        },
+        productBrief: {
+          userJob: 'I want stale cropped wording repaired.',
+          successMetric: 'The stale cropped wording disappears.',
+          authoredBy: 'spec-agent',
+          authoredAt: '2026-06-15T18:48:51.097Z',
+        },
+        notes: [{
+          agentId: 'system',
+          role: 'system',
+          content: 'Reframe requested from blocked. Guildhall will rebuild the task in plain language before continuing.',
+          timestamp: '2026-06-15T18:48:51.097Z',
+        }],
+      }),
+    ])
+    const spec = stubAgent('spec-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+    expect(out).toMatchObject({
+      kind: 'processed',
+      taskId: 'a',
+      agent: 'coordinator-recovery',
+      afterStatus: 'spec_review',
+    })
+
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    expect(task.spec).toContain(fullTitle)
+    expect(task.spec).not.toContain('changin...')
+    expect(task.productBrief?.userJob).toContain(fullTitle)
+    expect(task.productBrief?.successMetric).toContain(fullTitle)
+    expect(task.productBrief?.successMetric).not.toContain('changin...')
+    expect(task.acceptanceCriteria.map(ac => ac.description).join('\n')).toContain(fullTitle)
+    expect(task.acceptanceCriteria.map(ac => ac.description).join('\n')).not.toContain('changin...')
   })
 
   it('does not fossilize agent research narration into the fallback brief', async () => {
@@ -2962,6 +3144,81 @@ describe('Orchestrator.tick — routing', () => {
     expect(q.tasks[0]!.status).toBe('spec_review')
   })
 
+  it('routes non-reserved workspace-import child specs to spec_review when the spec lane saves a draft without status', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'expansion-child-audit',
+        title: 'Audit the remaining replacement scope',
+        domain: '_workspace_import',
+        status: 'exploring',
+      }),
+    ])
+    const spec = stubAgent('spec-agent', async () => {
+      await mutateTask('expansion-child-audit', {
+        spec: [
+          '## What this is',
+          'Audit the remaining replacement scope.',
+          '',
+          '## Acceptance Criteria',
+          '1. Given the project docs and task list, when the inventory is reviewed, then every remaining spec is listed exactly once.',
+          '',
+          '## Completion Boundary',
+          '- Product outcome: The next child task knows which implementation target comes first.',
+        ].join('\n'),
+        updatedAt: '2026-04-01T00:05:00Z',
+      })
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+    const out = await orch.tick()
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.taskId).toBe('expansion-child-audit')
+      expect(out.afterStatus).toBe('spec_review')
+      expect(out.transitioned).toBe(true)
+    }
+    const q = await readQueue()
+    expect(q.tasks[0]!.status).toBe('spec_review')
+    expect(q.tasks[0]!.notes.at(-1)?.content).toContain('saved spec draft')
+  })
+
+  it('does not promote a stale existing spec when the spec lane makes no durable spec update', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'expansion-child-implementation',
+        title: 'Implement the first independently verifiable replacement',
+        domain: '_workspace_import',
+        status: 'exploring',
+        spec: [
+          '## Summary',
+          'Build Implement the first independently verifiable replacement from generic current project evidence.',
+          '',
+          '## Acceptance Criteria',
+          '1. Given existing conventions, when implemented, then the feature appears somewhere appropriate.',
+        ].join('\n'),
+      }),
+    ])
+    const spec = stubAgent('spec-agent', async () => {
+      // The agent talked, but did not persist a revised spec for this turn.
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+    const out = await orch.tick()
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.taskId).toBe('expansion-child-implementation')
+      expect(out.afterStatus).toBe('exploring')
+      expect(out.transitioned).toBe(false)
+    }
+    const q = await readQueue()
+    expect(q.tasks[0]!.status).toBe('exploring')
+    expect(q.tasks[0]!.notes.some(note => note.content.includes('saved spec draft'))).toBe(false)
+  })
+
   it('reports no-coordinator when spec_review needs a missing domain coordinator', async () => {
     await writeQueue([mkTask({ id: 'a', status: 'spec_review', domain: 'ghost', spec: VALID_SPEC })])
     const orch = new Orchestrator({ config: baseConfig(), agents: agentSet() })
@@ -3344,6 +3601,95 @@ describe('Orchestrator.tick — routing', () => {
     expect(checkpoint.resumeContext?.safeNextMutationSurface?.slice(0, 2)).not.toContain('package.json')
     expect(checkpoint.resumeContext?.workingHypothesis).toContain('packages/converter/src/typescriptToJsdoc.ts')
     expect(checkpoint.resumeContext?.workingHypothesis).not.toContain('.gitignore')
+  })
+
+  it('keeps task-state files and lockfile noise out of recovery checkpoint mutation surfaces', async () => {
+    const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'worker-task')
+    await writeQueue([
+      mkTask({
+        id: 'worker-task',
+        title: 'Verify and update the migration record',
+        status: 'in_progress',
+        worktreePath,
+        spec: [
+          '## Summary',
+          'Create the migration inventory and update sibling task notes in TASKS.json.',
+          '',
+          '## Acceptance Criteria',
+          '1. docs/harness/remaining-spec-decomposition-inventory.md exists.',
+          '2. Sibling task notes are updated through Guildhall task state.',
+        ].join('\n'),
+      }),
+    ])
+    await fs.mkdir(path.join(worktreePath, 'docs', 'harness'), { recursive: true })
+    await fs.writeFile(path.join(worktreePath, 'package.json'), '{"name":"demo"}\n', 'utf8')
+    await fs.writeFile(path.join(worktreePath, 'package-lock.json'), '{"lockfileVersion":3}\n', 'utf8')
+    execFileSync('git', ['init'], { cwd: worktreePath, stdio: 'ignore' })
+    execFileSync('git', ['config', 'user.email', 'codex@example.com'], { cwd: worktreePath, stdio: 'ignore' })
+    execFileSync('git', ['config', 'user.name', 'Codex'], { cwd: worktreePath, stdio: 'ignore' })
+    execFileSync('git', ['add', '.'], { cwd: worktreePath, stdio: 'ignore' })
+    execFileSync('git', ['commit', '-m', 'baseline', '--no-verify'], { cwd: worktreePath, stdio: 'ignore' })
+    await fs.writeFile(path.join(worktreePath, 'package-lock.json'), '{"lockfileVersion":3,"noise":true}\n', 'utf8')
+
+    const inventoryPath = path.join(worktreePath, 'docs', 'harness', 'remaining-spec-decomposition-inventory.md')
+    const taskStatePath = path.join(worktreePath, 'TASKS.json')
+    const worker: StubAgent = {
+      name: 'worker-agent',
+      calls: [],
+      async generate(prompt: string) {
+        this.calls.push({ prompt })
+        throw new Error('Model returned an empty assistant message. The turn was ignored to keep the session healthy.')
+      },
+      getToolMetadata() {
+        return {
+          review_handoff_evidence: {
+            taskId: 'worker-task',
+            inspectedImplementationFile: true,
+            changedOrVerified: true,
+          },
+          recent_verified_work: [
+            'Ran bash command head -30 docs/specs/agent-decision-trees.md [PASS]',
+          ],
+          read_file_state: [
+            { path: taskStatePath, preview: '{"tasks":[]}' },
+            { path: inventoryPath, preview: '# Remaining spec decomposition inventory' },
+          ],
+          current_task_likely_target_files: [
+            taskStatePath,
+            inventoryPath,
+          ],
+        }
+      },
+    }
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+    })
+
+    for (let i = 0; i < 6; i += 1) {
+      await orch.tick()
+    }
+
+    const checkpoint = JSON.parse(
+      await fs.readFile(taskHistoryPath('worker-task', 'checkpoint.json'), 'utf8'),
+    ) as {
+      filesTouched: string[]
+      resumeContext?: {
+        companionFiles?: string[]
+        safeNextMutationSurface?: string[]
+        workingHypothesis?: string
+      }
+    }
+
+    expect(checkpoint.filesTouched).toContain('package-lock.json')
+    expect(checkpoint.resumeContext?.companionFiles).toContain(inventoryPath)
+    expect(checkpoint.resumeContext?.companionFiles).not.toContain(taskStatePath)
+    expect(checkpoint.resumeContext?.safeNextMutationSurface?.[0]).toBe(inventoryPath)
+    expect(checkpoint.resumeContext?.safeNextMutationSurface).not.toContain('package-lock.json')
+    expect(checkpoint.resumeContext?.safeNextMutationSurface).not.toContain(taskStatePath)
+    expect(checkpoint.resumeContext?.workingHypothesis).toContain('remaining-spec-decomposition-inventory.md')
+    expect(checkpoint.resumeContext?.workingHypothesis).not.toContain('package-lock.json')
   })
 
   it('writes a recovery checkpoint even when the worker already blocked the task before an empty assistant reply', async () => {
@@ -4443,6 +4789,51 @@ describe('Orchestrator.tick — revision counting', () => {
     const task = q.tasks[0]!
     expect(task.status).toBe('blocked')
     expect(task.blockReason).toContain('maxRevisions')
+  })
+
+  it('advances to gate_check instead of blocking when max revisions follow a prior all-clear LLM review', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'review',
+        revisionCount: 3,
+        reviewVerdicts: [
+          {
+            verdict: 'revise',
+            reviewerPath: 'llm',
+            reason: 'LLM reviewer requested revision before parser recovery',
+            reasoning: [
+              '**Review:** AC-1 through AC-8: Met.',
+              '',
+              '**Rubric**',
+              '- acceptance-criteria-met: yes',
+              '- no-scope-creep: yes',
+              '- conventions-followed: yes',
+              '- no-regressions: yes',
+            ].join('\n'),
+            failingSignals: [],
+            recordedAt: '2026-04-01T00:00:00Z',
+          },
+        ],
+      }),
+    ])
+    const reviewer = stubAgent('reviewer-agent', async () => {
+      await mutateTask('a', { status: 'in_progress' })
+    })
+    const orch = new Orchestrator({
+      config: baseConfig({ maxRevisions: 3 }),
+      agents: agentSet({ reviewer }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    const q = await readQueue()
+    const task = q.tasks[0]!
+    expect(task.status).toBe('gate_check')
+    expect(task.assignedTo).toBe('gate-checker-agent')
+    expect(task.blockReason).toBeUndefined()
+    expect(task.notes.at(-1)?.content).toContain('Skipped max-revision block')
   })
 
   it('self-heals a fresh retry window after a resolved max-revisions escalation before counting new revisions', async () => {
@@ -5960,7 +6351,6 @@ describe('Orchestrator.tick — error handling', () => {
       mkTask({
         id: 'a',
         status: 'exploring',
-        spec: '## Summary\nReady for review.',
         openQuestions: [
           {
             id: 'q-1',
@@ -5982,6 +6372,29 @@ describe('Orchestrator.tick — error handling', () => {
     const spec = {
       name: 'spec-agent',
       async generate() {
+        await writeQueue([
+          mkTask({
+            id: 'a',
+            status: 'exploring',
+            spec: '## Summary\nReady for review.',
+            openQuestions: [
+              {
+                id: 'q-1',
+                kind: 'choice',
+                askedBy: 'spec-agent',
+                askedAt: '2026-05-03T21:00:00.000Z',
+                answeredAt: '2026-05-03T21:01:00.000Z',
+                answer: 'Use bootstrapWorkspaceSession',
+                prompt: 'Which auth path should this E2E use?',
+                choices: [
+                  'Use bootstrapWorkspaceSession',
+                  'Drive the full login UI',
+                ],
+                selectionMode: 'single',
+              },
+            ],
+          }),
+        ])
         throw new Error('Exceeded maximum turn limit (8)')
       },
     }
@@ -6000,6 +6413,32 @@ describe('Orchestrator.tick — error handling', () => {
     expect(q.tasks[0]!.status).toBe('spec_review')
     expect(q.tasks[0]!.spec).toContain('Ready for review')
     expect(q.tasks[0]!.escalations).toHaveLength(0)
+  })
+
+  it('does not promote stale preexisting spec text when spec shaping hits a turn limit', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'exploring',
+        spec: '## Summary\nGeneric old draft that was already present before dispatch.',
+      }),
+    ])
+    const spec = {
+      name: 'spec-agent',
+      async generate() {
+        throw new Error('Exceeded maximum turn limit (8)')
+      },
+    }
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+    const out = await orch.tick()
+    expect(out.kind).toBe('escalated')
+
+    const q = await readQueue()
+    expect(q.tasks[0]!.status).toBe('blocked')
+    expect(q.tasks[0]!.spec).toContain('Generic old draft')
   })
 })
 
@@ -6589,6 +7028,66 @@ describe('Orchestrator.run — full loops', () => {
     expect(task?.escalations[0]?.resolution).toContain('Superseded')
   })
 
+  it('reopens a stale review-handoff blocker from update-task note persistence mismatch', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'blocked',
+        assignedTo: null,
+        spec: VALID_SPEC,
+        blockReason:
+          'human_judgment_required: Cannot transition to review — update-task tool rejects the transition despite self-critique being persisted on disk (SELF_CRITIQUE.md) and in PROGRESS.md. The note parameter does not append to the notes array for this task.',
+        notes: [
+          {
+            agentId: 'worker-agent',
+            role: 'self-critique',
+            content: `**Self-critique:**\n\nAC-1: Met — implementation exists and build passes.\n\n**Minimum-scope check:**\n- Files changed: author-voice-reviewer.ts.\n- Smallest useful change?: yes.\n- Anything to revert before review?: none.`,
+            timestamp: '2026-06-16T23:40:00.000Z',
+          },
+        ],
+        escalations: [
+          {
+            id: 'esc-a-1',
+            taskId: 'a',
+            agentId: 'worker-agent',
+            reason: 'human_judgment_required',
+            summary:
+              'Cannot transition to review — update-task tool rejects the transition despite self-critique being persisted on disk (SELF_CRITIQUE.md) and in PROGRESS.md.',
+            details:
+              'The note parameter does not append to the notes array for this task.',
+            raisedAt: '2026-06-16T23:41:39.000Z',
+          },
+        ],
+      }),
+    ])
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({
+        worker: stubAgent('worker-agent', async () => {
+          await mutateTask('a', { status: 'review' })
+        }),
+      }),
+      gitDriver: new InMemoryGitDriver({ clean: true }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.beforeStatus).toBe('in_progress')
+      expect(out.afterStatus).toBe('review')
+    }
+
+    const queue = await readQueue()
+    const task = queue.tasks.find((candidate) => candidate.id === 'a')
+    expect(task?.status).toBe('review')
+    expect(task?.assignedTo).toBe('reviewer-agent')
+    expect(task?.blockReason ?? null).toBeNull()
+    expect(task?.escalations[0]?.resolvedBy).toBe('system')
+    expect(task?.escalations[0]?.resolution).toContain('Superseded')
+  })
+
   it('reopens a stale gate_hard_failure review-handoff blocker after the validator bug is fixed', async () => {
     await writeQueue([
       mkTask({
@@ -7071,6 +7570,78 @@ describe('Orchestrator.run — full loops', () => {
     expect(seenPrompt).toContain('already at the review handoff stage')
     expect(seenPrompt).toContain('Your first action should be the exact handoff')
     expect(seenPrompt).not.toContain('Open or edit these exact files before any directory listing')
+  })
+
+  it('uses handoff-specific immediate resume instructions when proof and self-critique exist even with a noisy checkpoint', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        title: 'Resume proven handoff',
+        spec: VALID_SPEC,
+        notes: [
+          {
+            agentId: 'worker-agent',
+            role: 'self-critique',
+            content: [
+              '**Self-critique:**',
+              '',
+              'For each acceptance criterion:',
+              '- ac-1: Met.',
+              '',
+              '**Minimum-scope check:**',
+              '- Files changed: docs/harness/remaining-spec-decomposition-inventory.md.',
+              '- Smallest useful change?: yes.',
+              '- Anything to revert before review?: none.',
+              '',
+              '**Review proof packet:**',
+              '- Changed files: docs/harness/remaining-spec-decomposition-inventory.md.',
+              '- Verification commands passed: npm run build.',
+            ].join('\n'),
+            timestamp: '2026-05-13T15:00:00.000Z',
+          },
+        ],
+      }),
+    ])
+
+    const checkpointDir = getProjectTaskLocalHistoryDir(tmpDir, 'a')
+    await fs.mkdir(checkpointDir, { recursive: true })
+    await fs.writeFile(
+      path.join(checkpointDir, 'checkpoint.json'),
+      JSON.stringify({
+        taskId: 'a',
+        agentId: 'worker-agent',
+        step: 4,
+        intent: 'resume noisy worker state',
+        filesTouched: ['docs/harness/remaining-spec-decomposition-inventory.md'],
+        nextPlannedAction:
+          'Read likely target files to understand the current state, then verify sibling task notes.',
+        writtenAt: '2026-05-13T15:00:00.000Z',
+      }),
+    )
+
+    let seenPrompt = ''
+    const worker: OrchestratorAgent = {
+      name: 'worker-agent',
+      async generate(prompt: string) {
+        seenPrompt = prompt
+        return { text: 'ok' }
+      },
+      loadToolMetadata() {},
+    }
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+      gitDriver: new InMemoryGitDriver({ clean: true }),
+    })
+    await orch.tick()
+
+    expect(seenPrompt).toContain('already has durable verification proof and a structured self-critique')
+    expect(seenPrompt).toContain('Your first action should be the exact handoff')
+    expect(seenPrompt).not.toContain('Open or edit these files before any directory listing')
+    expect(seenPrompt).not.toContain('Do not use list-files, glob, or generic repo-root shell inspection')
   })
 
   it('reopens an already-existing task-branch blocker so Guildhall can attach the branch and continue', async () => {
@@ -7684,6 +8255,67 @@ describe('Orchestrator.run — full loops', () => {
     )).toBe(true)
     expect(task?.escalations[0]?.resolvedBy).toBe('system')
     expect(task?.escalations[0]?.resolution).toContain('availability failures stopped counting')
+  })
+
+  it('advances a blocked max-revisions task to gate_check when prior LLM review was all-clear', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'blocked',
+        assignedTo: null,
+        spec: VALID_SPEC,
+        acceptanceCriteria: [
+          { id: 'ac-1', description: 'done', met: true, verifiedBy: 'review' },
+        ],
+        blockReason: 'max_revisions_exceeded: Exceeded maxRevisions (3). Requires human judgment.',
+        reviewVerdicts: [
+          {
+            verdict: 'revise',
+            reviewerPath: 'llm',
+            reason: 'LLM reviewer requested revision before parser recovery',
+            reasoning: [
+              '**Review:** AC-1 through AC-8: Met.',
+              '',
+              '**Rubric**',
+              '- acceptance-criteria-met: yes',
+              '- no-scope-creep: yes',
+              '- conventions-followed: yes',
+              '- no-regressions: yes',
+            ].join('\n'),
+            recordedAt: '2026-05-03T00:10:00.000Z',
+            failingSignals: [],
+          },
+          {
+            verdict: 'revise',
+            reviewerPath: 'llm',
+            reason: 'LLM reviewer requested revision after partial output',
+            reasoning: '**Review:** AC-1: Met. AC-2: Met. AC-3: Met. AC-4: Met',
+            recordedAt: '2026-05-03T00:11:00.000Z',
+            failingSignals: [],
+          },
+        ],
+      }),
+    ])
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet(),
+      reviewerFanout: async () => [],
+      gitDriver: new InMemoryGitDriver({ clean: true }),
+    })
+
+    const out = await orch.tick()
+    expect(out.kind).toBe('processed')
+
+    const queue = await readQueue()
+    const task = queue.tasks.find((candidate) => candidate.id === 'a')
+    expect(task?.status).toBe('gate_check')
+    expect(task?.assignedTo).toBe('gate-checker-agent')
+    expect(task?.blockReason ?? null).toBeNull()
+    expect(task?.notes.some((note) =>
+      note.role === 'recovery' &&
+      note.content.includes('earlier all-clear LLM review'),
+    )).toBe(true)
   })
 
   it('reopens a substantive max-revisions blocker for another worker pass when the user explicitly restarts the project', async () => {
@@ -9036,6 +9668,52 @@ describe('Orchestrator.run — full loops', () => {
     expect(q.tasks.map((task) => task.status)).toEqual(['done', 'done', 'done'])
     expect(result.stopReason).toBe('all_terminal')
     expect(result.idleSummary?.counts.done).toBe(3)
+  })
+
+  it('closes a materialized split parent when all linked child tasks are complete', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'parent',
+        status: 'ready',
+        taskReadiness: {
+          taskKind: 'decision',
+          recommendation: 'ready',
+          summary: 'Split work has been turned into linked child tasks; continue through the child tasks instead of splitting this parent again.',
+          dimensions: [],
+          definitionOfDone: {
+            items: ['All linked child tasks are closed.'],
+            evidenceRequired: ['Child outcomes are recorded.'],
+            updatedAt: '2026-06-17T00:00:00.000Z',
+            createdBy: 'task-sizing',
+          },
+          blockerPlans: [],
+          contextBudget: {
+            estimatedTokens: 0,
+            risk: 'low',
+            fitsInOneWorkerBrief: true,
+            reasons: ['This work is already represented by linked tasks.'],
+          },
+          assessedAt: '2026-06-17T00:00:00.000Z',
+          assessedBy: 'task-sizing',
+        },
+        hierarchy: {
+          order: 0,
+          childIds: ['child-a', 'child-b', 'child-c'],
+        },
+      }),
+      mkTask({ id: 'child-a', status: 'done', hierarchy: { parentId: 'parent', childIds: [], order: 0 } }),
+      mkTask({ id: 'child-b', status: 'done', hierarchy: { parentId: 'parent', childIds: [], order: 1 } }),
+      mkTask({ id: 'child-c', status: 'done', hierarchy: { parentId: 'parent', childIds: [], order: 2 } }),
+    ])
+
+    const orch = new Orchestrator({ config: baseConfig(), agents: agentSet() })
+    const result = await orch.run({ maxTicks: 5, tickDelayMs: 0 })
+
+    const q = await readQueue()
+    expect(q.tasks.find(task => task.id === 'parent')?.status).toBe('done')
+    expect(q.tasks.find(task => task.id === 'parent')?.notes.at(-1)?.content).toContain('Closed containing work after linked child tasks completed')
+    expect(result.stopReason).toBe('all_terminal')
+    expect(result.idleSummary?.counts.done).toBe(4)
   })
 
   it('stops with explicit blocked accounting when unattended work runs into a human question', async () => {

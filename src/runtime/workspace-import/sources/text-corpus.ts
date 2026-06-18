@@ -91,7 +91,7 @@ function domainHint(rel: string): string | undefined {
 
 function fileTitle(raw: string, rel: string): string {
   const h1 = /^#\s+(.+?)\s*$/m.exec(raw)
-  return h1 ? cleanText(h1[1]!).slice(0, 120) : rel
+  return h1 ? cleanText(h1[1]!) : rel
 }
 
 function isDoneSection(heading: string | null): boolean {
@@ -138,7 +138,7 @@ export const textCorpusSource: TaskSource = {
 
         const checked = checklist[1]!.toLowerCase() === 'x'
         if (checked || isDoneSection(currentHeading)) continue
-        const title = cleanText(checklist[2]!).slice(0, 120)
+        const title = cleanText(checklist[2]!)
         if (!title) continue
         signals.push({
           source: 'text-corpus',

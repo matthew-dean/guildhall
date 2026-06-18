@@ -92,7 +92,11 @@ describe('ProjectsHome', () => {
 
     await screen.findByText('Looma knit')
     expect(screen.getByText('Loading project status...')).toBeTruthy()
-    expect(screen.getAllByText('Loading').length).toBeGreaterThan(0)
+    const loadingCards = screen.getAllByRole('button', { name: /still loading project state/i })
+    expect(loadingCards).toHaveLength(2)
+    expect(loadingCards[0]?.classList.contains('project-card-loading')).toBe(true)
+    expect(loadingCards[0]?.querySelectorAll('.gh-skeleton').length).toBeGreaterThan(0)
+    expect(loadingCards[0]?.querySelector('.loading-bars')).toBeNull()
     expect(fetchMock.mock.calls.map(([input]) => String(input))).toContain('/api/service/projects')
     expect(fetchMock.mock.calls.map(([input]) => String(input))).toContain('/api/service')
   })

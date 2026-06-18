@@ -1,5 +1,6 @@
 import type { Task } from '@guildhall/core'
 import { hasOpenEscalation } from '@guildhall/tools'
+import { taskDisplayLabel } from '../shared/task-display-label.js'
 
 export interface WorkRollup {
   totalChildren: number
@@ -42,7 +43,7 @@ export interface WorkListGroup {
 const TERMINAL = new Set(['done', 'shelved', 'blocked', 'pending_pr'])
 
 function taskTitle(task: Task): string {
-  return task.title?.trim() || task.id
+  return taskDisplayLabel(task, task.id)
 }
 
 function explicitParentId(task: Task): string | null {

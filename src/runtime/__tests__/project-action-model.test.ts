@@ -57,6 +57,7 @@ describe('buildProjectActionModel', () => {
       source: 'task',
       label: 'Clean up the brief',
       buttonLabel: 'Open Work',
+      href: '/work?task=task-brief',
     })
 
     const specReview = buildProjectActionModel({
@@ -168,7 +169,7 @@ describe('buildProjectActionModel', () => {
       source: 'task',
       label: 'Clean up the Stripe checkout brief',
       buttonLabel: 'Open Work',
-      href: '/work',
+      href: '/work?task=task-stripe-brief',
     })
     expect(model.secondaryActions.map(action => action.source)).toContain('inbox')
   })
@@ -223,6 +224,72 @@ describe('buildProjectActionModel', () => {
       startEnabled: false,
       disabledReason: 'Font Something needs your answer before Guildhall can continue',
       label: 'Waiting on answer',
+    })
+  })
+
+  it('surfaces open scope-authority requests as owner input', () => {
+    const model = buildProjectActionModel({
+      startReadiness: { canStart: true },
+      scopeAuthorityRequests: [{
+        id: 'scope-1',
+        type: 'change_release_boundary',
+        status: 'open',
+        targetWorkId: 'release-mvp',
+        question: 'Should UI editor work be part of Current MVP, or moved to Later?',
+        whyItMatters: 'This changes what Guildhall is allowed to work on next.',
+        createdAt: '2026-06-17T00:00:00.000Z',
+        createdBy: 'coordinator',
+      }],
+      tasks: [{
+        id: 'task-ready',
+        title: 'Ready work',
+        status: 'ready',
+      }],
+      thread: { turns: [], activeTurnId: null },
+      runStatus: 'stopped',
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      source: 'owner_input',
+      label: 'Needs your decision',
+      detail: 'Should UI editor work be part of Current MVP, or moved to Later?',
+      buttonLabel: 'Open decision',
+      href: '/overview/inbox?scopeAuthority=scope-1',
+    })
+    expect(model.ownerInput).toMatchObject({
+      active: true,
+      label: 'Needs your decision',
+    })
+  })
+
+  it('does not promote low-signal thread lead-ins as owner action detail', () => {
+    const model = buildProjectActionModel({
+      startReadiness: {
+        canStart: false,
+        code: 'owner_input_required',
+        message: 'Clarify Templates needs your answer before work can continue',
+        actionHref: '/thread?thread=bc-template-question',
+      },
+      tasks: [],
+      thread: {
+        activeTurnId: 'bounded-chat:bc-template-question',
+        turns: [{
+          id: 'bounded-chat:bc-template-question',
+          kind: 'bounded_chat',
+          status: 'active',
+          actionHref: '/thread?thread=bc-template-question',
+          question: { prompt: "From what I've seen:" },
+        }],
+      },
+      runStatus: 'stopped',
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      source: 'owner_input',
+      label: 'Answer in Thread',
+      detail: 'Open the thread to answer the current question.',
+      href: '/thread?thread=bc-template-question',
+      buttonLabel: 'Open Thread',
     })
   })
 
@@ -385,6 +452,58 @@ describe('buildProjectActionModel', () => {
       source: 'task',
       buttonLabel: 'Review in Thread',
       href: '/thread?thread=task%3Atask-spec-a',
+    })
+  })
+
+  it('links work task actions to the selected Work item and recovers clipped task labels from the full description', () => {
+    const model = buildProjectActionModel({
+      startReadiness: { canStart: true },
+      inbox: { items: [] },
+      tasks: [{
+        id: 'task-smoke-test',
+        title: 'What commands should I run to smoke test this project without changin...',
+        status: 'ready',
+        description: 'What commands should I run to smoke test this project without changing files?',
+        updatedAt: '2026-06-15T18:48:51.097Z',
+        productBrief: { approvedAt: '2026-06-15T18:48:51.097Z', userJob: '' },
+        spec: '',
+        acceptanceCriteria: [],
+      }],
+      thread: { turns: [] },
+      runStatus: 'stopped',
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      source: 'task',
+      label: 'What commands should I run to smoke test this project without changing files?',
+      buttonLabel: 'Open Work',
+      href: '/work?task=task-smoke-test',
+      taskId: 'task-smoke-test',
+    })
+  })
+
+  it('uses action-shaped labels for legacy question-shaped runnable work', () => {
+    const model = buildProjectActionModel({
+      startReadiness: { canStart: true },
+      inbox: { items: [] },
+      tasks: [{
+        id: 'task-smoke-test',
+        title: 'What commands should I run to smoke test this project without changing files?',
+        status: 'in_progress',
+        description: 'What commands should I run to smoke test this project without changing files?',
+        updatedAt: '2026-06-15T18:48:51.097Z',
+      }],
+      thread: { turns: [] },
+      runStatus: 'running',
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      source: 'task',
+      label: 'Define safe smoke-test commands',
+      detail: 'What commands should I run to smoke test this project without changing files?',
+      buttonLabel: 'Open Work',
+      href: '/work?task=task-smoke-test',
+      taskId: 'task-smoke-test',
     })
   })
 })

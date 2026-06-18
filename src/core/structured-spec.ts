@@ -14,6 +14,29 @@ function cleanedStringList(label: string): z.ZodType<string[], z.ZodTypeDef, unk
     })
 }
 
+function cleanedFlexibleStringList(label: string): z.ZodType<string[], z.ZodTypeDef, unknown> {
+  return z.preprocess((value) => {
+    if (!Array.isArray(value)) return value
+    return value.map((item) => {
+      if (typeof item === 'string') return item
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return item
+      const record = item as Record<string, unknown>
+      const risk = typeof record.risk === 'string' ? record.risk.trim() : ''
+      const mitigation = typeof record.mitigation === 'string' ? record.mitigation.trim() : ''
+      const question = typeof record.question === 'string' ? record.question.trim() : ''
+      const detail = typeof record.detail === 'string' ? record.detail.trim() : ''
+      if (risk && mitigation) return `${risk} - Mitigation: ${mitigation}`
+      if (risk) return risk
+      if (question) return question
+      if (detail) return detail
+      return Object.entries(record)
+        .filter(([, entryValue]) => typeof entryValue === 'string' && entryValue.trim().length > 0)
+        .map(([entryKey, entryValue]) => `${entryKey}: ${(entryValue as string).trim()}`)
+        .join('; ')
+    })
+  }, cleanedStringList(label))
+}
+
 function parseStructuredAcceptanceCriterionDescription(description: string): { scenario: string; expectation: string } {
   const normalized = description.trim().replace(/\s+/g, ' ')
   const gwtMatch = /^given\s+(.+?),\s*when\s+(.+?),\s*then\s+(.+)$/i.exec(normalized)
@@ -99,7 +122,7 @@ export const StructuredSpec = z.object({
   dataModelSchemaChanges: cleanedString('dataModelSchemaChanges').optional(),
   migrationRollout: cleanedString('migrationRollout').optional(),
   performanceReliabilitySecurity: cleanedString('performanceReliabilitySecurity').optional(),
-  risksOpenQuestions: cleanedStringList('risksOpenQuestions').optional(),
+  risksOpenQuestions: cleanedFlexibleStringList('risksOpenQuestions').optional(),
   handoffSequence: cleanedStringList('handoffSequence').optional(),
 }).strict()
 export type StructuredSpec = z.infer<typeof StructuredSpec>

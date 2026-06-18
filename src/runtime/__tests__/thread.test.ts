@@ -2168,7 +2168,7 @@ describe('buildThread', () => {
         'Current read: AI-powered font generation desktop application.',
         'Coordinator areas: Design.',
         'Bootstrap has been verified before.',
-        '2 tasks on record: 1 blocked, 1 ready.',
+        '2 tasks on record: 1 open, 1 blocked.',
       ]))
       expect(directionStep.contextSummary?.uncertainty).toMatch(/durable plan input/i)
       expect(directionStep.contextSummary?.uncertainty).toMatch(/revised later as the project changes/i)

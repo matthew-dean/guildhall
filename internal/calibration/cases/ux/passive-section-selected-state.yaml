@@ -1,0 +1,43 @@
+id: passive-section-selected-state
+title: Passive section selected state
+domain: ux
+productType: workflow-tool
+surfaceType: dashboard
+userGoal: Tell which specific row or card is selected without mistaking a passive section for an interactive card.
+scenario: Clicking a selectable mini-card gives the outer section card a brighter focus/selected border than the actual selected row.
+artifacts:
+  - id: selected-state-geometry
+    kind: copy_snippet
+    description: Selection-state evidence.
+    content: "Before click: outer card border normal. After row click: selected row aria-current=true, but outer Work list card border changes to the focus color and looks selected."
+reviewLanes:
+  - ux_comprehension
+  - visual_design
+  - accessibility
+knownFindings:
+  - id: passive-container-looks-selected
+    lane: visual_design
+    severity: high
+    summary: A passive section inherits selected/focus chrome from a selected child.
+    impact: Users cannot tell whether the section, every card, or the clicked row is the selected object.
+    minimumUsefulFix: Make focus-within/selected chrome opt-in for interactive containers and keep row selection on the shared row component.
+    matchHints:
+      - outer card
+      - selected
+      - focus-within
+      - passive section
+falsePositiveTraps:
+  - id: dont-add-local-purple
+    summary: Do not fix by adding a competing bespoke selected style to the row; centralize the selected treatment in shared components.
+source:
+  kind: production_miss
+  citation: Generalized from Guildhall Work list selected-state feedback on 2026-06-15.
+labelGovernance:
+  labeledBy: product-review
+  labeledAt: 2026-06-15T19:20:00.000Z
+  reviewStatus: seed
+privacyClassification: internal
+negativeControl: false
+stalenessPolicy:
+  reviewAfter: 2026-09-15
+  reason: FrameCard and row-selection component contracts are actively changing.

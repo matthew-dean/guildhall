@@ -1638,6 +1638,84 @@ Uncertainties: none`,
     expect(completed?.type === 'tool_execution_completed' ? completed.output : '').toContain('pnpm --filter @knit-app build')
   })
 
+  it('allows review handoff when cwd-scoped verification proves the authoritative cd-prefixed command', async () => {
+    const registry = new ToolRegistry()
+    let called = false
+    registry.register(
+      defineTool({
+        name: 'update-task',
+        description: '',
+        inputSchema: z.object({
+          taskId: z.string(),
+          status: z.string(),
+          note: z.unknown().optional(),
+        }),
+        execute: async (input) => {
+          if (input.status === 'review') called = true
+          return { output: 'updated', is_error: false }
+        },
+      }),
+    )
+    const events = await drain(
+      runQuery(
+        {
+          apiClient: new ScriptedApiClient([
+            {
+              message: assistantToolUse(
+                'update-task',
+                {
+                  taskId: 'task-verify',
+                  status: 'review',
+                  note: {
+                    agentId: 'worker-agent',
+                    role: 'self-critique',
+                    content: `**Self-critique:**
+For each acceptance criterion:
+- AC 1: Met — Type definitions compile.
+
+**Minimum-scope check:** Only the schema type package changed.
+
+**Review proof packet:**
+- Changed files / diff scope: packages/schemas/src
+- Verification commands passed: npx tsc --noEmit
+- Working hypothesis at handoff: The cwd-scoped typecheck proves the schema package.
+- Known gaps / follow-up: none`,
+                  },
+                },
+                'update-review',
+              ),
+            },
+          ]),
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 2,
+          toolMetadata: {
+            current_task_id: 'task-verify',
+            current_task_verification_commands: [
+              'cd packages/schemas && npx tsc --noEmit',
+            ],
+            review_handoff_evidence: {
+              taskId: 'task-verify',
+              inspectedImplementationFile: true,
+              changedOrVerified: true,
+              successfulVerificationCommands: ['npx tsc --noEmit'],
+            },
+          },
+        },
+        [{ role: 'user', content: [{ type: 'text', text: 'go' }] }],
+      ),
+    )
+
+    const completed = events.find((event) => event.type === 'tool_execution_completed')
+    expect(called).toBe(true)
+    expect(completed?.type === 'tool_execution_completed' ? completed.is_error : true).toBe(false)
+    expect(completed?.type === 'tool_execution_completed' ? completed.output : '').toBe('updated')
+  })
+
   it('allows review handoff when the self-critique uses plain AC lines and a bold minimum-scope heading', async () => {
     const registry = new ToolRegistry()
     let called = false
@@ -5574,6 +5652,96 @@ Uncertainties: none`,
       'Inspect the checkpoint-touched files against the verification result, then fix whatever still fails before you write the structured self-critique.',
     )
 
+  })
+
+  it('refuses shell commands that parse Guildhall task state files', async () => {
+    let shellCalls = 0
+    const registry = new ToolRegistry()
+    registry.register(
+      defineTool({
+        name: 'shell',
+        description: '',
+        inputSchema: z.object({ command: z.string() }),
+        isReadOnly: () => false,
+        execute: async () => {
+          shellCalls += 1
+          return { output: 'should not run', is_error: false }
+        },
+      }),
+    )
+    registry.register(
+      defineTool({
+        name: 'read-tasks',
+        description: '',
+        inputSchema: z.object({ tasksPath: z.string() }),
+        isReadOnly: () => true,
+        execute: async () => ({ output: '{"tasks":[]}', is_error: false }),
+      }),
+    )
+    const client = new ScriptedApiClient([
+      {
+        message: assistantToolUse(
+          'shell',
+          {
+            command:
+              'python -c "import json,sys; data=json.load(sys.stdin); print(len(data[\\\'tasks\\\']))" < /workspace/project/.guildhall/project-state/TASKS.json',
+          },
+          'toolu_task_state_shell',
+        ),
+      },
+      { message: assistantText('done') },
+    ])
+    const messages: ConversationMessage[] = [
+      { role: 'user', content: [{ type: 'text', text: 'go' }] },
+    ]
+
+    await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 3,
+          toolMetadata: {
+            current_agent_id: 'worker-agent',
+            current_task_id: 'task-012',
+            current_task_has_structured_self_critique: true,
+            current_task_has_review_proof_packet: true,
+          },
+        },
+        messages,
+      ),
+    )
+
+    expect(shellCalls).toBe(0)
+    expect(messages.some((message) =>
+      message.role === 'user' &&
+      message.content.some((block) =>
+        block.type === 'tool_result' &&
+        typeof block.content === 'string' &&
+        block.content.includes('Do not use shell to read or parse Guildhall task state'),
+      ),
+    )).toBe(true)
+    expect(messages.some((message) =>
+      message.role === 'user' &&
+      message.content.some((block) =>
+        block.type === 'tool_result' &&
+        typeof block.content === 'string' &&
+        block.content.includes('read-tasks'),
+      ),
+    )).toBe(true)
+    expect(messages.some((message) =>
+      message.role === 'user' &&
+      message.content.some((block) =>
+        block.type === 'tool_result' &&
+        typeof block.content === 'string' &&
+        block.content.includes('transition the active task with update-task now'),
+      ),
+    )).toBe(true)
   })
 
   it('allows verification-backed likely-target reads on a resumed checkpoint before rerunning shell in the same turn', async () => {

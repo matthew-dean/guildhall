@@ -266,4 +266,53 @@ describe('TaskQueue', () => {
     })
     expect(result.version).toBe(1)
   })
+
+  it('defaults execution plan actions for existing task queues', () => {
+    const result = TaskQueue.parse({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      tasks: [],
+    })
+
+    expect(result.executionPlanActions).toEqual([])
+  })
+
+  it('defaults scope authority requests for existing task queues', () => {
+    const result = TaskQueue.parse({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      tasks: [],
+    })
+
+    expect(result.scopeAuthorityRequests).toEqual([])
+  })
+
+  it('defaults work hierarchy relation to contains', () => {
+    const result = Task.parse({
+      id: 'task-1',
+      title: 'Task',
+      description: 'Task.',
+      domain: 'test',
+      projectPath: '/tmp/project',
+      status: 'ready',
+      priority: 'normal',
+      acceptanceCriteria: [],
+      outOfScope: [],
+      dependsOn: [],
+      notes: [],
+      gateResults: [],
+      reviewVerdicts: [],
+      adjudications: [],
+      escalations: [],
+      agentIssues: [],
+      origination: 'human',
+      revisionCount: 0,
+      remediationAttempts: 0,
+      hierarchy: { childIds: [], order: 0 },
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    })
+
+    expect(result.hierarchy?.relation).toBe('contains')
+  })
 })

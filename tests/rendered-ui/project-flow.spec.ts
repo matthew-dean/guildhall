@@ -1,4 +1,11 @@
 import { expect, test } from '@playwright/test'
+import {
+  defineFlowUserJob,
+  expectProjectFlowStateAgreement,
+  expectProjectOrientationSpineAgreement,
+  expectNoClippedContent,
+  readProjectFlowState,
+} from './flow-audit-assertions'
 
 const projectSurfaceRoutes = [
   {
@@ -340,6 +347,191 @@ test('work view switcher keeps list as default and board as the secondary surfac
   await expect(page.getByRole('button', { name: 'Board' })).toHaveAttribute('aria-pressed', 'true')
   await expect(page.getByRole('button', { name: 'Columns' })).toHaveCount(0)
   await expect(page.getByRole('combobox', { name: 'Show', exact: true })).toBeVisible()
+})
+
+test('work list columns fit normal split-screen widths and scroll only when genuinely narrow', async ({ page }) => {
+  await page.setViewportSize({ width: 1114, height: 692 })
+  await page.goto('/projects/narrative-harness/work')
+
+  await expect(page.getByRole('heading', { name: 'Work list' })).toBeVisible()
+  const normalMetrics = await page.locator('.work-list-stack').evaluate((stack) => {
+    const scrollRegion = stack.parentElement
+    const card = stack.closest('.gh-ui-compat-card')
+    if (!scrollRegion || !card) return null
+    const scrollStyle = getComputedStyle(scrollRegion)
+    const scrollBox = scrollRegion.getBoundingClientRect()
+    const cardBox = card.getBoundingClientRect()
+    const rowBoxes = Array.from(stack.querySelectorAll('.work-list-row')).map(row => row.getBoundingClientRect())
+    return {
+      scrollClass: scrollRegion.className,
+      scrollAriaLabel: scrollRegion.getAttribute('aria-label'),
+      overflowX: scrollStyle.overflowX,
+      scrollRight: scrollBox.right,
+      cardRight: cardBox.right,
+      stackScrollWidth: stack.scrollWidth,
+      scrollClientWidth: scrollRegion.clientWidth,
+      rowMaxRight: Math.max(...rowBoxes.map(box => box.right)),
+    }
+  })
+
+  expect(normalMetrics).not.toBeNull()
+  expect(normalMetrics!.scrollClass).toContain('work-list-scroll')
+  expect(normalMetrics!.scrollAriaLabel).toBe('Scrollable work list columns')
+  expect(['auto', 'scroll']).toContain(normalMetrics!.overflowX)
+  expect(normalMetrics!.scrollRight).toBeLessThanOrEqual(normalMetrics!.cardRight + 1)
+  expect(normalMetrics!.stackScrollWidth).toBeLessThanOrEqual(normalMetrics!.scrollClientWidth + 1)
+  expect(normalMetrics!.rowMaxRight).toBeLessThanOrEqual(normalMetrics!.cardRight + 1)
+
+  await page.setViewportSize({ width: 900, height: 692 })
+  await page.reload()
+  await expect(page.getByRole('heading', { name: 'Work list' })).toBeVisible()
+  const narrowMetrics = await page.locator('.work-list-stack').evaluate((stack) => {
+    const scrollRegion = stack.parentElement
+    const card = stack.closest('.gh-ui-compat-card')
+    if (!scrollRegion || !card) return null
+    const scrollStyle = getComputedStyle(scrollRegion)
+    const scrollBox = scrollRegion.getBoundingClientRect()
+    const cardBox = card.getBoundingClientRect()
+    return {
+      scrollClass: scrollRegion.className,
+      scrollAriaLabel: scrollRegion.getAttribute('aria-label'),
+      overflowX: scrollStyle.overflowX,
+      scrollRight: scrollBox.right,
+      cardRight: cardBox.right,
+      stackScrollWidth: stack.scrollWidth,
+      scrollClientWidth: scrollRegion.clientWidth,
+    }
+  })
+
+  expect(narrowMetrics).not.toBeNull()
+  expect(narrowMetrics!.scrollClass).toContain('work-list-scroll')
+  expect(narrowMetrics!.scrollAriaLabel).toBe('Scrollable work list columns')
+  expect(['auto', 'scroll']).toContain(narrowMetrics!.overflowX)
+  expect(narrowMetrics!.scrollRight).toBeLessThanOrEqual(narrowMetrics!.cardRight + 1)
+  expect(narrowMetrics!.stackScrollWidth).toBeGreaterThan(narrowMetrics!.scrollClientWidth)
+})
+
+test('flow audit protocol reconciles user job, visible state, and layout evidence', async ({ page }) => {
+  defineFlowUserJob({
+    route: '/projects/looma-knit/work',
+    projectId: 'looma-knit',
+    expectation: 'A user looking at route X should be able to tell what is happening now, what is queued, what is blocked, what they can do next, and whether the system is actually working.',
+  })
+
+  await page.setViewportSize({ width: 1114, height: 692 })
+  await page.goto('/projects/narrative-harness/work')
+  await expectNoClippedContent(page, {
+    containerSelector: '.gh-ui-compat-card:has(.work-list-stack)',
+    itemSelector: '.work-list-row',
+    horizontalScrollSelector: '.work-list-scroll',
+  })
+
+  await page.setViewportSize({ width: 900, height: 692 })
+  await page.reload()
+  await expectNoClippedContent(page, {
+    containerSelector: '.gh-ui-compat-card:has(.work-list-stack)',
+    itemSelector: '.work-list-row',
+    horizontalScrollSelector: '.work-list-scroll',
+  })
+
+  const state = await expectProjectFlowStateAgreement(page, 'looma-knit')
+  expect(state.visibleTotal).toBeGreaterThan(0)
+  if (state.startCanStart) {
+    expect(state.runnableCount).toBe(state.visibleActive)
+    expect(state.blockedQueueCount).toBe(state.visibleBlocked)
+    expect(state.firstRunnableId).not.toBeNull()
+  }
+})
+
+test('project orientation spine agrees across overview, work, thread, release, and structure', async ({ page }) => {
+  await expectProjectOrientationSpineAgreement(page, {
+    projectId: 'narrative-harness',
+    requireInferredPurpose: true,
+  })
+  await expectProjectOrientationSpineAgreement(page, {
+    projectId: 'looma-knit',
+    requireInferredPurpose: true,
+  })
+  await expectProjectOrientationSpineAgreement(page, {
+    projectId: 'jess',
+    minIncludedWorkCount: 1,
+    requireInferredPurpose: true,
+  })
+  await expectProjectOrientationSpineAgreement(page, {
+    projectId: 'fair-labor-license',
+    minIncludedWorkCount: 1,
+    requireInferredPurpose: true,
+  })
+})
+
+test('project shell uses stopped-project language consistently across flow surfaces', async ({ page }) => {
+  await page.setViewportSize({ width: 1114, height: 692 })
+  const state = await readProjectFlowState(page, 'looma-knit')
+  await page.goto('/projects/looma-knit')
+
+  await expect(page.getByRole('region', { name: 'Project overview' })).toBeVisible()
+  if (state.startCanStart && state.visibleActive > 0) {
+    const resumeLabel = state.visibleActive === 1
+      ? 'Resume 1 ready work item'
+      : `Resume ${state.visibleActive} ready work items`
+    await expect(page.getByRole('button', { name: resumeLabel })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Ready to resume' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Moving now' })).toHaveCount(0)
+  }
+
+  await page.goto('/projects/looma-knit/work')
+  if (state.startCanStart && state.runnableCount > 0) {
+    await expect(page.getByRole('region', { name: 'Delivery queue' })).toContainText('Ready when resumed')
+    await expect(page.getByRole('region', { name: 'Delivery queue' })).toContainText(`${state.runnableCount} ready to resume`)
+    await expect(page.getByRole('region', { name: 'Delivery queue' })).not.toContainText('Runnable project work.')
+  }
+
+  const revsHeader = page.getByRole('button', { name: 'Revs' })
+  await expect(revsHeader).toBeVisible()
+  const revsMetrics = await revsHeader.evaluate((node) => ({
+    clientWidth: node.clientWidth,
+    scrollWidth: node.scrollWidth,
+  }))
+  expect(revsMetrics.scrollWidth).toBeLessThanOrEqual(revsMetrics.clientWidth)
+})
+
+test('selecting a work row does not make the passive Work list card look selected', async ({ page }) => {
+  await page.setViewportSize({ width: 1114, height: 692 })
+  await page.goto('/projects/narrative-harness/work')
+
+  await expect(page.getByRole('heading', { name: 'Work list' })).toBeVisible()
+  const before = await page.locator('.work-list-stack').evaluate((stack) => {
+    const card = stack.closest('.gh-frame-card')
+    if (!card) return null
+    const style = getComputedStyle(card)
+    return {
+      borderColor: style.borderColor,
+      outlineStyle: style.outlineStyle,
+      outlineWidth: style.outlineWidth,
+    }
+  })
+
+  await page.locator('.work-list-row').first().click()
+
+  const after = await page.locator('.work-list-stack').evaluate((stack) => {
+    const card = stack.closest('.gh-frame-card')
+    const selectedRows = Array.from(stack.querySelectorAll('.work-list-row[aria-current="true"]'))
+    if (!card) return null
+    const style = getComputedStyle(card)
+    return {
+      borderColor: style.borderColor,
+      outlineStyle: style.outlineStyle,
+      outlineWidth: style.outlineWidth,
+      selectedRowCount: selectedRows.length,
+    }
+  })
+
+  expect(before).not.toBeNull()
+  expect(after).not.toBeNull()
+  expect(after!.selectedRowCount).toBe(1)
+  expect(after!.borderColor).toBe(before!.borderColor)
+  expect(after!.outlineStyle).toBe(before!.outlineStyle)
+  expect(after!.outlineWidth).toBe(before!.outlineWidth)
 })
 
 test('developer settings exposes migrations levers and design feedback state', async ({ page }) => {

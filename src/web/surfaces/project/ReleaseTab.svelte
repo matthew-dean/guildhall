@@ -1,8 +1,8 @@
 <!--
-  Current work closure view. Primary/secondary/overflow IA:
+  Release readiness view. Primary/secondary/overflow IA:
     · Primary: single verdict band — shared status treatment + one-line reason.
     · Secondary: criteria list, one row per check, expandable into task links.
-    · Overflow: compact closure counts and task-state tally.
+    · Overflow: compact release counts and task-state tally.
 -->
 <script lang="ts">
   import FrameCard from '../../../../packages/ui/src/components/FrameCard.svelte'
@@ -11,6 +11,7 @@
   import StatusPill from '../../../../packages/ui/src/components/StatusPill.svelte'
   import { nav } from '../../lib/nav.svelte.js'
   import { currentProjectHref, currentTaskHref, projectFetch } from '../../lib/project-routes.js'
+  import type { ProjectOrientationSpine } from '../../lib/types.js'
 
   interface ReleaseItem {
     id?: string
@@ -85,6 +86,7 @@
   const section = $derived(subView ?? 'verdict')
 
   let data = $state<ReleasePayload | null>(null)
+  let spine = $state<ProjectOrientationSpine | null>(null)
   let error = $state<string | null>(null)
   let initNeeded = $state(false)
 
@@ -104,6 +106,17 @@
       })
       .catch(err => {
         error = err instanceof Error ? err.message : String(err)
+      })
+  })
+
+  $effect(() => {
+    projectFetch('/api/project/spine', { cache: 'no-store' })
+      .then(r => r.json())
+      .then(j => {
+        spine = (j?.spine ?? null) as ProjectOrientationSpine | null
+      })
+      .catch(() => {
+        spine = null
       })
   })
 
@@ -298,14 +311,14 @@
       return {
         label: 'Not yet',
         tone: 'warn' as const,
-        reason: 'No tracked work yet. Shape the first task before judging closure.',
+        reason: 'No tracked work yet. Shape the first task before judging release readiness.',
       }
     }
     if (data.totals.blockingCount === 0 && unfinishedCount === 0 && dirtyCheckoutCount === 0 && !dirtyCheckoutError && dsLabel().clear) {
       return {
-        label: 'Closed',
+        label: 'Ready',
         tone: 'ok' as const,
-        reason: `${data.totals.done}/${data.totals.tasks} tasks done · no open closure blockers.`,
+        reason: `${data.totals.done}/${data.totals.tasks} tasks done · no open release blockers.`,
       }
     }
     if (unfinishedCount > 0) {
@@ -356,13 +369,13 @@
   const sectionCopy = $derived(
     section === 'criteria'
       ? {
-          title: 'Closure checks',
-          description: 'Expand any row to inspect the tasks, approvals, or Git stories still keeping the current work open.',
+          title: 'Release checks',
+          description: 'Expand any row to inspect the tasks, approvals, or Git stories still keeping the current release from being ready.',
         }
       : {
-          title: 'Current work closure',
+          title: 'Release readiness',
           description: data?.scope?.description
-            ?? 'A quick read on whether the current work is closed enough to hand off, ship, or deliberately defer.',
+            ?? 'A quick read on whether the current release is ready to hand off, ship, or deliberately defer.',
         },
   )
 
@@ -371,25 +384,38 @@
   )
   const releaseBlockerLabel = $derived(
     data
-      ? `${data.totals.blockingCount} closure blocker${data.totals.blockingCount === 1 ? '' : 's'}`
-      : '0 closure blockers',
+      ? `${data.totals.blockingCount} release blocker${data.totals.blockingCount === 1 ? '' : 's'}`
+      : '0 release blockers',
   )
   const taskDoneLabel = $derived(data?.totals.tasks === 0 ? 'No tracked work yet' : `${data?.totals.done ?? 0}/${data?.totals.tasks ?? 0} done`)
+  const spineReleaseBlocker = $derived(spine?.release?.blockers?.[0] ?? null)
+  const spineBlockerNode = $derived(spineReleaseBlocker?.owningNodeId ? spine?.nodes?.[spineReleaseBlocker.owningNodeId] ?? null : null)
+  const spineTopBlockerLabel = $derived.by(() => {
+    const blocker = spine?.summary?.topBlocker
+    if (!blocker) return spineReleaseBlocker?.label ?? null
+    return typeof blocker === 'string' ? blocker : blocker.label ?? spineReleaseBlocker?.label ?? null
+  })
+  const spineScopeCounts = $derived.by(() => {
+    if (!spine?.summary) return ''
+    const included = spine.summary.includedWorkCount ?? spine.summary.includedCount ?? 0
+    const deferred = spine.summary.deferredWorkCount ?? spine.summary.deferredCount ?? 0
+    return `${included} included · ${deferred} later`
+  })
 </script>
 
 {#if initNeeded}
-  <NoticeBand tone="warn" role="note" label="Closure" title="Project not initialized yet">
+  <NoticeBand tone="warn" role="note" label="Release" title="Project not initialized yet">
     {#snippet actions()}
       <a class="notice-link" href={currentProjectHref('/setup')}>Open setup wizard</a>
     {/snippet}
-    <p>Complete the setup wizard before assessing whether the current work is closed.</p>
+    <p>Complete the setup wizard before assessing release readiness.</p>
   </NoticeBand>
 {:else if error}
-  <NoticeBand tone="danger" role="alert" label="Closure" title="Could not load closure checks">
+  <NoticeBand tone="danger" role="alert" label="Release" title="Could not load release checks">
     <p>{error}</p>
   </NoticeBand>
 {:else if !data}
-  <NoticeBand tone="neutral" role="status" label="Closure" title="Loading closure checks">
+  <NoticeBand tone="neutral" role="status" label="Release" title="Loading release checks">
     <p>Collecting task status, approvals, Git stories, and checkout state…</p>
   </NoticeBand>
 {:else}
@@ -406,6 +432,33 @@
         <StatusPill label={taskDoneLabel} tone="neutral" />
       {/snippet}
     </SectionHeader>
+
+    {#if spine?.summary?.headline}
+      <FrameCard
+        tone={spineTopBlockerLabel ? 'warn' : 'neutral'}
+        padding="compact"
+        class="release-spine-card"
+      >
+        <div class="release-spine">
+          <div>
+            <span class="release-spine-label">{spine.summary.selectedScopeLabel ?? spine.scope?.label ?? 'Current scope'}</span>
+            <strong>{spine.summary.headline}</strong>
+            <p>{spine.summary.purpose ?? spine.charter?.goal ?? 'Project purpose has not been pinned yet.'}</p>
+          </div>
+          <div class="release-spine-side">
+            {#if spineScopeCounts}
+              <StatusPill label={spineScopeCounts} tone="neutral" />
+            {/if}
+            {#if spineTopBlockerLabel}
+              <span>Top blocker: {spineTopBlockerLabel}</span>
+            {/if}
+            {#if spineBlockerNode}
+              <button type="button" onclick={() => openTask(spineBlockerNode.refs?.taskIds?.[0] ?? '')}>{spineBlockerNode.title}</button>
+            {/if}
+          </div>
+        </div>
+      </FrameCard>
+    {/if}
 
     {#if section === 'verdict'}
       <NoticeBand
@@ -425,7 +478,7 @@
         {#snippet header()}
           <SectionHeader
             title="Current counts"
-            description="A compact view of the signals feeding the closure verdict."
+            description="A compact view of the signals feeding the release verdict."
             headingTag="h3"
             density="dense"
           >
@@ -435,13 +488,13 @@
           </SectionHeader>
         {/snippet}
 
-        <div class="summary-grid" aria-label="Current work closure summary counts">
+        <div class="summary-grid" aria-label="Release readiness summary counts">
           <div class="summary-stat">
             <span class="summary-label">Tasks done</span>
             <strong>{data.totals.tasks === 0 ? 'No tracked work' : `${data.totals.done}/${data.totals.tasks}`}</strong>
           </div>
           <div class="summary-stat">
-            <span class="summary-label">Total closure blockers</span>
+            <span class="summary-label">Total release blockers</span>
             <strong>{data.totals.blockingCount}</strong>
           </div>
           <div class="summary-stat">
@@ -473,7 +526,7 @@
         </div>
         {#if data.dirtyCheckout && dirtyCheckoutCount > 0}
           <p class="dirty-detail">
-            {dirtyCheckoutCount} project-local Guildhall {dirtyCheckoutCount === 1 ? 'file needs' : 'files need'} cleanup before the current work can close.
+            {dirtyCheckoutCount} project-local Guildhall {dirtyCheckoutCount === 1 ? 'file needs' : 'files need'} cleanup before the current release can be ready.
             Open diagnostics if you need the exact file list.
           </p>
         {:else if dirtyCheckoutError}
@@ -695,6 +748,54 @@
     color: var(--text-muted);
   }
 
+  .release-spine {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(220px, max-content);
+    gap: var(--gh-space-4);
+    align-items: start;
+  }
+
+  .release-spine div {
+    display: grid;
+    gap: var(--gh-space-1);
+    min-width: 0;
+  }
+
+  .release-spine-label,
+  .release-spine p,
+  .release-spine-side span {
+    color: var(--text-muted);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
+    overflow-wrap: anywhere;
+  }
+
+  .release-spine strong {
+    color: var(--text);
+    font-size: var(--gh-type-size-panel-title);
+    line-height: var(--gh-type-line-height-tight);
+    overflow-wrap: anywhere;
+  }
+
+  .release-spine p {
+    margin: 0;
+  }
+
+  .release-spine-side {
+    justify-items: start;
+  }
+
+  .release-spine-side button {
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--accent);
+    cursor: pointer;
+    font: inherit;
+    font-weight: var(--gh-type-weight-strong);
+    text-align: left;
+  }
+
   .criteria {
     list-style: none;
     display: grid;
@@ -808,6 +909,12 @@
   @container (min-width: 42rem) {
     .summary-grid {
       grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+  }
+
+  @media (max-width: 720px) {
+    .release-spine {
+      grid-template-columns: 1fr;
     }
   }
 </style>

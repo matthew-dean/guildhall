@@ -162,8 +162,8 @@ describe('buildProjectTicker', () => {
       ),
     ).toMatchObject({
       tone: 'idle',
-      actorLabel: 'Paused',
-      message: '1 task paused until you resume',
+      actorLabel: 'Ready',
+      message: '1 task ready when you resume',
     })
 
     expect(
@@ -263,8 +263,8 @@ describe('buildProjectTicker', () => {
       ),
     ).toMatchObject({
       tone: 'idle',
-      actorLabel: 'Paused',
-      message: '2 tasks paused until you resume',
+      actorLabel: 'Ready',
+      message: '2 tasks ready when you resume',
     })
 
     expect(
@@ -335,6 +335,25 @@ describe('buildProjectTicker', () => {
       pulse: false,
       actorLabel: 'Blocked',
       message: 'Blocked on bootstrap failure',
+    })
+  })
+
+  it('does not reduce stopped projects with resumable work to only blocked status', () => {
+    const detail: ProjectDetail = {
+      run: { status: 'stopped' },
+      tasks: [
+        { id: 'task-1', status: 'in_progress', title: 'Build first reviewer' },
+        { id: 'task-2', status: 'ready', title: 'Write trace pipeline' },
+        { id: 'task-3', status: 'blocked', title: 'Resolve imported backlog' },
+      ],
+    }
+
+    expect(buildProjectTicker(detail, null, now)).toMatchObject({
+      tone: 'idle',
+      actorLabel: 'Ready',
+      label: 'Ready',
+      message: '2 tasks ready when you resume',
+      detail: '1 blocked task',
     })
   })
 

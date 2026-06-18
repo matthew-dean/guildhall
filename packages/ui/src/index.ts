@@ -22,6 +22,7 @@ export { default as GuildDiagram } from './components/GuildDiagram.svelte'
 export { default as HeroBand } from './components/HeroBand.svelte'
 export { default as NoticeBand } from './components/NoticeBand.svelte'
 export { default as SectionHeader } from './components/SectionHeader.svelte'
+export { default as Skeleton } from './components/Skeleton.svelte'
 export { default as StatusPill } from './components/StatusPill.svelte'
 export { default as AnnotatedScreenshot } from './components/AnnotatedScreenshot.svelte'
 export type {
@@ -48,6 +49,8 @@ export type {
   SectionHeaderAlign,
   SectionHeaderHeadingTag,
   SectionHeaderProps,
+  SkeletonProps,
+  SkeletonShape,
   StatusPillProps,
   StatusPillTone,
 } from './components/types.js'

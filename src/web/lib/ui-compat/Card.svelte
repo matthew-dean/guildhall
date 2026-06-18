@@ -8,6 +8,8 @@
   type Variant = 'default' | 'callout'
   type RailTone = 'neutral' | 'warn' | 'danger' | 'ok' | 'accent'
   type RailStrength = 'subtle' | 'strong'
+  type Density = 'compact' | 'comfortable' | 'dense'
+  type Padding = 'compact' | 'default' | 'roomy'
 
   interface Props {
     title?: string
@@ -16,6 +18,8 @@
     variant?: Variant
     railTone?: RailTone | null
     railStrength?: RailStrength
+    density?: Density
+    padding?: Padding
     className?: string
     role?: string
     tabindex?: number
@@ -34,6 +38,8 @@
     variant = 'default',
     railTone = null,
     railStrength = 'subtle',
+    density = 'comfortable',
+    padding = 'default',
     className = '',
     role,
     tabindex,
@@ -47,6 +53,7 @@
 
   const frameTone = $derived(tone === 'default' ? 'default' : tone)
   const frameMode = $derived(variant === 'callout' ? 'display' : 'operator')
+  const frameFocusWithin = $derived(Boolean(onclick || onkeydown || tabindex !== undefined))
   const effectiveRailTone = $derived<RailTone | null>(
     railTone ?? (tone === 'default' ? null : tone),
   )
@@ -76,13 +83,15 @@
 <FrameCard
   tone={frameTone}
   mode={frameMode}
-  density="comfortable"
+  {density}
+  {padding}
   class={frameClass}
   {role}
   {tabindex}
   {ariaLabel}
   {onclick}
   {onkeydown}
+  focusWithin={frameFocusWithin}
   header={title || actions ? header : undefined}
 >
   {@render children?.()}

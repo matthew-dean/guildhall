@@ -330,6 +330,25 @@ function extractStructuredLlmVerdict(reasoning: string | undefined): ReviewVerdi
   return /^approve?d?$/i.test(match[1]) ? 'approve' : 'revise'
 }
 
+function extractRubricImpliedLlmVerdict(reasoning: string | undefined): ReviewVerdict['verdict'] | undefined {
+  const text = reasoning?.trim()
+  if (!text) return undefined
+  const required = [
+    'acceptance-criteria-met',
+    'no-scope-creep',
+    'conventions-followed',
+    'no-regressions',
+  ]
+  const values = new Map<string, string>()
+  for (const key of required) {
+    const pattern = new RegExp(`${key}\\s*:\\s*(yes|no)\\b`, 'i')
+    const match = pattern.exec(text)
+    if (match?.[1]) values.set(key, match[1].toLowerCase())
+  }
+  if (values.size !== required.length) return undefined
+  return required.every(key => values.get(key) === 'yes') ? 'approve' : 'revise'
+}
+
 /**
  * Record that the LLM reviewer path produced the verdict. Inferred from the
  * before/after status: a transition to `gate_check` means the LLM approved;
@@ -360,8 +379,9 @@ export function recordLlmVerdict(input: {
 
   const reasoning = input.reasoning ?? extractLlmReviewerReasoning(task)
   const structuredVerdict = extractStructuredLlmVerdict(reasoning)
+  const rubricVerdict = structuredVerdict ? undefined : extractRubricImpliedLlmVerdict(reasoning)
   const verdict: ReviewVerdict['verdict'] =
-    structuredVerdict ?? (input.afterStatus === 'gate_check' ? 'approve' : 'revise')
+    structuredVerdict ?? rubricVerdict ?? (input.afterStatus === 'gate_check' ? 'approve' : 'revise')
   const normalizedStatus: TaskStatus = verdict === 'approve' ? 'gate_check' : 'in_progress'
   const reason =
     verdict === 'approve'

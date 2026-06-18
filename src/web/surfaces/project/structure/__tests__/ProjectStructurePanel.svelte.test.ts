@@ -131,6 +131,57 @@ describe('ProjectStructurePanel', () => {
     expect(screen.getAllByText('Model')).not.toHaveLength(0)
   })
 
+  it('shows orientation spine context above structural domains', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'http://localhost')
+      if (url.pathname === '/api/project/spine') {
+        return json({
+          spine: {
+            scope: { label: 'Current MVP' },
+            summary: {
+              headline: 'Current MVP is blocked on proof.',
+              purpose: 'Build a fiction-first evaluation and reasoning harness.',
+              selectedScopeLabel: 'Current MVP',
+              includedWorkCount: 3,
+              deferredWorkCount: 2,
+              topBlocker: 'Anti-sameness proof missing',
+            },
+            roots: [{
+              id: 'work:task-anti-sameness',
+              title: 'Anti-sameness safeguards',
+              maturity: 'proof_needed',
+              children: [],
+            }],
+          },
+        })
+      }
+      if (url.pathname === '/api/project/project-graph') {
+        return json({
+          projectGraph: {
+            currentProject: { id: 'narrative-harness', label: 'Narrative Harness' },
+            localProjects: [],
+            structuralDomains: [
+              { id: 'domain:story-intelligence', label: 'Story intelligence', kind: 'coordinator_domain' },
+            ],
+            domainResponsibilities: [],
+            dependencyEdges: [],
+            contractSurfaces: [],
+          },
+        })
+      }
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(ProjectStructurePanel)
+
+    expect(await screen.findByText('Current MVP is blocked on proof.')).toBeInTheDocument()
+    expect(screen.getByText('3 included · 2 later')).toBeInTheDocument()
+    expect(screen.getByText('Top blocker: Anti-sameness proof missing')).toBeInTheDocument()
+    expect(screen.getByText('Anti-sameness safeguards')).toBeInTheDocument()
+    expect(await screen.findByText('Story intelligence')).toBeInTheDocument()
+  })
+
   it('keeps project map labels exact and exposes their source paths without a selected-row flow', async () => {
     project.detail = {
       ...project.detail!,

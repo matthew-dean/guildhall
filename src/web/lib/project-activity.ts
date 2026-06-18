@@ -305,13 +305,14 @@ export function buildProjectTicker(
       timeLabel: null,
     }
   }
-  if (blocked > 0) {
+  if (active > 0) {
     return {
-      tone: 'warn',
+      tone: 'idle',
       pulse: false,
-      actorLabel: 'Blocked',
-      label: 'Blocked',
-      message: `${blocked} blocked ${pluralize(blocked, 'task')}`,
+      actorLabel: 'Ready',
+      label: 'Ready',
+      message: `${active} ${pluralize(active, 'task')} ready when you resume`,
+      detail: blocked > 0 ? `${blocked} blocked ${pluralize(blocked, 'task')}` : undefined,
       timeLabel: null,
     }
   }
@@ -325,13 +326,13 @@ export function buildProjectTicker(
       timeLabel: null,
     }
   }
-  if (active > 0) {
+  if (blocked > 0) {
     return {
-      tone: 'idle',
+      tone: 'warn',
       pulse: false,
-      actorLabel: 'Paused',
-      label: 'Paused',
-      message: `${active} ${pluralize(active, 'task')} paused until you resume`,
+      actorLabel: 'Blocked',
+      label: 'Blocked',
+      message: `${blocked} blocked ${pluralize(blocked, 'task')}`,
       timeLabel: null,
     }
   }

@@ -758,6 +758,8 @@ async function cmdTask() {
       outputPath: getFlag('--output'),
       automationPolicy,
       proof,
+      ...(getFlag('--provider') ? { providerOverride: getFlag('--provider') } : {}),
+      ...(getFlag('--model') ? { modelAssignmentOverride: singleModelAssignment(getFlag('--model')!) } : {}),
       ...(maxTicks !== undefined ? { maxTicks } : {}),
     })
     console.log(`[guildhall] Run-once request: ${report.taskId}`)
@@ -767,6 +769,17 @@ async function cmdTask() {
   } catch (err) {
     console.error(`[guildhall] ${err instanceof Error ? err.message : String(err)}`)
     process.exit(1)
+  }
+}
+
+function singleModelAssignment(model: string) {
+  return {
+    spec: model,
+    coordinator: model,
+    worker: model,
+    reviewer: model,
+    gateChecker: model,
+    contextIndexer: model,
   }
 }
 

@@ -68,6 +68,22 @@ describe('routeRequest', () => {
     })
   })
 
+  it('keeps routed action labels complete instead of pre-cropping data strings', () => {
+    const raw = 'What commands should I run to smoke test this project without changing files?'
+    const result = routeRequest({
+      raw,
+      source: 'thread',
+      routeContext: { projectId: 'narrative-harness', route: '/projects/narrative-harness/thread' },
+    })
+
+    expect(result.actions[0]).toMatchObject({
+      kind: 'project_question',
+      label: raw,
+      intakeTarget: { title: raw },
+    })
+    expect(result.actions[0]?.label).not.toContain('...')
+  })
+
   it('classifies settings, persona/practice, repair, and clarification requests', () => {
     expect(routeRequest({
       raw: 'Turn on strict reviewer fanout for this project.',

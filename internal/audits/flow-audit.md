@@ -78,6 +78,71 @@ against deterministic local state. They do not replace live installed-app
 walkthroughs for machine-specific provider, process, git, or project-history
 behavior.
 
+## Fail-Closed Evidence Protocol
+
+A Guildhall flow audit is not a reasoning exercise. Treat the flow as broken
+until evidence proves the user can answer the current job from the visible UI.
+
+Before touching code, write the user job for the route under test:
+
+> A user looking at route X should be able to tell what is happening now, what
+> is queued, what is blocked, what they can do next, and whether the system is
+> actually working.
+
+Every flow-audit entry must include a state-agreement table or equivalent
+evidence covering the surfaces that claim the same state:
+
+| Surface | Required evidence |
+| --- | --- |
+| API summary | `/api/project?projectId=:id` readiness, queue, and visible work counts. |
+| Top action | Primary action label and the work/state it claims to act on. |
+| Work list/cards | Visible count labels, row/card statuses, selected/focused treatment, and next action affordance. |
+| Thread | Thread summary or selected-thread copy that explains owner/system ownership. |
+| Bottom/status chrome | Claimed running/blocked/waiting state and whether it agrees with the API. |
+
+If one surface says work is running, queued, blocked, or waiting on the owner
+while another surface hides or contradicts that state, log a failing finding.
+Do not classify it as acceptable ambiguity.
+
+Every browser audit must include viewport and geometry proof:
+
+- The reported or screenshot-sized desktop/split viewport.
+- A narrower desktop viewport when the layout has wide columns or toolbars.
+- Mobile when the route has a mobile-specific layout.
+- DOM geometry proving that visible content is not clipped. If horizontal
+  overflow exists, it must be inside a named scroll region.
+
+Use the reusable rendered helpers in
+`tests/rendered-ui/flow-audit-assertions.ts` for deterministic checks:
+
+- `defineFlowUserJob(...)` fails if the audit does not name the complete user
+  job.
+- `readProjectFlowState(...)` reads the authoritative API state.
+- `expectNoClippedContent(...)` fails on clipped visible content or unnamed
+  horizontal overflow.
+- `expectProjectFlowStateAgreement(...)` compares visible work state with the
+  shared API projection.
+
+For installed-app audits, run the proof chain sequentially:
+
+```sh
+pnpm build
+pnpm dev:install
+guildhall stop && guildhall start
+curl -s http://localhost:7777/api/stale-server
+```
+
+Do not run Playwright web-server tests in parallel with `pnpm build` or
+`pnpm dev:install`; both rewrite `.svelte-kit`/`dist` and can create false
+failures.
+
+Every escaped UX miss should become either a rendered regression, a calibration
+case under `internal/calibration/cases/ux`, or both. Current required miss
+families include ambiguous primary actions, contradictory counts, hidden
+overflow, clipped cards, vague approval labels, passive sections looking
+selected, and status bars claiming work that the visible work list cannot
+explain.
+
 ## Project-State Roster
 
 Live project roles keep the broad user test honest. Refresh this roster from
@@ -119,6 +184,24 @@ non-JavaScript proof language where possible.
 
 Use this as the canonical user-test matrix. Each row needs either current live
 browser proof or deterministic automated proof before a release readiness claim.
+
+### 2026-06-17 Narrative Harness Closed-MVP Proof
+
+- Installed app proof: `pnpm build && pnpm dev:install && guildhall stop &&
+  guildhall start`; `/api/stale-server` reported `stale:false` for
+  `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+- API proof for `/api/project?projectId=narrative-harness`: start readiness is
+  `all_terminal`; run control says `No runnable tasks`; owner input is inactive;
+  work counts are 11 `done`, 3 `shelved`, and no open tasks; orientation says
+  `Current MVP has no actionable work.` with 14 total, 11 done, 3 deferred, and
+  0 gaps.
+- Browser proof for `/projects/narrative-harness/overview` at 1280x720: the top
+  card is `Scope status` with a `CLOSED SCOPE` chip and the message
+  `No actionable tasks remain: 11 done, 0 blocked, 3 shelved.` The page shows
+  `No runnable work`, `No runnable tasks`, `11 Done`, `3 Shelved`, `3 deferred`,
+  no `Do this next` heading, no `Ready to resume` heading, no `Needs attention`,
+  no false `Blocked: 3 escalated`, no proof-gaps copy, no nonzero missing
+  verification, and no document-level horizontal overflow.
 
 | Surface | Routes | User job | Core project state | API evidence | Browser evidence | Automated coverage | Status / gap |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -11721,3 +11804,1116 @@ Verification:
   `3` skipped, and `11` todo.
 
 source: codex:managed-project-state-routing-2026-06-14
+
+2026-06-15T19:00:00Z - Added explicit per-card loading state for the fast
+Projects & Workspaces shell while full project status hydrates.
+
+- Work id: `codex:project-card-status-loading-affordance-2026-06-15`.
+- Root cause: `/api/service/projects` intentionally returns a lightweight
+  project shell with `projectStatusLoading:true`; the page-level inline
+  `Loading project status...` note existed, but individual project cards still
+  looked like ordinary/incomplete cards.
+- Fix: added a shared `Skeleton` primitive in `packages/ui` with rectangular
+  and circular shapes. `ProjectCard.svelte` now gives loading cards a
+  `project-card-loading` state, an accessible `still loading project state`
+  label, and fills its layout with shared skeleton rectangles instead of
+  card-local shimmer markup.
+- Proof: `pnpm vitest run src/web/surfaces/__tests__/ProjectsHome.svelte.test.ts -- --runInBand`;
+  `pnpm typecheck`; `pnpm build`; `pnpm dev:install`; service restart; live
+  `/api/stale-server` reported `stale:false` for PID `94781`; live
+  `/api/service/projects` returned seven projects with `projectStatusLoading:true`;
+  in-app browser loaded `http://localhost:7777/` and showed the hydrated fleet
+  once `/api/service` completed.
+
+source: codex:project-card-status-loading-affordance-2026-06-15
+
+2026-06-15T19:55:00Z - Reconciled Narrative Harness work-count and queue
+language after live `/projects/narrative-harness/work` showed split-brain
+state.
+
+- Work id: `codex:narrative-harness-work-queue-counts-2026-06-15`.
+- Root cause: the delivery queue counted `blocked` task status as runnable
+  when there were no dependency/primitive blockers, while Thread setup context
+  exposed raw lifecycle labels such as `ready`. Start readiness also treated
+  every `spec_review` as owner approval even though the orchestrator can run
+  normal coordinator/spec review work.
+- Fix: blocked delivery tasks now stay in the blocked queue; normal
+  `spec_review` tasks remain startable unless they are reserved owner-review
+  tasks; Thread setup context summarizes tasks as owner-facing buckets such as
+  open, working, blocked, needs brief, and needs you.
+- Proof: `pnpm exec vitest run src/runtime/__tests__/delivery-spine.test.ts src/runtime/__tests__/serve-settings.test.ts src/runtime/__tests__/thread.test.ts src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts --reporter=dot`;
+  `pnpm lint:contracts`; `pnpm build`; `pnpm dev:install`; `guildhall stop &&
+  guildhall start`; `/api/stale-server` returned `stale:false` for PID `85696`.
+  Live browser proof: `/projects/narrative-harness/work` showed `5 RUNNABLE`
+  and `3 BLOCKED`; `/projects/narrative-harness/thread` showed
+  `8 tasks on record: 4 open, 1 working, 3 blocked.`
+
+source: codex:narrative-harness-work-queue-counts-2026-06-15
+
+2026-06-15T19:10:00Z - Fixed Narrative Harness work-list column clipping at
+split-screen widths and added rendered geometry proof.
+
+- Work id: `codex:narrative-harness-work-list-overflow-2026-06-15`.
+- Root cause: the Work list rendered a six-column grid directly inside
+  `FrameCard`, whose shared contract clips overflow. The grid had no named
+  horizontal scroll boundary, and the existing regression only checked source
+  strings instead of rendered geometry.
+- Fix: wrapped the wide Work list grid in a named `role="region"` scroll
+  container, reduced the desktop grid's unnecessary minimum width so the
+  screenshot-size split view fits without clipping, and kept a real horizontal
+  scroll path for narrower desktop layouts before the mobile one-column
+  collapse.
+- Proof: new rendered regression in `tests/rendered-ui/project-flow.spec.ts`
+  verifies `/projects/narrative-harness/work` at `1114x692` fits inside the
+  card without horizontal clipping, then verifies `900x692` uses the named
+  scroll region when the desktop grid is genuinely narrower than its columns.
+  `pnpm exec vitest run src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts --reporter=dot`;
+  `pnpm exec playwright test tests/rendered-ui/project-flow.spec.ts -g "work list columns"`;
+  `pnpm build`; `pnpm dev:install`; `guildhall stop && guildhall start`;
+  `/api/stale-server` returned `stale:false` for PID `7992`. Live installed
+  browser proof at `1114x692`: `.work-list-scroll` had `overflow-x:auto`,
+  `role=region`, `aria-label="Scrollable work list columns"`, `scrollWidth`
+  `976`, `clientWidth` `976`, row right edge `1073`, and card right edge
+  `1090`.
+
+source: codex:narrative-harness-work-list-overflow-2026-06-15
+
+2026-06-15T19:16:00Z - Stopped passive Work list sections from inheriting
+selected/focus chrome when a work row is selected.
+
+- Work id: `codex:passive-card-focus-within-selection-2026-06-15`.
+- Root cause: shared `FrameCard` applied its focus-within border/outline to
+  every frame by default. When a selectable work row received focus, the
+  passive outer Work list card looked selected too, visually competing with the
+  actual selected work row.
+- Fix: moved `FrameCard` focus-within chrome behind an explicit
+  `focusWithin` prop and only opted the compatibility `Card` wrapper into that
+  behavior when the card itself has interactive props. Passive section cards no
+  longer inherit interaction state from their descendants.
+- Proof: new rendered regression in `tests/rendered-ui/project-flow.spec.ts`
+  clicks a Narrative Harness work row and asserts the outer `.gh-frame-card`
+  border and outline remain unchanged while exactly one row gets
+  `aria-current="true"`. `pnpm exec playwright test tests/rendered-ui/project-flow.spec.ts -g "selecting a work row"`;
+  `pnpm exec vitest run src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts --reporter=dot`;
+  `pnpm --filter @guildhall/ui build`; `pnpm build`; `pnpm dev:install`;
+  `guildhall stop && guildhall start`; `/api/stale-server` returned
+  `stale:false` for PID `80291`. Live installed browser proof at `1114x692`:
+  outer Work list card border stayed `rgba(255, 255, 255, 0.12)`, outline
+  stayed `none`, and selected work rows changed from `0` to `1`.
+
+source: codex:passive-card-focus-within-selection-2026-06-15
+
+2026-06-15T19:33:00Z - Made flow audits fail closed with explicit protocol,
+rendered helpers, and escaped-miss calibration cases.
+
+- Work id: `codex:flow-audit-evidence-protocol-2026-06-15`.
+- Root cause: "flow audit" guidance was still easy to satisfy as prose. It did
+  not force the agent to state the user job, reconcile every surface that
+  claims queue/readiness/status state, prove overflow geometry, or convert
+  escaped UX misses into reusable calibration fixtures.
+- Fix: added a fail-closed protocol to `AGENTS.md` and this artifact; added
+  `tests/rendered-ui/flow-audit-assertions.ts` with reusable
+  `defineFlowUserJob`, `readProjectFlowState`, `expectNoClippedContent`, and
+  `expectProjectFlowStateAgreement` helpers; added a rendered flow-audit
+  regression for `/projects/looma-knit/work` and Narrative Harness work-list
+  geometry; added escaped-miss cases for hidden horizontal overflow, passive
+  section selected state, status/work-list mismatch, and vague approval state;
+  and wired the new cases into the `ux-flow-audit-evidence` and
+  `ux-cross-surface-consistency` review-calibration recipes.
+- State-agreement proof: the rendered regression requires one concrete user job
+  sentence before assertions and compares API/readiness/work-list/thread-visible
+  concepts instead of accepting local surface wording. Live installed proof for
+  `/projects/narrative-harness/work` showed a coherent visible table: top action
+  `Do this next` names `What commands should I run to smoke test this project
+  without changin...` with `Needs brief: finish the handoff before a worker can
+  start.`; delivery queue shows `Build first coherence reviewer MVP`,
+  `Runnable project work.`, `5 runnable`, and `3 blocked`; Work list shows
+  `2 shown · 8 total`, `1 paused task`, and `1 Ready`; bottom ticker shows
+  `Blocked` / `3 blocked tasks`.
+- Geometry proof: installed app at `1114x692` had no page-level horizontal
+  overflow, `.work-list-scroll` was `role="region"` with
+  `aria-label="Scrollable work list columns"`, `overflow-x:auto`, `clientWidth`
+  `976`, `scrollWidth` `976`, and no clipped rows. Installed app at `900x692`
+  had no page-level horizontal overflow; the same named scroll region had
+  `clientWidth` `834`, `scrollWidth` `860`, so the remaining horizontal overflow
+  is contained in the explicit accessible scroll region.
+- Interaction proof: after clicking `Inspect work Build first coherence
+  reviewer MVP`, the selected treatment stayed on the work row button
+  (`is-selected` on `card-list-item work-list-row`), while the passive outer
+  `FrameCard` stayed `tone-default ... variant-default` with no selected or
+  interactive state.
+- Verification: `pnpm exec playwright test tests/rendered-ui/project-flow.spec.ts -g "flow audit protocol"`;
+  `pnpm exec playwright test tests/rendered-ui/project-flow.spec.ts -g "flow audit protocol|work list|selecting a work row"`;
+  `pnpm exec vitest run src/runtime/__tests__/review-calibration.test.ts src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts --reporter=dot`;
+  `pnpm --filter @guildhall/ui build`; `pnpm build`;
+  `node dist/cli.js review-calibration validate . --cases internal/calibration/cases`;
+  `pnpm dev:install`; `guildhall stop && guildhall start`;
+  `/api/stale-server` returned `stale:false` for PID `78749` from
+  `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+
+source: codex:flow-audit-evidence-protocol-2026-06-15
+
+2026-06-15T21:18:00Z - Ran the fail-closed multi-agent flow audit against
+Narrative Harness and fixed the remaining state/route contradictions.
+
+- Work id: `codex:narrative-harness-flow-state-agreement-2026-06-15`.
+- User job: a user looking at `/projects/narrative-harness`, `/work`, or
+  `/thread` should be able to tell what is happening now, what is ready when
+  resumed, what is blocked, what they can do next, and whether Guildhall is
+  actually working.
+- Multi-agent audit findings:
+  - Work route: API and delivery queue exposed 5 runnable/active items, but
+    bottom status reduced the project to `Blocked` / `3 blocked tasks`; top
+    action pointed at `task-009` while the first delivery runnable item was
+    `coherence-reviewer-mvp`.
+  - Thread route: API primary action was `task-009` / `Open Work`, but Thread
+    defaulted toward setup/import context and the setup row claimed `NOW Review
+    existing work`.
+  - Overview/Work language: stopped projects with resumable work used active
+    language such as `Moving now`, `Next runnable work`, and `Runnable project
+    work.`
+  - Geometry: `REVS` could clip in the work-list header in split/narrow desktop
+    layouts if the table did not have a contained scroll region.
+- Fix:
+  - `project-activity` now treats stopped projects with active/resumable work
+    as `Ready`, with ticker copy `N tasks ready when you resume` and blocked
+    work as secondary detail.
+  - Project top action now says `Resume 5 ready work items` instead of a bare
+    `Resume` when the shared work-progress counts say resumable work exists.
+  - Overview and Work delivery copy now distinguishes stopped/resumable state:
+    `Ready to resume`, `Next work when resumed`, `Ready when resumed.`, and
+    `5 READY TO RESUME`.
+  - Thread default selection now prefers the shared primary task action over
+    nonblocking setup/import context. Non-selected active setup rows now show a
+    neutral `Setup` chip instead of claiming `NOW`.
+  - Work list `REVS` column width was widened, and the rendered regression
+    keeps asserting overflow is either absent or contained inside
+    `.work-list-scroll`.
+- State-agreement proof from installed app after `pnpm dev:install`, service
+  restart, and `/api/stale-server`: API reported `run:null`, primary action
+  `task-009`, `visibleActive:5`, `visibleBlocked:3`, delivery
+  `runnable:5`, `blocked:3`, first runnable `coherence-reviewer-mvp`, and
+  thread API active turn `setup:workspaceImport`. Visible surfaces reconciled
+  that as: top action `Resume 5 ready work items`; Overview `Ready to resume`,
+  `Next work when resumed`, no `Moving now`, ticker `5 tasks ready when you
+  resume - 3 blocked tasks`; Work `Ready when resumed`, `5 READY TO RESUME`,
+  no `Runnable project work.`; Thread selected the `task-009` row and did not
+  expose `Open import review` as the selected action.
+- Geometry/interaction proof from installed app:
+  - `1114x692`: Overview, Work, and Thread had no clipped content. Work had no
+    uncontained horizontal overflow and `REVS` was visible.
+  - `900x692`: Work overflow was contained only by `.work-list-scroll`
+    (`clientWidth:834`, `scrollWidth:860`, `overflow-x:auto`); Thread had no
+    clipped content and still visibly selected `task-009`.
+  - Clicking a work row put `is-selected` only on the row button; the passive
+    outer Work list `gh-frame-card` remained `variant-default rail-none`.
+- Verification: `pnpm exec vitest run src/web/lib/__tests__/project-activity.test.ts src/web/surfaces/__tests__/ProjectView.svelte.test.ts src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts --reporter=dot`
+  passed `214` tests; `pnpm exec playwright test tests/rendered-ui/project-flow.spec.ts -g "flow audit protocol|work list|selecting a work row|project shell uses stopped-project language"`
+  passed `4` rendered tests; `pnpm --filter @guildhall/ui build`; `pnpm build`;
+  `pnpm dev:install`; `guildhall stop && guildhall start`; `/api/stale-server`
+  returned `stale:false` for PID `39935` from
+  `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+
+source: codex:narrative-harness-flow-state-agreement-2026-06-15
+
+2026-06-15T22:00:00Z - Added the first Project Orientation Spine implementation
+slice.
+
+- Work id: `codex:project-orientation-spine-2026-06-15`.
+- User job: a user opening Overview, Work, or Thread should immediately see the
+  current bounded scope, what is included now vs later, maturity/proof state,
+  what work is pinned, and which feature/slice a task belongs to without
+  reconstructing the project from raw thread history.
+- Fix:
+  - Added `buildProjectOrientationSpine()` as a derived runtime read model over
+    charter, selected scope, tasks, hierarchy, proof paths, release blockers,
+    source health, active pins, and orientation gaps.
+  - Added default `Current MVP` scope semantics so known proposed work starts in
+    the current bounded scope unless explicitly deferred.
+  - Added scheduler eligibility checks so deferred work is not picked for
+    ordinary unattended work unless explicitly targeted or required as an
+    included dependency.
+  - Exposed the spine through `/api/project/spine`, `/api/project`, and
+    `/api/project/thread`.
+  - Overview now opens with a compact State of the Union before detailed cards:
+    selected scope, included/later counts, scoped maturity, pinned work, top
+    blocker/gap, and one spine next action.
+  - Work rows and Thread task-linked cards now show the orientation path from
+    the shared spine.
+- Verification: `pnpm vitest run src/runtime/__tests__/project-orientation-spine.test.ts src/runtime/__tests__/orchestrator-picker.test.ts src/runtime/__tests__/serve-dashboard.test.ts src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts --reporter=dot`
+  passed `167` tests; `pnpm typecheck` passed.
+
+source: codex:project-orientation-spine-2026-06-15
+
+2026-06-17T00:00:00Z - Planned execution-decomposition migration behavior for
+Narrative Harness and Looma + Knit.
+
+- Work id: `codex:execution-planning-decomposition-2026-06-17`.
+- User job: when a project contains broad work, Guildhall should decide whether
+  the work must be decomposed for LLM execution without asking the owner to
+  approve normal task-shaping. Owner decisions should be reserved for changing
+  scope, moving release boundaries, credentials, external permission, or other
+  true authority handoffs.
+- Before behavior observed in the current planning thread:
+  - Narrative Harness can show a top item such as `What commands should I run...`
+    as runnable work even when the surrounding task shape is still unclear, and
+    owner-facing copy can make execution sizing feel like a user approval flow.
+  - Looma + Knit orientation can show rich scoped work, but proof/state
+    language does not distinguish "this needs coordinator decomposition before
+    execution" from "Matthew must decide scope."
+- After behavior required by this migration:
+  - Legacy `split_required` and `split_recommended` records with already-created
+    child work become `hierarchy.relation = decomposes` plus an applied
+    `ExecutionPlanAction(type: split_work, authority: execution_planning)`.
+    The parent becomes containing work and is not dispatched as the runnable
+    leaf.
+  - Legacy recommended child drafts without created work are not treated as
+    accepted scope and do not create owner input. They become failed
+    execution-planning recovery actions so the coordinator regenerates the split
+    from current accepted scope.
+  - New broad-work sizing writes `decompose_before_execution` and empty
+    `recommendedChildren`; child drafts are generated only when execution
+    planning applies a split.
+  - Project Map may hide internal decomposition/proof steps by default, but it
+    must expose a `Show internal steps` control so the owner can inspect the
+    skeleton when needed.
+- Installed-app proof:
+  - `pnpm build`, `pnpm dev:install`, `guildhall stop && guildhall start`
+    completed; `/api/stale-server` returned `stale:false` for PID `45354`
+    from `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+  - Narrative Harness API `/api/project?projectId=narrative-harness`: primary
+    action is `Required migration`, `ownerInput.active:false`, start readiness
+    is `required_migration_pending`, work progress is `14` visible, `11` done,
+    `3` shelved, `0` blocked, and orientation headline is `Current MVP has no
+    actionable work.` with `0` gaps.
+  - Narrative Harness browser proof: `/overview` at `1280x720` rendered
+    `Do this next`, `Required migration`, `Project map`, and `At a glance`
+    with no visible clipped elements, no page horizontal overflow, no literal
+    `State of the Union`, no `Approve split`, and no `Split recommended`.
+    `/map` at `1280x720` and `390x820` rendered `Project map`, `Current
+    scope`, `Capability lanes`, `Proof contract`, `Gaps to resolve`, and
+    `Show internal steps` with no visible clipping or page horizontal overflow.
+  - Looma + Knit API `/api/project?projectId=looma-knit`: primary action is
+    `Required migration`, start readiness is `required_migration_pending`, work
+    progress is `299` visible, `290` active/shaping, `6` done, `3` shelved,
+    and orientation headline is `Current MVP is being shaped.` with `34` gaps.
+    It also has an existing thread owner-input item; that is separate from
+    execution-planning decomposition and not a split approval.
+  - Looma + Knit browser proof: `/overview` at `1280x720` and `390x820`
+    rendered `Do this next`, `Required migration`, `Work mix`, `Project map`,
+    `At a glance`, `Ready to resume`, and `Blocked work` with no visible
+    clipping, no page horizontal overflow, no literal `State of the Union`, no
+    `Approve split`, and no `Split recommended`. `/map` at `1280x720` rendered
+    `Project map`, `Current scope`, `Capability lanes`, `Proof contract`,
+    `Gaps to resolve`, and `Show internal steps`.
+
+source: codex:execution-planning-decomposition-2026-06-17
+
+2026-06-17T02:32:00Z - Advanced the Narrative Harness headless MVP from the
+installed app and fixed a retry-work runtime-state blocker.
+
+- Work id: `codex:narrative-harness-mvp-runtime-retry-2026-06-17`.
+- User job: from Guildhall alone, continue the Narrative Harness headless MVP
+  until tasks are done or the remaining blocker is a real runner/runtime
+  blocker, not missing owner intake or hidden repo inspection.
+- Runtime fix:
+  - `retry-work` now tolerates stale active escalation records where the
+    effective task points at an escalation id that no longer resolves from
+    persisted task evidence.
+  - The endpoint clears stale `runtime.openEscalationIds` during retry so the
+    effective projection does not keep presenting already-cleared work as
+    blocked.
+  - Regression coverage:
+    `reopens blocked work when retry encounters stale missing escalation runtime
+    state`.
+- Installed-app proof:
+  - `pnpm vitest run src/runtime/__tests__/serve-task-endpoints.test.ts src/tools/__tests__/task-queue.test.ts --reporter=dot`
+    passed `124` tests.
+  - `pnpm typecheck` passed.
+  - `pnpm build && pnpm dev:install && guildhall stop && guildhall start`;
+    `/api/stale-server` returned `stale:false` for the installed
+    `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+- Narrative Harness live API evidence:
+  - `context-packet-compaction-core` retry previously failed with
+    `Escalation esc-context-packet-compaction-core-1 not found...`; after the
+    fix, `retry-work` returned `{"ok":true,"status":"in_progress"}` and the
+    task projected `openEscalationIds: []`.
+  - `task-009` and `decision-trace-pipeline` were already proven done earlier
+    in this MVP push, with review verdicts and gate results persisted.
+  - `hosting-policy-boundary-checks` advanced from `ready` through worker
+    proof into `review`; reviewer/adjudication returned it to `in_progress`
+    with two scoped follow-up items: warmer product-oriented spec prose and
+    user-visible error messages for each error code.
+  - Current live counts after the final cleanup restart: `5 done`, `2 ready`,
+    `1 in_progress`. Remaining work is not owner intake; it is runner progress
+    on the three remaining MVP tasks, especially the hosting-policy worker
+    revision.
+- Remaining blocker:
+  - Worker requests repeatedly stay active for minutes without new durable
+    task evidence, and stop/restart is sometimes required to unwind
+    `stopping`. One stop flushed hosting-policy worker output into review, but
+    the subsequent reviewer-requested worker revision did not persist new
+    evidence before cleanup.
+  - This should be treated as a Guildhall runner/provider liveness problem, not
+    as a Narrative Harness product-planning ambiguity.
+
+source: codex:narrative-harness-mvp-runtime-retry-2026-06-17
+
+2026-06-17T02:59:00Z - Continued the Narrative Harness headless MVP from the
+installed app and advanced one more MVP task to done.
+
+- Work id: `codex:narrative-harness-mvp-continue-2026-06-17`.
+- Installed-app state source: `http://localhost:7777/api/project?projectId=narrative-harness`;
+  `/api/stale-server` reported `stale:false` for the installed
+  `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+- Completed during this pass:
+  - `hosting-policy-boundary-checks` advanced from reviewer-adjudicated
+    worker revision to `review`, then `gate_check`, then `done`.
+  - Final proof: `15` notes, `13` review verdicts, `2` gate results, and
+    auto-commit `c93dd0a584760cf96aaa1362cd0eece6f28ed3d0`.
+- Progress on remaining work:
+  - `context-packet-compaction-core` moved from `ready` to `spec_review` after
+    Guildhall wrote a deterministic recovery spec seed. Acting as the owner for
+    this MVP, the spec was approved through `/approve-spec`, which moved it to
+    `ready`; a worker then claimed it but produced no durable task evidence for
+    several minutes. After stop/restart recovery, the stale worker assignment
+    was cleared.
+  - `expansion-task-full-decomposition` moved from `ready` to `exploring`,
+    produced an approved product brief, but did not produce a spec or
+    acceptance criteria. It then blocked again with
+    `human_judgment_required: Spec agent kept researching after Guildhall asked
+    for durable progress.` A narrow owner-authorized retry cleared stale
+    escalation ids and assigned a worker, but no durable evidence/spec appeared
+    before stop/restart recovery. Stale worker assignment was cleared.
+- Current live counts after cleanup: `6 done`, `2 in_progress`, no active run.
+  The remaining two tasks are unassigned but unfinished:
+  `context-packet-compaction-core` and `expansion-task-full-decomposition`.
+- Remaining blocker:
+  - This is now a repeated Guildhall runner/workflow liveness problem: active
+    worker/spec requests can claim tasks and report provider-health success
+    without producing durable task evidence, specs, acceptance criteria, review
+    transitions, or gates.
+  - The blocker is not owner intake. The owner-approved brief/spec path was
+    exercised through Guildhall's own API; the remaining failure is that the
+    runner does not reliably turn that approved state into durable work.
+
+source: codex:narrative-harness-mvp-continue-2026-06-17
+
+2026-06-17T03:01:00Z - Rechecked the Narrative Harness headless MVP and
+confirmed the remaining blocker is stable.
+
+- Work id: `codex:narrative-harness-mvp-blocker-confirmation-2026-06-17`.
+- Installed-app state source: `http://localhost:7777/api/project?projectId=narrative-harness`;
+  `/api/stale-server` reported `stale:false` for PID `27895` from the
+  installed `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+- Current live counts: `6 done`, `2 in_progress`, no active run reported.
+- Remaining unfinished tasks:
+  - `context-packet-compaction-core`: `in_progress`, unassigned, `9` notes,
+    no review verdicts, no gate results. Last visible note remains
+    `Claimed ready task for worker-agent.`
+  - `expansion-task-full-decomposition`: `in_progress`, unassigned, `12`
+    notes, no spec, no acceptance criteria, no review verdicts, no gate
+    results. Last visible note remains
+    `revise_blueprint: Task was ready but its spec is not buildable yet. Spec
+    is missing. Routing back to blueprint drafting before worker assignment.`
+- Blocker decision:
+  - This is the same blocker observed across consecutive continuations:
+    Guildhall can reopen/approve/claim the remaining MVP tasks, but the
+    runner/spec-worker path repeatedly fails to persist durable evidence,
+    specs, acceptance criteria, review transitions, or gates for these final
+    two tasks.
+  - The owner-intake path was exercised already: `context-packet-compaction-core`
+    had its recovery spec approved through Guildhall's `/approve-spec`
+    endpoint, and `expansion-task-full-decomposition` had its generated brief
+    approved through `/approve-brief`. Retrying after those approvals still did
+    not produce durable task output.
+  - The MVP is therefore not complete, and further progress is blocked on
+    Guildhall runner/workflow liveness or a different execution backend, not on
+    additional product decisions.
+
+source: codex:narrative-harness-mvp-blocker-confirmation-2026-06-17
+
+2026-06-16T21:08:00Z - Split Project Map into a dedicated Project view and
+kept Overview as a lean orientation preview.
+
+- Work id: `codex:project-map-dedicated-view-2026-06-16`.
+- User job: a project owner should be able to open Overview for immediate
+  "what now?" orientation, then open a Project-level Map view for the
+  1,000-foot skeleton: scoped work, capability lanes, progress state, source
+  provenance, and gaps.
+- Fix:
+  - Overview no longer embeds the full map section. It uses the existing card
+    and card-list primitives for a compact `Project map` preview with one
+    `Open map` action.
+  - Added `/projects/:id/map` under the Project rail beside Overview, Needs
+    you, Facts, and Structure.
+  - Added `ProjectMapTab` with shared `Card`, `CardList`, `CardListItem`,
+    `Chip`, `Button`, and `UtilityPanel` primitives instead of mockup-local
+    boxes.
+  - The shared orientation spine now groups otherwise-flat imported/spec work
+    into inferred capability lanes by domain, so Narrative Harness can show an
+    honest skeleton even before every task has explicit parent-child hierarchy.
+  - The Map view explicitly labels inferred charter/scope and the current gap:
+    document-level artifact refs are not attached to every lane yet.
+- Installed-app proof:
+  - `pnpm dev:install`; `guildhall stop`; `guildhall start`.
+  - `/api/stale-server` returned `stale:false` for PID `36888` from
+    `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+- Browser proof against installed `localhost:7777`:
+  - `/projects/narrative-harness/overview` had no `.project-map-section`, did
+    have `.orientation-map-preview`, had a Project rail `Map` entry, and did
+    not contain the rejected mockup placeholder copy.
+  - Overview preview text summarized real state:
+    `5 capability lanes · 8 scoped work items · 5 inferred nodes · 5 gaps` and
+    `6 specced · 3 blocked · 5 proof gaps`.
+  - `/projects/narrative-harness/map` rendered `Project map`, active rail sub
+    `Map`, scope `Current work`, stats `8 work items`, `6 Specced`,
+    `3 Blocked`, `5 Proof gaps`, and lanes `Coherence`, `Harness`, `Meta`,
+    `Product`, and `Workspace Import`.
+  - Source trail rendered `Charter Inferred`, `Scope Inferred`, and
+    `Work records 8 task records`, with the document-ref gap called out.
+  - Desktop geometry proof had `overflowX:false` and no clipped map, lane,
+    source, or gap containers.
+  - Mobile `390x844` geometry proof had `overflowX:false`, no clipped
+    containers, two stat columns, and headings in order: `Project map`,
+    `Current scope`, `Capability lanes`, `Source trail`, `Open questions`,
+    `Related views`.
+- Verification:
+  `pnpm vitest run src/runtime/__tests__/project-orientation-spine.test.ts src/web/lib/__tests__/router.test.ts src/web/surfaces/project/__tests__/ProjectMapTab.svelte.test.ts src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts src/web/surfaces/__tests__/ProjectView.svelte.test.ts -t "orientation spine|groups flat|project-scoped tab|ProjectMapTab|folds orientation|renders the map project surface" --reporter=dot`;
+  `pnpm typecheck`; `pnpm build`.
+
+source: codex:project-map-dedicated-view-2026-06-16
+
+2026-06-16T20:51:27Z - Linked live project status to the Timeline stream and
+renamed hidden raw events as live agent events.
+
+- Work id: `codex:live-agent-stream-timeline-affordance-2026-06-16`.
+- User job: when the project ticker says Guildhall is live or advancing one
+  task, the owner should have an obvious route to the live coordinator/agent
+  stream instead of guessing whether Timeline, Thread, or Work contains it.
+- Fix:
+  - The bottom live project ticker now shows `View live stream` while a project
+    run is running or stopping; it routes to `/projects/:id/timeline`.
+  - Timeline now labels raw hidden agent activity as `live agent events`
+    instead of `background agent events`.
+  - When the project run is active, Timeline opens the raw event details and
+    shows a `Live agent stream` note explaining that this is the recent stream
+    and older raw events may roll off the view.
+- Known remaining product gap: Timeline is still backed by the supervisor's
+  recent event stream and persisted recent event tail, not a full durable run
+  transcript with unlimited historical scrollback.
+- Installed-app proof: `pnpm build`; `pnpm dev:install`; `guildhall stop`;
+  `guildhall start`; `/api/stale-server` returned `stale:false` for PID
+  `96732` from `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+- Browser proof against installed `localhost:7777`: on
+  `/projects/narrative-harness/timeline`, the page rendered
+  `Coordinator timeline`, `6 connection checks hidden.`, `Live agent stream`,
+  `382 raw agent events from the current recent stream. Older raw events may
+  roll off this view.`, `Show live agent event details`, and
+  `View live stream`; `background agent events hidden` was no longer present.
+- Verification: `pnpm vitest run
+  src/web/surfaces/project/__tests__/TimelineTab.svelte.test.ts --reporter=dot`;
+  `pnpm vitest run src/web/surfaces/__tests__/ProjectView.svelte.test.ts -t
+  "links a running project ticker" --reporter=dot`; `pnpm typecheck`;
+  `pnpm build`.
+
+source: codex:live-agent-stream-timeline-affordance-2026-06-16
+
+2026-06-16T20:35:37Z - Fixed the Work delivery-queue chip anchoring miss.
+
+- Work id: `codex:work-delivery-queue-chip-anchoring-2026-06-16`.
+- User job: on `/projects/narrative-harness/work?task=task-009`, the owner
+  should read the delivery queue as one compact status summary, not as a title
+  with unrelated chips floating in the panel.
+- Fix: moved delivery status chips into the delivery queue copy block and
+  left-aligned them under the task summary. The chips now act as metadata for
+  the displayed runnable item instead of a separate right-side action cluster.
+- Installed-app proof: `pnpm build`; `pnpm dev:install`; `guildhall stop`;
+  `guildhall start`; `/api/stale-server` returned `stale:false` for PID
+  `55689` from `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+- Browser geometry proof against installed `localhost:7777`:
+  `queue-main.left=93`, `queue-chips.left=93`, chip row gap from the summary is
+  `8px`, `chipsInsideCopy:true`, `chipsJustify:flex-start`, and visible text is
+  `Delivery queue Build first coherence reviewer MVP Ready when resumed. 5 ready
+  to resume 3 blocked`.
+- Verification: `pnpm vitest run
+  src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts --reporter=dot`;
+  `pnpm typecheck`; `pnpm build`.
+
+source: codex:work-delivery-queue-chip-anchoring-2026-06-16
+
+2026-06-16T20:07:49Z - Fixed routed Work focus from the `Do this next` card.
+
+- Work id: `codex:do-this-next-work-route-focus-2026-06-16`.
+- User job: when the top `Do this next` action names a work item and the button
+  says `Open Work`, the Work screen should visibly land on that same item, not
+  simply open the generic Work page and make the user hunt for it.
+- Fix:
+  - Work routes with `?task=` or `?work=` now select the routed item, force the
+    matching Work lane, clear the part filter so the item is not hidden, and
+    scroll the selected row into view after the list renders.
+  - `CardListItem`/`UtilityPanel` gained a shared `elementRef` hook so routed
+    focus can use existing row primitives instead of ad-hoc DOM wrappers.
+- Verification before installed-app proof:
+  `pnpm vitest run src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts --reporter=dot`
+  passed `27` tests; `pnpm typecheck` passed.
+- Installed-app proof: `pnpm build`; `pnpm dev:install`; `guildhall stop`;
+  `guildhall start`; `/api/stale-server` returned `stale:false` for PID
+  `86931`.
+- Browser proof against installed `localhost:7777`: from
+  `/projects/narrative-harness/overview`, clicking the single `Open Work`
+  button navigated to `/projects/narrative-harness/work?task=task-009`;
+  Work showed `Show=planning`, `Part=all`, the selected row had
+  `aria-current="true"` for `What commands should I run to smoke test this
+  project without changing files?`, the inspector showed the same task, and
+  the selected row was vertically visible inside the named
+  `Scrollable work list columns` region. Horizontal overflow remained confined
+  to that named scroll region.
+
+source: codex:do-this-next-work-route-focus-2026-06-16
+
+2026-06-16T20:28:10Z - Fixed selected Work item run button state after launch.
+
+- Work id: `codex:work-item-run-button-active-state-2026-06-16`.
+- User job: when a user clicks `Run this work item` in the selected Work
+  inspector, the button should not re-enable or revert while Guildhall is
+  running that item.
+- Root cause: the inspector only tracked the POST request as busy. Once the
+  start request returned, `runWorkBusyId` cleared even though the project run
+  had started, so the button looked available again.
+- Fix:
+  - WorkTab now keeps a separate optimistic active work-item id after a
+    successful start request and clears it when project run state is no longer
+    active.
+  - WorkTreePreview now receives separate busy and active ids; active selected
+    work renders the run button as disabled `Running...`.
+- Verification:
+  `pnpm vitest run src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts --reporter=dot`
+  passed `27` tests; `pnpm typecheck` passed.
+- Installed-app proof: `pnpm build`; `pnpm dev:install`; clean service restart;
+  `/api/stale-server` returned `stale:false` for PID `29995`. Browser proof on
+  `/projects/narrative-harness/work?task=task-009`: after clicking the selected
+  inspector's `Run this work item`, the inspector task was `What commands should
+  I run to smoke test this project without changing files?`, the run button was
+  disabled with text `Running...`, and the ticker read `Coordinator Run started
+  0s ago`. The project run was stopped afterward and `/api/project` reported
+  `run.status` as `stopped`.
+
+source: codex:work-item-run-button-active-state-2026-06-16
+
+2026-06-16T18:00:00Z - Fixed escaped primary-action UX miss on Narrative
+Harness Overview.
+
+- Work id: `codex:narrative-harness-primary-action-task-target-2026-06-16`.
+- User job: when the project owner opens Narrative Harness Overview, the first
+  `Do this next` card should state the current action without data-cropped
+  text, and its `Open Work` button should open the specific referenced work
+  item instead of looping to a generic Work page.
+- Failure found by owner:
+  - The shared primary action label was derived from a persisted cropped task
+    title ending in `...`.
+  - The shared action had `taskId: task-009` but `href: /work`, so the button
+    discarded the target and Work reopened as a generic list.
+  - Existing testing had not clicked the first button on the first card of the
+    first project page under review.
+- Fix:
+  - Request routing, task intake, inbox summaries, Task Drawer summary text,
+    and workspace-import source titles no longer manufacture cropped semantic
+    labels. Visual cropping must be CSS/layout only.
+  - Shared task actions now route to `/work?task=<taskId>`.
+  - Work reads `?task=`/`?work=`, selects that task, and switches to the
+    matching work slice so the inspector opens on the intended item.
+  - Repaired live Narrative Harness state for `task-009`: `task.title` and
+    `task.request.title` now equal the complete raw question.
+- API proof before reinstall:
+  `/api/project?projectId=narrative-harness` returned primary action label
+  `What commands should I run to smoke test this project without changing
+  files?`, href `/work?task=task-009`, and task/request titles with no
+  ellipsis.
+- Final installed-app proof:
+  - `pnpm build`; `pnpm dev:install`; `guildhall stop`; `guildhall start`;
+    `/api/stale-server` returned `stale:false` for PID `86500`.
+  - Browser opened `/projects/narrative-harness/overview`; the `Do this next`
+    heading rendered the complete question and the scoped `.next-action`
+    button text was `Open Work`.
+  - Clicking that button navigated to
+    `/projects/narrative-harness/work?task=task-009`.
+  - Work opened with `task-009` selected, `Show` set to `planning`, and the
+    selected inspector contained the complete question in the title and scope.
+  - Browser body check for the cropped phrase
+    `What commands should I run to smoke test this project without changin...`
+    returned `false`.
+- Verification:
+  `pnpm vitest run src/runtime/__tests__/request-routing.test.ts src/runtime/__tests__/intake.test.ts src/runtime/__tests__/project-action-model.test.ts src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts --reporter=dot`
+  passed `111` tests; `pnpm vitest run src/runtime/__tests__/orchestrator.test.ts -t "legacy cropped task titles|deterministic recovery spec seed" --reporter=dot`
+  passed `2` focused orchestrator tests; `pnpm typecheck`.
+
+source: codex:narrative-harness-primary-action-task-target-2026-06-16
+
+2026-06-16T17:20:00Z - Moved Overview Work mix into the left-column
+orientation stack.
+
+- Work id: `codex:project-overview-workmix-left-column-2026-06-16`.
+- User job: a project owner opening `/projects/looma-knit/overview` should see
+  the immediate next action first, then a compact numeric work summary before
+  reading deeper plan/detail panels.
+- Root cause: the restored A+C Overview layout kept the live action and
+  orientation summary, but left Work mix later in the secondary grid. That made
+  the "what is the shape of the work?" signal feel misplaced and gave the
+  right column too much responsibility for orientation.
+- Fix: reused the existing `WorkMixChart` inside the existing `Card` treatment
+  and placed it as the second row of `.overview-orientation`, directly under
+  `Do this next`. The `At a glance` card remains the right-side orientation
+  summary on desktop, while `Plan status` moves below Work mix in the left
+  stack. No new selectable mini-card treatment or ad-hoc visual primitive was
+  added.
+- Installed-app proof: `pnpm build`; `pnpm dev:install`; `guildhall stop`;
+  `guildhall start`; `/api/stale-server` returned `stale:false` for PID
+  `11658` from `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+- Browser geometry proof against installed `localhost:7777`:
+  - Desktop `1180x860`: orientation children rendered in order as `Do this
+    next`, `Work mix`, right-side `At a glance`, then `Plan status`; Work mix
+    was in `.overview-orientation .orientation-work-mix` at `left:96`,
+    `top:459`, `width:658`; page horizontal overflow was `0` and clipped
+    visible content count was `0`.
+  - Mobile `390x844`: the same orientation order stacked as `Do this next`,
+    `Work mix`, `At a glance`, then `Plan status`; Work mix was at `left:20`,
+    `top:457`, `width:350`; page horizontal overflow was `0` and clipped
+    visible content count was `0`.
+  - Screenshot artifacts:
+    `internal/audits/screenshots/project-overview-desktop-workmix-left-loaded-20260616.png`
+    and
+    `internal/audits/screenshots/project-overview-mobile-workmix-left-loaded-20260616.png`.
+- Verification: `pnpm vitest run src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts --reporter=dot`
+  passed `21` tests; `pnpm typecheck` passed.
+
+source: codex:project-overview-workmix-left-column-2026-06-16
+
+2026-06-16T17:25:00Z - Reduced trapped Overview whitespace by compacting
+passive diagnostic sections.
+
+- Work id: `codex:project-overview-trapped-whitespace-2026-06-16`.
+- User job: a project owner opening `/projects/looma-knit/overview` should not
+  have to scroll through a stack of low-signal framed cards where short
+  metadata sections are stretched into empty panels.
+- Root cause:
+  - `.overview-grid` used `align-items: stretch`, so short cards paired with
+    taller cards inherited extra blank vertical space.
+  - Overview rendered separate passive cards for runtime/memory, structure,
+    verification, project health, and recent changes even though those are
+    compact diagnostic signals rather than primary work surfaces.
+- Fix:
+  - Let grid cards align to their content height instead of stretching to the
+    tallest sibling.
+  - Added compact/dense pass-through props to the existing compat `Card`
+    wrapper so pages can use the shared `FrameCard` density and padding API.
+  - Switched passive Overview cards to compact/dense treatment.
+  - Collapsed runtime, memory, health, structure, verification, and recent
+    changes into one full-width `Signals` card with compact actionable rows.
+    Structure and Verification remain clickable drill-ins; they are no longer
+    standalone framed sections.
+- Installed-app proof: `pnpm build`; `pnpm dev:install`; `guildhall stop`;
+  `guildhall start`; `/api/stale-server` returned `stale:false` for PID
+  `42918` from `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+- Browser geometry proof against installed `localhost:7777`:
+  - Desktop `1180x860`: Overview card count dropped from `12` to `9`; headings
+    dropped from `14` to `11`; the final diagnostic area is one `Signals` card
+    with `6` rows; page horizontal overflow was `0` and clipped visible content
+    count was `0`.
+  - Mobile `390x844`: Overview card count dropped from `12` to `9`; headings
+    dropped from `14` to `11`; `Signals` remains one card with `6` stacked
+    rows; page horizontal overflow was `0` and clipped visible content count
+    was `0`.
+  - Screenshot artifacts:
+    `internal/audits/screenshots/project-overview-desktop-signals-compact-loaded-20260616.png`
+    and
+    `internal/audits/screenshots/project-overview-mobile-signals-compact-loaded-20260616.png`.
+- Verification: `pnpm vitest run src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts --reporter=dot`
+  passed `21` tests; `pnpm typecheck` passed.
+
+source: codex:project-overview-trapped-whitespace-2026-06-16
+
+2026-06-16T17:34:00Z - Rebalanced Overview section treatments after owner
+review found Plan status and Needs you still over-weighted.
+
+- Work id: `codex:project-overview-section-treatment-rebalance-2026-06-16`.
+- User job: a project owner opening `/projects/looma-knit/overview` should see
+  high-value orientation and action surfaces first, without low-value scheduler
+  metadata or duplicate owner-action cards occupying first-screen or large-card
+  space.
+- Root cause:
+  - `Plan status` repeated low-value internal scheduler facts (`No primary
+    driver`, `None`, `Looks consistent`) and made the first-screen left column
+    feel cramped without adding a new owner decision.
+  - `Needs you` duplicated the top action and used a whole card for what is
+    better represented as compact owner-action rows.
+  - After removing `Plan status`, the flat orientation CSS grid left a dead row
+    gap between `Do this next` and `Work mix` because the right column card was
+    spanning synthetic rows.
+- Fix:
+  - Removed `Plan status` from Overview.
+  - Moved owner-action items into compact `Signals` rows while preserving each
+    distinct inbox action href.
+  - Made `Ready to resume` a full-width work section.
+  - Kept desktop row-height stretching only for the substantial paired planning
+    panels (`Blocked work` and `Next run`), where equal row height is
+    intentional rather than accidental.
+  - Replaced the flat orientation grid row-span behavior with a nested
+    left-column stack for `Do this next` and `Work mix`, plus a right-column
+    `At a glance` card.
+- Installed-app proof: `pnpm build`; `pnpm dev:install`; `guildhall stop`;
+  `guildhall start`; `/api/stale-server` returned `stale:false` for PID
+  `89361` from `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+- Browser geometry proof against installed `localhost:7777`:
+  - Desktop `1180x860`: Overview card count is `7`; headings are
+    `Looma + Knit`, `Do this next`, `Answer in Thread`, `Work mix`,
+    `At a glance`, `Ready to resume`, `Blocked work`, `Next run`, `Signals`;
+    `Plan status` is absent; there is no standalone `Needs you` card; one
+    `Needs you` signal row is present; `Do this next` to `Work mix` gap is
+    `16px`; `Blocked work` and `Next run` are intentionally equal-height;
+    horizontal overflow is `0` and clipped visible content count is `0`.
+  - Mobile `390x844`: same heading order and absence of `Plan status` /
+    standalone `Needs you`; one `Needs you` signal row is present; `Do this
+    next` to `Work mix` gap is `16px`; horizontal overflow is `0` and clipped
+    visible content count is `0`.
+  - Screenshot artifacts:
+    `internal/audits/screenshots/project-overview-desktop-nested-orientation-compact-loaded-20260616.png`
+    and
+    `internal/audits/screenshots/project-overview-mobile-nested-orientation-compact-loaded-20260616.png`.
+- Verification: `pnpm vitest run src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts --reporter=dot`
+  passed `21` tests; `pnpm typecheck` passed.
+
+source: codex:project-overview-section-treatment-rebalance-2026-06-16
+
+2026-06-16T01:35:00Z - Corrected the Overview spine implementation after
+multi-pass critique of the mockup-to-product failure.
+
+- Work id: `codex:project-orientation-spine-overview-critical-correction-2026-06-15`.
+- User job: a project owner opening Overview should instantly see the live
+  action, selected scope, current work focus, missing proof/blocker signal, and
+  recent project state without parsing placeholder metaphors, internal model
+  labels, or a dense mockup pasted into the page.
+- What failed in the prior pass:
+  - Owner-facing copy literalized internal/metaphor text such as `State of the
+    Union`, `Current MVP is shaped, but proof is the wall`, and `Agent pinned
+    here`.
+  - Overview duplicated the mockup and exposed too much project-map/editor
+    machinery instead of composing the existing Overview sections.
+  - The middle band had too many card-shaped informational fragments, so passive
+    information looked actionable.
+  - The priority card repeated low-signal active-thread text such as `From what
+    I've seen:` instead of telling the owner what to do.
+- Fix:
+  - Overview now leads with the shared `Do this next` action, then a compact
+    `Scope` / `Work` / `History` orientation summary, then the existing plan and
+    work sections.
+  - Removed task-body excerpts from the priority card; the card now shows label,
+    action detail, and destination only.
+  - Sanitized owner-input action detail in `project-action-model` so empty
+    lead-in prompts become `Open the thread to answer the current question.`
+  - The Structure material on Overview is a compact link to the Structure route,
+    not a local map editor with rename/merge/split/package controls.
+  - Replaced owner-facing proof/project-spine jargon with plain labels:
+    `Current work`, `work items in view`, `missing verification`, `Current
+    focus`, `Needs attention`, `Plan status`, and `Verification`.
+- Multi-pass critique inputs applied:
+  - Copy pass rejected internal labels and metaphors in owner-facing UI.
+  - Composition pass reduced duplicate action/status surfaces and removed the
+    local structure editor from Overview.
+  - Design-system pass kept Overview on shared `Card`, `Chip`, `Button`, and
+    existing section composition instead of ad-hoc mockup boxes.
+  - Mobile pass moved the priority action above the summary band and verified
+    single-column stacking.
+  - Data-semantics pass moved the low-signal owner-input prompt fix into the
+    shared action model rather than only hiding it in Svelte.
+- Installed-app proof:
+  - `pnpm build`; `pnpm dev:install`; `guildhall stop && guildhall start`.
+  - `/api/stale-server` returned `stale:false` for PID `66942` from
+    `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+  - Desktop `1180x860` loaded screenshot:
+    `internal/audits/screenshots/project-overview-final-desktop-loaded-20260615.png`.
+  - Mobile `390x844` loaded screenshot:
+    `internal/audits/screenshots/project-overview-final-mobile-loaded-20260615.png`.
+  - Desktop and mobile DOM/geometry proof: banned copy list empty, horizontal
+    overflow `0`, clipped visible element count `0`.
+  - First-screen proof now shows `Do this next`, `Answer in Thread`, `Open the
+    thread to answer the current question.`, `Current work`, `299 work items in
+    view`, `40 missing verification`, `Current focus: Floating toolbar`, `299
+    total work items`, and `4 recent changes`.
+- Verification:
+  - `pnpm vitest run src/runtime/__tests__/project-action-model.test.ts src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts src/runtime/__tests__/serve-dashboard.test.ts scripts/project-orientation-spine-audit.test.ts --reporter=dot`
+    passed `41` tests.
+  - `pnpm typecheck` passed.
+  - Earlier in this correction pass,
+    `pnpm exec playwright test tests/rendered-ui/project-flow.spec.ts -g "project orientation spine agrees" --reporter=line`
+    passed `1` rendered flow-audit test after updating the orientation
+    assertions.
+
+source: codex:project-orientation-spine-overview-critical-correction-2026-06-15
+
+2026-06-16T15:44:00Z - Restored the intended A+C Overview layout strategy
+after the prior correction over-flattened the page.
+
+- Work id: `codex:project-orientation-spine-overview-layout-restore-2026-06-16`.
+- User job: keep the mockup's useful information strategy while using existing
+  components and existing Overview sections: immediate action plus compact
+  orientation map, not a pasted mockup and not a flattened list of unrelated
+  cards.
+- Fix:
+  - Replaced the separate priority row plus `knowledge-band` with one
+    `.overview-orientation` cockpit.
+  - Left column: existing `Do this next` action, followed by the existing
+    `Plan status` section.
+  - Right column: existing `Card` + `CardList` + `CardListItem` summary for
+    `Scope`, `Work`, and `History`.
+  - Mobile collapses to a single stack without horizontal overflow.
+- Installed-app proof:
+  - `pnpm build`; `pnpm dev:install`; `guildhall stop && guildhall start`.
+  - `/api/stale-server` returned `stale:false` for PID `65300`.
+  - Desktop screenshot:
+    `internal/audits/screenshots/project-overview-desktop-restored-final-loaded-20260616.png`.
+  - Mobile screenshot:
+    `internal/audits/screenshots/project-overview-mobile-restored-final-loaded-20260616.png`.
+  - Desktop and mobile DOM proof: `.overview-orientation` present,
+    `.orientation-summary-list` present, `.delivery-band` is inside the
+    orientation section, horizontal overflow `0`, clipped visible elements `0`.
+- Verification:
+  - `pnpm vitest run src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts --reporter=dot`
+    passed `21` tests.
+  - `pnpm typecheck` passed.
+
+source: codex:project-orientation-spine-overview-layout-restore-2026-06-16
+
+2026-06-16T00:06:00Z - Added richer real-project calibration for the Project
+Orientation Spine using installed registered projects.
+
+- Work id: `codex:project-orientation-spine-real-project-calibration-2026-06-15`.
+- Reason: Jess and Fair Labor License were useful thin-scope calibration
+  projects, but they did not prove that a project with substantial Guildhall
+  state surfaces a deeper spine. Looma + Knit now serves that richer proof case.
+- Fix:
+  - Charter inference now reads durable workspace config as well as docs:
+    workspace council mandate can supply the project purpose, child project
+    labels/types can supply the audience/scope context, and coordinator
+    mandates only fill in when project-level docs or council purpose are absent
+    or weak. This prevents an agent-lane mandate from overriding a good README
+    purpose.
+  - The rendered orientation agreement calibration now includes
+    `looma-knit` in addition to Narrative Harness, Jess, and Fair Labor
+    License.
+  - The rendered helper can assert minimum included/root/pin/gap counts for
+    richer calibration fixtures when the backing state is available, while the
+    Playwright web-server route agreement remains state-portable.
+- Installed API evidence from `/api/project/spine`:
+  - `looma-knit`: inferred purpose `Keep Looma generic while letting Knit
+    product needs drive Looma primitive priority.`, audience `Looma library;
+    Knit app`, `299` included, `0` deferred, `292` roots, `299` nodes, `5`
+    pins, `40` gaps, progress `36` briefed / `40` specced / `1` blocked.
+    Visible roots include `Block menu / block side menu` (`spec`), `Floating
+    toolbar` (`review`), `Link editing UI` (`proof_needed`), `Mentions`
+    (`proof_needed`), and `Emoji` (`proof_needed`).
+  - `narrative-harness`: inferred docs purpose restored to `Narrative Harness
+    is a research and design workspace for fiction-writing software...`, `8`
+    included, `5` pins, `4` proof gaps.
+  - `font-something`: inferred coordinator-backed purpose for the ML pipeline,
+    `7` included, roots spanning autoencoder quality, precision-improvement,
+    Rust acceleration, hosted inference, and desktop shell work.
+  - `t-minus-t`: inferred docs purpose for the VSCode/Cursor TypeScript-in-JS
+    extension, `3` included, one blocked verification task.
+  - `fair-labor-license`, `commerce-project`, and `jess`: honest thin-scope
+    maps with `1` included root each; they are valid as missing/richer-state
+    calibration but not as proof of a deep feature tree yet.
+- Installed browser evidence for `/projects/looma-knit/overview` at `1280x720`:
+  first screen showed `State of the Union`, `Current MVP`, `299 included`,
+  `0 later`, purpose `Keep Looma generic while letting Knit product needs drive
+  Looma primitive priority.`, `40 specced`, `0 proven`, `1 blocked`, pinned
+  `Floating toolbar`, `Link editing UI`, and `Mentions`, plus proof gap
+  `Link editing UI needs proof before the selected scope can be ready.` Page
+  geometry had `clientWidth:1280`, `scrollWidth:1280`, and
+  `pageOverflow:false`.
+- Repeatable audit hook: `pnpm audit:project-spine` reads the installed app's
+  `/api/service/projects` and `/api/project/spine` endpoints, then classifies
+  each registered project as `rich-progressed`, `thin-honest`,
+  `thin-with-gaps`, or `needs-intake` so future agents can reproduce the
+  real-project calibration without reconstructing this chat.
+- Verification: `pnpm vitest run src/runtime/__tests__/serve-dashboard.test.ts scripts/project-orientation-spine-audit.test.ts --reporter=dot`
+  passed `11` tests; `pnpm audit:project-spine`; `pnpm typecheck`; `pnpm lint:contracts`;
+  `pnpm exec playwright test tests/rendered-ui/project-flow.spec.ts -g "project orientation spine agrees"`;
+  `pnpm dev:install`; `guildhall stop && guildhall start`;
+  `/api/stale-server` returned `stale:false` for PID `11361` from
+  `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+
+source: codex:project-orientation-spine-real-project-calibration-2026-06-15
+
+2026-06-16T00:49:00Z - Reworked Overview spine presentation into a 100-foot
+situation map.
+
+- Work id: `codex:project-orientation-spine-overview-situation-map-2026-06-15`.
+- Status: superseded by
+  `codex:project-orientation-spine-overview-composition-correction-2026-06-15`;
+  the standalone situation-map section was removed because it duplicated
+  Overview instead of composing with existing sections.
+- User job: opening Overview should immediately answer what is happening right
+  now, where agent work is pinned, why the current bounded scope is or is not
+  moving, and what needs attention. The full 1,000-foot project skeleton belongs
+  in a separate Project Map / Scope Map view, not in Overview.
+- Fix:
+  - Removed literal owner-facing `State of the Union` copy. That phrase was an
+    internal metaphor, not product UI.
+  - Moved the spine presentation above the knowledge summary cards so it is the
+    first project-specific orientation surface after the header.
+  - Replaced the old dashboard-style orientation card with a situation map:
+    `Right now`, situation headline/copy, current scope stats, a condensed
+    scope map, spine-specific next action, blocker/gap note, and quiet recent
+    context rows.
+  - Actionable items remain card/button-like; informational context is rendered
+    as quieter rows so it does not compete with real actions.
+  - The section uses the existing `Card`/`FrameCard` path and component-scoped
+    container queries so the situation hero, scope map, action column, and quiet
+    context collapse based on available container width.
+- Follow-up explicitly retained: build a dedicated 1,000-foot Project Map /
+  Scope Map view for the whole bounded scope and reuse the condensed scope-row
+  treatment at a larger, deeper zoom level.
+- Installed browser proof on `/projects/looma-knit/overview` after final
+  `pnpm build`, `pnpm dev:install`, `guildhall stop && guildhall start`, and
+  `/api/stale-server` `stale:false` for PID `2504`:
+  - Desktop `1280x820`: no page overflow (`clientWidth:1280`,
+    `scrollWidth:1280`); visible situation map says `Current MVP is shaped, but
+    proof is the wall`, shows `299 included in scope`, `40 specced`, `40 need
+    proof`, `0 later`, and scope rows for `Floating toolbar`, `Link editing
+    UI`, `Mentions`, `Emoji`, and `Table action depth`.
+  - Narrow `900x820`: no page overflow (`clientWidth:900`,
+    `scrollWidth:900`); the situation/action columns collapse while retaining
+    the same situation headline, scope stats, and scope rows.
+  - Mobile `390x820`: no page overflow (`clientWidth:390`,
+    `scrollWidth:390`); rows stack into single-column labels rather than
+    clipping or horizontal scrolling.
+  - Screenshot artifacts:
+    `internal/audits/screenshots/project-spine-overview-situation-final-desktop-20260616T005430Z.jpg`,
+    `internal/audits/screenshots/project-spine-overview-situation-final-narrow-20260616T005430Z.jpg`,
+    and
+    `internal/audits/screenshots/project-spine-overview-situation-final-mobile-20260616T005430Z.jpg`.
+- Verification:
+  - `pnpm vitest run src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts src/runtime/__tests__/serve-dashboard.test.ts scripts/project-orientation-spine-audit.test.ts --reporter=dot` passed `32` tests.
+  - `pnpm typecheck` passed.
+  - `pnpm lint:contracts` passed.
+  - `pnpm exec playwright test tests/rendered-ui/project-flow.spec.ts -g "project orientation spine agrees"` passed.
+  - `pnpm build` passed.
+  - `pnpm dev:install`; `guildhall stop`; `guildhall start`; `/api/stale-server` returned `stale:false`.
+
+source: codex:project-orientation-spine-overview-situation-map-2026-06-15
+
+2026-06-16T01:05:00Z - Corrected the Overview spine implementation to use the
+existing Overview information architecture instead of injecting the mockup as a
+new page section.
+
+- Work id: `codex:project-orientation-spine-overview-composition-correction-2026-06-15`.
+- User job: Overview should feel like one coherent dashboard. It should show
+  scoped orientation through the existing summary/action sections, not add a
+  second Overview inside the Overview.
+- Root cause: the prior situation-map pass copied the mockup into a standalone
+  `Project state` block with bespoke card, row, and action styling. That made
+  the page longer, duplicated `Do this next`, and bypassed existing selectable
+  card treatments.
+- Fix:
+  - Removed the standalone `orientation-state` section and all ad-hoc
+    `orientation-*` visual CSS.
+  - Folded the orientation spine into the existing `Project knowledge summary`
+    band as a selectable `Scope` card using `CardListItem` / `UtilityPanel`.
+  - Kept the existing `Do this next` card as the only primary action surface;
+    orientation next action is now only a fallback when the shared action model
+    and owner inbox have no stronger action.
+  - Kept Overview at the 100-foot level: scope counts, pinned work, and top
+    blocker/gap are summarized; the deeper 1,000-foot project/scope map remains
+    a separate view.
+- Verification:
+  - `pnpm vitest run src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts src/runtime/__tests__/serve-dashboard.test.ts scripts/project-orientation-spine-audit.test.ts --reporter=dot` passed `32` tests.
+  - `pnpm typecheck` passed.
+  - `pnpm lint:contracts` passed.
+  - `pnpm exec playwright test tests/rendered-ui/project-flow.spec.ts -g "project orientation spine agrees"` passed.
+  - `pnpm build` passed.
+  - `pnpm dev:install`; `guildhall stop && guildhall start`;
+    `/api/stale-server` returned `stale:false` for PID `65665`.
+  - Installed browser proof for `/projects/looma-knit/overview`:
+    desktop `1138x734` had `clientWidth:1138`, `scrollWidth:1138`,
+    `orientationCssClassCount:0`, no `.orientation-state`, one
+    `.overview-priority` button, and a normal knowledge-band `Scope` card:
+    `Current MVP needs proof`, `299 included`, `40 need proof`, and pinned
+    `Floating toolbar`.
+  - Mobile `390x820` had `clientWidth:390`, `scrollWidth:390`,
+    `orientationCssClassCount:0`, no `.orientation-state`, one priority action,
+    and the same `Scope` card stacked with the existing card layout.
+  - Screenshot artifacts:
+    `internal/audits/screenshots/project-spine-overview-composed-desktop-20260616T010800Z.png`
+    and
+    `internal/audits/screenshots/project-spine-overview-composed-mobile-20260616T010930Z.png`.
+
+source: codex:project-orientation-spine-overview-composition-correction-2026-06-15
+
+2026-06-15T23:52:00Z - Completed the Project Orientation Spine cross-route
+implementation and installed-app audit.
+
+- Work id: `codex:project-orientation-spine-2026-06-15`.
+- User job: a project owner should be able to open Overview and immediately
+  answer what the project is for, which bounded scope Guildhall is working,
+  what is included now vs later, where agent work is pinned, what proof or
+  grounding is missing, and where to drill in without reconstructing raw Thread
+  history.
+- Fix:
+  - Structure and Release now consume `/api/project/spine` and show the same
+    selected bounded scope, purpose, included/later counts, blocker/gap, and
+    first orientation root as Overview.
+  - Thread compact rows now show spine path labels too, so mobile/narrow Thread
+    does not lose task-to-feature orientation when the detail pane is hidden.
+  - The serve layer infers a read-only charter from existing `README.md` and
+    `docs/index.md` content when no explicit charter exists. This keeps the
+    spine useful without adding a manual intake burden or a persisted schema.
+  - Added `expectProjectOrientationSpineAgreement()` to the rendered flow-audit
+    helpers and calibrated it across Narrative Harness, Jess, and Fair Labor
+    License.
+- Narrative Harness manual audit from installed app:
+  - Route/API: `/projects/narrative-harness/overview` and
+    `/api/project/spine?projectId=narrative-harness`.
+  - First screen: `State of the Union`, `Current MVP`, `8 included`, `0 later`,
+    inferred purpose `Narrative Harness is a research and design workspace for
+    fiction-writing software...`, `5 specced`, `0 proven`, `3 blocked`, and
+    pinned work including `Build first coherence reviewer MVP`.
+  - Bounded-scope answer: `Current MVP`; included now `8`; deferred `0`.
+  - Pinned now: `Build first coherence reviewer MVP`, `Add decision trace and
+    debug artifact pipeline`, and `Implement author voice feedback loop MVP`
+    are visible before raw thread history.
+  - Missing proof/gaps: decision trace, author voice loop, and hosting policy
+    work need proof before the selected scope can be ready.
+  - Next/drill answer: `Review the current scope.` and `Open Work`; pin buttons
+    drill directly to active work.
+- Calibration audit:
+  - Jess Overview now shows inferred purpose `Jess is a language-agnostic, CSS
+    pre-processor replacement for: Less Sass (SCSS) CSS Modules CSS-in-JS`,
+    `Current MVP`, `1 included`, `0 later`, no pinned work, and first root
+    `Review existing project work`.
+  - Fair Labor License Overview now shows inferred purpose `Modern licensing
+    platform for: Primary: OSS projects using Fair Labor License (FLL) v1.2...`,
+    `Current MVP`, `1 included`, `0 later`, no pinned work, and first root
+    `Review existing project work`.
+  - Non-primary calibration gap: Jess and Fair Labor License have thin
+    Guildhall task state, so the spine can orient from docs and current scope
+    but cannot yet prove a rich feature tree until those projects have richer
+    registered work/artifacts. This does not block the first release of the
+    spine because the UI states the thin scope honestly instead of inventing
+    completeness.
+- Installed-app proof: `pnpm dev:install`; `guildhall stop`; `guildhall start`;
+  `/api/stale-server` returned `stale:false` for PID `9925` from
+  `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+- Browser geometry proof against installed `localhost:7777`: Overview, Work,
+  Thread, Structure, and Release all rendered the orientation spine at desktop
+  `1280x820`, narrow desktop `900x692`, and mobile `390x720`; every route had
+  `pageOverflow:false` and no uncontained overflow. The only horizontal scroll
+  was the named Work list region `aria-label="Scrollable work list columns"`
+  at `900x692` (`clientWidth:834`, `scrollWidth:860`) and mobile
+  (`clientWidth:340`, `scrollWidth:764`).
+- Verification:
+  `pnpm vitest run src/runtime/__tests__/project-orientation-spine.test.ts src/runtime/__tests__/orchestrator-picker.test.ts src/runtime/__tests__/serve-dashboard.test.ts src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts src/web/surfaces/project/__tests__/ReleaseTab.svelte.test.ts src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts --reporter=dot`
+  passed `196` tests; `pnpm typecheck`; `pnpm lint:contracts`;
+  `pnpm exec playwright test tests/rendered-ui/project-flow.spec.ts -g "project orientation spine agrees"`.
+
+source: codex:project-orientation-spine-2026-06-15

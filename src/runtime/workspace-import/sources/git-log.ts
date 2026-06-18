@@ -63,7 +63,7 @@ export function makeGitLogSource(opts: { limit?: number } = {}): TaskSource {
         signals.push({
           source: 'git-log',
           kind: 'milestone',
-          title: subject.slice(0, 120),
+          title: subject,
           evidence: `${sha.slice(0, 8)} ${subject}${author ? ` (${author}${date ? `, ${date}` : ''})` : ''}`.slice(
             0,
             240,

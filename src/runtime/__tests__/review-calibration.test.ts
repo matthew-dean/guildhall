@@ -428,6 +428,7 @@ describe('review calibration cases', () => {
         'ux-zero-context-comprehension',
         'ux-error-recovery',
         'ux-cross-surface-consistency',
+        'ux-flow-audit-evidence',
         'accessibility-keyboard-path',
         'security-tenant-boundary',
         'api-compatibility-contract',

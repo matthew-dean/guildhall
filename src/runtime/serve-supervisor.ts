@@ -61,6 +61,8 @@ export interface WorkspaceRun {
   workspacePath: string
   /** Dashboard/CLI run mode for operator-visible posture. */
   mode: 'continuous' | 'one_task'
+  /** When stop was requested; used to recover stale stopping state. */
+  stopRequestedAt?: string
   stopSummary?: OrchestratorRunResult
   /** Provider selected by start preflight for this run. */
   providerStatus?: ProviderRunStatus
@@ -310,6 +312,18 @@ export class OrchestratorSupervisor {
     return this.runs.get(workspaceId)
   }
 
+  async forceStopStaleStoppingRun(workspaceId: string, staleMs = 30_000): Promise<boolean> {
+    const run = this.runs.get(workspaceId)
+    if (!run || run.status !== 'stopping') return false
+    const requestedAtMs = run.stopRequestedAt ? Date.parse(run.stopRequestedAt) : Number.NaN
+    if (!Number.isFinite(requestedAtMs) || Date.now() - requestedAtMs < staleMs) return false
+    await run.processRegistry.shutdownAll()
+    run.status = 'stopped'
+    run.stoppedAt = new Date().toISOString()
+    await clearStopRequested(getProjectStateDir(run.workspacePath))
+    return true
+  }
+
   /**
    * Recent events for a given workspace id. Dashboards call this on
    * reconnect so the user doesn't see an empty feed.
@@ -426,6 +440,7 @@ export class OrchestratorSupervisor {
     if (run.status === 'stopping') return false
 
     run.status = 'stopping'
+    run.stopRequestedAt = new Date().toISOString()
     run.stopSignal.stopRequested = true
     run.abortController.abort(new DOMException('Stop requested.', 'AbortError'))
 

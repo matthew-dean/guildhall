@@ -5,6 +5,7 @@
 -->
 <script lang="ts">
   import Button from '../../lib/Button.svelte'
+  import { tick } from 'svelte'
   import Card from '../../lib/ui-compat/Card.svelte'
   import CardList from '../../lib/CardList.svelte'
   import CardListItem from '../../lib/CardListItem.svelte'
@@ -26,6 +27,7 @@
   import { taskStagePresentation, type TaskPresentationTone } from '../../lib/task-presentation.js'
   import { buildWorkHierarchy, nestedWorkCountLabel, workKindLabel } from '../../lib/work-hierarchy.js'
   import { deliveryProgressBadge } from '../../lib/work-progress-display.js'
+  import { taskDisplayLabel, taskSourceQuestion } from '../../../shared/task-display-label.js'
   import type { ProjectDetail, Task } from '../../lib/types.js'
   import PlannerTab from './PlannerTab.svelte'
   import WorkTreePreview from './WorkTreePreview.svelte'
@@ -94,7 +96,10 @@
   let workFilterProjectId = $state<string | null>(null)
   let selectedWorkId = $state<string | null>(null)
   let runWorkBusyId = $state<string | null>(null)
+  let runWorkActiveId = $state<string | null>(null)
   let runWorkError = $state<string | null>(null)
+  let pendingRouteScrollTaskId = $state<string | null>(null)
+  const workRowEls = new Map<string, HTMLElement>()
 
   const viewOptions = [
     { value: 'list', label: 'List' },
@@ -115,6 +120,9 @@
   const hierarchy = $derived(buildWorkHierarchy(tasks))
   const deliveryQueue = $derived(detail.deliverySpine?.queue ?? null)
   const deliveryFirstRunnable = $derived(deliveryQueue?.firstRunnable ?? null)
+  const projectRunning = $derived(detail.run?.status === 'running')
+  const projectRunActive = $derived(detail.run?.status === 'running' || detail.run?.status === 'stopping')
+  const deliveryReadyCount = $derived(deliveryQueue?.runnable?.length ?? 0)
   const deliveryPrimitiveBlockers = $derived.by(() => {
     return deliveryQueue?.blocked
       ?.flatMap(candidate => candidate.structuralBlockers ?? [])
@@ -137,6 +145,10 @@
   const visibleImportDrafts = $derived(importDrafts.filter(task => partFilter === 'all' || workAreaForTask(task).id === partFilter))
   const visibleImportDraftCount = $derived(showsPlanningArtifacts ? visibleImportDrafts.length : 0)
   const nextImportDraft = $derived(visibleImportDrafts[0] ?? null)
+  const selectedWork = $derived(selectedWorkId ? allWorkItems.find(task => task.id === selectedWorkId) ?? null : null)
+  const effectiveRunActiveId = $derived(runWorkActiveId ?? (
+    projectRunActive && selectedWork && isActiveWorkTask(selectedWork) ? selectedWork.id : null
+  ))
   const boardDetail = $derived({
     ...detail,
     tasks: visibleTasks,
@@ -254,6 +266,7 @@
         runWorkError = body.error ?? `Start failed (HTTP ${res.status})`
         return
       }
+      runWorkActiveId = taskId
       await project.refresh(detail.id)
       setTimeout(() => void project.refresh(detail.id), 500)
       setTimeout(() => void project.refresh(detail.id), 1800)
@@ -272,6 +285,27 @@
       selectedWorkId = taskId
       runWorkError = null
     }
+  }
+
+  function setWorkRowElement(taskId: string, node: HTMLElement | null): void {
+    if (node) {
+      workRowEls.set(taskId, node)
+    } else {
+      workRowEls.delete(taskId)
+    }
+  }
+
+  async function scrollWorkRowIntoView(taskId: string): Promise<void> {
+    await tick()
+    workRowEls.get(taskId)?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  }
+
+  function workFilterForTask(task: Task): WorkFilter {
+    if (task.status === 'blocked' || hasUnmetDependencies(task, tasks)) return 'blocked'
+    if (hasOpenQuestion(task)) return 'needs-you'
+    if (isQueuedWorkTask(task)) return 'queued'
+    if (isPlanningTask(task)) return 'planning'
+    return 'open'
   }
 
   function taskProgress(task: Task) {
@@ -305,6 +339,10 @@
   function isQueuedWorkTask(task: Task): boolean {
     if (hasUnmetDependencies(task, tasks)) return false
     if (task.status === 'ready') return isCompleteForWorkerHandoff(task)
+    return ['in_progress', 'review', 'gate_check'].includes(task.status ?? '')
+  }
+
+  function isActiveWorkTask(task: Task): boolean {
     return ['in_progress', 'review', 'gate_check'].includes(task.status ?? '')
   }
 
@@ -430,6 +468,7 @@
     if (task.blockReason) return friendlyRuntimeMessage(task.blockReason)
     if (task.terminalSummary?.headline) return task.terminalSummary.headline
     if (task.latestCheckpoint?.nextPlannedAction) return task.latestCheckpoint.nextPlannedAction
+    if (taskSourceQuestion(task)) return taskSourceQuestion(task)!
     if (task.description) return task.description
     return friendlyTaskId(task.id)
   }
@@ -438,7 +477,43 @@
     return primitive.label?.trim() || primitive.id || 'Primitive'
   }
 
+  function orientationPathForTask(task: Task): string {
+    const targetId = `work:${task.id}`
+    const direct = detail.orientationSpine?.nodes?.[targetId]
+    if (direct) {
+      const path = orientationPathFromNodeId(targetId)
+      if (path) return path
+    }
+    const path = findOrientationPath(detail.orientationSpine?.roots ?? [], targetId)
+    return path?.join(' / ') ?? ''
+  }
+
+  function orientationPathFromNodeId(nodeId: string): string {
+    const nodes = detail.orientationSpine?.nodes ?? {}
+    const titles: string[] = []
+    let current = nodes[nodeId]
+    const seen = new Set<string>()
+    while (current?.id && !seen.has(current.id)) {
+      seen.add(current.id)
+      titles.unshift(current.title ?? current.id)
+      current = current.parentId ? nodes[current.parentId] : undefined
+    }
+    return titles.join(' / ')
+  }
+
+  function findOrientationPath(nodes: NonNullable<ProjectDetail['orientationSpine']>['roots'], targetId: string, parents: string[] = []): string[] | null {
+    for (const node of nodes ?? []) {
+      const path = [...parents, node.title ?? node.id ?? 'Work']
+      if (node.id === targetId) return path
+      const childPath = findOrientationPath(node.children ?? [], targetId, path)
+      if (childPath) return childPath
+    }
+    return null
+  }
+
   function hierarchyBreadcrumb(task: Task): string {
+    const orientationPath = orientationPathForTask(task)
+    if (orientationPath) return orientationPath
     const crumbs = hierarchy.byId.get(task.id)?.breadcrumb ?? []
     if (crumbs.length <= 1) return ''
     return crumbs.map(crumb => crumb.title).join(' / ')
@@ -495,6 +570,11 @@
     return 'list'
   }
 
+  function readSelectedWorkIdFromUrl(): string | null {
+    const params = new URL(window.location.href).searchParams
+    return params.get('task') ?? params.get('work') ?? null
+  }
+
   function onWorkFilterSelect(value: string): void {
     workFilterUserSelected = true
     workFilter = value as WorkFilter
@@ -515,7 +595,33 @@
   })
 
   $effect(() => {
+    path.href
+    path.value
+    const routeTaskId = readSelectedWorkIdFromUrl()
+    if (!routeTaskId) return
+    const routeTask = allWorkItems.find(task => task.id === routeTaskId)
+    if (!routeTask) return
+    selectedWorkId = routeTaskId
+    runWorkError = null
+    workFilter = workFilterForTask(routeTask)
+    workFilterUserSelected = true
+    partFilter = 'all'
+    pendingRouteScrollTaskId = routeTaskId
+  })
+
+  $effect(() => {
+    const taskId = pendingRouteScrollTaskId
+    if (!taskId || selectedWorkId !== taskId || !sortedTasks.some(task => task.id === taskId)) return
+    pendingRouteScrollTaskId = null
+    void scrollWorkRowIntoView(taskId)
+  })
+
+  $effect(() => {
     if (!selectedWorkVisible) selectedWorkId = null
+  })
+
+  $effect(() => {
+    if (!projectRunActive) runWorkActiveId = null
   })
 </script>
 
@@ -541,19 +647,21 @@
   {:else}
     {#if deliveryQueue}
       <UtilityPanel as="section" className="delivery-queue-panel" tone={deliveryFirstRunnable ? 'ok' : deliveryQueue.blocked?.length ? 'warn' : 'neutral'} ariaLabel="Delivery queue">
-        <div>
+        <div class="queue-copy">
           <p class="queue-label">Delivery queue</p>
-          <strong>{deliveryFirstRunnable?.task ? deliveryFirstRunnable.task.title ?? deliveryFirstRunnable.task.id : 'No runnable task'}</strong>
-          {#if deliveryFirstRunnable?.why}
-            <span>{deliveryFirstRunnable.why}</span>
-          {/if}
-        </div>
-        <div class="queue-chips">
-          <Chip label={`${deliveryQueue.runnable?.length ?? 0} runnable`} tone={deliveryFirstRunnable ? 'ok' : 'neutral'} />
-          <Chip label={`${deliveryQueue.blocked?.length ?? 0} blocked`} tone={deliveryQueue.blocked?.length ? 'warn' : 'neutral'} />
-          {#each deliveryPrimitiveBlockers as primitive (`primitive-${primitive.id}`)}
-            <Chip label={primitiveLabel(primitive)} tone="warn" />
-          {/each}
+          <div class="queue-main">
+            <strong>{deliveryFirstRunnable?.task ? taskDisplayLabel(deliveryFirstRunnable.task, deliveryFirstRunnable.task.id) : 'No runnable task'}</strong>
+            {#if deliveryFirstRunnable?.why}
+              <span>{projectRunning ? deliveryFirstRunnable.why : 'Ready when resumed.'}</span>
+            {/if}
+          </div>
+          <div class="queue-chips">
+            <Chip label={projectRunning ? `${deliveryReadyCount} runnable` : `${deliveryReadyCount} ready to resume`} tone={deliveryFirstRunnable ? 'ok' : 'neutral'} />
+            <Chip label={`${deliveryQueue.blocked?.length ?? 0} blocked`} tone={deliveryQueue.blocked?.length ? 'warn' : 'neutral'} />
+            {#each deliveryPrimitiveBlockers as primitive (`primitive-${primitive.id}`)}
+              <Chip label={primitiveLabel(primitive)} tone="warn" />
+            {/each}
+          </div>
         </div>
       </UtilityPanel>
     {/if}
@@ -647,57 +755,60 @@
             {/if}
           </UtilityPanel>
         {:else}
-          <CardList className="work-list-stack">
-            <div class="list-column-head" aria-label="Sort work list">
-              <button type="button" class:active={sortKey === 'title'} onclick={() => toggleSort('title')}>Work{sortLabel('title')}</button>
-              <button type="button" class:active={sortKey === 'status'} onclick={() => toggleSort('status')}>Stage{sortLabel('status')}</button>
-              <button type="button" class:active={sortKey === 'area'} onclick={() => toggleSort('area')}>Part{sortLabel('area')}</button>
-              <button type="button" class:active={sortKey === 'priority'} onclick={() => toggleSort('priority')}>Priority{sortLabel('priority')}</button>
-              <button type="button" class:active={sortKey === 'updated'} onclick={() => toggleSort('updated')}>Updated{sortLabel('updated')}</button>
-              <button type="button" class:active={sortKey === 'revisions'} onclick={() => toggleSort('revisions')}>Revs{sortLabel('revisions')}</button>
-            </div>
-            {#each sortedTasks as task (task.id)}
-              {@const deliveryBadge = taskDeliveryBadge(task)}
-              <CardListItem
-                as="button"
-                className="work-list-row"
-                tone={listItemTone(task)}
-                railTone={listItemTone(task) === 'neutral' ? 'neutral' : listItemTone(task)}
-                railStrength="strong"
-                ariaLabel={`Inspect work ${task.title ?? task.id}`}
-                ariaCurrent={selectedWorkId === task.id ? 'true' : null}
-                selected={selectedWorkId === task.id}
-                onclick={() => selectWork(task)}
-                onkeydown={(event) => onTaskKey(event, task)}
-              >
-                <span class="row-main">
-                  <span class="task-title">{task.title ?? '(untitled)'}</span>
-                  {#if hierarchyBreadcrumb(task)}
-                    <span class="task-breadcrumb">{hierarchyBreadcrumb(task)}</span>
-                  {/if}
-                  <span class="task-subcopy">{taskSecondaryText(task)}</span>
-                </span>
-                <span class="row-status">
-                  <Chip label={effectiveStatusLabel(task)} tone={effectiveStatusTone(task)} />
-                  {#if deliveryBadge}
-                    <Chip label={deliveryBadge.label} tone={deliveryBadge.tone} title={deliveryBadge.title} size="compact" />
-                  {/if}
-                </span>
-                <span class="row-domain">
-                  {workAreaForTask(task).label}
-                </span>
-                <span class="row-priority">
-                  <Chip label={friendlyPriority(task.priority)} tone={priorityTone(task.priority)} />
-                </span>
-                <span class="row-updated">
-                  {formatUpdatedAt(task.updatedAt)}
-                </span>
-                <span class="row-revisions">
-                  {task.revisionCount ?? 0}
-                </span>
-              </CardListItem>
-            {/each}
-          </CardList>
+          <div class="work-list-scroll" role="region" aria-label="Scrollable work list columns">
+            <CardList className="work-list-stack">
+              <div class="list-column-head" aria-label="Sort work list">
+                <button type="button" class:active={sortKey === 'title'} onclick={() => toggleSort('title')}>Work{sortLabel('title')}</button>
+                <button type="button" class:active={sortKey === 'status'} onclick={() => toggleSort('status')}>Stage{sortLabel('status')}</button>
+                <button type="button" class:active={sortKey === 'area'} onclick={() => toggleSort('area')}>Part{sortLabel('area')}</button>
+                <button type="button" class:active={sortKey === 'priority'} onclick={() => toggleSort('priority')}>Priority{sortLabel('priority')}</button>
+                <button type="button" class:active={sortKey === 'updated'} onclick={() => toggleSort('updated')}>Updated{sortLabel('updated')}</button>
+                <button type="button" class:active={sortKey === 'revisions'} onclick={() => toggleSort('revisions')}>Revs{sortLabel('revisions')}</button>
+              </div>
+              {#each sortedTasks as task (task.id)}
+                {@const deliveryBadge = taskDeliveryBadge(task)}
+                <CardListItem
+                  as="button"
+                  className="work-list-row"
+                  tone={listItemTone(task)}
+                  railTone={listItemTone(task) === 'neutral' ? 'neutral' : listItemTone(task)}
+                  railStrength="strong"
+                  ariaLabel={`Inspect work ${taskDisplayLabel(task, task.id)}`}
+                  ariaCurrent={selectedWorkId === task.id ? 'true' : null}
+                  selected={selectedWorkId === task.id}
+                  elementRef={(node) => setWorkRowElement(task.id, node)}
+                  onclick={() => selectWork(task)}
+                  onkeydown={(event) => onTaskKey(event, task)}
+                >
+                  <span class="row-main">
+                    <span class="task-title">{taskDisplayLabel(task)}</span>
+                    {#if hierarchyBreadcrumb(task)}
+                      <span class="task-breadcrumb">{hierarchyBreadcrumb(task)}</span>
+                    {/if}
+                    <span class="task-subcopy">{taskSecondaryText(task)}</span>
+                  </span>
+                  <span class="row-status">
+                    <Chip label={effectiveStatusLabel(task)} tone={effectiveStatusTone(task)} />
+                    {#if deliveryBadge}
+                      <Chip label={deliveryBadge.label} tone={deliveryBadge.tone} title={deliveryBadge.title} size="compact" />
+                    {/if}
+                  </span>
+                  <span class="row-domain">
+                    {workAreaForTask(task).label}
+                  </span>
+                  <span class="row-priority">
+                    <Chip label={friendlyPriority(task.priority)} tone={priorityTone(task.priority)} />
+                  </span>
+                  <span class="row-updated">
+                    {formatUpdatedAt(task.updatedAt)}
+                  </span>
+                  <span class="row-revisions">
+                    {task.revisionCount ?? 0}
+                  </span>
+                </CardListItem>
+              {/each}
+            </CardList>
+          </div>
         {/if}
       </Card>
 
@@ -709,6 +820,7 @@
           onSelectTask={selectWorkById}
           onRunTask={runWorkItem}
           runBusyTaskId={runWorkBusyId}
+          runActiveTaskId={effectiveRunActiveId}
           runError={runWorkError}
         />
       {/if}
@@ -789,14 +901,18 @@
     min-width: 0;
   }
   :global(.delivery-queue-panel) {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--s-3);
+    display: block;
   }
-  :global(.delivery-queue-panel) > div:first-child {
+  .queue-copy {
     display: grid;
-    gap: var(--s-1);
+    gap: var(--s-2);
+    min-width: 0;
+  }
+  .queue-main {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--s-1) var(--s-2);
     min-width: 0;
   }
   :global(.delivery-queue-panel) strong {
@@ -817,7 +933,7 @@
   .queue-chips {
     display: flex;
     flex-wrap: wrap;
-    justify-content: flex-end;
+    justify-content: flex-start;
     gap: var(--s-2);
   }
   :global(.setup-empty) {
@@ -862,17 +978,30 @@
     font-size: var(--gh-type-size-meta);
     line-height: var(--gh-type-line-height-body);
   }
+  .work-list-scroll {
+    max-inline-size: 100%;
+    min-inline-size: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding-block: 2px var(--gh-space-2);
+    scrollbar-gutter: stable;
+  }
+  .work-list-scroll:focus-visible {
+    outline: var(--gh-layout-focus-ring-width) solid var(--gh-color-border-focus);
+    outline-offset: var(--gh-space-1);
+  }
   :global(.work-list-stack) {
     --work-list-columns:
-      minmax(220px, 1fr)
-      minmax(160px, max-content)
-      minmax(92px, 112px)
+      minmax(280px, 1fr)
+      minmax(120px, max-content)
+      minmax(96px, 124px)
       minmax(84px, max-content)
-      minmax(108px, max-content)
-      32px;
+      minmax(96px, max-content)
+      48px;
     display: grid;
     grid-template-columns: var(--work-list-columns);
     gap: var(--gh-space-2);
+    inline-size: max(100%, 860px);
   }
   .list-column-head {
     display: grid;
@@ -1033,6 +1162,13 @@
     }
     .work-list-inspector-layout.has-selection {
       grid-template-columns: minmax(0, 1fr);
+    }
+    .work-list-scroll {
+      overflow-x: visible;
+      padding-block-end: 0;
+    }
+    :global(.work-list-stack) {
+      inline-size: 100%;
     }
     :global(.work-list-row) {
       grid-template-columns: minmax(0, 1fr);

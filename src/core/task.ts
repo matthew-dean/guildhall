@@ -664,14 +664,95 @@ export const DeliveryStep = z.object({
 })
 export type DeliveryStep = z.infer<typeof DeliveryStep>
 
+export const WorkHierarchyRelation = z.enum([
+  'contains',
+  'decomposes',
+  'proves',
+  'reviews',
+  'sets_up',
+  'migrates',
+])
+export type WorkHierarchyRelation = z.infer<typeof WorkHierarchyRelation>
+
 export const WorkHierarchy = z.object({
   parentId: z.string().optional(),
   childIds: z.array(z.string()).default([]),
   order: z.number().default(0),
   depth: z.number().int().nonnegative().optional(),
   path: z.array(z.string()).optional(),
+  relation: WorkHierarchyRelation.default('contains'),
 })
-export type WorkHierarchy = z.infer<typeof WorkHierarchy>
+export type WorkHierarchy = Omit<z.infer<typeof WorkHierarchy>, 'relation'> & {
+  relation?: WorkHierarchyRelation
+}
+
+export const ExecutionPlanActionType = z.enum([
+  'split_work',
+  'create_proof_work',
+  'create_review_work',
+  'create_setup_work',
+  'create_migration_work',
+  'change_visibility',
+  'reorder_work',
+  'merge_work',
+])
+export type ExecutionPlanActionType = z.infer<typeof ExecutionPlanActionType>
+
+export const ExecutionPlanActionStatus = z.enum([
+  'planned',
+  'applying',
+  'applied',
+  'failed',
+  'superseded',
+])
+export type ExecutionPlanActionStatus = z.infer<typeof ExecutionPlanActionStatus>
+
+export const ExecutionPlanAction = z.object({
+  id: z.string(),
+  type: ExecutionPlanActionType,
+  targetWorkId: z.string(),
+  status: ExecutionPlanActionStatus,
+  authority: z.literal('execution_planning'),
+  rationale: z.string(),
+  createdChildIds: z.array(z.string()).default([]),
+  createdAt: z.string(),
+  createdBy: z.string(),
+  appliedAt: z.string().optional(),
+  appliedBy: z.string().optional(),
+  failureReason: z.string().optional(),
+})
+export type ExecutionPlanAction = z.infer<typeof ExecutionPlanAction>
+
+export const ScopeAuthorityRequestType = z.enum([
+  'add_scope',
+  'drop_scope',
+  'defer_scope',
+  'change_release_boundary',
+  'resolve_goal_conflict',
+  'external_permission',
+  'irreversible_operation',
+])
+export type ScopeAuthorityRequestType = z.infer<typeof ScopeAuthorityRequestType>
+
+export const ScopeAuthorityRequest = z.object({
+  id: z.string(),
+  type: ScopeAuthorityRequestType,
+  targetWorkId: z.string().optional(),
+  status: z.enum(['open', 'answered', 'withdrawn']).default('open'),
+  question: z.string(),
+  whyItMatters: z.string(),
+  options: z.array(z.object({
+    id: z.string(),
+    label: z.string(),
+    consequence: z.string(),
+  })).default([]),
+  createdAt: z.string(),
+  createdBy: z.string(),
+  answeredAt: z.string().optional(),
+  answeredBy: z.string().optional(),
+  answer: z.string().optional(),
+})
+export type ScopeAuthorityRequest = z.infer<typeof ScopeAuthorityRequest>
 
 export const WorkCompletionBoundary = z.object({
   summary: z.string(),
@@ -1182,7 +1263,8 @@ export const Task = z.object({
   completedAt: z.string().optional(),
 })
 type ParsedTask = z.infer<typeof Task>
-export type Task = ParsedTask & {
+export type Task = Omit<ParsedTask, 'hierarchy'> & {
+  hierarchy?: WorkHierarchy
   /**
    * @deprecated Legacy pre-0.10 raw field. The normal Task schema no longer
    * accepts or writes task-local owner questions; use OwnerInputRequest records
@@ -1195,5 +1277,11 @@ export const TaskQueue = z.object({
   version: z.number().default(1),
   lastUpdated: z.string(),
   tasks: z.array(Task),
+  executionPlanActions: z.array(ExecutionPlanAction).default([]),
+  scopeAuthorityRequests: z.array(ScopeAuthorityRequest).default([]),
 })
-export type TaskQueue = Omit<z.infer<typeof TaskQueue>, 'tasks'> & { tasks: Task[] }
+export type TaskQueue = Omit<z.infer<typeof TaskQueue>, 'tasks' | 'executionPlanActions' | 'scopeAuthorityRequests'> & {
+  tasks: Task[]
+  executionPlanActions?: ExecutionPlanAction[]
+  scopeAuthorityRequests?: ScopeAuthorityRequest[]
+}

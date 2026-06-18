@@ -83,6 +83,8 @@ export function parseRoute(p: string, state: unknown = null): Route {
       return { kind: 'project', projectId, view: 'workspace-import', sub: null, drawerTaskId: null, backgroundPath: null }
     if (normalized === '/structure')
       return { kind: 'project', projectId, view: 'structure', sub: null, drawerTaskId: null, backgroundPath: null }
+    if (normalized === '/map')
+      return { kind: 'project', projectId, view: 'map', sub: null, drawerTaskId: null, backgroundPath: null }
     const settingsSub = /^\/settings\/(.+)$/.exec(normalized)
     if (settingsSub)
       return { kind: 'project', projectId, view: 'settings', sub: settingsSub[1] ?? '', drawerTaskId: null, backgroundPath: null }

@@ -996,13 +996,31 @@ function taskCountSummary(tasks: Task[]): string {
   if (tasks.length === 0) return 'No tasks have been created yet.'
   const counts = new Map<string, number>()
   for (const task of tasks) {
-    const status = typeof task.status === 'string' ? task.status : 'unknown'
-    counts.set(status, (counts.get(status) ?? 0) + 1)
+    const bucket = taskCountBucket(task)
+    counts.set(bucket, (counts.get(bucket) ?? 0) + 1)
   }
+  const order = ['needs you', 'needs brief', 'open', 'working', 'blocked', 'shelved', 'done', 'unknown']
   const parts = Array.from(counts.entries())
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([status, count]) => `${count} ${status.replace(/_/g, ' ')}`)
+    .sort(([a], [b]) => taskCountBucketRank(a, order) - taskCountBucketRank(b, order))
+    .map(([bucket, count]) => `${count} ${bucket}`)
   return `${tasks.length} task${tasks.length === 1 ? '' : 's'} on record: ${parts.join(', ')}.`
+}
+
+function taskCountBucketRank(bucket: string, order: string[]): number {
+  const index = order.indexOf(bucket)
+  return index >= 0 ? index : order.length
+}
+
+function taskCountBucket(task: Task): string {
+  const status = typeof task.status === 'string' ? task.status : 'unknown'
+  if (visibleOpenQuestions(task).length > 0) return 'needs you'
+  if (status === 'import_draft') return 'needs brief'
+  if (status === 'blocked') return 'blocked'
+  if (status === 'shelved') return 'shelved'
+  if (status === 'done' || status === 'pending_pr') return 'done'
+  if (status === 'in_progress' || status === 'review' || status === 'gate_check') return 'working'
+  if (status === 'proposed' || status === 'exploring' || status === 'spec_review' || status === 'ready') return 'open'
+  return 'unknown'
 }
 
 function coordinatorSummary(snap: ProjectSnapshot): string {

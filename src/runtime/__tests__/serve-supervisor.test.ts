@@ -212,6 +212,36 @@ describe('OrchestratorSupervisor', () => {
     }
   })
 
+  it('can force-clear stale stopping state after the stop grace window expires', async () => {
+    const workspacePath = await mkdtemp(path.join(tmpdir(), 'guildhall-supervisor-'))
+    const supervisor = new OrchestratorSupervisor({
+      resolveConfig: () => ({ workspaceId: 'w', projectPath: workspacePath } as ResolvedConfig),
+      runOrchestrator: async () => {
+        await new Promise<void>(() => {})
+        return STOP_SUMMARY
+      },
+    })
+
+    try {
+      const run = supervisor.start({ workspaceId: 'w', workspacePath })
+
+      const stopped = await supervisor.stop('w', { waitMs: 1, reason: 'test' })
+      expect(stopped).toBe(false)
+      expect(run.status).toBe('stopping')
+
+      const tooEarly = await supervisor.forceStopStaleStoppingRun('w', 30_000)
+      expect(tooEarly).toBe(false)
+      expect(run.status).toBe('stopping')
+
+      run.stopRequestedAt = new Date(Date.now() - 31_000).toISOString()
+      const forced = await supervisor.forceStopStaleStoppingRun('w', 30_000)
+      expect(forced).toBe(true)
+      expect(run.status).toBe('stopped')
+    } finally {
+      await rm(workspacePath, { recursive: true, force: true })
+    }
+  })
+
   it('trims persisted recent events so reconnect hydration stays bounded', async () => {
     const workspacePath = await mkdtemp(path.join(tmpdir(), 'guildhall-supervisor-'))
     process.env.GUILDHALL_DATA_DIR = path.join(workspacePath, '.guildhall-data')

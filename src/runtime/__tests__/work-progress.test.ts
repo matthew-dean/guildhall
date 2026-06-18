@@ -98,4 +98,25 @@ describe('deriveProjectWorkProgress', () => {
     expect(progress.counts.deliveryDone).toBe(1)
     expect(progress.byTaskId['raw-step']?.deliverySteps[0]?.evidenceChannel).toBe('simulator_snapshot')
   })
+
+  it('rolls up shelved visible tasks as shelved instead of pending', () => {
+    const progress = deriveProjectWorkProgress([
+      {
+        id: 'duplicate-split-child',
+        title: 'Duplicate split child',
+        status: 'shelved',
+        shelveReason: {
+          code: 'not_viable',
+          detail: 'Duplicate child task was explicitly shelved.',
+        },
+      },
+    ])
+
+    expect(progress.counts).toMatchObject({
+      visibleTotal: 1,
+      visibleActive: 0,
+      visibleShelved: 1,
+    })
+    expect(progress.byTaskId['duplicate-split-child']?.rollup.primaryState).toBe('shelved')
+  })
 })

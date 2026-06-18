@@ -7,6 +7,7 @@
     padding = 'default',
     mode = 'operator',
     density = 'comfortable',
+    focusWithin = false,
     ariaLabel,
     children,
     header,
@@ -19,7 +20,7 @@
 <svelte:element
   this={as}
   {...restProps}
-  class={['gh-frame-card', `tone-${tone}`, `padding-${padding}`, `mode-${mode}`, `density-${density}`, className].filter(Boolean).join(' ')}
+  class={['gh-frame-card', `tone-${tone}`, `padding-${padding}`, `mode-${mode}`, `density-${density}`, focusWithin ? 'focus-within' : '', className].filter(Boolean).join(' ')}
   aria-label={ariaLabel}
 >
   {#if header}
@@ -87,7 +88,7 @@
     padding: var(--gh-layout-frame-padding-roomy);
   }
 
-  .gh-frame-card:focus-within {
+  .gh-frame-card.focus-within:focus-within {
     border-color: var(--gh-color-border-focus);
     outline: var(--gh-layout-focus-ring-width) solid color-mix(in srgb, var(--gh-color-border-focus) 35%, transparent);
     outline-offset: 0;

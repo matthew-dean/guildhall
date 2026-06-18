@@ -6,6 +6,9 @@ export type TaskSizeBand = z.infer<typeof TaskSizeBand>
 export const TaskSizeAction = z.enum([
   'proceed',
   'proceed_with_warning',
+  'decompose_before_execution',
+  'needs_scope_authority',
+  // Legacy compatibility only. New sizing writes should not use these actions.
   'split_recommended',
   'split_required',
   'ask_clarifying_question',
@@ -57,6 +60,8 @@ export const TaskSizePlan = z.object({
   band: TaskSizeBand,
   action: TaskSizeAction,
   factors: z.array(TaskSizeFactor).default([]),
+  // Legacy compatibility only. New decomposition writes create execution-plan
+  // actions and derive child drafts on demand instead of persisting suggestions.
   recommendedChildren: z.array(TaskSplitRecommendation).default([]),
   reviewBudgetHint: z.enum(['lean', 'balanced', 'thorough', 'release_critical']).optional(),
   reasons: z.array(z.string()).default([]),
@@ -235,17 +240,13 @@ export function buildTaskSizePlan(input: BuildTaskSizePlanInput): TaskSizePlan {
   const score = scoreForWeight(rawWeight, input.task.priority)
   const action = actionForScore(score)
   const band = bandForScore(score)
-  const recommendedChildren = action === 'split_recommended' || action === 'split_required'
-    ? recommendChildren({ text, files, lanes })
-    : []
-
   return TaskSizePlan.parse({
     taskId: input.task.id,
     score,
     band,
     action,
     factors,
-    recommendedChildren,
+    recommendedChildren: [],
     reviewBudgetHint: score >= 8 ? 'release_critical' : score >= 5 ? 'thorough' : score >= 3 ? 'balanced' : 'lean',
     reasons: [
       `Task size score: ${score}.`,
@@ -253,9 +254,9 @@ export function buildTaskSizePlan(input: BuildTaskSizePlanInput): TaskSizePlan {
         ? 'The task is small enough to work and review as one coherent unit.'
         : action === 'proceed_with_warning'
           ? 'The task can proceed, but reviewers should watch for scope creep.'
-          : action === 'split_recommended'
-            ? 'The task is coherent but large enough that child tasks would likely improve quality.'
-            : 'The task is too large for one high-quality agent pass and should become linked child tasks.',
+          : action === 'decompose_before_execution'
+            ? 'The task is too large for one high-quality agent pass and Guildhall should decompose it before execution.'
+            : 'The task needs scope authority before execution can proceed.',
     ],
     createdAt: input.createdAt ?? new Date().toISOString(),
     createdBy: input.createdBy ?? 'task-sizing',
@@ -294,12 +295,6 @@ function sizePlanFromWorkUnitAnalysis(input: BuildTaskSizePlanInput): TaskSizePl
   }
 
   const score = units.length >= 5 ? 8 : units.length >= 3 ? 5 : 3
-  const recommendedChildren = units.map((unit) => ({
-    title: unit.title,
-    reason: unit.rationale || unit.deliverable,
-    dependsOn: unit.dependsOn,
-    ...(unit.suggestedDomain ? { suggestedDomain: unit.suggestedDomain } : {}),
-  }))
   return TaskSizePlan.parse({
     taskId: input.task.id,
     score,
@@ -311,7 +306,7 @@ function sizePlanFromWorkUnitAnalysis(input: BuildTaskSizePlanInput): TaskSizePl
       weight: Math.min(6, units.length),
       reason: analysis.summary,
     }],
-    recommendedChildren,
+    recommendedChildren: [],
     reviewBudgetHint: score >= 8 ? 'release_critical' : score >= 5 ? 'thorough' : 'balanced',
     reasons: [
       `Task size score: ${score}.`,
@@ -435,8 +430,23 @@ function bandForScore(score: TaskSizePlan['score']): TaskSizeBand {
 function actionForScore(score: TaskSizePlan['score']): TaskSizeAction {
   if (score <= 2) return 'proceed'
   if (score === 3) return 'proceed_with_warning'
-  if (score === 5) return 'split_recommended'
-  return 'split_required'
+  return 'decompose_before_execution'
+}
+
+export function buildDecompositionChildDrafts(input: BuildTaskSizePlanInput): TaskSplitRecommendation[] {
+  const analysis = input.task.workUnitAnalysis
+  if (analysis?.units.length) {
+    return analysis.units.map((unit) => ({
+      title: unit.title,
+      reason: unit.rationale || unit.deliverable,
+      dependsOn: unit.dependsOn,
+      ...(unit.suggestedDomain ? { suggestedDomain: unit.suggestedDomain } : {}),
+    }))
+  }
+  const text = inScopeTaskText(input.task)
+  const files = [...new Set((input.changedFiles ?? []).map((file) => file.trim()).filter(Boolean))]
+  const lanes = [...new Set((input.riskLanes ?? []).map((lane) => lane.trim()).filter(Boolean))]
+  return recommendChildren({ text, files, lanes })
 }
 
 function recommendChildren(input: { text: string; files: readonly string[]; lanes: readonly string[] }): TaskSplitRecommendation[] {

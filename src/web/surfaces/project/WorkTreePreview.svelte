@@ -7,6 +7,7 @@
   import { hasUnmetDependencies } from '../../lib/task-dependencies.js'
   import { taskStagePresentation, type TaskPresentationTone } from '../../lib/task-presentation.js'
   import { buildWorkHierarchy } from '../../lib/work-hierarchy.js'
+  import { taskDisplayLabel, taskSourceQuestion } from '../../../shared/task-display-label.js'
   import type { ProjectDetail, Task } from '../../lib/types.js'
 
   interface Props {
@@ -16,6 +17,7 @@
     onSelectTask?: (taskId: string) => void
     onRunTask?: (taskId: string) => void | Promise<void>
     runBusyTaskId?: string | null
+    runActiveTaskId?: string | null
     runError?: string | null
   }
 
@@ -28,6 +30,7 @@
     onSelectTask,
     onRunTask,
     runBusyTaskId = null,
+    runActiveTaskId = null,
     runError = null,
   }: Props = $props()
 
@@ -119,6 +122,7 @@
     if (task.blockReason) return task.blockReason
     if (task.latestCheckpoint?.nextPlannedAction) return task.latestCheckpoint.nextPlannedAction
     if (task.acceptanceCriteria?.[0]?.description) return task.acceptanceCriteria[0].description
+    if (taskSourceQuestion(task)) return taskSourceQuestion(task)!
     return task.description ?? friendlyTaskId(task.id)
   }
 
@@ -167,9 +171,10 @@
     if (selectedTask) await onRunTask?.(selectedTask.id)
   }
 
-  function runButtonLabel(task: Task, busy: boolean): string {
+  function runButtonLabel(task: Task, busy: boolean, active: boolean): string {
+    if (active) return 'Running...'
     if (task.status === 'import_draft') return busy ? 'Drafting...' : 'Draft and run'
-    return busy ? 'Starting...' : 'Run this work item'
+    return busy ? 'Starting...' : 'Start work'
   }
 
   function selectContained(task: Task): void {
@@ -193,7 +198,7 @@
     <div class="inspector-head">
       <div>
         <p class="details-context">{containedWork.length ? 'Containing work' : 'Selected work'}</p>
-        <h3>{selectedTask.title ?? friendlyTaskId(selectedTask.id)}</h3>
+        <h3>{taskDisplayLabel(selectedTask, friendlyTaskId(selectedTask.id))}</h3>
       </div>
       <Chip label={taskStatusLabel(selectedTask)} tone={taskStatusTone(selectedTask)} />
     </div>
@@ -216,7 +221,7 @@
         <div class="contained-list">
           {#each containedWork as child (child.id)}
             <button type="button" class="contained-item" onclick={() => selectContained(child)}>
-              <span>{child.title ?? friendlyTaskId(child.id)}</span>
+              <span>{taskDisplayLabel(child, friendlyTaskId(child.id))}</span>
               <Chip label={taskStatusLabel(child)} tone={taskStatusTone(child)} size="compact" />
             </button>
           {/each}
@@ -249,8 +254,10 @@
 
     <div class="inspector-actions">
       {#if onRunTask}
-        <Button variant="agent" size="sm" disabled={runBusyTaskId === selectedTask.id} onclick={runSelected}>
-          {runButtonLabel(selectedTask, runBusyTaskId === selectedTask.id)}
+        {@const runBusy = runBusyTaskId === selectedTask.id}
+        {@const runActive = runActiveTaskId === selectedTask.id}
+        <Button variant="agent" size="sm" disabled={runBusy || runActive} onclick={runSelected}>
+          {runButtonLabel(selectedTask, runBusy, runActive)}
         </Button>
       {/if}
       <Button variant="primary" size="sm" onclick={openSelected}>Open drawer</Button>

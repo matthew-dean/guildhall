@@ -10,6 +10,7 @@
   import Card from './ui-compat/Card.svelte'
   import Chip from './Chip.svelte'
   import Tooltip from './Tooltip.svelte'
+  import Skeleton from '../../../packages/ui/src/components/Skeleton.svelte'
   import { avatarToneForRole } from './avatar-palette.js'
   import type { ProjectCardSummary } from './project-summary.js'
 
@@ -97,7 +98,11 @@
             : 'ready',
   )
   const openTitle = $derived(`Open ${summary.name} project`)
-  const selectTitle = $derived(`Project: ${summary.name}`)
+  const selectTitle = $derived(
+    summary.statusLoading
+      ? `Project: ${summary.name}, still loading project state`
+      : `Project: ${summary.name}`,
+  )
 
   function segmentFlex(count: number): string {
     return `flex: ${Math.max(0, count)} 1 0;`
@@ -172,7 +177,7 @@
 </script>
 
 <Card
-  className={`project-card ${effectiveRunning ? 'project-card-running' : ''}`.trim()}
+  className={`project-card ${effectiveRunning ? 'project-card-running' : ''} ${summary.statusLoading ? 'project-card-loading' : ''}`.trim()}
   tone={summary.tone === 'warn' ? 'warn' : effectiveRunning ? 'ok' : summary.tone === 'success' ? 'accent' : 'default'}
   role="button"
   tabindex={0}
@@ -242,6 +247,17 @@
           </Tooltip>
         {/if}
       </div>
+
+      {#if summary.statusLoading}
+        <div class="loading-state" role="status" aria-label={`Still loading project state for ${summary.name}`}>
+          <span class="loading-copy">Still loading project state</span>
+          <span class="loading-skeletons" aria-hidden="true">
+            <Skeleton width="100%" height="0.42rem" />
+            <Skeleton width="72%" height="0.42rem" />
+            <Skeleton width="42%" height="0.42rem" />
+          </span>
+        </div>
+      {/if}
 
       <div class="recent-workline" aria-label={recentWorkLabel}>
         {#each recentWorkBars as bar, index (`${index}-${bar.value}`)}
@@ -367,6 +383,9 @@
       inset 0 0 0 1px color-mix(in srgb, var(--accent-2) 26%, transparent),
       var(--light-emitted-agent),
       var(--glass-shadow);
+  }
+  :global(section.project-card.project-card-loading) {
+    border-color: color-mix(in srgb, var(--accent) 32%, var(--glass-border-strong));
   }
   :global(section.project-card[role="button"]) {
     cursor: pointer;
@@ -530,6 +549,32 @@
   .recent-workline .recent-workline-empty {
     background: color-mix(in srgb, var(--text-muted) 18%, transparent);
     box-shadow: none;
+  }
+  .loading-state {
+    display: grid;
+    grid-template-columns: minmax(0, auto) minmax(4.5rem, 1fr);
+    gap: var(--s-2);
+    align-items: center;
+    min-height: 1.35rem;
+    padding: 0.24rem 0.36rem;
+    border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--border));
+    border-radius: var(--r-1);
+    background: color-mix(in srgb, var(--glass-bg-strong) 72%, var(--bg-raised));
+    color: var(--text-muted);
+    font-size: var(--gh-type-size-caption);
+    font-weight: var(--gh-type-weight-strong);
+  }
+  .loading-copy {
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .loading-skeletons {
+    display: grid;
+    grid-template-columns: 1fr 0.72fr 0.42fr;
+    gap: 0.24rem;
+    min-width: 0;
   }
   .story {
     display: grid;

@@ -21,6 +21,7 @@
     type?: 'button' | 'submit' | 'reset'
     onclick?: (event: MouseEvent) => void
     onkeydown?: (event: KeyboardEvent) => void
+    elementRef?: (node: HTMLElement | null) => void
     children?: Snippet
   }
 
@@ -40,16 +41,24 @@
     type = 'button',
     onclick,
     onkeydown,
+    elementRef,
     children,
   }: Props = $props()
+  let element: HTMLElement | null = $state(null)
 
   const effectiveRailTone = $derived<RailTone | null>(
     railTone ?? (tone === 'default' ? null : tone),
   )
+
+  $effect(() => {
+    elementRef?.(element)
+    return () => elementRef?.(null)
+  })
 </script>
 
 <svelte:element
   this={as}
+  bind:this={element}
   class={[
     'utility-panel',
     `tone-${tone}`,

@@ -122,7 +122,20 @@ function isActionableFileCandidate(candidate: string): boolean {
   if (trimmed.includes(' ')) return false
   if (SHELLISH_CANDIDATE_RE.test(trimmed)) return false
   if (GLOB_CANDIDATE_RE.test(trimmed)) return false
+  if (isGuildhallTaskStateCandidate(trimmed)) return false
   return true
+}
+
+function isGuildhallTaskStateCandidate(candidate: string): boolean {
+  const normalized = candidate.replace(/\\/g, '/').replace(/^\.\//, '')
+  return (
+    normalized === 'TASKS.json' ||
+    normalized.endsWith('/TASKS.json') ||
+    normalized === 'PROGRESS.md' ||
+    normalized.endsWith('/PROGRESS.md') ||
+    normalized.includes('/project-state/') ||
+    normalized.includes('/project-state-evacuation/')
+  )
 }
 
 export function resolveLikelyTaskFiles(task: Task, checkpointFilesTouched: readonly string[] = []): string[] {
@@ -294,7 +307,9 @@ ${reviewerFeedbackText}`
   const push = (candidate: string) => {
     const trimmed = candidate.trim()
     if (!trimmed) return
+    if (isGuildhallTaskStateCandidate(trimmed)) return
     const normalized = normalizeCandidate(trimmed)
+    if (isGuildhallTaskStateCandidate(normalized)) return
     if (seen.has(normalized)) return
     seen.add(normalized)
     out.push(normalized)

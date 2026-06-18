@@ -14,7 +14,7 @@ expected:
   action: proceed
   requiredFactors:
     - narrow_verification
-  minRecommendedChildren: 0
+  minDecompositionChildren: 0
 labelGovernance:
   labeledBy: task-sizing-seed
   labeledAt: "2026-05-25"

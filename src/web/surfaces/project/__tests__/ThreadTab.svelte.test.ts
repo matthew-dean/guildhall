@@ -453,6 +453,7 @@ function installFetchFakes(
     startReadiness?: unknown
     projectAvailability?: { status: string; pausedAt?: string | null; resumedAt?: string | null }
     caughtUp?: boolean
+    orientationSpine?: unknown
     threadState?: () => { turns: unknown[]; activeTurnId: string | null; caughtUp?: boolean }
     onSetupSubmit?: (url: string, body: Record<string, unknown> | undefined) => void
     boundedChatAnswerResponse?: Response | (() => Response | Promise<Response>)
@@ -465,8 +466,8 @@ function installFetchFakes(
     calls.push({ url, init, body })
     if (url.startsWith('/api/project/thread')) {
       const state = options.threadState?.()
-      if (state) return json({ turns: state.turns, activeTurnId: state.activeTurnId, caughtUp: state.caughtUp ?? false })
-      return json({ turns, activeTurnId, caughtUp: options.caughtUp ?? false })
+      if (state) return json({ turns: state.turns, activeTurnId: state.activeTurnId, caughtUp: state.caughtUp ?? false, orientationSpine: options.orientationSpine })
+      return json({ turns, activeTurnId, caughtUp: options.caughtUp ?? false, orientationSpine: options.orientationSpine })
     }
     if (url.startsWith('/api/project/source-note')) {
       if (options.sourceNoteResponse) {
@@ -549,6 +550,7 @@ function installFetchFakes(
         ...(options.runtime ? { runtime: options.runtime } : {}),
         ...(project.detail?.taskRoutingContexts ? { taskRoutingContexts: project.detail.taskRoutingContexts } : {}),
         ...(project.detail?.deliverySpine ? { deliverySpine: project.detail.deliverySpine } : {}),
+        ...(project.detail?.actionModel ? { actionModel: project.detail.actionModel } : {}),
         tasks: [],
       })
     }
@@ -598,6 +600,36 @@ describe('ThreadTab', () => {
     expect(setupCall?.url).toContain('projectId=looma-knit')
     expect(setupCall?.body).toMatchObject({
       name: 'Looma + Knit Docs',
+    })
+  })
+
+  it('shows the orientation spine path on task-linked thread cards', async () => {
+    installFetchFakes([
+      importedDraftTurn({
+        id: 'draft-finding-taxonomy',
+        taskId: 'task-finding-taxonomy',
+        taskTitle: 'Finding taxonomy',
+        status: 'active',
+      }),
+    ], 'draft-finding-taxonomy', {
+      orientationSpine: {
+        roots: [{
+          id: 'work:task-anti-sameness',
+          title: 'Anti-sameness safeguards',
+          children: [{
+            id: 'work:task-finding-taxonomy',
+            title: 'Finding taxonomy',
+            children: [],
+          }],
+        }],
+        nodes: {},
+      },
+    })
+
+    render(ThreadTab)
+
+    await waitFor(() => {
+      expect(screen.getAllByText('Anti-sameness safeguards / Finding taxonomy').length).toBeGreaterThanOrEqual(2)
     })
   })
 
@@ -1130,6 +1162,57 @@ describe('ThreadTab', () => {
     await waitFor(() => expect(row.getAttribute('aria-current')).toBe('true'))
     expect(selectedThread().getByText('Open the full spec before you approve it or redirect it.')).toBeTruthy()
     expect(selectedThread().getByRole('button', { name: /view spec/i })).toBeTruthy()
+    expect(selectedThread().queryByRole('button', { name: /open import review/i })).toBeNull()
+  })
+
+  it('defaults to the shared primary task action instead of nonblocking setup import', async () => {
+    project.detail = {
+      id: 'looma-knit',
+      actionModel: {
+        primaryAction: {
+          source: 'task',
+          label: 'What commands should I run to smoke test this project?',
+          detail: 'Needs brief: finish the handoff before a worker can start.',
+          buttonLabel: 'Open Work',
+          href: '/work',
+          tone: 'warn',
+          taskId: 'task-009',
+        },
+        secondaryActions: [],
+        runControl: { label: 'Resume', startEnabled: true },
+        ownerInput: { active: false },
+        setup: { state: 'ready', freshIntakeNeeded: false },
+      },
+    } as any
+    installFetchFakes([
+      setupTurn({
+        id: 'setup-workspace-import',
+        stepId: 'workspaceImport',
+        title: 'Review existing work',
+        why: 'Review sources and possible backlog tasks Guildhall found.',
+        affordance: 'link',
+        actionLabel: 'Open import review',
+        actionHref: '/workspace-import',
+      }),
+      importedDraftTurn({
+        id: 'task-009-thread',
+        taskId: 'task-009',
+        taskTitle: 'What commands should I run to smoke test this project?',
+        importedDraft: false,
+        taskStatus: 'ready',
+        requestStage: 'task_brief_cleanup',
+        summary: 'Needs brief: finish the handoff before a worker can start.',
+      }),
+    ], 'setup-workspace-import')
+
+    render(ThreadTab)
+
+    const row = await screen.findByRole('button', { name: /What commands should I run to smoke test this project/i })
+    await waitFor(() => expect(row.getAttribute('aria-current')).toBe('true'))
+    const setupRow = screen.getByRole('button', { name: /Review existing work/i })
+    expect(setupRow.textContent).toContain('Setup')
+    expect(setupRow.textContent).not.toContain('NOW')
+    expect(selectedThread().getByText('Brief cleanup')).toBeTruthy()
     expect(selectedThread().queryByRole('button', { name: /open import review/i })).toBeNull()
   })
 

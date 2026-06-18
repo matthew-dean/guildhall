@@ -54,6 +54,38 @@
   user is actively testing, not the Guildhall repo root, unless the work is
   specifically about first-run initialization.
 
+## Flow-audit evidence protocol
+
+- Treat "flow audit" and "user testing" as evidence protocols, not reasoning
+  summaries. Before touching code for a flow-audit fix, write the concrete user
+  job for the route: the user should be able to tell what is happening now, what
+  is queued, what is blocked, what they can do next, and whether the system is
+  actually working.
+- Every flow audit must compare the same state across the authoritative API,
+  top action, work list/cards, Thread, bottom/status chrome, and visible cards
+  when those surfaces claim the same concept. If two surfaces disagree about
+  running, queued, blocked, owner-input, approval, or next-action state, log it
+  as a failing finding and fix the shared summary/action model first.
+- Browser proof must include viewport and geometry evidence. Check the reported
+  or screenshot-sized desktop/split viewport, a narrower desktop viewport for
+  wide layouts, and mobile when the route has a mobile layout. Visible content
+  must not be clipped; if horizontal overflow is unavoidable, it must be inside
+  a named scroll region.
+- Use `tests/rendered-ui/flow-audit-assertions.ts` for deterministic checks:
+  `defineFlowUserJob`, `readProjectFlowState`, `expectNoClippedContent`, and
+  `expectProjectFlowStateAgreement`.
+- Installed-app proof is mandatory when the user is looking at
+  `localhost:7777`: run `pnpm build`, `pnpm dev:install`, `guildhall stop &&
+  guildhall start`, confirm `/api/stale-server` reports `stale:false`, then
+  verify the real route in Browser. Do not run Playwright web-server tests in
+  parallel with `pnpm build` or `pnpm dev:install`; they rewrite `.svelte-kit`
+  and `dist`.
+- Turn escaped UX misses into calibration cases under
+  `internal/calibration/cases/ux` or rendered regressions, preferably both.
+  Required miss families include ambiguous primary actions, contradictory
+  counts, hidden overflow, clipped cards, vague approval labels, status bars
+  claiming invisible work, and passive sections looking selected.
+
 ## Summary-state and next-action ownership
 
 - Any derived project summary, readiness, next-action, owner-input,

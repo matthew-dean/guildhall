@@ -306,7 +306,11 @@ async function renderProjectView(
   project.error = null
   render(ProjectView, { initialView: view, initialSub: sub, projectId })
   await waitFor(() => expect(screen.getAllByText(initialDetail.name ?? 'Project').length).toBeGreaterThan(0))
-  await waitFor(() => expect(screen.queryByText('Loading project...')).toBeNull())
+  await waitFor(() => {
+    const page = document.querySelector('.app-shell-page')
+    expect(page).toBeTruthy()
+    expect(page?.textContent).not.toContain('Loading project...')
+  })
 }
 
 async function renderProjectViewWithoutInitialDetail(
@@ -430,6 +434,7 @@ describe('ProjectView', () => {
     ['inbox', 'Choose link editor scope'],
     ['work', 'Knit: add link editor controls'],
     ['planner', 'Knit: add link editor controls'],
+    ['map', 'Project map'],
     ['timeline', 'Coordinator timeline'],
     ['release', 'Current counts'],
     ['settings', 'Settings'],
@@ -808,6 +813,35 @@ describe('ProjectView', () => {
     expect(screen.getByLabelText('Live project ticker')).toHaveTextContent('No actionable tasks remain')
   })
 
+  it('does not treat open escalation records on terminal shelved work as live blockers', async () => {
+    const projectPayload = detail({
+      startReadiness: {
+        canStart: false,
+        code: 'all_terminal',
+        message: 'No actionable tasks remain: 1 done, 0 blocked, 1 shelved.',
+      },
+      run: { status: 'stopped', mode: 'continuous' },
+      tasks: [
+        task({ id: 'task-done', title: 'Done task', status: 'done' }),
+        task({
+          id: 'task-shelved',
+          title: 'Shelved duplicate',
+          status: 'shelved',
+          escalations: [{ id: 'esc-old', reason: 'Old split loop', raisedAt: now }],
+        }),
+      ],
+      recentEvents: [],
+      totals: { blockingCount: 0, tasks: 2, done: 1 },
+      statusCounts: { done: 1, shelved: 1 },
+    } as Partial<ProjectDetail>)
+    installFetchFakes(projectPayload)
+
+    await renderProjectView('overview', null, 'looma-knit', projectPayload)
+
+    expect(screen.getAllByText('No actionable tasks remain: 1 done, 0 blocked, 1 shelved.').length).toBeGreaterThan(0)
+    expect(screen.queryByText(/Blocked: 1 escalated/i)).not.toBeInTheDocument()
+  })
+
   it('does not show waiting-on-input for blocked work with only suppressed promise questions', async () => {
     const projectPayload = detail({
       tasks: [
@@ -856,7 +890,8 @@ describe('ProjectView', () => {
     const startButton = screen.getByRole('button', { name: /^resume$/i })
     expect(startButton.classList.contains('v-agent')).toBe(true)
     expect(startButton).toHaveTextContent(/^Resume$/)
-    expect(startButton).not.toHaveTextContent(/task/i)
+    expect(startButton.getAttribute('aria-label')).toBe('Resume')
+    expect(`${startButton.textContent ?? ''} ${startButton.getAttribute('aria-label') ?? ''} ${startButton.getAttribute('title') ?? ''}`).not.toMatch(/ready work item/i)
     await user.click(startButton)
 
     await waitFor(() => {
@@ -1070,6 +1105,8 @@ describe('ProjectView', () => {
     const user = userEvent.setup()
     const running = detail({
       run: { status: 'running', mode: 'one_task' },
+      startReadiness: { canStart: true, message: 'Ready' },
+      recentEvents: [],
     })
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input), 'http://localhost')
@@ -1093,6 +1130,23 @@ describe('ProjectView', () => {
       expect(fetchMock.mock.calls.some(([input]) => String(input).startsWith('/api/project/stop'))).toBe(true)
     })
     expect(screen.getByRole('button', { name: /pausing/i })).toBeDisabled()
+  })
+
+  it('links a running project ticker to the live Timeline stream', async () => {
+    const user = userEvent.setup()
+    const running = detail({
+      run: { status: 'running', mode: 'one_task' },
+      startReadiness: { canStart: true, message: 'Ready' },
+      recentEvents: [],
+    })
+    installFetchFakes(running)
+
+    await renderProjectView('work', null, 'looma-knit', running)
+
+    expect(screen.getByLabelText('Live project ticker')).toHaveTextContent('Advancing one task')
+    await user.click(screen.getByRole('link', { name: 'View live stream' }))
+
+    expect(path.value).toBe('/projects/looma-knit/timeline')
   })
 
   it('acknowledges pause immediately while the project run is stopping', async () => {

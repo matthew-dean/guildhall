@@ -73,6 +73,7 @@ export function suggestCoordinatorReflection(
   const splitPressure = tasks.filter(task =>
     task.sizePlan?.action === 'split_required' ||
     task.sizePlan?.action === 'split_recommended' ||
+    task.sizePlan?.action === 'decompose_before_execution' ||
     task.taskReadiness?.recommendation === 'split',
   )
   if (splitPressure.length >= 2) {

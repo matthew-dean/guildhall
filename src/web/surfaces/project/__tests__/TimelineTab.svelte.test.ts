@@ -116,4 +116,38 @@ describe('TimelineTab', () => {
     expect(screen.queryByText(/provider health/i)).toBeNull()
     expect(screen.getByText('2 connection checks hidden.')).toBeTruthy()
   })
+
+  it('opens raw live agent events when the project is running', () => {
+    render(TimelineTab, {
+      props: {
+        detail: {
+          id: 'looma-knit',
+          name: 'Looma + Knit',
+          path: '/repo/looma-knit',
+          run: { status: 'running', mode: 'one_task' },
+          tasks: [],
+          recentEvents: [
+            {
+              at: '2026-05-19T15:00:00.000Z',
+              event: { type: 'assistant_delta', task_id: 'task-a', agent_name: 'worker-agent', message: 'Checking files' },
+            },
+            {
+              at: '2026-05-19T15:01:00.000Z',
+              event: { type: 'tool_started', task_id: 'task-a', agent_name: 'worker-agent', message: 'rg' },
+            },
+            {
+              at: '2026-05-19T15:02:00.000Z',
+              event: { type: 'agent_started', task_id: 'task-a', agent_name: 'worker-agent' },
+            },
+          ],
+        },
+      },
+    })
+
+    expect(screen.getByText('Live agent stream')).toBeTruthy()
+    expect(screen.getByText(/2 raw agent events from the current recent stream/)).toBeTruthy()
+    const details = document.querySelector('details.raw-trace')
+    expect(details?.hasAttribute('open')).toBe(true)
+    expect(screen.getByText('Show live agent event details')).toBeTruthy()
+  })
 })

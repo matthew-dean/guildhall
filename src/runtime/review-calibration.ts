@@ -183,8 +183,27 @@ export const defaultReviewCalibrationRecipes: ReviewCalibrationRecipe[] = [
     contextPacket: 'cross_surface_artifacts',
     promptVersion: 'ux-cross-surface-v1',
     requiredArtifactKinds: ['copy_snippet', 'screenshot'],
-    calibratedCaseIds: ['cross-surface-state-contradiction'],
+    calibratedCaseIds: [
+      'cross-surface-state-contradiction',
+      'status-work-list-mismatch',
+      'vague-approval-state',
+    ],
     knownWeaknesses: ['Needs at least two surface artifacts to be meaningful.'],
+  },
+  {
+    id: 'ux-flow-audit-evidence',
+    version: 'v1',
+    lanes: ['ux_comprehension', 'visual_design', 'accessibility', 'test_adequacy'],
+    purpose: 'Check whether a flow audit proves state agreement, readable layout, scroll accessibility, and selected-state ownership with executable evidence.',
+    contextPacket: 'cross_surface_artifacts',
+    promptVersion: 'ux-flow-audit-evidence-v1',
+    requiredArtifactKinds: ['copy_snippet', 'screenshot', 'dom_snapshot'],
+    calibratedCaseIds: [
+      'hidden-horizontal-overflow',
+      'passive-section-selected-state',
+      'status-work-list-mismatch',
+    ],
+    knownWeaknesses: ['Requires DOM geometry or rendered-test evidence; screenshot-only reviews often miss clipped content and inherited focus chrome.'],
   },
   {
     id: 'accessibility-keyboard-path',

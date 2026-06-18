@@ -358,6 +358,8 @@ async function runTaskWorkspaceBenchmark(input: {
       automationPolicy,
       proof: 'commands',
       outputPath: getProjectSystemStatePath(materialized.projectRoot, `${fixture.id}-run-once.json`),
+      ...(input.options.modelProvider ? { providerOverride: input.options.modelProvider } : {}),
+      ...(input.options.model ? { modelAssignmentOverride: singleModelAssignment(input.options.model) } : {}),
     })
     const verifierResults = await runVerifierCommands(materialized.projectRoot, fixture.verifier)
     const touchedFiles = await collectTouchedFiles(fixture.seedDir, materialized.projectRoot)
@@ -436,6 +438,17 @@ async function runTaskWorkspaceBenchmark(input: {
   })
   if (!input.options.outputDir) return report
   return writeBenchmarkReport(report, input.options.outputDir)
+}
+
+function singleModelAssignment(model: string) {
+  return {
+    spec: model,
+    coordinator: model,
+    worker: model,
+    reviewer: model,
+    gateChecker: model,
+    contextIndexer: model,
+  }
 }
 
 function resolveFixtureQuestions(

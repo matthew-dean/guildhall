@@ -114,4 +114,47 @@ describe('StructuredSpec', () => {
     expect(markdown).toContain('Expectation: Then the approved actions are available.')
     expect(markdown).toContain('Negative case: Drag-and-drop reordering is not present in this task.')
   })
+
+  it('normalizes object-shaped risks and mitigations from agent tool calls', () => {
+    const structured = StructuredSpec.parse({
+      whatThisIs: 'A type-only story memory schema slice for Narrative Harness.',
+      problemContext: 'The MVP needs durable records before runtime behavior can consume them.',
+      goals: ['Define the core record interfaces.'],
+      nonGoals: ['Do not add persistence or runtime code in this slice.'],
+      proposedDesign: 'Create a TypeScript schema module that exports the named interfaces.',
+      keyDecisions: ['Keep this slice type-only.'],
+      acceptanceCriteria: [
+        {
+          scenario: 'Given the schema module exists, when TypeScript checks it',
+          expectation: 'Then the type definitions compile without errors.',
+          verificationMode: 'automated',
+          command: 'npx tsc --noEmit',
+        },
+      ],
+      verification: ['Run npx tsc --noEmit.'],
+      risksOpenQuestions: [
+        {
+          risk: 'Schema names may need refinement after the first consumer lands.',
+          mitigation: 'Keep the MVP slice type-only and easy to adjust.',
+        },
+        {
+          question: 'Should persistence be JSONL or SQLite in a later slice?',
+        },
+      ],
+      completionBoundary: {
+        productOutcome: 'Agents can target stable story memory record shapes.',
+        whatGuildhallCanCompleteInCode: 'The TypeScript interface definitions.',
+        externalDependencies: 'None.',
+        ownerOnlySetup: 'None.',
+        verificationEnvironment: 'Local TypeScript compiler.',
+        whatCountsAsDone: 'The schema module compiles and exports the agreed interfaces.',
+        whatMustBeSplitOrBlocked: 'Runtime persistence and consumers stay split out.',
+      },
+    })
+
+    expect(structured.risksOpenQuestions).toEqual([
+      'Schema names may need refinement after the first consumer lands. - Mitigation: Keep the MVP slice type-only and easy to adjust.',
+      'Should persistence be JSONL or SQLite in a later slice?',
+    ])
+  })
 })

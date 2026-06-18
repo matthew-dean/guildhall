@@ -24,9 +24,9 @@ describe('task sizing calibration', () => {
       },
       expected: {
         minScore: 8 as const,
-        action: 'split_required' as const,
+        action: 'decompose_before_execution' as const,
         requiredFactors: ['multiple_outcomes', 'migration_or_release'],
-        minRecommendedChildren: 3,
+        minDecompositionChildren: 3,
       },
       labelGovernance: {
         labeledBy: 'task-sizing-calibration-test',
@@ -53,7 +53,7 @@ describe('task sizing calibration', () => {
       scoreMeetsMinimum: true,
       actionMatches: true,
       missingFactorIds: [],
-      recommendedChildrenMeetMinimum: true,
+      decompositionDraftsMeetMinimum: true,
     })
   })
 

@@ -87,6 +87,7 @@
   const hiddenProviderHealthCount = $derived(events.filter(isProviderHealthEvent).length)
   const hiddenRawTraceCount = $derived(rawTraceEvents.length)
   const hiddenEmptyModelCount = $derived(emptyModelEvents.length)
+  const runActive = $derived(detail.run?.status === 'running' || detail.run?.status === 'stopping')
 </script>
 
 <Card title="Coordinator timeline">
@@ -96,7 +97,7 @@
     <p class="muted">
       Only connection checks and raw agent trace events are hidden. Project activity will appear here when tasks move.
     </p>
-    <p class="muted compact">{hiddenProviderHealthCount} connection checks hidden. {hiddenRawTraceCount} background agent events hidden.</p>
+    <p class="muted compact">{hiddenProviderHealthCount} connection checks hidden. {hiddenRawTraceCount} live agent events hidden.</p>
   {:else}
     {#if hiddenEmptyModelCount > 0}
       <div class="recovery-summary" role="note">
@@ -108,8 +109,14 @@
       <p class="muted compact">{hiddenProviderHealthCount} connection checks hidden.</p>
     {/if}
     {#if hiddenRawTraceCount > 0}
-      <details class="raw-trace">
-        <summary>{hiddenRawTraceCount} background agent event{hiddenRawTraceCount === 1 ? '' : 's'} hidden</summary>
+      {#if runActive}
+        <div class="live-stream-summary" role="note">
+          <strong>Live agent stream</strong>
+          <span>{hiddenRawTraceCount} raw agent event{hiddenRawTraceCount === 1 ? '' : 's'} from the current recent stream. Older raw events may roll off this view.</span>
+        </div>
+      {/if}
+      <details class="raw-trace" open={runActive}>
+        <summary>{runActive ? 'Show live agent event details' : `${hiddenRawTraceCount} live agent event${hiddenRawTraceCount === 1 ? '' : 's'} hidden`}</summary>
         <div class="feed raw">
           {#each rawTraceEvents as ev, i (i)}
             {@const text = summarizeEvent(ev)}
@@ -188,6 +195,21 @@
     line-height: var(--gh-type-line-height-body);
   }
   .recovery-summary span {
+    color: var(--text-muted);
+  }
+  .live-stream-summary {
+    display: grid;
+    gap: var(--s-1);
+    margin: 0 0 var(--s-3);
+    padding: var(--s-2) var(--s-3);
+    border: 1px solid color-mix(in oklab, var(--accent) 34%, transparent);
+    border-radius: var(--r-2);
+    background: color-mix(in oklab, var(--accent) 10%, transparent);
+    color: var(--text);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
+  }
+  .live-stream-summary span {
     color: var(--text-muted);
   }
   .ev {

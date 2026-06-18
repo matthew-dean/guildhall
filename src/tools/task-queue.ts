@@ -10,14 +10,18 @@ import {
 import {
   AcceptanceCriteria,
   GateResult,
+  type ExecutionPlanAction,
   type TaskEvidenceEvent,
   Task,
+  type Task as TaskModel,
   TaskQueue,
   TaskStatus,
   WorkUnitAnalysis,
   StructuredSpec,
   TaskDelivery,
+  type TaskQueue as TaskQueueModel,
   buildTaskSizePlan,
+  buildDecompositionChildDrafts,
   parseAcceptanceCriteriaFromSpec,
   renderStructuredSpecMarkdown,
 } from '@guildhall/core'
@@ -29,7 +33,7 @@ const TASKS_PATH_SCHEMA = z.string().describe('Absolute path to the TASKS.json f
 const readTasksInputSchema = z.object({ tasksPath: TASKS_PATH_SCHEMA })
 export type ReadTasksInput = z.input<typeof readTasksInputSchema>
 export interface ReadTasksResult {
-  queue: z.infer<typeof TaskQueue> | null
+  queue: TaskQueueModel | null
   error?: string
 }
 
@@ -89,6 +93,7 @@ const updateTaskInputSchema = z.object({
   tasksPath: TASKS_PATH_SCHEMA,
   taskId: z.string().optional(),
   title: z.string().optional(),
+  domain: z.string().optional(),
   status: TaskStatus.optional(),
   assignedTo: z.string().nullable().optional(),
   note: updateTaskNoteSchema.optional(),
@@ -110,8 +115,8 @@ export interface UpdateTaskResult {
   error?: string
 }
 
-type TaskRecord = z.infer<typeof Task>
-type TaskQueueRecord = z.infer<typeof TaskQueue>
+type TaskRecord = TaskModel
+type TaskQueueRecord = TaskQueueModel
 
 function inferMetadataTaskId(metadata: Record<string, unknown> = {}): string | null {
   const taskId = metadata['current_task_id']
@@ -141,7 +146,7 @@ export async function updateTask(
         success: false,
         taskId,
         error:
-          'No task mutation provided. Set at least one of title, status, assignedTo, note, blockReason, humanJudgment, spec, structuredSpec, acceptanceCriteria, workUnitAnalysis, delivery, gateResults, or completedAt.',
+          'No task mutation provided. Set at least one of title, domain, status, assignedTo, note, blockReason, humanJudgment, spec, structuredSpec, acceptanceCriteria, workUnitAnalysis, delivery, gateResults, or completedAt.',
       }
     }
     if (input.spec !== undefined && input.structuredSpec !== undefined) {
@@ -238,6 +243,7 @@ export async function updateTask(
     }
 
     if (input.title !== undefined) task.title = input.title
+    if (input.domain !== undefined && input.domain.trim() !== '') task.domain = input.domain.trim()
     if (statusTransition?.kind === 'applied') task.status = statusTransition.nextState
     if (input.assignedTo !== undefined) {
       if ((input.assignedTo ?? '').trim() === '') delete task.assignedTo
@@ -304,18 +310,23 @@ export async function updateTask(
         riskLanes: inferSizingRiskLanes(task),
         createdAt: sizePlanCreatedAt,
       })
-      if (isMaterializableSplitAction(task.sizePlan.action) && task.status === 'ready') {
+      const representedSplit = isMaterializableSplitAction(task.sizePlan.action)
+        ? settleMaterializedSplitReadiness(queue, task, sizePlanCreatedAt)
+        : null
+      if (!representedSplit && isMaterializableSplitAction(task.sizePlan.action) && task.status === 'ready') {
         materializeSplitChildren(queue, task, sizePlanCreatedAt)
       }
     }
     task.updatedAt = new Date().toISOString()
     queue.lastUpdated = new Date().toISOString()
 
-    await persistUpdateTaskRuntimeState(input.tasksPath, task)
+    await persistUpdateTaskRuntimeState(input.tasksPath, task, metadata)
     writeProjectTaskQueue(input.tasksPath, queue)
     await appendUpdateTaskEvidence({
       tasksPath: input.tasksPath,
+      task,
       taskId,
+      metadata,
       note: noteEvidence,
       gateResults: gateEvidence,
     })
@@ -325,7 +336,15 @@ export async function updateTask(
   }
 }
 
-function projectRootForTaskState(tasksPath: string, task: z.infer<typeof Task>): string {
+function projectRootForTaskState(
+  tasksPath: string,
+  task: z.infer<typeof Task>,
+  metadata: Record<string, unknown> = {},
+): string {
+  const metadataProjectPath = typeof metadata['current_task_project_path'] === 'string'
+    ? metadata['current_task_project_path'].trim()
+    : ''
+  if (metadataProjectPath && path.isAbsolute(metadataProjectPath)) return metadataProjectPath
   const stateDir = path.dirname(tasksPath)
   if (path.basename(stateDir) === 'project-state' && path.isAbsolute(task.projectPath)) {
     return task.projectPath
@@ -333,8 +352,12 @@ function projectRootForTaskState(tasksPath: string, task: z.infer<typeof Task>):
   return inferProjectRootFromMemoryDir(stateDir)
 }
 
-async function persistUpdateTaskRuntimeState(tasksPath: string, task: z.infer<typeof Task>): Promise<void> {
-  await upsertTaskRuntimeState(projectRootForTaskState(tasksPath, task), task.id, {
+async function persistUpdateTaskRuntimeState(
+  tasksPath: string,
+  task: z.infer<typeof Task>,
+  metadata: Record<string, unknown> = {},
+): Promise<void> {
+  await upsertTaskRuntimeState(projectRootForTaskState(tasksPath, task, metadata), task.id, {
     assignedTo: Object.prototype.hasOwnProperty.call(task, 'assignedTo') ? task.assignedTo ?? null : null,
     ...(typeof task.revisionCount === 'number' ? { revisionCount: task.revisionCount } : {}),
     ...(task.retryWindow ? { retryWindow: task.retryWindow } : {}),
@@ -345,12 +368,14 @@ async function persistUpdateTaskRuntimeState(tasksPath: string, task: z.infer<ty
 
 async function appendUpdateTaskEvidence(input: {
   tasksPath: string
+  task: z.infer<typeof Task>
   taskId: string
+  metadata?: Record<string, unknown>
   note: { agentId: string; role: string; content: string; timestamp: string } | null
   gateResults: Array<z.infer<typeof GateResult>>
 }): Promise<void> {
   if (!input.note && input.gateResults.length === 0) return
-  const projectRoot = inferProjectRootFromMemoryDir(path.dirname(input.tasksPath))
+  const projectRoot = projectRootForTaskState(input.tasksPath, input.task, input.metadata ?? {})
   const events: Array<Omit<TaskEvidenceEvent, 'taskId'>> = []
   if (input.note) {
     events.push({
@@ -377,13 +402,24 @@ export function materializeSplitChildren(
   queue: TaskQueueRecord,
   parent: TaskRecord,
   timestamp: string,
-): void {
+): { status: 'noop' | 'materialized' | 'already_represented'; childTaskIds: string[] } {
   const sizePlan = parent.sizePlan
-  if (!sizePlan || !isMaterializableSplitAction(sizePlan.action)) return
-  const recommendations = sizePlan.recommendedChildren ?? []
-  if (recommendations.length === 0) return
-  const splitLabel = sizePlan.action === 'split_required' ? 'Split-required' : 'Split-recommended'
-  const splitNote = sizePlan.action === 'split_required' ? 'Split required' : 'Split recommended'
+  if (!sizePlan || !isMaterializableSplitAction(sizePlan.action)) return { status: 'noop', childTaskIds: [] }
+  const legacyRecommendations = sizePlan.recommendedChildren ?? []
+  const recommendations = legacyRecommendations.length > 0
+    ? legacyRecommendations
+    : buildDecompositionChildDrafts({ task: parent })
+  if (recommendations.length === 0) return { status: 'noop', childTaskIds: [] }
+  const usesLegacyRecommendations = legacyRecommendations.length > 0
+  const splitLabel = legacySplitLabel(sizePlan.action)
+  const splitNote = legacySplitNote(sizePlan.action)
+
+  const representedSplit = legacyRecommendations.length > 0
+    ? settleAlreadyRepresentedSplitRecommendations(queue, parent, timestamp)
+    : null
+  if (representedSplit) {
+    return { status: 'already_represented', childTaskIds: representedSplit.childTaskIds }
+  }
 
   const existingChildIds = new Set(parent.hierarchy?.childIds ?? [])
   const planned = recommendations.map((recommendation, index) => {
@@ -405,12 +441,13 @@ export function materializeSplitChildren(
       timestamp,
     })
     if (!queue.tasks.some((candidate) => candidate.id === task.id)) queue.tasks.push(task)
-    recommendation.createdTaskId = task.id
+    if (usesLegacyRecommendations) recommendation.createdTaskId = task.id
     task.hierarchy = {
       ...(task.hierarchy ?? {}),
       parentId: parent.id,
       order: index,
       childIds: task.hierarchy?.childIds ?? [],
+      relation: 'decomposes',
     }
     attachInternalDeliveryStep(parent, task)
     existingChildIds.add(task.id)
@@ -440,28 +477,24 @@ export function materializeSplitChildren(
     ...(parent.hierarchy ?? {}),
     order: parent.hierarchy?.order ?? 0,
     childIds: [...existingChildIds],
+    relation: parent.hierarchy?.relation ?? 'contains',
   }
-  parent.taskReadiness = {
-    taskKind: parent.taskReadiness?.taskKind ?? parent.taskKind ?? 'implementation',
-    recommendation: 'split',
-    summary: `${splitLabel} work is represented by linked child tasks.`,
-    dimensions: parent.taskReadiness?.dimensions ?? [],
-    definitionOfDone: parent.taskReadiness?.definitionOfDone ?? {
-      items: ['All required child tasks are done or explicitly deferred.'],
-      evidenceRequired: ['Linked child task outcomes are recorded before the containing work is closed.'],
-      updatedAt: timestamp,
-      createdBy: 'task-sizing',
-    },
-    blockerPlans: parent.taskReadiness?.blockerPlans ?? [],
-    contextBudget: parent.taskReadiness?.contextBudget ?? {
-      estimatedTokens: 0,
-      risk: 'medium',
-      fitsInOneWorkerBrief: false,
-      reasons: ['This work was split into linked child tasks.'],
-    },
-    assessedAt: parent.taskReadiness?.assessedAt ?? timestamp,
-    assessedBy: parent.taskReadiness?.assessedBy ?? 'task-sizing',
-  }
+  recordAppliedSplitExecutionAction({
+    queue,
+    parent,
+    childTaskIds: planned.map(({ task }) => task.id),
+    timestamp,
+    actor: 'task-sizing',
+    rationale: 'Legacy split sizing was materialized into linked child work.',
+  })
+  settleMaterializedSplitParent({
+    parent,
+    timestamp,
+    recommendation: 'ready',
+    summary: `${splitLabel} work has been turned into linked child tasks; continue through the child tasks instead of splitting this parent again.`,
+    reason: 'Split has already been materialized into linked child tasks; do not split this parent again unless the child structure changes.',
+    childTaskIds: planned.map(({ task }) => task.id),
+  })
   if (!['blocked', 'review', 'gate_check', 'done', 'shelved'].includes(parent.status)) {
     if (parent.status !== 'ready') {
       const transitionResult = applyTaskTransition({
@@ -485,12 +518,329 @@ export function materializeSplitChildren(
       timestamp,
     })
   }
+  return { status: 'materialized', childTaskIds: planned.map(({ task }) => task.id) }
 }
 
 export const materializeRequiredSplitChildren = materializeSplitChildren
 
 export function isMaterializableSplitAction(action: string | undefined): boolean {
+  return action === 'split_required' || action === 'split_recommended' || action === 'decompose_before_execution'
+}
+
+function isLegacySplitAction(action: string | undefined): boolean {
   return action === 'split_required' || action === 'split_recommended'
+}
+
+function legacySplitLabel(action: string | undefined): string {
+  if (action === 'split_required') return 'Decomposition-required'
+  if (action === 'split_recommended') return 'Decomposition-planned'
+  return 'Decomposition-required'
+}
+
+function legacySplitNote(action: string | undefined): string {
+  if (action === 'split_required') return 'Decomposition required'
+  if (action === 'split_recommended') return 'Decomposition planned'
+  return 'Decomposition required'
+}
+
+export function settleAlreadyRepresentedSplitRecommendations(
+  queue: TaskQueueRecord,
+  parent: TaskRecord,
+  timestamp: string,
+): { childTaskIds: string[] } | null {
+  const recommendations = parent.sizePlan?.recommendedChildren ?? []
+  const existingSiblingIds = splitRecommendationsAlreadyRepresentedBySiblings(queue, parent, recommendations)
+  if (!existingSiblingIds) return null
+  removeDuplicateNestedSplitChildIds(queue, parent, recommendations)
+  settleMaterializedSplitParent({
+    parent,
+    timestamp,
+    recommendation: 'ready',
+    summary: 'This task is ready; sibling tasks already cover the split work.',
+    reason: 'Split recommendations already match existing sibling tasks under the same parent; do not split this task again unless the child structure changes.',
+    childTaskIds: existingSiblingIds,
+  })
+  return { childTaskIds: existingSiblingIds }
+}
+
+export function settleMaterializedSplitReadiness(
+  queue: TaskQueueRecord,
+  parent: TaskRecord,
+  timestamp: string,
+): { childTaskIds: string[] } | null {
+  const recommendations = parent.sizePlan?.recommendedChildren ?? []
+  const representedIds = recommendations.map(recommendation => {
+    if (recommendation.createdTaskId && queue.tasks.some(task => task.id === recommendation.createdTaskId)) {
+      return recommendation.createdTaskId
+    }
+    return queue.tasks.find(task =>
+      task.hierarchy?.parentId === parent.id &&
+      normalizeTaskTitle(task.title) === normalizeTaskTitle(recommendation.title),
+    )?.id
+  })
+  const linkedChildIds = linkedChildTaskIds(queue, parent)
+  const hasExactRecommendationCoverage = recommendations.length > 0 && representedIds.every(Boolean)
+  const representedChildIds = hasExactRecommendationCoverage
+    ? representedIds.filter((id): id is string => Boolean(id))
+    : linkedChildIds
+  if (representedChildIds.length === 0) return null
+  if (hasExactRecommendationCoverage) {
+    recommendations.forEach((recommendation, index) => {
+      recommendation.createdTaskId = representedChildIds[index]
+    })
+  } else if (parent.sizePlan && isLegacySplitAction(parent.sizePlan.action)) {
+    parent.sizePlan.recommendedChildren = representedChildIds.map((childTaskId) => {
+      const child = queue.tasks.find(task => task.id === childTaskId)
+      return {
+        title: child?.title ?? childTaskId,
+        reason: 'Existing linked child task represents the parent split boundary.',
+        dependsOn: child?.dependsOn ?? [],
+        suggestedDomain: child?.domain,
+        createdTaskId: childTaskId,
+      }
+    })
+  }
+  const reason = hasExactRecommendationCoverage
+    ? 'Split has already been materialized into linked child tasks; do not split this parent again unless the child structure changes.'
+    : 'Linked child tasks already represent this parent split; reconcile child scope instead of splitting this parent again.'
+  settleMaterializedSplitParent({
+    parent,
+    timestamp,
+    recommendation: 'ready',
+    summary: 'Split work is represented by linked child tasks; continue through the child tasks instead of splitting this parent again.',
+    reason,
+    childTaskIds: representedChildIds,
+  })
+  parent.hierarchy = {
+    ...(parent.hierarchy ?? {}),
+    order: parent.hierarchy?.order ?? 0,
+    childIds: representedChildIds,
+    relation: parent.hierarchy?.relation ?? 'contains',
+  }
+  recordAppliedSplitExecutionAction({
+    queue,
+    parent,
+    childTaskIds: representedChildIds,
+    timestamp,
+    actor: 'task-sizing',
+    rationale: 'Linked child tasks already represent the parent split boundary.',
+  })
+  return { childTaskIds: representedChildIds }
+}
+
+function linkedChildTaskIds(queue: TaskQueueRecord, parent: TaskRecord): string[] {
+  const orderedIds = parent.hierarchy?.childIds ?? []
+  const childIds = new Set<string>()
+  for (const id of orderedIds) {
+    if (queue.tasks.some(task => task.id === id && task.hierarchy?.parentId === parent.id)) childIds.add(id)
+  }
+  for (const task of queue.tasks) {
+    if (task.hierarchy?.parentId === parent.id) childIds.add(task.id)
+  }
+  return [...childIds]
+}
+
+function splitRecommendationsAlreadyRepresentedBySiblings(
+  queue: TaskQueueRecord,
+  parent: TaskRecord,
+  recommendations: Array<{ title: string }>,
+): string[] | null {
+  const containingParentId = parent.hierarchy?.parentId
+  if (!containingParentId || recommendations.length === 0) return null
+  const siblingsByTitle = new Map<string, string>()
+  for (const task of queue.tasks) {
+    if (task.id !== parent.id && task.hierarchy?.parentId !== containingParentId) continue
+    siblingsByTitle.set(normalizeTaskTitle(task.title), task.id)
+  }
+  const representedIds = recommendations.map(recommendation =>
+    siblingsByTitle.get(normalizeTaskTitle(recommendation.title)),
+  )
+  if (representedIds.some(id => !id)) return null
+  return representedIds.filter((id): id is string => Boolean(id))
+}
+
+function removeDuplicateNestedSplitChildIds(
+  queue: TaskQueueRecord,
+  parent: TaskRecord,
+  recommendations: Array<{ title: string }>,
+): void {
+  const hierarchy = parent.hierarchy
+  const nestedChildIds = hierarchy?.childIds ?? []
+  const recommendationTitles = new Set(recommendations.map(recommendation => normalizeTaskTitle(recommendation.title)))
+  const nestedDuplicates = queue.tasks.filter(task =>
+    task.hierarchy?.parentId === parent.id &&
+    recommendationTitles.has(normalizeTaskTitle(task.title)),
+  )
+  const nestedDuplicateIds = new Set(nestedDuplicates.map(task => task.id))
+  if (nestedDuplicateIds.size === 0) return
+  for (const task of nestedDuplicates) {
+    if (!task.hierarchy) continue
+    task.hierarchy = {
+      ...task.hierarchy,
+      parentId: undefined,
+      order: task.hierarchy.order ?? 0,
+    }
+  }
+  parent.hierarchy = {
+    ...(hierarchy ?? {}),
+    order: hierarchy?.order ?? 0,
+    childIds: nestedChildIds.filter(childId => !nestedDuplicateIds.has(childId)),
+  }
+}
+
+function settleMaterializedSplitParent(input: {
+  parent: TaskRecord
+  timestamp: string
+  recommendation?: 'ready' | 'split'
+  summary: string
+  reason: string
+  childTaskIds?: string[]
+}): void {
+  const { parent, timestamp, recommendation = 'split', summary, reason, childTaskIds = [] } = input
+  const splitBoundary = settledSplitBoundaryText(childTaskIds)
+  if (parent.sizePlan && isMaterializableSplitAction(parent.sizePlan.action)) {
+    parent.sizePlan = {
+      ...parent.sizePlan,
+      action: 'proceed_with_warning',
+      reasons: [
+        ...parent.sizePlan.reasons.filter(existing => existing !== reason),
+        reason,
+      ],
+    }
+  }
+  parent.taskReadiness = {
+    taskKind: parent.taskReadiness?.taskKind ?? parent.taskKind ?? 'implementation',
+    recommendation,
+    summary,
+    dimensions: settledSplitReadinessDimensions(parent.taskReadiness?.dimensions ?? []),
+    definitionOfDone: parent.taskReadiness?.definitionOfDone ?? {
+      items: ['All required sibling tasks are done or explicitly deferred.'],
+      evidenceRequired: ['Linked task outcomes are recorded before the containing work is closed.'],
+      updatedAt: timestamp,
+      createdBy: 'task-sizing',
+    },
+    blockerPlans: parent.taskReadiness?.blockerPlans ?? [],
+    contextBudget: parent.taskReadiness?.contextBudget
+      ? {
+          ...parent.taskReadiness.contextBudget,
+          risk: recommendation === 'ready' ? 'low' : parent.taskReadiness.contextBudget.risk,
+          fitsInOneWorkerBrief: recommendation === 'ready' ? true : parent.taskReadiness.contextBudget.fitsInOneWorkerBrief,
+          reasons: parent.taskReadiness.contextBudget.reasons.length > 0
+            ? parent.taskReadiness.contextBudget.reasons
+            : ['This work is already represented by linked tasks.'],
+        }
+      : {
+          estimatedTokens: 0,
+          risk: recommendation === 'ready' ? 'low' : 'medium',
+          fitsInOneWorkerBrief: recommendation === 'ready',
+          reasons: ['This work is already represented by linked tasks.'],
+        },
+    assessedAt: parent.taskReadiness?.assessedAt ?? timestamp,
+    assessedBy: parent.taskReadiness?.assessedBy ?? 'task-sizing',
+  }
+  rewriteSettledSplitBoundary(parent, splitBoundary)
+  parent.updatedAt = timestamp
+}
+
+function recordAppliedSplitExecutionAction(input: {
+  queue: TaskQueueRecord
+  parent: TaskRecord
+  childTaskIds: string[]
+  timestamp: string
+  actor: string
+  rationale: string
+}): void {
+  input.queue.executionPlanActions ??= []
+  const normalizedChildIds = [...new Set(input.childTaskIds)]
+  const existing = input.queue.executionPlanActions.find(action =>
+    action.type === 'split_work' &&
+    action.targetWorkId === input.parent.id &&
+    action.status === 'applied' &&
+    sameStringSet(action.createdChildIds, normalizedChildIds),
+  )
+  if (existing) return
+  const action: ExecutionPlanAction = {
+    id: uniqueExecutionPlanActionId(input.queue, input.parent.id, input.timestamp),
+    type: 'split_work',
+    targetWorkId: input.parent.id,
+    status: 'applied',
+    authority: 'execution_planning',
+    rationale: input.rationale,
+    createdChildIds: normalizedChildIds,
+    createdAt: input.timestamp,
+    createdBy: input.actor,
+    appliedAt: input.timestamp,
+    appliedBy: input.actor,
+  }
+  input.queue.executionPlanActions.push(action)
+}
+
+function uniqueExecutionPlanActionId(queue: TaskQueueRecord, parentId: string, timestamp: string): string {
+  const suffix = timestamp.replace(/[^0-9A-Za-z]/g, '')
+  const base = `${parentId}-split-${suffix}`
+  const existingIds = new Set((queue.executionPlanActions ?? []).map(action => action.id))
+  if (!existingIds.has(base)) return base
+  let index = 2
+  while (existingIds.has(`${base}-${index}`)) index += 1
+  return `${base}-${index}`
+}
+
+function sameStringSet(left: readonly string[], right: readonly string[]): boolean {
+  if (left.length !== right.length) return false
+  const rightSet = new Set(right)
+  return left.every(value => rightSet.has(value))
+}
+
+function settledSplitBoundaryText(childTaskIds: string[]): string {
+  const suffix = childTaskIds.length > 0 ? `: ${childTaskIds.join(', ')}` : '.'
+  return `Already split into linked child tasks${suffix}`
+}
+
+function rewriteSettledSplitBoundary(parent: TaskRecord, splitBoundary: string): void {
+  if (parent.structuredSpec) {
+    parent.structuredSpec = StructuredSpec.parse({
+      ...parent.structuredSpec,
+      completionBoundary: {
+        ...parent.structuredSpec.completionBoundary,
+        whatMustBeSplitOrBlocked: splitBoundary,
+      },
+    })
+    parent.spec = renderStructuredSpecMarkdown(parent.structuredSpec)
+    return
+  }
+  if (!parent.spec || parent.spec.trim().length === 0) return
+  const boundaryLine = /(^\s*(?:[-*]\s*)?What must be split or blocked\s*:\s*).+$/im
+  if (boundaryLine.test(parent.spec)) {
+    parent.spec = parent.spec.replace(boundaryLine, `$1${splitBoundary}`)
+  }
+}
+
+function settledSplitReadinessDimensions(
+  dimensions: NonNullable<TaskRecord['taskReadiness']>['dimensions'],
+): NonNullable<TaskRecord['taskReadiness']>['dimensions'] {
+  const hasSizeDimension = dimensions.some(dimension => dimension.id === 'size')
+  const settled = dimensions.map(dimension => {
+    if (dimension.id !== 'size') return dimension
+    return {
+      ...dimension,
+      status: 'ok' as const,
+      summary: 'Size is handled by linked child tasks.',
+      evidence: [
+        ...dimension.evidence.filter(evidence => !/too (large|broad)|split/i.test(evidence)),
+        'Split recommendations have already been materialized into linked child tasks.',
+      ],
+    }
+  })
+  if (hasSizeDimension) return settled
+  return [
+    ...settled,
+    {
+      id: 'size',
+      status: 'ok' as const,
+      summary: 'Size is handled by linked child tasks.',
+      evidence: ['Split recommendations have already been materialized into linked child tasks.'],
+    },
+  ]
 }
 
 function attachInternalDeliveryStep(parent: TaskRecord, child: TaskRecord): void {
@@ -546,6 +896,11 @@ function createSplitChildTask(input: {
 }): TaskRecord {
   const id = uniqueSplitChildTaskId(input.queue, input.parent.id, input.title, input.index)
   const workKind = splitChildWorkKind(input.title)
+  const domain = splitChildDomain({
+    suggestedDomain: input.suggestedDomain,
+    parentDomain: input.parent.domain,
+    queue: input.queue,
+  })
   return Task.parse({
     id,
     title: input.title,
@@ -554,7 +909,7 @@ function createSplitChildTask(input: {
       '',
       `Split from containing work ${input.parent.id}: ${input.parent.title}.`,
     ].join('\n'),
-    domain: input.suggestedDomain ?? input.parent.domain,
+    domain,
     projectPath: input.parent.projectPath,
     status: 'exploring',
     priority: input.parent.priority,
@@ -565,7 +920,7 @@ function createSplitChildTask(input: {
       {
         agentId: 'task-sizing',
         role: 'coordinator',
-        content: `Created from ${input.parent.sizePlan?.action === 'split_required' ? 'split-required' : 'split-recommended'} parent ${input.parent.id}. ${input.reason}`,
+        content: `Created from execution-planning decomposition of ${input.parent.id}. ${input.reason}`,
         timestamp: input.timestamp,
       },
     ],
@@ -589,6 +944,21 @@ function createSplitChildTask(input: {
     createdAt: input.timestamp,
     updatedAt: input.timestamp,
   })
+}
+
+const RESERVED_SPLIT_SOURCE_DOMAINS = new Set(['_meta', '_workspace_import'])
+
+function splitChildDomain(input: {
+  suggestedDomain?: string
+  parentDomain?: string
+  queue: TaskQueueRecord
+}): string {
+  if (input.suggestedDomain && !RESERVED_SPLIT_SOURCE_DOMAINS.has(input.suggestedDomain)) return input.suggestedDomain
+  if (input.parentDomain && !RESERVED_SPLIT_SOURCE_DOMAINS.has(input.parentDomain)) return input.parentDomain
+  const existingProjectDomain = input.queue.tasks
+    .map((task) => task.domain)
+    .find((domain): domain is string => typeof domain === 'string' && domain.length > 0 && !RESERVED_SPLIT_SOURCE_DOMAINS.has(domain))
+  return existingProjectDomain ?? 'general'
 }
 
 function splitChildWorkKind(title: string): TaskRecord['workKind'] {
@@ -698,6 +1068,7 @@ function updateIncludesCompletionEvidence(input: UpdateTaskInput, task: z.infer<
 
 function hasTaskMutation(input: UpdateTaskInput): boolean {
   return input.title !== undefined ||
+    input.domain !== undefined ||
     input.status !== undefined ||
     input.assignedTo !== undefined ||
     input.note !== undefined ||
@@ -730,7 +1101,7 @@ function inferSizingRiskLanes(task: z.infer<typeof Task>): string[] {
   return [...lanes]
 }
 
-function inferSingleActiveTaskId(queue: z.infer<typeof TaskQueue>): string | null {
+function inferSingleActiveTaskId(queue: TaskQueueModel): string | null {
   const candidates = queue.tasks.filter((t) =>
     ['in_progress', 'review', 'gate_check', 'spec_review'].includes(t.status),
   )
@@ -849,6 +1220,7 @@ export const updateTaskTool = defineTool({
       tasksPath: { type: 'string', description: 'Absolute path to TASKS.json' },
       taskId: { type: 'string', description: 'Task id. Omit only when exactly one task is active.' },
       title: { type: 'string' },
+      domain: { type: 'string' },
       status: {
         type: 'string',
         enum: [

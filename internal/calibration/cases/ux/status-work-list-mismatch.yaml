@@ -1,0 +1,42 @@
+id: status-work-list-mismatch
+title: Status bar and work list mismatch
+domain: ux
+productType: workflow-tool
+surfaceType: dashboard
+userGoal: Understand whether work is currently happening and which visible items account for that work.
+scenario: The bottom status bar says the system is working on five tasks, but the visible work list shows one idle-looking item and no explanation of where the other work is.
+artifacts:
+  - id: state-copy
+    kind: copy_snippet
+    description: Conflicting visible state.
+    content: "Bottom status: Working on 5 tasks. Work list: 1 item shown, no active row. Header: Resume. API: five runnable tasks."
+reviewLanes:
+  - ux_comprehension
+  - copy_clarity
+knownFindings:
+  - id: untraceable-work-count
+    lane: ux_comprehension
+    severity: critical
+    summary: The UI claims work is happening but does not let users trace that claim to visible work items.
+    impact: Users cannot tell whether the system is actually working, stalled, or reporting stale counts.
+    minimumUsefulFix: Use one shared state projection and show where each count comes from across top action, work list, thread, and status chrome.
+    matchHints:
+      - working on 5
+      - one item
+      - counts disagree
+      - visible work
+falsePositiveTraps:
+  - id: dont-trust-one-surface
+    summary: Do not pass because one surface has a plausible count; the issue is cross-surface traceability.
+source:
+  kind: production_miss
+  citation: Generalized from Guildhall Narrative Harness work/status feedback on 2026-06-15.
+labelGovernance:
+  labeledBy: product-review
+  labeledAt: 2026-06-15T19:20:00.000Z
+  reviewStatus: seed
+privacyClassification: internal
+negativeControl: false
+stalenessPolicy:
+  reviewAfter: 2026-09-15
+  reason: Work-progress and status-bar projections are actively changing.

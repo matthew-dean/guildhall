@@ -31,7 +31,7 @@ export interface DeliveryStep {
   toolLabel?: string
 }
 
-export type WorkProgressState = 'done' | 'blocked' | 'active' | 'pending'
+export type WorkProgressState = 'done' | 'blocked' | 'active' | 'shelved' | 'pending'
 
 export interface WorkProgressRollup {
   primaryState: WorkProgressState
@@ -276,9 +276,11 @@ function deriveRollup(
     ? 'blocked'
     : TASK_DONE_STATUSES.has(status) && doneStepCount === requiredSteps.length && visibleChildDoneCount === visibleChildren.length
       ? 'done'
-      : TASK_ACTIVE_STATUSES.has(status) || deliverySteps.some(step => step.status === 'active')
-        ? 'active'
-        : 'pending'
+      : TASK_SHELVED_STATUSES.has(status)
+        ? 'shelved'
+        : TASK_ACTIVE_STATUSES.has(status) || deliverySteps.some(step => step.status === 'active')
+          ? 'active'
+          : 'pending'
 
   return {
     primaryState,

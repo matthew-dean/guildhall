@@ -120,12 +120,6 @@
     return sentence.trim()
   }
 
-  function truncateDisplayTitle(value: string, max = 72): string {
-    const singleLine = value.replace(/\s+/g, ' ').trim()
-    if (singleLine.length <= max) return singleLine
-    return `${singleLine.slice(0, max - 1).trim()}...`
-  }
-
   function scopedProjectId(): string | null {
     const normalized = projectId?.trim()
     return normalized ? normalized : null
@@ -688,7 +682,7 @@
       /^Draft a first starter task for /i.test(raw)
     ) {
       const summary = firstSpecSummaryLine(spec)
-      if (summary) return `Starter task spec: ${truncateDisplayTitle(summary)}`
+      if (summary) return `Starter task spec: ${summary}`
       return 'Starter task spec draft'
     }
     return raw || taskId

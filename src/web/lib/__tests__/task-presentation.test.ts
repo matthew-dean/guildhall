@@ -88,6 +88,21 @@ describe('taskStagePresentation', () => {
     })
   })
 
+  it('presents API-assigned worker tasks as actively working', () => {
+    const stage = taskStagePresentation({
+      id: 'author-voice-loop-mvp',
+      title: 'Implement author voice feedback loop MVP',
+      status: 'in_progress',
+      assignedTo: 'worker-agent',
+    }, { runStatus: 'running' })
+
+    expect(stage).toEqual({
+      label: 'Working',
+      tone: 'running',
+      key: 'working',
+    })
+  })
+
   it('presents queued work with unmet blockers as blocked', () => {
     const stage = taskStagePresentation({
       id: 'task-storybook-proof',

@@ -21,6 +21,7 @@
     type?: 'button' | 'submit' | 'reset'
     onclick?: (event: MouseEvent) => void
     onkeydown?: (event: KeyboardEvent) => void
+    elementRef?: (node: HTMLElement | null) => void
     children?: Snippet
   }
 
@@ -39,6 +40,7 @@
     type = 'button',
     onclick,
     onkeydown,
+    elementRef,
     children,
   }: Props = $props()
 </script>
@@ -58,6 +60,7 @@
   {type}
   {onclick}
   {onkeydown}
+  {elementRef}
 >
   {@render children?.()}
 </UtilityPanel>

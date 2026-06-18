@@ -281,7 +281,11 @@ function needsProductJudgment(text: string): boolean {
 }
 
 function isLargeTask(task: Task, contextBudget: ContextBudgetEstimate): boolean {
-  if (task.sizePlan?.action === 'split_required' || task.sizePlan?.action === 'split_recommended') return true
+  if (
+    task.sizePlan?.action === 'split_required' ||
+    task.sizePlan?.action === 'split_recommended' ||
+    task.sizePlan?.action === 'decompose_before_execution'
+  ) return true
   return contextBudget.risk === 'high' || surfaceKeywords(taskText(task)) >= 6
 }
 

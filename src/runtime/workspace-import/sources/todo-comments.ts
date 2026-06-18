@@ -75,7 +75,7 @@ export const todoCommentsSource: TaskSource = {
       signals.push({
         source: 'todo-comments',
         kind: 'open_work',
-        title: clean.slice(0, 120),
+        title: clean,
         evidence: clean,
         references: [`${file}:${lineNo}`],
         confidence: 'low',

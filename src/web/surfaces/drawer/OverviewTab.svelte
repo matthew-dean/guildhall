@@ -53,7 +53,7 @@
   const nestedWorkIds = $derived(task.hierarchy?.childIds ?? [])
   const goalEnvelopeId = $derived(task.businessEnvelope?.goalId ?? null)
   const needsSplitAction = $derived(
-    (sizePlan?.action === 'split_required' || sizePlan?.action === 'split_recommended') &&
+    isDecompositionAction(sizePlan?.action) &&
     recommendedChildren.length > 0 &&
     createdChildren.length === 0,
   )
@@ -62,7 +62,7 @@
     Boolean(onCreateSplitChildren),
   )
   const splitNeeded = $derived(
-    sizePlan?.action === 'split_required' || sizePlan?.action === 'split_recommended',
+    isDecompositionAction(sizePlan?.action),
   )
   const splitStillNeedsAction = $derived(
     splitNeeded && createdChildren.length === 0,
@@ -104,10 +104,21 @@
   }
 
   function sizeTone(action: string | undefined): ChipTone {
-    if (action === 'split_required') return 'danger'
+    if (action === 'split_required' || action === 'decompose_before_execution') return 'danger'
     if (action === 'split_recommended' || action === 'ask_clarifying_question') return 'warn'
     if (action === 'proceed_with_warning') return 'warn'
     return 'neutral'
+  }
+
+  function isDecompositionAction(action: string | undefined): boolean {
+    return action === 'split_required' ||
+      action === 'split_recommended' ||
+      action === 'decompose_before_execution'
+  }
+
+  function sizeActionLabel(action: string | undefined): string {
+    if (isDecompositionAction(action)) return 'Decompose before execution'
+    return token(action)
   }
 
   function priorityTone(priority: string | undefined): ChipTone {
@@ -277,9 +288,9 @@
         <div class:split-callout-warning={splitStillNeedsAction} class="split-callout">
           <strong>
             {#if needsSplitAction}
-              Split this task
+              Split into smaller work
             {:else}
-              {sizePlan?.action === 'split_required' ? 'Split required' : 'Split recommended'}
+              Decompose before execution
             {/if}
           </strong>
           <span>
@@ -293,7 +304,7 @@
             <div class="split-actions">
               <Button variant="agent" size="sm" disabled={createSplitBusy} onclick={onCreateSplitChildren}>
                 <Icon name="sparkles" size={14} />
-                {createSplitBusy ? 'Splitting...' : 'Split this task'}
+                {createSplitBusy ? 'Splitting...' : 'Split into smaller work'}
               </Button>
             </div>
           {/if}
@@ -317,7 +328,7 @@
 
       {#if recommendedChildren.length > 0}
         <div>
-          <h4>{createdChildren.length > 0 ? 'Child tasks' : needsSplitAction ? 'Work to create' : 'Recommended child tasks'}</h4>
+          <h4>{createdChildren.length > 0 ? 'Child tasks' : 'Work to create'}</h4>
           <ul class="child-list">
             {#each recommendedChildren as child, index (`${child.title ?? 'child'}-${index}`)}
               <li>
@@ -373,7 +384,7 @@
       <Stack gap="3">
         <Row wrap gap="2">
           <Chip label={token(sizePlan.band)} tone={sizeTone(sizePlan.action)} />
-          <Chip label={token(sizePlan.action)} tone={sizeTone(sizePlan.action)} />
+          <Chip label={sizeActionLabel(sizePlan.action)} tone={sizeTone(sizePlan.action)} />
           {#if sizePlan.score}<Chip label={`Score ${sizePlan.score}`} tone="neutral" />{/if}
           {#if sizePlan.reviewBudgetHint}<Chip label={`${token(sizePlan.reviewBudgetHint)} review`} tone="ok" />{/if}
         </Row>

@@ -10,8 +10,9 @@ import {
   updateTaskTool,
   addTaskTool,
   materializeSplitChildren,
+  settleMaterializedSplitReadiness,
 } from '../task-queue.js'
-import { readTaskEvidence } from '@guildhall/sessions'
+import { getProjectSystemStatePath, readTaskEvidence } from '@guildhall/sessions'
 import { TaskQueue } from '@guildhall/core'
 import { FORBIDDEN_PROJECT_TASK_FIELDS } from '../../runtime/project-state-boundary.js'
 import { buildEffectiveTask } from '../../runtime/effective-task.js'
@@ -96,6 +97,12 @@ describe('updateTask', () => {
     expect(raw.tasks[0].status).toBe('spec_review')
   })
 
+  it('updates task domain for lane repair', async () => {
+    await updateTask({ tasksPath, taskId: 'task-001', domain: 'harness' })
+    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    expect(raw.tasks[0].domain).toBe('harness')
+  })
+
   it('persists updates through the project-state boundary', async () => {
     await updateTask({ tasksPath, taskId: 'task-001', title: 'Boundary-safe title' })
 
@@ -177,6 +184,71 @@ describe('updateTask', () => {
       content: 'Spec complete.',
     })
     expect((evidence[0]?.payload as { timestamp?: string }).timestamp).toBeDefined()
+  })
+
+  it('writes note evidence to the task project root when TASKS lives under project-state', async () => {
+    const stateDir = path.join(tmpDir, '.guildhall', 'project-state')
+    const stateTasksPath = path.join(stateDir, 'TASKS.json')
+    await fs.mkdir(stateDir, { recursive: true })
+    seedQueue.tasks[0]!.status = 'in_progress'
+    await fs.writeFile(stateTasksPath, JSON.stringify(seedQueue, null, 2), 'utf-8')
+
+    const result = await updateTask({
+      tasksPath: stateTasksPath,
+      taskId: 'task-001',
+      status: 'review',
+      note: {
+        agentId: 'worker-agent',
+        role: 'self-critique',
+        content: '**Self-critique:**\n\nAC-1: Met.\n\n**Minimum-scope check:** yes.',
+      },
+    })
+    expect(result.success).toBe(true)
+
+    const evidence = await readTaskEvidence(tmpDir, 'task-001', { kind: 'note' })
+    expect(evidence.at(-1)?.payload).toMatchObject({
+      agentId: 'worker-agent',
+      role: 'self-critique',
+      content: '**Self-critique:**\n\nAC-1: Met.\n\n**Minimum-scope check:** yes.',
+    })
+    const misplaced = await readTaskEvidence(path.join(tmpDir, '.guildhall'), 'task-001', { kind: 'note' })
+    expect(misplaced).toHaveLength(0)
+  })
+
+  it('uses task metadata as the evidence root when a system-local TASKS record has a relative projectPath', async () => {
+    const stateTasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
+    await fs.mkdir(path.dirname(stateTasksPath), { recursive: true })
+    seedQueue.tasks[0]!.projectPath = '.'
+    seedQueue.tasks[0]!.status = 'in_progress'
+    await fs.writeFile(stateTasksPath, JSON.stringify(seedQueue, null, 2), 'utf-8')
+
+    const result = await updateTask({
+      tasksPath: stateTasksPath,
+      taskId: 'task-001',
+      note: {
+        agentId: 'worker-agent',
+        role: 'self-critique',
+        content: '**Self-critique:** Metadata-rooted proof packet recorded.',
+      },
+    }, {
+      current_agent_id: 'worker-agent',
+      current_task_id: 'task-001',
+      current_task_project_path: tmpDir,
+    })
+    expect(result.success).toBe(true)
+
+    const raw = JSON.parse(await fs.readFile(stateTasksPath, 'utf-8'))
+    const effective = await buildEffectiveTask(tmpDir, TaskQueue.parse(raw).tasks[0]!)
+    expect(Array.isArray(effective.notes)).toBe(true)
+    const effectiveNotes = effective.notes as Array<{ agentId: string; role: string; content: string }>
+    expect(effectiveNotes.at(-1)).toMatchObject({
+      agentId: 'worker-agent',
+      role: 'self-critique',
+      content: '**Self-critique:** Metadata-rooted proof packet recorded.',
+    })
+
+    const misplaced = await readTaskEvidence(path.dirname(stateTasksPath), 'task-001', { kind: 'note' })
+    expect(misplaced).toHaveLength(0)
   })
 
   it('accepts a stringified note object from model tool calls', async () => {
@@ -312,7 +384,7 @@ describe('updateTask', () => {
     })
   })
 
-  it('records a split-required sizing plan when a shaped task is too large', async () => {
+  it('records a decomposition sizing plan without persisted child recommendations when shaped work is too large', async () => {
     await updateTask({
       tasksPath,
       taskId: 'task-001',
@@ -337,10 +409,10 @@ describe('updateTask', () => {
       taskId: 'task-001',
       score: 8,
       band: 'epic',
-      action: 'split_required',
+      action: 'decompose_before_execution',
     })
     expect(raw.tasks[0].parentGoalId).toBeUndefined()
-    expect(raw.tasks[0].sizePlan.recommendedChildren.length).toBeGreaterThanOrEqual(3)
+    expect(raw.tasks[0].sizePlan.recommendedChildren).toEqual([])
   })
 
   it('materializes split-required sizing plans into linked child tasks idempotently', async () => {
@@ -368,9 +440,21 @@ describe('updateTask', () => {
       task.id !== 'task-001' && task.hierarchy?.parentId === 'task-001',
     )
 
-    expect(parent.sizePlan.action).toBe('split_required')
+    expect(parent.sizePlan.action).toBe('proceed_with_warning')
+    expect(parent.sizePlan.reasons.at(-1)).toContain('Linked child tasks already represent this parent')
+    expect(parent.taskReadiness.recommendation).toBe('ready')
+    expect(parent.taskReadiness.summary).toContain('continue through the child tasks')
+    expect(parent.taskReadiness.dimensions.find((dimension: { id: string }) => dimension.id === 'size')?.status).toBe('ok')
     expect(parent.status).toBe('ready')
     expect(parent.hierarchy.childIds).toEqual(children.map((task: { id: string }) => task.id))
+    expect(raw.executionPlanActions).toHaveLength(1)
+    expect(raw.executionPlanActions[0]).toMatchObject({
+      type: 'split_work',
+      targetWorkId: 'task-001',
+      status: 'applied',
+      authority: 'execution_planning',
+      createdChildIds: children.map((task: { id: string }) => task.id),
+    })
     expect(children.map((task: { title: string }) => task.title)).toEqual([
       'Implement the billing settings workflow',
       'Add the admin subscription API contract',
@@ -383,9 +467,7 @@ describe('updateTask', () => {
       task.origination === 'system' &&
       task.proposedBy === 'task-sizing',
     )).toBe(true)
-    expect(parent.sizePlan.recommendedChildren.map((child: { createdTaskId?: string }) => child.createdTaskId)).toEqual(
-      children.map((task: { id: string }) => task.id),
-    )
+    expect(parent.sizePlan.recommendedChildren).toEqual([])
   })
 
   it('materializes split-recommended work units into linked child tasks idempotently', async () => {
@@ -445,7 +527,11 @@ describe('updateTask', () => {
       task.id !== 'task-001' && task.hierarchy?.parentId === 'task-001',
     )
 
-    expect(parent.sizePlan.action).toBe('split_recommended')
+    expect(parent.sizePlan.action).toBe('proceed_with_warning')
+    expect(parent.sizePlan.reasons.at(-1)).toContain('Linked child tasks already represent this parent')
+    expect(parent.taskReadiness.recommendation).toBe('ready')
+    expect(parent.taskReadiness.summary).toContain('continue through the child tasks')
+    expect(parent.taskReadiness.dimensions.find((dimension: { id: string }) => dimension.id === 'size')?.status).toBe('ok')
     expect(parent.status).toBe('ready')
     expect(parent.hierarchy.childIds).toEqual(children.map((task: { id: string }) => task.id))
     expect(children.map((task: { title: string }) => task.title)).toEqual([
@@ -455,9 +541,7 @@ describe('updateTask', () => {
       'API docs sync',
     ])
     expect(raw.tasks).toHaveLength(5)
-    expect(parent.sizePlan.recommendedChildren.map((child: { createdTaskId?: string }) => child.createdTaskId)).toEqual(
-      children.map((task: { id: string }) => task.id),
-    )
+    expect(parent.sizePlan.recommendedChildren).toEqual([])
     expect(children.find((task: { title: string }) => task.title === 'Component implementation')?.workKind).toBe('component')
     expect(children.find((task: { title: string }) => task.title === 'Storybook story')?.workKind).toBe('story')
     expect(children.every((task: { delivery?: { driver?: string; provider?: string; supports?: string[] } }) =>
@@ -531,7 +615,307 @@ describe('updateTask', () => {
     ])
   })
 
-  it('keeps a split-required parent out of the ready worker queue', async () => {
+  it('does not inherit reserved workspace-import domains for executable split children', async () => {
+    const timestamp = '2026-06-12T00:00:00.000Z'
+    const parentTask = structuredClone(seedQueue.tasks[0]!)
+    const queue = TaskQueue.parse({
+      version: 1,
+      lastUpdated: timestamp,
+      tasks: [
+        {
+          ...parentTask,
+          id: 'existing-harness-task',
+          domain: 'harness',
+        },
+        {
+          ...parentTask,
+          id: 'expansion-task-full-decomposition',
+          title: 'Expand backlog into full doc-to-task decomposition',
+          domain: '_workspace_import',
+          status: 'ready',
+          sizePlan: {
+            taskId: 'expansion-task-full-decomposition',
+            score: 8,
+            band: 'large',
+            action: 'split_required',
+            factors: [],
+            recommendedChildren: [
+              {
+                title: 'Implement the first independently verifiable replacement',
+                reason: 'Make the first replacement executable.',
+                dependsOn: [],
+              },
+            ],
+            reasons: ['Broad enough to split.'],
+            reviewBudgetHint: 'balanced',
+            createdAt: timestamp,
+            createdBy: 'test',
+          },
+        },
+      ],
+    })
+    const parent = queue.tasks.find(task => task.id === 'expansion-task-full-decomposition')!
+
+    materializeSplitChildren(queue, parent, timestamp)
+
+    const child = queue.tasks.find(task => task.title === 'Implement the first independently verifiable replacement')
+    expect(child).toBeDefined()
+    expect(child?.domain).toBe('harness')
+  })
+
+  it('settles duplicate sibling split recommendations without creating nested duplicate children', async () => {
+    const timestamp = '2026-06-12T00:00:00.000Z'
+    const queue = TaskQueue.parse({
+      version: 1,
+      lastUpdated: timestamp,
+      tasks: [
+        {
+          ...structuredClone(seedQueue.tasks[0]!),
+          id: 'parent',
+          title: 'Replace primitives',
+          status: 'ready',
+          hierarchy: { childIds: ['child-audit', 'child-implement', 'child-verify'], order: 0 },
+        },
+        {
+          ...structuredClone(seedQueue.tasks[0]!),
+          id: 'child-audit',
+          title: 'Audit the remaining replacement scope',
+          status: 'ready',
+          hierarchy: {
+            parentId: 'parent',
+            childIds: [
+              'child-audit-split-audit',
+              'child-audit-split-implement',
+              'child-audit-split-verify',
+            ],
+            order: 0,
+          },
+          sizePlan: {
+            taskId: 'child-audit',
+            score: 8,
+            band: 'epic',
+            action: 'split_required',
+            factors: [],
+            recommendedChildren: [
+              { title: 'Audit the remaining replacement scope', reason: 'Duplicate current child.', dependsOn: [] },
+              { title: 'Implement the first independently verifiable replacement', reason: 'Duplicate sibling.', dependsOn: [] },
+              { title: 'Verify and update the migration record', reason: 'Duplicate sibling.', dependsOn: [] },
+            ],
+            reasons: ['Task size score: 8.'],
+            reviewBudgetHint: 'release_critical',
+            createdAt: timestamp,
+            createdBy: 'test',
+          },
+        },
+        {
+          ...structuredClone(seedQueue.tasks[0]!),
+          id: 'child-implement',
+          title: 'Implement the first independently verifiable replacement',
+          status: 'exploring',
+          hierarchy: { parentId: 'parent', childIds: [], order: 1 },
+        },
+        {
+          ...structuredClone(seedQueue.tasks[0]!),
+          id: 'child-verify',
+          title: 'Verify and update the migration record',
+          status: 'exploring',
+          hierarchy: { parentId: 'parent', childIds: [], order: 2 },
+        },
+        {
+          ...structuredClone(seedQueue.tasks[0]!),
+          id: 'child-audit-split-audit',
+          title: 'Audit the remaining replacement scope',
+          status: 'shelved',
+          hierarchy: { parentId: 'child-audit', childIds: [], order: 0 },
+        },
+        {
+          ...structuredClone(seedQueue.tasks[0]!),
+          id: 'child-audit-split-implement',
+          title: 'Implement the first independently verifiable replacement',
+          status: 'shelved',
+          hierarchy: { parentId: 'child-audit', childIds: [], order: 1 },
+        },
+        {
+          ...structuredClone(seedQueue.tasks[0]!),
+          id: 'child-audit-split-verify',
+          title: 'Verify and update the migration record',
+          status: 'shelved',
+          hierarchy: { parentId: 'child-audit', childIds: [], order: 2 },
+        },
+      ],
+    })
+    const childAudit = queue.tasks.find(task => task.id === 'child-audit')!
+
+    const result = materializeSplitChildren(queue, childAudit, timestamp)
+
+    expect(result.status).toBe('already_represented')
+    expect(result.childTaskIds).toEqual(['child-audit', 'child-implement', 'child-verify'])
+    expect(queue.tasks).toHaveLength(7)
+    expect(childAudit.hierarchy?.childIds).toEqual([])
+    expect(queue.tasks.find(task => task.id === 'child-audit-split-audit')?.hierarchy?.parentId).toBeUndefined()
+    expect(queue.tasks.find(task => task.id === 'child-audit-split-implement')?.hierarchy?.parentId).toBeUndefined()
+    expect(queue.tasks.find(task => task.id === 'child-audit-split-verify')?.hierarchy?.parentId).toBeUndefined()
+    expect(childAudit.sizePlan?.action).toBe('proceed_with_warning')
+    expect(childAudit.sizePlan?.reasons.at(-1)).toContain('already match existing sibling tasks')
+    expect(childAudit.taskReadiness?.recommendation).toBe('ready')
+    expect(childAudit.taskReadiness?.summary).toBe('This task is ready; sibling tasks already cover the split work.')
+  })
+
+  it('settles refreshed parent sizing when linked child tasks already represent the split', async () => {
+    const timestamp = '2026-06-12T00:00:00.000Z'
+    const queue = TaskQueue.parse({
+      version: 1,
+      lastUpdated: timestamp,
+      tasks: [
+        {
+          ...structuredClone(seedQueue.tasks[0]!),
+          id: 'parent',
+          title: 'Build the release scope',
+          status: 'spec_review',
+          hierarchy: { childIds: ['child-audit', 'child-implement', 'child-verify'], order: 0 },
+          spec: [
+            '## Summary',
+            'Build the release scope.',
+            '',
+            '## Completion Boundary',
+            '- Product outcome: The release scope is ready.',
+            '- What Guildhall can complete in code: Implement the release scope.',
+            '- External dependencies: None.',
+            '- Owner-only setup: None.',
+            '- Verification environment: Local.',
+            '- What counts as done: Linked proof is recorded.',
+            '- What must be split or blocked: Audit, implementation, and verification must still be split before work can proceed.',
+          ].join('\n'),
+          structuredSpec: {
+            whatThisIs: 'Build the release scope.',
+            problemContext: 'Release scope parent.',
+            goals: ['The release scope is ready.'],
+            nonGoals: ['Do not implement child work inside the parent container.'],
+            proposedDesign: 'Coordinate linked child work.',
+            keyDecisions: ['Use linked child tasks as the execution boundary.'],
+            acceptanceCriteria: [
+              {
+                scenario: 'Given linked child tasks',
+                expectation: 'Then linked proof is recorded before the parent is closed.',
+                verificationMode: 'review',
+              },
+            ],
+            verification: ['Review linked task outcomes.'],
+            completionBoundary: {
+              productOutcome: 'The release scope is ready.',
+              whatGuildhallCanCompleteInCode: 'Implement the release scope.',
+              externalDependencies: 'None.',
+              ownerOnlySetup: 'None.',
+              verificationEnvironment: 'Local.',
+              whatCountsAsDone: 'Linked proof is recorded.',
+              whatMustBeSplitOrBlocked: 'Audit, implementation, and verification must still be split before work can proceed.',
+            },
+          },
+          taskReadiness: {
+            taskKind: 'implementation',
+            recommendation: 'split',
+            summary: 'Task is too broad and should be split.',
+            dimensions: [
+              {
+                id: 'size',
+                status: 'blocked',
+                summary: 'Too broad for one pass.',
+                evidence: ['Split required before work can continue.'],
+              },
+            ],
+            definitionOfDone: {
+              items: ['Ship the release scope.'],
+              evidenceRequired: ['Proof is recorded.'],
+              updatedAt: timestamp,
+              createdBy: 'test',
+            },
+            blockerPlans: [],
+            contextBudget: {
+              estimatedTokens: 12000,
+              risk: 'high',
+              fitsInOneWorkerBrief: false,
+              reasons: ['Too large.'],
+            },
+            assessedAt: timestamp,
+            assessedBy: 'test',
+          },
+        },
+        {
+          ...structuredClone(seedQueue.tasks[0]!),
+          id: 'child-audit',
+          title: 'Audit the remaining replacement scope',
+          status: 'done',
+          hierarchy: { parentId: 'parent', childIds: [], order: 0 },
+        },
+        {
+          ...structuredClone(seedQueue.tasks[0]!),
+          id: 'child-implement',
+          title: 'Implement the first independently verifiable replacement',
+          status: 'review',
+          hierarchy: { parentId: 'parent', childIds: [], order: 1 },
+        },
+        {
+          ...structuredClone(seedQueue.tasks[0]!),
+          id: 'child-verify',
+          title: 'Verify and update the migration record',
+          status: 'exploring',
+          hierarchy: { parentId: 'parent', childIds: [], order: 2 },
+        },
+      ],
+    })
+    const parent = queue.tasks.find(task => task.id === 'parent')!
+    parent.sizePlan = {
+      taskId: 'parent',
+      score: 8,
+      band: 'epic',
+      action: 'split_required',
+      factors: [],
+      recommendedChildren: [
+        {
+          title: 'Implementation slice',
+          reason: 'A stale coordinator title that no longer matches the child records exactly.',
+          dependsOn: [],
+        },
+      ],
+      reasons: ['Task size score: 8.', 'The task is too large for one high-quality agent pass and should become linked child tasks.'],
+      reviewBudgetHint: 'release_critical',
+      createdAt: timestamp,
+      createdBy: 'test',
+    }
+
+    const result = settleMaterializedSplitReadiness(queue, parent, timestamp)
+
+    expect(result?.childTaskIds).toEqual(['child-audit', 'child-implement', 'child-verify'])
+    expect(parent.sizePlan.action).toBe('proceed_with_warning')
+    expect(parent.sizePlan.recommendedChildren.map(child => child.title)).toEqual([
+      'Audit the remaining replacement scope',
+      'Implement the first independently verifiable replacement',
+      'Verify and update the migration record',
+    ])
+    expect(parent.sizePlan.recommendedChildren.map(child => child.createdTaskId)).toEqual([
+      'child-audit',
+      'child-implement',
+      'child-verify',
+    ])
+    expect(parent.sizePlan.reasons.at(-1)).toContain('Linked child tasks already represent this parent')
+    expect(parent.taskReadiness?.recommendation).toBe('ready')
+    expect(parent.taskReadiness?.summary).toContain('continue through the child tasks')
+    expect(parent.taskReadiness?.dimensions.find(dimension => dimension.id === 'size')?.status).toBe('ok')
+    expect(parent.structuredSpec?.completionBoundary.whatMustBeSplitOrBlocked).toContain('Already split into linked child tasks')
+    expect(parent.spec).toContain('- What must be split or blocked: Already split into linked child tasks:')
+    expect(parent.spec).toContain('child-audit, child-implement, child-verify')
+    expect(parent.spec).not.toContain('must still be split before work can proceed')
+    expect(queue.executionPlanActions).toHaveLength(1)
+    expect(queue.executionPlanActions?.[0]).toMatchObject({
+      type: 'split_work',
+      targetWorkId: 'parent',
+      status: 'applied',
+      authority: 'execution_planning',
+      createdChildIds: ['child-audit', 'child-implement', 'child-verify'],
+    })
+  })
+
+  it('keeps a materialized split parent out of the ready worker queue', async () => {
     await updateTask({
       tasksPath,
       taskId: 'task-001',
@@ -553,7 +937,9 @@ describe('updateTask', () => {
     })
 
     const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
-    expect(raw.tasks[0].sizePlan.action).toBe('split_required')
+    expect(raw.tasks[0].sizePlan.action).toBe('proceed_with_warning')
+    expect(raw.tasks[0].taskReadiness.recommendation).toBe('ready')
+    expect(raw.tasks[0].taskReadiness.summary).toContain('continue through the child tasks')
     expect(raw.tasks[0].status).toBe('ready')
     expect(raw.tasks.filter((task: { id: string; hierarchy?: { parentId?: string } }) =>
       task.id !== 'task-001' && task.hierarchy?.parentId === 'task-001',

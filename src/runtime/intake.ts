@@ -13,6 +13,9 @@ import {
   isMaterializableSplitAction,
   materializeSplitChildren,
   resolveEscalation,
+  resolveSupersededEscalations,
+  settleAlreadyRepresentedSplitRecommendations,
+  settleMaterializedSplitReadiness,
 } from '@guildhall/tools'
 import { normalizeImportedDraftTask, promoteImportDraftToExploring } from './import-drafts.js'
 import {
@@ -101,7 +104,7 @@ export interface IntakeInput {
   workspacePath?: string
   /** Optional override for the task id (otherwise auto-generated) */
   taskId?: string
-  /** Optional explicit title; defaults to a shortened ask */
+  /** Optional explicit title; defaults to a complete first-line ask or generic fallback. */
   title?: string
   /** User-facing routed request metadata for Thread projection. */
   request?: TaskRequest
@@ -281,18 +284,18 @@ function compactStoredLabel(
   fallbackLabel: string,
   max = 60,
 ): string {
-  const preferredLabel = preferredStoredLabel(preferred, max)
+  const preferredLabel = preferredStoredLabel(preferred)
   if (preferredLabel) return preferredLabel
   const fallbackCandidate = completeShortLabel(fallbackContent, max)
   return fallbackCandidate ?? fallbackLabel
 }
 
-function preferredStoredLabel(value: string | undefined, max = 60): string | null {
+function preferredStoredLabel(value: string | undefined): string | null {
   const firstLine = value?.split(/\n/).find(line => line.trim().length > 0)?.trim()
   if (!firstLine) return null
   const singleLine = firstLine.replace(/\s+/g, ' ').trim()
   if (!singleLine) return null
-  return singleLine.length <= max ? singleLine : `${singleLine.slice(0, Math.max(0, max - 3)).trimEnd()}...`
+  return singleLine
 }
 
 function completeShortLabel(value: string | undefined, max = 60): string | null {
@@ -303,6 +306,7 @@ function completeShortLabel(value: string | undefined, max = 60): string | null 
   if (singleLine.length <= max) return singleLine
   const sentence = singleLine.match(/^(.+?[.!?])(?:\s|$)/)?.[1]?.trim()
   if (sentence && sentence.length <= max && !/\.\.\.$/.test(sentence)) return sentence
+  if (/\s/.test(singleLine)) return singleLine
   return null
 }
 
@@ -387,10 +391,24 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
     })
   }
   applyTaskShaping(task, { now, recordNote: false })
-  if (isMaterializableSplitAction(task.sizePlan?.action) && !shouldKeepFixedSpecRunnable(task)) {
-    materializeSplitChildren(queue, task, now)
+  const representedParentSplit = isMaterializableSplitAction(task.sizePlan?.action) && !shouldKeepFixedSpecRunnable(task)
+    ? settleMaterializedSplitReadiness(queue, task, now)
+    : null
+  const duplicateSiblingSplit = splitRecommendationsDuplicateExistingSiblings(queue, task)
+  let splitMaterialized = false
+  if (
+    isMaterializableSplitAction(task.sizePlan?.action) &&
+    !shouldKeepFixedSpecRunnable(task) &&
+    !representedParentSplit &&
+    !duplicateSiblingSplit
+  ) {
+    splitMaterialized = materializeSplitChildren(queue, task, now).status === 'materialized'
   } else {
-    if (task.sizePlan?.action === 'split_required' && shouldKeepFixedSpecRunnable(task)) {
+    if (representedParentSplit) {
+      // `settleMaterializedSplitReadiness` has already rewritten stale parent split metadata.
+    } else if (duplicateSiblingSplit) {
+      settleAlreadyRepresentedSplitRecommendations(queue, task, now)
+    } else if (task.sizePlan?.action === 'split_required' && shouldKeepFixedSpecRunnable(task)) {
       task.sizePlan = {
         ...task.sizePlan,
         action: 'proceed_with_warning',
@@ -410,6 +428,12 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
     })
   }
   task.updatedAt = now
+  resolveSupersededEscalations(task, {
+    now,
+    resolvedBy: 'system',
+    resolution:
+      'Superseded by approved spec; the approved scope is enough for Guildhall to continue without owner re-intake.',
+  })
   queue.lastUpdated = now
 
   if (input.approvalNote) {
@@ -429,8 +453,10 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
     role: 'system',
     content: input.approvalNote
       ? `Spec approved by human. Note: ${input.approvalNote}`
-      : isMaterializableSplitAction(task.sizePlan?.action)
+      : splitMaterialized
         ? 'Spec approved. Guildhall created the nested work and kept this item as the containing work.'
+        : representedParentSplit
+          ? 'Spec approved. Existing linked work already represents the split, so Guildhall kept this item as containing work.'
         : 'Spec approved by human. Task advanced to ready.',
   })
 
@@ -475,6 +501,23 @@ function shouldKeepFixedSpecRunnable(task: Task): boolean {
   if (!/\bfixed(?:-| )spec\b|\bcompletion boundary\b/i.test(text)) return false
   const splitBoundary = task.spec?.match(/what must be split or blocked\s*:\s*([^\n]+)/i)?.[1] ?? ''
   return /^(none|nothing|not required|nothing to split)/i.test(splitBoundary.trim())
+}
+
+function splitRecommendationsDuplicateExistingSiblings(queue: TaskQueue, task: Task): boolean {
+  const parentId = task.hierarchy?.parentId
+  const recommendations = task.sizePlan?.recommendedChildren ?? []
+  if (!parentId || recommendations.length === 0) return false
+  const existingTitles = new Set(
+    queue.tasks
+      .filter(candidate => candidate.id === task.id || candidate.hierarchy?.parentId === parentId)
+      .map(candidate => normalizeTitle(candidate.title)),
+  )
+  if (existingTitles.size === 0) return false
+  return recommendations.every(recommendation => existingTitles.has(normalizeTitle(recommendation.title)))
+}
+
+function normalizeTitle(title: string): string {
+  return title.trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
 }
 
 // ---------------------------------------------------------------------------
@@ -641,8 +684,8 @@ export interface EnrichTaskInput {
  * again.
  */
 export async function resumeExploring(input: ResumeExploringInput): Promise<{ success: boolean; error?: string }> {
-  const queue = await readQueue(input.memoryDir)
-  const task = queue.tasks.find((t) => t.id === input.taskId)
+  let queue = await readQueue(input.memoryDir)
+  let task = queue.tasks.find((t) => t.id === input.taskId)
   if (!task) return { success: false, error: `Task ${input.taskId} not found` }
   if (task.status === 'done' || task.status === 'shelved') {
     return { success: false, error: `Task ${input.taskId} is ${task.status}` }
@@ -659,6 +702,9 @@ export async function resumeExploring(input: ResumeExploringInput): Promise<{ su
       nextStatus: 'exploring',
     })
     if (!result.success) return { success: false, error: result.error ?? 'unknown' }
+    queue = await readQueue(input.memoryDir)
+    task = queue.tasks.find((t) => t.id === input.taskId)
+    if (!task) return { success: false, error: `Task ${input.taskId} not found after escalation resolution` }
   }
 
   if (input.message) {
@@ -691,7 +737,7 @@ export async function resumeExploring(input: ResumeExploringInput): Promise<{ su
     task.updatedAt = new Date().toISOString()
     queue.lastUpdated = task.updatedAt
     await writeQueue(input.memoryDir, queue)
-  } else if (input.message && input.preserveStatus) {
+  } else if (input.message) {
     task.updatedAt = new Date().toISOString()
     queue.lastUpdated = task.updatedAt
     await writeQueue(input.memoryDir, queue)
@@ -974,14 +1020,30 @@ function findFinishedDuplicate(tasks: TaskQueue['tasks'], task: Task): { id: str
   return null
 }
 
+function detachStaleShelvedReverseChildren(queue: TaskQueue, task: Task, now: string): void {
+  if ((task.hierarchy?.childIds ?? []).length > 0) return
+  for (const candidate of queue.tasks) {
+    if (candidate.hierarchy?.parentId !== task.id || candidate.status !== 'shelved') continue
+    candidate.hierarchy = {
+      ...candidate.hierarchy,
+      parentId: undefined,
+      order: candidate.hierarchy.order ?? 0,
+    }
+    candidate.updatedAt = now
+  }
+}
+
 export async function rerunTaskStage(
   input: RerunTaskStageInput,
 ): Promise<RerunTaskStageResult> {
   const queue = await readQueue(input.memoryDir)
   const task = queue.tasks.find((t) => t.id === input.taskId)
   if (!task) return { success: false, error: `Task ${input.taskId} not found` }
-  if (task.status === 'done' || task.status === 'shelved' || task.status === 'blocked') {
+  if (task.status === 'shelved' || task.status === 'blocked') {
     return { success: false, error: `Task ${input.taskId} is ${task.status}` }
+  }
+  if (task.status === 'done' && input.stage !== 'spec') {
+    return { success: false, error: `Task ${input.taskId} is done; rerun the spec stage before review or gate` }
   }
 
   const now = new Date().toISOString()
@@ -995,6 +1057,7 @@ export async function rerunTaskStage(
     }
     task.status = 'exploring'
     task.assignedTo = null
+    detachStaleShelvedReverseChildren(queue, task, now)
     task.updatedAt = now
     queue.lastUpdated = now
     task.notes.push({

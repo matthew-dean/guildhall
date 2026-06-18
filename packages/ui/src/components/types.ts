@@ -68,6 +68,7 @@ export interface FrameCardProps extends HTMLAttributes<HTMLElement> {
   padding?: FrameCardPadding
   mode?: GuildhallShellMode
   density?: GuildhallDensityMode
+  focusWithin?: boolean
   ariaLabel?: string
   children?: Snippet
   header?: Snippet
@@ -82,6 +83,16 @@ export interface StatusPillProps extends HTMLAttributes<HTMLSpanElement> {
   mode?: GuildhallShellMode
   density?: GuildhallDensityMode
   emphasis?: GuildhallEmphasisMode
+}
+
+export type SkeletonShape = 'rect' | 'circle'
+
+export interface SkeletonProps extends Omit<HTMLAttributes<HTMLSpanElement>, 'children'> {
+  shape?: SkeletonShape
+  width?: string
+  height?: string
+  animated?: boolean
+  label?: string
 }
 
 export interface HeroBandBadge {

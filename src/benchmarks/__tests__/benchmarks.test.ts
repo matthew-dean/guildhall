@@ -214,11 +214,15 @@ describe('benchmark runners', () => {
   })
 
   it('runs a SWE-local smoke fixture in a materialized workspace and records scope evidence', async () => {
+    const calls: Array<{ providerOverride?: string; workerModel?: string }> = []
     const report = await runSweLocalBenchmark('smoke', {
       projectRoot: process.cwd(),
       automationPolicy: 'fully_automated',
+      modelProvider: 'openai-api',
+      model: 'zai-org/GLM-5.2',
       now,
-      runTaskOnceImpl: async ({ projectRoot }) => {
+      runTaskOnceImpl: async ({ projectRoot, providerOverride, modelAssignmentOverride }) => {
+        calls.push({ providerOverride, workerModel: modelAssignmentOverride?.worker })
         await fs.writeFile(path.join(projectRoot, 'src', 'copy.ts'), "export function helperCopy() {\n  return 'benchmark-ready helper copy'\n}\n", 'utf8')
         return {
           id: 'run-once-1',
@@ -253,6 +257,9 @@ describe('benchmark runners', () => {
 
     expect(report.results).toHaveLength(1)
     expect(report.results[0]?.benchmarkId).toBe('swe-local')
+    expect(report.results[0]?.modelProvider).toBe('openai-api')
+    expect(report.results[0]?.model).toBe('zai-org/GLM-5.2')
+    expect(calls).toEqual([{ providerOverride: 'openai-api', workerModel: 'zai-org/GLM-5.2' }])
     expect(report.results[0]?.verificationCommandRefs).toEqual(['node scripts/test.js'])
     expect(report.results[0]?.redaction.internalOnly).toBe(true)
     expect(report.results[0]?.result).toBe('pass')
