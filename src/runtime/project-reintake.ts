@@ -12,6 +12,7 @@ import {
   evidenceTaskDescription,
   evidenceTaskPriority,
 } from './evidence-task-import-draft.js'
+import { detectShadowedCurrentMilestoneDeliverableImports as detectShadowedCurrentMilestoneDeliverables } from './current-milestone-shadowing.js'
 
 export type ProjectReintakeSource = EvidenceSource
 
@@ -478,7 +479,7 @@ function archiveShadowedCurrentMilestoneDeliverableTasks(
   usedTaskIds: Set<string>,
   sources: ProjectReintakeSource[],
 ): ReintakeChange[] {
-  const shadowedImports = detectShadowedCurrentMilestoneDeliverableImports(sources)
+  const shadowedImports = detectShadowedCurrentMilestoneDeliverables(sources)
   if (shadowedImports.length === 0) return []
 
   return tasks
@@ -499,38 +500,6 @@ function archiveShadowedCurrentMilestoneDeliverableTasks(
       taskId: stringField(task, 'id') ?? '',
       reason: 'Roadmap deliverable bullet was previously imported as a task, but the current milestone now defines a starter-task sequence that supersedes it.',
     }))
-}
-
-function detectShadowedCurrentMilestoneDeliverableImports(
-  sources: ProjectReintakeSource[],
-): Array<{ sourcePath: string; title: string }> {
-  const shadowed: Array<{ sourcePath: string; title: string }> = []
-
-  for (const source of sources) {
-    const currentMilestoneMatch = source.content.match(/##\s+Current Next Milestone[\s\S]*?The next milestone is\s+(Stage\s+\d+)(?:\s*:.*)?\./i)
-    if (!currentMilestoneMatch?.[1]) continue
-    const currentMilestoneSection = source.content.match(/##\s+Current Next Milestone[\s\S]*$/i)?.[0] ?? ''
-    if (!/^\s*\d+\.\s+.+$/m.test(currentMilestoneSection)) continue
-
-    const stageNumber = currentMilestoneMatch[1].match(/Stage\s+(\d+)/i)?.[1]
-    if (!stageNumber) continue
-    const stageSection = source.content.match(
-      new RegExp(`##\\s+Stage\\s+${stageNumber}\\s*:[\\s\\S]*?(?=\\n##\\s+|$)`, 'i'),
-    )?.[0]
-    if (!stageSection) continue
-    const deliverablesMatch = stageSection.match(/Deliverables:\s*([\s\S]*?)(?=\n[A-Z][^\n]*:\s*$|\n##\s+|$)/i)
-    if (!deliverablesMatch?.[1]) continue
-
-    const deliverableTitles = [...deliverablesMatch[1].matchAll(/^\s*-\s+(.+?)\s*$/gm)]
-      .map(match => match[1]?.trim())
-      .filter((title): title is string => Boolean(title))
-
-    for (const title of deliverableTitles) {
-      shadowed.push({ sourcePath: source.path, title })
-    }
-  }
-
-  return shadowed
 }
 
 function singleEditChange(sources: ProjectReintakeSource[]): ReintakeChange | null {

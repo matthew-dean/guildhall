@@ -1214,6 +1214,65 @@ tasks:
       'The referenced documentation still represents intended project direction.',
     ])
   })
+
+  it('drops parsed deliverable bullets when the same roadmap already defines current starter tasks', async () => {
+    await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'harness', 'implementation-roadmap.md'),
+      [
+        '# Implementation Roadmap',
+        '',
+        '## Current Next Milestone',
+        '',
+        'The next milestone is Stage 1.',
+        '',
+        '1. Define fixture, expected-record, prototype-run, and evaluation schemas.',
+        '2. Add the first tiny fiction fixture and human-authored expected records.',
+        '',
+        '## Stage 1: Harness foundation',
+        '',
+        'Deliverables:',
+        '- fixture directory shape for at least one small story fixture',
+        '- typed fixture and expected-record contracts',
+      ].join('\n'),
+      'utf-8',
+    )
+    await seedImporterWithSpec(`
+\`\`\`yaml
+tasks:
+  - id: task-fixture-shape
+    title: fixture directory shape for at least one small story fixture
+    description: "docs/harness/implementation-roadmap.md: - fixture directory shape for at least one small story fixture"
+    domain: harness
+    priority: normal
+    references:
+      - docs/harness/implementation-roadmap.md
+  - id: task-contracts
+    title: typed fixture and expected-record contracts
+    description: "docs/harness/implementation-roadmap.md: - typed fixture and expected-record contracts"
+    domain: harness
+    priority: normal
+    references:
+      - docs/harness/implementation-roadmap.md
+\`\`\`
+`)
+
+    const approved = await approveWorkspaceImport({
+      memoryDir,
+      projectPath: tmpDir,
+    })
+    expect(approved).toMatchObject({ success: true, tasksAdded: 2 })
+
+    const q = await readQueue()
+    expect(q.tasks
+      .filter(task => task.id !== WORKSPACE_IMPORT_TASK_ID)
+      .map(task => task.title)).toEqual([
+      'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+      'Add the first tiny fiction fixture and human-authored expected records.',
+    ])
+    expect(q.tasks.find(task => task.title === 'fixture directory shape for at least one small story fixture')).toBeUndefined()
+    expect(q.tasks.find(task => task.title === 'typed fixture and expected-record contracts')).toBeUndefined()
+  })
 })
 
 describe('mergeWorkspaceImportDraft', () => {

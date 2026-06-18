@@ -28,6 +28,7 @@ import {
   evidenceTaskReferences,
   evidenceTaskWhyThisMayMatter,
 } from './evidence-task-import-draft.js'
+import { detectShadowedCurrentMilestoneDeliverableImports } from './current-milestone-shadowing.js'
 
 // ---------------------------------------------------------------------------
 // FR-34: reserved workspace-importer task.
@@ -1128,12 +1129,28 @@ async function materializeEvidenceWorkGraphTasks(
   const graphTaskIds = new Set(plan.tasks.map(task => task.id))
   const reconciledIds = new Set(plan.reconciliations.map(reconciliation => reconciliation.existingTaskId))
   const graphTasks = plan.tasks.map(task => graphTaskToParsedTask(task))
+  const shadowedImports = new Set(
+    detectShadowedCurrentMilestoneDeliverableImports(sources).map(candidate =>
+      `${candidate.sourcePath}::${candidate.title}`,
+    ),
+  )
   const untouchedParsedTasks = input.parsedTasks.filter(task =>
     !graphTaskIds.has(task.id) &&
-    !reconciledIds.has(task.id),
+    !reconciledIds.has(task.id) &&
+    !isShadowedCurrentMilestoneDeliverableTask(task, shadowedImports),
   )
 
   return [...graphTasks, ...untouchedParsedTasks]
+}
+
+function isShadowedCurrentMilestoneDeliverableTask(
+  task: ParsedTask,
+  shadowedImports: ReadonlySet<string>,
+): boolean {
+  if (shadowedImports.size === 0) return false
+  const description = task.description.trim()
+  if (!description.includes(': - ')) return false
+  return task.references.some(reference => shadowedImports.has(`${reference}::${task.title}`))
 }
 
 function graphTaskToParsedTask(task: EvidenceTask): MaterializedImportTask {
