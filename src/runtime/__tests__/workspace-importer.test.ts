@@ -1678,6 +1678,299 @@ tasks:
     })
   })
 
+  it('shelves previously imported work that still exists in detected docs but falls outside the approved current scope', async () => {
+    await writeQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      tasks: [
+        {
+          id: WORKSPACE_IMPORT_TASK_ID,
+          title: 'Review existing project work',
+          description: 'Reserved importer',
+          domain: WORKSPACE_IMPORT_DOMAIN,
+          projectPath: tmpDir,
+          status: 'spec_review',
+          priority: 'high',
+          spec: '',
+          acceptanceCriteria: [],
+          dependsOn: [],
+          outOfScope: [],
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          adjudications: [],
+          escalations: [],
+          agentIssues: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          origination: 'system',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+        {
+          id: 'task-import-stage-two',
+          title: 'Mastra workflow for the prototype iteration loop',
+          description: 'Imported once from Stage 2 roadmap work.',
+          domain: 'harness',
+          projectPath: tmpDir,
+          status: 'spec_review',
+          priority: 'normal',
+          acceptanceCriteria: [],
+          dependsOn: [],
+          outOfScope: [],
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          adjudications: [],
+          escalations: [],
+          agentIssues: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          origination: 'human',
+          requestIntake: {
+            intent: 'spec_only',
+            recommendedNextAction: 'draft_spec',
+            componentStack: [],
+            assumptions: [],
+            missingInformation: [],
+            evidenceRefs: ['import:/repo/docs/harness/implementation-roadmap.md'],
+            pressureTestSummary: {
+              systemOwned: true,
+              degree: 'guided',
+              qualityBar: 'Imported work should stay structurally visible until it truly leaves the docs.',
+              ownerQuestionPolicy: 'Only ask when scope intent actually changes.',
+              checks: [],
+            },
+            clarifyingQuestions: [],
+            createdAt: new Date().toISOString(),
+            createdBy: 'workspace-importer',
+          },
+          references: ['/repo/docs/harness/implementation-roadmap.md'],
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        } as Task,
+      ],
+    })
+
+    const approved = await approveWorkspaceImport({
+      memoryDir,
+      projectPath: tmpDir,
+      draftOverride: {
+        goals: [],
+        tasks: [
+          {
+            suggestedId: 'task-import-schema',
+            title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+            description: 'Current Stage 1 slice.',
+            domain: 'harness',
+            scope: 'current',
+            priority: 'high',
+            references: ['/repo/docs/harness/implementation-roadmap.md'],
+            source: 'planning-docs',
+            confidence: 'high',
+          },
+        ],
+        milestones: [],
+        context: [],
+        stats: {
+          inputSignals: 1,
+          drafted: 1,
+          deduped: 0,
+        },
+      },
+      detectedDraftSnapshot: {
+        goals: [],
+        tasks: [
+          {
+            suggestedId: 'task-import-schema',
+            title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+            description: 'Current Stage 1 slice.',
+            domain: 'harness',
+            scope: 'current',
+            priority: 'high',
+            references: ['/repo/docs/harness/implementation-roadmap.md'],
+            source: 'planning-docs',
+            confidence: 'high',
+          },
+          {
+            suggestedId: 'task-import-stage-two',
+            title: 'Mastra workflow for the prototype iteration loop',
+            description: 'Detected Stage 2 work should remain deferred, not disappear.',
+            domain: 'harness',
+            scope: 'later',
+            priority: 'normal',
+            references: ['/repo/docs/harness/implementation-roadmap.md'],
+            source: 'planning-docs',
+            confidence: 'high',
+          },
+        ],
+        milestones: [],
+        context: [],
+        stats: {
+          inputSignals: 2,
+          drafted: 2,
+          deduped: 0,
+        },
+      },
+      replacePreviouslyImportedTasks: true,
+    })
+
+    expect(approved).toMatchObject({ success: true, tasksAdded: 1 })
+
+    const q = await readQueue()
+    expect(q.tasks.find(task => task.id === 'task-import-stage-two')).toMatchObject({
+      status: 'shelved',
+    })
+    expect(q.tasks.find(task => task.id === 'task-import-stage-two')?.notes?.at(-1)?.content ?? '').toContain(
+      'outside the approved current scope',
+    )
+  })
+
+  it('revives previously archived imported work back to shelved when the docs still mention it', async () => {
+    await writeQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      tasks: [
+        {
+          id: WORKSPACE_IMPORT_TASK_ID,
+          title: 'Review existing project work',
+          description: 'Reserved importer',
+          domain: WORKSPACE_IMPORT_DOMAIN,
+          projectPath: tmpDir,
+          status: 'spec_review',
+          priority: 'high',
+          spec: '',
+          acceptanceCriteria: [],
+          dependsOn: [],
+          outOfScope: [],
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          adjudications: [],
+          escalations: [],
+          agentIssues: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          origination: 'system',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+        {
+          id: 'task-import-stage-two-archived',
+          title: 'Mastra workflow for the prototype iteration loop',
+          description: 'Collapsed by an older bad import refresh.',
+          domain: 'harness',
+          projectPath: tmpDir,
+          status: 'archived',
+          priority: 'normal',
+          acceptanceCriteria: [],
+          dependsOn: [],
+          outOfScope: [],
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          adjudications: [],
+          escalations: [],
+          agentIssues: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          origination: 'human',
+          requestIntake: {
+            intent: 'spec_only',
+            recommendedNextAction: 'draft_spec',
+            componentStack: [],
+            assumptions: [],
+            missingInformation: [],
+            evidenceRefs: ['import:/repo/docs/harness/implementation-roadmap.md'],
+            pressureTestSummary: {
+              systemOwned: true,
+              degree: 'guided',
+              qualityBar: 'Imported work should remain recoverable while the docs still support it.',
+              ownerQuestionPolicy: 'Only ask when scope intent actually changes.',
+              checks: [],
+            },
+            clarifyingQuestions: [],
+            createdAt: new Date().toISOString(),
+            createdBy: 'workspace-importer',
+          },
+          references: ['/repo/docs/harness/implementation-roadmap.md'],
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        } as Task,
+      ],
+    })
+
+    const approved = await approveWorkspaceImport({
+      memoryDir,
+      projectPath: tmpDir,
+      draftOverride: {
+        goals: [],
+        tasks: [
+          {
+            suggestedId: 'task-import-schema',
+            title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+            description: 'Current Stage 1 slice.',
+            domain: 'harness',
+            scope: 'current',
+            priority: 'high',
+            references: ['/repo/docs/harness/implementation-roadmap.md'],
+            source: 'planning-docs',
+            confidence: 'high',
+          },
+        ],
+        milestones: [],
+        context: [],
+        stats: {
+          inputSignals: 1,
+          drafted: 1,
+          deduped: 0,
+        },
+      },
+      detectedDraftSnapshot: {
+        goals: [],
+        tasks: [
+          {
+            suggestedId: 'task-import-schema',
+            title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+            description: 'Current Stage 1 slice.',
+            domain: 'harness',
+            scope: 'current',
+            priority: 'high',
+            references: ['/repo/docs/harness/implementation-roadmap.md'],
+            source: 'planning-docs',
+            confidence: 'high',
+          },
+          {
+            suggestedId: 'task-import-stage-two',
+            title: 'Mastra workflow for the prototype iteration loop',
+            description: 'Detected Stage 2 work should remain deferred, not disappear.',
+            domain: 'harness',
+            scope: 'later',
+            priority: 'normal',
+            references: ['/repo/docs/harness/implementation-roadmap.md'],
+            source: 'planning-docs',
+            confidence: 'high',
+          },
+        ],
+        milestones: [],
+        context: [],
+        stats: {
+          inputSignals: 2,
+          drafted: 2,
+          deduped: 0,
+        },
+      },
+      replacePreviouslyImportedTasks: true,
+    })
+
+    expect(approved).toMatchObject({ success: true, tasksAdded: 1 })
+
+    const q = await readQueue()
+    expect(q.tasks.find(task => task.id === 'task-import-stage-two-archived')).toMatchObject({
+      status: 'shelved',
+    })
+  })
+
   it('does not duplicate already-imported tasks when a refreshed import includes the same title again', async () => {
     await writeQueue({
       version: 1,
@@ -2194,7 +2487,7 @@ tasks:
 
     const q = await readQueue()
     expect(q.tasks
-      .filter(task => task.id !== WORKSPACE_IMPORT_TASK_ID)
+      .filter(task => task.id !== WORKSPACE_IMPORT_TASK_ID && !task.hierarchy?.parentId)
       .map(task => task.title)).toEqual([
       'Define fixture, expected-record, prototype-run, and evaluation schemas.',
       'Add the first tiny fiction fixture and human-authored expected records.',
@@ -2559,7 +2852,9 @@ tasks:
       'Shape actionable finding output',
       'Add deterministic fixture proof for the reviewer lane',
     ])
-    expect(dialogue?.sizePlan?.action).toBe('decompose_before_execution')
+    expect(dialogue?.sizePlan?.action).toBe('proceed_with_warning')
+    expect(dialogue?.taskReadiness?.recommendation).toBe('ready')
+    expect(dialogue?.hierarchy?.childIds).toHaveLength(5)
     expect(dialogue?.acceptanceCriteria?.[1]?.description).toContain('Could the line be reassigned to another character without anyone noticing?')
     expect(dialogue?.proofPaths?.[1]?.expectedEvidence?.join(' ')).toContain('Recorded findings answer prompts')
     expect(dialogue?.spec).not.toContain('follows target-area conventions')
@@ -2577,7 +2872,9 @@ tasks:
       'Preserve severity and fiction-first boundaries',
       'Add deterministic proof for the workflow pipeline',
     ])
-    expect(feedback?.sizePlan?.action).toBe('decompose_before_execution')
+    expect(feedback?.sizePlan?.action).toBe('proceed_with_warning')
+    expect(feedback?.taskReadiness?.recommendation).toBe('ready')
+    expect(feedback?.hierarchy?.childIds).toHaveLength(4)
     expect(feedback?.acceptanceCriteria?.[1]?.description).toContain('Severity, Confidence, Voice risk')
     expect(feedback?.acceptanceCriteria?.[2]?.description).toContain('Protect')
     expect(feedback?.spec).not.toContain('exposes the expected public contract')
@@ -2679,6 +2976,7 @@ tasks:
 
     const q = await readQueue()
     const task = q.tasks.find(candidate => candidate.id === 'task-schemas')
+    const childTasks = q.tasks.filter(candidate => candidate.hierarchy?.parentId === 'task-schemas')
     expect(task?.acceptanceCriteria?.map(criterion => criterion.id)).toEqual([
       'contracts-defined',
       'fixture-ground-truth-shape',
@@ -2691,7 +2989,7 @@ tasks:
       'Capture prototype run and evaluation records',
       'Add deterministic proof for the imported contract surface',
     ])
-    expect(task?.sizePlan?.action).toBe('decompose_before_execution')
+    expect(task?.sizePlan?.action).toBe('proceed_with_warning')
     expect(task?.spec).toContain('`FixtureManifest`')
     expect(task?.spec).toContain('`ExpectedRecordSet`')
     expect(task?.spec).toContain('`PrototypeRun`')
@@ -2701,10 +2999,31 @@ tasks:
     expect(task?.spec).not.toContain('Guildhall still needs to confirm')
     expect(task?.spec).not.toContain('Add the first tiny fiction fixture')
     expect(task?.productBrief?.nonGoals ?? []).not.toContain('Guildhall still needs to confirm scope, current relevance, and success criteria during shaping.')
+    expect(task?.hierarchy?.childIds).toHaveLength(4)
+    expect(task?.taskReadiness?.recommendation).toBe('ready')
+    expect(task?.taskReadiness?.summary).toContain('continue through the child tasks')
+    expect(childTasks.map(candidate => candidate.title)).toEqual([
+      'Define the cited contracts for Define fixture, expected-record, prototype-run, and evaluation schemas.',
+      'Shape fixture and expected-record ground truth',
+      'Capture prototype run and evaluation records',
+      'Add deterministic proof for the imported contract surface',
+    ])
+    expect(childTasks.map(candidate => candidate.status)).toEqual([
+      'exploring',
+      'exploring',
+      'exploring',
+      'exploring',
+    ])
+    expect(childTasks[1]?.dependsOn).toEqual([
+      childTasks[0]?.id,
+    ])
+    expect(childTasks[3]?.dependsOn).toEqual([
+      childTasks[2]?.id,
+    ])
 
-    const specApproval = await approveSpec({ memoryDir, taskId: 'task-schemas' })
-    expect(specApproval).toMatchObject({ success: true, newStatus: 'ready' })
+    expect(task?.status).toBe('ready')
   })
+
 })
 
 describe('mergeWorkspaceImportDraft', () => {

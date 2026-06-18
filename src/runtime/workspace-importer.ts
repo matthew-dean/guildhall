@@ -31,6 +31,7 @@ import {
 } from './evidence-task-import-draft.js'
 import { detectShadowedCurrentMilestoneDeliverableImports } from './current-milestone-shadowing.js'
 import { applyTaskShaping } from './task-decomposition.js'
+import { isMaterializableSplitAction, materializeSplitChildren } from '../tools/task-queue.js'
 
 // ---------------------------------------------------------------------------
 // FR-34: reserved workspace-importer task.
@@ -1605,6 +1606,7 @@ function normalizeDomainRouteKey(value: string): string {
 
 function importedTaskCanBeArchivedDuringScopeRefresh(status: Task['status']): boolean {
   return [
+    'archived',
     'exploring',
     'proposed',
     'import_draft',
@@ -1612,6 +1614,49 @@ function importedTaskCanBeArchivedDuringScopeRefresh(status: Task['status']): bo
     'ready',
     'shelved',
   ].includes(status)
+}
+
+function normalizeDetectedImportRef(value: string): string {
+  return value.replaceAll('\\', '/').trim()
+}
+
+function detectedSnapshotStillMentionsImportedTask(
+  task: Task,
+  detectedDraftSnapshot: WorkspaceImportDraft | undefined,
+): boolean {
+  if (!detectedDraftSnapshot) return false
+  const normalizedTitle = normalizeImportText(task.title)
+  const taskRefs = new Set((task.references ?? []).map(normalizeDetectedImportRef).filter(Boolean))
+  const taskRefBasenames = new Set([...taskRefs].map(ref => path.basename(ref)))
+
+  const matchesRefs = (refs: readonly string[] | undefined): boolean => {
+    if (!refs || refs.length === 0) return false
+    return refs.some((ref) => {
+      const normalized = normalizeDetectedImportRef(ref)
+      if (!normalized) return false
+      if (taskRefs.has(normalized)) return true
+      const basename = path.basename(normalized)
+      return taskRefBasenames.has(basename)
+    })
+  }
+
+  if (detectedDraftSnapshot.tasks.some((candidate) => {
+    const candidateTitle = normalizeImportText(candidate.title)
+    return (
+      (normalizedTitle.length > 0 && candidateTitle === normalizedTitle) ||
+      matchesRefs(candidate.references)
+    )
+  })) {
+    return true
+  }
+
+  return detectedDraftSnapshot.context.some((candidate) => {
+    const candidateTitle = normalizeImportText(candidate.label)
+    return (
+      (normalizedTitle.length > 0 && candidateTitle === normalizedTitle) ||
+      matchesRefs(candidate.references)
+    )
+  })
 }
 
 async function evidenceSourcesForParsedTasks(
@@ -3654,6 +3699,7 @@ export async function approveWorkspaceImport(
     if (materializedProof.length > 0) existing.proofPaths = materializedProof
     else delete existing.proofPaths
     existing.updatedAt = now
+    materializeImportedSplitChildren(queue, existing, imported.scope, now)
   }
 
   if (input.replacePreviouslyImportedTasks) {
@@ -3664,7 +3710,8 @@ export async function approveWorkspaceImport(
       if (existingTask.requestIntake?.createdBy !== 'workspace-importer') continue
       const normalizedTitle = normalizeImportText(existingTask.title)
       if (!normalizedTitle || approvedTaskTitles.has(normalizedTitle)) continue
-      existingTask.status = 'archived'
+      const stillMentioned = detectedSnapshotStillMentionsImportedTask(existingTask, input.detectedDraftSnapshot)
+      existingTask.status = stillMentioned ? 'shelved' : 'archived'
       existingTask.updatedAt = now
       existingTask.notes = [
         ...(existingTask.notes ?? []),
@@ -3673,7 +3720,9 @@ export async function approveWorkspaceImport(
           role: 'system',
           timestamp: now,
           content:
-            'Workspace import refresh archived this draft because it is no longer part of the approved import scope.',
+            stillMentioned
+              ? 'Workspace import refresh deferred this imported task because it still exists in the project evidence but is outside the approved current scope.'
+              : 'Workspace import refresh archived this draft because it is no longer part of the approved import scope.',
         },
       ]
     }
@@ -3698,7 +3747,7 @@ export async function approveWorkspaceImport(
     const normalizedReferences = absoluteImportedReferences(t.references, input.projectPath)
     const evidenceDetail = extractReferenceEvidenceDetail(t, input.projectPath)
     const seededBlueprint = buildImportedBlueprintSeed(t, normalizedReferences, input.projectPath, now)
-    queue.tasks.push({
+    const importedTaskRecord: Task = {
       id,
       title: t.title,
       description: normalizedDescription,
@@ -3735,7 +3784,9 @@ export async function approveWorkspaceImport(
       origination: 'human',
       createdAt: now,
       updatedAt: now,
-    })
+    }
+    queue.tasks.push(importedTaskRecord)
+    materializeImportedSplitChildren(queue, importedTaskRecord, t.scope, now)
     tasksAdded++
   }
 
@@ -3827,6 +3878,18 @@ export async function approveWorkspaceImport(
     goalsRecorded: parsed.goals.length,
     milestonesLogged,
   }
+}
+
+function materializeImportedSplitChildren(
+  queue: TaskQueue,
+  task: Task,
+  scope: MaterializedImportTask['scope'] | undefined,
+  now: string,
+): void {
+  if (scope === 'later') return
+  const action = task.sizePlan?.action
+  if (!isMaterializableSplitAction(action)) return
+  materializeSplitChildren(queue, task, now)
 }
 
 // ---------------------------------------------------------------------------
