@@ -852,7 +852,7 @@ tasks:
       ]),
     )
     expect(draft.tasks.find((task) => task.title === 'Implement dialogue-and-character-voice reviewer lane')).toMatchObject({
-      scope: 'later',
+      scope: 'current',
       domain: 'coherence',
       references: expect.arrayContaining([
         expect.stringContaining('docs/harness/remaining-spec-decomposition-inventory.md'),

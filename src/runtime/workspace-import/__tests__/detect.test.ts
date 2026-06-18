@@ -413,7 +413,7 @@ describe('planningDocsSource', () => {
     expect(sigs.filter((signal) => signal.kind === 'open_work' || signal.kind === 'milestone')).toEqual([])
   })
 
-  it('treats roadmap deliverables in the current milestone stage as current open work and future stages as later work', async () => {
+  it('keeps roadmap deliverables from later stages in the same bounded work instead of auto-deferring them', async () => {
     mkdirSync(join(dir, 'docs', 'harness'), { recursive: true })
     writeFileSync(
       join(dir, 'docs', 'harness', 'implementation-roadmap.md'),
@@ -461,12 +461,12 @@ The next milestone is Stage 1: Fixture And Evaluation Harness.
       expect.objectContaining({
         kind: 'open_work',
         title: 'Mastra workflow for the prototype iteration loop',
-        scopeHint: 'later',
+        scopeHint: 'current',
       }),
       expect.objectContaining({
         kind: 'open_work',
         title: 'specialist editor agent calls for the first review lanes',
-        scopeHint: 'later',
+        scopeHint: 'current',
       }),
     ]))
   })
@@ -520,12 +520,12 @@ The next milestone is Stage 1: Fixture And Evaluation Harness.
       expect.objectContaining({
         kind: 'open_work',
         title: 'Mastra workflow for the prototype iteration loop',
-        scopeHint: 'later',
+        scopeHint: 'current',
       }),
       expect.objectContaining({
         kind: 'open_work',
         title: 'specialist editor agent calls for the first review lanes',
-        scopeHint: 'later',
+        scopeHint: 'current',
       }),
       expect.objectContaining({
         kind: 'context',

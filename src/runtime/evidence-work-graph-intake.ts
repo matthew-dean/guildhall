@@ -161,7 +161,7 @@ function extractSeeds(source: EvidenceSource, currentMilestoneStage: string | nu
   return [
     ...extractTableSeeds(source),
     ...extractRoadmapMilestoneSeeds(source),
-    ...extractRecommendedTaskSeeds(source, currentMilestoneStage),
+    ...extractRecommendedTaskSeeds(source),
   ]
 }
 
@@ -250,7 +250,7 @@ function extractRoadmapMilestoneSeeds(source: EvidenceSource): UnitSeed[] {
   return seeds
 }
 
-function extractRecommendedTaskSeeds(source: EvidenceSource, currentMilestoneStage: string | null): UnitSeed[] {
+function extractRecommendedTaskSeeds(source: EvidenceSource): UnitSeed[] {
   const lines = logicalMarkdownLines(source.content)
   const seeds: UnitSeed[] = []
   let currentEntry = ''
@@ -261,11 +261,6 @@ function extractRecommendedTaskSeeds(source: EvidenceSource, currentMilestoneSta
   const flush = () => {
     const title = stripInlineCode(currentRecommendedTitle.trim())
     if (!title || /^\(?none\b/i.test(title)) {
-      currentRecommendedTitle = ''
-      return
-    }
-    const normalizedAlignment = normalizeStageLabel(currentStageAlignment)
-    if (currentMilestoneStage && normalizedAlignment && normalizedAlignment !== currentMilestoneStage) {
       currentRecommendedTitle = ''
       return
     }

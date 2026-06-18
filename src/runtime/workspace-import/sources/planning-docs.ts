@@ -248,9 +248,6 @@ function stageDeliverableSignal(
   if (stageNumber != null && currentStageNumber != null && stageNumber < currentStageNumber) {
     return { kind: 'milestone' }
   }
-  if (stageNumber != null && currentStageNumber != null && stageNumber > currentStageNumber) {
-    return { kind: 'open_work', scopeHint: 'later' }
-  }
   return { kind: 'open_work', scopeHint: 'current' }
 }
 
@@ -307,12 +304,7 @@ export const planningDocsSource: TaskSource = {
       const flushPendingRecommendedTask = () => {
         if (!pendingRecommendedTaskTitle) return
         const title = pendingRecommendedTaskTitle
-        const normalizedAlignment = normalizeStageLabel(currentRecommendedStageAlignment)
         if (!/^\(?none\b/i.test(title)) {
-          const scopeHint: WorkspaceSignal['scopeHint'] =
-            currentMilestoneStage && normalizedAlignment && normalizedAlignment !== currentMilestoneStage
-              ? 'later'
-              : 'current'
           const references = [abs]
           const relatedSpec = relatedSpecReference(
             projectPath,
@@ -330,7 +322,7 @@ export const planningDocsSource: TaskSource = {
             evidence: `${rel}: ${pendingRecommendedTaskSection ?? currentSection ?? title}`.slice(0, 240),
             references,
             ...(currentRecommendedDomain ? { domainHint: currentRecommendedDomain } : domainHint ? { domainHint } : {}),
-            scopeHint,
+            scopeHint: 'current',
             confidence: 'high',
           })
         }
@@ -492,8 +484,12 @@ export const planningDocsSource: TaskSource = {
               : currentLabel === 'do_not_start'
               ? { kind: 'context' as const }
                 : null
+          const isCurrentMilestoneStageSection =
+            parseStageOrdinal(currentSection) != null
+            && parseStageOrdinal(currentSection) === parseStageOrdinal(currentMilestoneStage)
           const shouldSuppressCurrentStageDeliverableAsWork =
             currentLabel === 'deliverables' &&
+            isCurrentMilestoneStageSection &&
             currentMilestoneHasStarterTasks &&
             stageScopedSignal?.kind === 'open_work' &&
             stageScopedSignal.scopeHint === 'current'

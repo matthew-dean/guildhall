@@ -354,7 +354,7 @@ describe('evidence-to-work-graph intake', () => {
     )
   })
 
-  it('keeps later-stage inventory recommendations out of the current task graph when a roadmap names the active milestone stage', () => {
+  it('keeps later-stage inventory recommendations inside the same MVP task graph when a roadmap names the active milestone stage', () => {
     const plan = planEvidenceWorkGraph({
       sources: [
         { path: 'docs/harness/implementation-roadmap.md', content: narrativeRoadmapEvidence },
@@ -363,7 +363,7 @@ describe('evidence-to-work-graph intake', () => {
       existingTasks: [],
     })
 
-    expect(plan.tasks.map(task => task.title)).not.toEqual(
+    expect(plan.tasks.map(task => task.title)).toEqual(
       expect.arrayContaining([
         'Implement dialogue-and-character-voice reviewer lane',
         'Implement scene-and-chapter-intelligence reviewer lane',
