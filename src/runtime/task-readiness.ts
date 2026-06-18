@@ -195,7 +195,9 @@ function recommendationFor(
   const byId = new Map(dimensions.map(dimension => [dimension.id, dimension]))
   if (task.status === 'shelved') return 'shelve_defer'
   if (byId.get('uncertainty')?.status === 'blocked') return 'needs_research_spike'
-  if (byId.get('size')?.status === 'blocked' || byId.get('context_load')?.status === 'blocked' || !contextBudget.fitsInOneWorkerBrief) return 'split'
+  if (byId.get('size')?.status === 'blocked' || byId.get('context_load')?.status === 'blocked' || !contextBudget.fitsInOneWorkerBrief) {
+    return 'requires_child_work'
+  }
   if (byId.get('outcome_clarity')?.status === 'blocked') return 'needs_one_question'
   if (byId.get('proofability')?.status === 'blocked') return 'needs_one_question'
   return 'ready'
@@ -209,8 +211,8 @@ function summaryForRecommendation(recommendation: TaskReadinessRecommendation): 
       return 'Task needs one owner-facing answer or finishability detail before dispatch.'
     case 'needs_research_spike':
       return 'Task should run research or a spike before implementation.'
-    case 'split':
-      return 'Task should split into smaller finishable work items.'
+    case 'requires_child_work':
+      return 'Task must be planned as smaller child work before execution.'
     case 'shelve_defer':
       return 'Task should stay shelved or deferred until conditions change.'
   }

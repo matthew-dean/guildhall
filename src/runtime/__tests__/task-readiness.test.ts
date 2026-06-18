@@ -130,7 +130,7 @@ describe('assessTaskReadiness', () => {
     expect(assessment.dimensions.find(dimension => dimension.id === 'uncertainty')?.status).toBe('blocked')
   })
 
-  it('recommends splitting work whose context budget exceeds one worker brief', () => {
+  it('marks work as requiring child work when the context budget exceeds one worker brief', () => {
     const hugeSpec = Array.from({ length: 120 }, (_, index) => `Step ${index}: update a distinct screen, API, migration, and docs.`).join('\n')
     const assessment = assessTaskReadiness(task({
       title: 'Rebuild dashboard, API, migration, docs, release, onboarding, settings, and verification',
@@ -141,7 +141,7 @@ describe('assessTaskReadiness', () => {
       ],
     }))
 
-    expect(assessment.recommendation).toBe('split')
+    expect(assessment.recommendation).toBe('requires_child_work')
     expect(assessment.contextBudget.fitsInOneWorkerBrief).toBe(false)
     expect(assessment.dimensions.find(dimension => dimension.id === 'context_load')?.status).toBe('blocked')
   })

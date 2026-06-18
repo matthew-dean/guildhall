@@ -1888,7 +1888,7 @@ describe('POST /api/project/task/:id/create-split-children', () => {
         },
         taskReadiness: {
           taskKind: 'implementation',
-          recommendation: 'split',
+          recommendation: 'requires_child_work',
           summary: 'Split-required work is represented by linked child tasks.',
           dimensions: [
             {
@@ -2468,7 +2468,7 @@ describe('POST /api/project/task/:id/enrich-task', () => {
         id: 'task-legacy-sibling',
         status: 'ready',
         title: 'Sibling carrying old split readiness',
-        taskReadiness: { recommendation: 'split' },
+        taskReadiness: { recommendation: 'requires_child_work' },
         notes: [],
       },
     ])
@@ -2508,7 +2508,7 @@ describe('POST /api/project/task/:id/enrich-task', () => {
     })
     expect(raw.tasks[1]!.taskReadiness).toMatchObject({
       taskKind: expect.any(String),
-      recommendation: 'split',
+      recommendation: 'requires_child_work',
       contextBudget: {
         fitsInOneWorkerBrief: false,
       },

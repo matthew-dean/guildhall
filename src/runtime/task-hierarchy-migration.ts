@@ -207,7 +207,7 @@ export async function migrateTaskHierarchyState(
       task.workKind = task.workKind ?? 'feature_spec'
       task.taskReadiness = {
         ...(task.taskReadiness ?? {}),
-        recommendation: 'split',
+        recommendation: 'requires_child_work',
       }
       task.completionBoundary = {
         summary: task.completionBoundary?.summary ?? 'Containing work is complete when required child work is done.',

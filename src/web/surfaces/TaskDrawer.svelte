@@ -541,7 +541,7 @@
 
   const isContainingWorkTask = $derived(Boolean(
     (task?.hierarchy?.childIds?.length ?? 0) > 0 ||
-    readinessRecommendation(task) === 'split',
+    readinessRecommendation(task) === 'requires_child_work',
   ))
   const canReframeTask = $derived(Boolean(
     task &&

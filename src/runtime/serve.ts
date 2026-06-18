@@ -2802,10 +2802,14 @@ export function buildServeApp(opts: ServeOptions = {}): {
         )
       }
     }
+    const isSplitRepairAction =
+      c.req.path.startsWith('/api/project/task/') &&
+      c.req.path.endsWith('/create-split-children')
     if (
       c.req.path.startsWith('/api/project') &&
       !c.req.path.startsWith('/api/project/migrations') &&
       c.req.path !== '/api/project/meta-intake/synthesize' &&
+      !isSplitRepairAction &&
       c.req.method !== 'GET' &&
       c.req.method !== 'HEAD'
     ) {
@@ -4972,6 +4976,15 @@ export function buildServeApp(opts: ServeOptions = {}): {
         .replace(/[^a-z0-9\s-]/g, ' ')
         .replace(/\s+/g, ' ')
         .trim()
+    const normalizeImportRef = (value: string): string =>
+      value.replaceAll('\\', '/').trim()
+    const refsFromRecord = (value: unknown): string[] => {
+      if (!value || typeof value !== 'object') return []
+      const refs = (value as { references?: unknown }).references
+      return Array.isArray(refs)
+        ? refs.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0).map(normalizeImportRef)
+        : []
+    }
 
     const tasksPath = projectTasksPath(projectPath)
     if (!existsSync(tasksPath)) return null
@@ -5000,12 +5013,17 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
     const coveredTitles = new Set<string>()
     const currentScopeCoveredTitles = new Set<string>()
+    const coveredRefs = new Set<string>()
     for (const task of parsed.tasks) {
       if (typeof task.title === 'string' && task.title.trim().length > 0) {
         const normalized = normalizeImportTitle(task.title)
         coveredTitles.add(normalized)
         if (task.scope !== 'later') currentScopeCoveredTitles.add(normalized)
       }
+      for (const ref of refsFromRecord(task)) coveredRefs.add(ref)
+    }
+    for (const milestone of parsed.milestones) {
+      for (const ref of refsFromRecord(milestone)) coveredRefs.add(ref)
     }
     for (const task of tasks) {
       if (!task || typeof task !== 'object') continue
@@ -5021,6 +5039,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const normalized = normalizeImportTitle(title)
       coveredTitles.add(normalized)
       if (status !== 'shelved') currentScopeCoveredTitles.add(normalized)
+      for (const ref of refsFromRecord(task)) coveredRefs.add(ref)
     }
 
     const missing = detected.tasks.filter(task => {
@@ -5032,7 +5051,14 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const title = typeof task.title === 'string' ? task.title : ''
       return title.trim().length > 0 && !currentScopeCoveredTitles.has(normalizeImportTitle(title))
     })
-    if (missing.length === 0 && currentScopeMissing.length === 0) return null
+    const uncoveredCapabilitySpecs = detected.context.filter(context => {
+      if (context.role !== 'capability') return false
+      const refs = refsFromRecord(context)
+      const specRefs = refs.filter(ref => /(^|\/)docs\/specs\//.test(ref))
+      if (specRefs.length === 0) return false
+      return specRefs.every(ref => !coveredRefs.has(ref))
+    })
+    if (missing.length === 0 && currentScopeMissing.length === 0 && uncoveredCapabilitySpecs.length === 0) return null
 
     if (currentScopeMissing.length > 0) {
       const first = currentScopeMissing[0]?.title?.trim() || 'the first current-scope task'
@@ -5042,6 +5068,18 @@ export function buildServeApp(opts: ServeOptions = {}): {
         message:
           `Guildhall's saved import is under-scoped for the current project docs. ` +
           `The live detector still treats ${currentScopeMissing.length} current task${currentScopeMissing.length === 1 ? '' : 's'} as active work outside the approved current scope, starting with "${first}". Refresh the import before treating this project as complete.`,
+        actionHref: '/workspace-import',
+      }
+    }
+
+    if (uncoveredCapabilitySpecs.length > 0) {
+      const first = uncoveredCapabilitySpecs[0]?.label?.trim() || 'the first uncovered spec'
+      return {
+        canStart: false,
+        code: 'workspace_import_refresh_needed',
+        message:
+          `Guildhall's saved import is structurally incomplete for the current docs. ` +
+          `The live detector still sees ${uncoveredCapabilitySpecs.length} spec-backed capability ${uncoveredCapabilitySpecs.length === 1 ? 'lane' : 'lanes'} with no linked work item, starting with "${first}". Refresh the import before treating this project as complete.`,
         actionHref: '/workspace-import',
       }
     }
@@ -5072,6 +5110,23 @@ export function buildServeApp(opts: ServeOptions = {}): {
       })
       const capabilityContexts = draft.context.filter(context => context.role === 'capability')
       if (draft.tasks.length === 0 && capabilityContexts.length === 0) return null
+      const inferredContextDomain = (context: typeof capabilityContexts[number]): string | undefined => {
+        if (context.domain?.trim()) return context.domain.trim()
+        const refs = new Set((context.references ?? []).map(ref => ref.replaceAll('\\', '/')))
+        const domainCounts = new Map<string, number>()
+        for (const task of draft.tasks) {
+          if (!task.domain?.trim()) continue
+          const taskRefs = (task.references ?? []).map(ref => ref.replaceAll('\\', '/'))
+          if (!taskRefs.some(ref => refs.has(ref))) continue
+          domainCounts.set(task.domain, (domainCounts.get(task.domain) ?? 0) + 1)
+        }
+        const winner = [...domainCounts.entries()].sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))[0]?.[0]
+        if (winner) return winner
+        const firstRef = context.references?.[0]?.replaceAll('\\', '/')
+        const docsGroup = firstRef?.match(/(?:^|\/)docs\/([^/]+)\//)?.[1]
+        if (docsGroup && docsGroup !== 'specs') return docsGroup
+        return undefined
+      }
       return {
         tasks: draft.tasks.map(task => ({
           id: task.suggestedId,
@@ -5085,7 +5140,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           id: `capability-${index + 1}`,
           title: context.label,
           description: context.excerpt,
-          domain: context.domain,
+          domain: inferredContextDomain(context),
           refs: context.references?.map(ref => `import:${ref}`) ?? [`import:${context.source}`],
         })),
         source: {
@@ -8448,10 +8503,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
         const sizePlan = task.sizePlan
         const hasSettledRepresentedSplit =
           sizePlan?.action === 'proceed_with_warning' &&
-          task.taskReadiness?.recommendation === 'split' &&
+          task.taskReadiness?.recommendation === 'requires_child_work' &&
           (sizePlan.recommendedChildren?.length ?? 0) > 0
         if (!sizePlan || (!isMaterializableSplitAction(sizePlan.action) && !hasSettledRepresentedSplit)) {
-          return c.json({ error: 'task does not have split recommendations' }, 400)
+          return c.json({ error: 'task does not have planned child work' }, 400)
         }
         const now = new Date().toISOString()
         const deliveryModel = await readProjectDeliveryModel(project.path)
@@ -8488,7 +8543,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
                 {
                   path: `tasks.${task.id}.sizePlan`,
                   code: 'split_already_represented',
-                  message: 'Split recommendations already match existing sibling tasks; no new child tasks were created.',
+                  message: 'Planned child work already matches existing sibling tasks; no new child tasks were created.',
                 },
               ],
             }

@@ -804,7 +804,7 @@ describe('approveSpec', () => {
     }
     base.taskReadiness = {
       taskKind: 'implementation',
-      recommendation: 'split',
+      recommendation: 'requires_child_work',
       summary: 'Task needs to be split again.',
       dimensions: [
         {
@@ -1020,7 +1020,7 @@ describe('approveSpec', () => {
     expect(updated.tasks[0]?.sizePlan?.action).toBe('proceed_with_warning')
   })
 
-  it('splits broad deterministic recovery specs instead of approving them as one runnable task', async () => {
+  it('does not invent generic child work for broad deterministic recovery specs without explicit work units', async () => {
     const queue = await readQueue()
     const task = queue.tasks[0]!
     task.id = 'task-import-twwvys'
@@ -1066,21 +1066,12 @@ describe('approveSpec', () => {
     expect(approved.success).toBe(true)
     const updated = await readQueue()
     const parent = updated.tasks.find(candidate => candidate.id === task.id)
-    expect(parent?.status).toBe('ready')
-    expect(parent?.taskReadiness?.recommendation).toBe('ready')
-    expect(parent?.taskReadiness?.summary).toContain('continue through the child tasks')
-    expect(parent?.sizePlan?.action).toBe('proceed_with_warning')
-    expect(parent?.hierarchy?.childIds).toEqual([
-      'task-import-twwvys-split-audit-the-remaining-replacement-scope',
-      'task-import-twwvys-split-implement-the-first-independently-verifiable-replacement',
-      'task-import-twwvys-split-verify-and-update-the-migration-record',
-    ])
-    expect(updated.tasks.map(candidate => candidate.title)).toEqual([
-      task.title,
-      'Audit the remaining replacement scope',
-      'Implement the first independently verifiable replacement',
-      'Verify and update the migration record',
-    ])
+    expect(parent?.status).toBe('spec_review')
+    expect(parent?.taskReadiness?.recommendation).toBe('requires_child_work')
+    expect(parent?.taskReadiness?.summary).toContain('planned as smaller child work before execution')
+    expect(parent?.sizePlan?.action).toBe('decompose_before_execution')
+    expect(parent?.hierarchy?.childIds ?? []).toEqual([])
+    expect(updated.tasks).toHaveLength(1)
   })
 
   it('records an approval note on the task when provided', async () => {

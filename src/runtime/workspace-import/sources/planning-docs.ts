@@ -258,11 +258,11 @@ function scopeHintForStage(
 function stageDeliverableSignal(
   currentSection: string,
   currentMilestoneStage: string | null,
-): { kind: WorkspaceSignal['kind']; scopeHint?: WorkspaceSignal['scopeHint'] } {
+): { kind: WorkspaceSignal['kind']; scopeHint?: WorkspaceSignal['scopeHint']; role?: WorkspaceSignal['role'] } {
   const stageNumber = parseStageOrdinal(currentSection)
   const currentStageNumber = parseStageOrdinal(currentMilestoneStage)
   if (stageNumber != null && currentStageNumber != null && stageNumber < currentStageNumber) {
-    return { kind: 'milestone' }
+    return { kind: 'context', role: 'capability' }
   }
   return { kind: 'open_work', scopeHint: scopeHintForStage(currentSection, currentMilestoneStage) }
 }
@@ -360,6 +360,7 @@ export const planningDocsSource: TaskSource = {
             title: `Spec: ${specTitle}`,
             evidence: summarizeMarkdownAfterTitle(raw) || rel,
             references: [abs],
+            role: 'capability',
             ...(domainHint ? { domainHint } : {}),
             confidence: 'medium',
           })
@@ -531,6 +532,19 @@ export const planningDocsSource: TaskSource = {
               confidence: 'medium',
             })
           } else if (!grouping) {
+            if (currentLabel === 'deliverables') {
+              signals.push({
+                source: 'planning-docs',
+                kind: 'context',
+                role: 'capability',
+                title,
+                evidence: `${rel}: ${line.trim()}`.slice(0, 240),
+                references: [abs],
+                ...(stageScopedSignal?.scopeHint ? { scopeHint: stageScopedSignal.scopeHint } : {}),
+                ...(domainHint ? { domainHint } : {}),
+                confidence: 'medium',
+              })
+            }
             const kind: WorkspaceSignal['kind'] = shouldSuppressCurrentStageDeliverableAsWork
               ? 'context'
               : stageScopedSignal?.kind ?? (
@@ -545,6 +559,7 @@ export const planningDocsSource: TaskSource = {
               title,
               evidence: `${rel}: ${line.trim()}`.slice(0, 240),
               references: [abs],
+              ...(stageScopedSignal?.role ? { role: stageScopedSignal.role } : {}),
               ...(stageScopedSignal?.scopeHint ? { scopeHint: stageScopedSignal.scopeHint } : {}),
               ...(domainHint ? { domainHint } : {}),
               confidence: 'medium',

@@ -69,8 +69,8 @@ function summaryFor(recommendation: TaskReadinessRecommendation): string {
       return 'Task needs one owner-facing answer or finishability detail before dispatch.'
     case 'needs_research_spike':
       return 'Task should run research or a spike before implementation.'
-    case 'split':
-      return 'Task should split into smaller finishable work items.'
+    case 'requires_child_work':
+      return 'Task must be planned as smaller child work before execution.'
     case 'shelve_defer':
       return 'Task should stay shelved or deferred until conditions change.'
   }
@@ -118,14 +118,14 @@ function normalizeDefinitionOfDone(value: unknown, task: RecordLike, taskKind: T
 function normalizeContextBudget(value: unknown, task: RecordLike, recommendation: TaskReadinessRecommendation): RecordLike {
   const text = taskText(task)
   const estimatedTokens = Math.max(0, Math.ceil(text.length / 4))
-  const fallbackRisk = recommendation === 'split' ? 'high' : estimatedTokens > 2500 ? 'medium' : 'low'
-  const fallbackFits = recommendation !== 'split' && fallbackRisk !== 'high'
+  const fallbackRisk = recommendation === 'requires_child_work' ? 'high' : estimatedTokens > 2500 ? 'medium' : 'low'
+  const fallbackFits = recommendation !== 'requires_child_work' && fallbackRisk !== 'high'
   if (!isRecord(value)) {
     return {
       estimatedTokens,
       risk: fallbackRisk,
       fitsInOneWorkerBrief: fallbackFits,
-      reasons: recommendation === 'split' ? ['Legacy readiness marked this task for splitting.'] : [],
+      reasons: recommendation === 'requires_child_work' ? ['Legacy readiness marked this task as requiring child work before execution.'] : [],
     }
   }
   const risk = value.risk === 'low' || value.risk === 'medium' || value.risk === 'high'
@@ -139,7 +139,7 @@ function normalizeContextBudget(value: unknown, task: RecordLike, recommendation
     risk,
     fitsInOneWorkerBrief: typeof value.fitsInOneWorkerBrief === 'boolean'
       ? value.fitsInOneWorkerBrief
-      : recommendation !== 'split' && risk !== 'high',
+      : recommendation !== 'requires_child_work' && risk !== 'high',
     reasons: stringArray(value.reasons),
   }
 }

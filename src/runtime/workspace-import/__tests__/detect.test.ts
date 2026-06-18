@@ -294,6 +294,7 @@ describe('planningDocsSource', () => {
         source: 'planning-docs',
         kind: 'context',
         title: 'Spec: V1 Editor',
+        role: 'capability',
       }),
     )
   })
@@ -413,7 +414,7 @@ describe('planningDocsSource', () => {
     expect(sigs.filter((signal) => signal.kind === 'open_work' || signal.kind === 'milestone')).toEqual([])
   })
 
-  it('keeps roadmap deliverables from later stages inside current scope when no release boundary is defined', async () => {
+  it('marks roadmap deliverables from later stages as deferred when the current milestone is explicit', async () => {
     mkdirSync(join(dir, 'docs', 'harness'), { recursive: true })
     writeFileSync(
       join(dir, 'docs', 'harness', 'implementation-roadmap.md'),
@@ -461,12 +462,12 @@ The next milestone is Stage 1: Fixture And Evaluation Harness.
       expect.objectContaining({
         kind: 'open_work',
         title: 'Mastra workflow for the prototype iteration loop',
-        scopeHint: 'current',
+        scopeHint: 'later',
       }),
       expect.objectContaining({
         kind: 'open_work',
         title: 'specialist editor agent calls for the first review lanes',
-        scopeHint: 'current',
+        scopeHint: 'later',
       }),
     ]))
   })
@@ -520,20 +521,22 @@ The next milestone is Stage 1: Fixture And Evaluation Harness.
       expect.objectContaining({
         kind: 'open_work',
         title: 'Mastra workflow for the prototype iteration loop',
-        scopeHint: 'current',
+        scopeHint: 'later',
       }),
       expect.objectContaining({
         kind: 'open_work',
         title: 'specialist editor agent calls for the first review lanes',
-        scopeHint: 'current',
+        scopeHint: 'later',
       }),
       expect.objectContaining({
         kind: 'context',
         title: 'fixture directory shape for at least one small story fixture',
+        role: 'capability',
       }),
       expect.objectContaining({
         kind: 'context',
         title: 'typed fixture and expected-record contracts',
+        role: 'capability',
       }),
     ]))
     expect(sigs).not.toEqual(expect.arrayContaining([
@@ -646,6 +649,67 @@ contracts against small fiction fixtures before any product UI is designed.
       expect.objectContaining({
         kind: 'context',
         title: 'Stage 1: Fixture And Evaluation Harness',
+      }),
+    ]))
+  })
+
+  it('keeps earlier stage deliverables as capability context instead of pretending they are completed milestones', async () => {
+    mkdirSync(join(dir, 'docs', 'harness'), { recursive: true })
+    writeFileSync(
+      join(dir, 'docs', 'harness', 'implementation-roadmap.md'),
+      `# Implementation Roadmap
+
+## Stage 0: Spec Baseline
+
+Status: current foundation.
+
+Deliverables:
+
+- story-memory schema draft
+- agent packet and compaction spec
+
+## Stage 1: Fixture And Evaluation Harness
+
+Deliverables:
+
+- fixture directory shape for at least one small story fixture
+
+## Current Next Milestone
+
+The next milestone is Stage 1: Fixture And Evaluation Harness.
+
+1. Define fixture, expected-record, prototype-run, and evaluation schemas.
+`,
+    )
+
+    const sigs = await planningDocsSource.detect({
+      projectPath: dir,
+      exec: fakeExec(() => ({
+        stdout: ['docs/harness/implementation-roadmap.md'].join('\n'),
+        code: 0,
+      })),
+    })
+
+    expect(sigs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'context',
+        role: 'capability',
+        title: 'story-memory schema draft',
+      }),
+      expect.objectContaining({
+        kind: 'context',
+        role: 'capability',
+        title: 'agent packet and compaction spec',
+      }),
+    ]))
+    expect(sigs).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'milestone',
+        title: 'story-memory schema draft',
+      }),
+      expect.objectContaining({
+        kind: 'milestone',
+        title: 'agent packet and compaction spec',
       }),
     ]))
   })

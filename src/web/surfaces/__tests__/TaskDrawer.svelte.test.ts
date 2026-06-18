@@ -849,7 +849,7 @@ describe('TaskDrawer', () => {
           ],
           order: 0,
         },
-        taskReadiness: { recommendation: 'split' },
+        taskReadiness: { recommendation: 'requires_child_work' },
         sizePlan: {
           taskId: 'task-link-editor',
           score: 8,

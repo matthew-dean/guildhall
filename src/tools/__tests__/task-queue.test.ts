@@ -721,7 +721,7 @@ describe('updateTask', () => {
     expect(child?.domain).toBe('harness')
   })
 
-  it('settles duplicate sibling split recommendations without creating nested duplicate children', async () => {
+  it('settles duplicate sibling child-work plans without creating nested duplicate children', async () => {
     const timestamp = '2026-06-12T00:00:00.000Z'
     const queue = TaskQueue.parse({
       version: 1,
@@ -871,8 +871,8 @@ describe('updateTask', () => {
           },
           taskReadiness: {
             taskKind: 'implementation',
-            recommendation: 'split',
-            summary: 'Task is too broad and should be split.',
+            recommendation: 'requires_child_work',
+            summary: 'Task must be planned as child work before execution.',
             dimensions: [
               {
                 id: 'size',

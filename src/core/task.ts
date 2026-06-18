@@ -796,13 +796,21 @@ export const TaskReadinessDimensionId = z.enum([
 ])
 export type TaskReadinessDimensionId = z.infer<typeof TaskReadinessDimensionId>
 
-export const TaskReadinessRecommendation = z.enum([
+const TaskReadinessRecommendationValue = z.enum([
   'ready',
   'needs_one_question',
   'needs_research_spike',
-  'split',
+  'requires_child_work',
   'shelve_defer',
 ])
+export const TaskReadinessRecommendation: z.ZodType<
+  z.infer<typeof TaskReadinessRecommendationValue>,
+  z.ZodTypeDef,
+  unknown
+> = z.preprocess(
+  (value) => value === 'split' ? 'requires_child_work' : value,
+  TaskReadinessRecommendationValue,
+)
 export type TaskReadinessRecommendation = z.infer<typeof TaskReadinessRecommendation>
 
 export const DefinitionOfDone = z.object({

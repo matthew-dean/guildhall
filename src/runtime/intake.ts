@@ -396,12 +396,14 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
     : null
   const duplicateSiblingSplit = splitRecommendationsDuplicateExistingSiblings(queue, task)
   let splitMaterialized = false
+  let attemptedSplitMaterialization = false
   if (
     isMaterializableSplitAction(task.sizePlan?.action) &&
     !shouldKeepFixedSpecRunnable(task) &&
     !representedParentSplit &&
     !duplicateSiblingSplit
   ) {
+    attemptedSplitMaterialization = true
     splitMaterialized = materializeSplitChildren(queue, task, now).status === 'materialized'
   } else {
     if (representedParentSplit) {
@@ -419,6 +421,20 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
         ],
       }
     }
+    transitionTaskStatus({
+      task,
+      event: 'mark_ready',
+      actor: 'human',
+      evidenceRefs: ['task:approve-spec'],
+      now,
+    })
+  }
+  if (
+    attemptedSplitMaterialization &&
+    !splitMaterialized &&
+    task.status === 'spec_review' &&
+    task.taskReadiness?.recommendation === 'ready'
+  ) {
     transitionTaskStatus({
       task,
       event: 'mark_ready',

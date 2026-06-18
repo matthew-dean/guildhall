@@ -95,7 +95,7 @@ describe('decomposeTaskForFinishability', () => {
     expect(result.blockerPlans?.length).toBeGreaterThan(0)
     expect(result.contextBudget?.fitsInOneWorkerBrief).toBe(true)
     expect(result.decomposition?.action).toBe('keep')
-    expect(result.notes.at(-1)?.content).toContain('Task readiness: ready')
+    expect(result.notes.at(-1)?.content).toContain('Task readiness action: ready')
   })
 
   it('does not draft split children for one bounded deliverable with multiple proof bullets', () => {

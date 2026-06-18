@@ -3173,6 +3173,89 @@ describe('Workspace Import review endpoints', () => {
     expect(body.startReadiness?.message).toContain('Add the first tiny fiction fixture and human-authored expected records.')
   })
 
+  it('blocks readiness when spec-backed capability docs still have no linked imported work', async () => {
+    await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
+    await fs.mkdir(path.join(tmpDir, 'docs', 'specs'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'harness', 'implementation-roadmap.md'),
+      [
+        '# Implementation Roadmap',
+        '',
+        '## Stage 1: Fixture And Evaluation Harness',
+        '',
+        '## Current Next Milestone',
+        '',
+        'The next milestone is Stage 1: Fixture And Evaluation Harness.',
+        '',
+        '1. Define fixture, expected-record, prototype-run, and evaluation schemas.',
+      ].join('\n'),
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'specs', 'world-and-object-continuity.md'),
+      [
+        '# World And Object Continuity',
+        '',
+        'Track object state, world facts, and causal continuity across scenes.',
+      ].join('\n'),
+      'utf8',
+    )
+    await fs.writeFile(path.join(tmpDir, 'package.json'), JSON.stringify({ name: 'spec-capability-gap' }), 'utf8')
+    await writeSystemText(
+      'TASKS.json',
+      JSON.stringify(
+        {
+          version: 1,
+          lastUpdated: '2026-01-01T00:00:00.000Z',
+          tasks: [
+            {
+              id: 'task-workspace-import',
+              title: 'Review existing project work',
+              description: 'Reserved importer',
+              domain: '_workspace_import',
+              projectPath: tmpDir,
+              status: 'done',
+              priority: 'normal',
+              acceptanceCriteria: [],
+              dependsOn: [],
+              outOfScope: [],
+              spec: [
+                '```yaml',
+                'tasks:',
+                '  - id: imported-one',
+                '    title: Define fixture, expected-record, prototype-run, and evaluation schemas.',
+                '    description: Saved importer task.',
+                '    domain: harness',
+                '    priority: high',
+                '    references:',
+                '      - docs/harness/implementation-roadmap.md',
+                '```',
+              ].join('\n'),
+              createdAt: '2026-01-01T00:00:00.000Z',
+              updatedAt: '2026-01-01T00:00:00.000Z',
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+    )
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(scoped('/api/project')))
+    expect(res.status).toBe(200)
+    const body = await res.json() as {
+      startReadiness?: { canStart?: boolean; code?: string; message?: string; actionHref?: string }
+    }
+    expect(body.startReadiness).toMatchObject({
+      canStart: false,
+      code: 'workspace_import_refresh_needed',
+      actionHref: '/workspace-import',
+    })
+    expect(body.startReadiness?.message).toContain('structurally incomplete')
+    expect(body.startReadiness?.message).toContain('Spec: World And Object Continuity')
+  })
+
   it('does not let archived stale imports satisfy workspace-import coverage', async () => {
     await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
     await fs.writeFile(

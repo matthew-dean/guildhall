@@ -27,13 +27,13 @@ describe('task transitions', () => {
     })
   })
 
-  it('rejects worker start for containing work that still needs split children', () => {
+  it('rejects worker start for containing work that still needs child work planned', () => {
     const result = applyTaskTransition({
       task: {
         id: 'feature',
         status: 'ready',
         hierarchy: { childIds: ['child-a'] },
-        taskReadiness: { recommendation: 'split' },
+        taskReadiness: { recommendation: 'requires_child_work' },
       },
       event: 'start_worker',
       actor: 'orchestrator',

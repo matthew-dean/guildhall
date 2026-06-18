@@ -38,7 +38,7 @@ describe('task hierarchy migration', () => {
     expect(feature.status).toBe('ready')
     expect(feature.parentGoalId).toBeUndefined()
     expect(feature.hierarchy.childIds).toEqual(['child-a', 'child-b'])
-    expect(feature.taskReadiness.recommendation).toBe('split')
+    expect(feature.taskReadiness.recommendation).toBe('requires_child_work')
     expect(feature.completionBoundary.requiredChildPolicy).toBe('all_required_done')
     expect(childA.parentGoalId).toBeUndefined()
     expect(childA.hierarchy.parentId).toBe('feature-shell')

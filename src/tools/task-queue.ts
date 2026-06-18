@@ -691,12 +691,12 @@ function removeDuplicateNestedSplitChildIds(
 function settleMaterializedSplitParent(input: {
   parent: TaskRecord
   timestamp: string
-  recommendation?: 'ready' | 'split'
+  recommendation?: 'ready' | 'requires_child_work'
   summary: string
   reason: string
   childTaskIds?: string[]
 }): void {
-  const { parent, timestamp, recommendation = 'split', summary, reason, childTaskIds = [] } = input
+  const { parent, timestamp, recommendation = 'requires_child_work', summary, reason, childTaskIds = [] } = input
   const splitBoundary = settledSplitBoundaryText(childTaskIds)
   if (parent.sizePlan && isMaterializableSplitAction(parent.sizePlan.action)) {
     parent.sizePlan = {
@@ -827,7 +827,7 @@ function settledSplitReadinessDimensions(
       summary: 'Size is handled by linked child tasks.',
       evidence: [
         ...dimension.evidence.filter(evidence => !/too (large|broad)|split/i.test(evidence)),
-        'Split recommendations have already been materialized into linked child tasks.',
+        'Required child work has already been materialized into linked child tasks.',
       ],
     }
   })
@@ -838,7 +838,7 @@ function settledSplitReadinessDimensions(
       id: 'size',
       status: 'ok' as const,
       summary: 'Size is handled by linked child tasks.',
-      evidence: ['Split recommendations have already been materialized into linked child tasks.'],
+      evidence: ['Required child work has already been materialized into linked child tasks.'],
     },
   ]
 }
