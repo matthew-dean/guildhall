@@ -293,6 +293,10 @@ export function taskNodeId(taskId: string): string {
   return `work:${taskId}`
 }
 
+function isProjectSetupTask(taskId: string): boolean {
+  return taskId === 'task-meta-intake' || taskId === 'task-workspace-import'
+}
+
 export function taskEligibleForSelectedScope(
   task: Pick<OrientationTaskInput, 'id' | 'dependsOn'>,
   scope: OrientationScope | null | undefined,
@@ -362,12 +366,13 @@ function normalizeCharter(input: BuildProjectOrientationSpineInput): ProjectOrie
 }
 
 function defaultScope(tasks: OrientationTaskInput[]): OrientationScope | null {
-  if (tasks.length === 0) return null
+  const scopedTasks = tasks.filter(task => !isProjectSetupTask(task.id))
+  if (scopedTasks.length === 0) return null
   const nodeIds = tasks
-    .filter(task => task.status !== 'shelved')
+    .filter(task => !isProjectSetupTask(task.id) && task.status !== 'shelved')
     .map(task => taskNodeId(task.id))
   const deferredNodeIds = tasks
-    .filter(task => task.status === 'shelved')
+    .filter(task => !isProjectSetupTask(task.id) && task.status === 'shelved')
     .map(task => taskNodeId(task.id))
   return {
     id: 'current-work',
@@ -399,8 +404,6 @@ function augmentTasksWithWorkspaceImportDraft(input: {
 
   const currentNodeIds: string[] = []
   const deferredNodeIds: string[] = []
-  const importerTask = augmented.find(task => task.id === 'task-workspace-import')
-  if (importerTask) currentNodeIds.push(taskNodeId(importerTask.id))
 
   for (const draftTask of draft.tasks) {
     const existing = titleToTask.get(normalizeText(draftTask.title))
@@ -525,6 +528,7 @@ function normalizeScope(input: BuildProjectOrientationSpineInput, tasks: Orienta
 
 function expandScopeWithDescendants(scope: OrientationScope, tasks: OrientationTaskInput[]): OrientationScope {
   const childIdsByParent = buildChildMap(tasks)
+  const taskById = new Map(tasks.map(task => [task.id, task]))
   const included = new Set(scope.nodeIds)
   const deferred = new Set(scope.deferredNodeIds)
   const visit = (taskId: string) => {
@@ -537,6 +541,14 @@ function expandScopeWithDescendants(scope: OrientationScope, tasks: OrientationT
   }
   for (const nodeId of [...included]) {
     if (nodeId.startsWith('work:')) visit(nodeId.slice('work:'.length))
+  }
+  for (const nodeId of [...included]) {
+    if (!nodeId.startsWith('work:')) continue
+    const task = taskById.get(nodeId.slice('work:'.length))
+    if (task?.status === 'shelved') {
+      included.delete(nodeId)
+      deferred.add(nodeId)
+    }
   }
   return {
     ...scope,
@@ -1053,6 +1065,12 @@ function summarizeStartReadiness(input: {
         topBlocker: 'Imported drafts need review.',
         nextAction: 'Open the first imported draft.',
       }
+    case 'imported_scope_shaping':
+      return {
+        headline: `${genericWorkLabel} is being shaped.`,
+        topBlocker: message,
+        nextAction: 'Draft the first current-scope brief.',
+      }
     case 'workspace_import_refresh_needed':
       return {
         headline: `${genericWorkLabel} needs import refresh.`,
@@ -1114,10 +1132,10 @@ function buildSummary(input: {
     purpose,
     selectedReleaseLabel: releaseLabel,
     selectedScopeLabel: workLabel,
-    includedCount: input.scope?.nodeIds.length ?? 0,
-    includedWorkCount: input.scope?.nodeIds.length ?? 0,
-    deferredCount: input.scope?.deferredNodeIds.length ?? 0,
-    deferredWorkCount: input.scope?.deferredNodeIds.length ?? 0,
+    includedCount: input.scope?.nodeIds.length ?? input.progress.total - input.progress.deferred,
+    includedWorkCount: input.scope?.nodeIds.length ?? input.progress.total - input.progress.deferred,
+    deferredCount: input.scope?.deferredNodeIds.length ?? input.progress.deferred,
+    deferredWorkCount: input.scope?.deferredNodeIds.length ?? input.progress.deferred,
     pinnedNow: input.pins.map(pin => pin.label),
     topBlocker,
     nextAction: readinessSummary?.nextAction ?? (topBlocker ? `Review blocker: ${topBlocker}` : 'Review current work.'),
@@ -1127,7 +1145,7 @@ function buildSummary(input: {
 
 export function buildProjectOrientationSpine(input: BuildProjectOrientationSpineInput): ProjectOrientationSpine {
   const now = input.now ?? new Date().toISOString()
-  const baseTasks = input.tasks ?? []
+  const baseTasks = (input.tasks ?? []).filter(task => !isProjectSetupTask(task.id))
   const draftAugmentation = augmentTasksWithWorkspaceImportDraft({
     tasks: baseTasks,
     workspaceImportDraft: input.workspaceImportDraft,
@@ -1136,7 +1154,8 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
   const tasks = draftAugmentation.tasks
   const charter = normalizeCharter(input)
   const selectedRelease = normalizeRelease(input, tasks)
-  const scope = releaseToScope(selectedRelease) ?? draftAugmentation.scope ?? normalizeScope(input, tasks)
+  const rawScope = releaseToScope(selectedRelease) ?? draftAugmentation.scope ?? normalizeScope(input, tasks)
+  const scope = rawScope ? expandScopeWithDescendants(rawScope, tasks) : null
   const { roots, byId, gaps: nodeGaps } = buildNodes(tasks, scope, now)
   const { blockers, gaps: blockerGaps } = attachReleaseBlockers(input.releaseReadiness?.blockers ?? [], byId)
   const executionBoundary = buildExecutionBoundary({

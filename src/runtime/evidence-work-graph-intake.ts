@@ -36,6 +36,7 @@ export type EvidenceTask = {
   dependsOn: string[]
   relatedTasks: Array<{ taskId: string; relationship: 'blocks' | 'related'; reason: string }>
   consumerSurface?: string
+  sourceRefs: Array<{ path: string; snippet: string }>
   acceptanceCriteria: Array<{ id: string; description: string; verifiedBy?: string }>
   proofPaths: Array<{ kind: 'command' | 'review' | 'browser'; command?: string; expectedEvidence?: string[] }>
   status?: string
@@ -365,6 +366,7 @@ function buildImplementationTask(unit: EvidenceUnit, existingMatch?: ExistingTas
     sharedFoundations: unit.sharedFoundations,
     dependsOn: [],
     relatedTasks: [],
+    sourceRefs: unit.sourceRefs,
     acceptanceCriteria: implementationAcceptanceCriteria(unit),
     proofPaths: implementationProofPaths(unit),
     status: supersedesVagueIntake ? 'spec_review' : undefined,
@@ -409,6 +411,7 @@ function buildIntegrationTask(
     dependsOn: Array.from(dependsOn),
     relatedTasks: [],
     consumerSurface,
+    sourceRefs: unit.sourceRefs,
     acceptanceCriteria: integrationAcceptanceCriteria(),
     proofPaths: integrationProofPaths(unit),
   }
@@ -551,7 +554,7 @@ function inferStatusHint(need: string): EvidenceUnit['statusHint'] {
 
 function inferTargetArea(seed: UnitSeed): string {
   if (seed.explicitTargetArea?.trim()) {
-    return normalizeDeliverableName(seed.explicitTargetArea.trim())
+    return normalizeTargetArea(seed.explicitTargetArea.trim())
   }
   const { path, deliverable } = seed
   const releaseFixture = path.match(/(?:^|\/)release-proof-matrix\/([^/]+)/)
@@ -566,6 +569,14 @@ function inferTargetArea(seed: UnitSeed): string {
     return 'Admin settings page'
   }
   return firstPathSegment ?? 'project'
+}
+
+function normalizeTargetArea(value: string): string {
+  const trimmed = value.trim()
+  if (/^[a-z0-9-]+$/.test(trimmed)) {
+    return trimmed
+  }
+  return normalizeDeliverableName(trimmed)
 }
 
 function inferRoadmapTargetArea(path: string): string {

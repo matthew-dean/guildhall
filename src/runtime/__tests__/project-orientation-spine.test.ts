@@ -454,10 +454,10 @@ describe('buildProjectOrientationSpine', () => {
     })
 
     expect(spine.scope).toMatchObject({
-      nodeIds: ['work:task-workspace-import', 'work:workspace-import:task-current'],
+      nodeIds: ['work:workspace-import:task-current'],
       deferredNodeIds: ['work:workspace-import:task-later'],
     })
-    expect(spine.summary.includedWorkCount).toBe(2)
+    expect(spine.summary.includedWorkCount).toBe(1)
     expect(spine.summary.deferredWorkCount).toBe(1)
     expect(spine.nodes['work:workspace-import:task-current']?.source).toMatchObject({
       kind: 'inferred',
@@ -465,7 +465,7 @@ describe('buildProjectOrientationSpine', () => {
       inferred: true,
     })
     expect(spine.nodes['work:workspace-import:task-later']?.maturity).toBe('deferred')
-    expect(spine.roots.map(root => root.title)).toEqual(['Coherence', 'Harness', 'Workspace Import'])
+    expect(spine.roots.map(root => root.title)).toEqual(['Coherence', 'Harness'])
   })
 
   it('groups flat imported work into inferred capability lanes by domain', () => {

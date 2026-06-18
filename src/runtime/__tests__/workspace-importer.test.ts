@@ -1145,7 +1145,7 @@ tasks:
     expect(pickNextTask(afterImplementation)?.id).toBe('task-alert-dialog-integration')
   })
 
-  it('keeps explicit imported task wording when the evidence graph does not add net-new structure', async () => {
+  it('uses the evidence graph even when it reframes one imported task instead of adding more tasks', async () => {
     await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
     await fs.writeFile(
       path.join(tmpDir, 'docs', 'harness', 'implementation-roadmap.md'),
@@ -1190,13 +1190,28 @@ tasks:
     const imported = q.tasks.find(task => task.id === 'task-import-schema')
     expect(imported).toMatchObject({
       title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
-      description: 'docs/harness/implementation-roadmap.md: 1. Define fixture, expected-record, prototype-run, and evaluation schemas.',
+      description: '1. Define fixture, expected-record, prototype-run, and evaluation schemas.',
       domain: 'harness',
       status: 'import_draft',
     })
-    expect(imported?.acceptanceCriteria ?? []).toEqual([])
+    expect(imported?.acceptanceCriteria?.map(criterion => criterion.id)).toEqual([
+      'source-implementation',
+      'public-contract',
+      'foundation-reuse',
+      'design-system-conformance',
+      'accessibility-contract',
+      'automated-proof',
+    ])
+    expect(imported?.proofPaths).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'command',
+          command: 'pnpm test -- define-fixture-expected-record-prototype-run-and-evaluation-schemas',
+        }),
+      ]),
+    )
     expect(imported?.requestIntake?.assumptions).toEqual([
-      'This item still reflects current project intent and has not already been completed or superseded elsewhere.',
+      'The referenced documentation still represents intended project direction.',
     ])
   })
 })

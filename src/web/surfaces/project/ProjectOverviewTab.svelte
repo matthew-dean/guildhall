@@ -67,7 +67,12 @@
     href: string
   }
 
-  const tasks = $derived(detail.tasks ?? [])
+  function isProjectSetupTask(task: Task | null | undefined): boolean {
+    const id = task?.id ?? ''
+    return id === 'task-meta-intake' || id === 'task-workspace-import'
+  }
+
+  const tasks = $derived((detail.tasks ?? []).filter(task => !isProjectSetupTask(task)))
   const displayPath = $derived(formatUserPath(detail.path))
   const running = $derived(detail.run?.status === 'running')
   const actionableInbox = $derived(inboxItems.filter(item => item.severity !== 'low').slice(0, 3))

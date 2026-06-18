@@ -27,6 +27,30 @@ describe('buildProjectActionModel', () => {
       startEnabled: false,
     })
 
+    const importedScopeShaping = buildProjectActionModel({
+      startReadiness: {
+        canStart: false,
+        code: 'imported_scope_shaping',
+        message: '12 imported current-scope tasks still need real briefs before Guildhall can build unattended. Start with "Define fixture schemas".',
+        actionHref: '/task/task-import-1',
+      },
+      tasks: [{ id: 'task-import-1', title: 'Define fixture schemas', status: 'import_draft' }],
+      thread: { turns: [], activeTurnId: null },
+      runStatus: 'stopped',
+    })
+    expect(importedScopeShaping.primaryAction).toMatchObject({
+      source: 'start_readiness',
+      label: 'Imported scope needs briefs',
+      detail: '12 imported current-scope tasks still need real briefs before Guildhall can build unattended. Start with "Define fixture schemas".',
+      buttonLabel: 'Draft first brief',
+      href: '/task/task-import-1',
+      tone: 'warn',
+    })
+    expect(importedScopeShaping.runControl).toMatchObject({
+      label: 'Needs briefs',
+      startEnabled: false,
+    })
+
     const briefCleanup = buildProjectActionModel({
       startReadiness: {
         canStart: false,

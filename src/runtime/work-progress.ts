@@ -83,6 +83,11 @@ const TASK_ACTIVE_STATUSES = new Set([
   'proposed',
 ])
 
+function isProjectSetupTask(task: TaskRecord): boolean {
+  const id = stringValue(task.id)
+  return id === 'task-meta-intake' || id === 'task-workspace-import'
+}
+
 export function deriveProjectWorkProgress(tasks: TaskRecord[]): ProjectWorkProgress {
   const byId = new Map<string, TaskRecord>()
   for (const task of tasks) {
@@ -159,6 +164,9 @@ function deriveTaskWorkProgress(task: TaskRecord, byId: Map<string, TaskRecord>)
 }
 
 function deriveWorkVisibility(task: TaskRecord): WorkVisibility {
+  if (isProjectSetupTask(task)) {
+    return { kind: 'hidden', countInProjectTotals: false }
+  }
   const explicit = objectValue(task.workVisibility)
   const explicitKind = stringValue(explicit?.kind)
   if (explicitKind === 'primary' || explicitKind === 'supporting' || explicitKind === 'internal_step' || explicitKind === 'hidden') {

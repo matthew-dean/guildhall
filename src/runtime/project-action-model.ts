@@ -185,6 +185,7 @@ function startReadinessButtonLabel(readiness: ProjectActionStartReadiness): stri
     return /question|answer/i.test(readiness.message ?? '') ? 'Open Thread' : 'Open item'
   }
   if (readiness.code === 'import_drafts_waiting') return 'Review drafts'
+  if (readiness.code === 'imported_scope_shaping') return 'Draft first brief'
   if (readiness.code === 'no_unattended_progress') {
     const message = readiness.message ?? ''
     if (/brief/i.test(message)) return 'Review brief'
@@ -205,6 +206,7 @@ function runControlLabel(readiness: ProjectActionStartReadiness | null | undefin
   if (readiness.code === 'required_migration_pending') return 'Migrate'
   if (isProviderReadinessCode(readiness.code)) return 'Needs provider'
   if (readiness.code === 'all_terminal') return 'No runnable tasks'
+  if (readiness.code === 'imported_scope_shaping') return 'Needs briefs'
   if (/question|answer/i.test(message)) return 'Waiting on answer'
   if (/recover|blocked|escalation/i.test(message)) return 'Needs recovery'
   if (/draft/i.test(message)) return 'Review drafts'
@@ -224,6 +226,7 @@ function isProviderReadinessCode(code: string | undefined): boolean {
 function startReadinessActionLabel(readiness: ProjectActionStartReadiness): string {
   if (readiness.code === 'required_migration_pending') return 'Required migration'
   if (readiness.code === 'import_drafts_waiting') return 'Review imported drafts'
+  if (readiness.code === 'imported_scope_shaping') return 'Imported scope needs briefs'
   if (isProviderReadinessCode(readiness.code)) return 'Provider unavailable'
   if (readiness.code === 'no_unattended_progress') {
     const message = readiness.message ?? ''

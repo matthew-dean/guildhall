@@ -4738,7 +4738,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
   async function startBlockerForImportDrafts(projectPath: string): Promise<{
     canStart: false
-    code: 'import_drafts_waiting'
+    code: 'import_drafts_waiting' | 'imported_scope_shaping'
     message: string
     actionHref: string
   } | null> {
@@ -4750,6 +4750,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
     const tasks = Array.isArray(raw) ? raw : raw.tasks ?? []
     const importDrafts = tasks.filter(t => t && typeof t === 'object' && (t as { status?: unknown }).status === 'import_draft')
     if (importDrafts.length === 0) return null
+    const importerTask = tasks.find(task =>
+      task &&
+      typeof task === 'object' &&
+      (task as { id?: unknown }).id === WORKSPACE_IMPORT_TASK_ID,
+    ) as { status?: unknown } | undefined
     const runnable = tasks.some(t => {
       if (!t || typeof t !== 'object') return false
       const status = String((t as { status?: unknown }).status ?? '')
@@ -4759,13 +4764,18 @@ export function buildServeApp(opts: ServeOptions = {}): {
     const first = importDrafts[0] as { id?: unknown; title?: unknown }
     const title = typeof first.title === 'string' && first.title.trim() ? first.title.trim() : 'the first imported draft'
     const id = typeof first.id === 'string' ? first.id : ''
+    const importerDone = typeof importerTask?.status === 'string' && ['done', 'spec_review'].includes(importerTask.status)
     return {
       canStart: false,
-      code: 'import_drafts_waiting',
+      code: importerDone ? 'imported_scope_shaping' : 'import_drafts_waiting',
       message:
-        importDrafts.length === 1
-          ? `Review the imported draft "${title}" and turn it into a task brief before starting.`
-          : `Review ${importDrafts.length} imported drafts before starting. Start with "${title}".`,
+        importerDone
+          ? importDrafts.length === 1
+            ? `Imported current work still needs a real brief before Guildhall can build unattended. Start with "${title}".`
+            : `${importDrafts.length} imported current-scope tasks still need real briefs before Guildhall can build unattended. Start with "${title}".`
+          : importDrafts.length === 1
+            ? `Review the imported draft "${title}" and turn it into a task brief before starting.`
+            : `Review ${importDrafts.length} imported drafts before starting. Start with "${title}".`,
       actionHref: id ? `/task/${encodeURIComponent(id)}` : '/notifications',
     }
   }
@@ -4844,7 +4854,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   }
 
   async function workspaceImportDraftForOrientation(projectPath: string, startReadiness: { code?: string } | null | undefined) {
-    if (!startReadiness || !['import_drafts_waiting', 'workspace_import_refresh_needed'].includes(startReadiness.code ?? '')) {
+    if (!startReadiness || !['import_drafts_waiting', 'imported_scope_shaping', 'workspace_import_refresh_needed'].includes(startReadiness.code ?? '')) {
       return null
     }
     const inventory = await detectWorkspaceSignals({ projectPath })

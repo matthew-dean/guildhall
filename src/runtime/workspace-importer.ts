@@ -22,6 +22,12 @@ import {
   type EvidenceTask,
   type EvidenceSource,
 } from './evidence-work-graph-intake.js'
+import {
+  evidenceTaskDescription,
+  evidenceTaskPriority,
+  evidenceTaskReferences,
+  evidenceTaskWhyThisMayMatter,
+} from './evidence-task-import-draft.js'
 
 // ---------------------------------------------------------------------------
 // FR-34: reserved workspace-importer task.
@@ -1067,17 +1073,9 @@ async function materializeEvidenceWorkGraphTasks(
     return [...input.parsedTasks]
   }
 
-  const parsedTaskIds = new Set(input.parsedTasks.map(task => task.id))
-  const graphAddsNetNewStructure = plan.tasks.some(task =>
-    task.kind === 'integration' || !parsedTaskIds.has(task.id),
-  )
-  if (!graphAddsNetNewStructure) {
-    return [...input.parsedTasks]
-  }
-
   const graphTaskIds = new Set(plan.tasks.map(task => task.id))
   const reconciledIds = new Set(plan.reconciliations.map(reconciliation => reconciliation.existingTaskId))
-  const graphTasks = plan.tasks.map(task => graphTaskToParsedTask(task, sources))
+  const graphTasks = plan.tasks.map(task => graphTaskToParsedTask(task))
   const untouchedParsedTasks = input.parsedTasks.filter(task =>
     !graphTaskIds.has(task.id) &&
     !reconciledIds.has(task.id),
@@ -1086,30 +1084,22 @@ async function materializeEvidenceWorkGraphTasks(
   return [...graphTasks, ...untouchedParsedTasks]
 }
 
-function graphTaskToParsedTask(task: EvidenceTask, sources: readonly EvidenceSource[]): MaterializedImportTask {
-  const references = sources.map(source => source.path)
+function graphTaskToParsedTask(task: EvidenceTask): MaterializedImportTask {
+  const references = evidenceTaskReferences(task)
   return {
     id: task.id,
     title: task.title,
-    description: [
-      task.kind === 'integration'
-        ? `Wire ${task.deliverableName} into ${task.consumerSurface ?? task.targetArea}.`
-        : `Build ${task.deliverableName} as ${task.producedArtifact ?? 'a deliverable'}.`,
-      task.buildsOn.length > 0 ? `Builds on: ${task.buildsOn.join(', ')}.` : '',
-      references.length > 0 ? `Evidence: ${references.join(', ')}.` : '',
-    ].filter(Boolean).join(' '),
-    whyThisMayMatter: task.kind === 'integration'
-      ? `${task.consumerSurface ?? task.targetArea} depends on ${task.deliverableName} before the user-facing flow can be completed.`
-      : `${task.deliverableName} appears to be a missing prerequisite the project documentation already expects.`,
+    description: evidenceTaskDescription(task),
+    whyThisMayMatter: evidenceTaskWhyThisMayMatter(task),
     assumptions: [
       'The referenced documentation still represents intended project direction.',
     ],
     missingInformation: [
-      'Guildhall still needs to confirm the final success criteria and implementation boundary during shaping.',
+      'Guildhall still needs to confirm the final implementation boundary during shaping.',
     ],
     domain: task.targetArea,
     scope: 'current',
-    priority: task.kind === 'integration' ? 'normal' : 'high',
+    priority: evidenceTaskPriority(task),
     references,
     acceptanceCriteria: task.acceptanceCriteria,
     dependsOn: task.dependsOn,

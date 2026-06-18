@@ -331,11 +331,11 @@ describe('evidence-to-work-graph intake', () => {
       expect.arrayContaining([
         expect.objectContaining({
           title: 'Implement dialogue-and-character-voice reviewer lane',
-          targetArea: 'Coherence',
+          targetArea: 'coherence',
         }),
         expect.objectContaining({
           title: 'Implement scene-and-chapter-intelligence reviewer lane',
-          targetArea: 'Coherence',
+          targetArea: 'coherence',
         }),
       ]),
     )

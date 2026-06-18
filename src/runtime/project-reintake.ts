@@ -8,6 +8,10 @@ import {
   type EvidenceSource,
   type EvidenceTask,
 } from './evidence-work-graph-intake.js'
+import {
+  evidenceTaskDescription,
+  evidenceTaskPriority,
+} from './evidence-task-import-draft.js'
 
 export type ProjectReintakeSource = EvidenceSource
 
@@ -363,12 +367,10 @@ function evidenceTaskToDraft(task: EvidenceTask): ReintakeTaskDraft {
   return {
     id: task.id,
     title: task.title,
-    description: task.kind === 'integration'
-      ? `Wire ${task.deliverableName} into ${task.consumerSurface ?? task.targetArea}.`
-      : `Build ${task.deliverableName}.`,
+    description: evidenceTaskDescription(task),
     domain: task.targetArea,
     status: 'import_draft',
-    priority: task.kind === 'integration' ? 'normal' : 'high',
+    priority: evidenceTaskPriority(task),
     dependsOn: task.dependsOn,
     acceptanceCriteria: task.acceptanceCriteria.map(criterion => ({
       id: criterion.id,

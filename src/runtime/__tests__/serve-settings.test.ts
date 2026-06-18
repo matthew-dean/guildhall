@@ -1143,6 +1143,91 @@ describe('POST /api/project/start', () => {
     expect(startBody.actionHref).toBe('/task/task-import-1')
   })
 
+  it('treats approved import drafts as shaping backlog instead of ongoing import review', async () => {
+    const tasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
+    await fs.mkdir(path.dirname(tasksPath), { recursive: true })
+    const now = new Date().toISOString()
+    await fs.writeFile(
+      tasksPath,
+      JSON.stringify({
+        version: 1,
+        lastUpdated: now,
+        tasks: [
+          {
+            id: 'task-workspace-import',
+            title: 'Import project notes and plans',
+            description: 'Reserved importer.',
+            domain: '_workspace_import',
+            status: 'done',
+            priority: 'high',
+            acceptanceCriteria: [],
+            outOfScope: [],
+            dependsOn: [],
+            notes: [],
+            gateResults: [],
+            reviewVerdicts: [],
+            adjudications: [],
+            escalations: [],
+            agentIssues: [],
+            revisionCount: 0,
+            remediationAttempts: 0,
+            createdAt: now,
+            updatedAt: now,
+          },
+          {
+            id: 'task-import-1',
+            title: 'Define fixture schemas',
+            description: 'Needs shaping before work can run.',
+            domain: 'core',
+            status: 'import_draft',
+            priority: 'normal',
+            acceptanceCriteria: [],
+            outOfScope: [],
+            dependsOn: [],
+            notes: [],
+            gateResults: [],
+            reviewVerdicts: [],
+            adjudications: [],
+            escalations: [],
+            agentIssues: [],
+            revisionCount: 0,
+            remediationAttempts: 0,
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
+      }, null, 2),
+      'utf8',
+    )
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const projectRes = await app.fetch(new Request(scoped('/api/project')))
+    const projectBody = (await projectRes.json()) as {
+      startReadiness?: { canStart?: boolean; code?: string; actionHref?: string; message?: string }
+      orientationSpine?: { summary?: { headline?: string; topBlocker?: string; nextAction?: string; includedCount?: number; progress?: { total?: number; done?: number } } }
+    }
+    expect(projectBody.startReadiness).toMatchObject({
+      canStart: false,
+      code: 'imported_scope_shaping',
+      actionHref: '/task/task-import-1',
+    })
+    expect(projectBody.startReadiness?.message).toContain('still needs a real brief')
+    expect(projectBody.orientationSpine?.summary).toMatchObject({
+      headline: 'Current work is being shaped.',
+      nextAction: 'Draft the first current-scope brief.',
+      includedCount: 1,
+      progress: { total: 1, done: 0 },
+    })
+
+    const startRes = await app.fetch(
+      new Request(scoped('/api/project/start'), { method: 'POST', body: '{}' }),
+    )
+    expect(startRes.status).toBe(400)
+    const startBody = (await startRes.json()) as { code?: string; actionHref?: string }
+    expect(startBody.code).toBe('imported_scope_shaping')
+    expect(startBody.actionHref).toBe('/task/task-import-1')
+  })
+
   it('blocks Start when ready tasks still need brief cleanup', async () => {
     const now = new Date().toISOString()
     await writeSystemTasks({
@@ -2287,10 +2372,10 @@ describe('Workspace Import review endpoints', () => {
     }
 
     expect(body.ok).toBe(true)
-    expect(body.tasksAdded).toBe(3)
+    expect(body.tasksAdded).toBe(4)
 
     const tasks = await readTasks(tmpDir)
-    expect(tasks.some(task => task.id === 'curated-first-task')).toBe(false)
+    expect(tasks.some(task => task.id === 'curated-first-task')).toBe(true)
     expect(tasks.some(task => task.title === 'Detector task one')).toBe(true)
     expect(tasks.some(task => task.title === 'Detector task two')).toBe(true)
     expect(tasks.some(task => task.title === 'Detector task three')).toBe(true)
