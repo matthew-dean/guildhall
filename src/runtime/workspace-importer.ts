@@ -1218,6 +1218,25 @@ function formatParsedImportAsSpec(parsed: ParsedImport): string {
   }, parsed))
 }
 
+function normalizeParsedImportForSpec(
+  parsed: ParsedImport,
+  workspaceProjectPath: string,
+): ParsedImport {
+  return {
+    goals: parsed.goals.map(goal => ({ ...goal })),
+    tasks: parsed.tasks.map(task => ({
+      ...task,
+      ...(task.missingInformation?.length
+        ? { missingInformation: cleanImportedMissingInformation(task.missingInformation) }
+        : {}),
+      references: task.references.map(reference =>
+        normalizeImportedReferenceForTask(reference, workspaceProjectPath, workspaceProjectPath),
+      ),
+    })),
+    milestones: parsed.milestones.map(milestone => ({ ...milestone })),
+  }
+}
+
 function serializeInlineYamlValue(value: unknown, _indent: number): string[] {
   if (typeof value === 'string') return [JSON.stringify(value)]
   if (typeof value === 'number' || typeof value === 'boolean') return [String(value)]
@@ -1689,7 +1708,7 @@ function graphTaskToParsedTask(
     assumptions: [
       'The referenced documentation still represents intended project direction.',
     ],
-    missingInformation: parsedTask?.missingInformation ? [...parsedTask.missingInformation] : [],
+    missingInformation: cleanImportedMissingInformation(parsedTask?.missingInformation ?? []),
     domain: graphTaskDomain(task, parsedTask),
     scope: parsedTask?.scope === 'later' ? 'later' : 'current',
     priority: evidenceTaskPriority(task),
@@ -2406,7 +2425,7 @@ export async function approveWorkspaceImport(
   })
   const materializedTasks = materializedParsed.tasks
   const approvedSpec = input.draftOverride
-    ? formatParsedImportAsSpec(materializedParsed)
+    ? formatParsedImportAsSpec(normalizeParsedImportForSpec(materializedParsed, input.projectPath))
     : null
   const existingImportedTasksByTitle = new Map<string, Task>()
   for (const existingTask of queue.tasks) {

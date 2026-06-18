@@ -1029,6 +1029,10 @@ tasks:
         ]),
       },
     ])
+    expect(reparsed.tasks[0]?.missingInformation ?? []).not.toContain(
+      'Guildhall still needs to confirm scope, current relevance, and success criteria during shaping.',
+    )
+    expect((reparsed.tasks[0]?.references ?? []).every(reference => !path.isAbsolute(reference))).toBe(true)
   })
 
   it('archives stale importer-generated draft residue during a full scope replacement refresh', async () => {
