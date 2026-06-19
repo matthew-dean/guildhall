@@ -13,7 +13,7 @@ const DONE_HEADING_RE =
   /^(done|shipped|complete|completed|recent progress|milestone snapshot|verification snapshot)$/i
 
 const OPEN_HEADING_RE =
-  /^(next up|in progress|blockers?(?:\s*\/\s*open questions)?|parity gaps|v1 polish(?:\s*\+\s*hardening)?|v2 priorities|later|current focus|p0|p1|p2|open defects|next in phase 1|current next milestone)$/i
+  /^(next up|in progress|blockers?(?:\s*\/\s*open questions)?|parity gaps|v1 polish(?:\s*\+\s*hardening)?|v2 priorities(?:\b.*)?|later(?:\b.*)?|current focus|p0|p1|p2|open defects|next in phase 1|current next milestone)$/i
 
 const STAGE_HEADING_RE = /^stage\s+\d+\s*:/i
 const DELIVERABLE_LABEL_RE = /^deliverables:\s*$/i
@@ -402,8 +402,23 @@ function scopeHintForOpenWorkSection(
   sectionHeading: string | null | undefined,
 ): WorkspaceSignal['scopeHint'] | undefined {
   if (!sectionHeading) return undefined
-  if (/^(later|v2 priorities)$/i.test(sectionHeading.trim())) return 'later'
+  if (/^(later|v2 priorities)(?:\b.*)?$/i.test(sectionHeading.trim())) return 'later'
   return undefined
+}
+
+function scopeHintForOpenWorkTitle(
+  title: string | null | undefined,
+): WorkspaceSignal['scopeHint'] | undefined {
+  if (!title) return undefined
+  if (/\b(deferred|post[-\s]?launch|later|v2)\b/i.test(title)) return 'later'
+  return undefined
+}
+
+function scopeHintForOpenWork(
+  sectionHeading: string | null | undefined,
+  title: string | null | undefined,
+): WorkspaceSignal['scopeHint'] | undefined {
+  return scopeHintForOpenWorkSection(sectionHeading) ?? scopeHintForOpenWorkTitle(title)
 }
 
 function isFutureStage(
@@ -720,7 +735,7 @@ export const planningDocsSource: TaskSource = {
             title: cleanHeading(unchecked[1]!),
             evidence: `${rel}: ${line.trim()}`.slice(0, 240),
             references: [abs],
-            ...(scopeHintForOpenWorkSection(currentSection) ? { scopeHint: scopeHintForOpenWorkSection(currentSection) } : {}),
+            ...(scopeHintForOpenWork(currentSection, unchecked[1]) ? { scopeHint: scopeHintForOpenWork(currentSection, unchecked[1]) } : {}),
             ...(domainHint ? { domainHint } : {}),
             confidence: 'high',
           })
@@ -754,7 +769,7 @@ export const planningDocsSource: TaskSource = {
               title: title.replace(/:$/, ''),
               evidence: `${rel}: ${line.trim()}`.slice(0, 240),
               references: [abs],
-              ...(scopeHintForOpenWorkSection(currentSection) ? { scopeHint: scopeHintForOpenWorkSection(currentSection) } : {}),
+              ...(scopeHintForOpenWork(currentSection, title) ? { scopeHint: scopeHintForOpenWork(currentSection, title) } : {}),
               ...(domainHint ? { domainHint } : {}),
               confidence: 'medium',
             })
@@ -789,8 +804,8 @@ export const planningDocsSource: TaskSource = {
               ...(stageScopedSignal?.role ? { role: stageScopedSignal.role } : {}),
               ...(stageScopedSignal?.scopeHint
                 ? { scopeHint: stageScopedSignal.scopeHint }
-                : scopeHintForOpenWorkSection(currentSection)
-                  ? { scopeHint: scopeHintForOpenWorkSection(currentSection) }
+                : scopeHintForOpenWork(currentSection, title)
+                  ? { scopeHint: scopeHintForOpenWork(currentSection, title) }
                   : {}),
               ...(domainHint ? { domainHint } : {}),
               confidence: 'medium',
@@ -824,7 +839,7 @@ export const planningDocsSource: TaskSource = {
             title: cleanHeading(numbered[1]!),
             evidence: `${rel}: ${line.trim()}`.slice(0, 240),
             references: [abs],
-            ...(scopeHintForOpenWorkSection(currentSection) ? { scopeHint: scopeHintForOpenWorkSection(currentSection) } : {}),
+            ...(scopeHintForOpenWork(currentSection, numbered[1]) ? { scopeHint: scopeHintForOpenWork(currentSection, numbered[1]) } : {}),
             ...(domainHint ? { domainHint } : {}),
             confidence: 'medium',
           })

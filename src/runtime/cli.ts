@@ -1276,7 +1276,7 @@ function workspaceImportDraftWarnings(
     })
   }
   const genericTaskIds = draft.tasks
-    .filter(task => /^(research|implement|verify)(?:\b|$)/i.test(task.title.trim()))
+    .filter(task => /^(research|implement|verify)(?:\s+(?:it|this|feature|task|work))?\.?$/i.test(task.title.trim()))
     .map(task => task.suggestedId)
   if (genericTaskIds.length > 0) {
     warnings.push({

@@ -514,6 +514,74 @@ The next milestone is Stage 1: Fixture And Evaluation Harness.
     ]))
   })
 
+  it('marks obvious future-section planning bullets as later scope', async () => {
+    writeFileSync(
+      join(dir, 'PROJECT_STATE.md'),
+      `# Project State
+
+## Next Up
+
+### V1 polish + hardening
+- [ ] Add smoke coverage.
+
+### V2 priorities (post V1 launch)
+- Inline comments
+- Connections / backlinks graph
+`,
+    )
+
+    const sigs = await planningDocsSource.detect({
+      projectPath: dir,
+      exec: fakeExec(() => ({
+        stdout: ['PROJECT_STATE.md'].join('\n'),
+        code: 0,
+      })),
+    })
+
+    expect(sigs).toContainEqual(expect.objectContaining({
+      kind: 'open_work',
+      title: 'Add smoke coverage.',
+    }))
+    expect(sigs).toContainEqual(expect.objectContaining({
+      kind: 'open_work',
+      title: 'Inline comments',
+      scopeHint: 'later',
+    }))
+    expect(sigs).toContainEqual(expect.objectContaining({
+      kind: 'open_work',
+      title: 'Connections / backlinks graph',
+      scopeHint: 'later',
+    }))
+  })
+
+  it('marks deferred checklist items as later even when they appear in status history', async () => {
+    writeFileSync(
+      join(dir, 'PROJECT_STATE.md'),
+      `# Project State
+
+## Done
+
+### Version History
+- [x] Version list UI
+- [ ] Version diff view (deferred)
+`,
+    )
+
+    const sigs = await planningDocsSource.detect({
+      projectPath: dir,
+      exec: fakeExec(() => ({
+        stdout: ['PROJECT_STATE.md'].join('\n'),
+        code: 0,
+      })),
+    })
+
+    expect(sigs).toContainEqual(expect.objectContaining({
+      kind: 'open_work',
+      title: 'Version diff view (deferred)',
+      scopeHint: 'later',
+    }))
+  })
+
   it('does not duplicate current-stage deliverables as open work when the roadmap already names explicit current milestone starter tasks', async () => {
     mkdirSync(join(dir, 'docs', 'harness'), { recursive: true })
     writeFileSync(

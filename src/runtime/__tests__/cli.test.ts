@@ -364,6 +364,7 @@ describe('Guildhall CLI surface', () => {
     expect(report.draft.tasks.map(task => task.scope)).toContain('current')
     expect(report.draft.tasks.map(task => task.scope)).toContain('later')
     expect(report.warnings.some(warning => warning.code === 'read_only_report')).toBe(true)
+    expect(report.warnings.some(warning => warning.code === 'generic_task_title')).toBe(false)
   })
 
   it('exposes external-agent memory bridge import, review, and reject through explicit JSON CLI flows', async () => {
