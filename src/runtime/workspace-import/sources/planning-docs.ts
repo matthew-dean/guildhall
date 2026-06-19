@@ -380,7 +380,7 @@ function headingSignalKind(
 
 function parseStageOrdinal(label: string | null | undefined): number | null {
   if (!label) return null
-  const match = /^stage\s+(\d+)(?:\s*[:(].*)?$/i.exec(label.trim())
+  const match = /^stage\s+(\d+)(?:\b|\s*[:(].*)/i.exec(label.trim())
   if (!match?.[1]) return null
   const value = Number.parseInt(match[1], 10)
   return Number.isFinite(value) ? value : null
@@ -398,10 +398,25 @@ function scopeHintForStage(
   return 'current'
 }
 
+function isFutureStage(
+  stageLabel: string | null | undefined,
+  currentMilestoneStage: string | null | undefined,
+): boolean {
+  const stageNumber = parseStageOrdinal(stageLabel)
+  const currentStageNumber = parseStageOrdinal(currentMilestoneStage)
+  return stageNumber != null && currentStageNumber != null && stageNumber > currentStageNumber
+}
+
 function stageDeliverableSignal(
   currentSection: string,
   currentMilestoneStage: string | null,
 ): { kind: WorkspaceSignal['kind']; scopeHint?: WorkspaceSignal['scopeHint']; role?: WorkspaceSignal['role'] } {
+  if (isFutureStage(currentSection, currentMilestoneStage)) {
+    return {
+      kind: 'open_work',
+      scopeHint: 'later',
+    }
+  }
   return {
     kind: 'context',
     role: 'capability',
@@ -734,7 +749,7 @@ export const planningDocsSource: TaskSource = {
               confidence: 'medium',
             })
           } else if (!grouping) {
-            if (currentLabel === 'deliverables') {
+            if (currentLabel === 'deliverables' && stageScopedSignal?.kind === 'context') {
               signals.push({
                 source: 'planning-docs',
                 kind: 'context',

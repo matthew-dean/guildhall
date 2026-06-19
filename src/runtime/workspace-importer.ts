@@ -1493,11 +1493,7 @@ export function workspaceGoalsNeedStructuralRefresh(state: WorkspaceGoalsState |
   if (!hasStructuralContext) return false
   if (state.scopeMembershipHydrated) return true
   if (state.version < WORKSPACE_GOALS_STRUCTURAL_VERSION) return true
-  return state.context.some(context =>
-    (context.role === 'brief_input' || context.role === 'capability') &&
-    context.structure !== 'record' &&
-    context.structure !== 'note',
-  )
+  return false
 }
 
 export async function materializeParsedWorkspaceImport(input: {

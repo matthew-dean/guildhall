@@ -1475,6 +1475,39 @@ tasks:
     expect(workspaceGoalsNeedStructuralRefresh(state)).toBe(true)
   })
 
+  it('does not require structural refresh for fresh capability notes with explicit task-scope membership', () => {
+    const state = parseWorkspaceGoalsState({
+      version: 3,
+      recordedAt: '2026-06-18T12:00:00.000Z',
+      goals: [],
+      tasks: [],
+      milestones: [],
+      context: [
+        {
+          label: 'Mastra workflow for the prototype iteration loop',
+          excerpt: 'Future-stage capability note.',
+          source: 'planning-docs',
+          role: 'capability',
+          scopeHint: 'later',
+        },
+      ],
+      approved: {
+        goalCount: 0,
+        taskCount: 2,
+        milestoneCount: 0,
+        currentTaskCount: 1,
+        laterTaskCount: 1,
+        taskIds: ['task-current', 'task-later'],
+        currentTaskIds: ['task-current'],
+        laterTaskIds: ['task-later'],
+      },
+      detected: null,
+    })
+
+    expect(state?.scopeMembershipHydrated).toBeUndefined()
+    expect(workspaceGoalsNeedStructuralRefresh(state)).toBe(false)
+  })
+
   it('preserves current-vs-later task ids when summarizing an importer spec', () => {
     const summary = summarizeWorkspaceImportSpec([
       '```yaml',
@@ -3428,16 +3461,21 @@ tasks:
     const draft = formWorkspaceHypothesis(inventory)
 
     expect(draft.tasks.map(task => task.title)).toEqual([
+      'Mastra workflow for the prototype iteration loop',
+      'specialist editor agent calls for the first review lanes',
       'Define fixture, expected-record, prototype-run, and evaluation schemas.',
       'Add the first tiny fiction fixture and human-authored expected records.',
     ])
+    expect(draft.tasks.find(task => task.title === 'Mastra workflow for the prototype iteration loop')?.scope).toBe('later')
+    expect(draft.tasks.find(task => task.title === 'specialist editor agent calls for the first review lanes')?.scope).toBe('later')
+    expect(draft.tasks.find(task => task.title === 'Define fixture, expected-record, prototype-run, and evaluation schemas.')?.scope).toBe('current')
     expect(draft.context).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        label: 'Mastra workflow for the prototype iteration loop',
+        label: 'fixture directory shape for at least one small story fixture',
         role: 'capability',
       }),
       expect.objectContaining({
-        label: 'specialist editor agent calls for the first review lanes',
+        label: 'typed fixture and expected-record contracts',
         role: 'capability',
       }),
     ]))
@@ -3457,8 +3495,8 @@ tasks:
     expect(approved).toMatchObject({ success: true })
 
     const q = await readQueue()
-    expect(q.tasks.find(task => task.title === 'Mastra workflow for the prototype iteration loop')).toBeUndefined()
-    expect(q.tasks.find(task => task.title === 'specialist editor agent calls for the first review lanes')).toBeUndefined()
+    expect(q.tasks.find(task => task.title === 'Mastra workflow for the prototype iteration loop')?.status).toBe('shelved')
+    expect(q.tasks.find(task => task.title === 'specialist editor agent calls for the first review lanes')?.status).toBe('shelved')
   })
 
   it('prefers decomposed spec tasks over coarse later-stage roadmap deliverables when a current milestone and inventory both exist', async () => {
@@ -3625,30 +3663,18 @@ tasks:
 
     const inventory = await detectWorkspaceSignals({ projectPath: tmpDir })
     const draft = formWorkspaceHypothesis(inventory)
-    expect(draft.tasks.map(task => task.title)).not.toEqual(expect.arrayContaining([
+    expect(draft.tasks.map(task => task.title)).toEqual(expect.arrayContaining([
       'provider/model registry schema',
       'fiction bakeoff scenarios for writer, editor, reviewer, and safety lanes',
       'manuscript import or simple editor shell',
       'project brief and author-provenance capture',
     ]))
-    expect(draft.context).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        label: 'provider/model registry schema',
-        role: 'capability',
-      }),
-      expect.objectContaining({
-        label: 'fiction bakeoff scenarios for writer, editor, reviewer, and safety lanes',
-        role: 'capability',
-      }),
-      expect.objectContaining({
-        label: 'manuscript import or simple editor shell',
-        role: 'capability',
-      }),
-      expect.objectContaining({
-        label: 'project brief and author-provenance capture',
-        role: 'capability',
-      }),
-    ]))
+    expect(draft.tasks.filter(task => [
+      'provider/model registry schema',
+      'fiction bakeoff scenarios for writer, editor, reviewer, and safety lanes',
+      'manuscript import or simple editor shell',
+      'project brief and author-provenance capture',
+    ].includes(task.title)).every(task => task.scope === 'later')).toBe(true)
     const materialized = await materializeWorkspaceImportDraft({
       memoryDir,
       projectPath: tmpDir,
@@ -3659,36 +3685,20 @@ tasks:
       'Define fixture, expected-record, prototype-run, and evaluation schemas.',
     ]))
     expect(materialized.tasks.find(task => task.title === 'Implement dialogue-and-character-voice reviewer lane')).toBeUndefined()
-    expect(materialized.tasks.map(task => task.title)).not.toEqual(expect.arrayContaining([
+    expect(materialized.tasks.filter(task => [
       'provider/model registry schema',
       'fiction bakeoff scenarios for writer, editor, reviewer, and safety lanes',
       'manuscript import or simple editor shell',
       'project brief and author-provenance capture',
       'Mastra workflow for the prototype iteration loop',
       'specialist editor agent calls for the first review lanes',
-      'Implement dialogue-and-character-voice reviewer lane',
-    ]))
+    ].includes(task.title)).every(task => task.scope === 'later')).toBe(true)
+    expect(materialized.tasks.find(task => task.title === 'Implement dialogue-and-character-voice reviewer lane')).toBeUndefined()
     expect(materialized.context).toEqual(expect.arrayContaining([
       expect.objectContaining({
         label: 'Spec: Dialogue And Character Voice',
         role: 'capability',
         scopeHint: 'later',
-      }),
-      expect.objectContaining({
-        label: 'provider/model registry schema',
-        role: 'capability',
-      }),
-      expect.objectContaining({
-        label: 'fiction bakeoff scenarios for writer, editor, reviewer, and safety lanes',
-        role: 'capability',
-      }),
-      expect.objectContaining({
-        label: 'manuscript import or simple editor shell',
-        role: 'capability',
-      }),
-      expect.objectContaining({
-        label: 'project brief and author-provenance capture',
-        role: 'capability',
       }),
     ]))
   })

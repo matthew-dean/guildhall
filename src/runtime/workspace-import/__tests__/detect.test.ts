@@ -414,7 +414,7 @@ describe('planningDocsSource', () => {
     expect(sigs.filter((signal) => signal.kind === 'open_work' || signal.kind === 'milestone')).toEqual([])
   })
 
-  it('keeps roadmap deliverables as capability context even when the current milestone is explicit', async () => {
+  it('keeps current roadmap deliverables as capability context and future deliverables as later task candidates', async () => {
     mkdirSync(join(dir, 'docs', 'harness'), { recursive: true })
     writeFileSync(
       join(dir, 'docs', 'harness', 'implementation-roadmap.md'),
@@ -462,14 +462,12 @@ The next milestone is Stage 1: Fixture And Evaluation Harness.
         scopeHint: 'current',
       }),
       expect.objectContaining({
-        kind: 'context',
-        role: 'capability',
+        kind: 'open_work',
         title: 'Mastra workflow for the prototype iteration loop',
         scopeHint: 'later',
       }),
       expect.objectContaining({
-        kind: 'context',
-        role: 'capability',
+        kind: 'open_work',
         title: 'specialist editor agent calls for the first review lanes',
         scopeHint: 'later',
       }),
@@ -482,14 +480,6 @@ The next milestone is Stage 1: Fixture And Evaluation Harness.
       expect.objectContaining({
         kind: 'open_work',
         title: 'typed fixture and expected-record contracts',
-      }),
-      expect.objectContaining({
-        kind: 'open_work',
-        title: 'Mastra workflow for the prototype iteration loop',
-      }),
-      expect.objectContaining({
-        kind: 'open_work',
-        title: 'specialist editor agent calls for the first review lanes',
       }),
     ]))
   })
@@ -541,14 +531,12 @@ The next milestone is Stage 1: Fixture And Evaluation Harness.
         title: 'Add the first tiny fiction fixture and human-authored expected records.',
       }),
       expect.objectContaining({
-        kind: 'context',
-        role: 'capability',
+        kind: 'open_work',
         title: 'Mastra workflow for the prototype iteration loop',
         scopeHint: 'later',
       }),
       expect.objectContaining({
-        kind: 'context',
-        role: 'capability',
+        kind: 'open_work',
         title: 'specialist editor agent calls for the first review lanes',
         scopeHint: 'later',
       }),
