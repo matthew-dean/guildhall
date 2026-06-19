@@ -17,7 +17,9 @@ const OPEN_HEADING_RE =
 
 const STAGE_HEADING_RE = /^stage\s+\d+\s*:/i
 const DELIVERABLE_LABEL_RE = /^deliverables:\s*$/i
+const SCOPE_LABEL_RE = /^(?:primary\s+)?scope:\s*$/i
 const SUCCESS_GATES_LABEL_RE = /^success gates:\s*$/i
+const DONE_GATE_LABEL_RE = /^done gate(?:\s+for\s+.+?)?:\s*$/i
 const DO_NOT_START_LABEL_RE = /^do not start yet:\s*$/i
 const GOAL_LABEL_RE = /^goal:\s*(.+?)\s*$/i
 const RECOMMENDED_TASK_TITLE_RE = /^-\s+\*\*recommended first task title:\*\*\s+(.+?)\s*$/i
@@ -239,7 +241,7 @@ function startsWrappedLabel(line: string): boolean {
 function isWrappedLabelContinuationLine(line: string): boolean {
   if (!line.trim()) return false
   const trimmed = line.trim()
-  return !/^(?:#{1,6}\s+|[-*]\s+(?:\[[xX ]\]\s+)?|\d+\.\s+|goal:\s+|status:\s+|deliverables:\s*$|success gates:\s*$|do not start yet:\s*$|the next milestone is:\s+)/i.test(trimmed)
+  return !/^(?:#{1,6}\s+|[-*]\s+(?:\[[xX ]\]\s+)?|\d+\.\s+|goal:\s+|status:\s+|(?:primary\s+)?scope:\s*$|deliverables:\s*$|success gates:\s*$|done gate(?:\s+for\s+.+?)?:\s*$|do not start yet:\s*$|the next milestone is:\s+)/i.test(trimmed)
 }
 
 function isListContinuationLine(line: string): boolean {
@@ -393,7 +395,7 @@ function scopeHintForStage(
   const stageNumber = parseStageOrdinal(stageLabel)
   const currentStageNumber = parseStageOrdinal(currentMilestoneStage)
   if (stageNumber != null && currentStageNumber != null) {
-    return stageNumber === currentStageNumber ? 'current' : 'later'
+    return stageNumber <= currentStageNumber ? 'current' : 'later'
   }
   return 'current'
 }
@@ -488,7 +490,7 @@ export const planningDocsSource: TaskSource = {
       const domainHint = inferDomainHint(rel, multiProjectRoots)
       let currentSection: string | null = null
       let currentSectionRaw: string | null = null
-      let currentLabel: 'deliverables' | 'success_gates' | 'do_not_start' | null = null
+      let currentLabel: 'deliverables' | 'scope' | 'success_gates' | 'done_gate' | 'do_not_start' | null = null
       let pendingRecommendedTaskTitle: string | null = null
       let pendingRecommendedTaskSection: string | null = null
       let pendingRecommendedTaskSectionRaw: string | null = null
@@ -673,8 +675,18 @@ export const planningDocsSource: TaskSource = {
             bulletStack.length = 0
             continue
           }
+          if (SCOPE_LABEL_RE.test(trimmedLine)) {
+            currentLabel = 'scope'
+            bulletStack.length = 0
+            continue
+          }
           if (SUCCESS_GATES_LABEL_RE.test(trimmedLine)) {
             currentLabel = 'success_gates'
+            bulletStack.length = 0
+            continue
+          }
+          if (DONE_GATE_LABEL_RE.test(trimmedLine)) {
+            currentLabel = 'done_gate'
             bulletStack.length = 0
             continue
           }
@@ -748,7 +760,11 @@ export const planningDocsSource: TaskSource = {
           const title = cleanHeading(bullet[2]!)
           const stageScopedSignal = currentLabel === 'deliverables'
             ? stageDeliverableSignal(currentSection, currentMilestoneStage)
+            : currentLabel === 'scope'
+              ? stageDeliverableSignal(currentSection, currentMilestoneStage)
             : currentLabel === 'success_gates'
+              ? { kind: 'context' as const }
+              : currentLabel === 'done_gate'
               ? { kind: 'context' as const }
               : currentLabel === 'do_not_start'
               ? { kind: 'context' as const }
@@ -854,13 +870,26 @@ export const planningDocsSource: TaskSource = {
 }
 
 function detectCurrentMilestoneStage(contents: Iterable<string>): string | null {
+  let earliestStage: number | null = null
+  let earliestNonBaselineStage: number | null = null
   for (const raw of contents) {
     const match = raw.match(/##\s+Current Next Milestone[\s\S]*?The next milestone is\s+(Stage\s+\d+)/i)
     if (match?.[1]) {
       return normalizeStageLabel(match[1])
     }
+    for (const stageMatch of raw.matchAll(/^#{2,4}\s+Stage\s+(\d+)(?:\b|\s*[:(].*)/gim)) {
+      const stage = Number.parseInt(stageMatch[1] ?? '', 10)
+      if (!Number.isFinite(stage)) continue
+      earliestStage = earliestStage == null ? stage : Math.min(earliestStage, stage)
+      if (stage > 0) {
+        earliestNonBaselineStage = earliestNonBaselineStage == null
+          ? stage
+          : Math.min(earliestNonBaselineStage, stage)
+      }
+    }
   }
-  return null
+  const fallbackStage = earliestNonBaselineStage ?? earliestStage
+  return fallbackStage == null ? null : normalizeStageLabel(`Stage ${fallbackStage}`)
 }
 
 function normalizeStageLabel(value: string | null | undefined): string | null {

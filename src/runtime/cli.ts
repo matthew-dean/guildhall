@@ -1360,9 +1360,19 @@ function printWorkspaceImportDraftReport(report: WorkspaceImportDraftReport): vo
   console.log(`[guildhall] Tasks: ${report.draft.tasks.length} (${report.review.totalCurrentTaskCandidates} now, ${report.review.totalLaterTaskCandidates} later)`)
   console.log(`[guildhall] Milestones: ${report.draft.milestones.length}`)
   console.log(`[guildhall] Context notes: ${report.draft.context.length}`)
-  for (const task of report.draft.tasks) {
-    const scope = task.scope === 'later' ? 'later' : 'now'
-    console.log(`[guildhall]   - [${scope}] ${task.title}`)
+  const nowTasks = report.draft.tasks.filter(task => task.scope !== 'later')
+  const laterTasks = report.draft.tasks.filter(task => task.scope === 'later')
+  if (nowTasks.length > 0) {
+    console.log(`[guildhall] Now (${nowTasks.length}):`)
+    for (const task of nowTasks) {
+      console.log(`[guildhall]   - ${task.title}`)
+    }
+  }
+  if (laterTasks.length > 0) {
+    console.log(`[guildhall] Later (${laterTasks.length}):`)
+    for (const task of laterTasks) {
+      console.log(`[guildhall]   - ${task.title}`)
+    }
   }
   if (report.warnings.length > 0) {
     console.log('[guildhall] Warnings:')

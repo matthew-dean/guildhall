@@ -133,6 +133,63 @@ describe('textCorpusSource', () => {
     )
     expect(sigs.some((s) => s.references?.[0]?.endsWith('src/app.ts'))).toBe(false)
   })
+
+  it('keeps specs and feature catalogs as context instead of current work', async () => {
+    mkdirSync(join(dir, 'docs'), { recursive: true })
+    mkdirSync(join(dir, 'specs'), { recursive: true })
+    mkdirSync(join(dir, 'supabase'), { recursive: true })
+    writeFileSync(
+      join(dir, 'docs', 'features.md'),
+      [
+        '# Feature Catalog',
+        '',
+        '- [ ] Inline comments',
+        '- [ ] AI writing assistant',
+      ].join('\n'),
+    )
+    writeFileSync(
+      join(dir, 'specs', 'v1-editor.md'),
+      [
+        '# V1 Editor',
+        '',
+        '## Acceptance Criteria',
+        '- [ ] AC1: User can write rich text.',
+        '- [ ] AC2: User can insert tables.',
+      ].join('\n'),
+    )
+    writeFileSync(
+      join(dir, 'supabase', 'MIGRATION_GUIDE.md'),
+      [
+        '# Migration Guide',
+        '',
+        '- [ ] All CREATE statements use IF NOT EXISTS',
+      ].join('\n'),
+    )
+
+    const sigs = await textCorpusSource.detect({ projectPath: dir })
+
+    expect(sigs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'context',
+        title: 'Text document (docs/features.md): Feature Catalog',
+      }),
+      expect.objectContaining({
+        kind: 'context',
+        title: 'Text document (specs/v1-editor.md): V1 Editor',
+      }),
+      expect.objectContaining({
+        kind: 'context',
+        title: 'Text document (supabase/MIGRATION_GUIDE.md): Migration Guide',
+      }),
+    ]))
+    expect(sigs).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'open_work', title: 'Inline comments' }),
+      expect.objectContaining({ kind: 'open_work', title: 'AI writing assistant' }),
+      expect.objectContaining({ kind: 'open_work', title: 'AC1: User can write rich text.' }),
+      expect.objectContaining({ kind: 'open_work', title: 'AC2: User can insert tables.' }),
+      expect.objectContaining({ kind: 'open_work', title: 'All CREATE statements use IF NOT EXISTS' }),
+    ]))
+  })
 })
 
 describe('agentsMdSource', () => {
@@ -552,6 +609,67 @@ The next milestone is Stage 1: Fixture And Evaluation Harness.
       title: 'Connections / backlinks graph',
       scopeHint: 'later',
     }))
+  })
+
+  it('uses the first numbered stage as current when a release plan has no explicit current milestone', async () => {
+    mkdirSync(join(dir, 'docs'), { recursive: true })
+    writeFileSync(
+      join(dir, 'docs', 'release-plan.md'),
+      `# Release Plan
+
+## Stage 1: Release Hardening
+
+Scope:
+
+- Fill the most important unit and E2E gaps.
+
+Done gate:
+
+- \`pnpm test\`: pass
+
+## Stage 2: Primitive Convergence
+
+Scope:
+
+- Finish remaining high-use primitive replacement.
+
+Done gate:
+
+- Replacement-wave items are complete or deferred.
+`,
+    )
+
+    const sigs = await planningDocsSource.detect({
+      projectPath: dir,
+      exec: fakeExec(() => ({
+        stdout: ['docs/release-plan.md'].join('\n'),
+        code: 0,
+      })),
+    })
+
+    expect(sigs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'context',
+        role: 'capability',
+        title: 'Fill the most important unit and E2E gaps.',
+        scopeHint: 'current',
+      }),
+      expect.objectContaining({
+        kind: 'open_work',
+        title: 'Finish remaining high-use primitive replacement.',
+        scopeHint: 'later',
+      }),
+    ]))
+    expect(sigs).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'open_work',
+        title: 'pnpm test: pass',
+      }),
+      expect.objectContaining({
+        kind: 'open_work',
+        title: 'Replacement-wave items are complete or deferred.',
+      }),
+    ]))
   })
 
   it('marks deferred checklist items as later even when they appear in status history', async () => {

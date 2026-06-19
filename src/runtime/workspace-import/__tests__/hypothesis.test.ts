@@ -96,6 +96,36 @@ describe('formWorkspaceHypothesis', () => {
     })
   })
 
+  it('lets explicit later scope win when duplicate planning signals disagree', () => {
+    const draft = formWorkspaceHypothesis(
+      invFrom([
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'Version diff view',
+          evidence: 'PROJECT_STATE.md: Version diff view',
+          references: ['/repo/PROJECT_STATE.md'],
+          confidence: 'medium',
+        },
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'Version diff view (deferred)',
+          evidence: 'PROJECT_STATE.md: - [ ] Version diff view (deferred)',
+          references: ['/repo/PROJECT_STATE.md'],
+          scopeHint: 'later',
+          confidence: 'high',
+        },
+      ]),
+    )
+
+    expect(draft.tasks).toHaveLength(1)
+    expect(draft.tasks[0]).toMatchObject({
+      title: 'Version diff view (deferred)',
+      scope: 'later',
+    })
+  })
+
   it('does not collapse distinct planning-doc reviewer lanes just because they share generic wording', () => {
     const draft = formWorkspaceHypothesis(
       invFrom([

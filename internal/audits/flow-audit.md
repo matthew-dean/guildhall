@@ -12108,6 +12108,53 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-06-18T22:20:00Z - Tightened workspace-import truth recovery and
+owner-visible draft communication for Narrative Harness and Looma/Knit.
+
+- Work id: `codex:workspace-import-scope-truth-2026-06-18`.
+- User job: a project owner should be able to run Guildhall's workspace import
+  draft and immediately see what work is in the current slice, what is later,
+  and which docs supplied the project context, without broad specs/catalogs or
+  stage-gate prose being flattened into current work.
+- Fix:
+  - `text-corpus` still records specs, feature catalogs, templates, and guide
+    docs as context/source trail, but no longer promotes their unchecked
+    checklist rows into current task candidates.
+  - `planning-docs` treats staged `Scope` bullets like capability context for
+    the active stage, keeps `Done gate` bullets as proof/context, and defaults
+    staged plans without an explicit current marker to the first non-baseline
+    stage while keeping earlier baseline context current.
+  - Draft task synthesis now lets explicit later/deferred signals win when
+    duplicate planning signals disagree, so deferred work cannot be pulled back
+    into current scope by a generic echo.
+  - CLI draft output now groups tasks as `Now` then `Later` with counts instead
+    of printing one source-ordered list that could bury the current slice.
+- Real-project proof:
+  - Narrative Harness draft: `407` signals, `1` goal, `362` context notes,
+    `29` task candidates split as `6 now` and `23 later`; CLI shows `Now (6)`
+    first with fixture/schema/runner/evaluation/debug-report/schema-narrowing
+    work, then `Later (23)` for Mastra, packet-builder, reviewer lanes, UI,
+    billing, audit, and reliability work.
+  - Looma/Knit draft improved from the prior x-ray of `749` signals and
+    `291` task candidates with `280` current to `543` signals and `73` task
+    candidates split as `48 now` and `25 later`; `Version diff view
+    (deferred)` now appears under `Later`, and release-plan Stage 2+ scope no
+    longer appears in current Stage 1 scope.
+- Verification:
+  - `pnpm vitest run src/runtime/workspace-import/__tests__/detect.test.ts src/runtime/workspace-import/__tests__/hypothesis.test.ts src/runtime/workspace-import/__tests__/review.test.ts`
+    passed `77` tests.
+  - `pnpm vitest run src/runtime/workspace-import/__tests__/detect.test.ts src/runtime/workspace-import/__tests__/hypothesis.test.ts src/runtime/__tests__/cli.test.ts --testNamePattern "workspace import draft|explicit later scope|first numbered stage|specs and feature catalogs"`
+    passed the three matched workspace-import tests; the CLI file had no test
+    name matching this filter.
+  - `pnpm build`, `pnpm lint:contracts`, and `git diff --check` passed.
+  - Human-readable proof used `node dist/cli.js workspace-import draft
+    /Users/matthew/git/oss/narrative-harness` and
+    `node dist/cli.js workspace-import draft /Users/matthew/git/oss/looma-knit`;
+    both outputs showed summary counts followed by explicit `Now` and `Later`
+    sections.
+
+source: codex:workspace-import-scope-truth-2026-06-18
+
 2026-06-18T05:47:00Z - Tightened Narrative Harness workspace-import truth so
 approve follows the reviewed draft instead of synthesizing a hidden one.
 

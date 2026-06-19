@@ -543,9 +543,9 @@ function addTask(
         ? domainFromSignal(sig)
         : existing.domain,
     scope:
-      existing.scope === 'current' || scopeFromSignal(sig) === 'current'
-        ? 'current'
-        : 'later',
+      existing.scope === 'later' || scopeFromSignal(sig) === 'later'
+        ? 'later'
+        : 'current',
     priority: shouldBump
       ? priorityFromConfidence(sig.confidence)
       : existing.priority,
@@ -553,6 +553,7 @@ function addTask(
   const refs = mergeReferences(existing.references, sig.references)
   if (refs) merged.references = refs
   if (shouldBump) {
+    if (scopeFromSignal(sig) === 'later') merged.title = sig.title
     merged.description = supportingText(sig.title, sig.evidence)
     merged.whyThisMayMatter = supportingText(sig.title, sig.evidence) ? sig.evidence : existing.whyThisMayMatter
     merged.assumptions = draftTaskAssumptions(sig)
