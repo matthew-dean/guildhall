@@ -100,7 +100,7 @@ export function ifThenBlockerPlansForTask(task: Task): IfThenBlockerPlan[] {
   }
   if (kind === 'decision') {
     plans.push({
-      if: 'The choice changes product meaning, risk tolerance, release boundary, or business policy',
+      if: 'The choice changes product meaning, risk tolerance, active task scope, or business policy',
       then: 'Ask the owner for the decision with options and tradeoffs.',
       owner: 'owner',
       reason: 'Guildhall should not make product judgment invisible.',

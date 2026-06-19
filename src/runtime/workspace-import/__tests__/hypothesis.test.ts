@@ -624,6 +624,50 @@ describe('formWorkspaceHypothesis', () => {
     )
   })
 
+  it('dedupes current roadmap starter work with section-indexed decomposition recommendations from real inventory prose', () => {
+    const draft = formWorkspaceHypothesis(
+      invFrom([
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+          evidence: 'docs/harness/implementation-roadmap.md: 1. Define fixture, expected-record, prototype-run, and evaluation schemas.',
+          references: ['/repo/docs/harness/implementation-roadmap.md'],
+          domainHint: 'harness',
+          confidence: 'medium',
+          scopeHint: 'current',
+        },
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'Implement fixture-and-expected-record schemas (from schema-contract-roadmap)',
+          evidence: 'docs/harness/remaining-spec-decomposition-inventory.md: 2.10 schema-contract-roadmap.md',
+          references: [
+            '/repo/docs/harness/remaining-spec-decomposition-inventory.md',
+            '/repo/docs/specs/schema-contract-roadmap.md',
+          ],
+          domainHint: 'harness',
+          confidence: 'high',
+          scopeHint: 'current',
+        },
+      ]),
+    )
+
+    expect(draft.tasks).toHaveLength(1)
+    expect(draft.tasks[0]).toMatchObject({
+      title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+      scope: 'current',
+      domain: 'harness',
+    })
+    expect(new Set(draft.tasks[0]!.references)).toEqual(
+      new Set([
+        '/repo/docs/harness/implementation-roadmap.md',
+        '/repo/docs/harness/remaining-spec-decomposition-inventory.md',
+        '/repo/docs/specs/schema-contract-roadmap.md',
+      ]),
+    )
+  })
+
   it('enriches current roadmap tasks with related spec and harness references', () => {
     const draft = formWorkspaceHypothesis(
       invFrom([
@@ -760,6 +804,45 @@ describe('formWorkspaceHypothesis', () => {
       ]),
     )
     expect(draft.context).toHaveLength(2)
+  })
+
+  it('merges duplicate structural records across sources into one brief record context', () => {
+    const draft = formWorkspaceHypothesis(
+      invFrom([
+        {
+          source: 'planning-docs',
+          kind: 'context',
+          title: 'Book brief',
+          evidence: 'author voice, premise, genre, themes, constraints',
+          confidence: 'high',
+          references: ['/repo/docs/harness/architecture-notes.md'],
+          role: 'brief_input',
+          structure: 'record',
+        },
+        {
+          source: 'planning-docs',
+          kind: 'context',
+          title: 'Book brief',
+          evidence: 'premise, genre/form, intended audience, age bracket, target reader experience, themes, constraints',
+          confidence: 'high',
+          references: ['/repo/docs/specs/agent-context-packets-and-compaction.md'],
+          role: 'brief_input',
+          structure: 'record',
+        },
+      ]),
+    )
+
+    expect(draft.context).toHaveLength(1)
+    expect(draft.context[0]).toMatchObject({
+      label: 'Book brief',
+      role: 'brief_input',
+      structure: 'record',
+    })
+    expect(new Set(draft.context[0]!.references)).toEqual(new Set([
+      '/repo/docs/harness/architecture-notes.md',
+      '/repo/docs/specs/agent-context-packets-and-compaction.md',
+    ]))
+    expect(draft.context[0]!.excerpt).toContain('intended audience')
   })
 
   it('keeps multiple context entries when they come from the same file but describe different structure', () => {

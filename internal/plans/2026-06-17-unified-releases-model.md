@@ -190,6 +190,70 @@ bounded-chat session or a git-story state machine.
 - **Rollback/revert behavior:** remove optional fields and fallback to inferred
   release if persisted release state is invalid.
 
+## Contract Touch Decision: Selected Task Scope Read Model
+
+- **Work id:** narrative-harness-import-truth-2026-06-18
+- **Touched contracts:** orientation spine payload, `/api/project/spine`,
+  `/api/project/release-readiness`, project Start task selection, current-work
+  execution state, Map/Overview/Release/Structure route agreement.
+- **Contracts considered but not touched:** owner-facing release persistence,
+  bounded-chat closure receipts, git-story closure state, and MCP resource
+  names. Release persistence remains optional; the selected task scope is the
+  active bounded work contract whether or not an owner-facing release exists.
+- **Required follow-up:** once all UI/API consumers read `selectedTaskScope`,
+  remove the older `scope` compatibility alias from the orientation spine
+  payload in a separate breaking-contract pass.
+- **Proof required:** orientation spine tests for no-release and explicit
+  non-MVP release projects; release-readiness tests; project Start/picker tests;
+  work execution/progress tests; Map/Overview/Release/Structure Svelte tests;
+  installed-app API proof on Narrative Harness with `/api/stale-server`
+  reporting `stale:false`.
+- **Proof provided:** focused runtime and Svelte tests passed; `pnpm build` and
+  `pnpm dev:install` passed; installed app restarted and served
+  `selectedTaskScope` for Narrative Harness while keeping `selectedRelease:
+  null` and flagging the current task scope as needing import refresh.
+- **Waivers:** the broad all-test sweep currently has unrelated corpus,
+  calibration, release README, and legacy modal expectation failures; focused
+  contract tests remain the required proof for this slice.
+- **Owner-review items:** confirm that project Start with no release should run
+  the selected task scope, not the entire project; confirm the current
+  Narrative Harness import refresh should expand from docs into a fuller
+  headless/CLI-first MVP capability chain.
+- **Apply/revert behavior:** revert the selected task scope read-model fields
+  and UI consumers; old `scope` compatibility remains the fallback during the
+  transition.
+
+## Schema Migration Decision: Selected Task Scope Read Model
+
+- **Persisted schema touched:** `workspace-goals.json` reader compatibility and
+  runtime work execution state readers.
+- **Scope:** project-local workspace import state and current-work execution
+  summaries.
+- **Change class:** backward-compatible read-time hydration and optional
+  in-memory compatibility flag.
+- **Existing data impact:** old workspace import snapshots with only flat
+  `taskIds` still load, but structural snapshots that required hydration are
+  now treated as needing import refresh instead of silently appearing fresh.
+- **Migration id:** none; no destructive or write-time migration lands in this
+  slice.
+- **Safety:** no persisted files are rewritten on read.
+- **Required before run:** no. Start/readiness may run against existing state,
+  but stale imported scope is surfaced as a blocker until the workspace import
+  is refreshed.
+- **Compatibility reader:** `parseWorkspaceGoalsState` backfills
+  `currentTaskIds` and `laterTaskIds` from older flat snapshots and records
+  `scopeMembershipHydrated` when that compatibility path was needed.
+- **Fixtures/tests:** workspace importer tests for stale version-3 snapshots,
+  current-vs-later backfill, and preserved explicit scope membership; runtime
+  readiness and orientation-spine tests for current work with and without named
+  releases.
+- **Owner-facing plan text:** Guildhall should say "current task scope" when
+  no owner-facing release is defined, and should say the selected release name
+  when one exists. It must not invent "MVP boundary" or other release names.
+- **Rollback/revert behavior:** remove the hydration flag and selected task
+  scope fields; older snapshots continue to parse through the legacy `scope`
+  alias.
+
 ## Work Tracker
 
 - [x] Audit existing hard-coded `Closure`, `Current scope`, and MVP-ish release

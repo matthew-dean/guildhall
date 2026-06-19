@@ -18,8 +18,12 @@ import {
   maybeSeedWorkspaceImport,
   formatDetectedDraftAsSpec,
   mergeWorkspaceImportDraft,
+  summarizeWorkspaceImportSpec,
   WORKSPACE_IMPORT_TASK_ID,
   WORKSPACE_IMPORT_DOMAIN,
+  readWorkspaceGoalsState,
+  parseWorkspaceGoalsState,
+  workspaceGoalsNeedStructuralRefresh,
 } from '../workspace-importer.js'
 import { approveSpec } from '../intake.js'
 import { pickNextTask } from '../orchestrator-picker.js'
@@ -152,7 +156,7 @@ describe('createWorkspaceImportTask', () => {
     expect(content).toContain('Detected inventory summary')
     expect(content).toContain('Draft goals')
     expect(content).toContain('Ship multi-agent orchestrator')
-    expect(content).toContain('Draft tasks')
+    expect(content).toContain('Current draft tasks')
     expect(content).toContain('Wire dashboard card')
     expect(content).toContain('Draft milestones')
     expect(content).toContain('Ship v0.1.0')
@@ -161,6 +165,72 @@ describe('createWorkspaceImportTask', () => {
     expect(content).toContain('goals:')
     expect(content).toContain('tasks:')
     expect(content).toContain('milestones:')
+  })
+
+  it('labels current vs deferred work and structural context roles in the exploring transcript', async () => {
+    const inventory = sampleInventory()
+    const res = await createWorkspaceImportTask({
+      memoryDir,
+      projectPath: tmpDir,
+      inventory,
+      draft: {
+        goals: [],
+        tasks: [
+          {
+            suggestedId: 'task-current',
+            title: 'Current stage task',
+            description: 'Current-scope work.',
+            domain: 'harness',
+            scope: 'current',
+            priority: 'high',
+            source: 'planning-docs',
+            confidence: 'high',
+            references: ['docs/harness/implementation-roadmap.md'],
+          },
+          {
+            suggestedId: 'task-later',
+            title: 'Later stage task',
+            description: 'Deferred work.',
+            domain: 'coherence',
+            scope: 'later',
+            priority: 'normal',
+            source: 'planning-docs',
+            confidence: 'medium',
+            references: ['docs/specs/reader-knowledge-and-revelation.md'],
+          },
+        ],
+        milestones: [],
+        context: [
+          {
+            label: 'Author defines book intent, genre/form expectations, themes, and voice.',
+            excerpt: 'Book brief input.',
+            source: 'planning-docs',
+            references: ['docs/harness/architecture-notes.md'],
+            role: 'brief_input',
+          },
+          {
+            label: 'The coordinator chooses reviewers based on current phase.',
+            excerpt: 'Capability lane.',
+            source: 'planning-docs',
+            references: ['docs/harness/architecture-notes.md'],
+            role: 'capability',
+          },
+        ],
+        stats: {
+          inputSignals: inventory.signals.length,
+          drafted: 2,
+          deduped: 0,
+        },
+      },
+    })
+
+    const content = await fs.readFile(res.transcriptPath, 'utf-8')
+    expect(content).toContain('Current draft tasks')
+    expect(content).toContain('Later / deferred draft tasks')
+    expect(content).toContain('domain: harness')
+    expect(content).toContain('domain: coherence')
+    expect(content).toContain('Brief notes')
+    expect(content).toContain('Capability context')
   })
 
   it('returns the computed inventory + draft to callers even when idempotent', async () => {
@@ -1248,15 +1318,33 @@ tasks:
       goals: unknown[]
       tasks: unknown[]
       milestones: unknown[]
-      approved: { taskCount: number; currentTaskCount: number; laterTaskCount: number }
-      detected: { taskCount: number; currentTaskCount: number; laterTaskCount: number } | null
+      approved: {
+        taskCount: number
+        currentTaskCount: number
+        laterTaskCount: number
+        currentTaskIds: string[]
+        laterTaskIds: string[]
+      }
+      detected: {
+        taskCount: number
+        currentTaskCount: number
+        laterTaskCount: number
+        currentTaskIds: string[]
+        laterTaskIds: string[]
+      } | null
     }>(tmpDir, 'workspace-goals.json')
-    expect(goalsPersisted.version).toBe(2)
+    expect(goalsPersisted.version).toBe(3)
     expect(goalsPersisted.goals).toHaveLength(seeded.draft.goals.length)
     expect(goalsPersisted.tasks).toHaveLength(seeded.draft.tasks.length)
     expect(goalsPersisted.milestones).toHaveLength(seeded.draft.milestones.length)
     expect(goalsPersisted.approved.taskCount).toBe(seeded.draft.tasks.length)
     expect(goalsPersisted.approved.currentTaskCount + goalsPersisted.approved.laterTaskCount).toBe(seeded.draft.tasks.length)
+    expect(goalsPersisted.approved.currentTaskIds).toEqual(
+      seeded.draft.tasks.filter(task => task.scope !== 'later').map(task => task.suggestedId),
+    )
+    expect(goalsPersisted.approved.laterTaskIds).toEqual(
+      seeded.draft.tasks.filter(task => task.scope === 'later').map(task => task.suggestedId),
+    )
     expect(goalsPersisted.detected?.taskCount ?? 0).toBe(seeded.draft.tasks.length)
 
     // PROGRESS.md logs every completed milestone (e.g. "Initial scaffold").
@@ -1302,6 +1390,116 @@ tasks:
         'Wire eligibility checks through the application flow',
       ]),
     )
+  })
+
+  it('backfills current-vs-later task membership when reading a legacy workspace goals snapshot', () => {
+    const state = parseWorkspaceGoalsState({
+      version: 3,
+      recordedAt: '2026-06-18T12:00:00.000Z',
+      goals: [],
+      tasks: [
+        {
+          id: 'task-current',
+          title: 'Current task',
+          description: 'Current task.',
+          domain: 'harness',
+          priority: 'high',
+          references: ['docs/harness/implementation-roadmap.md'],
+        },
+        {
+          id: 'task-later',
+          title: 'Later task',
+          description: 'Later task.',
+          domain: 'coherence',
+          priority: 'normal',
+          references: ['docs/harness/remaining-spec-decomposition-inventory.md'],
+          scope: 'later',
+        },
+      ],
+      milestones: [],
+      context: [],
+      approved: {
+        goalCount: 0,
+        taskCount: 2,
+        milestoneCount: 0,
+        currentTaskCount: 1,
+        laterTaskCount: 1,
+        taskIds: ['task-current', 'task-later'],
+      },
+      detected: null,
+    })
+
+    expect(state?.approved.currentTaskIds).toEqual(['task-current'])
+    expect(state?.approved.laterTaskIds).toEqual(['task-later'])
+    expect(state?.approved.currentTaskCount).toBe(1)
+    expect(state?.approved.laterTaskCount).toBe(1)
+  })
+
+  it('requires structural refresh when a versioned goals snapshot still lacks durable task-scope membership', () => {
+    const state = parseWorkspaceGoalsState({
+      version: 3,
+      recordedAt: '2026-06-18T12:00:00.000Z',
+      goals: [],
+      tasks: [
+        {
+          id: 'task-current',
+          title: 'Current task',
+          description: 'Current task.',
+          domain: 'harness',
+          priority: 'high',
+          references: ['docs/harness/implementation-roadmap.md'],
+        },
+      ],
+      milestones: [],
+      context: [
+        {
+          label: 'Stage 1: Fixture And Evaluation Harness',
+          excerpt: 'Current milestone.',
+          source: 'planning-docs',
+          role: 'capability',
+          structure: 'record',
+          scopeHint: 'current',
+        },
+      ],
+      approved: {
+        goalCount: 0,
+        taskCount: 1,
+        milestoneCount: 0,
+        currentTaskCount: 1,
+        laterTaskCount: 0,
+        taskIds: ['task-current'],
+      },
+      detected: null,
+    })
+
+    expect(workspaceGoalsNeedStructuralRefresh(state)).toBe(true)
+  })
+
+  it('preserves current-vs-later task ids when summarizing an importer spec', () => {
+    const summary = summarizeWorkspaceImportSpec([
+      '```yaml',
+      'tasks:',
+      '  - id: task-current',
+      '    title: "Current task"',
+      '    description: "Current task."',
+      '    domain: "harness"',
+      '    priority: high',
+      '  - id: task-later',
+      '    title: "Later task"',
+      '    description: "Later task."',
+      '    domain: "coherence"',
+      '    scope: later',
+      '    priority: normal',
+      '```',
+    ].join('\n'))
+
+    expect(summary).toMatchObject({
+      taskIds: ['task-current', 'task-later'],
+      currentTaskIds: ['task-current'],
+      laterTaskIds: ['task-later'],
+      currentTaskCount: 1,
+      laterTaskCount: 1,
+    })
   })
 
   it('detects stage deliverables, current milestone tasks, and decomposition inventory recommendations from prose docs', async () => {
@@ -1363,7 +1561,6 @@ tasks:
       expect.arrayContaining([
         'Define fixture, expected-record, prototype-run, and evaluation schemas.',
         'Add the first tiny fiction fixture and human-authored expected records.',
-        'Implement dialogue-and-character-voice reviewer lane',
       ]),
     )
     expect(draft.tasks.map(task => task.title)).not.toEqual(
@@ -1382,14 +1579,19 @@ tasks:
         role: 'capability',
       }),
     ]))
-    expect(draft.tasks.find((task) => task.title === 'Implement dialogue-and-character-voice reviewer lane')).toMatchObject({
-      scope: 'later',
-      domain: 'coherence',
-      references: expect.arrayContaining([
-        expect.stringContaining('docs/harness/remaining-spec-decomposition-inventory.md'),
-        expect.stringContaining('docs/specs/dialogue-and-character-voice.md'),
-      ]),
-    })
+    expect(draft.tasks.find((task) => task.title === 'Implement dialogue-and-character-voice reviewer lane')).toBeUndefined()
+    expect(draft.context).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        label: 'Spec: Dialogue And Character Voice',
+        role: 'capability',
+        domain: 'coherence',
+        scopeHint: 'later',
+        references: expect.arrayContaining([
+          expect.stringContaining('docs/specs/dialogue-and-character-voice.md'),
+          expect.stringContaining('docs/harness/remaining-spec-decomposition-inventory.md'),
+        ]),
+      }),
+    ]))
   })
 
   it('imports later-scope workspace tasks as shelved instead of current intake drafts', async () => {
@@ -1646,7 +1848,7 @@ tasks:
               systemOwned: true,
               degree: 'guided',
               qualityBar: 'Carry imported project evidence forward into a reviewable implementation blueprint before execution starts.',
-              ownerQuestionPolicy: 'Only ask when the cited evidence conflicts strongly enough to change product intent or the release boundary.',
+              ownerQuestionPolicy: 'Only ask when the cited evidence conflicts strongly enough to change product intent or the active task scope.',
               checks: [],
             },
             clarifyingQuestions: [],
@@ -1979,6 +2181,180 @@ tasks:
     )
   })
 
+  it('archives generated split descendants when an imported parent is removed from the approved import scope', async () => {
+    const now = new Date().toISOString()
+    await writeQueue({
+      version: 1,
+      lastUpdated: now,
+      tasks: [
+        {
+          id: WORKSPACE_IMPORT_TASK_ID,
+          title: 'Review existing project work',
+          description: 'Reserved importer',
+          domain: WORKSPACE_IMPORT_DOMAIN,
+          projectPath: tmpDir,
+          status: 'spec_review',
+          priority: 'high',
+          spec: '',
+          acceptanceCriteria: [],
+          dependsOn: [],
+          outOfScope: [],
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          adjudications: [],
+          escalations: [],
+          agentIssues: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          origination: 'system',
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          id: 'task-old-parent',
+          title: 'Mastra workflow for the prototype iteration loop',
+          description: 'Old imported later-stage task.',
+          domain: 'harness',
+          projectPath: tmpDir,
+          status: 'shelved',
+          priority: 'normal',
+          acceptanceCriteria: [],
+          dependsOn: [],
+          outOfScope: [],
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          adjudications: [],
+          escalations: [],
+          agentIssues: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          origination: 'human',
+          requestIntake: {
+            intent: 'implementation',
+            recommendedNextAction: 'proceed_to_implementation_spec',
+            componentStack: [],
+            assumptions: [],
+            missingInformation: [],
+            evidenceRefs: ['import:/repo/docs/harness/implementation-roadmap.md'],
+            pressureTestSummary: {
+              systemOwned: true,
+              degree: 'guided',
+              qualityBar: 'Imported work must stay aligned with the current roadmap slice.',
+              ownerQuestionPolicy: 'Only ask when the docs still leave the scope boundary ambiguous.',
+              checks: [],
+            },
+            clarifyingQuestions: [],
+            createdAt: now,
+            createdBy: 'workspace-importer',
+          },
+          hierarchy: {
+            childIds: ['task-old-parent-split-a'],
+            relation: 'contains',
+            order: 0,
+          },
+          createdAt: now,
+          updatedAt: now,
+        } as Task,
+        {
+          id: 'task-old-parent-split-a',
+          title: 'Run the bounded reviewer and writer loop headlessly',
+          description: 'Generated child from the old imported parent.',
+          domain: 'harness',
+          projectPath: tmpDir,
+          status: 'exploring',
+          priority: 'normal',
+          acceptanceCriteria: [],
+          dependsOn: [],
+          outOfScope: [],
+          notes: [{ agentId: 'task-sizing', role: 'system', timestamp: now, content: 'Generated split child.' }],
+          gateResults: [],
+          reviewVerdicts: [],
+          adjudications: [],
+          escalations: [],
+          agentIssues: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          origination: 'system',
+          hierarchy: {
+            parentId: 'task-old-parent',
+            relation: 'contains',
+            order: 0,
+          },
+          createdAt: now,
+          updatedAt: now,
+        } as Task,
+      ],
+    })
+
+    const approved = await approveWorkspaceImport({
+      memoryDir,
+      projectPath: tmpDir,
+      draftOverride: {
+        goals: [],
+        tasks: [
+          {
+            suggestedId: 'task-import-schema',
+            title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+            description: 'Current Stage 1 slice.',
+            domain: 'harness',
+            scope: 'current',
+            priority: 'high',
+            references: ['/repo/docs/harness/implementation-roadmap.md'],
+            source: 'planning-docs',
+            confidence: 'high',
+          },
+        ],
+        milestones: [],
+        context: [],
+        stats: {
+          inputSignals: 1,
+          drafted: 1,
+          deduped: 0,
+        },
+      },
+      detectedDraftSnapshot: {
+        goals: [],
+        tasks: [
+          {
+            suggestedId: 'task-import-schema',
+            title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+            description: 'Current Stage 1 slice.',
+            domain: 'harness',
+            scope: 'current',
+            priority: 'high',
+            references: ['/repo/docs/harness/implementation-roadmap.md'],
+            source: 'planning-docs',
+            confidence: 'high',
+          },
+        ],
+        milestones: [],
+        context: [],
+        stats: {
+          inputSignals: 1,
+          drafted: 1,
+          deduped: 0,
+        },
+      },
+      replacePreviouslyImportedTasks: true,
+    })
+
+    expect(approved).toMatchObject({ success: true, tasksAdded: 1 })
+
+    const q = await readQueue()
+    expect(q.tasks.find(task => task.id === 'task-old-parent')).toMatchObject({
+      status: 'archived',
+    })
+    expect(q.tasks.find(task => task.id === 'task-old-parent-split-a')).toMatchObject({
+      status: 'archived',
+    })
+    expect(q.tasks.find(task => task.id === 'task-old-parent-split-a')?.hierarchy?.parentId).toBeUndefined()
+    expect(q.tasks.find(task => task.id === 'task-old-parent-split-a')?.notes?.at(-1)?.content ?? '').toContain(
+      'superseded because its imported parent left the approved import scope',
+    )
+  })
+
   it('archives previously imported tasks when the detected snapshot only preserves them as context', async () => {
     await writeQueue({
       version: 1,
@@ -2264,6 +2640,132 @@ tasks:
     expect(q.tasks.find(task => task.id === 'task-capability-ghost-archived')).toMatchObject({
       status: 'archived',
     })
+  })
+
+  it('persists approved import context alongside goals, tasks, and milestones', async () => {
+    await writeQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      tasks: [
+        {
+          id: WORKSPACE_IMPORT_TASK_ID,
+          title: 'Review existing project work',
+          description: 'Reserved importer',
+          domain: WORKSPACE_IMPORT_DOMAIN,
+          projectPath: tmpDir,
+          status: 'spec_review',
+          priority: 'high',
+          acceptanceCriteria: [],
+          dependsOn: [],
+          outOfScope: [],
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          adjudications: [],
+          escalations: [],
+          agentIssues: [],
+          origination: 'system',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      ],
+    })
+
+    const approved = await approveWorkspaceImport({
+      memoryDir,
+      projectPath: tmpDir,
+      draftOverride: {
+        goals: [],
+        tasks: [
+          {
+            suggestedId: 'task-import-schema',
+            title: 'Define fixture schemas',
+            description: 'Current Stage 1 slice.',
+            domain: 'harness',
+            scope: 'current',
+            priority: 'high',
+            references: ['/repo/docs/harness/implementation-roadmap.md'],
+            source: 'planning-docs',
+            confidence: 'high',
+          },
+        ],
+        milestones: [],
+        context: [
+          {
+            label: 'Author defines book intent, genre/form expectations, themes, and voice.',
+            excerpt: 'Book-brief framing.',
+            source: 'planning-docs',
+            references: ['/repo/docs/harness/architecture-notes.md'],
+            role: 'brief_input',
+          },
+          {
+            label: 'The coordinator chooses reviewers based on current phase.',
+            excerpt: 'Capability map row.',
+            source: 'planning-docs',
+            references: ['/repo/docs/harness/architecture-notes.md'],
+            role: 'capability',
+          },
+        ],
+        stats: {
+          inputSignals: 3,
+          drafted: 3,
+          deduped: 0,
+        },
+      },
+      detectedDraftSnapshot: {
+        goals: [],
+        tasks: [
+          {
+            suggestedId: 'task-import-schema',
+            title: 'Define fixture schemas',
+            description: 'Current Stage 1 slice.',
+            domain: 'harness',
+            scope: 'current',
+            priority: 'high',
+            references: ['/repo/docs/harness/implementation-roadmap.md'],
+            source: 'planning-docs',
+            confidence: 'high',
+          },
+        ],
+        milestones: [],
+        context: [
+          {
+            label: 'Author defines book intent, genre/form expectations, themes, and voice.',
+            excerpt: 'Book-brief framing.',
+            source: 'planning-docs',
+            references: ['/repo/docs/harness/architecture-notes.md'],
+            role: 'brief_input',
+          },
+          {
+            label: 'The coordinator chooses reviewers based on current phase.',
+            excerpt: 'Capability map row.',
+            source: 'planning-docs',
+            references: ['/repo/docs/harness/architecture-notes.md'],
+            role: 'capability',
+          },
+        ],
+        stats: {
+          inputSignals: 3,
+          drafted: 3,
+          deduped: 0,
+        },
+      },
+      replacePreviouslyImportedTasks: true,
+    })
+
+    expect(approved).toMatchObject({ success: true, tasksAdded: 1 })
+
+    const goalsState = await readWorkspaceGoalsState(memoryDir)
+    expect(goalsState?.context).toEqual([
+      expect.objectContaining({
+        label: 'Author defines book intent, genre/form expectations, themes, and voice.',
+        role: 'brief_input',
+      }),
+      expect.objectContaining({
+        label: 'The coordinator chooses reviewers based on current phase.',
+        role: 'capability',
+      }),
+    ])
   })
 
   it('keeps previously archived imported work archived when the docs only mention it outside the approved import set', async () => {
@@ -3037,10 +3539,10 @@ tasks:
 
     expect(materialized.tasks.map(task => task.title)).toEqual(expect.arrayContaining([
       'Define fixture, expected-record, prototype-run, and evaluation schemas.',
-      'Implement dialogue-and-character-voice reviewer lane',
-      'Implement editor-writer feedback chain contract and weighted-feedback pipeline',
     ]))
     expect(materialized.tasks.map(task => task.title)).not.toEqual(expect.arrayContaining([
+      'Implement dialogue-and-character-voice reviewer lane',
+      'Implement editor-writer feedback chain contract and weighted-feedback pipeline',
       'Mastra workflow for the prototype iteration loop',
       'packet-builder implementation for the first writer/editor packet types',
       'deterministic retrieval tools over structured story records',
@@ -3049,9 +3551,19 @@ tasks:
     const milestoneTerminal = materialized.tasks.find(task => task.title === 'Define fixture, expected-record, prototype-run, and evaluation schemas.')
     const laterDialogue = materialized.tasks.find(task => task.title === 'Implement dialogue-and-character-voice reviewer lane')
     const laterWorkflow = materialized.tasks.find(task => task.title === 'Implement editor-writer feedback chain contract and weighted-feedback pipeline')
-    expect(laterDialogue?.scope).toBe('later')
-    expect(laterWorkflow?.scope).toBe('later')
-    expect(laterDialogue?.dependsOn ?? []).toContain(milestoneTerminal?.suggestedId)
+    expect(laterDialogue).toBeUndefined()
+    expect(laterWorkflow).toBeUndefined()
+    expect(draft.context).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        label: 'Spec: Dialogue And Character Voice',
+        scopeHint: 'later',
+      }),
+      expect.objectContaining({
+        label: 'Spec: Editor Writer Feedback Chain',
+        scopeHint: 'later',
+      }),
+    ]))
+    expect(milestoneTerminal?.scope).toBe('current')
   })
 
   it('keeps later-stage roadmap deliverables in capability context when only one intermediate stage has decomposed replacements', async () => {
@@ -3144,8 +3656,9 @@ tasks:
     })
 
     expect(materialized.tasks.map(task => task.title)).toEqual(expect.arrayContaining([
-      'Implement dialogue-and-character-voice reviewer lane',
+      'Define fixture, expected-record, prototype-run, and evaluation schemas.',
     ]))
+    expect(materialized.tasks.find(task => task.title === 'Implement dialogue-and-character-voice reviewer lane')).toBeUndefined()
     expect(materialized.tasks.map(task => task.title)).not.toEqual(expect.arrayContaining([
       'provider/model registry schema',
       'fiction bakeoff scenarios for writer, editor, reviewer, and safety lanes',
@@ -3153,8 +3666,14 @@ tasks:
       'project brief and author-provenance capture',
       'Mastra workflow for the prototype iteration loop',
       'specialist editor agent calls for the first review lanes',
+      'Implement dialogue-and-character-voice reviewer lane',
     ]))
     expect(materialized.context).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        label: 'Spec: Dialogue And Character Voice',
+        role: 'capability',
+        scopeHint: 'later',
+      }),
       expect.objectContaining({
         label: 'provider/model registry schema',
         role: 'capability',
@@ -3241,14 +3760,20 @@ tasks:
       status: 'spec_review',
       domain: 'harness',
     })
-    expect(q.tasks.find(task => task.title === 'Implement dialogue-and-character-voice reviewer lane')).toMatchObject({
-      status: 'shelved',
-      domain: 'coherence',
-      references: expect.arrayContaining([
-        path.join(tmpDir, 'docs/harness/remaining-spec-decomposition-inventory.md'),
-        path.join(tmpDir, 'docs/specs/dialogue-and-character-voice.md'),
-      ]),
-    })
+    expect(q.tasks.find(task => task.title === 'Implement dialogue-and-character-voice reviewer lane')).toBeUndefined()
+    const goalsState = await readWorkspaceGoalsState(memoryDir)
+    expect(goalsState?.context).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        label: 'Spec: Dialogue And Character Voice',
+        role: 'capability',
+        domain: 'coherence',
+        scopeHint: 'later',
+        references: expect.arrayContaining([
+          path.join(tmpDir, 'docs/specs/dialogue-and-character-voice.md'),
+          path.join(tmpDir, 'docs/harness/remaining-spec-decomposition-inventory.md'),
+        ]),
+      }),
+    ]))
   })
 
   it('derives reviewer-lane and workflow contracts from cited fiction specs instead of generic convention filler', async () => {
@@ -3923,6 +4448,13 @@ tasks:
     expect(q.tasks.find(candidate => candidate.id === 'task-runner-split-load-fixture-inputs-and-shared-records')).toMatchObject({
       status: 'archived',
     })
+    expect(q.tasks.find(candidate => candidate.id === 'task-runner-split-load-fixture-inputs-and-canonical-story-records'))
+      .toMatchObject({
+        workVisibility: {
+          kind: 'internal_step',
+          countInProjectTotals: false,
+        },
+      })
     expect(q.tasks.find(candidate => candidate.id === 'task-runner-split-execute-the-packet-run-without-ui-help')?.hierarchy?.parentId).toBeUndefined()
     expect(q.tasks.find(candidate => candidate.id === 'task-runner-split-prove-the-runner-over-a-bounded-fixture')?.hierarchy?.parentId).toBeUndefined()
   })

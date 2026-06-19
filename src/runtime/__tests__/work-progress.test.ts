@@ -44,6 +44,36 @@ describe('deriveProjectWorkProgress', () => {
     })
   })
 
+  it('treats importer-generated decomposition children as internal steps even without explicit visibility', () => {
+    const progress = deriveProjectWorkProgress([
+      {
+        id: 'task-runner',
+        title: 'Implement a no-UI runner that builds a packet from fixture records.',
+        status: 'ready',
+        requestIntake: { createdBy: 'workspace-importer' },
+        hierarchy: { childIds: ['task-runner-split-load-fixture-inputs'], relation: 'contains' },
+      },
+      {
+        id: 'task-runner-split-load-fixture-inputs',
+        title: 'Load fixture inputs and canonical story records',
+        status: 'exploring',
+        hierarchy: { parentId: 'task-runner', relation: 'decomposes', order: 0 },
+        notes: [{ agentId: 'task-sizing', role: 'coordinator', content: 'Generated split child.' }],
+      },
+    ])
+
+    expect(progress.counts.visibleTotal).toBe(1)
+    expect(progress.byTaskId['task-runner-split-load-fixture-inputs']?.visibility).toEqual({
+      kind: 'internal_step',
+      countInProjectTotals: false,
+      label: undefined,
+    })
+    expect(progress.byTaskId['task-runner']?.rollup).toMatchObject({
+      visibleChildCount: 0,
+      internalStepCount: 1,
+    })
+  })
+
   it('keeps tool and channel details as metadata rather than closed model kinds', () => {
     const progress = deriveProjectWorkProgress([
       {

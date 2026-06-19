@@ -1,4 +1,5 @@
 import { taskDisplayLabel } from '../shared/task-display-label.js'
+import { deriveTaskWorkVisibility } from './work-visibility.js'
 
 export type OrientationScopeKind =
   | 'release'
@@ -200,9 +201,10 @@ export interface ProjectOrientationSpine {
   projectId: string
   updatedAt: string
   selectedRelease: OrientationRelease | null
+  selectedTaskScope: OrientationScope | null
   /**
-   * @deprecated Compatibility alias for selectedRelease work assignment.
-   * New UI/runtime code should read selectedRelease.
+   * @deprecated Compatibility alias for selectedTaskScope.
+   * New UI/runtime code should read selectedTaskScope.
    */
   scope: OrientationScope | null
   charter: ProjectOrientationCharter
@@ -263,6 +265,9 @@ export interface OrientationWorkspaceImportDraftContext {
   description?: string
   domain?: string
   refs?: string[]
+  role?: 'capability' | 'reference' | 'brief_input'
+  scopeHint?: 'current' | 'later'
+  linkedTaskHints?: string[]
 }
 
 export interface OrientationWorkspaceImportDraft {
@@ -297,6 +302,7 @@ export interface BuildProjectOrientationSpineInput {
 export interface ScopeEligibilityOptions {
   explicitTaskId?: string
   includedDependencyIds?: ReadonlySet<string>
+  tasksById?: ReadonlyMap<string, Pick<OrientationTaskInput, 'id' | 'hierarchy'>>
 }
 
 export function taskNodeId(taskId: string): string {
@@ -308,16 +314,28 @@ function isProjectSetupTask(taskId: string): boolean {
 }
 
 export function taskEligibleForSelectedScope(
-  task: Pick<OrientationTaskInput, 'id' | 'dependsOn'>,
+  task: Pick<OrientationTaskInput, 'id' | 'dependsOn' | 'hierarchy'>,
   scope: OrientationScope | null | undefined,
   options: ScopeEligibilityOptions = {},
-): { eligible: boolean; reason: 'no_scope' | 'included' | 'deferred' | 'explicit_target' | 'included_prerequisite' } {
+): {
+  eligible: boolean
+  reason: 'no_scope' | 'included' | 'included_ancestor' | 'deferred' | 'explicit_target' | 'included_prerequisite'
+} {
   if (!scope) return { eligible: true, reason: 'no_scope' }
   if (options.explicitTaskId === task.id) return { eligible: true, reason: 'explicit_target' }
   const nodeId = taskNodeId(task.id)
   if (scope.nodeIds.includes(nodeId)) return { eligible: true, reason: 'included' }
   if (options.includedDependencyIds?.has(task.id)) return { eligible: true, reason: 'included_prerequisite' }
   if (scope.deferredNodeIds.includes(nodeId)) return { eligible: false, reason: 'deferred' }
+  if (options.tasksById) {
+    let parentId = task.hierarchy?.parentId?.trim() || null
+    while (parentId) {
+      const parentNodeId = taskNodeId(parentId)
+      if (scope.nodeIds.includes(parentNodeId)) return { eligible: true, reason: 'included_ancestor' }
+      if (scope.deferredNodeIds.includes(parentNodeId)) return { eligible: false, reason: 'deferred' }
+      parentId = options.tasksById.get(parentId)?.hierarchy?.parentId?.trim() || null
+    }
+  }
   return { eligible: false, reason: 'deferred' }
 }
 
@@ -378,15 +396,19 @@ function normalizeCharter(input: BuildProjectOrientationSpineInput): ProjectOrie
 function defaultScope(tasks: OrientationTaskInput[]): OrientationScope | null {
   const scopedTasks = tasks.filter(task => !isProjectSetupTask(task.id))
   if (scopedTasks.length === 0) return null
+  const tasksById = new Map(tasks.map(task => [task.id, task]))
   const nodeIds = tasks
-    .filter(task => !isProjectSetupTask(task.id) && task.status !== 'shelved')
+    .filter(task => {
+      if (isProjectSetupTask(task.id) || task.status === 'shelved') return false
+      return visibilityForTask(task, tasksById).countInProjectTotals
+    })
     .map(task => taskNodeId(task.id))
   const deferredNodeIds = tasks
     .filter(task => !isProjectSetupTask(task.id) && task.status === 'shelved')
     .map(task => taskNodeId(task.id))
   return {
     id: 'current-work',
-    label: 'Current work',
+    label: 'Current task scope',
     kind: 'proposed_feature_set',
     source: 'inferred',
     nodeIds,
@@ -461,7 +483,7 @@ function augmentTasksWithWorkspaceImportDraft(input: {
     tasks: augmented,
     scope: {
       id: 'current-work',
-      label: 'Current work',
+      label: 'Current task scope',
       kind: 'proposed_feature_set',
       source: 'inferred',
       nodeIds: [...new Set(currentNodeIds)],
@@ -525,7 +547,7 @@ function normalizeRelease(input: BuildProjectOrientationSpineInput, tasks: Orien
 }
 
 function expandReleaseWithDescendants(release: OrientationRelease, tasks: OrientationTaskInput[]): OrientationRelease {
-  const scope = expandScopeWithDescendants(releaseToScope(release)!, tasks)
+  const scope = normalizeScopeTaskLists(releaseToScope(release)!, tasks)
   return {
     ...release,
     nodeIds: scope.nodeIds,
@@ -538,31 +560,31 @@ function normalizeScope(input: BuildProjectOrientationSpineInput, tasks: Orienta
   const fallback = defaultScope(tasks)
   const base = {
     id: input.scope.id ?? fallback?.id ?? 'current-work',
-    label: input.scope.label ?? fallback?.label ?? 'Current work',
+    label: input.scope.label ?? fallback?.label ?? 'Current task scope',
     kind: input.scope.kind ?? fallback?.kind ?? 'proposed_feature_set',
     source: input.scope.source ?? fallback?.source ?? 'inferred',
     nodeIds: input.scope.nodeIds ?? fallback?.nodeIds ?? [],
     deferredNodeIds: input.scope.deferredNodeIds ?? [],
   }
-  return expandScopeWithDescendants(base, tasks)
+  return normalizeScopeTaskLists(base, tasks)
 }
 
-function expandScopeWithDescendants(scope: OrientationScope, tasks: OrientationTaskInput[]): OrientationScope {
-  const childIdsByParent = buildChildMap(tasks)
+function normalizeScopeTaskLists(scope: OrientationScope, tasks: OrientationTaskInput[]): OrientationScope {
   const taskById = new Map(tasks.map(task => [task.id, task]))
-  const included = new Set(scope.nodeIds)
-  const deferred = new Set(scope.deferredNodeIds)
-  const visit = (taskId: string) => {
-    for (const childId of childIdsByParent.get(taskId) ?? []) {
-      const nodeId = taskNodeId(childId)
-      if (included.has(nodeId) || deferred.has(nodeId)) continue
-      included.add(nodeId)
-      visit(childId)
-    }
-  }
-  for (const nodeId of [...included]) {
-    if (nodeId.startsWith('work:')) visit(nodeId.slice('work:'.length))
-  }
+  const included = new Set(
+    scope.nodeIds.filter((nodeId) => {
+      if (!nodeId.startsWith('work:')) return true
+      const task = taskById.get(nodeId.slice('work:'.length))
+      return task ? visibilityForTask(task, taskById).countInProjectTotals : true
+    }),
+  )
+  const deferred = new Set(
+    scope.deferredNodeIds.filter((nodeId) => {
+      if (!nodeId.startsWith('work:')) return true
+      const task = taskById.get(nodeId.slice('work:'.length))
+      return task ? visibilityForTask(task, taskById).countInProjectTotals : true
+    }),
+  )
   for (const nodeId of [...included]) {
     if (!nodeId.startsWith('work:')) continue
     const task = taskById.get(nodeId.slice('work:'.length))
@@ -627,8 +649,9 @@ function maturityForTask(
   task: OrientationTaskInput,
   childIdsByParent: Map<string, string[]>,
   scope: OrientationScope | null,
+  tasksById: ReadonlyMap<string, OrientationTaskInput>,
 ): OrientationMaturity {
-  if (!taskEligibleForSelectedScope(task, scope).eligible) return 'deferred'
+  if (!taskEligibleForSelectedScope(task, scope, { tasksById }).eligible) return 'deferred'
   if (task.status === 'shelved') return 'deferred'
   if (task.status === 'blocked') return 'blocked'
   if (task.status === 'in_progress') return 'active'
@@ -709,12 +732,12 @@ function buildNodes(
   const build = (task: OrientationTaskInput): OrientationNode => {
     const existing = byId.get(taskNodeId(task.id))
     if (existing) return existing
-    const maturity = maturityForTask(task, childIdsByParent, scope)
+    const maturity = maturityForTask(task, childIdsByParent, scope, tasksById)
     const children = (childIdsByParent.get(task.id) ?? [])
       .map(childId => tasksById.get(childId))
       .filter((child): child is OrientationTaskInput => Boolean(child))
       .map(build)
-    const visibility = visibilityForTask(task)
+    const visibility = visibilityForTask(task, tasksById)
     const childProgress = children.reduce(
       (progress, child) => child.visibility.countInProjectTotals
         ? addProgress(progress, child.progress)
@@ -781,7 +804,14 @@ function capabilityNodeId(contextId: string): string {
 
 function summarizeCapabilityArea(title: string, children: OrientationNode[]): string {
   const count = children.length
-  return `${title} project skeleton: ${count} mapped ${count === 1 ? 'capability' : 'capabilities'} from durable docs.`
+  const deferred = children.filter(child => child.maturity === 'deferred').length
+  const current = count - deferred
+  const pieces = [
+    `${count} mapped ${count === 1 ? 'capability' : 'capabilities'}`,
+    current > 0 ? `${current} shaping current understanding` : null,
+    deferred > 0 ? `${deferred} documented for later` : null,
+  ].filter(Boolean)
+  return `${title} project skeleton: ${pieces.join(' · ')}.`
 }
 
 function stripImportPrefix(ref: string): string {
@@ -861,13 +891,18 @@ function mergeWorkspaceImportContexts(input: {
     const areaId = `area:${normalizeText(areaDescriptor.key || 'unsorted').replace(/\s+/g, '-') || 'unsorted'}`
     const title = areaDescriptor.title
     const children = contexts.map((context) => {
+      const maturity: OrientationMaturity = context.scopeHint === 'later'
+        ? 'deferred'
+        : context.role === 'brief_input'
+          ? 'brief'
+          : 'idea'
       const node: OrientationNode = {
         id: capabilityNodeId(context.id),
         parentId: areaId,
         kind: 'feature',
         title: context.title,
         summary: context.description ?? context.title,
-        maturity: 'idea',
+        maturity,
         progress: emptyProgress(input.scope?.id ?? null),
         proof: { state: 'none', verified: [], missing: [] },
         ownerAction: null,
@@ -1059,20 +1094,13 @@ function groupFlatRootsByDomain(
   return areaRoots.sort((left, right) => left.title.localeCompare(right.title))
 }
 
-function visibilityForTask(task: OrientationTaskInput): OrientationNode['visibility'] {
-  const kind = task.workVisibility?.kind
-  if (kind === 'primary' || kind === 'supporting' || kind === 'internal_step' || kind === 'hidden') {
-    return {
-      kind,
-      countInProjectTotals: typeof task.workVisibility?.countInProjectTotals === 'boolean'
-        ? task.workVisibility.countInProjectTotals
-        : kind === 'primary' || kind === 'supporting',
-    }
-  }
-  if (task.hierarchy?.parentId && (task.workKind === 'verification' || task.workKind === 'test')) {
-    return { kind: 'internal_step', countInProjectTotals: false }
-  }
-  return { kind: 'primary', countInProjectTotals: true }
+function visibilityForTask(
+  task: OrientationTaskInput,
+  tasksById: ReadonlyMap<string, OrientationTaskInput>,
+): OrientationNode['visibility'] {
+  const parentId = task.hierarchy?.parentId?.trim() || null
+  const parent = parentId ? tasksById.get(parentId) ?? null : null
+  return deriveTaskWorkVisibility(task as never, parent as never)
 }
 
 function normalizeText(value: string): string {
@@ -1200,12 +1228,12 @@ function buildExecutionBoundary(input: {
         ? 'UI-visible proof'
         : 'Proof mode missing'
   const detail = mode === 'unspecified'
-    ? 'Guildhall has not collected whether the selected scope should be proven headlessly, through UI review, or both.'
+    ? 'Guildhall has not collected whether the current task scope should be proven headlessly, through UI review, or both.'
     : proofStyle === 'script_only'
-      ? 'Selected scope should be proven with scripts or commands before it is treated as ready.'
+      ? 'The current task scope should be proven with scripts or commands before it is treated as ready.'
       : proofStyle === 'manual'
-        ? 'Selected scope includes UI or manual proof expectations.'
-        : 'Selected scope includes more than one proof style.'
+        ? 'The current task scope includes UI or manual proof expectations.'
+        : 'The current task scope includes more than one proof style.'
   const refs = input.sourceRefs.length > 0 ? input.sourceRefs : [`project:${input.charter.source}`]
   return {
     label,
@@ -1283,7 +1311,7 @@ function summarizeStartReadiness(input: {
 }): { headline: string; topBlocker: string; nextAction: string } | null {
   const { workLabel, startReadiness } = input
   if (startReadiness.canStart) return null
-  const genericWorkLabel = workLabel ?? 'Current work'
+  const genericWorkLabel = workLabel ?? 'Current task scope'
   const message = typeof startReadiness.message === 'string' && startReadiness.message.trim()
     ? startReadiness.message.trim()
     : 'Project start is blocked until the current issue is resolved.'
@@ -1361,10 +1389,10 @@ function buildSummary(input: {
     purpose,
     selectedReleaseLabel: releaseLabel,
     selectedScopeLabel: workLabel,
-    includedCount: input.scope?.nodeIds.length ?? input.progress.total - input.progress.deferred,
-    includedWorkCount: input.scope?.nodeIds.length ?? input.progress.total - input.progress.deferred,
-    deferredCount: input.scope?.deferredNodeIds.length ?? input.progress.deferred,
-    deferredWorkCount: input.scope?.deferredNodeIds.length ?? input.progress.deferred,
+    includedCount: input.progress.total - input.progress.deferred,
+    includedWorkCount: input.progress.total - input.progress.deferred,
+    deferredCount: input.progress.deferred,
+    deferredWorkCount: input.progress.deferred,
     pinnedNow: input.pins.map(pin => pin.label),
     topBlocker,
     nextAction: readinessSummary?.nextAction ?? (topBlocker ? `Review blocker: ${topBlocker}` : 'Review current work.'),
@@ -1388,7 +1416,7 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
   const charter = normalizeCharter(input)
   const selectedRelease = normalizeRelease(input, tasks)
   const rawScope = releaseToScope(selectedRelease) ?? draftAugmentation.scope ?? normalizeScope(input, tasks)
-  const scope = rawScope ? expandScopeWithDescendants(rawScope, tasks) : null
+  const scope = rawScope ? normalizeScopeTaskLists(rawScope, tasks) : null
   const built = buildNodes(tasks, scope, now)
   const roots = mergeWorkspaceImportContexts({
     roots: built.roots,
@@ -1449,6 +1477,7 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
     projectId: input.projectId,
     updatedAt: now,
     selectedRelease,
+    selectedTaskScope: scope,
     scope,
     charter,
     executionBoundary,

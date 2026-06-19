@@ -1086,6 +1086,79 @@ describe('Orchestrator.tick — idle handling', () => {
     if (out.kind === 'idle') expect(out.consecutiveIdleTicks).toBe(2)
   })
 
+  it('reports broader documented work when the current task scope is exhausted but later scope remains', async () => {
+    await writeQueue([mkTask({ id: 'a', status: 'done' })])
+    await fs.writeFile(
+      getProjectSystemStatePath(tmpDir, 'workspace-goals.json'),
+      JSON.stringify({
+        version: 3,
+        recordedAt: '2026-06-18T12:00:00.000Z',
+        goals: [],
+        tasks: [
+          {
+            id: 'a',
+            title: 'Current harness slice',
+            description: 'Current scope.',
+            domain: 'harness',
+            priority: 'normal',
+            references: ['docs/harness/implementation-roadmap.md'],
+          },
+        ],
+        milestones: [],
+        context: [
+          {
+            label: 'Mastra workflow for the prototype iteration loop',
+            excerpt: 'Later-stage capability.',
+            source: 'planning-docs',
+            references: ['docs/harness/implementation-roadmap.md'],
+            role: 'capability',
+            scopeHint: 'later',
+          },
+          {
+            label: 'provider/model registry schema',
+            excerpt: 'Later-stage capability.',
+            source: 'planning-docs',
+            references: ['docs/harness/implementation-roadmap.md'],
+            role: 'capability',
+            scopeHint: 'later',
+          },
+        ],
+        approved: {
+          goalCount: 0,
+          taskCount: 1,
+          milestoneCount: 0,
+          currentTaskCount: 1,
+          laterTaskCount: 0,
+          taskIds: ['a'],
+          currentTaskIds: ['a'],
+          laterTaskIds: [],
+        },
+        detected: {
+          goalCount: 0,
+          taskCount: 2,
+          milestoneCount: 0,
+          currentTaskCount: 1,
+          laterTaskCount: 1,
+          taskIds: ['a', 'task-later'],
+          currentTaskIds: ['a'],
+          laterTaskIds: ['task-later'],
+        },
+      }, null, 2),
+      'utf-8',
+    )
+
+    const orch = new Orchestrator({ config: baseConfig(), agents: agentSet() })
+    const out = await orch.tick()
+    expect(out.kind).toBe('idle')
+    if (out.kind === 'idle') {
+      expect(out.allDone).toBe(true)
+      expect(out.summary?.reason).toBe('all_terminal')
+      expect(out.summary?.message).toContain('Current task scope is exhausted')
+      expect(out.summary?.message).toContain('2 later documented capabilities')
+      expect(out.summary?.message).toContain('1 additional detected task not yet in the approved scope')
+    }
+  })
+
   it('resets the idle counter when a task is processed', async () => {
     await writeQueue([mkTask({ id: 'a', status: 'done' })])
     const orch = new Orchestrator({ config: baseConfig(), agents: agentSet() })

@@ -58,10 +58,10 @@ describe('ReleaseTab', () => {
 
     render(ReleaseTab)
 
-    expect(await screen.findByText('Current work')).toBeTruthy()
+    expect(await screen.findByText('Current task scope')).toBeTruthy()
     expect(screen.getAllByText('Ready')).toHaveLength(2)
-    expect(screen.getByText('Current work readiness')).toBeTruthy()
-    expect(screen.getByText('4/4 tasks done · no open blockers.')).toBeTruthy()
+    expect(screen.getByText('Scope readiness')).toBeTruthy()
+    expect(screen.getByText('4/4 tasks done · no open scope blockers.')).toBeTruthy()
     expect(screen.getByText('Current counts')).toBeTruthy()
     expect(screen.getByText('Total blockers')).toBeTruthy()
     expect(screen.getByText('Unfinished tasks')).toBeTruthy()
@@ -124,7 +124,7 @@ describe('ReleaseTab', () => {
     render(ReleaseTab)
 
     expect(await screen.findByText('Current MVP is blocked on proof.')).toBeTruthy()
-    expect(screen.getByText('Current MVP')).toBeTruthy()
+    expect(screen.getAllByText('Current MVP').length).toBeGreaterThanOrEqual(1)
     expect(screen.getByText('3 included · 2 later')).toBeTruthy()
     expect(screen.getAllByText('Anti-sameness proof missing').length).toBeGreaterThanOrEqual(1)
     expect(screen.getByText('Anti-sameness safeguards')).toBeTruthy()
@@ -153,7 +153,7 @@ describe('ReleaseTab', () => {
 
     render(ReleaseTab, { props: { subView: 'criteria' } })
 
-    expect(await screen.findByText('Current work checks')).toBeTruthy()
+    expect(await screen.findByText('Scope checks')).toBeTruthy()
     expect(screen.getByText('Open escalations')).toBeTruthy()
     expect(screen.getAllByText('1 task still open.')).toHaveLength(2)
     expect(screen.getByText('Choose project scope')).toBeTruthy()
@@ -203,7 +203,7 @@ describe('ReleaseTab', () => {
 
     render(ReleaseTab, { props: { subView: 'criteria' } })
 
-    expect(await screen.findByText('Current work checks')).toBeTruthy()
+    expect(await screen.findByText('Scope checks')).toBeTruthy()
     expect(screen.getByText('Incomplete briefs')).toBeTruthy()
     expect(screen.getByText('Needs brief cleanup')).toBeTruthy()
     expect(screen.getByText('Task brief needs user job, why it matters now, success metric, and at least one non-goal before approval.')).toBeTruthy()
@@ -219,7 +219,7 @@ describe('ReleaseTab', () => {
 
     render(ReleaseTab)
 
-    await screen.findByText('Current work')
+    await screen.findByText('Current task scope')
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith('/api/project/release-readiness?projectId=t-minus-t')
     })
@@ -239,7 +239,7 @@ describe('ReleaseTab', () => {
 
     render(ReleaseTab)
 
-    expect(await screen.findByText('Current work')).toBeTruthy()
+    expect(await screen.findByText('Current task scope')).toBeTruthy()
     expect(screen.getAllByText('Blocked')).toHaveLength(2)
     expect(screen.getByText('No design-system guardrail is captured yet.')).toBeTruthy()
   })
@@ -260,7 +260,7 @@ describe('ReleaseTab', () => {
 
     render(ReleaseTab)
 
-    expect(await screen.findByText('Current work')).toBeTruthy()
+    expect(await screen.findByText('Current task scope')).toBeTruthy()
     expect(screen.getAllByText('Blocked')).toHaveLength(2)
     expect(screen.getByText('Answer the pressure-test question before closing this work.')).toBeTruthy()
     expect(screen.queryByText('No design-system guardrail is captured yet.')).toBeNull()
@@ -285,7 +285,7 @@ describe('ReleaseTab', () => {
 
     render(ReleaseTab)
 
-    expect(await screen.findByText('Current work')).toBeTruthy()
+    expect(await screen.findByText('Current task scope')).toBeTruthy()
     expect(screen.getByText('detected in repo')).toBeTruthy()
     expect(screen.queryByText('not drafted')).toBeFalsy()
   })
@@ -305,7 +305,7 @@ describe('ReleaseTab', () => {
 
     render(ReleaseTab)
 
-    expect(await screen.findByText('Current work')).toBeTruthy()
+    expect(await screen.findByText('Current task scope')).toBeTruthy()
     expect(screen.getAllByText('Blocked')).toHaveLength(2)
     expect(screen.getByText('38 tasks still need shaping, worker execution, review, or recovery.')).toBeTruthy()
   })
@@ -326,7 +326,7 @@ describe('ReleaseTab', () => {
 
     render(ReleaseTab)
 
-    expect(await screen.findByText('Current work')).toBeTruthy()
+    expect(await screen.findByText('Current task scope')).toBeTruthy()
     expect(screen.getAllByText('Blocked')).toHaveLength(2)
     expect(screen.getByText('3 Guildhall-owned project files still need cleanup or landing.')).toBeTruthy()
     expect(screen.getByText('3 Guildhall files dirty')).toBeTruthy()
@@ -351,7 +351,7 @@ describe('ReleaseTab', () => {
 
     render(ReleaseTab)
 
-    expect(await screen.findByText('Current work')).toBeTruthy()
+    expect(await screen.findByText('Current task scope')).toBeTruthy()
     expect(screen.getByText('Could not inspect checkout')).toBeTruthy()
     expect(screen.getByText(/This checkout could not be inspected with git/)).toBeTruthy()
     expect(screen.queryByText(/fatal: not a git repository/)).toBeNull()
@@ -379,7 +379,7 @@ describe('ReleaseTab', () => {
 
     render(ReleaseTab, { props: { subView: 'criteria' } })
 
-    expect(await screen.findByText('Current work checks')).toBeTruthy()
+    expect(await screen.findByText('Scope checks')).toBeTruthy()
     expect(screen.getByText('9 unresolved git stories.')).toBeTruthy()
     expect(screen.getByText('Showing 5 of 9 git stories.')).toBeTruthy()
     expect(screen.getByText('Repo 0 needs commit or push.')).toBeTruthy()
@@ -410,7 +410,7 @@ describe('ReleaseTab', () => {
 
     render(ReleaseTab, { props: { subView: 'criteria' } })
 
-    expect(await screen.findByText('Current work checks')).toBeTruthy()
+    expect(await screen.findByText('Scope checks')).toBeTruthy()
     expect(screen.getByText('A branch needs a sharing decision.')).toBeTruthy()
     expect(screen.getByText('Push it, open a PR, or mark the work local-only/deferred if it should not be shared.')).toBeTruthy()
     expect(screen.queryByText(/has no upstream branch/)).toBeNull()
@@ -442,7 +442,7 @@ describe('ReleaseTab', () => {
 
     render(ReleaseTab, { props: { subView: 'criteria' } })
 
-    await screen.findByText('Current work checks')
+    await screen.findByText('Scope checks')
     await userEvent.click(screen.getByRole('button', { name: 'A branch needs a sharing decision.' }))
 
     expect(path.value).toBe('/projects/looma-knit/task/task-import-1y7kmp6')

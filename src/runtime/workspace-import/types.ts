@@ -37,6 +37,12 @@ export interface WorkspaceSignal {
    */
   role?: 'capability' | 'reference' | 'brief_input'
   /**
+   * Optional shape hint for structural context. `record` means the signal
+   * names a durable project record (for example "Book brief") rather than a
+   * loose prose note about that record.
+   */
+  structure?: 'record' | 'note'
+  /**
    * Optional explicit task ids/titles documented as owning this signal's
    * reference. This lets durable planning docs state "spec X is covered by
    * task Y" without forcing downstream consumers to guess from title overlap.

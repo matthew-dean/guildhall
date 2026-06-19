@@ -73,6 +73,8 @@ export interface DraftContext {
   references?: readonly string[]
   domain?: string
   role?: 'capability' | 'reference' | 'brief_input'
+  structure?: 'record' | 'note'
+  scopeHint?: 'current' | 'later'
   linkedTaskHints?: readonly string[]
 }
 
@@ -184,12 +186,20 @@ function referenceBasenames(refs: readonly string[] | undefined): Set<string> {
   )
 }
 
+function referencesContainPathSegment(
+  refs: readonly string[] | undefined,
+  segment: string,
+): boolean {
+  const normalizedSegment = `/${segment.replace(/^\/+|\/+$/g, '')}/`
+  return (refs ?? []).some(ref => ref.replaceAll('\\', '/').includes(normalizedSegment))
+}
+
 function planningDocStructuralForm(
   item: Pick<WorkspaceSignal, 'evidence' | 'source'>,
 ): 'numbered' | 'bullet' | null {
   if (item.source !== 'planning-docs') return null
   const evidence = item.evidence.trim()
-  if (/: \d+\.\s+/.test(evidence)) return 'numbered'
+  if (/: \d+(?:\.\d+)*\.?\s+/.test(evidence)) return 'numbered'
   if (/: -\s+/.test(evidence)) return 'bullet'
   return null
 }
@@ -483,7 +493,24 @@ function addTask(
         sharedReferenceBasename &&
         meaningfulOverlap >= 0.45 &&
         sharedMeaningfulTokens >= 2
-      if (sameReferenceEcho || sameReferenceFamilyEcho || planningDocEcho) {
+      const currentRoadmapSpecEcho =
+        sig.source === 'planning-docs' &&
+        existing.source === 'planning-docs' &&
+        scopeFromSignal(sig) === 'current' &&
+        existing.scope === 'current' &&
+        meaningfulOverlap >= 0.45 &&
+        sharedMeaningfulTokens >= 3 &&
+        (
+          (
+            referencesContainPathSegment(sig.references, 'specs') &&
+            referencesContainPathSegment(existing.references, 'harness')
+          ) ||
+          (
+            referencesContainPathSegment(existing.references, 'specs') &&
+            referencesContainPathSegment(sig.references, 'harness')
+          )
+        )
+      if (sameReferenceEcho || sameReferenceFamilyEcho || planningDocEcho || currentRoadmapSpecEcho) {
         key = existingKey
         break
       }
@@ -559,9 +586,33 @@ function addContext(
   index: Map<string, DraftContext>,
   sig: WorkspaceSignal,
 ): void {
+  const mergeByStructure =
+    (sig.role === 'brief_input' || sig.role === 'capability') &&
+    sig.structure === 'record'
   const refKey = sig.references?.[0] ?? sig.title
-  const key = `${sig.source}:${refKey}:${normalize(sig.title)}`
-  if (index.has(key)) return
+  const key = mergeByStructure
+    ? `${sig.source}:${sig.role ?? 'context'}:${sig.structure}:${normalize(sig.title)}`
+    : `${sig.source}:${refKey}:${normalize(sig.title)}`
+  const existing = index.get(key)
+  if (existing) {
+    const mergedReferences = mergeReferences(existing.references, sig.references)
+    const mergedHints = mergeReferences(existing.linkedTaskHints, sig.linkedTaskHints)
+    const nextExcerpt = existing.excerpt.length >= sig.evidence.length
+      ? existing.excerpt
+      : sig.evidence
+    const nextScopeHint =
+      existing.scopeHint === 'current' || sig.scopeHint === 'current'
+        ? 'current'
+        : existing.scopeHint ?? sig.scopeHint
+    index.set(key, {
+      ...existing,
+      excerpt: nextExcerpt,
+      ...(nextScopeHint ? { scopeHint: nextScopeHint } : {}),
+      ...(mergedReferences ? { references: mergedReferences } : {}),
+      ...(mergedHints ? { linkedTaskHints: mergedHints } : {}),
+    })
+    return
+  }
   index.set(key, {
     label: sig.title,
     excerpt: sig.evidence,
@@ -569,6 +620,8 @@ function addContext(
     ...(sig.references ? { references: sig.references } : {}),
     ...(sig.domainHint ? { domain: sig.domainHint } : {}),
     ...(sig.role ? { role: sig.role } : {}),
+    ...(sig.structure ? { structure: sig.structure } : {}),
+    ...(sig.scopeHint ? { scopeHint: sig.scopeHint } : {}),
     ...(sig.linkedTaskHints?.length ? { linkedTaskHints: [...sig.linkedTaskHints] } : {}),
   })
 }

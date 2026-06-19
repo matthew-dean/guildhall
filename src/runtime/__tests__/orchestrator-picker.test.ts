@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { TaskQueue } from '@guildhall/core'
-import { pickNextTask, selectedReleaseScopeForQueue } from '../orchestrator-picker.js'
+import { pickNextTask, selectedReleaseScopeForQueue, selectedTaskScopeForQueue } from '../orchestrator-picker.js'
 import type { OrientationScope } from '../project-orientation-spine.js'
 
 function task(overrides: Record<string, unknown> = {}) {
@@ -89,6 +89,36 @@ describe('pickNextTask bounded scope eligibility', () => {
       deferredNodeIds: ['work:later'],
     })
     expect(pickNextTask(q, undefined, undefined, undefined, undefined, { scope })?.id).toBe('included')
+  })
+
+  it('bounds unattended Start to the approved current task scope when no release is defined', () => {
+    const q = queue([
+      { id: 'later', title: 'Later scope feature', priority: 'critical' },
+      { id: 'included', title: 'Current scope feature', priority: 'normal' },
+    ])
+    const scope = selectedTaskScopeForQueue(q, {
+      currentTaskIds: ['included'],
+      laterTaskIds: ['later'],
+    })
+
+    expect(scope).toMatchObject({
+      id: 'current-work',
+      label: 'Current task scope',
+      nodeIds: ['work:included'],
+      deferredNodeIds: ['work:later'],
+    })
+    expect(pickNextTask(q, undefined, undefined, undefined, undefined, { scope })?.id).toBe('included')
+  })
+
+  it('keeps selected release scope membership explicit while still allowing descendant work', () => {
+    const q = queueWithRelease([
+      { id: 'included', title: 'Selected release feature', priority: 'normal', hierarchy: { childIds: ['child'], order: 0 } },
+      { id: 'child', title: 'Scoped child work', priority: 'normal', hierarchy: { parentId: 'included', childIds: [], order: 0 } },
+    ])
+    const scope = selectedReleaseScopeForQueue(q)
+
+    expect(scope?.nodeIds).toEqual(['work:included'])
+    expect(pickNextTask(q, undefined, undefined, undefined, undefined, { scope })?.id).toBe('child')
   })
 
   it('does not pick deferred ready work during normal unattended current-scope work', () => {

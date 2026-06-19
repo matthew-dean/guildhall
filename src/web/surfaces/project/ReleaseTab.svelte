@@ -306,9 +306,9 @@
   const gitStoryBlockers = $derived(dedupeGitBlockers(data?.gitStory?.blockers ?? []))
   const visibleGitStoryBlockers = $derived(gitStoryBlockers.slice(0, 5))
   const hasNamedRelease = $derived(Boolean(data?.release?.label))
-  const readinessNoun = $derived(hasNamedRelease ? 'release' : 'current work')
-  const readinessTitle = $derived(hasNamedRelease ? 'Release readiness' : 'Current work readiness')
-  const blockerNoun = $derived(hasNamedRelease ? 'release blocker' : 'blocker')
+  const readinessNoun = $derived(hasNamedRelease ? 'release' : 'scope')
+  const readinessTitle = $derived(hasNamedRelease ? 'Release readiness' : 'Scope readiness')
+  const blockerNoun = $derived(hasNamedRelease ? 'release blocker' : 'scope blocker')
 
   const verdict = $derived.by(() => {
     if (!data) return { label: 'Loading', tone: 'neutral' as const, reason: '' }
@@ -380,22 +380,22 @@
 
   const sectionCopy = $derived(
     section === 'criteria'
-      ? {
-          title: hasNamedRelease ? 'Release checks' : 'Current work checks',
+        ? {
+          title: hasNamedRelease ? 'Release checks' : 'Scope checks',
           description: hasNamedRelease
             ? 'Expand any row to inspect the tasks, approvals, or Git stories still keeping the current release from being ready.'
-            : 'Expand any row to inspect the tasks, approvals, or Git stories still keeping current work from being ready.',
+            : 'Expand any row to inspect the tasks, approvals, or Git stories still keeping the current task scope from being ready.',
         }
       : {
           title: readinessTitle,
           description: data?.release?.description ?? data?.scope?.description
             ?? (hasNamedRelease
               ? 'A quick read on whether the current release is ready to hand off, ship, or deliberately defer.'
-              : 'A quick read on whether current work is ready to hand off, ship, or deliberately defer.'),
+              : 'A quick read on whether the current task scope is ready to hand off, ship, or deliberately defer.'),
         },
   )
-  const releaseLabel = $derived(data?.release?.label ?? data?.scope?.label ?? spine?.summary?.selectedReleaseLabel ?? spine?.selectedRelease?.label ?? 'Current work')
-  const spineReleaseLabel = $derived(spine?.summary?.selectedReleaseLabel ?? spine?.selectedRelease?.label ?? spine?.summary?.selectedScopeLabel ?? spine?.scope?.label ?? 'Current work')
+  const releaseLabel = $derived(data?.release?.label ?? data?.scope?.label ?? spine?.summary?.selectedScopeLabel ?? spine?.selectedTaskScope?.label ?? spine?.scope?.label ?? spine?.summary?.selectedReleaseLabel ?? spine?.selectedRelease?.label ?? 'Current task scope')
+  const spineReleaseLabel = $derived(spine?.summary?.selectedScopeLabel ?? spine?.selectedTaskScope?.label ?? spine?.scope?.label ?? spine?.summary?.selectedReleaseLabel ?? spine?.selectedRelease?.label ?? 'Current task scope')
 
   const statusRows = $derived(
     data ? Object.entries(data.statusCounts).sort((a, b) => b[1] - a[1]) : [],

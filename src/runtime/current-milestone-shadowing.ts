@@ -13,6 +13,28 @@ export type ShadowedStageAlignedDeliverable = {
   title: string
 }
 
+function logicalBulletTitles(section: string): string[] {
+  const lines = section.split('\n')
+  const titles: string[] = []
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? ''
+    const bullet = /^\s*-\s+(.+?)\s*$/.exec(line)
+    if (!bullet?.[1]) continue
+    let title = bullet[1].trim()
+    while (index + 1 < lines.length) {
+      const next = lines[index + 1] ?? ''
+      if (!/^\s{2,}\S/.test(next)) break
+      if (/^\s*(?:-\s+|\d+\.\s+|##\s+|[A-Z][^:\n]*:\s*$)/.test(next)) break
+      title = `${title} ${next.trim()}`
+      index += 1
+    }
+    titles.push(title)
+  }
+
+  return titles
+}
+
 export function detectShadowedCurrentMilestoneDeliverableImports(
   sources: readonly ShadowingSource[],
 ): ShadowedCurrentMilestoneDeliverable[] {
@@ -32,10 +54,7 @@ export function detectShadowedCurrentMilestoneDeliverableImports(
     if (!stageSection) continue
     const deliverablesMatch = stageSection.match(/Deliverables:\s*([\s\S]*?)(?=\n[A-Z][^\n]*:\s*$|\n##\s+|$)/i)
     if (!deliverablesMatch?.[1]) continue
-
-    const deliverableTitles = [...deliverablesMatch[1].matchAll(/^\s*-\s+(.+?)\s*$/gm)]
-      .map(match => match[1]?.trim())
-      .filter((title): title is string => Boolean(title))
+    const deliverableTitles = logicalBulletTitles(deliverablesMatch[1])
 
     for (const title of deliverableTitles) {
       shadowed.push({ sourcePath: source.path, title })
@@ -67,9 +86,7 @@ export function detectShadowedStageAlignedRoadmapDeliverables(
       if (!stageSection) continue
       const deliverablesMatch = stageSection.match(/Deliverables:\s*([\s\S]*?)(?=\n[A-Z][^\n]*:\s*$|\n##\s+|$)/i)
       if (!deliverablesMatch?.[1]) continue
-      const deliverableTitles = [...deliverablesMatch[1].matchAll(/^\s*-\s+(.+?)\s*$/gm)]
-        .map(match => match[1]?.trim())
-        .filter((title): title is string => Boolean(title))
+      const deliverableTitles = logicalBulletTitles(deliverablesMatch[1])
       for (const title of deliverableTitles) {
         shadowed.push({ sourcePath: source.path, title })
       }

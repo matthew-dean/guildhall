@@ -111,7 +111,7 @@
     return typeof action === 'string' ? { label: action, href: currentProjectHref('/work', activeProjectId) } : action
   })
   const orientationGap = $derived(orientationSpine?.gaps?.find(gap => gap.severity === 'high' || gap.kind === 'missing_charter' || gap.kind === 'source_conflict') ?? orientationSpine?.gaps?.[0] ?? null)
-  const orientationScopeLabel = $derived(orientationSpine?.summary?.selectedReleaseLabel ?? orientationSpine?.summary?.selectedScopeLabel ?? orientationSpine?.scope?.label ?? 'Current work')
+  const orientationScopeLabel = $derived(orientationSpine?.summary?.selectedScopeLabel ?? orientationSpine?.selectedTaskScope?.label ?? orientationSpine?.scope?.label ?? orientationSpine?.summary?.selectedReleaseLabel ?? orientationSpine?.selectedRelease?.label ?? 'Current task scope')
   const orientationIncludedCount = $derived(orientationSpine?.summary?.includedWorkCount ?? orientationSpine?.summary?.includedCount ?? 0)
   const orientationDeferredCount = $derived(
     orientationSpine?.summary?.progress?.deferred ??
@@ -156,7 +156,10 @@
     const roots = orientationSpine.roots?.length ?? 0
     const inferred = orientationSpine.sourceHealth?.inferred ?? 0
     const gaps = orientationSpine.sourceHealth?.gaps ?? orientationSpine.gaps?.length ?? 0
-    return `${roots} capability lanes · ${orientationIncludedCount} scoped work items · ${inferred} inferred nodes · ${gaps} gaps`
+    const documented = (orientationSpine.roots ?? []).reduce((sum, root) =>
+      sum + (root.children ?? []).filter(child => child.visibility?.kind === 'supporting').length,
+    0)
+    return `${orientationIncludedCount} scoped work items · ${documented} documented capabilities · ${inferred} inferred nodes · ${gaps} gaps`
   })
   const orientationMapPreviewTitle = $derived.by(() => {
     if (!orientationSpine) return 'Project map not generated yet'
@@ -165,10 +168,14 @@
   const orientationMapPreviewDetail = $derived.by(() => {
     if (!orientationSpine) return 'Open the map when this project has imported work or confirmed planning docs.'
     const progress = orientationSpine.summary?.progress
+    const laterDocumented = (orientationSpine.roots ?? []).reduce((sum, root) =>
+      sum + (root.children ?? []).filter(child => child.visibility?.kind === 'supporting' && child.maturity === 'deferred').length,
+    0)
     const pieces = [
       progress?.specced ? `${progress.specced} specced` : null,
       progress?.active ? `${progress.active} active` : null,
       progress?.blocked ? `${progress.blocked} blocked` : null,
+      laterDocumented ? `${laterDocumented} later` : null,
       orientationProofGapCount ? `${orientationProofGapCount} proof gaps` : null,
     ].filter(Boolean)
     return pieces.length ? pieces.join(' · ') : orientationScopeDetail

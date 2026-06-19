@@ -170,6 +170,49 @@ describe('project re-intake apply', () => {
     })
   })
 
+  it('archives wrapped current-milestone deliverable imports when starter tasks now define that milestone', async () => {
+    const wrappedRoadmap = [
+      '# Implementation Roadmap',
+      '',
+      '## Stage 1: Fixture And Evaluation Harness',
+      '',
+      'Deliverables:',
+      '',
+      '- scripts or tests that ingest a fixture, build records, run a packet, and save',
+      '  the run output',
+      '',
+      '## Current Next Milestone',
+      '',
+      'The next milestone is Stage 1: Fixture And Evaluation Harness.',
+      '',
+      '1. Implement a no-UI runner that builds a packet from fixture records.',
+    ].join('\n')
+    const legacyTask = task({
+      id: 'task-wrapped-deliverable',
+      title: 'scripts or tests that ingest a fixture, build records, run a packet, and save the run output',
+      description: 'docs/harness/implementation-roadmap.md: - scripts or tests that ingest a fixture, build records, run a packet, and save the run output',
+      status: 'shelved',
+    })
+    const memoryDir = await makeState([legacyTask])
+    const draft = planProjectReintake({
+      now,
+      sources: [{ path: 'docs/harness/implementation-roadmap.md', content: wrappedRoadmap }],
+      tasks: [legacyTask],
+    })
+    await writeProjectReintakeDraft(memoryDir, draft)
+
+    const result = await applyProjectReintakeDraft({ memoryDir, now })
+    expect(result.success).toBe(true)
+
+    const queue = await readQueue(memoryDir)
+    expect(queue.tasks.find((candidate: { id?: string }) => candidate.id === 'task-wrapped-deliverable')).toMatchObject({
+      status: 'archived',
+      archivedEvidence: expect.objectContaining({
+        reason: expect.stringContaining('starter-task sequence'),
+      }),
+    })
+  })
+
   it('archives without deleting and creates graph tasks with dependency proof fields', async () => {
     const memoryDir = await makeState([
       task({ id: 'task-old', title: 'Retry project discovery update', status: 'blocked' }),

@@ -73,6 +73,7 @@ import {
   dependenciesSatisfied,
   taskHasUnansweredOpenQuestion,
   selectedReleaseScopeForQueue,
+  selectedTaskScopeForQueue,
 } from './orchestrator-picker.js'
 import {
   AGENT_SETTINGS_FILENAME,
@@ -92,7 +93,7 @@ import {
 import { buildHookExecutor } from './hooks-loader.js'
 import { buildDefaultCompactor } from './compactor-builder.js'
 import { evaluateProposal, type PromotionAction } from './proposal-promotion.js'
-import { WORKSPACE_IMPORT_TASK_ID } from './workspace-importer.js'
+import { WORKSPACE_IMPORT_TASK_ID, readWorkspaceGoalsState } from './workspace-importer.js'
 import { taskHasUnansweredVisibleQuestion } from './question-visibility.js'
 import { isInternalAgentNarration } from './user-facing-text.js'
 import { buildPromptCacheKey } from './prompt-cache.js'
@@ -2427,6 +2428,11 @@ export class Orchestrator {
   private summarizeIdleQueue(
     queue: TaskQueue,
     scopeTaskId?: string,
+    broaderDocumentedScope?: {
+      laterTaskCount: number
+      laterContextCount: number
+      detectedAdditionalTaskCount: number
+    } | null,
   ): NonNullable<Extract<TickOutcome, { kind: 'idle' }>['summary']> {
     const scopedIds = scopeTaskId ? new Set(workSubtreeIds(queue.tasks, scopeTaskId)) : null
     const tasks = scopedIds ? queue.tasks.filter(task => scopedIds.has(task.id)) : queue.tasks
@@ -2491,10 +2497,29 @@ export class Orchestrator {
     }
 
     if (counts.terminal === counts.total) {
+      const broaderScopeFragments: string[] = []
+      if ((broaderDocumentedScope?.laterTaskCount ?? 0) > 0) {
+        broaderScopeFragments.push(
+          `${broaderDocumentedScope!.laterTaskCount} later documented task${broaderDocumentedScope!.laterTaskCount === 1 ? '' : 's'}`,
+        )
+      }
+      if ((broaderDocumentedScope?.laterContextCount ?? 0) > 0) {
+        broaderScopeFragments.push(
+          `${broaderDocumentedScope!.laterContextCount} later documented capabilit${broaderDocumentedScope!.laterContextCount === 1 ? 'y' : 'ies'}`,
+        )
+      }
+      if ((broaderDocumentedScope?.detectedAdditionalTaskCount ?? 0) > 0) {
+        broaderScopeFragments.push(
+          `${broaderDocumentedScope!.detectedAdditionalTaskCount} additional detected task${broaderDocumentedScope!.detectedAdditionalTaskCount === 1 ? '' : 's'} not yet in the approved scope`,
+        )
+      }
       return {
         reason: 'all_terminal',
         message:
-          `No actionable tasks remain: ${counts.done} done, ${counts.blocked} blocked, ${counts.shelved} shelved.`,
+          `No actionable tasks remain: ${counts.done} done, ${counts.blocked} blocked, ${counts.shelved} shelved.` +
+          (broaderScopeFragments.length > 0
+            ? ` Current task scope is exhausted, but ${broaderScopeFragments.join(', ')} remain outside this scope.`
+            : ''),
         counts,
       }
     }
@@ -2582,7 +2607,16 @@ export class Orchestrator {
       dispatchCapacity: capacity,
     })
     const ownerInputBlockedTaskIds = this.waitingOwnerInputTaskIds(queueBefore)
-    const selectedReleaseScope = opts.preferredTaskId ? null : selectedReleaseScopeForQueue(queueBefore)
+    const workspaceGoalsState = opts.preferredTaskId
+      ? null
+      : await readWorkspaceGoalsState(getProjectStateDir(this.opts.config.projectPath)).catch(() => null)
+    const explicitReleaseScope = opts.preferredTaskId ? null : selectedReleaseScopeForQueue(queueBefore)
+    const selectedReleaseScope = opts.preferredTaskId
+      ? null
+      : (
+          explicitReleaseScope ??
+          selectedTaskScopeForQueue(queueBefore, workspaceGoalsState?.approved ?? null)
+        )
     const picks = pickNextTasks({
       queue: queueBefore,
       capacity,
@@ -2618,12 +2652,28 @@ export class Orchestrator {
       const scopedTasks = scopedIds
         ? queueBefore.tasks.filter((task) => scopedIds.has(task.id))
         : selectedReleaseScope
-          ? queueBefore.tasks.filter((task) => taskEligibleForSelectedScope(task, selectedReleaseScope).eligible)
+          ? queueBefore.tasks.filter((task) => taskEligibleForSelectedScope(task, selectedReleaseScope, {
+            tasksById: new Map(queueBefore.tasks.map(task => [task.id, task] as const)),
+          }).eligible)
         : queueBefore.tasks
       const allDone = scopedTasks.length > 0 && scopedTasks.every((t) =>
         (TERMINAL_TASK_STATUSES as readonly TaskStatus[]).includes(t.status),
       )
-      const summary = this.summarizeIdleQueue(queueBefore, opts.preferredTaskId)
+      const broaderDocumentedScope = !opts.preferredTaskId && !explicitReleaseScope && workspaceGoalsState
+        ? {
+            laterTaskCount: workspaceGoalsState.approved.laterTaskIds.length,
+            laterContextCount: workspaceGoalsState.context.filter(context =>
+              (context.role === 'capability' || context.role === 'brief_input') &&
+              context.scopeHint === 'later',
+            ).length,
+            detectedAdditionalTaskCount: Math.max(
+              0,
+              (workspaceGoalsState.detected?.taskCount ?? workspaceGoalsState.approved.taskCount) -
+                workspaceGoalsState.approved.taskCount,
+            ),
+          }
+        : null
+      const summary = this.summarizeIdleQueue(queueBefore, opts.preferredTaskId, broaderDocumentedScope)
       return {
         kind: 'idle',
         consecutiveIdleTicks: this.consecutiveIdleTicks,

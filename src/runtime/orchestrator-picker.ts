@@ -43,19 +43,7 @@ export function selectedReleaseScopeForQueue(queue: Pick<TaskQueue, 'tasks' | 'r
   for (const task of queue.tasks) {
     if (task.releaseIds?.includes(release.id)) nodeIds.add(taskNodeId(task.id))
   }
-  for (const nodeId of [...nodeIds]) {
-    if (!nodeId.startsWith('work:')) continue
-    for (const childId of workSubtreeIds(queue.tasks, nodeId.slice('work:'.length))) {
-      nodeIds.add(taskNodeId(childId))
-    }
-  }
   const deferredNodeIds = new Set<string>(release.deferredNodeIds ?? [])
-  for (const nodeId of [...deferredNodeIds]) {
-    if (!nodeId.startsWith('work:')) continue
-    for (const childId of workSubtreeIds(queue.tasks, nodeId.slice('work:'.length))) {
-      deferredNodeIds.add(taskNodeId(childId))
-    }
-  }
   return {
     id: release.id,
     label: release.label,
@@ -63,6 +51,41 @@ export function selectedReleaseScopeForQueue(queue: Pick<TaskQueue, 'tasks' | 'r
     source: release.source,
     nodeIds: [...nodeIds],
     deferredNodeIds: [...deferredNodeIds],
+  }
+}
+
+export function selectedTaskScopeForQueue(
+  queue: Pick<TaskQueue, 'tasks'>,
+  membership: {
+    currentTaskIds: string[]
+    laterTaskIds: string[]
+  } | null | undefined,
+): OrientationScope | null {
+  if (!membership) return null
+  const currentTaskIds = membership.currentTaskIds
+    .map(taskId => taskId.trim())
+    .filter(Boolean)
+  const laterTaskIds = membership.laterTaskIds
+    .map(taskId => taskId.trim())
+    .filter(Boolean)
+  if (currentTaskIds.length === 0 && laterTaskIds.length === 0) return null
+
+  const queueTaskIds = new Set(queue.tasks.map(task => task.id))
+  const nodeIds = currentTaskIds
+    .filter(taskId => queueTaskIds.has(taskId))
+    .map(taskNodeId)
+  const deferredNodeIds = laterTaskIds
+    .filter(taskId => queueTaskIds.has(taskId))
+    .map(taskNodeId)
+  if (nodeIds.length === 0 && deferredNodeIds.length === 0) return null
+
+  return {
+    id: 'current-work',
+    label: 'Current task scope',
+    kind: 'proposed_feature_set',
+    source: 'inferred',
+    nodeIds,
+    deferredNodeIds,
   }
 }
 
@@ -171,6 +194,7 @@ export function pickNextTask(
     ? new Set(workSubtreeIds(queue.tasks, preferredTaskId))
     : null
   const explicitTargetIds = scopedIds ?? new Set<string>()
+  const tasksById = new Map(queue.tasks.map(task => [task.id, task] as const))
   const isExcluded = exclude
     ? (t: Task) => exclude.has(t.id)
     : (_t: Task) => false
@@ -184,6 +208,7 @@ export function pickNextTask(
     taskEligibleForSelectedScope(task, options.scope, {
       explicitTaskId: explicitTargetIds.has(task.id) ? task.id : undefined,
       includedDependencyIds: options.includedDependencyIds,
+      tasksById,
     }).eligible
   const matchesStatusSlot = (
     task: Task,

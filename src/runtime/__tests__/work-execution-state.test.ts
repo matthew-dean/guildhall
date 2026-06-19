@@ -129,6 +129,34 @@ describe('work execution state', () => {
     expect(feature?.summaryState).toBe('blocked')
   })
 
+  it('keeps importer-generated decomposition children out of visible execution scope', () => {
+    const tasks = [
+      task({
+        id: 'task-runner',
+        title: 'Implement a no-UI runner that builds a packet from fixture records.',
+        status: 'ready',
+        requestIntake: { createdBy: 'workspace-importer' } as Task['requestIntake'],
+        hierarchy: { childIds: ['task-runner-split-load-fixture-inputs'], order: 0, relation: 'contains' },
+      }),
+      task({
+        id: 'task-runner-split-load-fixture-inputs',
+        title: 'Load fixture inputs and canonical story records',
+        status: 'exploring',
+        hierarchy: { parentId: 'task-runner', childIds: [], order: 0, relation: 'decomposes' },
+        notes: [{ agentId: 'task-sizing', role: 'coordinator', content: 'Generated split child.' }] as Task['notes'],
+      }),
+    ]
+
+    const project = deriveProjectWorkExecutionState(tasks)
+    const parent = project.byTaskId['task-runner']
+
+    expect(project.counts.visibleTotal).toBe(1)
+    expect(project.counts.internalTotal).toBe(1)
+    expect(parent?.visibleChildIds).toEqual([])
+    expect(parent?.internalChildIds).toEqual(['task-runner-split-load-fixture-inputs'])
+    expect(parent?.runnableChildIds).toEqual([])
+  })
+
   it('does not treat legacy split recommendations as runtime authority when hierarchy already exists', () => {
     const tasks = [
       task({

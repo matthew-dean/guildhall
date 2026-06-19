@@ -142,8 +142,8 @@ function deriveTaskWorkProgress(task: TaskRecord, byId: Map<string, TaskRecord>)
   const id = stringValue(task.id)
   if (!id) return null
   const childTasks = directChildTasks(task, byId)
-  const visibility = deriveWorkVisibility(task)
-  const internalChildTasks = childTasks.filter(child => deriveWorkVisibility(child).kind === 'internal_step')
+  const visibility = deriveWorkVisibility(task, byId)
+  const internalChildTasks = childTasks.filter(child => deriveWorkVisibility(child, byId).kind === 'internal_step')
   const visibleChildProgress = childTasks
     .map(child => deriveTaskWorkProgress(child, byId))
     .filter((progress): progress is TaskWorkProgress => Boolean(progress && progress.visibility.countInProjectTotals))
@@ -164,7 +164,7 @@ function deriveTaskWorkProgress(task: TaskRecord, byId: Map<string, TaskRecord>)
   }
 }
 
-function deriveWorkVisibility(task: TaskRecord): WorkVisibility {
+function deriveWorkVisibility(task: TaskRecord, byId: Map<string, TaskRecord>): WorkVisibility {
   if (isProjectSetupTask(task)) {
     return { kind: 'hidden', countInProjectTotals: false }
   }
@@ -172,26 +172,13 @@ function deriveWorkVisibility(task: TaskRecord): WorkVisibility {
   if (status && TASK_HIDDEN_STATUSES.has(status)) {
     return { kind: 'hidden', countInProjectTotals: false }
   }
-  const explicit = objectValue(task.workVisibility)
-  const explicitKind = stringValue(explicit?.kind)
-  if (explicitKind === 'primary' || explicitKind === 'supporting' || explicitKind === 'internal_step' || explicitKind === 'hidden') {
-    const explicitCount = explicit?.countInProjectTotals
-    return {
-      kind: explicitKind,
-      label: stringValue(explicit?.label),
-      countInProjectTotals: typeof explicitCount === 'boolean'
-        ? explicitCount
-        : explicitKind === 'primary' || explicitKind === 'supporting',
-    }
-  }
-
   const parentId = stringValue(objectValue(task.hierarchy)?.parentId)
-  const workKind = stringValue(task.workKind)
-  if (parentId && workKind && INTERNAL_STEP_WORK_KINDS.has(workKind)) {
-    return { kind: 'internal_step', countInProjectTotals: false }
+  const parent = parentId ? byId.get(parentId) ?? null : null
+  const visibility = deriveTaskWorkVisibility(task, parent)
+  return {
+    ...visibility,
+    label: stringValue(objectValue(task.workVisibility)?.label),
   }
-
-  return { kind: 'primary', countInProjectTotals: true }
 }
 
 function directChildTasks(task: TaskRecord, byId: Map<string, TaskRecord>): TaskRecord[] {
@@ -391,3 +378,4 @@ function stringValue(value: unknown): string | undefined {
 function booleanValue(value: unknown, fallback: boolean): boolean {
   return typeof value === 'boolean' ? value : fallback
 }
+import { deriveTaskWorkVisibility } from './work-visibility.js'

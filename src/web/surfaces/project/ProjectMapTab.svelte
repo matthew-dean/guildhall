@@ -24,6 +24,28 @@
   const spine = $derived<ProjectOrientationSpine | null>(detail.orientationSpine ?? null)
   const progress = $derived(spine?.summary?.progress ?? null)
   const lanes = $derived(spine?.roots ?? [])
+  const workRoots = $derived.by(() =>
+    lanes.filter(root =>
+      root.visibility?.countInProjectTotals !== false &&
+      (
+        (root.progress?.total ?? 0) > 0 ||
+        root.kind === 'work' ||
+        (root.children ?? []).some(child => child.visibility?.countInProjectTotals)
+      ),
+    ),
+  )
+  const skeletonRoots = $derived.by(() =>
+    lanes.filter(root => supportingChildren(root).length > 0),
+  )
+  const documentedCapabilityCount = $derived.by(() =>
+    skeletonRoots.reduce((sum, root) => sum + supportingChildren(root).length, 0),
+  )
+  const documentedLaterCount = $derived.by(() =>
+    skeletonRoots.reduce((sum, root) => sum + deferredSupportingChildren(root).length, 0),
+  )
+  const documentedCurrentCount = $derived.by(() =>
+    documentedCapabilityCount - documentedLaterCount,
+  )
   const proofGapCount = $derived(spine?.gaps?.filter(gap => gap.kind === 'proof_needed').length ?? 0)
   const sourceGapCount = $derived(spine?.sourceHealth?.gaps ?? spine?.gaps?.length ?? 0)
   const sourceInferredCount = $derived(spine?.sourceHealth?.inferred ?? 0)
@@ -32,8 +54,9 @@
   const mapHeadline = $derived(spine?.charter?.goal ?? spine?.summary?.purpose ?? `${detail.name ?? detail.id ?? 'Project'} needs a confirmed project goal.`)
   const targetAudience = $derived(spine?.charter?.targetAudience ?? null)
   const selectedRelease = $derived(spine?.selectedRelease ?? null)
-  const releaseLabel = $derived(spine?.summary?.selectedReleaseLabel ?? selectedRelease?.label ?? spine?.summary?.selectedScopeLabel ?? spine?.scope?.label ?? 'Current work')
-  const workContainerTitle = $derived(selectedRelease ? 'Selected release' : 'Current work')
+  const selectedTaskScope = $derived(spine?.selectedTaskScope ?? spine?.scope ?? null)
+  const taskScopeLabel = $derived(spine?.summary?.selectedScopeLabel ?? selectedTaskScope?.label ?? spine?.summary?.selectedReleaseLabel ?? selectedRelease?.label ?? 'Current task scope')
+  const workContainerTitle = $derived('Task scope')
   const mapGaps = $derived.by(() => {
     return (spine?.gaps ?? []).slice(0, 5).map(gap => ({
       ...gap,
@@ -65,10 +88,10 @@
         tone: sourceIsInferred(spine.charter?.source) ? 'warn' as Tone : 'ok' as Tone,
       },
       {
-        label: selectedRelease ? 'Release' : 'Work',
-        value: sourceLabelFor(selectedRelease?.source ?? spine.scope?.source),
-        detail: `${releaseLabel} contains ${spine.summary?.includedWorkCount ?? spine.summary?.includedCount ?? 0} assigned work items and ${spine.summary?.deferredWorkCount ?? spine.summary?.deferredCount ?? 0} later.`,
-        tone: sourceIsInferred(selectedRelease?.source ?? spine.scope?.source) ? 'warn' as Tone : 'ok' as Tone,
+        label: 'Scope',
+        value: sourceLabelFor(selectedTaskScope?.source),
+        detail: `${taskScopeLabel} contains ${spine.summary?.includedWorkCount ?? spine.summary?.includedCount ?? 0} assigned work items and ${spine.summary?.deferredWorkCount ?? spine.summary?.deferredCount ?? 0} later.`,
+        tone: sourceIsInferred(selectedTaskScope?.source) ? 'warn' as Tone : 'ok' as Tone,
       },
       {
         label: 'Work records',
@@ -91,9 +114,9 @@
     nav(projectActionHref(href, activeProjectId), { backgroundPath: path.value })
   }
 
-  function countLabel(value: number | undefined, singular: string): string {
+  function countLabel(value: number | undefined, singular: string, plural?: string): string {
     const count = value ?? 0
-    return `${count} ${count === 1 ? singular : `${singular}s`}`
+    return `${count} ${count === 1 ? singular : (plural ?? `${singular}s`)}`
   }
 
   function laneTone(node: ProjectOrientationNode): Tone {
@@ -137,6 +160,25 @@
   function visibleChildren(node: ProjectOrientationNode): ProjectOrientationNode[] {
     const children = node.children ?? []
     return showInternalSteps ? children : children.filter(child => !isInternalNode(child))
+  }
+
+  function supportingChildren(node: ProjectOrientationNode): ProjectOrientationNode[] {
+    return (node.children ?? []).filter(child => child.visibility?.kind === 'supporting')
+  }
+
+  function deferredSupportingChildren(node: ProjectOrientationNode): ProjectOrientationNode[] {
+    return supportingChildren(node).filter(child => child.maturity === 'deferred')
+  }
+
+  function skeletonSummary(node: ProjectOrientationNode): string {
+    const all = supportingChildren(node)
+    const deferred = deferredSupportingChildren(node).length
+    const current = all.length - deferred
+    const pieces = [
+      current > 0 ? `${current} shaping the current picture` : null,
+      deferred > 0 ? `${deferred} documented for later` : null,
+    ].filter(Boolean)
+    return pieces.join(' · ') || node.summary || 'No documented structure is mapped yet.'
   }
 
   function hiddenInternalCount(node: ProjectOrientationNode): number {
@@ -196,16 +238,16 @@
     </div>
     <Card title={workContainerTitle} titleTag="h2" padding="compact" density="dense" className="map-scope-card">
       <div class="scope-stack">
-        <Chip label={releaseLabel} tone={sourceIsInferred(selectedRelease?.source ?? spine?.scope?.source) ? 'warn' : 'accent'} />
+        <Chip label={taskScopeLabel} tone={sourceIsInferred(selectedTaskScope?.source) ? 'warn' : 'accent'} />
         <strong>{countLabel(spine?.summary?.includedWorkCount ?? spine?.summary?.includedCount, 'assigned work item')}</strong>
-        <span>{countLabel(lanes.length, 'capability lane')} · {countLabel(sourceInferredCount, 'inferred node')} · {countLabel(sourceGapCount, 'gap')}</span>
+        <span>{countLabel(documentedCapabilityCount, 'documented capability', 'documented capabilities')} · {countLabel(documentedLaterCount, 'later capability', 'later capabilities')} · {countLabel(sourceGapCount, 'gap')}</span>
       </div>
     </Card>
     <Card title="Proof mode" titleTag="h2" padding="compact" density="dense" className="map-boundary-card">
       <div class="scope-stack">
         <Chip label={executionBoundary?.label ?? 'Missing'} tone={executionBoundaryTone(executionBoundary?.mode)} />
         <strong>{friendlyStatus(executionBoundary?.proofStyle ?? 'unspecified')}</strong>
-        <span>{executionBoundary?.detail ?? 'Guildhall needs this before it can safely run the selected scope unattended.'}</span>
+        <span>{executionBoundary?.detail ?? 'Guildhall needs this before it can safely run the current task scope unattended.'}</span>
       </div>
     </Card>
   </section>
@@ -218,7 +260,11 @@
     <section class="map-stats" aria-label="Project map progress">
       <UtilityPanel className="stat" tone="neutral">
         <strong>{countLabel(progress?.total, 'work item')}</strong>
-        <span>Total scope</span>
+        <span>Tasks in scope</span>
+      </UtilityPanel>
+      <UtilityPanel className="stat" tone="neutral">
+        <strong>{countLabel(documentedCapabilityCount, 'documented capability', 'documented capabilities')}</strong>
+        <span>Project skeleton</span>
       </UtilityPanel>
       <UtilityPanel className="stat" tone="accent">
         <strong>{progress?.specced ?? 0}</strong>
@@ -228,9 +274,9 @@
         <strong>{progress?.active ?? 0}</strong>
         <span>Active</span>
       </UtilityPanel>
-      <UtilityPanel className="stat" tone={progress?.blocked ? 'warn' : 'neutral'}>
-        <strong>{progress?.blocked ?? 0}</strong>
-        <span>Blocked</span>
+      <UtilityPanel className="stat" tone={documentedLaterCount ? 'neutral' : 'ok'}>
+        <strong>{documentedLaterCount}</strong>
+        <span>Later</span>
       </UtilityPanel>
       <UtilityPanel className="stat" tone={proofGapCount ? 'warn' : 'ok'}>
         <strong>{proofGapCount}</strong>
@@ -243,15 +289,19 @@
     </section>
 
     <section class="map-layout">
-      <Card title="Capability lanes" titleTag="h2" padding="compact" density="dense" className="map-lanes-card">
+      <div class="map-main">
+      <Card title="Tasks in scope" titleTag="h2" padding="compact" density="dense" className="map-lanes-card">
         <div class="lane-toolbar">
           <Button variant="ghost" size="sm" onclick={() => { showInternalSteps = !showInternalSteps }}>
             <Icon name="list-todo" size={14} />
             {showInternalSteps ? 'Hide internal steps' : 'Show internal steps'}
           </Button>
         </div>
+        {#if workRoots.length === 0}
+          <p class="muted">No scoped work is mapped yet.</p>
+        {:else}
         <CardList className="lane-list">
-          {#each lanes as lane (lane.id ?? lane.title)}
+          {#each workRoots as lane (lane.id ?? lane.title)}
             <CardListItem className="lane-row" tone={laneTone(lane)} railStrength="strong">
               <div class="lane-head">
                 <div>
@@ -289,7 +339,42 @@
             </CardListItem>
           {/each}
         </CardList>
+        {/if}
       </Card>
+
+      <Card title="Documented skeleton" titleTag="h2" padding="compact" density="dense" className="map-structure-card">
+        <div class="lane-meta">
+          <span>{countLabel(documentedCurrentCount, 'current capability', 'current capabilities')} · {countLabel(documentedLaterCount, 'later capability', 'later capabilities')}</span>
+        </div>
+        {#if skeletonRoots.length === 0}
+          <p class="muted">Guildhall has not mapped durable project structure yet.</p>
+        {:else}
+          <CardList className="lane-list">
+            {#each skeletonRoots as root (root.id ?? root.title)}
+              <CardListItem className="lane-row" tone="neutral" railStrength="subtle">
+                <div class="lane-head">
+                  <div>
+                    <strong>{root.title}</strong>
+                    <p>{skeletonSummary(root)}</p>
+                  </div>
+                  <Chip label={countLabel(supportingChildren(root).length, 'capability', 'capabilities')} tone="neutral" />
+                </div>
+                {#if supportingChildren(root).length > 0}
+                  <div class="child-list">
+                    {#each supportingChildren(root).slice(0, 4) as child (child.id ?? child.title)}
+                      <CardListItem className="child-row" tone={child.maturity === 'deferred' ? 'neutral' : laneTone(child)} dense>
+                        <span>{child.title ?? 'Untitled capability'}</span>
+                        <Chip label={child.maturity === 'deferred' ? 'Later' : maturityLabel(child)} tone={child.maturity === 'deferred' ? 'neutral' : laneTone(child)} />
+                      </CardListItem>
+                    {/each}
+                  </div>
+                {/if}
+              </CardListItem>
+            {/each}
+          </CardList>
+        {/if}
+      </Card>
+      </div>
 
       <div class="map-side">
         <Card title="Source trail" titleTag="h2" padding="compact" density="dense">
@@ -474,6 +559,12 @@
     grid-template-columns: minmax(0, 1.45fr) minmax(20rem, 0.55fr);
     gap: var(--s-4);
     align-items: start;
+    min-width: 0;
+  }
+
+  .map-main {
+    display: grid;
+    gap: var(--s-4);
     min-width: 0;
   }
 

@@ -45,6 +45,17 @@ export interface WorkspaceImportAreaGroup {
 }
 
 export interface WorkspaceImportReview {
+  summary: {
+    currentMilestoneLabel: string | null
+    headline: string
+    currentScope: string
+    deferredScope: string | null
+    structuralScope: string | null
+    briefInputCount: number
+    briefRecordCount: number
+    capabilityCount: number
+    capabilityRecordCount: number
+  }
   areaGroups: WorkspaceImportAreaGroup[]
   sourceGroups: WorkspaceImportSourceGroup[]
   totalTaskCandidates: number
@@ -166,6 +177,21 @@ export function buildWorkspaceImportReview(
   existingTasks: readonly WorkspaceImportExistingTask[] = [],
   projectPath?: string,
 ): WorkspaceImportReview {
+  const currentTaskCount = draft.tasks.filter(task => task.scope !== 'later').length
+  const laterTaskCount = draft.tasks.filter(task => task.scope === 'later').length
+  const briefInputCount = draft.context.filter(context => context.role === 'brief_input').length
+  const briefRecordCount = draft.context.filter(
+    context => context.role === 'brief_input' && context.structure === 'record',
+  ).length
+  const capabilityCount = draft.context.filter(context => context.role === 'capability').length
+  const capabilityRecordCount = draft.context.filter(
+    context => context.role === 'capability' && context.structure === 'record',
+  ).length
+  const currentMilestoneLabel = draft.context.find(context =>
+    context.scopeHint === 'current' && /^Stage\s+\d+\s*:/i.test(context.label),
+  )?.label
+    ?? draft.context.find(context => /^Stage\s+\d+\s*:/i.test(context.label))?.label
+    ?? null
   const existingTitles = new Set(existingTasks.map(task => normalizedTitle(task.title)))
   const byKey = new Map<string, Omit<WorkspaceImportSourceGroup, 'summary' | 'kind'> & {
     taskTitles: string[]
@@ -317,12 +343,37 @@ export function buildWorkspaceImportReview(
       return a.label.localeCompare(b.label)
     })
 
+  const summary = {
+    currentMilestoneLabel,
+    headline: currentMilestoneLabel
+      ? `${currentMilestoneLabel} is the current scoped milestone.`
+      : currentTaskCount > 0
+        ? `Guildhall found ${currentTaskCount} current task${currentTaskCount === 1 ? '' : 's'} in the documented scope.`
+        : 'Guildhall did not find current implementation tasks in the documented scope.',
+    currentScope: currentTaskCount > 0
+      ? `The current docs name ${currentTaskCount} task${currentTaskCount === 1 ? '' : 's'} to work on now.`
+      : briefInputCount > 0 || capabilityCount > 0
+        ? 'The docs describe project structure, but they do not yet name current implementation tasks for it.'
+        : 'The docs do not currently name implementation tasks to start from.',
+    deferredScope: laterTaskCount > 0
+      ? `The docs also describe ${laterTaskCount} later/deferred task${laterTaskCount === 1 ? '' : 's'} that should wait outside the current task scope.`
+      : null,
+    structuralScope: briefInputCount > 0 || capabilityCount > 0
+      ? `The project skeleton also includes ${briefRecordCount} brief record${briefRecordCount === 1 ? '' : 's'}, ${Math.max(0, briefInputCount - briefRecordCount)} brief note${Math.max(0, briefInputCount - briefRecordCount) === 1 ? '' : 's'}, and ${capabilityRecordCount} capability record${capabilityRecordCount === 1 ? '' : 's'} before any runnable work is drafted from them.`
+      : null,
+    briefInputCount,
+    briefRecordCount,
+    capabilityCount,
+    capabilityRecordCount,
+  }
+
   return {
+    summary,
     areaGroups,
     sourceGroups,
     totalTaskCandidates: draft.tasks.length,
-    totalCurrentTaskCandidates: draft.tasks.filter(task => task.scope !== 'later').length,
-    totalLaterTaskCandidates: draft.tasks.filter(task => task.scope === 'later').length,
+    totalCurrentTaskCandidates: currentTaskCount,
+    totalLaterTaskCandidates: laterTaskCount,
     totalMilestones: draft.milestones.length,
     totalGoals: draft.goals.length,
   }

@@ -27,7 +27,7 @@ describe('ProjectMapTab', () => {
             label: 'Headless proof',
             mode: 'headless',
             proofStyle: 'script_only',
-            detail: 'Selected scope should be proven with scripts or commands before it is treated as ready.',
+            detail: 'The current task scope should be proven with scripts or commands before it is treated as ready.',
             source: { kind: 'charter', refs: ['project-brief.md'], confidence: 'high', inferred: false },
           },
           proofContracts: [{
@@ -40,11 +40,11 @@ describe('ProjectMapTab', () => {
             refs: ['task:task-a'],
           }],
           scope: {
-            label: 'Current work',
+            label: 'Current task scope',
             source: 'inferred',
           },
           summary: {
-            selectedScopeLabel: 'Current work',
+            selectedScopeLabel: 'Current task scope',
             includedWorkCount: 2,
             deferredWorkCount: 0,
             progress: {
@@ -118,14 +118,14 @@ describe('ProjectMapTab', () => {
 
     expect(screen.getByRole('heading', { name: 'Project map' })).toBeInTheDocument()
     expect(screen.getByText('Build a fiction-first planning and review harness.')).toBeInTheDocument()
-    expect(screen.getAllByText('Current work').length).toBeGreaterThanOrEqual(1)
-    expect(screen.getByText('Coherence')).toBeInTheDocument()
+    expect(screen.getAllByText('Current task scope').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getAllByText('Coherence').length).toBeGreaterThanOrEqual(1)
     expect(screen.getAllByText('Coherence reviewer MVP').length).toBeGreaterThanOrEqual(1)
     expect(screen.queryByText('Internal CLI proof')).not.toBeInTheDocument()
     expect(container.textContent).toMatch(/internal step[s]? hidden/i)
     await fireEvent.click(screen.getByRole('button', { name: 'Show internal steps' }))
     expect(screen.getByText('Internal CLI proof')).toBeInTheDocument()
-    expect(screen.getByText('Author drafts or imports chapters.')).toBeInTheDocument()
+    expect(screen.getAllByText('Author drafts or imports chapters.').length).toBeGreaterThanOrEqual(1)
     expect(screen.getByRole('button', { name: 'Hide internal steps' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Proof mode' })).toBeInTheDocument()
     expect(screen.getAllByText('Headless proof').length).toBeGreaterThanOrEqual(1)

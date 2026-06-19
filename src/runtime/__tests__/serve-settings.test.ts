@@ -1403,7 +1403,7 @@ describe('POST /api/project/start', () => {
     })
     expect(projectBody.startReadiness?.message).toContain('still needs a real brief')
     expect(projectBody.orientationSpine?.summary).toMatchObject({
-      headline: 'Current work is being shaped.',
+      headline: 'Current task scope is being shaped.',
       nextAction: 'Draft the first current-scope brief.',
       includedCount: 1,
       progress: { total: 1, done: 0 },
@@ -3418,7 +3418,7 @@ describe('Workspace Import review endpoints', () => {
     expect(body.startReadiness?.message).toContain('under-scoped')
     expect(body.startReadiness?.message).toContain('Define fixture, expected-record, prototype-run, and evaluation schemas.')
     expect(body.orientationSpine?.summary).toMatchObject({
-      headline: 'Current work needs import refresh.',
+      headline: 'Current task scope needs import refresh.',
       topBlocker: 'Workspace import is under-scoped.',
       nextAction: 'Refresh the workspace import.',
     })
@@ -3579,7 +3579,7 @@ describe('Workspace Import review endpoints', () => {
     expect(body.startReadiness?.message).toContain('Spec: World And Object Continuity')
   })
 
-  it('blocks readiness when the saved import dropped current-milestone deliverables in favor of starter tasks only', async () => {
+  it('does not block readiness on shadowed current-milestone deliverables when starter tasks already define the active slice', async () => {
     await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
     await fs.writeFile(
       path.join(tmpDir, 'docs', 'harness', 'implementation-roadmap.md'),
@@ -3591,6 +3591,8 @@ describe('Workspace Import review endpoints', () => {
         'Deliverables:',
         '- fixture directory shape for at least one small story fixture',
         '- typed fixture and expected-record contracts',
+        '- scripts or tests that ingest a fixture, build records, run a packet, and',
+        '  save the run output',
         '',
         '## Current Next Milestone',
         '',
@@ -3657,11 +3659,9 @@ describe('Workspace Import review endpoints', () => {
     }
     expect(body.startReadiness).toMatchObject({
       canStart: false,
-      code: 'workspace_import_refresh_needed',
-      actionHref: '/workspace-import',
+      code: 'all_terminal',
     })
-    expect(body.startReadiness?.message).toContain('under-scoped')
-    expect(body.startReadiness?.message).toContain('fixture directory shape for at least one small story fixture')
+    expect(body.startReadiness?.code).not.toBe('workspace_import_refresh_needed')
   })
 
   it('treats documented spec-to-task coverage links as real structural coverage', async () => {
@@ -3987,6 +3987,295 @@ describe('Workspace Import review endpoints', () => {
     expect(body.startReadiness?.message).toContain('Add the first tiny fiction fixture and human-authored expected records.')
   })
 
+  it('returns approved import context from saved workspace goals state', async () => {
+    await writeSystemTasks({
+      version: 1,
+      lastUpdated: '2026-01-01T00:00:00.000Z',
+      tasks: [
+        {
+          id: 'task-workspace-import',
+          title: 'Review existing project work',
+          description: 'Reserved importer',
+          domain: '_workspace_import',
+          projectPath: tmpDir,
+          status: 'done',
+          priority: 'normal',
+          acceptanceCriteria: [],
+          dependsOn: [],
+          outOfScope: [],
+          spec: [
+            '```yaml',
+            'tasks:',
+            '  - id: imported-one',
+            '    title: Define fixture schemas',
+            '    description: Saved importer task.',
+            '    domain: harness',
+            '    priority: high',
+            '```',
+          ].join('\n'),
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          adjudications: [],
+          escalations: [],
+          agentIssues: [],
+          origination: 'system',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+        },
+      ],
+    })
+    await writeSystemJson('workspace-goals.json', {
+      version: 3,
+      recordedAt: '2026-01-01T00:00:00.000Z',
+      goals: [],
+      tasks: [
+        {
+          id: 'imported-one',
+          title: 'Define fixture schemas',
+          description: 'Saved importer task.',
+          domain: 'harness',
+          priority: 'high',
+          references: ['docs/harness/implementation-roadmap.md'],
+          scope: 'current',
+        },
+      ],
+      milestones: [],
+      context: [
+        {
+          label: 'Author defines book intent, genre/form expectations, themes, and voice.',
+          excerpt: 'Book-brief framing.',
+          source: 'planning-docs',
+          references: ['docs/harness/architecture-notes.md'],
+          role: 'brief_input',
+          structure: 'note',
+        },
+      ],
+      approved: {
+        goalCount: 0,
+        taskCount: 1,
+        milestoneCount: 0,
+        currentTaskCount: 1,
+        laterTaskCount: 0,
+        taskIds: ['imported-one'],
+      },
+      detected: null,
+    })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(scoped('/api/project/workspace-import/draft')))
+    expect(res.status).toBe(200)
+    const body = await res.json() as {
+      parsed?: { context?: Array<{ label?: string; role?: string }> }
+    }
+    expect(body.parsed?.context).toEqual([
+      expect.objectContaining({
+        label: 'Author defines book intent, genre/form expectations, themes, and voice.',
+        role: 'brief_input',
+      }),
+    ])
+  })
+
+  it('does not let legacy saved structural context override newly detected structural records in the draft endpoint', async () => {
+    await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'harness', 'architecture-notes.md'),
+      [
+        '# Architecture Notes',
+        '',
+        '## Core Loop',
+        '1. Author defines book intent, genre/form expectations, themes, and voice.',
+        '',
+        '## System Records',
+        '| Record | Purpose |',
+        '| --- | --- |',
+        '| Book brief | author voice, premise, genre, themes, constraints |',
+      ].join('\n'),
+      'utf8',
+    )
+    await writeSystemTasks({
+      version: 1,
+      lastUpdated: '2026-01-01T00:00:00.000Z',
+      tasks: [
+        {
+          id: 'task-workspace-import',
+          title: 'Review existing project work',
+          description: 'Reserved importer',
+          domain: '_workspace_import',
+          projectPath: tmpDir,
+          status: 'done',
+          priority: 'normal',
+          acceptanceCriteria: [],
+          dependsOn: [],
+          outOfScope: [],
+          spec: '```yaml\ntasks: []\n```',
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          adjudications: [],
+          escalations: [],
+          agentIssues: [],
+          origination: 'system',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+        },
+      ],
+    })
+    await writeSystemJson('workspace-goals.json', {
+      version: 2,
+      recordedAt: '2026-01-01T00:00:00.000Z',
+      goals: [],
+      tasks: [],
+      milestones: [],
+      context: [
+        {
+          label: 'Author defines book intent, genre/form expectations, themes, and voice.',
+          excerpt: 'Legacy structural note with no explicit record shape.',
+          source: 'planning-docs',
+          references: ['docs/harness/architecture-notes.md'],
+          role: 'brief_input',
+        },
+      ],
+      approved: {
+        goalCount: 0,
+        taskCount: 0,
+        milestoneCount: 0,
+        currentTaskCount: 0,
+        laterTaskCount: 0,
+        taskIds: [],
+      },
+      detected: null,
+    })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(scoped('/api/project/workspace-import/draft')))
+    expect(res.status).toBe(200)
+    const body = await res.json() as {
+      parsed?: { context?: Array<{ label?: string; structure?: string }> }
+      detected?: { context?: Array<{ label?: string; structure?: string; role?: string }> }
+    }
+    expect(body.parsed?.context ?? []).toEqual([])
+    expect(body.detected?.context).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        label: 'Book brief',
+        role: 'brief_input',
+        structure: 'record',
+      }),
+    ]))
+  })
+
+  it('treats legacy saved structural import state as stale and blocks start until the import is refreshed', async () => {
+    await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'harness', 'architecture-notes.md'),
+      [
+        '# Architecture Notes',
+        '',
+        '## Core Loop',
+        '1. Author defines book intent, genre/form expectations, themes, and voice.',
+        '2. Author builds a house: premise, world, cast, outline, chapter goals, review standards.',
+        '',
+        '## System Records',
+        '| Record | Purpose |',
+        '| --- | --- |',
+        '| Book brief | author voice, premise, genre, themes, constraints |',
+      ].join('\n'),
+      'utf8',
+    )
+    await writeSystemTasks({
+      version: 1,
+      lastUpdated: '2026-01-01T00:00:00.000Z',
+      tasks: [
+        {
+          id: 'task-workspace-import',
+          title: 'Review existing project work',
+          description: 'Reserved importer',
+          domain: '_workspace_import',
+          projectPath: tmpDir,
+          status: 'done',
+          priority: 'normal',
+          acceptanceCriteria: [],
+          dependsOn: [],
+          outOfScope: [],
+          spec: [
+            '```yaml',
+            'tasks:',
+            '  - id: imported-one',
+            '    title: Define fixture schemas',
+            '    description: Saved importer task.',
+            '    domain: harness',
+            '    priority: high',
+            '```',
+          ].join('\n'),
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          adjudications: [],
+          escalations: [],
+          agentIssues: [],
+          origination: 'system',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+        },
+      ],
+    })
+    await writeSystemJson('workspace-goals.json', {
+      version: 2,
+      recordedAt: '2026-01-01T00:00:00.000Z',
+      goals: [],
+      tasks: [
+        {
+          id: 'imported-one',
+          title: 'Define fixture schemas',
+          description: 'Saved importer task.',
+          domain: 'harness',
+          priority: 'high',
+          references: ['docs/harness/implementation-roadmap.md'],
+          scope: 'current',
+        },
+      ],
+      milestones: [],
+      context: [
+        {
+          label: 'Author defines book intent, genre/form expectations, themes, and voice.',
+          excerpt: 'Legacy structural note with no explicit record shape.',
+          source: 'planning-docs',
+          references: ['docs/harness/architecture-notes.md'],
+          role: 'brief_input',
+        },
+      ],
+      approved: {
+        goalCount: 0,
+        taskCount: 1,
+        milestoneCount: 0,
+        currentTaskCount: 1,
+        laterTaskCount: 0,
+        taskIds: ['imported-one'],
+      },
+      detected: null,
+    })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(scoped('/api/project')))
+    expect(res.status).toBe(200)
+    const body = await res.json() as {
+      startReadiness?: { canStart?: boolean; code?: string; message?: string; actionHref?: string }
+      orientationSpine?: { summary?: { headline?: string; topBlocker?: string; nextAction?: string } }
+    }
+    expect(body.startReadiness).toMatchObject({
+      canStart: false,
+      code: 'workspace_import_refresh_needed',
+      actionHref: '/workspace-import',
+    })
+    expect(body.startReadiness?.message).toContain('structural project records')
+    expect(body.startReadiness?.message).toContain('Book brief')
+    expect(body.orientationSpine?.summary).toMatchObject({
+      headline: 'Current task scope needs import refresh.',
+      topBlocker: 'Workspace import is under-scoped.',
+      nextAction: 'Refresh the workspace import.',
+    })
+  })
+
   it('does not let shelved imported tasks satisfy current-scope coverage when docs still mark them current', async () => {
     await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
     await fs.writeFile(
@@ -4076,9 +4365,105 @@ describe('Workspace Import review endpoints', () => {
       code: 'workspace_import_refresh_needed',
       actionHref: '/workspace-import',
     })
-    expect(body.startReadiness?.message).toContain('under-scoped')
-    expect(body.startReadiness?.message).toContain('outside the approved current scope')
     expect(body.startReadiness?.message).toContain('Add the first tiny fiction fixture and human-authored expected records.')
+  })
+
+  it('does not treat current-stage success gates as missing deliverables ahead of real missing deliverables', async () => {
+    await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'harness', 'implementation-roadmap.md'),
+      [
+        '# Implementation Roadmap',
+        '',
+        '## Stage 1: Fixture And Evaluation Harness',
+        '',
+        'Deliverables:',
+        '- fixture directory shape for at least one small story fixture',
+        '',
+        'Success gates:',
+        '- the harness can run without a frontend',
+        '',
+        '## Current Next Milestone',
+        '',
+        'The next milestone is Stage 1: Fixture And Evaluation Harness.',
+        '',
+        '1. Define fixture, expected-record, prototype-run, and evaluation schemas.',
+      ].join('\n'),
+      'utf8',
+    )
+    await fs.writeFile(path.join(tmpDir, 'package.json'), JSON.stringify({ name: 'success-gate-is-not-a-deliverable' }), 'utf8')
+    await writeSystemText(
+      'TASKS.json',
+      JSON.stringify(
+        {
+          version: 1,
+          lastUpdated: '2026-01-01T00:00:00.000Z',
+          tasks: [
+            {
+              id: 'task-workspace-import',
+              title: 'Review existing project work',
+              description: 'Reserved importer',
+              domain: '_workspace_import',
+              projectPath: tmpDir,
+              status: 'done',
+              priority: 'normal',
+              acceptanceCriteria: [],
+              dependsOn: [],
+              outOfScope: [],
+              spec: [
+                '```yaml',
+                'tasks:',
+                '  - id: imported-starter',
+                '    title: Define fixture, expected-record, prototype-run, and evaluation schemas.',
+                '    description: Current starter task already carried into the active slice.',
+                '    domain: harness',
+                '    priority: high',
+                '```',
+              ].join('\n'),
+              createdAt: '2026-01-01T00:00:00.000Z',
+              updatedAt: '2026-01-01T00:00:00.000Z',
+            },
+            {
+              id: 'imported-starter',
+              title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+              description: 'Current starter task already tracked.',
+              domain: 'harness',
+              projectPath: tmpDir,
+              status: 'ready',
+              priority: 'high',
+              acceptanceCriteria: [],
+              dependsOn: [],
+              outOfScope: [],
+              notes: [],
+              gateResults: [],
+              reviewVerdicts: [],
+              adjudications: [],
+              escalations: [],
+              agentIssues: [],
+              revisionCount: 0,
+              remediationAttempts: 0,
+              createdAt: '2026-01-01T00:00:00.000Z',
+              updatedAt: '2026-01-01T00:00:00.000Z',
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+    )
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(scoped('/api/project')))
+    expect(res.status).toBe(200)
+    const body = await res.json() as {
+      startReadiness?: { canStart?: boolean; code?: string; message?: string; actionHref?: string } | null
+    }
+    expect(body.startReadiness).toMatchObject({
+      canStart: false,
+      code: 'no_unattended_progress',
+    })
+    expect(body.startReadiness?.code).not.toBe('workspace_import_refresh_needed')
+    expect(body.startReadiness?.message).not.toContain('the harness can run without a frontend')
   })
 
   it('blocks start when the saved approved current slice still contains stale imported work that live docs no longer mark current', async () => {

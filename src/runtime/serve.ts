@@ -90,6 +90,7 @@ import {
 } from '@guildhall/guilds'
 import { OrchestratorSupervisor } from './serve-supervisor.js'
 import { resolveFanoutCapacity } from './fanout-dispatcher.js'
+import { detectShadowedCurrentMilestoneDeliverableImports as detectShadowedCurrentMilestoneDeliverables } from './current-milestone-shadowing.js'
 import {
   normalizePreferredProvider,
   selectApiClient,
@@ -167,6 +168,7 @@ import {
   recordExternalAgentLink,
 } from './external-agent-links.js'
 import { deriveProjectWorkProgress, type ProjectWorkProgress } from './work-progress.js'
+import { deriveTaskWorkVisibility } from './work-visibility.js'
 import {
   buildProjectOrientationSpine,
   taskEligibleForSelectedScope,
@@ -244,6 +246,7 @@ import {
   readWorkspaceGoalsState,
   rerunWorkspaceImportTask,
   summarizeWorkspaceImportSpec,
+  workspaceGoalsNeedStructuralRefresh,
   workspaceNeedsImport,
   workspaceImportYamlErrors,
   WORKSPACE_IMPORT_TASK_ID,
@@ -1750,7 +1753,12 @@ function summarizeScopedReleaseWork(
   unfinishedCount: number
   scopedTasks: Task[]
 } {
-  const scopedTasks = tasks.filter(task => taskEligibleForSelectedScope(task, scope).eligible)
+  const tasksById = new Map(tasks.map(task => [task.id, task]))
+  const scopedTasks = tasks.filter((task) => {
+    if (!taskEligibleForSelectedScope(task, scope, { tasksById }).eligible) return false
+    const parent = task.hierarchy?.parentId ? tasksById.get(task.hierarchy.parentId) ?? null : null
+    return deriveTaskWorkVisibility(task, parent).countInProjectTotals
+  })
   const statusCounts: Record<string, number> = {}
   const openEscalations: Array<{ taskId: string; taskTitle: string; escalationId: string; reason: string; summary: string }> = []
   const incompleteBriefs: Array<{ id: string; title: string; reason: string }> = []
@@ -4753,6 +4761,17 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
   }
 
+  function taskSpecText(spec: unknown): string {
+    if (typeof spec === 'string') return spec
+    if (Array.isArray(spec)) {
+      const lines = spec
+        .filter((entry): entry is string => typeof entry === 'string')
+        .map(entry => entry.trimEnd())
+      return lines.join('\n')
+    }
+    return ''
+  }
+
 	  async function terminalStartState(projectPath: string, requestedTaskId?: string): Promise<{
 	    canStart: false
 	    code: 'all_terminal'
@@ -5000,7 +5019,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     ) as { status?: unknown; spec?: unknown } | undefined
     if (!importTask) return null
     const status = typeof importTask.status === 'string' ? importTask.status : ''
-    const spec = typeof importTask.spec === 'string' ? importTask.spec : ''
+    const spec = taskSpecText(importTask.spec)
     if (!['done', 'spec_review'].includes(status) || !spec.trim()) return null
 
     const parsed = parseWorkspaceImport(spec)
@@ -5010,10 +5029,111 @@ export function buildServeApp(opts: ServeOptions = {}): {
       projectPath,
       draft: formWorkspaceHypothesis(inventory),
     })
-    if (detected.tasks.length === 0) return null
+    const shadowedCurrentDeliverables = (() => {
+      const seen = new Set<string>()
+      const sources: Array<{ path: string; content: string }> = []
+      for (const signal of inventory.signals) {
+        if (signal.source !== 'planning-docs') continue
+        for (const reference of signal.references ?? []) {
+          if (!reference || /^[a-z]+:\/\//i.test(reference)) continue
+          const absolute = isAbsolute(reference) ? reference : resolve(projectPath, reference)
+          if (seen.has(absolute) || !existsSync(absolute) || extname(absolute).toLowerCase() !== '.md') continue
+          seen.add(absolute)
+          try {
+            sources.push({
+              path: absolute,
+              content: readFileSync(absolute, 'utf-8'),
+            })
+          } catch {
+            // Ignore unreadable files; readiness should keep going with what it can verify.
+          }
+        }
+      }
+      return detectShadowedCurrentMilestoneDeliverables(sources)
+    })()
+    const isShadowedCurrentDeliverable = (title: string, reference: string | null | undefined): boolean => {
+      const normalizedTitle = normalizeImportTitle(title)
+      if (!normalizedTitle) return false
+      const normalizedReference = reference
+        ? (isAbsolute(reference) ? reference : resolve(projectPath, reference)).replaceAll('\\', '/')
+        : null
+      const matchingCandidates = shadowedCurrentDeliverables.filter(
+        candidate => normalizeImportTitle(candidate.title) === normalizedTitle,
+      )
+      if (matchingCandidates.length === 0) return false
+      if (!normalizedReference || matchingCandidates.length === 1) return true
+      return matchingCandidates.some(candidate => {
+        const candidatePath = candidate.sourcePath.replaceAll('\\', '/')
+        return normalizedReference === candidatePath
+      })
+    }
+    if (workspaceGoalsNeedStructuralRefresh(workspaceGoalsState)) {
+      const firstStructuralLabel = (
+        detected.context.find(context =>
+          (context.role === 'brief_input' || context.role === 'capability') &&
+          context.structure === 'record',
+        ) ??
+        detected.context.find(context =>
+          context.role === 'brief_input' || context.role === 'capability',
+        )
+      )?.label?.trim() || 'the first structural record'
+      return {
+        canStart: false,
+        code: 'workspace_import_refresh_needed',
+        message:
+          `Guildhall's saved workspace import was approved before structural project records were captured durably. ` +
+          `The live docs still define structural context starting with "${firstStructuralLabel}". Refresh the import before treating this project as complete.`,
+        actionHref: '/workspace-import',
+      }
+    }
+    const liveNonImporterTasks = tasks.filter(task => {
+      if (!task || typeof task !== 'object') return false
+      if ((task as { id?: unknown }).id === WORKSPACE_IMPORT_TASK_ID) return false
+      const status = typeof (task as { status?: unknown }).status === 'string'
+        ? (task as { status: string }).status
+        : ''
+      return status !== 'archived' && status !== 'cancelled'
+    })
+    const approvedCurrentTitles = parsed.tasks
+      .filter(task => task.scope !== 'later')
+      .map(task => task.title.trim())
+      .filter(title => title.length > 0)
+    const fallbackApprovedTitles = approvedCurrentTitles.length > 0
+      ? []
+      : Array.from(spec.matchAll(/^\s*title:\s*(.+?)\s*$/gm))
+        .map(match => match[1]?.trim() ?? '')
+        .filter(title => title.length > 0)
+    const detectedCurrentTitlesList = detected.tasks
+      .filter(task => task.scope !== 'later')
+      .map(task => task.title.trim())
+      .filter(title => title.length > 0)
+    const currentApprovedOrDetectedTitles = [
+      ...approvedCurrentTitles,
+      ...fallbackApprovedTitles,
+      ...detectedCurrentTitlesList,
+    ]
+    if (detected.tasks.length === 0) {
+      if (currentApprovedOrDetectedTitles.length > 0 && liveNonImporterTasks.length === 0) {
+        const first = currentApprovedOrDetectedTitles[0] || 'the first approved current-scope task'
+        return {
+          canStart: false,
+          code: 'workspace_import_refresh_needed',
+          message:
+            `Guildhall has an approved workspace-import slice, but none of that current work is materialized in the live queue. ` +
+            `Refresh the import before treating this project as complete. Start with "${first}".`,
+          actionHref: '/workspace-import',
+        }
+      }
+      return null
+    }
 
     const coveredTitles = new Set<string>()
     const currentScopeCoveredTitles = new Set<string>()
+    const currentScopeContextCoveredTitles = new Set(
+      (workspaceGoalsNeedStructuralRefresh(workspaceGoalsState) ? [] : (workspaceGoalsState?.context ?? []))
+        .map(context => normalizeImportTitle(context.label))
+        .filter(Boolean),
+    )
     const coveredRefs = new Set<string>()
     const activeTaskHints = new Set<string>()
     for (const task of parsed.tasks) {
@@ -5069,21 +5189,27 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const title = typeof task.title === 'string' ? task.title : ''
       return title.trim().length > 0 && !currentScopeCoveredTitles.has(normalizeImportTitle(title))
     })
-    const rawCurrentDeliverableMissing = workspaceGoalsState
-      ? []
-      : (() => {
+    const rawCurrentDeliverableMissing = (() => {
       const seen = new Set<string>()
       const missing: Array<{ title: string }> = []
       for (const signal of inventory.signals) {
-        if (signal.kind !== 'open_work') continue
-        if (signal.scopeHint === 'later') continue
+        if (signal.kind !== 'open_work' && signal.kind !== 'context') continue
+        if (signal.scopeHint !== 'current') continue
         if (signal.source !== 'planning-docs') continue
+        if (signal.role !== 'capability') continue
         const title = typeof signal.title === 'string' ? signal.title.trim() : ''
         if (!title) continue
+        const primaryRef = typeof signal.references?.[0] === 'string' ? signal.references[0] : null
+        if (isShadowedCurrentDeliverable(title, primaryRef)) continue
         const evidence = typeof signal.evidence === 'string' ? signal.evidence.trim() : ''
         if (!evidence.includes(': - ')) continue
         const normalized = normalizeImportTitle(title)
-        if (!normalized || seen.has(normalized) || currentScopeCoveredTitles.has(normalized)) continue
+        if (
+          !normalized ||
+          seen.has(normalized) ||
+          currentScopeCoveredTitles.has(normalized) ||
+          currentScopeContextCoveredTitles.has(normalized)
+        ) continue
         seen.add(normalized)
         missing.push({ title })
       }
@@ -5213,6 +5339,21 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
     }
 
+    if (
+      currentApprovedOrDetectedTitles.length > 0 &&
+      liveNonImporterTasks.length === 0
+    ) {
+      const first = currentApprovedOrDetectedTitles[0] || 'the first approved current-scope task'
+      return {
+        canStart: false,
+        code: 'workspace_import_refresh_needed',
+        message:
+          `Guildhall has an approved workspace-import slice, but none of that current work is materialized in the live queue. ` +
+          `Refresh the import before treating this project as complete. Start with "${first}".`,
+        actionHref: '/workspace-import',
+      }
+    }
+
     const currentMissing = missing.filter(task => task.scope !== 'later').length
     const laterMissing = missing.length - currentMissing
     const first = missing[0]?.title?.trim() || 'the first current-scope task'
@@ -5231,15 +5372,52 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
   async function workspaceImportDraftForOrientation(projectPath: string, _startReadiness: { code?: string } | null | undefined) {
     try {
+      const savedWorkspaceGoals = await readWorkspaceGoalsState(getProjectStateDir(projectPath))
+      if (savedWorkspaceGoals && !workspaceGoalsNeedStructuralRefresh(savedWorkspaceGoals) && (
+        savedWorkspaceGoals.tasks.length > 0 ||
+        savedWorkspaceGoals.context.length > 0
+      )) {
+        return {
+          tasks: savedWorkspaceGoals.tasks.map(task => ({
+            id: task.id,
+            title: task.title,
+            description: task.whyThisMayMatter ?? task.description,
+            domain: task.domain,
+            scope: task.scope === 'later' ? 'later' : 'current',
+            refs: task.references?.map(ref => `import:${ref}`) ?? ['workspace-import:approved'],
+          })),
+          contexts: savedWorkspaceGoals.context
+            .filter(context => context.role === 'capability' || context.role === 'brief_input')
+            .map((context, index) => ({
+              id: `approved-context-${index + 1}`,
+              title: context.label,
+              description: context.excerpt,
+              domain: context.domain,
+              refs: context.references?.map(ref => `import:${ref}`) ?? [`import:${context.source}`],
+              role: context.role,
+              scopeHint: context.scopeHint,
+              linkedTaskHints: context.linkedTaskHints ? [...context.linkedTaskHints] : undefined,
+            })),
+          source: {
+            kind: 'inferred' as const,
+            refs: ['workspace-import:approved'],
+            confidence: 'high' as const,
+            freshness: 'fresh' as const,
+            inferred: false,
+            refreshedAt: savedWorkspaceGoals.recordedAt,
+          },
+        }
+      }
+
       const inventory = await detectWorkspaceSignals({ projectPath })
       const draft = await materializeWorkspaceImportDraft({
         memoryDir: getProjectStateDir(projectPath),
         projectPath,
         draft: formWorkspaceHypothesis(inventory),
       })
-      const capabilityContexts = draft.context.filter(context => context.role === 'capability')
-      if (draft.tasks.length === 0 && capabilityContexts.length === 0) return null
-      const inferredContextDomain = (context: typeof capabilityContexts[number]): string | undefined => {
+      const structuralContexts = draft.context.filter(context => context.role === 'capability' || context.role === 'brief_input')
+      if (draft.tasks.length === 0 && structuralContexts.length === 0) return null
+      const inferredContextDomain = (context: typeof structuralContexts[number]): string | undefined => {
         if (context.domain?.trim()) return context.domain.trim()
         const refs = new Set((context.references ?? []).map(ref => ref.replaceAll('\\', '/')))
         const domainCounts = new Map<string, number>()
@@ -5265,12 +5443,15 @@ export function buildServeApp(opts: ServeOptions = {}): {
           scope: task.scope,
           refs: task.references?.map(ref => `import:${ref}`) ?? [`import:${task.source}`],
         })),
-        contexts: capabilityContexts.map((context, index) => ({
+        contexts: structuralContexts.map((context, index) => ({
           id: `capability-${index + 1}`,
           title: context.label,
           description: context.excerpt,
           domain: inferredContextDomain(context),
           refs: context.references?.map(ref => `import:${ref}`) ?? [`import:${context.source}`],
+          role: context.role,
+          scopeHint: context.scopeHint,
+          linkedTaskHints: context.linkedTaskHints ? [...context.linkedTaskHints] : undefined,
         })),
         source: {
           kind: 'inferred' as const,
@@ -6715,16 +6896,20 @@ export function buildServeApp(opts: ServeOptions = {}): {
           anchors,
         })
       }
-      const parsed = savedWorkspaceGoals &&
+      const trustSavedWorkspaceGoals = savedWorkspaceGoals &&
+        !workspaceGoalsNeedStructuralRefresh(savedWorkspaceGoals) &&
         (
           savedWorkspaceGoals.goals.length > 0 ||
           savedWorkspaceGoals.tasks.length > 0 ||
-          savedWorkspaceGoals.milestones.length > 0
+          savedWorkspaceGoals.milestones.length > 0 ||
+          savedWorkspaceGoals.context.length > 0
         )
+      const parsed = trustSavedWorkspaceGoals
         ? {
             goals: [...savedWorkspaceGoals.goals],
             tasks: [...savedWorkspaceGoals.tasks],
             milestones: [...savedWorkspaceGoals.milestones],
+            context: [...savedWorkspaceGoals.context],
           }
         : await materializeParsedWorkspaceImport({
             memoryDir,
@@ -9744,10 +9929,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const fallbackRelease = {
         id: 'current-work',
         kind: 'current_work',
-        label: 'Current work',
+        label: 'Current task scope',
         state: 'active',
         source: 'inferred',
-        description: 'Guildhall is checking the current work queue. No release is defined for this project yet.',
+        description: 'Guildhall is checking the currently selected task scope. No named release is defined for this project yet.',
       }
       if (project.initializationNeeded) return c.json({ initializationNeeded: true, release: null, scope: fallbackRelease })
       const memoryDir = getProjectStateDir(project.path)

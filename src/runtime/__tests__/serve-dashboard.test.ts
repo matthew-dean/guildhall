@@ -131,8 +131,8 @@ describe('GET /api/project/spine', () => {
       }
     }
     expect(body.spine?.projectId).toBe(projectId)
-    expect(body.spine?.scope?.label).toBe('Current work')
-    expect(body.spine?.summary?.selectedScopeLabel).toBe('Current work')
+    expect(body.spine?.scope?.label).toBe('Current task scope')
+    expect(body.spine?.summary?.selectedScopeLabel).toBe('Current task scope')
     expect(body.spine?.roots?.find(node => node.id === 'work:task-anti-sameness')).toMatchObject({
       id: 'work:task-anti-sameness',
       title: 'Anti-sameness safeguards',
@@ -164,8 +164,8 @@ describe('GET /api/project/spine', () => {
         summary?: { selectedScopeLabel?: string | null; includedWorkCount?: number }
       }
     }
-    expect(body.orientationSpine?.scope?.label).toBe('Current work')
-    expect(body.orientationSpine?.summary?.selectedScopeLabel).toBe('Current work')
+    expect(body.orientationSpine?.scope?.label).toBe('Current task scope')
+    expect(body.orientationSpine?.summary?.selectedScopeLabel).toBe('Current task scope')
     expect(body.orientationSpine?.summary?.includedWorkCount).toBe(1)
   })
 

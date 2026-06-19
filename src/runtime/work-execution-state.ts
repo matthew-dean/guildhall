@@ -1,6 +1,7 @@
 import type { Task } from '@guildhall/core'
 import { buildWorkHierarchy, needsOwnerAction, workSubtreeIds } from './work-hierarchy.js'
 import { deriveProjectWorkProgress } from './work-progress.js'
+import { deriveTaskWorkVisibility } from './work-visibility.js'
 
 export type WorkExecutionSummaryState =
   | 'ready'
@@ -70,7 +71,7 @@ export function deriveProjectWorkExecutionState(tasks: Task[]): ProjectWorkExecu
   for (const task of tasks) {
     const state = deriveWorkExecutionState(tasks, task.id)
     byTaskId[task.id] = state
-    const visibility = progress.byTaskId[task.id]?.visibility ?? visibilityForTask(task)
+    const visibility = progress.byTaskId[task.id]?.visibility ?? visibilityForTask(task, tasks)
     if (visibility.countInProjectTotals) counts.visibleTotal += 1
     if (visibility.kind === 'internal_step' || visibility.kind === 'hidden') counts.internalTotal += 1
     if (state.isRunnable) counts.runnableTotal += 1
@@ -94,11 +95,11 @@ export function deriveWorkExecutionState(tasks: Task[], workId: string): WorkExe
     .map(id => model.byId.get(id)?.task ?? tasks.find(task => task.id === id))
     .filter((candidate): candidate is Task => Boolean(candidate))
   const visibleChildIds = descendants
-    .filter(child => visibilityForTask(child).countInProjectTotals)
+    .filter(child => visibilityForTask(child, tasks).countInProjectTotals)
     .map(child => child.id)
   const internalChildIds = descendants
     .filter(child => {
-      const visibility = visibilityForTask(child)
+      const visibility = visibilityForTask(child, tasks)
       return visibility.kind === 'internal_step' || visibility.kind === 'hidden' || !visibility.countInProjectTotals
     })
     .map(child => child.id)
@@ -125,7 +126,7 @@ export function deriveWorkExecutionState(tasks: Task[], workId: string): WorkExe
   const requiredDeliveryDone = requiredDelivery.filter(step => step.status === 'done' || step.status === 'waived').length
   const blockedInternalProofCount = descendants.filter(child =>
     BLOCKED_STATUSES.has(child.status) &&
-    (visibilityForTask(child).kind === 'internal_step' || child.workKind === 'verification' || child.workKind === 'test'),
+    (visibilityForTask(child, tasks).kind === 'internal_step' || child.workKind === 'verification' || child.workKind === 'test'),
   ).length
   const missingProofCount = blockedInternalProofCount + requiredDelivery.filter(step => step.status === 'blocked').length
   const isRunnable = deriveLeafRunnableState(tasks, task.id)
@@ -169,7 +170,7 @@ function deriveLeafRunnableState(tasks: Task[], workId: string): boolean {
   if (!task) return false
   if (descendantsFor(tasks, workId).length > 0) return false
   if (DECOMPOSE_ACTIONS.has(task.sizePlan?.action ?? '')) return false
-  const visibility = visibilityForTask(task)
+  const visibility = visibilityForTask(task, tasks)
   if (!visibility.countInProjectTotals || visibility.kind === 'internal_step' || visibility.kind === 'hidden') return false
   return ACTIVE_STATUSES.has(task.status) && !BLOCKED_STATUSES.has(task.status) && !TERMINAL_STATUSES.has(task.status)
 }
@@ -178,20 +179,10 @@ function descendantsFor(tasks: Task[], workId: string): string[] {
   return workSubtreeIds(tasks, workId).filter(id => id !== workId)
 }
 
-function visibilityForTask(task: Task): { kind: 'primary' | 'supporting' | 'internal_step' | 'hidden'; countInProjectTotals: boolean } {
-  const kind = task.workVisibility?.kind
-  if (kind === 'primary' || kind === 'supporting' || kind === 'internal_step' || kind === 'hidden') {
-    return {
-      kind,
-      countInProjectTotals: typeof task.workVisibility?.countInProjectTotals === 'boolean'
-        ? task.workVisibility.countInProjectTotals
-        : kind === 'primary' || kind === 'supporting',
-    }
-  }
-  if (task.hierarchy?.parentId && (task.workKind === 'verification' || task.workKind === 'test')) {
-    return { kind: 'internal_step', countInProjectTotals: false }
-  }
-  return { kind: 'primary', countInProjectTotals: true }
+function visibilityForTask(task: Task, tasks: Task[]): { kind: 'primary' | 'supporting' | 'internal_step' | 'hidden'; countInProjectTotals: boolean } {
+  const parentId = task.hierarchy?.parentId?.trim() || null
+  const parent = parentId ? tasks.find(candidate => candidate.id === parentId) ?? null : null
+  return deriveTaskWorkVisibility(task, parent)
 }
 
 function scopeAuthorityRequestIds(task: Task): string[] {

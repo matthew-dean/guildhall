@@ -10,6 +10,7 @@ import {
   detectWorkspaceSignals,
   formWorkspaceHypothesis,
   isFormattingDebris,
+  type DraftContext,
   type DraftGoal,
   type DraftMilestone,
   type DraftTask,
@@ -165,6 +166,38 @@ function formatDraftForTranscript(
   draft: WorkspaceImportDraft,
 ): string {
   const lines: string[] = []
+  const isBriefRecord = (context: typeof draft.context[number]): boolean =>
+    context.role === 'brief_input' && context.structure === 'record'
+  const isBriefNote = (context: typeof draft.context[number]): boolean =>
+    context.role === 'brief_input' && context.structure !== 'record'
+  const isCapabilityRecord = (context: typeof draft.context[number]): boolean =>
+    context.role === 'capability' && context.structure === 'record'
+  const isCapabilityNote = (context: typeof draft.context[number]): boolean =>
+    context.role === 'capability' && context.structure !== 'record'
+  const pushTaskSection = (title: string, tasks: typeof draft.tasks): void => {
+    if (tasks.length === 0) return
+    lines.push(title)
+    lines.push('-'.repeat(title.length))
+    for (const t of tasks) {
+      lines.push(`- [${t.confidence}/${t.priority}] ${t.title}  (suggestedId: ${t.suggestedId})`)
+      lines.push(`    ${t.description}`)
+      lines.push(`    domain: ${t.domain}`)
+      lines.push(`    scope: ${t.scope === 'later' ? 'later / deferred' : 'current / now'}`)
+      lines.push(`    source: ${t.source}${t.references ? ` (${t.references.join(', ')})` : ''}`)
+    }
+    lines.push('')
+  }
+  const pushContextSection = (title: string, contexts: typeof draft.context): void => {
+    if (contexts.length === 0) return
+    lines.push(title)
+    lines.push('-'.repeat(title.length))
+    for (const c of contexts) {
+      lines.push(`- ${c.label}`)
+      lines.push(`    ${c.excerpt}`)
+      lines.push(`    source: ${c.source}${c.references ? ` (${c.references.join(', ')})` : ''}`)
+    }
+    lines.push('')
+  }
   lines.push('Detected inventory summary')
   lines.push('==========================')
   lines.push(
@@ -189,14 +222,8 @@ function formatDraftForTranscript(
   }
 
   if (draft.tasks.length > 0) {
-    lines.push('Draft tasks')
-    lines.push('-----------')
-    for (const t of draft.tasks) {
-      lines.push(`- [${t.confidence}/${t.priority}] ${t.title}  (suggestedId: ${t.suggestedId})`)
-      lines.push(`    ${t.description}`)
-      lines.push(`    source: ${t.source}${t.references ? ` (${t.references.join(', ')})` : ''}`)
-    }
-    lines.push('')
+    pushTaskSection('Current draft tasks', draft.tasks.filter(task => task.scope !== 'later'))
+    pushTaskSection('Later / deferred draft tasks', draft.tasks.filter(task => task.scope === 'later'))
   }
 
   if (draft.milestones.length > 0) {
@@ -213,11 +240,13 @@ function formatDraftForTranscript(
   if (draft.context.length > 0) {
     lines.push('Project context notes')
     lines.push('---------------------')
-    for (const c of draft.context) {
-      lines.push(`- ${c.label}`)
-      lines.push(`    source: ${c.source}${c.references ? ` (${c.references.join(', ')})` : ''}`)
-    }
     lines.push('')
+    pushContextSection('Brief records', draft.context.filter(isBriefRecord))
+    pushContextSection('Brief notes', draft.context.filter(isBriefNote))
+    pushContextSection('Capability records', draft.context.filter(isCapabilityRecord))
+    pushContextSection('Capability context', draft.context.filter(isCapabilityNote))
+    pushContextSection('Reference context', draft.context.filter(context => context.role === 'reference'))
+    pushContextSection('General context', draft.context.filter(context => !context.role))
   }
 
   return lines.join('\n')
@@ -1209,6 +1238,8 @@ export function summarizeWorkspaceImportSpec(spec: string): WorkspaceImportScope
   let currentTaskCount = 0
   let laterTaskCount = 0
   const taskIds: string[] = []
+  const currentTaskIds: string[] = []
+  const laterTaskIds: string[] = []
 
   for (const obj of iterateYamlFences(spec)) {
     if (!obj || typeof obj !== 'object' || Array.isArray(obj)) continue
@@ -1222,8 +1253,13 @@ export function summarizeWorkspaceImportSpec(spec: string): WorkspaceImportScope
       for (const task of tasks) {
         const id = typeof task.id === 'string' ? task.id.trim() : ''
         if (id) taskIds.push(id)
-        if (task.scope === 'later') laterTaskCount++
-        else currentTaskCount++
+        if (task.scope === 'later') {
+          laterTaskCount++
+          if (id) laterTaskIds.push(id)
+        } else {
+          currentTaskCount++
+          if (id) currentTaskIds.push(id)
+        }
       }
     }
     if (Array.isArray(record.milestones)) {
@@ -1238,6 +1274,8 @@ export function summarizeWorkspaceImportSpec(spec: string): WorkspaceImportScope
     currentTaskCount,
     laterTaskCount,
     taskIds,
+    currentTaskIds,
+    laterTaskIds,
   }
 }
 
@@ -1413,6 +1451,7 @@ export interface ApproveWorkspaceImportResult {
 }
 
 const WORKSPACE_GOALS_FILE = 'workspace-goals.json'
+export const WORKSPACE_GOALS_STRUCTURAL_VERSION = 3
 
 export interface WorkspaceImportScopeSnapshot {
   goalCount: number
@@ -1421,6 +1460,8 @@ export interface WorkspaceImportScopeSnapshot {
   currentTaskCount: number
   laterTaskCount: number
   taskIds: string[]
+  currentTaskIds: string[]
+  laterTaskIds: string[]
 }
 
 export interface WorkspaceGoalsState {
@@ -1429,8 +1470,10 @@ export interface WorkspaceGoalsState {
   goals: ParsedGoal[]
   tasks: ParsedTask[]
   milestones: ParsedMilestone[]
+  context: DraftContext[]
   approved: WorkspaceImportScopeSnapshot
   detected: WorkspaceImportScopeSnapshot | null
+  scopeMembershipHydrated?: boolean
   dismissed?: boolean
   dismissedAt?: string
 }
@@ -1440,6 +1483,21 @@ export interface WorkspaceImportSummary {
   specPresent: boolean
   approved: WorkspaceImportScopeSnapshot | null
   detected: WorkspaceImportScopeSnapshot | null
+}
+
+export function workspaceGoalsNeedStructuralRefresh(state: WorkspaceGoalsState | null | undefined): boolean {
+  if (!state) return false
+  const hasStructuralContext = state.context.some(context =>
+    context.role === 'brief_input' || context.role === 'capability',
+  )
+  if (!hasStructuralContext) return false
+  if (state.scopeMembershipHydrated) return true
+  if (state.version < WORKSPACE_GOALS_STRUCTURAL_VERSION) return true
+  return state.context.some(context =>
+    (context.role === 'brief_input' || context.role === 'capability') &&
+    context.structure !== 'record' &&
+    context.structure !== 'note',
+  )
 }
 
 export async function materializeParsedWorkspaceImport(input: {
@@ -1508,14 +1566,23 @@ function workspaceScopeSnapshotFromParsed(parsed: ParsedImport): WorkspaceImport
   const taskIds = parsed.tasks
     .map(task => task.id.trim())
     .filter(Boolean)
-  const currentTaskCount = parsed.tasks.filter(task => task.scope !== 'later').length
+  const currentTaskIds = parsed.tasks
+    .filter(task => task.scope !== 'later')
+    .map(task => task.id.trim())
+    .filter(Boolean)
+  const laterTaskIds = parsed.tasks
+    .filter(task => task.scope === 'later')
+    .map(task => task.id.trim())
+    .filter(Boolean)
   return {
     goalCount: parsed.goals.length,
     taskCount: parsed.tasks.length,
     milestoneCount: parsed.milestones.length,
-    currentTaskCount,
-    laterTaskCount: parsed.tasks.length - currentTaskCount,
+    currentTaskCount: currentTaskIds.length,
+    laterTaskCount: laterTaskIds.length,
     taskIds,
+    currentTaskIds,
+    laterTaskIds,
   }
 }
 
@@ -1523,15 +1590,32 @@ function workspaceScopeSnapshotFromDraft(draft: WorkspaceImportDraft): Workspace
   const taskIds = draft.tasks
     .map(task => task.suggestedId.trim())
     .filter(Boolean)
-  const currentTaskCount = draft.tasks.filter(task => task.scope !== 'later').length
+  const currentTaskIds = draft.tasks
+    .filter(task => task.scope !== 'later')
+    .map(task => task.suggestedId.trim())
+    .filter(Boolean)
+  const laterTaskIds = draft.tasks
+    .filter(task => task.scope === 'later')
+    .map(task => task.suggestedId.trim())
+    .filter(Boolean)
   return {
     goalCount: draft.goals.length,
     taskCount: draft.tasks.length,
     milestoneCount: draft.milestones.length,
-    currentTaskCount,
-    laterTaskCount: draft.tasks.length - currentTaskCount,
+    currentTaskCount: currentTaskIds.length,
+    laterTaskCount: laterTaskIds.length,
     taskIds,
+    currentTaskIds,
+    laterTaskIds,
   }
+}
+
+function isDraftContext(raw: unknown): raw is DraftContext {
+  return Boolean(raw) &&
+    typeof raw === 'object' &&
+    typeof (raw as DraftContext).label === 'string' &&
+    typeof (raw as DraftContext).excerpt === 'string' &&
+    typeof (raw as DraftContext).source === 'string'
 }
 
 export function parseWorkspaceGoalsState(raw: unknown): WorkspaceGoalsState | null {
@@ -1559,20 +1643,74 @@ export function parseWorkspaceGoalsState(raw: unknown): WorkspaceGoalsState | nu
       && typeof (milestone as ParsedMilestone).title === 'string'
       && typeof (milestone as ParsedMilestone).evidence === 'string'
   }) : []
-  const approved = parseWorkspaceScopeSnapshot(record.approved)
-    ?? workspaceScopeSnapshotFromParsed({ goals, tasks, milestones })
-  const detected = parseWorkspaceScopeSnapshot(record.detected)
-    ?? null
+  const context = Array.isArray(record.context)
+    ? record.context.filter(isDraftContext).map((entry) => ({
+        label: entry.label,
+        excerpt: entry.excerpt,
+        source: entry.source,
+        ...(entry.references ? { references: [...entry.references] } : {}),
+        ...(entry.domain ? { domain: entry.domain } : {}),
+        ...(entry.role ? { role: entry.role } : {}),
+        ...(entry.structure ? { structure: entry.structure } : {}),
+        ...(entry.scopeHint ? { scopeHint: entry.scopeHint } : {}),
+        ...(entry.linkedTaskHints ? { linkedTaskHints: [...entry.linkedTaskHints] } : {}),
+      }))
+    : []
+  const parsedSnapshot = workspaceScopeSnapshotFromParsed({ goals, tasks, milestones })
+  const approvedSnapshot = parseWorkspaceScopeSnapshot(record.approved)
+  const detectedSnapshot = parseWorkspaceScopeSnapshot(record.detected)
+  const scopeMembershipHydrated = scopeSnapshotNeedsMembershipHydration(approvedSnapshot) ||
+    scopeSnapshotNeedsMembershipHydration(detectedSnapshot)
+  const approved = hydrateWorkspaceScopeSnapshot(
+    approvedSnapshot ?? parsedSnapshot,
+    parsedSnapshot,
+  )
+  const detected = hydrateWorkspaceScopeSnapshot(
+    detectedSnapshot,
+    parsedSnapshot,
+  )
   return {
     version: typeof record.version === 'number' ? record.version : 1,
     recordedAt,
     goals,
     tasks,
     milestones,
+    context,
     approved,
     detected,
+    ...(scopeMembershipHydrated ? { scopeMembershipHydrated: true } : {}),
     ...(dismissed ? { dismissed: true } : {}),
     ...(typeof record.dismissedAt === 'string' ? { dismissedAt: record.dismissedAt } : {}),
+  }
+}
+
+function scopeSnapshotNeedsMembershipHydration(
+  snapshot: WorkspaceImportScopeSnapshot | null,
+): boolean {
+  if (!snapshot || snapshot.taskCount === 0) return false
+  return snapshot.currentTaskIds.length === 0 &&
+    snapshot.laterTaskIds.length === 0 &&
+    (snapshot.currentTaskCount > 0 || snapshot.laterTaskCount > 0 || snapshot.taskIds.length > 0)
+}
+
+function hydrateWorkspaceScopeSnapshot(
+  snapshot: WorkspaceImportScopeSnapshot | null,
+  fallback: WorkspaceImportScopeSnapshot,
+): WorkspaceImportScopeSnapshot | null {
+  if (!snapshot) return null
+  const currentTaskIds = snapshot.currentTaskIds.length > 0
+    ? snapshot.currentTaskIds
+    : fallback.currentTaskIds
+  const laterTaskIds = snapshot.laterTaskIds.length > 0
+    ? snapshot.laterTaskIds
+    : fallback.laterTaskIds
+  return {
+    ...snapshot,
+    taskIds: snapshot.taskIds.length > 0 ? snapshot.taskIds : fallback.taskIds,
+    currentTaskIds,
+    laterTaskIds,
+    currentTaskCount: currentTaskIds.length,
+    laterTaskCount: laterTaskIds.length,
   }
 }
 
@@ -1581,6 +1719,12 @@ function parseWorkspaceScopeSnapshot(raw: unknown): WorkspaceImportScopeSnapshot
   const snapshot = raw as Record<string, unknown>
   const taskIds = Array.isArray(snapshot.taskIds)
     ? snapshot.taskIds.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    : []
+  const currentTaskIds = Array.isArray(snapshot.currentTaskIds)
+    ? snapshot.currentTaskIds.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    : []
+  const laterTaskIds = Array.isArray(snapshot.laterTaskIds)
+    ? snapshot.laterTaskIds.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
     : []
   const goalCount = typeof snapshot.goalCount === 'number' ? snapshot.goalCount : null
   const taskCount = typeof snapshot.taskCount === 'number' ? snapshot.taskCount : null
@@ -1603,6 +1747,8 @@ function parseWorkspaceScopeSnapshot(raw: unknown): WorkspaceImportScopeSnapshot
     currentTaskCount,
     laterTaskCount,
     taskIds,
+    currentTaskIds,
+    laterTaskIds,
   }
 }
 
@@ -1826,28 +1972,51 @@ async function materializeEvidenceWorkGraphTasks(
   const graphMatchedParsedTitles = new Set<string>()
   const inventoryReferencesByTitle = new Map<string, string[]>()
   const inventoryScopeByTitle = new Map<string, 'current' | 'later'>()
+  const inventoryScopeByReference = new Map<string, 'current' | 'later'>()
   for (const signal of inventory?.signals ?? []) {
-    const key = normalizeImportText(signal.title)
-    if (!key) continue
+    const keys = [
+      normalizeImportText(signal.title),
+      ...((signal.linkedTaskHints ?? []).map(hint => normalizeImportText(hint))),
+    ].filter(Boolean)
     const refs = (signal.references ?? [])
       .filter(Boolean)
       .map(reference => path.relative(
         input.projectPath,
         absoluteImportedReference(reference, input.projectPath),
       ) || path.basename(reference))
-    if (refs.length === 0) continue
-    inventoryReferencesByTitle.set(
-      key,
-      mergeImportReferences(inventoryReferencesByTitle.get(key), refs),
-    )
+    if (keys.length === 0 || refs.length === 0) continue
     const signalScope = signal.scopeHint === 'later' ? 'later' : 'current'
-    const existingScope = inventoryScopeByTitle.get(key)
-    inventoryScopeByTitle.set(
-      key,
-      existingScope === 'current' || signalScope === 'current' ? 'current' : 'later',
-    )
+    for (const key of keys) {
+      inventoryReferencesByTitle.set(
+        key,
+        mergeImportReferences(inventoryReferencesByTitle.get(key), refs),
+      )
+      const existingScope = inventoryScopeByTitle.get(key)
+      inventoryScopeByTitle.set(
+        key,
+        existingScope === 'current' || signalScope === 'current' ? 'current' : 'later',
+      )
+    }
+    for (const ref of refs) {
+      const existingReferenceScope = inventoryScopeByReference.get(ref)
+      inventoryScopeByReference.set(
+        ref,
+        existingReferenceScope === 'current' || signalScope === 'current' ? 'current' : 'later',
+      )
+    }
   }
   const graphTasks = plan.tasks.map(task => {
+    const taskReferenceScopes = evidenceTaskReferences(task)
+      .map(reference => inventoryScopeByReference.get(reference))
+      .filter((scope): scope is 'current' | 'later' => Boolean(scope))
+    const detectedScope = inventoryScopeByTitle.get(normalizeImportText(task.title))
+      ?? (
+        taskReferenceScopes.includes('current')
+          ? 'current'
+          : taskReferenceScopes.includes('later')
+            ? 'later'
+            : undefined
+      )
     const matchedById = parsedTasksById.get(task.id)
     const matchedByTitle = matchedById ? undefined : parsedTasksByTitle.get(normalizeImportText(task.title))
     const matchedBySemantic = matchedById || matchedByTitle
@@ -1864,6 +2033,9 @@ async function materializeEvidenceWorkGraphTasks(
       graphMatchedParsedIds.add(matchedParsedTask.id)
       graphMatchedParsedTitles.add(normalizeImportText(matchedParsedTask.title))
     }
+    if (!matchedParsedTask && detectedScope === 'later') {
+      return null
+    }
     if (!matchedParsedTask && shadowedByExistingParsedTask && task.kind === 'implementation') {
       return null
     }
@@ -1871,7 +2043,7 @@ async function materializeEvidenceWorkGraphTasks(
       task,
       matchedParsedTask,
       inventoryReferencesByTitle.get(normalizeImportText(task.title)),
-      inventoryScopeByTitle.get(normalizeImportText(task.title)),
+      detectedScope,
       Boolean(matchedBySemantic),
     )
   }).filter((task): task is MaterializedImportTask => Boolean(task) && !isFormattingDebris({ title: task.title }))
@@ -2072,7 +2244,7 @@ function importedCompletionBoundary(
     `- Product outcome: ${successMetric}`,
     `- What Guildhall can complete in code: Implement ${task.title} within the boundary already described by the cited sources, acceptance criteria, and proof plan.`,
     '- External dependencies: None beyond the cited repo-local evidence and the local tooling needed to run the proof plan.',
-    '- Owner-only setup: None expected. If the imported evidence is stale or points at the wrong release boundary, reshape the task before execution instead of silently changing scope.',
+    '- Owner-only setup: None expected. If the imported evidence is stale or points at the wrong task-scope boundary, reshape the task before execution instead of silently changing scope.',
     `- Proof target: ${verificationEnvironment}`,
     `- What counts as done: ${successMetric} Record the proof result against the imported acceptance criteria.`,
     `- What must be split or blocked: ${splitOrBlock}`,
@@ -4125,7 +4297,7 @@ function buildImportedBlueprintSeed(
         systemOwned: true,
         degree: 'guided',
         qualityBar: 'Carry imported project evidence forward into a reviewable implementation blueprint before execution starts.',
-        ownerQuestionPolicy: 'Only ask when the cited evidence conflicts strongly enough to change product intent or the release boundary.',
+        ownerQuestionPolicy: 'Only ask when the cited evidence conflicts strongly enough to change product intent or the active task scope.',
         checks: [
           {
             id: 'source-relevance',
@@ -4245,6 +4417,19 @@ export async function approveWorkspaceImport(
     projectPath: input.projectPath,
     parsed,
   })
+  const detectedDraftSnapshot = input.detectedDraftSnapshot
+    ?? (
+      input.draftOverride
+        ? null
+        : formWorkspaceHypothesis(
+            await detectWorkspaceSignals({ projectPath: input.projectPath }),
+          )
+    )
+  const approvedContext = input.draftOverride?.context
+    ? [...input.draftOverride.context]
+    : detectedDraftSnapshot?.context
+      ? [...detectedDraftSnapshot.context]
+      : []
   const materializedTasks = materializedParsed.tasks
   const approvedSpec = input.draftOverride
     ? formatParsedImportAsSpec(normalizeParsedImportForSpec(materializedParsed, input.projectPath))
@@ -4354,6 +4539,7 @@ export async function approveWorkspaceImport(
   }
 
   if (input.replacePreviouslyImportedTasks) {
+    const archivedImportedParentIds: string[] = []
     for (const existingTask of queue.tasks) {
       if (existingTask.id === WORKSPACE_IMPORT_TASK_ID) continue
       if (!importedTaskCanBeArchivedDuringScopeRefresh(existingTask.status)) continue
@@ -4362,6 +4548,7 @@ export async function approveWorkspaceImport(
       if (approvedQueueTaskIds.has(existingTask.id)) continue
       existingTask.status = 'archived'
       existingTask.updatedAt = now
+      archivedImportedParentIds.push(existingTask.id)
       existingTask.notes = [
         ...(existingTask.notes ?? []),
         {
@@ -4372,6 +4559,7 @@ export async function approveWorkspaceImport(
         },
       ]
     }
+    archiveGeneratedImportedDescendants(queue, archivedImportedParentIds, now)
   }
 
   let tasksAdded = 0
@@ -4450,24 +4638,26 @@ export async function approveWorkspaceImport(
   if (
     materializedParsed.goals.length > 0 ||
     materializedParsed.tasks.length > 0 ||
-    materializedParsed.milestones.length > 0
+    materializedParsed.milestones.length > 0 ||
+    approvedContext.length > 0
   ) {
     const goalsPath = workspaceImportStatePath(input.memoryDir, WORKSPACE_GOALS_FILE)
     const approvedSnapshot = workspaceScopeSnapshotFromParsed(materializedParsed)
-    const detectedSnapshot = input.detectedDraftSnapshot
-      ? workspaceScopeSnapshotFromDraft(input.detectedDraftSnapshot)
+    const detectedSnapshot = detectedDraftSnapshot
+      ? workspaceScopeSnapshotFromDraft(detectedDraftSnapshot)
       : input.draftOverride
         ? workspaceScopeSnapshotFromDraft(input.draftOverride)
         : approvedSnapshot
     await writeManagedTextFile(
       goalsPath,
-      JSON.stringify(
+          JSON.stringify(
         {
-          version: 2,
+          version: WORKSPACE_GOALS_STRUCTURAL_VERSION,
           recordedAt: now,
           goals: materializedParsed.goals,
           tasks: materializedParsed.tasks,
           milestones: materializedParsed.milestones,
+          context: approvedContext,
           approved: approvedSnapshot,
           detected: detectedSnapshot,
         } satisfies WorkspaceGoalsState,
@@ -4537,6 +4727,28 @@ function materializeImportedSplitChildren(
   if (!isMaterializableSplitAction(action)) return
   reconcileImportedSplitChildren(queue, task, now)
   materializeSplitChildren(queue, task, now)
+  normalizeImportedSplitChildVisibility(queue, task, now)
+}
+
+function normalizeImportedSplitChildVisibility(
+  queue: TaskQueue,
+  parent: Task,
+  now: string,
+): void {
+  for (const child of queue.tasks) {
+    if (child.hierarchy?.parentId !== parent.id) continue
+    if (child.workVisibility?.kind) continue
+    const looksLikeGeneratedSplitChild =
+      child.id.startsWith(`${parent.id}-split-`) ||
+      child.hierarchy?.relation === 'decomposes' ||
+      child.notes?.some(note => note.agentId === 'task-sizing')
+    if (!looksLikeGeneratedSplitChild) continue
+    child.workVisibility = {
+      kind: 'internal_step',
+      countInProjectTotals: false,
+    }
+    child.updatedAt = now
+  }
 }
 
 function reconcileImportedSplitChildren(
@@ -4601,6 +4813,55 @@ function reconcileImportedSplitChildren(
   }
   if (task.deliverySteps?.length) {
     task.deliverySteps = task.deliverySteps.filter(step => !step.sourceTaskId || !staleChildIds.has(step.sourceTaskId))
+  }
+}
+
+function archiveGeneratedImportedDescendants(
+  queue: TaskQueue,
+  parentIds: readonly string[],
+  now: string,
+): void {
+  if (parentIds.length === 0) return
+  const pending = [...parentIds]
+  const seen = new Set<string>(parentIds)
+
+  while (pending.length > 0) {
+    const parentId = pending.shift()
+    if (!parentId) continue
+
+    for (const candidate of queue.tasks) {
+      if (seen.has(candidate.id)) continue
+      const isDescendant =
+        candidate.hierarchy?.parentId === parentId ||
+        candidate.id.startsWith(`${parentId}-split-`)
+      if (!isDescendant) continue
+
+      seen.add(candidate.id)
+      pending.push(candidate.id)
+
+      const isGeneratedSplitChild =
+        candidate.hierarchy?.parentId === parentId ||
+        candidate.id.startsWith(`${parentId}-split-`) ||
+        candidate.notes?.some(note => note.agentId === 'task-sizing')
+      if (!isGeneratedSplitChild) continue
+
+      if (candidate.hierarchy?.parentId) {
+        const nextHierarchy = { ...(candidate.hierarchy ?? {}) }
+        delete nextHierarchy.parentId
+        candidate.hierarchy = nextHierarchy
+      }
+      if (!['done', 'pending_pr'].includes(candidate.status)) candidate.status = 'archived'
+      candidate.updatedAt = now
+      const notes = candidate.notes ?? (candidate.notes = [])
+      if (!notes.some(note => note.agentId === 'workspace-importer' && /superseded because its imported parent left the approved import scope/i.test(note.content))) {
+        notes.push({
+          agentId: 'workspace-importer',
+          role: 'system',
+          content: 'Archived because this generated split child was superseded because its imported parent left the approved import scope.',
+          timestamp: now,
+        })
+      }
+    }
   }
 }
 

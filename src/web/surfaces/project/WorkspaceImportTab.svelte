@@ -28,6 +28,7 @@
     title: string
     description: string
     domain: string
+    scope?: 'current' | 'later'
     priority: 'critical' | 'high' | 'normal' | 'low'
     source: string
     references?: readonly string[]
@@ -44,6 +45,8 @@
     excerpt: string
     source: string
     references?: readonly string[]
+    role?: 'capability' | 'reference' | 'brief_input'
+    structure?: 'record' | 'note'
   }
   interface SourceGroup {
     key: string
@@ -78,9 +81,22 @@
     context: DetectedContext[]
     stats: { inputSignals: number; drafted: number; deduped: number }
     review?: {
+      summary?: {
+        currentMilestoneLabel: string | null
+        headline: string
+        currentScope: string
+        deferredScope: string | null
+        structuralScope: string | null
+        briefInputCount: number
+        briefRecordCount: number
+        capabilityCount: number
+        capabilityRecordCount: number
+      }
       areaGroups: AreaGroup[]
       sourceGroups: SourceGroup[]
       totalTaskCandidates: number
+      totalCurrentTaskCandidates: number
+      totalLaterTaskCandidates: number
       totalMilestones: number
       totalGoals: number
     }
@@ -220,7 +236,10 @@
   const areaGroups = $derived(data?.detected?.review?.areaGroups ?? [])
   const groups = $derived(data?.detected?.review?.sourceGroups ?? [])
   const totalTaskCandidates = $derived(data?.detected?.review?.totalTaskCandidates ?? 0)
+  const totalCurrentTaskCandidates = $derived(data?.detected?.review?.totalCurrentTaskCandidates ?? 0)
+  const totalLaterTaskCandidates = $derived(data?.detected?.review?.totalLaterTaskCandidates ?? 0)
   const totalGoals = $derived(data?.detected?.review?.totalGoals ?? 0)
+  const importSummary = $derived(data?.detected?.review?.summary ?? null)
   const primaryAreas = $derived(areaGroups.filter(area => area.taskCount > 0))
   const secondaryAreas = $derived(areaGroups.filter(area => area.taskCount === 0))
   const selectedAreas = $derived(areaGroups.filter(area => selectedAreaKeys.includes(area.key)))
@@ -970,7 +989,10 @@
             <div class="metric-row" aria-label="Import summary">
               <Chip label={`${areaGroups.length} parts`} tone="accent" />
               {#if hasTaskCandidates}
-                <Chip label={`${totalTaskCandidates} possible tasks`} tone="ok" />
+                <Chip label={`${totalCurrentTaskCandidates} now`} tone="ok" />
+                {#if totalLaterTaskCandidates > 0}
+                  <Chip label={`${totalLaterTaskCandidates} later`} tone="neutral" />
+                {/if}
               {:else if totalGoals > 0}
                 <Chip label={`${totalGoals} goals`} tone="neutral" />
               {:else}
@@ -979,6 +1001,20 @@
               <Chip label={`${groups.length} sources`} tone="neutral" />
             </div>
           </div>
+          {#if importSummary}
+            <div class="scope-summary" aria-label="Current import scope summary">
+              <div class="scope-summary-header">
+                <strong>{importSummary.headline}</strong>
+              </div>
+              <p>{importSummary.currentScope}</p>
+              {#if importSummary.deferredScope}
+                <p>{importSummary.deferredScope}</p>
+              {/if}
+              {#if importSummary.structuralScope}
+                <p>{importSummary.structuralScope}</p>
+              {/if}
+            </div>
+          {/if}
           {#if data.detected?.learning?.defaults?.note}
             <p class="learned-note">{data.detected.learning.defaults.note}</p>
           {/if}

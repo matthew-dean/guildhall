@@ -121,16 +121,24 @@ describe('buildProjectOrientationSpine', () => {
     })
 
     expect(spine.selectedRelease).toBeNull()
+    expect((spine as any).selectedTaskScope).toMatchObject({
+      id: 'current-work',
+      label: 'Current task scope',
+      kind: 'proposed_feature_set',
+      source: 'inferred',
+      nodeIds: ['work:feature-a', 'work:feature-b'],
+      deferredNodeIds: [],
+    })
     expect(spine.scope).toMatchObject({
       id: 'current-work',
-      label: 'Current work',
+      label: 'Current task scope',
       kind: 'proposed_feature_set',
       source: 'inferred',
       nodeIds: ['work:feature-a', 'work:feature-b'],
       deferredNodeIds: [],
     })
     expect(spine.summary.selectedReleaseLabel).toBeNull()
-    expect(spine.summary.selectedScopeLabel).toBe('Current work')
+    expect(spine.summary.selectedScopeLabel).toBe('Current task scope')
     expect(spine.gaps).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: 'missing_charter' }),
     ]))
@@ -178,7 +186,7 @@ describe('buildProjectOrientationSpine', () => {
       now: '2026-06-18T12:00:00.000Z',
       scope: {
         id: 'current-work',
-        label: 'Current work',
+        label: 'Current task scope',
         kind: 'proposed_feature_set',
         source: 'inferred',
         nodeIds: ['work:task-current'],
@@ -220,6 +228,45 @@ describe('buildProjectOrientationSpine', () => {
     expect(spine.summary.progress).toMatchObject({
       total: 1,
       deferred: 0,
+    })
+  })
+
+  it('does not count importer-generated decomposition children as scoped work in current work', () => {
+    const spine = buildProjectOrientationSpine({
+      projectId: 'narrative-harness',
+      now: '2026-06-18T12:00:00.000Z',
+      tasks: [
+        {
+          id: 'task-runner',
+          title: 'Implement a no-UI runner that builds a packet from fixture records.',
+          description: 'Current-scope runner work.',
+          domain: 'harness',
+          projectPath: '/tmp/narrative-harness',
+          status: 'ready',
+          priority: 'normal',
+          requestIntake: { createdBy: 'workspace-importer' },
+          hierarchy: { childIds: ['task-runner-split-load-fixture-inputs'], relation: 'contains' },
+        },
+        {
+          id: 'task-runner-split-load-fixture-inputs',
+          title: 'Load fixture inputs and canonical story records',
+          description: 'Execution breakdown only.',
+          domain: 'harness',
+          projectPath: '/tmp/narrative-harness',
+          status: 'exploring',
+          priority: 'normal',
+          hierarchy: { parentId: 'task-runner', relation: 'decomposes', order: 0 },
+          notes: [{ agentId: 'task-sizing', role: 'coordinator', content: 'Generated split child.' }],
+        },
+      ],
+    })
+
+    expect(spine.scope?.nodeIds).toEqual(['work:task-runner'])
+    expect(spine.summary.includedWorkCount).toBe(1)
+    expect(spine.summary.progress.total).toBe(1)
+    expect(spine.nodes['work:task-runner-split-load-fixture-inputs']?.visibility).toEqual({
+      kind: 'internal_step',
+      countInProjectTotals: false,
     })
   })
 
@@ -291,6 +338,14 @@ describe('buildProjectOrientationSpine', () => {
       kind: 'release',
       source: 'release_plan',
       proofStyle: 'script_only',
+      nodeIds: ['work:parser-api'],
+      deferredNodeIds: ['work:theme-editor'],
+    })
+    expect((spine as any).selectedTaskScope).toMatchObject({
+      id: '2-0-alpha',
+      label: '2.0 alpha',
+      kind: 'release',
+      source: 'release_plan',
       nodeIds: ['work:parser-api'],
       deferredNodeIds: ['work:theme-editor'],
     })
@@ -387,7 +442,7 @@ describe('buildProjectOrientationSpine', () => {
     expect(spine.nodes['work:coherence-reviewer-mvp']?.maturity).toBe('done')
     expect(spine.gaps.map(gap => gap.kind)).not.toContain('proof_needed')
     expect(spine.summary.progress.done).toBe(1)
-    expect(spine.summary.headline).toBe('Current work has no actionable work.')
+    expect(spine.summary.headline).toBe('Current task scope has no actionable work.')
   })
 
   it('lets shared start-readiness block the orientation headline before idle copy', () => {
@@ -409,7 +464,7 @@ describe('buildProjectOrientationSpine', () => {
       },
     })
 
-    expect(spine.summary.headline).toBe('Current work needs import refresh.')
+    expect(spine.summary.headline).toBe('Current task scope needs import refresh.')
     expect(spine.summary.topBlocker).toBe('Workspace import is under-scoped.')
     expect(spine.summary.nextAction).toBe('Refresh the workspace import.')
   })
@@ -532,6 +587,8 @@ describe('buildProjectOrientationSpine', () => {
             description: 'Architecture core loop step.',
             domain: 'harness',
             refs: ['import:docs/harness/architecture-notes.md'],
+            role: 'capability',
+            scopeHint: 'later',
           },
         ],
       },
@@ -551,6 +608,7 @@ describe('buildProjectOrientationSpine', () => {
     expect(spine.nodes['work:workspace-import:task-later']?.maturity).toBe('deferred')
     expect(spine.nodes['capability:capability-core-loop']).toMatchObject({
       title: 'Author drafts or imports chapters.',
+      maturity: 'deferred',
       visibility: { kind: 'supporting', countInProjectTotals: false },
       source: { refs: ['import:docs/harness/architecture-notes.md'], inferred: true },
     })
@@ -604,12 +662,14 @@ describe('buildProjectOrientationSpine', () => {
             title: 'Author drafts or imports chapters.',
             description: 'Architecture core loop step.',
             refs: ['import:docs/harness/architecture-notes.md'],
+            role: 'capability',
           },
           {
             id: 'capability-spec',
             title: 'Spec: Story Intelligence Overview',
             description: 'Story intelligence framing.',
             refs: ['import:docs/specs/story-intelligence-overview.md'],
+            role: 'capability',
           },
         ],
       },
@@ -747,6 +807,7 @@ describe('buildProjectOrientationSpine', () => {
             title: 'Author drafts or imports chapters.',
             description: 'Architecture capability row.',
             refs: ['import:docs/harness/architecture-notes.md'],
+            role: 'capability',
           },
         ],
       },
@@ -757,6 +818,39 @@ describe('buildProjectOrientationSpine', () => {
       title: 'Author drafts or imports chapters.',
     })
     expect(spine.summary.includedWorkCount).toBe(1)
+  })
+
+  it('preserves brief inputs as brief-stage supporting nodes instead of generic capability rows', () => {
+    const spine = buildProjectOrientationSpine({
+      projectId: 'narrative-harness',
+      now: '2026-06-18T12:00:00.000Z',
+      workspaceImportDraft: {
+        source: {
+          kind: 'inferred',
+          refs: ['workspace-import:approved'],
+          confidence: 'high',
+          freshness: 'fresh',
+          inferred: false,
+          refreshedAt: '2026-06-18T12:00:00.000Z',
+        },
+        tasks: [],
+        contexts: [
+          {
+            id: 'brief-core-loop',
+            title: 'Author defines book intent, genre/form expectations, themes, and voice.',
+            description: 'Book-brief framing.',
+            refs: ['import:docs/harness/architecture-notes.md'],
+            role: 'brief_input',
+          },
+        ],
+      },
+    })
+
+    expect(spine.nodes['capability:brief-core-loop']).toMatchObject({
+      title: 'Author defines book intent, genre/form expectations, themes, and voice.',
+      maturity: 'brief',
+      visibility: { kind: 'supporting', countInProjectTotals: false },
+    })
   })
 
   it('keeps deferred work scheduler-ineligible unless explicitly targeted or required as a dependency', () => {
@@ -784,6 +878,30 @@ describe('buildProjectOrientationSpine', () => {
     )).toEqual({
       eligible: true,
       reason: 'included_prerequisite',
+    })
+  })
+
+  it('treats descendants of included tasks as in-scope without inflating explicit scope membership', () => {
+    const scope = {
+      id: 'mvp',
+      label: 'MVP',
+      kind: 'release' as const,
+      source: 'owner_approved' as const,
+      nodeIds: ['work:parent'],
+      deferredNodeIds: [],
+    }
+    const tasksById = new Map([
+      ['parent', { id: 'parent', hierarchy: { childIds: ['child'] } }],
+      ['child', { id: 'child', hierarchy: { parentId: 'parent' } }],
+    ])
+
+    expect(taskEligibleForSelectedScope(
+      { id: 'child', dependsOn: [], hierarchy: { parentId: 'parent' } },
+      scope,
+      { tasksById },
+    )).toEqual({
+      eligible: true,
+      reason: 'included_ancestor',
     })
   })
 })

@@ -598,6 +598,12 @@ The next milestone is Stage 1: Fixture And Evaluation Harness.
 5. Reviewers produce evidence-backed findings.
 6. The coordinator summarizes conflicts and turns them into author decisions.
 7. Accepted decisions update the story bible, outline, and manuscript tasks.
+
+## System Records
+| Record | Purpose |
+| --- | --- |
+| Book brief | author voice, premise, genre, themes, constraints |
+| Outline | acts, chapters, scene goals, thread movement |
 `,
     )
 
@@ -613,7 +619,16 @@ The next milestone is Stage 1: Fixture And Evaluation Harness.
       expect.objectContaining({
         kind: 'context',
         role: 'brief_input',
-        title: 'Author defines book intent, genre/form expectations, themes, and voice.',
+        structure: 'record',
+        title: 'Book brief',
+        evidence: expect.stringContaining('author voice, premise, genre, themes, constraints'),
+      }),
+      expect.objectContaining({
+        kind: 'context',
+        role: 'capability',
+        structure: 'record',
+        title: 'Outline',
+        evidence: expect.stringContaining('acts, chapters, scene goals, thread movement'),
       }),
       expect.objectContaining({
         kind: 'context',
@@ -641,7 +656,14 @@ The next milestone is Stage 1: Fixture And Evaluation Harness.
         kind: 'open_work',
         title: 'Author defines book intent, genre/form expectations, themes, and voice.',
       }),
+      expect.objectContaining({
+        kind: 'context',
+        title: 'Author defines book intent, genre/form expectations, themes, and voice.',
+      }),
     ]))
+    expect(sigs.find(signal => signal.title === 'Book brief')?.evidence).toContain(
+      'Also described as: Author defines book intent, genre/form expectations, themes, and voice.',
+    )
   })
 
   it('extracts explicit spec-to-task coverage links from decomposition inventory tables', async () => {
@@ -700,6 +722,64 @@ The next milestone is Stage 1: Fixture And Evaluation Harness.
     expect(sigs.some((signal) => signal.title === 'Spec coverage: Index')).toBe(false)
   })
 
+  it('keeps later decomposition inventory recommendations as capability context instead of runnable work', async () => {
+    mkdirSync(join(dir, 'docs', 'harness'), { recursive: true })
+    mkdirSync(join(dir, 'docs', 'specs'), { recursive: true })
+    writeFileSync(join(dir, 'docs', 'specs', 'dialogue-and-character-voice.md'), '# Dialogue And Character Voice\n')
+    writeFileSync(
+      join(dir, 'docs', 'harness', 'remaining-spec-decomposition-inventory.md'),
+      `# Remaining Spec Decomposition Inventory
+
+## 2.2 \`dialogue-and-character-voice.md\`
+
+- **Covers:** Dialogue review behavior.
+- **Recommended first task title:** Implement dialogue-and-character-voice reviewer lane
+- **Recommended domain:** coherence
+- **Stage alignment:** Stage 2 (Agent Coordination)
+`,
+    )
+    writeFileSync(
+      join(dir, 'docs', 'harness', 'implementation-roadmap.md'),
+      `# Implementation Roadmap
+
+## Current Next Milestone
+
+The next milestone is Stage 1: Fixture And Evaluation Harness.
+`,
+    )
+
+    const sigs = await planningDocsSource.detect({
+      projectPath: dir,
+      exec: fakeExec(() => ({
+        stdout: [
+          'docs/harness/implementation-roadmap.md',
+          'docs/harness/remaining-spec-decomposition-inventory.md',
+          'docs/specs/dialogue-and-character-voice.md',
+        ].join('\n'),
+        code: 0,
+      })),
+    })
+
+    expect(sigs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'context',
+        role: 'capability',
+        title: 'Spec: Dialogue And Character Voice',
+        scopeHint: 'later',
+        references: [
+          join(dir, 'docs', 'specs', 'dialogue-and-character-voice.md'),
+          join(dir, 'docs', 'harness', 'remaining-spec-decomposition-inventory.md'),
+        ],
+      }),
+    ]))
+    expect(sigs).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'open_work',
+        title: 'Implement dialogue-and-character-voice reviewer lane',
+      }),
+    ]))
+  })
+
   it('keeps full wrapped stage goals and every stage heading from one roadmap file', async () => {
     mkdirSync(join(dir, 'docs', 'harness'), { recursive: true })
     writeFileSync(
@@ -728,20 +808,28 @@ contracts against small fiction fixtures before any product UI is designed.
 
     expect(sigs).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        kind: 'goal',
-        title: 'make the product architecture explicit enough that implementation agents can work without re-litigating the core design.',
-      }),
-      expect.objectContaining({
-        kind: 'goal',
-        title: 'build a no-UI test harness that proves the story-memory and packet contracts against small fiction fixtures before any product UI is designed.',
-      }),
-      expect.objectContaining({
         kind: 'context',
         title: 'Stage 0: Spec Baseline',
+        role: 'capability',
+        scopeHint: 'current',
+        evidence: expect.stringContaining('make the product architecture explicit enough that implementation agents can work without re-litigating the core design.'),
       }),
       expect.objectContaining({
         kind: 'context',
         title: 'Stage 1: Fixture And Evaluation Harness',
+        role: 'capability',
+        scopeHint: 'current',
+        evidence: expect.stringContaining('build a no-UI test harness that proves the story-memory and packet contracts against small fiction fixtures before any product UI is designed.'),
+      }),
+      expect.objectContaining({
+        kind: 'context',
+        title: 'Stage 0: Spec Baseline',
+        scopeHint: 'current',
+      }),
+      expect.objectContaining({
+        kind: 'context',
+        title: 'Stage 1: Fixture And Evaluation Harness',
+        scopeHint: 'current',
       }),
     ]))
   })

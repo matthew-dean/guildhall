@@ -133,7 +133,7 @@ describe('GET /api/project/release-readiness', () => {
     const body = await res.json() as any
     expect(body.ready).toBe(false)
     expect(body.release).toBeNull()
-    expect(body.scope).toMatchObject({ id: 'current-work', label: 'Current work', kind: 'current_work' })
+    expect(body.scope).toMatchObject({ id: 'current-work', label: 'Current task scope', kind: 'current_work' })
     expect(body.notReadyReason).toBe('No tasks in this scope yet.')
     expect(body.totals.blockingCount).toBe(0)
     expect(body.openEscalations).toEqual([])
@@ -220,6 +220,50 @@ describe('GET /api/project/release-readiness', () => {
     expect(body.statusCounts).toEqual({ import_draft: 1 })
     expect(body.shelvedUnclaimed).toEqual([])
     expect(body.totals.unfinishedCount).toBe(1)
+  })
+
+  it('does not count importer-generated decomposition children as scoped release tasks', async () => {
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: 'headless-mvp',
+      releases: [{
+        id: 'headless-mvp',
+        label: 'Headless MVP',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-runner', 'work:task-runner-split-load-fixture-inputs'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [
+        makeTask({
+          id: 'task-runner',
+          title: 'Implement a no-UI runner that builds a packet from fixture records.',
+          status: 'ready',
+          requestIntake: { createdBy: 'workspace-importer' } as Task['requestIntake'],
+          hierarchy: { childIds: ['task-runner-split-load-fixture-inputs'], relation: 'contains' } as Task['hierarchy'],
+        }),
+        makeTask({
+          id: 'task-runner-split-load-fixture-inputs',
+          title: 'Load fixture inputs and canonical story records',
+          status: 'exploring',
+          hierarchy: { parentId: 'task-runner', childIds: [], order: 0, relation: 'decomposes' } as Task['hierarchy'],
+          notes: [{ agentId: 'task-sizing', role: 'coordinator', content: 'Generated split child.' }] as Task['notes'],
+        }),
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await approveDesignSystem(app)
+    await commitAndPush('release readiness ignores imported split children')
+
+    const res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
+    const body = await res.json() as any
+
+    expect(body.scope.nodeIds).toEqual(['work:task-runner'])
+    expect(body.totals.tasks).toBe(1)
+    expect(body.statusCounts).toEqual({ ready: 1 })
   })
 
   it('returns a plain release-readiness load error when task state cannot be read', async () => {

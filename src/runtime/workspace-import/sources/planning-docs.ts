@@ -23,6 +23,7 @@ const GOAL_LABEL_RE = /^goal:\s*(.+?)\s*$/i
 const RECOMMENDED_TASK_TITLE_RE = /^-\s+\*\*recommended first task title:\*\*\s+(.+?)\s*$/i
 const RECOMMENDED_DOMAIN_RE = /^-\s+\*\*recommended domain:\*\*\s+(.+?)\s*$/i
 const CORE_LOOP_HEADING_RE = /^core loop$/i
+const SYSTEM_RECORDS_HEADING_RE = /^system records$/i
 const MARKDOWN_TABLE_ROW_RE = /^\|.+\|\s*$/
 
 function coreLoopRole(title: string): WorkspaceSignal['role'] {
@@ -36,6 +37,61 @@ function coreLoopRole(title: string): WorkspaceSignal['role'] {
     return 'brief_input'
   }
   return 'capability'
+}
+
+function recordRole(title: string): WorkspaceSignal['role'] {
+  const normalized = cleanHeading(title).toLowerCase()
+  if (
+    /^(book brief|author voice profile|project author notes|global author database|author profile)$/.test(normalized)
+  ) {
+    return 'brief_input'
+  }
+  return 'capability'
+}
+
+function normalizeKey(text: string): string {
+  return cleanHeading(text).toLowerCase()
+}
+
+function mergeCoreLoopStructuralContext(signals: WorkspaceSignal[]): WorkspaceSignal[] {
+  const next: WorkspaceSignal[] = []
+  const bookBriefRecordByRef = new Map<string, number>()
+
+  for (const signal of signals) {
+    if (
+      signal.kind === 'context' &&
+      signal.role === 'brief_input' &&
+      signal.structure === 'record' &&
+      normalizeKey(signal.title) === 'book brief'
+    ) {
+      const ref = signal.references?.[0]
+      if (ref) bookBriefRecordByRef.set(ref, next.length)
+    }
+    next.push(signal)
+  }
+
+  return next.filter((signal) => {
+    const ref = signal.references?.[0]
+    if (
+      signal.kind === 'context' &&
+      signal.role === 'brief_input' &&
+      !signal.structure &&
+      /^author defines book intent\b/i.test(signal.title) &&
+      ref &&
+      bookBriefRecordByRef.has(ref)
+    ) {
+      const recordIndex = bookBriefRecordByRef.get(ref)!
+      const record = next[recordIndex]
+      if (record) {
+        const supporting = cleanHeading(signal.title)
+        if (supporting && !record.evidence.includes(supporting)) {
+          record.evidence = `${record.evidence} Also described as: ${supporting}`.slice(0, 240)
+        }
+      }
+      return false
+    }
+    return true
+  })
 }
 
 function likelyRelevantFile(rel: string): boolean {
@@ -140,6 +196,10 @@ function relatedSpecReference(
   return basenameMatches[0] ? join(projectPath, basenameMatches[0]) : null
 }
 
+function isDecompositionInventoryFile(rel: string): boolean {
+  return /(^|\/)remaining-spec-decomposition-inventory\.md$/i.test(rel.replaceAll('\\', '/'))
+}
+
 function logicalMarkdownLines(raw: string): string[] {
   const physicalLines = raw.split('\n')
   const logicalLines: string[] = []
@@ -221,6 +281,10 @@ function splitMarkdownTableRow(line: string): string[] | null {
   const trimmed = line.trim().replace(/^\|/, '').replace(/\|$/, '')
   const cells = trimmed.split('|').map(cell => cleanHeading(cell.trim()))
   return cells.length > 0 ? cells : null
+}
+
+function isMarkdownTableDividerRow(cells: readonly string[]): boolean {
+  return cells.every(cell => /^:?-{3,}:?$/.test(cell))
 }
 
 function parseLinkedTaskHints(cell: string): string[] {
@@ -329,10 +393,7 @@ function scopeHintForStage(
   const stageNumber = parseStageOrdinal(stageLabel)
   const currentStageNumber = parseStageOrdinal(currentMilestoneStage)
   if (stageNumber != null && currentStageNumber != null) {
-    if (stageNumber > currentStageNumber) {
-      return 'later'
-    }
-    return 'current'
+    return stageNumber === currentStageNumber ? 'current' : 'later'
   }
   return 'current'
 }
@@ -396,6 +457,8 @@ export const planningDocsSource: TaskSource = {
       let currentRecommendedStageAlignment: string | null = null
       let currentRecommendedDomain: string | null = null
       const bulletStack: Array<{ indent: number; title: string; grouping: boolean }> = []
+      let pendingTableHeaders: string[] | null = null
+      let activeTableHeaders: string[] | null = null
 
       const flushPendingRecommendedTask = () => {
         if (!pendingRecommendedTaskTitle) return
@@ -411,16 +474,33 @@ export const planningDocsSource: TaskSource = {
           if (relatedSpec && !references.includes(relatedSpec)) {
             references.push(relatedSpec)
           }
-          signals.push({
-            source: 'planning-docs',
-            kind: 'open_work',
-            title,
-            evidence: `${rel}: ${pendingRecommendedTaskSection ?? currentSection ?? title}`.slice(0, 240),
-            references,
-            ...(currentRecommendedDomain ? { domainHint: currentRecommendedDomain } : domainHint ? { domainHint } : {}),
-            scopeHint: scopeHintForStage(currentRecommendedStageAlignment, currentMilestoneStage),
-            confidence: 'high',
-          })
+          const scopeHint = scopeHintForStage(currentRecommendedStageAlignment, currentMilestoneStage)
+          const domain = currentRecommendedDomain ?? domainHint
+          if (isDecompositionInventoryFile(rel) && scopeHint === 'later' && relatedSpec) {
+            signals.push({
+              source: 'planning-docs',
+              kind: 'context',
+              role: 'capability',
+              title: `Spec: ${humanizeSpecStem(path.basename(relatedSpec))}`,
+              evidence: `${rel}: ${pendingRecommendedTaskSection ?? currentSection ?? title}`.slice(0, 240),
+              references: [relatedSpec, abs],
+              linkedTaskHints: [title],
+              ...(domain ? { domainHint: domain } : {}),
+              scopeHint,
+              confidence: 'high',
+            })
+          } else {
+            signals.push({
+              source: 'planning-docs',
+              kind: 'open_work',
+              title,
+              evidence: `${rel}: ${pendingRecommendedTaskSection ?? currentSection ?? title}`.slice(0, 240),
+              references,
+              ...(domain ? { domainHint: domain } : {}),
+              scopeHint,
+              confidence: 'high',
+            })
+          }
         }
         pendingRecommendedTaskTitle = null
         pendingRecommendedTaskSection = null
@@ -463,6 +543,8 @@ export const planningDocsSource: TaskSource = {
           currentSectionRaw = heading[2]!.trim()
           currentLabel = null
           bulletStack.length = 0
+          pendingTableHeaders = null
+          activeTableHeaders = null
           const kind = headingSignalKind(fileBase, rel, currentSection, currentSection)
           if (kind && !DONE_HEADING_RE.test(currentSection) && !OPEN_HEADING_RE.test(currentSection)) {
             signals.push({
@@ -482,6 +564,7 @@ export const planningDocsSource: TaskSource = {
               title: currentSection,
               evidence: `${rel}: ${line.trim()}`.slice(0, 240),
               references: [abs],
+              scopeHint: scopeHintForStage(currentSection, currentMilestoneStage),
               ...(domainHint ? { domainHint } : {}),
               confidence: 'medium',
             })
@@ -493,10 +576,12 @@ export const planningDocsSource: TaskSource = {
         if (goalLabel && currentSection && STAGE_HEADING_RE.test(currentSection)) {
           signals.push({
             source: 'planning-docs',
-            kind: 'goal',
-            title: cleanHeading(goalLabel[1]!),
-            evidence: `${rel}: ${line.trim()}`.slice(0, 240),
+            kind: 'context',
+            title: currentSection,
+            evidence: `${rel}: ${cleanHeading(goalLabel[1]!)}`.slice(0, 240),
             references: [abs],
+            role: 'capability',
+            scopeHint: scopeHintForStage(currentSection, currentMilestoneStage),
             ...(domainHint ? { domainHint } : {}),
             confidence: 'medium',
           })
@@ -504,6 +589,46 @@ export const planningDocsSource: TaskSource = {
         }
 
         const trimmedLine = line.trim()
+        const tableCells = splitMarkdownTableRow(line)
+        if (tableCells) {
+          if (isMarkdownTableDividerRow(tableCells)) {
+            if (pendingTableHeaders) {
+              activeTableHeaders = pendingTableHeaders
+              pendingTableHeaders = null
+            }
+            continue
+          }
+          if (!activeTableHeaders) {
+            pendingTableHeaders = tableCells
+            continue
+          }
+          if (
+            currentSection &&
+            SYSTEM_RECORDS_HEADING_RE.test(currentSection) &&
+            activeTableHeaders[0]?.toLowerCase() === 'record' &&
+            activeTableHeaders[1]?.toLowerCase() === 'purpose' &&
+            tableCells.length >= 2
+          ) {
+            const recordTitle = cleanHeading(tableCells[0] ?? '')
+            const recordPurpose = cleanHeading(tableCells[1] ?? '')
+            if (recordTitle && recordPurpose) {
+              signals.push({
+                source: 'planning-docs',
+                kind: 'context',
+                title: recordTitle,
+                evidence: `${rel}: ${recordPurpose}`.slice(0, 240),
+                references: [abs],
+                role: recordRole(recordTitle),
+                structure: 'record',
+                ...(domainHint ? { domainHint } : {}),
+                confidence: 'high',
+              })
+            }
+          }
+          continue
+        }
+        pendingTableHeaders = null
+        activeTableHeaders = null
         if (currentSection && STAGE_HEADING_RE.test(currentSection)) {
           if (DELIVERABLE_LABEL_RE.test(trimmedLine)) {
             currentLabel = 'deliverables'
@@ -679,7 +804,7 @@ export const planningDocsSource: TaskSource = {
       flushPendingRecommendedTask()
     }
 
-    return signals
+    return mergeCoreLoopStructuralContext(signals)
   },
 }
 
