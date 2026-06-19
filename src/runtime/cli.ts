@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-import { dirname, resolve, join } from 'node:path'
-import { homedir } from 'node:os'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { basename, dirname, resolve, join } from 'node:path'
+import { homedir, tmpdir } from 'node:os'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { confirm } from '@inquirer/prompts'
 import type { RunOnceAutomationPolicy, RunOnceProofMode } from './run-once.js'
@@ -51,6 +51,8 @@ import { platform } from 'node:os'
 import { buildSemanticIndexPrompt, codebaseMapPath, refreshCodebaseMap, type CorpusSemanticIndexer } from '@guildhall/corpus-map'
 import { getProjectStateDir } from '@guildhall/sessions'
 import type { ConsumerReturnPacket, DeliveryReceipt } from './project-graph.js'
+import { detectWorkspaceSignals, formWorkspaceHypothesis, type WorkspaceImportDraft, type WorkspaceSignal } from './workspace-import/index.js'
+import { buildWorkspaceImportReview, type WorkspaceImportReview } from './workspace-import/review.js'
 
 function openBrowser(url: string): void {
   const cmd = platform() === 'darwin' ? `open "${url}"`
@@ -303,6 +305,8 @@ export function resolveServiceLifecycleIntent(
 //   guildhall migrate status [id|path] — show generic migration status
 //   guildhall migrate plan [id|path]   — show pending generic migrations
 //   guildhall migrate apply [id|path]  — apply automatic generic migrations
+//   guildhall workspace-import draft [id|path] [--from-file <doc.md>] [--json]
+//                                      — print the read-only workspace-import decomposition draft
 //   guildhall review-calibration validate [path] [--cases <dir>]
 //                                      — validate and record review calibration corpus coverage
 //   guildhall review-calibration escaped-miss [path] --task <id> --lane <lane> --finding <text>
@@ -348,6 +352,7 @@ export const SHIPPED_CLI_COMMANDS = [
   'corpus-map',
   'memory',
   'migrate',
+  'workspace-import',
   'review-calibration',
   'model-bakeoff',
   'benchmarks',
@@ -449,6 +454,10 @@ Usage:
   guildhall migrate task-state [id|path]
                                   Compatibility command for the 0.8.0 task-state migration
     --apply                      Write files. Without this, prints a dry run
+  guildhall workspace-import draft [id|path]
+                                  Print a read-only decomposition draft for project intake
+    --from-file <path>            Run one Markdown planning document in isolation
+    --json                        Print compact JSON for calibration and agent clients
   guildhall review-calibration validate [id|path]
                                   Validate and record calibration corpus coverage
     --cases <dir>                Corpus directory (default: internal/calibration/cases)
@@ -1201,6 +1210,189 @@ function printMigrationStatus(
   if (pending.length === 0 && blocked.length === 0) {
     console.log('[guildhall] No pending migrations.')
   }
+}
+
+export interface WorkspaceImportDraftReportWarning {
+  code:
+    | 'read_only_report'
+    | 'no_task_candidates'
+    | 'no_current_scope'
+    | 'no_deferred_scope'
+    | 'generic_task_title'
+  message: string
+  taskIds?: string[]
+}
+
+export interface WorkspaceImportDraftReport {
+  projectPath: string
+  sourceDocument: string | null
+  inventory: {
+    inputSignals: number
+    ran: readonly string[]
+    failed: readonly { id: string; error: string }[]
+    bySource: Record<string, number>
+    signals: readonly WorkspaceSignal[]
+  }
+  draft: WorkspaceImportDraft
+  review: WorkspaceImportReview
+  warnings: WorkspaceImportDraftReportWarning[]
+}
+
+function remapSingleDocumentSignals(
+  signals: readonly WorkspaceSignal[],
+  inputFile: string,
+  tempFileName: string,
+): WorkspaceSignal[] {
+  return signals.map(signal => ({
+    ...signal,
+    evidence: signal.evidence.replaceAll(tempFileName, inputFile),
+    references: signal.references?.length ? [inputFile] : undefined,
+  }))
+}
+
+function workspaceImportDraftWarnings(
+  draft: WorkspaceImportDraft,
+): WorkspaceImportDraftReportWarning[] {
+  const warnings: WorkspaceImportDraftReportWarning[] = [{
+    code: 'read_only_report',
+    message: 'This command only reports the decomposition draft. It does not approve import, create tasks, or mutate project state.',
+  }]
+  if (draft.tasks.length === 0) {
+    warnings.push({
+      code: 'no_task_candidates',
+      message: 'No task candidates were derived from the selected source.',
+    })
+  }
+  if (!draft.tasks.some(task => task.scope !== 'later')) {
+    warnings.push({
+      code: 'no_current_scope',
+      message: 'No current-scope task candidates were derived.',
+    })
+  }
+  if (!draft.tasks.some(task => task.scope === 'later')) {
+    warnings.push({
+      code: 'no_deferred_scope',
+      message: 'No deferred/later-scope task candidates were derived.',
+    })
+  }
+  const genericTaskIds = draft.tasks
+    .filter(task => /^(research|implement|verify)(?:\b|$)/i.test(task.title.trim()))
+    .map(task => task.suggestedId)
+  if (genericTaskIds.length > 0) {
+    warnings.push({
+      code: 'generic_task_title',
+      message: 'Some task candidates use generic fallback-style titles instead of source-specific work names.',
+      taskIds: genericTaskIds,
+    })
+  }
+  return warnings
+}
+
+export async function buildWorkspaceImportDraftReport(input: {
+  projectPath: string
+  fromFile?: string
+}): Promise<WorkspaceImportDraftReport> {
+  const projectPath = resolve(expandPath(input.projectPath))
+  const sourceDocument = input.fromFile ? resolve(expandPath(input.fromFile)) : null
+  let tempProject: string | null = null
+
+  try {
+    let inventory
+    if (sourceDocument) {
+      tempProject = mkdtempSync(join(tmpdir(), 'guildhall-workspace-import-draft-'))
+      const tempFileName = basename(sourceDocument) || 'workspace-import-input.md'
+      writeFileSync(
+        join(tempProject, tempFileName),
+        readFileSync(sourceDocument, 'utf8'),
+      )
+      const detected = await detectWorkspaceSignals({
+        projectPath: tempProject,
+        only: ['planning-docs'],
+      })
+      const signals = remapSingleDocumentSignals(detected.signals, sourceDocument, tempFileName)
+      inventory = {
+        ...detected,
+        signals,
+        bySource: Object.fromEntries(
+          Object.entries(detected.bySource).map(([source, sourceSignals]) => [
+            source,
+            remapSingleDocumentSignals(sourceSignals, sourceDocument, tempFileName),
+          ]),
+        ),
+      }
+    } else {
+      inventory = await detectWorkspaceSignals({ projectPath })
+    }
+
+    const draft = formWorkspaceHypothesis(inventory)
+    const review = buildWorkspaceImportReview(draft, [], projectPath)
+    return {
+      projectPath,
+      sourceDocument,
+      inventory: {
+        inputSignals: inventory.signals.length,
+        ran: inventory.ran,
+        failed: inventory.failed,
+        bySource: Object.fromEntries(
+          Object.entries(inventory.bySource).map(([source, sourceSignals]) => [
+            source,
+            sourceSignals.length,
+          ]),
+        ),
+        signals: inventory.signals,
+      },
+      draft,
+      review,
+      warnings: workspaceImportDraftWarnings(draft),
+    }
+  } finally {
+    if (tempProject) rmSync(tempProject, { recursive: true, force: true })
+  }
+}
+
+function printWorkspaceImportDraftReport(report: WorkspaceImportDraftReport): void {
+  console.log(`[guildhall] Workspace import draft for ${report.projectPath}`)
+  if (report.sourceDocument) {
+    console.log(`[guildhall] Source document: ${report.sourceDocument}`)
+  }
+  console.log(`[guildhall] Signals: ${report.inventory.inputSignals}`)
+  console.log(`[guildhall] Goals: ${report.draft.goals.length}`)
+  console.log(`[guildhall] Tasks: ${report.draft.tasks.length} (${report.review.totalCurrentTaskCandidates} now, ${report.review.totalLaterTaskCandidates} later)`)
+  console.log(`[guildhall] Milestones: ${report.draft.milestones.length}`)
+  console.log(`[guildhall] Context notes: ${report.draft.context.length}`)
+  for (const task of report.draft.tasks) {
+    const scope = task.scope === 'later' ? 'later' : 'now'
+    console.log(`[guildhall]   - [${scope}] ${task.title}`)
+  }
+  if (report.warnings.length > 0) {
+    console.log('[guildhall] Warnings:')
+    for (const warning of report.warnings) {
+      console.log(`[guildhall]   - ${warning.code}: ${warning.message}`)
+    }
+  }
+}
+
+async function cmdWorkspaceImport() {
+  const [subcommand = 'help', idOrPath] = positionals()
+  if (subcommand !== 'draft') {
+    console.error('[guildhall] Usage: guildhall workspace-import draft [id|path] [--from-file <doc.md>] [--json]')
+    process.exit(1)
+  }
+  const explicitProject = getFlag('--project')
+  const workspace = idOrPath ? findWorkspace(idOrPath) : null
+  const projectPath = explicitProject
+    ? resolve(expandPath(explicitProject))
+    : workspace?.path ?? (idOrPath ? resolve(expandPath(idOrPath)) : process.cwd())
+  const fromFile = getFlag('--from-file')
+  const report = await buildWorkspaceImportDraftReport({
+    projectPath,
+    ...(fromFile ? { fromFile } : {}),
+  })
+  if (args.includes('--json')) {
+    console.log(JSON.stringify(report, null, 2))
+    return
+  }
+  printWorkspaceImportDraftReport(report)
 }
 
 export async function validateReviewCalibrationCorpus(input: {
@@ -2113,6 +2305,7 @@ async function main() {
     case 'corpus-map': return cmdCorpusMap()
     case 'memory': return cmdMemory()
     case 'migrate': return cmdMigrate()
+    case 'workspace-import': return cmdWorkspaceImport()
     case 'review-calibration': return cmdReviewCalibration()
     case 'model-bakeoff': return cmdModelBakeoff()
     case 'benchmarks': return cmdBenchmarks()

@@ -274,6 +274,36 @@ describe('planningDocsSource', () => {
     expect(sigs.find((s) => s.title === 'Add editor tests')?.domainHint).toBe('knit')
   })
 
+  it('treats implementation tracker checklists as planning work signals', async () => {
+    writeFileSync(
+      join(dir, '2026-05-27-guildhall-0-9-implementation-tracker.md'),
+      `# Implementation Tracker
+
+## Milestone 1: Runtime Image Contract
+
+- [x] Add a committed Containerfile.
+- [ ] Add runtime smoke command.
+`,
+    )
+
+    const sigs = await planningDocsSource.detect({
+      projectPath: dir,
+      exec: fakeExec(() => ({
+        stdout: ['2026-05-27-guildhall-0-9-implementation-tracker.md'].join('\n'),
+        code: 0,
+      })),
+    })
+
+    expect(sigs).toContainEqual(expect.objectContaining({
+      kind: 'milestone',
+      title: 'Add a committed Containerfile.',
+    }))
+    expect(sigs).toContainEqual(expect.objectContaining({
+      kind: 'open_work',
+      title: 'Add runtime smoke command.',
+    }))
+  })
+
   it('treats nested specs as context signals', async () => {
     mkdirSync(join(dir, 'knit', 'specs'), { recursive: true })
     writeFileSync(

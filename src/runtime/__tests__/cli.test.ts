@@ -18,6 +18,7 @@ import {
   probeLiveService,
   readServiceRuntimeState,
   renderHelpText,
+  buildWorkspaceImportDraftReport,
   runAgentMemoryBridgeCommand,
   resolveServiceLifecycleIntent,
   serviceStatePath,
@@ -280,6 +281,7 @@ describe('Guildhall CLI surface', () => {
       'corpus-map',
       'memory',
       'migrate',
+      'workspace-import',
       'review-calibration',
       'model-bakeoff',
       'benchmarks',
@@ -308,6 +310,7 @@ describe('Guildhall CLI surface', () => {
     expect(help).toContain('guildhall migrate status')
     expect(help).toContain('guildhall migrate plan')
     expect(help).toContain('guildhall migrate apply')
+    expect(help).toContain('guildhall workspace-import draft')
     expect(help).toContain('guildhall review-calibration escaped-miss')
     expect(help).toContain('guildhall review-calibration draft-case')
     expect(help).toContain('guildhall review-calibration validate-planning')
@@ -320,6 +323,47 @@ describe('Guildhall CLI surface', () => {
     expect(help).toContain('guildhall agent memory import')
     expect(help).toContain('guildhall agent memory review')
     expect(help).toContain('guildhall agent memory reject')
+  })
+
+  it('builds a read-only workspace-import draft report from one planning document', async () => {
+    const project = tmpHome()
+    const doc = join(project, 'old-plan.md')
+    writeFileSync(doc, [
+      '# Historical planning doc',
+      '',
+      '## Goal',
+      '',
+      '- Give owners a CLI-visible way to inspect decomposition before approving imports.',
+      '',
+      '## Current focus',
+      '',
+      '- Build a read-only draft command.',
+      '- Add a regression fixture for historical Guildhall planning docs.',
+      '',
+      '## Later',
+      '',
+      '- Add dashboard comparison views after the CLI report is trustworthy.',
+      '',
+      '## Done',
+      '',
+      '- Existing CLI help lists shipped commands.',
+      '',
+    ].join('\n'))
+
+    const before = existsSync(join(project, '.guildhall'))
+    const report = await buildWorkspaceImportDraftReport({
+      projectPath: project,
+      fromFile: doc,
+    })
+
+    expect(before).toBe(false)
+    expect(existsSync(join(project, '.guildhall'))).toBe(false)
+    expect(report.sourceDocument).toBe(doc)
+    expect(report.review.totalCurrentTaskCandidates).toBeGreaterThan(0)
+    expect(report.review.totalLaterTaskCandidates).toBeGreaterThan(0)
+    expect(report.draft.tasks.map(task => task.scope)).toContain('current')
+    expect(report.draft.tasks.map(task => task.scope)).toContain('later')
+    expect(report.warnings.some(warning => warning.code === 'read_only_report')).toBe(true)
   })
 
   it('exposes external-agent memory bridge import, review, and reject through explicit JSON CLI flows', async () => {

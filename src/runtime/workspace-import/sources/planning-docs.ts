@@ -342,7 +342,7 @@ function specCoverageSignalsForFile(input: {
 function fileLooksLikeTaskList(fileBase: string, rel: string): boolean {
   if (/^PROJECT_STATE\.md$/i.test(fileBase)) return true
   if (/\/specs\/[^/]+\.md$/i.test(rel)) return false
-  return /(roadmap|plan|milestone|inventory|bugs|todo)/i.test(fileBase)
+  return /(roadmap|plan|tracker|milestone|inventory|bugs|todo)/i.test(fileBase)
 }
 
 function isProjectStateCurrentFocus(fileBase: string, sectionHeading: string | null): boolean {
@@ -396,6 +396,14 @@ function scopeHintForStage(
     return stageNumber === currentStageNumber ? 'current' : 'later'
   }
   return 'current'
+}
+
+function scopeHintForOpenWorkSection(
+  sectionHeading: string | null | undefined,
+): WorkspaceSignal['scopeHint'] | undefined {
+  if (!sectionHeading) return undefined
+  if (/^(later|v2 priorities)$/i.test(sectionHeading.trim())) return 'later'
+  return undefined
 }
 
 function isFutureStage(
@@ -712,6 +720,7 @@ export const planningDocsSource: TaskSource = {
             title: cleanHeading(unchecked[1]!),
             evidence: `${rel}: ${line.trim()}`.slice(0, 240),
             references: [abs],
+            ...(scopeHintForOpenWorkSection(currentSection) ? { scopeHint: scopeHintForOpenWorkSection(currentSection) } : {}),
             ...(domainHint ? { domainHint } : {}),
             confidence: 'high',
           })
@@ -745,6 +754,7 @@ export const planningDocsSource: TaskSource = {
               title: title.replace(/:$/, ''),
               evidence: `${rel}: ${line.trim()}`.slice(0, 240),
               references: [abs],
+              ...(scopeHintForOpenWorkSection(currentSection) ? { scopeHint: scopeHintForOpenWorkSection(currentSection) } : {}),
               ...(domainHint ? { domainHint } : {}),
               confidence: 'medium',
             })
@@ -777,7 +787,11 @@ export const planningDocsSource: TaskSource = {
               evidence: `${rel}: ${line.trim()}`.slice(0, 240),
               references: [abs],
               ...(stageScopedSignal?.role ? { role: stageScopedSignal.role } : {}),
-              ...(stageScopedSignal?.scopeHint ? { scopeHint: stageScopedSignal.scopeHint } : {}),
+              ...(stageScopedSignal?.scopeHint
+                ? { scopeHint: stageScopedSignal.scopeHint }
+                : scopeHintForOpenWorkSection(currentSection)
+                  ? { scopeHint: scopeHintForOpenWorkSection(currentSection) }
+                  : {}),
               ...(domainHint ? { domainHint } : {}),
               confidence: 'medium',
             })
@@ -810,6 +824,7 @@ export const planningDocsSource: TaskSource = {
             title: cleanHeading(numbered[1]!),
             evidence: `${rel}: ${line.trim()}`.slice(0, 240),
             references: [abs],
+            ...(scopeHintForOpenWorkSection(currentSection) ? { scopeHint: scopeHintForOpenWorkSection(currentSection) } : {}),
             ...(domainHint ? { domainHint } : {}),
             confidence: 'medium',
           })
