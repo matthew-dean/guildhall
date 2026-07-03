@@ -581,6 +581,82 @@ describe('pickNextTask', () => {
     expect(pickNextTask(q)?.id).toBe('t-review')
   })
 
+  it('bounds continuous ticks to approved current workspace-goals scope', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'current-parent',
+        title: 'Current scoped parent',
+        status: 'spec_review',
+        priority: 'normal',
+        hierarchy: { childIds: ['current-child'], order: 0 },
+      }),
+      mkTask({
+        id: 'current-child',
+        title: 'Runnable current child',
+        status: 'ready',
+        priority: 'normal',
+        hierarchy: { parentId: 'current-parent', childIds: [], order: 0 },
+      }),
+      mkTask({
+        id: 'later-critical',
+        title: 'Critical later work',
+        status: 'ready',
+        priority: 'critical',
+      }),
+    ])
+    await fs.writeFile(
+      getProjectSystemStatePath(tmpDir, 'workspace-goals.json'),
+      JSON.stringify({
+        version: 3,
+        recordedAt: '2026-07-03T20:10:00.000Z',
+        goals: [],
+        tasks: [],
+        milestones: [],
+        context: [],
+        approved: {
+          goalCount: 0,
+          taskCount: 2,
+          milestoneCount: 0,
+          currentTaskCount: 1,
+          laterTaskCount: 1,
+          taskIds: ['current-parent', 'later-critical'],
+          currentTaskIds: ['current-parent'],
+          laterTaskIds: ['later-critical'],
+        },
+        detected: null,
+      }),
+      'utf-8',
+    )
+
+    const worker = stubAgent('worker-agent', async () => {
+      await mutateTask('current-child', { status: 'review' })
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+      gitDriver: new InMemoryGitDriver(),
+    })
+
+    const first = await orch.tick()
+    expect(first).toMatchObject({
+      kind: 'processed',
+      taskId: 'current-child',
+      agent: 'task-claimer',
+      beforeStatus: 'ready',
+      afterStatus: 'in_progress',
+    })
+    expect(worker.calls).toHaveLength(0)
+
+    await orch.tick()
+
+    expect(worker.calls).toHaveLength(1)
+    expect(worker.calls[0]?.prompt).toContain('## Current Task: current-child')
+    expect(worker.calls[0]?.prompt).not.toContain('## Current Task: later-critical')
+    const queue = await readQueue()
+    expect(queue.tasks.find(task => task.id === 'current-child')?.status).toBe('review')
+    expect(queue.tasks.find(task => task.id === 'later-critical')?.status).toBe('ready')
+  })
+
   it('runs gate checks before sending reviewed work back through other stages', async () => {
     const q: TaskQueue = {
       version: 1,

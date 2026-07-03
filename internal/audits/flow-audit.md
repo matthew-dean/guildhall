@@ -12108,6 +12108,54 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-07-03T20:16:00Z - Added continuous-run scoped execution proof for
+approved workspace-goals scope.
+
+- Work id: `codex:scoped-start-execution-proof-2026-07-03`.
+- User job: when a project has recovered current/later scope, pressing
+  Start/Resume should consume only the current release/scope unless the owner
+  explicitly targets out-of-scope work.
+- Root-cause investigation:
+  - Narrative Harness currently has no formal `releases` entries in
+    `TASKS.json`; its active boundary is the persisted
+    `workspace-goals.json` approved scope.
+  - The live state has `6` approved current parent tasks, `12` later/deferred
+    tasks, and generated child tasks under the current parents. That means
+    continuous Start must pass the approved workspace-goals membership into
+    the orchestrator picker so child work under a current parent can run, while
+    later work remains ineligible even when it has higher priority.
+- Regression proof:
+  - Added a tick-level orchestrator test with a current parent, runnable child,
+    and higher-priority later task.
+  - The first tick claimed `current-child` for work (`task-claimer`) instead
+    of the higher-priority `later-critical` task.
+  - The second tick dispatched the worker prompt for `current-child`; the
+    later task remained `ready`.
+- Why this matters for the visible product:
+  - The UI now shows `6 now` / `12 later` and the status chrome says
+    `Current task scope`.
+  - This regression proves the runtime selection path behind the `Resume`
+    button obeys the same approved current-scope boundary instead of silently
+    consuming deferred work.
+- Contract Touch Decision:
+  - Touched contracts: orchestrator runtime behavior test coverage for scoped
+    execution.
+  - Contracts considered but not touched: task schema, release schema,
+    workspace-goals schema, picker production logic, and Start API contract.
+    Existing production code already passed the new proof; this slice makes the
+    runtime promise durable.
+  - Required follow-up: add browser/API proof for an actual Start attempt only
+    when intentionally advancing Narrative Harness work, since clicking Resume
+    mutates live project state.
+  - Proof provided: focused tick-level regression.
+  - Apply/revert behavior: reverting removes the guardrail test only; no
+    runtime or persisted state migration is involved.
+- Verification:
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/orchestrator.test.ts --testNamePattern "bounds continuous ticks"`
+    passed.
+
+source: codex:scoped-start-execution-proof-2026-07-03
+
 2026-07-03T20:05:00Z - Made completed workspace imports and status chrome
 prove the same recovered scope.
 
