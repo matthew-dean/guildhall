@@ -65,6 +65,8 @@ export interface WorkspaceSignal {
    * later inference.
    */
   releaseId?: string
+  /** Owner-visible label for `releaseId`, when the source names one. */
+  releaseLabel?: string
   /** How confident the source is that this signal means what it claims. */
   confidence: 'high' | 'medium' | 'low'
 }

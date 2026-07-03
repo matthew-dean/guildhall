@@ -726,6 +726,37 @@ Done gate:
     ]))
   })
 
+  it('preserves explicit arbitrary release labels from planning headings', async () => {
+    mkdirSync(join(dir, 'docs'), { recursive: true })
+    writeFileSync(
+      join(dir, 'docs', 'release-plan.md'),
+      `# Release Plan
+
+## Release: 2.0 alpha
+
+### Current Focus
+
+- Prove package migration dry run
+`,
+    )
+
+    const sigs = await planningDocsSource.detect({
+      projectPath: dir,
+      exec: fakeExec(() => ({
+        stdout: ['docs/release-plan.md'].join('\n'),
+        code: 0,
+      })),
+    })
+
+    expect(sigs).toContainEqual(expect.objectContaining({
+      kind: 'open_work',
+      title: 'Prove package migration dry run',
+      scopeHint: 'current',
+      releaseId: '2-0-alpha',
+      releaseLabel: '2.0 alpha',
+    }))
+  })
+
   it('marks deferred checklist items as later even when they appear in status history', async () => {
     writeFileSync(
       join(dir, 'PROJECT_STATE.md'),

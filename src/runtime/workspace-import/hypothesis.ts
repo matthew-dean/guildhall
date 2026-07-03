@@ -60,6 +60,14 @@ export interface DraftTask {
   confidence: DraftConfidence
 }
 
+export interface DraftRelease {
+  id: string
+  label: string
+  source: string
+  references?: readonly string[]
+  confidence: DraftConfidence
+}
+
 export interface DraftMilestone {
   title: string
   evidence: string
@@ -81,6 +89,7 @@ export interface DraftContext {
 
 export interface WorkspaceImportDraft {
   goals: readonly DraftGoal[]
+  releases?: readonly DraftRelease[]
   tasks: readonly DraftTask[]
   milestones: readonly DraftMilestone[]
   context: readonly DraftContext[]
@@ -297,6 +306,19 @@ function releaseIdsFromSignal(sig: WorkspaceSignal): string[] | undefined {
   return [releaseId]
 }
 
+function releaseFromSignal(sig: WorkspaceSignal): DraftRelease | null {
+  const releaseId = sig.releaseId?.trim()
+  const label = sig.releaseLabel?.trim()
+  if (!releaseId || !label || scopeFromSignal(sig) === 'later') return null
+  return {
+    id: releaseId,
+    label,
+    source: sig.source,
+    ...(sig.references ? { references: sig.references } : {}),
+    confidence: sig.confidence,
+  }
+}
+
 export function isFormattingDebris(sig: Pick<WorkspaceSignal, 'title'>): boolean {
   if (sig.title.trim().endsWith(':')) return true
   const title = normalize(sig.title)
@@ -357,6 +379,7 @@ export function formWorkspaceHypothesis(
   inventory: WorkspaceInventory,
 ): WorkspaceImportDraft {
   const goalIndex = new Map<string, DraftGoal>()
+  const releaseIndex = new Map<string, DraftRelease>()
   const taskIndex = new Map<string, DraftTask>()
   const milestoneIndex = new Map<string, DraftMilestone>()
   const contextIndex = new Map<string, DraftContext>()
@@ -373,6 +396,7 @@ export function formWorkspaceHypothesis(
   for (const sig of inventory.signals) {
     if (sig.kind === 'goal') addGoal(goalIndex, sig, bump)
     else if (sig.kind === 'open_work') {
+      addRelease(releaseIndex, sig, bump)
       if (isContextualOpenWork(sig)) addContext(contextIndex, sig)
       else addTask(taskIndex, sig, bump)
     }
@@ -382,16 +406,18 @@ export function formWorkspaceHypothesis(
 
   // Count merges: signals − unique entries across all buckets.
   const uniques =
-    goalIndex.size + taskIndex.size + milestoneIndex.size + contextIndex.size
+    goalIndex.size + releaseIndex.size + taskIndex.size + milestoneIndex.size + contextIndex.size
   deduped = Math.max(0, inventory.signals.length - uniques)
 
   const goals = [...goalIndex.values()]
+  const releases = [...releaseIndex.values()]
   const context = [...contextIndex.values()]
   const tasks = enrichTasksWithRelatedContext([...taskIndex.values()], context)
   const milestones = [...milestoneIndex.values()]
 
   return {
     goals,
+    ...(releases.length > 0 ? { releases } : {}),
     tasks,
     milestones,
     context,
@@ -400,6 +426,35 @@ export function formWorkspaceHypothesis(
       drafted: uniques,
       deduped,
     },
+  }
+}
+
+function addRelease(
+  index: Map<string, DraftRelease>,
+  sig: WorkspaceSignal,
+  bump: (cur: { confidence: DraftConfidence } | undefined, next: DraftConfidence) => boolean,
+): void {
+  const release = releaseFromSignal(sig)
+  if (!release) return
+  const existing = index.get(release.id)
+  if (!existing) {
+    index.set(release.id, release)
+    return
+  }
+  const refs = mergeReferences(existing.references, release.references)
+  const shouldBump = bump(existing, release.confidence)
+  if (shouldBump) {
+    index.set(release.id, {
+      ...release,
+      ...(refs ? { references: refs } : {}),
+    })
+    return
+  }
+  if (refs) {
+    index.set(release.id, {
+      ...existing,
+      references: refs,
+    })
   }
 }
 

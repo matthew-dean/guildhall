@@ -1136,6 +1136,49 @@ tasks:
     ]))
   })
 
+  it('preserves exact imported release labels instead of deriving labels from ids', async () => {
+    await seedImporterWithSpec(`
+\`\`\`yaml
+releases:
+  - id: 2-0-alpha
+    label: 2.0 alpha
+    source: release_plan
+tasks:
+  - id: task-alpha-dry-run
+    title: Prove package migration dry run
+    description: First task in the documented alpha release.
+    domain: packaging
+    priority: high
+    releaseIds:
+      - 2-0-alpha
+    references:
+      - docs/release-plan.md
+\`\`\`
+`)
+
+    const res = await approveWorkspaceImport({
+      memoryDir,
+      projectPath: tmpDir,
+    })
+    expect(res).toMatchObject({ success: true, tasksAdded: 1 })
+
+    const q = await readQueue()
+    expect(q.selectedReleaseId).toBe('2-0-alpha')
+    expect(q.releases).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: '2-0-alpha',
+        label: '2.0 alpha',
+        source: 'release_plan',
+      }),
+    ]))
+    expect(q.releases).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: '2-0-alpha',
+        label: '2 0 Alpha',
+      }),
+    ]))
+  })
+
   it('normalizes imported evidence paths after narrowing a task to a subproject', async () => {
     const knitPath = path.join(tmpDir, 'knit')
     await fs.mkdir(knitPath, { recursive: true })

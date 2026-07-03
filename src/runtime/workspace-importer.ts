@@ -515,8 +515,15 @@ export async function workspaceNeedsImport(opts: {
 
 export interface ParsedImport {
   goals: readonly ParsedGoal[]
+  releases?: readonly ParsedRelease[]
   tasks: readonly ParsedTask[]
   milestones: readonly ParsedMilestone[]
+}
+
+export interface ParsedRelease {
+  id: string
+  label: string
+  source?: ProjectRelease['source']
 }
 
 export interface ParsedGoal {
@@ -891,6 +898,22 @@ export function mergeWorkspaceImportDraft(
     })
   }
 
+  const mergedReleasesById = new Map<string, NonNullable<WorkspaceImportDraft['releases']>[number]>()
+  for (const release of detected.releases ?? []) {
+    mergedReleasesById.set(release.id, release)
+  }
+  for (const release of parsed.releases ?? []) {
+    const existing = mergedReleasesById.get(release.id)
+    mergedReleasesById.set(release.id, {
+      id: release.id,
+      label: release.label || existing?.label || releaseLabelFromId(release.id),
+      source: existing?.source ?? 'workspace-importer',
+      ...(existing?.references ? { references: [...existing.references] } : {}),
+      confidence: existing?.confidence ?? 'medium',
+    })
+  }
+  const mergedReleases = [...mergedReleasesById.values()]
+
   const mergedTasks: DraftTask[] = []
   const parsedTasksByTitle = new Map(
     parsedTasks.map(task => [normalizeImportText(task.title), task] as const),
@@ -1019,6 +1042,7 @@ export function mergeWorkspaceImportDraft(
 
   return {
     goals: mergedGoals,
+    ...(mergedReleases.length > 0 ? { releases: mergedReleases } : {}),
     tasks: mergedTasks,
     milestones: mergedMilestones,
     context: [...detected.context],
@@ -1118,6 +1142,7 @@ function normalizeImportedDescriptionForTask(
  */
 export function parseWorkspaceImport(spec: string): ParsedImport {
   const goals: ParsedGoal[] = []
+  const releases: ParsedRelease[] = []
   const tasks: ParsedTask[] = []
   const milestones: ParsedMilestone[] = []
 
@@ -1181,6 +1206,23 @@ export function parseWorkspaceImport(spec: string): ParsedImport {
         goals.push({ id, title, rationale })
       }
     }
+    if (Array.isArray(obj['releases'])) {
+      for (const raw of obj['releases']) {
+        if (!raw || typeof raw !== 'object') continue
+        const release = raw as Record<string, unknown>
+        const id = typeof release['id'] === 'string' ? release['id'].trim() : ''
+        const label = typeof release['label'] === 'string' ? release['label'].trim() : ''
+        if (!id || !label) continue
+        const source = typeof release['source'] === 'string'
+          ? release['source'].trim()
+          : undefined
+        releases.push({
+          id,
+          label,
+          ...(source ? { source: source as ProjectRelease['source'] } : {}),
+        })
+      }
+    }
     if (Array.isArray(obj['tasks'])) {
       for (const raw of obj['tasks']) {
         if (!raw || typeof raw !== 'object') continue
@@ -1240,7 +1282,7 @@ export function parseWorkspaceImport(spec: string): ParsedImport {
     }
   }
 
-  return { goals, tasks, milestones }
+  return { goals, ...(releases.length > 0 ? { releases } : {}), tasks, milestones }
 }
 
 export function summarizeWorkspaceImportSpec(spec: string): WorkspaceImportScopeSnapshot {
@@ -1310,6 +1352,17 @@ export function formatDetectedDraftAsSpec(draft: WorkspaceImportDraft): string {
       lines.push(`  - id: ${escape(g.id)}`)
       lines.push(`    title: ${escape(g.title)}`)
       if (g.rationale) lines.push(`    rationale: ${escape(g.rationale)}`)
+    }
+    lines.push('```')
+    lines.push('')
+  }
+  if (draft.releases && draft.releases.length > 0) {
+    lines.push('```yaml')
+    lines.push('releases:')
+    for (const release of draft.releases) {
+      lines.push(`  - id: ${escape(release.id)}`)
+      lines.push(`    label: ${escape(release.label)}`)
+      lines.push('    source: release_plan')
     }
     lines.push('```')
     lines.push('')
@@ -1387,6 +1440,15 @@ function parsedImportFromDraft(draft: WorkspaceImportDraft): ParsedImport {
       title: goal.title,
       rationale: goal.rationale,
     })),
+    ...(draft.releases?.length
+      ? {
+          releases: draft.releases.map(release => ({
+            id: release.id,
+            label: release.label,
+            source: 'release_plan' as const,
+          })),
+        }
+      : {}),
     tasks: draft.tasks.map(task => ({
       id: task.suggestedId,
       title: task.title,
@@ -1430,6 +1492,9 @@ function normalizeParsedImportForSpec(
 ): ParsedImport {
   return {
     goals: parsed.goals.map(goal => ({ ...goal })),
+    ...(parsed.releases?.length
+      ? { releases: parsed.releases.map(release => ({ ...release })) }
+      : {}),
     tasks: parsed.tasks.map(task => ({
       ...task,
       ...(task.missingInformation?.length
@@ -1553,6 +1618,7 @@ export async function materializeParsedWorkspaceImport(input: {
   })
   return {
     goals: [...input.parsed.goals],
+    ...(input.parsed.releases?.length ? { releases: [...input.parsed.releases] } : {}),
     tasks: enrichedTasks,
     milestones: [...input.parsed.milestones],
   }
@@ -2170,7 +2236,16 @@ function releaseLabelFromId(id: string): string {
     .join(' ') || id
 }
 
-function ensureImportedReleaseContainers(queue: TaskQueue, now: string): void {
+function ensureImportedReleaseContainers(
+  queue: TaskQueue,
+  now: string,
+  importedReleases: readonly ParsedRelease[] = [],
+): void {
+  const importedReleaseLabels = new Map(
+    importedReleases
+      .map(release => [release.id.trim(), release.label.trim()] as const)
+      .filter(([id, label]) => id.length > 0 && label.length > 0),
+  )
   const releaseIds = [...new Set(
     queue.tasks
       .filter(task => task.status !== 'shelved' && task.status !== 'archived' && task.status !== 'cancelled')
@@ -2186,10 +2261,10 @@ function ensureImportedReleaseContainers(queue: TaskQueue, now: string): void {
     if (!release) {
       release = {
         id: releaseId,
-        label: releaseLabelFromId(releaseId),
+        label: importedReleaseLabels.get(releaseId) ?? releaseLabelFromId(releaseId),
         kind: 'release',
         state: 'active',
-        source: 'release_plan',
+        source: importedReleases.find(candidate => candidate.id === releaseId)?.source ?? 'release_plan',
         nodeIds: [],
         deferredNodeIds: [],
         proofStyle: 'unspecified',
@@ -2197,6 +2272,8 @@ function ensureImportedReleaseContainers(queue: TaskQueue, now: string): void {
         updatedAt: now,
       }
       releases.push(release)
+    } else if (importedReleaseLabels.has(releaseId)) {
+      release.label = importedReleaseLabels.get(releaseId)!
     }
     const nodeIds = new Set(release.nodeIds ?? [])
     for (const task of queue.tasks) {
@@ -4699,7 +4776,7 @@ export async function approveWorkspaceImport(
   task.status = 'done'
   task.updatedAt = now
   task.completedAt = now
-  ensureImportedReleaseContainers(queue, now)
+  ensureImportedReleaseContainers(queue, now, materializedParsed.releases ?? [])
   queue.lastUpdated = now
   await writeQueue(input.memoryDir, queue)
 

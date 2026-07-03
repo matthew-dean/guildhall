@@ -12151,6 +12151,46 @@ Project Map communication proof.
 
 source: codex:release-scope-visible-import-truth-2026-07-03
 
+2026-07-03T23:36:00Z - Preserved exact owner-visible release labels from
+planning history through imported release containers.
+
+- Work id: `codex:release-label-fidelity-2026-07-03`.
+- User job: a project owner should see the release/scope name the project
+  actually documented, such as `2.0 alpha`, not a slug-derived approximation
+  like `2 0 Alpha`. This protects arbitrary project release markers and avoids
+  fake or overfit MVP labels.
+- Fix:
+  - `planning-docs` now emits both a stable `releaseId` and the exact
+    owner-visible `releaseLabel` for explicit release headings.
+  - Workspace import hypotheses now include first-class draft release
+    containers, while tasks continue to reference releases by id.
+  - Workspace-import YAML now round-trips top-level `releases:` records.
+  - Approval preserves parsed release labels when creating or refreshing queue
+    release containers; slug humanizing remains only a fallback for unlabeled
+    legacy ids.
+- Contract Touch Decision:
+  - Work id: `codex:release-label-fidelity-2026-07-03`.
+  - Touched contracts: `WorkspaceSignal.releaseLabel`,
+    `WorkspaceImportDraft.releases`, `ParsedImport.releases`, and the
+    workspace-import YAML `releases:` fence.
+  - Contracts considered but not touched: task queue task `releaseIds` and
+    Project Map orientation selected-release schema. Tasks already reference
+    releases by id, and Project Map already displays the selected release
+    label; the failure was label loss before the UI layer.
+  - Existing data impact: backward compatible. Existing imports without
+    `releases:` still use the previous fallback label.
+  - Migration id: none required.
+  - Proof required/provided: failing-then-passing tests for arbitrary release
+    labels from planning headings, draft release containers, and approved queue
+    release labels.
+  - Owner-review items: none for the contract shape; future work should expose
+    release containers in intake previews/editing if owner correction is needed.
+- Verification:
+  `/opt/homebrew/bin/pnpm vitest run src/runtime/workspace-import/__tests__/detect.test.ts src/runtime/workspace-import/__tests__/hypothesis.test.ts src/runtime/__tests__/workspace-importer.test.ts`
+  passed `154` tests.
+
+source: codex:release-label-fidelity-2026-07-03
+
 2026-07-03T23:03:00Z - Preserved explicit release scope through workspace
 import approval so regenerated work can drive selected-scope execution.
 

@@ -134,6 +134,32 @@ describe('formWorkspaceHypothesis', () => {
     expect(draft.tasks.find(task => task.title === 'Add browser drafting workspace')?.releaseIds).toBeUndefined()
   })
 
+  it('records explicit release containers with owner-visible labels', () => {
+    const draft = formWorkspaceHypothesis(
+      invFrom([
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'Prove package migration dry run',
+          evidence: 'docs/release-plan.md: - Prove package migration dry run',
+          scopeHint: 'current',
+          releaseId: '2-0-alpha',
+          releaseLabel: '2.0 alpha',
+          confidence: 'high',
+        },
+      ]),
+    )
+
+    expect(draft.releases).toEqual([
+      expect.objectContaining({
+        id: '2-0-alpha',
+        label: '2.0 alpha',
+        source: 'planning-docs',
+      }),
+    ])
+    expect(draft.tasks[0]?.releaseIds).toEqual(['2-0-alpha'])
+  })
+
   it('lets explicit later scope win when duplicate planning signals disagree', () => {
     const draft = formWorkspaceHypothesis(
       invFrom([

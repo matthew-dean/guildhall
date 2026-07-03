@@ -536,6 +536,7 @@ export const planningDocsSource: TaskSource = {
       let currentRecommendedStageAlignment: string | null = null
       let currentRecommendedDomain: string | null = null
       let currentReleaseId: string | null = null
+      let currentReleaseLabel: string | null = null
       let currentReleaseDepth: number | null = null
       const bulletStack: Array<{ indent: number; title: string; grouping: boolean }> = []
       let pendingTableHeaders: string[] | null = null
@@ -561,6 +562,7 @@ export const planningDocsSource: TaskSource = {
           )
           const domain = currentRecommendedDomain ?? domainHint
           const releaseId = currentReleaseIdForScope(currentReleaseId, scopeHint)
+          const releaseLabel = releaseId ? currentReleaseLabel : null
           if (isDecompositionInventoryFile(rel) && scopeHint === 'later' && relatedSpec) {
             signals.push({
               source: 'planning-docs',
@@ -584,6 +586,7 @@ export const planningDocsSource: TaskSource = {
               ...(domain ? { domainHint: domain } : {}),
               scopeHint,
               ...(releaseId ? { releaseId } : {}),
+              ...(releaseLabel ? { releaseLabel } : {}),
               confidence: 'high',
             })
           }
@@ -628,6 +631,7 @@ export const planningDocsSource: TaskSource = {
           const headingDepth = heading[1]!.length
           if (currentReleaseDepth != null && headingDepth <= currentReleaseDepth) {
             currentReleaseId = null
+            currentReleaseLabel = null
             currentReleaseDepth = null
           }
           currentSection = cleanHeading(heading[2]!)
@@ -635,6 +639,7 @@ export const planningDocsSource: TaskSource = {
           const releaseLabel = explicitReleaseLabelForHeading(currentSection)
           if (releaseLabel) {
             currentReleaseId = releaseIdFromLabel(releaseLabel)
+            currentReleaseLabel = releaseLabel
             currentReleaseDepth = headingDepth
           }
           currentLabel = null
@@ -802,6 +807,7 @@ export const planningDocsSource: TaskSource = {
             scopeHintForOpenWork(currentSection, unchecked[1]),
           )
           const releaseId = currentReleaseIdForScope(currentReleaseId, scopeHint)
+          const releaseLabel = releaseId ? currentReleaseLabel : null
           signals.push({
             source: 'planning-docs',
             kind: 'open_work',
@@ -810,6 +816,7 @@ export const planningDocsSource: TaskSource = {
             references: [abs],
             ...(scopeHint ? { scopeHint } : {}),
             ...(releaseId ? { releaseId } : {}),
+            ...(releaseLabel ? { releaseLabel } : {}),
             ...(domainHint ? { domainHint } : {}),
             confidence: 'high',
           })
@@ -843,6 +850,7 @@ export const planningDocsSource: TaskSource = {
               scopeHintForOpenWork(currentSection, title),
             )
             const releaseId = currentReleaseIdForScope(currentReleaseId, scopeHint)
+            const releaseLabel = releaseId ? currentReleaseLabel : null
             signals.push({
               source: 'planning-docs',
               kind:
@@ -854,6 +862,7 @@ export const planningDocsSource: TaskSource = {
               references: [abs],
               ...(scopeHint ? { scopeHint } : {}),
               ...(releaseId ? { releaseId } : {}),
+              ...(releaseLabel ? { releaseLabel } : {}),
               ...(domainHint ? { domainHint } : {}),
               confidence: 'medium',
             })
@@ -886,6 +895,7 @@ export const planningDocsSource: TaskSource = {
             const releaseId = kind === 'open_work'
               ? currentReleaseIdForScope(currentReleaseId, scopeHint)
               : undefined
+            const releaseLabel = releaseId ? currentReleaseLabel : null
             signals.push({
               source: 'planning-docs',
               kind,
@@ -895,6 +905,7 @@ export const planningDocsSource: TaskSource = {
               ...(stageScopedSignal?.role ? { role: stageScopedSignal.role } : {}),
               ...(scopeHint ? { scopeHint } : {}),
               ...(releaseId ? { releaseId } : {}),
+              ...(releaseLabel ? { releaseLabel } : {}),
               ...(domainHint ? { domainHint } : {}),
               confidence: 'medium',
             })
@@ -928,6 +939,7 @@ export const planningDocsSource: TaskSource = {
           const releaseId = kind === 'open_work'
             ? currentReleaseIdForScope(currentReleaseId, scopeHint)
             : undefined
+          const releaseLabel = releaseId ? currentReleaseLabel : null
           signals.push({
             source: 'planning-docs',
             kind,
@@ -936,6 +948,7 @@ export const planningDocsSource: TaskSource = {
             references: [abs],
             ...(scopeHint ? { scopeHint } : {}),
             ...(releaseId ? { releaseId } : {}),
+            ...(releaseLabel ? { releaseLabel } : {}),
             ...(domainHint ? { domainHint } : {}),
             confidence: 'medium',
           })
