@@ -241,6 +241,84 @@ describe('WorkTab', () => {
     expect(screen.getByText('Import review flow')).toBeInTheDocument()
   })
 
+  it('summarizes scoped current work instead of raw internal delivery blockers', async () => {
+    render(WorkTab, {
+      props: {
+        detail: detail([
+          task({
+            id: 'task-runner',
+            title: 'Implement a no-UI runner that builds a packet from fixture records.',
+            status: 'ready',
+            domain: 'harness',
+          }),
+        ], {
+          actionModel: {
+            primaryAction: {
+              source: 'task',
+              label: 'Implement a no-UI runner that builds a packet from fixture records.',
+              detail: 'Needs brief: finish the handoff before a worker can start.',
+              buttonLabel: 'Open Work',
+              href: '/work?task=task-runner',
+              tone: 'warn',
+              taskId: 'task-runner',
+            },
+            secondaryActions: [],
+            runControl: { label: 'Resume', startEnabled: true },
+            ownerInput: { active: false },
+            setup: { state: 'ready', freshIntakeNeeded: false },
+          },
+          workProgress: {
+            counts: {
+              visibleTotal: 18,
+              visibleActive: 6,
+              visibleBlocked: 0,
+              visibleDone: 0,
+              visibleShelved: 12,
+              deliveryTotal: 60,
+              deliveryRequired: 60,
+              deliveryDone: 0,
+              deliveryBlocked: 0,
+            },
+            byTaskId: {},
+          },
+          orientationSpine: {
+            scope: { label: 'Current task scope' },
+            summary: {
+              headline: 'Current task scope is being shaped.',
+              purpose: 'Build the headless Narrative Harness MVP.',
+              selectedScopeLabel: 'Current task scope',
+              includedWorkCount: 6,
+              deferredWorkCount: 12,
+            },
+            roots: [],
+            nodes: {},
+          },
+          deliverySpine: {
+            queue: {
+              runnable: [],
+              firstRunnable: null,
+              blocked: Array.from({ length: 26 }, (_, index) => ({
+                task: { id: `internal-${index}`, title: `Internal step ${index}`, status: 'blocked' },
+                structuralBlockers: [],
+              })),
+            },
+          },
+        }),
+      },
+    })
+
+    const queue = await screen.findByRole('region', { name: 'Delivery queue' })
+    expect(queue).toHaveTextContent('Current task scope')
+    expect(queue).toHaveTextContent('Implement a no-UI runner that builds a packet from fixture records.')
+    expect(queue).toHaveTextContent('Needs brief: finish the handoff before a worker can start.')
+    expect(queue).toHaveTextContent('6 current tasks')
+    expect(queue).toHaveTextContent('0 blocked')
+    expect(queue).toHaveTextContent('12 deferred')
+    expect(queue).not.toHaveTextContent('0 ready to resume')
+    expect(queue).not.toHaveTextContent('26 blocked')
+    expect(queue).not.toHaveTextContent('No runnable task')
+  })
+
   it('prefers shaped work units over proof-step badges for planning work and names blockers by task title', async () => {
     render(WorkTab, {
       props: {

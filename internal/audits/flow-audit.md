@@ -12171,6 +12171,64 @@ legacy backlog noise.
 
 source: codex:overview-scoped-orientation-communication-2026-07-03
 
+2026-07-03T21:18:00Z - Tightened Work delivery queue so current-scope truth
+beats raw internal blocker counts.
+
+- Work id: `codex:work-scoped-queue-communication-2026-07-03`.
+- User job: a project owner should be able to open Work and tell what the
+  current scoped work is, what Guildhall would do next, and whether the current
+  scope is blocked without decoding internal delivery-step blockers.
+- Fix:
+  - Work's Delivery queue now falls back to the shared action model and scoped
+    work-progress counts when there is no first runnable delivery candidate but
+    the project has a current orientation scope.
+  - Narrative Harness Work now names `Current task scope`, the same primary
+    action as the top project chrome, `6 current tasks`, `0 blocked`, and
+    `12 deferred` instead of `No runnable task`, `0 ready to resume`, and
+    `26 blocked`.
+  - True runnable delivery queues still use the existing first-runnable
+    delivery candidate path.
+- Contract Touch Decision:
+  - Work id: `codex:work-scoped-queue-communication-2026-07-03`.
+  - Touched contracts: WorkTab Delivery queue presentation, scoped
+    work-progress communication, action-model fallback display.
+  - Contracts considered but not touched: persisted task schema,
+    delivery-spine model, orientation-spine API shape, task transition rules,
+    start/resume endpoint behavior.
+  - Required follow-up: Work-list row stage labels still need a separate pass
+    because some planning rows visually say `BLOCKED` while the shared scoped
+    blocked count is `0`; this slice fixes the queue/header contradiction only.
+  - Proof required: focused WorkTab regression, installed-app proof against
+    Narrative Harness Work, and geometry check.
+  - Proof provided: `WorkTab.svelte.test.ts` scoped-queue regression, full
+    WorkTab component suite, installed-app `stale:false`, and browser proof
+    below.
+  - Waivers: rendered Playwright project-flow run could not start because its
+    configured webServer invokes `pnpm build`, and this shell's pnpm wrapper
+    attempted a non-interactive production install. Installed-app browser proof
+    was used instead after a successful build through a temporary local
+    `pnpm exec vite` shim.
+  - Owner-review items: none.
+  - Apply/revert behavior: revert the WorkTab fallback and test additions to
+    restore raw delivery-queue rendering.
+- Installed-app proof:
+  - `/api/stale-server` returned `stale:false` for PID `53843` from
+    `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+  - Desktop `1280x820` route `/projects/narrative-harness/work` showed
+    Delivery queue text `CURRENT TASK SCOPE`, `Implement a no-UI runner that
+    builds a packet from fixture records.`, `Needs brief: finish the handoff
+    before a worker can start.`, `6 CURRENT TASKS`, `0 BLOCKED`, and
+    `12 DEFERRED`.
+  - The same queue proof did not show `26 blocked` or `No runnable task`, and
+    had no horizontal overflow (`scrollWidth:1280`, `clientWidth:1280`).
+  - Screenshot artifact:
+    `/tmp/guildhall-nh-work-scope-queue-proof.png`.
+- Verification:
+  - `./node_modules/.bin/vitest run src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts`
+    passed `30` tests.
+
+source: codex:work-scoped-queue-communication-2026-07-03
+
 2026-07-03T20:16:00Z - Added continuous-run scoped execution proof for
 approved workspace-goals scope.
 

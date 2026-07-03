@@ -129,6 +129,22 @@
       .filter((primitive, index, all) => primitive.id && all.findIndex(item => item.id === primitive.id) === index)
       .slice(0, 5) ?? []
   })
+  const scopeQueueFallback = $derived.by(() => {
+    if (deliveryFirstRunnable) return null
+    const counts = detail.workProgress?.counts
+    const scopeLabel = detail.orientationSpine?.summary?.selectedScopeLabel ?? detail.orientationSpine?.scope?.label
+    if (!counts || !scopeLabel) return null
+    if (counts.visibleActive + counts.visibleBlocked + counts.visibleShelved <= 0) return null
+    const primaryAction = detail.actionModel?.primaryAction
+    return {
+      label: scopeLabel,
+      title: primaryAction?.label ?? scopeLabel,
+      detail: primaryAction?.detail ?? detail.orientationSpine?.summary?.nextAction ?? 'Open the current scoped work to continue shaping it.',
+      current: counts.visibleActive,
+      blocked: counts.visibleBlocked,
+      deferred: counts.visibleShelved,
+    }
+  })
   const allWorkItems = $derived([...tasks, ...importDrafts])
   const workAreasByTaskId = $derived(viewModel.workAreasByTaskId)
   const workAreaOptions = $derived(viewModel.workAreaOptions)
@@ -668,21 +684,29 @@
     <PlannerTab detail={boardDetail} />
   {:else}
     {#if deliveryQueue}
-      <UtilityPanel as="section" className="delivery-queue-panel" tone={deliveryFirstRunnable ? 'ok' : deliveryQueue.blocked?.length ? 'warn' : 'neutral'} ariaLabel="Delivery queue">
+      <UtilityPanel as="section" className="delivery-queue-panel" tone={deliveryFirstRunnable ? 'ok' : scopeQueueFallback ? 'warn' : deliveryQueue.blocked?.length ? 'warn' : 'neutral'} ariaLabel="Delivery queue">
         <div class="queue-copy">
-          <p class="queue-label">Delivery queue</p>
+          <p class="queue-label">{scopeQueueFallback?.label ?? 'Delivery queue'}</p>
           <div class="queue-main">
-            <strong>{deliveryFirstRunnable?.task ? taskDisplayLabel(deliveryFirstRunnable.task, deliveryFirstRunnable.task.id) : 'No runnable task'}</strong>
+            <strong>{deliveryFirstRunnable?.task ? taskDisplayLabel(deliveryFirstRunnable.task, deliveryFirstRunnable.task.id) : scopeQueueFallback?.title ?? 'No runnable task'}</strong>
             {#if deliveryFirstRunnable?.why}
               <span>{projectRunning ? deliveryFirstRunnable.why : 'Ready when resumed.'}</span>
+            {:else if scopeQueueFallback?.detail}
+              <span>{scopeQueueFallback.detail}</span>
             {/if}
           </div>
           <div class="queue-chips">
-            <Chip label={projectRunning ? `${deliveryReadyCount} runnable` : `${deliveryReadyCount} ready to resume`} tone={deliveryFirstRunnable ? 'ok' : 'neutral'} />
-            <Chip label={`${deliveryQueue.blocked?.length ?? 0} blocked`} tone={deliveryQueue.blocked?.length ? 'warn' : 'neutral'} />
-            {#each deliveryPrimitiveBlockers as primitive (`primitive-${primitive.id}`)}
-              <Chip label={primitiveLabel(primitive)} tone="warn" />
-            {/each}
+            {#if scopeQueueFallback}
+              <Chip label={countLabel(scopeQueueFallback.current, 'current task')} tone="accent" />
+              <Chip label={`${scopeQueueFallback.blocked} blocked`} tone={scopeQueueFallback.blocked ? 'warn' : 'neutral'} />
+              <Chip label={countLabel(scopeQueueFallback.deferred, 'deferred', 'deferred')} tone="neutral" />
+            {:else}
+              <Chip label={projectRunning ? `${deliveryReadyCount} runnable` : `${deliveryReadyCount} ready to resume`} tone={deliveryFirstRunnable ? 'ok' : 'neutral'} />
+              <Chip label={`${deliveryQueue.blocked?.length ?? 0} blocked`} tone={deliveryQueue.blocked?.length ? 'warn' : 'neutral'} />
+              {#each deliveryPrimitiveBlockers as primitive (`primitive-${primitive.id}`)}
+                <Chip label={primitiveLabel(primitive)} tone="warn" />
+              {/each}
+            {/if}
           </div>
         </div>
       </UtilityPanel>
