@@ -257,6 +257,17 @@ export interface OrientationWorkspaceImportDraftTask {
   domain?: string
   scope: 'current' | 'later'
   refs?: string[]
+  releaseIds?: string[]
+}
+
+export interface OrientationWorkspaceImportDraftRelease {
+  id: string
+  label: string
+  source?: OrientationReleaseSource
+  description?: string | null
+  kind?: OrientationReleaseKind
+  state?: OrientationReleaseState
+  proofStyle?: OrientationReleaseProofStyle
 }
 
 export interface OrientationWorkspaceImportDraftContext {
@@ -271,6 +282,7 @@ export interface OrientationWorkspaceImportDraftContext {
 }
 
 export interface OrientationWorkspaceImportDraft {
+  releases?: OrientationWorkspaceImportDraftRelease[]
   tasks: OrientationWorkspaceImportDraftTask[]
   contexts?: OrientationWorkspaceImportDraftContext[]
   source: OrientationSource
@@ -427,11 +439,13 @@ function augmentTasksWithWorkspaceImportDraft(input: {
 }): {
   tasks: OrientationTaskInput[]
   scope: OrientationScope | null
+  releases: Array<Partial<OrientationRelease>>
+  selectedReleaseId: string | null
   contexts: OrientationWorkspaceImportDraftContext[]
 } {
   const draft = input.workspaceImportDraft
   if (!draft || draft.tasks.length === 0) {
-    return { tasks: input.tasks, scope: null, contexts: draft?.contexts ?? [] }
+    return { tasks: input.tasks, scope: null, releases: [], selectedReleaseId: null, contexts: draft?.contexts ?? [] }
   }
 
   const augmented = [...input.tasks]
@@ -440,6 +454,9 @@ function augmentTasksWithWorkspaceImportDraft(input: {
 
   const currentNodeIds: string[] = []
   const deferredNodeIds: string[] = []
+  const releaseNodeIds = new Map<string, Set<string>>()
+  const releaseDeferredNodeIds = new Map<string, Set<string>>()
+  const currentReleaseIds = new Set<string>()
 
   for (const draftTask of draft.tasks) {
     const existing = titleToTask.get(normalizeText(draftTask.title))
@@ -457,6 +474,7 @@ function augmentTasksWithWorkspaceImportDraft(input: {
         description: draftTask.description ?? draftTask.title,
         domain: draftTask.domain,
         ...(importedRefs.length > 0 ? { references: importedRefs } : {}),
+        ...(draftTask.scope === 'later' ? {} : draftTask.releaseIds?.length ? { releaseIds: [...draftTask.releaseIds] } : {}),
         status: draftTask.scope === 'later' ? 'shelved' : 'import_draft',
         updatedAt: input.now,
         workVisibility: {
@@ -472,12 +490,44 @@ function augmentTasksWithWorkspaceImportDraft(input: {
       }
       augmented.push(synthetic)
       titleToTask.set(normalizeText(draftTask.title), synthetic)
+    } else if (draftTask.scope !== 'later' && draftTask.releaseIds?.length) {
+      existing.releaseIds = [...new Set([...(existing.releaseIds ?? []), ...draftTask.releaseIds])]
     }
 
     const nodeId = taskNodeId(taskId)
-    if (draftTask.scope === 'later') deferredNodeIds.push(nodeId)
-    else currentNodeIds.push(nodeId)
+    const taskReleaseIds = draftTask.scope === 'later' ? [] : draftTask.releaseIds ?? []
+    if (draftTask.scope === 'later') {
+      deferredNodeIds.push(nodeId)
+      for (const release of draft.releases ?? []) {
+        const bucket = releaseDeferredNodeIds.get(release.id) ?? new Set<string>()
+        bucket.add(nodeId)
+        releaseDeferredNodeIds.set(release.id, bucket)
+      }
+    } else {
+      currentNodeIds.push(nodeId)
+      for (const releaseId of taskReleaseIds) {
+        currentReleaseIds.add(releaseId)
+        const bucket = releaseNodeIds.get(releaseId) ?? new Set<string>()
+        bucket.add(nodeId)
+        releaseNodeIds.set(releaseId, bucket)
+      }
+    }
   }
+  const releases = (draft.releases ?? []).map(release => ({
+    id: release.id,
+    label: release.label,
+    kind: release.kind ?? 'release',
+    state: release.state ?? (currentReleaseIds.has(release.id) ? 'active' : 'planned'),
+    source: release.source ?? 'release_plan',
+    description: release.description ?? null,
+    nodeIds: [...(releaseNodeIds.get(release.id) ?? [])],
+    deferredNodeIds: [...(releaseDeferredNodeIds.get(release.id) ?? [])],
+    proofStyle: release.proofStyle ?? 'unspecified',
+  }))
+  const selectedReleaseId =
+    releases.find(release => release.id && currentReleaseIds.has(release.id))?.id ??
+    releases[0]?.id ??
+    null
 
   return {
     tasks: augmented,
@@ -489,6 +539,8 @@ function augmentTasksWithWorkspaceImportDraft(input: {
       nodeIds: [...new Set(currentNodeIds)],
       deferredNodeIds: [...new Set(deferredNodeIds)],
     },
+    releases,
+    selectedReleaseId,
     contexts: draft.contexts ?? [],
   }
 }
@@ -1420,7 +1472,12 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
   })
   const tasks = draftAugmentation.tasks
   const charter = normalizeCharter(input)
-  const selectedRelease = normalizeRelease(input, tasks)
+  const releases = input.releases?.length ? input.releases : draftAugmentation.releases
+  const selectedRelease = normalizeRelease({
+    ...input,
+    selectedReleaseId: input.selectedReleaseId ?? draftAugmentation.selectedReleaseId,
+    releases,
+  }, tasks)
   const rawScope = releaseToScope(selectedRelease) ?? draftAugmentation.scope ?? normalizeScope(input, tasks)
   const scope = rawScope ? normalizeScopeTaskLists(rawScope, tasks) : null
   const built = buildNodes(tasks, scope, now)

@@ -360,6 +360,61 @@ describe('buildProjectOrientationSpine', () => {
     expect(spine.nodes['work:theme-editor']?.maturity).toBe('deferred')
   })
 
+  it('uses release records recovered from the workspace import draft as the visible scope', () => {
+    const spine = buildProjectOrientationSpine({
+      projectId: 'narrative-harness',
+      now: '2026-07-03T12:00:00.000Z',
+      workspaceImportDraft: {
+        releases: [{
+          id: 'headless-mvp',
+          label: 'Headless MVP',
+          source: 'release_plan',
+        }],
+        tasks: [
+          {
+            id: 'task-context-packet',
+            title: 'Build the context packet runner',
+            description: 'Current headless MVP work.',
+            domain: 'harness',
+            scope: 'current',
+            releaseIds: ['headless-mvp'],
+            refs: ['import:docs/harness/implementation-roadmap.md'],
+          },
+          {
+            id: 'task-authoring-ui',
+            title: 'Build the authoring UI shell',
+            description: 'Later UI work.',
+            domain: 'ui',
+            scope: 'later',
+            refs: ['import:docs/harness/implementation-roadmap.md'],
+          },
+        ],
+        source: {
+          kind: 'inferred',
+          refs: ['workspace-import:draft'],
+          confidence: 'high',
+          freshness: 'fresh',
+          inferred: true,
+          refreshedAt: '2026-07-03T12:00:00.000Z',
+        },
+      },
+    })
+
+    expect(spine.selectedRelease).toMatchObject({
+      id: 'headless-mvp',
+      label: 'Headless MVP',
+      source: 'release_plan',
+      nodeIds: ['work:workspace-import:task-context-packet'],
+      deferredNodeIds: ['work:workspace-import:task-authoring-ui'],
+    })
+    expect(spine.summary.selectedReleaseLabel).toBe('Headless MVP')
+    expect(spine.summary.selectedScopeLabel).toBe('Headless MVP')
+    expect(spine.summary.includedWorkCount).toBe(1)
+    expect(spine.summary.deferredWorkCount).toBe(1)
+    expect(spine.nodes['work:workspace-import:task-context-packet']?.maturity).not.toBe('deferred')
+    expect(spine.nodes['work:workspace-import:task-authoring-ui']?.maturity).toBe('deferred')
+  })
+
   it('uses action-shaped labels for question-shaped task nodes', () => {
     const spine = buildProjectOrientationSpine({
       projectId: 'narrative-harness',

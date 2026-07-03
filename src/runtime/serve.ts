@@ -5378,12 +5378,14 @@ export function buildServeApp(opts: ServeOptions = {}): {
         savedWorkspaceGoals.context.length > 0
       )) {
         return {
+          releases: [],
           tasks: savedWorkspaceGoals.tasks.map(task => ({
             id: task.id,
             title: task.title,
             description: task.whyThisMayMatter ?? task.description,
             domain: task.domain,
             scope: task.scope === 'later' ? 'later' : 'current',
+            releaseIds: task.scope === 'later' ? [] : task.releaseIds ? [...task.releaseIds] : undefined,
             refs: task.references?.map(ref => `import:${ref}`) ?? ['workspace-import:approved'],
           })),
           contexts: savedWorkspaceGoals.context
@@ -5435,12 +5437,21 @@ export function buildServeApp(opts: ServeOptions = {}): {
         return undefined
       }
       return {
+        releases: (draft.releases ?? []).map(release => ({
+          id: release.id,
+          label: release.label,
+          source: release.source === 'release_plan' || release.source === 'spec' || release.source === 'owner_approved'
+            ? release.source
+            : 'release_plan' as const,
+          state: 'active' as const,
+        })),
         tasks: draft.tasks.map(task => ({
           id: task.suggestedId,
           title: task.title,
           description: task.whyThisMayMatter ?? task.description,
           domain: task.domain,
           scope: task.scope,
+          releaseIds: task.scope === 'later' ? [] : task.releaseIds ? [...task.releaseIds] : undefined,
           refs: task.references?.map(ref => `import:${ref}`) ?? [`import:${task.source}`],
         })),
         contexts: structuralContexts.map((context, index) => ({

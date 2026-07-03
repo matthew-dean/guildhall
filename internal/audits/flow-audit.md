@@ -13936,6 +13936,59 @@ review preview.
 
 source: codex:workspace-import-release-scope-preview-2026-07-03
 
+2026-07-03T23:56:37Z - Carried imported release scope into the project
+orientation spine before approval.
+
+- Work id: `codex:workspace-import-draft-release-orientation-2026-07-03`.
+- User job: a project owner looking at Overview or Project Map should see the
+  named release/scope that Guildhall recovered from planning docs even before
+  the import has been approved into the queue. A detected `Headless MVP` or
+  `2.0 alpha` release must not collapse back into a generic `Current task
+  scope` label on orientation surfaces.
+- Contract Touch Decision:
+  - Work id: `codex:workspace-import-draft-release-orientation-2026-07-03`.
+  - Touched contracts: `OrientationWorkspaceImportDraft`,
+    `OrientationWorkspaceImportDraftTask`, and
+    `ProjectOrientationSpine.selectedRelease` can now be populated from
+    release records recovered in a workspace import draft.
+  - Contracts considered but not touched: persisted workspace-goals schema,
+    TASKS.json release schema, Project Map component contract, Overview
+    component contract.
+  - Required follow-up: live browser proof on Narrative Harness and Looma + Knit
+    after the next import/repopulation pass, confirming users can see the same
+    recovered release labels on `/overview`, `/map`, and `/release` without
+    inspecting repo files.
+  - Proof required: a failing orientation-spine test showing draft releases were
+    previously ignored, then orientation/API/UI tests showing the same selected
+    release label reaches Project Map and Overview surfaces.
+  - Proof provided: `pnpm vitest run
+    src/runtime/__tests__/project-orientation-spine.test.ts
+    src/runtime/__tests__/serve-dashboard.test.ts
+    src/web/surfaces/project/__tests__/ProjectMapTab.svelte.test.ts
+    src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts`
+    passed `55` tests.
+  - Waivers: no persisted schema migration required; this only extends the
+    transient orientation draft payload and uses already-detected/imported
+    release records. Saved approved imports still rely on TASKS.json release
+    containers for durable release orientation.
+  - Owner-review items: multi-release draft previews currently select the first
+    release with current assigned work and show other imported work as deferred.
+  - Apply/revert behavior: removing this mapping makes unapproved import
+    orientation fall back to `Current task scope`, losing the recovered release
+    name on Project Map/Overview.
+- Fix:
+  - `OrientationWorkspaceImportDraft` now carries detected release records and
+    current-task `releaseIds`.
+  - The spine builder promotes those release records into
+    `selectedRelease`/`selectedTaskScope` only when the import draft supplied
+    named releases; projects with no release records still use generic current
+    work and do not get fake release buckets.
+  - The server orientation mapper now passes detected releases and task
+    release assignments from the workspace import draft into the shared spine
+    builder.
+
+source: codex:workspace-import-draft-release-orientation-2026-07-03
+
 2026-06-15T23:52:00Z - Completed the Project Orientation Spine cross-route
 implementation and installed-app audit.
 
