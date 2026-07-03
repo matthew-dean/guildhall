@@ -30,6 +30,14 @@
     domain: string
     scope?: 'current' | 'later'
     priority: 'critical' | 'high' | 'normal' | 'low'
+    releaseIds?: readonly string[]
+    source: string
+    references?: readonly string[]
+    confidence: 'high' | 'medium' | 'low'
+  }
+  interface DetectedRelease {
+    id: string
+    label: string
     source: string
     references?: readonly string[]
     confidence: 'high' | 'medium' | 'low'
@@ -80,6 +88,7 @@
   }
   interface DetectedDraft {
     goals: DetectedGoal[]
+    releases?: DetectedRelease[]
     tasks: DetectedTask[]
     milestones: DetectedMilestone[]
     context: DetectedContext[]
@@ -87,6 +96,7 @@
     review?: {
       summary?: {
         currentMilestoneLabel: string | null
+        releaseScopeLabel: string | null
         headline: string
         currentScope: string
         deferredScope: string | null
@@ -946,6 +956,12 @@
         </div>
         {#if importSummary}
           <div class="scope-summary" aria-label="Completed import scope summary">
+            {#if importSummary.releaseScopeLabel}
+              <div class="scope-fact" aria-label="Completed release scope">
+                <span class="summary-label">Release scope</span>
+                <strong>{importSummary.releaseScopeLabel}</strong>
+              </div>
+            {/if}
             <div class="scope-summary-header">
               <strong>{importSummary.headline}</strong>
             </div>
@@ -1039,6 +1055,12 @@
           </div>
           {#if importSummary}
             <div class="scope-summary" aria-label="Current import scope summary">
+              {#if importSummary.releaseScopeLabel}
+                <div class="scope-fact" aria-label="Current release scope">
+                  <span class="summary-label">Release scope</span>
+                  <strong>{importSummary.releaseScopeLabel}</strong>
+                </div>
+              {/if}
               <div class="scope-summary-header">
                 <strong>{importSummary.headline}</strong>
               </div>
@@ -1856,6 +1878,17 @@
     gap: var(--gh-space-2);
     flex-wrap: wrap;
     align-items: center;
+  }
+  .scope-fact {
+    display: flex;
+    align-items: baseline;
+    gap: var(--gh-space-3);
+    flex-wrap: wrap;
+  }
+  .scope-fact strong {
+    color: var(--text);
+    font-size: var(--gh-type-size-body);
+    line-height: var(--gh-type-line-height-body);
   }
   .learned-note {
     margin: var(--gh-space-2) 0 0;

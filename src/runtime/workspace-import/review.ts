@@ -47,6 +47,7 @@ export interface WorkspaceImportAreaGroup {
 export interface WorkspaceImportReview {
   summary: {
     currentMilestoneLabel: string | null
+    releaseScopeLabel: string | null
     headline: string
     currentScope: string
     deferredScope: string | null
@@ -172,6 +173,26 @@ function kindForGroup(group: {
   return 'reference'
 }
 
+function currentReleaseScopeLabel(draft: WorkspaceImportDraft): string | null {
+  const releases = draft.releases ?? []
+  if (releases.length === 0) return null
+
+  const currentReleaseIds = new Set<string>()
+  for (const task of draft.tasks) {
+    if (task.scope === 'later') continue
+    for (const releaseId of task.releaseIds ?? []) {
+      currentReleaseIds.add(releaseId)
+    }
+  }
+
+  const releasesInCurrentWork = releases.filter(release => currentReleaseIds.has(release.id))
+  const scopedReleases = releasesInCurrentWork.length > 0 ? releasesInCurrentWork : releases
+  const [first] = scopedReleases
+  if (!first) return null
+  if (scopedReleases.length === 1) return first.label
+  return `${first.label} + ${scopedReleases.length - 1} more`
+}
+
 export function buildWorkspaceImportReview(
   draft: WorkspaceImportDraft,
   existingTasks: readonly WorkspaceImportExistingTask[] = [],
@@ -192,6 +213,7 @@ export function buildWorkspaceImportReview(
   )?.label
     ?? draft.context.find(context => /^Stage\s+\d+\s*:/i.test(context.label))?.label
     ?? null
+  const releaseScopeLabel = currentReleaseScopeLabel(draft)
   const existingTitles = new Set(existingTasks.map(task => normalizedTitle(task.title)))
   const byKey = new Map<string, Omit<WorkspaceImportSourceGroup, 'summary' | 'kind'> & {
     taskTitles: string[]
@@ -345,6 +367,7 @@ export function buildWorkspaceImportReview(
 
   const summary = {
     currentMilestoneLabel,
+    releaseScopeLabel,
     headline: currentMilestoneLabel
       ? `${currentMilestoneLabel} is the current scoped milestone.`
       : currentTaskCount > 0

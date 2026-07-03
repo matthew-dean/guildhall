@@ -13891,6 +13891,51 @@ new page section.
 
 source: codex:project-orientation-spine-overview-composition-correction-2026-06-15
 
+2026-07-03T23:48:36Z - Preserved recovered release scope in the workspace import
+review preview.
+
+- Work id: `codex:workspace-import-release-scope-preview-2026-07-03`.
+- User job: before Guildhall schedules or approves imported work, the owner
+  should be able to see which documented release/scope the recovered current
+  work belongs to. Recovered release truth does not count as success if it only
+  exists in backend draft data and the import screen still reads as a generic
+  now/later pile.
+- Contract Touch Decision:
+  - Work id: `codex:workspace-import-release-scope-preview-2026-07-03`.
+  - Touched contracts: `WorkspaceImportReview.summary` now includes
+    `releaseScopeLabel: string | null`.
+  - Contracts considered but not touched: persisted task queue schema,
+    workspace import draft schema, release container schema, API route shape
+    beyond the existing review summary payload.
+  - Required follow-up: Project Map and Overview still need live browser proof
+    that the same release labels remain visible after approval, especially for
+    Narrative Harness and Looma + Knit.
+  - Proof required: failing model/UI tests proving the label was absent, then
+    targeted import pipeline tests proving release labels are computed in the
+    shared review model and rendered in the import preview.
+  - Proof provided: `pnpm vitest run
+    src/runtime/workspace-import/__tests__/detect.test.ts
+    src/runtime/workspace-import/__tests__/hypothesis.test.ts
+    src/runtime/__tests__/workspace-importer.test.ts
+    src/runtime/__tests__/workspace-import-review.test.ts
+    src/web/surfaces/project/__tests__/WorkspaceImportTab.svelte.test.ts`
+    passed `169` tests.
+  - Waivers: no schema migration required because this is a derived review
+    summary field; persisted draft release/task linkage already existed.
+  - Owner-review items: confirm whether multi-release import previews should
+    show a compact `+ N more` label or expand into a small list.
+  - Apply/revert behavior: removing the field reverts the UI to generic
+    import counts and should fail the release-scope preview tests.
+- Fix:
+  - `buildWorkspaceImportReview` now derives the visible release scope from
+    release containers attached to current imported tasks, falling back to the
+    draft's release list only when no current task is linked yet.
+  - Workspace Import renders `Release scope` inside the existing scope summary
+    on both fresh and completed import states, avoiding a separate ad-hoc card
+    or any local page-only release inference.
+
+source: codex:workspace-import-release-scope-preview-2026-07-03
+
 2026-06-15T23:52:00Z - Completed the Project Orientation Spine cross-route
 implementation and installed-app audit.
 

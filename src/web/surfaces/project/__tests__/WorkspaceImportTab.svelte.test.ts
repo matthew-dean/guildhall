@@ -29,6 +29,14 @@ const detectedDraft = {
         confidence: 'high',
       },
     ],
+    releases: [
+      {
+        id: 'v1-release-hardening',
+        label: 'V1 Release Hardening',
+        source: 'docs/roadmap.md',
+        confidence: 'high',
+      },
+    ],
     tasks: [
       {
         suggestedId: 'task-link-editor',
@@ -37,6 +45,7 @@ const detectedDraft = {
         domain: 'editor',
         scope: 'current',
         priority: 'high',
+        releaseIds: ['v1-release-hardening'],
         source: 'docs/roadmap.md',
         references: ['docs/roadmap.md', 'web/app/components/editor/toolbar.ts'],
         confidence: 'high',
@@ -152,6 +161,7 @@ const detectedDraft = {
       ],
       summary: {
         currentMilestoneLabel: 'Stage 1: V1 Release Hardening',
+        releaseScopeLabel: 'V1 Release Hardening',
         headline: 'Current import scope',
         currentScope: '1 current task candidate from active release scope.',
         deferredScope: '1 later task candidate is deferred.',
@@ -231,6 +241,8 @@ describe('WorkspaceImportTab', () => {
     expect(screen.getByText(/starts from the full current import/)).toBeTruthy()
     expect(screen.getByText(/Nothing is saved until the final step/)).toBeTruthy()
     expect(screen.getByText(/You can resume this review later/)).toBeTruthy()
+    expect(screen.getByText('Release scope')).toBeTruthy()
+    expect(screen.getByText('V1 Release Hardening')).toBeTruthy()
 
     await userEvent.click(screen.getByRole('button', { name: /choose parts to review/i }))
     await screen.findByText('Choose the parts for this pass')

@@ -7,6 +7,15 @@ const projectPath = '/tmp/looma-knit'
 function sampleDraft(): WorkspaceImportDraft {
   return {
     goals: [],
+    releases: [
+      {
+        id: 'v1-release-hardening',
+        label: 'V1 Release Hardening',
+        source: 'planning-docs',
+        references: [`${projectPath}/knit/docs/roadmap.md`],
+        confidence: 'high',
+      },
+    ],
     tasks: [
       {
         suggestedId: 'task-1',
@@ -15,6 +24,7 @@ function sampleDraft(): WorkspaceImportDraft {
         domain: 'looma',
         scope: 'current',
         priority: 'high',
+        releaseIds: ['v1-release-hardening'],
         source: 'planning-docs',
         references: [`${projectPath}/looma/docs/component-roadmap.md`],
         confidence: 'high',
@@ -26,6 +36,7 @@ function sampleDraft(): WorkspaceImportDraft {
         domain: 'looma',
         scope: 'current',
         priority: 'high',
+        releaseIds: ['v1-release-hardening'],
         source: 'planning-docs',
         references: [`${projectPath}/looma/docs/component-roadmap.md`],
         confidence: 'high',
@@ -112,6 +123,7 @@ describe('buildWorkspaceImportReview', () => {
     })
     expect(review.summary).toMatchObject({
       currentMilestoneLabel: 'Stage 1: Current MVP',
+      releaseScopeLabel: 'V1 Release Hardening',
       briefInputCount: 1,
       briefRecordCount: 0,
       capabilityCount: 1,
