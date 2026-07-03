@@ -12108,6 +12108,49 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-07-03T23:15:00Z - Tightened workspace-import release-scope recovery and
+Project Map communication proof.
+
+- Work id: `codex:release-scope-visible-import-truth-2026-07-03`.
+- User job: a project owner should not have to trust that Guildhall privately
+  inferred a release/scope boundary; when planning docs name a release, the
+  imported current work must carry that release membership and Project Map must
+  visibly communicate the selected release scope, its source, and its included
+  vs later counts.
+- Fix:
+  - `planning-docs` now recognizes explicit owner-visible headings such as
+    `Release: Headless MVP` and `Headless MVP Release`.
+  - Current work under that explicit heading receives a stable release id;
+    later/deferred work under the same document does not inherit release
+    membership.
+  - The workspace hypothesis carries current release membership into draft
+    tasks so approval/import can create the existing release container rather
+    than rediscovering scope later.
+  - Project Map now labels the top scope card as `Release scope` when a named
+    release is selected and uses the selected release source in Source trail.
+- Contract Touch Decision:
+  - Work id: `codex:release-scope-visible-import-truth-2026-07-03`.
+  - Touched contracts: `WorkspaceSignal.releaseId` as an optional
+    owner-visible planning-doc signal field.
+  - Contracts considered but not touched: persisted task queue release schema,
+    orientation spine selected-release schema, and workspace-import YAML parser.
+    These already accepted release membership from the previous slice.
+  - Required follow-up: keep label fidelity under review for arbitrary release
+    names such as `2.0 alpha`; this slice stores the stable id and relies on the
+    existing release-label path during import.
+  - Proof required/provided: failing-then-passing detection and hypothesis
+    tests for explicit release scope, importer release-scope regression, and
+    Project Map component proof that a selected release is visible as
+    `Release scope`.
+  - Waivers: no installed-app browser proof in this slice because the changed
+    UI behavior is covered by the Svelte component test and no route/runtime
+    wiring changed.
+- Verification:
+  `/opt/homebrew/bin/pnpm vitest run src/runtime/workspace-import/__tests__/detect.test.ts src/runtime/workspace-import/__tests__/hypothesis.test.ts src/runtime/__tests__/workspace-importer.test.ts src/web/surfaces/project/__tests__/ProjectMapTab.svelte.test.ts`
+  passed `152` tests.
+
+source: codex:release-scope-visible-import-truth-2026-07-03
+
 2026-07-03T23:03:00Z - Preserved explicit release scope through workspace
 import approval so regenerated work can drive selected-scope execution.
 

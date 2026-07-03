@@ -672,6 +672,60 @@ Done gate:
     ]))
   })
 
+  it('attaches explicitly named release scope to current planning work without leaking it to later scope', async () => {
+    mkdirSync(join(dir, 'docs'), { recursive: true })
+    writeFileSync(
+      join(dir, 'docs', 'release-plan.md'),
+      `# Release Plan
+
+## Release: Headless MVP
+
+### Current Focus
+
+- Build fixture-driven author voice shaping
+- Generate synopsis to outline records
+
+### Later
+
+- Add browser drafting workspace
+`,
+    )
+
+    const sigs = await planningDocsSource.detect({
+      projectPath: dir,
+      exec: fakeExec(() => ({
+        stdout: ['docs/release-plan.md'].join('\n'),
+        code: 0,
+      })),
+    })
+
+    expect(sigs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'open_work',
+        title: 'Build fixture-driven author voice shaping',
+        scopeHint: 'current',
+        releaseId: 'headless-mvp',
+      }),
+      expect.objectContaining({
+        kind: 'open_work',
+        title: 'Generate synopsis to outline records',
+        scopeHint: 'current',
+        releaseId: 'headless-mvp',
+      }),
+      expect.objectContaining({
+        kind: 'open_work',
+        title: 'Add browser drafting workspace',
+        scopeHint: 'later',
+      }),
+    ]))
+    expect(sigs).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        title: 'Add browser drafting workspace',
+        releaseId: 'headless-mvp',
+      }),
+    ]))
+  })
+
   it('marks deferred checklist items as later even when they appear in status history', async () => {
     writeFileSync(
       join(dir, 'PROJECT_STATE.md'),

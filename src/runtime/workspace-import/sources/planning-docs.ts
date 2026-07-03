@@ -423,6 +423,45 @@ function scopeHintForOpenWork(
   return scopeHintForOpenWorkSection(sectionHeading) ?? scopeHintForOpenWorkTitle(title)
 }
 
+function explicitReleaseLabelForHeading(heading: string): string | null {
+  const cleaned = cleanHeading(heading).replace(/\s+/g, ' ').trim()
+  if (!cleaned) return null
+  const colonLabel =
+    /^(?:current\s+)?(?:release|bounded scope|scope)\s*:\s*(.+?)\s*$/i.exec(cleaned)?.[1]
+  if (colonLabel) return cleanReleaseLabel(colonLabel)
+  const suffixLabel = /^(.+?)\s+release$/i.exec(cleaned)?.[1]
+  return suffixLabel ? cleanReleaseLabel(suffixLabel) : null
+}
+
+function cleanReleaseLabel(label: string): string | null {
+  const cleaned = cleanHeading(label).replace(/\s+/g, ' ').trim()
+  if (!cleaned || /^(plan|roadmap|notes?|tbd)$/i.test(cleaned)) return null
+  return cleaned
+}
+
+function releaseIdFromLabel(label: string): string {
+  return label
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+}
+
+function currentReleaseIdForScope(
+  releaseId: string | null,
+  scopeHint: WorkspaceSignal['scopeHint'] | undefined,
+): string | undefined {
+  if (!releaseId || scopeHint === 'later') return undefined
+  return releaseId
+}
+
+function scopeHintInsideExplicitRelease(
+  releaseId: string | null,
+  scopeHint: WorkspaceSignal['scopeHint'] | undefined,
+): WorkspaceSignal['scopeHint'] | undefined {
+  if (scopeHint) return scopeHint
+  return releaseId ? 'current' : undefined
+}
+
 function isFutureStage(
   stageLabel: string | null | undefined,
   currentMilestoneStage: string | null | undefined,
@@ -496,6 +535,8 @@ export const planningDocsSource: TaskSource = {
       let pendingRecommendedTaskSectionRaw: string | null = null
       let currentRecommendedStageAlignment: string | null = null
       let currentRecommendedDomain: string | null = null
+      let currentReleaseId: string | null = null
+      let currentReleaseDepth: number | null = null
       const bulletStack: Array<{ indent: number; title: string; grouping: boolean }> = []
       let pendingTableHeaders: string[] | null = null
       let activeTableHeaders: string[] | null = null
@@ -514,8 +555,12 @@ export const planningDocsSource: TaskSource = {
           if (relatedSpec && !references.includes(relatedSpec)) {
             references.push(relatedSpec)
           }
-          const scopeHint = scopeHintForStage(currentRecommendedStageAlignment, currentMilestoneStage)
+          const scopeHint = scopeHintInsideExplicitRelease(
+            currentReleaseId,
+            scopeHintForStage(currentRecommendedStageAlignment, currentMilestoneStage),
+          )
           const domain = currentRecommendedDomain ?? domainHint
+          const releaseId = currentReleaseIdForScope(currentReleaseId, scopeHint)
           if (isDecompositionInventoryFile(rel) && scopeHint === 'later' && relatedSpec) {
             signals.push({
               source: 'planning-docs',
@@ -538,6 +583,7 @@ export const planningDocsSource: TaskSource = {
               references,
               ...(domain ? { domainHint: domain } : {}),
               scopeHint,
+              ...(releaseId ? { releaseId } : {}),
               confidence: 'high',
             })
           }
@@ -579,8 +625,18 @@ export const planningDocsSource: TaskSource = {
         const heading = /^(#{2,4})\s+(.+?)\s*$/.exec(line)
         if (heading) {
           flushPendingRecommendedTask()
+          const headingDepth = heading[1]!.length
+          if (currentReleaseDepth != null && headingDepth <= currentReleaseDepth) {
+            currentReleaseId = null
+            currentReleaseDepth = null
+          }
           currentSection = cleanHeading(heading[2]!)
           currentSectionRaw = heading[2]!.trim()
+          const releaseLabel = explicitReleaseLabelForHeading(currentSection)
+          if (releaseLabel) {
+            currentReleaseId = releaseIdFromLabel(releaseLabel)
+            currentReleaseDepth = headingDepth
+          }
           currentLabel = null
           bulletStack.length = 0
           pendingTableHeaders = null
@@ -741,13 +797,19 @@ export const planningDocsSource: TaskSource = {
           (fileLooksLikeTaskList(fileBase, rel) || (currentSection && OPEN_HEADING_RE.test(currentSection)))
         ) {
           bulletStack.length = 0
+          const scopeHint = scopeHintInsideExplicitRelease(
+            currentReleaseId,
+            scopeHintForOpenWork(currentSection, unchecked[1]),
+          )
+          const releaseId = currentReleaseIdForScope(currentReleaseId, scopeHint)
           signals.push({
             source: 'planning-docs',
             kind: 'open_work',
             title: cleanHeading(unchecked[1]!),
             evidence: `${rel}: ${line.trim()}`.slice(0, 240),
             references: [abs],
-            ...(scopeHintForOpenWork(currentSection, unchecked[1]) ? { scopeHint: scopeHintForOpenWork(currentSection, unchecked[1]) } : {}),
+            ...(scopeHint ? { scopeHint } : {}),
+            ...(releaseId ? { releaseId } : {}),
             ...(domainHint ? { domainHint } : {}),
             confidence: 'high',
           })
@@ -776,6 +838,11 @@ export const planningDocsSource: TaskSource = {
           const grouping = title.endsWith(':')
           const groupingChildrenAreTasks = grouping && groupingChildrenAreTaskCandidates(title)
           if (grouping && !groupingChildrenAreTasks) {
+            const scopeHint = scopeHintInsideExplicitRelease(
+              currentReleaseId,
+              scopeHintForOpenWork(currentSection, title),
+            )
+            const releaseId = currentReleaseIdForScope(currentReleaseId, scopeHint)
             signals.push({
               source: 'planning-docs',
               kind:
@@ -785,7 +852,8 @@ export const planningDocsSource: TaskSource = {
               title: title.replace(/:$/, ''),
               evidence: `${rel}: ${line.trim()}`.slice(0, 240),
               references: [abs],
-              ...(scopeHintForOpenWork(currentSection, title) ? { scopeHint: scopeHintForOpenWork(currentSection, title) } : {}),
+              ...(scopeHint ? { scopeHint } : {}),
+              ...(releaseId ? { releaseId } : {}),
               ...(domainHint ? { domainHint } : {}),
               confidence: 'medium',
             })
@@ -811,6 +879,13 @@ export const planningDocsSource: TaskSource = {
                 ? 'context'
                 : 'open_work'
             )
+            const scopeHint = scopeHintInsideExplicitRelease(
+              currentReleaseId,
+              stageScopedSignal?.scopeHint ?? scopeHintForOpenWork(currentSection, title),
+            )
+            const releaseId = kind === 'open_work'
+              ? currentReleaseIdForScope(currentReleaseId, scopeHint)
+              : undefined
             signals.push({
               source: 'planning-docs',
               kind,
@@ -818,11 +893,8 @@ export const planningDocsSource: TaskSource = {
               evidence: `${rel}: ${line.trim()}`.slice(0, 240),
               references: [abs],
               ...(stageScopedSignal?.role ? { role: stageScopedSignal.role } : {}),
-              ...(stageScopedSignal?.scopeHint
-                ? { scopeHint: stageScopedSignal.scopeHint }
-                : scopeHintForOpenWork(currentSection, title)
-                  ? { scopeHint: scopeHintForOpenWork(currentSection, title) }
-                  : {}),
+              ...(scopeHint ? { scopeHint } : {}),
+              ...(releaseId ? { releaseId } : {}),
               ...(domainHint ? { domainHint } : {}),
               confidence: 'medium',
             })
@@ -849,13 +921,21 @@ export const planningDocsSource: TaskSource = {
           const kind: WorkspaceSignal['kind'] = isProjectStateCurrentFocus(fileBase, currentSection)
             ? 'context'
             : 'open_work'
+          const scopeHint = scopeHintInsideExplicitRelease(
+            currentReleaseId,
+            scopeHintForOpenWork(currentSection, numbered[1]),
+          )
+          const releaseId = kind === 'open_work'
+            ? currentReleaseIdForScope(currentReleaseId, scopeHint)
+            : undefined
           signals.push({
             source: 'planning-docs',
             kind,
             title: cleanHeading(numbered[1]!),
             evidence: `${rel}: ${line.trim()}`.slice(0, 240),
             references: [abs],
-            ...(scopeHintForOpenWork(currentSection, numbered[1]) ? { scopeHint: scopeHintForOpenWork(currentSection, numbered[1]) } : {}),
+            ...(scopeHint ? { scopeHint } : {}),
+            ...(releaseId ? { releaseId } : {}),
             ...(domainHint ? { domainHint } : {}),
             confidence: 'medium',
           })

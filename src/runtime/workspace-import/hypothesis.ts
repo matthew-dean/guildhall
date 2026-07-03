@@ -291,6 +291,12 @@ function scopeFromSignal(sig: WorkspaceSignal): DraftTask['scope'] {
   return sig.scopeHint === 'later' ? 'later' : 'current'
 }
 
+function releaseIdsFromSignal(sig: WorkspaceSignal): string[] | undefined {
+  const releaseId = sig.releaseId?.trim()
+  if (!releaseId || scopeFromSignal(sig) === 'later') return undefined
+  return [releaseId]
+}
+
 export function isFormattingDebris(sig: Pick<WorkspaceSignal, 'title'>): boolean {
   if (sig.title.trim().endsWith(':')) return true
   const title = normalize(sig.title)
@@ -531,6 +537,7 @@ function addTask(
       priority: priorityFromConfidence(sig.confidence),
       source: sig.source,
       ...(sig.references ? { references: sig.references } : {}),
+      ...(releaseIdsFromSignal(sig) ? { releaseIds: releaseIdsFromSignal(sig) } : {}),
       confidence: sig.confidence,
     })
     return
@@ -553,6 +560,9 @@ function addTask(
   }
   const refs = mergeReferences(existing.references, sig.references)
   if (refs) merged.references = refs
+  const releaseIds = mergeReferences(existing.releaseIds, releaseIdsFromSignal(sig))
+  if (merged.scope === 'later') delete merged.releaseIds
+  else if (releaseIds) merged.releaseIds = releaseIds
   if (shouldBump) {
     if (scopeFromSignal(sig) === 'later') merged.title = sig.title
     merged.description = supportingText(sig.title, sig.evidence)

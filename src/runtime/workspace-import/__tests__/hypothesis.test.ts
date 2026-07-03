@@ -96,6 +96,44 @@ describe('formWorkspaceHypothesis', () => {
     })
   })
 
+  it('carries explicit release scope from current work signals into draft tasks', () => {
+    const draft = formWorkspaceHypothesis(
+      invFrom([
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'Build fixture-driven author voice shaping',
+          evidence: 'docs/release-plan.md: - Build fixture-driven author voice shaping',
+          scopeHint: 'current',
+          releaseId: 'headless-mvp',
+          confidence: 'high',
+        },
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'Add browser drafting workspace',
+          evidence: 'docs/release-plan.md: - Add browser drafting workspace',
+          scopeHint: 'later',
+          releaseId: 'headless-mvp',
+          confidence: 'high',
+        },
+      ]),
+    )
+
+    expect(draft.tasks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        title: 'Build fixture-driven author voice shaping',
+        scope: 'current',
+        releaseIds: ['headless-mvp'],
+      }),
+      expect.objectContaining({
+        title: 'Add browser drafting workspace',
+        scope: 'later',
+      }),
+    ]))
+    expect(draft.tasks.find(task => task.title === 'Add browser drafting workspace')?.releaseIds).toBeUndefined()
+  })
+
   it('lets explicit later scope win when duplicate planning signals disagree', () => {
     const draft = formWorkspaceHypothesis(
       invFrom([

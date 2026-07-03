@@ -43,8 +43,16 @@ describe('ProjectMapTab', () => {
             label: 'Current task scope',
             source: 'inferred',
           },
+          selectedRelease: {
+            id: 'headless-mvp',
+            label: 'Headless MVP',
+            kind: 'release',
+            state: 'active',
+            source: { kind: 'release_plan', refs: ['import:docs/harness/implementation-roadmap.md'], confidence: 'high', inferred: false },
+          },
           summary: {
-            selectedScopeLabel: 'Current task scope',
+            selectedScopeLabel: 'Headless MVP',
+            selectedReleaseLabel: 'Headless MVP',
             includedWorkCount: 2,
             deferredWorkCount: 0,
             progress: {
@@ -118,7 +126,8 @@ describe('ProjectMapTab', () => {
 
     expect(screen.getByRole('heading', { name: 'Project map' })).toBeInTheDocument()
     expect(screen.getByText('Build a fiction-first planning and review harness.')).toBeInTheDocument()
-    expect(screen.getAllByText('Current task scope').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getByRole('heading', { name: 'Release scope' })).toBeInTheDocument()
+    expect(screen.getAllByText('Headless MVP').length).toBeGreaterThanOrEqual(1)
     expect(screen.getAllByText('Coherence').length).toBeGreaterThanOrEqual(1)
     expect(screen.getAllByText('Coherence reviewer MVP').length).toBeGreaterThanOrEqual(1)
     expect(screen.queryByText('Internal CLI proof')).not.toBeInTheDocument()
@@ -133,6 +142,7 @@ describe('ProjectMapTab', () => {
     expect(screen.getByText('Script or command proof for Coherence reviewer MVP.')).toBeInTheDocument()
     expect(screen.getByText('2 source documents')).toBeInTheDocument()
     expect(screen.getByText('implementation-roadmap.md, architecture-notes.md')).toBeInTheDocument()
+    expect(screen.getByText('Headless MVP contains 2 assigned work items and 0 later.')).toBeInTheDocument()
     expect(screen.getByText('Source: implementation-roadmap.md')).toBeInTheDocument()
     expect(screen.getAllByText('Source: architecture-notes.md').length).toBeGreaterThanOrEqual(1)
     expect(screen.getByText('Document-level artifact references are not attached to every lane yet.')).toBeInTheDocument()

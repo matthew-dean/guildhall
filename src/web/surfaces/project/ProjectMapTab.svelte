@@ -56,7 +56,8 @@
   const selectedRelease = $derived(spine?.selectedRelease ?? null)
   const selectedTaskScope = $derived(spine?.selectedTaskScope ?? spine?.scope ?? null)
   const taskScopeLabel = $derived(spine?.summary?.selectedScopeLabel ?? selectedTaskScope?.label ?? spine?.summary?.selectedReleaseLabel ?? selectedRelease?.label ?? 'Current task scope')
-  const workContainerTitle = $derived('Task scope')
+  const selectedScopeSource = $derived(selectedRelease?.source ?? selectedTaskScope?.source)
+  const workContainerTitle = $derived(selectedRelease ? 'Release scope' : 'Task scope')
   const mapGaps = $derived.by(() => {
     return (spine?.gaps ?? []).slice(0, 5).map(gap => ({
       ...gap,
@@ -92,9 +93,9 @@
       },
       {
         label: 'Scope',
-        value: sourceLabelFor(selectedTaskScope?.source),
+        value: sourceLabelFor(selectedScopeSource),
         detail: `${taskScopeLabel} contains ${spine.summary?.includedWorkCount ?? spine.summary?.includedCount ?? 0} assigned work items and ${spine.summary?.deferredWorkCount ?? spine.summary?.deferredCount ?? 0} later.`,
-        tone: sourceIsInferred(selectedTaskScope?.source) ? 'warn' as Tone : 'ok' as Tone,
+        tone: sourceIsInferred(selectedScopeSource) ? 'warn' as Tone : 'ok' as Tone,
       },
       {
         label: 'Source docs',
@@ -289,7 +290,7 @@
     </div>
     <Card title={workContainerTitle} titleTag="h2" padding="compact" density="dense" className="map-scope-card">
       <div class="scope-stack">
-        <Chip label={taskScopeLabel} tone={sourceIsInferred(selectedTaskScope?.source) ? 'warn' : 'accent'} />
+        <Chip label={taskScopeLabel} tone={sourceIsInferred(selectedScopeSource) ? 'warn' : 'accent'} />
         <strong>{countLabel(spine?.summary?.includedWorkCount ?? spine?.summary?.includedCount, 'assigned work item')}</strong>
         <span>{countLabel(documentedCapabilityCount, 'documented capability', 'documented capabilities')} · {countLabel(documentedLaterCount, 'later capability', 'later capabilities')} · {countLabel(sourceGapCount, 'gap')}</span>
       </div>

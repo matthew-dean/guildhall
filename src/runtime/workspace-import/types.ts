@@ -59,6 +59,12 @@ export interface WorkspaceSignal {
    * bounded scope or should stay visible as later/deferred scope.
    */
   scopeHint?: 'current' | 'later'
+  /**
+   * Optional explicit release/scope container documented by the source. This
+   * must come from owner-visible project material, not from generic current vs
+   * later inference.
+   */
+  releaseId?: string
   /** How confident the source is that this signal means what it claims. */
   confidence: 'high' | 'medium' | 'low'
 }
