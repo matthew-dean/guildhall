@@ -12108,6 +12108,68 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-07-03T22:39:00Z - Added per-row source document provenance to the
+Project Map so Guildhall visibly proves where orientation claims came from.
+
+- Work id: `codex:narrative-harness-map-row-source-2026-07-03`.
+- User job: a project owner should be able to open Narrative Harness Map and
+  see not only that source documents exist, but which source document supports
+  a specific work or capability row. The proof standard is visible
+  communication in Guildhall, not Codex-only inference from project files.
+- Fix:
+  - Project Map task and capability child rows now render a compact
+    `Source: filename.md` line when the orientation spine node has imported
+    source refs.
+  - Rows resolve through canonical `spine.nodes[id]` first, so a visible child
+    receives the registered source refs even when the parent list contains a
+    compact node copy.
+  - Clickable work rows keep an explicit action label of work title plus status,
+    so the visible source line does not pollute the accessible button name.
+- Contract Touch Decision:
+  - Work id: `codex:narrative-harness-map-row-source-2026-07-03`.
+  - Touched contracts: Project Map row presentation and
+    `ProjectMapTab.svelte` regression coverage.
+  - Contracts considered but not touched: persisted project schema, orientation
+    spine source-ref schema, task schema, import model.
+  - Required follow-up: continue proving that deeper source refs are attached
+    to every generated lane after the Narrative Harness re-intake. This change
+    only renders refs already present in the spine.
+  - Proof required: focused Map regression, adjacent Overview/orientation spine
+    regression, installed-app desktop/mobile proof on
+    `/projects/narrative-harness/map`.
+  - Proof provided:
+    `./node_modules/.bin/vitest run src/web/surfaces/project/__tests__/ProjectMapTab.svelte.test.ts`;
+    `./node_modules/.bin/vitest run src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts src/web/surfaces/project/__tests__/ProjectMapTab.svelte.test.ts src/runtime/__tests__/project-orientation-spine.test.ts`;
+    build via `node build.mjs` with the local pnpm/vite shim; installed app
+    `/api/stale-server` returned `stale:false`.
+  - Waivers: in-app Browser bridge remained unreliable, so installed-app proof
+    used local Playwright against `http://127.0.0.1:7777`.
+  - Owner-review items: verify whether the row source treatment is enough for
+    fast trust, or whether rows should expose an expandable "why this claim"
+    affordance once source refs are richer.
+  - Apply/revert behavior: presentation-only; reverting removes row-level
+    source labels and tests without migrating user data.
+- Installed-app proof:
+  - Route: `/projects/narrative-harness/map`.
+  - Desktop `1280x720`: visible row source lines included
+    `Source: architecture-notes.md`, `Source: implementation-roadmap.md`,
+    `Source: author-involvement-modes.md, remaining-spec-decomposition-inventory.md`,
+    `Source: agent-context-packets-and-compaction.md`, and
+    `Source: story-intelligence-overview.md`; `clientWidth:1280`,
+    `scrollWidth:1280`, no clipped elements.
+  - Mobile `390x820`: the same row source lines were present;
+    `clientWidth:390`, `scrollWidth:390`, no clipped elements.
+  - Global Source trail still showed `Source docs`, `24 source documents`, and
+    representative files including `implementation-roadmap.md`,
+    `remaining-spec-decomposition-inventory.md`,
+    `schema-contract-roadmap.md`, and `agent-decision-trees.md`.
+  - Screenshot artifacts:
+    `/tmp/guildhall-nh-map-row-source-desktop.png`,
+    `/tmp/guildhall-nh-map-row-source-mobile.png`, and
+    `/tmp/guildhall-nh-map-source-trail-current.png`.
+
+source: codex:narrative-harness-map-row-source-2026-07-03
+
 2026-07-03T22:00:00Z - Corrected Narrative Harness scoped-work waiting
 language so Guildhall communicates the work state it has, rather than merely
 preparing it for scheduling.

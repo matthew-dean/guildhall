@@ -230,6 +230,24 @@
     return nodes
   }
 
+  function canonicalNode(node: ProjectOrientationNode): ProjectOrientationNode {
+    return (node.id ? spine?.nodes?.[node.id] : null) ?? node
+  }
+
+  function importSourceLabels(node: ProjectOrientationNode): string[] {
+    const source = canonicalNode(node).source
+    const refs = source && typeof source === 'object' ? source.refs ?? [] : []
+    return refs
+      .filter(ref => ref.startsWith('import:'))
+      .map(sourceRefLabel)
+      .filter(Boolean)
+  }
+
+  function nodeSourceSummary(node: ProjectOrientationNode): string | null {
+    const labels = importSourceLabels(node)
+    return labels.length > 0 ? `Source: ${labels.slice(0, 2).join(', ')}` : null
+  }
+
   function sourceRefLabel(ref: string): string {
     const value = ref.startsWith('import:') ? ref.slice('import:'.length) : ref
     const parts = value.split('/').filter(Boolean)
@@ -358,12 +376,18 @@
                       className="child-row"
                       tone={laneTone(child)}
                       dense
+                      ariaLabel={childHref(child) ? `${child.title ?? 'Untitled work'} ${maturityLabel(child)}` : undefined}
                       onclick={() => {
                         const href = childHref(child)
                         if (href) go(href)
                       }}
                     >
-                      <span>{child.title ?? 'Untitled work'}</span>
+                      <span>
+                        {child.title ?? 'Untitled work'}
+                        {#if nodeSourceSummary(child)}
+                          <small>{nodeSourceSummary(child)}</small>
+                        {/if}
+                      </span>
                       <Chip label={maturityLabel(child)} tone={laneTone(child)} />
                     </CardListItem>
                   {/each}
@@ -396,7 +420,12 @@
                   <div class="child-list">
                     {#each supportingChildren(root).slice(0, 4) as child (child.id ?? child.title)}
                       <CardListItem className="child-row" tone={child.maturity === 'deferred' ? 'neutral' : laneTone(child)} dense>
-                        <span>{child.title ?? 'Untitled capability'}</span>
+                        <span>
+                          {child.title ?? 'Untitled capability'}
+                          {#if nodeSourceSummary(child)}
+                            <small>{nodeSourceSummary(child)}</small>
+                          {/if}
+                        </span>
                         <Chip label={child.maturity === 'deferred' ? 'Later' : maturityLabel(child)} tone={child.maturity === 'deferred' ? 'neutral' : laneTone(child)} />
                       </CardListItem>
                     {/each}
@@ -670,7 +699,15 @@
   }
 
   :global(.child-row span) {
+    display: grid;
+    gap: var(--s-1);
     overflow-wrap: anywhere;
+  }
+
+  :global(.child-row small) {
+    color: var(--text-muted);
+    font-size: var(--gh-type-size-caption);
+    line-height: var(--gh-type-line-height-tight);
   }
 
   :global(.proof-contract-row div) {

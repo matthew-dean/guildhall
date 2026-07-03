@@ -133,6 +133,8 @@ describe('ProjectMapTab', () => {
     expect(screen.getByText('Script or command proof for Coherence reviewer MVP.')).toBeInTheDocument()
     expect(screen.getByText('2 source documents')).toBeInTheDocument()
     expect(screen.getByText('implementation-roadmap.md, architecture-notes.md')).toBeInTheDocument()
+    expect(screen.getByText('Source: implementation-roadmap.md')).toBeInTheDocument()
+    expect(screen.getAllByText('Source: architecture-notes.md').length).toBeGreaterThanOrEqual(1)
     expect(screen.getByText('Document-level artifact references are not attached to every lane yet.')).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Gaps to resolve' })).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Open questions' })).not.toBeInTheDocument()
