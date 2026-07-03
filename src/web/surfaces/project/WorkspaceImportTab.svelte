@@ -55,6 +55,8 @@
     areaKey: string
     areaLabel: string
     taskCount: number
+    currentTaskCount: number
+    laterTaskCount: number
     milestoneCount: number
     goalCount: number
     contextCount: number
@@ -67,6 +69,8 @@
     key: string
     label: string
     taskCount: number
+    currentTaskCount: number
+    laterTaskCount: number
     milestoneCount: number
     goalCount: number
     contextCount: number
@@ -342,6 +346,8 @@
   const completedParsedSourceCount = $derived(data?.detected?.review?.sourceGroups?.length ?? 0)
   const completedParsedGoalCount = $derived(data?.parsed?.goals?.length ?? data?.detected?.review?.totalGoals ?? 0)
   const completedParsedMilestoneCount = $derived(data?.parsed?.milestones?.length ?? data?.detected?.review?.totalMilestones ?? 0)
+  const completedCurrentTaskCount = $derived(data?.detected?.review?.totalCurrentTaskCandidates ?? 0)
+  const completedLaterTaskCount = $derived(data?.detected?.review?.totalLaterTaskCandidates ?? 0)
 
   function selectArea(key: string) {
     const area = areaGroups.find(item => item.key === key)
@@ -477,6 +483,16 @@
       parts.push(`${area.sourceCount} planning source${area.sourceCount === 1 ? '' : 's'}`)
     }
     return parts.join(' · ')
+  }
+
+  function scopeTaskSummary(item: Pick<AreaGroup | SourceGroup, 'taskCount' | 'currentTaskCount' | 'laterTaskCount'>): string {
+    if (item.taskCount === 0) return '0 tasks'
+    if (item.currentTaskCount > 0 && item.laterTaskCount > 0) {
+      return `${item.currentTaskCount} now · ${item.laterTaskCount} later`
+    }
+    if (item.currentTaskCount > 0) return `${item.currentTaskCount} now`
+    if (item.laterTaskCount > 0) return `${item.laterTaskCount} later`
+    return `${item.taskCount} task${item.taskCount === 1 ? '' : 's'}`
   }
 
   function sourceSummary(group: SourceGroup): string {
@@ -911,6 +927,12 @@
             {#if completedParsedTaskCount > 0}
               <Chip label={`${completedParsedTaskCount} proposed task${completedParsedTaskCount === 1 ? '' : 's'}`} tone="ok" />
             {/if}
+            {#if completedCurrentTaskCount > 0}
+              <Chip label={`${completedCurrentTaskCount} now`} tone="ok" />
+            {/if}
+            {#if completedLaterTaskCount > 0}
+              <Chip label={`${completedLaterTaskCount} later`} tone="neutral" />
+            {/if}
             {#if completedParsedGoalCount > 0}
               <Chip label={`${completedParsedGoalCount} goal${completedParsedGoalCount === 1 ? '' : 's'}`} tone="neutral" />
             {/if}
@@ -922,6 +944,20 @@
             {/if}
           </div>
         </div>
+        {#if importSummary}
+          <div class="scope-summary" aria-label="Completed import scope summary">
+            <div class="scope-summary-header">
+              <strong>{importSummary.headline}</strong>
+            </div>
+            <p>{importSummary.currentScope}</p>
+            {#if importSummary.deferredScope}
+              <p>{importSummary.deferredScope}</p>
+            {/if}
+            {#if importSummary.structuralScope}
+              <p>{importSummary.structuralScope}</p>
+            {/if}
+          </div>
+        {/if}
         {#if completedMissingTaskCount > 0}
           <p class="learned-note">
             {completedMissingTaskCount} proposed task{completedMissingTaskCount === 1 ? '' : 's'} from this import
@@ -1028,7 +1064,7 @@
                         <strong>{area.label}</strong>
                       </div>
                       <div class="metric-row">
-                        <Chip label={`${area.taskCount} tasks`} tone="ok" />
+                        <Chip label={scopeTaskSummary(area)} tone="ok" />
                         <Chip label={`${area.sourceCount} sources`} tone="neutral" />
                       </div>
                     </div>
@@ -1120,7 +1156,7 @@
                       </span>
                     </div>
                     <div class="metric-row">
-                      <Chip label={`${area.taskCount} tasks`} tone="ok" />
+                      <Chip label={scopeTaskSummary(area)} tone="ok" />
                       <Chip label={`${area.sourceCount} sources`} tone="neutral" />
                     </div>
                     <div class="source-path">{sourcePreview(area)}</div>
@@ -1256,7 +1292,7 @@
                       </div>
                       <div class="metric-row">
                         {#if group.taskCount > 0}
-                          <Chip label={`${group.taskCount} tasks`} tone="ok" />
+                          <Chip label={scopeTaskSummary(group)} tone="ok" />
                         {/if}
                         {#if group.milestoneCount > 0}
                           <Chip label={`${group.milestoneCount} milestones`} tone="warn" />

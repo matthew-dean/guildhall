@@ -62,6 +62,49 @@ function blockedTaskCount(detail: ProjectDetail | null | undefined): number {
   return (detail?.tasks ?? []).filter(task => (task.status ?? '') === 'blocked').length
 }
 
+function orientationText(value: unknown): string | null {
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    return trimmed.length > 0 ? trimmed : null
+  }
+  if (value && typeof value === 'object') {
+    const label = (value as { label?: unknown }).label
+    if (typeof label === 'string' && label.trim().length > 0) return label.trim()
+  }
+  return null
+}
+
+function scopedWorkTicker(
+  detail: ProjectDetail | null | undefined,
+  active: number,
+  blocked: number,
+): ProjectActivityLine | null {
+  const summary = detail?.orientationSpine?.summary
+  const included = summary?.includedWorkCount
+  if (!Number.isFinite(included) || included == null || included <= 0) return null
+  if (active <= 0) return null
+
+  const deferred = summary?.deferredWorkCount ?? 0
+  const hasScopeBoundary = deferred > 0 || included !== active
+  if (!hasScopeBoundary) return null
+
+  const topBlocker = orientationText(summary?.topBlocker)
+  const nextAction = orientationText(summary?.nextAction)
+  const scopeLabel = summary?.selectedScopeLabel?.trim() || 'Current scope'
+  const currentText = `${included} current ${pluralize(included, 'task')}`
+  const deferredText = deferred > 0 ? `${deferred} later` : null
+
+  return {
+    tone: topBlocker ? 'warn' : 'idle',
+    pulse: false,
+    actorLabel: scopeLabel,
+    label: scopeLabel,
+    message: deferredText ? `${currentText}; ${deferredText}` : `${currentText} when you resume`,
+    detail: topBlocker ?? nextAction ?? (blocked > 0 ? `${blocked} blocked ${pluralize(blocked, 'task')}` : undefined),
+    timeLabel: null,
+  }
+}
+
 function lineFromEvent(
   detail: ProjectDetail | null | undefined,
   event: EventEnvelope | null,
@@ -336,6 +379,8 @@ export function buildProjectTicker(
       timeLabel: null,
     }
   }
+  const scopedLine = scopedWorkTicker(detail, active, blocked)
+  if (scopedLine) return scopedLine
   if (active > 0) {
     return {
       tone: 'idle',

@@ -35,6 +35,7 @@ const detectedDraft = {
         title: 'Knit: add link editor controls',
         description: 'Build URL input, display text, open-in-new-tab, and remove link controls.',
         domain: 'editor',
+        scope: 'current',
         priority: 'high',
         source: 'docs/roadmap.md',
         references: ['docs/roadmap.md', 'web/app/components/editor/toolbar.ts'],
@@ -45,6 +46,7 @@ const detectedDraft = {
         title: 'Knit: preview saved links',
         description: 'Show a compact preview after inserting a link.',
         domain: 'editor',
+        scope: 'later',
         priority: 'normal',
         source: 'docs/notes.md',
         references: ['docs/notes.md'],
@@ -72,6 +74,8 @@ const detectedDraft = {
           key: 'knit',
           label: 'Knit',
           taskCount: 2,
+          currentTaskCount: 1,
+          laterTaskCount: 1,
           milestoneCount: 1,
           goalCount: 1,
           contextCount: 1,
@@ -83,6 +87,8 @@ const detectedDraft = {
           key: 'looma',
           label: 'Looma',
           taskCount: 0,
+          currentTaskCount: 0,
+          laterTaskCount: 0,
           milestoneCount: 0,
           goalCount: 0,
           contextCount: 1,
@@ -99,6 +105,8 @@ const detectedDraft = {
           areaKey: 'knit',
           areaLabel: 'Knit',
           taskCount: 1,
+          currentTaskCount: 1,
+          laterTaskCount: 0,
           milestoneCount: 1,
           goalCount: 1,
           contextCount: 0,
@@ -114,6 +122,8 @@ const detectedDraft = {
           areaKey: 'knit',
           areaLabel: 'Knit',
           taskCount: 1,
+          currentTaskCount: 0,
+          laterTaskCount: 1,
           milestoneCount: 0,
           goalCount: 0,
           contextCount: 1,
@@ -129,6 +139,8 @@ const detectedDraft = {
           areaKey: 'looma',
           areaLabel: 'Looma',
           taskCount: 0,
+          currentTaskCount: 0,
+          laterTaskCount: 0,
           milestoneCount: 0,
           goalCount: 0,
           contextCount: 1,
@@ -138,7 +150,20 @@ const detectedDraft = {
           taskIds: [],
         },
       ],
+      summary: {
+        currentMilestoneLabel: 'Stage 1: V1 Release Hardening',
+        headline: 'Current import scope',
+        currentScope: '1 current task candidate from active release scope.',
+        deferredScope: '1 later task candidate is deferred.',
+        structuralScope: '1 capability note grounds the current scope.',
+        briefInputCount: 0,
+        briefRecordCount: 0,
+        capabilityCount: 1,
+        capabilityRecordCount: 0,
+      },
       totalTaskCandidates: 2,
+      totalCurrentTaskCandidates: 1,
+      totalLaterTaskCandidates: 1,
       totalMilestones: 1,
       totalGoals: 1,
     },
@@ -368,6 +393,10 @@ describe('WorkspaceImportTab', () => {
     await screen.findByText('This project import has already been approved.')
     expect(screen.queryByText(/Found planning notes/)).toBeNull()
     expect(screen.getByText('2 proposed tasks')).toBeTruthy()
+    expect(screen.getByText('1 now')).toBeTruthy()
+    expect(screen.getByText('1 later')).toBeTruthy()
+    expect(screen.getByLabelText('Completed import scope summary')).toBeTruthy()
+    expect(screen.getByText('1 current task candidate from active release scope.')).toBeTruthy()
 
     await userEvent.click(screen.getByRole('button', { name: /restore 2 missing drafts/i }))
 

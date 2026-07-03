@@ -271,6 +271,35 @@ describe('buildProjectTicker', () => {
       buildProjectTicker(
         {
           tasks: [
+            { id: 'parent-1', status: 'spec_review', title: 'Define schema contracts' },
+            { id: 'parent-2', status: 'ready', title: 'Implement runner' },
+            { id: 'child-1', status: 'exploring', title: 'Split child one' },
+            { id: 'child-2', status: 'exploring', title: 'Split child two' },
+          ],
+          orientationSpine: {
+            summary: {
+              selectedScopeLabel: 'Current task scope',
+              includedWorkCount: 2,
+              deferredWorkCount: 12,
+              topBlocker: 'Define schema contracts is waiting for spec review.',
+            },
+          },
+        },
+        null,
+        now,
+      ),
+    ).toMatchObject({
+      tone: 'warn',
+      actorLabel: 'Current task scope',
+      label: 'Current task scope',
+      message: '2 current tasks; 12 later',
+      detail: 'Define schema contracts is waiting for spec review.',
+    })
+
+    expect(
+      buildProjectTicker(
+        {
+          tasks: [
             { id: 'task-import-1', status: 'import_draft', title: 'Review existing work' },
             { id: 'task-import-2', status: 'import_draft', title: 'Review more work' },
             { id: 'done-1', status: 'done', title: 'Finished' },

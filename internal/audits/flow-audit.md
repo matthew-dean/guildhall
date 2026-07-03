@@ -12108,6 +12108,89 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-07-03T20:05:00Z - Made completed workspace imports and status chrome
+prove the same recovered scope.
+
+- Work id: `codex:narrative-harness-import-visible-scope-2026-07-03`.
+- User job: after Guildhall recovers project truth from a completed workspace
+  import, a project owner should be able to see what work was found, what is
+  in the current scope, what is deferred, what context records ground that
+  scope, and whether the global status chrome agrees with the same current
+  work boundary.
+- Escaped finding: Narrative Harness workspace import had recovered
+  `6` current task candidates and `12` later/deferred task candidates, but the
+  completed import page only looked like generic saved context. Browser proof
+  then exposed a second contradiction: the bottom status chrome said
+  `26 tasks ready when you resume` because it counted raw non-terminal task
+  rows, including split child rows, instead of consuming the scoped orientation
+  summary.
+- Fix:
+  - Completed workspace-import summaries now show proposed task count, `now`
+    count, `later` count, source/goal counts, and the recovered scope summary.
+  - Area/source rows use the same now/later task summary when scope data is
+    available instead of collapsing everything to a flat task count.
+  - The project activity ticker now consumes `orientationSpine.summary` when
+    a scoped work boundary exists, so status chrome says the selected current
+    scope and deferred work count instead of double-counting split children.
+- Installed-app proof:
+  - Built with direct checks because `pnpm dev:install` currently prompts
+    during `pnpm install --production` in this non-interactive shell.
+  - Replaced only `/Users/matthew/.guildhall/app/0.10.1/app/dist` with the
+    freshly built `dist`, then restarted Guildhall.
+  - `/api/stale-server` returned `stale:false` for PID `89406` with
+    `bootBuildMtimeMs` equal to `currentBuildMtimeMs` at
+    `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+- API proof:
+  - `/api/project/workspace-import/draft?projectId=narrative-harness` returned
+    `taskStatus:"done"`, `specReady:true`, `total:18`, `now:6`, `later:12`,
+    and the summary `The current docs name 6 tasks to work on now.`
+  - `/api/project?projectId=narrative-harness` returned
+    `orientationSpine.summary.includedWorkCount:6`,
+    `deferredWorkCount:12`, and top blocker
+    `Define fixture, expected-record, prototype-run, and evaluation schemas is
+    waiting for spec review.`
+- Browser proof against installed `localhost:7777`:
+  - Route `/projects/narrative-harness/workspace-import`, viewport
+    `1280x720`: visible import card text included `18 proposed tasks`,
+    `6 now`, `12 later`, `Stage 0: Spec Baseline is the current scoped
+    milestone.`, the current-scope sentence, the later/deferred sentence, and
+    the project-skeleton grounding sentence.
+  - The same route's bottom chrome now reads `Current task scope` and
+    `6 current tasks; 12 later - Define fixture, expected-record, prototype-run,
+    and evaluation schemas is waiting for spec review.`
+  - The bad prior copy `26 tasks ready when you resume` was not present.
+  - Desktop `1280x720`, narrow `900x720`, and mobile `390x844` had
+    `scrollWidth === clientWidth` and no clipped scope/metric elements.
+- Contract Touch Decision:
+  - Touched contracts: `ui_component` and `documentation_help` for
+    `WorkspaceImportTab.svelte`, `project-activity.ts`, and their focused
+    tests.
+  - Contracts considered but not touched: persisted workspace-import snapshot
+    schema, task schema, release schema, and runtime orientation-spine builder.
+    The runtime already exposes the needed scope counts; this slice only makes
+    existing web surfaces consume and display that shared state.
+  - Required follow-up: fix the non-interactive `pnpm dev:install` packaging
+    prompt separately so installed-app proof can use the normal script again.
+  - Proof required/provided: focused component/unit tests, UI package typecheck,
+    Vite production build, contract detector after this decision, stale-server
+    freshness, API proof, browser text proof, and desktop/narrow/mobile
+    geometry proof.
+  - Owner-review items: none for schema or model semantics; the visible wording
+    is intentionally plain and scope-count based.
+  - Apply/revert behavior: reverting this slice restores the previous generic
+    completed-import copy and raw active-task ticker count; no data migration
+    or persisted state cleanup is needed.
+- Verification:
+  - `./node_modules/.bin/vitest run src/web/surfaces/project/__tests__/WorkspaceImportTab.svelte.test.ts src/web/lib/__tests__/project-activity.test.ts`
+    passed `30` tests.
+  - `node packages/ui/scripts/generate-styles.mjs`
+  - `./node_modules/.bin/tsc -p packages/ui/tsconfig.json`
+  - `./node_modules/.bin/vite build`
+  - Browser proof used system Chrome because the local Playwright browser cache
+    was missing.
+
+source: codex:narrative-harness-import-visible-scope-2026-07-03
+
 2026-06-18T22:20:00Z - Tightened workspace-import truth recovery and
 owner-visible draft communication for Narrative Harness and Looma/Knit.
 
