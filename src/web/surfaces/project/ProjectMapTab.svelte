@@ -70,14 +70,17 @@
     if (!spine) return []
     const taskRefs = new Set<string>()
     const artifactRefs = new Set<string>()
-    for (const node of Object.values(spine.nodes ?? {})) {
+    const importRefs = new Set<string>()
+    for (const node of collectSourceNodes(spine)) {
       const refs = node.source && typeof node.source === 'object' ? node.source.refs ?? [] : []
       for (const ref of refs) {
         if (ref.startsWith('task:')) taskRefs.add(ref)
         if (ref.startsWith('artifact:')) artifactRefs.add(ref)
+        if (ref.startsWith('import:')) importRefs.add(ref)
       }
       for (const artifactId of node.refs?.artifactIds ?? []) artifactRefs.add(`artifact:${artifactId}`)
     }
+    const sourceDocNames = [...importRefs].map(sourceRefLabel).filter(Boolean)
     return [
       {
         label: 'Charter',
@@ -92,6 +95,14 @@
         value: sourceLabelFor(selectedTaskScope?.source),
         detail: `${taskScopeLabel} contains ${spine.summary?.includedWorkCount ?? spine.summary?.includedCount ?? 0} assigned work items and ${spine.summary?.deferredWorkCount ?? spine.summary?.deferredCount ?? 0} later.`,
         tone: sourceIsInferred(selectedTaskScope?.source) ? 'warn' as Tone : 'ok' as Tone,
+      },
+      {
+        label: 'Source docs',
+        value: countLabel(importRefs.size, 'source document'),
+        detail: sourceDocNames.length > 0
+          ? sourceDocNames.slice(0, 4).join(', ')
+          : 'No source documents are attached to mapped claims yet.',
+        tone: importRefs.size > 0 ? 'ok' as Tone : 'warn' as Tone,
       },
       {
         label: 'Work records',
@@ -201,6 +212,28 @@
     if (state === 'proven') return 'ok'
     if (state === 'partial' || state === 'needed') return 'warn'
     return 'neutral'
+  }
+
+  function collectSourceNodes(spine: ProjectOrientationSpine): ProjectOrientationNode[] {
+    const nodes: ProjectOrientationNode[] = []
+    const seen = new Set<string>()
+    const add = (node: ProjectOrientationNode | undefined) => {
+      if (!node) return
+      const key = node.id ?? `${node.title ?? 'node'}:${nodes.length}`
+      if (seen.has(key)) return
+      seen.add(key)
+      nodes.push(node)
+      for (const child of node.children ?? []) add(child)
+    }
+    for (const node of Object.values(spine.nodes ?? {})) add(node)
+    for (const node of spine.roots ?? []) add(node)
+    return nodes
+  }
+
+  function sourceRefLabel(ref: string): string {
+    const value = ref.startsWith('import:') ? ref.slice('import:'.length) : ref
+    const parts = value.split('/').filter(Boolean)
+    return parts.at(-1) ?? value
   }
 
   function gapHref(gap: { refs?: string[]; nodeId?: string }): string | null {

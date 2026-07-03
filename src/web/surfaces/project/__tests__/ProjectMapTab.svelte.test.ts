@@ -100,7 +100,7 @@ describe('ProjectMapTab', () => {
             'work:task-a': {
               id: 'work:task-a',
               title: 'Coherence reviewer MVP',
-              source: { kind: 'task', refs: ['task:task-a'] },
+              source: { kind: 'task', refs: ['task:task-a', 'import:docs/harness/implementation-roadmap.md'] },
               refs: { taskIds: ['task-a'] },
             },
           },
@@ -131,10 +131,12 @@ describe('ProjectMapTab', () => {
     expect(screen.getAllByText('Headless proof').length).toBeGreaterThanOrEqual(1)
     expect(screen.getByRole('heading', { name: 'Proof contract' })).toBeInTheDocument()
     expect(screen.getByText('Script or command proof for Coherence reviewer MVP.')).toBeInTheDocument()
+    expect(screen.getByText('2 source documents')).toBeInTheDocument()
+    expect(screen.getByText('implementation-roadmap.md, architecture-notes.md')).toBeInTheDocument()
     expect(screen.getByText('Document-level artifact references are not attached to every lane yet.')).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Gaps to resolve' })).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Open questions' })).not.toBeInTheDocument()
-    expect(container.querySelectorAll('.source-fact')).toHaveLength(4)
+    expect(container.querySelectorAll('.source-fact')).toHaveLength(5)
     expect(container.querySelector('.source-row')).toBeNull()
 
     await fireEvent.click(screen.getByRole('button', { name: 'Coherence reviewer MVP Active' }))

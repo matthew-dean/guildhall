@@ -12243,6 +12243,68 @@ language in the 100-foot Overview surface.
 
 source: codex:narrative-harness-overview-waiting-label-2026-07-03
 
+2026-07-03T22:23:00Z - Made the 1,000-foot Project Map expose source
+documents directly in the Source trail.
+
+- Work id: `codex:narrative-harness-map-source-docs-2026-07-03`.
+- User job: a user reading Project Map should be able to tell which real
+  planning/source documents Guildhall used to recover the project structure
+  without asking Codex to inspect the repo.
+- Finding:
+  - The orientation spine carried `import:` refs from Narrative Harness docs,
+    but Project Map's Source trail only summarized charter/scope/task/artifact
+    records.
+  - Result: the user could see that Guildhall had a source trail, but not the
+    actual documents behind mapped claims.
+- Fix:
+  - Project Map now walks both the orientation node map and rendered root tree,
+    dedupes `import:` refs, and renders a `Source docs` row with the number of
+    source documents and representative filenames.
+- State agreement proof:
+  - API `/api/project?projectId=narrative-harness`: orientation source refs
+    include 24 unique imported documents. Sample refs include
+    `docs/harness/implementation-roadmap.md`,
+    `docs/specs/debuggability-and-traceability.md`,
+    `docs/specs/schema-contract-roadmap.md`,
+    `docs/harness/prototype-iteration-workflow.md`, and
+    `docs/harness/architecture-notes.md`.
+  - Browser route `/projects/narrative-harness/map` at `1280x720`: Source trail
+    includes `Source docs`, `24 source documents`, and visible filenames
+    including `implementation-roadmap.md`,
+    `remaining-spec-decomposition-inventory.md`,
+    `schema-contract-roadmap.md`, and `agent-decision-trees.md`.
+  - Mobile `390x820`: same Source trail content visible.
+  - Desktop geometry was `clientWidth: 1280`, `scrollWidth: 1280`,
+    `bodyScrollWidth: 1280`; mobile geometry was `clientWidth: 390`,
+    `scrollWidth: 390`, `bodyScrollWidth: 390`.
+  - Screenshots:
+    `/tmp/guildhall-nh-map-source-docs-desktop.png` and
+    `/tmp/guildhall-nh-map-source-docs-mobile.png`.
+- Contract Touch Decision:
+  - Work id: `codex:narrative-harness-map-source-docs-2026-07-03`.
+  - Touched contracts: Project Map Source trail presentation and
+    ProjectMapTab source-row test fixture.
+  - Contracts considered but not touched: persisted orientation-spine schema,
+    source ref schema, import/ref normalization, task schema, release/scope
+    schema, and artifact registry. Existing `import:` refs already carried the
+    needed truth; the gap was visible presentation.
+  - Required follow-up: Source trail still lists representative filenames only;
+    richer per-lane clickable provenance remains part of the broader orientation
+    goal.
+  - Proof required/provided: failing component regression, ProjectMap/Overview
+    and orientation tests, installed-app stale check, API source-ref count,
+    desktop/mobile rendered Map text and geometry.
+  - Waivers: local Playwright used for route proof against installed
+    `localhost:7777`.
+  - Apply/revert behavior: reverting this slice hides source documents from the
+    1,000-foot view even though the model contains them.
+- Verification:
+  `./node_modules/.bin/vitest run src/web/surfaces/project/__tests__/ProjectMapTab.svelte.test.ts`;
+  `./node_modules/.bin/vitest run src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts src/web/surfaces/project/__tests__/ProjectMapTab.svelte.test.ts src/runtime/__tests__/project-orientation-spine.test.ts`;
+  `node build.mjs`; installed-app restart; `/api/stale-server`.
+
+source: codex:narrative-harness-map-source-docs-2026-07-03
+
 2026-07-03T21:08:00Z - Tightened Overview so scoped orientation beats stale
 legacy backlog noise.
 
