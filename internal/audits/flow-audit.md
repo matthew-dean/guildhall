@@ -12108,6 +12108,69 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-07-03T21:08:00Z - Tightened Overview so scoped orientation beats stale
+legacy backlog noise.
+
+- Work id: `codex:overview-scoped-orientation-communication-2026-07-03`.
+- User job: a project owner should be able to open Overview and immediately
+  tell the current scoped work, deferred work, and true execution blocker
+  without raw historical import-draft counts competing with the scoped story.
+- Fix:
+  - Overview now filters lower-priority visible Signals when a required
+    migration owns the project blocker, so a stale draft-shaping queue is not
+    shown beside the authoritative migration action.
+  - The Work mix card uses the orientation spine as `Current scope` and
+    `Deferred` when a scoped spine exists instead of echoing raw task-status
+    buckets such as `255 Being shaped`.
+  - The work-summary card uses scoped orientation totals when a spine exists,
+    so Looma + Knit shows `73 scoped work items`, `48 in current scope`, and
+    `25 deferred` instead of a raw legacy total.
+  - Blocked starts now label the live-work section `Execution blocked` instead
+    of `Ready to resume`.
+- Contract Touch Decision:
+  - Work id: `codex:overview-scoped-orientation-communication-2026-07-03`.
+  - Touched contracts: `ProjectOverviewTab` user-visible summary contract,
+    Overview work-mix presentation, Overview Signals filtering under
+    authoritative start blockers.
+  - Contracts considered but not touched: persisted task schema,
+    workspace-import schema, orientation-spine API shape, migration API shape,
+    delivery-spine model.
+  - Required follow-up: continue moving raw status/count ownership into shared
+    summary models as additional surfaces expose contradictions.
+  - Proof required: unit/component regression for migration-blocked scoped
+    Overview, installed-app live proof against Looma + Knit, desktop and mobile
+    geometry checks.
+  - Proof provided: component regression in
+    `ProjectOverviewTab.svelte.test.ts`, focused endpoint regression in
+    `serve-settings.test.ts`, installed-app `stale:false`, and browser proof
+    below.
+  - Waivers: build ran through a temporary local `pnpm exec vite` shim because
+    the repo's pnpm wrapper attempted a non-interactive production install in
+    this shell; the committed source was not changed for that workaround.
+  - Owner-review items: none.
+  - Apply/revert behavior: revert the Overview component and test changes to
+    restore previous raw status/count rendering.
+- Installed-app proof:
+  - `/api/stale-server` returned `stale:false` for PID `71618` from
+    `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+  - Desktop `1280x820` route
+    `/projects/looma-knit/overview` showed `Required migration`,
+    `48 Current scope`, `25 Deferred`, `48 work items in view`, `25 deferred`,
+    `73 scoped work items`, and `Execution blocked`.
+  - The same desktop proof did not show `250 imported drafts need task briefs`,
+    `294 total work items`, `255 Being shaped`, or `Ready to resume`.
+  - Mobile `390x820` showed `48 Current scope`, `25 Deferred`, and
+    `Execution blocked`, did not show the stale draft/raw mix labels, and had
+    no horizontal overflow (`scrollWidth:390`, `clientWidth:390`).
+  - Screenshot artifacts:
+    `/tmp/guildhall-looma-overview-scope-proof.png` and
+    `/tmp/guildhall-looma-overview-scope-proof-mobile.png`.
+- Verification:
+  - `./node_modules/.bin/vitest run src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts src/runtime/__tests__/serve-settings.test.ts -t "ProjectOverviewTab|keeps draft-shaping queues out of needs-you"`
+    passed `24` tests with `96` skipped by filter.
+
+source: codex:overview-scoped-orientation-communication-2026-07-03
+
 2026-07-03T20:16:00Z - Added continuous-run scoped execution proof for
 approved workspace-goals scope.
 

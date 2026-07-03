@@ -809,6 +809,55 @@ describe('POST /api/project/start', () => {
     })
   })
 
+  it('keeps draft-shaping queues out of needs-you while a required migration owns the project blocker', async () => {
+    const yamlPath = path.join(tmpDir, 'guildhall.yaml')
+    const current = await fs.readFile(yamlPath, 'utf8')
+    await fs.writeFile(
+      yamlPath,
+      current +
+        '\nbootstrap:\n  verifiedAt: "2026-04-24T00:00:00Z"\n  packageManager: pnpm\n  install: { command: "pnpm install", status: ok }\n  gates:\n    lint: { command: "pnpm lint", available: true }\n',
+      'utf8',
+    )
+    await writeSystemJson('workspace-goals.json', { goals: [{ id: 'stage-1', title: 'Stage 1' }] })
+    await writeSystemText(
+      'project-brief.md',
+      'This project already has a scoped import outcome and a current stage.\n',
+    )
+    await writeSystemJson(
+      'TASKS.json',
+      {
+        version: 1,
+        lastUpdated: '2026-06-18T00:00:00.000Z',
+        tasks: [
+          {
+            id: 'task-import-a',
+            title: 'Version diff view (deferred)',
+            status: 'import_draft',
+          },
+          {
+            id: 'task-import-b',
+            title: 'Scope current release proof',
+            status: 'import_draft',
+            sizePlan: {
+              action: 'split_recommended',
+              recommendedChildren: [{ title: 'Child A', reason: 'Legacy child.' }],
+            },
+          },
+        ],
+      },
+    )
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const res = await app.fetch(new Request(scoped('/api/project/inbox')))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      items?: Array<Record<string, any>>
+    }
+
+    expect(body.items?.some(item => item.kind === 'required_migration')).toBe(true)
+    expect(body.items?.some(item => item.kind === 'import_draft_queue')).toBe(false)
+  })
+
   it('includes project start readiness in service summaries so fleet cards inherit start blockers', async () => {
     registerWorkspace({ id: PROJECT_ID, name: 'Settings Test', path: tmpDir, tags: [] })
     await fs.mkdir(path.join(tmpDir, 'memory'), { recursive: true })

@@ -125,7 +125,7 @@ describe('ProjectOverviewTab', () => {
     expect(screen.getByText('Open map')).toBeInTheDocument()
     expect(screen.getByText(/3 work items in view/)).toBeInTheDocument()
     expect(screen.getByText(/1 verified/)).toBeInTheDocument()
-    expect(screen.getByText(/1 blocked/)).toBeInTheDocument()
+    expect(screen.getAllByText(/1 blocked/).length).toBeGreaterThan(0)
     expect(screen.getByText(/1 missing verification/)).toBeInTheDocument()
     expect(screen.getByText(/2 deferred/)).toBeInTheDocument()
     expect(screen.getByText(/Current focus: Anti-sameness safeguards/)).toBeInTheDocument()
@@ -434,6 +434,129 @@ describe('ProjectOverviewTab', () => {
     expect(screen.getByRole('heading', { name: 'Choose a recovery path for the blocked task' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /open item/i })).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Review project discovery update' })).not.toBeInTheDocument()
+  })
+
+  it('communicates scoped orientation instead of stale draft backlog when a migration blocks execution', () => {
+    render(ProjectOverviewTab, {
+      detail: {
+        id: 'looma-knit',
+        name: 'Looma + Knit',
+        path: '/Users/matthew/git/oss/looma-knit',
+        tasks: [
+          { id: 'task-import-a', title: 'Version diff view (deferred)', status: 'import_draft' },
+          { id: 'task-current', title: 'Lock overlay positioning vocabulary before more overlay APIs ship', status: 'ready' },
+        ],
+        workProgress: {
+          counts: {
+            visibleTotal: 294,
+            visibleActive: 290,
+            visibleBlocked: 0,
+            visibleDone: 1,
+            visibleShelved: 3,
+            deliveryTotal: 4,
+            deliveryRequired: 4,
+            deliveryDone: 4,
+            deliveryBlocked: 0,
+          },
+          byTaskId: {},
+        },
+        startReadiness: {
+          canStart: false,
+          code: 'required_migration_pending',
+          message: 'Run required Guildhall migration 0.11.0/execution-planning-decomposition before starting this project.',
+          actionHref: '/migrations',
+        },
+        actionModel: {
+          primaryAction: {
+            source: 'start_readiness',
+            label: 'Required migration',
+            detail: 'Run required Guildhall migration 0.11.0/execution-planning-decomposition before starting this project.',
+            buttonLabel: 'Migrate project',
+            href: '/migrations',
+            tone: 'danger',
+            code: 'required_migration_pending',
+          },
+          secondaryActions: [],
+          runControl: {
+            label: 'Migrate',
+            startEnabled: false,
+            disabledReason: 'Run required Guildhall migration 0.11.0/execution-planning-decomposition before starting this project.',
+            href: '/migrations',
+          },
+          ownerInput: { active: false },
+          setup: { state: 'blocked', freshIntakeNeeded: false },
+        },
+        orientationSpine: {
+          scope: { label: 'Current task scope' },
+          charter: {
+            goal: 'Keep Looma generic while letting Knit product needs drive Looma primitive priority.',
+            targetAudience: 'Looma and Knit maintainers',
+          },
+          summary: {
+            headline: 'Stage 1: V1 Release Hardening is the current scoped milestone.',
+            purpose: 'Keep Looma generic while letting Knit product needs drive Looma primitive priority.',
+            selectedScopeLabel: 'Current task scope',
+            includedWorkCount: 48,
+            deferredWorkCount: 25,
+            progress: {
+              total: 73,
+              specced: 1,
+              proven: 0,
+              blocked: 0,
+              deferred: 25,
+            },
+            pinnedNow: ['Lock overlay positioning vocabulary before more overlay APIs ship'],
+            topBlocker: 'Run required Guildhall migration 0.11.0/execution-planning-decomposition before starting this project.',
+            nextAction: 'Resolve the current start blocker.',
+          },
+          gaps: [],
+          roots: [],
+          nodes: {},
+          sourceHealth: { status: 'ok', inferred: 50, gaps: 1 },
+        },
+      },
+      inboxLoaded: true,
+      inboxItems: [
+        {
+          kind: 'required_migration',
+          severity: 'high',
+          migrationId: '0.11.0/execution-planning-decomposition',
+          title: 'Required migration: Convert legacy split recommendations into execution-planning records',
+          detail: 'Run this migration before the project can update.',
+          actionHref: '/migrations',
+          blocking: true,
+          dismissible: false,
+          source: { system: 'migrations', id: '0.11.0/execution-planning-decomposition' },
+        },
+        {
+          kind: 'import_draft_queue',
+          severity: 'medium',
+          taskId: 'task-import-a',
+          title: '250 imported drafts need task briefs',
+          detail: 'Start with "Version diff view (deferred)". 249 more imported drafts are waiting behind it.',
+          actionHref: '/task/task-import-a',
+        },
+      ],
+      projectTicker: {
+        label: 'Needs migration',
+        actorLabel: 'Guildhall',
+        message: 'Required migration blocks project execution.',
+        tone: 'warn',
+        pulse: false,
+      },
+      activeProjectId: 'looma-knit',
+    })
+
+    expect(screen.getByRole('heading', { name: 'Required migration' })).toBeInTheDocument()
+    expect(screen.getByText(/48 work items in view/)).toBeInTheDocument()
+    expect(screen.getByText(/25 deferred/)).toBeInTheDocument()
+    expect(screen.getByText('48 Current scope')).toBeInTheDocument()
+    expect(screen.getByText('25 Deferred')).toBeInTheDocument()
+    expect(screen.queryByText(/250 imported drafts need task briefs/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/294 total work items/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/255 Being shaped/)).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Ready to resume' })).not.toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Execution blocked' })).toBeInTheDocument()
   })
 
   it('treats ready tasks with incomplete worker handoffs as brief cleanup on the dashboard', () => {

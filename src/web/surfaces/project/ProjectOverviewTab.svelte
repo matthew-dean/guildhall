@@ -75,7 +75,17 @@
   const tasks = $derived((detail.tasks ?? []).filter(task => !isProjectSetupTask(task)))
   const displayPath = $derived(formatUserPath(detail.path))
   const running = $derived(detail.run?.status === 'running')
-  const actionableInbox = $derived(inboxItems.filter(item => item.severity !== 'low').slice(0, 3))
+  const requiredMigrationBlocked = $derived(detail.startReadiness?.code === 'required_migration_pending')
+  const allTerminalStart = $derived(detail.startReadiness?.code === 'all_terminal')
+  const startBlocked = $derived(detail.startReadiness?.canStart === false)
+  const actionableInbox = $derived.by(() => {
+    const visible = inboxItems.filter(item => {
+      if (item.severity === 'low') return false
+      if (requiredMigrationBlocked) return item.kind === 'required_migration'
+      return true
+    })
+    return visible.slice(0, 3)
+  })
   const runtime = $derived(detail.runtime ?? null)
   const memoryHealth = $derived(detail.memoryHealth ?? null)
   const structuralMapReview = $derived(detail.structuralMapReview ?? null)
@@ -206,6 +216,25 @@
     { key: 'done', label: 'Done', count: counts.done, tone: 'done' },
     { key: 'shelved', label: 'Shelved', count: counts.shelved, tone: 'shelved' },
   ].filter(segment => segment.count > 0))
+  const workMixSegments = $derived.by((): WorkMixSegment[] => {
+    if (!orientationSpine || orientationIncludedCount + orientationDeferredCount <= 0) return segments
+    return [
+      {
+        key: 'current-scope',
+        label: 'Current scope',
+        count: orientationIncludedCount,
+        tone: requiredMigrationBlocked ? 'attention' : 'ready',
+        tooltip: `${orientationIncludedCount} work items are in the current scoped work.`,
+      },
+      {
+        key: 'deferred-scope',
+        label: 'Deferred',
+        count: orientationDeferredCount,
+        tone: 'shelved',
+        tooltip: `${orientationDeferredCount} work items are documented for later scope.`,
+      },
+    ].filter(segment => segment.count > 0)
+  })
 
   const activeTask = $derived.by(() => {
     const priority = ['in_progress', 'review', 'gate_check', 'blocked', 'spec_review', 'ready', 'exploring', 'import_draft']
@@ -226,15 +255,14 @@
       .sort((left, right) => (right.updatedAt ?? '').localeCompare(left.updatedAt ?? ''))
       .slice(0, 4)
   })
-  const requiredMigrationBlocked = $derived(detail.startReadiness?.code === 'required_migration_pending')
-  const allTerminalStart = $derived(detail.startReadiness?.code === 'all_terminal')
-  const startBlocked = $derived(detail.startReadiness?.canStart === false)
   const runPanelTitle = $derived(
     running
       ? 'Moving now'
-      : allTerminalStart
-        ? 'No runnable work'
-        : 'Ready to resume',
+      : requiredMigrationBlocked || (startBlocked && !allTerminalStart)
+        ? 'Execution blocked'
+        : allTerminalStart
+          ? 'No runnable work'
+          : 'Ready to resume',
   )
   const nextActionCardTitle = $derived(allTerminalStart ? 'Scope status' : 'Do this next')
   const emptyWorkMixLabel = $derived(
@@ -338,23 +366,39 @@
   })
 
   const knowledgeCards = $derived.by(() => {
+    const scopedProgress = orientationSpine?.summary?.progress
+    const orientationTotalCount = orientationSpine
+      ? orientationIncludedCount + orientationDeferredCount
+      : null
     const activeCount = workProgressCounts
       ? workProgressCounts.visibleActive
       : counts.working + counts.ready + counts.approval + counts.shaping
     const blockedCount = workProgressCounts?.visibleBlocked ?? counts.blocked
     const doneCount = workProgressCounts?.visibleDone ?? counts.done
     const totalCount = workProgressCounts?.visibleTotal ?? counts.total
+    const displayedActiveCount = orientationSpine ? orientationIncludedCount : activeCount
+    const displayedBlockedCount = orientationSpine
+      ? scopedProgress?.blockedCount ?? scopedProgress?.blocked ?? blockedCount
+      : blockedCount
+    const displayedDoneCount = orientationSpine
+      ? scopedProgress?.doneCount ?? scopedProgress?.done ?? doneCount
+      : doneCount
+    const displayedTotalCount = orientationTotalCount ?? totalCount
     const deliveryDetail = workProgressCounts && workProgressCounts.deliveryRequired > 0
       ? `${workProgressCounts.deliveryDone} / ${workProgressCounts.deliveryRequired} delivery steps done${workProgressCounts.deliveryBlocked ? ` · ${workProgressCounts.deliveryBlocked} blocked` : ''}.`
       : null
     const baseCards = [
       {
         label: 'Work',
-        title: `${totalCount} total ${totalCount === 1 ? 'work item' : 'work items'}`,
-        detail: `${activeCount} active or shaping · ${doneCount} completed · ${blockedCount} blocked.`,
+        title: orientationSpine
+          ? `${displayedTotalCount} scoped ${displayedTotalCount === 1 ? 'work item' : 'work items'}`
+          : `${displayedTotalCount} total ${displayedTotalCount === 1 ? 'work item' : 'work items'}`,
+        detail: orientationSpine
+          ? `${displayedActiveCount} in current scope · ${displayedDoneCount} completed · ${displayedBlockedCount} blocked.`
+          : `${displayedActiveCount} active or shaping · ${displayedDoneCount} completed · ${displayedBlockedCount} blocked.`,
         secondaryDetail: deliveryDetail,
         href: currentProjectHref('/work', activeProjectId),
-        tone: blockedCount > 0 || (workProgressCounts?.deliveryBlocked ?? 0) > 0 ? 'warn' as Tone : activeCount > 0 ? 'accent' as Tone : 'neutral' as Tone,
+        tone: displayedBlockedCount > 0 || (workProgressCounts?.deliveryBlocked ?? 0) > 0 ? 'warn' as Tone : displayedActiveCount > 0 ? 'accent' as Tone : 'neutral' as Tone,
       },
       {
         label: 'History',
@@ -379,8 +423,9 @@
   })
 
   const workMixTotalCount = $derived(
-    workProgressCounts?.visibleTotal
-      ?? segments.reduce((sum, segment) => sum + segment.count, 0),
+    orientationSpine && orientationIncludedCount + orientationDeferredCount > 0
+      ? orientationIncludedCount + orientationDeferredCount
+      : workProgressCounts?.visibleTotal ?? workMixSegments.reduce((sum, segment) => sum + segment.count, 0),
   )
 
   const nextAction = $derived.by(() => {
@@ -921,7 +966,7 @@
       <Card title="Work mix" titleTag="h2" padding="compact" density="dense" className="overview-card orientation-work-mix">
         <WorkMixChart
           ariaLabel={`Work mix: ${workMixTotalCount} tasks`}
-          {segments}
+          segments={workMixSegments}
           emptyLabel={emptyWorkMixLabel}
           onLegendClick={() => go(currentProjectHref('/work', activeProjectId))}
         />
