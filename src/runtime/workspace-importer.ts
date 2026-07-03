@@ -539,6 +539,7 @@ export interface ParsedTask {
   acceptanceCriteria?: Array<{ id: string; description: string; verifiedBy?: string; source?: 'documented' | 'inferred' }>
   dependsOn?: readonly string[]
   proofPaths?: Task['proofPaths']
+  releaseIds?: readonly string[]
 }
 
 interface MaterializedImportTask extends ParsedTask {
@@ -928,6 +929,9 @@ export function mergeWorkspaceImportDraft(
       const resolvedProofPaths = preserveDetectedScope
         ? task.proofPaths ?? parsedTask.proofPaths
         : parsedTask.proofPaths ?? task.proofPaths
+      const resolvedReleaseIds = preserveDetectedScope
+        ? task.releaseIds ?? parsedTask.releaseIds
+        : parsedTask.releaseIds ?? task.releaseIds
       mergedTasks.push({
         ...task,
         suggestedId: exactTitleMatch ? parsedTask.id : task.suggestedId,
@@ -942,6 +946,7 @@ export function mergeWorkspaceImportDraft(
           : parsedTask.scope === 'later' ? 'later' : task.scope,
         priority: preserveDetectedScope ? task.priority || parsedTask.priority : parsedTask.priority || task.priority,
         references: mergeImportReferences(task.references, parsedTask.references),
+        ...(resolvedReleaseIds ? { releaseIds: [...resolvedReleaseIds] } : {}),
         ...(resolvedAcceptanceCriteria ? { acceptanceCriteria: resolvedAcceptanceCriteria } : {}),
         ...(resolvedDependsOn ? { dependsOn: [...resolvedDependsOn] } : {}),
         ...(resolvedProofPaths ? { proofPaths: [...resolvedProofPaths] } : {}),
@@ -978,6 +983,7 @@ export function mergeWorkspaceImportDraft(
       ...(task.dependsOn ? { dependsOn: [...task.dependsOn] } : {}),
       ...(task.proofPaths ? { proofPaths: [...task.proofPaths] } : {}),
       ...(task.references.length > 0 ? { references: [...task.references] } : {}),
+      ...(task.releaseIds && task.releaseIds.length > 0 ? { releaseIds: [...task.releaseIds] } : {}),
       confidence: 'medium',
     })
   }
@@ -1147,6 +1153,9 @@ export function parseWorkspaceImport(spec: string): ParsedImport {
           scope,
           priority,
           references: normStringList(t['references']),
+          ...(normStringList(t['releaseIds']).length > 0
+            ? { releaseIds: normStringList(t['releaseIds']) }
+            : {}),
           ...(parseImportedAcceptanceCriteria(t['acceptanceCriteria'])
             ? { acceptanceCriteria: parseImportedAcceptanceCriteria(t['acceptanceCriteria']) }
             : {}),
@@ -1203,6 +1212,9 @@ export function parseWorkspaceImport(spec: string): ParsedImport {
           scope,
           priority,
           references: normStringList(t['references']),
+          ...(normStringList(t['releaseIds']).length > 0
+            ? { releaseIds: normStringList(t['releaseIds']) }
+            : {}),
           ...(parseImportedAcceptanceCriteria(t['acceptanceCriteria'])
             ? { acceptanceCriteria: parseImportedAcceptanceCriteria(t['acceptanceCriteria']) }
             : {}),
@@ -1333,6 +1345,10 @@ export function formatDetectedDraftAsSpec(draft: WorkspaceImportDraft): string {
         lines.push('    dependsOn:')
         for (const dependency of t.dependsOn) lines.push(`      - ${escape(dependency)}`)
       }
+      if (t.releaseIds && t.releaseIds.length > 0) {
+        lines.push('    releaseIds:')
+        for (const releaseId of t.releaseIds) lines.push(`      - ${escape(releaseId)}`)
+      }
       if (t.proofPaths && t.proofPaths.length > 0) {
         lines.push('    proofPaths:')
         for (const proofPath of t.proofPaths) {
@@ -1382,6 +1398,7 @@ function parsedImportFromDraft(draft: WorkspaceImportDraft): ParsedImport {
       ...(task.scope === 'later' ? { scope: 'later' as const } : {}),
       priority: task.priority,
       references: [...(task.references ?? [])],
+      ...(task.releaseIds?.length ? { releaseIds: [...task.releaseIds] } : {}),
       ...(task.acceptanceCriteria ? { acceptanceCriteria: [...task.acceptanceCriteria] } : {}),
       ...(task.dependsOn ? { dependsOn: [...task.dependsOn] } : {}),
       ...(task.proofPaths ? { proofPaths: [...task.proofPaths] } : {}),
@@ -2128,6 +2145,7 @@ function graphTaskToParsedTask(
     acceptanceCriteria: task.acceptanceCriteria,
     dependsOn: task.dependsOn,
     proofPaths: task.proofPaths,
+    ...(parsedTask?.releaseIds?.length ? { releaseIds: [...parsedTask.releaseIds] } : {}),
     evidenceGraphTask: true,
   }
 }
@@ -2141,6 +2159,57 @@ function graphTaskDomain(task: EvidenceTask, parsedTask?: ParsedTask): string {
     return parsedDomain
   }
   return task.targetArea
+}
+
+function releaseLabelFromId(id: string): string {
+  const acronyms = new Set(['api', 'cli', 'mcp', 'mvp', 'nh', 'ui', 'ux'])
+  return id
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map(part => acronyms.has(part.toLowerCase()) ? part.toUpperCase() : part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ') || id
+}
+
+function ensureImportedReleaseContainers(queue: TaskQueue, now: string): void {
+  const releaseIds = [...new Set(
+    queue.tasks
+      .filter(task => task.status !== 'shelved' && task.status !== 'archived' && task.status !== 'cancelled')
+      .flatMap(task => task.releaseIds ?? [])
+      .map(id => id.trim())
+      .filter(Boolean),
+  )]
+  if (releaseIds.length === 0) return
+
+  const releases = [...(queue.releases ?? [])]
+  for (const releaseId of releaseIds) {
+    let release = releases.find(candidate => candidate.id === releaseId)
+    if (!release) {
+      release = {
+        id: releaseId,
+        label: releaseLabelFromId(releaseId),
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: [],
+        deferredNodeIds: [],
+        proofStyle: 'unspecified',
+        createdAt: now,
+        updatedAt: now,
+      }
+      releases.push(release)
+    }
+    const nodeIds = new Set(release.nodeIds ?? [])
+    for (const task of queue.tasks) {
+      if (task.status === 'shelved' || task.status === 'archived' || task.status === 'cancelled') continue
+      if (task.releaseIds?.includes(releaseId)) nodeIds.add(`work:${task.id}`)
+    }
+    release.nodeIds = [...nodeIds]
+    release.updatedAt = now
+  }
+  queue.releases = releases
+  if (!queue.selectedReleaseId) {
+    queue.selectedReleaseId = releaseIds[0]
+  }
 }
 
 function materializedAcceptanceCriteria(
@@ -4511,6 +4580,7 @@ export async function approveWorkspaceImport(
     existing.projectPath = taskProjectPath
     existing.priority = imported.priority
     existing.dependsOn = [...(imported.dependsOn ?? [])].map(dependency => dependencyIdMap.get(dependency) ?? dependency)
+    existing.releaseIds = imported.scope === 'later' ? [] : [...(imported.releaseIds ?? [])]
     existing.acceptanceCriteria = materializedAcceptanceCriteria(imported, evidenceDetail)
     existing.requestIntake = seededBlueprint.requestIntake
     existing.references = normalizedReferences
@@ -4527,7 +4597,7 @@ export async function approveWorkspaceImport(
     existing.contextBudget = seededBlueprint.contextBudget
     existing.decomposition = seededBlueprint.decomposition
     existing.sizePlan = seededBlueprint.sizePlan
-    const materializedProof = materializedProofPaths(imported, evidenceDetail)
+    const materializedProof = materializedProofPaths(imported, evidenceDetail) ?? []
     if (materializedProof.length > 0) existing.proofPaths = materializedProof
     else delete existing.proofPaths
     existing.updatedAt = now
@@ -4577,6 +4647,7 @@ export async function approveWorkspaceImport(
     const normalizedReferences = absoluteImportedReferences(t.references, input.projectPath)
     const evidenceDetail = extractReferenceEvidenceDetail(t, input.projectPath)
     const seededBlueprint = buildImportedBlueprintSeed(t, normalizedReferences, input.projectPath, now)
+    const importedProofPaths = materializedProofPaths(t, evidenceDetail) ?? []
     const importedTaskRecord: Task = {
       id,
       title: t.title,
@@ -4586,6 +4657,7 @@ export async function approveWorkspaceImport(
       status: seededBlueprint.status,
       priority: t.priority,
       dependsOn: [...(t.dependsOn ?? [])].map(dependency => dependencyIdMap.get(dependency) ?? dependency),
+      releaseIds: t.scope === 'later' ? [] : [...(t.releaseIds ?? [])],
       outOfScope: seededBlueprint.outOfScope,
       acceptanceCriteria: materializedAcceptanceCriteria(t, evidenceDetail),
       requestIntake: seededBlueprint.requestIntake,
@@ -4606,8 +4678,8 @@ export async function approveWorkspaceImport(
       ...(seededBlueprint.contextBudget ? { contextBudget: seededBlueprint.contextBudget } : {}),
       ...(seededBlueprint.decomposition ? { decomposition: seededBlueprint.decomposition } : {}),
       ...(seededBlueprint.sizePlan ? { sizePlan: seededBlueprint.sizePlan } : {}),
-      ...(materializedProofPaths(t, evidenceDetail).length > 0
-        ? { proofPaths: materializedProofPaths(t, evidenceDetail) }
+      ...(importedProofPaths.length > 0
+        ? { proofPaths: importedProofPaths }
         : {}),
       revisionCount: 0,
       remediationAttempts: 0,
@@ -4627,6 +4699,7 @@ export async function approveWorkspaceImport(
   task.status = 'done'
   task.updatedAt = now
   task.completedAt = now
+  ensureImportedReleaseContainers(queue, now)
   queue.lastUpdated = now
   await writeQueue(input.memoryDir, queue)
 
@@ -4650,9 +4723,9 @@ export async function approveWorkspaceImport(
         {
           version: WORKSPACE_GOALS_STRUCTURAL_VERSION,
           recordedAt: now,
-          goals: materializedParsed.goals,
-          tasks: materializedParsed.tasks,
-          milestones: materializedParsed.milestones,
+          goals: [...materializedParsed.goals],
+          tasks: [...materializedParsed.tasks],
+          milestones: [...materializedParsed.milestones],
           context: approvedContext,
           approved: approvedSnapshot,
           detected: detectedSnapshot,

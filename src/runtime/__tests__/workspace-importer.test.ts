@@ -1086,6 +1086,56 @@ milestones:
     expect(progress).toContain('MILESTONE')
   })
 
+  it('preserves explicit release scope on approved imported tasks', async () => {
+    await seedImporterWithSpec(`
+\`\`\`yaml
+tasks:
+  - id: task-headless-schema
+    title: Define fixture, expected-record, prototype-run, and evaluation schemas.
+    description: First headless proof task for the documented MVP release.
+    domain: harness
+    priority: high
+    releaseIds:
+      - nh-headless-mvp
+    references:
+      - docs/harness/implementation-roadmap.md
+  - id: task-authoring-shell
+    title: Build the local authoring shell
+    description: Later product shell after headless proof.
+    domain: ui
+    scope: later
+    priority: normal
+    references:
+      - docs/harness/implementation-roadmap.md
+\`\`\`
+`)
+
+    const res = await approveWorkspaceImport({
+      memoryDir,
+      projectPath: tmpDir,
+    })
+    expect(res).toMatchObject({ success: true, tasksAdded: 2 })
+
+    const q = await readQueue()
+    expect(q.tasks.find((t) => t.id === 'task-headless-schema')).toMatchObject({
+      status: 'import_draft',
+      releaseIds: ['nh-headless-mvp'],
+    })
+    expect(q.tasks.find((t) => t.id === 'task-authoring-shell')).toMatchObject({
+      status: 'shelved',
+      releaseIds: [],
+    })
+    expect(q.selectedReleaseId).toBe('nh-headless-mvp')
+    expect(q.releases).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'nh-headless-mvp',
+        label: 'NH Headless MVP',
+        state: 'active',
+        source: 'release_plan',
+      }),
+    ]))
+  })
+
   it('normalizes imported evidence paths after narrowing a task to a subproject', async () => {
     const knitPath = path.join(tmpDir, 'knit')
     await fs.mkdir(knitPath, { recursive: true })
@@ -5007,6 +5057,7 @@ describe('formatDetectedDraftAsSpec', () => {
             { id: 'runner-proof', description: 'The runner has deterministic proof output.', verifiedBy: 'automated' },
           ],
           dependsOn: ['task-schema'],
+          releaseIds: ['nh-headless-mvp'],
           proofPaths: [
             {
               kind: 'command',
@@ -5030,6 +5081,7 @@ describe('formatDetectedDraftAsSpec', () => {
         id: 'task-runner',
         title: 'Implement a no-UI runner that builds a packet from fixture records.',
         dependsOn: ['task-schema'],
+        releaseIds: ['nh-headless-mvp'],
         acceptanceCriteria: [
           { id: 'runner-contract', description: 'The runner builds a packet from fixture records.' },
           { id: 'runner-proof', description: 'The runner has deterministic proof output.', verifiedBy: 'automated' },

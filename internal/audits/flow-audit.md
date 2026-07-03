@@ -12108,6 +12108,55 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-07-03T23:03:00Z - Preserved explicit release scope through workspace
+import approval so regenerated work can drive selected-scope execution.
+
+- Work id: `codex:workspace-import-release-scope-contract-2026-07-03`.
+- User job: when an importer-approved plan names a release or bounded scope,
+  Guildhall should persist that as machine-readable queue state. The user
+  should not have to infer a release from task titles, and Guildhall should not
+  invent a release when no release membership was provided.
+- Fix:
+  - Workspace-import YAML now accepts `releaseIds` on tasks.
+  - `releaseIds` round-trip through detected-draft serialization,
+    `parseWorkspaceImport`, merge/materialization, evidence-graph reframing,
+    refreshed imported tasks, and newly inserted imported tasks.
+  - Later/deferred imported tasks have release membership cleared when written
+    to the queue, so they do not accidentally become current release work.
+  - Approval creates a queue-level release container only when current tasks
+    have explicit release membership, preserves existing release records, and
+    selects the release only when the queue has no selected release yet.
+  - Generated fallback labels preserve common acronyms, for example
+    `nh-headless-mvp` displays as `NH Headless MVP`.
+- Contract Touch Decision:
+  - Work id: `codex:workspace-import-release-scope-contract-2026-07-03`.
+  - Touched contracts: workspace-import task YAML, `WorkspaceImportDraft`
+    task shape, approved `TASKS.json` queue release/task membership.
+  - Contracts considered but not touched: persisted source-signal schema,
+    orientation spine release schema, orchestrator selected-scope picker,
+    release-readiness API contract.
+  - Required follow-up: teach planning-doc detection to derive release IDs
+    directly from explicit release/scope docs, then rerun Narrative Harness and
+    Looma + Knit imports against real project history.
+  - Proof required: importer approval regression, importer round-trip
+    regression, selected-scope consumer regressions.
+  - Proof provided:
+    `./node_modules/.bin/vitest run src/runtime/__tests__/workspace-importer.test.ts`
+    passed `72` tests;
+    `./node_modules/.bin/vitest run src/runtime/__tests__/orchestrator-picker.test.ts src/runtime/__tests__/project-orientation-spine.test.ts src/runtime/__tests__/serve-release-readiness.test.ts`
+    passed `47` tests; `git diff --check`.
+  - Waivers: no installed-app proof for this slice because it changes the
+    importer persistence contract and selected-scope model plumbing, not a
+    rendered product surface. UI proof remains required after real NH/Looma
+    repopulation uses the new contract.
+  - Owner-review items: decide whether importer-generated release containers
+    should accept owner-facing labels from docs before fallbacking to a
+    humanized id.
+  - Apply/revert behavior: reverting removes release membership persistence
+    from imported work and leaves existing queue data untouched.
+
+source: codex:workspace-import-release-scope-contract-2026-07-03
+
 2026-07-03T22:39:00Z - Added per-row source document provenance to the
 Project Map so Guildhall visibly proves where orientation claims came from.
 

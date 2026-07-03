@@ -47,13 +47,14 @@ export interface DraftTask {
   domain: string
   scope: 'current' | 'later'
   priority: 'critical' | 'high' | 'normal' | 'low'
-  acceptanceCriteria?: readonly Array<{
+  acceptanceCriteria?: ReadonlyArray<{
     id: string
     description: string
     verifiedBy?: string
   }>
   dependsOn?: readonly string[]
-  proofPaths?: readonly Record<string, unknown>[]
+  proofPaths?: ReadonlyArray<Record<string, unknown>>
+  releaseIds?: readonly string[]
   source: string
   references?: readonly string[]
   confidence: DraftConfidence
