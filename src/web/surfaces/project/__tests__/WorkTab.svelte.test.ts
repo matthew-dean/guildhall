@@ -384,7 +384,9 @@ describe('WorkTab', () => {
 
     await screen.findByText('3 planned units')
     const runnerRow = screen.getByRole('button', { name: /inspect work implement a no-ui runner that builds a packet from fixture records/i })
-    expect(runnerRow).toHaveTextContent('Blocked by Define fixture, expected-record, prototype-run, and evaluation schemas.')
+    expect(runnerRow).toHaveTextContent('Waiting on Define fixture, expected-record, prototype-run, and evaluation schemas.')
+    expect(runnerRow).not.toHaveTextContent('Blocked')
+    expect(runnerRow).toHaveTextContent('Awaiting approval')
     expect(runnerRow).not.toHaveTextContent('0/2 delivery steps')
 
     await userEvent.click(runnerRow)

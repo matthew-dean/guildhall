@@ -12108,6 +12108,81 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-07-03T22:00:00Z - Corrected Narrative Harness scoped-work waiting
+language so Guildhall communicates the work state it has, rather than merely
+preparing it for scheduling.
+
+- Work id: `codex:narrative-harness-work-waiting-state-2026-07-03`.
+- User job: a user opening Narrative Harness Work should be able to tell what
+  the current scoped work is, whether Guildhall sees true blockers, which items
+  are merely waiting on earlier scoped work, and what can be resumed without
+  reading repository files or inferring state from hidden data.
+- Finding:
+  - API `workProgress.counts.visibleBlocked` was `0`, and the Work queue
+    correctly showed `0 BLOCKED`, but planning/dependency rows rendered
+    dependency sequencing as `Blocked` / `Blocked by ...`.
+  - The orientation summary also said `Current task scope is blocked on proof`
+    while the same summary progress said `blocked: 0`.
+- Fix:
+  - `taskStagePresentation` now reserves `Blocked` for actual blocked task
+    state. Ready work with unmet dependencies renders as `Waiting`; planning
+    work with unmet dependencies stays in its planning state.
+  - Work rows now say `Waiting on ...` for dependency sequencing unless the
+    task itself is `status: blocked`.
+  - The Work `Blocked` filter now means actual blocked tasks, not dependency
+    sequencing.
+  - Orientation summary copy now says `waiting on proof` when proof/review is
+    still required but scoped progress has zero true blocked work.
+- State agreement proof:
+  - API `/api/project?projectId=narrative-harness`: primary action is
+    `Implement a no-UI runner that builds a packet from fixture records.`;
+    run control is `Resume`; work counts are `visibleActive: 6`,
+    `visibleBlocked: 0`, `visibleShelved: 12`, `deliveryBlocked: 0`;
+    orientation headline is `Current task scope is waiting on proof.` and
+    orientation progress says `blocked: 0`.
+  - Browser route
+    `/projects/narrative-harness/work?task=task-import-14yqvl7` at `1280x720`:
+    queue excerpt shows `CURRENT TASK SCOPE`, the runner task, `6 CURRENT
+    TASKS`, `0 BLOCKED`, and `12 DEFERRED`; first six visible work rows say
+    `Waiting on ...`; no visible row text contains `Blocked by`.
+  - Mobile `390x820`: same queue and row-language proof; document geometry was
+    `clientWidth: 390`, `scrollWidth: 390`, `bodyScrollWidth: 390`.
+  - Desktop geometry was `clientWidth: 1280`, `scrollWidth: 1280`,
+    `bodyScrollWidth: 1280`.
+  - Screenshots:
+    `/tmp/guildhall-nh-work-waiting-proof-desktop.png` and
+    `/tmp/guildhall-nh-work-waiting-proof-mobile.png`.
+- Contract Touch Decision:
+  - Work id: `codex:narrative-harness-work-waiting-state-2026-07-03`.
+  - Touched contracts: shared task presentation state, Work row/filter
+    semantics, orientation summary headline copy, WorkTab component tests, and
+    orientation spine runtime tests.
+  - Contracts considered but not touched: persisted task schema, dependency
+    schema, work-progress counting, release schema, delivery-spine schema,
+    project action model, and start-readiness schema. The issue was display
+    semantics over existing authoritative state, not missing persisted fields.
+  - Required follow-up: continue the broader Narrative Harness MVP proof loop;
+    this slice does not complete the MVP or prove task intake quality.
+  - Proof required: focused unit/component tests, installed-app stale check,
+    API summary agreement, desktop/mobile route geometry, and visible row copy.
+  - Proof provided: `task-presentation`, WorkTab, ProjectOverviewTab,
+    ProjectStructurePanel, ReleaseTab, orientation-spine focused runtime
+    tests; `node build.mjs`; installed app `/api/stale-server` with
+    `stale:false`; API/browser evidence above.
+  - Waivers: in-app Browser bridge timed out during this audit, so browser
+    route proof used local Playwright against the same installed
+    `localhost:7777` service.
+  - Owner-review items: none for this bounded wording/state fix.
+  - Apply/revert behavior: reverting this slice restores dependency sequencing
+    being displayed as hard blocked work and may recreate count/row
+    contradictions.
+- Verification:
+  `./node_modules/.bin/vitest run src/web/lib/__tests__/task-presentation.test.ts src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts src/web/surfaces/project/structure/__tests__/ProjectStructurePanel.svelte.test.ts src/web/surfaces/project/__tests__/ReleaseTab.svelte.test.ts`;
+  `./node_modules/.bin/vitest run src/runtime/__tests__/project-orientation-spine.test.ts src/runtime/__tests__/serve-dashboard.test.ts src/runtime/__tests__/serve-settings.test.ts --testNamePattern "orientation|spine|scoped|Narrative|task scope|blocked|proof"`;
+  `node build.mjs`; installed-app restart; `/api/stale-server`.
+
+source: codex:narrative-harness-work-waiting-state-2026-07-03
+
 2026-07-03T21:08:00Z - Tightened Overview so scoped orientation beats stale
 legacy backlog noise.
 

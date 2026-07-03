@@ -1378,7 +1378,9 @@ function buildSummary(input: {
   const headline = readinessSummary?.headline ?? (
     workLabel
       ? topBlocker
-        ? `${workLabel} is blocked on proof.`
+        ? input.progress.blocked > 0
+          ? `${workLabel} is blocked on proof.`
+          : `${workLabel} is waiting on proof.`
         : hasActionableWork
           ? `${workLabel} is being shaped.`
           : `${workLabel} has no actionable work.`

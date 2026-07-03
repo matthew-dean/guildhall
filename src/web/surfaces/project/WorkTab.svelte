@@ -317,7 +317,7 @@
   }
 
   function workFilterForTask(task: Task): WorkFilter {
-    if (task.status === 'blocked' || hasUnmetDependencies(task, tasks)) return 'blocked'
+    if (task.status === 'blocked') return 'blocked'
     if (hasOpenQuestion(task)) return 'needs-you'
     if (isQueuedWorkTask(task)) return 'queued'
     if (isPlanningTask(task)) return 'planning'
@@ -413,7 +413,7 @@
     if (workFilter === 'queued') return isQueuedWorkTask(task)
     if (workFilter === 'planning') return isPlanningTask(task)
     if (workFilter === 'open') return !['done', 'pending_pr', 'shelved'].includes(task.status ?? '')
-    if (workFilter === 'blocked') return task.status === 'blocked' || hasUnmetDependencies(task, tasks)
+    if (workFilter === 'blocked') return task.status === 'blocked'
     if (workFilter === 'needs-you') return hasOpenQuestion(task)
     return false
   }
@@ -497,7 +497,10 @@
       return `${count} requirements; no contained work or decomposition proposal yet.`
     }
     const blockers = unmetDependencyIds(task, tasks)
-    if (blockers.length > 0) return `Blocked by ${blockers.map(dependencyLabel).join(', ')}`
+    if (blockers.length > 0) {
+      const prefix = task.status === 'blocked' ? 'Blocked by' : 'Waiting on'
+      return `${prefix} ${blockers.map(dependencyLabel).join(', ')}`
+    }
     const semanticUnits = semanticUnitCount(task)
     if (childCount === 0 && semanticUnits > 0 && isPlanningTask(task)) {
       return `${semanticUnits} planned work ${semanticUnits === 1 ? 'unit' : 'units'} already shaped.`

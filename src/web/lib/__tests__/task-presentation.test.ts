@@ -103,7 +103,7 @@ describe('taskStagePresentation', () => {
     })
   })
 
-  it('presents queued work with unmet blockers as blocked', () => {
+  it('presents ready work with unmet dependencies as waiting instead of hard blocked', () => {
     const stage = taskStagePresentation({
       id: 'task-storybook-proof',
       title: 'Storybook proof',
@@ -117,9 +117,32 @@ describe('taskStagePresentation', () => {
     })
 
     expect(stage).toEqual({
-      label: 'Blocked',
-      tone: 'danger',
-      key: 'dependency_blocked',
+      label: 'Waiting',
+      tone: 'warn',
+      key: 'waiting_dependency',
+    })
+  })
+
+  it('keeps planning tasks in their planning state when prerequisites are still being shaped', () => {
+    const stage = taskStagePresentation({
+      id: 'task-runner',
+      title: 'Implement a no-UI runner that builds a packet from fixture records.',
+      status: 'spec_review',
+      dependsOn: ['task-fixture'],
+      spec: '## Summary\n\nImplement the runner.',
+      acceptanceCriteria: [{ description: 'The runner executes a fixture.' }],
+      openQuestions: [],
+    }, {
+      runStatus: 'stopped',
+      tasks: [
+        { id: 'task-fixture', status: 'spec_review' },
+      ],
+    })
+
+    expect(stage).toEqual({
+      label: 'Paused',
+      tone: 'neutral',
+      key: 'paused',
     })
   })
 
@@ -176,7 +199,7 @@ describe('taskStagePresentation', () => {
 
     for (const stage of examples) {
       expect(stage.label.split(/\s+/)).toHaveLength(stage.label === 'Needs you' || stage.label === 'Needs brief' || stage.label === 'Needs recovery' || stage.label === 'Pending PR' ? 2 : 1)
-      expect(stage.label).not.toMatch(/Guildhall|shaping|revision|waiting|for Guildhall/i)
+      expect(stage.label).not.toMatch(/Guildhall|shaping|revision|for Guildhall/i)
     }
   })
 })
