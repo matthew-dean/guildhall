@@ -130,6 +130,10 @@
     0,
   )
   const orientationProofGapCount = $derived(orientationSpine?.gaps?.filter(gap => gap.kind === 'proof_needed').length ?? 0)
+  const orientationBlockedCount = $derived.by(() => {
+    const progress = orientationSpine?.summary?.progress
+    return progress?.blockedCount ?? progress?.blocked ?? 0
+  })
   const orientationScopeTitle = $derived.by(() => {
     if (!orientationSpine) return 'Scope not mapped yet'
     return orientationScopeLabel
@@ -137,11 +141,10 @@
   const orientationScopeDetail = $derived.by(() => {
     if (!orientationSpine) return 'No bounded scope has been derived for this project yet.'
     const proven = orientationSpine.summary?.progress?.provenCount ?? orientationSpine.summary?.progress?.proven ?? 0
-    const blocked = orientationSpine.summary?.progress?.blockedCount ?? orientationSpine.summary?.progress?.blocked ?? 0
     const pieces = [
       `${orientationIncludedCount} work items in view`,
       `${orientationProofGapCount} missing verification`,
-      `${blocked} blocked`,
+      `${orientationBlockedCount} blocked`,
       `${proven} verified`,
       `${orientationDeferredCount} deferred`,
     ]
@@ -149,9 +152,10 @@
   })
   const orientationScopeSecondaryDetail = $derived.by(() => {
     if (!orientationSpine) return null
+    const blockerPrefix = orientationBlockedCount > 0 ? 'Blocking' : 'Waiting on'
     const pieces = [
       orientationPins[0]?.label ? `Current focus: ${orientationPins[0].label}` : null,
-      orientationTopBlocker?.label ? `Blocking: ${orientationTopBlocker.label}` : orientationGap?.label ? `Needs attention: ${orientationGap.label}` : null,
+      orientationTopBlocker?.label ? `${blockerPrefix}: ${orientationTopBlocker.label}` : orientationGap?.label ? `Needs attention: ${orientationGap.label}` : null,
     ]
     return pieces.filter(Boolean).join(' · ') || null
   })

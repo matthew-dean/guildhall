@@ -81,6 +81,8 @@ describe('buildProjectOrientationSpine', () => {
     expect(spine.summary.headline).toBe('Stage 1 docs/spec/evaluation harness is waiting on proof.')
     expect(spine.summary.progress.specced).toBe(1)
     expect(spine.summary.progress.blocked).toBe(0)
+    expect(spine.summary.nextAction).toBe('Review waiting work: Anti-sameness has no prototype proof.')
+    expect(spine.summary.nextAction).not.toContain('blocker')
     expect(spine.summary.progress.proven).toBe(0)
     expect(spine.summary.progress.deferred).toBe(1)
     expect(spine.roots[0]?.title).toBe('Anti-sameness safeguards')

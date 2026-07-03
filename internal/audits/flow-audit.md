@@ -12183,6 +12183,66 @@ preparing it for scheduling.
 
 source: codex:narrative-harness-work-waiting-state-2026-07-03
 
+2026-07-03T22:06:00Z - Tightened the same Narrative Harness waiting-state
+language in the 100-foot Overview surface.
+
+- Work id: `codex:narrative-harness-overview-waiting-label-2026-07-03`.
+- User job: a user reading Overview should be able to trust that `0 blocked`
+  really means no true blockers are visible, while still seeing what proof or
+  review dependency is waiting.
+- Finding:
+  - The shared orientation summary API had been corrected to
+    `Current task scope is waiting on proof.` and `Review waiting work: ...`,
+    with `progress.blocked: 0`.
+  - Overview still rendered the same waiting proof issue as `Blocking: ...` in
+    the At a glance scope summary.
+- Fix:
+  - `ProjectOverviewTab` now derives the scope secondary label from scoped
+    blocked progress. Nonzero blocked progress renders `Blocking`; zero blocked
+    progress renders `Waiting on`.
+  - The orientation-spine summary next action also uses `Review waiting work`
+    when a top proof/review issue exists but scoped blocked progress is zero.
+- State agreement proof:
+  - API `/api/project?projectId=narrative-harness`: headline
+    `Current task scope is waiting on proof.`, next action
+    `Review waiting work: Define fixture, expected-record, prototype-run, and
+    evaluation schemas is waiting for spec review.`, and `blocked: 0`.
+  - Browser route `/projects/narrative-harness/overview` at `1280x720`:
+    visible text includes `0 blocked` and
+    `Waiting on: Define fixture, expected-record, prototype-run, and evaluation
+    schemas is waiting for spec review.`; visible text does not include
+    `Blocking: Define fixture`.
+  - Mobile `390x820`: same text proof with document geometry
+    `clientWidth: 390`, `scrollWidth: 390`, `bodyScrollWidth: 390`.
+  - Desktop geometry was `clientWidth: 1280`, `scrollWidth: 1280`,
+    `bodyScrollWidth: 1280`.
+  - Screenshots:
+    `/tmp/guildhall-nh-overview-waiting-label-desktop.png` and
+    `/tmp/guildhall-nh-overview-waiting-label-mobile.png`.
+- Contract Touch Decision:
+  - Work id: `codex:narrative-harness-overview-waiting-label-2026-07-03`.
+  - Touched contracts: orientation summary next-action wording and Overview
+    orientation secondary-label presentation.
+  - Contracts considered but not touched: persisted task schema, release/scope
+    schema, work-progress counts, delivery spine, and action model. The source
+    of truth already exposes `blocked: 0`; the bug was local/shared wording.
+  - Required follow-up: continue broader Narrative Harness task regeneration
+    and scoped execution proof; this slice only removes one visible
+    contradiction.
+  - Proof required/provided: failing runtime and component regressions, focused
+    surface tests, installed-app stale check, API evidence, desktop/mobile
+    rendered text and geometry proof.
+  - Waivers: local Playwright used for route proof against the installed
+    `localhost:7777` service.
+  - Apply/revert behavior: reverting this slice makes Overview call waiting
+    proof work `Blocking` while the same card says `0 blocked`.
+- Verification:
+  `./node_modules/.bin/vitest run src/runtime/__tests__/project-orientation-spine.test.ts`;
+  `./node_modules/.bin/vitest run src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts src/web/surfaces/project/__tests__/ProjectMapTab.svelte.test.ts src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts src/runtime/__tests__/project-orientation-spine.test.ts`;
+  `node build.mjs`; installed-app restart; `/api/stale-server`.
+
+source: codex:narrative-harness-overview-waiting-label-2026-07-03
+
 2026-07-03T21:08:00Z - Tightened Overview so scoped orientation beats stale
 legacy backlog noise.
 

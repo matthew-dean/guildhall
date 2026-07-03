@@ -133,6 +133,65 @@ describe('ProjectOverviewTab', () => {
     expect(screen.getByRole('heading', { name: 'Do this next' })).toBeInTheDocument()
   })
 
+  it('labels proof waits as waiting instead of blocking when scoped blocked count is zero', () => {
+    const { container } = render(ProjectOverviewTab, {
+      detail: {
+        id: 'narrative-harness',
+        name: 'Narrative Harness',
+        path: '/Users/matthew/git/oss/narrative-harness',
+        tasks: [],
+        orientationSpine: {
+          scope: { label: 'Current task scope' },
+          charter: {
+            goal: 'Build a headless fiction harness.',
+            targetAudience: 'Authors and agent builders.',
+          },
+          summary: {
+            headline: 'Current task scope is waiting on proof.',
+            purpose: 'Build a headless fiction harness.',
+            selectedScopeLabel: 'Current task scope',
+            includedWorkCount: 6,
+            deferredWorkCount: 12,
+            progress: {
+              total: 18,
+              specced: 6,
+              blocked: 0,
+              deferred: 12,
+            },
+            pinnedNow: ['Implement a no-UI runner that builds a packet from fixture records.'],
+            topBlocker: 'Define fixture, expected-record, prototype-run, and evaluation schemas is waiting for spec review.',
+            nextAction: 'Review waiting work: Define fixture, expected-record, prototype-run, and evaluation schemas is waiting for spec review.',
+          },
+          gaps: [{
+            kind: 'proof_needed',
+            label: 'Proof needed: Implement a no-UI runner that builds a packet from fixture records.',
+            severity: 'warn',
+            refs: ['task-import-14yqvl7'],
+          }],
+          roots: [],
+          nodes: {},
+          sourceHealth: { inferred: 4, gaps: 1 },
+        },
+      },
+      inboxLoaded: true,
+      inboxItems: [],
+      projectTicker: {
+        label: 'Not running',
+        actorLabel: 'Guildhall',
+        message: 'Project is waiting for proof.',
+        tone: 'idle',
+        pulse: false,
+      },
+      activeProjectId: 'narrative-harness',
+    })
+
+    const orientation = container.querySelector('.overview-orientation')
+    expect(orientation).toBeTruthy()
+    expect(orientation?.textContent).toContain('0 blocked')
+    expect(orientation?.textContent).toContain('Waiting on: Define fixture, expected-record, prototype-run, and evaluation schemas is waiting for spec review.')
+    expect(orientation?.textContent).not.toContain('Blocking: Define fixture')
+  })
+
   it('presents all-terminal scoped work as calm finished state instead of attention needed', () => {
     render(ProjectOverviewTab, {
       detail: {

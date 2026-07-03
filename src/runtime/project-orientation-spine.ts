@@ -1397,7 +1397,11 @@ function buildSummary(input: {
     deferredWorkCount: input.progress.deferred,
     pinnedNow: input.pins.map(pin => pin.label),
     topBlocker,
-    nextAction: readinessSummary?.nextAction ?? (topBlocker ? `Review blocker: ${topBlocker}` : 'Review current work.'),
+    nextAction: readinessSummary?.nextAction ?? (topBlocker
+      ? input.progress.blocked > 0
+        ? `Review blocker: ${topBlocker}`
+        : `Review waiting work: ${topBlocker}`
+      : 'Review current work.'),
     progress: input.progress,
   }
 }
