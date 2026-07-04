@@ -12,6 +12,69 @@ This is the active browser test plan for the Guildhall project surface. Keep it
 updated while auditing the active test project so another agent can resume
 without guessing.
 
+2026-07-04T16:34:00Z - Orientation summary now follows paused Narrative
+Harness live work instead of stale parent cleanup copy.
+
+- Work id:
+  `codex:narrative-harness-orientation-paused-work-rollup-2026-07-04`.
+- User job: the 1,000-foot orientation view must tell the same story as the
+  action model. If Guildhall says Resume will continue a pinned internal child
+  task, the project/release summary must not say there is no active work or
+  lead with stale parent brief-cleanup copy.
+- Failure reproduced:
+  - Live `/api/project?projectId=narrative-harness` returned
+    `startReadiness.code:"paused_live_work"` and `runControl.label:"Resume"`
+    for `Shape fixture and expected-record ground truth`.
+  - The same response returned
+    `orientationSpine.summary.progress.active:0` and
+    `orientationSpine.summary.topBlocker:"Define fixture, expected-record,
+    prototype-run, and evaluation schemas needs brief cleanup before
+    approval."`
+  - The selected release parent had an active internal child, but orientation
+    maturity rolled up the parent as proof-needed instead of active.
+- Fix:
+  - Parent orientation maturity now rolls up active/review/blocked child work
+    before parent proof-needed state, so an active internal child can make the
+    selected release visibly active without inflating scoped work totals.
+  - `paused_live_work` start readiness can now own the orientation summary even
+    though `canStart:true`, so the summary headline and next action point at
+    Resume instead of lower-priority cleanup copy.
+- Live installed-app proof:
+  - `/api/stale-server` returned `stale:false` for PID `22977` with matching
+    boot/current build mtimes.
+  - Live Narrative Harness `/api/project` returned
+    `orientationSpine.summary.headline:"Stage 1: Fixture And Evaluation Harness
+    is paused with work in progress."`,
+    `topBlocker:null`, `nextAction:"Resume the current work."`, and
+    `progress.active:1`.
+  - The same response returned `startReadiness.code:"paused_live_work"`,
+    `actionModel.runControl.label:"Resume"`, and primary action
+    `Shape fixture and expected-record ground truth`, all pointing at
+    `/work?task=task-import-9s8tkc-split-shape-fixture-and-expected-record-ground-truth-2`.
+  - The orientation node for parent task `task-import-9s8tkc` now has
+    `maturity:"active"` and contains the active internal child
+    `Shape fixture and expected-record ground truth`.
+- Remaining gap:
+  - `orientationSpine.release.blockers` still lists spec'd tasks as needing
+    brief cleanup. That lower-level release-readiness detail should be
+    reconciled next so optional spec-fill cleanup does not look like a hard
+    release blocker while Resume is valid.
+- Verification:
+  - `CI=true /opt/homebrew/bin/pnpm exec vitest run
+    src/runtime/__tests__/project-orientation-spine.test.ts` passed `37`
+    tests.
+  - `CI=true /opt/homebrew/bin/pnpm exec vitest run
+    src/runtime/__tests__/serve-dashboard.test.ts -t
+    "release blockers|orientation|spine"` passed `5` focused tests.
+  - `CI=true /opt/homebrew/bin/pnpm exec vitest run
+    src/runtime/__tests__/serve-settings.test.ts -t
+    "selected release|paused_live_work|brief cleanup|orientationSpine"` passed
+    `5` focused tests.
+  - `/opt/homebrew/bin/pnpm build` and `/opt/homebrew/bin/pnpm dev:install`
+    passed before installed-app proof.
+
+source: codex:narrative-harness-orientation-paused-work-rollup-2026-07-04
+
 2026-07-04T16:25:00Z - Reframed bad Narrative Harness child scope only when
 Guildhall could visibly prove the correction.
 

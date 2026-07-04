@@ -96,6 +96,94 @@ describe('buildProjectOrientationSpine', () => {
     expect(spine.gaps.map(gap => gap.kind)).not.toContain('source_conflict')
   })
 
+  it('rolls active internal child work into the selected release summary', () => {
+    const spine = buildProjectOrientationSpine({
+      projectId: 'narrative-harness',
+      now: '2026-07-04T16:30:00.000Z',
+      charter: {
+        goal: 'Prove the headless Narrative Harness MVP from fixture records.',
+        targetAudience: 'Authors and agent builders working on long-form fiction.',
+        currentReleaseTarget: 'Stage 1 fixture and evaluation harness.',
+        successDefinition: 'The selected release is complete only when script proof is attached.',
+        nonGoals: ['Production UI'],
+        source: 'owner_approved',
+      },
+      releases: [{
+        id: 'stage-1-fixture-and-evaluation-harness',
+        label: 'Stage 1: Fixture And Evaluation Harness',
+        nodeIds: ['work:parent-contracts'],
+        deferredNodeIds: [],
+      }],
+      selectedReleaseId: 'stage-1-fixture-and-evaluation-harness',
+      tasks: [
+        {
+          id: 'parent-contracts',
+          title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+          projectPath: '/tmp/narrative-harness',
+          status: 'ready',
+          priority: 'normal',
+          productBrief: {
+            userJob: 'Shape the headless harness.',
+            whyItMattersNow: 'The first proof loop needs contracts.',
+            successMetric: 'Contracts are usable by the runner.',
+          },
+          spec: 'Parent contract spec.',
+          acceptanceCriteria: [{ id: 'AC-1', description: 'Contracts exist.', verifiedBy: 'review', met: false }],
+          hierarchy: {
+            childIds: ['fixture-ground-truth'],
+          },
+        },
+        {
+          id: 'fixture-ground-truth',
+          title: 'Shape fixture and expected-record ground truth',
+          projectPath: '/tmp/narrative-harness',
+          status: 'in_progress',
+          priority: 'normal',
+          assignedTo: 'worker-agent',
+          productBrief: {
+            approvedAt: '2026-07-04T16:00:00.000Z',
+            userJob: 'Define fixture ground truth.',
+            whyItMattersNow: 'The worker is implementing this child.',
+            successMetric: 'Fixture records are available.',
+            nonGoals: ['Prototype run records'],
+          },
+          spec: 'Child fixture spec.',
+          acceptanceCriteria: [{ id: 'AC-1', description: 'Fixture records exist.', verifiedBy: 'test', met: false }],
+          hierarchy: {
+            parentId: 'parent-contracts',
+          },
+        },
+      ],
+      releaseReadiness: {
+        verdict: 'blocked',
+        blockers: [{
+          id: 'parent-contracts',
+          label: 'Define fixture, expected-record, prototype-run, and evaluation schemas needs brief cleanup before approval.',
+        }],
+      },
+      startReadiness: {
+        canStart: true,
+        code: 'paused_live_work',
+        message: '"Shape fixture and expected-record ground truth" is paused in live work. Resume continues from that pinned task.',
+        actionHref: '/work?task=fixture-ground-truth',
+      },
+      runStatus: 'stopped',
+    })
+
+    expect(spine.nodes['work:parent-contracts']?.maturity).toBe('active')
+    expect(spine.summary.progress.active).toBe(1)
+    expect(spine.summary.headline).toBe('Stage 1: Fixture And Evaluation Harness is paused with work in progress.')
+    expect(spine.summary.topBlocker).toBeNull()
+    expect(spine.summary.nextAction).toBe('Resume the current work.')
+    expect(spine.activePins).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        nodeId: 'work:fixture-ground-truth',
+        label: 'Shape fixture and expected-record ground truth',
+        kind: 'active_work',
+      }),
+    ]))
+  })
+
   it('defaults known proposed work into current work without inventing a release', () => {
     const spine = buildProjectOrientationSpine({
       projectId: 'demo',

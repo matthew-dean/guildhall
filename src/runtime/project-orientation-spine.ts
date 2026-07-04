@@ -770,8 +770,9 @@ function maturityForTask(
   if (task.status === 'blocked') return 'blocked'
   if (task.status === 'in_progress') return 'active'
   if (task.status === 'review' || task.status === 'gate_check') return 'review'
+  const childRollup = unfinishedChildRollupMaturity(task, childIdsByParent, scope, tasksById)
+  if (childRollup === 'active' || childRollup === 'review' || childRollup === 'blocked') return childRollup
   if (task.status === 'done') {
-    const childRollup = unfinishedChildRollupMaturity(task, childIdsByParent, scope, tasksById)
     if (childRollup) return childRollup
     const proof = proofForTask(task)
     if (proof.state === 'proven') return 'proven'
@@ -1464,8 +1465,15 @@ function summarizeStartReadiness(input: {
   startReadiness: NonNullable<BuildProjectOrientationSpineInput['startReadiness']>
 }): { headline: string; topBlocker: string | null; nextAction: string } | null {
   const { workLabel, startReadiness } = input
-  if (startReadiness.canStart) return null
   const genericWorkLabel = workLabel ?? 'Current task scope'
+  if (startReadiness.canStart && startReadiness.code === 'paused_live_work') {
+    return {
+      headline: `${genericWorkLabel} is paused with work in progress.`,
+      topBlocker: null,
+      nextAction: 'Resume the current work.',
+    }
+  }
+  if (startReadiness.canStart) return null
   const message = typeof startReadiness.message === 'string' && startReadiness.message.trim()
     ? startReadiness.message.trim()
     : 'Project start is blocked until the current issue is resolved.'
@@ -1550,7 +1558,7 @@ function buildSummary(input: {
         startReadiness: input.startReadiness,
       })
     : null
-  const topBlocker = readinessSummary?.topBlocker ?? input.blockers[0]?.label ?? null
+  const topBlocker = readinessSummary ? readinessSummary.topBlocker : input.blockers[0]?.label ?? null
   const hasActionableWork =
     input.progress.ready > 0 ||
     input.progress.active > 0 ||
