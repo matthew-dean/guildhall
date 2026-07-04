@@ -141,4 +141,16 @@ describe('effective task projection', () => {
     expect(effective.assignedTo).toBe('reviewer-agent')
     expect(effective.revisionCount).toBe(8)
   })
+
+  it('recovers a clipped imported title before exposing the effective task', async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-effective-task-'))
+
+    const effective = await buildEffectiveTask(projectRoot, legacyTask({
+      id: 'task-import-1v8sume',
+      title: 'Continue the Knit-to-Looma promotion work from the now-complete first M6 queue into the next generic surfaces, while the',
+      description: 'looma/PROJECT_STATE.md: 3. Continue the Knit-to-Looma promotion work from the now-complete first M6 queue into the next generic surfaces, while the primitive normalization wave continues in Knit.',
+    }))
+
+    expect(effective.title).toBe('Continue the Knit-to-Looma promotion work from the now-complete first M6 queue into the next generic surfaces, while the primitive normalization wave continues in Knit.')
+  })
 })

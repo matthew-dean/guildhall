@@ -15,6 +15,7 @@ import {
   readTaskRuntimeStore,
   readTaskWorkspaceStore,
 } from './task-state-store.js'
+import { effectiveTaskTitle } from '../shared/task-display-label.js'
 
 type LegacyTask = Task & Record<string, unknown>
 
@@ -174,6 +175,7 @@ export async function buildEffectiveTask(
   const projected = legacyFieldsFromEvidence(evidence)
   return {
     ...task,
+    title: effectiveTaskTitle(task) ?? task.title,
     ...projected,
     ...(runtime?.assignedTo !== undefined ? { assignedTo: runtime.assignedTo } : {}),
     ...(runtime?.revisionCount !== undefined ? { revisionCount: runtime.revisionCount } : {}),

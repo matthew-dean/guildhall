@@ -118,6 +118,25 @@ describe('buildProjectScopeProjection', () => {
     expect(projection.release.state).toBe('active')
   })
 
+  it('does not double-punctuate release blocker labels for titled work', () => {
+    const projection = buildProjectScopeProjection(queue([
+      task({
+        id: 'task-contracts',
+        title: 'Define fixture contracts.',
+        status: 'spec_review',
+        spec: 'Fixture contract spec.',
+        acceptanceCriteria: [{ id: 'AC-1', description: 'Contract is parseable.', verifiedBy: 'test', met: false }],
+      }),
+    ]))
+
+    expect(projection.release.blockers).toEqual([
+      expect.objectContaining({
+        id: 'task-contracts',
+        label: 'Define fixture contracts: waiting for review before work can start.',
+      }),
+    ])
+  })
+
   it('treats release-linked shelved work as deferred instead of current scope', () => {
     const projection = buildProjectScopeProjection(queue([
       task({

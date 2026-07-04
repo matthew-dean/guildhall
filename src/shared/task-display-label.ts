@@ -9,13 +9,17 @@ export interface DisplayTaskLike {
 }
 
 export function taskDisplayLabel(task: DisplayTaskLike, fallback = 'Untitled work'): string {
+  const title = effectiveTaskTitle(task)
+  const description = task.description?.trim()
+  const derived = derivedQuestionTaskLabel(title, description)
+  if (derived) return derived
+  return title || task.id || fallback
+}
+
+export function effectiveTaskTitle(task: DisplayTaskLike): string | undefined {
   const title = task.title?.trim()
   const description = task.description?.trim()
-  const recovered = recoverClippedTitle(title, description)
-  const derived = derivedQuestionTaskLabel(recovered ?? title, description)
-  if (derived) return derived
-  if (recovered) return recovered
-  return title || task.id || fallback
+  return recoverClippedTitle(title, description) ?? title
 }
 
 export function taskSourceQuestion(task: DisplayTaskLike): string | null {
@@ -59,9 +63,16 @@ function recoverClippedTitle(title: string | undefined, description: string | un
   const compactTitle = title.replace(/\.\.\.$/, '').trim()
   const titleLooksClipped = title.length >= 60 || title.endsWith('...')
   if (!titleLooksClipped) return null
-  if (description.length <= title.length) return null
-  if (!description.toLowerCase().startsWith(compactTitle.toLowerCase())) return null
+  const descriptionBody = stripSourcePrefix(description)
+  if (descriptionBody.length <= title.length) return null
+  if (!descriptionBody.toLowerCase().startsWith(compactTitle.toLowerCase())) return null
+  return descriptionBody
+}
+
+function stripSourcePrefix(description: string): string {
   return description
+    .replace(/^(?:[A-Za-z]:)?[^:\n]{1,240}\.(?:md|mdx|txt|yaml|yml|json):\s*(?:[-*]\s*)?(?:\d+[.)]\s*)?/i, '')
+    .trim()
 }
 
 function isQuestionLike(value: string): boolean {

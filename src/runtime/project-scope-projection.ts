@@ -433,10 +433,11 @@ function summarizeRelease(rows: readonly ProjectScopeRow[]): ProjectScopeProject
 }
 
 function blockerLabelFor(row: ProjectScopeRow): string {
+  const title = row.title.replace(/[.!?]+$/, '')
   if (row.handoffState === 'brief_cleanup' || row.handoffState === 'not_shaped') {
-    return `${row.title} needs a clearer brief before unattended work can run.`
+    return `${title}: needs a clearer brief before unattended work can run.`
   }
-  if (row.handoffState === 'spec_review') return `${row.title} is waiting for review before work can start.`
-  if (row.handoffState === 'blocked') return `${row.title} is blocked.`
-  return `${row.title} needs attention.`
+  if (row.handoffState === 'spec_review') return `${title}: waiting for review before work can start.`
+  if (row.handoffState === 'blocked') return `${title}: blocked.`
+  return `${title}: needs attention.`
 }

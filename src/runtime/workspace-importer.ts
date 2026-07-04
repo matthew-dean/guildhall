@@ -36,6 +36,7 @@ import {
 } from './current-milestone-shadowing.js'
 import { applyTaskShaping } from './task-decomposition.js'
 import { isMaterializableSplitAction, materializeSplitChildren } from '../tools/task-queue.js'
+import { effectiveTaskTitle } from '../shared/task-display-label.js'
 
 // ---------------------------------------------------------------------------
 // FR-34: reserved workspace-importer task.
@@ -4839,6 +4840,7 @@ export async function approveWorkspaceImport(
     const seededBlueprint = buildImportedBlueprintSeed(imported, normalizedReferences, input.projectPath, now)
     const refreshedAcceptanceCriteria = materializedAcceptanceCriteria(imported, evidenceDetail)
     const materializedProof = materializedProofPaths(imported, evidenceDetail) ?? []
+    existing.title = effectiveTaskTitle({ title: existing.title, description: normalizedDescription }) ?? existing.title
     existing.description = normalizedDescription
     existing.domain = domain
     existing.projectPath = taskProjectPath
@@ -4919,9 +4921,10 @@ export async function approveWorkspaceImport(
     const evidenceDetail = extractReferenceEvidenceDetail(t, input.projectPath)
     const seededBlueprint = buildImportedBlueprintSeed(t, normalizedReferences, input.projectPath, now)
     const importedProofPaths = materializedProofPaths(t, evidenceDetail) ?? []
+    const importedTitle = effectiveTaskTitle({ title: t.title, description: normalizedDescription }) ?? t.title
     const importedTaskRecord: Task = {
       id,
-      title: t.title,
+      title: importedTitle,
       description: normalizedDescription,
       domain,
       projectPath: taskProjectPath,

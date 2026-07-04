@@ -16055,6 +16055,78 @@ Story instead of treating the workspace container as the repo boundary.
 
 source: codex:workspace-child-git-story-boundaries-2026-07-04
 
+2026-07-04T19:05:00Z - Fixed imported title truth and verified child-repo Git
+story communication for Looma + Knit.
+
+- Work id: `codex:effective-import-title-and-child-repo-git-proof-2026-07-04`.
+- User job: when a registered Guildhall project is a workspace folder that
+  contains real repositories, Guildhall must not communicate the outer folder as
+  a failed Git repository. It must summarize the child repositories
+  transparently, and task/project state must never expose a title that was
+  cropped in persisted/imported data.
+- Failure reproduced from installed `localhost:7777` before this slice:
+  - Looma + Knit's live Git story correctly had child repo state, but this was
+    the exact boundary to preserve: the outer `/Users/matthew/git/oss/looma-knit`
+    path is not the repo; `looma` and `knit` are.
+  - `/api/project?projectId=looma-knit` exposed task
+    `task-import-1v8sume` with title ending in `while the`, while the
+    source-prefixed description contained the complete sentence from
+    `looma/PROJECT_STATE.md`.
+- Fix:
+  - Promoted clipped-title recovery into `effectiveTaskTitle()` so UI display
+    labels, effective task API payloads, project scope projection, and future
+    importer materialization share one evidence-backed recovery rule.
+  - `buildEffectiveTask()` now exposes the recovered full title when the
+    description proves the source sentence.
+  - Workspace import approval repairs provably clipped existing imported titles
+    and avoids storing a clipped title for newly materialized imports.
+  - Release blocker labels now use `Title: status` copy, avoiding double
+    punctuation and awkward forced grammar for long imported task titles.
+- Contract Touch Decision:
+  - Work id:
+    `codex:effective-import-title-and-child-repo-git-proof-2026-07-04`.
+  - Touched contracts: effective task payload title normalization,
+    project-scope release blocker label copy, workspace import materialized task
+    title normalization.
+  - Contracts considered but not touched: persisted task schema, release schema,
+    Git story response shape.
+  - Existing data impact: no schema migration; existing clipped imported titles
+    are corrected at effective-read time, and import approval repairs only when
+    description evidence proves the complete title.
+  - Required follow-up: none for this slice; future importer regeneration should
+    still be audited for task decomposition quality separately.
+  - Proof required: focused unit/runtime tests plus installed-app API proof for
+    `narrative-harness` and `looma-knit`.
+  - Proof provided: tests and live API evidence listed below.
+  - Apply/revert behavior: reverting restores previous display-only recovery and
+    may expose cropped imported titles from effective task payloads again.
+- Installed-app proof:
+  - Rebuilt and installed the current branch with `/opt/homebrew/bin/pnpm build`
+    and `/opt/homebrew/bin/pnpm dev:install`.
+  - Restarted Guildhall; `/api/stale-server` returned `stale:false`.
+  - `/api/project?projectId=looma-knit` returned full effective task title
+    `Continue the Knit-to-Looma promotion work from the now-complete first M6
+    queue into the next generic surfaces, while the primitive normalization wave
+    continues in Knit.` for `task-import-1v8sume`; `while the` was no longer a
+    dangling suffix.
+  - `/api/project/git-story?projectId=looma-knit` had no `fatal` or
+    `not a git repository` text and returned child-repo labels for `Looma` and
+    `Knit`, including `Looma: codex/component-audit-roadmap` and `Knit: main`.
+  - `/api/project?projectId=narrative-harness` still returned
+    `startReadiness.canStart:false` with code `no_unattended_progress`, focused
+    on spec review work rather than pretending Guildhall can run past owner
+    approval.
+- Verification:
+  - `CI=true /opt/homebrew/bin/pnpm exec vitest run
+    src/shared/__tests__/task-display-label.test.ts
+    src/runtime/__tests__/effective-task.test.ts
+    src/runtime/__tests__/project-scope-projection.test.ts
+    src/runtime/__tests__/serve-dashboard.test.ts --reporter=dot` passed `23`
+    tests.
+  - `git diff --check` passed.
+
+source: codex:effective-import-title-and-child-repo-git-proof-2026-07-04
+
 2026-07-04T14:57:00Z - Recovered Narrative Harness spec no-progress work and
 fixed the project action model so Guildhall communicates the actual shaped
 work item, not only the containing parent.
