@@ -171,6 +171,7 @@ import { deriveProjectWorkProgress, type ProjectWorkProgress } from './work-prog
 import { deriveTaskWorkVisibility } from './work-visibility.js'
 import {
   buildProjectOrientationSpine,
+  taskNodeId,
   taskEligibleForSelectedScope,
   type BuildProjectOrientationSpineInput,
   type OrientationScope,
@@ -275,7 +276,7 @@ import {
   resetProjectSkillProposals,
 } from '@guildhall/skills'
 import { normalizeImportedDraftTask } from './import-drafts.js'
-import { specReviewRequiresOwnerApproval } from './orchestrator-picker.js'
+import { selectedReleaseScopeForQueue, specReviewRequiresOwnerApproval } from './orchestrator-picker.js'
 import {
   buildInbox,
   buildInboxBlockers,
@@ -1858,6 +1859,24 @@ function buildOrientationSpineWithScopedReleaseTruth(
     },
   })
   return { orientationSpine, releaseTruth }
+}
+
+function selectedReleaseScopeFromTaskMembership(tasks: Task[]): OrientationScope | null {
+  const selectedReleaseId = tasks
+    .flatMap(task => Array.isArray(task.releaseIds) ? task.releaseIds : [])
+    .map(releaseId => releaseId.trim())
+    .find(Boolean)
+  if (!selectedReleaseId) return null
+  return {
+    id: selectedReleaseId,
+    label: selectedReleaseId,
+    kind: 'release',
+    source: 'inferred',
+    nodeIds: tasks
+      .filter(task => task.releaseIds?.includes(selectedReleaseId))
+      .map(task => taskNodeId(task.id)),
+    deferredNodeIds: [],
+  }
 }
 
 async function chooseProjectFolderMacOS(): Promise<string | null> {
@@ -4632,6 +4651,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
     if (input.allowTaskReadinessBlocker !== false) {
       const taskReadinessBlocker = await startBlockerForTaskReadiness(input.projectPath)
       if (taskReadinessBlocker) return taskReadinessBlocker
+
+      const selectedReleaseReviewBlocker = await startBlockerForSelectedReleaseReview(input.projectPath, input.resolvedConfig)
+      if (selectedReleaseReviewBlocker) return selectedReleaseReviewBlocker
     }
 
 	    const terminal = await terminalStartState(input.projectPath, input.requestedTaskId)
@@ -5518,10 +5540,17 @@ export function buildServeApp(opts: ServeOptions = {}): {
   } | null> {
     const tasksPath = projectTasksPath(projectPath)
     if (!existsSync(tasksPath)) return null
-    const raw = JSON.parse(await readManagedTextFile(tasksPath, 'utf-8')) as
-      | { tasks?: Array<Record<string, unknown>> }
-      | Array<Record<string, unknown>>
-    const tasks = Array.isArray(raw) ? raw : raw.tasks ?? []
+    const queue = await readTaskQueueFileNormalized(tasksPath)
+    const typedQueue = {
+      tasks: queue.tasks as Task[],
+      releases: queue.releases,
+      ...(queue.selectedReleaseId ? { selectedReleaseId: queue.selectedReleaseId } : {}),
+    }
+    const selectedReleaseScope = selectedReleaseScopeForQueue(typedQueue) ?? selectedReleaseScopeFromTaskMembership(typedQueue.tasks)
+    const tasksById = new Map(typedQueue.tasks.map(task => [task.id, task]))
+    const tasks = selectedReleaseScope
+      ? typedQueue.tasks.filter(task => taskEligibleForSelectedScope(task, selectedReleaseScope, { tasksById }).eligible)
+      : typedQueue.tasks
     if (tasks.length === 0) return null
 
     let runnable = 0
@@ -5546,7 +5575,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           ? (task as { title: string }).title.trim()
           : null
         const hasSpecDraft = typeof (task as { spec?: unknown }).spec === 'string' && (task as { spec: string }).spec.trim().length > 0
-        if (taskId && (hasSpecDraft || specReviewRequiresOwnerApproval({ id: taskId }))) {
+        if (taskId && (selectedReleaseScope || hasSpecDraft || specReviewRequiresOwnerApproval({ id: taskId }))) {
           waitingForApproval += 1
           if (!firstWaitingSpecTaskId) {
             firstWaitingSpecTaskId = taskId
@@ -5574,6 +5603,24 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
     }
 
+    if (selectedReleaseScope && waitingForApproval > 0) {
+      const focusTitle = firstWaitingSpecTaskTitle ?? 'the first spec'
+      return {
+        canStart: false,
+        code: 'no_unattended_progress',
+        message:
+          waitingForApproval === 1
+            ? `"${focusTitle}" is waiting for review before work can start.`
+            : `${waitingForApproval} specs are waiting for review before work can start. Start with "${focusTitle}".`,
+        actionHref: firstWaitingSpecTaskId
+          ? `/thread?thread=${encodeURIComponent(`task:${firstWaitingSpecTaskId}`)}`
+          : '/thread',
+        focusTaskId: firstWaitingSpecTaskId ?? undefined,
+        focusTaskTitle: firstWaitingSpecTaskTitle ?? undefined,
+        focusKind: 'spec_review',
+        count: waitingForApproval,
+      }
+    }
     if (runnable > 0 || terminal === tasks.length) return null
     if (needsBriefCleanup > 0) {
       const focusTitle = firstBriefCleanupTaskTitle ?? 'the first task'
@@ -5610,6 +5657,54 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
     }
     return null
+  }
+
+  async function startBlockerForSelectedReleaseReview(
+    projectPath: string,
+    resolvedConfig: ReturnType<typeof resolveConfig>,
+  ): Promise<{
+    canStart: false
+    code: 'no_unattended_progress'
+    message: string
+    actionHref: string
+    focusTaskId?: string
+    focusTaskTitle?: string
+    focusKind?: string
+    count?: number
+  } | null> {
+    const tasksPath = projectTasksPath(projectPath)
+    if (!existsSync(tasksPath)) return null
+    const rawQueue = await readTaskQueueFileNormalized(tasksPath)
+    if (rawQueue.tasks.length === 0) return null
+    const tasks = await Promise.all(rawQueue.tasks.map(task => buildEffectiveTask(projectPath, task as Task)))
+    const { releaseTruth } = buildOrientationSpineWithScopedReleaseTruth({
+      projectId: resolvedConfig.id ?? basename(projectPath),
+      charter: inferProjectCharterFromExistingSources(projectPath, resolvedConfig),
+      selectedReleaseId: rawQueue.selectedReleaseId,
+      releases: rawQueue.releases,
+      tasks: tasks as Task[],
+      workspaceImportDraft: await workspaceImportDraftForOrientation(projectPath, null),
+      sourceRefs: projectOrientationSourceRefs(projectPath),
+    })
+    if (releaseTruth.unapprovedSpecs.length === 0) return null
+
+    const first = releaseTruth.unapprovedSpecs[0]
+    const focusTitle = first?.title ?? 'the first spec'
+    return {
+      canStart: false,
+      code: 'no_unattended_progress',
+      message:
+        releaseTruth.unapprovedSpecs.length === 1
+          ? `"${focusTitle}" is waiting for review before work can start.`
+          : `${releaseTruth.unapprovedSpecs.length} specs are waiting for review before work can start. Start with "${focusTitle}".`,
+      actionHref: first?.id
+        ? `/thread?thread=${encodeURIComponent(`task:${first.id}`)}`
+        : '/thread',
+      focusTaskId: first?.id,
+      focusTaskTitle: first?.title,
+      focusKind: 'spec_review',
+      count: releaseTruth.unapprovedSpecs.length,
+    }
   }
 
   function startBlockerForOwnerInput(projectPath: string): {

@@ -12,6 +12,60 @@ This is the active browser test plan for the Guildhall project surface. Keep it
 updated while auditing the active test project so another agent can resume
 without guessing.
 
+2026-07-04T01:45:00Z - Fixed selected-release Start readiness so Guildhall
+cannot say a scoped release is startable while the visible spine says it is
+waiting for spec review.
+
+- Work id: `codex:selected-release-start-readiness-agreement-2026-07-04`.
+- User job: a project owner should be able to trust that Overview/Map/Work and
+  the Start/Resume action communicate the same current release truth. If the
+  selected release has spec-review blockers, Guildhall must show that blocker
+  and must not quietly start unrelated or child-shaped work.
+- Failure reproduced:
+  - Narrative Harness had `Stage 0: Spec Baseline` selected with six current
+    release tasks waiting in `spec_review`, while unscoped split children still
+    looked runnable in the flat task queue.
+  - `/api/project` showed orientation blocker text for the selected release but
+    `startReadiness: { canStart: true }`, which would let the UI imply work was
+    ready to run even though Guildhall had not communicated/reviewed the current
+    scope clearly enough.
+- Fix:
+  - `startBlockerForTaskReadiness()` now reads the normalized task queue,
+    derives the selected release scope using the orchestrator's release-scope
+    helper, and evaluates readiness inside that scope.
+  - If a project has task-level `releaseIds` but no top-level release container
+    in `TASKS.json`, readiness derives the current execution scope from that
+    membership instead of flattening the queue. This matches projects whose
+    release labels are reconstructed by the workspace-import/orientation layer.
+  - When a selected release has `spec_review` work, that release blocker wins
+    over runnable child/task residue so Start/Resume cannot mask review work
+    with a flat-queue runnable count.
+  - `/api/project` Start readiness now also consumes the selected-release
+    review summary used by release readiness, so import-augmented release
+    containers and task-level release membership produce the same blocker.
+  - The orientation spine now receives the same blocker text from
+    `startReadiness`, so the owner-facing summary and primary action agree.
+- Regression proof:
+  - Added a `GET /api/project` regression with task-level release membership,
+    one scoped `spec_review` parent, and one runnable unscoped child. The test
+    fails on the old behavior with
+    `startReadiness.canStart: true` and passes only when both
+    `startReadiness` and `orientationSpine.summary.topBlocker` show the same
+    spec-review blocker.
+  - Verification passed:
+    `pnpm vitest run src/runtime/workspace-import/__tests__/detect.test.ts src/runtime/workspace-import/__tests__/hypothesis.test.ts src/runtime/__tests__/serve-settings.test.ts src/runtime/__tests__/serve-release-readiness.test.ts src/web/surfaces/project/__tests__/ProjectMapTab.svelte.test.ts src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts`
+    (`224` tests).
+  - Installed-app proof after `pnpm dev:install`, `guildhall stop`, and
+    `guildhall start`: `/api/stale-server` returned `stale:false` for PID
+    `44611`; `/api/project?projectId=narrative-harness` returned selected
+    release `Stage 0: Spec Baseline`, `6` included and `12` deferred, and
+    `startReadiness.canStart:false` with
+    `5 specs are waiting for review before work can start. Start with "Define
+    fixture, expected-record, prototype-run, and evaluation schemas.".` The
+    orientation summary used the same blocker text.
+
+source: codex:selected-release-start-readiness-agreement-2026-07-04
+
 ## Test workspace
 
 - Guildhall repo: `/Users/matthew/git/oss/guildhall`

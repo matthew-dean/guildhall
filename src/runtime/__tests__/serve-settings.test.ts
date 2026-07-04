@@ -6028,6 +6028,55 @@ describe('GET /api/project — bootstrap status', () => {
     })
   })
 
+  it('blocks project start when the selected release is waiting for review even if unscoped child work is runnable', async () => {
+    const migrationApp = buildServeApp({ projectPath: tmpDir })
+    await applyStorageBoundaryMigration(migrationApp.app)
+    await writeSystemTasks({
+      version: 1,
+      tasks: [
+        {
+          id: 'task-release-spec',
+          title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+          status: 'spec_review',
+          releaseIds: ['stage-0-spec-baseline'],
+          createdAt: '2026-06-11T15:00:00.000Z',
+          updatedAt: '2026-06-11T15:00:00.000Z',
+        },
+        {
+          id: 'task-unscoped-child',
+          title: 'Shape fixture and expected-record ground truth',
+          status: 'exploring',
+          hierarchy: { parentId: 'task-release-spec', relation: 'child' },
+          createdAt: '2026-06-11T15:01:00.000Z',
+          updatedAt: '2026-06-11T15:01:00.000Z',
+        },
+      ],
+    })
+    setProvider('anthropic-api', { apiKey: 'sk-ant-test' })
+    updateGlobalConfig({ preferredProvider: 'anthropic-api' })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const res = await app.fetch(new Request(scoped('/api/project')))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      startReadiness?: { canStart?: boolean; actionHref?: string; message?: string }
+      orientationSpine?: { summary?: { topBlocker?: string | null } }
+    }
+
+    expect(body.orientationSpine?.summary?.topBlocker).toBe(
+      '"Define fixture, expected-record, prototype-run, and evaluation schemas." is waiting for review before work can start.',
+    )
+    expect(body.startReadiness).toMatchObject({
+      canStart: false,
+      message: '"Define fixture, expected-record, prototype-run, and evaluation schemas." is waiting for review before work can start.',
+      actionHref: '/thread?thread=task%3Atask-release-spec',
+      focusTaskId: 'task-release-spec',
+      focusTaskTitle: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+      focusKind: 'spec_review',
+      count: 1,
+    })
+  })
+
   it('includes the last bootstrap run status so the shell can explain async start failures', async () => {
     const bootstrapPath = path.join(getProjectLocalHistoryDir(tmpDir), 'bootstrap.json')
     await fs.writeFile(
