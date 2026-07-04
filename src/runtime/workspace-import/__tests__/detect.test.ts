@@ -25,10 +25,11 @@ function fakeExec(
   handler: (
     cmd: string,
     args: readonly string[],
+    opts?: { cwd?: string; timeoutMs?: number },
   ) => { stdout: string; stderr?: string; code?: number },
 ): Exec {
-  return async (cmd, args) => {
-    const res = handler(cmd, args)
+  return async (cmd, args, opts) => {
+    const res = handler(cmd, args, opts)
     return { stdout: res.stdout, stderr: res.stderr ?? '', code: res.code ?? 0 }
   }
 }
@@ -1483,6 +1484,32 @@ describe('gitLogSource', () => {
   it('returns [] when .git is not present', async () => {
     const sigs = await gitLogSource.detect({ projectPath: dir })
     expect(sigs).toEqual([])
+  })
+
+  it('reads immediate child git repos when the workspace root is not a git repo', async () => {
+    mkdirSync(join(dir, 'knit', '.git'), { recursive: true })
+    mkdirSync(join(dir, 'looma', '.git'), { recursive: true })
+    const SEP = '\x1f'
+    const sigs = await gitLogSource.detect({
+      projectPath: dir,
+      exec: fakeExec((_cmd, _args, opts) => {
+        const cwd = String(opts?.cwd ?? '')
+        const subject = cwd.endsWith('/knit')
+          ? 'Ship Knit v1'
+          : 'feat: add Looma toolbar primitive'
+        return {
+          stdout: [['abc12345', subject, 'Alice', '2026-04-20'].join(SEP)].join('\n'),
+          code: 0,
+        }
+      }),
+    })
+
+    expect(sigs.map((s) => [s.domainHint, s.title])).toEqual([
+      ['knit', 'Ship Knit v1'],
+      ['looma', 'feat: add Looma toolbar primitive'],
+    ])
+    expect(sigs[0]!.references).toEqual(['knit:abc12345'])
+    expect(sigs[1]!.evidence).toContain('looma: abc12345')
   })
 
   it('flags milestone-keyword commits as high-confidence milestones', async () => {

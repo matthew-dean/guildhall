@@ -13091,6 +13091,50 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-07-04T19:35:00Z - Fixed workspace-import git history for multi-repo
+project folders whose parent path is not itself a Git repository.
+
+- Work id: `codex:workspace-import-child-git-roots-2026-07-04`.
+- User job: when a project like Looma + Knit is registered at a workspace
+  folder, Guildhall should recognize the child Git repositories transparently
+  instead of saying the parent path is not a repo and losing repo history as
+  project evidence.
+- Fix:
+  - `git-log` source now inspects the project root when it is a Git repo.
+  - If the root is not a Git repo, it inspects immediate child directories with
+    `.git` roots and emits their milestones as normal `git-log` signals.
+  - Child repo signals carry repo-scoped evidence and references such as
+    `knit:7d7c0fd6...` and `looma:4e250c04...`, plus `domainHint`, so later
+    intake can keep Looma work and Knit work separated.
+- Contract Touch Decision:
+  - Work id: `codex:workspace-import-child-git-roots-2026-07-04`.
+  - Touched contracts: no persisted project schema, no task schema, no API
+    response schema. Reused existing optional `WorkspaceSignal.domainHint` and
+    existing `references`.
+  - Contracts considered but not touched: workspace config `projects`,
+    release/scope containers, git-story readiness summary.
+  - Required follow-up: none for schema migration. Future UI can choose to show
+    repo labels more prominently, but the data is now present.
+  - Proof required: focused detector regression, compiled CLI proof against
+    Looma + Knit, contract detector.
+  - Proof provided:
+    - `CI=true pnpm vitest run src/runtime/workspace-import/__tests__/detect.test.ts`
+      passed `52` tests.
+    - `CI=true pnpm build` passed.
+    - `CI=true pnpm lint:contracts` passed.
+    - `node dist/cli.js workspace-import draft /Users/matthew/git/oss/looma-knit --json`
+      reported `58` draft tasks, `154` milestones, and git milestones with
+      both `knit:` and `looma:` evidence/references from the child repos even
+      though `/Users/matthew/git/oss/looma-knit` has no `.git`.
+    - Installed app proof after `CI=true pnpm dev:install`, `guildhall stop`,
+      and `guildhall start`: `/api/stale-server` returned `stale:false`, and
+      `/api/project/workspace-import/draft?projectId=looma-knit` returned
+      `155` milestones including `knit:` and `looma:` git evidence/references.
+  - Apply/revert behavior: revert the two-file source/test diff to return to
+    root-only git-log detection.
+
+source: codex:workspace-import-child-git-roots-2026-07-04
+
 2026-07-04T18:35:00Z - Corrected workspace import so future release
 deliverables remain project-map skeleton instead of becoming fake runnable
 tasks.
