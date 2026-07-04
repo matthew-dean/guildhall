@@ -1136,6 +1136,69 @@ tasks:
     ]))
   })
 
+  it('reopens stale imported done status when refreshed current work still lacks acceptance and proof evidence', async () => {
+    const spec = `
+\`\`\`yaml
+tasks:
+  - id: task-headless-schema
+    title: Define fixture, expected-record, prototype-run, and evaluation schemas.
+    description: First headless proof task for the documented MVP release.
+    domain: harness
+    priority: high
+    releaseIds:
+      - nh-headless-mvp
+    references:
+      - docs/harness/implementation-roadmap.md
+    acceptanceCriteria:
+      - id: contracts-defined
+        description: Fixture and run contracts are defined.
+        verifiedBy: review
+        source: documented
+    proofPaths:
+      - kind: review
+        source: inferred
+        expectedEvidence:
+          - Fixture and run contracts are visible in code or docs.
+\`\`\`
+`
+    await seedImporterWithSpec(spec)
+    const first = await approveWorkspaceImport({
+      memoryDir,
+      projectPath: tmpDir,
+    })
+    expect(first).toMatchObject({ success: true, tasksAdded: 1 })
+
+    const q = await readQueue()
+    const importedTask = q.tasks.find((t) => t.id === 'task-headless-schema')!
+    importedTask.status = 'done'
+    importedTask.completedAt = '2026-07-04T00:00:00.000Z'
+    importedTask.acceptanceCriteria = importedTask.acceptanceCriteria.map((criterion) => ({
+      ...criterion,
+      met: false,
+    }))
+    await writeQueue(q)
+
+    await seedImporterWithSpec(spec)
+    const refreshed = await approveWorkspaceImport({
+      memoryDir,
+      projectPath: tmpDir,
+      replacePreviouslyImportedTasks: true,
+    })
+    expect(refreshed).toMatchObject({ success: true })
+
+    const refreshedQueue = await readQueue()
+    expect(refreshedQueue.tasks.find((t) => t.id === 'task-headless-schema')).toMatchObject({
+      status: 'spec_review',
+      releaseIds: ['nh-headless-mvp'],
+      acceptanceCriteria: [
+        expect.objectContaining({
+          id: 'contracts-defined',
+          met: false,
+        }),
+      ],
+    })
+  })
+
   it('preserves exact imported release labels instead of deriving labels from ids', async () => {
     await seedImporterWithSpec(`
 \`\`\`yaml

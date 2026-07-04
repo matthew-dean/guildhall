@@ -2301,6 +2301,66 @@ function ensureImportedReleaseContainers(
   }
 }
 
+function importedCurrentCompletionNeedsFreshProof(input: {
+  existing: Task
+  refreshedAcceptanceCriteria: Task['acceptanceCriteria']
+  refreshedProofPaths: Task['proofPaths']
+}): boolean {
+  const hasUnmetRefreshedCriteria = (input.refreshedAcceptanceCriteria ?? [])
+    .some(criterion => criterion.met !== true)
+  const hasUnverifiedRefreshedProof = (input.refreshedProofPaths ?? [])
+    .some(proofPathMissingPassedEvidence)
+  if (!hasUnmetRefreshedCriteria && !hasUnverifiedRefreshedProof) return false
+  return !taskHasVerifiedCompletionEvidence(input.existing)
+}
+
+function taskHasVerifiedCompletionEvidence(task: Task): boolean {
+  return (
+    completionHandoffHasVerifiedEvidence(task.completionHandoff) ||
+    (task.proofPaths ?? []).some(proofPathHasPassedEvidence) ||
+    (task.gateResults ?? []).some(result => result.status === 'pass') ||
+    (task.reviewVerdicts ?? []).some(verdict => verdict.decision === 'approved')
+  )
+}
+
+function completionHandoffHasVerifiedEvidence(handoff: unknown): boolean {
+  if (!handoff || typeof handoff !== 'object' || Array.isArray(handoff)) return false
+  const record = handoff as Record<string, unknown>
+  return nonEmptyStringArray(record.verified).length > 0 ||
+    nonEmptyArray(record.evidenceRefs).length > 0 ||
+    passedVerificationRecords(record.automatedProof).length > 0 ||
+    passedVerificationRecords(record.manualProof).length > 0 ||
+    passedVerificationRecords(record.providerProof).length > 0
+}
+
+function proofPathHasPassedEvidence(proofPath: unknown): boolean {
+  if (!proofPath || typeof proofPath !== 'object' || Array.isArray(proofPath)) return false
+  const record = proofPath as Record<string, unknown>
+  if (record.status === 'verified') return true
+  return passedVerificationRecords(record.verificationRecords).length > 0
+}
+
+function proofPathMissingPassedEvidence(proofPath: unknown): boolean {
+  if (!proofPath || typeof proofPath !== 'object' || Array.isArray(proofPath)) return true
+  return !proofPathHasPassedEvidence(proofPath)
+}
+
+function nonEmptyStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+    : []
+}
+
+function nonEmptyArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value.filter(Boolean) : []
+}
+
+function passedVerificationRecords(value: unknown): unknown[] {
+  return Array.isArray(value)
+    ? value.filter(item => Boolean(item && typeof item === 'object' && (item as { status?: unknown }).status === 'passed'))
+    : []
+}
+
 function materializedAcceptanceCriteria(
   task: MaterializedImportTask,
   evidenceDetail?: ImportedEvidenceDetail,
@@ -4685,11 +4745,24 @@ export async function approveWorkspaceImport(
   }
 
   const refreshedStatusForImportedTask = (
-    existingStatus: Task['status'],
+    existing: Task,
     importedScope: MaterializedImportTask['scope'],
     seededStatus: Task['status'],
+    refreshedAcceptanceCriteria: Task['acceptanceCriteria'],
+    refreshedProofPaths: Task['proofPaths'],
   ): Task['status'] => {
+    const existingStatus = existing.status
     if (importedScope === 'later') return 'shelved'
+    if (
+      ['done', 'pending_pr'].includes(existingStatus) &&
+      importedCurrentCompletionNeedsFreshProof({
+        existing,
+        refreshedAcceptanceCriteria,
+        refreshedProofPaths,
+      })
+    ) {
+      return seededStatus
+    }
     if (['blocked', 'in_progress', 'review', 'gate_check', 'done', 'pending_pr'].includes(existingStatus)) {
       return existingStatus
     }
@@ -4717,17 +4790,25 @@ export async function approveWorkspaceImport(
     const normalizedReferences = absoluteImportedReferences(imported.references, input.projectPath)
     const evidenceDetail = extractReferenceEvidenceDetail(imported, input.projectPath)
     const seededBlueprint = buildImportedBlueprintSeed(imported, normalizedReferences, input.projectPath, now)
+    const refreshedAcceptanceCriteria = materializedAcceptanceCriteria(imported, evidenceDetail)
+    const materializedProof = materializedProofPaths(imported, evidenceDetail) ?? []
     existing.description = normalizedDescription
     existing.domain = domain
     existing.projectPath = taskProjectPath
     existing.priority = imported.priority
     existing.dependsOn = [...(imported.dependsOn ?? [])].map(dependency => dependencyIdMap.get(dependency) ?? dependency)
     existing.releaseIds = [...(imported.releaseIds ?? [])]
-    existing.acceptanceCriteria = materializedAcceptanceCriteria(imported, evidenceDetail)
+    existing.acceptanceCriteria = refreshedAcceptanceCriteria
     existing.requestIntake = seededBlueprint.requestIntake
     existing.references = normalizedReferences
     existing.notes = seededBlueprint.notes
-    existing.status = refreshedStatusForImportedTask(existing.status, imported.scope, seededBlueprint.status)
+    existing.status = refreshedStatusForImportedTask(
+      existing,
+      imported.scope,
+      seededBlueprint.status,
+      refreshedAcceptanceCriteria,
+      materializedProof,
+    )
     existing.outOfScope = seededBlueprint.outOfScope
     existing.spec = seededBlueprint.spec
     existing.productBrief = seededBlueprint.productBrief
@@ -4739,7 +4820,6 @@ export async function approveWorkspaceImport(
     existing.contextBudget = seededBlueprint.contextBudget
     existing.decomposition = seededBlueprint.decomposition
     existing.sizePlan = seededBlueprint.sizePlan
-    const materializedProof = materializedProofPaths(imported, evidenceDetail) ?? []
     if (materializedProof.length > 0) existing.proofPaths = materializedProof
     else delete existing.proofPaths
     existing.updatedAt = now

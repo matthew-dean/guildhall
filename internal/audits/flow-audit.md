@@ -12607,6 +12607,76 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-07-04T13:58:00Z - Stopped decomposed parent work from masquerading as
+completed release work in Narrative Harness orientation.
+
+- Work id: `codex:narrative-harness-split-parent-rollup-2026-07-04`.
+- User job: when Guildhall splits a scoped release item into child work, the
+  owner should still understand the release state from Guildhall's UI. A parent
+  marked mechanically complete because the split was materialized must not make
+  the 1,000-foot release map claim implementation progress that has not
+  happened.
+- Finding:
+  - Live Narrative Harness state had selected release
+    `Stage 1: Fixture And Evaluation Harness`.
+  - `task-import-9s8tkc` was marked `done` after split-child materialization
+    even though its acceptance criteria were unmet and proof paths had no
+    passed evidence.
+  - The API could then count split parents as done, which made orientation look
+    more complete than the real child work.
+- Fix:
+  - Workspace import refresh now reopens stale imported `done`/`pending_pr`
+    current work when refreshed acceptance criteria or proof paths still lack
+    verified completion evidence.
+  - Orientation maturity now rolls a `done` parent with eligible unfinished
+    children up from those children before applying the parent's own done/proof
+    state. In the live Narrative Harness case, the schema parent is now
+    `sliced`, with parent progress `total:1`, `sliced:1`, `done:0`.
+- Contract Touch Decision:
+  - Work id: `codex:narrative-harness-split-parent-rollup-2026-07-04`.
+  - Touched contracts: none; no persisted schema fields or public API shapes
+    changed.
+  - Contracts considered but not touched: task status enum, task hierarchy
+    schema, release container schema, orientation spine TypeScript interfaces,
+    start/action model contract.
+  - Required follow-up: decide whether split parents need a first-class
+    non-implementation terminal state instead of overloading `done` for
+    "decomposition materialized"; rendered map summaries still need a tighter
+    distinction between grouped rows, current work counts, and deferred counts.
+  - Proof required: failing importer regression for stale imported completion,
+    failing orientation regression for split-parent progress, focused runtime
+    tests, installed-app API proof, and rendered installed-app route proof.
+  - Proof provided:
+    `/opt/homebrew/bin/pnpm exec vitest run src/runtime/__tests__/workspace-importer.test.ts src/runtime/workspace-import/__tests__/detect.test.ts src/runtime/workspace-import/__tests__/hypothesis.test.ts src/runtime/__tests__/serve-settings.test.ts src/runtime/__tests__/project-orientation-spine.test.ts`
+    passed `300` tests.
+  - Apply/revert behavior: revert the workspace-importer status refresh and
+    orientation child-rollup changes together if release progress regresses.
+- Installed-app proof:
+  - `/opt/homebrew/bin/pnpm build` passed.
+  - `/opt/homebrew/bin/pnpm dev:install && guildhall stop && guildhall start`
+    installed the branch; `/api/stale-server` returned `stale:false` for PID
+    `48452` from `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+  - `/api/project?projectId=narrative-harness` returned selected release
+    `Stage 1: Fixture And Evaluation Harness`, `7` included nodes, `8`
+    deferred nodes, `startReadiness.canStart: true`, and primary action
+    `Define the cited contracts for Define fixture, expected-record,
+    prototype-run, and evaluation schemas.`
+  - The same API returned the split parent
+    `Define fixture, expected-record, prototype-run, and evaluation schemas.`
+    as `maturity: sliced` with `done: 0` in its progress.
+  - Rendered installed-app proof on `localhost:7777` showed Overview and
+    Project Map with the selected stage label, `7 Current scope`, `8 Deferred`,
+    the child task as `Do this next`, and no `MVP boundary` text. Screenshots:
+    `/tmp/guildhall-nh-overview-proof-after5s.png` and
+    `/tmp/guildhall-nh-map-proof-after5s.png`.
+- Caveat:
+  - The in-app browser control bridge timed out before it could even return the
+    current tab URL during this pass, so rendered proof used headless
+    Playwright against the same installed `localhost:7777` app instead of the
+    Codex in-app browser session.
+
+source: codex:narrative-harness-split-parent-rollup-2026-07-04
+
 2026-07-04T13:25:00Z - Start readiness now treats declared proof as release
 completion evidence, not optional decoration.
 

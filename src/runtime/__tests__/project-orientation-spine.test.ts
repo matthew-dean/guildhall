@@ -994,6 +994,46 @@ describe('buildProjectOrientationSpine', () => {
     expect(spine.activePins.map(pin => pin.kind)).toEqual(['proof', 'proof'])
   })
 
+  it('does not count a split parent as completed while its child work is unfinished', () => {
+    const spine = buildProjectOrientationSpine({
+      projectId: 'narrative-harness',
+      now: '2026-07-04T12:30:00.000Z',
+      scope: {
+        id: 'stage-1-fixture-and-evaluation-harness',
+        label: 'Stage 1: Fixture And Evaluation Harness',
+        kind: 'release',
+        source: 'release_plan',
+        nodeIds: ['work:fixture-schema-parent'],
+        deferredNodeIds: [],
+      },
+      tasks: [
+        {
+          id: 'fixture-schema-parent',
+          title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+          status: 'done',
+          spec: 'Split into contract, fixture, and proof tasks.',
+          proofPaths: [{ expectedEvidence: ['schema tests pass'] }],
+          hierarchy: { childIds: ['fixture-contract-child'] },
+        },
+        {
+          id: 'fixture-contract-child',
+          title: 'Define the cited contracts for fixture schemas.',
+          status: 'exploring',
+          spec: 'Draft the concrete schema contracts.',
+          hierarchy: { parentId: 'fixture-schema-parent' },
+          workVisibility: { kind: 'internal_step', countInProjectTotals: false },
+        },
+      ],
+    })
+
+    expect(spine.nodes['work:fixture-schema-parent']?.maturity).toBe('sliced')
+    expect(spine.summary.progress.total).toBe(1)
+    expect(spine.summary.progress.sliced).toBe(1)
+    expect(spine.summary.progress.done).toBe(0)
+    expect(spine.summary.headline).toBe('Stage 1: Fixture And Evaluation Harness is being shaped.')
+    expect(spine.gaps.filter(gap => gap.kind === 'proof_needed')).toHaveLength(0)
+  })
+
   it('keeps a completed scope complete when import refresh is only follow-up work', () => {
     const spine = buildProjectOrientationSpine({
       projectId: 'narrative-harness',

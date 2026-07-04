@@ -720,6 +720,45 @@ function taskHasChildren(task: OrientationTaskInput, childIdsByParent: Map<strin
   return (task.hierarchy?.childIds?.length ?? 0) > 0 || (childIdsByParent.get(task.id)?.length ?? 0) > 0
 }
 
+function childTasksFor(
+  task: OrientationTaskInput,
+  childIdsByParent: Map<string, string[]>,
+  tasksById: ReadonlyMap<string, OrientationTaskInput>,
+): OrientationTaskInput[] {
+  return [...new Set([...(task.hierarchy?.childIds ?? []), ...(childIdsByParent.get(task.id) ?? [])])]
+    .map(childId => tasksById.get(childId))
+    .filter((child): child is OrientationTaskInput => Boolean(child))
+}
+
+function unfinishedChildRollupMaturity(
+  task: OrientationTaskInput,
+  childIdsByParent: Map<string, string[]>,
+  scope: OrientationScope | null,
+  tasksById: ReadonlyMap<string, OrientationTaskInput>,
+): OrientationMaturity | null {
+  const children = childTasksFor(task, childIdsByParent, tasksById)
+    .filter(child => child.status !== 'archived' && child.status !== 'cancelled')
+    .filter(child => taskEligibleForSelectedScope(child, scope, { tasksById }).eligible)
+  if (children.length === 0) return null
+
+  const unfinished = children.filter((child) => {
+    if (child.status === 'shelved') return false
+    if (child.status !== 'done') return true
+    const proof = proofForTask(child)
+    return hasExplicitProofExpectation(child) && (proof.state === 'needed' || proof.state === 'partial')
+  })
+  if (unfinished.length === 0) return null
+  if (unfinished.some(child => child.status === 'blocked')) return 'blocked'
+  if (unfinished.some(child => child.status === 'in_progress')) return 'active'
+  if (unfinished.some(child => child.status === 'review' || child.status === 'gate_check')) return 'review'
+  if (unfinished.some((child) => {
+    if (child.status !== 'done') return false
+    const proof = proofForTask(child)
+    return hasExplicitProofExpectation(child) && (proof.state === 'needed' || proof.state === 'partial')
+  })) return 'proof_needed'
+  return 'sliced'
+}
+
 function maturityForTask(
   task: OrientationTaskInput,
   childIdsByParent: Map<string, string[]>,
@@ -732,6 +771,8 @@ function maturityForTask(
   if (task.status === 'in_progress') return 'active'
   if (task.status === 'review' || task.status === 'gate_check') return 'review'
   if (task.status === 'done') {
+    const childRollup = unfinishedChildRollupMaturity(task, childIdsByParent, scope, tasksById)
+    if (childRollup) return childRollup
     const proof = proofForTask(task)
     if (proof.state === 'proven') return 'proven'
     if (hasExplicitProofExpectation(task) && (proof.state === 'needed' || proof.state === 'partial')) return 'proof_needed'
