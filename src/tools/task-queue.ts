@@ -74,6 +74,14 @@ export const readTasksTool = defineTool({
   },
 })
 
+const structuredUpdateTaskNoteSchema = z.object({
+  agentId: z.string(),
+  role: z.string(),
+  content: z.string(),
+})
+
+type StructuredUpdateTaskNote = z.infer<typeof structuredUpdateTaskNoteSchema>
+
 const updateTaskNoteSchema = z.preprocess((value) => {
   if (typeof value !== 'string') return value
   const trimmed = value.trim()
@@ -81,13 +89,53 @@ const updateTaskNoteSchema = z.preprocess((value) => {
   try {
     return JSON.parse(trimmed)
   } catch {
-    return value
+    return parseJsonShapedNoteString(trimmed) ?? value
   }
-}, z.object({
-  agentId: z.string(),
-  role: z.string(),
-  content: z.string(),
-}))
+}, z.union([structuredUpdateTaskNoteSchema, z.string().min(1)]))
+
+function parseJsonShapedNoteString(value: string): { agentId: string; role: string; content: string } | null {
+  const agentId = /"agentId"\s*:\s*"([^"]+)"/.exec(value)?.[1]
+  const role = /"role"\s*:\s*"([^"]+)"/.exec(value)?.[1]
+  const content = (
+    /"content"\s*:\s*"([\s\S]*)"\s*}\s*$/.exec(value) ??
+    /"content"\s*:\s*"([\s\S]*)$/.exec(value)
+  )?.[1]
+  if (!agentId || !role || content === undefined) return null
+  return {
+    agentId,
+    role,
+    content: content
+      .replace(/"\s*}\s*$/, '')
+      .replace(/\\"/g, '"')
+      .replace(/\\n/g, '\n')
+      .replace(/\\t/g, '\t')
+      .replace(/\\\\/g, '\\'),
+  }
+}
+
+function normalizeUpdateTaskNote(
+  note: z.infer<typeof updateTaskNoteSchema> | undefined,
+  metadata: Record<string, unknown>,
+): StructuredUpdateTaskNote | undefined {
+  if (note === undefined) return undefined
+  if (typeof note !== 'string') {
+    const parsedContent = parseJsonShapedNoteString(note.content)
+    return parsedContent ? { ...note, content: parsedContent.content } : note
+  }
+  const content = note.trim()
+  if (!content) return undefined
+  const agentId = typeof metadata['current_agent_id'] === 'string' && metadata['current_agent_id'].trim()
+    ? metadata['current_agent_id'].trim()
+    : 'agent'
+  const role = agentId === 'worker-agent'
+    ? 'self-critique'
+    : agentId === 'reviewer-agent'
+      ? 'reviewer'
+      : agentId === 'gate-checker-agent'
+        ? 'gate-checker'
+        : 'note'
+  return { agentId, role, content }
+}
 
 const updateTaskInputSchema = z.object({
   tasksPath: TASKS_PATH_SCHEMA,
@@ -160,6 +208,7 @@ export async function updateTask(
     const currentAgentId = typeof metadata['current_agent_id'] === 'string'
       ? metadata['current_agent_id'].trim()
       : ''
+    const normalizedNote = normalizeUpdateTaskNote(input.note, metadata)
     if (
       currentAgentId === 'worker-agent' &&
       input.gateResults?.some((result) => result.type === 'hard')
@@ -297,8 +346,8 @@ export async function updateTask(
       ? z.array(GateResult).parse(input.gateResults)
       : []
     if (input.completedAt !== undefined && input.completedAt.trim() !== '') task.completedAt = input.completedAt
-    const noteEvidence = input.note
-      ? { ...input.note, timestamp: new Date().toISOString() }
+    const noteEvidence = normalizedNote
+      ? { ...normalizedNote, timestamp: new Date().toISOString() }
       : null
     const shouldRefreshSizePlan =
       (nextSpec !== undefined && nextSpec.trim() !== '') ||
@@ -341,6 +390,10 @@ function projectRootForTaskState(
   task: z.infer<typeof Task>,
   metadata: Record<string, unknown> = {},
 ): string {
+  const workspaceProjectPath = typeof metadata['current_task_workspace_project_path'] === 'string'
+    ? metadata['current_task_workspace_project_path'].trim()
+    : ''
+  if (workspaceProjectPath && path.isAbsolute(workspaceProjectPath)) return workspaceProjectPath
   const metadataProjectPath = typeof metadata['current_task_project_path'] === 'string'
     ? metadata['current_task_project_path'].trim()
     : ''

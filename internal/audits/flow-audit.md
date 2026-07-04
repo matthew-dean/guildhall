@@ -12607,6 +12607,47 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-07-04T11:58:00Z - Completed Narrative Harness Stage 1 live-run
+state-agreement hardening.
+
+- Work id: `codex:narrative-harness-stage-1-live-proof-2026-07-04`.
+- User job: a project owner should be able to tell from Guildhall itself,
+  without repo inspection, whether the selected release is still running,
+  paused, blocked, complete, or waiting on follow-up import refresh.
+- Findings fixed:
+  - In-progress work with a stopped/stopping run could be described as
+    running. Orientation now receives run status and says paused/stopping
+    honestly.
+  - Worker handoff loops could leave verified implementation work in
+    `in_progress` after a valid proof packet or checkpoint-backed review
+    handoff existed. Guildhall now synthesizes/recognizes review proof and
+    promotes the task to review instead of redispatching the worker.
+  - Completed selected release scope could be presented as `needs attention`
+    when the follow-up workspace import detector found newly documented work.
+    Orientation now says the selected scope is complete, keeps `topBlocker`
+    null, and presents import refresh as the next follow-up action.
+- Live Narrative Harness proof from installed `localhost:7777`:
+  - `/api/stale-server`: `stale:false`, boot/current build mtime
+    `1783166220322`.
+  - `/api/project?projectId=narrative-harness`: `run:null`,
+    `startReadiness.code:"workspace_import_refresh_needed"`,
+    headline `Stage 1: Fixture And Evaluation Harness is complete.`,
+    `topBlocker:null`, next action `Refresh import for newly documented work.`,
+    selected scope `7 done`, `0 active`, `0 blocked`, `8 deferred`.
+  - Live event evidence showed the recovery line:
+    `The worker had already produced durable verification evidence and review
+    handoff proof. Guildhall promoted the task to review instead of leaving it
+    stuck in a handoff loop.`
+- Deterministic proof:
+  - `vitest` focused orchestrator handoff bundle passed `6` tests.
+  - `vitest` focused orientation bundle passed `5` tests.
+  - `vitest` focused serve-readiness bundle passed `3` tests.
+  - Rendered flow proof for `project orientation spine agrees` and `Narrative
+    Harness overview and map show the documented current release scope` passed
+    `2` Playwright tests.
+
+source: codex:narrative-harness-stage-1-live-proof-2026-07-04
+
 2026-07-04T08:21:00Z - Repaired Narrative Harness re-intake so Guildhall
 communicates and executes the selected release from its own project surfaces.
 

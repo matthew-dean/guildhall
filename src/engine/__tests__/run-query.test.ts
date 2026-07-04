@@ -1210,6 +1210,17 @@ describe('runQuery — unknown tool + invalid input', () => {
         },
       }),
     )
+    registry.register(
+      defineTool({
+        name: 'write-checkpoint',
+        description: '',
+        inputSchema: z.object({
+          taskId: z.string().optional(),
+          step: z.number().optional(),
+        }),
+        execute: async () => ({ output: 'checkpoint written', is_error: false }),
+      }),
+    )
     const client = new ScriptedApiClient([
       { message: assistantToolUse('update-task', { taskId: 'task-1' }) },
       { message: assistantText('ok') },
@@ -1843,6 +1854,133 @@ AC-2 (Email confirmation): Met - /auth/confirm reads token from query params, ca
     expect(updateCompleted?.type === 'tool_execution_completed' ? updateCompleted.output : '').toBe('updated')
   })
 
+  it('allows review handoff after a structured self-critique is persisted as a string note', async () => {
+    const registry = new ToolRegistry()
+    const statuses: string[] = []
+    registry.register(
+      defineTool({
+        name: 'read-file',
+        description: '',
+        inputSchema: z.object({ filePath: z.string() }),
+        isReadOnly: () => true,
+        execute: async () => ({ output: 'export const x = 1', is_error: false }),
+      }),
+    )
+    registry.register(
+      defineTool({
+        name: 'shell',
+        description: '',
+        inputSchema: z.object({ command: z.string() }),
+        isReadOnly: () => true,
+        execute: async () => ({ output: 'build passed', is_error: false }),
+      }),
+    )
+    registry.register(
+      defineTool({
+        name: 'update-task',
+        description: '',
+        inputSchema: z.object({
+          tasksPath: z.string().optional(),
+          taskId: z.string(),
+          status: z.string(),
+          note: z.unknown().optional(),
+        }),
+        execute: async (input) => {
+          statuses.push(input.status)
+          return { output: 'updated', is_error: false, metadata: { taskId: input.taskId } }
+        },
+      }),
+    )
+    const stringNote = `**Self-critique:**
+
+**Acceptance criteria:**
+- AC 1 (Schemas): Met - fixture and evaluation schema exports were verified.
+
+Minimum-scope check:
+- Files changed: src/schemas/fixture.ts, src/schemas/evaluation.ts
+- Smallest useful change?: yes - only schema files changed.
+- Anything to revert before review?: none.
+
+Review proof packet:
+- Changed files / diff scope: src/schemas/fixture.ts, src/schemas/evaluation.ts
+- Verification commands passed: pnpm build passed.
+- Working hypothesis at handoff: The schema implementation is ready for review.
+- Known gaps / follow-up: none.`
+    const client = new ScriptedApiClient([
+      { message: assistantToolUse('update-task', { taskId: 'task-1', status: 'in_progress' }, 'start-string-note') },
+      {
+        message: {
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool_use',
+              id: 'read-string-note',
+              name: 'read-file',
+              input: { filePath: '/workspace/project/src/schemas/fixture.ts' },
+            },
+          ],
+        },
+      },
+      {
+        message: {
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool_use',
+              id: 'shell-string-note',
+              name: 'shell',
+              input: { command: 'pnpm build' },
+            },
+          ],
+        },
+      },
+      {
+        message: assistantToolUse(
+          'update-task',
+          {
+            taskId: 'task-1',
+            status: 'in_progress',
+            note: stringNote,
+          },
+          'persist-string-note',
+        ),
+      },
+      { message: assistantToolUse('write-checkpoint', { taskId: 'task-1', step: 1 }, 'checkpoint-after-string-note') },
+      {
+        message: assistantToolUse(
+          'update-task',
+          {
+            taskId: 'task-1',
+            status: 'review',
+          },
+          'review-after-string-note',
+        ),
+      },
+      { message: assistantText('ok') },
+    ])
+
+    const events = await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 8,
+          toolMetadata: { current_task_id: 'task-1' },
+        },
+        [{ role: 'user', content: [{ type: 'text', text: 'go' }] }],
+      ),
+    )
+
+    const updateResults = events.filter((event) => event.type === 'tool_execution_completed')
+    expect(statuses).toEqual(['in_progress', 'in_progress', 'review'])
+    expect(updateResults.at(-1)?.type === 'tool_execution_completed' ? updateResults.at(-1)?.is_error : true).toBe(false)
+  })
+
   it('blocks review handoff after source inspection and verification when the self-critique is missing', async () => {
     const registry = new ToolRegistry()
     let called = false
@@ -2422,6 +2560,68 @@ Uncertainties: none`,
     expect(reviewCalls).toBe(1)
     expect(completed.at(-1)?.type === 'tool_execution_completed' ? completed.at(-1)?.is_error : true).toBe(false)
     expect(completed.at(-1)?.type === 'tool_execution_completed' ? completed.at(-1)?.output : '').toBe('updated')
+  })
+
+  it('allows review handoff from durable proof metadata after fresh verification reruns', async () => {
+    const registry = new ToolRegistry()
+    let reviewCalls = 0
+    registry.register(
+      defineTool({
+        name: 'shell',
+        description: '',
+        inputSchema: z.object({ command: z.string() }),
+        isReadOnly: () => true,
+        execute: async () => ({
+          output: 'build passed',
+          is_error: false,
+          metadata: { success: true, executedCommand: 'pnpm build' },
+        }),
+      }),
+    )
+    registry.register(
+      defineTool({
+        name: 'update-task',
+        description: '',
+        inputSchema: z.object({
+          taskId: z.string(),
+          status: z.string(),
+        }),
+        execute: async (input) => {
+          if (input.status === 'review') reviewCalls += 1
+          return { output: 'updated', is_error: false, metadata: { taskId: input.taskId } }
+        },
+      }),
+    )
+    const client = new ScriptedApiClient([
+      { message: assistantToolUse('shell', { command: 'pnpm build' }, 'shell-resumed-proof') },
+      { message: assistantToolUse('update-task', { taskId: 'task-1', status: 'review' }, 'review-resumed-proof') },
+      { message: assistantText('ok') },
+    ])
+
+    const events = await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 4,
+          toolMetadata: {
+            current_task_id: 'task-1',
+            current_task_has_structured_self_critique: true,
+            current_task_has_review_proof_packet: true,
+          },
+        },
+        [{ role: 'user', content: [{ type: 'text', text: 'go' }] }],
+      ),
+    )
+
+    const completed = events.filter((event) => event.type === 'tool_execution_completed')
+    expect(reviewCalls).toBe(1)
+    expect(completed.at(-1)?.type === 'tool_execution_completed' ? completed.at(-1)?.is_error : true).toBe(false)
   })
 
   it('allows review handoff for a resumed task when authoritative verification only exists in durable checkpoint history', async () => {

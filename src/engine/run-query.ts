@@ -450,7 +450,8 @@ function looksLikeStructuredSelfCritiqueContent(content: string): boolean {
   }
   const hasAcceptanceCoverage =
     /for each acceptance criterion:/i.test(normalized) ||
-    /(?:^|\n)\s*(?:-\s*)?(?:\[[^\]]+\]|ac-\d+)(?:\s*\([^)\n]+\))?\s*:\s*(met|not met)\b/im.test(normalized)
+    /(?:^|\n)\s*(?:\*\*)?acceptance criteria:?/i.test(normalized) ||
+    /(?:^|\n)\s*(?:-\s*)?(?:\[[^\]]+\]|ac[-\s]?\d+)(?:\s*\([^)\n]+\))?\s*:\s*(met|not met)\b/im.test(normalized)
   const hasMinimumScope =
     /(?:^|\n)\s*(?:\*\*)?-?\s*(?:minimum|minimal|mini)-scope check:\s*(?:\*\*)?/i.test(normalized)
   const hasProofPacket =
@@ -463,14 +464,46 @@ function looksLikeStructuredSelfCritiqueContent(content: string): boolean {
   return hasAcceptanceCoverage && hasMinimumScope && hasProofPacket && hasVerificationProof && hasDiffScope
 }
 
+function parseJsonShapedNoteContent(value: string): string {
+  const trimmed = value.trim()
+  if (!trimmed.startsWith('{')) return trimmed
+  try {
+    const parsed = JSON.parse(trimmed) as unknown
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const content = (parsed as Record<string, unknown>)['content']
+      if (typeof content === 'string' && content.trim().length > 0) return content.trim()
+    }
+  } catch {
+    const match = /"content"\s*:\s*"([\s\S]*)"\s*}\s*$/.exec(trimmed)
+    if (match?.[1]) {
+      return match[1]
+        .replace(/\\"/g, '"')
+        .replace(/\\n/g, '\n')
+        .replace(/\\t/g, '\t')
+        .replace(/\\\\/g, '\\')
+        .trim()
+    }
+  }
+  return trimmed
+}
+
+function structuredSelfCritiqueContentFromUpdateTaskNote(note: unknown): string {
+  if (!note) return ''
+  if (typeof note === 'string') {
+    const content = parseJsonShapedNoteContent(note)
+    return looksLikeStructuredSelfCritiqueContent(content) ? content : ''
+  }
+  if (typeof note !== 'object' || Array.isArray(note)) return ''
+  const content = (note as Record<string, unknown>)['content']
+  if (typeof content !== 'string') return ''
+  const normalized = parseJsonShapedNoteContent(content)
+  return looksLikeStructuredSelfCritiqueContent(normalized) ? normalized : ''
+}
+
 function structuredSelfCritiqueFromUpdateTaskInput(
   input: Record<string, unknown>,
 ): string {
-  const note = input['note']
-  if (!note || typeof note !== 'object' || Array.isArray(note)) return ''
-  const rec = note as Record<string, unknown>
-  const content = typeof rec['content'] === 'string' ? rec['content'].trim() : ''
-  return looksLikeStructuredSelfCritiqueContent(content) ? content : ''
+  return structuredSelfCritiqueContentFromUpdateTaskNote(input['note'])
 }
 
 function checkpointFilesTouched(
@@ -2608,6 +2641,7 @@ function hasReviewHandoffEvidence(
   if (evidence?.taskId !== taskId) return false
   if (evidence.inspectedImplementationFile && evidence.changedOrVerified) return true
   if (currentTaskLooksLikeVerificationOnly(toolMetadata) && evidence.changedOrVerified) return true
+  if (hasStructuredSelfCritiqueInMetadata(toolMetadata) && evidence.changedOrVerified) return true
   if (checkpointFilesTouched(toolMetadata).length > 0 && hasStructuredSelfCritiqueInMetadata(toolMetadata)) {
     return true
   }
@@ -2625,6 +2659,7 @@ function hasImplementationEvidenceForSelfCritique(
   if (evidence?.taskId === taskId) {
     if (evidence.inspectedImplementationFile && evidence.changedOrVerified) return true
     if (currentTaskLooksLikeVerificationOnly(toolMetadata) && evidence.changedOrVerified) return true
+    if (hasStructuredSelfCritiqueInMetadata(toolMetadata) && evidence.changedOrVerified) return true
   }
   return checkpointFilesTouched(toolMetadata).length > 0
 }

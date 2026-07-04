@@ -705,7 +705,7 @@
               <Chip label={countLabel(scopeQueueFallback.deferred, 'deferred', 'deferred')} tone="neutral" />
             {:else}
               <Chip label={projectRunning ? `${deliveryReadyCount} runnable` : `${deliveryReadyCount} ready to resume`} tone={deliveryFirstRunnable ? 'ok' : 'neutral'} />
-              <Chip label={`${deliveryQueue.blocked?.length ?? 0} blocked`} tone={deliveryQueue.blocked?.length ? 'warn' : 'neutral'} />
+              <Chip label={`${deliveryQueue.blocked?.length ?? 0} waiting on dependencies`} tone={deliveryQueue.blocked?.length ? 'warn' : 'neutral'} />
               {#each deliveryPrimitiveBlockers as primitive (`primitive-${primitive.id}`)}
                 <Chip label={primitiveLabel(primitive)} tone="warn" />
               {/each}

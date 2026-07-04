@@ -193,6 +193,50 @@ describe('Orchestrator — coordinator adjudication on recurrent dissent', () =>
     expect(after.reviewVerdicts.at(-1)?.reason).toContain('procedural-only dissent')
   })
 
+  it('does not bounce completed work for Guildhall checkpoint or audit bookkeeping requests', async () => {
+    await writeTask(mkTask())
+
+    const runner: ReviewerFanoutRunner = async ({ personas }) => {
+      return personas.map(
+        (persona, i): PersonaVerdict =>
+          i === 0
+            ? {
+                guildSlug: persona.slug,
+                guildName: persona.name,
+                verdict: 'revise',
+                reasoning:
+                  'All acceptance criteria are satisfied. However, the absence of recorded checkpoints and a persisted audit trail violates the crash-recoverability and traceability requirements.',
+                revisionItems: [
+                  'Add a checkpoint marker to the README documenting the verification command.',
+                  'Insert an audit entry in a product file documenting the verification command.',
+                ],
+                rawOutput: '**Verdict:** revise',
+              }
+            : {
+                guildSlug: persona.slug,
+                guildName: persona.name,
+                verdict: 'approve',
+                reasoning: `${persona.name} approved.`,
+                revisionItems: [],
+                rawOutput: '**Verdict:** approve',
+              },
+      )
+    }
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet(),
+      reviewerFanout: runner,
+    })
+    await orch.tick()
+
+    const after = (await readQueue()).tasks[0]!
+    expect(after.status).toBe('gate_check')
+    expect(after.revisionCount).toBe(0)
+    expect(after.notes.at(-1)?.content).toContain('procedural-only')
+    expect(after.notes.at(-1)?.content).toContain('persisted audit trail')
+  })
+
   it('bounces normally on first round of dissent even under the adjudication policy', async () => {
     await setFanoutPolicy('coordinator_adjudicates_on_conflict')
     await writeTask(mkTask())

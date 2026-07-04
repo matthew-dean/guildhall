@@ -319,6 +319,67 @@ describe('WorkTab', () => {
     expect(queue).not.toHaveTextContent('No runnable task')
   })
 
+  it('labels dependency-waiting delivery work separately from blocked tasks', async () => {
+    render(WorkTab, {
+      props: {
+        detail: detail([
+          task({
+            id: 'task-schema',
+            title: 'Define fixture schemas',
+            status: 'ready',
+          }),
+          task({
+            id: 'task-fixture',
+            title: 'Add the first fiction fixture',
+            status: 'ready',
+          }),
+        ], {
+          workProgress: {
+            counts: {
+              visibleTotal: 2,
+              visibleActive: 1,
+              visibleBlocked: 0,
+              visibleDone: 0,
+              visibleShelved: 0,
+              deliveryTotal: 2,
+              deliveryRequired: 2,
+              deliveryDone: 0,
+              deliveryBlocked: 0,
+            },
+            byTaskId: {},
+          },
+          deliverySpine: {
+            queue: {
+              runnable: [{
+                task: task({ id: 'task-schema', title: 'Define fixture schemas', status: 'ready' }),
+                executionBlockers: [],
+                structuralBlockers: [],
+                why: 'Runnable project work.',
+              }],
+              firstRunnable: {
+                task: task({ id: 'task-schema', title: 'Define fixture schemas', status: 'ready' }),
+                executionBlockers: [],
+                structuralBlockers: [],
+                why: 'Runnable project work.',
+              },
+              blocked: [{
+                task: task({ id: 'task-fixture', title: 'Add the first fiction fixture', status: 'ready' }),
+                executionBlockers: [{ id: 'task-schema', title: 'Define fixture schemas', status: 'ready' }],
+                structuralBlockers: [],
+                why: 'Blocked by Define fixture schemas.',
+              }],
+            },
+          },
+        }),
+      },
+    })
+
+    const queue = await screen.findByRole('region', { name: 'Delivery queue' })
+    expect(queue).toHaveTextContent('1 ready to resume')
+    expect(queue).toHaveTextContent('1 waiting on dependencies')
+    expect(queue).not.toHaveTextContent('1 blocked')
+  })
+
   it('prefers shaped work units over proof-step badges for planning work and names blockers by task title', async () => {
     render(WorkTab, {
       props: {

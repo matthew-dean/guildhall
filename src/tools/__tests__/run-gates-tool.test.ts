@@ -183,7 +183,7 @@ describe('runGatesTool scoped exceptions', () => {
     )
   })
 
-  it('persists current task gate results to evidence without rewriting TASKS.json gate history', async () => {
+  it('persists current task gate results to task state and evidence', async () => {
     const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-run-gates-task-state-'))
     const guildhallDir = path.join(projectRoot, '.guildhall')
     const tasksPath = path.join(guildhallDir, 'TASKS.json')
@@ -244,7 +244,15 @@ describe('runGatesTool scoped exceptions', () => {
       expect(result.is_error).toBe(false)
       expect((result.metadata as Record<string, unknown>).persistedTaskGateResults).toBe(true)
       const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
-      expect(raw.tasks[0].gateResults).toEqual([])
+      expect(raw.tasks[0].gateResults).toEqual([
+        {
+          gateId: 'test',
+          type: 'hard',
+          passed: true,
+          checkedAt: '2026-06-03T00:01:00.000Z',
+          output: 'ok',
+        },
+      ])
       const evidence = await readTaskEvidence(projectRoot, 'task-001', { kind: 'gate_result' })
       expect(evidence.map((event) => event.payload)).toEqual([
         {

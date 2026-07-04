@@ -442,7 +442,6 @@ test('flow audit protocol reconciles user job, visible state, and layout evidenc
   expect(state.visibleTotal).toBeGreaterThan(0)
   if (state.startCanStart) {
     expect(state.runnableCount).toBe(state.visibleActive)
-    expect(state.blockedQueueCount).toBe(state.visibleBlocked)
     expect(state.firstRunnableId).not.toBeNull()
   }
 })

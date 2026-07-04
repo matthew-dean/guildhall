@@ -106,6 +106,23 @@ async function persistGateResultsForCurrentTask(input: {
     const task = queue.tasks.find((candidate) => candidate['id'] === taskId)
     if (!task) return false
 
+    const resultIds = new Set(input.results.map((result) => result.gateId))
+    const existingGateResults = Array.isArray(task['gateResults'])
+      ? task['gateResults'].filter((result) =>
+          result &&
+          typeof result === 'object' &&
+          !(
+            (result as Record<string, unknown>)['type'] === 'hard' &&
+            resultIds.has(String((result as Record<string, unknown>)['gateId'] ?? ''))
+          ),
+        )
+      : []
+    task['gateResults'] = [...existingGateResults, ...input.results]
+    const now = new Date().toISOString()
+    task['updatedAt'] = now
+    queue.lastUpdated = now
+    await writeManagedTextFile(tasksPath, JSON.stringify(queue, null, 2))
+
     const projectRoot = inferProjectRootFromMemoryDir(path.dirname(tasksPath))
     await Promise.all(input.results.map((result) =>
       appendTaskEvidence(projectRoot, taskId, {

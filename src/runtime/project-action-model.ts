@@ -26,6 +26,7 @@ export interface ProjectActionTask {
   title?: string
   description?: string
   status?: string
+  blockReason?: string
   updatedAt?: string
   dependsOn?: string[]
   productBrief?: {
@@ -362,15 +363,15 @@ function dependencyBlockedRank(task: ProjectActionTask, tasksById: ReadonlyMap<s
 }
 
 function bestTaskAction(tasks: ProjectActionTask[], running: boolean): ProjectAction | null {
-  const priority = ['in_progress', 'review', 'gate_check', 'ready', 'spec_review', 'exploring', 'import_draft', 'blocked']
+  const priority = ['in_progress', 'review', 'gate_check', 'blocked', 'ready', 'spec_review', 'exploring', 'import_draft']
   const tasksById = new Map(tasks.map(task => [task.id, task]))
   const ranked = [...tasks]
     .filter(task => priority.includes(task.status ?? ''))
     .sort((left, right) => {
-      const briefDelta = Number(needsBriefCleanup(right)) - Number(needsBriefCleanup(left))
-      if (briefDelta !== 0) return briefDelta
       const statusDelta = priority.indexOf(left.status ?? '') - priority.indexOf(right.status ?? '')
       if (statusDelta !== 0) return statusDelta
+      const briefDelta = Number(needsBriefCleanup(right)) - Number(needsBriefCleanup(left))
+      if (briefDelta !== 0) return briefDelta
       const dependencyDelta = dependencyBlockedRank(left, tasksById) - dependencyBlockedRank(right, tasksById)
       if (dependencyDelta !== 0) return dependencyDelta
       return (right.updatedAt ?? '').localeCompare(left.updatedAt ?? '')
@@ -381,7 +382,9 @@ function bestTaskAction(tasks: ProjectActionTask[], running: boolean): ProjectAc
   return {
     source: 'task',
     label: taskLabel(task),
-    detail: cleanup
+    detail: task.status === 'blocked' && task.blockReason?.trim()
+      ? task.blockReason.trim()
+      : cleanup
       ? 'Needs brief: finish the handoff before a worker can start.'
       : task.description,
     buttonLabel: task.status === 'spec_review' ? 'Review in Thread' : 'Open Work',

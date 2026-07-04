@@ -287,6 +287,35 @@ function looksLikeDirectFileWrite(command: string): boolean {
   return hasStdoutRedirect || hasHereDoc || hasTee
 }
 
+function shellWriteTargets(command: string, cwd: string): string[] {
+  const targets: string[] = []
+  const addTarget = (raw: string | undefined) => {
+    const value = raw?.trim()
+    if (!value || value.startsWith('&') || value.startsWith('(')) return
+    targets.push(path.resolve(cwd, stripShellCdQuotes(value)))
+  }
+  const redirectPattern = /(^|[^0-9])>>?\s*("[^"]+"|'[^']+'|[^\s;&|]+)/g
+  for (const match of command.matchAll(redirectPattern)) {
+    addTarget(match[2])
+  }
+  const teePattern = /\btee(?:\s+-a)?\s+("[^"]+"|'[^']+'|[^\s;&|]+)/g
+  for (const match of command.matchAll(teePattern)) {
+    addTarget(match[1])
+  }
+  return targets
+}
+
+function shellWriteTouchesTaskScope(command: string, cwd: string, metadata: Record<string, unknown> | undefined): boolean {
+  const targets = shellWriteTargets(command, cwd)
+  if (targets.length === 0) return true
+  const protectedRoots = [
+    String(metadata?.['current_task_project_path'] ?? '').trim(),
+    String(metadata?.['current_task_worktree_path'] ?? '').trim(),
+  ].filter(Boolean).map(root => path.resolve(root))
+  if (protectedRoots.length === 0) return true
+  return targets.some(target => protectedRoots.some(root => target === root || target.startsWith(`${root}${path.sep}`)))
+}
+
 function directFileWriteGuardMessage(metadata: Record<string, unknown> | undefined): string {
   const missingTarget = String(metadata?.['current_missing_likely_target_file'] ?? '').trim()
   const likelyTargets = Array.isArray(metadata?.['current_task_likely_target_files'])
@@ -530,7 +559,12 @@ export const shellTool = defineTool({
         } as unknown as Record<string, unknown>,
       }
     }
-    if (hasTaskScopedFileMutationGuard(ctx.metadata) && looksLikeDirectFileWrite(executableCommand)) {
+    const effectiveCwd = reconcileShellCwdWithTaskScope(cdAdjustedCwd, ctx.metadata)
+    if (
+      hasTaskScopedFileMutationGuard(ctx.metadata) &&
+      looksLikeDirectFileWrite(executableCommand) &&
+      shellWriteTouchesTaskScope(executableCommand, effectiveCwd, ctx.metadata)
+    ) {
       return {
         output: directFileWriteGuardMessage(ctx.metadata),
         is_error: true,
@@ -544,7 +578,6 @@ export const shellTool = defineTool({
         } as unknown as Record<string, unknown>,
       }
     }
-    const effectiveCwd = reconcileShellCwdWithTaskScope(cdAdjustedCwd, ctx.metadata)
     const normalizedInput: ShellInput = {
       ...input,
       command: executableCommand,

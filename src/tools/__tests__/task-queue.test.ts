@@ -261,6 +261,70 @@ describe('updateTask', () => {
     expect(misplaced).toHaveLength(0)
   })
 
+  it('uses the workspace project root for evidence when the task target is a subdirectory', async () => {
+    const stateTasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
+    await fs.mkdir(path.dirname(stateTasksPath), { recursive: true })
+    const docsTarget = path.join(tmpDir, 'docs', 'harness')
+    seedQueue.tasks[0]!.projectPath = docsTarget
+    seedQueue.tasks[0]!.status = 'in_progress'
+    await fs.writeFile(stateTasksPath, JSON.stringify(seedQueue, null, 2), 'utf-8')
+
+    const result = await updateTask({
+      tasksPath: stateTasksPath,
+      taskId: 'task-001',
+      note: {
+        agentId: 'worker-agent',
+        role: 'self-critique',
+        content: '**Self-critique:** Subdirectory-targeted task proof recorded.',
+      },
+    }, {
+      current_agent_id: 'worker-agent',
+      current_task_id: 'task-001',
+      current_task_project_path: docsTarget,
+      current_task_workspace_project_path: tmpDir,
+    })
+    expect(result.success).toBe(true)
+
+    const raw = JSON.parse(await fs.readFile(stateTasksPath, 'utf-8'))
+    const effective = await buildEffectiveTask(tmpDir, TaskQueue.parse(raw).tasks[0]!)
+    const effectiveNotes = effective.notes as Array<{ agentId: string; role: string; content: string }> | undefined
+    expect(effectiveNotes?.at(-1)).toMatchObject({
+      agentId: 'worker-agent',
+      role: 'self-critique',
+      content: '**Self-critique:** Subdirectory-targeted task proof recorded.',
+    })
+
+    const misplaced = await readTaskEvidence(docsTarget, 'task-001', { kind: 'note' })
+    expect(misplaced).toHaveLength(0)
+  })
+
+  it('accepts a plain note string and structures it from current agent metadata', async () => {
+    const stateTasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
+    await fs.mkdir(path.dirname(stateTasksPath), { recursive: true })
+    seedQueue.tasks[0]!.status = 'in_progress'
+    await fs.writeFile(stateTasksPath, JSON.stringify(seedQueue, null, 2), 'utf-8')
+
+    const result = await updateTask({
+      tasksPath: stateTasksPath,
+      taskId: 'task-001',
+      note: '**Self-critique:** All acceptance criteria are met.',
+    }, {
+      current_agent_id: 'worker-agent',
+      current_task_id: 'task-001',
+      current_task_workspace_project_path: tmpDir,
+    })
+
+    expect(result.success).toBe(true)
+    const raw = JSON.parse(await fs.readFile(stateTasksPath, 'utf-8'))
+    const effective = await buildEffectiveTask(tmpDir, TaskQueue.parse(raw).tasks[0]!)
+    const effectiveNotes = effective.notes as Array<{ agentId: string; role: string; content: string }>
+    expect(effectiveNotes.at(-1)).toMatchObject({
+      agentId: 'worker-agent',
+      role: 'self-critique',
+      content: '**Self-critique:** All acceptance criteria are met.',
+    })
+  })
+
   it('accepts a stringified note object from model tool calls', async () => {
     await updateTaskTool.execute({
       tasksPath,
@@ -277,6 +341,64 @@ describe('updateTask', () => {
       agentId: 'worker-agent',
       role: 'self-critique',
       content: '**Self-critique:** Review proof packet recorded.',
+    })
+  })
+
+  it('accepts a stringified note object during engine input validation', () => {
+    const parsed = updateTaskTool.inputSchema.safeParse({
+      tasksPath,
+      taskId: 'task-001',
+      note: JSON.stringify({
+        agentId: 'worker-agent',
+        role: 'self-critique',
+        content: '**Self-critique:** Review proof packet recorded.',
+      }),
+    })
+
+    expect(parsed.success).toBe(true)
+    if (!parsed.success) return
+    expect(parsed.data.note).toMatchObject({
+      agentId: 'worker-agent',
+      role: 'self-critique',
+      content: '**Self-critique:** Review proof packet recorded.',
+    })
+  })
+
+  it('accepts a multiline JSON-shaped note string during engine input validation', () => {
+    const parsed = updateTaskTool.inputSchema.safeParse({
+      tasksPath,
+      taskId: 'task-001',
+      note:
+        '{"agentId":"worker-agent","role":"self-critique","content":"**Self-critique:**\n\nAC4: `npm run verify:schemas` passed."}',
+    })
+
+    expect(parsed.success).toBe(true)
+    if (!parsed.success) return
+    expect(parsed.data.note).toMatchObject({
+      agentId: 'worker-agent',
+      role: 'self-critique',
+      content: '**Self-critique:**\n\nAC4: `npm run verify:schemas` passed.',
+    })
+  })
+
+  it('unwraps a malformed JSON-shaped note wrapper from structured note content', async () => {
+    await updateTaskTool.execute({
+      tasksPath,
+      taskId: 'task-001',
+      note: {
+        agentId: 'worker-agent',
+        role: 'self-critique',
+        content:
+          '{"agentId":"worker-agent","role":"self-critique","content":"**Self-critique:**\\n\\nAC 1: Met.\\n\\nMinimum-scope check: only scripts/run-packet.mjs changed.',
+      },
+    }, ctx)
+
+    const evidence = await readTaskEvidence(tmpDir, 'task-001', { kind: 'note' })
+    expect(evidence.at(-1)?.payload).toMatchObject({
+      agentId: 'worker-agent',
+      role: 'self-critique',
+      content:
+        '**Self-critique:**\n\nAC 1: Met.\n\nMinimum-scope check: only scripts/run-packet.mjs changed.',
     })
   })
 

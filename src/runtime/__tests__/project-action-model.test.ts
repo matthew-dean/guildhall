@@ -210,6 +210,41 @@ describe('buildProjectActionModel', () => {
     expect(model.secondaryActions.map(action => action.source)).toContain('inbox')
   })
 
+  it('surfaces a blocked current-scope task before unrelated ready work', () => {
+    const model = buildProjectActionModel({
+      startReadiness: { canStart: true },
+      tasks: [
+        {
+          id: 'runner-proof',
+          title: 'Implement a no-UI runner that builds a packet from fixture records.',
+          description: 'Build the script runner proof.',
+          status: 'blocked',
+          blockReason: "decision_required: Cannot transition task to 'review' -- guard keeps blocking despite self-critique note being persisted",
+          updatedAt: '2026-07-04T10:00:00.000Z',
+        },
+        {
+          id: 'schema-narrowing',
+          title: 'Use the first run to narrow the MVP story-memory schema.',
+          description: 'Follow-on ready task.',
+          status: 'ready',
+          updatedAt: '2026-07-04T10:05:00.000Z',
+        },
+      ],
+      thread: { turns: [], activeTurnId: null },
+      runStatus: 'stopped',
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      source: 'task',
+      label: 'Implement a no-UI runner that builds a packet from fixture records.',
+      detail: "decision_required: Cannot transition task to 'review' -- guard keeps blocking despite self-critique note being persisted",
+      buttonLabel: 'Open Work',
+      href: '/work?task=runner-proof',
+      tone: 'warn',
+      taskId: 'runner-proof',
+    })
+  })
+
   it('uses owner-input start readiness as the single primary action over competing queues', () => {
     const model = buildProjectActionModel({
       startReadiness: {

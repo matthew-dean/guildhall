@@ -19,7 +19,7 @@ export interface ProjectFlowState {
   visibleActive: number
   visibleBlocked: number
   runnableCount: number
-  blockedQueueCount: number
+  waitingOnDependenciesCount: number
   firstRunnableId: string | null
 }
 
@@ -63,7 +63,7 @@ export async function readProjectFlowState(page: Page, projectId: string): Promi
     visibleActive: counts.visibleActive ?? 0,
     visibleBlocked: counts.visibleBlocked ?? 0,
     runnableCount: queue.runnable?.length ?? 0,
-    blockedQueueCount: queue.blocked?.length ?? 0,
+    waitingOnDependenciesCount: queue.blocked?.length ?? 0,
     firstRunnableId: queue.firstRunnable?.task?.id ?? null,
   }
 }
@@ -115,10 +115,10 @@ export async function expectProjectFlowStateAgreement(page: Page, projectId: str
 
   if (state.startCanStart) {
     await expect(page.getByText(`${state.runnableCount} RUNNABLE`)).toBeVisible()
-    if (state.blockedQueueCount > 0) {
-      await expect(page.getByText(`${state.blockedQueueCount} BLOCKED`)).toBeVisible()
+    if (state.waitingOnDependenciesCount > 0) {
+      await expect(page.getByText(`${state.waitingOnDependenciesCount} WAITING ON DEPENDENCIES`)).toBeVisible()
     } else {
-      await expect(page.getByText(/\d+ BLOCKED/)).toHaveCount(0)
+      await expect(page.getByText(/\d+ WAITING ON DEPENDENCIES/)).toHaveCount(0)
     }
     if (state.visibleBlocked > 0) {
       await expect(page.getByText(`${state.visibleBlocked} blocked tasks`)).toBeVisible()
@@ -135,7 +135,6 @@ export async function expectProjectFlowStateAgreement(page: Page, projectId: str
 
   if (state.startCanStart) {
     expect(state.runnableCount).toBe(state.visibleActive)
-    expect(state.blockedQueueCount).toBe(state.visibleBlocked)
     expect(state.firstRunnableId).not.toBeNull()
   }
   return state

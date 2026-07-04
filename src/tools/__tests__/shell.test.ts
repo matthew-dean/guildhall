@@ -667,6 +667,31 @@ describe('shellTool — engine-tool interface', () => {
     })
   })
 
+  it('allows temporary shell-written verification fixtures outside the active task worktree', async () => {
+    const { projectPath, worktreePath } = makeTaskScopedDirs()
+    const tempFile = path.join(os.tmpdir(), `guildhall-shell-temp-${Date.now()}.mjs`)
+    const result = await shellTool.execute(
+      {
+        command: `printf 'console.log("ok")\\n' > ${tempFile} && node ${tempFile}`,
+        cwd: worktreePath,
+        timeoutMs: 5000,
+      },
+      {
+        cwd: worktreePath,
+        metadata: {
+          current_task_project_path: projectPath,
+          current_task_worktree_path: worktreePath,
+          current_task_likely_target_files: [
+            path.join(worktreePath, 'web/tests/unit/composables/use-collections.test.ts'),
+          ],
+        },
+      },
+    )
+    expect(result.is_error).toBe(false)
+    expect(result.output).toContain('ok')
+    expect((result.metadata as Record<string, unknown>).blockedDirectFileWrite).toBeUndefined()
+  })
+
   it('still allows shell verification commands for active coding tasks', async () => {
     const { projectPath, worktreePath } = makeTaskScopedDirs()
     const result = await shellTool.execute(

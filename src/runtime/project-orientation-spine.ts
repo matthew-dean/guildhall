@@ -306,6 +306,7 @@ export interface BuildProjectOrientationSpineInput {
     message?: string
     actionHref?: string
   } | null
+  runStatus?: 'running' | 'stopping' | 'stopped' | 'error' | string | null
   workspaceImportDraft?: OrientationWorkspaceImportDraft | null
   sourceConflicts?: Array<{ id: string; summary: string; refs: string[] }>
   sourceRefs?: string[]
@@ -733,12 +734,27 @@ function progressForTask(task: OrientationTaskInput, maturity: OrientationMaturi
   if (hasSpec(task)) progress.specced = 1
   if (maturity === 'sliced') progress.sliced = 1
   if (maturity === 'ready' || (maturity === 'proof_needed' && task.status === 'ready')) progress.ready = 1
-  if (maturity === 'active') progress.active = 1
+  if (maturity === 'active' || maturity === 'review') progress.active = 1
   if (maturity === 'proven') progress.proven = 1
   if (maturity === 'done' || maturity === 'proven') progress.done = 1
   if (maturity === 'blocked') progress.blocked = 1
   if (maturity === 'deferred') progress.deferred = 1
   return progress
+}
+
+function progressForSelectedScope(
+  tasks: OrientationTaskInput[],
+  scope: OrientationScope | null,
+): OrientationProgress {
+  const tasksById = new Map(tasks.map(task => [task.id, task]))
+  const childIdsByParent = buildChildMap(tasks)
+  return tasks.reduce((progress, task) => {
+    if (isProjectSetupTask(task.id) || task.status === 'archived' || task.status === 'cancelled') return progress
+    if (!visibilityForTask(task, tasksById).countInProjectTotals) return progress
+    if (!taskCountsTowardScopeProgress(task, scope)) return progress
+    const maturity = maturityForTask(task, childIdsByParent, scope, tasksById)
+    return addProgress(progress, progressForTask(task, maturity, scope?.id ?? null))
+  }, emptyProgress(scope?.id ?? null))
 }
 
 function emptyRefs(taskId: string): OrientationRefs {
@@ -1363,8 +1379,9 @@ function sourceHealth(nodes: OrientationNode[], gaps: OrientationGap[]): Orienta
 
 function summarizeStartReadiness(input: {
   workLabel: string | null
+  progress: OrientationProgress
   startReadiness: NonNullable<BuildProjectOrientationSpineInput['startReadiness']>
-}): { headline: string; topBlocker: string; nextAction: string } | null {
+}): { headline: string; topBlocker: string | null; nextAction: string } | null {
   const { workLabel, startReadiness } = input
   if (startReadiness.canStart) return null
   const genericWorkLabel = workLabel ?? 'Current task scope'
@@ -1372,6 +1389,12 @@ function summarizeStartReadiness(input: {
     ? startReadiness.message.trim()
     : 'Project start is blocked until the current issue is resolved.'
   switch (startReadiness.code) {
+    case 'all_terminal':
+      return {
+        headline: `${genericWorkLabel} is complete.`,
+        topBlocker: null,
+        nextAction: 'Review completed scope.',
+      }
     case 'import_drafts_waiting':
       return {
         headline: `${genericWorkLabel} needs import review.`,
@@ -1385,6 +1408,13 @@ function summarizeStartReadiness(input: {
         nextAction: 'Draft the first current-scope brief.',
       }
     case 'workspace_import_refresh_needed':
+      if (input.progress.done > 0 && input.progress.active === 0 && input.progress.ready === 0 && input.progress.blocked === 0) {
+        return {
+          headline: `${genericWorkLabel} is complete.`,
+          topBlocker: null,
+          nextAction: 'Refresh import for newly documented work.',
+        }
+      }
       return {
         headline: `${genericWorkLabel} needs import refresh.`,
         topBlocker: 'Workspace import is under-scoped.',
@@ -1414,6 +1444,7 @@ function buildSummary(input: {
   pins: OrientationPin[]
   blockers: OrientationBlocker[]
   startReadiness?: BuildProjectOrientationSpineInput['startReadiness']
+  runStatus?: BuildProjectOrientationSpineInput['runStatus']
 }): ProjectOrientationSummary {
   const purpose = input.charter.goal ?? `Project ${input.projectId} needs a confirmed purpose.`
   const releaseLabel = input.selectedRelease?.label ?? null
@@ -1421,6 +1452,7 @@ function buildSummary(input: {
   const readinessSummary = input.startReadiness
     ? summarizeStartReadiness({
         workLabel,
+        progress: input.progress,
         startReadiness: input.startReadiness,
       })
     : null
@@ -1431,15 +1463,30 @@ function buildSummary(input: {
     input.progress.blocked > 0 ||
     input.progress.sliced > 0 ||
     input.progress.total > input.progress.done + input.progress.deferred
+  const hasScopedWork = input.progress.total > input.progress.deferred
+  const runStatus = input.runStatus ?? null
+  const hasActiveWork = input.progress.active > 0
+  const runIsRunning = runStatus === null || runStatus === 'running'
+  const runIsStopping = runStatus === 'stopping'
   const headline = readinessSummary?.headline ?? (
     workLabel
       ? topBlocker
         ? input.progress.blocked > 0
           ? `${workLabel} is blocked on proof.`
           : `${workLabel} is waiting on proof.`
-        : hasActionableWork
-          ? `${workLabel} is being shaped.`
-          : `${workLabel} has no actionable work.`
+        : hasActiveWork && runIsStopping
+          ? `${workLabel} is stopping with work in progress.`
+          : hasActiveWork && !runIsRunning
+            ? `${workLabel} is paused with work in progress.`
+          : hasActiveWork
+            ? `${workLabel} is in progress.`
+          : input.progress.done > 0 && hasActionableWork
+            ? `${workLabel} is partly complete.`
+            : hasActionableWork
+              ? `${workLabel} is being shaped.`
+              : hasScopedWork && input.progress.done > 0
+                ? `${workLabel} is complete.`
+                : `${workLabel} has no actionable work.`
       : 'No current work is selected yet.'
   )
   return {
@@ -1457,7 +1504,15 @@ function buildSummary(input: {
       ? input.progress.blocked > 0
         ? `Review blocker: ${topBlocker}`
         : `Review waiting work: ${topBlocker}`
-      : 'Review current work.'),
+      : hasActiveWork && runIsStopping
+        ? 'Wait for Guildhall to finish stopping, then resume.'
+      : hasActiveWork && !runIsRunning
+        ? 'Resume the current work.'
+      : hasActiveWork
+        ? 'Open the running work.'
+        : input.progress.done > 0 && hasActionableWork
+          ? 'Continue the remaining scoped work.'
+          : 'Review current work.'),
     progress: input.progress,
   }
 }
@@ -1531,10 +1586,7 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
     ...sourceConflictGaps(input.sourceConflicts),
   ]
   const pins = activePins(roots)
-  const progress = roots.reduce(
-    (current, node) => addProgress(current, node.progress),
-    emptyProgress(scope?.id ?? null),
-  )
+  const progress = progressForSelectedScope(tasks, scope)
   const releaseState: OrientationReleaseSummary['state'] = blockers.length > 0
     ? 'blocked'
     : scope
@@ -1558,6 +1610,7 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
       pins,
       blockers,
       startReadiness: input.startReadiness,
+      runStatus: input.runStatus,
     }),
     roots,
     nodes: Object.fromEntries(byId.entries()),

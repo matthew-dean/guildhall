@@ -449,18 +449,21 @@ function isLowSignalCheckpointMutationPath(file: string): boolean {
 }
 
 function noteLooksLikeStructuredSelfCritique(task: Task): boolean {
-  return (task.notes ?? []).some((note) =>
-    note.agentId !== 'human' &&
-    isWorkerSelfCritiqueNote(note) &&
-    /\bself-critique\b/i.test(note.content) &&
-    /\bmin(?:imum|imal|i)-scope check\b/i.test(note.content),
-  )
+  return (task.notes ?? []).some((note) => {
+    const content = noteContentForClassification(note.content)
+    return (
+      note.agentId !== 'human' &&
+      isWorkerSelfCritiqueNote({ ...note, content }) &&
+      /\bself-critique\b/i.test(content) &&
+      /\bmin(?:imum|imal|i)-scope check\b/i.test(content)
+    )
+  })
 }
 
 function noteLooksLikeReviewProofPacket(task: Task): boolean {
   return (task.notes ?? []).some((note) => {
     if (note.agentId === 'human' || !isWorkerSelfCritiqueNote(note)) return false
-    const content = note.content ?? ''
+    const content = noteContentForClassification(note.content ?? '')
     return (
       /\bself-critique\b/i.test(content) &&
       /\bmin(?:imum|imal|i)-scope check\b/i.test(content) &&
@@ -470,6 +473,27 @@ function noteLooksLikeReviewProofPacket(task: Task): boolean {
       /\b(?:changed files|files changed|diff scope|scope of changes)\b/i.test(content)
     )
   })
+}
+
+function noteContentForClassification(content: string): string {
+  const parsed = parseJsonShapedNoteContent(content)
+  return parsed ?? content
+}
+
+function parseJsonShapedNoteContent(value: string): string | null {
+  const trimmed = value.trim()
+  if (!trimmed.startsWith('{') || !/"content"\s*:/i.test(trimmed)) return null
+  const content = (
+    /"content"\s*:\s*"([\s\S]*)"\s*}\s*$/.exec(trimmed) ??
+    /"content"\s*:\s*"([\s\S]*)$/.exec(trimmed)
+  )?.[1]
+  if (content === undefined) return null
+  return content
+    .replace(/"\s*}\s*$/, '')
+    .replace(/\\"/g, '"')
+    .replace(/\\n/g, '\n')
+    .replace(/\\t/g, '\t')
+    .replace(/\\\\/g, '\\')
 }
 
 function isRecoverableReviewHandoffToolLoop(task: Task): boolean {
@@ -511,6 +535,7 @@ function isRecoverableReviewHandoffToolLoop(task: Task): boolean {
       /Tool validation bug prevents transitioning .* to review status/i.test(blockReason) ||
       /Cannot transition to review .* system validator rejects passing verification/i.test(blockReason) ||
       /Cannot transition to review .* update-task tool rejects the transition despite self-critique/i.test(blockReason) ||
+      /Cannot transition task to 'review'.*guard keeps blocking despite self-critique note being persisted/i.test(blockReason) ||
       /Blocked from transitioning to review .* system validator bug persists/i.test(blockReason) ||
       /Task blocked from transitioning to review despite passing all verification/i.test(blockReason) ||
       hasValidatorBugEscalation
@@ -538,6 +563,7 @@ function resolveRecoverableReviewHandoffEscalations(task: Task, resolvedAt: stri
         /Tool validation bug prevents transitioning .* to review status/i.test(summary) ||
         /Cannot transition to review .* system validator rejects passing verification/i.test(summary) ||
         /Cannot transition to review .* update-task tool rejects the transition despite self-critique/i.test(summary) ||
+        /Cannot transition task to 'review'.*guard keeps blocking despite self-critique note being persisted/i.test(summary) ||
         /Blocked from transitioning to review .* system validator bug persists/i.test(summary) ||
         /Task blocked from transitioning to review despite passing all verification/i.test(summary) ||
         /persist a structured self-critique note via update-task first/i.test(details) ||
@@ -896,6 +922,14 @@ function resolveRecoverableWorkerTimeoutEscalations(task: Task, resolvedAt: stri
       escalation.resolution = 'Superseded after the project was explicitly resumed from the latest recovery checkpoint.'
     }
   }
+}
+
+function countRuntimeNotes(task: Task, pattern: RegExp): number {
+  return (task.notes ?? []).filter(note =>
+    note.role === 'runtime' &&
+    typeof note.content === 'string' &&
+    pattern.test(note.content),
+  ).length
 }
 
 function reviewVerdictLooksInfrastructureOnly(verdict: Pick<ReviewVerdict, 'verdict' | 'reasoning'>): boolean {
@@ -2340,6 +2374,7 @@ export class Orchestrator {
   private readonly emptyAssistantResets = new Map<string, number>()
   private readonly specTimeoutRetries = new Map<string, number>()
   private readonly dirtyWorkerTimeoutRetries = new Map<string, number>()
+  private readonly likelyTargetWorkerTimeoutRetries = new Map<string, number>()
   private readonly exploringNoProgressCounts = new Map<string, number>()
   private readonly workerNoProgressCounts = new Map<string, number>()
   private runAutomationResolutionCount = 0
@@ -2912,6 +2947,11 @@ export class Orchestrator {
       if (guildGateOutcome) return guildGateOutcome
     }
 
+    if (task.status === 'gate_check') {
+      const recordedHardGateOutcome = await this.completeGateCheckWithRecordedPassingHardGatesInline(task)
+      if (recordedHardGateOutcome) return recordedHardGateOutcome
+    }
+
     // Handoff sequence pre-pass at `review`: when the task is running a
     // multi-step handoff and the current step is NOT the last, we capture
     // the step's handoff note, advance `handoffStep`, and revert status to
@@ -3243,6 +3283,13 @@ export class Orchestrator {
         }
       }
     }
+
+    const reviewProofPromotion = await this.maybePromoteExistingWorkerReviewProof({
+      task,
+      beforeStatus,
+      activeWorktreePath,
+    })
+    if (reviewProofPromotion) return reviewProofPromotion
 
     // When a worktree is freshly minted (or its lockfile has changed), re-run
     // the project's bootstrap inside the worktree so the worker lands in a
@@ -3728,6 +3775,7 @@ export class Orchestrator {
       this.emptyAssistantResets.delete(retryKey)
       this.specTimeoutRetries.delete(retryKey)
       this.dirtyWorkerTimeoutRetries.delete(retryKey)
+      this.likelyTargetWorkerTimeoutRetries.delete(retryKey)
     } catch (err) {
       this.livenessTracker.unregister(agent.name)
       await this.emitBackendEvent({
@@ -4032,7 +4080,12 @@ export class Orchestrator {
           task.worktreePath.trim().length > 0 &&
           !(await this.gitDriver.isClean(resolveRuntimePath(task.worktreePath)))
         if (worktreeDirty) {
-          const dirtyTimeoutRetries = (this.dirtyWorkerTimeoutRetries.get(retryKey) ?? 0) + 1
+          const durableDirtyTimeoutRetries = countRuntimeNotes(
+            task,
+            /worker hit its turn budget.*(?:preserving that partial implementation|dirty work preserved)/i,
+          )
+          const dirtyTimeoutRetries =
+            Math.max(this.dirtyWorkerTimeoutRetries.get(retryKey) ?? 0, durableDirtyTimeoutRetries) + 1
           this.dirtyWorkerTimeoutRetries.set(retryKey, dirtyTimeoutRetries)
           if (dirtyTimeoutRetries > 2) {
             const summary = 'Worker repeatedly hit its turn budget after saving partial work.'
@@ -4076,14 +4129,20 @@ export class Orchestrator {
               }
             }
           }
+          const runtimeNote =
+            dirtyTimeoutRetries === 1
+              ? 'The worker hit its turn budget after making worktree edits, so Guildhall is preserving that partial implementation for the next pass.'
+              : 'The worker hit its turn budget again with dirty work preserved. Guildhall will retry once more before asking for owner intervention.'
+          await this.appendRuntimeTaskNote({
+            taskId: task.id,
+            agentId: agent.name,
+            content: runtimeNote,
+          })
           await this.emitBackendEvent({
             type: 'line_complete',
             task_id: task.id,
             agent_name: agent.name,
-            message:
-              dirtyTimeoutRetries === 1
-                ? 'The worker hit its turn budget after making worktree edits, so Guildhall is preserving that partial implementation for the next pass.'
-                : 'The worker hit its turn budget again with dirty work preserved. Guildhall will retry once more before asking for owner intervention.',
+            message: runtimeNote,
           })
           return {
             kind: 'processed',
@@ -4096,6 +4155,32 @@ export class Orchestrator {
           }
         }
         if (likelyWorkerTargets.length > 0 && !worktreeDirty) {
+          const likelyTargetTimeoutRetries = (this.likelyTargetWorkerTimeoutRetries.get(retryKey) ?? 0) + 1
+          this.likelyTargetWorkerTimeoutRetries.set(retryKey, likelyTargetTimeoutRetries)
+          if (likelyTargetTimeoutRetries <= 1) {
+            const runtimeNote =
+              'The worker timed out before mutating a likely target file. Guildhall will retry once with the same task context and require a concrete file-tool mutation or focused verification before asking for owner intervention.'
+            await this.appendRuntimeTaskNote({
+              taskId: task.id,
+              agentId: agent.name,
+              content: runtimeNote,
+            })
+            await this.emitBackendEvent({
+              type: 'line_complete',
+              task_id: task.id,
+              agent_name: agent.name,
+              message: runtimeNote,
+            })
+            return {
+              kind: 'processed',
+              taskId: task.id,
+              agent: agent.name,
+              beforeStatus,
+              afterStatus: beforeStatus,
+              transitioned: false,
+              revisionCount: task.revisionCount,
+            }
+          }
           const escalation = await raiseEscalation({
             tasksPath,
             progressPath: this.progressPath(),
@@ -4109,6 +4194,7 @@ export class Orchestrator {
               `demanded concrete progress on the authoritative likely target files.`,
           })
           if (escalation.success && escalation.escalationId) {
+            this.likelyTargetWorkerTimeoutRetries.delete(retryKey)
             await this.annotateWorkerBlockedClassification({
               taskId: task.id,
               agentId: 'coordinator',
@@ -4136,6 +4222,19 @@ export class Orchestrator {
             }
           }
         }
+      }
+      if (
+        agent.name === 'gate-checker-agent' &&
+        beforeStatus === 'gate_check' &&
+        /timed out after \d+ms|exceeded \d+ms total turn budget/i.test(message)
+      ) {
+        const preservedGateCheck = await this.preserveGateCheckAfterRecordedHardGateProof({
+          taskId: task.id,
+          agentName: agent.name,
+          beforeStatus,
+          message,
+        })
+        if (preservedGateCheck) return preservedGateCheck
       }
       return {
         kind: 'agent-error',
@@ -4488,8 +4587,23 @@ export class Orchestrator {
           afterStatus === 'in_progress' &&
           !transitioned &&
           hasCheckpointScopedVerifiedProgress &&
-          this.hasReviewProofPacket(taskAfter) &&
           looksLikeReviewHandoffNextAction(checkpointNextAction)
+        if (
+          canAutoPromoteReviewFromCheckpointHandoff &&
+          !this.hasReviewProofPacket(taskAfter) &&
+          checkpointSaysVerificationPassed(checkpointNextAction)
+        ) {
+          taskAfter.notes.push({
+            agentId: 'worker-agent',
+            role: 'self-critique',
+            content: this.syntheticCheckpointSelfCritique({
+              task: taskAfter,
+              checkpointTouchedFiles,
+              metadata: successfulAgentMetadata,
+            }),
+            timestamp: this.now(),
+          })
+        }
         const canAutoPromoteReviewFromFreshHandoff =
           agent.name === 'worker-agent' &&
           beforeStatus === 'in_progress' &&
@@ -4499,7 +4613,10 @@ export class Orchestrator {
           hasWorkerTurnEvidence &&
           this.hasReviewProofPacket(taskAfter) &&
           (hasDirtyLikelyTargetProgress || hasDirtyWorktreeAfter || hasCheckpointScopedVerifiedProgress)
-        if (canAutoPromoteReviewFromCheckpointHandoff || canAutoPromoteReviewFromFreshHandoff) {
+        if (
+          (canAutoPromoteReviewFromCheckpointHandoff && this.hasReviewProofPacket(taskAfter)) ||
+          canAutoPromoteReviewFromFreshHandoff
+        ) {
           ensureReviewerOwnership(taskAfter)
           transitionTaskStatus({
             task: taskAfter,
@@ -4516,7 +4633,7 @@ export class Orchestrator {
             task_id: task.id,
             agent_name: agent.name,
             message:
-              'The worker had already produced durable verification evidence and a structured self-critique. Guildhall promoted the task to review instead of leaving it stuck in a handoff loop.',
+              'The worker had already produced durable verification evidence and review handoff proof. Guildhall promoted the task to review instead of leaving it stuck in a handoff loop.',
           })
           return {
             kind: 'processed',
@@ -5691,6 +5808,31 @@ export class Orchestrator {
     })
   }
 
+  private async appendRuntimeTaskNote(input: {
+    taskId: string
+    agentId: string
+    content: string
+    timestamp?: string
+  }): Promise<void> {
+    const timestamp = input.timestamp ?? this.now()
+    await this.withQueueWriteLock(async () => {
+      const queue = await this.readQueue()
+      const task = queue.tasks.find((candidate) => candidate.id === input.taskId)
+      if (!task) return
+      const note: NonNullable<Task['notes']>[number] = {
+        agentId: input.agentId,
+        role: 'runtime',
+        content: input.content,
+        timestamp,
+      }
+      task.notes.push(note)
+      task.updatedAt = timestamp
+      queue.lastUpdated = timestamp
+      await this.recordTaskNoteEvidence(task, note)
+      await this.writeQueue(queue)
+    })
+  }
+
   private async readEffectiveAgentIssues(task: Task): Promise<AgentIssue[]> {
     const projectRoot = inferProjectRootFromMemoryDir(this.opts.config.memoryDir)
     const evidence = await readTaskEvidence(projectRoot, task.id, { kind: 'agent_issue' })
@@ -6808,6 +6950,128 @@ export class Orchestrator {
         note: `acceptance command gates passed (${results.length}); remaining non-command criteria still need gate review`,
       })
       return null
+    })
+  }
+
+  private async completeGateCheckWithRecordedPassingHardGatesInline(task: Task): Promise<TickOutcome | null> {
+    if (task.status !== 'gate_check') return null
+    const latestHardGates = latestHardGateResults(task)
+    if (latestHardGates.length === 0 || !latestHardGates.every((gate) => gate.passed)) return null
+
+    const beforeStatus = task.status
+    return await this.withQueueWriteLock(async () => {
+      const queue = await this.readQueue()
+      const current = queue.tasks.find((candidate) => candidate.id === task.id)
+      if (!current || current.status !== 'gate_check') return null
+      const currentHardGates = latestHardGateResults(current)
+      if (currentHardGates.length === 0 || !currentHardGates.every((gate) => gate.passed)) return null
+
+      const now = this.now()
+      transitionTaskStatus({
+        task: current,
+        event: 'complete',
+        actor: 'recorded-hard-gates',
+        evidenceRefs: currentHardGates.map((result) => `gate:${result.gateId}`),
+        now,
+        requiredEvidencePresent: true,
+      })
+      current.assignedTo = undefined
+      current.completedAt = now
+      current.notes.push({
+        agentId: 'recorded-hard-gates',
+        role: 'gate-checker',
+        content:
+          `Guildhall completed this gate check from recorded passing hard gates: ${currentHardGates.map((gate) => gate.gateId).join(', ')}.`,
+        timestamp: now,
+      })
+
+      const autoCommit = await this.maybeAutoCommitCompletedTaskWork(current)
+      if (!autoCommit.ok) {
+        transitionTaskStatus({
+          task: current,
+          event: 'landing_failed',
+          actor: 'recorded-hard-gates',
+          evidenceRefs: ['task:landing:auto-commit-failed'],
+          now,
+        })
+        current.assignedTo = null
+        current.blockReason =
+          `Guildhall could not auto-commit completed work: ${autoCommit.detail ?? 'unknown git error'}.`
+        current.notes.push({
+          agentId: 'coordinator',
+          role: 'git-story',
+          content:
+            `Auto-commit was required by project Git Story policy, but it failed: ${autoCommit.detail ?? 'unknown git error'}.`,
+          timestamp: now,
+        })
+        current.mergeRecord = {
+          fromBranch: current.branchName ?? '<unknown>',
+          toBranch: current.baseBranch ?? '<unknown>',
+          strategy: await this.resolveLandingStrategySafe(),
+          result: 'skipped',
+          mergedAt: now,
+          detail: 'auto-commit failed before landing',
+        }
+      } else {
+        const landingStrategy = await this.resolveLandingStrategySafe()
+        const worktreeMode = await this.resolveWorktreeModeSafe()
+        const completionWorktreeMode = current.worktreePath?.trim() ? 'per_task' : worktreeMode
+        if (completionWorktreeMode !== 'none' && current.branchName && current.baseBranch) {
+          const effectiveTaskProjectPath = resolveEffectiveTaskProjectPath(
+            current,
+            this.opts.config.projectPath,
+          )
+          const mergeOutcome = await dispatchMerge({
+            task: current,
+            policy: landingStrategy,
+            projectPath: effectiveTaskProjectPath,
+            memoryDir: this.opts.config.memoryDir,
+            gitDriver: this.gitDriver,
+            now: this.now(),
+          })
+          current.mergeRecord = mergeOutcome.record
+          if (mergeOutcome.transitionReceipt) {
+            current.status = mergeOutcome.transitionReceipt.to
+          }
+          if (mergeOutcome.fixupTask) appendFixupTask(queue, mergeOutcome.fixupTask, this.now())
+          if (mergeOutcome.newStatus === 'done') shelveSupersededFixupTasks(queue, current.id, this.now())
+        } else if (!current.mergeRecord) {
+          current.mergeRecord = {
+            fromBranch: current.branchName ?? '<unknown>',
+            toBranch: current.baseBranch ?? '<unknown>',
+            strategy: landingStrategy,
+            result: 'skipped',
+            mergedAt: now,
+            detail:
+              completionWorktreeMode === 'none'
+                ? 'worktree isolation disabled — merge skipped'
+                : 'branch metadata missing — merge skipped',
+          }
+        }
+      }
+
+      current.updatedAt = this.now()
+      queue.lastUpdated = current.updatedAt
+      await this.writeQueue(queue)
+      await this.maybeCleanupWorktree(current, await this.resolveWorktreeModeSafe())
+      const afterStatus = current.status
+      await this.logTickProgress({
+        task: current,
+        agent: 'recorded-hard-gates',
+        beforeStatus,
+        afterStatus,
+        transitioned: true,
+        note: `recorded hard gates passed (${currentHardGates.length}) → ${afterStatus}`,
+      })
+      return {
+        kind: 'processed',
+        taskId: current.id,
+        agent: 'recorded-hard-gates',
+        beforeStatus,
+        afterStatus,
+        transitioned: true,
+        revisionCount: current.revisionCount,
+      } as TickOutcome
     })
   }
 
@@ -7941,12 +8205,10 @@ export class Orchestrator {
         recoveryNote =
           'User restarted the project after the worker exhausted its turn budget. Reopened the task so Guildhall can continue from the current task state instead of treating the turn limit as terminal.'
       } else if (isRecoverableWorkerTimeoutBlocker(task)) {
-        const checkpoint = await readCheckpoint(this.opts.config.memoryDir, task.id).catch(() => null)
-        if (!checkpoint?.nextPlannedAction) continue
         resolveRecoverableWorkerTimeoutEscalations(task, now)
         if (activeEscalations(task).length > 0) continue
         recoveryNote =
-          'User restarted the project after the worker timed out mid-task. Reopened the task so Guildhall can continue from the latest recovery checkpoint instead of treating the timeout as terminal.'
+          'User restarted the project after the worker timed out before mutating the likely target file. Reopened the task so Guildhall can retry the worker lane from the current task plan instead of treating an internal execution miss as owner judgment.'
       } else if (
         await this.isRecoverableSelfAuthoredVerificationBlockedTask(task)
       ) {
@@ -8143,8 +8405,13 @@ export class Orchestrator {
     const worktreeMode = await this.resolveWorktreeModeSafe()
     const landingStrategy = await this.resolveLandingStrategySafe()
     for (const task of queue.tasks) {
-      if (task.status !== 'done') continue
-      if (task.mergeRecord) continue
+      const hasAutoCommitLandingFailure =
+        task.status === 'blocked' &&
+        typeof task.blockReason === 'string' &&
+        /could not (auto-commit completed work|commit it before landing)/i.test(task.blockReason) &&
+        (!task.mergeRecord || /auto-commit failed/i.test(task.mergeRecord.detail ?? ''))
+      if (task.status !== 'done' && !hasAutoCommitLandingFailure) continue
+      if (task.mergeRecord && !hasAutoCommitLandingFailure) continue
       if (!task.worktreePath?.trim()) continue
       if (!task.branchName?.trim() || !task.baseBranch?.trim()) {
         transitionTaskStatus({
@@ -8161,6 +8428,19 @@ export class Orchestrator {
         queue.lastUpdated = this.now()
         changed = true
         continue
+      }
+
+      if (hasAutoCommitLandingFailure) {
+        task.status = 'done'
+        task.assignedTo = null
+        delete task.blockReason
+        task.mergeRecord = undefined
+        task.notes.push({
+          agentId: 'coordinator',
+          role: 'git-story',
+          content: 'Retrying landing for completed work after a previous auto-commit failure.',
+          timestamp: this.now(),
+        })
       }
 
       const autoCommit = await this.maybeAutoCommitCompletedTaskWork(task)
@@ -8668,7 +8948,8 @@ export class Orchestrator {
     if (!content) return false
     const hasAcceptanceCoverage =
       /for each acceptance criterion:/i.test(content) ||
-      /(?:^|\n)\s*-?\s*(?:\[[^\]]+\]|ac-\d+(?:\s*\([^)]+\))?)\s*:\s*(met|not met)\b/i.test(content)
+      /(?:^|\n)\s*(?:\*\*)?acceptance criteria:?/i.test(content) ||
+      /(?:^|\n)\s*-?\s*(?:\[[^\]]+\]|ac[-\s]?\d+(?:\s*\([^)]+\))?)\s*:\s*(met|not met)\b/i.test(content)
     const hasMinimumScope =
       /(?:^|\n)\s*(?:\*\*)?-?\s*(?:minimum|minimal|mini)-scope check:\s*(?:\*\*)?/i.test(content)
     return hasAcceptanceCoverage && hasMinimumScope
@@ -8688,6 +8969,130 @@ export class Orchestrator {
     const hasDiffScope =
       /\b(?:changed files|files changed|diff scope|scope of changes)\b/i.test(content)
     return hasProofPacket && hasVerificationProof && hasDiffScope
+  }
+
+  private async maybePromoteExistingWorkerReviewProof(input: {
+    task: Task
+    beforeStatus: TaskStatus
+    activeWorktreePath: string
+  }): Promise<TickOutcome | null> {
+    if (input.beforeStatus !== 'in_progress') return null
+    if (input.task.assignedTo && input.task.assignedTo !== 'worker-agent') return null
+    if (!this.hasReviewProofPacket(input.task)) return null
+
+    let hasTaskWorktreeChanges = false
+    const proofWorktreePath = input.task.worktreePath?.trim()
+      ? resolveRuntimePath(input.task.worktreePath)
+      : resolveRuntimePath(input.activeWorktreePath)
+    if (proofWorktreePath) {
+      hasTaskWorktreeChanges = !(await this.gitDriver.isClean(proofWorktreePath))
+    }
+    const checkpointTouchedFiles = this.checkpointTouchedFilesFromTaskNotes(input.task)
+    if (!hasTaskWorktreeChanges && checkpointTouchedFiles.length === 0) return null
+
+    const now = this.now()
+    const queue = await this.readQueue()
+    const queuedTask = queue.tasks.find((candidate) => candidate.id === input.task.id)
+    if (!queuedTask) return null
+    if (queuedTask.status !== 'in_progress') return null
+    if (!this.hasReviewProofPacket(queuedTask)) return null
+
+    ensureReviewerOwnership(queuedTask)
+    transitionTaskStatus({
+      task: queuedTask,
+      event: 'request_review',
+      actor: 'worker-proof-packet-recovery',
+      evidenceRefs: ['task:review-proof-packet'],
+      now,
+    })
+    queuedTask.blockReason = undefined
+    queuedTask.notes.push({
+      agentId: 'coordinator',
+      role: 'recovery',
+      content:
+        'Guildhall found an existing worker self-critique with a review proof packet and task-scoped worktree changes, so it moved the task to review instead of dispatching another worker turn.',
+      timestamp: now,
+    })
+    queuedTask.updatedAt = now
+    queue.lastUpdated = now
+    await this.writeQueue(queue)
+    await this.emitBackendEvent({
+      type: 'line_complete',
+      task_id: input.task.id,
+      agent_name: 'coordinator',
+      message:
+        'Existing worker review proof packet found. Guildhall moved the task to review instead of asking the worker to rediscover the handoff state.',
+    })
+    return {
+      kind: 'processed',
+      taskId: input.task.id,
+      agent: 'coordinator-recovery',
+      beforeStatus: input.beforeStatus,
+      afterStatus: 'review',
+      transitioned: true,
+      revisionCount: queuedTask.revisionCount,
+    }
+  }
+
+  private checkpointTouchedFilesFromTaskNotes(task: Task): string[] {
+    const checkpointNotes = task.notes.filter((note) =>
+      note.role === 'checkpoint' &&
+      /files touched|files changed|worktree edits|checkpoint/i.test(note.content),
+    )
+    return checkpointNotes.flatMap((note) =>
+      [...note.content.matchAll(/(?:files touched|files changed):\s*([^\n]+)/gi)]
+        .flatMap((match) => (match[1] ?? '').split(','))
+        .map((value) => value.trim())
+        .filter(Boolean),
+    )
+  }
+
+  private syntheticCheckpointSelfCritique(input: {
+    task: Task
+    checkpointTouchedFiles: readonly string[]
+    metadata: Record<string, unknown> | undefined
+  }): string {
+    const criteria = input.task.acceptanceCriteria.length > 0
+      ? input.task.acceptanceCriteria
+      : [{ id: 'AC-1', description: 'Checkpoint-scoped verification passed.' }]
+    const files = input.checkpointTouchedFiles.length > 0
+      ? input.checkpointTouchedFiles
+      : ['checkpoint-scoped files']
+    const recentVerifiedWork = Array.isArray(input.metadata?.['recent_verified_work'])
+      ? (input.metadata?.['recent_verified_work'] as unknown[])
+          .filter((value): value is string => typeof value === 'string')
+      : []
+    const verification = recentVerifiedWork
+      .filter((entry) => /^(Ran bash command|Shell command succeeded|Verified)\b/i.test(entry.trim()))
+    const verificationLine = verification.length > 0
+      ? verification.join('; ')
+      : 'All authoritative verification commands recorded in the latest checkpoint passed.'
+    return [
+      '**Self-critique:**',
+      '',
+      'For each acceptance criterion:',
+      ...criteria.map((criterion, index) => {
+        const id = typeof criterion.id === 'string' && criterion.id.trim()
+          ? criterion.id.trim()
+          : `AC-${index + 1}`
+        return `- ${id}: Met — latest checkpoint says the authoritative verification passed for ${criterion.description ?? 'this criterion'}.`
+      }),
+      '',
+      'Minimum-scope check:',
+      `- Files changed: ${files.join(', ')}.`,
+      '- Smallest useful change?: yes — Guildhall is preserving the checkpoint-scoped implementation work already verified by the worker.',
+      '- Anything to revert before review?: none recorded in the checkpoint.',
+      '',
+      'Review proof packet:',
+      `- Changed files / diff scope: ${files.join(', ')}.`,
+      `- Verification commands passed: ${verificationLine}`,
+      '- Proof path updates: latest worker checkpoint and recorded command output.',
+      '- Working hypothesis at handoff: implementation is ready for reviewer evaluation because the worker recorded passing verification and the checkpoint named review handoff as the next step.',
+      '- Known gaps / follow-up: none recorded in the checkpoint.',
+      '',
+      'Out-of-scope changes introduced: None recorded.',
+      'Uncertainties: This self-critique was synthesized by Guildhall from durable checkpoint evidence because the worker repeatedly failed the update-task handoff ceremony after recording passing proof.',
+    ].join('\n')
   }
 
   private renderCheckpoint(
@@ -8856,6 +9261,55 @@ export class Orchestrator {
       transitioned,
       revisionCount: task.revisionCount,
       ...(hasOpenQuestion || hasWaitingOwnerInput ? { waitingOnUser: true } : {}),
+    }
+  }
+
+  private async preserveGateCheckAfterRecordedHardGateProof(input: {
+    taskId: string
+    agentName: string
+    beforeStatus: TaskStatus
+    message: string
+  }): Promise<TickOutcome | null> {
+    const queue = await this.readQueue()
+    const task = queue.tasks.find((candidate) => candidate.id === input.taskId)
+    if (!task || task.status !== 'gate_check') return null
+    const latestHardGates = latestHardGateResults(task)
+    if (latestHardGates.length === 0 || !latestHardGates.every((gate) => gate.passed)) return null
+
+    const now = this.now()
+    task.notes.push({
+      agentId: 'coordinator',
+      role: 'gate-checker',
+      content:
+        'The gate checker timed out after recording passing hard gates. Guildhall preserved that proof and will complete the gate check from recorded task state on the next tick.',
+      timestamp: now,
+    })
+    task.updatedAt = now
+    queue.lastUpdated = now
+    await this.writeQueue(queue)
+    await this.emitBackendEvent({
+      type: 'line_complete',
+      task_id: task.id,
+      agent_name: input.agentName,
+      message:
+        'The gate checker timed out after recording passing hard gates. Guildhall preserved the proof instead of surfacing an agent error.',
+    })
+    await this.logTickProgress({
+      task,
+      agent: input.agentName,
+      beforeStatus: input.beforeStatus,
+      afterStatus: task.status,
+      transitioned: false,
+      note: `gate checker timed out after recorded passing hard gates: ${input.message}`,
+    })
+    return {
+      kind: 'processed',
+      taskId: task.id,
+      agent: input.agentName,
+      beforeStatus: input.beforeStatus,
+      afterStatus: task.status,
+      transitioned: false,
+      revisionCount: task.revisionCount,
     }
   }
 
@@ -10858,6 +11312,7 @@ function normalizedWorkerCheckpointNextAction(
     /write or refresh self-critique note|write or refresh the self-critique note/i.test(trimmed) &&
     /hand off to review|handoff to review|transition to review/i.test(trimmed)
   ) {
+    if (checkpointSaysVerificationPassed(trimmed)) return trimmed
     return 'Resume from the active worktree diff, rerun the focused verification commands, and fix whatever still fails in the checkpoint-touched files before you write the structured self-critique.'
   }
   if (
@@ -10885,8 +11340,25 @@ function looksLikeReviewHandoffNextAction(nextAction: string): boolean {
     normalized.includes('handoff to review') ||
     normalized.includes('handoff for review') ||
     normalized.includes('transition to review') ||
+    /\btransition\s+(?:the\s+)?(?:task\s+)?to review\b/.test(normalized) ||
     normalized.includes('move to review') ||
     normalized.includes('reviewers evaluate')
+  )
+}
+
+function checkpointSaysVerificationPassed(nextAction: string): boolean {
+  const normalized = nextAction.trim().toLowerCase()
+  if (!normalized) return false
+  return (
+    normalized.includes('all authoritative verification') &&
+    (
+      normalized.includes('passed') ||
+      normalized.includes('pass')
+    )
+  ) || (
+    normalized.includes('verification') &&
+    normalized.includes('passed') &&
+    looksLikeReviewHandoffNextAction(nextAction)
   )
 }
 
@@ -10921,6 +11393,8 @@ function isProceduralOnlyFanoutDissent(dissenting: readonly PersonaVerdict[]): b
     ].join('\n')
     const saysAccepted =
       /\bmeets all acceptance criteria\b/i.test(text) ||
+      /\ball acceptance criteria are satisfied\b/i.test(text) ||
+      /\ball ACs (?:are )?satisfied\b/i.test(text) ||
       /\bsatisfies all functional ACs\b/i.test(text) ||
       /\bmeets all functional ACs\b/i.test(text) ||
       /\bmeets functional ACs\b/i.test(text) ||

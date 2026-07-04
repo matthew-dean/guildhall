@@ -23,6 +23,7 @@ import { resolveRuntimePath } from './path-utils.js'
 const execFileP = promisify(execFile)
 const GIT_BIN = process.env['GUILDHALL_GIT_BIN']?.trim() || '/usr/bin/git'
 const GH_BIN = process.env['GUILDHALL_GH_BIN']?.trim() || 'gh'
+const STALE_GIT_INDEX_LOCK_MS = 5_000
 
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`
@@ -42,6 +43,36 @@ async function execGit(args: readonly string[], opts: { cwd: string; maxBuffer?:
 
 async function execGh(args: readonly string[], opts: { cwd: string; maxBuffer?: number }): Promise<{ stdout: string; stderr: string }> {
   return await execFileP(GH_BIN, [...args], opts)
+}
+
+function errorDetail(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
+}
+
+export async function pruneStaleGitIndexLockFromError(
+  detail: string,
+  opts: { now?: number; staleAfterMs?: number } = {},
+): Promise<boolean> {
+  if (!detail.includes('index.lock')) return false
+  const match = /Unable to create '([^']*index\.lock)'/.exec(detail)
+  const lockPath = match?.[1]
+  if (!lockPath || !path.isAbsolute(lockPath)) return false
+  const normalized = path.normalize(lockPath)
+  if (!normalized.endsWith(`${path.sep}index.lock`) || !normalized.includes(`${path.sep}.git${path.sep}`)) {
+    return false
+  }
+
+  let stat: fsSync.Stats
+  try {
+    stat = await fs.stat(normalized)
+  } catch {
+    return false
+  }
+  const now = opts.now ?? Date.now()
+  const staleAfterMs = opts.staleAfterMs ?? STALE_GIT_INDEX_LOCK_MS
+  if (now - stat.mtimeMs < staleAfterMs) return false
+  await fs.rm(normalized, { force: true })
+  return true
 }
 
 function isIgnorableGuildhallStatePath(file: string): boolean {
@@ -252,7 +283,7 @@ export class NodeGitDriver implements GitDriver {
 
   async commitAll(repoRoot: string, message: string): Promise<CheckpointResult> {
     const gitRoot = await resolveGitTopLevel(repoRoot)
-    try {
+    const runCommit = async (): Promise<CheckpointResult> => {
       await execGit(['add', '-A'], { cwd: gitRoot })
       await execGit(['reset', '--quiet', 'HEAD', '--', '.guildhall', 'memory', 'guildhall.yaml'],
         { cwd: gitRoot },
@@ -268,8 +299,25 @@ export class NodeGitDriver implements GitDriver {
       await execGit(['commit', '--no-verify', '-m', message], { cwd: gitRoot })
       const { stdout } = await execGit(['rev-parse', 'HEAD'], { cwd: gitRoot })
       return { ok: true, commitSha: stdout.trim() }
+    }
+    try {
+      return await runCommit()
     } catch (err) {
-      return { ok: false, detail: err instanceof Error ? err.message : String(err) }
+      const detail = errorDetail(err)
+      if (await pruneStaleGitIndexLockFromError(detail)) {
+        try {
+          const retry = await runCommit()
+          return {
+            ...retry,
+            detail: retry.detail
+              ? `${retry.detail}\nRecovered from stale git index lock and retried commit.`
+              : 'Recovered from stale git index lock and retried commit.',
+          }
+        } catch (retryErr) {
+          return { ok: false, detail: errorDetail(retryErr) }
+        }
+      }
+      return { ok: false, detail }
     }
   }
 

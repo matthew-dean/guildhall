@@ -546,7 +546,7 @@ describe('buildProjectOrientationSpine', () => {
     expect(spine.nodes['work:coherence-reviewer-mvp']?.maturity).toBe('done')
     expect(spine.gaps.map(gap => gap.kind)).not.toContain('proof_needed')
     expect(spine.summary.progress.done).toBe(1)
-    expect(spine.summary.headline).toBe('Current task scope has no actionable work.')
+    expect(spine.summary.headline).toBe('Current task scope is complete.')
   })
 
   it('lets shared start-readiness block the orientation headline before idle copy', () => {
@@ -672,6 +672,177 @@ describe('buildProjectOrientationSpine', () => {
     expect(spine.nodes['work:ready-proof-task']?.maturity).toBe('proof_needed')
     expect(spine.summary.progress.ready).toBe(1)
     expect(spine.summary.progress.proven).toBe(0)
+  })
+
+  it('counts selected-scope work directly so summary progress matches visible rows', () => {
+    const spine = buildProjectOrientationSpine({
+      projectId: 'narrative-harness',
+      now: '2026-07-04T10:00:00.000Z',
+      scope: {
+        id: 'stage-1-fixture-and-evaluation-harness',
+        label: 'Stage 1: Fixture And Evaluation Harness',
+        kind: 'release',
+        source: 'release_plan',
+        nodeIds: [
+          'work:fixture-schema',
+          'work:first-fixture',
+          'work:runner-proof',
+          'work:evaluation-output',
+          'work:debug-report',
+          'work:schema-narrowing',
+          'work:schema-roadmap',
+        ],
+        deferredNodeIds: [
+          'work:later-reviewer',
+          'work:later-ui',
+        ],
+      },
+      tasks: [
+        { id: 'fixture-schema', title: 'Define fixture schemas.', status: 'done', spec: 'Done.', acceptanceCriteria: [{ met: true }] },
+        { id: 'first-fixture', title: 'Add first fiction fixture.', status: 'done', spec: 'Done.', acceptanceCriteria: [{ met: true }] },
+        { id: 'runner-proof', title: 'Implement no-UI runner.', status: 'blocked', spec: 'Blocked.', acceptanceCriteria: [{ met: false }] },
+        { id: 'evaluation-output', title: 'Add deterministic evaluation output.', status: 'ready', spec: 'Ready.', acceptanceCriteria: [{ met: false }] },
+        { id: 'debug-report', title: 'Generate debug report.', status: 'ready', spec: 'Ready.', acceptanceCriteria: [{ met: false }] },
+        { id: 'schema-narrowing', title: 'Use first run to narrow schema.', status: 'ready', spec: 'Ready.', acceptanceCriteria: [{ met: false }] },
+        { id: 'schema-roadmap', title: 'Implement fixture-and-expected-record schemas.', status: 'done', spec: 'Done.', acceptanceCriteria: [{ met: true }] },
+        { id: 'later-reviewer', title: 'Later reviewer lane.', status: 'shelved', spec: 'Later.', acceptanceCriteria: [{ met: false }] },
+        { id: 'later-ui', title: 'Later UI lane.', status: 'shelved', spec: 'Later.', acceptanceCriteria: [{ met: false }] },
+      ],
+    })
+
+    expect(spine.summary.includedWorkCount).toBe(7)
+    expect(spine.summary.deferredWorkCount).toBe(2)
+    expect(spine.summary.progress).toMatchObject({
+      total: 9,
+      done: 3,
+      blocked: 1,
+      ready: 3,
+      deferred: 2,
+    })
+  })
+
+  it('summarizes active selected-scope work as in progress instead of still being shaped', () => {
+    const spine = buildProjectOrientationSpine({
+      projectId: 'narrative-harness',
+      now: '2026-07-04T10:20:00.000Z',
+      scope: {
+        id: 'stage-1-fixture-and-evaluation-harness',
+        label: 'Stage 1: Fixture And Evaluation Harness',
+        kind: 'release',
+        source: 'release_plan',
+        nodeIds: [
+          'work:fixture-schema',
+          'work:first-fixture',
+          'work:runner-proof',
+          'work:evaluation-output',
+          'work:debug-report',
+          'work:schema-narrowing',
+        ],
+        deferredNodeIds: ['work:later-ui'],
+      },
+      tasks: [
+        { id: 'fixture-schema', title: 'Define fixture schemas.', status: 'done', spec: 'Done.', acceptanceCriteria: [{ met: true }] },
+        { id: 'first-fixture', title: 'Add first fiction fixture.', status: 'done', spec: 'Done.', acceptanceCriteria: [{ met: true }] },
+        { id: 'runner-proof', title: 'Implement no-UI runner.', status: 'done', spec: 'Done.', acceptanceCriteria: [{ met: true }] },
+        { id: 'evaluation-output', title: 'Add deterministic evaluation output.', status: 'in_progress', spec: 'Running.', acceptanceCriteria: [{ met: false }] },
+        { id: 'debug-report', title: 'Generate debug report.', status: 'ready', spec: 'Ready.', acceptanceCriteria: [{ met: false }] },
+        { id: 'schema-narrowing', title: 'Use first run to narrow schema.', status: 'ready', spec: 'Ready.', acceptanceCriteria: [{ met: false }] },
+        { id: 'later-ui', title: 'Later UI lane.', status: 'shelved', spec: 'Later.', acceptanceCriteria: [{ met: false }] },
+      ],
+    })
+
+    expect(spine.summary.headline).toBe('Stage 1: Fixture And Evaluation Harness is in progress.')
+    expect(spine.summary.nextAction).toBe('Open the running work.')
+    expect(spine.summary.progress).toMatchObject({
+      done: 3,
+      active: 1,
+      ready: 2,
+      deferred: 1,
+    })
+  })
+
+  it('counts review and gate-check work as active selected-scope progress', () => {
+    const spine = buildProjectOrientationSpine({
+      projectId: 'narrative-harness',
+      now: '2026-07-04T10:38:00.000Z',
+      scope: {
+        id: 'stage-1-fixture-and-evaluation-harness',
+        label: 'Stage 1: Fixture And Evaluation Harness',
+        kind: 'release',
+        source: 'release_plan',
+        nodeIds: ['work:review-task', 'work:gate-task', 'work:ready-task'],
+        deferredNodeIds: [],
+      },
+      tasks: [
+        { id: 'review-task', title: 'Review evaluation output.', status: 'review', spec: 'Review.', acceptanceCriteria: [{ met: false }] },
+        { id: 'gate-task', title: 'Gate evaluation output.', status: 'gate_check', spec: 'Gate.', acceptanceCriteria: [{ met: false }] },
+        { id: 'ready-task', title: 'Generate debug report.', status: 'ready', spec: 'Ready.', acceptanceCriteria: [{ met: false }] },
+      ],
+    })
+
+    expect(spine.summary.headline).toBe('Stage 1: Fixture And Evaluation Harness is in progress.')
+    expect(spine.summary.progress).toMatchObject({
+      active: 2,
+      ready: 1,
+    })
+  })
+
+  it('describes completed scoped work as complete instead of blocked', () => {
+    const spine = buildProjectOrientationSpine({
+      projectId: 'narrative-harness',
+      now: '2026-07-04T11:52:00.000Z',
+      scope: {
+        id: 'stage-1-fixture-and-evaluation-harness',
+        label: 'Stage 1: Fixture And Evaluation Harness',
+        kind: 'release',
+        source: 'release_plan',
+        nodeIds: ['work:fixture-schema', 'work:runner-proof'],
+        deferredNodeIds: [],
+      },
+      tasks: [
+        { id: 'fixture-schema', title: 'Define fixture schemas.', status: 'done', spec: 'Done.', acceptanceCriteria: [{ met: true }] },
+        { id: 'runner-proof', title: 'Implement no-UI runner.', status: 'done', spec: 'Done.', acceptanceCriteria: [{ met: true }] },
+      ],
+      startReadiness: {
+        canStart: false,
+        code: 'all_terminal',
+        message: 'Stage 1: Fixture And Evaluation Harness is complete.',
+      },
+    })
+
+    expect(spine.summary.headline).toBe('Stage 1: Fixture And Evaluation Harness is complete.')
+    expect(spine.summary.topBlocker).toBeNull()
+    expect(spine.summary.nextAction).toBe('Review completed scope.')
+  })
+
+  it('keeps a completed scope complete when import refresh is only follow-up work', () => {
+    const spine = buildProjectOrientationSpine({
+      projectId: 'narrative-harness',
+      now: '2026-07-04T11:52:00.000Z',
+      scope: {
+        id: 'stage-1-fixture-and-evaluation-harness',
+        label: 'Stage 1: Fixture And Evaluation Harness',
+        kind: 'release',
+        source: 'release_plan',
+        nodeIds: ['work:fixture-schema', 'work:runner-proof'],
+        deferredNodeIds: ['work:later-ui'],
+      },
+      tasks: [
+        { id: 'fixture-schema', title: 'Define fixture schemas.', status: 'done', spec: 'Done.', acceptanceCriteria: [{ met: true }] },
+        { id: 'runner-proof', title: 'Implement no-UI runner.', status: 'done', spec: 'Done.', acceptanceCriteria: [{ met: true }] },
+        { id: 'later-ui', title: 'Later UI lane.', status: 'shelved', spec: 'Later.', acceptanceCriteria: [{ met: false }] },
+      ],
+      startReadiness: {
+        canStart: false,
+        code: 'workspace_import_refresh_needed',
+        message: 'Workspace import is under-scoped for newly documented work.',
+        actionHref: '/workspace-import',
+      },
+    })
+
+    expect(spine.summary.headline).toBe('Stage 1: Fixture And Evaluation Harness is complete.')
+    expect(spine.summary.topBlocker).toBeNull()
+    expect(spine.summary.nextAction).toBe('Refresh import for newly documented work.')
   })
 
   it('uses live workspace-import draft scope to surface current and deferred work before approval', () => {
@@ -1041,5 +1212,32 @@ describe('buildProjectOrientationSpine', () => {
       eligible: true,
       reason: 'included_ancestor',
     })
+  })
+
+  it('does not describe active task state as running while the project run is stopping', () => {
+    const spine = buildProjectOrientationSpine({
+      projectId: 'narrative-harness',
+      runStatus: 'stopping',
+      scope: {
+        id: 'stage-1',
+        label: 'Stage 1',
+        kind: 'release',
+        source: 'owner_approved',
+        nodeIds: ['work:debug-report'],
+        deferredNodeIds: [],
+      },
+      tasks: [
+        {
+          id: 'debug-report',
+          title: 'Generate a developer-readable debug report for each run.',
+          status: 'in_progress',
+          spec: 'Write the debug report script.',
+          acceptanceCriteria: [{ met: false }],
+        },
+      ],
+    })
+
+    expect(spine.summary.headline).toBe('Stage 1 is stopping with work in progress.')
+    expect(spine.summary.nextAction).toBe('Wait for Guildhall to finish stopping, then resume.')
   })
 })

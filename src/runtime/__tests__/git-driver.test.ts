@@ -4,7 +4,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { NodeGitDriver } from '../git-driver.js'
+import { NodeGitDriver, pruneStaleGitIndexLockFromError } from '../git-driver.js'
 
 const execFileP = promisify(execFile)
 
@@ -40,6 +40,34 @@ afterEach(async () => {
 })
 
 describe('NodeGitDriver', () => {
+  it('prunes stale git index locks from git error output', async () => {
+    const lockPath = path.join(repoRoot, '.git', 'worktrees', 'task-a', 'index.lock')
+    await fs.mkdir(path.dirname(lockPath), { recursive: true })
+    await fs.writeFile(lockPath, '', 'utf8')
+    const staleTime = new Date(Date.now() - 60_000)
+    await fs.utimes(lockPath, staleTime, staleTime)
+
+    const pruned = await pruneStaleGitIndexLockFromError(
+      `fatal: Unable to create '${lockPath}': File exists.`,
+    )
+
+    expect(pruned).toBe(true)
+    await expect(fs.stat(lockPath)).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('keeps fresh git index locks in place', async () => {
+    const lockPath = path.join(repoRoot, '.git', 'worktrees', 'task-a', 'index.lock')
+    await fs.mkdir(path.dirname(lockPath), { recursive: true })
+    await fs.writeFile(lockPath, '', 'utf8')
+
+    const pruned = await pruneStaleGitIndexLockFromError(
+      `fatal: Unable to create '${lockPath}': File exists.`,
+    )
+
+    expect(pruned).toBe(false)
+    await expect(fs.stat(lockPath)).resolves.toBeTruthy()
+  })
+
   it('treats repo-root Guildhall state as ignorable when checking cleanliness from a subdirectory project path', async () => {
     const driver = new NodeGitDriver()
     await fs.mkdir(path.join(repoRoot, 'memory'), { recursive: true })
