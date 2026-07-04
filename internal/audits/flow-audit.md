@@ -12162,6 +12162,50 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-07-04T02:55:00Z - Added rendered proof that Narrative Harness release
+scope truth is communicated by Guildhall surfaces, not just available through
+Codex or raw project state.
+
+- Work id: `codex:narrative-harness-selected-release-visible-proof-2026-07-04`.
+- User job: when Narrative Harness has a selected release/scope that cannot
+  start yet, a project owner should be able to open Overview and immediately
+  see which scope is selected, how much work is in scope vs later, why Start is
+  blocked, and where review should begin without relying on Codex narration.
+- Fix:
+  - The rendered fixture for Narrative Harness now seeds modern managed task
+    state with a selected release `Stage 0: Spec Baseline`, six current work
+    items, twelve deferred work items, and five spec-review blockers.
+  - The fixture records the project-state storage migration as already applied
+    for this proof case, so the test proves selected-release communication
+    instead of stopping at setup/migration.
+  - `expectProjectOrientationSpineAgreement()` now self-applies required
+    fixture migrations before checking orientation surfaces, uses the current
+    `Project orientation` and release/scope readiness copy, verifies the shared
+    action-model run-control label is visible, and opens the Work filter to
+    `All` before checking a spine work anchor.
+- Rendered proof:
+  - `tests/rendered-ui/project-flow.spec.ts` now has a Narrative Harness
+    regression that first asserts `/api/project?projectId=narrative-harness`
+    returns selected release `Stage 0: Spec Baseline`, `6` included, `12`
+    deferred, `startReadiness.canStart:false`, code
+    `no_unattended_progress`, focus kind `spec_review`, count `5`, and a
+    top blocker matching the shared start-readiness message.
+  - The same regression then opens
+    `/projects/narrative-harness/overview` and asserts the rendered Overview
+    visibly contains `Stage 0: Spec Baseline`, `6 work items in view`,
+    `12 Deferred`, and the spec-review blocker text.
+  - The broader rendered orientation proof passes independently across
+    Narrative Harness, Looma + Knit, Jess, and Fair Labor License, covering
+    Overview, Work, Thread, Release, and Structure agreement.
+- Verification:
+  - `pnpm exec playwright test tests/rendered-ui/project-flow.spec.ts`
+    passed `34` rendered tests, including the selected-release Narrative
+    Harness proof and the cross-route orientation agreement helper.
+  - `pnpm vitest run src/runtime/__tests__/project-action-model.test.ts src/runtime/__tests__/project-orientation-spine.test.ts src/runtime/__tests__/serve-settings.test.ts`
+    passed `135` tests.
+
+source: codex:narrative-harness-selected-release-visible-proof-2026-07-04
+
 2026-07-03T23:15:00Z - Tightened workspace-import release-scope recovery and
 Project Map communication proof.
 

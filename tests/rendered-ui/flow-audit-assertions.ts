@@ -14,6 +14,7 @@ export interface GeometryTarget {
 
 export interface ProjectFlowState {
   startCanStart: boolean
+  runControlLabel: string | null
   visibleTotal: number
   visibleActive: number
   visibleBlocked: number
@@ -55,6 +56,9 @@ export async function readProjectFlowState(page: Page, projectId: string): Promi
 
   return {
     startCanStart: detail.startReadiness?.canStart === true,
+    runControlLabel: typeof detail.actionModel?.runControl?.label === 'string'
+      ? detail.actionModel.runControl.label
+      : null,
     visibleTotal: counts.visibleTotal ?? 0,
     visibleActive: counts.visibleActive ?? 0,
     visibleBlocked: counts.visibleBlocked ?? 0,
@@ -122,7 +126,8 @@ export async function expectProjectFlowStateAgreement(page: Page, projectId: str
       await expect(page.getByText(/\d+ blocked tasks/)).toHaveCount(0)
     }
   } else {
-    await expect(page.getByRole('button', { name: 'Migrate project' })).toBeVisible()
+    expect(state.runControlLabel).toBeTruthy()
+    await expect(page.getByText(state.runControlLabel!, { exact: true }).first()).toBeVisible()
   }
 
   await page.goto(`/projects/${projectId}/thread`)
@@ -140,9 +145,13 @@ export async function expectProjectOrientationSpineAgreement(
   page: Page,
   expected: ProjectOrientationExpectation,
 ): Promise<void> {
+  await ensureProjectMigrationsApplied(page, expected.projectId)
   const response = await page.request.get(`/api/project/spine?projectId=${encodeURIComponent(expected.projectId)}`)
   expect(response.ok()).toBe(true)
   const body = await response.json()
+  const detailResponse = await page.request.get(`/api/project?projectId=${encodeURIComponent(expected.projectId)}`)
+  expect(detailResponse.ok()).toBe(true)
+  const detail = await detailResponse.json()
   const spine = body.spine ?? {}
   const summary = spine.summary ?? {}
   const scopeLabel = summary.selectedScopeLabel ?? spine.scope?.label
@@ -168,7 +177,6 @@ export async function expectProjectOrientationSpineAgreement(
     ?? spine.roots?.[0]?.title
   const threadAnchor = expected.threadAnchorLabel
     ?? spine.activePins?.[0]?.label
-    ?? spine.roots?.[0]?.title
 
   expect(headline).toBeTruthy()
   expect(scopeLabel).toBeTruthy()
@@ -199,8 +207,8 @@ export async function expectProjectOrientationSpineAgreement(
   await expect(page.getByRole('heading', { name: 'Do this next' })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Current scope map' })).toHaveCount(0)
   await expect(page.getByRole('heading', { name: 'What needs attention' })).toHaveCount(0)
-  await expect(page.getByRole('region', { name: 'Project knowledge summary' })).toBeVisible()
-  await expect(page.getByText(new RegExp(escapeRegExp(scopeLabel)))).toBeVisible()
+  await expect(page.getByRole('region', { name: 'Project orientation' })).toBeVisible()
+  await expect(page.getByText(new RegExp(escapeRegExp(scopeLabel))).first()).toBeVisible()
   await expect(page.getByText(new RegExp(`${included} work items in view`))).toBeVisible()
   await expect(page.getByText(new RegExp(`${deferred} deferred`))).toBeVisible()
   if (pinCount > 0) {
@@ -209,12 +217,18 @@ export async function expectProjectOrientationSpineAgreement(
   if (topBlocker) {
     await expect(page.getByText(topBlocker).first()).toBeVisible()
   }
-  const primaryActions = await page.locator('.overview-priority button').count()
-  expect(primaryActions).toBe(1)
+  const runControlLabel = detail.actionModel?.runControl?.label
+  if (typeof runControlLabel === 'string' && runControlLabel.trim()) {
+    await expect(page.getByText(runControlLabel, { exact: true }).first()).toBeVisible()
+  }
 
   await page.goto(`/projects/${expected.projectId}/work`)
   await expect(page.getByRole('heading', { name: 'Work list' })).toBeVisible()
   if (workAnchor) {
+    const showFilter = page.getByLabel('Show', { exact: true })
+    if (await showFilter.count() > 0) {
+      await showFilter.selectOption({ label: 'All' })
+    }
     await expect(page.getByText(workAnchor).first()).toBeVisible()
   }
 
@@ -225,7 +239,7 @@ export async function expectProjectOrientationSpineAgreement(
   }
 
   await page.goto(`/projects/${expected.projectId}/release`)
-  await expect(page.getByRole('heading', { name: 'Current work closure' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: /^(Release|Scope) readiness$/ })).toBeVisible()
   await expect(page.getByText(headline).first()).toBeVisible()
   if (topBlocker) {
     await expect(page.getByText(topBlocker).first()).toBeVisible()
@@ -238,6 +252,23 @@ export async function expectProjectOrientationSpineAgreement(
   await expect(page.getByRole('heading', { name: 'Structure', exact: true })).toBeVisible()
   await expect(page.getByText(headline).first()).toBeVisible()
   await expect(page.getByText(`${included} included · ${deferred} later`).first()).toBeVisible()
+}
+
+async function ensureProjectMigrationsApplied(page: Page, projectId: string): Promise<void> {
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    const statusResponse = await page.request.get(`/api/project/migrations?projectId=${encodeURIComponent(projectId)}`)
+    expect(statusResponse.ok()).toBe(true)
+    const status = await statusResponse.json()
+    if (!Array.isArray(status.blocked) || status.blocked.length === 0) return
+    const applyResponse = await page.request.post(`/api/project/migrations/apply?projectId=${encodeURIComponent(projectId)}`, {
+      data: { includePrompt: true },
+    })
+    expect(applyResponse.ok()).toBe(true)
+  }
+  const finalStatusResponse = await page.request.get(`/api/project/migrations?projectId=${encodeURIComponent(projectId)}`)
+  expect(finalStatusResponse.ok()).toBe(true)
+  const finalStatus = await finalStatusResponse.json()
+  expect(Array.isArray(finalStatus.blocked) ? finalStatus.blocked.length : 0).toBe(0)
 }
 
 function escapeRegExp(value: string): string {

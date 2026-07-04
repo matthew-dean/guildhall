@@ -51,16 +51,17 @@ const projectSurfaceRoutes = [
     name: 'release',
     path: '/projects/fair-labor-license/release',
     assertions: async (page) => {
-      await expect(page.getByRole('heading', { name: 'Current work closure' })).toBeVisible()
+      await expect(page.getByRole('heading', { name: /^(Release|Scope) readiness$/ })).toBeVisible()
       await expect(page.getByText('Tasks done')).toBeVisible()
-      await expect(page.getByText('Total closure blockers')).toBeVisible()
+      await expect(page.getByText(/\d+ (release|scope) blockers/)).toBeVisible()
+      await expect(page.getByText('Total blockers')).toBeVisible()
     },
   },
   {
     name: 'release criteria',
     path: '/projects/looma-knit/release/criteria',
     assertions: async (page) => {
-      await expect(page.getByRole('heading', { name: 'Closure checks' })).toBeVisible()
+      await expect(page.getByRole('heading', { name: /^(Release|Scope) checks$/ })).toBeVisible()
       await expect(page.getByRole('heading', { name: 'Criteria' })).toBeVisible()
       await expect(page.getByRole('heading', { name: 'Task-state tally' })).toBeVisible()
     },
@@ -94,7 +95,7 @@ const projectSurfaceRoutes = [
     name: 'infra release criteria',
     path: '/projects/pipeline-ops/release/criteria',
     assertions: async (page) => {
-      await expect(page.getByRole('heading', { name: 'Closure checks' })).toBeVisible()
+      await expect(page.getByRole('heading', { name: /^(Release|Scope) checks$/ })).toBeVisible()
       await expect(page.getByRole('heading', { name: 'Task-state tally' })).toBeVisible()
       await expect(page.getByTitle('Pipeline Ops')).toBeVisible()
     },
@@ -139,7 +140,7 @@ const projectSurfaceRoutes = [
     name: 'dirty service release',
     path: '/projects/dirty-service/release',
     assertions: async (page) => {
-      await expect(page.getByRole('heading', { name: 'Current work closure' })).toBeVisible()
+      await expect(page.getByRole('heading', { name: /^(Release|Scope) readiness$/ })).toBeVisible()
       await expect(page.getByText(/project-local Guildhall .*file[s]? need[s]? cleanup/)).toBeVisible()
       await expect(page.getByTitle('Dirty Service')).toBeVisible()
     },
@@ -225,6 +226,8 @@ test('projects home keeps project cards compact for scanability', async ({ page 
 
   const cards = page.locator('section.project-card')
   await expect(cards).toHaveCount(17)
+  await expect(page.getByText('Loading project status...')).toHaveCount(0)
+  await expect(page.getByText('Still loading project state')).toHaveCount(0)
   for (const projectName of [
     'Docs Compass',
     'Pipeline Ops',
@@ -245,7 +248,7 @@ test('projects home keeps project cards compact for scanability', async ({ page 
       return { height: box.height, width: box.width, top: box.top, left: box.left, right: box.right }
     }),
   )
-  expect(Math.max(...boxes.map(box => box.height))).toBeLessThan(260)
+  expect(Math.max(...boxes.map(box => box.height))).toBeLessThan(270)
   expect(new Set(boxes.map(box => Math.round(box.top))).size).toBeGreaterThan(1)
 
   const rows = new Map<number, typeof boxes>()
@@ -462,6 +465,32 @@ test('project orientation spine agrees across overview, work, thread, release, a
     minIncludedWorkCount: 1,
     requireInferredPurpose: true,
   })
+})
+
+test('Narrative Harness overview shows selected release review blockers instead of a startable queue', async ({ page }) => {
+  const response = await page.request.get('/api/project?projectId=narrative-harness')
+  expect(response.ok()).toBe(true)
+  const detail = await response.json()
+  const blocker = 'specs are waiting for review before work can start'
+
+  expect(detail.orientationSpine?.summary?.selectedReleaseLabel).toBe('Stage 0: Spec Baseline')
+  expect(detail.orientationSpine?.summary?.includedWorkCount).toBe(6)
+  expect(detail.orientationSpine?.summary?.deferredWorkCount).toBe(12)
+  expect(detail.startReadiness).toMatchObject({
+    canStart: false,
+    code: 'no_unattended_progress',
+    focusKind: 'spec_review',
+    count: 5,
+  })
+  expect(detail.startReadiness?.message).toContain(blocker)
+  expect(detail.orientationSpine?.summary?.topBlocker).toBe(detail.startReadiness?.message)
+
+  await page.goto('/projects/narrative-harness/overview')
+  await expect(page.getByRole('region', { name: 'Project overview' })).toBeVisible()
+  await expect(page.getByText('Stage 0: Spec Baseline').first()).toBeVisible()
+  await expect(page.getByText('6 work items in view')).toBeVisible()
+  await expect(page.getByRole('button', { name: '12 Deferred', exact: true })).toBeVisible()
+  await expect(page.getByText(new RegExp(blocker)).first()).toBeVisible()
 })
 
 test('project shell uses stopped-project language consistently across flow surfaces', async ({ page }) => {

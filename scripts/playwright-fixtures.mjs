@@ -24,6 +24,28 @@ function projectLocalHistoryDir(projectPath) {
   return join(guildhallHome, 'data', 'projects', `${basename(resolved) || 'root'}-${digest}`)
 }
 
+async function markFixtureProjectStateMigrated(localHistoryDir) {
+  await mkdir(join(localHistoryDir, 'migrations'), { recursive: true })
+  await writeFile(
+    join(localHistoryDir, 'migrations', 'migrations.json'),
+    JSON.stringify({
+      version: 1,
+      records: [{
+        id: '0.10.0/project-state-storage-boundary',
+        introducedIn: '0.10.0',
+        scope: 'project',
+        safety: 'prompt',
+        status: 'applied',
+        appliedAt: now,
+        appliedByVersion: '0.10.0',
+        summary: 'Fixture is already seeded in managed project state.',
+        affectedPaths: ['memory/'],
+      }],
+    }, null, 2),
+    'utf8',
+  )
+}
+
 async function writeProject({
   id,
   name,
@@ -32,6 +54,7 @@ async function writeProject({
   files = [],
   initialized = true,
   tasks: explicitTasks,
+  taskQueue,
   capabilityRequests = [],
   dirtyGuildhallFile = false,
 }) {
@@ -125,12 +148,19 @@ async function writeProject({
         }
       : {}),
   }))
-  await writeFile(join(memoryDir, 'TASKS.json'), JSON.stringify(tasks, null, 2), 'utf8')
+  const persistedTasks = taskQueue ?? tasks
+  await writeFile(join(memoryDir, 'TASKS.json'), JSON.stringify(persistedTasks, null, 2), 'utf8')
+  if (taskQueue) {
+    const localHistoryDir = projectLocalHistoryDir(projectPath)
+    const managedStateDir = join(localHistoryDir, 'project-state')
+    await mkdir(managedStateDir, { recursive: true })
+    await writeFile(join(managedStateDir, 'TASKS.json'), JSON.stringify(taskQueue, null, 2), 'utf8')
+    await markFixtureProjectStateMigrated(localHistoryDir)
+  }
   if (id === 'capability-boundary') {
     const localHistoryDir = projectLocalHistoryDir(projectPath)
     const managedStateDir = join(localHistoryDir, 'project-state')
     await mkdir(managedStateDir, { recursive: true })
-    await mkdir(join(localHistoryDir, 'migrations'), { recursive: true })
     await writeFile(join(managedStateDir, 'TASKS.json'), JSON.stringify({ version: 1, lastUpdated: now, tasks }, null, 2), 'utf8')
     await writeFile(join(managedStateDir, 'project-brief.md'), `${name} fixture covers owner approval for runtime capability requests.\n`, 'utf8')
     await writeFile(join(managedStateDir, 'workspace-goals.json'), JSON.stringify({ goals: [] }, null, 2), 'utf8')
@@ -147,20 +177,7 @@ async function writeProject({
       ].join('\n'),
       'utf8',
     )
-    await writeFile(
-      join(localHistoryDir, 'migrations', 'migrations.json'),
-      JSON.stringify({
-        version: 1,
-        records: [{
-          id: '0.8.0/project-state-layout',
-          status: 'applied',
-          appliedAt: now,
-          summary: 'Fixture is already seeded in managed project state.',
-          affectedPaths: ['memory/'],
-        }],
-      }, null, 2),
-      'utf8',
-    )
+    await markFixtureProjectStateMigrated(localHistoryDir)
   }
   if (capabilityRequests.length > 0) {
     await mkdir(join(memoryDir, 'capability-requests'), { recursive: true })
@@ -281,6 +298,96 @@ async function writeProject({
     await writeFile(join(projectStateDir, 'release-note.md'), 'unlanded Guildhall-owned fixture note\n', 'utf8')
   }
   return projectPath
+}
+
+function fixtureTask(projectPath, input) {
+  return {
+    id: input.id,
+    title: input.title,
+    description: input.description ?? 'Rendered UI fixture task.',
+    domain: input.domain ?? 'guildhall',
+    projectPath,
+    status: input.status,
+    priority: input.priority ?? 'normal',
+    spec: input.spec ?? 'Fixture spec for rendered UI coverage.',
+    acceptanceCriteria: [],
+    outOfScope: [],
+    dependsOn: input.dependsOn ?? [],
+    notes: [],
+    gateResults: [],
+    reviewVerdicts: [],
+    adjudications: [],
+    revisionCount: 0,
+    remediationAttempts: 0,
+    escalations: [],
+    agentIssues: [],
+    origination: 'human',
+    ...(input.releaseIds ? { releaseIds: input.releaseIds } : {}),
+    ...(input.hierarchy ? { hierarchy: input.hierarchy } : {}),
+  }
+}
+
+function narrativeHarnessReleaseQueue() {
+  const projectPath = join(projectsRoot, 'narrative-harness')
+  const releaseId = 'stage-0-spec-baseline'
+  const current = [
+    ['task-import-9s8tkc', 'Define fixture, expected-record, prototype-run, and evaluation schemas.', 'spec_review'],
+    ['task-import-dh34s5', 'Add the first tiny fiction fixture and human-authored expected records.', 'spec_review'],
+    ['task-import-14yqvl7', 'Implement a no-UI runner that builds a packet from fixture records.', 'ready'],
+    ['task-import-1isf6n0', 'Add deterministic evaluation output that reports missing, noisy, stale, and useful context.', 'spec_review'],
+    ['task-import-1nfemy6', 'Generate a developer-readable debug report for each run.', 'spec_review'],
+    ['task-import-1v2ehs', 'Use the first run to narrow the MVP story-memory schema.', 'spec_review'],
+  ].map(([id, title, status]) => fixtureTask(projectPath, {
+    id,
+    title,
+    status,
+    domain: 'harness',
+    releaseIds: [releaseId],
+  }))
+  const laterTitles = [
+    'manuscript import or simple editor shell',
+    'project brief and author-provenance capture',
+    'story-memory inspection views for traces, findings, and decisions',
+    'askable retrieval interface for character, scene, reader-state, and world questions',
+    'lightweight visualizations where they clarify the story state',
+    'production data model and migrations',
+    'sync/storage strategy',
+    'subscription tier definitions',
+    'provider usage accounting and quota controls',
+    'audit logs for consent, AI context inclusion, and safety decisions',
+    'export/import boundaries',
+    'reliability and observability plan',
+  ]
+  const deferred = laterTitles.map((title, index) => fixtureTask(projectPath, {
+    id: `task-import-later-${index + 1}`,
+    title,
+    status: 'shelved',
+    domain: 'harness',
+    spec: '',
+  }))
+  const child = fixtureTask(projectPath, {
+    id: 'task-import-9s8tkc-split-shape-fixture-and-expected-record-ground-truth',
+    title: 'Shape fixture and expected-record ground truth',
+    status: 'exploring',
+    domain: 'harness',
+    spec: '',
+    hierarchy: { parentId: 'task-import-9s8tkc', relation: 'child' },
+  })
+
+  return {
+    version: 1,
+    selectedReleaseId: releaseId,
+    releases: [{
+      id: releaseId,
+      label: 'Stage 0: Spec Baseline',
+      kind: 'release',
+      state: 'active',
+      source: 'release_plan',
+      nodeIds: current.map(task => `work:${task.id}`),
+      deferredNodeIds: deferred.map(task => `work:${task.id}`),
+    }],
+    tasks: [...current, ...deferred, child],
+  }
 }
 
 function projectRef(id, label, projectPath) {
@@ -541,7 +648,7 @@ const projects = [
   {
     id: 'narrative-harness',
     name: 'Narrative Harness',
-    statuses: ['exploring', 'spec_review', 'review', 'done', 'shelved'],
+    taskQueue: narrativeHarnessReleaseQueue(),
   },
   {
     id: 'linecraft',
