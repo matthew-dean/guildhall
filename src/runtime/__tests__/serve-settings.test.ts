@@ -2731,6 +2731,13 @@ describe('Workspace Import review endpoints', () => {
         id: 'stage-1-v1-release-hardening',
         label: 'Stage 1: V1 Release Hardening',
       }),
+      expect.objectContaining({
+        id: 'stage-2-primitive-convergence',
+        label: 'Stage 2: Primitive Convergence',
+      }),
+    ])
+    expect(body.detected?.tasks.find(task => task.title.includes('Finish remaining high-use primitive replacement'))?.releaseIds).toEqual([
+      'stage-2-primitive-convergence',
     ])
     expect(body.effective?.releases).toEqual(body.detected?.releases)
     expect(body.detected?.tasks).toEqual(expect.arrayContaining([

@@ -201,6 +201,7 @@ export interface ProjectOrientationSpine {
   projectId: string
   updatedAt: string
   selectedRelease: OrientationRelease | null
+  releases: OrientationRelease[]
   selectedTaskScope: OrientationScope | null
   /**
    * @deprecated Compatibility alias for selectedTaskScope.
@@ -479,7 +480,7 @@ function augmentTasksWithWorkspaceImportDraft(input: {
         description: draftTask.description ?? draftTask.title,
         domain: draftTask.domain,
         ...(importedRefs.length > 0 ? { references: importedRefs } : {}),
-        ...(draftTask.scope === 'later' ? {} : draftTask.releaseIds?.length ? { releaseIds: [...draftTask.releaseIds] } : {}),
+        ...(draftTask.releaseIds?.length ? { releaseIds: [...draftTask.releaseIds] } : {}),
         status: draftTask.scope === 'later' ? 'shelved' : 'import_draft',
         updatedAt: input.now,
         workVisibility: {
@@ -495,18 +496,21 @@ function augmentTasksWithWorkspaceImportDraft(input: {
       }
       augmented.push(synthetic)
       titleToTask.set(normalizeText(draftTask.title), synthetic)
-    } else if (draftTask.scope !== 'later' && draftTask.releaseIds?.length) {
+    } else if (draftTask.releaseIds?.length) {
       existing.releaseIds = [...new Set([...(existing.releaseIds ?? []), ...draftTask.releaseIds])]
     }
 
     const nodeId = taskNodeId(taskId)
-    const taskReleaseIds = draftTask.scope === 'later' ? [] : draftTask.releaseIds ?? []
+    const taskReleaseIds = draftTask.releaseIds ?? []
     if (draftTask.scope === 'later') {
       deferredNodeIds.push(nodeId)
-      for (const release of draft.releases ?? []) {
-        const bucket = releaseDeferredNodeIds.get(release.id) ?? new Set<string>()
+      const owningReleaseIds = taskReleaseIds.length
+        ? taskReleaseIds
+        : (draft.releases ?? []).map(release => release.id)
+      for (const releaseId of owningReleaseIds) {
+        const bucket = releaseDeferredNodeIds.get(releaseId) ?? new Set<string>()
         bucket.add(nodeId)
-        releaseDeferredNodeIds.set(release.id, bucket)
+        releaseDeferredNodeIds.set(releaseId, bucket)
       }
     } else {
       currentNodeIds.push(nodeId)
@@ -1548,12 +1552,19 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
   })
   const tasks = draftAugmentation.tasks
   const charter = normalizeCharter(input)
-  const releases = input.releases?.length ? input.releases : draftAugmentation.releases
+  const releases = mergeOrientationReleaseInputs(input.releases, draftAugmentation.releases)
   const selectedRelease = normalizeRelease({
     ...input,
     selectedReleaseId: input.selectedReleaseId ?? draftAugmentation.selectedReleaseId,
     releases,
   }, tasks)
+  const normalizedReleases = releases
+    .map(release => normalizeRelease({
+      ...input,
+      selectedReleaseId: release.id,
+      releases: [release],
+    }, tasks))
+    .filter((release): release is OrientationRelease => Boolean(release))
   const rawScope = releaseToScope(selectedRelease) ?? draftAugmentation.scope ?? normalizeScope(input, tasks)
   const scope = rawScope ? normalizeScopeTaskLists(rawScope, tasks) : null
   const built = buildNodes(tasks, scope, now)
@@ -1613,6 +1624,7 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
     projectId: input.projectId,
     updatedAt: now,
     selectedRelease,
+    releases: normalizedReleases,
     selectedTaskScope: scope,
     scope,
     charter,
@@ -1639,4 +1651,34 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
     },
     sourceHealth: sourceHealth(roots, gaps),
   }
+}
+
+function mergeOrientationReleaseInputs(
+  primary: BuildProjectOrientationSpineInput['releases'],
+  secondary: Array<Partial<OrientationRelease>>,
+): BuildProjectOrientationSpineInput['releases'] {
+  const merged: NonNullable<BuildProjectOrientationSpineInput['releases']> = []
+  const byId = new Map<string, Partial<OrientationRelease>>()
+  for (const release of [...(primary ?? []), ...secondary]) {
+    const id = release.id?.trim()
+    if (!id) continue
+    const existing = byId.get(id)
+    if (!existing) {
+      byId.set(id, release)
+      merged.push(release)
+      continue
+    }
+    const combined: Partial<OrientationRelease> = {
+      ...release,
+      ...existing,
+      nodeIds: [...new Set([...(existing.nodeIds ?? []), ...(release.nodeIds ?? [])])],
+      deferredNodeIds: [...new Set([...(existing.deferredNodeIds ?? []), ...(release.deferredNodeIds ?? [])])],
+      description: existing.description ?? release.description ?? null,
+      proofStyle: existing.proofStyle ?? release.proofStyle,
+    }
+    byId.set(id, combined)
+    const index = merged.findIndex(item => item.id === id)
+    if (index >= 0) merged[index] = combined
+  }
+  return merged
 }

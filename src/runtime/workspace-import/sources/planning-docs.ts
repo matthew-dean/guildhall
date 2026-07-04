@@ -470,7 +470,8 @@ function currentReleaseIdForScope(
   releaseId: string | null,
   scopeHint: WorkspaceSignal['scopeHint'] | undefined,
 ): string | undefined {
-  if (!releaseId || scopeHint === 'later') return undefined
+  void scopeHint
+  if (!releaseId) return undefined
   return releaseId
 }
 
@@ -662,12 +663,9 @@ export const planningDocsSource: TaskSource = {
             currentReleaseLabel = releaseLabel
             currentReleaseDepth = headingDepth
           } else if (STAGE_HEADING_RE.test(currentSection)) {
-            const stageScopeHint = scopeHintForStage(currentSection, currentMilestoneStage)
-            if (!currentReleaseId && stageScopeHint === 'current') {
-              currentReleaseId = releaseIdFromLabel(currentSection)
-              currentReleaseLabel = currentSection
-              currentReleaseDepth = headingDepth
-            }
+            currentReleaseId = releaseIdFromLabel(currentSection)
+            currentReleaseLabel = currentSection
+            currentReleaseDepth = headingDepth
           }
           currentLabel = null
           bulletStack.length = 0

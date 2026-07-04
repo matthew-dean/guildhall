@@ -754,6 +754,17 @@ export interface ProjectOrientationSpine {
     deferredNodeIds?: string[]
     proofStyle?: string
   } | null
+  releases?: Array<{
+    id?: string
+    label?: string
+    kind?: string
+    state?: string
+    source?: ProjectOrientationSource | 'owner_approved' | 'spec' | 'release_plan' | 'inferred' | string
+    description?: string | null
+    nodeIds?: string[]
+    deferredNodeIds?: string[]
+    proofStyle?: string
+  }>
   selectedTaskScope?: {
     id?: string
     label?: string

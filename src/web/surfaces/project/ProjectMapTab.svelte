@@ -26,6 +26,8 @@
   const progress = $derived(spine?.summary?.progress ?? null)
   const lanes = $derived(spine?.roots ?? [])
   const selectedRelease = $derived(spine?.selectedRelease ?? null)
+  const releaseRoadmap = $derived(spine?.releases ?? (selectedRelease ? [selectedRelease] : []))
+  const selectedReleaseId = $derived(selectedRelease?.id ?? null)
   const selectedTaskScope = $derived(spine?.selectedTaskScope ?? spine?.scope ?? null)
   const selectedScopeNodeIds = $derived.by(() => {
     const ids = selectedRelease?.nodeIds?.length
@@ -258,6 +260,23 @@
     return 'neutral'
   }
 
+  function releaseTone(release: { id?: string; state?: string; nodeIds?: string[]; deferredNodeIds?: string[] }): Tone {
+    if (release.id && release.id === selectedReleaseId) return 'accent'
+    if (release.state === 'shipped' || release.state === 'ready') return 'ok'
+    if ((release.nodeIds?.length ?? 0) > 0) return 'accent'
+    return 'neutral'
+  }
+
+  function releaseSummary(release: { nodeIds?: string[]; deferredNodeIds?: string[] }): string {
+    const active = release.nodeIds?.length ?? 0
+    const later = release.deferredNodeIds?.length ?? 0
+    const pieces = [
+      active > 0 ? countLabel(active, 'current work item') : null,
+      later > 0 ? countLabel(later, 'later work item') : null,
+    ].filter(Boolean)
+    return pieces.join(' · ') || 'No work assigned yet'
+  }
+
   function collectSourceNodes(spine: ProjectOrientationSpine): ProjectOrientationNode[] {
     const nodes: ProjectOrientationNode[] = []
     const seen = new Set<string>()
@@ -382,6 +401,22 @@
         <span>Proven</span>
       </UtilityPanel>
     </section>
+
+    {#if releaseRoadmap.length > 0}
+      <Card title="Release roadmap" titleTag="h2" padding="compact" density="dense" className="release-roadmap-card">
+        <CardList className="release-roadmap-list">
+          {#each releaseRoadmap as release (release.id ?? release.label)}
+            <CardListItem className="release-roadmap-row" tone={releaseTone(release)} railStrength={release.id === selectedReleaseId ? 'strong' : 'subtle'} dense>
+              <div>
+                <Chip label={release.id === selectedReleaseId ? 'Selected' : friendlyStatus(release.state ?? 'planned')} tone={releaseTone(release)} />
+                <strong>{release.label ?? 'Untitled release'}</strong>
+                <p>{releaseSummary(release)}</p>
+              </div>
+            </CardListItem>
+          {/each}
+        </CardList>
+      </Card>
+    {/if}
 
     <section class="map-layout">
       <div class="map-main">
@@ -696,6 +731,39 @@
   :global(.stat) span {
     color: var(--text-muted);
     font-size: var(--gh-type-size-meta);
+  }
+
+  :global(.release-roadmap-list) {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(18rem, 100%), 1fr));
+    gap: var(--s-3);
+  }
+
+  :global(.release-roadmap-row) {
+    min-width: 0;
+  }
+
+  :global(.release-roadmap-row > div) {
+    display: grid;
+    gap: var(--s-1);
+    min-width: 0;
+  }
+
+  :global(.release-roadmap-row .chip) {
+    justify-self: start;
+  }
+
+  :global(.release-roadmap-row strong) {
+    color: var(--text);
+    overflow-wrap: anywhere;
+  }
+
+  :global(.release-roadmap-row p) {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
+    overflow-wrap: anywhere;
   }
 
   .map-layout {

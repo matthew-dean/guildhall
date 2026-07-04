@@ -2251,13 +2251,14 @@ function ensureImportedReleaseContainers(
       .map(release => [release.id.trim(), release.label.trim()] as const)
       .filter(([id, label]) => id.length > 0 && label.length > 0),
   )
-  const releaseIds = [...new Set(
-    queue.tasks
-      .filter(task => task.status !== 'shelved' && task.status !== 'archived' && task.status !== 'cancelled')
+  const releaseIds = [...new Set([
+    ...importedReleases.map(release => release.id.trim()).filter(Boolean),
+    ...queue.tasks
+      .filter(task => task.status !== 'archived' && task.status !== 'cancelled')
       .flatMap(task => task.releaseIds ?? [])
       .map(id => id.trim())
       .filter(Boolean),
-  )]
+  ])]
   if (releaseIds.length === 0) return
 
   const releases = [...(queue.releases ?? [])]
@@ -2281,11 +2282,17 @@ function ensureImportedReleaseContainers(
       release.label = importedReleaseLabels.get(releaseId)!
     }
     const nodeIds = new Set(release.nodeIds ?? [])
+    const deferredNodeIds = new Set(release.deferredNodeIds ?? [])
     for (const task of queue.tasks) {
-      if (task.status === 'shelved' || task.status === 'archived' || task.status === 'cancelled') continue
+      if (task.status === 'archived' || task.status === 'cancelled') continue
       if (task.releaseIds?.includes(releaseId)) nodeIds.add(`work:${task.id}`)
+      if (task.status === 'shelved' && task.releaseIds?.includes(releaseId)) {
+        nodeIds.delete(`work:${task.id}`)
+        deferredNodeIds.add(`work:${task.id}`)
+      }
     }
     release.nodeIds = [...nodeIds]
+    release.deferredNodeIds = [...deferredNodeIds]
     release.updatedAt = now
   }
   queue.releases = releases
@@ -4715,7 +4722,7 @@ export async function approveWorkspaceImport(
     existing.projectPath = taskProjectPath
     existing.priority = imported.priority
     existing.dependsOn = [...(imported.dependsOn ?? [])].map(dependency => dependencyIdMap.get(dependency) ?? dependency)
-    existing.releaseIds = imported.scope === 'later' ? [] : [...(imported.releaseIds ?? [])]
+    existing.releaseIds = [...(imported.releaseIds ?? [])]
     existing.acceptanceCriteria = materializedAcceptanceCriteria(imported, evidenceDetail)
     existing.requestIntake = seededBlueprint.requestIntake
     existing.references = normalizedReferences
@@ -4792,7 +4799,7 @@ export async function approveWorkspaceImport(
       status: seededBlueprint.status,
       priority: t.priority,
       dependsOn: [...(t.dependsOn ?? [])].map(dependency => dependencyIdMap.get(dependency) ?? dependency),
-      releaseIds: t.scope === 'later' ? [] : [...(t.releaseIds ?? [])],
+      releaseIds: [...(t.releaseIds ?? [])],
       outOfScope: seededBlueprint.outOfScope,
       acceptanceCriteria: materializedAcceptanceCriteria(t, evidenceDetail),
       requestIntake: seededBlueprint.requestIntake,

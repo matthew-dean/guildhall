@@ -129,9 +129,9 @@ describe('formWorkspaceHypothesis', () => {
       expect.objectContaining({
         title: 'Add browser drafting workspace',
         scope: 'later',
+        releaseIds: ['headless-mvp'],
       }),
     ]))
-    expect(draft.tasks.find(task => task.title === 'Add browser drafting workspace')?.releaseIds).toBeUndefined()
   })
 
   it('records explicit release containers with owner-visible labels', () => {
@@ -158,6 +158,35 @@ describe('formWorkspaceHypothesis', () => {
       }),
     ])
     expect(draft.tasks[0]?.releaseIds).toEqual(['2-0-alpha'])
+  })
+
+  it('keeps owner-visible release containers for deferred future scopes', () => {
+    const draft = formWorkspaceHypothesis(
+      invFrom([
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'Build specialist reviewer lanes',
+          evidence: 'docs/roadmap.md: - Build specialist reviewer lanes',
+          scopeHint: 'later',
+          releaseId: 'stage-2-agent-prototype',
+          releaseLabel: 'Stage 2: Agent Prototype',
+          confidence: 'high',
+        },
+      ]),
+    )
+
+    expect(draft.releases).toEqual([
+      expect.objectContaining({
+        id: 'stage-2-agent-prototype',
+        label: 'Stage 2: Agent Prototype',
+      }),
+    ])
+    expect(draft.tasks[0]).toMatchObject({
+      title: 'Build specialist reviewer lanes',
+      scope: 'later',
+      releaseIds: ['stage-2-agent-prototype'],
+    })
   })
 
   it('assigns untagged current work to the matching documented current release scope', () => {

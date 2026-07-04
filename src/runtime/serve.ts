@@ -5460,6 +5460,28 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
   async function workspaceImportDraftForOrientation(projectPath: string, _startReadiness: { code?: string } | null | undefined) {
     try {
+      const draftTaskId = (task: {
+        id?: string
+        suggestedId?: string
+        title: string
+      }, index: number): string => {
+        const explicit = task.id?.trim() || task.suggestedId?.trim()
+        if (explicit) return explicit
+        const slug = task.title
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/^-+|-+$/g, '')
+        return `draft-${slug || 'task'}-${index + 1}`
+      }
+      const draftTaskRefs = (task: {
+        refs?: string[]
+        references?: string[]
+        source?: string
+      }): string[] => {
+        if (task.refs?.length) return [...task.refs]
+        if (task.references?.length) return task.references.map(ref => `import:${ref}`)
+        return task.source ? [`import:${task.source}`] : ['workspace-import:detected']
+      }
       const savedWorkspaceGoals = await readWorkspaceGoalsState(getProjectStateDir(projectPath))
       if (savedWorkspaceGoals && !workspaceGoalsNeedStructuralRefresh(savedWorkspaceGoals) && (
         savedWorkspaceGoals.tasks.length > 0 ||
@@ -5468,11 +5490,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         let detectedReleaseDraft: Awaited<ReturnType<typeof materializeWorkspaceImportDraft>> | null = null
         try {
           const inventory = await detectWorkspaceSignals({ projectPath })
-          detectedReleaseDraft = await materializeWorkspaceImportDraft({
-            memoryDir: getProjectStateDir(projectPath),
-            projectPath,
-            draft: formWorkspaceHypothesis(inventory),
-          })
+          detectedReleaseDraft = formWorkspaceHypothesis(inventory)
         } catch {
           detectedReleaseDraft = null
         }
@@ -5482,6 +5500,29 @@ export function buildServeApp(opts: ServeOptions = {}): {
             task.releaseIds ? [...task.releaseIds] : [],
           ]),
         )
+        const savedTaskTitles = new Set(savedWorkspaceGoals.tasks.map(task => task.title.trim().toLowerCase()))
+        const detectedOnlyTasks = (detectedReleaseDraft?.tasks ?? [])
+          .filter(task => !savedTaskTitles.has(task.title.trim().toLowerCase()))
+        const savedOrientationTasks = savedWorkspaceGoals.tasks.map(task => ({
+          id: task.id,
+          title: task.title,
+          description: task.whyThisMayMatter ?? task.description,
+          domain: task.domain,
+          scope: task.scope === 'later' ? 'later' as const : 'current' as const,
+          releaseIds: task.releaseIds?.length
+            ? [...task.releaseIds]
+            : releaseIdsByTitle.get(task.title.trim().toLowerCase()),
+          refs: task.references?.map(ref => `import:${ref}`) ?? ['workspace-import:approved'],
+        }))
+        const detectedOrientationTasks = detectedOnlyTasks.map((task, index) => ({
+          id: `detected-${draftTaskId(task, index)}`,
+          title: task.title,
+          description: task.description,
+          domain: task.domain,
+          scope: task.scope === 'later' ? 'later' as const : 'current' as const,
+          releaseIds: task.releaseIds ? [...task.releaseIds] : undefined,
+          refs: draftTaskRefs(task),
+        }))
         return {
           releases: (detectedReleaseDraft?.releases ?? []).map(release => ({
             id: release.id,
@@ -5491,19 +5532,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
               : 'release_plan' as const,
             state: 'active' as const,
           })),
-          tasks: savedWorkspaceGoals.tasks.map(task => ({
-            id: task.id,
-            title: task.title,
-            description: task.whyThisMayMatter ?? task.description,
-            domain: task.domain,
-            scope: task.scope === 'later' ? 'later' : 'current',
-            releaseIds: task.scope === 'later'
-              ? []
-              : task.releaseIds?.length
-                ? [...task.releaseIds]
-                : releaseIdsByTitle.get(task.title.trim().toLowerCase()),
-            refs: task.references?.map(ref => `import:${ref}`) ?? ['workspace-import:approved'],
-          })),
+          tasks: [...savedOrientationTasks, ...detectedOrientationTasks],
           contexts: savedWorkspaceGoals.context
             .filter(context => context.role === 'capability' || context.role === 'brief_input')
             .map((context, index) => ({
@@ -5528,11 +5557,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
 
       const inventory = await detectWorkspaceSignals({ projectPath })
-      const draft = await materializeWorkspaceImportDraft({
-        memoryDir: getProjectStateDir(projectPath),
-        projectPath,
-        draft: formWorkspaceHypothesis(inventory),
-      })
+      const draft = formWorkspaceHypothesis(inventory)
       const structuralContexts = draft.context.filter(context => context.role === 'capability' || context.role === 'brief_input')
       if (draft.tasks.length === 0 && structuralContexts.length === 0) return null
       const inferredContextDomain = (context: typeof structuralContexts[number]): string | undefined => {
@@ -5561,14 +5586,14 @@ export function buildServeApp(opts: ServeOptions = {}): {
             : 'release_plan' as const,
           state: 'active' as const,
         })),
-        tasks: draft.tasks.map(task => ({
-          id: task.suggestedId,
+        tasks: draft.tasks.map((task, index) => ({
+          id: draftTaskId(task, index),
           title: task.title,
           description: task.whyThisMayMatter ?? task.description,
           domain: task.domain,
           scope: task.scope,
-          releaseIds: task.scope === 'later' ? [] : task.releaseIds ? [...task.releaseIds] : undefined,
-          refs: task.references?.map(ref => `import:${ref}`) ?? [`import:${task.source}`],
+          releaseIds: task.releaseIds ? [...task.releaseIds] : undefined,
+          refs: draftTaskRefs(task),
         })),
         contexts: structuralContexts.map((context, index) => ({
           id: `capability-${index + 1}`,

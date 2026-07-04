@@ -1003,6 +1003,20 @@ describe('buildProjectOrientationSpine', () => {
           inferred: true,
           refreshedAt: '2026-06-18T12:00:00.000Z',
         },
+        releases: [
+          {
+            id: 'stage-1-fixture-and-evaluation-harness',
+            label: 'Stage 1: Fixture And Evaluation Harness',
+            source: 'release_plan',
+            state: 'active',
+          },
+          {
+            id: 'stage-2-mastra-agent-prototype',
+            label: 'Stage 2: Mastra Agent Prototype',
+            source: 'release_plan',
+            state: 'planned',
+          },
+        ],
         tasks: [
           {
             id: 'task-current',
@@ -1010,6 +1024,7 @@ describe('buildProjectOrientationSpine', () => {
             description: 'Current MVP harness work.',
             domain: 'harness',
             scope: 'current',
+            releaseIds: ['stage-1-fixture-and-evaluation-harness'],
             refs: ['import:docs/harness/implementation-roadmap.md'],
           },
           {
@@ -1018,6 +1033,7 @@ describe('buildProjectOrientationSpine', () => {
             description: 'Deferred Stage 2 reviewer work.',
             domain: 'coherence',
             scope: 'later',
+            releaseIds: ['stage-2-mastra-agent-prototype'],
             refs: ['import:docs/harness/remaining-spec-decomposition-inventory.md'],
           },
         ],
@@ -1037,10 +1053,24 @@ describe('buildProjectOrientationSpine', () => {
 
     expect(spine.scope).toMatchObject({
       nodeIds: ['work:workspace-import:task-current'],
-      deferredNodeIds: ['work:workspace-import:task-later'],
+      deferredNodeIds: [],
     })
+    expect(spine.releases).toEqual([
+      expect.objectContaining({
+        id: 'stage-1-fixture-and-evaluation-harness',
+        label: 'Stage 1: Fixture And Evaluation Harness',
+        nodeIds: ['work:workspace-import:task-current'],
+        deferredNodeIds: [],
+      }),
+      expect.objectContaining({
+        id: 'stage-2-mastra-agent-prototype',
+        label: 'Stage 2: Mastra Agent Prototype',
+        nodeIds: [],
+        deferredNodeIds: ['work:workspace-import:task-later'],
+      }),
+    ])
     expect(spine.summary.includedWorkCount).toBe(1)
-    expect(spine.summary.deferredWorkCount).toBe(1)
+    expect(spine.summary.deferredWorkCount).toBe(0)
     expect(spine.nodes['work:workspace-import:task-current']?.source).toMatchObject({
       kind: 'inferred',
       refs: ['import:docs/harness/implementation-roadmap.md'],
@@ -1057,6 +1087,138 @@ describe('buildProjectOrientationSpine', () => {
       'Architecture Notes',
       'Implementation Roadmap',
       'Spec Decomposition Inventory',
+    ])
+  })
+
+  it('preserves detected release buckets for later tasks that already exist in saved task state', () => {
+    const spine = buildProjectOrientationSpine({
+      projectId: 'narrative-harness',
+      now: '2026-06-18T12:00:00.000Z',
+      tasks: [
+        {
+          id: 'saved-stage-two',
+          title: 'Mastra workflow for the prototype iteration loop',
+          description: 'Saved task record imported before release buckets existed.',
+          domain: 'agent-workflow',
+          status: 'shelved',
+        },
+      ],
+      workspaceImportDraft: {
+        source: {
+          kind: 'inferred',
+          refs: ['workspace-import:draft'],
+          confidence: 'medium',
+          freshness: 'fresh',
+          inferred: true,
+          refreshedAt: '2026-06-18T12:00:00.000Z',
+        },
+        releases: [
+          {
+            id: 'stage-1-fixture-and-evaluation-harness',
+            label: 'Stage 1: Fixture And Evaluation Harness',
+            source: 'release_plan',
+            state: 'active',
+          },
+          {
+            id: 'stage-2-mastra-agent-prototype',
+            label: 'Stage 2: Mastra Agent Prototype',
+            source: 'release_plan',
+            state: 'planned',
+          },
+        ],
+        tasks: [
+          {
+            id: 'draft-stage-one',
+            title: 'Define fixture schemas',
+            description: 'Current harness work.',
+            domain: 'harness',
+            scope: 'current',
+            releaseIds: ['stage-1-fixture-and-evaluation-harness'],
+            refs: ['import:docs/harness/implementation-roadmap.md'],
+          },
+          {
+            id: 'draft-stage-two',
+            title: 'Mastra workflow for the prototype iteration loop',
+            description: 'Detected deferred Stage 2 work.',
+            domain: 'agent-workflow',
+            scope: 'later',
+            releaseIds: ['stage-2-mastra-agent-prototype'],
+            refs: ['import:docs/harness/implementation-roadmap.md'],
+          },
+        ],
+        contexts: [],
+      },
+    })
+
+    expect(spine.nodes['work:saved-stage-two']?.maturity).toBe('deferred')
+    expect(spine.nodes['work:saved-stage-two']?.source.refs).toEqual(['import:docs/harness/implementation-roadmap.md'])
+    expect(spine.releases).toEqual([
+      expect.objectContaining({
+        id: 'stage-1-fixture-and-evaluation-harness',
+        nodeIds: ['work:workspace-import:draft-stage-one'],
+        deferredNodeIds: [],
+      }),
+      expect.objectContaining({
+        id: 'stage-2-mastra-agent-prototype',
+        nodeIds: [],
+        deferredNodeIds: ['work:saved-stage-two'],
+      }),
+    ])
+  })
+
+  it('merges saved release labels with detected orientation buckets for the same release id', () => {
+    const spine = buildProjectOrientationSpine({
+      projectId: 'narrative-harness',
+      now: '2026-06-18T12:00:00.000Z',
+      releases: [
+        {
+          id: 'stage-2-mastra-agent-prototype',
+          label: 'Stage 2: Mastra Agent Prototype',
+          source: 'release_plan',
+          state: 'planned',
+          nodeIds: [],
+          deferredNodeIds: [],
+        },
+      ],
+      workspaceImportDraft: {
+        source: {
+          kind: 'inferred',
+          refs: ['workspace-import:draft'],
+          confidence: 'medium',
+          freshness: 'fresh',
+          inferred: true,
+          refreshedAt: '2026-06-18T12:00:00.000Z',
+        },
+        releases: [
+          {
+            id: 'stage-2-mastra-agent-prototype',
+            label: 'Stage 2: Mastra Agent Prototype',
+            source: 'release_plan',
+            state: 'planned',
+          },
+        ],
+        tasks: [
+          {
+            id: 'draft-stage-two',
+            title: 'Mastra workflow for the prototype iteration loop',
+            description: 'Detected deferred Stage 2 work.',
+            domain: 'agent-workflow',
+            scope: 'later',
+            releaseIds: ['stage-2-mastra-agent-prototype'],
+            refs: ['import:docs/harness/implementation-roadmap.md'],
+          },
+        ],
+        contexts: [],
+      },
+    })
+
+    expect(spine.releases).toEqual([
+      expect.objectContaining({
+        id: 'stage-2-mastra-agent-prototype',
+        label: 'Stage 2: Mastra Agent Prototype',
+        nodeIds: [],
+        deferredNodeIds: ['work:workspace-import:draft-stage-two'],
+      }),
     ])
   })
 

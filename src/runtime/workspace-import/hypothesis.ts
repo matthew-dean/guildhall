@@ -64,6 +64,7 @@ export interface DraftRelease {
   id: string
   label: string
   source: string
+  scope?: 'current' | 'later'
   references?: readonly string[]
   confidence: DraftConfidence
 }
@@ -302,18 +303,19 @@ function scopeFromSignal(sig: WorkspaceSignal): DraftTask['scope'] {
 
 function releaseIdsFromSignal(sig: WorkspaceSignal): string[] | undefined {
   const releaseId = sig.releaseId?.trim()
-  if (!releaseId || scopeFromSignal(sig) === 'later') return undefined
+  if (!releaseId) return undefined
   return [releaseId]
 }
 
 function releaseFromSignal(sig: WorkspaceSignal): DraftRelease | null {
   const releaseId = sig.releaseId?.trim()
   const label = sig.releaseLabel?.trim()
-  if (!releaseId || !label || scopeFromSignal(sig) === 'later') return null
+  if (!releaseId || !label) return null
   return {
     id: releaseId,
     label,
     source: sig.source,
+    ...(sig.scopeHint ? { scope: scopeFromSignal(sig) } : {}),
     ...(sig.references ? { references: sig.references } : {}),
     confidence: sig.confidence,
   }
@@ -446,17 +448,20 @@ function addRelease(
   }
   const refs = mergeReferences(existing.references, release.references)
   const shouldBump = bump(existing, release.confidence)
+  const mergedScope = existing.scope === 'current' || release.scope === 'current' ? 'current' : existing.scope ?? release.scope
   if (shouldBump) {
     index.set(release.id, {
       ...release,
+      ...(mergedScope ? { scope: mergedScope } : {}),
       ...(refs ? { references: refs } : {}),
     })
     return
   }
-  if (refs) {
+  if (refs || mergedScope) {
     index.set(release.id, {
       ...existing,
-      references: refs,
+      ...(refs ? { references: refs } : {}),
+      ...(mergedScope ? { scope: mergedScope } : {}),
     })
   }
 }
@@ -619,8 +624,7 @@ function addTask(
   const refs = mergeReferences(existing.references, sig.references)
   if (refs) merged.references = refs
   const releaseIds = mergeReferences(existing.releaseIds, releaseIdsFromSignal(sig))
-  if (merged.scope === 'later') delete merged.releaseIds
-  else if (releaseIds) merged.releaseIds = releaseIds
+  if (releaseIds) merged.releaseIds = releaseIds
   if (shouldBump) {
     if (scopeFromSignal(sig) === 'later') merged.title = sig.title
     merged.description = supportingText(sig.title, sig.evidence)
@@ -719,7 +723,7 @@ function assignCurrentReleaseScopes(
   const releasesWithRefs = releases.map(release => ({
     release,
     refs: new Set(release.references ?? []),
-  }))
+  })).filter(entry => entry.release.scope !== 'later')
   return tasks.map(task => {
     if (task.scope === 'later' || task.releaseIds?.length) return task
     const matching = releasesWithRefs
@@ -728,12 +732,41 @@ function assignCurrentReleaseScopes(
         return (task.references ?? []).some(ref => entry.refs.has(ref))
       })
       .map(entry => entry.release.id)
-    if (matching.length === 0) return task
+    const selected = selectAutomaticCurrentReleaseIds(matching, releases)
+    if (selected.length === 0) return task
     return {
       ...task,
-      releaseIds: [...new Set(matching)],
+      releaseIds: selected,
     }
   })
+}
+
+function selectAutomaticCurrentReleaseIds(
+  matchingIds: readonly string[],
+  releases: readonly DraftRelease[],
+): string[] {
+  const unique = [...new Set(matchingIds)]
+  if (unique.length <= 1) return unique
+  const byId = new Map(releases.map(release => [release.id, release]))
+  const staged = unique
+    .map(id => {
+      const release = byId.get(id)
+      return release ? { id, stage: parseReleaseStageOrdinal(release.label) } : null
+    })
+    .filter((entry): entry is { id: string; stage: number } => entry !== null && entry.stage !== null)
+  if (staged.length === 0) return []
+  const nonBaseline = staged.filter(entry => entry.stage > 0)
+  const candidates = nonBaseline.length > 0 ? nonBaseline : staged
+  const earliest = Math.min(...candidates.map(entry => entry.stage))
+  return candidates.filter(entry => entry.stage === earliest).map(entry => entry.id)
+}
+
+function parseReleaseStageOrdinal(label: string | null | undefined): number | null {
+  if (!label) return null
+  const match = /^stage\s+(\d+)(?:\b|\s*[:(].*)/i.exec(label.trim())
+  if (!match?.[1]) return null
+  const value = Number.parseInt(match[1], 10)
+  return Number.isFinite(value) ? value : null
 }
 
 function relatedContextReferences(

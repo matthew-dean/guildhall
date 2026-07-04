@@ -552,11 +552,15 @@ The next milestone is Stage 1: Fixture And Evaluation Harness.
         kind: 'open_work',
         title: 'Mastra workflow for the prototype iteration loop',
         scopeHint: 'later',
+        releaseId: 'stage-2-mastra-agent-prototype',
+        releaseLabel: 'Stage 2: Mastra Agent Prototype',
       }),
       expect.objectContaining({
         kind: 'open_work',
         title: 'specialist editor agent calls for the first review lanes',
         scopeHint: 'later',
+        releaseId: 'stage-2-mastra-agent-prototype',
+        releaseLabel: 'Stage 2: Mastra Agent Prototype',
       }),
     ]))
     expect(sigs).not.toEqual(expect.arrayContaining([
@@ -672,7 +676,7 @@ Done gate:
     ]))
   })
 
-  it('attaches explicitly named release scope to current planning work without leaking it to later scope', async () => {
+  it('attaches explicitly named release scope to current and later planning work without making later work current', async () => {
     mkdirSync(join(dir, 'docs'), { recursive: true })
     writeFileSync(
       join(dir, 'docs', 'release-plan.md'),
@@ -716,11 +720,6 @@ Done gate:
         kind: 'open_work',
         title: 'Add browser drafting workspace',
         scopeHint: 'later',
-      }),
-    ]))
-    expect(sigs).not.toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        title: 'Add browser drafting workspace',
         releaseId: 'headless-mvp',
       }),
     ]))

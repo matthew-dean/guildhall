@@ -90,6 +90,8 @@
   const memoryHealth = $derived(detail.memoryHealth ?? null)
   const structuralMapReview = $derived(detail.structuralMapReview ?? null)
   const orientationSpine = $derived(detail.orientationSpine ?? null)
+  const releaseRoadmap = $derived(orientationSpine?.releases ?? (orientationSpine?.selectedRelease ? [orientationSpine.selectedRelease] : []))
+  const laterReleaseCount = $derived(releaseRoadmap.filter(release => release.id !== orientationSpine?.selectedRelease?.id).length)
   const primaryProofPaths = $derived.by(() => {
     return tasks
       .flatMap(task => (task.proofPaths ?? []).map(proofPath => ({ task, proofPath })))
@@ -173,7 +175,16 @@
     const documented = (orientationSpine.roots ?? []).reduce((sum, root) =>
       sum + (root.children ?? []).filter(child => child.visibility?.kind === 'supporting').length,
     0)
-    return `${orientationIncludedCount} scoped work items · ${documented} documented capabilities · ${inferred} inferred nodes · ${gaps} gaps`
+    const releasePiece = releaseRoadmap.length > 0
+      ? `${releaseRoadmap.length} ${releaseRoadmap.length === 1 ? 'release/scope' : 'release/scopes'}`
+      : null
+    return [
+      releasePiece,
+      `${orientationIncludedCount} scoped work items`,
+      `${documented} documented capabilities`,
+      `${inferred} inferred nodes`,
+      `${gaps} gaps`,
+    ].filter(Boolean).join(' · ')
   })
   const orientationMapPreviewTitle = $derived.by(() => {
     if (!orientationSpine) return 'Project map not generated yet'
@@ -186,6 +197,7 @@
       sum + (root.children ?? []).filter(child => child.visibility?.kind === 'supporting' && child.maturity === 'deferred').length,
     0)
     const pieces = [
+      releaseRoadmap.length > 1 ? `${laterReleaseCount} later release/scope ${laterReleaseCount === 1 ? 'container' : 'containers'}` : null,
       progress?.specced ? `${progress.specced} specced work items` : null,
       progress?.active ? `${progress.active} active work items` : null,
       progress?.blocked ? `${progress.blocked} blocked work items` : null,
