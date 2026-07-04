@@ -495,6 +495,43 @@ describe('buildProjectActionModel', () => {
     expect(model.secondaryActions.some(action => /answer in thread/i.test(action.label))).toBe(false)
   })
 
+  it('pins child shaping work ahead of parent cleanup while the project is running', () => {
+    const model = buildProjectActionModel({
+      startReadiness: { canStart: true },
+      inbox: { items: [] },
+      tasks: [
+        {
+          id: 'task-import-9s8tkc',
+          title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+          status: 'ready',
+          updatedAt: '2026-07-04T10:00:00.000Z',
+          productBrief: { approvedAt: '2026-07-04T09:00:00.000Z', userJob: '' },
+          spec: '',
+          acceptanceCriteria: [],
+        },
+        {
+          id: 'task-import-9s8tkc-split-define-fixture-expected-record-prototype-run-and-evaluat',
+          title: 'Define fixture, expected-record, prototype-run, and evaluation contracts',
+          status: 'exploring',
+          description: 'Spec agent is defining the fixture, expected-record, prototype-run, and evaluation contracts.',
+          updatedAt: '2026-07-04T10:05:00.000Z',
+        },
+      ],
+      thread: { activeTurnId: null, turns: [] },
+      runStatus: 'running',
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      source: 'task',
+      label: 'Define fixture, expected-record, prototype-run, and evaluation contracts',
+      detail: 'Spec agent is defining the fixture, expected-record, prototype-run, and evaluation contracts.',
+      buttonLabel: 'Open Work',
+      href: '/work?task=task-import-9s8tkc-split-define-fixture-expected-record-prototype-run-and-evaluat',
+      tone: 'running',
+      taskId: 'task-import-9s8tkc-split-define-fixture-expected-record-prototype-run-and-evaluat',
+    })
+  })
+
   it('blocks Resume for active setup questions even when raw readiness is permissive and the project has zero tasks', () => {
     const model = buildProjectActionModel({
       startReadiness: { canStart: true },

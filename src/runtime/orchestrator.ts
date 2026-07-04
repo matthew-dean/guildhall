@@ -651,7 +651,8 @@ function isRecoverableSpecNoProgressBlocker(task: Task): boolean {
       .filter((escalation) => !escalation.resolvedAt)
       .map((escalation) => `${escalation.agentId}\n${escalation.summary ?? ''}\n${escalation.details ?? ''}`),
   ].join('\n')
-  return /spec-agent|Spec agent/i.test(text) && /made no visible progress|no saved spec|no durable draft/i.test(text)
+  return /spec-agent|Spec agent/i.test(text) &&
+    /made no visible progress|no saved spec|no durable draft|kept researching after Guildhall asked for durable progress|ignored the durable-progress nudge/i.test(text)
 }
 
 function isRecoverableToolPathMismatchBlocker(task: Task): boolean {
@@ -758,7 +759,10 @@ function resolveRecoverableSpecNoProgressEscalations(task: Task, resolvedAt: str
   for (const escalation of task.escalations ?? []) {
     if (escalation.resolvedAt) continue
     const text = `${escalation.agentId}\n${escalation.summary ?? ''}\n${escalation.details ?? ''}`
-    if (/spec-agent|Spec agent/i.test(text) && /made no visible progress|no saved spec|no durable draft/i.test(text)) {
+    if (
+      /spec-agent|Spec agent/i.test(text) &&
+      /made no visible progress|no saved spec|no durable draft|kept researching after Guildhall asked for durable progress|ignored the durable-progress nudge/i.test(text)
+    ) {
       escalation.resolvedAt = resolvedAt
       escalation.resolvedBy = 'system'
       escalation.resolution =
@@ -8018,6 +8022,7 @@ export class Orchestrator {
   }
 
   private hasGuildhallOwnershipTrail(task: Task): boolean {
+    if (task.origination === 'system' || task.proposedBy === 'task-sizing') return true
     if ((task.notes ?? []).some((note) => note.agentId !== 'human')) return true
     const progress = (task as Task & { progress?: Array<{ agentId?: string }> }).progress
     if ((progress ?? []).some((entry) => entry.agentId !== 'human')) return true

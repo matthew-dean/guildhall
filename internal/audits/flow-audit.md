@@ -15215,6 +15215,54 @@ of merely preparing schedulable work.
 
 source: codex:narrative-harness-reintake-spec-specificity-2026-07-04
 
+2026-07-04T14:57:00Z - Recovered Narrative Harness spec no-progress work and
+fixed the project action model so Guildhall communicates the actual shaped
+work item, not only the containing parent.
+
+- Work id: `codex:narrative-harness-spec-no-progress-recovery-2026-07-04`.
+- User job: when Guildhall is driving the Narrative Harness release, the
+  project owner must be able to see the live/current work Guildhall is trying
+  to shape or run. It is not enough for the task queue to contain the right
+  child work if Overview/Work still points at a stale parent handoff.
+- Failure reproduced from installed `localhost:7777`:
+  - `/api/project?projectId=narrative-harness` showed child task
+    `task-import-9s8tkc-split-define-fixture-expected-record-prototype-run-and-evaluat`
+    as `exploring`, but the primary action still pointed at parent
+    `task-import-9s8tkc` with `Needs brief: finish the handoff before a worker
+    can start.`
+  - A recovered spec-agent blocker used the live text
+    `human_judgment_required: Spec agent kept researching after Guildhall asked
+    for durable progress.`, which the recovery detector did not recognize.
+- Fix:
+  - Spec no-progress recovery now recognizes the live durable-progress failure
+    text and treats generated task-sizing/internal-step work as Guildhall-owned
+    recovery scope.
+  - `buildProjectActionModel()` now understands assigned work and aligns task
+    priority with the picker by surfacing shaping/spec work before a containing
+    `ready` parent cleanup item.
+- Installed-app proof:
+  - Rebuilt and installed the current branch with `/opt/homebrew/bin/pnpm build`
+    and `/opt/homebrew/bin/pnpm dev:install`.
+  - Restarted Guildhall; `/api/stale-server` returned `stale:false` for
+    `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+  - After the patched install,
+    `/api/project?projectId=narrative-harness` returned primary action
+    `Define fixture, expected-record, prototype-run, and evaluation contracts`
+    with href
+    `/work?task=task-import-9s8tkc-split-define-fixture-expected-record-prototype-run-and-evaluat`.
+  - The same response still showed parent `task-import-9s8tkc` as `ready`, so
+    the proof specifically covers product communication choosing the actual
+    child shaping work over the parent container.
+- Verification:
+  - `CI=true /opt/homebrew/bin/pnpm exec vitest run src/runtime/__tests__/project-action-model.test.ts`
+    passed `16` tests.
+  - `CI=true /opt/homebrew/bin/pnpm exec vitest run src/runtime/__tests__/orchestrator-picker.test.ts`
+    passed `12` tests.
+  - `CI=true /opt/homebrew/bin/pnpm exec vitest run src/runtime/__tests__/orchestrator.test.ts -t "recovers the live durable-progress spec-agent blocker|recovers generated internal split durable-progress blockers|durable-progress|spec no-progress|no-progress blocker|turn limit without durable progress"`
+    passed `8` focused orchestrator recovery tests.
+
+source: codex:narrative-harness-spec-no-progress-recovery-2026-07-04
+
 2026-06-15T23:52:00Z - Completed the Project Orientation Spine cross-route
 implementation and installed-app audit.
 

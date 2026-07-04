@@ -26,6 +26,7 @@ export interface ProjectActionTask {
   title?: string
   description?: string
   status?: string
+  assignedTo?: string | null
   blockReason?: string
   updatedAt?: string
   dependsOn?: string[]
@@ -365,12 +366,20 @@ function dependencyBlockedRank(task: ProjectActionTask, tasksById: ReadonlyMap<s
   return allSatisfied ? 0 : 1
 }
 
+function taskHasLiveAssignment(task: ProjectActionTask): boolean {
+  return typeof task.assignedTo === 'string' && task.assignedTo.trim().length > 0
+}
+
 function bestTaskAction(tasks: ProjectActionTask[], running: boolean): ProjectAction | null {
-  const priority = ['in_progress', 'review', 'gate_check', 'blocked', 'ready', 'spec_review', 'exploring', 'import_draft']
+  const priority = ['in_progress', 'review', 'gate_check', 'blocked', 'exploring', 'spec_review', 'ready', 'import_draft']
   const tasksById = new Map(tasks.map(task => [task.id, task]))
   const ranked = [...tasks]
     .filter(task => priority.includes(task.status ?? ''))
     .sort((left, right) => {
+      if (running) {
+        const assignmentDelta = Number(taskHasLiveAssignment(right)) - Number(taskHasLiveAssignment(left))
+        if (assignmentDelta !== 0) return assignmentDelta
+      }
       const statusDelta = priority.indexOf(left.status ?? '') - priority.indexOf(right.status ?? '')
       if (statusDelta !== 0) return statusDelta
       const briefDelta = Number(needsBriefCleanup(right)) - Number(needsBriefCleanup(left))

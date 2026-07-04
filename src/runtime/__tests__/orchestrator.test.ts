@@ -1487,6 +1487,110 @@ describe('Orchestrator.tick — routing', () => {
     expect(task.blockReason).toContain('Spec agent kept researching')
   })
 
+  it('recovers the live durable-progress spec-agent blocker on resume', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'blocked',
+        title: 'Build AlertDialog primitive',
+        blockReason: 'human_judgment_required: Spec agent kept researching after Guildhall asked for durable progress.',
+        escalations: [{
+          id: 'esc-a-1',
+          taskId: 'a',
+          agentId: 'spec-agent',
+          reason: 'human_judgment_required',
+          summary: 'Spec agent kept researching after Guildhall asked for durable progress.',
+          details: 'Task remained in exploring after the agent ignored the durable-progress nudge and kept using read-only exploration.',
+          raisedAt: '2026-07-04T14:37:04.468Z',
+        }],
+      }),
+    ])
+    const spec = stubAgent('spec-agent', async () => {
+      await mutateTask('a', {
+        status: 'spec_review',
+        assignedTo: null,
+        spec: VALID_SPEC,
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          description: 'Thing is done',
+          verifiedBy: 'review',
+          met: false,
+        }],
+        productBrief: {
+          userJob: 'I want the task shaped into implementable work.',
+          successMetric: 'The task has a reviewable spec.',
+          antiPatterns: ['Do not loop on read-only research.'],
+        },
+      })
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    expect(spec.calls).toHaveLength(1)
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    expect(task.status).toBe('spec_review')
+    expect(task.blockReason).toBeUndefined()
+    expect(task.notes.some(note =>
+      /failed to save a durable draft|preserved transcript notes/i.test(note.content ?? ''),
+    )).toBe(true)
+    expect(task.escalations[0]).toMatchObject({
+      resolvedBy: 'system',
+    })
+  })
+
+  it('recovers generated internal split durable-progress blockers even without an escalation record', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'blocked',
+        title: 'Define fixture contracts',
+        blockReason: 'human_judgment_required: Spec agent kept researching after Guildhall asked for durable progress.',
+        origination: 'system',
+        proposedBy: 'task-sizing',
+        workVisibility: { kind: 'internal_step', countInProjectTotals: false },
+        hierarchy: { parentId: 'parent', childIds: [], order: 0, relation: 'decomposes' },
+      }),
+      mkTask({
+        id: 'parent',
+        status: 'ready',
+        title: 'Define fixture schemas',
+        hierarchy: { childIds: ['a'], order: 0, relation: 'contains' },
+      }),
+    ])
+    const spec = stubAgent('spec-agent', async () => {
+      await mutateTask('a', {
+        status: 'spec_review',
+        assignedTo: null,
+        spec: VALID_SPEC,
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          description: 'Thing is done',
+          verifiedBy: 'review',
+          met: false,
+        }],
+      })
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    expect(spec.calls).toHaveLength(1)
+    const queue = await readQueue()
+    const task = queue.tasks.find(candidate => candidate.id === 'a')!
+    expect(task.status).toBe('spec_review')
+    expect(task.blockReason).toBeUndefined()
+  })
+
   it('treats the live durable-progress nudge wording as spec-agent no-progress', async () => {
     await writeQueue([mkTask({ id: 'a', status: 'exploring', title: 'Build AlertDialog primitive' })])
     const spec = {
