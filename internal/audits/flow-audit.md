@@ -12,6 +12,75 @@ This is the active browser test plan for the Guildhall project surface. Keep it
 updated while auditing the active test project so another agent can resume
 without guessing.
 
+2026-07-04T15:34:00Z - Made Narrative Harness recovered work prove itself
+through Guildhall's own action/readiness surfaces.
+
+- Work id:
+  `codex:narrative-harness-recovered-work-visible-proof-2026-07-04`.
+- User job: while Codex is acting as the delegated human reviewer for the
+  Narrative Harness MVP proof, Guildhall itself must show what information it
+  has, what work is pinned, whether owner input is really needed, and whether
+  Resume continues paused work. It is not enough for Codex to inspect files or
+  infer state from local access.
+- Failure reproduced:
+  - The spec lane converted evidence narration into a fake owner question:
+    `The existing schemas already have:` with file-list choices.
+  - After Codex answered on the owner's behalf, task-local open-question state
+    still made project surfaces imply `Answer in Thread` even though the prompt
+    was not a user decision.
+  - The recovered contract child had a concrete spec, but approval could leave
+    it in `spec_review` because decomposition/readiness metadata said more
+    research or splitting was needed while no child work was materialized.
+  - After service restart, `/api/project` could report `run:null` while the
+    pinned task remained `in_progress`, and `startReadiness` only said
+    `canStart:true`, leaving the user without a truthful paused-work summary.
+- Fix:
+  - Owner-question normalization and visible-question filtering now reject
+    evidence-summary prompts such as `The existing schemas already have:`.
+  - Deterministic recovery spec seeding now pulls parent/import contract terms
+    and acceptance context into the recovered child spec instead of emitting a
+    generic implementation template.
+  - Spec approval can advance bounded child contract work with no materialized
+    child recommendations, while still leaving broad parent specs in review
+    when they genuinely require child work.
+  - Project readiness now reports `paused_live_work` when a task is pinned as
+    live but the supervisor has no active run, and clears that label once the
+    supervisor is running. The shared action model keeps `Resume` enabled and
+    points both Resume/Open Work at the same pinned task.
+- Live installed-app proof:
+  - `/api/stale-server` returned `stale:false` for PID `51164` with matching
+    boot/current build mtimes.
+  - Stopped state for Narrative Harness returned
+    `startReadiness.code:"paused_live_work"`, `run:null`,
+    `actionModel.runControl.label:"Resume"`, `startEnabled:true`, and
+    `href:"/work?task=task-import-9s8tkc-split-define-fixture-expected-record-prototype-run-and-evaluat"`.
+  - The same response returned `ownerInput.active:false` and primary action
+    `Define fixture, expected-record, prototype-run, and evaluation contracts`
+    with `buttonLabel:"Open Work"` and the same task href.
+  - `POST /api/project/start?projectId=narrative-harness` returned
+    `status:"running"` using `openai-api`; after six seconds
+    `/api/project?projectId=narrative-harness` returned
+    `startReadiness:{canStart:true}`, `run.status:"running"`,
+    `runControl.label:"Pause"`, primary action tone `running`, and the same
+    pinned task still `in_progress`/`worker-agent`.
+- Verification:
+  - `CI=true /opt/homebrew/bin/pnpm exec vitest run
+    src/runtime/__tests__/intake.test.ts -t
+    "needs-research-spike|transitions spec_review|does not invent generic child work"`
+    passed `3` focused approval tests.
+  - `CI=true /opt/homebrew/bin/pnpm exec vitest run
+    src/runtime/__tests__/orchestrator.test.ts -t
+    "parent contract evidence|durable-draft recovery|deterministic recovery spec seed|evidence-summary|durable-progress|spec no-progress"`
+    passed `11` focused recovery tests.
+  - `CI=true /opt/homebrew/bin/pnpm exec vitest run
+    src/runtime/__tests__/question-visibility.test.ts
+    src/runtime/__tests__/owner-question-normalizer.test.ts
+    src/runtime/__tests__/project-action-model.test.ts` passed `21` tests
+    after the paused-work regression was added.
+  - `/opt/homebrew/bin/pnpm build` passed before install.
+
+source: codex:narrative-harness-recovered-work-visible-proof-2026-07-04
+
 2026-07-04T07:20:00Z - Re-intake now turns source-grounded Narrative Harness
 Stage 1 work into reviewable specs instead of generic import drafts.
 

@@ -1530,8 +1530,14 @@ describe('Orchestrator.tick — routing', () => {
 
     const out = await orch.tick()
 
-    expect(out.kind).toBe('processed')
-    expect(spec.calls).toHaveLength(1)
+    expect(out).toMatchObject({
+      kind: 'processed',
+      agent: 'coordinator-recovery',
+      beforeStatus: 'exploring',
+      afterStatus: 'spec_review',
+      transitioned: true,
+    })
+    expect(spec.calls).toHaveLength(0)
     const queue = await readQueue()
     const task = queue.tasks[0]!
     expect(task.status).toBe('spec_review')
@@ -1583,8 +1589,14 @@ describe('Orchestrator.tick — routing', () => {
 
     const out = await orch.tick()
 
-    expect(out.kind).toBe('processed')
-    expect(spec.calls).toHaveLength(1)
+    expect(out).toMatchObject({
+      kind: 'processed',
+      agent: 'coordinator-recovery',
+      beforeStatus: 'exploring',
+      afterStatus: 'spec_review',
+      transitioned: true,
+    })
+    expect(spec.calls).toHaveLength(0)
     const queue = await readQueue()
     const task = queue.tasks.find(candidate => candidate.id === 'a')!
     expect(task.status).toBe('spec_review')
@@ -1688,6 +1700,41 @@ describe('Orchestrator.tick — routing', () => {
         'Both — create the missing inventory AND verify the implementation',
       ],
     })
+  })
+
+  it('does not turn evidence-summary bullets into owner-input choices', async () => {
+    await writeQueue([mkTask({
+      id: 'a',
+      status: 'exploring',
+      title: 'Define fixture, expected-record, prototype-run, and evaluation contracts',
+    })])
+    const spec = stubAgent(
+      'spec-agent',
+      undefined,
+      [
+        'Now I have the full picture. This is a Docusaurus documentation site.',
+        '',
+        'The existing schemas already have:',
+        '- `src/schemas/fixture.ts` — `FixtureManifest`, `ExpectedRecordSet`',
+        '- `src/schemas/evaluation.ts` — `PrototypeRun`, `RunEvaluation`',
+        '- `src/schemas/index.ts` — barrel export',
+        '',
+        'Let me now write the product brief and draft the spec.',
+      ].join('\n'),
+    )
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    expect(task.openQuestions ?? []).toHaveLength(0)
+    expect(task.status).toBe('exploring')
+    expect(task.blockReason).toBeUndefined()
   })
 
 
@@ -2652,6 +2699,103 @@ describe('Orchestrator.tick — routing', () => {
     expect(task.spec).not.toContain('Superseded by a task reframe request')
     expect(task.acceptanceCriteria).toHaveLength(3)
     expect(task.notes.some(note => note.content.includes('deterministic recovery spec seed'))).toBe(true)
+  })
+
+  it('writes a deterministic recovery spec seed after repeated durable-draft recovery', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'exploring',
+        title: 'Define fixture, expected-record, prototype-run, and evaluation contracts',
+        description: 'Imported contract work should materialize the named schema and record surfaces directly from the cited docs.',
+        notes: [{
+          agentId: 'coordinator',
+          role: 'recovery',
+          content: 'User restarted the project after the spec agent failed to save a durable draft. Reopened intake so Guildhall can retry from the preserved transcript notes.',
+          timestamp: '2026-07-04T15:06:27.010Z',
+        }],
+      }),
+    ])
+    const spec = stubAgent('spec-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out).toMatchObject({
+      kind: 'processed',
+      taskId: 'a',
+      agent: 'coordinator-recovery',
+      beforeStatus: 'exploring',
+      afterStatus: 'spec_review',
+      transitioned: true,
+    })
+    expect(spec.calls).toHaveLength(0)
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    expect(task.status).toBe('spec_review')
+    expect(task.spec).toContain('## Completion Boundary')
+    expect(task.acceptanceCriteria).toHaveLength(3)
+  })
+
+  it('uses parent contract evidence when seeding a recovered child spec', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'parent',
+        status: 'ready',
+        title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+        spec: [
+          '## Acceptance Criteria',
+          '1. The cited contracts are explicitly defined and usable in code: `FixtureManifest`, `ExpectedRecordSet`, `ExpectedSignal`.',
+          '2. `PrototypeRun`, `RunEvaluation`, and `PacketQualityScore` capture the prototype run and trace evidence.',
+        ].join('\n'),
+        acceptanceCriteria: [{
+          id: 'contracts-defined',
+          description: 'The cited contracts are explicitly defined and usable in code: `FixtureManifest`, `ExpectedRecordSet`, `ExpectedSignal`.',
+          verifiedBy: 'review',
+          met: false,
+        }],
+        hierarchy: { childIds: ['a'], order: 0, relation: 'contains' },
+      }),
+      mkTask({
+        id: 'a',
+        status: 'exploring',
+        title: 'Define fixture, expected-record, prototype-run, and evaluation contracts',
+        description: 'Imported contract work should materialize the named schema and record surfaces directly from the cited docs.',
+        hierarchy: { parentId: 'parent', childIds: [], order: 0, relation: 'decomposes' },
+        notes: [{
+          agentId: 'coordinator',
+          role: 'recovery',
+          content: 'User restarted the project after the spec agent failed to save a durable draft. Reopened intake so Guildhall can retry from the preserved transcript notes.',
+          timestamp: '2026-07-04T15:06:27.010Z',
+        }],
+      }),
+    ])
+    const spec = stubAgent('spec-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out).toMatchObject({
+      kind: 'processed',
+      taskId: 'a',
+      agent: 'coordinator-recovery',
+      afterStatus: 'spec_review',
+    })
+    expect(spec.calls).toHaveLength(0)
+    const queue = await readQueue()
+    const task = queue.tasks.find(candidate => candidate.id === 'a')!
+    expect(task.spec).toContain('Contract terms to account for')
+    expect(task.spec).toContain('`FixtureManifest`')
+    expect(task.spec).toContain('`RunEvaluation`')
+    expect(task.spec).toContain('Do not introduce Rust contracts')
+    expect(task.spec).not.toContain('appropriate repo surface')
+    expect(task.acceptanceCriteria).toHaveLength(4)
   })
 
   it('does not fossilize legacy cropped task titles into recovered specs or briefs', async () => {

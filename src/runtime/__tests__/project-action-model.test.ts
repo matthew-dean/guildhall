@@ -677,4 +677,45 @@ describe('buildProjectActionModel', () => {
       taskId: 'task-smoke-test',
     })
   })
+
+  it('keeps paused live work resumable and pinned to the active task', () => {
+    const model = buildProjectActionModel({
+      startReadiness: {
+        canStart: true,
+        code: 'paused_live_work',
+        message: '"Define fixture contracts" is paused in live work. Resume continues from that pinned task.',
+        actionHref: '/work?task=contract-task',
+        focusTaskId: 'contract-task',
+        focusTaskTitle: 'Define fixture contracts',
+        focusKind: 'paused_work',
+        count: 1,
+      },
+      tasks: [
+        {
+          id: 'contract-task',
+          title: 'Define fixture contracts',
+          description: 'Imported contract work should materialize the named schema and record surfaces.',
+          status: 'in_progress',
+          assignedTo: 'worker-agent',
+          updatedAt: '2026-07-04T15:30:00.000Z',
+        },
+      ],
+      thread: { turns: [], activeTurnId: null },
+      runStatus: 'stopped',
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      source: 'task',
+      label: 'Define fixture contracts',
+      buttonLabel: 'Open Work',
+      href: '/work?task=contract-task',
+      tone: 'accent',
+      taskId: 'contract-task',
+    })
+    expect(model.runControl).toMatchObject({
+      label: 'Resume',
+      startEnabled: true,
+      href: '/work?task=contract-task',
+    })
+  })
 })

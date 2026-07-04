@@ -436,13 +436,31 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
     attemptedSplitMaterialization &&
     !splitMaterialized &&
     task.status === 'spec_review' &&
-    task.taskReadiness?.recommendation === 'ready'
+    (task.taskReadiness?.recommendation === 'ready' || task.taskReadiness?.recommendation === 'needs_research_spike')
   ) {
     transitionTaskStatus({
       task,
       event: 'mark_ready',
       actor: 'human',
       evidenceRefs: ['task:approve-spec'],
+      now,
+    })
+  }
+  if (task.status === 'spec_review' && task.taskReadiness?.recommendation === 'needs_research_spike') {
+    transitionTaskStatus({
+      task,
+      event: 'mark_ready',
+      actor: 'human',
+      evidenceRefs: ['task:approve-spec:research-spike'],
+      now,
+    })
+  }
+  if (task.status === 'spec_review' && isBoundedChildContractWorkWithoutMaterializedChildren(task)) {
+    transitionTaskStatus({
+      task,
+      event: 'mark_ready',
+      actor: 'human',
+      evidenceRefs: ['task:approve-spec:bounded-child-contract'],
       now,
     })
   }
@@ -524,6 +542,15 @@ function shouldKeepFixedSpecRunnable(task: Task): boolean {
     /\bPantry Pulse\b/i.test(text) ||
     task.productBrief?.authoredBy === 'project-reintake'
   )
+}
+
+function isBoundedChildContractWorkWithoutMaterializedChildren(task: Task): boolean {
+  if (!isMaterializableSplitAction(task.sizePlan?.action)) return false
+  if ((task.sizePlan?.recommendedChildren?.length ?? 0) > 0) return false
+  const hasContainingWork = Boolean(task.hierarchy?.parentId) || (task.delivery?.supports?.length ?? 0) > 0
+  if (!hasContainingWork) return false
+  const text = [task.title, task.description, task.spec].filter(Boolean).join('\n')
+  return /\b(contract|schema|fixture|expected-record|prototype-run|evaluation)\b/i.test(text)
 }
 
 function approveReintakeBriefWithSpec(task: Task, now: string): void {

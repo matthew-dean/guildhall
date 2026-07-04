@@ -361,6 +361,53 @@ describe('approveSpec', () => {
     expect(queue.tasks[0]!.status).toBe('ready')
   })
 
+  it('approves needs-research-spike specs when no child work is materialized', async () => {
+    const queue = await readQueue()
+    queue.tasks[0]!.title = 'Define fixture, expected-record, prototype-run, and evaluation contracts'
+    queue.tasks[0]!.hierarchy = { parentId: 'task-parent', childIds: [] }
+    queue.tasks[0]!.spec = [
+      '## Summary',
+      'Define the concrete fixture, expected-record, prototype-run, and evaluation contract surface for this Stage 1 harness work.',
+      '',
+      'Contract terms to account for:',
+      '- `FixtureManifest`',
+      '- `ExpectedRecordSet`',
+      '- `ExpectedSignal`',
+      '- `PrototypeRun`',
+      '- `RunEvaluation`',
+      '- `PacketQualityScore`',
+      '',
+      '## Acceptance Criteria',
+      '1. Given the current schema files and imported parent spec, when this task is implemented, then the repo defines or verifies each relevant contract term listed above without introducing a second parallel contract surface.',
+      '2. Given the Stage 1 fixture harness boundary, when fixture and expected-record contracts are reviewed, then they can express a tiny fiction fixture, author/profile permissions, expected records, and expected signals.',
+      '3. Given the prototype run and evaluation boundary, when run/evaluation contracts are reviewed, then they capture run output, signal evaluation, packet quality or field usage, and trace evidence needed for the first proof loop.',
+      '4. Given the implementation is complete, when the local proof command runs, then Guildhall records the exact command and result against this task before the parent work is treated as satisfied.',
+      '',
+      '## Out of Scope',
+      '- Do not introduce Rust contracts for this TypeScript project.',
+      '- Do not add UI copy or API endpoints for this contract-only child task.',
+      '',
+      '## Completion Boundary',
+      '- Product outcome: Contract terms are represented by concrete TypeScript schema/record contracts and proof evidence.',
+      '- What Guildhall can complete in code: schema/type updates, fixture or evaluation record updates, exports, and local proof scripts/tests needed for this child work.',
+      '- External dependencies: None known.',
+      '- Owner-only setup: None known.',
+      '- Verification environment: the local checkout and repo-local package scripts.',
+      '- What counts as done: the contract terms above are defined or verified, acceptance criteria are checked, and the proof result is recorded.',
+      '- What must be split or blocked: any newly discovered product decision that changes which contracts belong in Stage 1 versus a later stage.',
+    ].join('\n')
+    queue.tasks[0]!.acceptanceCriteria = []
+    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+
+    const result = await approveSpec({ memoryDir, taskId: 'task-001' })
+
+    expect(result.success).toBe(true)
+    expect(result.newStatus).toBe('ready')
+    const updated = await readQueue()
+    expect(updated.tasks[0]!.status).toBe('ready')
+    expect(updated.tasks[0]!.sizePlan?.recommendedChildren ?? []).toEqual([])
+  })
+
   it('persists task readiness and finishability artifacts when a spec is approved', async () => {
     const queue = await readQueue()
     queue.tasks[0]!.proofPaths = [{ id: 'proof-ghost-button' }]

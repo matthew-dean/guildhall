@@ -4743,11 +4743,21 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
 
     if (preflight.providerName !== 'llama-cpp') {
-      return { canStart: true }
+      return await readyStartStatus(
+        input.projectPath,
+        input.requestedTaskId,
+        input.resolvedConfig.id ?? basename(input.projectPath),
+      )
     }
 
     const creds = input.runtimeProvider.credentials
-    if (!creds.llamaCppUrl) return { canStart: true }
+    if (!creds.llamaCppUrl) {
+      return await readyStartStatus(
+        input.projectPath,
+        input.requestedTaskId,
+        input.resolvedConfig.id ?? basename(input.projectPath),
+      )
+    }
 
     const loadedModels = await loadedLlamaModelIds(creds.llamaCppUrl).catch(() => [])
     if (loadedModels.length === 0) {
@@ -4764,17 +4774,31 @@ export function buildServeApp(opts: ServeOptions = {}): {
           loadedModels,
         }
       }
-      return { canStart: true }
+      return await readyStartStatus(
+        input.projectPath,
+        input.requestedTaskId,
+        input.resolvedConfig.id ?? basename(input.projectPath),
+      )
     }
 
     const missingModels = missingAssignedModels(input.resolvedConfig.models, loadedModels)
-    if (missingModels.length === 0) return { canStart: true }
+    if (missingModels.length === 0) {
+      return await readyStartStatus(
+        input.projectPath,
+        input.requestedTaskId,
+        input.resolvedConfig.id ?? basename(input.projectPath),
+      )
+    }
 
     const paidFallback = input.allowPaidProviderFallback
       ? await selectPaidFallbackProvider(creds)
       : null
     if (paidFallback && paidFallback.providerName !== 'none') {
-      return { canStart: true }
+      return await readyStartStatus(
+        input.projectPath,
+        input.requestedTaskId,
+        input.resolvedConfig.id ?? basename(input.projectPath),
+      )
     }
     return {
       canStart: false,
@@ -4785,6 +4809,70 @@ export function buildServeApp(opts: ServeOptions = {}): {
       actionHref: '/providers',
       loadedModels,
       missingModels,
+    }
+  }
+
+  async function readyStartStatus(projectPath: string, requestedTaskId: string | undefined, projectId: string): Promise<{
+    canStart: true
+    code?: string
+    message?: string
+    actionHref?: string
+    focusTaskId?: string
+    focusTaskTitle?: string
+    focusKind?: string
+    count?: number
+  }> {
+    const activeRun = supervisor.get(projectId)
+    if (activeRun?.status === 'running' || activeRun?.status === 'stopping') return { canStart: true }
+    return await startStatusForPausedLiveWork(projectPath, requestedTaskId) ?? { canStart: true }
+  }
+
+  async function startStatusForPausedLiveWork(projectPath: string, requestedTaskId?: string): Promise<{
+    canStart: true
+    code: 'paused_live_work'
+    message: string
+    actionHref: string
+    focusTaskId: string
+    focusTaskTitle: string
+    focusKind: 'paused_work'
+    count: number
+  } | null> {
+    const tasksPath = projectTasksPath(projectPath)
+    if (!existsSync(tasksPath)) return null
+    const queue = await readTaskQueueFileNormalized(tasksPath)
+    const typedQueue = {
+      tasks: queue.tasks as Task[],
+      releases: queue.releases,
+      ...(queue.selectedReleaseId ? { selectedReleaseId: queue.selectedReleaseId } : {}),
+    }
+    const selectedReleaseScope = selectedReleaseScopeForQueue(typedQueue) ?? selectedReleaseScopeFromTaskMembership(typedQueue.tasks)
+    const tasksById = new Map(typedQueue.tasks.map(task => [task.id, task]))
+    const scopedTasks = selectedReleaseScope
+      ? typedQueue.tasks.filter(task => taskEligibleForSelectedScope(task, selectedReleaseScope, { tasksById }).eligible)
+      : typedQueue.tasks
+    const pausedTasks = scopedTasks.filter(task => {
+      if (!task || typeof task !== 'object') return false
+      if (requestedTaskId && task.id !== requestedTaskId) return false
+      return ['in_progress', 'review', 'gate_check'].includes(String(task.status ?? ''))
+    })
+    if (pausedTasks.length === 0) return null
+    const first = pausedTasks
+      .slice()
+      .sort((left, right) => (right.updatedAt ?? '').localeCompare(left.updatedAt ?? ''))[0]!
+    const focusTitle = typeof first.title === 'string' && first.title.trim().length > 0
+      ? first.title.trim()
+      : first.id
+    return {
+      canStart: true,
+      code: 'paused_live_work',
+      message: pausedTasks.length === 1
+        ? `"${focusTitle}" is paused in live work. Resume continues from that pinned task.`
+        : `${pausedTasks.length} live work items are paused. Resume continues from "${focusTitle}".`,
+      actionHref: `/work?task=${encodeURIComponent(first.id)}`,
+      focusTaskId: first.id,
+      focusTaskTitle: focusTitle,
+      focusKind: 'paused_work',
+      count: pausedTasks.length,
     }
   }
 

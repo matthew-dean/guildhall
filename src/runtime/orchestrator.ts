@@ -1411,6 +1411,15 @@ function normalizeFallbackWhitespace(value: string): string {
   return value.replace(/\s+/g, ' ').trim()
 }
 
+function extractBacktickTerms(value: string | undefined | null): string[] {
+  if (!value) return []
+  return uniqueStrings(
+    [...value.matchAll(/`([^`\n]{2,120})`/g)]
+      .map((match) => match[1]?.trim() ?? '')
+      .filter(Boolean),
+  )
+}
+
 function sentenceCaseFallbackQuestion(value: string): string {
   const trimmed = normalizeFallbackWhitespace(value).replace(/\s+\?/g, '?')
   if (!trimmed) return trimmed
@@ -1523,6 +1532,7 @@ function isEvidenceSummaryPrompt(promptBody: string): boolean {
     /^let me (?:piece|synthesize|summarize|recap)\b/.test(normalized) ||
     /^let me check what (?:i|we) know\b/.test(normalized) ||
     /^here'?s what i (?:found|know|learned|asked)\b/.test(normalized) ||
+    /^the existing .+\b(?:has|have|includes?|contains?)\s*:?$/.test(normalized) ||
     /^from (?:the )?transcript (?:notes?|history|context)\b/.test(normalized) ||
     /^what (?:guildhall|i|we) (?:found|know|learned)\b/.test(normalized) ||
     /^what i (?:found|know|learned)\b/.test(normalized)
@@ -9627,7 +9637,7 @@ export class Orchestrator {
     if (taskHasUnansweredVisibleQuestion(task)) return null
     const notes = Array.isArray(task.notes) ? task.notes : []
     const isRecoveryRetry = notes.some((note) =>
-      /reframe requested|fresh spec pass|retry.*spec|rebuild the task/i.test(note.content ?? ''),
+      /reframe requested|fresh spec pass|retry.*spec|rebuild the task|failed to save a durable draft|preserved transcript notes/i.test(note.content ?? ''),
     )
     if (!isRecoveryRetry) return null
 
@@ -9641,13 +9651,78 @@ export class Orchestrator {
     const answeredDecisions = recoverySpecSeedDecisionTexts(liveTask)
     const taskTitle = semanticTaskTitle(liveTask)
     const sourceIntent = formatRecoverySpecSourceIntent(liveTask.description || taskTitle)
+    const parentId = liveTask.hierarchy?.parentId ?? liveTask.delivery?.supports?.[0]
+    const parentTask = parentId ? queue.tasks.find((candidate) => candidate.id === parentId) : undefined
+    const parentSpec = typeof parentTask?.spec === 'string' ? parentTask.spec : ''
+    const contractTerms = uniqueStrings([
+      ...extractBacktickTerms(parentSpec),
+      ...extractBacktickTerms(liveTask.description),
+      ...extractBacktickTerms(liveTask.proposalRationale),
+    ])
+    const parentAcceptance = Array.isArray(parentTask?.acceptanceCriteria)
+      ? parentTask.acceptanceCriteria
+          .map((criterion) => {
+            if (typeof criterion === 'string') return criterion
+            if (criterion && typeof criterion === 'object') {
+              const description = (criterion as { description?: unknown }).description
+              return typeof description === 'string' ? description : ''
+            }
+            return ''
+          })
+          .map((value) => value.trim())
+          .filter(Boolean)
+      : []
+    const contractFocusedSeed =
+      contractTerms.length > 0 &&
+      /contract|schema|fixture|expected-record|prototype-run|evaluation/i.test(taskTitle)
     const decisionLines = answeredDecisions.length > 0
       ? answeredDecisions.map((decision) => `- ${decision}`).join('\n')
       : '- No unresolved owner decisions are recorded on the task.'
     const outOfScope = answeredDecisions
       .filter((decision) => /\bout of scope|separate|not in scope|do not|don't/i.test(decision))
       .map((decision) => `- ${decision}`)
-    const spec = [
+    const spec = contractFocusedSeed ? [
+      '## Summary',
+      `Define the concrete ${taskTitle} surface for this Stage 1 harness work, using the imported parent task as the source of truth instead of restarting open-ended research.`,
+      '',
+      'Source intent:',
+      `- ${sourceIntent}`,
+      ...(parentTask?.title ? [`- Containing work: ${semanticTaskTitle(parentTask)}`] : []),
+      '',
+      'Contract terms to account for:',
+      ...contractTerms.map((term) => `- \`${term}\``),
+      '',
+      'Parent acceptance context:',
+      ...(parentAcceptance.length > 0
+        ? parentAcceptance.slice(0, 6).map((item) => `- ${item}`)
+        : ['- No parent acceptance criteria were available; stay within the child proposal and cited contract terms.']),
+      '',
+      'Resolved owner decisions:',
+      decisionLines,
+      '',
+      '## Acceptance Criteria',
+      `1. Given the current schema files and imported parent spec, when this task is implemented, then the repo defines or verifies each relevant contract term listed above without introducing a second parallel contract surface.`,
+      '2. Given the Stage 1 fixture harness boundary, when fixture and expected-record contracts are reviewed, then they can express a tiny fiction fixture, author/profile permissions, expected records, and expected signals.',
+      '3. Given the prototype run and evaluation boundary, when run/evaluation contracts are reviewed, then they capture run output, signal evaluation, packet quality or field usage, and trace evidence needed for the first proof loop.',
+      '4. Given the implementation is complete, when the local proof command runs, then Guildhall records the exact command and result against this task before the parent work is treated as satisfied.',
+      '',
+      '## Out of Scope',
+      '- Do not introduce Rust contracts for this TypeScript project.',
+      '- Do not add UI copy or API endpoints for this contract-only child task.',
+      '- Do not expand into later-stage story intelligence beyond the contracts named by the parent/import evidence.',
+      '',
+      '## Open Questions',
+      '- None known from the current task record. If a real product decision is missing, ask one direct question with a question mark and concrete choices.',
+      '',
+      '## Completion Boundary',
+      `- Product outcome: ${taskTitle} is represented by concrete TypeScript schema/record contracts and proof evidence in the Narrative Harness project.`,
+      '- What Guildhall can complete in code: schema/type updates, fixture or evaluation record updates, exports, and local proof scripts/tests needed for this child work.',
+      '- External dependencies: None known from the current task record.',
+      '- Owner-only setup: None known.',
+      '- Verification environment: the local Narrative Harness checkout and repo-local package scripts.',
+      '- What counts as done: the contract terms above are defined or verified, acceptance criteria are checked, and the proof result is recorded.',
+      '- What must be split or blocked: any newly discovered product decision that changes which contracts belong in Stage 1 versus a later stage.',
+    ].join('\n') : [
       '## Summary',
       `Build ${taskTitle} from the current project evidence, preserving the source intent: ${sourceIntent}`,
       '',
