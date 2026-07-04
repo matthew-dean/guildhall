@@ -647,3 +647,29 @@ test('task drawer direct route renders tabs and closes to the overview backgroun
   await expect(page).toHaveURL(/\/projects\/looma-knit\/overview$/)
   await expect(page.getByRole('region', { name: 'Project overview' })).toBeVisible()
 })
+
+test('Narrative Harness re-intake apply remains visible in the project map', async ({ page }) => {
+  const rerun = await page.request.post('/api/project/reintake/rerun?projectId=narrative-harness')
+  expect(rerun.ok()).toBe(true)
+  const draftPayload = await rerun.json()
+  expect(draftPayload.draft?.selectedReleaseId).toBe('stage-1-fixture-and-evaluation-harness')
+
+  const apply = await page.request.post('/api/project/reintake/apply?projectId=narrative-harness')
+  expect(apply.ok()).toBe(true)
+
+  const detailResponse = await page.request.get('/api/project?projectId=narrative-harness')
+  expect(detailResponse.ok()).toBe(true)
+  const detail = await detailResponse.json()
+  expect(detail.orientationSpine?.summary?.selectedReleaseLabel).toBe('Stage 1: Fixture And Evaluation Harness')
+  expect(detail.orientationSpine?.summary?.includedWorkCount).toBeGreaterThanOrEqual(6)
+  expect(detail.orientationSpine?.summary?.deferredWorkCount).toBeGreaterThanOrEqual(2)
+
+  await page.goto('/projects/narrative-harness/map')
+  const projectMap = page.locator('.project-map')
+  await expect(projectMap.getByText('Stage 1: Fixture And Evaluation Harness').first()).toBeVisible()
+  await expect(projectMap.getByText('Define fixture, expected-record, prototype-run, and evaluation schemas.').first()).toBeVisible()
+  await expect(projectMap.getByText('Implement dialogue-and-character-voice reviewer lane').first()).toBeVisible()
+  await expect(projectMap.getByText('Implement scene-and-chapter-intelligence reviewer lane').first()).toBeVisible()
+  await expect(projectMap.getByText('implementation-roadmap.md').first()).toBeVisible()
+  await expect(projectMap.getByText('remaining-spec-decomposition-inventory.md').first()).toBeVisible()
+})

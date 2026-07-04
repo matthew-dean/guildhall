@@ -803,7 +803,7 @@ async function collectProjectReintakeSources(projectPath: string): Promise<Array
       } catch {
         continue
       }
-      if (!/Deliverable|Foundation|Consumer|should say|missing/i.test(content)) continue
+      if (!/Deliverable|Foundation|Consumer|should say|missing|Recommended first task title|Stage alignment|Current Next Milestone/i.test(content)) continue
       sources.push({ path: relative(projectPath, absolute) || entry.name, content })
     }
   }

@@ -394,6 +394,55 @@ function narrativeHarnessReleaseQueue() {
   }
 }
 
+function narrativeHarnessRoadmapDoc() {
+  return [
+    '# Implementation Roadmap',
+    '',
+    '## Stage 1: Fixture And Evaluation Harness',
+    '',
+    'Goal: build a no-UI test harness that proves the story-memory and packet contracts against small fiction fixtures before any product UI is designed.',
+    '',
+    'Deliverables:',
+    '',
+    '- fixture directory shape for at least one small story fixture',
+    '- typed fixture and expected-record contracts',
+    '- prototype run record contract',
+    '',
+    '## Current Next Milestone',
+    '',
+    'The next milestone is Stage 1: Fixture And Evaluation Harness.',
+    '',
+    'The first Guildhall starter tasks should be:',
+    '',
+    '1. Define fixture, expected-record, prototype-run, and evaluation schemas.',
+    '2. Add the first tiny fiction fixture and human-authored expected records.',
+    '3. Implement a no-UI runner that builds a packet from fixture records.',
+    '4. Add deterministic evaluation output that reports missing, noisy, stale, and useful context.',
+    '5. Generate a developer-readable debug report for each run.',
+    '6. Use the first run to narrow the MVP story-memory schema.',
+    '',
+    'Stage 2 should wait until Stage 1 has enough fixture evidence to prove which records and packet fields are actually useful.',
+  ].join('\n')
+}
+
+function narrativeHarnessInventoryDoc() {
+  return [
+    '# Remaining Spec Decomposition Inventory',
+    '',
+    '### 2.2 `dialogue-and-character-voice.md`',
+    '',
+    '- **Recommended first task title:** Implement dialogue-and-character-voice reviewer lane',
+    '- **Recommended domain:** coherence',
+    '- **Stage alignment:** Stage 2 (Agent Coordination)',
+    '',
+    '### 2.7 `scene-and-chapter-intelligence.md`',
+    '',
+    '- **Recommended first task title:** Implement scene-and-chapter-intelligence reviewer lane',
+    '- **Recommended domain:** coherence',
+    '- **Stage alignment:** Stage 2 (Agent Coordination)',
+  ].join('\n')
+}
+
 function loomaKnitReleaseQueue() {
   const projectPath = join(projectsRoot, 'looma-knit')
   const releaseId = 'stage-1-v1-release-hardening'
@@ -706,6 +755,18 @@ const projects = [
     id: 'narrative-harness',
     name: 'Narrative Harness',
     taskQueue: narrativeHarnessReleaseQueue(),
+    files: [
+      {
+        dir: 'docs/harness',
+        path: 'docs/harness/implementation-roadmap.md',
+        content: narrativeHarnessRoadmapDoc(),
+      },
+      {
+        dir: 'docs/harness',
+        path: 'docs/harness/remaining-spec-decomposition-inventory.md',
+        content: narrativeHarnessInventoryDoc(),
+      },
+    ],
   },
   {
     id: 'linecraft',

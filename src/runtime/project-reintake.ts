@@ -28,6 +28,8 @@ export interface ProjectReintakeDraft {
   createdBy: 'project-reintake'
   status: 'draft' | 'applied' | 'dismissed'
   taskQueueFingerprint: string
+  selectedReleaseId?: string
+  releases?: ProjectReintakeReleaseDraft[]
   sources: Array<{ path: string; kind: string }>
   summary: {
     kept: number
@@ -69,11 +71,24 @@ export interface ReintakeTaskDraft {
   title: string
   description: string
   domain: string
-  status: 'import_draft'
+  status: 'import_draft' | 'shelved'
   priority: 'critical' | 'high' | 'normal' | 'low'
   dependsOn: string[]
   acceptanceCriteria: Task['acceptanceCriteria']
+  references?: string[]
+  releaseIds?: string[]
+  stageAlignment?: string
   proofPaths?: unknown[]
+}
+
+export interface ProjectReintakeReleaseDraft {
+  id: string
+  label: string
+  kind: 'release'
+  state: 'active'
+  source: 'release_plan'
+  nodeIds: string[]
+  deferredNodeIds: string[]
 }
 
 export interface ProjectReintakeApplyResult {
@@ -86,6 +101,7 @@ export function planProjectReintake(input: ProjectReintakeInput): ProjectReintak
   const now = input.now ?? new Date().toISOString()
   const groups: ReintakeChangeGroup[] = []
   const usedTaskIds = new Set<string>()
+  const selectedRelease = detectSelectedRelease(input.sources)
   const protectedProgressTaskIds = new Set(input.tasks
     .filter(task => isStartedOrCompletedTask(task))
     .map(task => stringField(task, 'id'))
@@ -120,6 +136,7 @@ export function planProjectReintake(input: ProjectReintakeInput): ProjectReintak
       { ...task, dependsOn: task.dependsOn.filter(dependency => !completedTaskIds.has(dependency)) },
       graphPlan.reconciliations,
       input.tasks,
+      selectedRelease,
     ))
   if (graphChanges.length > 0) {
     groups.push({
@@ -187,12 +204,14 @@ export function planProjectReintake(input: ProjectReintakeInput): ProjectReintak
     })
   }
 
+  const releases = selectedRelease ? releaseDraftsFor(selectedRelease, groups) : []
   return {
     id: `reintake-${now.replace(/[^0-9A-Za-z]/g, '').slice(0, 14)}`,
     createdAt: now,
     createdBy: 'project-reintake',
     status: 'draft',
     taskQueueFingerprint: fingerprint(input.tasks),
+    ...(selectedRelease && releases.length > 0 ? { selectedReleaseId: selectedRelease.id, releases } : {}),
     sources: input.sources.map(source => ({ path: source.path, kind: 'source' })),
     summary: summarize(groups),
     groups,
@@ -244,6 +263,7 @@ export async function applyProjectReintakeDraft(input: {
       applyChange(queue.tasks, change, now)
     }
   }
+  applyReleaseDrafts(queue, draft, groups)
 
   queue.lastUpdated = now
   await writeManagedTextFile(queuePath, JSON.stringify(queue, null, 2), 'utf-8')
@@ -359,11 +379,12 @@ function graphTaskChange(
   task: EvidenceTask,
   reconciliations: EvidenceReconciliation[],
   existingTasks: Array<Record<string, unknown>>,
+  selectedRelease: SelectedRelease | null,
 ): ReintakeChange {
   const reframe = reconciliations.find(change =>
     'existingTaskId' in change && change.existingTaskId === task.id,
   ) as { existingTaskId?: string; reason?: string } | undefined
-  const draft = evidenceTaskToDraft(task)
+  const draft = evidenceTaskToDraft(task, selectedRelease)
 
   if (reframe) {
     const existing = existingTasks.find(candidate => stringField(candidate, 'id') === task.id)
@@ -387,13 +408,14 @@ function graphTaskChange(
   }
 }
 
-function evidenceTaskToDraft(task: EvidenceTask): ReintakeTaskDraft {
+function evidenceTaskToDraft(task: EvidenceTask, selectedRelease: SelectedRelease | null): ReintakeTaskDraft {
+  const later = selectedRelease ? taskIsAfterSelectedRelease(task, selectedRelease) : false
   return {
     id: task.id,
     title: task.title,
     description: evidenceTaskDescription(task),
     domain: task.targetArea,
-    status: 'import_draft',
+    status: later ? 'shelved' : 'import_draft',
     priority: evidenceTaskPriority(task),
     dependsOn: task.dependsOn,
     acceptanceCriteria: task.acceptanceCriteria.map(criterion => ({
@@ -402,8 +424,118 @@ function evidenceTaskToDraft(task: EvidenceTask): ReintakeTaskDraft {
       verifiedBy: criterion.id.includes('automated') || criterion.id.includes('regression') ? 'automated' : 'review',
       met: false,
     })),
+    references: unique(task.sourceRefs.map(ref => ref.path)),
+    ...(later || !selectedRelease ? {} : { releaseIds: [selectedRelease.id] }),
+    ...(task.stageAlignment ? { stageAlignment: task.stageAlignment } : {}),
     proofPaths: task.proofPaths,
   }
+}
+
+type SelectedRelease = {
+  id: string
+  label: string
+  stageNumber: number
+}
+
+function detectSelectedRelease(sources: ProjectReintakeSource[]): SelectedRelease | null {
+  for (const source of sources) {
+    const current = source.content.match(/##\s+Current Next Milestone[\s\S]{0,500}?The next milestone is\s+(Stage\s+(\d+)(?::\s*([^.\n]+))?)/i)
+    if (!current?.[1] || !current[2]) continue
+    const stagePrefix = `Stage ${Number(current[2])}`
+    const labelFromCurrent = current[3]?.trim() ? `${stagePrefix}: ${current[3].trim()}` : null
+    const label = labelFromCurrent ?? matchingStageHeading(source.content, Number(current[2])) ?? stagePrefix
+    return {
+      id: slugify(label),
+      label,
+      stageNumber: Number(current[2]),
+    }
+  }
+  return null
+}
+
+function matchingStageHeading(content: string, selectedStageNumber: number): string | null {
+  const re = /^##\s+(Stage\s+(\d+)\s*:\s*.+?)\s*$/gim
+  let match: RegExpExecArray | null
+  while ((match = re.exec(content)) !== null) {
+    if (match[2] && Number(match[2]) === selectedStageNumber) {
+      return match[1]?.trim() ?? null
+    }
+  }
+  return null
+}
+
+function taskIsAfterSelectedRelease(task: EvidenceTask, selectedRelease: SelectedRelease): boolean {
+  const alignedStage = stageNumber(task.stageAlignment)
+  return alignedStage !== null && alignedStage > selectedRelease.stageNumber
+}
+
+function stageNumber(value: string | undefined): number | null {
+  if (!value) return null
+  const match = /\bstage\s+(\d+)\b/i.exec(value)
+  return match?.[1] ? Number(match[1]) : null
+}
+
+function releaseDraftsFor(selectedRelease: SelectedRelease, groups: ReintakeChangeGroup[]): ProjectReintakeReleaseDraft[] {
+  const nodeIds: string[] = []
+  const deferredNodeIds: string[] = []
+  for (const change of groups.flatMap(group => group.changes)) {
+    const task = change.kind === 'create' ? change.task : change.kind === 'reframe' ? change.after : null
+    if (!task) continue
+    const nodeId = `work:${task.id}`
+    if (task.status === 'shelved') {
+      deferredNodeIds.push(nodeId)
+    } else if (task.releaseIds?.includes(selectedRelease.id)) {
+      nodeIds.push(nodeId)
+    }
+  }
+  if (nodeIds.length === 0 && deferredNodeIds.length === 0) return []
+  return [{
+    id: selectedRelease.id,
+    label: selectedRelease.label,
+    kind: 'release',
+    state: 'active',
+    source: 'release_plan',
+    nodeIds: unique(nodeIds),
+    deferredNodeIds: unique(deferredNodeIds),
+  }]
+}
+
+function applyReleaseDrafts(
+  queue: { selectedReleaseId?: string; releases?: ProjectReintakeReleaseDraft[]; tasks: Array<Record<string, unknown>> },
+  draft: ProjectReintakeDraft,
+  groups: ReintakeChangeGroup[],
+): void {
+  if (!draft.selectedReleaseId || !draft.releases?.length) return
+  const appliedTaskIds = new Set<string>()
+  for (const change of groups.flatMap(group => group.changes)) {
+    if (change.kind === 'create') appliedTaskIds.add(change.task.id)
+    if (change.kind === 'reframe') appliedTaskIds.add(change.taskId)
+  }
+  if (appliedTaskIds.size === 0) return
+
+  const releaseDrafts = draft.releases
+    .map(release => ({
+      ...release,
+      nodeIds: release.nodeIds.filter(nodeId => appliedTaskIds.has(nodeId.replace(/^work:/, ''))),
+      deferredNodeIds: release.deferredNodeIds.filter(nodeId => appliedTaskIds.has(nodeId.replace(/^work:/, ''))),
+    }))
+    .filter(release => release.nodeIds.length > 0 || release.deferredNodeIds.length > 0)
+  if (releaseDrafts.length === 0) return
+
+  queue.selectedReleaseId = queue.selectedReleaseId ?? draft.selectedReleaseId
+  const existing = new Map((queue.releases ?? []).map(release => [release.id, release]))
+  for (const release of releaseDrafts) {
+    const prior = existing.get(release.id)
+    existing.set(release.id, prior
+      ? {
+          ...release,
+          ...prior,
+          nodeIds: unique([...(prior.nodeIds ?? []), ...release.nodeIds]),
+          deferredNodeIds: unique([...(prior.deferredNodeIds ?? []), ...release.deferredNodeIds]),
+        }
+      : release)
+  }
+  queue.releases = Array.from(existing.values())
 }
 
 function duplicateMergeChanges(tasks: Array<Record<string, unknown>>): ReintakeMergeChange[] {
@@ -568,6 +700,18 @@ function stringField(source: Record<string, unknown>, key: string): string | und
 
 function normalize(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+}
+
+function slugify(value: string): string {
+  return value
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')
+}
+
+function unique<T>(values: T[]): T[] {
+  return Array.from(new Set(values))
 }
 
 function isStartedOrCompletedTask(task: Record<string, unknown>): boolean {

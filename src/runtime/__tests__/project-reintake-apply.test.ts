@@ -84,6 +84,16 @@ const narrativeRoadmap = [
   '1. Define fixture, expected-record, prototype-run, and evaluation schemas.',
 ].join('\n')
 
+const narrativeRemainingInventory = [
+  '# Remaining Spec Decomposition Inventory',
+  '',
+  '### 2.2 `dialogue-and-character-voice.md`',
+  '',
+  '- **Recommended first task title:** Implement dialogue-and-character-voice reviewer lane',
+  '- **Recommended domain:** coherence',
+  '- **Stage alignment:** Stage 2 (Agent Coordination)',
+].join('\n')
+
 describe('project re-intake apply', () => {
   it('applies reframes in place and appends a re-intake note', async () => {
     const memoryDir = await makeState([
@@ -211,6 +221,51 @@ describe('project re-intake apply', () => {
         reason: expect.stringContaining('starter-task sequence'),
       }),
     })
+  })
+
+  it('persists current release scope, later work, and source refs when applying Narrative Harness re-intake', async () => {
+    const memoryDir = await makeState([])
+    const draft = planProjectReintake({
+      now,
+      sources: [
+        { path: 'docs/harness/implementation-roadmap.md', content: narrativeRoadmap },
+        { path: 'docs/harness/remaining-spec-decomposition-inventory.md', content: narrativeRemainingInventory },
+      ],
+      tasks: [],
+    })
+    await writeProjectReintakeDraft(memoryDir, draft)
+
+    const result = await applyProjectReintakeDraft({ memoryDir, now })
+    expect(result.success).toBe(true)
+
+    const queue = await readQueue(memoryDir) as {
+      selectedReleaseId?: string
+      releases?: Array<{ id: string; label: string; nodeIds?: string[]; deferredNodeIds?: string[] }>
+      tasks: Array<Record<string, any>>
+    }
+    const currentTask = queue.tasks.find(task => task.title === 'Define fixture, expected-record, prototype-run, and evaluation schemas.')
+    const laterTask = queue.tasks.find(task => task.title === 'Implement dialogue-and-character-voice reviewer lane')
+
+    expect(queue.selectedReleaseId).toBe('stage-1-fixture-and-evaluation-harness')
+    expect(queue.releases).toEqual([
+      expect.objectContaining({
+        id: 'stage-1-fixture-and-evaluation-harness',
+        label: 'Stage 1: Fixture And Evaluation Harness',
+        nodeIds: expect.arrayContaining([`work:${currentTask?.id}`]),
+        deferredNodeIds: expect.arrayContaining([`work:${laterTask?.id}`]),
+      }),
+    ])
+    expect(currentTask).toMatchObject({
+      releaseIds: ['stage-1-fixture-and-evaluation-harness'],
+      references: ['docs/harness/implementation-roadmap.md'],
+      status: 'import_draft',
+    })
+    expect(laterTask).toMatchObject({
+      status: 'shelved',
+      references: ['docs/harness/remaining-spec-decomposition-inventory.md'],
+      stageAlignment: 'stage 2 (agent coordination)',
+    })
+    expect(laterTask?.releaseIds ?? []).toEqual([])
   })
 
   it('archives without deleting and creates graph tasks with dependency proof fields', async () => {

@@ -12,6 +12,57 @@ This is the active browser test plan for the Guildhall project surface. Keep it
 updated while auditing the active test project so another agent can resume
 without guessing.
 
+2026-07-04T05:03:55Z - Proved Narrative Harness re-intake can repopulate scoped
+release truth and make it visible in the Project Map.
+
+- Work id: `codex:narrative-harness-reintake-visible-release-proof-2026-07-04`.
+- User job: when bad Narrative Harness tasks are regenerated from planning
+  history, Guildhall should persist the current release boundary, preserve
+  source provenance, defer later-stage work, and show that structure in the UI.
+  The user should not need repo access, hidden CLI output, or Codex inference to
+  understand what happened.
+- Failure reproduced:
+  - `applyProjectReintakeDraft()` created/reframed tasks but dropped release
+    membership, source refs, and stage alignment.
+  - A rendered re-intake rerun/apply could show `Stage 1: Fixture And
+    Evaluation Harness`, but deferred Stage 2 reviewer lanes were absent because
+    source collection ignored recommendation/inventory docs.
+- Fix:
+  - Evidence graph tasks now carry `stageAlignment`.
+  - Re-intake drafts now include selected release metadata and task fields for
+    `references`, `releaseIds`, and later-stage `shelved` scope.
+  - Applying re-intake writes `selectedReleaseId` and `releases` into
+    `TASKS.json`, with current `nodeIds` and deferred `deferredNodeIds`.
+  - Re-intake source collection includes docs with `Recommended first task
+    title`, `Stage alignment`, and `Current Next Milestone`, so decomposition
+    inventories participate in safe regeneration.
+- Visible proof:
+  - Rendered route test calls
+    `POST /api/project/reintake/rerun?projectId=narrative-harness`, then
+    `POST /api/project/reintake/apply?projectId=narrative-harness`.
+  - `/api/project?projectId=narrative-harness` returns selected release
+    `Stage 1: Fixture And Evaluation Harness`, at least six included work
+    items, and at least two deferred work items.
+  - `/projects/narrative-harness/map` visibly shows the Stage 1 release, current
+    schema task, later reviewer lanes `Implement dialogue-and-character-voice
+    reviewer lane` and `Implement scene-and-chapter-intelligence reviewer
+    lane`, plus source docs `implementation-roadmap.md` and
+    `remaining-spec-decomposition-inventory.md`.
+- Verification:
+  - `/opt/homebrew/bin/pnpm vitest run src/runtime/__tests__/project-reintake.test.ts
+    src/runtime/__tests__/project-reintake-apply.test.ts
+    src/runtime/__tests__/evidence-work-graph-intake.test.ts
+    src/runtime/__tests__/workspace-importer.test.ts
+    src/runtime/workspace-import/__tests__/detect.test.ts
+    src/runtime/workspace-import/__tests__/hypothesis.test.ts` passed `189`
+    tests.
+  - `/opt/homebrew/bin/pnpm exec playwright test
+    tests/rendered-ui/project-flow.spec.ts` passed `36` tests.
+  - `/opt/homebrew/bin/pnpm build` passed.
+  - `/opt/homebrew/bin/pnpm lint:contracts` passed.
+
+source: codex:narrative-harness-reintake-visible-release-proof-2026-07-04
+
 2026-07-04T04:12:35Z - Proved Looma + Knit release truth is restored and visible
 in the project map instead of only existing in recovered task data.
 

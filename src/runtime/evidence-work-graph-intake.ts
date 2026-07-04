@@ -43,6 +43,7 @@ export type EvidenceTask = {
   acceptanceCriteria: Array<{ id: string; description: string; verifiedBy?: string }>
   proofPaths: Array<{ kind: 'command' | 'review' | 'browser'; command?: string; expectedEvidence?: string[]; source?: 'documented' | 'inferred' }>
   status?: string
+  stageAlignment?: string
   supersedesVagueIntake?: boolean
 }
 
@@ -475,6 +476,7 @@ function buildImplementationTask(unit: EvidenceUnit, existingMatch?: ExistingTas
     acceptanceCriteria: implementationAcceptanceCriteria(unit),
     proofPaths: implementationProofPaths(unit),
     status: supersedesVagueIntake ? 'spec_review' : undefined,
+    ...(unit.stageAlignment ? { stageAlignment: unit.stageAlignment } : {}),
     supersedesVagueIntake,
   }
 }
