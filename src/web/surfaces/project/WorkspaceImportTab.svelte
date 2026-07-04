@@ -145,6 +145,7 @@
       domain: string
       priority: 'critical' | 'high' | 'normal' | 'low'
       references?: readonly string[]
+      scope?: 'current' | 'later'
     }>
     milestones: Array<{ title: string; evidence: string }>
   }
@@ -345,6 +346,12 @@
   )
   const completedTaskImport = $derived(data?.taskStatus === 'done' && !completedImport)
   const completedParsedTaskCount = $derived(data?.parsed?.tasks?.length ?? 0)
+  const completedApprovedCurrentTaskCount = $derived(
+    data?.parsed?.tasks?.filter(task => task.scope !== 'later').length ?? 0,
+  )
+  const completedApprovedLaterTaskCount = $derived(
+    data?.parsed?.tasks?.filter(task => task.scope === 'later').length ?? 0,
+  )
   const completedMissingParsedTasks = $derived.by(() => {
     const parsedTasks = data?.parsed?.tasks ?? []
     const currentTasks = project.detail?.tasks ?? []
@@ -358,6 +365,23 @@
   const completedParsedMilestoneCount = $derived(data?.parsed?.milestones?.length ?? data?.detected?.review?.totalMilestones ?? 0)
   const completedCurrentTaskCount = $derived(data?.detected?.review?.totalCurrentTaskCandidates ?? 0)
   const completedLaterTaskCount = $derived(data?.detected?.review?.totalLaterTaskCandidates ?? 0)
+  const completedDetectedTaskCount = $derived(data?.detected?.review?.totalTaskCandidates ?? 0)
+  const completedImportDrift = $derived(
+    completedTaskImport &&
+    completedMissingTaskCount === 0 &&
+    completedDetectedTaskCount > 0 &&
+    (
+      completedParsedTaskCount !== completedDetectedTaskCount ||
+      completedApprovedCurrentTaskCount !== completedCurrentTaskCount ||
+      completedApprovedLaterTaskCount !== completedLaterTaskCount
+    ),
+  )
+  const completedImportDriftSummary = $derived(
+    `Saved import: ${completedParsedTaskCount} task${completedParsedTaskCount === 1 ? '' : 's'} ` +
+    `(${completedApprovedCurrentTaskCount} now, ${completedApprovedLaterTaskCount} later). ` +
+    `Current notes: ${completedDetectedTaskCount} task${completedDetectedTaskCount === 1 ? '' : 's'} ` +
+    `(${completedCurrentTaskCount} now, ${completedLaterTaskCount} later).`,
+  )
 
   function selectArea(key: string) {
     const area = areaGroups.find(item => item.key === key)
@@ -781,11 +805,15 @@
         goalsRecorded: j.goalsRecorded ?? completedParsedGoalCount,
         milestonesLogged: j.milestonesLogged ?? completedParsedMilestoneCount,
       }
-      toast.success(
-        (j.tasksAdded ?? 0) > 0
-          ? `Restored ${j.tasksAdded} draft task${j.tasksAdded === 1 ? '' : 's'} from the completed import.`
-          : 'Import is already landed.',
-      )
+      if (completedImportDrift) {
+        toast.success('Refreshed the import from the current project notes.')
+      } else {
+        toast.success(
+          (j.tasksAdded ?? 0) > 0
+            ? `Restored ${j.tasksAdded} draft task${j.tasksAdded === 1 ? '' : 's'} from the completed import.`
+            : 'Import is already landed.',
+        )
+      }
       await project.refresh()
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e))
@@ -935,7 +963,13 @@
           </p>
           <div class="metric-row" aria-label="Completed import summary">
             {#if completedParsedTaskCount > 0}
-              <Chip label={`${completedParsedTaskCount} proposed task${completedParsedTaskCount === 1 ? '' : 's'}`} tone="ok" />
+              <Chip
+                label={`${completedParsedTaskCount} saved task${completedParsedTaskCount === 1 ? '' : 's'}`}
+                tone={completedImportDrift ? 'warn' : 'ok'}
+              />
+            {/if}
+            {#if completedImportDrift}
+              <Chip label={`${completedDetectedTaskCount} current-note task${completedDetectedTaskCount === 1 ? '' : 's'}`} tone="ok" />
             {/if}
             {#if completedCurrentTaskCount > 0}
               <Chip label={`${completedCurrentTaskCount} now`} tone="ok" />
@@ -974,9 +1008,20 @@
             {/if}
           </div>
         {/if}
+        {#if completedImportDrift}
+          <div class="repair-guidance" aria-label="Import refresh needed">
+            <p>
+              The saved import no longer matches the project notes Guildhall reads now.
+            </p>
+            <p>{completedImportDriftSummary}</p>
+            <p>
+              Refreshing replaces stale imported drafts with the current detected scope, including the current/later split.
+            </p>
+          </div>
+        {/if}
         {#if completedMissingTaskCount > 0}
           <p class="learned-note">
-            {completedMissingTaskCount} proposed task{completedMissingTaskCount === 1 ? '' : 's'} from this import
+            {completedMissingTaskCount} saved task{completedMissingTaskCount === 1 ? '' : 's'} from this import
             {completedMissingTaskCount === 1 ? ' is' : ' are'} missing from Work.
           </p>
           <div class="repair-guidance" aria-label="Import repair guidance">
@@ -989,7 +1034,7 @@
           </div>
         {:else if completedParsedTaskCount > 0}
           <p class="learned-note">
-            All proposed tasks from this completed import already exist in Work.
+            All saved tasks from this completed import already exist in Work.
           </p>
         {/if}
         <Row justify="end" gap="3" wrap>
@@ -1000,7 +1045,11 @@
           <Button variant="secondary" onclick={() => nav(projectActionHref('/work'))}>
             Open Work
           </Button>
-          {#if completedMissingTaskCount > 0}
+          {#if completedImportDrift}
+            <Button variant="primary" onclick={restoreCompletedImportDrafts} disabled={busy !== null}>
+              {busy === 'approve' ? 'Refreshing...' : 'Refresh import from current notes'}
+            </Button>
+          {:else if completedMissingTaskCount > 0}
             <Button variant="primary" onclick={restoreCompletedImportDrafts} disabled={busy !== null}>
               {busy === 'approve' ? 'Restoring...' : `Restore ${completedMissingTaskCount} missing draft${completedMissingTaskCount === 1 ? '' : 's'}`}
             </Button>

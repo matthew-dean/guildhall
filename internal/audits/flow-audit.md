@@ -15696,6 +15696,65 @@ of merely preparing schedulable work.
 
 source: codex:narrative-harness-reintake-spec-specificity-2026-07-04
 
+2026-07-04T17:58:00Z - Exposed and repaired stale workspace-import scope drift
+for Looma + Knit.
+
+- Work id: `codex:workspace-import-stale-scope-refresh-2026-07-04`.
+- User job: when an already-approved import no longer matches the project notes
+  Guildhall reads now, the project owner must see that mismatch as a model
+  problem with a direct refresh action. Guildhall must not blend old saved
+  import totals with new current/later detector totals and call that a coherent
+  project state.
+- Data-model diagnosis:
+  - The saved import snapshot and the current detected import snapshot can
+    legitimately diverge, but the UI treated both as one completed-import
+    summary.
+  - Looma + Knit had `252` approved imported tasks, all counted as current,
+    while the current detector read `73` tasks split into `48` now and `25`
+    later.
+  - That mismatch is the same class of failure as the broader release/scope
+    confusion: too many ledgers can claim to summarize current work without one
+    authoritative "current imported scope" state.
+- Fix:
+  - Completed import cards now detect saved-vs-current import drift when the
+    saved parsed task count or now/later split disagrees with the current
+    detected scope.
+  - Drifted imports show saved counts beside current-note counts, explain the
+    mismatch, and offer `Refresh import from current notes`.
+  - Completed imports now consistently label approved tasks as saved tasks, not
+    proposed tasks.
+  - Ponytail follow-up: collapse this further into a shared import-scope summary
+    model so Overview, Map, Work, and Workspace Import do not each reconcile
+    saved/imported/detected/release counts locally.
+- Live repair proof:
+  - Before refresh, `/api/project/workspace-import/status?projectId=looma-knit`
+    returned approved `252` tasks with `252` current and `0` later, while
+    detected returned `73` tasks with `48` current and `25` later.
+  - Browser proof on
+    `/projects/looma-knit/workspace-import` showed the stale warning,
+    `252 SAVED TASKS`, `73 CURRENT-NOTE TASKS`, the saved/current-note count
+    explanation, and no horizontal overflow at `1280x820`.
+  - The first refresh attempt correctly refused to mutate old state until the
+    required `0.11.0/execution-planning-decomposition` migration was applied.
+  - After `guildhall migrate apply looma-knit --migration 0.11.0/execution-planning-decomposition`,
+    refreshing the import returned `{"ok":true,"tasksAdded":29,...}`.
+  - After refresh, workspace-import status returned approved `73` tasks with
+    `48` current and `25` later, matching detected exactly.
+  - Installed browser proof then showed `73 SAVED TASKS`, `48 NOW`, `25 LATER`,
+    no stale warning, no refresh button, no `73 PROPOSED TASKS`, and no
+    horizontal overflow at `1280x820`.
+- Installed-app proof:
+  - Rebuilt and installed the current branch with `/opt/homebrew/bin/pnpm build`
+    and `/opt/homebrew/bin/pnpm dev:install`.
+  - Restarted Guildhall; `/api/stale-server` returned `stale:false` for
+    `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+- Verification:
+  - `CI=true /opt/homebrew/bin/pnpm exec vitest run src/web/surfaces/project/__tests__/WorkspaceImportTab.svelte.test.ts`
+    passed `14` tests.
+  - `git diff --check` passed.
+
+source: codex:workspace-import-stale-scope-refresh-2026-07-04
+
 2026-07-04T14:57:00Z - Recovered Narrative Harness spec no-progress work and
 fixed the project action model so Guildhall communicates the actual shaped
 work item, not only the containing parent.

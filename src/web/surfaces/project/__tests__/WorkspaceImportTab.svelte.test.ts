@@ -404,7 +404,7 @@ describe('WorkspaceImportTab', () => {
 
     await screen.findByText('This project import has already been approved.')
     expect(screen.queryByText(/Found planning notes/)).toBeNull()
-    expect(screen.getByText('2 proposed tasks')).toBeTruthy()
+    expect(screen.getByText('2 saved tasks')).toBeTruthy()
     expect(screen.getByText('1 now')).toBeTruthy()
     expect(screen.getByText('1 later')).toBeTruthy()
     expect(screen.getByLabelText('Completed import scope summary')).toBeTruthy()
@@ -487,8 +487,75 @@ describe('WorkspaceImportTab', () => {
     render(WorkspaceImportTab)
 
     await screen.findByText('This project import has already been approved.')
-    expect(screen.getByText('All proposed tasks from this completed import already exist in Work.')).toBeTruthy()
+    expect(screen.getByText('All saved tasks from this completed import already exist in Work.')).toBeTruthy()
     expect(screen.queryByRole('button', { name: /restore/i })).toBeNull()
+  })
+
+  it('offers a refresh when a completed import no longer matches current detected scope', async () => {
+    const completedDraft = structuredClone(detectedDraft)
+    completedDraft.taskStatus = 'done'
+    completedDraft.parsed = {
+      goals: [],
+      tasks: [
+        {
+          id: 'task-old-a',
+          title: 'Old current task A',
+          description: '',
+          domain: 'editor',
+          priority: 'high',
+          references: [],
+          scope: 'current',
+        },
+        {
+          id: 'task-old-b',
+          title: 'Old current task B',
+          description: '',
+          domain: 'editor',
+          priority: 'normal',
+          references: [],
+          scope: 'current',
+        },
+        {
+          id: 'task-old-c',
+          title: 'Old current task C',
+          description: '',
+          domain: 'editor',
+          priority: 'normal',
+          references: [],
+          scope: 'current',
+        },
+      ],
+      milestones: [],
+    }
+    project.detail = {
+      id: 'looma-knit',
+      name: 'Looma + Knit',
+      path: '/repo/looma-knit',
+      tasks: [
+        { id: 'task-old-a', title: 'Old current task A', status: 'ready' },
+        { id: 'task-old-b', title: 'Old current task B', status: 'ready' },
+        { id: 'task-old-c', title: 'Old current task C', status: 'ready' },
+      ],
+    } as never
+    const { calls } = installFetchFakes(completedDraft)
+
+    render(WorkspaceImportTab)
+
+    await screen.findByText('This project import has already been approved.')
+    expect(screen.getByText('3 saved tasks')).toBeTruthy()
+    expect(screen.getByText('2 current-note tasks')).toBeTruthy()
+    expect(screen.getByLabelText('Import refresh needed')).toBeTruthy()
+    expect(screen.getByText(/Saved import: 3 tasks \(3 now, 0 later\)/)).toBeTruthy()
+    expect(screen.getByText(/Current notes: 2 tasks \(1 now, 1 later\)/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /restore/i })).toBeNull()
+
+    await userEvent.click(screen.getByRole('button', { name: /refresh import from current notes/i }))
+
+    await waitFor(() => {
+      const refreshCall = calls.find(call => call.url.startsWith('/api/project/workspace-import/approve'))
+      expect(refreshCall).toBeDefined()
+      expect(refreshCall?.body).toEqual({ projectId: 'looma-knit' })
+    })
   })
 
   it('lets users narrow sources and individual imported tasks before creating drafts', async () => {
