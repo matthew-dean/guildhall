@@ -348,6 +348,33 @@ describe('evidence-to-work-graph intake', () => {
     expect(plan.tasks.every(task => task.kind === 'implementation')).toBe(true)
   })
 
+  it('does not fold indented completion annotations into current milestone task titles', () => {
+    const plan = planEvidenceWorkGraph({
+      sources: [{
+        path: 'docs/harness/implementation-roadmap.md',
+        content: [
+          '# Implementation Roadmap',
+          '',
+          '## Stage 1: Fixture And Evaluation Harness',
+          '',
+          '## Current Next Milestone',
+          '',
+          'The next milestone is Stage 1: Fixture And Evaluation Harness.',
+          '',
+          '1. Use the first run to narrow the MVP story-memory schema.',
+          '   ✓ Completed — see [mvp-story-memory-schema-narrowing.md](../specs/mvp-story-memory-schema-narrowing.md)',
+          '     and the updated [schema-contract-roadmap.md](../specs/schema-contract-roadmap.md#mvp-contract-boundary).',
+        ].join('\n'),
+      }],
+      existingTasks: [],
+    })
+
+    expect(plan.tasks.filter(task => task.kind === 'implementation').map(task => task.title)).toEqual([
+      'Use the first run to narrow the MVP story-memory schema.',
+    ])
+    expect(JSON.stringify(plan.tasks)).not.toContain('Completed')
+  })
+
   it('extracts recommended implementation tasks from decomposition inventories instead of treating spec docs as inert context', () => {
     const plan = planEvidenceWorkGraph({
       sources: [{ path: 'docs/harness/remaining-spec-decomposition-inventory.md', content: narrativeRemainingInventoryEvidence }],

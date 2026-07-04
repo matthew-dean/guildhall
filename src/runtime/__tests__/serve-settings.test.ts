@@ -4156,6 +4156,100 @@ describe('Workspace Import review endpoints', () => {
     expect(body.startReadiness?.code).not.toBe('workspace_import_refresh_needed')
   })
 
+  it('does not report import drift when an indented completion note follows an already saved current task', async () => {
+    await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'harness', 'implementation-roadmap.md'),
+      [
+        '# Implementation Roadmap',
+        '',
+        '## Stage 1: Fixture And Evaluation Harness',
+        '',
+        '## Current Next Milestone',
+        '',
+        'The next milestone is Stage 1: Fixture And Evaluation Harness.',
+        '',
+        '1. Use the first run to narrow the MVP story-memory schema.',
+        '   ✓ Completed — see [mvp-story-memory-schema-narrowing.md](../specs/mvp-story-memory-schema-narrowing.md)',
+        '     and the updated [schema-contract-roadmap.md](../specs/schema-contract-roadmap.md#mvp-contract-boundary).',
+      ].join('\n'),
+      'utf8',
+    )
+    await fs.writeFile(path.join(tmpDir, 'package.json'), JSON.stringify({ name: 'clean-completion-note' }), 'utf8')
+    await writeSystemText(
+      'TASKS.json',
+      JSON.stringify(
+        {
+          version: 1,
+          lastUpdated: '2026-01-01T00:00:00.000Z',
+          tasks: [
+            {
+              id: 'task-workspace-import',
+              title: 'Review existing project work',
+              description: 'Reserved importer',
+              domain: '_workspace_import',
+              projectPath: tmpDir,
+              status: 'done',
+              priority: 'normal',
+              acceptanceCriteria: [],
+              dependsOn: [],
+              outOfScope: [],
+              spec: [
+                '```yaml',
+                'tasks:',
+                '  - id: task-import-1v2ehs',
+                '    title: Use the first run to narrow the MVP story-memory schema.',
+                '    description: Saved current task.',
+                '    domain: harness',
+                '    priority: high',
+                '    references:',
+                '      - docs/harness/implementation-roadmap.md',
+                '```',
+              ].join('\n'),
+              createdAt: '2026-01-01T00:00:00.000Z',
+              updatedAt: '2026-01-01T00:00:00.000Z',
+            },
+            {
+              id: 'task-import-1v2ehs',
+              title: 'Use the first run to narrow the MVP story-memory schema.',
+              description: 'Saved current task.',
+              domain: 'harness',
+              projectPath: tmpDir,
+              status: 'done',
+              priority: 'high',
+              acceptanceCriteria: [],
+              dependsOn: [],
+              outOfScope: [],
+              references: [
+                'docs/harness/implementation-roadmap.md',
+              ],
+              createdAt: '2026-01-01T00:00:00.000Z',
+              updatedAt: '2026-01-01T00:00:00.000Z',
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+    )
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(scoped('/api/project')))
+    expect(res.status).toBe(200)
+    const body = await res.json() as {
+      startReadiness?: { canStart?: boolean; code?: string; message?: string; actionHref?: string }
+      orientationSpine?: { summary?: { headline?: string; topBlocker?: string; nextAction?: string } }
+    }
+    expect(body.startReadiness?.message ?? '').not.toContain('Completed')
+    expect(body.startReadiness?.code).not.toBe('workspace_import_refresh_needed')
+    expect(body.startReadiness).toMatchObject({
+      canStart: false,
+      code: 'all_terminal',
+    })
+    expect(body.orientationSpine?.summary?.headline ?? '').not.toContain('needs import refresh')
+    expect(body.orientationSpine?.summary?.topBlocker ?? '').not.toBe('Workspace import is under-scoped.')
+  })
+
   it('treats documented spec-to-task coverage links as real structural coverage', async () => {
     await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
     await fs.mkdir(path.join(tmpDir, 'docs', 'specs'), { recursive: true })

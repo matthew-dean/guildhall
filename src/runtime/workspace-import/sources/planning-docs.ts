@@ -220,8 +220,17 @@ function logicalMarkdownLines(raw: string): string[] {
       logicalLines.push(line)
       continue
     }
-    while (index + 1 < physicalLines.length && isListContinuationLine(physicalLines[index + 1] ?? '')) {
-      line = `${line.trimEnd()} ${(physicalLines[index + 1] ?? '').trim()}`
+    while (index + 1 < physicalLines.length) {
+      const nextLine = physicalLines[index + 1] ?? ''
+      if (isListCompletionAnnotation(nextLine.trim())) {
+        index += 1
+        while (index + 1 < physicalLines.length && isListMetadataContinuationLine(physicalLines[index + 1] ?? '')) {
+          index += 1
+        }
+        continue
+      }
+      if (!isListContinuationLine(nextLine)) break
+      line = `${line.trimEnd()} ${nextLine.trim()}`
       index += 1
     }
     logicalLines.push(line)
@@ -247,7 +256,18 @@ function isWrappedLabelContinuationLine(line: string): boolean {
 function isListContinuationLine(line: string): boolean {
   if (!/^\s{2,}\S/.test(line)) return false
   const trimmed = line.trim()
+  if (isListCompletionAnnotation(trimmed)) return false
   return !/^(?:#{1,6}\s+|\|(?:.+)\||[-*]\s+(?:\[[xX ]\]\s+)?|\d+\.\s+)/.test(trimmed)
+}
+
+function isListMetadataContinuationLine(line: string): boolean {
+  if (!/^\s{2,}\S/.test(line)) return false
+  const trimmed = line.trim()
+  return !/^(?:#{1,6}\s+|\|(?:.+)\||[-*]\s+(?:\[[xX ]\]\s+)?|\d+\.\s+)/.test(trimmed)
+}
+
+function isListCompletionAnnotation(trimmed: string): boolean {
+  return /^(?:[✓✔✅]\s*)?(?:completed?|done|shipped|verified|proof|evidence)\b/i.test(trimmed)
 }
 
 function summarizeMarkdownAfterTitle(raw: string): string {

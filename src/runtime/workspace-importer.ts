@@ -799,6 +799,10 @@ function parsedTaskShadowsDetectedTask(
   )
 }
 
+function taskTitleContainsCompletionMetadata(title: string): boolean {
+  return /\b(?:completed?|done|shipped|verified|proof|evidence)\b/i.test(title)
+}
+
 function parsedTaskShadowsEvidenceTask(
   parsedTask: ParsedTask,
   evidenceTask: EvidenceTask,
@@ -955,10 +959,11 @@ export function mergeWorkspaceImportDraft(
       const resolvedReleaseIds = preserveDetectedScope
         ? task.releaseIds ?? parsedTask.releaseIds
         : parsedTask.releaseIds ?? task.releaseIds
+      const useParsedTaskIdentity = exactTitleMatch || taskTitleContainsCompletionMetadata(task.title)
       mergedTasks.push({
         ...task,
-        suggestedId: exactTitleMatch ? parsedTask.id : task.suggestedId,
-        title: exactTitleMatch ? parsedTask.title : task.title,
+        suggestedId: useParsedTaskIdentity ? parsedTask.id : task.suggestedId,
+        title: useParsedTaskIdentity ? parsedTask.title : task.title,
         description: resolvedDescription,
         ...(resolvedWhyThisMayMatter ? { whyThisMayMatter: resolvedWhyThisMayMatter } : {}),
         ...(resolvedAssumptions && resolvedAssumptions.length > 0 ? { assumptions: [...resolvedAssumptions] } : {}),

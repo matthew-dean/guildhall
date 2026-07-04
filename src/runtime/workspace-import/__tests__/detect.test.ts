@@ -1079,6 +1079,8 @@ The next milestone is Stage 1: Fixture And Evaluation Harness.
       join(dir, 'docs', 'harness', 'implementation-roadmap.md'),
       `# Implementation Roadmap
 
+## Stage 1: Fixture And Evaluation Harness
+
 ## Current Next Milestone
 
 The next milestone is Stage 1: Fixture And Evaluation Harness.
@@ -1113,6 +1115,44 @@ The next milestone is Stage 1: Fixture And Evaluation Harness.
       expect.objectContaining({
         kind: 'open_work',
         title: 'Implement dialogue-and-character-voice reviewer lane',
+      }),
+    ]))
+  })
+
+  it('does not fold indented completion annotations into current milestone task titles', async () => {
+    mkdirSync(join(dir, 'docs', 'harness'), { recursive: true })
+    writeFileSync(
+      join(dir, 'docs', 'harness', 'implementation-roadmap.md'),
+      `# Implementation Roadmap
+
+## Current Next Milestone
+
+The next milestone is Stage 1: Fixture And Evaluation Harness.
+
+1. Use the first run to narrow the MVP story-memory schema.
+   ✓ Completed — see [mvp-story-memory-schema-narrowing.md](../specs/mvp-story-memory-schema-narrowing.md)
+     and the updated [schema-contract-roadmap.md](../specs/schema-contract-roadmap.md#mvp-contract-boundary).
+`,
+    )
+
+    const sigs = await planningDocsSource.detect({
+      projectPath: dir,
+      exec: fakeExec(() => ({
+        stdout: ['docs/harness/implementation-roadmap.md'].join('\n'),
+        code: 0,
+      })),
+    })
+
+    expect(sigs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'open_work',
+        title: 'Use the first run to narrow the MVP story-memory schema.',
+      }),
+    ]))
+    expect(sigs).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'open_work',
+        title: expect.stringContaining('Completed'),
       }),
     ]))
   })
@@ -1507,6 +1547,50 @@ describe('detectWorkspaceSignals (composition)', () => {
     expect(inv.bySource['readme']!).toHaveLength(1)
     expect(inv.bySource['roadmap']!).toHaveLength(1)
     expect(inv.bySource['text-corpus']!).toHaveLength(3)
+  })
+
+  it('does not promote indented completion annotations into active work from any built-in source', async () => {
+    mkdirSync(join(dir, 'docs', 'harness'), { recursive: true })
+    mkdirSync(join(dir, 'docs', 'specs'), { recursive: true })
+    writeFileSync(
+      join(dir, 'docs', 'harness', 'implementation-roadmap.md'),
+      `# Implementation Roadmap
+
+## Stage 1: Fixture And Evaluation Harness
+
+## Current Next Milestone
+
+The next milestone is Stage 1: Fixture And Evaluation Harness.
+
+1. Use the first run to narrow the MVP story-memory schema.
+   ✓ Completed — see [mvp-story-memory-schema-narrowing.md](../specs/mvp-story-memory-schema-narrowing.md)
+     and the updated [schema-contract-roadmap.md](../specs/schema-contract-roadmap.md#mvp-contract-boundary).
+`,
+    )
+    writeFileSync(join(dir, 'docs', 'specs', 'schema-contract-roadmap.md'), '# Schema Contract Roadmap\n')
+    const inv = await detectWorkspaceSignals({
+      projectPath: dir,
+      exec: fakeExec(() => ({
+        stdout: [
+          'docs/harness/implementation-roadmap.md',
+          'docs/specs/schema-contract-roadmap.md',
+        ].join('\n'),
+        code: 0,
+      })),
+    })
+
+    expect(inv.signals).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'open_work',
+        title: 'Use the first run to narrow the MVP story-memory schema.',
+      }),
+    ]))
+    expect(inv.signals).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'open_work',
+        title: expect.stringContaining('Completed'),
+      }),
+    ]))
   })
 
   it('does not abort the batch when one source throws', async () => {
