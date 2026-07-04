@@ -250,7 +250,7 @@ Proof 2026-07-04: `project-orientation-spine.test.ts` now proves a stale parent 
 - Modify: `tests/rendered-ui/project-flow.spec.ts`
 - Modify: `tests/rendered-ui/flow-audit-assertions.ts`
 
-- [ ] **Step 1: Keep rendered fixtures aligned with projection semantics**
+- [x] **Step 1: Keep rendered fixtures aligned with projection semantics**
 
 The Narrative Harness fixture must seed:
 
@@ -261,15 +261,22 @@ The Narrative Harness fixture must seed:
 - child status `in_progress`
 - fake provider state in `.playwright-fixtures/home/.guildhall` so provider setup does not mask project communication tests
 
+Status 2026-07-04: rendered Narrative Harness fixtures now seed the selected
+Stage 1 release, current/deferred work, materialized child work, and provider
+state needed for orientation proof.
+
 - [ ] **Step 2: Extend rendered assertion helper**
 
 Add a helper that fetches `/api/project`, then asserts Overview, Map, Release, and Work render the same selected scope, counts, run-control label, pinned task, blocker state, and source trail.
 
-- [ ] **Step 3: Replace hard-coded stale blocker assertions**
+- [x] **Step 3: Replace hard-coded stale blocker assertions**
 
 Tests should assert exact values only when they are part of the fixture contract, such as `includedWorkCount: 6`. Counts that may vary with later fixture expansion, like deferred work, should be read from the API and verified in the UI.
 
-- [ ] **Step 4: Run rendered proof**
+Status 2026-07-04: the rendered proof now asserts projection-backed visible
+state instead of the stale parent brief-cleanup blocker.
+
+- [x] **Step 4: Run rendered proof**
 
 Run:
 
@@ -279,12 +286,14 @@ CI=true /opt/homebrew/bin/pnpm exec playwright test tests/rendered-ui/project-fl
 
 Expected: pass, with the UI showing Stage 1, six work items in view, deferred count from API, Resume, `Shape fixture and expected-record ground truth`, implementation-roadmap source trail, and no fake spec-review or brief-cleanup blocker.
 
+Proof 2026-07-04: `CI=true /opt/homebrew/bin/pnpm exec playwright test tests/rendered-ui/project-flow.spec.ts -g "Narrative Harness overview and map show"` passed before the installed-app proof pass.
+
 ## Task 5: Installed-App Narrative Harness Proof
 
 **Files:**
 - Modify: `internal/audits/flow-audit.md`
 
-- [ ] **Step 1: Install and restart**
+- [x] **Step 1: Install and restart**
 
 Run:
 
@@ -298,7 +307,10 @@ curl -s http://localhost:7777/api/stale-server
 
 Expected: `stale:false`.
 
-- [ ] **Step 2: Query live Narrative Harness state**
+Proof 2026-07-04: build, install, stop/start passed and
+`/api/stale-server` returned `stale:false` for PID `3980`.
+
+- [x] **Step 2: Query live Narrative Harness state**
 
 Run:
 
@@ -314,11 +326,26 @@ Expected:
 - false brief/spec-review blockers are absent.
 - release readiness blocker counts match projection rows.
 
-- [ ] **Step 3: Run browser or rendered UI proof**
+Proof 2026-07-04: live `/api/project?projectId=narrative-harness` returned
+`startReadiness.code:"paused_live_work"`, `runControl.label:"Resume"`, selected
+release `Stage 1: Fixture And Evaluation Harness`, `includedWorkCount:6`,
+`deferredWorkCount:8`, `progress.active:1`, `topBlocker:null`,
+`release.state:"active"`, and zero orientation release blockers. Live
+`/api/project/release-readiness?projectId=narrative-harness` returned
+`ready:false` with six unfinished ready tasks and zero human/brief/spec
+blockers, proving the distinction between ready-to-run and ready-to-close.
+
+- [x] **Step 3: Run browser or rendered UI proof**
 
 Prefer in-app browser screenshots when available. If the browser tool times out, use rendered Playwright screenshots and explicitly record that limitation.
 
-- [ ] **Step 4: Update flow audit**
+Proof 2026-07-04: installed-app Playwright proof at
+`/projects/narrative-harness/map` confirmed visible `Project map`, `Stage 1:
+Fixture And Evaluation Harness`, `Scope ledger`, the scoped task `Define
+fixture, expected-record, prototype-run, and evaluation schemas.`, and `Source
+trail`.
+
+- [x] **Step 4: Update flow audit**
 
 Record:
 
@@ -330,4 +357,33 @@ Record:
 
 ## Self-Review
 
-This plan intentionally does not persist a new schema first. The immediate failure mode is inconsistent interpretation of existing persisted fields, so the first move is a canonical read model. A later schema migration can collapse duplicated release membership fields only after the projection proves the semantics and compatibility readers are stable.
+This plan intentionally did not persist a new schema first. The immediate
+failure mode was inconsistent interpretation of existing persisted fields, so
+the first move was a canonical read model.
+
+That is no longer enough as the whole solution. Live proof caught
+`ProjectScopeProjection.release.state` using `ready` to mean runnable unfinished
+work while `/api/project/release-readiness.ready` meant closeable release. That
+is exactly the kind of sync pressure that comes from a model that stores scope
+membership across `ProjectRelease.nodeIds`, `ProjectRelease.deferredNodeIds`,
+`Task.releaseIds`, hierarchy links, task status, and side-channel git/design
+checks, then asks every surface to reconstruct "what is current" and "can it
+close."
+
+The next architecture step should be a persisted scope membership and execution
+boundary model:
+
+- `Scope` remains optional/user-facing. A project can have no named releases,
+  one active release, many future releases, milestones, or arbitrary markers.
+- Each scope has explicit membership rows: work id, included/deferred role,
+  reason/source, user-facing visibility, and whether descendants are included.
+- Task hierarchy remains pure containment. It should not double as release
+  membership, execution eligibility, or progress semantics.
+- Execution state remains derived from task/runtime evidence, but the selected
+  execution boundary should point at a scope and produce `readyToRun` separately
+  from `readyToClose`.
+- Release/closure readiness should consume the same membership rows plus
+  closure gates; it should not reinterpret raw task fields.
+
+Until that migration exists, `ProjectScopeProjection` is the compatibility
+read model and the only acceptable place to reconcile legacy fields.

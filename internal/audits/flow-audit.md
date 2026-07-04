@@ -28,6 +28,17 @@ projection instead of separate scope/readiness guesses.
   - The first fix is not a new persisted schema. It is a canonical runtime read
     model, `ProjectScopeProjection`, that normalizes those fields into scoped
     rows, counts, start summary, and release blockers.
+  - Follow-up live proof showed the projection was still carrying one overloaded
+    word: `release.state:"ready"` meant "there is runnable scoped work" while
+    `/api/project/release-readiness.ready` meant "the scope can close." That is
+    a real model smell, not a copy problem. The projection now reserves release
+    `ready` for included scoped work that is already terminal enough to close,
+    and reports runnable unfinished scope as `active`.
+  - This pass proves a runtime read model helps, but it should not be the final
+    architecture. Guildhall still needs a persisted scope-membership/execution
+    boundary model so release membership, current/later assignment, task
+    hierarchy, execution handoff, and closure readiness are not reconstructed
+    from overlapping fields on every route.
 - Fix:
   - Added `src/runtime/project-scope-projection.ts` with selected-scope
     resolution, task node ids, eligibility, row handoff state, start summary,
@@ -46,6 +57,12 @@ projection instead of separate scope/readiness guesses.
     serve layer provides it, orientation summary progress, release state, and
     release blockers follow the projection instead of stale per-view
     release-readiness guesses.
+  - `ProjectScopeProjection.release.state` no longer calls a release ready just
+    because ready-to-run tasks exist; runnable unfinished work is `active`, and
+    release `ready` means the scoped work is terminal.
+  - Release readiness bridges projection and legacy approval accounting with the
+    larger human-blocker count while approval semantics are still split between
+    the projection and release-readiness compatibility fields.
   - The spine now exposes `scopeRows`, and Project Map renders those rows as a
     `Scope ledger` using existing `Card`, `CardList`, `CardListItem`, and
     `Chip` primitives. Each row shows Now/Later, handoff state, inclusion
@@ -72,6 +89,30 @@ projection instead of separate scope/readiness guesses.
     passed `11` focused tests.
   - `CI=true /opt/homebrew/bin/pnpm exec vitest run src/runtime/__tests__/project-scope-projection.test.ts src/runtime/__tests__/project-orientation-spine.test.ts src/runtime/__tests__/serve-release-readiness.test.ts src/runtime/__tests__/serve-settings.test.ts -t "brief cleanup|ready tasks with a spec|selected release|paused_live_work|rolls active internal child"`
     passed `10` focused tests after the orientation projection handoff.
+  - `CI=true /opt/homebrew/bin/pnpm exec vitest run src/runtime/__tests__/project-scope-projection.test.ts src/runtime/__tests__/project-orientation-spine.test.ts src/runtime/__tests__/serve-release-readiness.test.ts`
+    passed `58` focused tests after separating runnable-work readiness from
+    release-closure readiness.
+  - Installed-app proof after `pnpm build`, `pnpm dev:install`, `guildhall
+    stop`, and `guildhall start`: `/api/stale-server` returned `stale:false`
+    for PID `59949` with matching boot/current build mtimes.
+  - Live `/api/project?projectId=narrative-harness` now returns
+    `startReadiness.code:"paused_live_work"`,
+    `actionModel.runControl.label:"Resume"`,
+    `orientationSpine.summary.selectedReleaseLabel:"Stage 1: Fixture And
+    Evaluation Harness"`, `includedWorkCount:6`, `deferredWorkCount:8`,
+    `progress.active:1`, `topBlocker:null`, `release.state:"active"`, and
+    zero orientation release blockers.
+  - Live `/api/project/release-readiness?projectId=narrative-harness` returns
+    `ready:false`, `statusCounts.ready:6`, zero human/brief/spec blockers,
+    `unfinishedCount:6`, `designSystemBlockingCount:1`,
+    `dirtyCheckoutBlockingCount:1`, and `gitStoryBlockingCount:11`. This is
+    the intended distinction: scoped work can resume, but the release cannot
+    close yet.
+  - Installed UI proof with Playwright at
+    `/projects/narrative-harness/map` confirmed visible `Project map`, `Stage
+    1: Fixture And Evaluation Harness`, `Scope ledger`, the scoped task
+    `Define fixture, expected-record, prototype-run, and evaluation schemas.`,
+    and `Source trail`.
 
 2026-07-04T16:34:00Z - Orientation summary now follows paused Narrative
 Harness live work instead of stale parent cleanup copy.

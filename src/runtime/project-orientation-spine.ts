@@ -841,7 +841,7 @@ function progressFromScopeProjection(
     scopeId,
     total: fallback.total,
     ready: projection.counts.ready,
-    active: projection.counts.active,
+    active: Math.max(projection.counts.active, fallback.active),
     done: projection.counts.done,
     blocked: projection.counts.ownerBlocked + projection.counts.proofBlocked,
     deferred: fallback.deferred,

@@ -115,6 +115,23 @@ describe('buildProjectScopeProjection', () => {
       humanBlocking: false,
     })
     expect(projection.release.blockers).toEqual([])
+    expect(projection.release.state).toBe('active')
+  })
+
+  it('marks the release ready only after included scoped work is done', () => {
+    const projection = buildProjectScopeProjection(queue([
+      task({
+        id: 'task-contracts',
+        title: 'Done scoped task',
+        status: 'done',
+        completedAt: now,
+      }),
+    ]))
+
+    expect(projection.release).toMatchObject({
+      state: 'ready',
+      blockers: [],
+    })
   })
 
   it('blocks genuinely thin ready work as brief cleanup', () => {

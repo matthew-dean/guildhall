@@ -1885,7 +1885,7 @@ function summarizeScopedReleaseWork(
     shelvedUnclaimed,
     blockedByAgent,
     releaseBlockers: projectionReleaseBlockers.length > 0 ? projectionReleaseBlockers : [...releaseBlockersById.values()],
-    humanBlockingCount: scopeProjection.counts.humanBlocking || humanBlockingKeys.size,
+    humanBlockingCount: Math.max(scopeProjection.counts.humanBlocking, humanBlockingKeys.size),
     unfinishedCount,
     scopedTasks,
   }

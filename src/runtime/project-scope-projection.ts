@@ -406,6 +406,7 @@ function summarizeStart(rows: readonly ProjectScopeRow[], selectedScope: Project
 }
 
 function summarizeRelease(rows: readonly ProjectScopeRow[]): ProjectScopeProjection['release'] {
+  const included = rows.filter(row => row.scope === 'included')
   const blockers = rows
     .filter(row => row.scope === 'included' && row.blocksRelease)
     .map(row => ({
@@ -414,11 +415,12 @@ function summarizeRelease(rows: readonly ProjectScopeRow[]): ProjectScopeProject
       label: blockerLabelFor(row),
     }))
   if (blockers.length > 0) return { state: 'blocked', blockers }
-  if (rows.some(row => row.scope === 'included' && (row.handoffState === 'paused' || row.handoffState === 'review'))) {
+  if (included.length === 0) return { state: 'unknown', blockers: [] }
+  if (included.every(row => row.handoffState === 'done')) return { state: 'ready', blockers: [] }
+  if (included.some(row => row.handoffState === 'not_shaped' || row.handoffState === 'brief_cleanup')) return { state: 'shaping', blockers: [] }
+  if (included.some(row => row.handoffState === 'ready' || row.handoffState === 'paused' || row.handoffState === 'review' || row.handoffState === 'spec_review')) {
     return { state: 'active', blockers: [] }
   }
-  if (rows.some(row => row.scope === 'included' && row.handoffState === 'ready')) return { state: 'ready', blockers: [] }
-  if (rows.some(row => row.scope === 'included' && row.handoffState === 'not_shaped')) return { state: 'shaping', blockers: [] }
   return { state: 'unknown', blockers: [] }
 }
 
