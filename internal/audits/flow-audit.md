@@ -13135,6 +13135,61 @@ project folders whose parent path is not itself a Git repository.
 
 source: codex:workspace-import-child-git-roots-2026-07-04
 
+2026-07-04T19:55:00Z - Added explicit release-boundary selection from Project
+Map so Start/Resume can be understood as running the selected scope.
+
+- Work id: `codex:project-map-release-selection-2026-07-04`.
+- User job: in the 1,000-foot project map, a project owner should be able to
+  tell which release/scope Guildhall is currently working and deliberately
+  switch to a different existing release when they want Start/Resume bounded to
+  that release instead.
+- Fix:
+  - Added `POST /api/project/release/select` for project-scoped release
+    selection. The endpoint only accepts an existing release id and rewrites
+    `selectedReleaseId` in `TASKS.json`; it does not create or infer releases.
+  - Project Map release roadmap rows now use existing `CardListItem`, `Chip`,
+    and `Button` primitives. The selected release remains labeled `Selected`;
+    other releases get a compact `Select` action.
+  - After selection, Project Map asks `ProjectView` to refresh the shared
+    project snapshot, so the selected release, scope ledger, and runner-visible
+    boundary stay aligned.
+- Contract Touch Decision:
+  - Work id: `codex:project-map-release-selection-2026-07-04`.
+  - Touched contracts: project-scoped API surface (`/api/project/release/select`),
+    owner-visible Project Map UI component, `TASKS.json.selectedReleaseId`
+    write behavior.
+  - Contracts considered but not touched: release container schema, task schema,
+    start/run payloads, release readiness response schema. The existing
+    `selectedReleaseId` field already drives selected-scope execution.
+  - Required follow-up: browser proof after installed restart; later UX work
+    may add richer release-management editing, but this slice intentionally
+    only selects among existing releases.
+  - Proof required: server endpoint test proving persisted selection, UI test
+    proving Project Map calls the scoped API and refreshes, build, contract
+    detector, installed-app proof.
+  - Proof provided so far:
+    - `./node_modules/.bin/vitest run src/web/surfaces/project/__tests__/ProjectMapTab.svelte.test.ts src/runtime/__tests__/serve-settings.test.ts -t "ProjectMapTab|selects the current release boundary|applies structural map review actions"`
+      passed `5` focused tests.
+    - `CI=true pnpm build` passed.
+    - `CI=true pnpm lint:contracts` passed after this Contract Touch
+      Decision was recorded.
+    - Installed app proof after `CI=true pnpm dev:install`, `guildhall stop`,
+      and `guildhall start`: `/api/stale-server` returned `stale:false`.
+    - Reversible live API proof on Looma + Knit: selected release changed from
+      `stage-1-v1-release-hardening` to
+      `stage-2-looma-primitive-convergence`; `/api/project/spine` then reported
+      Stage 2 selected; selecting the original id restored Stage 1 and spine
+      again reported `stage-1-v1-release-hardening`.
+    - Browser proof on `/projects/looma-knit/map` at `1280x820`: `Project map`
+      rendered `Release roadmap` with `8` release rows, exactly one `Selected`
+      row for `Stage 1: V1 Release Hardening`, `7` `Select` buttons for the
+      other releases, and no page-level horizontal overflow
+      (`clientWidth:1280`, `scrollWidth:1280`).
+  - Apply/revert behavior: revert the API helper/route plus Project Map button
+    wiring to return to display-only release roadmap behavior.
+
+source: codex:project-map-release-selection-2026-07-04
+
 2026-07-04T18:35:00Z - Corrected workspace import so future release
 deliverables remain project-map skeleton instead of becoming fake runnable
 tasks.

@@ -8,16 +8,19 @@
   import UtilityPanel from '../../lib/UtilityPanel.svelte'
   import { friendlyStatus } from '../../lib/display.js'
   import { nav, path } from '../../lib/nav.svelte.js'
-  import { currentProjectHref, currentTaskHref, projectActionHref } from '../../lib/project-routes.js'
+  import { currentProjectHref, currentTaskHref, projectActionHref, projectFetch } from '../../lib/project-routes.js'
   import type { ProjectDetail, ProjectOrientationNode, ProjectOrientationSpine } from '../../lib/types.js'
 
   interface Props {
     detail: ProjectDetail
     activeProjectId?: string | null
+    onReleaseSelected?: () => void | Promise<void>
   }
 
-  let { detail, activeProjectId = null }: Props = $props()
+  let { detail, activeProjectId = null, onReleaseSelected }: Props = $props()
   let showInternalSteps = $state(false)
+  let selectingReleaseId = $state<string | null>(null)
+  let releaseSelectionError = $state<string | null>(null)
 
   type Tone = 'neutral' | 'ok' | 'warn' | 'danger' | 'accent'
   const MAX_SKELETON_ROOTS = 12
@@ -282,6 +285,26 @@
     return pieces.join(' · ') || 'No work assigned yet'
   }
 
+  async function selectRelease(release: { id?: string; label?: string }): Promise<void> {
+    if (!release.id || release.id === selectedReleaseId || selectingReleaseId) return
+    selectingReleaseId = release.id
+    releaseSelectionError = null
+    try {
+      const response = await projectFetch('/api/project/release/select', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ releaseId: release.id }),
+      }, activeProjectId)
+      const payload = await response.json().catch(() => ({})) as { error?: string }
+      if (!response.ok) throw new Error(payload.error ?? `HTTP ${response.status}`)
+      await onReleaseSelected?.()
+    } catch (err) {
+      releaseSelectionError = err instanceof Error ? err.message : String(err)
+    } finally {
+      selectingReleaseId = null
+    }
+  }
+
   function collectSourceNodes(spine: ProjectOrientationSpine): ProjectOrientationNode[] {
     const nodes: ProjectOrientationNode[] = []
     const seen = new Set<string>()
@@ -438,6 +461,9 @@
 
     {#if releaseRoadmap.length > 0}
       <Card title="Release roadmap" titleTag="h2" padding="compact" density="dense" className="release-roadmap-card">
+        {#if releaseSelectionError}
+          <p class="form-error" role="alert">{releaseSelectionError}</p>
+        {/if}
         <CardList className="release-roadmap-list">
           {#each releaseRoadmap as release (release.id ?? release.label)}
             <CardListItem className="release-roadmap-row" tone={releaseTone(release)} railStrength={release.id === selectedReleaseId ? 'strong' : 'subtle'} dense>
@@ -445,6 +471,11 @@
                 <Chip label={release.id === selectedReleaseId ? 'Selected' : friendlyStatus(release.state ?? 'planned')} tone={releaseTone(release)} />
                 <strong>{release.label ?? 'Untitled release'}</strong>
                 <p>{releaseSummary(release)}</p>
+                {#if release.id && release.id !== selectedReleaseId}
+                  <Button variant="secondary" size="sm" disabled={Boolean(selectingReleaseId)} onclick={() => void selectRelease(release)}>
+                    {selectingReleaseId === release.id ? 'Selecting' : 'Select'}
+                  </Button>
+                {/if}
               </div>
             </CardListItem>
           {/each}

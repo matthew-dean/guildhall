@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import '@testing-library/jest-dom/vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/svelte'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { path } from '../../../lib/nav.svelte.js'
 import ProjectMapTab from '../ProjectMapTab.svelte'
 
@@ -9,6 +9,7 @@ describe('ProjectMapTab', () => {
   afterEach(() => {
     cleanup()
     path.value = '/'
+    vi.restoreAllMocks()
   })
 
   it('renders the 1,000-foot capability lanes and honest source trail from the orientation spine', async () => {
@@ -269,5 +270,80 @@ describe('ProjectMapTab', () => {
     expect(screen.queryByText('Later imported work 0')).not.toBeInTheDocument()
     expect(screen.queryByText('Later imported work 79')).not.toBeInTheDocument()
     expect(screen.getByText('Stage 1: V1 Release Hardening contains 2 assigned work items and 80 later.')).toBeInTheDocument()
+  })
+
+  it('lets the user select a different release boundary from the map', async () => {
+    const refresh = vi.fn()
+    const fetchCalls: Array<{ url: string; body: unknown }> = []
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      fetchCalls.push({
+        url: String(input),
+        body: typeof init?.body === 'string' ? JSON.parse(init.body) : null,
+      })
+      return new Response(JSON.stringify({ selectedReleaseId: 'release-2' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    }))
+
+    render(ProjectMapTab, {
+      detail: {
+        id: 'narrative-harness',
+        name: 'Narrative Harness',
+        tasks: [],
+        orientationSpine: {
+          charter: { goal: 'Build a fiction-first planning and review harness.', source: 'inferred' },
+          selectedRelease: {
+            id: 'release-1',
+            label: 'Headless MVP',
+            kind: 'release',
+            state: 'active',
+            source: 'release_plan',
+            nodeIds: ['work:task-a'],
+          },
+          releases: [
+            {
+              id: 'release-1',
+              label: 'Headless MVP',
+              kind: 'release',
+              state: 'active',
+              source: 'release_plan',
+              nodeIds: ['work:task-a'],
+            },
+            {
+              id: 'release-2',
+              label: 'Agent review proof',
+              kind: 'release',
+              state: 'planned',
+              source: 'release_plan',
+              nodeIds: ['work:task-b'],
+            },
+          ],
+          summary: {
+            selectedScopeLabel: 'Headless MVP',
+            selectedReleaseLabel: 'Headless MVP',
+            includedWorkCount: 1,
+            deferredWorkCount: 1,
+            progress: { total: 2 },
+          },
+          roots: [],
+          nodes: {},
+          gaps: [],
+          sourceHealth: { inferred: 0, gaps: 0 },
+        },
+      },
+      activeProjectId: 'narrative-harness',
+      onReleaseSelected: refresh,
+    })
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Select' }))
+
+    expect(fetchCalls).toEqual([
+      {
+        url: '/api/project/release/select?projectId=narrative-harness',
+        body: { releaseId: 'release-2', projectId: 'narrative-harness' },
+      },
+    ])
+    expect(refresh).toHaveBeenCalledTimes(1)
   })
 })

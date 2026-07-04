@@ -1650,7 +1650,11 @@
               </div>
             {:then module}
               {@const ProjectMapTab = module.default}
-              <ProjectMapTab {detail} activeProjectId={activeProjectId} />
+              <ProjectMapTab
+                {detail}
+                activeProjectId={activeProjectId}
+                onReleaseSelected={() => project.refresh(activeProjectId)}
+              />
             {/await}
           {:else if currentView === 'structure'}
             {#await loadProjectStructurePanel()}

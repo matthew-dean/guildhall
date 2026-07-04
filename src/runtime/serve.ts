@@ -1106,6 +1106,28 @@ async function writeTasksFilePreservingQueue(
   normalizedTasksCache.set(tasksPath, { raw: rewritten, tasks: tasks.map(task => ({ ...task })) })
 }
 
+async function writeSelectedReleaseId(
+  tasksPath: string,
+  releaseId: string,
+): Promise<{ release: ProjectRelease; selectedReleaseId: string }> {
+  if (!existsSync(tasksPath)) throw new Error('No task queue exists for this project.')
+  const raw = JSON.parse(await readManagedTextFile(tasksPath, 'utf8')) as
+    | { tasks?: Array<Record<string, unknown>>; releases?: ProjectRelease[]; selectedReleaseId?: string; version?: unknown; lastUpdated?: unknown }
+    | Array<Record<string, unknown>>
+  if (Array.isArray(raw)) throw new Error('This project has no release containers yet.')
+  const releases = Array.isArray(raw.releases) ? raw.releases : []
+  const release = releases.find(candidate => candidate.id === releaseId)
+  if (!release) throw new Error('Release not found in this project.')
+  const rewritten = {
+    ...raw,
+    selectedReleaseId: releaseId,
+    lastUpdated: new Date().toISOString(),
+  }
+  await writeManagedTextFileSync(tasksPath, JSON.stringify(rewritten, null, 2) + '\n')
+  invalidateTaskQueueReadCaches(tasksPath)
+  return { release, selectedReleaseId: releaseId }
+}
+
 function stagedContractChangeSet(model: { validationEvidence?: Array<Record<string, unknown>> }, resultId: string): ContractChangeSet | null {
   const record = (model.validationEvidence ?? []).find(candidate => (
     typeof candidate.id === 'string' &&
@@ -3782,6 +3804,34 @@ export function buildServeApp(opts: ServeOptions = {}): {
       return c.json({ structuralMapReview: summarizeStructuralMapForReview(map) })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    }
+  })
+
+  app.post('/api/project/release/select', async c => {
+    try {
+      const body = await c.req.json().catch(() => ({})) as {
+        releaseId?: unknown
+      }
+      const releaseId = typeof body.releaseId === 'string' ? body.releaseId.trim() : ''
+      if (!releaseId) return c.json({ error: 'releaseId is required.' }, 400)
+      const result = await writeSelectedReleaseId(projectTasksPath(project.path), releaseId)
+      const rawQueue = await readTaskQueueFileNormalized(projectTasksPath(project.path))
+      const startReadiness = await projectStartReadinessForProject(project.path)
+      const { orientationSpine: spine } = buildOrientationSpineWithScopedReleaseTruth({
+        projectId: project.id,
+        charter: inferProjectCharterFromExistingSources(project.path, project.config),
+        selectedReleaseId: rawQueue.selectedReleaseId,
+        releases: rawQueue.releases,
+        tasks: rawQueue.tasks as Task[],
+        runStatus: supervisor.get(project.id)?.status ?? 'stopped',
+        startReadiness,
+        workspaceImportDraft: await workspaceImportDraftForOrientation(project.path, startReadiness),
+        sourceRefs: projectOrientationSourceRefs(project.path),
+      })
+      return c.json({ ...result, spine })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      return c.json({ error: message }, /not found|no release|no task queue/i.test(message) ? 404 : 500)
     }
   })
 

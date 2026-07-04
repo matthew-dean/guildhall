@@ -7079,6 +7079,64 @@ describe('GET /api/project — bootstrap status', () => {
     expect(acceptBody.structuralMapReview?.state).toBe('accepted')
   })
 
+  it('selects the current release boundary through the owning project endpoint', async () => {
+    await writeSystemTasks({
+      version: 1,
+      lastUpdated: '2026-06-01T12:00:00.000Z',
+      selectedReleaseId: 'release-1',
+      releases: [
+        {
+          id: 'release-1',
+          label: 'Headless MVP',
+          kind: 'release',
+          state: 'active',
+          source: 'release_plan',
+        },
+        {
+          id: 'release-2',
+          label: 'Agent review proof',
+          kind: 'release',
+          state: 'planned',
+          source: 'release_plan',
+        },
+      ],
+      tasks: [
+        {
+          id: 'task-1',
+          title: 'Run headless proof',
+          status: 'ready',
+          releaseIds: ['release-1'],
+        },
+        {
+          id: 'task-2',
+          title: 'Run agent review proof',
+          status: 'ready',
+          releaseIds: ['release-2'],
+        },
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const select = await app.fetch(new Request(scoped('/api/project/release/select'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ releaseId: 'release-2' }),
+    }))
+
+    expect(select.status).toBe(200)
+    const body = (await select.json()) as {
+      selectedReleaseId?: string
+      release?: { id?: string; label?: string }
+      spine?: { selectedRelease?: { id?: string; label?: string } }
+    }
+    expect(body.selectedReleaseId).toBe('release-2')
+    expect(body.release?.label).toBe('Agent review proof')
+    expect(body.spine?.selectedRelease?.id).toBe('release-2')
+
+    const queue = await readProjectStateJsonAsync<{ selectedReleaseId?: string }>(tmpDir, 'TASKS.json')
+    expect(queue.selectedReleaseId).toBe('release-2')
+  })
+
   it('serves the scoped local project graph view for the selected project', async () => {
     const providerDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-serve-settings-provider-'))
     try {
