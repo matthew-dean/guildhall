@@ -653,18 +653,19 @@ function normalizeScope(input: BuildProjectOrientationSpineInput, tasks: Orienta
 
 function normalizeScopeTaskLists(scope: OrientationScope, tasks: OrientationTaskInput[]): OrientationScope {
   const taskById = new Map(tasks.map(task => [task.id, task]))
+  const keepMissingWorkNode = (nodeId: string): boolean => nodeId.startsWith('work:workspace-import:')
   const included = new Set(
     scope.nodeIds.filter((nodeId) => {
       if (!nodeId.startsWith('work:')) return true
       const task = taskById.get(nodeId.slice('work:'.length))
-      return task ? visibilityForTask(task, taskById).countInProjectTotals : true
+      return task ? visibilityForTask(task, taskById).countInProjectTotals : keepMissingWorkNode(nodeId)
     }),
   )
   const deferred = new Set(
     scope.deferredNodeIds.filter((nodeId) => {
       if (!nodeId.startsWith('work:')) return true
       const task = taskById.get(nodeId.slice('work:'.length))
-      return task ? visibilityForTask(task, taskById).countInProjectTotals : true
+      return task ? visibilityForTask(task, taskById).countInProjectTotals : keepMissingWorkNode(nodeId)
     }),
   )
   for (const nodeId of [...included]) {

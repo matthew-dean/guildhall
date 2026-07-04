@@ -1488,6 +1488,60 @@ describe('buildProjectOrientationSpine', () => {
     expect(spine.releases.find(release => release.id === 'stage-2-mastra-agent-prototype')?.state).toBe('planned')
   })
 
+  it('drops archived task ids from owner-visible release scope while preserving import-preview nodes', () => {
+    const spine = buildProjectOrientationSpine({
+      projectId: 'narrative-harness',
+      now: '2026-06-18T12:00:00.000Z',
+      selectedReleaseId: 'stage-1-fixture-and-evaluation-harness',
+      releases: [
+        {
+          id: 'stage-1-fixture-and-evaluation-harness',
+          label: 'Stage 1: Fixture And Evaluation Harness',
+          source: 'release_plan',
+          state: 'active',
+          nodeIds: [
+            'work:task-current',
+            'work:task-archived',
+            'work:workspace-import:detected-task-stage-two',
+          ],
+          deferredNodeIds: [],
+        },
+      ],
+      tasks: [
+        {
+          id: 'task-current',
+          title: 'Define fixture schemas',
+          description: 'Current harness work.',
+          domain: 'harness',
+          status: 'ready',
+          releaseIds: ['stage-1-fixture-and-evaluation-harness'],
+          spec: 'Spec.',
+          acceptanceCriteria: [{ met: false }],
+        },
+        {
+          id: 'task-archived',
+          title: 'Archived stale import echo',
+          description: 'Old duplicate import work.',
+          domain: 'harness',
+          status: 'archived',
+          releaseIds: ['stage-1-fixture-and-evaluation-harness'],
+          spec: 'Spec.',
+          acceptanceCriteria: [{ met: true }],
+        },
+      ],
+    })
+
+    expect(spine.selectedRelease?.nodeIds).toEqual([
+      'work:task-current',
+      'work:workspace-import:detected-task-stage-two',
+    ])
+    expect(spine.scope?.nodeIds).toEqual([
+      'work:task-current',
+      'work:workspace-import:detected-task-stage-two',
+    ])
+    expect(spine.nodes['work:task-archived']).toBeUndefined()
+  })
+
   it('groups imported Narrative Harness structure by document family instead of collapsing it into coarse domains', () => {
     const spine = buildProjectOrientationSpine({
       projectId: 'narrative-harness',

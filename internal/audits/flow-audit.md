@@ -13070,6 +13070,48 @@ and imported source docs do not masquerade as failed git repositories.
 
 source: codex:task-repo-root-normalization-2026-07-04
 
+2026-07-04T18:22:01Z - Removed archived import echoes from owner-visible
+release scope.
+
+- Work id: `codex:release-scope-ghost-node-cleanup-2026-07-04`.
+- User job: the 1,000-foot Project Map and 100-foot Overview should show the
+  real selected release skeleton, not archived stale task echoes that happen
+  to retain an old `releaseIds` value.
+- Finding:
+  - Live Narrative Harness `/api/project?projectId=narrative-harness` showed
+    `orientationSpine.selectedRelease.nodeIds` containing 7 nodes for
+    `Stage 1: Fixture And Evaluation Harness`.
+  - `/api/project/workspace-import/status?projectId=narrative-harness`
+    reported only 6 approved current task ids.
+  - The extra owner-visible release node was archived task
+    `task-import-1c4eedx` (`Implement fixture-and-expected-record schemas
+    (from schema-contract-roadmap)`).
+- Fix:
+  - `releaseToProjectScope()` now removes archived and cancelled tasks from
+    both current and deferred release node sets.
+  - `buildProjectOrientationSpine()` now drops missing real `work:<task-id>`
+    nodes after archived/cancelled tasks are filtered, while preserving
+    synthetic `work:workspace-import:*` preview nodes.
+- Live installed-app proof:
+  - `/api/stale-server` returned `stale:false` for PID `38534` from
+    `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+  - Narrative Harness `orientationSpine.selectedRelease.nodeIds` now contains
+    exactly the 6 approved current Stage 1 task ids:
+    `task-import-9s8tkc`, `task-import-dh34s5`, `task-import-14yqvl7`,
+    `task-import-1isf6n0`, `task-import-1nfemy6`, and `task-import-1v2ehs`.
+  - `ghostIds` compared against approved current import state is now `[]`.
+  - `task-import-1c4eedx` is no longer present in selected release node ids.
+- Verification:
+  - `CI=true NODE_ENV=development pnpm vitest run src/runtime/__tests__/project-scope-projection.test.ts src/runtime/__tests__/project-orientation-spine.test.ts src/runtime/__tests__/serve-release-readiness.test.ts --reporter=dot`
+    passed `62` tests.
+  - `CI=true pnpm build` passed.
+  - `CI=true pnpm lint:contracts` passed with all touched contract paths having
+    decision evidence.
+  - `CI=true pnpm dev:install` completed, followed by `guildhall stop &&
+    guildhall start`.
+
+source: codex:release-scope-ghost-node-cleanup-2026-07-04
+
 2026-07-04T16:45:00Z - Corrected Narrative Harness release readiness so
 spec-shaped current work is not communicated as owner brief cleanup.
 

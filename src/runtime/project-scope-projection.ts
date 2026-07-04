@@ -106,7 +106,10 @@ export function releaseToProjectScope(release: ProjectRelease, tasks: readonly T
   for (const task of tasks) {
     if (!task.releaseIds?.includes(release.id)) continue
     const nodeId = taskScopeNodeId(task.id)
-    if (task.status === 'shelved') {
+    if (task.status === 'archived' || task.status === 'cancelled') {
+      nodeIds.delete(nodeId)
+      deferredNodeIds.delete(nodeId)
+    } else if (task.status === 'shelved') {
       nodeIds.delete(nodeId)
       deferredNodeIds.add(nodeId)
     } else {

@@ -151,6 +151,33 @@ describe('buildProjectScopeProjection', () => {
     })
   })
 
+  it('drops archived release-linked work from the selected scope', () => {
+    const projection = buildProjectScopeProjection(queue([
+      task({
+        id: 'task-contracts',
+        title: 'Current scoped task',
+        spec: 'Current work spec.',
+        acceptanceCriteria: [{ id: 'AC-1', description: 'Current work is verifiable.', verifiedBy: 'test', met: false }],
+      }),
+      task({
+        id: 'task-stale',
+        title: 'Archived stale import echo',
+        status: 'archived',
+        releaseIds: ['stage-1'],
+      }),
+    ]))
+
+    expect(projection.selectedScope).toMatchObject({
+      nodeIds: ['work:task-contracts'],
+      deferredNodeIds: ['work:task-later'],
+    })
+    expect(projection.rows.some(row => row.taskId === 'task-stale')).toBe(false)
+    expect(projection.counts).toMatchObject({
+      included: 1,
+      deferred: 0,
+    })
+  })
+
   it('marks the release ready only after included scoped work is done', () => {
     const projection = buildProjectScopeProjection(queue([
       task({
