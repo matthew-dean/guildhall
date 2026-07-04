@@ -213,7 +213,7 @@ describe('GET /api/project/spine', () => {
       expect(payload?.release?.blockers).toEqual(expect.arrayContaining([
         expect.objectContaining({
           id: 'task-spec-review',
-          label: 'Define the packet proof contract is waiting for spec review.',
+          label: 'Define the packet proof contract is waiting for review before work can start.',
         }),
       ]))
     }

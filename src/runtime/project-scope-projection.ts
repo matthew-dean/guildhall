@@ -3,6 +3,7 @@ import { taskDisplayLabel } from '../shared/task-display-label.js'
 import { deriveTaskWorkVisibility } from './work-visibility.js'
 import { META_INTAKE_TASK_ID } from './meta-intake.js'
 import { WORKSPACE_IMPORT_TASK_ID } from './workspace-importer.js'
+import { specReviewRequiresOwnerApproval } from './spec-review-ownership.js'
 
 export type ProjectScopeKind = 'release' | 'milestone' | 'proposed_feature_set'
 export type ProjectScopeSource = 'owner_approved' | 'spec' | 'release_plan' | 'inferred'
@@ -281,10 +282,6 @@ function humanBlockingFor(task: Task, handoffState: ProjectScopeHandoffState, sc
   if (scope === 'deferred') return false
   if (handoffState === 'brief_cleanup' || handoffState === 'not_shaped' || handoffState === 'blocked') return true
   return handoffState === 'spec_review' && specReviewRequiresOwnerApproval(task)
-}
-
-function specReviewRequiresOwnerApproval(task: Pick<Task, 'id'>): boolean {
-  return task.id === META_INTAKE_TASK_ID || task.id === WORKSPACE_IMPORT_TASK_ID
 }
 
 function isProjectSetupTask(taskId: string): boolean {

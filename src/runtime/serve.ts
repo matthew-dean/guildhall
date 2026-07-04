@@ -277,7 +277,8 @@ import {
   resetProjectSkillProposals,
 } from '@guildhall/skills'
 import { importedTaskNeedsBriefShaping, normalizeImportedDraftTask } from './import-drafts.js'
-import { selectedReleaseScopeForQueue, specReviewRequiresOwnerApproval } from './orchestrator-picker.js'
+import { selectedReleaseScopeForQueue } from './orchestrator-picker.js'
+import { specReviewRequiresOwnerApproval } from './spec-review-ownership.js'
 import {
   buildInbox,
   buildInboxBlockers,

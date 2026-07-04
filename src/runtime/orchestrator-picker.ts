@@ -15,13 +15,12 @@
 
 import { type Task, type TaskQueue, type TaskStatus } from '@guildhall/core'
 import { hasOpenEscalation } from '@guildhall/tools'
-import { META_INTAKE_TASK_ID } from './meta-intake.js'
-import { WORKSPACE_IMPORT_TASK_ID } from './workspace-importer.js'
 import { taskHasUnansweredVisibleQuestion } from './question-visibility.js'
 import { workSubtreeIds } from './work-hierarchy.js'
 import { taskEligibleForSelectedScope, taskNodeId, type OrientationScope } from './project-orientation-spine.js'
 import { selectedProjectScopeForQueue } from './project-scope-projection.js'
 import { deriveWorkExecutionState } from './work-execution-state.js'
+import { specReviewRequiresOwnerApproval } from './spec-review-ownership.js'
 
 export type TaskLane = 'spec' | 'worker' | 'review' | 'coordinator'
 
@@ -75,10 +74,6 @@ function hasUnansweredOpenQuestion(task: Task): boolean {
 
 export function taskHasUnansweredOpenQuestion(task: Task): boolean {
   return hasUnansweredOpenQuestion(task)
-}
-
-export function specReviewRequiresOwnerApproval(task: Pick<Task, 'id'>): boolean {
-  return task.id === META_INTAKE_TASK_ID || task.id === WORKSPACE_IMPORT_TASK_ID
 }
 
 function finishabilityAllowsDispatch(task: Task): boolean {

@@ -12,6 +12,74 @@ This is the active browser test plan for the Guildhall project surface. Keep it
 updated while auditing the active test project so another agent can resume
 without guessing.
 
+2026-07-04T18:45:00Z - Refreshed Looma + Knit nested Git Story proof.
+
+- Work id: `codex:looma-knit-nested-repo-proof-2026-07-04`.
+- User job: when a registered workspace root is a container with child git
+  repos, the owner should see Git Story for the actual child repos, not a
+  root-level "not a git repository" failure.
+- Evidence:
+  - Filesystem: `/Users/matthew/git/oss/looma-knit` is a workspace container;
+    child repos exist at `looma/.git` and `knit/.git`.
+  - `/api/project?projectId=looma-knit` returned Git Story blockers labelled
+    `Looma` and `Knit` with `repoId`/`repoLabel`, and no
+    `fatal`/`not a git repository` text.
+  - `/api/project/release-readiness?projectId=looma-knit` returned child-repo
+    Git Story blockers and no `fatal`/`not a git repository` text.
+  - `/api/project/task/task-import-1y7kmp6/git-story?projectId=looma-knit`
+    returned `repoRoot` `/Users/matthew/git/oss/looma-knit/looma`,
+    `repoId` `looma`, and `repoLabel` `Looma`.
+- Result: no code change was required for this slice; existing shared
+  child-repo path resolution is holding at the API layer. Keep UI/browser
+  surfaces under audit before claiming the product communicates nested repos
+  well enough.
+
+source: codex:looma-knit-nested-repo-proof-2026-07-04
+
+2026-07-04T18:55:00Z - Regrounded `spec_review` as an owner approval
+checkpoint.
+
+- Work id: `codex:spec-review-owner-approval-boundary-2026-07-04`.
+- User job: Codex may act as the owner during a delegated exercise, but
+  Guildhall itself must not treat a saved spec draft as permission to automate
+  past approval. A task in `spec_review` should be visible as a "Needs you"
+  checkpoint and should block selected-scope release readiness until approved.
+- Root cause:
+  - `spec_review` had split semantics: meta/import tasks were owner approval,
+    while ordinary component tasks were treated as queued coordinator review.
+  - That made release state drift: one shared surface could say a selected
+    release was active while another correctly treated the saved spec as a
+    blocker.
+- Fix:
+  - Added one shared `specReviewRequiresOwnerApproval()` helper and removed the
+    duplicate project-scope rule.
+  - Projection, picker, Thread, and start/readiness now share the same approval
+    boundary.
+  - Updated the task status comment so future work does not reintroduce
+    "human or coordinator approval" as a status meaning.
+- Contract Touch Decision:
+  - Work id: `codex:spec-review-owner-approval-boundary-2026-07-04`.
+  - Touched contracts: `TaskStatus` semantic comment for `spec_review`; runtime
+    dispatch/readiness interpretation for `spec_review`.
+  - Contracts considered but not touched: persisted `TaskStatus` enum values,
+    task schema shape, task transition endpoints, release schema.
+  - Existing data impact: no migration; existing `spec_review` tasks become
+    more conservative and visible as approval checkpoints instead of runnable
+    coordinator work.
+  - Proof required: shared project/spine/thread release blockers agree;
+    Thread renders component spec drafts as approval cards; Work/Thread
+    presentation tests do not regress.
+  - Proof provided: focused runtime and web tests listed below.
+  - Apply/revert behavior: revert the helper and tests to restore previous
+    coordinator-review semantics; no data rollback required.
+- Verification:
+  - `CI=true /opt/homebrew/bin/pnpm exec vitest run src/runtime/__tests__/serve-dashboard.test.ts src/runtime/__tests__/thread.test.ts src/runtime/__tests__/orchestrator-picker.test.ts src/runtime/__tests__/project-scope-projection.test.ts --reporter=dot`
+    passed `97` tests.
+  - `CI=true /opt/homebrew/bin/pnpm exec vitest run src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts src/web/lib/__tests__/task-presentation.test.ts --reporter=dot`
+    passed `153` tests.
+
+source: codex:spec-review-owner-approval-boundary-2026-07-04
+
 2026-07-04T17:35:00Z - Workspace import release state now preserves roadmap
 truth instead of marking every release active.
 

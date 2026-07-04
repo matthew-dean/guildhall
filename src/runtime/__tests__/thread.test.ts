@@ -1755,7 +1755,7 @@ describe('buildThread', () => {
     }
   })
 
-  it('summarizes normal spec_review component tasks as queued coordinator review', async () => {
+  it('summarizes normal spec_review component tasks as owner approval', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {
       await mkdir(statePath(projectPath), { recursive: true })
@@ -1797,11 +1797,9 @@ describe('buildThread', () => {
         recentEvents: [],
       })
 
-      expect(thread.turns.find(turn => turn.id === 'inflight:task-combobox')).toMatchObject({
-        kind: 'inflight',
-        taskStatus: 'spec_review',
+      expect(thread.turns.find(turn => turn.id === 'spec:task-combobox')).toMatchObject({
+        kind: 'spec_review',
         phase: 'spec',
-        summary: 'Your answers and a spec draft are saved. Coordinator review is next.',
       })
     } finally {
       await rm(projectPath, { recursive: true, force: true })
@@ -2710,13 +2708,12 @@ describe('buildThread', () => {
       const thread = buildThread({ projectPath, snapshot, recentEvents: [] })
 
       expect(thread.turns.find((turn) => turn.id === 'brief:task-block-menu' && turn.status !== 'done')).toBeUndefined()
-      expect(thread.turns.find((turn) => turn.id === 'spec:task-block-menu')).toBeUndefined()
-      expect(thread.activeTurnId).toBe('inflight:task-block-menu')
-      expect(thread.turns.find((turn) => turn.id === 'inflight:task-block-menu')).toMatchObject({
-        kind: 'inflight',
+      expect(thread.turns.find((turn) => turn.id === 'spec:task-block-menu')).toMatchObject({
+        kind: 'spec_review',
         status: 'active',
         phase: 'spec',
       })
+      expect(thread.activeTurnId).toBe('spec:task-block-menu')
     } finally {
       await rm(projectPath, { recursive: true, force: true })
     }
@@ -3134,13 +3131,10 @@ coordinators:
       })
 
       expect(thread.turns.find(turn => turn.id === 'q:task-003:q-1')).toBeUndefined()
-      expect(thread.turns.find(turn => turn.id === 'spec:task-003')).toBeUndefined()
-      expect(thread.activeTurnId).toBe('inflight:task-003')
-      const internalTurn = thread.turns.find(turn => turn.id === 'inflight:task-003')
-      expect(internalTurn).toMatchObject({
-        kind: 'inflight',
-        status: 'active',
-        phase: 'spec',
+      expect(thread.turns.find(turn => turn.id === 'spec:task-003')).toMatchObject({
+        kind: 'spec_review',
+        status: 'pending',
+        phase: 'intake',
       })
     } finally {
       await rm(projectPath, { recursive: true, force: true })

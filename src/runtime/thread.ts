@@ -40,7 +40,7 @@ import { listBoundedChatSessions, type BoundedChatSession } from './bounded-chat
 import { getProjectStateDir, getProjectSystemStatePath } from '@guildhall/sessions'
 import type { GitStorySnapshot } from './git-story.js'
 import { userFacingText } from './user-facing-text.js'
-import { specReviewRequiresOwnerApproval } from './orchestrator-picker.js'
+import { specReviewRequiresOwnerApproval } from './spec-review-ownership.js'
 
 // ---------------------------------------------------------------------------
 // Turn shape

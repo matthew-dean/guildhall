@@ -24,7 +24,7 @@ const TaskStatusValue = z.enum([
   'proposed',      // FR-21: agent-originated; awaiting promotion per lever `task_origination`
   'import_draft',  // Workspace-imported draft that still needs shaping before normal intake begins
   'exploring',     // Conversational intake — Spec Agent is building the spec with the user (FR-12)
-  'spec_review',   // Spec drafted; awaiting human or coordinator approval
+  'spec_review',   // Spec drafted; awaiting owner approval before worker handoff
   'ready',         // Spec approved, ready for a worker to pick up
   'in_progress',   // Assigned to a worker agent
   'review',        // Worker done, awaiting reviewer agent
