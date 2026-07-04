@@ -434,6 +434,16 @@
 
   const nextAction = $derived.by(() => {
     const shared = detail.actionModel?.primaryAction
+    if (detail.startReadiness?.canStart === false && detail.startReadiness.code === 'all_terminal') {
+      return {
+        label: detail.startReadiness.message ?? startReadinessLabel(detail.startReadiness.code),
+        detail: 'All scoped work is terminal. Open Work to inspect completed and deferred items.',
+        button: 'Open Work',
+        href: currentProjectHref('/work', activeProjectId),
+        tone: 'neutral' as Tone,
+        action: 'navigate' as NextActionKind,
+      }
+    }
     if (shared) {
       return {
         label: shared.label ?? 'Open Work',
@@ -464,16 +474,6 @@
       }
     }
     if (detail.startReadiness?.canStart === false) {
-      if (detail.startReadiness.code === 'all_terminal') {
-        return {
-          label: detail.startReadiness.message ?? startReadinessLabel(detail.startReadiness.code),
-          detail: 'All scoped work is terminal. Open Work to inspect completed and shelved items.',
-          button: 'Open Work',
-          href: currentProjectHref('/work', activeProjectId),
-          tone: 'neutral' as Tone,
-          action: 'navigate' as NextActionKind,
-        }
-      }
       const href = detail.startReadiness.actionHref ?? currentProjectHref('/overview', activeProjectId)
       const matchingInbox = inboxItems.find(item => item.severity !== 'low' && item.actionHref === href)
       return {

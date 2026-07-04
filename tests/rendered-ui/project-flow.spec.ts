@@ -225,7 +225,7 @@ test('projects home keeps project cards compact for scanability', async ({ page 
   expect(Math.max(...panelBoxes.map(box => box.right))).toBeGreaterThan(1380)
 
   const cards = page.locator('section.project-card')
-  await expect(cards).toHaveCount(17)
+  await expect(cards).toHaveCount(18)
   await expect(page.getByText('Loading project status...')).toHaveCount(0)
   await expect(page.getByText('Still loading project state')).toHaveCount(0)
   for (const projectName of [
@@ -235,6 +235,7 @@ test('projects home keeps project cards compact for scanability', async ({ page 
     'API Broker',
     'Scratch Setup Pending',
     'Dirty Service',
+    'Release Consumed',
     'Consumer App',
     'Provider Library',
     'Capability Boundary',
@@ -535,6 +536,35 @@ test('Looma + Knit map shows V1 hardening as current and Looma convergence as la
   await expect(projectMap.getByText('Looma Editor Integration').first()).toBeVisible()
   await expect(projectMap.getByText('release-plan.md').first()).toBeVisible()
   await expect(projectMap.getByText('PROJECT_STATE.md').first()).toBeVisible()
+})
+
+test('consumed selected release is visible as complete while later work stays deferred', async ({ page }) => {
+  const response = await page.request.get('/api/project?projectId=release-consumed')
+  expect(response.ok()).toBe(true)
+  const detail = await response.json()
+
+  expect(detail.orientationSpine?.summary?.selectedReleaseLabel).toBe('Headless MVP')
+  expect(detail.startReadiness).toMatchObject({
+    canStart: false,
+    code: 'all_terminal',
+    message: 'Headless MVP is complete. 1 ready task remains outside this release.',
+  })
+  expect(detail.orientationSpine?.summary?.topBlocker).toBe(detail.startReadiness?.message)
+
+  await page.goto('/projects/release-consumed/overview')
+  await expect(page.getByRole('region', { name: 'Project overview' })).toBeVisible()
+  await expect(page.getByText('Headless MVP').first()).toBeVisible()
+  await expect(page.getByText('Headless MVP is complete. 1 ready task remains outside this release.').first()).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Open Work' })).toBeVisible()
+  await expect(page.getByText('1 Deferred').first()).toBeVisible()
+  const scopeStatus = page.locator('.overview-priority-card')
+  await expect(scopeStatus).toContainText('Headless MVP is complete. 1 ready task remains outside this release.')
+  await expect(scopeStatus).not.toContainText('Start next release feature')
+
+  await page.goto('/projects/release-consumed/work')
+  await expect(page.getByRole('heading', { name: 'Work list' })).toBeVisible()
+  await expect(page.getByText('Headless MVP is complete. 1 ready task remains outside this release.').first()).toBeVisible()
+  await expect(page.getByText('Start next release feature').first()).toBeVisible()
 })
 
 test('project shell uses stopped-project language consistently across flow surfaces', async ({ page }) => {

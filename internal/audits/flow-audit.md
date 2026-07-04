@@ -14368,6 +14368,62 @@ the documented current release/scope, not just any imported release container.
 
 source: codex:narrative-harness-current-release-visible-proof-2026-07-04
 
+2026-07-04T05:27:00Z - Fixed selected-release completion visibility so
+deferred work cannot masquerade as the current next action.
+
+- Work id: `codex:selected-release-consumed-visible-proof-2026-07-04`.
+- User job: when a project has a selected release, the owner should be able to
+  press or inspect Start/Resume and understand that Guildhall will only consume
+  work inside the selected release. If that release is complete while later
+  work exists, Guildhall must say the selected release is complete, show that
+  later work remains outside the release, and avoid presenting later work as
+  the current next action.
+- Failure found during proof:
+  - `/api/project` returned `canStart: true` when the selected release only had
+    terminal tasks but a later/deferred task was ready.
+  - After the runtime fix, the rendered Overview still promoted the deferred
+    task as the `Scope status` headline, contradicting the completion banner.
+- Fix:
+  - `terminalStartState()` now scopes terminal/all-done checks to the selected
+    release when a release is selected, and reports deferred actionable status
+    outside that release in the owner-facing message.
+  - Overview now lets `all_terminal` selected-scope readiness win over the
+    generic primary action, so the `Scope status` card leads with the completed
+    release state instead of the later task title.
+  - Added a rendered fixture project, `release-consumed`, where `Headless MVP`
+    is complete and one later task remains ready.
+- Contract Touch Decision:
+  - Work id: `codex:selected-release-consumed-visible-proof-2026-07-04`.
+  - Touched contracts: project start readiness semantics; Project Overview
+    primary-action presentation for `all_terminal`; rendered flow-audit fixture
+    matrix.
+  - Contracts considered but not touched: persisted task/release schema,
+    selected release task eligibility, orchestrator picker behavior, action
+    model button labels, release/map schema.
+  - Required follow-up: none for this slice. The larger Narrative Harness goal
+    still needs continued execution proof against real NH tasks.
+  - Proof required: API must stop Start for a consumed selected release even
+    when deferred work is ready; Overview and Work must visibly show the
+    completed selected release and keep deferred work out of the current next
+    action.
+  - Proof provided: `serve-settings` unit/API coverage plus rendered
+    `project-flow` coverage for Overview and Work.
+  - Waivers: no schema migration decision required because no persisted schema
+    shape changed.
+  - Owner-review items: wording is deliberately plain:
+    `Headless MVP is complete. 1 ready task remains outside this release.`
+  - Apply/revert behavior: revert the runtime readiness branch and Overview
+    precedence branch together; reverting only one recreates contradictory UI.
+- Verification:
+  - `/opt/homebrew/bin/pnpm vitest run src/runtime/__tests__/serve-settings.test.ts`
+    passed `101` tests.
+  - `/opt/homebrew/bin/pnpm exec playwright test tests/rendered-ui/project-flow.spec.ts`
+    passed `37` tests.
+  - `/opt/homebrew/bin/pnpm build` passed.
+  - `git diff --check` passed.
+
+source: codex:selected-release-consumed-visible-proof-2026-07-04
+
 2026-06-15T23:52:00Z - Completed the Project Orientation Spine cross-route
 implementation and installed-app audit.
 

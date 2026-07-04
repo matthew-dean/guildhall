@@ -1076,6 +1076,110 @@ describe('POST /api/project/start', () => {
     })
   })
 
+  it('shows the selected release as consumed when only deferred work remains runnable', async () => {
+    const now = new Date().toISOString()
+    await writeSystemTasks({
+      version: 1,
+      lastUpdated: now,
+      selectedReleaseId: 'headless-mvp',
+      releases: [
+        {
+          id: 'headless-mvp',
+          label: 'Headless MVP',
+          kind: 'release',
+          state: 'active',
+          source: 'release_plan',
+          nodeIds: ['work:current-done'],
+          deferredNodeIds: ['work:later-ready'],
+        },
+      ],
+      tasks: [
+        {
+          id: 'current-done',
+          title: 'Finish current release proof',
+          description: 'The selected release work is finished.',
+          domain: 'core',
+          status: 'done',
+          releaseIds: ['headless-mvp'],
+          priority: 'normal',
+          acceptanceCriteria: [],
+          outOfScope: [],
+          dependsOn: [],
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          adjudications: [],
+          escalations: [],
+          agentIssues: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          id: 'later-ready',
+          title: 'Start next release feature',
+          description: 'This is outside the selected release.',
+          domain: 'core',
+          status: 'ready',
+          scope: 'later',
+          priority: 'critical',
+          acceptanceCriteria: ['Later work has its own release boundary.'],
+          outOfScope: [],
+          dependsOn: [],
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          adjudications: [],
+          escalations: [],
+          agentIssues: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+    })
+    setProvider('anthropic-api', { apiKey: 'sk-ant-test' })
+    updateGlobalConfig({ preferredProvider: 'anthropic-api' })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await applyStorageBoundaryMigration(app)
+    const projectRes = await app.fetch(new Request(scoped('/api/project')))
+    expect(projectRes.status).toBe(200)
+    const projectBody = await projectRes.json() as {
+      startReadiness?: {
+        canStart?: boolean
+        code?: string
+        message?: string
+      }
+    }
+
+    expect(projectBody.startReadiness).toMatchObject({
+      canStart: false,
+      code: 'all_terminal',
+    })
+    expect(projectBody.startReadiness?.message).toContain('Headless MVP')
+    expect(projectBody.startReadiness?.message).toContain('complete')
+    expect(projectBody.startReadiness?.message).toContain('1 ready')
+    expect(projectBody.startReadiness?.message).toContain('outside this release')
+
+    const startRes = await app.fetch(
+      new Request(scoped('/api/project/start'), { method: 'POST', body: '{}' }),
+    )
+    expect(startRes.status).toBe(200)
+    const startBody = await startRes.json() as {
+      status?: string
+      code?: string
+      stopSummary?: { reason?: string }
+    }
+    expect(startBody).toMatchObject({
+      status: 'stopped',
+      code: 'all_terminal',
+      stopSummary: { reason: 'all_terminal' },
+    })
+  })
+
   it('treats archived, cancelled, and pending PR tasks as terminal for Start readiness', async () => {
     const now = new Date().toISOString()
     await writeSystemTasks({

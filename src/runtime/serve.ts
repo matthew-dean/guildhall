@@ -4835,6 +4835,29 @@ export function buildServeApp(opts: ServeOptions = {}): {
 	      return null
 	    }
 
+    const rawQueue = !Array.isArray(raw) && raw && typeof raw === 'object'
+      ? raw as { releases?: unknown; selectedReleaseId?: unknown }
+      : null
+    const typedTasks = tasks.filter((task): task is Task => Boolean(task && typeof task === 'object'))
+    const selectedReleaseScope = !requestedTaskId && rawQueue && Array.isArray(rawQueue.releases)
+      ? selectedReleaseScopeForQueue({
+          version: 1,
+          lastUpdated: new Date(0).toISOString(),
+          tasks: typedTasks,
+          releases: rawQueue.releases as TaskQueue['releases'],
+          ...(typeof rawQueue.selectedReleaseId === 'string'
+            ? { selectedReleaseId: rawQueue.selectedReleaseId }
+            : {}),
+        })
+      : null
+    const tasksById = selectedReleaseScope
+      ? new Map(typedTasks.map(task => [task.id, task] as const))
+      : null
+    const scopedTasks = selectedReleaseScope && tasksById
+      ? typedTasks.filter(task => taskEligibleForSelectedScope(task, selectedReleaseScope, { tasksById }).eligible)
+      : tasks
+    if (selectedReleaseScope && scopedTasks.length === 0) return null
+
     let done = 0
     let blocked = 0
     let shelved = 0
@@ -4842,7 +4865,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     let archived = 0
     let cancelled = 0
     let terminal = 0
-    for (const task of tasks) {
+    for (const task of scopedTasks) {
       if (!task || typeof task !== 'object') return null
       const status = String((task as { status?: unknown }).status ?? '')
       if (status === 'done') {
@@ -4865,13 +4888,30 @@ export function buildServeApp(opts: ServeOptions = {}): {
         terminal += 1
       }
     }
-    const actionable = tasks.length - terminal
+    const actionable = scopedTasks.length - terminal
     if (actionable > 0) return null
 
     const detailMessage = `No actionable tasks remain: ${done} done, ${blocked} blocked, ${shelved} shelved, ${pendingPr} pending PR, ${archived} archived, ${cancelled} cancelled.`
-    const message = done === tasks.length
+    let message = done === scopedTasks.length
       ? 'All tasks are already finished.'
       : detailMessage
+    if (selectedReleaseScope && tasksById) {
+      const outsideActionableByStatus = new Map<string, number>()
+      for (const task of typedTasks) {
+        if (taskEligibleForSelectedScope(task, selectedReleaseScope, { tasksById }).eligible) continue
+        const status = String(task.status ?? '')
+        if (['done', 'blocked', 'shelved', 'pending_pr', 'archived', 'cancelled'].includes(status)) continue
+        outsideActionableByStatus.set(status, (outsideActionableByStatus.get(status) ?? 0) + 1)
+      }
+      const outsideFragments = [...outsideActionableByStatus.entries()]
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([status, count]) => `${count} ${status.replaceAll('_', ' ')}`)
+      message = `${selectedReleaseScope.label} is complete.${
+        outsideFragments.length > 0
+          ? ` ${outsideFragments.join(', ')} ${outsideFragments.length === 1 && outsideFragments[0]?.startsWith('1 ') ? 'task remains' : 'tasks remain'} outside this release.`
+          : ''
+      }`
+    }
 
 	    return {
 	      canStart: false,
@@ -4881,7 +4921,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         reason: 'all_terminal',
         message: detailMessage,
         counts: {
-          total: tasks.length,
+          total: scopedTasks.length,
           done,
           blocked,
           shelved,
