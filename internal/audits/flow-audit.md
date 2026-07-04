@@ -13023,6 +13023,53 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-07-04T18:13:49Z - Fixed task repo-root resolution so workspace containers
+and imported source docs do not masquerade as failed git repositories.
+
+- Work id: `codex:task-repo-root-normalization-2026-07-04`.
+- User job: a project owner should be able to register a workspace container
+  like Looma + Knit and still see Git Story for the actual child repositories,
+  while imported planning/docs folders remain source trail rather than
+  executable repo roots.
+- Fix:
+  - `resolveEffectiveTaskProjectPath()` now treats task `projectPath` values
+    inside `doc`, `docs`, or `documentation` folders as source-document paths
+    unless that folder has an execution marker such as `.git`, `package.json`,
+    `guildhall.yaml`, `pyproject.toml`, `Cargo.toml`, or `go.mod`.
+  - Task-level Git Story now reuses the shared effective task project path
+    instead of independently trusting raw task `projectPath`.
+  - Task-level Git Story ignores recorded task worktree paths that no longer
+    exist and falls back to the owning repo, so stale runtime state does not
+    produce false `not a git repository` blockers.
+- Live installed-app proof:
+  - `/api/stale-server` returned `stale:false` for PID `97240` from
+    `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+  - `/api/project?projectId=narrative-harness` returned `0` Git Story
+    inspection failures matching `not a git repository` or
+    `Cannot resolve git root`; docs-imported tasks now inspect
+    `/Users/matthew/git/oss/narrative-harness`.
+  - `/api/project?projectId=looma-knit` and
+    `/api/project/release-readiness?projectId=looma-knit` returned child repo
+    snapshots labelled `Looma` and `Knit`, with repo roots
+    `/Users/matthew/git/oss/looma-knit/looma` and
+    `/Users/matthew/git/oss/looma-knit/knit`, and `0` git-inspection failures.
+- Browser proof caveat:
+  - The in-app browser automation timed out twice while navigating to
+    `/projects/looma-knit/release` after the installed restart. The API proof
+    is still live installed-app proof of the payload consumed by Release, but
+    a later visual pass should refresh the screen-level evidence once the
+    browser harness is responsive.
+- Verification:
+  - `CI=true pnpm vitest run src/runtime/__tests__/task-gates.test.ts src/runtime/__tests__/git-story.test.ts --reporter=dot`
+    passed `41` tests.
+  - `CI=true pnpm build` passed.
+  - `CI=true pnpm lint:contracts` passed with all touched contract paths having
+    decision evidence.
+  - `CI=true pnpm dev:install` completed, followed by `guildhall stop &&
+    guildhall start`.
+
+source: codex:task-repo-root-normalization-2026-07-04
+
 2026-07-04T16:45:00Z - Corrected Narrative Harness release readiness so
 spec-shaped current work is not communicated as owner brief cleanup.
 

@@ -98,6 +98,7 @@ import {
   type ProviderName,
 } from './provider-selection.js'
 import { normalizeLegacyTaskQueueShape } from './task-queue-compat.js'
+import { resolveEffectiveTaskProjectPath } from './task-gates.js'
 import {
   buildSelectApiClientOptions,
   getRuntimeProviderConfig,
@@ -2435,12 +2436,9 @@ function taskGitStoryRepoPath(
     ? workspace.worktreePath.trim()
     : typeof task.worktreePath === 'string' && task.worktreePath.trim()
       ? task.worktreePath.trim()
-    : ''
-  if (worktreePath) return worktreePath
-  const taskProjectPath = typeof task.projectPath === 'string' && task.projectPath.trim()
-    ? task.projectPath.trim()
-    : ''
-  return taskProjectPath || projectPath
+      : ''
+  if (worktreePath && existsSync(worktreePath)) return worktreePath
+  return resolveEffectiveTaskProjectPath(task as Pick<Task, 'projectPath'>, projectPath)
 }
 
 const TASK_FILE_PREVIEW_LIMIT_BYTES = 256 * 1024
@@ -2516,8 +2514,7 @@ async function gitStoryForTask(
     workspaceProjects: resolvedWorkspaceProjects,
     task,
   })
-  const repoRoot = childProject?.path ??
-    (typeof task.projectPath === 'string' && task.projectPath.trim() ? task.projectPath.trim() : projectPath)
+  const repoRoot = childProject?.path ?? resolveEffectiveTaskProjectPath(task as Pick<Task, 'projectPath'>, projectPath)
   return inspectGitStory(driver, {
     repoRoot,
     ...(childProject?.id ? { repoId: childProject.id } : {}),

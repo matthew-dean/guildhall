@@ -90,6 +90,27 @@ function isWithin(parent: string, child: string): boolean {
   return normalizedChild === normalizedParent || normalizedChild.startsWith(`${normalizedParent}${path.sep}`)
 }
 
+function hasExecutionProjectMarker(projectPath: string): boolean {
+  return [
+    '.git',
+    'guildhall.yaml',
+    'package.json',
+    'pnpm-workspace.yaml',
+    'pyproject.toml',
+    'Cargo.toml',
+    'go.mod',
+    'deno.json',
+    'deno.jsonc',
+  ].some(file => fs.existsSync(path.join(projectPath, file)))
+}
+
+function isDocumentationSourcePath(taskProjectPath: string, workspaceProjectPath: string): boolean {
+  if (!isWithin(workspaceProjectPath, taskProjectPath)) return false
+  const relativePath = path.relative(workspaceProjectPath, taskProjectPath)
+  if (!relativePath || relativePath.startsWith('..')) return false
+  return relativePath.split(path.sep).some(segment => ['doc', 'docs', 'documentation'].includes(segment.toLowerCase()))
+}
+
 function rewriteWorkspaceScopedCommandForTask(
   command: string,
   workspaceProjectPath: string,
@@ -1029,9 +1050,17 @@ export function resolveEffectiveTaskProjectPath(
 ): string {
   if (typeof task.projectPath === 'string' && task.projectPath.trim().length > 0) {
     const taskProjectPath = task.projectPath.trim()
-    return path.isAbsolute(taskProjectPath)
+    const resolvedTaskProjectPath = path.isAbsolute(taskProjectPath)
       ? resolveRuntimePath(taskProjectPath)
       : resolveRuntimePath(path.join(workspaceProjectPath, taskProjectPath))
+    const resolvedWorkspaceProjectPath = resolveRuntimePath(workspaceProjectPath)
+    if (
+      isDocumentationSourcePath(resolvedTaskProjectPath, resolvedWorkspaceProjectPath) &&
+      !hasExecutionProjectMarker(resolvedTaskProjectPath)
+    ) {
+      return resolvedWorkspaceProjectPath
+    }
+    return resolvedTaskProjectPath
   }
   return resolveRuntimePath(workspaceProjectPath)
 }

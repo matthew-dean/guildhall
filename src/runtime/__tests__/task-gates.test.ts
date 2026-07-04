@@ -42,6 +42,32 @@ describe('resolveEffectiveTaskProjectPath', () => {
       ),
     ).toBe('/repo/fair-labor-license/frontend')
   })
+
+  it('treats imported docs paths as source trail instead of execution roots', async () => {
+    const docsPath = path.join(tmpDir, 'docs', 'harness')
+    await fs.mkdir(docsPath, { recursive: true })
+    await fs.writeFile(path.join(tmpDir, 'package.json'), '{"scripts":{}}\n', 'utf8')
+
+    expect(
+      resolveEffectiveTaskProjectPath(
+        { projectPath: docsPath },
+        tmpDir,
+      ),
+    ).toBe(tmpDir)
+  })
+
+  it('keeps marked child project paths as execution roots', async () => {
+    const childPath = path.join(tmpDir, 'knit')
+    await fs.mkdir(childPath, { recursive: true })
+    await fs.writeFile(path.join(childPath, 'package.json'), '{"scripts":{}}\n', 'utf8')
+
+    expect(
+      resolveEffectiveTaskProjectPath(
+        { projectPath: childPath },
+        tmpDir,
+      ),
+    ).toBe(childPath)
+  })
 })
 
 describe('normalizeAutomatedAcceptanceCriterionCommands', () => {
