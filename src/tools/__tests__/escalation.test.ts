@@ -14,7 +14,7 @@ import {
 } from '../escalation.js'
 import { readTasks } from '../task-queue.js'
 import { buildEffectiveTask } from '../../runtime/effective-task.js'
-import { readTaskRuntimeStore, upsertTaskRuntimeState } from '@guildhall/sessions'
+import { appendTaskEvidence, readTaskRuntimeStore, upsertTaskRuntimeState } from '@guildhall/sessions'
 import type { Task } from '@guildhall/core'
 
 // ---------------------------------------------------------------------------
@@ -428,6 +428,51 @@ describe('resolveEscalation', () => {
     })
     const task = await readEffectiveTask()
     expect(task.escalations[0]?.resolvedBy).toBe('coordinator-looma')
+  })
+
+  it('clears canonical blocker fields when resolving a sidecar-only escalation', async () => {
+    const raisedAt = new Date().toISOString()
+    await writeSeed([
+      seedTask({
+        status: 'blocked',
+        blockReason: 'decision_required: stale proof policy question',
+        escalations: [],
+        openEscalations: [
+          {
+            id: 'esc-task-001-stale',
+            summary: 'Stale compact escalation row',
+          },
+        ],
+      } as Partial<Task>),
+    ])
+    await appendTaskEvidence(tmpDir, 'task-001', {
+      id: 'esc-task-001-1',
+      kind: 'escalation',
+      recordedAt: raisedAt,
+      payload: {
+        id: 'esc-task-001-1',
+        taskId: 'task-001',
+        agentId: 'worker-agent',
+        reason: 'decision_required',
+        summary: 'Need proof policy decision',
+        raisedAt,
+      },
+    })
+
+    const result = await resolveEscalation({
+      tasksPath,
+      taskId: 'task-001',
+      escalationId: 'esc-task-001-1',
+      resolution: 'Use the project-local proof command.',
+      nextStatus: 'in_progress',
+    })
+
+    expect(result.success).toBe(true)
+    const raw = await readRawQueue()
+    const task = raw.tasks.find(candidate => candidate.id === 'task-001')!
+    expect(task.status).toBe('in_progress')
+    expect(task.blockReason).toBeUndefined()
+    expect(task.openEscalations).toBeUndefined()
   })
 
   it('keeps task blocked if other escalations remain open', async () => {

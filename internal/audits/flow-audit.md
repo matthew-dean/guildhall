@@ -16561,6 +16561,36 @@ work item, not only the containing parent.
 
 source: codex:narrative-harness-spec-no-progress-recovery-2026-07-04
 
+2026-07-04T16:31:00-07:00 - Fixed resolved escalation state leaving tasks
+visibly blocked after the false proof-policy escalation.
+
+- Work id: `codex:resolve-escalation-canonical-blocker-sync-2026-07-04`.
+- User job: when Codex resolves a false blocker while acting as the owner for a
+  run, Guildhall should return the task to runnable work and every visible
+  surface should stop claiming the owner is still needed.
+- Finding:
+  - Narrative Harness task
+    `task-import-9s8tkc-split-shape-fixture-and-expected-record-ground-truth-2`
+    had an effective escalation resolved through the API, but the canonical
+    task row still had `status: blocked`, the old proof-policy `blockReason`,
+    and a stale compact `openEscalations` row.
+  - This is model sync debt: the real escalation record lives in sidecar
+    evidence, while `openEscalations` is duplicated display/cache state on the
+    task row. Resolving the sidecar record must retire the duplicate row state.
+- Fix:
+  - `resolveEscalation` now clears stale compact `openEscalations` whenever it
+    resolves the final open escalation and clears `blockReason`.
+  - `retry-work` clears the same compact `openEscalations` cache when it
+    reopens blocked work after stale/missing escalation runtime state.
+  - Added a regression for sidecar-only escalation resolution with a blocked
+    canonical task row and extended the retry-work stale runtime regression so
+    future runs cannot half-resolve the task again.
+- Verification:
+  - `./node_modules/.bin/vitest run src/tools/__tests__/escalation.test.ts src/runtime/__tests__/serve-task-endpoints.test.ts`
+    passed `121` tests.
+
+source: codex:resolve-escalation-canonical-blocker-sync-2026-07-04
+
 2026-06-15T23:52:00Z - Completed the Project Orientation Spine cross-route
 implementation and installed-app audit.
 

@@ -9387,6 +9387,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         task.status = 'in_progress'
         task.assignedTo = null
         delete task.blockReason
+        delete task.openEscalations
         task.updatedAt = now
         queue.lastUpdated = now
         if (shouldClearRuntimeEscalations) {

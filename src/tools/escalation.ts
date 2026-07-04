@@ -424,6 +424,7 @@ export async function resolveEscalation(
         task.retryWindow = retryWindowPatch
       }
       delete task.blockReason
+      delete (task as Task & { openEscalations?: unknown }).openEscalations
     }
     task.updatedAt = now
     queue.lastUpdated = now

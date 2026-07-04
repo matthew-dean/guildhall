@@ -2122,6 +2122,12 @@ describe('POST /api/project/task/:id/resume', () => {
       status: 'blocked',
       assignedTo: null,
       blockReason: 'human_judgment_required: Spec author stopped after hitting its turn limit.',
+      openEscalations: [
+        {
+          id: 'esc-task-1-stale',
+          summary: 'Stale compact escalation row',
+        },
+      ],
       notes: [],
     })
     await upsertTaskRuntimeState(tmpDir, 'task-1', {
@@ -2150,6 +2156,7 @@ describe('POST /api/project/task/:id/resume', () => {
       assignedTo: null,
     })
     expect(queue.tasks[0]?.blockReason).toBeUndefined()
+    expect(queue.tasks[0]?.openEscalations).toBeUndefined()
     expect(queue.tasks[0]?.notes.at(-1)?.content).toContain('finish the reviewable proof')
     const effective = await readEffectiveTask('task-1')
     expect(activeEscalations(effective as any)).toEqual([])
