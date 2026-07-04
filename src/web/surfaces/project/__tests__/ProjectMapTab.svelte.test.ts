@@ -158,4 +158,82 @@ describe('ProjectMapTab', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Proof Needed Proof needed: Coherence reviewer MVP. Open the linked work item to resolve this gap.' }))
     expect(path.value).toBe('/projects/narrative-harness/task/task-a')
   })
+
+  it('bounds the default map to the selected release instead of rendering every imported root', () => {
+    const noisyRoots = Array.from({ length: 80 }, (_, index) => ({
+      id: `work:later-${index}`,
+      kind: 'work',
+      title: `Later imported work ${index}`,
+      summary: 'Deferred work from a broader import.',
+      maturity: 'deferred',
+      progress: { total: 1, deferred: 1 },
+      visibility: { kind: 'supporting', countInProjectTotals: true },
+      source: { kind: 'inferred', refs: ['import:docs/later.md'], inferred: true },
+    }))
+
+    render(ProjectMapTab, {
+      detail: {
+        id: 'looma-knit',
+        name: 'Looma + Knit',
+        tasks: [],
+        orientationSpine: {
+          charter: {
+            goal: 'Keep Looma generic while letting Knit product needs drive Looma primitive priority.',
+            source: 'inferred',
+          },
+          selectedRelease: {
+            id: 'stage-1-v1-release-hardening',
+            label: 'Stage 1: V1 Release Hardening',
+            kind: 'release',
+            state: 'active',
+            source: { kind: 'release_plan', refs: ['import:knit/docs/release-plan.md'], confidence: 'medium', inferred: false },
+            nodeIds: ['work:current-a', 'work:current-b'],
+            deferredNodeIds: noisyRoots.map(root => root.id),
+          },
+          summary: {
+            selectedScopeLabel: 'Stage 1: V1 Release Hardening',
+            selectedReleaseLabel: 'Stage 1: V1 Release Hardening',
+            includedWorkCount: 2,
+            deferredWorkCount: 80,
+            progress: { total: 82, deferred: 80 },
+          },
+          roots: [
+            {
+              id: 'work:current-a',
+              kind: 'work',
+              title: 'Unit tests: use-collections',
+              summary: 'Current release work.',
+              maturity: 'idea',
+              progress: { total: 1 },
+              visibility: { kind: 'primary', countInProjectTotals: true },
+              source: { kind: 'task', refs: ['import:knit/docs/release-plan.md'] },
+            },
+            {
+              id: 'work:current-b',
+              kind: 'work',
+              title: 'E2E tests: login flow',
+              summary: 'Current release work.',
+              maturity: 'idea',
+              progress: { total: 1 },
+              visibility: { kind: 'primary', countInProjectTotals: true },
+              source: { kind: 'task', refs: ['import:knit/docs/release-plan.md'] },
+            },
+            ...noisyRoots,
+          ],
+          nodes: {},
+          gaps: [],
+          sourceHealth: { inferred: 80, gaps: 0 },
+        },
+      },
+      activeProjectId: 'looma-knit',
+    })
+
+    expect(screen.getByRole('heading', { name: 'Release scope' })).toBeInTheDocument()
+    expect(screen.getAllByText('Stage 1: V1 Release Hardening').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getByText('Unit tests: use-collections')).toBeInTheDocument()
+    expect(screen.getByText('E2E tests: login flow')).toBeInTheDocument()
+    expect(screen.queryByText('Later imported work 0')).not.toBeInTheDocument()
+    expect(screen.queryByText('Later imported work 79')).not.toBeInTheDocument()
+    expect(screen.getByText('Stage 1: V1 Release Hardening contains 2 assigned work items and 80 later.')).toBeInTheDocument()
+  })
 })

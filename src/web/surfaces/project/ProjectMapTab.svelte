@@ -20,12 +20,27 @@
   let showInternalSteps = $state(false)
 
   type Tone = 'neutral' | 'ok' | 'warn' | 'danger' | 'accent'
+  const MAX_SKELETON_ROOTS = 12
 
   const spine = $derived<ProjectOrientationSpine | null>(detail.orientationSpine ?? null)
   const progress = $derived(spine?.summary?.progress ?? null)
   const lanes = $derived(spine?.roots ?? [])
+  const selectedRelease = $derived(spine?.selectedRelease ?? null)
+  const selectedTaskScope = $derived(spine?.selectedTaskScope ?? spine?.scope ?? null)
+  const selectedScopeNodeIds = $derived.by(() => {
+    const ids = selectedRelease?.nodeIds?.length
+      ? selectedRelease.nodeIds
+      : selectedTaskScope?.nodeIds ?? []
+    return new Set(ids)
+  })
+  const scopedLanes = $derived.by(() => {
+    if (selectedScopeNodeIds.size === 0) return lanes
+    return lanes
+      .map(lane => laneInSelectedScope(lane))
+      .filter((lane): lane is ProjectOrientationNode => Boolean(lane))
+  })
   const workRoots = $derived.by(() =>
-    lanes.filter(root =>
+    scopedLanes.filter(root =>
       root.visibility?.countInProjectTotals !== false &&
       (
         (root.progress?.total ?? 0) > 0 ||
@@ -34,14 +49,20 @@
       ),
     ),
   )
-  const skeletonRoots = $derived.by(() =>
+  const allSkeletonRoots = $derived.by(() =>
     lanes.filter(root => supportingChildren(root).length > 0),
   )
+  const skeletonRoots = $derived.by(() =>
+    allSkeletonRoots.slice(0, MAX_SKELETON_ROOTS),
+  )
+  const hiddenSkeletonRootCount = $derived.by(() =>
+    Math.max(0, allSkeletonRoots.length - skeletonRoots.length),
+  )
   const documentedCapabilityCount = $derived.by(() =>
-    skeletonRoots.reduce((sum, root) => sum + supportingChildren(root).length, 0),
+    allSkeletonRoots.reduce((sum, root) => sum + supportingChildren(root).length, 0),
   )
   const documentedLaterCount = $derived.by(() =>
-    skeletonRoots.reduce((sum, root) => sum + deferredSupportingChildren(root).length, 0),
+    allSkeletonRoots.reduce((sum, root) => sum + deferredSupportingChildren(root).length, 0),
   )
   const documentedCurrentCount = $derived.by(() =>
     documentedCapabilityCount - documentedLaterCount,
@@ -53,8 +74,6 @@
   const proofContracts = $derived((spine?.proofContracts ?? []).slice(0, 6))
   const mapHeadline = $derived(spine?.charter?.goal ?? spine?.summary?.purpose ?? `${detail.name ?? detail.id ?? 'Project'} needs a confirmed project goal.`)
   const targetAudience = $derived(spine?.charter?.targetAudience ?? null)
-  const selectedRelease = $derived(spine?.selectedRelease ?? null)
-  const selectedTaskScope = $derived(spine?.selectedTaskScope ?? spine?.scope ?? null)
   const taskScopeLabel = $derived(spine?.summary?.selectedScopeLabel ?? selectedTaskScope?.label ?? spine?.summary?.selectedReleaseLabel ?? selectedRelease?.label ?? 'Current task scope')
   const selectedScopeSource = $derived(selectedRelease?.source ?? selectedTaskScope?.source)
   const workContainerTitle = $derived(selectedRelease ? 'Release scope' : 'Task scope')
@@ -172,6 +191,22 @@
   function visibleChildren(node: ProjectOrientationNode): ProjectOrientationNode[] {
     const children = node.children ?? []
     return showInternalSteps ? children : children.filter(child => !isInternalNode(child))
+  }
+
+  function laneInSelectedScope(node: ProjectOrientationNode): ProjectOrientationNode | null {
+    if (selectedScopeNodeIds.has(node.id ?? '')) {
+      const scopedChildren = (node.children ?? [])
+        .map(child => laneInSelectedScope(child))
+        .filter((child): child is ProjectOrientationNode => Boolean(child))
+      return scopedChildren.length === (node.children?.length ?? 0)
+        ? node
+        : { ...node, children: scopedChildren }
+    }
+    const scopedChildren = (node.children ?? [])
+      .map(child => laneInSelectedScope(child))
+      .filter((child): child is ProjectOrientationNode => Boolean(child))
+    if (scopedChildren.length === 0) return null
+    return { ...node, children: scopedChildren }
   }
 
   function supportingChildren(node: ProjectOrientationNode): ProjectOrientationNode[] {
@@ -435,6 +470,9 @@
               </CardListItem>
             {/each}
           </CardList>
+          {#if hiddenSkeletonRootCount > 0}
+            <p class="overflow-summary">{countLabel(hiddenSkeletonRootCount, 'additional skeleton lane')} summarized in the counts above.</p>
+          {/if}
         {/if}
       </Card>
       </div>
@@ -637,7 +675,8 @@
     margin-bottom: var(--space-3);
   }
 
-  .internal-summary {
+  .internal-summary,
+  .overflow-summary {
     margin: var(--space-2) 0 0;
     color: var(--color-text-muted);
     font-size: var(--font-size-sm);

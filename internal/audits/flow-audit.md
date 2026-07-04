@@ -14067,6 +14067,63 @@ scope communication across workspace import and orientation spine.
 
 source: codex:stage-release-scope-detection-2026-07-04
 
+2026-07-04T00:54:00Z - Completed selected-scope rendering proof for the
+Project Map.
+
+- Work id: `codex:project-map-selected-scope-rendering-2026-07-04`.
+- User job: opening Project Map should orient the owner to the selected release
+  or bounded scope immediately. It must not render every imported planning root
+  as if all of it were current, because that recreates the overwhelming
+  "amorphous blob" problem.
+- Fix:
+  - `ProjectMapTab` now derives `Tasks in scope` from the selected release or
+    selected task-scope node ids when those ids exist.
+  - Deferred/out-of-scope import roots stay out of the default task list while
+    counts and source trail still communicate that later work exists.
+  - The documented skeleton list is capped to a compact first page, with
+    additional skeleton lanes summarized in counts instead of rendered as
+    hundreds of cards.
+- Contract Touch Decision:
+  - Work id: `codex:project-map-selected-scope-rendering-2026-07-04`.
+  - Touched contracts: none persisted. This is a presentation/filtering change
+    inside the project map view consuming the existing orientation spine
+    contract.
+  - Contracts considered but not touched: orientation spine runtime contract and
+    workspace-import draft contract. The existing `selectedRelease.nodeIds` and
+    `selectedTaskScope.nodeIds` are sufficient.
+  - Required follow-up: add viewport/geometry assertions for large imported maps
+    so future regressions catch card floods before owner review.
+  - Proof required: component regression test, build, installed-app proof, and
+    browser-visible Narrative Harness plus Looma + Knit map evidence.
+  - Proof provided:
+    `pnpm vitest run src/runtime/workspace-import/__tests__/detect.test.ts src/runtime/workspace-import/__tests__/hypothesis.test.ts src/runtime/__tests__/serve-settings.test.ts src/web/surfaces/project/__tests__/ProjectMapTab.svelte.test.ts src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts`
+    passed `208` tests; `pnpm build` passed.
+  - Waivers: no schema migration, because this only changes which existing
+    spine nodes are rendered by default.
+  - Owner-review items: the Map still needs a more explicit affordance for
+    drilling into all later/deferred work without flooding the default view.
+  - Apply/revert behavior: reverting this change returns large imported maps to
+    rendering every root in the default task/skeleton lists, including
+    out-of-scope later work.
+- Installed-app proof:
+  - `pnpm dev:install`; `guildhall stop && guildhall start`.
+  - `/api/stale-server` returned `stale:false` for PID `65838` from
+    `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+  - Looma + Knit rendered `/projects/looma-knit/map` in the in-app browser and
+    visibly contained `Release scope`, `Stage 1: V1 Release Hardening`,
+    `8 assigned work items`, and source-trail text
+    `Stage 1: V1 Release Hardening contains 8 assigned work items and 25 later.`
+    It did not contain the generic `Current task scope` label. The rendered map
+    had 11 lane headings, not the 328 raw roots exposed by the full spine.
+  - Narrative Harness rendered `/projects/narrative-harness/map` in the in-app
+    browser and visibly contained `Release scope`, `Stage 0: Spec Baseline`,
+    `6 assigned work items`, and source-trail text
+    `Stage 0: Spec Baseline contains 6 assigned work items and 12 later.` It
+    did not contain the generic `Current task scope` label. The rendered map had
+    10 lane headings.
+
+source: codex:project-map-selected-scope-rendering-2026-07-04
+
 2026-06-15T23:52:00Z - Completed the Project Orientation Spine cross-route
 implementation and installed-app audit.
 
