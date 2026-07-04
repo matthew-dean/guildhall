@@ -496,7 +496,7 @@ function evidenceTaskSpec(input: {
   const referencedContent = input.references
     .map(reference => sourcesByPath.get(reference))
     .filter((content): content is string => Boolean(content))
-  const contractNames = unique(referencedContent.flatMap(extractNeededContractNames))
+  const contractNames = unique(referencedContent.flatMap(content => extractNeededContractNames(content, input.task.title)))
   return [
     '## What this is',
     input.task.title,
@@ -518,23 +518,88 @@ function evidenceTaskSpec(input: {
   ].join('\n')
 }
 
-function extractNeededContractNames(content: string): string[] {
-  const names: string[] = []
+function splitMarkdownSectionsForReintake(content: string): Array<{ heading: string; body: string }> {
   const lines = content.split(/\r?\n/)
-  let collecting = false
+  const sections: Array<{ heading: string; body: string }> = []
+  let currentHeading = '(intro)'
+  let currentBody: string[] = []
   for (const line of lines) {
-    const trimmed = line.trim()
-    if (/^needed contracts\s*:/i.test(trimmed)) {
-      collecting = true
+    const heading = /^#{2,6}\s+(.+?)\s*$/.exec(line)
+    if (heading) {
+      sections.push({ heading: currentHeading, body: currentBody.join('\n').trim() })
+      currentHeading = heading[1]!.trim()
+      currentBody = []
       continue
     }
-    if (collecting && (/^#{1,6}\s+/.test(trimmed) || /^[A-Z][A-Za-z ]+\s*:\s*$/.test(trimmed))) {
-      collecting = false
+    currentBody.push(line)
+  }
+  sections.push({ heading: currentHeading, body: currentBody.join('\n').trim() })
+  return sections
+}
+
+function normalizeContractMatchText(value: string): string {
+  return value
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .toLowerCase()
+    .replace(/[`*_~]/g, '')
+    .replace(/[^a-z0-9\s-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function contractMatchKeywords(title: string): string[] {
+  const generic = new Set([
+    'define',
+    'using',
+    'schema',
+    'schemas',
+    'contract',
+    'contracts',
+    'concrete',
+    'cited',
+    'docs',
+    'record',
+    'records',
+    'run',
+    'runs',
+  ])
+  const keywords = new Set<string>()
+  for (const word of normalizeContractMatchText(title).split(/\s+/)) {
+    if (!generic.has(word) && word.length >= 4) keywords.add(word)
+    for (const part of word.split('-')) {
+      if (!generic.has(part) && part.length >= 4) keywords.add(part)
     }
-    if (!collecting || !/^[-*]\s+/.test(trimmed)) continue
-    const match = /^[-*]\s+`([^`\n]{2,80})`/.exec(trimmed)
-    const name = match?.[1]?.trim()
-    if (name && /^[A-Za-z][A-Za-z0-9_-]+$/.test(name)) names.push(name)
+  }
+  return [...keywords]
+}
+
+function contractSectionMatchesTask(section: { heading: string; body: string }, taskTitle: string): boolean {
+  const contractNames = [...section.body.matchAll(/`([^`\n]{2,80})`/g)].map(match => match[1] ?? '').join(' ')
+  const haystack = normalizeContractMatchText(`${section.heading}\n${contractNames}`)
+  return contractMatchKeywords(taskTitle).some(keyword => haystack.includes(keyword))
+}
+
+function extractNeededContractNames(content: string, taskTitle: string): string[] {
+  const names: string[] = []
+  for (const section of splitMarkdownSectionsForReintake(content)) {
+    if (!/\bneeded contracts\s*:/i.test(section.body)) continue
+    if (!contractSectionMatchesTask(section, taskTitle)) continue
+    const lines = section.body.split(/\r?\n/)
+    let collecting = false
+    for (const line of lines) {
+      const trimmed = line.trim()
+      if (/^needed contracts\s*:/i.test(trimmed)) {
+        collecting = true
+        continue
+      }
+      if (collecting && /^[A-Z][A-Za-z ]+\s*:\s*$/.test(trimmed)) {
+        collecting = false
+      }
+      if (!collecting || !/^[-*]\s+/.test(trimmed)) continue
+      const match = /^[-*]\s+`([^`\n]{2,80})`/.exec(trimmed)
+      const name = match?.[1]?.trim()
+      if (name && /^[A-Za-z][A-Za-z0-9_-]+$/.test(name)) names.push(name)
+    }
   }
   return names
 }

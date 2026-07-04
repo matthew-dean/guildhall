@@ -4063,6 +4063,30 @@ tasks:
         '- `PrototypeRun`',
         '- `RunEvaluation`',
         '- `PacketQualityScore`',
+        '',
+        '## Provider Registry Schema',
+        '',
+        'Needed contracts:',
+        '- `ProviderRegistryEntry`',
+        '- `ModelRegistryEntry`',
+        '',
+        'Purpose:',
+        '- record provider privacy and retention claims',
+        '',
+        '## Schema Versioning And Migration',
+        '',
+        'Needed contracts:',
+        '- `SchemaVersion`',
+        '- `RecordVersion`',
+        '',
+        'Purpose:',
+        '- migrate fixture data as schemas narrow',
+        '',
+        '## Import Export Schema',
+        '',
+        'Needed contracts:',
+        '- `ImportManifest`',
+        '- `ExportManifest`',
       ].join('\n'),
       'utf-8',
     )
@@ -4153,6 +4177,9 @@ tasks:
     expect(task?.spec).toContain('`FixtureManifest`')
     expect(task?.spec).toContain('`ExpectedRecordSet`')
     expect(task?.spec).toContain('`PrototypeRun`')
+    expect(task?.spec).not.toContain('`ProviderRegistryEntry`')
+    expect(task?.spec).not.toContain('`ImportManifest`')
+    expect(task?.spec).not.toContain('`SchemaVersion`')
     expect(task?.spec).not.toContain('`coherence-reviewer-mvp`')
     expect(task?.spec).not.toContain('`decision-trace-pipeline`')
     expect(task?.spec).not.toContain('`author-voice-loop-mvp`')

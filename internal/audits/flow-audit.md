@@ -12,6 +12,74 @@ This is the active browser test plan for the Guildhall project surface. Keep it
 updated while auditing the active test project so another agent can resume
 without guessing.
 
+2026-07-04T06:45:00Z - Narrowed Narrative Harness contract extraction so visible
+task specs do not absorb adjacent roadmap contracts.
+
+- Work id: `codex:narrative-harness-contract-family-visible-proof-2026-07-04`.
+- User job: when Guildhall displays the Narrative Harness Stage 1 schema task,
+  the owner must see the contracts that belong to that task, not every
+  backticked contract in the same broad roadmap document. This is part of the
+  visible orientation contract: Guildhall has to prove that it knows the work
+  shape, not merely recover source files that Codex can inspect.
+- Failure reproduced:
+  - A contaminated schema roadmap with fixture/run contracts plus provider,
+    model, import/export, and version contracts made the importer include
+    `ProviderRegistryEntry`, `ImportManifest`, and `SchemaVersion` in the
+    fixture/prototype schema task spec.
+- Fix:
+  - Re-intake and workspace-import contract extraction now split Markdown into
+    sections and only collect `Needed contracts` from sections whose terms match
+    the task title after generic words such as `schema` and `contract` are
+    ignored.
+  - The rendered Narrative Harness fixture now includes unrelated provider and
+    import/export sections so the browser-flow proof can catch future
+    over-collection.
+- Contract Touch Decision:
+  - Work id:
+    `codex:narrative-harness-contract-family-visible-proof-2026-07-04`.
+  - Touched contracts: workspace-import evidence-detail contract extraction and
+    re-intake task-spec generation.
+  - Contracts considered but not touched: persisted task schema, release schema,
+    orientation-spine API shape, and task-detail API shape.
+  - Required follow-up: continue from import drafts into brief/spec shaping for
+    the selected Stage 1 scope; do not approve or run until the visible specs
+    stay source-grounded.
+  - Proof required/provided: focused red/green tests, full importer/re-intake
+    unit suites, rendered-flow fixture contamination.
+  - Apply/revert behavior: reverting restores broad section matching and can
+    reintroduce unrelated contracts into visible task specs.
+- Verification:
+  - `./node_modules/.bin/vitest run
+    src/runtime/__tests__/project-reintake-apply.test.ts
+    src/runtime/__tests__/workspace-importer.test.ts` passed `83` tests.
+  - `/opt/homebrew/bin/pnpm build`, `/opt/homebrew/bin/pnpm lint:contracts`,
+    and `git diff --check` passed.
+  - `/opt/homebrew/bin/pnpm exec playwright test
+    tests/rendered-ui/project-flow.spec.ts -g "Narrative Harness re-intake
+    apply remains visible"` passed.
+  - Installed-app proof after `pnpm dev:install`, `guildhall stop`, and
+    `guildhall start`: `/api/stale-server` returned `stale:false`.
+  - Live Narrative Harness proof after re-intake rerun/apply:
+    `POST /api/project/reintake/apply?projectId=narrative-harness` returned
+    `{ "success": true, "appliedGroups": 4 }`.
+  - Live `/api/project/task/task-import-9s8tkc?projectId=narrative-harness`
+    returned the Stage 1 schema task with `FixtureManifest`,
+    `ExpectedRecordSet`, `PrototypeRun`, `RunEvaluation`, and
+    `PacketQualityScore` present, while `ProviderRegistryEntry`,
+    `ModelRegistryEntry`, `ImportManifest`, `SchemaVersion`, and
+    `RecordVersion` were absent.
+  - Live `/api/project?projectId=narrative-harness` agreed on selected release
+    `Stage 1: Fixture And Evaluation Harness`, `7` included work items, `8`
+    deferred work items, and the same narrowed task spec.
+  - In-app browser proof partially succeeded on `/projects/narrative-harness/work?task=task-import-9s8tkc`:
+    the visible Work page showed Stage 1, seven current tasks needing briefs,
+    and the first task title. Browser automation then timed out on direct task
+    and Map navigation, so the visible contract-family proof for those surfaces
+    is covered by the rendered Playwright route test and live APIs, not a
+    manual screenshot in this pass.
+
+source: codex:narrative-harness-contract-family-visible-proof-2026-07-04
+
 2026-07-04T06:30:00Z - Proved Narrative Harness source truth is visible through
 Guildhall surfaces, not just recoverable by Codex.
 

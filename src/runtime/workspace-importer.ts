@@ -3375,9 +3375,11 @@ function markdownSectionAllowsContractNameExtraction(section: {
   body: string
   contractSection: boolean
   genericSequenceSection: boolean
+  matchesTaskContractTerms: boolean
   sectionMatchesReferenceSlug: boolean
 }): boolean {
   if (!section.contractSection || section.genericSequenceSection) return false
+  if (!section.matchesTaskContractTerms) return false
   if (/\bneeded contracts\s*:/i.test(section.body)) return true
   return section.sectionMatchesReferenceSlug
 }
@@ -3422,6 +3424,42 @@ function readImportedReferenceContent(
 function keywordOverlapScore(text: string, keywords: readonly string[]): number {
   const haystack = normalizeImportText(text)
   return keywords.reduce((sum, keyword) => sum + (haystack.includes(keyword) ? 1 : 0), 0)
+}
+
+function contractSectionMatchKeywords(taskTitle: string): string[] {
+  const generic = new Set([
+    'define',
+    'using',
+    'schema',
+    'schemas',
+    'contract',
+    'contracts',
+    'concrete',
+    'cited',
+    'docs',
+    'record',
+    'records',
+    'run',
+    'runs',
+  ])
+  const keywords = new Set<string>()
+  for (const word of normalizeContractSectionText(taskTitle).split(/\s+/)) {
+    if (!generic.has(word) && word.length >= 4) keywords.add(word)
+    for (const part of word.split('-')) {
+      if (!generic.has(part) && part.length >= 4) keywords.add(part)
+    }
+  }
+  return [...keywords]
+}
+
+function normalizeContractSectionText(value: string): string {
+  return normalizeImportText(value.replace(/([a-z0-9])([A-Z])/g, '$1 $2'))
+}
+
+function contractSectionMatchesTask(section: { heading: string; body: string }, taskTitle: string): boolean {
+  const contractNames = [...section.body.matchAll(/`([^`\n]{2,80})`/g)].map(match => match[1] ?? '').join(' ')
+  const haystack = normalizeContractSectionText(`${section.heading}\n${contractNames}`)
+  return contractSectionMatchKeywords(taskTitle).some(keyword => haystack.includes(keyword))
 }
 
 function importedReferenceSlug(reference: string): string | null {
@@ -3535,6 +3573,7 @@ function extractReferenceEvidenceDetail(
         const contractSection =
           /\b(schema|trace|run record|fixture shape|prototype run|expected-record|needed contracts|first mvp candidate|minimum prototype requirements)\b/i.test(section.heading) ||
           /\bneeded contracts:\b/i.test(section.body)
+        const matchesTaskContractTerms = contractSectionMatchesTask(section, task.title)
         const verificationSection =
           /\b(verification|evaluation|rubric|run record|trace spine|success criteria)\b/i.test(section.heading) ||
           /\b(evaluate|evaluation|proof|trace|pass signal|run summary)\b/i.test(section.body)
@@ -3546,12 +3585,13 @@ function extractReferenceEvidenceDetail(
             score +
             (exactTaskTitleInSection ? 12 : 0) +
             (sectionMatchesReferenceSlug ? 10 : 0) +
-            (titleSuggestsContracts && contractSection ? 6 : 0) +
+            (titleSuggestsContracts && contractSection && matchesTaskContractTerms ? 6 : 0) +
             (verificationSection ? 2 : 0) -
             (sectionMentionsAnotherSpecSlug ? 12 : 0) -
             (sectionMentionsOtherRecommendedTask ? 5 : 0) -
             (genericSequenceSection ? 4 : 0),
           contractSection,
+          matchesTaskContractTerms,
           verificationSection,
           genericSequenceSection,
           sectionMatchesReferenceSlug,
@@ -3561,7 +3601,7 @@ function extractReferenceEvidenceDetail(
       .filter(section =>
         (!inventoryStyleReference || !section.sectionMentionsAnotherSpecSlug) && (
           section.score > 0 ||
-        section.contractSection ||
+        (section.contractSection && section.matchesTaskContractTerms) ||
         section.verificationSection ||
           sections.length === 1
         ),

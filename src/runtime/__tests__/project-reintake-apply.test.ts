@@ -110,6 +110,30 @@ const narrativeSchemaRoadmap = [
   '- `PrototypeRun`',
   '- `RunEvaluation`',
   '- `PacketQualityScore`',
+  '',
+  '## Provider Registry Schema',
+  '',
+  'Needed contracts:',
+  '- `ProviderRegistryEntry`',
+  '- `ModelRegistryEntry`',
+  '',
+  'Purpose:',
+  '- record provider privacy and retention claims',
+  '',
+  '## Schema Versioning And Migration',
+  '',
+  'Needed contracts:',
+  '- `SchemaVersion`',
+  '- `RecordVersion`',
+  '',
+  'Purpose:',
+  '- migrate fixture data as schemas narrow',
+  '',
+  '## Import Export Schema',
+  '',
+  'Needed contracts:',
+  '- `ImportManifest`',
+  '- `ExportManifest`',
 ].join('\n')
 
 describe('project re-intake apply', () => {
@@ -328,6 +352,9 @@ describe('project re-intake apply', () => {
     })
     expect(refreshed?.spec).toContain('`FixtureManifest`')
     expect(refreshed?.spec).toContain('`PrototypeRun`')
+    expect(refreshed?.spec).not.toContain('`ProviderRegistryEntry`')
+    expect(refreshed?.spec).not.toContain('`ImportManifest`')
+    expect(refreshed?.spec).not.toContain('`SchemaVersion`')
     expect(refreshed?.spec).not.toMatch(/coherence-reviewer-mvp|decision-trace-pipeline|author-voice-loop-mvp|context-packet-compaction-core/)
     expect(refreshed?.notes.some((note: { content?: string }) => note.content?.includes('Re-intake'))).toBe(true)
   })
