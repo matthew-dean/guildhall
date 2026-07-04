@@ -5377,15 +5377,43 @@ export function buildServeApp(opts: ServeOptions = {}): {
         savedWorkspaceGoals.tasks.length > 0 ||
         savedWorkspaceGoals.context.length > 0
       )) {
+        let detectedReleaseDraft: Awaited<ReturnType<typeof materializeWorkspaceImportDraft>> | null = null
+        try {
+          const inventory = await detectWorkspaceSignals({ projectPath })
+          detectedReleaseDraft = await materializeWorkspaceImportDraft({
+            memoryDir: getProjectStateDir(projectPath),
+            projectPath,
+            draft: formWorkspaceHypothesis(inventory),
+          })
+        } catch {
+          detectedReleaseDraft = null
+        }
+        const releaseIdsByTitle = new Map(
+          (detectedReleaseDraft?.tasks ?? []).map(task => [
+            task.title.trim().toLowerCase(),
+            task.releaseIds ? [...task.releaseIds] : [],
+          ]),
+        )
         return {
-          releases: [],
+          releases: (detectedReleaseDraft?.releases ?? []).map(release => ({
+            id: release.id,
+            label: release.label,
+            source: release.source === 'release_plan' || release.source === 'spec' || release.source === 'owner_approved'
+              ? release.source
+              : 'release_plan' as const,
+            state: 'active' as const,
+          })),
           tasks: savedWorkspaceGoals.tasks.map(task => ({
             id: task.id,
             title: task.title,
             description: task.whyThisMayMatter ?? task.description,
             domain: task.domain,
             scope: task.scope === 'later' ? 'later' : 'current',
-            releaseIds: task.scope === 'later' ? [] : task.releaseIds ? [...task.releaseIds] : undefined,
+            releaseIds: task.scope === 'later'
+              ? []
+              : task.releaseIds?.length
+                ? [...task.releaseIds]
+                : releaseIdsByTitle.get(task.title.trim().toLowerCase()),
             refs: task.references?.map(ref => `import:${ref}`) ?? ['workspace-import:approved'],
           })),
           contexts: savedWorkspaceGoals.context
@@ -6825,6 +6853,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       // first: real findings the user can Approve or Dismiss *now*.
       let detected: {
         goals: unknown[]
+        releases?: unknown[]
         tasks: unknown[]
         milestones: unknown[]
         context: unknown[]
@@ -6842,6 +6871,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         const review = buildWorkspaceImportReview(draft, existingTasks, projectPath)
         detected = {
           goals: [...draft.goals],
+          ...(draft.releases?.length ? { releases: [...draft.releases] } : {}),
           tasks: [...draft.tasks],
           milestones: [...draft.milestones],
           context: [...draft.context],
@@ -6859,6 +6889,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const detectedDraft = detected
         ? {
             goals: detected.goals,
+            ...(detected.releases?.length ? { releases: detected.releases } : {}),
             tasks: detected.tasks,
             milestones: detected.milestones,
             context: detected.context,

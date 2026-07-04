@@ -160,6 +160,53 @@ describe('formWorkspaceHypothesis', () => {
     expect(draft.tasks[0]?.releaseIds).toEqual(['2-0-alpha'])
   })
 
+  it('assigns untagged current work to the matching documented current release scope', () => {
+    const draft = formWorkspaceHypothesis(
+      invFrom([
+        {
+          source: 'planning-docs',
+          kind: 'context',
+          title: 'Stage 1: V1 Release Hardening',
+          evidence: 'docs/release-plan.md: ## Stage 1: V1 Release Hardening',
+          references: ['docs/release-plan.md'],
+          scopeHint: 'current',
+          releaseId: 'stage-1-v1-release-hardening',
+          releaseLabel: 'Stage 1: V1 Release Hardening',
+          confidence: 'medium',
+        },
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'Harden editor link controls',
+          evidence: 'docs/release-plan.md: - Harden editor link controls',
+          references: ['docs/release-plan.md'],
+          scopeHint: 'current',
+          confidence: 'high',
+        },
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'Finish later visual polish',
+          evidence: 'docs/release-plan.md: - Finish later visual polish',
+          references: ['docs/release-plan.md'],
+          scopeHint: 'later',
+          confidence: 'high',
+        },
+      ]),
+    )
+
+    expect(draft.releases).toEqual([
+      expect.objectContaining({
+        id: 'stage-1-v1-release-hardening',
+        label: 'Stage 1: V1 Release Hardening',
+      }),
+    ])
+    expect(draft.tasks.find(task => task.title === 'Harden editor link controls')?.releaseIds).toEqual([
+      'stage-1-v1-release-hardening',
+    ])
+    expect(draft.tasks.find(task => task.title === 'Finish later visual polish')?.releaseIds).toBeUndefined()
+  })
+
   it('lets explicit later scope win when duplicate planning signals disagree', () => {
     const draft = formWorkspaceHypothesis(
       invFrom([

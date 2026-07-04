@@ -13989,6 +13989,84 @@ orientation spine before approval.
 
 source: codex:workspace-import-draft-release-orientation-2026-07-03
 
+2026-07-04T00:36:00Z - Completed installed-app proof for detected release
+scope communication across workspace import and orientation spine.
+
+- Work id: `codex:stage-release-scope-detection-2026-07-04`.
+- User job: a project owner should not need repo access or agent memory to
+  understand which bounded release/scope Guildhall is using. If planning docs
+  define a current numbered stage, Guildhall should expose that stage as a
+  release/scope container in import review, project map/spine, and project
+  summary APIs.
+- Fix:
+  - Planning-doc detection now treats a current numbered stage as a release
+    container when there is no explicit `Release:` heading.
+  - Workspace-import hypothesis formation records release containers from
+    context signals, not only open-work signals, and assigns current untagged
+    work to the matching detected release by source references.
+  - `/api/project/workspace-import/draft` now returns detected release
+    containers alongside release-tagged tasks, so the UI is not forced to infer
+    release names from hidden task metadata.
+  - Approved workspace-import orientation now keeps the approved task slice but
+    borrows live detected release labels and matching release membership, so
+    Map/Overview do not fall back to generic `Current task scope` when import
+    review already knows the release.
+- Contract Touch Decision:
+  - Work id: `codex:stage-release-scope-detection-2026-07-04`.
+  - Touched contracts: workspace-import draft response shape
+    (`detected.releases` and `effective.releases`); orientation spine
+    workspace-import augmentation input; planning-doc signal release metadata.
+  - Contracts considered but not touched: persisted project task schema and
+    persisted `workspace-goals.json` schema. The change enriches runtime
+    orientation from live detection and does not require rewriting saved tasks.
+  - Required follow-up: decide whether approved workspace-goals should persist
+    named release containers directly during the next schema-bearing release
+    work, instead of borrowing live detector release labels at read time.
+  - Proof required: detector unit tests, hypothesis tests, route tests, installed
+    API proof, and at least one rendered project-map proof.
+  - Proof provided:
+    `pnpm vitest run src/runtime/workspace-import/__tests__/detect.test.ts src/runtime/workspace-import/__tests__/hypothesis.test.ts src/runtime/__tests__/workspace-import-review.test.ts src/runtime/__tests__/project-orientation-spine.test.ts src/runtime/__tests__/serve-dashboard.test.ts src/runtime/__tests__/serve-settings.test.ts src/web/surfaces/project/__tests__/ProjectMapTab.svelte.test.ts src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts src/web/surfaces/project/__tests__/WorkspaceImportTab.svelte.test.ts`
+    passed `252` tests.
+  - Waivers: no persisted schema migration is included because existing saved
+    imports remain readable and the new release labels are runtime enrichment
+    from the live detector.
+  - Owner-review items: confirm whether `Stage 0: Spec Baseline` is the right
+    selected Narrative Harness release or whether Guildhall should infer the
+    first executable harness stage as the current release after re-intake.
+  - Apply/revert behavior: reverting this change returns approved imported
+    scopes to generic `Current task scope` in orientation surfaces even when
+    import review detects named releases.
+- Installed-app proof:
+  - `pnpm build`; `pnpm dev:install`; `guildhall stop && guildhall start`.
+  - `/api/stale-server` returned `stale:false` for PID `93386` from
+    `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+  - Narrative Harness `/api/project/workspace-import/draft` returned two
+    detected releases: `Stage 0: Spec Baseline` and
+    `Stage 1: Fixture And Evaluation Harness`; six current release-tagged
+    tasks were visible in the response.
+  - Narrative Harness `/api/project/spine?projectId=narrative-harness`
+    returned selected scope/release `Stage 0: Spec Baseline`, six included,
+    twelve deferred, and headline `Stage 0: Spec Baseline is waiting on proof.`
+  - Narrative Harness `/api/project?projectId=narrative-harness` agreed with
+    the same selected release/scope and counts.
+  - Narrative Harness rendered page proof:
+    `/projects/narrative-harness/map` visibly contained `Release scope`,
+    `Stage 0: Spec Baseline`, `6 assigned work items`, and source-trail text
+    `Stage 0: Spec Baseline contains 6 assigned work items and 12 later.`
+    The page did not contain the generic `Current task scope` label.
+  - Looma + Knit `/api/project/workspace-import/draft` returned two detected
+    releases: `Stage 1: V1 Release Hardening` and
+    `Stage 1: Finish Knit Primitive Replacement Wave`; 38 release-tagged tasks
+    were visible in the response.
+  - Looma + Knit `/api/project/spine?projectId=looma-knit` returned selected
+    scope/release `Stage 1: V1 Release Hardening`, eight included, twenty-five
+    deferred, and headline `Stage 1: V1 Release Hardening needs attention.`
+  - Remaining proof gap: the Looma + Knit rendered map did not complete inside
+    the browser helper's 60 second timeout. Treat this as a follow-up
+    performance/verification gap rather than rendered UI proof for that route.
+
+source: codex:stage-release-scope-detection-2026-07-04
+
 2026-06-15T23:52:00Z - Completed the Project Orientation Spine cross-route
 implementation and installed-app audit.
 

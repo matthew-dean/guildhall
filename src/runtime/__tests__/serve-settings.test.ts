@@ -2393,6 +2393,160 @@ describe('Workspace Import review endpoints', () => {
     expect(typeof body.detected!.stats.inputSignals).toBe('number')
   })
 
+  it('draft endpoint exposes detected release containers alongside release-tagged tasks', async () => {
+    await fs.mkdir(path.join(tmpDir, 'docs'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'release-plan.md'),
+      [
+        '# Release Plan',
+        '',
+        '## Stage 1: V1 Release Hardening',
+        '',
+        'Scope:',
+        '- Fill the most important unit and E2E gaps.',
+        '',
+        '## Current Next Milestone',
+        '',
+        'The next milestone is Stage 1: V1 Release Hardening.',
+        '',
+        '1. Fill the most important unit and E2E gaps.',
+        '',
+        '## Stage 2: Primitive Convergence',
+        '',
+        'Scope:',
+        '- Finish remaining high-use primitive replacement.',
+      ].join('\n'),
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'package.json'),
+      JSON.stringify({ name: 'release-preview', scripts: {} }),
+      'utf8',
+    )
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(scoped('/api/project/workspace-import/draft')))
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      detected: {
+        releases?: Array<{ id: string; label: string }>
+        tasks: Array<{ title: string; releaseIds?: string[] }>
+      } | null
+      effective?: {
+        releases?: Array<{ id: string; label: string }>
+      } | null
+    }
+    expect(body.detected?.releases).toEqual([
+      expect.objectContaining({
+        id: 'stage-1-v1-release-hardening',
+        label: 'Stage 1: V1 Release Hardening',
+      }),
+    ])
+    expect(body.effective?.releases).toEqual(body.detected?.releases)
+    expect(body.detected?.tasks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        title: 'Fill the most important unit and E2E gaps.',
+        releaseIds: ['stage-1-v1-release-hardening'],
+      }),
+    ]))
+  })
+
+  it('project orientation keeps approved import scope attached to detected release containers', async () => {
+    await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'harness', 'implementation-roadmap.md'),
+      [
+        '# Implementation Roadmap',
+        '',
+        '## Stage 1: Fixture And Evaluation Harness',
+        '',
+        '## Current Next Milestone',
+        '',
+        'The next milestone is Stage 1: Fixture And Evaluation Harness.',
+        '',
+        '1. Define fixture, expected-record, prototype-run, and evaluation schemas.',
+      ].join('\n'),
+      'utf8',
+    )
+    await fs.writeFile(path.join(tmpDir, 'package.json'), JSON.stringify({ name: 'approved-release-orientation' }), 'utf8')
+    await writeSystemTasks({
+      version: 1,
+      lastUpdated: '2026-01-01T00:00:00.000Z',
+      tasks: [
+        {
+          id: 'task-workspace-import',
+          title: 'Review existing project work',
+          description: 'Reserved importer',
+          domain: '_workspace_import',
+          projectPath: tmpDir,
+          status: 'done',
+          priority: 'normal',
+          acceptanceCriteria: [],
+          dependsOn: [],
+          outOfScope: [],
+          spec: '```yaml\ntasks: []\n```',
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          adjudications: [],
+          escalations: [],
+          agentIssues: [],
+          origination: 'system',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+        },
+      ],
+    })
+    await writeSystemJson('workspace-goals.json', {
+      version: 3,
+      recordedAt: '2026-01-01T00:00:00.000Z',
+      goals: [],
+      tasks: [
+        {
+          id: 'imported-one',
+          title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+          description: 'Saved approved task.',
+          domain: 'harness',
+          priority: 'high',
+          references: ['docs/harness/implementation-roadmap.md'],
+          scope: 'current',
+        },
+      ],
+      milestones: [],
+      context: [],
+      approved: {
+        goalCount: 0,
+        taskCount: 1,
+        milestoneCount: 0,
+        currentTaskCount: 1,
+        laterTaskCount: 0,
+        taskIds: ['imported-one'],
+        currentTaskIds: ['imported-one'],
+        laterTaskIds: [],
+      },
+      detected: null,
+    })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(scoped('/api/project')))
+
+    expect(res.status).toBe(200)
+    const body = await res.json() as {
+      orientationSpine?: {
+        summary?: { selectedReleaseLabel?: string | null; selectedScopeLabel?: string | null }
+        selectedRelease?: { id?: string; label?: string; nodeIds?: string[] } | null
+      }
+    }
+    expect(body.orientationSpine?.summary?.selectedReleaseLabel).toBe('Stage 1: Fixture And Evaluation Harness')
+    expect(body.orientationSpine?.summary?.selectedScopeLabel).toBe('Stage 1: Fixture And Evaluation Harness')
+    expect(body.orientationSpine?.selectedRelease).toMatchObject({
+      id: 'stage-1-fixture-and-evaluation-harness',
+      label: 'Stage 1: Fixture And Evaluation Harness',
+      nodeIds: ['work:workspace-import:imported-one'],
+    })
+  })
+
   it('draft endpoint prefers the approved workspace-goals state over a stale importer task spec', async () => {
     await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
     await fs.writeFile(
@@ -3467,7 +3621,7 @@ describe('Workspace Import review endpoints', () => {
     expect(body.startReadiness?.message).toContain('under-scoped')
     expect(body.startReadiness?.message).toContain('Define fixture, expected-record, prototype-run, and evaluation schemas.')
     expect(body.orientationSpine?.summary).toMatchObject({
-      headline: 'Current task scope needs import refresh.',
+      headline: 'Stage 1: Fixture And Evaluation Harness needs import refresh.',
       topBlocker: 'Workspace import is under-scoped.',
       nextAction: 'Refresh the workspace import.',
     })
@@ -4107,6 +4261,8 @@ describe('Workspace Import review endpoints', () => {
         currentTaskCount: 1,
         laterTaskCount: 0,
         taskIds: ['imported-one'],
+        currentTaskIds: ['imported-one'],
+        laterTaskIds: [],
       },
       detected: null,
     })

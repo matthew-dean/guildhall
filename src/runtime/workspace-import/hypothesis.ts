@@ -394,9 +394,9 @@ export function formWorkspaceHypothesis(
   }
 
   for (const sig of inventory.signals) {
+    addRelease(releaseIndex, sig, bump)
     if (sig.kind === 'goal') addGoal(goalIndex, sig, bump)
     else if (sig.kind === 'open_work') {
-      addRelease(releaseIndex, sig, bump)
       if (isContextualOpenWork(sig)) addContext(contextIndex, sig)
       else addTask(taskIndex, sig, bump)
     }
@@ -412,7 +412,10 @@ export function formWorkspaceHypothesis(
   const goals = [...goalIndex.values()]
   const releases = [...releaseIndex.values()]
   const context = [...contextIndex.values()]
-  const tasks = enrichTasksWithRelatedContext([...taskIndex.values()], context)
+  const tasks = assignCurrentReleaseScopes(
+    enrichTasksWithRelatedContext([...taskIndex.values()], context),
+    releases,
+  )
   const milestones = [...milestoneIndex.values()]
 
   return {
@@ -704,6 +707,31 @@ function enrichTasksWithRelatedContext(
     return {
       ...task,
       references: mergeReferences(task.references, relatedReferences),
+    }
+  })
+}
+
+function assignCurrentReleaseScopes(
+  tasks: DraftTask[],
+  releases: readonly DraftRelease[],
+): DraftTask[] {
+  if (tasks.length === 0 || releases.length === 0) return tasks
+  const releasesWithRefs = releases.map(release => ({
+    release,
+    refs: new Set(release.references ?? []),
+  }))
+  return tasks.map(task => {
+    if (task.scope === 'later' || task.releaseIds?.length) return task
+    const matching = releasesWithRefs
+      .filter(entry => {
+        if (releases.length === 1) return true
+        return (task.references ?? []).some(ref => entry.refs.has(ref))
+      })
+      .map(entry => entry.release.id)
+    if (matching.length === 0) return task
+    return {
+      ...task,
+      releaseIds: [...new Set(matching)],
     }
   })
 }

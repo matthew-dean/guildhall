@@ -757,6 +757,54 @@ Done gate:
     }))
   })
 
+  it('treats the current numbered stage as the release scope when no explicit release heading exists', async () => {
+    mkdirSync(join(dir, 'docs'), { recursive: true })
+    writeFileSync(
+      join(dir, 'docs', 'release-plan.md'),
+      `# Release Plan
+
+## Stage 1: V1 Release Hardening
+
+Scope:
+
+- Fill the most important unit and E2E gaps.
+
+## Stage 2: Primitive Convergence
+
+Scope:
+
+- Finish remaining high-use primitive replacement.
+`,
+    )
+
+    const sigs = await planningDocsSource.detect({
+      projectPath: dir,
+      exec: fakeExec(() => ({
+        stdout: ['docs/release-plan.md'].join('\n'),
+        code: 0,
+      })),
+    })
+
+    expect(sigs).toContainEqual(expect.objectContaining({
+      kind: 'context',
+      title: 'Fill the most important unit and E2E gaps.',
+      scopeHint: 'current',
+      releaseId: 'stage-1-v1-release-hardening',
+      releaseLabel: 'Stage 1: V1 Release Hardening',
+    }))
+    expect(sigs).toContainEqual(expect.objectContaining({
+      kind: 'open_work',
+      title: 'Finish remaining high-use primitive replacement.',
+      scopeHint: 'later',
+    }))
+    expect(sigs).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        title: 'Finish remaining high-use primitive replacement.',
+        releaseId: 'stage-1-v1-release-hardening',
+      }),
+    ]))
+  })
+
   it('marks deferred checklist items as later even when they appear in status history', async () => {
     writeFileSync(
       join(dir, 'PROJECT_STATE.md'),

@@ -641,6 +641,13 @@ export const planningDocsSource: TaskSource = {
             currentReleaseId = releaseIdFromLabel(releaseLabel)
             currentReleaseLabel = releaseLabel
             currentReleaseDepth = headingDepth
+          } else if (STAGE_HEADING_RE.test(currentSection)) {
+            const stageScopeHint = scopeHintForStage(currentSection, currentMilestoneStage)
+            if (!currentReleaseId && stageScopeHint === 'current') {
+              currentReleaseId = releaseIdFromLabel(currentSection)
+              currentReleaseLabel = currentSection
+              currentReleaseDepth = headingDepth
+            }
           }
           currentLabel = null
           bulletStack.length = 0
@@ -659,13 +666,18 @@ export const planningDocsSource: TaskSource = {
             })
           }
           if (STAGE_HEADING_RE.test(currentSection)) {
+            const scopeHint = scopeHintForStage(currentSection, currentMilestoneStage)
+            const releaseId = currentReleaseIdForScope(currentReleaseId, scopeHint)
+            const releaseLabel = releaseId ? currentReleaseLabel : null
             signals.push({
               source: 'planning-docs',
               kind: 'context',
               title: currentSection,
               evidence: `${rel}: ${line.trim()}`.slice(0, 240),
               references: [abs],
-              scopeHint: scopeHintForStage(currentSection, currentMilestoneStage),
+              scopeHint,
+              ...(releaseId ? { releaseId } : {}),
+              ...(releaseLabel ? { releaseLabel } : {}),
               ...(domainHint ? { domainHint } : {}),
               confidence: 'medium',
             })
@@ -675,6 +687,9 @@ export const planningDocsSource: TaskSource = {
 
         const goalLabel = GOAL_LABEL_RE.exec(line.trim())
         if (goalLabel && currentSection && STAGE_HEADING_RE.test(currentSection)) {
+          const scopeHint = scopeHintForStage(currentSection, currentMilestoneStage)
+          const releaseId = currentReleaseIdForScope(currentReleaseId, scopeHint)
+          const releaseLabel = releaseId ? currentReleaseLabel : null
           signals.push({
             source: 'planning-docs',
             kind: 'context',
@@ -682,7 +697,9 @@ export const planningDocsSource: TaskSource = {
             evidence: `${rel}: ${cleanHeading(goalLabel[1]!)}`.slice(0, 240),
             references: [abs],
             role: 'capability',
-            scopeHint: scopeHintForStage(currentSection, currentMilestoneStage),
+            scopeHint,
+            ...(releaseId ? { releaseId } : {}),
+            ...(releaseLabel ? { releaseLabel } : {}),
             ...(domainHint ? { domainHint } : {}),
             confidence: 'medium',
           })
@@ -868,6 +885,8 @@ export const planningDocsSource: TaskSource = {
             })
           } else if (!grouping) {
             if (currentLabel === 'deliverables' && stageScopedSignal?.kind === 'context') {
+              const releaseId = currentReleaseIdForScope(currentReleaseId, stageScopedSignal.scopeHint)
+              const releaseLabel = releaseId ? currentReleaseLabel : null
               signals.push({
                 source: 'planning-docs',
                 kind: 'context',
@@ -876,6 +895,8 @@ export const planningDocsSource: TaskSource = {
                 evidence: `${rel}: ${line.trim()}`.slice(0, 240),
                 references: [abs],
                 ...(stageScopedSignal?.scopeHint ? { scopeHint: stageScopedSignal.scopeHint } : {}),
+                ...(releaseId ? { releaseId } : {}),
+                ...(releaseLabel ? { releaseLabel } : {}),
                 ...(domainHint ? { domainHint } : {}),
                 confidence: 'medium',
               })
@@ -892,9 +913,7 @@ export const planningDocsSource: TaskSource = {
               currentReleaseId,
               stageScopedSignal?.scopeHint ?? scopeHintForOpenWork(currentSection, title),
             )
-            const releaseId = kind === 'open_work'
-              ? currentReleaseIdForScope(currentReleaseId, scopeHint)
-              : undefined
+            const releaseId = currentReleaseIdForScope(currentReleaseId, scopeHint)
             const releaseLabel = releaseId ? currentReleaseLabel : null
             signals.push({
               source: 'planning-docs',
