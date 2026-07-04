@@ -16,6 +16,7 @@ export type ProjectScopeHandoffState =
   | 'ready'
   | 'paused'
   | 'review'
+  | 'deferred'
   | 'done'
   | 'blocked'
 
@@ -249,7 +250,8 @@ function handoffStateForTask(
     selectedScope: ProjectScope | null
   },
 ): ProjectScopeHandoffState {
-  if (input.scope === 'deferred' || task.status === 'shelved') return 'done'
+  if (input.scope === 'deferred') return 'deferred'
+  if (task.status === 'shelved') return 'deferred'
   if (task.status === 'blocked') return 'blocked'
   if (task.status === 'done' || task.status === 'pending_pr') return 'done'
   if (task.status === 'in_progress') return 'paused'

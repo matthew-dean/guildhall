@@ -16055,6 +16055,79 @@ Story instead of treating the workspace container as the repo boundary.
 
 source: codex:workspace-child-git-story-boundaries-2026-07-04
 
+2026-07-04T19:18:00Z - Corrected release-boundary and deferred-work truth in
+the project map/read model.
+
+- Work id: `codex:release-boundary-and-deferred-truth-2026-07-04`.
+- User job: when a project owner opens the 1,000-foot Project Map or asks
+  Guildhall what it will run, Later work must not look completed and only the
+  selected release/scope should present as the active run boundary.
+- Failure reproduced from installed `localhost:7777`:
+  - Looma + Knit scope rows included deferred work with `handoffState:"done"`
+    even when the underlying task status was `ready`, `review`, or
+    `import_draft`.
+  - Looma + Knit had two persisted release containers with `state:"active"`,
+    which made the Project Map imply multiple current run boundaries while Start
+    still executes the selected release only.
+  - Installed CLI draft output marked future Narrative Harness stages as
+    `current` release containers even though only Stage 1 had current draft
+    tasks.
+- Fix:
+  - Project scope projection now returns `handoffState:"deferred"` for work
+    outside the selected scope instead of collapsing it to `done`.
+  - Workspace import draft synthesis derives release `current` vs `later` from
+    actual current draft tasks after tasks/context are assembled. A release is
+    current only when current draft tasks are assigned to it; later-only
+    capability context no longer makes the release current.
+  - Project orientation spine normalizes the read model so the selected release
+    is the only release shown as `active`; stale additional active release
+    containers remain visible as planned until selected.
+- Contract Touch Decision:
+  - Work id: `codex:release-boundary-and-deferred-truth-2026-07-04`.
+  - Touched contracts: project scope projection row `handoffState`, orientation
+    spine release state read model, workspace import draft release scope.
+  - Contracts considered but not touched: persisted release schema,
+    selectedReleaseId storage, task status enum, Start/Resume execution picker.
+  - Existing data impact: no destructive migration; stale persisted active
+    release states are corrected in the read model, and deferred task rows keep
+    their real task status while using a truthful scope handoff state.
+  - Required follow-up: expose explicit release selection/editing in the UI
+    before treating draft-current release buckets as user-selected run
+    boundaries.
+  - Proof required: focused projection/spine/import tests, installed-app API
+    proof for Narrative Harness and Looma + Knit, and installed CLI draft proof.
+  - Proof provided: tests and live evidence listed below.
+  - Apply/revert behavior: reverting may again show Later work as Done and may
+    show more than one release as active in the project map.
+- Installed-app proof:
+  - Rebuilt and installed the current branch with `/opt/homebrew/bin/pnpm build`
+    and `/opt/homebrew/bin/pnpm dev:install`.
+  - Restarted Guildhall; `/api/stale-server` returned `stale:false`.
+  - `/api/project?projectId=narrative-harness` showed only
+    `Stage 1: Fixture And Evaluation Harness` as active; Stage 0 and Stage 2+
+    appeared as planned.
+  - `/api/project?projectId=looma-knit` showed only
+    `Stage 1: V1 Release Hardening` as active; the previously active
+    `Stage 1: Finish Knit Primitive Replacement Wave` read as planned.
+  - Looma + Knit had `75` deferred scope rows, all with `handoffState:"deferred"`
+    and `0` deferred rows with `handoffState:"done"`.
+  - Installed CLI draft proof:
+    - Narrative Harness: `6` tasks, `6` current, `0` later; release scopes were
+      Stage 1 current and Stage 0/Stage 2+ later.
+    - Looma + Knit: `58` tasks, `49` current, `9` later; draft release scopes
+      preserved both current source-plan buckets while the product read model
+      selected a single active run boundary.
+- Verification:
+  - `CI=true /opt/homebrew/bin/pnpm exec vitest run
+    src/runtime/__tests__/project-scope-projection.test.ts
+    src/runtime/__tests__/project-orientation-spine.test.ts
+    src/web/surfaces/project/__tests__/ProjectMapTab.svelte.test.ts
+    src/runtime/workspace-import/__tests__/hypothesis.test.ts --reporter=dot`
+    passed `86` tests.
+  - `git diff --check` passed.
+
+source: codex:release-boundary-and-deferred-truth-2026-07-04
+
 2026-07-04T19:05:00Z - Fixed imported title truth and verified child-repo Git
 story communication for Looma + Knit.
 

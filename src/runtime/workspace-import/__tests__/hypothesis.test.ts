@@ -222,6 +222,47 @@ describe('formWorkspaceHypothesis', () => {
     })
   })
 
+  it('marks release containers current only when they have current draft tasks', () => {
+    const draft = formWorkspaceHypothesis(
+      invFrom([
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'Define fixture schemas',
+          evidence: 'docs/harness/implementation-roadmap.md: Stage 1 task.',
+          references: ['docs/harness/implementation-roadmap.md'],
+          scopeHint: 'current',
+          releaseId: 'stage-1-fixture-and-evaluation-harness',
+          releaseLabel: 'Stage 1: Fixture And Evaluation Harness',
+          confidence: 'high',
+        },
+        {
+          source: 'planning-docs',
+          kind: 'context',
+          role: 'capability',
+          title: 'Mastra workflow for the prototype iteration loop',
+          evidence: 'docs/harness/implementation-roadmap.md: Stage 2 capability.',
+          references: ['docs/harness/implementation-roadmap.md'],
+          scopeHint: 'later',
+          releaseId: 'stage-2-mastra-agent-prototype',
+          releaseLabel: 'Stage 2: Mastra Agent Prototype',
+          confidence: 'medium',
+        },
+      ]),
+    )
+
+    expect(draft.releases).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'stage-1-fixture-and-evaluation-harness',
+        scope: 'current',
+      }),
+      expect.objectContaining({
+        id: 'stage-2-mastra-agent-prototype',
+        scope: 'later',
+      }),
+    ]))
+  })
+
   it('assigns untagged current work to the matching documented current release scope', () => {
     const draft = formWorkspaceHypothesis(
       invFrom([

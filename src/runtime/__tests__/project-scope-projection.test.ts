@@ -160,7 +160,7 @@ describe('buildProjectScopeProjection', () => {
     expect(projection.rows.find(row => row.taskId === 'task-future')).toMatchObject({
       scope: 'deferred',
       eligibilityReason: 'deferred',
-      handoffState: 'done',
+      handoffState: 'deferred',
       blocksStart: false,
       blocksRelease: false,
     })

@@ -135,7 +135,7 @@ describe('ProjectMapTab', () => {
               eligibilityReason: 'deferred',
               hierarchyRole: 'root',
               status: 'ready',
-              handoffState: 'done',
+              handoffState: 'deferred',
               blocksStart: false,
               blocksRelease: false,
               humanBlocking: false,
@@ -171,7 +171,7 @@ describe('ProjectMapTab', () => {
     expect(screen.getByRole('heading', { name: 'Scope ledger' })).toBeInTheDocument()
     expect(screen.getByText('1 current work item · 1 later work item')).toBeInTheDocument()
     expect(screen.getByText('Paused · directly assigned · Source: implementation-roadmap.md')).toBeInTheDocument()
-    expect(screen.getByText('Done · later scope · Source: architecture-notes.md')).toBeInTheDocument()
+    expect(screen.getByText('Deferred · later scope · Source: architecture-notes.md')).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Proof contract' })).toBeInTheDocument()
     expect(screen.getByText('Script or command proof for Coherence reviewer MVP.')).toBeInTheDocument()
     expect(screen.getByText('2 source documents')).toBeInTheDocument()

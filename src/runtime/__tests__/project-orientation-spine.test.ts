@@ -1306,6 +1306,60 @@ describe('buildProjectOrientationSpine', () => {
     ])
   })
 
+  it('shows only the selected release as the active run boundary', () => {
+    const spine = buildProjectOrientationSpine({
+      projectId: 'looma-knit',
+      now: '2026-07-04T12:00:00.000Z',
+      selectedReleaseId: 'stage-1-v1-release-hardening',
+      releases: [
+        {
+          id: 'stage-1-v1-release-hardening',
+          label: 'Stage 1: V1 Release Hardening',
+          kind: 'release',
+          state: 'active',
+          source: 'release_plan',
+          nodeIds: ['work:task-v1'],
+          deferredNodeIds: [],
+        },
+        {
+          id: 'stage-1-finish-knit-primitive-replacement-wave',
+          label: 'Stage 1: Finish Knit Primitive Replacement Wave',
+          kind: 'release',
+          state: 'active',
+          source: 'release_plan',
+          nodeIds: ['work:task-other'],
+          deferredNodeIds: [],
+        },
+      ],
+      tasks: [
+        {
+          id: 'task-v1',
+          title: 'V1 release hardening',
+          domain: 'knit',
+          status: 'ready',
+          releaseIds: ['stage-1-v1-release-hardening'],
+          spec: 'V1 hardening spec.',
+          acceptanceCriteria: [{ id: 'AC-1', description: 'V1 proof exists.', verifiedBy: 'test', met: false }],
+        },
+        {
+          id: 'task-other',
+          title: 'Primitive replacement wave',
+          domain: 'looma',
+          status: 'ready',
+          releaseIds: ['stage-1-finish-knit-primitive-replacement-wave'],
+          spec: 'Primitive wave spec.',
+          acceptanceCriteria: [{ id: 'AC-1', description: 'Primitive proof exists.', verifiedBy: 'test', met: false }],
+        },
+      ],
+    })
+
+    expect(spine.selectedRelease?.id).toBe('stage-1-v1-release-hardening')
+    expect(spine.releases.map(release => [release.id, release.state])).toEqual([
+      ['stage-1-v1-release-hardening', 'active'],
+      ['stage-1-finish-knit-primitive-replacement-wave', 'planned'],
+    ])
+  })
+
   it('preserves detected release buckets for later tasks that already exist in saved task state', () => {
     const spine = buildProjectOrientationSpine({
       projectId: 'narrative-harness',

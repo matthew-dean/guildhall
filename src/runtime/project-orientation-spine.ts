@@ -1716,6 +1716,7 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
       releases: [release],
     }, tasks))
     .filter((release): release is OrientationRelease => Boolean(release))
+    .map(release => normalizeReadModelReleaseState(release, selectedRelease?.id ?? null))
   const rawScope = releaseToScope(selectedRelease) ?? draftAugmentation.scope ?? normalizeScope(input, tasks)
   const scope = rawScope ? normalizeScopeTaskLists(rawScope, tasks) : null
   const built = buildNodes(tasks, scope, now)
@@ -1814,6 +1815,14 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
     },
     sourceHealth: sourceHealth(roots, gaps),
   }
+}
+
+function normalizeReadModelReleaseState(release: OrientationRelease, selectedReleaseId: string | null): OrientationRelease {
+  if (release.id === selectedReleaseId) {
+    return release.state === 'shipped' ? release : { ...release, state: 'active' }
+  }
+  if (release.state === 'active') return { ...release, state: 'planned' }
+  return release
 }
 
 function mergeOrientationReleaseInputs(

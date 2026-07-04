@@ -413,12 +413,13 @@ export function formWorkspaceHypothesis(
   deduped = Math.max(0, inventory.signals.length - uniques)
 
   const goals = [...goalIndex.values()]
-  const releases = [...releaseIndex.values()]
   const context = [...contextIndex.values()]
+  const preliminaryReleases = [...releaseIndex.values()]
   const tasks = assignCurrentReleaseScopes(
     enrichTasksWithRelatedContext([...taskIndex.values()], context),
-    releases,
+    preliminaryReleases,
   )
+  const releases = deriveReleaseScopesFromDraft(preliminaryReleases, tasks, context)
   const milestones = [...milestoneIndex.values()]
 
   return {
@@ -433,6 +434,36 @@ export function formWorkspaceHypothesis(
       deduped,
     },
   }
+}
+
+function deriveReleaseScopesFromDraft(
+  releases: readonly DraftRelease[],
+  tasks: readonly DraftTask[],
+  context: readonly DraftContext[],
+): DraftRelease[] {
+  const releaseUsage = new Map<string, { currentTask: boolean; later: boolean }>()
+  const touch = (releaseId: string, update: Partial<{ currentTask: boolean; later: boolean }>) => {
+    const existing = releaseUsage.get(releaseId) ?? { currentTask: false, later: false }
+    releaseUsage.set(releaseId, {
+      currentTask: existing.currentTask || Boolean(update.currentTask),
+      later: existing.later || Boolean(update.later),
+    })
+  }
+  for (const task of tasks) {
+    for (const releaseId of task.releaseIds ?? []) {
+      touch(releaseId, task.scope === 'current' ? { currentTask: true } : { later: true })
+    }
+  }
+  for (const item of context) {
+    for (const releaseId of item.releaseIds ?? []) {
+      touch(releaseId, item.scopeHint === 'current' ? { currentTask: false } : { later: true })
+    }
+  }
+  return releases.map(release => {
+    const usage = releaseUsage.get(release.id)
+    const scope = usage?.currentTask ? 'current' : 'later'
+    return { ...release, scope }
+  })
 }
 
 function addRelease(
