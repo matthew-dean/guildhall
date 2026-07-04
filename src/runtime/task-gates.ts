@@ -835,12 +835,14 @@ function normalizeCriterionCommand(
 }
 
 export function normalizeAutomatedAcceptanceCriterionCommands(input: {
-  task: Pick<Task, 'projectPath' | 'acceptanceCriteria'>
+  task: Pick<Task, 'projectPath' | 'domain' | 'acceptanceCriteria'>
   workspaceProjectPath: string
+  workspaceProjects?: readonly WorkspaceProjectBlock[]
 }): boolean {
   const taskProjectPath = resolveEffectiveTaskProjectPath(
     input.task,
     input.workspaceProjectPath,
+    { workspaceProjects: input.workspaceProjects },
   )
   let changed = false
   for (const criterion of input.task.acceptanceCriteria ?? []) {
@@ -854,13 +856,15 @@ export function normalizeAutomatedAcceptanceCriterionCommands(input: {
 }
 
 export function reconcileAutomatedAcceptanceCommandsFromVerifiedWork(input: {
-  task: Pick<Task, 'projectPath' | 'acceptanceCriteria'>
+  task: Pick<Task, 'projectPath' | 'domain' | 'acceptanceCriteria'>
   workspaceProjectPath: string
+  workspaceProjects?: readonly WorkspaceProjectBlock[]
   recentVerifiedWork: readonly string[] | undefined
 }): boolean {
   const taskProjectPath = resolveEffectiveTaskProjectPath(
     input.task,
     input.workspaceProjectPath,
+    { workspaceProjects: input.workspaceProjects },
   )
   const passedCommands = (input.recentVerifiedWork ?? [])
     .map(commandEvidenceFromRecentVerifiedWork)
@@ -1044,10 +1048,30 @@ function mergeVerificationCommands(
   return merged
 }
 
+function workspaceProjectForTask(
+  task: Pick<Task, 'projectPath' | 'domain'>,
+  workspaceProjects: readonly WorkspaceProjectBlock[] | undefined,
+): WorkspaceProjectBlock | undefined {
+  if (!workspaceProjects || workspaceProjects.length === 0) return undefined
+  const taskDomain = typeof task.domain === 'string' ? task.domain.trim() : ''
+  if (taskDomain) {
+    const domainMatch = workspaceProjects.find(project =>
+      project.id === taskDomain || project.coordinator === taskDomain,
+    )
+    if (domainMatch) return domainMatch
+  }
+  const taskProjectPath = typeof task.projectPath === 'string' ? task.projectPath.trim() : ''
+  if (!taskProjectPath) return undefined
+  const resolvedTaskProjectPath = resolveRuntimePath(taskProjectPath)
+  return workspaceProjects.find(project => path.resolve(project.path) === resolvedTaskProjectPath)
+}
+
 export function resolveEffectiveTaskProjectPath(
-  task: Pick<Task, 'projectPath'>,
+  task: Pick<Task, 'projectPath' | 'domain'>,
   workspaceProjectPath: string,
+  options: { workspaceProjects?: readonly WorkspaceProjectBlock[] } = {},
 ): string {
+  const workspaceProject = workspaceProjectForTask(task, options.workspaceProjects)
   if (typeof task.projectPath === 'string' && task.projectPath.trim().length > 0) {
     const taskProjectPath = task.projectPath.trim()
     const resolvedTaskProjectPath = path.isAbsolute(taskProjectPath)
@@ -1058,20 +1082,24 @@ export function resolveEffectiveTaskProjectPath(
       isDocumentationSourcePath(resolvedTaskProjectPath, resolvedWorkspaceProjectPath) &&
       !hasExecutionProjectMarker(resolvedTaskProjectPath)
     ) {
+      if (workspaceProject) return resolveRuntimePath(workspaceProject.path)
       return resolvedWorkspaceProjectPath
     }
     return resolvedTaskProjectPath
   }
+  if (workspaceProject) return resolveRuntimePath(workspaceProject.path)
   return resolveRuntimePath(workspaceProjectPath)
 }
 
 export function resolveEffectiveTaskBootstrapBlock(input: {
-  task: Pick<Task, 'projectPath'>
+  task: Pick<Task, 'projectPath' | 'domain'>
   workspaceProjectPath: string
   workspaceBootstrap?: BootstrapBlock
   workspaceProjects?: readonly WorkspaceProjectBlock[]
 }): { commands: readonly string[]; successGates: readonly string[]; timeoutMs: number } | null {
-  const taskProjectPath = resolveEffectiveTaskProjectPath(input.task, input.workspaceProjectPath)
+  const taskProjectPath = resolveEffectiveTaskProjectPath(input.task, input.workspaceProjectPath, {
+    workspaceProjects: input.workspaceProjects,
+  })
   const projectBootstrap = input.workspaceProjects
     ?.find((project) => path.resolve(project.path) === path.resolve(taskProjectPath))
     ?.bootstrap
@@ -1096,14 +1124,16 @@ export function resolveEffectiveTaskBootstrapBlock(input: {
 }
 
 export function resolveEffectiveTaskSuccessGates(input: {
-  task: Pick<Task, 'projectPath' | 'acceptanceCriteria'>
+  task: Pick<Task, 'projectPath' | 'domain' | 'acceptanceCriteria'>
   workspaceProjectPath: string
   workspaceBootstrap?: BootstrapBlock
   likelyTargetFiles?: readonly string[]
+  workspaceProjects?: readonly WorkspaceProjectBlock[]
 }): readonly string[] | undefined {
   const taskProjectPath = resolveEffectiveTaskProjectPath(
     input.task,
     input.workspaceProjectPath,
+    { workspaceProjects: input.workspaceProjects },
   )
   const workspaceProjectPath = path.resolve(input.workspaceProjectPath)
   const acceptanceBuckets = deriveAutomatedAcceptanceCommands(input.task, taskProjectPath)
@@ -1152,14 +1182,16 @@ export function resolveEffectiveTaskSuccessGates(input: {
 }
 
 export function resolveEffectiveTaskVerificationCommands(input: {
-  task: Pick<Task, 'projectPath' | 'acceptanceCriteria'>
+  task: Pick<Task, 'projectPath' | 'domain' | 'acceptanceCriteria'>
   workspaceProjectPath: string
   workspaceBootstrap?: BootstrapBlock
   likelyTargetFiles?: readonly string[]
+  workspaceProjects?: readonly WorkspaceProjectBlock[]
 }): readonly string[] | undefined {
   const taskProjectPath = resolveEffectiveTaskProjectPath(
     input.task,
     input.workspaceProjectPath,
+    { workspaceProjects: input.workspaceProjects },
   )
   const workspaceProjectPath = path.resolve(input.workspaceProjectPath)
   const acceptanceBuckets = deriveAutomatedAcceptanceCommands(input.task, taskProjectPath)

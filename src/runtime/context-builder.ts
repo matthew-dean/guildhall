@@ -55,6 +55,7 @@ import {
   readProjectDeliveryModel,
   type TaskContextPacket,
 } from './delivery-spine.js'
+import { buildPersonaOutputHints, sanitizeInventedProofCommandFeedback } from './reviewer-fanout.js'
 
 // ---------------------------------------------------------------------------
 // Just-in-time context builder
@@ -1136,13 +1137,18 @@ export async function buildContext(
     const parsed = cutoff ? Date.parse(cutoff) : Number.NaN
     return Number.isFinite(parsed) ? parsed : null
   })()
-  const latestRevisionFeedback = [...task.notes]
+  const reviewerTaskText = buildPersonaOutputHints(task).taskText ?? ''
+  const rawLatestRevisionFeedback = [...task.notes]
     .reverse()
     .find((note) =>
       (note.agentId === 'reviewer-fanout' || note.agentId === 'reviewer-agent') &&
       note.role === 'reviewer' &&
       (reviewerFeedbackCutoffMs === null || Date.parse(note.timestamp) > reviewerFeedbackCutoffMs),
     )?.content ?? ''
+  const latestRevisionFeedback = sanitizeInventedProofCommandFeedback(
+    rawLatestRevisionFeedback,
+    reviewerTaskText,
+  )
   const clippedRevisionFeedback = latestRevisionFeedback
     ? clipContextBlock(latestRevisionFeedback, MAX_REVISION_FEEDBACK_CHARS)
     : ''
@@ -1156,7 +1162,10 @@ export async function buildContext(
     .filter((note) => note.role !== 'reviewer')
     .slice(-MAX_AGENT_NOTES)
     .map((note) =>
-      `**${note.agentId} (${note.role})** ${note.timestamp}:\n${clipContextBlock(note.content, MAX_AGENT_NOTE_CHARS)}`,
+      `**${note.agentId} (${note.role})** ${note.timestamp}:\n${clipContextBlock(
+        sanitizeInventedProofCommandFeedback(note.content, reviewerTaskText),
+        MAX_AGENT_NOTE_CHARS,
+      )}`,
     )
   const specOverview = renderSpecOverview(task)
   const constructionMode = constructionModeForTask({

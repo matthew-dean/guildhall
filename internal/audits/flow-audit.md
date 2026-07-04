@@ -12,6 +12,86 @@ This is the active browser test plan for the Guildhall project surface. Keep it
 updated while auditing the active test project so another agent can resume
 without guessing.
 
+2026-07-04T22:02:00Z - Routed task execution through child repos and filtered
+invented proof-command feedback.
+
+- Work id: `codex:child-repo-task-root-and-proof-feedback-2026-07-04`.
+- User job: when a registered project is a workspace envelope such as Looma +
+  Knit, Guildhall should transparently run, bootstrap, gate, and inspect tasks
+  in the right child repo instead of treating the envelope as the git root. When
+  a reviewer invents a proof command that the task/spec did not name, Guildhall
+  should not preserve that invented command as retry truth, UI feedback, or
+  coordinator-scoped work.
+- Fix:
+  - Shared Git Story policy now has `discoverChildGitProjects` and
+    `resolveWorkspaceProjectPathsOrDiscover`, so configured workspace children
+    still win, while non-git envelopes with immediate child repos get child
+    project identities instead of root `not_git` behavior.
+  - Orchestrator task-root resolution now passes configured-or-discovered child
+    projects into worktree setup, dirty-repo recovery, merge/cleanup, inline
+    gates, review planning, checkpoint recovery, and session freshness checks.
+  - Task gate helpers now route domain-scoped tasks such as `domain: knit` or
+    `domain: looma` to the matching child project even when `task.projectPath`
+    is absent, while docs paths remain source trail rather than execution roots.
+  - Reviewer fan-out now exports a deterministic sanitizer for invented proof
+    command demands; context building and coordinator adjudication use it before
+    showing latest revisions or turning stale dissent into scoped worker
+    instructions.
+  - Worker/reviewer/persona prompts now explicitly forbid substituting an
+    invented proof command when the task only asked for a recorded local proof
+    command.
+- Contract Touch Decision:
+  - Work id: `codex:child-repo-task-root-and-proof-feedback-2026-07-04`.
+  - Touched contracts: task effective project-root semantics; workspace child
+    Git Story discovery semantics; reviewer feedback handoff semantics; build
+    script invocation of the local Vite binary.
+  - Contracts considered but not touched: persisted task schema, workspace YAML
+    schema, release schema, acceptance criteria schema, review verdict schema,
+    task note schema.
+  - Existing data impact: no migration. Existing stale reviewer notes remain
+    stored for audit, but invented proof-command lines are filtered before they
+    are reused as current guidance.
+  - Required follow-up: resume Narrative Harness Stage 1 and confirm the
+    fixture task no longer receives the invented `npx guildhall run --task=...`
+    instruction.
+  - Proof required: focused child-repo resolver tests, child-repo Git Story
+    discovery tests, release-readiness regression, reviewer/context sanitizer
+    tests, contract lint, build, installed-app readback.
+  - Proof provided: focused runtime/agent suites, release script suites,
+    contract lint, direct build proof, and installed-app readback listed below.
+  - Apply/revert behavior: revert the shared child-discovery helper and
+    orchestrator resolver helper to restore root-only execution; revert the
+    sanitizer and prompt additions to restore raw reviewer feedback handoff.
+- Verification:
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/reviewer-fanout.test.ts src/runtime/__tests__/context-builder.test.ts src/runtime/__tests__/task-gates.test.ts src/runtime/__tests__/git-story.test.ts src/runtime/__tests__/serve-release-readiness.test.ts`
+    passed `153` tests.
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/task-gates.test.ts src/runtime/__tests__/git-story.test.ts src/runtime/__tests__/context-builder.test.ts src/runtime/__tests__/reviewer-fanout.test.ts src/runtime/__tests__/serve-release-readiness.test.ts src/agents/__tests__/guildhall-agent.test.ts src/agents/__tests__/persona-reviewer.test.ts`
+    passed `225` tests.
+  - `./node_modules/.bin/vitest run scripts/release-artifacts.test.ts scripts/pr-workflow.test.ts scripts/publish-script.test.ts`
+    passed `18` tests.
+  - `CI=true pnpm lint:contracts` passed.
+  - `node packages/ui/scripts/generate-styles.mjs && ./node_modules/.bin/tsc -p packages/ui/tsconfig.json`
+    passed.
+  - `node ./build.mjs` passed and emitted `dist/cli.js`, `dist/web/`, and
+    `dist/release-manifest.json`.
+  - `node scripts/dev-install.mjs` completed, followed by `guildhall stop` and
+    `guildhall start`; `/api/stale-server` returned `stale:false` for PID
+    `64392` from `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+  - Live `/api/project/release-readiness?projectId=looma-knit` returned Git
+    Story snapshot labels including `Looma` and `Knit`; the serialized Git
+    Story payload contained no `not_git`, `not a git repository`, `Cannot
+    resolve git root`, or `fatal` text.
+  - `CI=true pnpm build` did not complete in this Codex environment because
+    pnpm pruned devDependencies before `build:ui`, leaving `tsc` unavailable;
+    the direct build commands above verified the same UI TypeScript and runtime
+    build steps without invoking that pruning wrapper. The development installer
+    now calls the local build/package scripts directly so `dev-install` can run
+    in the same environment without that wrapper prune.
+  - `CI=true pnpm install --prod=false` restored devDependencies but exited
+    nonzero under pnpm `11.7.0` because dependency build scripts require
+    approval in this environment; the restored local binaries were used for the
+    direct build/install proof above.
+
 2026-07-04T19:59:23Z - Scoped release Git Story blockers to the selected
 release and hardened container repo discovery.
 

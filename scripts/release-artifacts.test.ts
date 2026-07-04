@@ -86,7 +86,8 @@ describe('release artifact contract', () => {
     }
 
     expect(manifest.devDependencies?.['@sveltejs/kit']).toBeTruthy()
-    expect(build).toContain("'vite', 'build'")
+    expect(build).toContain("node_modules/.bin/vite")
+    expect(build).toContain("spawnSync(viteBin, ['build']")
     expect(build).not.toContain("outfile: join(WEB_OUT_DIR, 'app.js')")
     expect(read('svelte.config.js')).toContain('@sveltejs/adapter-static')
     expect(read('vite.config.ts')).toContain('sveltekit')

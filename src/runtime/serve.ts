@@ -341,9 +341,11 @@ import {
   type GitStorySummary,
 } from './git-story.js'
 import {
+  discoverChildGitProjects,
   effectiveGitStoryPolicy,
   resolveGitStoryWorkspaceProject,
   resolveWorkspaceProjectPaths,
+  resolveWorkspaceProjectPathsOrDiscover,
 } from './git-story-policy.js'
 import { taskHasUnansweredVisibleQuestion } from './question-visibility.js'
 import { validateSpecCompletionBoundary } from './spec-quality.js'
@@ -2528,8 +2530,8 @@ async function gitStoryForTask(
   const resolvedWorkspaceProjects = workspaceProjects ?? (() => {
     const workspaceConfig = readWorkspaceConfig(projectPath)
     return workspaceConfig.kind === 'workspace'
-      ? resolveWorkspaceProjectPaths(projectPath, workspaceConfig)
-      : []
+      ? resolveWorkspaceProjectPathsOrDiscover(projectPath, workspaceConfig)
+      : discoverChildGitProjects(projectPath)
   })()
   const childProject = resolveGitStoryWorkspaceProject({
     workspacePath: projectPath,
@@ -2552,7 +2554,7 @@ async function buildProjectGitStorySummary(projectPath: string, tasks?: Array<Re
   const driver = new NodeGitDriver()
   const workspaceConfig = readWorkspaceConfig(projectPath)
   const workspaceProjects = workspaceConfig.kind === 'workspace'
-    ? resolveWorkspaceProjectPaths(projectPath, workspaceConfig)
+    ? resolveWorkspaceProjectPathsOrDiscover(projectPath, workspaceConfig)
     : discoverChildGitProjects(projectPath)
   const rootSnapshots = workspaceProjects.length > 0
     ? await Promise.all(workspaceProjects.map(child =>
@@ -2595,28 +2597,6 @@ async function buildProjectGitStorySummary(projectPath: string, tasks?: Array<Re
   return summarizeGitStories(snapshots)
 }
 
-function discoverChildGitProjects(projectPath: string): ReturnType<typeof resolveWorkspaceProjectPaths> {
-  if (existsSync(join(projectPath, '.git'))) return []
-  let entries: Dirent[]
-  try {
-    entries = readdirSync(projectPath, { withFileTypes: true })
-  } catch {
-    return []
-  }
-  return entries
-    .filter(entry => entry.isDirectory() && !['.git', '.guildhall', 'node_modules', 'dist', 'build', 'coverage'].includes(entry.name))
-    .map(entry => {
-      const childPath = join(projectPath, entry.name)
-      return {
-        id: slugify(entry.name),
-        label: entry.name,
-        path: childPath,
-      }
-    })
-    .filter(child => existsSync(join(child.path, '.git')))
-    .sort((left, right) => left.label.localeCompare(right.label))
-}
-
 function gitStoryAutomationFor(
   projectPath: string,
   workspaceConfig: ReturnType<typeof readWorkspaceConfig> | null,
@@ -2627,7 +2607,9 @@ function gitStoryAutomationFor(
     workspacePath: projectPath,
     workspaceProjectPath: projectPath,
     ...(workspaceConfig?.gitStory ? { workspaceGitStory: workspaceConfig.gitStory } : {}),
-    workspaceProjects: workspaceConfig ? resolveWorkspaceProjectPaths(projectPath, workspaceConfig) : [],
+    workspaceProjects: workspaceConfig
+      ? resolveWorkspaceProjectPathsOrDiscover(projectPath, workspaceConfig)
+      : discoverChildGitProjects(projectPath),
     task,
   })
   const value = policy[action]
@@ -10695,8 +10677,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
   }> {
     const workspaceConfig = readWorkspaceConfig(projectPath)
     const childProjects = workspaceConfig.kind === 'workspace'
-      ? resolveWorkspaceProjectPaths(projectPath, workspaceConfig)
-      : []
+      ? resolveWorkspaceProjectPathsOrDiscover(projectPath, workspaceConfig)
+      : discoverChildGitProjects(projectPath)
     if (childProjects.length > 0) {
       const results = await Promise.all(childProjects.map(async (child) => {
         const result = await guildhallOwnedDirtyCheckoutInRepo(child.path)

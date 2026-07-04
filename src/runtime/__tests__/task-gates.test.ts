@@ -68,6 +68,42 @@ describe('resolveEffectiveTaskProjectPath', () => {
       ),
     ).toBe(childPath)
   })
+
+  it('uses the matching workspace child project for domain-scoped tasks', async () => {
+    const loomaPath = path.join(tmpDir, 'looma')
+    const knitPath = path.join(tmpDir, 'knit')
+
+    expect(
+      resolveEffectiveTaskProjectPath(
+        { domain: 'knit' },
+        tmpDir,
+        {
+          workspaceProjects: [
+            { id: 'looma', path: loomaPath } as any,
+            { id: 'knit', coordinator: 'knit', path: knitPath } as any,
+          ],
+        },
+      ),
+    ).toBe(knitPath)
+  })
+
+  it('keeps docs as source trail while routing domain-scoped execution to the child repo', async () => {
+    const docsPath = path.join(tmpDir, 'docs', 'looma')
+    const loomaPath = path.join(tmpDir, 'looma')
+    await fs.mkdir(docsPath, { recursive: true })
+
+    expect(
+      resolveEffectiveTaskProjectPath(
+        { domain: 'looma', projectPath: docsPath },
+        tmpDir,
+        {
+          workspaceProjects: [
+            { id: 'looma', coordinator: 'looma', path: loomaPath } as any,
+          ],
+        },
+      ),
+    ).toBe(loomaPath)
+  })
 })
 
 describe('normalizeAutomatedAcceptanceCriterionCommands', () => {

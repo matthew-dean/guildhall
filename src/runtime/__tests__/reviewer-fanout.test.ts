@@ -5,6 +5,7 @@ import {
   aggregateFanout,
   personaVerdictToReviewRecord,
   buildPersonaOutputHints,
+  sanitizeInventedProofCommandFeedback,
 } from '../reviewer-fanout.js'
 
 const componentDesigner = BUILTIN_GUILDS.find((g) => g.slug === 'component-designer')!
@@ -187,6 +188,62 @@ describe('parsePersonaOutput', () => {
     expect(v.followUpItems).toEqual([
       'Add a schema validation step for the id router parameter before it is used in Supabase queries.',
     ])
+  })
+
+  it('demotes invented proof command demands when the task only asks for recorded local proof', () => {
+    const hints = buildPersonaOutputHints({
+      title: 'Shape fixture and expected-record ground truth',
+      description: 'Define the fixture and expected-record ground truth surface.',
+      spec: [
+        '## Summary',
+        'Shape fixture and expected-record ground truth.',
+        '',
+        '## Acceptance Criteria',
+        '1. Fixture manifest can express the tiny fiction fixture.',
+        '2. Expected records encode source facts and expected signals.',
+        '3. The existing schema files and fixture artifacts represent the data.',
+        '4. Given the implementation is complete, when the local proof command runs, then Guildhall records the exact command and result against this task before the parent work is treated as satisfied.',
+      ].join('\n'),
+      acceptanceCriteria: [],
+      outOfScope: [],
+    })
+    const raw = `
+**Verdict:** revise
+
+**Reasoning:** The implementation fails AC4 because the required proof command has not been executed.
+
+**If revise, recommended task-local revisions:**
+- Execute the proof command \`npx guildhall run --task=task-import-9s8tkc-split-define-fixture-expected-record-prototype-run-and-evaluat\` and capture its output.
+
+**Risk if accepted as-is:**
+- Guildhall cannot record the required command and result.
+
+**Optional follow-up ideas (non-blocking):**
+- (none)
+`
+    const v = parsePersonaOutput(componentDesigner, raw, hints)
+    expect(v.verdict).toBe('approve')
+    expect(v.revisionItems).toEqual([])
+    expect(v.followUpItems).toEqual([
+      'Execute the proof command `npx guildhall run --task=task-import-9s8tkc-split-define-fixture-expected-record-prototype-run-and-evaluat` and capture its output.',
+    ])
+  })
+
+  it('sanitizes stale invented proof command feedback before retry coaching reuses it', () => {
+    const taskText = [
+      'Shape fixture and expected-record ground truth',
+      'Given the implementation is complete, when the local proof command runs, then Guildhall records the exact command and result.',
+    ].join('\n')
+    const feedback = [
+      '**Required revisions:**',
+      '- Execute the proof command `npx guildhall run --task=made-up-task` and capture its output.',
+      '- Keep the fixture manifest aligned with the expected records.',
+    ].join('\n')
+
+    expect(sanitizeInventedProofCommandFeedback(feedback, taskText)).toBe([
+      '**Required revisions:**',
+      '- Keep the fixture manifest aligned with the expected records.',
+    ].join('\n'))
   })
 
   it('keeps direct task-overlap fixes blocking on narrow cleanup tasks while demoting unrelated doctrine', () => {

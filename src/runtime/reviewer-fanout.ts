@@ -318,6 +318,11 @@ function normalizeTaskBoundedRevisionScope(input: {
       demotedRevisionItems += 1
       continue
     }
+    if (looksLikeInventedProofCommandDemand(item, input.taskText)) {
+      followUpItems.push(item)
+      demotedRevisionItems += 1
+      continue
+    }
     revisionItems.push(item)
   }
 
@@ -330,6 +335,35 @@ function looksLikeBroadStandardsFollowUp(item: string): boolean {
 
 function looksLikeExistingSurfaceConcern(item: string): boolean {
   return /\b(?:route|endpoint|handler|api|request|response|parameter|header|logging|metrics|trace|validation)\b/i.test(item)
+}
+
+export function sanitizeInventedProofCommandFeedback(feedback: string, taskText: string): string {
+  return feedback
+    .split('\n')
+    .filter(line => !looksLikeInventedProofCommandDemand(line, taskText))
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+export function looksLikeInventedProofCommandDemand(item: string, taskText: string): boolean {
+  if (!/\b(?:run|execute|use)\b[\s\S]{0,80}\b(?:proof command|command)\b|\bproof command\b[\s\S]{0,80}\b(?:run|executed|capture|record)/i.test(item)) {
+    return false
+  }
+  const commands = commandLikeSnippets(item)
+  if (commands.length === 0) return false
+  const normalizedTaskText = normalizeCommandText(taskText)
+  return commands.every(command => !normalizedTaskText.includes(normalizeCommandText(command)))
+}
+
+function commandLikeSnippets(text: string): string[] {
+  return Array.from(text.matchAll(/`([^`]+)`/g))
+    .map(match => match[1]?.trim() ?? '')
+    .filter(command => /^(?:pnpm|npm|yarn|bun|npx|node|guildhall)\b/.test(command))
+}
+
+function normalizeCommandText(text: string): string {
+  return text.replace(/\s+/g, ' ').trim().toLowerCase()
 }
 
 function mentionsTaskLocalAnchor(text: string): boolean {

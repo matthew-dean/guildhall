@@ -150,7 +150,7 @@ import {
   type GitDriver,
 } from './git-driver.js'
 import { buildCommitStoryMessage } from './commit-story.js'
-import { effectiveGitStoryPolicy } from './git-story-policy.js'
+import { discoverChildGitProjects, effectiveGitStoryPolicy } from './git-story-policy.js'
 import { readTaskWorkspaceStore, upsertTaskWorkspaceState } from './task-state-store.js'
 import {
   ensureWorktreeForDispatch,
@@ -235,8 +235,10 @@ import {
 } from '@guildhall/guilds'
 import {
   aggregateFanout,
+  buildPersonaOutputHints,
   boundedConcurrency,
   personaVerdictToReviewRecord,
+  sanitizeInventedProofCommandFeedback,
   selectReviewersForPlan,
   type PersonaVerdict,
   type ReviewerFanoutPolicy,
@@ -2471,6 +2473,18 @@ export class Orchestrator {
     return this.livenessTracker
   }
 
+  private resolveEffectiveTaskProjectPath(task: Pick<Task, 'projectPath' | 'domain'>): string {
+    return resolveEffectiveTaskProjectPath(task, this.opts.config.projectPath, {
+      workspaceProjects: this.workspaceProjectsForTaskResolution(),
+    })
+  }
+
+  private workspaceProjectsForTaskResolution(): NonNullable<ResolvedConfig['projects']> {
+    return this.opts.config.projects?.length
+      ? this.opts.config.projects
+      : discoverChildGitProjects(this.opts.config.projectPath)
+  }
+
   /** FR-30: convenience — same as `this.liveness.scanStalls()`. */
   scanStalls(nowOverride?: number): StallFlag[] {
     return this.livenessTracker.scanStalls(nowOverride)
@@ -3123,10 +3137,7 @@ export class Orchestrator {
     // the agent runs. On first creation, persist the path/branch/base on the
     // task so subsequent ticks reuse them. Skipped when mode is `none`.
     const worktreeMode = await this.resolveWorktreeModeSafe()
-    const effectiveTaskProjectPath = resolveEffectiveTaskProjectPath(
-      task,
-      this.opts.config.projectPath,
-    )
+    const effectiveTaskProjectPath = this.resolveEffectiveTaskProjectPath(task)
     let activeWorktreePath = effectiveTaskProjectPath
     const baseBranch = await this.resolveBaseBranch(effectiveTaskProjectPath)
     if (worktreeMode !== 'none' && !shouldSkipGitIsolation(task, agent.name)) {
@@ -3376,7 +3387,7 @@ export class Orchestrator {
       task,
       workspaceProjectPath: this.opts.config.projectPath,
       workspaceBootstrap: this.opts.config.bootstrap ?? undefined,
-      workspaceProjects: this.opts.config.projects ?? [],
+      workspaceProjects: this.workspaceProjectsForTaskResolution(),
     })
     if (
       wtBootstrap &&
@@ -3527,6 +3538,7 @@ export class Orchestrator {
     normalizeAutomatedAcceptanceCriterionCommands({
       task,
       workspaceProjectPath: this.opts.config.projectPath,
+      workspaceProjects: this.workspaceProjectsForTaskResolution(),
     })
     const effectiveTaskSuccessGatesRaw =
       beforeStatus === 'gate_check' || beforeStatus === 'in_progress'
@@ -3536,6 +3548,7 @@ export class Orchestrator {
             ...(this.opts.config.bootstrap
               ? { workspaceBootstrap: this.opts.config.bootstrap }
               : {}),
+            workspaceProjects: this.workspaceProjectsForTaskResolution(),
             likelyTargetFiles,
           })
         : undefined
@@ -3547,6 +3560,7 @@ export class Orchestrator {
             ...(this.opts.config.bootstrap
               ? { workspaceBootstrap: this.opts.config.bootstrap }
               : {}),
+            workspaceProjects: this.workspaceProjectsForTaskResolution(),
             likelyTargetFiles,
           })
         : undefined
@@ -4360,6 +4374,7 @@ export class Orchestrator {
           reconcileAutomatedAcceptanceCommandsFromVerifiedWork({
             task: taskAfter,
             workspaceProjectPath: this.opts.config.projectPath,
+            workspaceProjects: this.workspaceProjectsForTaskResolution(),
             recentVerifiedWork,
           })
         if (learnedVerificationCommands) {
@@ -4604,7 +4619,7 @@ export class Orchestrator {
           this.clearExploringNoProgress(task.id)
         }
 
-        const taskRepoRootAfter = resolveEffectiveTaskProjectPath(taskAfter, this.opts.config.projectPath)
+        const taskRepoRootAfter = this.resolveEffectiveTaskProjectPath(taskAfter)
         const likelyWorkerTargets =
           beforeStatus === 'in_progress' ? resolveLikelyTaskFiles(taskAfter) : []
         const hasDirtyWorktreeAfter =
@@ -6643,6 +6658,7 @@ export class Orchestrator {
         ...(this.opts.config.bootstrap
           ? { workspaceBootstrap: this.opts.config.bootstrap }
           : {}),
+        workspaceProjects: this.workspaceProjectsForTaskResolution(),
         likelyTargetFiles,
       })
       const settings = await this.readLeverSettings()
@@ -6804,7 +6820,7 @@ export class Orchestrator {
     const taskProjectPath =
       typeof task.worktreePath === 'string' && task.worktreePath.trim().length > 0
         ? task.worktreePath.trim()
-        : resolveEffectiveTaskProjectPath(task, this.opts.config.projectPath)
+        : this.resolveEffectiveTaskProjectPath(task)
     const gates = commandCriteria.map(({ criterion }) => ({
       id: criterion.id,
       label: criterion.description || criterion.id,
@@ -6961,10 +6977,7 @@ export class Orchestrator {
           const worktreeMode = await this.resolveWorktreeModeSafe()
           const completionWorktreeMode = current.worktreePath?.trim() ? 'per_task' : worktreeMode
           if (completionWorktreeMode !== 'none' && current.branchName && current.baseBranch) {
-            const effectiveTaskProjectPath = resolveEffectiveTaskProjectPath(
-              current,
-              this.opts.config.projectPath,
-            )
+            const effectiveTaskProjectPath = this.resolveEffectiveTaskProjectPath(current)
             const mergeOutcome = await dispatchMerge({
               task: current,
               policy: landingStrategy,
@@ -7092,10 +7105,7 @@ export class Orchestrator {
         const worktreeMode = await this.resolveWorktreeModeSafe()
         const completionWorktreeMode = current.worktreePath?.trim() ? 'per_task' : worktreeMode
         if (completionWorktreeMode !== 'none' && current.branchName && current.baseBranch) {
-          const effectiveTaskProjectPath = resolveEffectiveTaskProjectPath(
-            current,
-            this.opts.config.projectPath,
-          )
+          const effectiveTaskProjectPath = this.resolveEffectiveTaskProjectPath(current)
           const mergeOutcome = await dispatchMerge({
             task: current,
             policy: landingStrategy,
@@ -7706,10 +7716,12 @@ export class Orchestrator {
     // scoped instructions = the union of dissent revision items, framed as
     // the coordinator's decision.
     const dissenterSlugs = input.aggregate.dissenting.map(d => d.guildSlug)
+    const taskText = buildPersonaOutputHints(input.task).taskText ?? ''
     const scopeInstructions: string[] = []
     for (const d of input.aggregate.dissenting) {
       for (const item of d.revisionItems) {
-        if (!scopeInstructions.includes(item)) scopeInstructions.push(item)
+        const sanitizedItem = sanitizeInventedProofCommandFeedback(item, taskText)
+        if (sanitizedItem && !scopeInstructions.includes(sanitizedItem)) scopeInstructions.push(sanitizedItem)
       }
       if (d.revisionItems.length === 0) {
         const fallback = d.reasoning
@@ -8136,7 +8148,7 @@ export class Orchestrator {
       let recoveryStatus: Task['status'] = 'in_progress'
       let recoveryAssignee: string | null = 'worker-agent'
       if (blockReason.includes('Guildhall could not start work because the target repo is dirty:')) {
-        const repoRoot = resolveEffectiveTaskProjectPath(task, this.opts.config.projectPath)
+        const repoRoot = this.resolveEffectiveTaskProjectPath(task)
         const repoClean = await this.gitDriver.isClean(repoRoot)
         if (repoClean) continue
         recoveryNote =
@@ -8145,13 +8157,13 @@ export class Orchestrator {
         blockReason.includes('Guildhall could not start work because task setup failed:') ||
         blockReason.includes('project setup contract changed, but task setup still fails:')
       ) {
-        const effectiveTaskProjectPath = resolveEffectiveTaskProjectPath(task, this.opts.config.projectPath)
+        const effectiveTaskProjectPath = this.resolveEffectiveTaskProjectPath(task)
         const activeWorktreePath = task.worktreePath?.trim() ?? ''
         const wtBootstrap = resolveEffectiveTaskBootstrapBlock({
           task,
           workspaceProjectPath: this.opts.config.projectPath,
           workspaceBootstrap: this.opts.config.bootstrap ?? undefined,
-          workspaceProjects: this.opts.config.projects ?? [],
+          workspaceProjects: this.workspaceProjectsForTaskResolution(),
         })
         if (
           !activeWorktreePath ||
@@ -8181,13 +8193,13 @@ export class Orchestrator {
         recoveryNote =
           'User restarted the project after an earlier task bootstrap failure. The task worktree bootstrap now passes, so Guildhall reopened the task into the runnable queue.'
       } else if (isRecoverableEnvironmentSetupBlocker(task)) {
-        const effectiveTaskProjectPath = resolveEffectiveTaskProjectPath(task, this.opts.config.projectPath)
+        const effectiveTaskProjectPath = this.resolveEffectiveTaskProjectPath(task)
         const activeWorktreePath = task.worktreePath?.trim() ?? ''
         const wtBootstrap = resolveEffectiveTaskBootstrapBlock({
           task,
           workspaceProjectPath: this.opts.config.projectPath,
           workspaceBootstrap: this.opts.config.bootstrap ?? undefined,
-          workspaceProjects: this.opts.config.projects ?? [],
+          workspaceProjects: this.workspaceProjectsForTaskResolution(),
         })
         if (
           !activeWorktreePath ||
@@ -8441,14 +8453,14 @@ export class Orchestrator {
       workspacePath: this.opts.config.workspacePath,
       workspaceProjectPath: this.opts.config.projectPath,
       ...(this.opts.config.gitStory ? { workspaceGitStory: this.opts.config.gitStory } : {}),
-      workspaceProjects: this.opts.config.projects ?? [],
+      workspaceProjects: this.workspaceProjectsForTaskResolution(),
       task,
     })
     if (policy.commit !== 'auto' && !hasIsolatedLandingBranch) return { ok: true }
     const repoRoot =
       typeof task.worktreePath === 'string' && task.worktreePath.trim().length > 0
         ? task.worktreePath.trim()
-        : resolveEffectiveTaskProjectPath(task, this.opts.config.projectPath)
+        : this.resolveEffectiveTaskProjectPath(task)
     const status = await this.gitDriver.statusSummary(repoRoot)
     if (status.clean) return { ok: true }
     const result = await this.gitDriver.commitAll(
@@ -8545,10 +8557,7 @@ export class Orchestrator {
         continue
       }
 
-      const effectiveTaskProjectPath = resolveEffectiveTaskProjectPath(
-        task,
-        this.opts.config.projectPath,
-      )
+      const effectiveTaskProjectPath = this.resolveEffectiveTaskProjectPath(task)
       const mergeOutcome = await dispatchMerge({
         task,
         policy: landingStrategy,
@@ -8583,10 +8592,7 @@ export class Orchestrator {
       if (task.status !== 'pending_pr') continue
       const branch = task.branchName?.trim()
       if (!branch) continue
-      const effectiveTaskProjectPath = resolveEffectiveTaskProjectPath(
-        task,
-        this.opts.config.projectPath,
-      )
+      const effectiveTaskProjectPath = this.resolveEffectiveTaskProjectPath(task)
       const pr = await this.gitDriver
         .pullRequestForBranch(effectiveTaskProjectPath, branch)
         .catch(() => ({ ok: false as const }))
@@ -8634,10 +8640,7 @@ export class Orchestrator {
       task.status === 'shelved'
     const preservingForPr = task.status === 'pending_pr'
     if (!isTerminal && !preservingForPr) return
-    const effectiveTaskProjectPath = resolveEffectiveTaskProjectPath(
-      task,
-      this.opts.config.projectPath,
-    )
+    const effectiveTaskProjectPath = this.resolveEffectiveTaskProjectPath(task)
     try {
       await cleanupWorktreeForTerminal({
         task,
@@ -10027,7 +10030,7 @@ export class Orchestrator {
     if (!this.hasDurableWorkerHandoffEvidence(input.agentMetadata, task.id)) return null
     const checkpointTouchedFiles = this.checkpointTouchedFilesFromMetadata(
       input.agentMetadata,
-      resolveEffectiveTaskProjectPath(task, this.opts.config.projectPath),
+      this.resolveEffectiveTaskProjectPath(task),
     )
     if (!hasDirtyWorktree && checkpointTouchedFiles.length === 0) return null
 
@@ -10449,10 +10452,7 @@ export class Orchestrator {
   }): Promise<boolean> {
     if (input.task.status !== 'in_progress' && input.task.status !== 'blocked') return false
 
-    const effectiveProjectPath = resolveEffectiveTaskProjectPath(
-      input.task,
-      this.opts.config.projectPath,
-    )
+    const effectiveProjectPath = this.resolveEffectiveTaskProjectPath(input.task)
     const existingCheckpoint = await readCheckpoint(this.opts.config.memoryDir, input.task.id).catch(() => null)
     let filesTouched = await this.changedFilesForTask(input.task)
     if (filesTouched.length === 0) {
@@ -10472,6 +10472,7 @@ export class Orchestrator {
       reconcileAutomatedAcceptanceCommandsFromVerifiedWork({
         task: input.task,
         workspaceProjectPath: this.opts.config.projectPath,
+        workspaceProjects: this.workspaceProjectsForTaskResolution(),
         recentVerifiedWork,
       })
     }
@@ -10545,7 +10546,7 @@ export class Orchestrator {
     const repoRoot =
       typeof task.worktreePath === 'string' && task.worktreePath.trim().length > 0
         ? resolveRuntimePath(task.worktreePath)
-        : resolveEffectiveTaskProjectPath(task, this.opts.config.projectPath)
+        : this.resolveEffectiveTaskProjectPath(task)
     try {
       const { stdout } = await execFileP('git', ['status', '--short', '--untracked-files=all'], {
         cwd: repoRoot,
@@ -11200,6 +11201,11 @@ export async function runOrchestrator(
       const expectedTaskProjectPath = resolveEffectiveTaskProjectPath(
         resumableTask,
         config.projectPath,
+        {
+          workspaceProjects: config.projects?.length
+            ? config.projects
+            : discoverChildGitProjects(config.projectPath),
+        },
       )
       const expectedSuccessGates =
         resumableTask.status === 'gate_check'
@@ -11207,6 +11213,9 @@ export async function runOrchestrator(
               task: resumableTask,
               workspaceProjectPath: config.projectPath,
               ...(config.bootstrap ? { workspaceBootstrap: config.bootstrap } : {}),
+              workspaceProjects: config.projects?.length
+                ? config.projects
+                : discoverChildGitProjects(config.projectPath),
               likelyTargetFiles: resolveLikelyTaskFiles(resumableTask),
             })
           : undefined

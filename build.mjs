@@ -154,7 +154,8 @@ function extractHelpTopics() {
 }
 
 function buildWebApp() {
-  const result = spawnSync('pnpm', ['exec', 'vite', 'build'], {
+  const viteBin = resolve(ROOT, 'node_modules/.bin/vite')
+  const result = spawnSync(viteBin, ['build'], {
     cwd: ROOT,
     stdio: 'inherit',
   })

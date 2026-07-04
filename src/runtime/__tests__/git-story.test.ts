@@ -1,13 +1,14 @@
 import { describe, expect, it } from 'vitest'
+import fs from 'node:fs/promises'
 import path from 'node:path'
-import { homedir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { InMemoryGitDriver } from '../git-driver.js'
 import {
   classifyGitStoryState,
   inspectGitStory,
   summarizeGitStories,
 } from '../git-story.js'
-import { effectiveGitStoryPolicy } from '../git-story-policy.js'
+import { discoverChildGitProjects, effectiveGitStoryPolicy } from '../git-story-policy.js'
 
 describe('classifyGitStoryState', () => {
   it('reports dirty work before unpublished commits', () => {
@@ -202,6 +203,32 @@ describe('summarizeGitStories', () => {
       repoId: 'knit',
       repoLabel: 'Knit',
     })
+  })
+})
+
+describe('discoverChildGitProjects', () => {
+  it('recognizes immediate child git repos under a non-git workspace envelope', async () => {
+    const workspacePath = await fs.mkdtemp(path.join(tmpdir(), 'guildhall-child-git-'))
+    try {
+      await fs.mkdir(path.join(workspacePath, 'looma', '.git'), { recursive: true })
+      await fs.mkdir(path.join(workspacePath, 'knit', '.git'), { recursive: true })
+
+      expect(discoverChildGitProjects(workspacePath).map(project => project.id)).toEqual(['knit', 'looma'])
+    } finally {
+      await fs.rm(workspacePath, { recursive: true, force: true })
+    }
+  })
+
+  it('does not split a real git repo into child repos', async () => {
+    const workspacePath = await fs.mkdtemp(path.join(tmpdir(), 'guildhall-root-git-'))
+    try {
+      await fs.mkdir(path.join(workspacePath, '.git'), { recursive: true })
+      await fs.mkdir(path.join(workspacePath, 'package-a', '.git'), { recursive: true })
+
+      expect(discoverChildGitProjects(workspacePath)).toEqual([])
+    } finally {
+      await fs.rm(workspacePath, { recursive: true, force: true })
+    }
   })
 })
 

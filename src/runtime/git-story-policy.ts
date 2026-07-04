@@ -1,4 +1,5 @@
 import path from 'node:path'
+import { existsSync, readdirSync, type Dirent } from 'node:fs'
 import {
   readGlobalConfig,
   readProjectConfig,
@@ -8,6 +9,7 @@ import {
 } from '@guildhall/config'
 
 type WorkspaceProject = NonNullable<ResolvedConfig['projects']>[number]
+const IGNORED_CHILD_GIT_PROJECT_DIRS = new Set(['.git', '.guildhall', 'node_modules', 'dist', 'build', 'coverage'])
 
 export interface GitStoryPolicyContext {
   workspacePath: string
@@ -45,6 +47,37 @@ export function resolveWorkspaceProjectPaths(
     ...project,
     path: path.isAbsolute(project.path) ? path.resolve(project.path) : path.resolve(base, project.path),
   }))
+}
+
+export function discoverChildGitProjects(workspacePath: string): WorkspaceProject[] {
+  const resolvedWorkspacePath = path.resolve(workspacePath)
+  if (existsSync(path.join(resolvedWorkspacePath, '.git'))) return []
+  let entries: Dirent[]
+  try {
+    entries = readdirSync(resolvedWorkspacePath, { withFileTypes: true })
+  } catch {
+    return []
+  }
+  return entries
+    .filter(entry => entry.isDirectory() && !IGNORED_CHILD_GIT_PROJECT_DIRS.has(entry.name))
+    .map(entry => {
+      const childPath = path.join(resolvedWorkspacePath, entry.name)
+      return {
+        id: entry.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || entry.name,
+        label: entry.name,
+        path: childPath,
+      }
+    })
+    .filter(child => existsSync(path.join(child.path, '.git')))
+    .sort((left, right) => (left.label ?? left.id).localeCompare(right.label ?? right.id))
+}
+
+export function resolveWorkspaceProjectPathsOrDiscover(
+  workspacePath: string,
+  config: Pick<WorkspaceYamlConfig, 'projectPath' | 'projects'>,
+): WorkspaceProject[] {
+  const configured = resolveWorkspaceProjectPaths(workspacePath, config)
+  return configured.length > 0 ? configured : discoverChildGitProjects(resolveWorkspaceBaseProjectPath(workspacePath, config))
 }
 
 function taskString(task: GitStoryPolicyContext['task'], key: 'domain' | 'projectPath' | 'worktreePath'): string | undefined {
