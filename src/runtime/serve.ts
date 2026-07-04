@@ -275,7 +275,7 @@ import {
   readProjectSkillProposals,
   resetProjectSkillProposals,
 } from '@guildhall/skills'
-import { normalizeImportedDraftTask } from './import-drafts.js'
+import { importedTaskNeedsBriefShaping, normalizeImportedDraftTask } from './import-drafts.js'
 import { selectedReleaseScopeForQueue, specReviewRequiresOwnerApproval } from './orchestrator-picker.js'
 import {
   buildInbox,
@@ -5005,38 +5005,50 @@ export function buildServeApp(opts: ServeOptions = {}): {
   } | null> {
     const tasksPath = projectTasksPath(projectPath)
     if (!existsSync(tasksPath)) return null
-    const raw = JSON.parse(await readManagedTextFile(tasksPath, 'utf-8')) as
-      | { tasks?: Array<Record<string, unknown>> }
-      | Array<Record<string, unknown>>
-    const tasks = Array.isArray(raw) ? raw : raw.tasks ?? []
-    const importDrafts = tasks.filter(t => t && typeof t === 'object' && (t as { status?: unknown }).status === 'import_draft')
-    if (importDrafts.length === 0) return null
-    const importerTask = tasks.find(task =>
+    const queue = await readTaskQueueFileNormalized(tasksPath)
+    const typedQueue = {
+      tasks: queue.tasks as Task[],
+      releases: queue.releases,
+      ...(queue.selectedReleaseId ? { selectedReleaseId: queue.selectedReleaseId } : {}),
+    }
+    const selectedReleaseScope = selectedReleaseScopeForQueue(typedQueue) ?? selectedReleaseScopeFromTaskMembership(typedQueue.tasks)
+    const tasksById = new Map(typedQueue.tasks.map(task => [task.id, task]))
+    const tasks = selectedReleaseScope
+      ? typedQueue.tasks.filter(task => taskEligibleForSelectedScope(task, selectedReleaseScope, { tasksById }).eligible)
+      : typedQueue.tasks
+    const importedShapingTasks = tasks.filter(importedTaskNeedsBriefShaping)
+    if (importedShapingTasks.length === 0) return null
+    const importerTask = typedQueue.tasks.find(task =>
       task &&
       typeof task === 'object' &&
       (task as { id?: unknown }).id === WORKSPACE_IMPORT_TASK_ID,
     ) as { status?: unknown } | undefined
     const runnable = tasks.some(t => {
       if (!t || typeof t !== 'object') return false
+      if (importedTaskNeedsBriefShaping(t)) return false
       const status = String((t as { status?: unknown }).status ?? '')
       return ['proposed', 'ready', 'exploring', 'in_progress', 'review', 'gate_check', 'spec_review'].includes(status)
     })
     if (runnable) return null
-    const first = importDrafts[0] as { id?: unknown; title?: unknown }
+    const first = importedShapingTasks[0] as { id?: unknown; title?: unknown; status?: unknown }
     const title = typeof first.title === 'string' && first.title.trim() ? first.title.trim() : 'the first imported draft'
     const id = typeof first.id === 'string' ? first.id : ''
-    const importerDone = typeof importerTask?.status === 'string' && ['done', 'spec_review'].includes(importerTask.status)
+    const importerDone =
+      typeof importerTask?.status === 'string' && ['done', 'spec_review'].includes(importerTask.status)
+    const shapingCount = importedShapingTasks.length
+    const rawImportDraftCount = importedShapingTasks.filter(task => task.status === 'import_draft').length
+    const shapingStarted = first.status === 'exploring' || rawImportDraftCount < shapingCount
     return {
       canStart: false,
-      code: importerDone ? 'imported_scope_shaping' : 'import_drafts_waiting',
+      code: importerDone || shapingStarted ? 'imported_scope_shaping' : 'import_drafts_waiting',
       message:
-        importerDone
-          ? importDrafts.length === 1
+        importerDone || shapingStarted
+          ? shapingCount === 1
             ? `Imported current work still needs a real brief before Guildhall can build unattended. Start with "${title}".`
-            : `${importDrafts.length} imported current-scope tasks still need real briefs before Guildhall can build unattended. Start with "${title}".`
-          : importDrafts.length === 1
+            : `${shapingCount} imported current-scope tasks still need real briefs before Guildhall can build unattended. Start with "${title}".`
+          : shapingCount === 1
             ? `Review the imported draft "${title}" and turn it into a task brief before starting.`
-            : `Review ${importDrafts.length} imported drafts before starting. Start with "${title}".`,
+            : `Review ${shapingCount} imported drafts before starting. Start with "${title}".`,
       actionHref: id ? `/task/${encodeURIComponent(id)}` : '/notifications',
     }
   }

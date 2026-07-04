@@ -150,6 +150,14 @@ export function shouldUseImportDraftState(task: Task): boolean {
   return !hasSpecDraft(task) && !hasProductBriefShape(task) && !hasAnyAcceptanceCriteria(task) && !hasOpenQuestions(task)
 }
 
+export function importedTaskNeedsBriefShaping(task: Task): boolean {
+  if (task.status === 'import_draft') return true
+  if (!hasWorkspaceImportProvenance(task)) return false
+  if (task.status !== 'exploring') return false
+  if (!hasShapingRequest(task)) return false
+  return !hasProductBriefShape(task) || !hasAnyAcceptanceCriteria(task)
+}
+
 export function normalizeImportedDraftTask(task: Task): boolean {
   if (!shouldUseImportDraftState(task)) return false
   if (task.status === 'import_draft') return false

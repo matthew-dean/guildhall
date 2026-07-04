@@ -12,6 +12,74 @@ This is the active browser test plan for the Guildhall project surface. Keep it
 updated while auditing the active test project so another agent can resume
 without guessing.
 
+2026-07-04T07:05:00Z - Kept shaped import drafts from making the selected
+Narrative Harness release look runnable.
+
+- Work id: `codex:narrative-harness-shaped-import-start-blocker-2026-07-04`.
+- User job: when a Stage 1 imported task has only been opened for shaping,
+  Guildhall must visibly communicate that the selected release still needs real
+  briefs/specs, and Start must not run just because unrelated later work is
+  ready.
+- Failure reproduced:
+  - `task-import-9s8tkc` was promoted from `import_draft` to `exploring` by
+    the shape-draft action.
+  - `/api/project?projectId=narrative-harness` then reported
+    `startReadiness.canStart: true` even though the selected Stage 1 release
+    still contained shaped/imported work with no approved brief.
+- Fix:
+  - Start readiness now treats raw `import_draft` tasks and shaped imported
+    `exploring` tasks as the same current-scope shaping blocker until they have
+    real brief/acceptance shape.
+  - The import-shaping blocker now evaluates the selected release/current scope
+    instead of all project tasks, so future ready work cannot make the current
+    release appear runnable.
+  - The reserved workspace-import task can live outside the selected release
+    while still determining whether imported drafts are waiting for review or
+    are now a shaping backlog.
+- Contract Touch Decision:
+  - Work id:
+    `codex:narrative-harness-shaped-import-start-blocker-2026-07-04`.
+  - Touched contracts: project Start readiness and shared `/api/project`
+    `startReadiness` blocker semantics.
+  - Contracts considered but not touched: persisted task schema, release schema,
+    orientation-spine payload shape, and task-detail payload shape.
+  - Required follow-up: installed-app proof must show Narrative Harness Stage 1
+    blocked on imported-scope shaping before more MVP work is run.
+  - Proof required/provided: regression test with a selected release, one
+    shaped imported task, one raw imported draft, and a future ready task outside
+    the release; focused Start/import/release suite.
+  - Apply/revert behavior: reverting can let a shaped imported draft count as
+    runnable and can let future release work hide current-release shaping gaps.
+- Verification:
+  - `./node_modules/.bin/vitest run
+    src/runtime/__tests__/serve-settings.test.ts --testNamePattern "shaped
+    import drafts"` passed.
+  - `./node_modules/.bin/vitest run
+    src/runtime/__tests__/serve-settings.test.ts --testNamePattern
+    "import|release|Start"` passed `45` tests.
+  - `./node_modules/.bin/vitest run
+    src/runtime/__tests__/serve-settings.test.ts
+    src/runtime/__tests__/project-reintake-apply.test.ts
+    src/runtime/__tests__/workspace-importer.test.ts` passed `185` tests.
+  - `/opt/homebrew/bin/pnpm build`, `/opt/homebrew/bin/pnpm lint:contracts`,
+    and `git diff --check` passed.
+  - Installed-app proof after `/opt/homebrew/bin/pnpm dev:install`,
+    `guildhall stop`, and `guildhall start`: `/api/stale-server` returned
+    `stale:false` for PID `42282` from
+    `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+  - Live `/api/project?projectId=narrative-harness` returned
+    `startReadiness.canStart: false`, code `imported_scope_shaping`, action
+    `/task/task-import-9s8tkc`, selected release
+    `Stage 1: Fixture And Evaluation Harness`, `7` included work items, and
+    `8` deferred work items.
+  - Live `POST /api/project/start?projectId=narrative-harness` returned HTTP
+    `400` with code `imported_scope_shaping` and the same action href.
+  - Rendered Overview proof at desktop `1280x820` showed the top action
+    `Needs briefs` disabled, `Draft first brief` enabled, work mix `7 Current
+    scope` and `8 Deferred`, scope `Stage 1: Fixture And Evaluation Harness`,
+    and the visible blocker text `7 imported current-scope tasks still need real
+    briefs before Guildhall can build unattended...`.
+
 2026-07-04T06:45:00Z - Narrowed Narrative Harness contract extraction so visible
 task specs do not absorb adjacent roadmap contracts.
 

@@ -1571,6 +1571,173 @@ describe('POST /api/project/start', () => {
     expect(startBody.actionHref).toBe('/task/task-import-1')
   })
 
+  it('keeps shaped import drafts from making selected release Start look runnable', async () => {
+    const tasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
+    await fs.mkdir(path.dirname(tasksPath), { recursive: true })
+    const now = new Date().toISOString()
+    await fs.writeFile(
+      tasksPath,
+      JSON.stringify({
+        version: 1,
+        selectedReleaseId: 'release-stage-1',
+        lastUpdated: now,
+        releases: [
+          {
+            id: 'release-stage-1',
+            label: 'Stage 1: Fixture And Evaluation Harness',
+            kind: 'release',
+            state: 'active',
+            source: 'release_plan',
+            nodeIds: ['work:task-import-shaped', 'work:task-import-waiting'],
+            deferredNodeIds: ['work:task-future-ready'],
+            proofStyle: 'script_only',
+          },
+        ],
+        tasks: [
+          {
+            id: 'task-workspace-import',
+            title: 'Import project notes and plans',
+            description: 'Reserved importer.',
+            domain: '_workspace_import',
+            status: 'done',
+            priority: 'high',
+            acceptanceCriteria: [],
+            outOfScope: [],
+            dependsOn: [],
+            notes: [],
+            gateResults: [],
+            reviewVerdicts: [],
+            adjudications: [],
+            escalations: [],
+            agentIssues: [],
+            revisionCount: 0,
+            remediationAttempts: 0,
+            createdAt: now,
+            updatedAt: now,
+          },
+          {
+            id: 'task-import-shaped',
+            title: 'Define fixture manifest and run result schemas',
+            description: 'Drafted import context, but no owner-approved brief exists yet.',
+            domain: 'core',
+            status: 'exploring',
+            priority: 'normal',
+            releaseIds: ['release-stage-1'],
+            spec: 'Imported task spec text from docs.',
+            acceptanceCriteria: [],
+            outOfScope: [],
+            dependsOn: [],
+            notes: [
+              {
+                agentId: 'workspace-importer',
+                role: 'importer',
+                content: 'Imported from docs.',
+                timestamp: now,
+              },
+              {
+                agentId: 'human',
+                role: 'shaping-request',
+                content: 'User asked Guildhall to shape this imported draft into a complete task.',
+                timestamp: now,
+              },
+            ],
+            gateResults: [],
+            reviewVerdicts: [],
+            adjudications: [],
+            escalations: [],
+            agentIssues: [],
+            revisionCount: 0,
+            remediationAttempts: 0,
+            createdAt: now,
+            updatedAt: now,
+          },
+          {
+            id: 'task-import-waiting',
+            title: 'Build evaluation command fixtures',
+            description: 'Needs shaping before work can run.',
+            domain: 'core',
+            status: 'import_draft',
+            priority: 'normal',
+            releaseIds: ['release-stage-1'],
+            acceptanceCriteria: [],
+            outOfScope: [],
+            dependsOn: [],
+            notes: [
+              {
+                agentId: 'workspace-importer',
+                role: 'importer',
+                content: 'Imported from docs.',
+                timestamp: now,
+              },
+            ],
+            gateResults: [],
+            reviewVerdicts: [],
+            adjudications: [],
+            escalations: [],
+            agentIssues: [],
+            revisionCount: 0,
+            remediationAttempts: 0,
+            createdAt: now,
+            updatedAt: now,
+          },
+          {
+            id: 'task-future-ready',
+            title: 'Future ready task',
+            description: 'Outside the selected release.',
+            domain: 'core',
+            status: 'ready',
+            priority: 'normal',
+            productBrief: {
+              userJob: 'Run a future task.',
+              whyItMattersNow: 'It matters later.',
+              successMetric: 'The future task completes.',
+              nonGoals: ['Do not include in Stage 1.'],
+              approvedAt: now,
+            },
+            spec: 'Complete future task spec.',
+            acceptanceCriteria: ['The future task works.'],
+            outOfScope: [],
+            dependsOn: [],
+            notes: [],
+            gateResults: [],
+            reviewVerdicts: [],
+            adjudications: [],
+            escalations: [],
+            agentIssues: [],
+            revisionCount: 0,
+            remediationAttempts: 0,
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
+      }, null, 2),
+      'utf8',
+    )
+    setProvider('anthropic-api', { apiKey: 'sk-ant-test' })
+    updateGlobalConfig({ preferredProvider: 'anthropic-api' })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const projectRes = await app.fetch(new Request(scoped('/api/project')))
+    const projectBody = (await projectRes.json()) as {
+      startReadiness?: { canStart?: boolean; code?: string; actionHref?: string; message?: string }
+    }
+    expect(projectBody.startReadiness).toMatchObject({
+      canStart: false,
+      code: 'imported_scope_shaping',
+      actionHref: '/task/task-import-shaped',
+    })
+    expect(projectBody.startReadiness?.message).toContain('2 imported current-scope tasks')
+    expect(projectBody.startReadiness?.message).toContain('Define fixture manifest and run result schemas')
+
+    const startRes = await app.fetch(
+      new Request(scoped('/api/project/start'), { method: 'POST', body: '{}' }),
+    )
+    expect(startRes.status).toBe(400)
+    const startBody = (await startRes.json()) as { code?: string; actionHref?: string }
+    expect(startBody.code).toBe('imported_scope_shaping')
+    expect(startBody.actionHref).toBe('/task/task-import-shaped')
+  })
+
   it('blocks Start when ready tasks still need brief cleanup', async () => {
     const now = new Date().toISOString()
     await writeSystemTasks({
