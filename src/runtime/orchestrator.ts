@@ -1420,6 +1420,67 @@ function extractBacktickTerms(value: string | undefined | null): string[] {
   )
 }
 
+function scopedRecoveryContractTerms(taskTitle: string, terms: string[]): string[] {
+  const title = taskTitle.toLowerCase()
+  if (/fixture|expected-record|ground truth/.test(title) && !/prototype|evaluation/.test(title)) {
+    const scoped = terms.filter((term) =>
+      /run-fixture|fixture|synthetic|permission|expectedrecord|expectedsignal|expected-record/i.test(term) &&
+      !/prototype|runevaluation|schemafield|packetquality|writeroutput|reviewerdisagreement/i.test(term),
+    )
+    return scoped.length > 0 ? scoped : terms
+  }
+  if (/prototype|evaluation/.test(title) && !/fixture|ground truth/.test(title)) {
+    const scoped = terms.filter((term) =>
+      /run-fixture|prototype|runevaluation|schemafield|packetquality|expectedsignal|evaluation/i.test(term),
+    )
+    return scoped.length > 0 ? scoped : terms
+  }
+  return terms
+}
+
+function scopedRecoveryContractAcceptance(taskTitle: string): string[] {
+  const title = taskTitle.toLowerCase()
+  if (/fixture|expected-record|ground truth/.test(title) && !/prototype|evaluation/.test(title)) {
+    return [
+      '1. Given the Stage 1 fixture harness boundary, when this task is implemented, then the fixture manifest, synthetic author profile, and permission setup can express the tiny fiction fixture without introducing a parallel fixture format.',
+      '2. Given human-authored ground truth for the first proof loop, when expected records are reviewed, then they can encode the source facts, expected signals, and evidence references needed to judge generated output.',
+      '3. Given the existing Narrative Harness schema files and fixture artifacts, when this work is complete, then fixture and expected-record data are represented in the repo-local TypeScript/JSON surfaces named by the parent evidence.',
+      '4. Given the implementation is complete, when the local proof command runs, then Guildhall records the exact command and result against this task before the parent work is treated as satisfied.',
+    ]
+  }
+  if (/prototype|evaluation/.test(title) && !/fixture|ground truth/.test(title)) {
+    return [
+      '1. Given the Stage 1 prototype-run boundary, when this task is implemented, then the prototype run record captures generated output, packet/context evidence, and trace references without introducing a parallel run format.',
+      '2. Given expected signals from the fixture ground truth, when evaluation records are reviewed, then they can report signal matches, misses, stale/noisy findings, and supporting evidence.',
+      '3. Given the existing Narrative Harness schema files and run artifacts, when this work is complete, then prototype-run and evaluation data are represented in the repo-local TypeScript/JSON surfaces named by the parent evidence.',
+      '4. Given the implementation is complete, when the local proof command runs, then Guildhall records the exact command and result against this task before the parent work is treated as satisfied.',
+    ]
+  }
+  return [
+    '1. Given the current schema files and imported parent spec, when this task is implemented, then the repo defines or verifies each relevant contract term listed above without introducing a second parallel contract surface.',
+    '2. Given the Stage 1 fixture harness boundary, when fixture and expected-record contracts are reviewed, then they can express a tiny fiction fixture, author/profile permissions, expected records, and expected signals.',
+    '3. Given the prototype run and evaluation boundary, when run/evaluation contracts are reviewed, then they capture run output, signal evaluation, packet quality or field usage, and trace evidence needed for the first proof loop.',
+    '4. Given the implementation is complete, when the local proof command runs, then Guildhall records the exact command and result against this task before the parent work is treated as satisfied.',
+  ]
+}
+
+function scopedRecoveryParentAcceptance(taskTitle: string, parentAcceptance: string[]): string[] {
+  const title = taskTitle.toLowerCase()
+  if (/fixture|expected-record|ground truth/.test(title) && !/prototype|evaluation/.test(title)) {
+    const scoped = parentAcceptance.filter((item) =>
+      /fixture|expected|ground truth|signal|permission|profile/i.test(item) &&
+      !/prototype|runevaluation|run evaluation|packet quality|schema field/i.test(item),
+    )
+    return scoped
+  }
+  if (/prototype|evaluation/.test(title) && !/fixture|ground truth/.test(title)) {
+    return parentAcceptance.filter((item) =>
+      /prototype|evaluation|packet|trace|signal|run/i.test(item),
+    )
+  }
+  return parentAcceptance
+}
+
 function sentenceCaseFallbackQuestion(value: string): string {
   const trimmed = normalizeFallbackWhitespace(value).replace(/\s+\?/g, '?')
   if (!trimmed) return trimmed
@@ -9696,6 +9757,9 @@ export class Orchestrator {
     const contractFocusedSeed =
       contractTerms.length > 0 &&
       /contract|schema|fixture|expected-record|prototype-run|evaluation/i.test(taskTitle)
+    const scopedContractTerms = scopedRecoveryContractTerms(taskTitle, contractTerms)
+    const scopedContractAcceptance = scopedRecoveryContractAcceptance(taskTitle)
+    const scopedParentAcceptance = scopedRecoveryParentAcceptance(taskTitle, parentAcceptance)
     const decisionLines = answeredDecisions.length > 0
       ? answeredDecisions.map((decision) => `- ${decision}`).join('\n')
       : '- No unresolved owner decisions are recorded on the task.'
@@ -9711,21 +9775,18 @@ export class Orchestrator {
       ...(parentTask?.title ? [`- Containing work: ${semanticTaskTitle(parentTask)}`] : []),
       '',
       'Contract terms to account for:',
-      ...contractTerms.map((term) => `- \`${term}\``),
+      ...scopedContractTerms.map((term) => `- \`${term}\``),
       '',
       'Parent acceptance context:',
-      ...(parentAcceptance.length > 0
-        ? parentAcceptance.slice(0, 6).map((item) => `- ${item}`)
+      ...(scopedParentAcceptance.length > 0
+        ? scopedParentAcceptance.slice(0, 6).map((item) => `- ${item}`)
         : ['- No parent acceptance criteria were available; stay within the child proposal and cited contract terms.']),
       '',
       'Resolved owner decisions:',
       decisionLines,
       '',
       '## Acceptance Criteria',
-      `1. Given the current schema files and imported parent spec, when this task is implemented, then the repo defines or verifies each relevant contract term listed above without introducing a second parallel contract surface.`,
-      '2. Given the Stage 1 fixture harness boundary, when fixture and expected-record contracts are reviewed, then they can express a tiny fiction fixture, author/profile permissions, expected records, and expected signals.',
-      '3. Given the prototype run and evaluation boundary, when run/evaluation contracts are reviewed, then they capture run output, signal evaluation, packet quality or field usage, and trace evidence needed for the first proof loop.',
-      '4. Given the implementation is complete, when the local proof command runs, then Guildhall records the exact command and result against this task before the parent work is treated as satisfied.',
+      ...scopedContractAcceptance,
       '',
       '## Out of Scope',
       '- Do not introduce Rust contracts for this TypeScript project.',

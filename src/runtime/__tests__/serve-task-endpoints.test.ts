@@ -2427,10 +2427,50 @@ describe('POST /api/project/task/:id/reframe-task', () => {
     expect(transcript).toContain('The current task is unreadable.')
   })
 
-  it('rejects reframe once implementation work is active', async () => {
+  it('reopens an active worker claim when no durable implementation output exists yet', async () => {
     await seedTask('task-1', {
       status: 'in_progress',
       assignedTo: 'worker-agent',
+      spec: '## Summary\nApply the wrong broad policy in the dashboard.',
+      acceptanceCriteria: [{ id: 'AC-1', description: 'Dashboard shows the policy.', verifiedBy: 'review' }],
+      notes: [{
+        agentId: 'task-claimer',
+        role: 'orchestrator',
+        content: 'Claimed ready task for worker-agent.',
+        timestamp: '2026-05-19T10:00:00.000Z',
+      }],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-1/reframe-task'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ reason: 'The spec copied parent scope into this child before any worker output was saved.' }),
+      }),
+    )
+
+    expect(res.status).toBe(200)
+    await expect(res.json()).resolves.toMatchObject({ ok: true, status: 'exploring' })
+
+    const queue = await readTaskQueue()
+    const task = queue.tasks[0]!
+    expect(task.status).toBe('exploring')
+    expect(task.assignedTo).toBe('spec-agent')
+    expect(task.spec).toBeUndefined()
+    expect(task.acceptanceCriteria).toEqual([])
+    expect(task.notes.some((note: Record<string, unknown>) =>
+      String(note.content ?? '').includes('Cleared an active agent claim with no durable worker checkpoint'),
+    )).toBe(true)
+    const effective = await buildEffectiveTask(tmpDir, task as any) as Record<string, any>
+    expect(effective.assignedTo).toBe('spec-agent')
+  })
+
+  it('rejects reframe once implementation work has durable output', async () => {
+    await seedTask('task-1', {
+      status: 'in_progress',
+      assignedTo: 'worker-agent',
+      handoffStep: 1,
       spec: '## Summary\nApply the policy in the dashboard.',
       acceptanceCriteria: [{ id: 'AC-1', description: 'Dashboard shows the policy.', verifiedBy: 'review' }],
     })

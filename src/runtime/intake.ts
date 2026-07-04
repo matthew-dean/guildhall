@@ -4,8 +4,10 @@ import path from 'node:path'
 import { TaskQueue, type RequestIntake, type Task, type TaskRequest, type TaskStatus } from '@guildhall/core'
 import {
   atomicWriteText,
+  inferProjectRootFromMemoryDir,
   projectStatePathFromMemoryDir,
   readProjectStateTextFromMemoryDirAsync,
+  upsertTaskRuntimeState,
   writeProjectStateJsonFromMemoryDirAsync,
 } from '@guildhall/sessions'
 import {
@@ -34,6 +36,7 @@ import { transitionTaskStatus } from './task-transition.js'
 import { createOwnerInputRequest } from './owner-input-store.js'
 import { normalizeLegacyTaskQueueShape } from './task-queue-compat.js'
 import { buildSurfaceReviewPacketsForStructuredSpec } from './contract-surfaces.js'
+import { buildEffectiveTask } from './effective-task.js'
 
 // ---------------------------------------------------------------------------
 // FR-12: exploratory task intake.
@@ -86,6 +89,19 @@ async function readQueue(memoryDir: string): Promise<TaskQueue> {
 
 async function writeQueue(memoryDir: string, queue: TaskQueue): Promise<void> {
   await writeProjectStateJsonFromMemoryDirAsync(memoryDir, 'TASKS.json', queue)
+}
+
+function hasDurableImplementationProgress(task: Task): boolean {
+  const record = task as Task & {
+    artifactIds?: unknown
+    latestCheckpoint?: unknown
+    terminalSummary?: unknown
+  }
+  if (record.latestCheckpoint) return true
+  if (record.terminalSummary) return true
+  if (typeof task.handoffStep === 'number') return true
+  if (Array.isArray(record.artifactIds) && record.artifactIds.length > 0) return true
+  return false
 }
 
 function nextTaskId(queue: TaskQueue): string {
@@ -815,10 +831,15 @@ export async function reframeTask(input: ReframeTaskInput): Promise<ReframeTaskR
   const queue = await readQueue(input.memoryDir)
   const task = queue.tasks.find((t) => t.id === input.taskId)
   if (!task) return { success: false, error: `Task ${input.taskId} not found` }
+  const projectRoot = inferProjectRootFromMemoryDir(input.memoryDir)
+  const effectiveTask = await buildEffectiveTask(projectRoot, task) as unknown as Task
   if (task.status === 'done' || task.status === 'shelved' || task.status === 'pending_pr') {
     return { success: false, error: `Task ${input.taskId} is ${task.status}` }
   }
-  if (task.status === 'in_progress' || task.status === 'review' || task.status === 'gate_check') {
+  if (
+    (task.status === 'in_progress' || task.status === 'review' || task.status === 'gate_check') &&
+    hasDurableImplementationProgress(effectiveTask)
+  ) {
     return {
       success: false,
       error: `Task ${input.taskId} already started implementation; pause or finish the current work before reframing so work traces stay connected.`,
@@ -850,6 +871,14 @@ export async function reframeTask(input: ReframeTaskInput): Promise<ReframeTaskR
   ].join('\n')
 
   const notes = Array.isArray(task.notes) ? [...task.notes] : []
+  if (task.status === 'in_progress' || task.status === 'review' || task.status === 'gate_check') {
+    notes.push({
+      agentId: 'system',
+      role: 'system',
+      content: 'Cleared an active agent claim with no durable worker checkpoint, artifact, handoff, or terminal output so this task can be reframed before implementation continues.',
+      timestamp: now,
+    })
+  }
   notes.push({
     agentId: 'human',
     role: 'human',
@@ -882,6 +911,10 @@ export async function reframeTask(input: ReframeTaskInput): Promise<ReframeTaskR
   task.updatedAt = now
   queue.lastUpdated = now
 
+  await upsertTaskRuntimeState(projectRoot, task.id, {
+    assignedTo: 'spec-agent',
+    updatedAt: now,
+  })
   await appendExploringTranscript({
     memoryDir: input.memoryDir,
     taskId: task.id,

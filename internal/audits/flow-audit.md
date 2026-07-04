@@ -12,6 +12,83 @@ This is the active browser test plan for the Guildhall project surface. Keep it
 updated while auditing the active test project so another agent can resume
 without guessing.
 
+2026-07-04T16:25:00Z - Reframed bad Narrative Harness child scope only when
+Guildhall could visibly prove the correction.
+
+- Work id:
+  `codex:narrative-harness-child-scope-visible-proof-2026-07-04`.
+- User job: while Codex is acting as Matthew's delegated reviewer, Guildhall
+  must show the project/task information it is using. Codex repo access is not
+  proof. The owner-facing task detail, Work surface, and shared project action
+  state must communicate which child work is pinned, what scope was approved,
+  and whether implementation has actually produced durable output.
+- Failure reproduced:
+  - The Narrative Harness child task `Shape fixture and expected-record ground
+    truth` had a visible spec, but the spec copied parent prototype/evaluation
+    terms into the child contract: `PrototypeRun`, `RunEvaluation`,
+    `SchemaFieldUsage`, and `PacketQualityScore`.
+  - The task was marked active by an agent claim even though there was no
+    durable worker checkpoint, artifact, handoff step, or terminal summary.
+    Reframe rejected the task because it treated that claim as real
+    implementation progress.
+  - Internal child steps could disappear from Work even when the shared action
+    model or runtime state said that exact step was the pinned/active work.
+- Fix:
+  - Recovery spec seeding scopes parent/import contract terms to the child
+    title before writing a deterministic recovered spec. Fixture/ground-truth
+    children now keep fixture, author profile, permission setup, expected
+    record, and expected signal terms without inheriting prototype/evaluation
+    acceptance criteria.
+  - Reframe now blocks only after durable implementation output exists. If a
+    task is merely claimed by an agent and has no checkpoint, artifact, handoff,
+    or terminal summary, Guildhall can clear the claim, record why, return the
+    task to shaping, and assign the spec lane.
+  - Work visibility now always includes the primary-action task and active
+    internal steps, so the user can see the work Guildhall says is next or
+    currently running.
+- Live installed-app proof:
+  - `/api/stale-server` returned `stale:false` for PID `17770` with matching
+    boot/current build mtimes.
+  - After Codex submitted a reviewer reframe on Matthew's behalf,
+    `/api/project/task/...shape-fixture-and-expected-record-ground-truth-2`
+    returned `status:"exploring"`, `assignedTo:"spec-agent"`, `hasSpec:false`,
+    and no acceptance criteria. The task note recorded that only a stale active
+    claim was cleared.
+  - After Guildhall regenerated the spec, the same endpoint returned
+    `status:"spec_review"`, `hasSpec:true`, `acCount:4`, and
+    `specHasPrototype:false`.
+  - The regenerated visible spec named `FixtureManifest`,
+    `SyntheticAuthorProfile`, `FixturePermissionSetup`, `ExpectedRecordSet`,
+    and `ExpectedSignal`; it did not name `PrototypeRun`, `RunEvaluation`,
+    `SchemaFieldUsage`, or `PacketQualityScore`.
+  - Codex then approved the corrected visible spec on Matthew's behalf. Start
+    moved the task to `status:"in_progress"` with
+    `assignedTo:"worker-agent"`. A later poll still showed no checkpoint,
+    artifact, handoff, or terminal summary, so completion was not claimed.
+  - After reinstall/restart, `/api/project?projectId=narrative-harness`
+    returned `run:null`, `startReadiness.code:"paused_live_work"`, primary
+    action label `Shape fixture and expected-record ground truth`, and
+    `runControl.label:"Resume"` pointing at the same task href.
+- Verification:
+  - `CI=true /opt/homebrew/bin/pnpm exec vitest run
+    src/runtime/__tests__/serve-task-endpoints.test.ts -t
+    "reopens an active worker claim|rejects reframe once implementation work
+    has durable output|reopens an inscrutable blocked task"` passed `3`
+    focused tests.
+  - `CI=true /opt/homebrew/bin/pnpm exec vitest run
+    src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts -t
+    "keeps active internal steps visible|keeps the primary-action internal
+    shaping task visible|shows internal delivery steps|labels inactive
+    in-progress"` passed `4` focused tests.
+  - `CI=true /opt/homebrew/bin/pnpm exec vitest run
+    src/runtime/__tests__/orchestrator.test.ts -t
+    "parent contract evidence|narrows recovered fixture child specs|deterministic
+    recovery spec seed|durable-draft recovery"` passed `4` focused tests.
+  - `/opt/homebrew/bin/pnpm build` and `/opt/homebrew/bin/pnpm dev:install`
+    passed before the installed-app proof above.
+
+source: codex:narrative-harness-child-scope-visible-proof-2026-07-04
+
 2026-07-04T15:34:00Z - Made Narrative Harness recovered work prove itself
 through Guildhall's own action/readiness surfaces.
 

@@ -1124,6 +1124,171 @@ describe('WorkTab', () => {
     expect(screen.queryByText('In progress')).toBeNull()
   })
 
+  it('keeps active internal steps visible while Guildhall is working on them', async () => {
+    render(WorkTab, {
+      props: {
+        detail: {
+          ...runningDetail([
+            task({
+              id: 'feature-root',
+              title: 'Define fixture schemas',
+              status: 'ready',
+              hierarchy: { childIds: ['fixture-ground-truth'], order: 0 },
+            }),
+            task({
+              id: 'fixture-ground-truth',
+              title: 'Shape fixture and expected-record ground truth',
+              status: 'in_progress',
+              hierarchy: { parentId: 'feature-root', childIds: [], order: 0 },
+            }),
+          ]),
+          workProgress: {
+            counts: {
+              visibleTotal: 1,
+              visibleActive: 1,
+              visibleBlocked: 0,
+              visibleDone: 0,
+              visibleShelved: 0,
+              deliveryTotal: 2,
+              deliveryRequired: 2,
+              deliveryDone: 0,
+              deliveryBlocked: 0,
+            },
+            byTaskId: {
+              'feature-root': {
+                id: 'feature-root',
+                title: 'Define fixture schemas',
+                status: 'ready',
+                visibility: { kind: 'primary', countInProjectTotals: true },
+                deliverySteps: [],
+                rollup: {
+                  primaryState: 'ready',
+                  visibleChildCount: 0,
+                  visibleChildDoneCount: 0,
+                  internalStepCount: 1,
+                  requiredStepCount: 1,
+                  doneStepCount: 0,
+                  blockedStepCount: 0,
+                },
+              },
+              'fixture-ground-truth': {
+                id: 'fixture-ground-truth',
+                title: 'Shape fixture and expected-record ground truth',
+                status: 'in_progress',
+                visibility: { kind: 'internal_step', countInProjectTotals: false },
+                deliverySteps: [],
+                rollup: {
+                  primaryState: 'active',
+                  visibleChildCount: 0,
+                  visibleChildDoneCount: 0,
+                  internalStepCount: 0,
+                  requiredStepCount: 0,
+                  doneStepCount: 0,
+                  blockedStepCount: 0,
+                },
+              },
+            },
+          },
+        },
+      },
+    })
+
+    expect(await screen.findByText('Shape fixture and expected-record ground truth')).toBeTruthy()
+    expect(screen.getByText('1 shown · 2 total')).toBeTruthy()
+    expect((screen.getByRole('combobox', { name: /^show$/i }) as HTMLSelectElement).value).toBe('queued')
+    expect(screen.getByText('1 Working')).toBeTruthy()
+  })
+
+  it('keeps the primary-action internal shaping task visible in Work', async () => {
+    render(WorkTab, {
+      props: {
+        detail: {
+          ...detail([
+            task({
+              id: 'feature-root',
+              title: 'Define fixture schemas',
+              status: 'ready',
+              hierarchy: { childIds: ['fixture-ground-truth'], order: 0 },
+            }),
+            task({
+              id: 'fixture-ground-truth',
+              title: 'Shape fixture and expected-record ground truth',
+              status: 'exploring',
+              hierarchy: { parentId: 'feature-root', childIds: [], order: 0 },
+            }),
+          ], {
+            actionModel: {
+              primaryAction: {
+                source: 'task',
+                label: 'Shape fixture and expected-record ground truth',
+                buttonLabel: 'Open Work',
+                href: '/work?task=fixture-ground-truth',
+                tone: 'accent',
+                taskId: 'fixture-ground-truth',
+              },
+              secondaryActions: [],
+              runControl: { label: 'Resume', startEnabled: true },
+              ownerInput: { active: false },
+              setup: { state: 'ready', freshIntakeNeeded: false },
+            },
+          }),
+          workProgress: {
+            counts: {
+              visibleTotal: 1,
+              visibleActive: 1,
+              visibleBlocked: 0,
+              visibleDone: 0,
+              visibleShelved: 0,
+              deliveryTotal: 2,
+              deliveryRequired: 2,
+              deliveryDone: 0,
+              deliveryBlocked: 0,
+            },
+            byTaskId: {
+              'feature-root': {
+                id: 'feature-root',
+                title: 'Define fixture schemas',
+                status: 'ready',
+                visibility: { kind: 'primary', countInProjectTotals: true },
+                deliverySteps: [],
+                rollup: {
+                  primaryState: 'ready',
+                  visibleChildCount: 0,
+                  visibleChildDoneCount: 0,
+                  internalStepCount: 1,
+                  requiredStepCount: 1,
+                  doneStepCount: 0,
+                  blockedStepCount: 0,
+                },
+              },
+              'fixture-ground-truth': {
+                id: 'fixture-ground-truth',
+                title: 'Shape fixture and expected-record ground truth',
+                status: 'exploring',
+                visibility: { kind: 'internal_step', countInProjectTotals: false },
+                deliverySteps: [],
+                rollup: {
+                  primaryState: 'active',
+                  visibleChildCount: 0,
+                  visibleChildDoneCount: 0,
+                  internalStepCount: 0,
+                  requiredStepCount: 0,
+                  doneStepCount: 0,
+                  blockedStepCount: 0,
+                },
+              },
+            },
+          },
+        },
+      },
+    })
+
+    expect(await screen.findByText('Shape fixture and expected-record ground truth')).toBeTruthy()
+    expect((screen.getByRole('combobox', { name: /^show$/i }) as HTMLSelectElement).value).toBe('planning')
+    expect(screen.getByText('2 shown · 2 total')).toBeTruthy()
+    expect(screen.getByText('Paused')).toBeTruthy()
+  })
+
   it('keeps stopped gate checks labeled as gate work instead of paused work', async () => {
     render(WorkTab, {
       props: {

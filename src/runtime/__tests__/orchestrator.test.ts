@@ -2798,6 +2798,66 @@ describe('Orchestrator.tick — routing', () => {
     expect(task.acceptanceCriteria).toHaveLength(4)
   })
 
+  it('narrows recovered fixture child specs instead of copying parent prototype scope', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'parent',
+        status: 'ready',
+        title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+        spec: [
+          '## Acceptance Criteria',
+          '1. The cited contracts are explicitly defined and usable in code: `FixtureManifest`, `SyntheticAuthorProfile`, `FixturePermissionSetup`, `ExpectedRecordSet`, `ExpectedSignal`.',
+          '2. `PrototypeRun`, `RunEvaluation`, `SchemaFieldUsage`, and `PacketQualityScore` capture the prototype run and trace evidence.',
+        ].join('\n'),
+        acceptanceCriteria: [{
+          id: 'contracts-defined',
+          description: 'The cited contracts include `FixtureManifest`, `ExpectedRecordSet`, `ExpectedSignal`, `PrototypeRun`, and `RunEvaluation`.',
+          verifiedBy: 'review',
+          met: false,
+        }],
+        hierarchy: { childIds: ['fixture-child'], order: 0, relation: 'contains' },
+      }),
+      mkTask({
+        id: 'fixture-child',
+        status: 'exploring',
+        title: 'Shape fixture and expected-record ground truth',
+        description: 'The first proof loop needs explicit fixture and ground-truth records instead of ad hoc fixture shape.',
+        hierarchy: { parentId: 'parent', childIds: [], order: 0, relation: 'decomposes' },
+        notes: [{
+          agentId: 'coordinator',
+          role: 'recovery',
+          content: 'User restarted the project after the spec agent failed to save a durable draft. Reopened intake so Guildhall can retry from the preserved transcript notes.',
+          timestamp: '2026-07-04T15:06:27.010Z',
+        }],
+      }),
+    ])
+    const spec = stubAgent('spec-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out).toMatchObject({
+      kind: 'processed',
+      taskId: 'fixture-child',
+      agent: 'coordinator-recovery',
+      afterStatus: 'spec_review',
+    })
+    expect(spec.calls).toHaveLength(0)
+    const queue = await readQueue()
+    const task = queue.tasks.find(candidate => candidate.id === 'fixture-child')!
+    expect(task.spec).toContain('`FixtureManifest`')
+    expect(task.spec).toContain('`ExpectedRecordSet`')
+    expect(task.spec).toContain('human-authored ground truth')
+    expect(task.spec).not.toContain('`PrototypeRun`')
+    expect(task.spec).not.toContain('`RunEvaluation`')
+    expect(task.spec).not.toContain('prototype run and evaluation boundary')
+    expect(task.acceptanceCriteria.map((criterion) => criterion.description).join('\n')).toContain('fixture manifest')
+    expect(task.acceptanceCriteria.map((criterion) => criterion.description).join('\n')).not.toContain('prototype run record')
+  })
+
   it('does not fossilize legacy cropped task titles into recovered specs or briefs', async () => {
     const fullTitle = 'What commands should I run to smoke test this project without changing files?'
     await writeQueue([
