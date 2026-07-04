@@ -161,6 +161,42 @@ describe('buildProjectOrientationSpine', () => {
           label: 'Define fixture, expected-record, prototype-run, and evaluation schemas needs brief cleanup before approval.',
         }],
       },
+      scopeProjection: {
+        selectedScope: {
+          id: 'stage-1-fixture-and-evaluation-harness',
+          label: 'Stage 1: Fixture And Evaluation Harness',
+          kind: 'release',
+          source: 'release_plan',
+          nodeIds: ['work:parent-contracts'],
+          deferredNodeIds: [],
+        },
+        rows: [],
+        counts: {
+          included: 2,
+          deferred: 0,
+          ready: 1,
+          paused: 1,
+          active: 1,
+          done: 0,
+          ownerBlocked: 0,
+          proofBlocked: 0,
+          humanBlocking: 0,
+        },
+        start: {
+          canStart: true,
+          code: 'paused_live_work',
+          label: 'Resume',
+          focusTaskId: 'fixture-ground-truth',
+          focusTaskTitle: 'Shape fixture and expected-record ground truth',
+          focusKind: 'paused_work',
+          message: '"Shape fixture and expected-record ground truth" is paused in live work. Resume continues from that pinned task.',
+          actionHref: '/work?task=fixture-ground-truth',
+        },
+        release: {
+          state: 'active',
+          blockers: [],
+        },
+      },
       startReadiness: {
         canStart: true,
         code: 'paused_live_work',
@@ -175,6 +211,10 @@ describe('buildProjectOrientationSpine', () => {
     expect(spine.summary.headline).toBe('Stage 1: Fixture And Evaluation Harness is paused with work in progress.')
     expect(spine.summary.topBlocker).toBeNull()
     expect(spine.summary.nextAction).toBe('Resume the current work.')
+    expect(spine.release).toMatchObject({
+      state: 'active',
+      blockers: [],
+    })
     expect(spine.activePins).toEqual(expect.arrayContaining([
       expect.objectContaining({
         nodeId: 'work:fixture-ground-truth',

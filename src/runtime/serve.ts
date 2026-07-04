@@ -1898,9 +1898,19 @@ function buildOrientationSpineWithScopedReleaseTruth(
   releaseTruth: ReturnType<typeof summarizeScopedReleaseWork>
 } {
   const provisionalSpine = buildProjectOrientationSpine(input)
+  const scopeProjection = buildProjectScopeProjection(
+    {
+      version: 1,
+      lastUpdated: new Date(0).toISOString(),
+      tasks: (input.tasks ?? []) as Task[],
+      releases: [],
+    },
+    { selectedScope: provisionalSpine.scope as ProjectScope | null | undefined },
+  )
   const releaseTruth = summarizeScopedReleaseWork(input.tasks ?? [], provisionalSpine.scope)
   const orientationSpine = buildProjectOrientationSpine({
     ...input,
+    scopeProjection,
     releaseReadiness: {
       verdict: releaseTruth.releaseBlockers.length > 0 ? 'blocked' : 'clear',
       blockers: releaseTruth.releaseBlockers,

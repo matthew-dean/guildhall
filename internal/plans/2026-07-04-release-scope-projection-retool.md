@@ -189,7 +189,7 @@ Do not change `/api/project` or `/api/project/release-readiness` response shapes
 
 Status 2026-07-04: no public response fields were renamed or removed in this slice.
 
-- [ ] **Step 4: Run focused runtime tests**
+- [x] **Step 4: Run focused runtime tests**
 
 Run:
 
@@ -200,6 +200,8 @@ CI=true /opt/homebrew/bin/pnpm exec vitest run src/runtime/__tests__/serve-relea
 
 Expected: all focused tests pass without duplicating readiness rules in `serve.ts`.
 
+Proof 2026-07-04: focused `serve-settings`, `serve-release-readiness`, `orchestrator-picker`, and `project-scope-projection` tests passed for selected-release, paused-live-work, ready-spec, and brief-cleanup paths.
+
 ## Task 3: Make Orientation Spine Consume Projection
 
 **Files:**
@@ -207,11 +209,11 @@ Expected: all focused tests pass without duplicating readiness rules in `serve.t
 - Modify: `src/runtime/serve.ts`
 - Test: `src/runtime/__tests__/project-orientation-spine.test.ts`
 
-- [ ] **Step 1: Add optional `scopeProjection` input to `buildProjectOrientationSpine()`**
+- [x] **Step 1: Add optional `scopeProjection` input to `buildProjectOrientationSpine()`**
 
 The spine should render summary counts, active pins, top blocker, release blockers, and current/deferred rows from the projection when provided.
 
-- [ ] **Step 2: Remove duplicated status counting from orientation summary when projection exists**
+- [x] **Step 2: Remove duplicated status counting from orientation summary when projection exists**
 
 Summary fields that must come from projection:
 
@@ -225,7 +227,9 @@ Summary fields that must come from projection:
 - `progress.blocked`
 - `release.blockers`
 
-- [ ] **Step 3: Add regression tests for Narrative Harness Stage 1**
+Status 2026-07-04: the spine accepts `scopeProjection`. When present, summary progress and release blockers/state come from projection counts and projection blockers instead of stale release-readiness input.
+
+- [x] **Step 3: Add regression tests for Narrative Harness Stage 1**
 
 Use the same parent/child and ready/spec-shaped fixture as Task 1. Assert:
 
@@ -236,6 +240,8 @@ expect(spine.summary.pinnedNow).toContain('Shape fixture and expected-record gro
 expect(spine.summary.topBlocker).toBeNull()
 expect(spine.release.blockers).toEqual([])
 ```
+
+Proof 2026-07-04: `project-orientation-spine.test.ts` now proves a stale parent brief-cleanup release blocker is ignored when the projection says the Stage 1 child is paused and the release has no blockers.
 
 ## Task 4: Make Fixtures And UI Proof Projection-Based
 

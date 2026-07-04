@@ -42,9 +42,15 @@ projection instead of separate scope/readiness guesses.
     for selected release/current-scope task readiness. Import-draft shaping
     stays in the import-draft preflight because it is a distinct workflow
     blocker, not generic brief cleanup.
+  - `buildProjectOrientationSpine()` now accepts `scopeProjection`; when the
+    serve layer provides it, orientation summary progress, release state, and
+    release blockers follow the projection instead of stale per-view
+    release-readiness guesses.
 - Verification:
   - `CI=true /opt/homebrew/bin/pnpm exec vitest run src/runtime/__tests__/project-scope-projection.test.ts src/runtime/__tests__/orchestrator-picker.test.ts src/runtime/__tests__/serve-release-readiness.test.ts src/runtime/__tests__/serve-settings.test.ts -t "brief cleanup|ready tasks with a spec|selected release|paused_live_work"`
     passed `11` focused tests.
+  - `CI=true /opt/homebrew/bin/pnpm exec vitest run src/runtime/__tests__/project-scope-projection.test.ts src/runtime/__tests__/project-orientation-spine.test.ts src/runtime/__tests__/serve-release-readiness.test.ts src/runtime/__tests__/serve-settings.test.ts -t "brief cleanup|ready tasks with a spec|selected release|paused_live_work|rolls active internal child"`
+    passed `10` focused tests after the orientation projection handoff.
 
 2026-07-04T16:34:00Z - Orientation summary now follows paused Narrative
 Harness live work instead of stale parent cleanup copy.

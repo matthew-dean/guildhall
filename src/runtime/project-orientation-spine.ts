@@ -3,6 +3,7 @@ import {
   taskScopeEligibility,
   taskScopeNodeId,
   type ProjectScope,
+  type ProjectScopeProjection,
 } from './project-scope-projection.js'
 import { deriveTaskWorkVisibility } from './work-visibility.js'
 
@@ -312,6 +313,7 @@ export interface BuildProjectOrientationSpineInput {
     message?: string
     actionHref?: string
   } | null
+  scopeProjection?: ProjectScopeProjection | null
   runStatus?: 'running' | 'stopping' | 'stopped' | 'error' | string | null
   workspaceImportDraft?: OrientationWorkspaceImportDraft | null
   sourceConflicts?: Array<{ id: string; summary: string; refs: string[] }>
@@ -811,6 +813,23 @@ function progressForSelectedScope(
     const maturity = maturityForTask(task, childIdsByParent, scope, tasksById)
     return addProgress(progress, progressForTask(task, maturity, scope?.id ?? null))
   }, emptyProgress(scope?.id ?? null))
+}
+
+function progressFromScopeProjection(
+  projection: ProjectScopeProjection,
+  scopeId: string | null,
+  fallback: OrientationProgress,
+): OrientationProgress {
+  return {
+    ...fallback,
+    scopeId,
+    total: projection.counts.included + projection.counts.deferred,
+    ready: projection.counts.ready,
+    active: projection.counts.active,
+    done: projection.counts.done,
+    blocked: projection.counts.ownerBlocked + projection.counts.proofBlocked,
+    deferred: projection.counts.deferred,
+  }
 }
 
 function emptyRefs(taskId: string): OrientationRefs {
@@ -1648,7 +1667,13 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
     now,
   })
   const { byId, gaps: nodeGaps } = built
-  const { blockers, gaps: blockerGaps } = attachReleaseBlockers(input.releaseReadiness?.blockers ?? [], byId)
+  const releaseBlockerInput = input.scopeProjection
+    ? input.scopeProjection.release.blockers.map(blocker => ({
+        id: blocker.id,
+        label: blocker.label,
+      }))
+    : input.releaseReadiness?.blockers ?? []
+  const { blockers, gaps: blockerGaps } = attachReleaseBlockers(releaseBlockerInput, byId)
   const executionBoundary = buildExecutionBoundary({
     charter,
     tasks,
@@ -1686,12 +1711,17 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
     ...sourceConflictGaps(input.sourceConflicts),
   ]
   const pins = activePins(roots)
-  const progress = progressForSelectedScope(tasks, scope)
-  const releaseState: OrientationReleaseSummary['state'] = blockers.length > 0
-    ? 'blocked'
-    : scope
-      ? 'shaping'
-      : 'unknown'
+  const fallbackProgress = progressForSelectedScope(tasks, scope)
+  const progress = input.scopeProjection
+    ? progressFromScopeProjection(input.scopeProjection, scope?.id ?? null, fallbackProgress)
+    : fallbackProgress
+  const releaseState: OrientationReleaseSummary['state'] = input.scopeProjection
+    ? input.scopeProjection.release.state
+    : blockers.length > 0
+      ? 'blocked'
+      : scope
+        ? 'shaping'
+        : 'unknown'
   return {
     projectId: input.projectId,
     updatedAt: now,
