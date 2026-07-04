@@ -36,6 +36,57 @@ describe('buildProjectTicker', () => {
     })
   })
 
+  it('lets proof readiness override stale all-terminal run events', () => {
+    expect(
+      buildProjectTicker(
+        {
+          startReadiness: {
+            canStart: false,
+            code: 'proof_evidence_missing',
+            message: 'Stage 1 is waiting on proof evidence for 7 completed tasks.',
+            actionHref: '/work?task=task-1',
+            focusTaskTitle: 'Run fixture evaluator proof',
+            focusKind: 'proof',
+            count: 7,
+          },
+          run: {
+            status: 'stopped',
+            stopSummary: {
+              stopReason: 'all_terminal',
+              stopMessage: 'No actionable tasks remain.',
+            },
+          },
+          recentEvents: [
+            {
+              at: now.toISOString(),
+              event: {
+                type: 'supervisor_stopped',
+                reason: 'all_terminal',
+                message: 'No actionable tasks remain: 8 done, 0 blocked, 20 shelved.',
+              },
+            },
+          ],
+          tasks: [{ id: 'task-1', title: 'Run fixture evaluator proof', status: 'done' }],
+        },
+        {
+          at: now.toISOString(),
+          event: {
+            type: 'supervisor_stopped',
+            reason: 'all_terminal',
+            message: 'No actionable tasks remain: 8 done, 0 blocked, 20 shelved.',
+          },
+        },
+        now,
+      ),
+    ).toMatchObject({
+      label: 'Needs proof',
+      actorLabel: 'Needs proof',
+      message: 'Run fixture evaluator proof',
+      detail: '7 completed tasks missing proof',
+      tone: 'warn',
+    })
+  })
+
   it('surfaces active worker progress from recent events', () => {
     const detail: ProjectDetail = {
       run: { status: 'running' },

@@ -269,6 +269,19 @@ function readinessTicker(detail: ProjectDetail | null | undefined): ProjectActiv
       timeLabel: null,
     }
   }
+  if (readiness.code === 'proof_evidence_missing') {
+    return {
+      tone: 'warn',
+      pulse: false,
+      actorLabel: 'Needs proof',
+      label: 'Needs proof',
+      message: readiness.focusTaskTitle || readiness.message || 'Proof evidence is missing.',
+      detail: readiness.count && readiness.count > 1
+        ? `${readiness.count} completed tasks missing proof`
+        : 'Completed work is missing proof',
+      timeLabel: null,
+    }
+  }
   if (readiness.code === 'no_unattended_progress') {
     if (readiness.focusKind === 'spec_review' && readiness.focusTaskTitle) {
       return {

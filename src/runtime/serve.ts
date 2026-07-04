@@ -4644,6 +4644,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
     code?: string
     message?: string
     actionHref?: string
+    focusTaskId?: string
+    focusTaskTitle?: string
+    focusKind?: string
+    count?: number
     loadedModels?: string[]
     missingModels?: string[]
   }> {
@@ -4676,6 +4680,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
         canStart: false,
         code: terminal.code,
         message: terminal.message,
+        ...(terminal.actionHref ? { actionHref: terminal.actionHref } : {}),
+        ...(terminal.focusTaskId ? { focusTaskId: terminal.focusTaskId } : {}),
+        ...(terminal.focusTaskTitle ? { focusTaskTitle: terminal.focusTaskTitle } : {}),
+        ...(terminal.focusKind ? { focusKind: terminal.focusKind } : {}),
+        ...(terminal.count ? { count: terminal.count } : {}),
       }
     }
 
@@ -4810,8 +4819,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
 	  async function terminalStartState(projectPath: string, requestedTaskId?: string): Promise<{
 	    canStart: false
-	    code: 'all_terminal'
+	    code: 'all_terminal' | 'proof_evidence_missing'
 	    message: string
+      actionHref?: string
+      focusTaskId?: string
+      focusTaskTitle?: string
+      focusKind?: string
+      count?: number
     stopSummary: {
       reason: 'all_terminal'
       message: string
@@ -4879,12 +4893,22 @@ export function buildServeApp(opts: ServeOptions = {}): {
     let archived = 0
     let cancelled = 0
     let terminal = 0
+    const proofMissingDoneTasks: Array<{ id: string; title: string }> = []
     for (const task of scopedTasks) {
       if (!task || typeof task !== 'object') return null
       const status = String((task as { status?: unknown }).status ?? '')
       if (status === 'done') {
         done += 1
         terminal += 1
+        if (taskDoneButProofMissing(task)) {
+          const id = typeof (task as { id?: unknown }).id === 'string' && (task as { id: string }).id.trim()
+            ? (task as { id: string }).id.trim()
+            : ''
+          const title = typeof (task as { title?: unknown }).title === 'string' && (task as { title: string }).title.trim()
+            ? (task as { title: string }).title.trim()
+            : id || 'completed task'
+          if (id) proofMissingDoneTasks.push({ id, title })
+        }
       } else if (status === 'blocked') {
         blocked += 1
         terminal += 1
@@ -4906,6 +4930,38 @@ export function buildServeApp(opts: ServeOptions = {}): {
     if (actionable > 0) return null
 
     const detailMessage = `No actionable tasks remain: ${done} done, ${blocked} blocked, ${shelved} shelved, ${pendingPr} pending PR, ${archived} archived, ${cancelled} cancelled.`
+    if (proofMissingDoneTasks.length > 0) {
+      const first = proofMissingDoneTasks[0]!
+      const scopeLabel = selectedReleaseScope?.label ?? 'Current task scope'
+      const message = proofMissingDoneTasks.length === 1
+        ? `${scopeLabel} is waiting on proof evidence for "${first.title}".`
+        : `${scopeLabel} is waiting on proof evidence for ${proofMissingDoneTasks.length} completed tasks, starting with "${first.title}".`
+      return {
+        canStart: false,
+        code: 'proof_evidence_missing',
+        message,
+        actionHref: `/work?task=${encodeURIComponent(first.id)}`,
+        focusTaskId: first.id,
+        focusTaskTitle: first.title,
+        focusKind: 'proof',
+        count: proofMissingDoneTasks.length,
+        stopSummary: {
+          reason: 'all_terminal',
+          message: detailMessage,
+          counts: {
+            total: scopedTasks.length,
+            done,
+            blocked,
+            shelved,
+            pendingPr,
+            archived,
+            cancelled,
+            actionable,
+            terminal,
+          },
+        },
+      }
+    }
     let message = done === scopedTasks.length
       ? 'All tasks are already finished.'
       : detailMessage
@@ -4948,6 +5004,66 @@ export function buildServeApp(opts: ServeOptions = {}): {
       },
 	    }
 	  }
+
+  function taskDoneButProofMissing(task: unknown): boolean {
+    if (!task || typeof task !== 'object') return false
+    const proofPaths = Array.isArray((task as { proofPaths?: unknown }).proofPaths)
+      ? (task as { proofPaths: unknown[] }).proofPaths
+      : []
+    const handoff = (task as { completionHandoff?: unknown }).completionHandoff
+    const handoffObject = handoff && typeof handoff === 'object' && !Array.isArray(handoff)
+      ? handoff as Record<string, unknown>
+      : null
+
+    const handoffVerified = nonEmptyStringArray(handoffObject?.verified).length > 0 ||
+      passedVerificationRecords(handoffObject?.automatedProof).length > 0 ||
+      passedVerificationRecords(handoffObject?.manualProof).length > 0 ||
+      passedVerificationRecords(handoffObject?.providerProof).length > 0 ||
+      nonEmptyArray(handoffObject?.evidenceRefs).length > 0
+    const handoffMissing = nonEmptyStringArray(handoffObject?.notVerified).length > 0 ||
+      nonEmptyStringArray(handoffObject?.remainingRisks).length > 0
+
+    if (proofPaths.length === 0) return handoffMissing && !handoffVerified
+    return proofPaths.some(proofPathMissingEvidence)
+  }
+
+  function proofPathMissingEvidence(proofPath: unknown): boolean {
+    if (!proofPath || typeof proofPath !== 'object') return true
+    const record = proofPath as Record<string, unknown>
+    const expectedEvidence = Array.isArray(record.expectedEvidence) ? record.expectedEvidence : []
+    const verificationRecords = Array.isArray(record.verificationRecords) ? record.verificationRecords : []
+    const passedEvidence = new Set(
+      verificationRecords
+        .filter(item => Boolean(item && typeof item === 'object' && (item as { status?: unknown }).status === 'passed'))
+        .map(item => (item as { evidenceId?: unknown }).evidenceId)
+        .filter((id): id is string => typeof id === 'string' && id.trim().length > 0),
+    )
+    const requiredEvidenceIds = expectedEvidence
+      .filter(item => Boolean(item && typeof item === 'object' && (item as { required?: unknown }).required !== false))
+      .map(item => (item as { id?: unknown }).id)
+      .filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
+    if (requiredEvidenceIds.length > 0) {
+      return requiredEvidenceIds.some(id => !passedEvidence.has(id))
+    }
+    if (record.status === 'verified') return false
+    return verificationRecords.every(item => !Boolean(item && typeof item === 'object' && (item as { status?: unknown }).status === 'passed'))
+  }
+
+  function nonEmptyStringArray(value: unknown): string[] {
+    return Array.isArray(value)
+      ? value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+      : []
+  }
+
+  function nonEmptyArray(value: unknown): unknown[] {
+    return Array.isArray(value) ? value.filter(Boolean) : []
+  }
+
+  function passedVerificationRecords(value: unknown): unknown[] {
+    return Array.isArray(value)
+      ? value.filter(item => Boolean(item && typeof item === 'object' && (item as { status?: unknown }).status === 'passed'))
+      : []
+  }
 
 	  async function hasRecoverableBlockedStartTask(
 	    projectPath: string,

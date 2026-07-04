@@ -702,6 +702,20 @@ function proofForTask(task: OrientationTaskInput): OrientationProofSummary {
   return { state: 'none', verified, missing }
 }
 
+function hasExplicitProofExpectation(task: OrientationTaskInput): boolean {
+  const handoff = task.completionHandoff && typeof task.completionHandoff === 'object'
+    ? task.completionHandoff as {
+        notVerified?: string[]
+        remainingRisks?: string[]
+      }
+    : null
+  return (
+    (Array.isArray(task.proofPaths) && task.proofPaths.length > 0) ||
+    ((handoff?.notVerified?.length ?? 0) > 0) ||
+    ((handoff?.remainingRisks?.length ?? 0) > 0)
+  )
+}
+
 function taskHasChildren(task: OrientationTaskInput, childIdsByParent: Map<string, string[]>): boolean {
   return (task.hierarchy?.childIds?.length ?? 0) > 0 || (childIdsByParent.get(task.id)?.length ?? 0) > 0
 }
@@ -717,7 +731,12 @@ function maturityForTask(
   if (task.status === 'blocked') return 'blocked'
   if (task.status === 'in_progress') return 'active'
   if (task.status === 'review' || task.status === 'gate_check') return 'review'
-  if (task.status === 'done') return proofForTask(task).state === 'proven' ? 'proven' : 'done'
+  if (task.status === 'done') {
+    const proof = proofForTask(task)
+    if (proof.state === 'proven') return 'proven'
+    if (hasExplicitProofExpectation(task) && (proof.state === 'needed' || proof.state === 'partial')) return 'proof_needed'
+    return 'done'
+  }
   const childBearing = taskHasChildren(task, childIdsByParent)
   if (task.status === 'ready' && !childBearing && (task.workKind === 'app_spec' || task.workKind === 'feature_spec')) {
     return 'needs_breakdown'
@@ -1411,10 +1430,23 @@ function summarizeStartReadiness(input: {
     : 'Project start is blocked until the current issue is resolved.'
   switch (startReadiness.code) {
     case 'all_terminal':
+      if (input.progress.total > input.progress.done + input.progress.deferred) {
+        return {
+          headline: `${genericWorkLabel} is waiting on proof.`,
+          topBlocker: 'Proof evidence has not been attached yet.',
+          nextAction: 'Attach proof for the completed scoped work.',
+        }
+      }
       return {
         headline: `${genericWorkLabel} is complete.`,
         topBlocker: null,
         nextAction: 'Review completed scope.',
+      }
+    case 'proof_evidence_missing':
+      return {
+        headline: `${genericWorkLabel} is waiting on proof.`,
+        topBlocker: message,
+        nextAction: 'Attach proof for the completed scoped work.',
       }
     case 'import_drafts_waiting':
       return {

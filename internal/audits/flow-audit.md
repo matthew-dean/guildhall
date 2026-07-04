@@ -12607,6 +12607,44 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-07-04T13:25:00Z - Start readiness now treats declared proof as release
+completion evidence, not optional decoration.
+
+- Work id: `codex:proof-aware-release-completion-2026-07-04`.
+- User job: when a bounded scope or release has completed task records, the
+  owner should still be able to tell whether the scope is actually proven. If
+  proof was declared but not attached, Overview, Map, Start, and run controls
+  must all communicate "proof needed" instead of "scope complete."
+- Contract Touch Decision:
+  - Touched contracts: `/api/project.startReadiness.code`,
+    `/api/project.startReadiness.actionHref`, `actionModel.runControl`, and
+    `orientationSpine.summary`.
+  - New code: `proof_evidence_missing`.
+  - Why: `all_terminal` meant "no worker-runnable task status remains," but it
+    was also being used as "release is complete." That collapsed two different
+    states and let Guildhall claim a release was consumed when current tasks
+    still had explicit `proofPaths` without passed/verified evidence.
+  - Contracts considered but not touched: persisted task schema. No schema
+    migration is needed because existing `proofPaths`, `completionHandoff`, and
+    verification records already carry the proof expectation/evidence boundary.
+  - Owner-review items: none; this is a truthfulness/readiness correction, not
+    a new owner approval gate.
+  - Apply/revert behavior: reverting this code makes selected releases with
+    done-but-unproven tasks fall back to `all_terminal` and reintroduces the
+    false "complete" message.
+- Verification:
+  - Added API regression:
+    `serve-settings.test.ts` now requires a selected release with done tasks and
+    missing proof to return `startReadiness.code:"proof_evidence_missing"`,
+    action `/work?task=...`, orientation headline "waiting on proof," and run
+    control label "Needs proof."
+  - Added spine regression:
+    `project-orientation-spine.test.ts` now keeps done tasks with explicit
+    missing proof at maturity `proof_needed` and keeps active pins/gaps proof
+    focused.
+
+source: codex:proof-aware-release-completion-2026-07-04
+
 2026-07-04T11:58:00Z - Completed Narrative Harness Stage 1 live-run
 state-agreement hardening.
 

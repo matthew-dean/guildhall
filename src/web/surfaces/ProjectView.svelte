@@ -838,6 +838,7 @@
     if (runStatus === 'running' || runStatus === 'stopping') return null
     const summary = runStopSummary
     if (!summary?.stopMessage) return null
+    if (startReadinessNoticeHref && summary.stopReason === 'all_terminal') return null
     const counts = summary.idleSummary?.counts
     if (!counts) {
       if (summary.stopReason === 'one_task') return 'One task finished.'
@@ -1089,6 +1090,7 @@
   function startReadinessActionLabel(message: string | undefined): string {
     if (/question|answer/i.test(message ?? '')) return 'Answer question'
     if (/draft/i.test(message ?? '')) return 'Review drafts'
+    if (/proof/i.test(message ?? '')) return 'Attach proof'
     if (/spec/i.test(message ?? '')) return /\b\d+\s+specs\b/i.test(message ?? '') ? 'Review next spec' : 'Review spec'
     if (/brief/i.test(message ?? '')) return 'Review brief'
     if (/recover|blocked|escalation/i.test(message ?? '')) return 'Review recovery'

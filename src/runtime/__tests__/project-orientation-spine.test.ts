@@ -947,6 +947,53 @@ describe('buildProjectOrientationSpine', () => {
     expect(spine.summary.nextAction).toBe('Review completed scope.')
   })
 
+  it('does not call terminal scoped work complete when explicit proof is still missing', () => {
+    const spine = buildProjectOrientationSpine({
+      projectId: 'narrative-harness',
+      now: '2026-07-04T11:52:00.000Z',
+      scope: {
+        id: 'stage-1-fixture-and-evaluation-harness',
+        label: 'Stage 1: Fixture And Evaluation Harness',
+        kind: 'release',
+        source: 'release_plan',
+        nodeIds: ['work:fixture-schema', 'work:runner-proof'],
+        deferredNodeIds: [],
+      },
+      tasks: [
+        {
+          id: 'fixture-schema',
+          title: 'Define fixture schemas.',
+          status: 'done',
+          spec: 'Done.',
+          acceptanceCriteria: [{ met: true }],
+          proofPaths: ['src/verify-fixture-schema.ts'],
+        },
+        {
+          id: 'runner-proof',
+          title: 'Implement no-UI runner.',
+          status: 'done',
+          spec: 'Done.',
+          acceptanceCriteria: [{ met: true }],
+          proofPaths: ['src/verify-runner.ts'],
+        },
+      ],
+      startReadiness: {
+        canStart: false,
+        code: 'all_terminal',
+        message: 'Stage 1: Fixture And Evaluation Harness is complete.',
+      },
+    })
+
+    expect(spine.summary.headline).toBe('Stage 1: Fixture And Evaluation Harness is waiting on proof.')
+    expect(spine.summary.topBlocker).toBe('Proof evidence has not been attached yet.')
+    expect(spine.summary.nextAction).toBe('Attach proof for the completed scoped work.')
+    expect(spine.summary.progress.done).toBe(0)
+    expect(spine.nodes['work:fixture-schema']?.maturity).toBe('proof_needed')
+    expect(spine.nodes['work:runner-proof']?.maturity).toBe('proof_needed')
+    expect(spine.gaps.filter(gap => gap.kind === 'proof_needed')).toHaveLength(2)
+    expect(spine.activePins.map(pin => pin.kind)).toEqual(['proof', 'proof'])
+  })
+
   it('keeps a completed scope complete when import refresh is only follow-up work', () => {
     const spine = buildProjectOrientationSpine({
       projectId: 'narrative-harness',

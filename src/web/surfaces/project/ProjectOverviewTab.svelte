@@ -830,6 +830,7 @@
       case 'all_terminal': return 'No runnable tasks'
       case 'provider_unavailable': return 'Provider unavailable'
       case 'bootstrap_blocked': return 'Readiness blocked'
+      case 'proof_evidence_missing': return 'Proof needed'
       case 'no_unattended_progress': return 'Nothing ready to run'
       case 'required_migration_pending': return 'Required migration'
       default: return 'Start is blocked'
