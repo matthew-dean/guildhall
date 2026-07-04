@@ -12,6 +12,69 @@ This is the active browser test plan for the Guildhall project surface. Keep it
 updated while auditing the active test project so another agent can resume
 without guessing.
 
+2026-07-04T17:35:00Z - Workspace import release state now preserves roadmap
+truth instead of marking every release active.
+
+- Work id: `codex:workspace-import-release-state-2026-07-04`.
+- User job: when Guildhall recovers a project roadmap from real planning docs,
+  future stages should look like future stages. A user opening Project Map
+  should not see Stage 2, Stage 3, and later releases as "active" just because
+  the importer persisted release containers before release state existed.
+- Data-model diagnosis:
+  - `formWorkspaceHypothesis()` already derived whether release containers came
+    from current or later scope, but `workspace-importer` dropped that when
+    serializing detected drafts and when approving parsed imports.
+  - `buildProjectOrientationSpine()` also inferred release `nodeIds` from every
+    task with a matching `releaseIds` entry, including shelved future work. That
+    let legacy future releases keep looking active in the roadmap.
+- Fix:
+  - `ProjectScopeProjection` now treats release-linked shelved tasks as
+    deferred scope members instead of silently re-adding them to current
+    `nodeIds`.
+  - Detected workspace-import YAML now writes release `state`.
+  - `parseWorkspaceImport()` and `parsedImportFromDraft()` preserve parsed
+    release state, and invalid release states are ignored instead of type-cast
+    into the persisted contract.
+  - `ensureImportedReleaseContainers()` writes imported release state into
+    `TaskQueue.releases` and preserves shipped releases.
+  - Orientation release normalization treats shelved tasks as deferred, not
+    current `nodeIds`, and downgrades legacy active future releases with no
+    current work to planned.
+- Contract Touch Decision:
+  - Work id: `codex:workspace-import-release-state-2026-07-04`.
+  - Touched contracts: workspace-import YAML release item shape,
+    `ParsedRelease.state`, persisted `ProjectRelease.state`, and
+    `ProjectOrientationSpine.releases[].state` read semantics.
+  - Contracts considered but not touched: `ProjectReleaseState` enum,
+    task `releaseIds`, selected release selection, and `/api/project` response
+    shape.
+  - Required follow-up: after the next safe re-population, live Narrative
+    Harness and Looma + Knit task queues should be refreshed from the corrected
+    importer so old release containers do not keep stale node/deferred rows.
+  - Proof required: importer round-trip tests, approval/persistence tests,
+    orientation regression for legacy future releases, build, installed-app API
+    proof, and Map UI proof.
+  - Apply/revert behavior: reverting this will make future imported release
+    containers default active again and can make the 1,000-foot roadmap imply
+    several scopes are current at once.
+- Verification:
+  - `CI=true /opt/homebrew/bin/pnpm exec vitest run src/runtime/__tests__/project-scope-projection.test.ts src/runtime/__tests__/workspace-importer.test.ts src/runtime/workspace-import/__tests__/hypothesis.test.ts src/runtime/__tests__/project-orientation-spine.test.ts -t "release|round-trips|future release state|owner-visible|legacy future release|shelved work"`
+    passed `22` focused tests before installed-app proof.
+  - `CI=true /opt/homebrew/bin/pnpm exec vitest run src/runtime/__tests__/workspace-importer.test.ts src/runtime/__tests__/project-scope-projection.test.ts src/runtime/__tests__/project-orientation-spine.test.ts src/runtime/workspace-import/__tests__/hypothesis.test.ts`
+    passed `155` broader importer/projection/orientation tests.
+  - `pnpm lint:contracts`, `git diff --check`, and `pnpm build` passed.
+  - Installed-app proof after `pnpm dev:install`, `guildhall stop`, and
+    `guildhall start`: `/api/stale-server` returned `stale:false` for
+    process `48526`.
+  - Live Narrative Harness API proof: `/api/project?projectId=narrative-harness`
+    reported selected `Stage 1: Fixture And Evaluation Harness` as `active`,
+    Stage 2 through Stage 5 as `planned`, `scopeRows` as `6` included and `20`
+    deferred, and no stale future-stage `nodeIds`.
+  - In-app browser proof at `1280x720` on
+    `/projects/narrative-harness/map`: visible page text contained `Release
+    roadmap`, `Scope ledger`, Stage 1, Stage 2, `Active`, and `Planned`, with no
+    document-level horizontal overflow.
+
 2026-07-04T17:10:00Z - Selected scope readiness now has one runtime
 projection instead of separate scope/readiness guesses.
 

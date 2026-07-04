@@ -102,8 +102,16 @@ export function selectedProjectScopeForQueue(
 
 export function releaseToProjectScope(release: ProjectRelease, tasks: readonly Task[]): ProjectScope {
   const nodeIds = new Set<string>(release.nodeIds ?? [])
+  const deferredNodeIds = new Set<string>(release.deferredNodeIds ?? [])
   for (const task of tasks) {
-    if (task.releaseIds?.includes(release.id)) nodeIds.add(taskScopeNodeId(task.id))
+    if (!task.releaseIds?.includes(release.id)) continue
+    const nodeId = taskScopeNodeId(task.id)
+    if (task.status === 'shelved') {
+      nodeIds.delete(nodeId)
+      deferredNodeIds.add(nodeId)
+    } else {
+      nodeIds.add(nodeId)
+    }
   }
   return {
     id: release.id,
@@ -111,7 +119,7 @@ export function releaseToProjectScope(release: ProjectRelease, tasks: readonly T
     kind: release.kind === 'milestone' ? 'milestone' : release.kind === 'release' ? 'release' : 'proposed_feature_set',
     source: release.source,
     nodeIds: [...nodeIds],
-    deferredNodeIds: [...new Set(release.deferredNodeIds ?? [])],
+    deferredNodeIds: [...deferredNodeIds],
   }
 }
 

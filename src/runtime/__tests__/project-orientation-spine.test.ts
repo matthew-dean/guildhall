@@ -1437,6 +1437,57 @@ describe('buildProjectOrientationSpine', () => {
     ])
   })
 
+  it('does not present legacy future release containers as active when they only contain later work', () => {
+    const spine = buildProjectOrientationSpine({
+      projectId: 'narrative-harness',
+      now: '2026-06-18T12:00:00.000Z',
+      selectedReleaseId: 'stage-1-fixture-and-evaluation-harness',
+      releases: [
+        {
+          id: 'stage-1-fixture-and-evaluation-harness',
+          label: 'Stage 1: Fixture And Evaluation Harness',
+          source: 'release_plan',
+          state: 'active',
+          nodeIds: ['work:stage-one-task'],
+          deferredNodeIds: [],
+        },
+        {
+          id: 'stage-2-mastra-agent-prototype',
+          label: 'Stage 2: Mastra Agent Prototype',
+          source: 'release_plan',
+          state: 'active',
+          nodeIds: [],
+          deferredNodeIds: ['work:stage-two-task'],
+        },
+      ],
+      tasks: [
+        {
+          id: 'stage-one-task',
+          title: 'Define fixture schemas',
+          description: 'Current harness work.',
+          domain: 'harness',
+          status: 'ready',
+          releaseIds: ['stage-1-fixture-and-evaluation-harness'],
+          spec: 'Spec.',
+          acceptanceCriteria: [{ met: false }],
+        },
+        {
+          id: 'stage-two-task',
+          title: 'Mastra workflow for the prototype iteration loop',
+          description: 'Future workflow work.',
+          domain: 'agent-workflow',
+          status: 'shelved',
+          releaseIds: ['stage-2-mastra-agent-prototype'],
+          spec: 'Spec.',
+          acceptanceCriteria: [{ met: false }],
+        },
+      ],
+    })
+
+    expect(spine.selectedRelease?.state).toBe('active')
+    expect(spine.releases.find(release => release.id === 'stage-2-mastra-agent-prototype')?.state).toBe('planned')
+  })
+
   it('groups imported Narrative Harness structure by document family instead of collapsing it into coarse domains', () => {
     const spine = buildProjectOrientationSpine({
       projectId: 'narrative-harness',

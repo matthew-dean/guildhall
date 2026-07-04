@@ -599,13 +599,13 @@ function normalizeRelease(input: BuildProjectOrientationSpineInput, tasks: Orien
   if (selected) {
     const id = selected.id ?? slugifyReleaseId(selected.label ?? 'selected-release')
     const assignedByTask = tasks
-      .filter(task => task.releaseIds?.includes(id))
+      .filter(task => task.releaseIds?.includes(id) && task.status !== 'shelved')
       .map(task => taskNodeId(task.id))
     return expandReleaseWithDescendants({
       id,
       label: selected.label ?? 'Selected release',
       kind: selected.kind ?? 'release',
-      state: selected.state ?? 'active',
+      state: normalizedReleaseState(selected, assignedByTask),
       source: selected.source ?? 'release_plan',
       description: selected.description ?? null,
       nodeIds: selected.nodeIds?.length ? selected.nodeIds : assignedByTask,
@@ -614,6 +614,18 @@ function normalizeRelease(input: BuildProjectOrientationSpineInput, tasks: Orien
     }, tasks)
   }
   return null
+}
+
+function normalizedReleaseState(
+  release: Partial<OrientationRelease>,
+  assignedNodeIds: readonly string[],
+): OrientationReleaseState {
+  const explicit = release.state ?? 'active'
+  if (explicit === 'shipped' || explicit === 'ready' || explicit === 'deferred') return explicit
+  const currentCount = (release.nodeIds?.length ?? 0) || assignedNodeIds.length
+  if (currentCount > 0) return explicit
+  if ((release.deferredNodeIds?.length ?? 0) > 0) return 'planned'
+  return explicit === 'active' ? 'planned' : explicit
 }
 
 function expandReleaseWithDescendants(release: OrientationRelease, tasks: OrientationTaskInput[]): OrientationRelease {

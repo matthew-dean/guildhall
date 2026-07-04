@@ -1114,7 +1114,7 @@ tasks:
       memoryDir,
       projectPath: tmpDir,
     })
-    expect(res).toMatchObject({ success: true, tasksAdded: 2 })
+    expect(res, res.success ? undefined : res.error).toMatchObject({ success: true, tasksAdded: 2 })
 
     const q = await readQueue()
     expect(q.tasks.find((t) => t.id === 'task-headless-schema')).toMatchObject({
@@ -1239,6 +1239,59 @@ tasks:
       expect.objectContaining({
         id: '2-0-alpha',
         label: '2 0 Alpha',
+      }),
+    ]))
+  })
+
+  it('preserves imported future release state instead of marking every release active', async () => {
+    await seedImporterWithSpec(`
+\`\`\`yaml
+releases:
+  - id: stage-1-headless-proof
+    label: "Stage 1: Headless Proof"
+    source: release_plan
+    state: active
+  - id: stage-2-authoring-shell
+    label: "Stage 2: Authoring Shell"
+    source: release_plan
+    state: planned
+tasks:
+  - id: task-headless-runner
+    title: Implement headless runner
+    description: Current scoped work.
+    domain: harness
+    releaseIds:
+      - stage-1-headless-proof
+  - id: task-authoring-shell
+    title: Build authoring shell
+    description: Later scoped work.
+    domain: app
+    scope: later
+    releaseIds:
+      - stage-2-authoring-shell
+\`\`\`
+`)
+
+    const res = await approveWorkspaceImport({
+      memoryDir,
+      projectPath: tmpDir,
+    })
+    expect(res, res.success ? undefined : res.error).toMatchObject({ success: true, tasksAdded: 2 })
+
+    const q = await readQueue()
+    expect(q.selectedReleaseId).toBe('stage-1-headless-proof')
+    expect(q.releases).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'stage-1-headless-proof',
+        state: 'active',
+        nodeIds: ['work:task-headless-runner'],
+        deferredNodeIds: [],
+      }),
+      expect.objectContaining({
+        id: 'stage-2-authoring-shell',
+        state: 'planned',
+        nodeIds: [],
+        deferredNodeIds: ['work:task-authoring-shell'],
       }),
     ]))
   })
@@ -5248,6 +5301,46 @@ describe('formatDetectedDraftAsSpec', () => {
     expect(parsed.tasks.find((task) => task.title === 'Implement dialogue reviewer lane')).toMatchObject({
       scope: 'later',
     })
+  })
+
+  it('round-trips release roadmap state from detected current and later scopes', () => {
+    const spec = formatDetectedDraftAsSpec({
+      goals: [],
+      releases: [
+        {
+          id: 'stage-1-headless-proof',
+          label: 'Stage 1: Headless Proof',
+          source: 'planning-docs',
+          scope: 'current',
+          confidence: 'high',
+        },
+        {
+          id: 'stage-2-authoring-shell',
+          label: 'Stage 2: Authoring Shell',
+          source: 'planning-docs',
+          scope: 'later',
+          confidence: 'high',
+        },
+      ],
+      tasks: [],
+      milestones: [],
+      context: [],
+      stats: { inputSignals: 2, drafted: 2, deduped: 0 },
+    })
+
+    const parsed = parseWorkspaceImport(spec)
+    expect(parsed.releases).toEqual([
+      expect.objectContaining({
+        id: 'stage-1-headless-proof',
+        label: 'Stage 1: Headless Proof',
+        state: 'active',
+      }),
+      expect.objectContaining({
+        id: 'stage-2-authoring-shell',
+        label: 'Stage 2: Authoring Shell',
+        state: 'planned',
+      }),
+    ])
   })
 
   it('round-trips structured execution fields instead of dropping them from the import contract', () => {

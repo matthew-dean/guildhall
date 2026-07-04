@@ -118,6 +118,39 @@ describe('buildProjectScopeProjection', () => {
     expect(projection.release.state).toBe('active')
   })
 
+  it('treats release-linked shelved work as deferred instead of current scope', () => {
+    const projection = buildProjectScopeProjection(queue([
+      task({
+        id: 'task-contracts',
+        title: 'Current scoped task',
+        spec: 'Current work spec.',
+        acceptanceCriteria: [{ id: 'AC-1', description: 'Current work is verifiable.', verifiedBy: 'test', met: false }],
+      }),
+      task({
+        id: 'task-future',
+        title: 'Future roadmap task',
+        status: 'shelved',
+        releaseIds: ['stage-1'],
+      }),
+    ]))
+
+    expect(projection.selectedScope).toMatchObject({
+      nodeIds: ['work:task-contracts'],
+      deferredNodeIds: ['work:task-later', 'work:task-future'],
+    })
+    expect(projection.rows.find(row => row.taskId === 'task-future')).toMatchObject({
+      scope: 'deferred',
+      eligibilityReason: 'deferred',
+      handoffState: 'done',
+      blocksStart: false,
+      blocksRelease: false,
+    })
+    expect(projection.counts).toMatchObject({
+      included: 1,
+      deferred: 1,
+    })
+  })
+
   it('marks the release ready only after included scoped work is done', () => {
     const projection = buildProjectScopeProjection(queue([
       task({

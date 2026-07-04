@@ -2,7 +2,7 @@ import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, wr
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { load as yamlLoad } from 'js-yaml'
-import { TaskQueue, buildDecompositionChildDrafts, type Task, type TaskPriority } from '@guildhall/core'
+import { ProjectReleaseState, TaskQueue, buildDecompositionChildDrafts, type ProjectRelease, type Task, type TaskPriority } from '@guildhall/core'
 import { getProjectSystemStatePathFromMemoryDir } from '@guildhall/sessions'
 import { appendExploringTranscript } from '@guildhall/tools'
 import { loadLeverSettings, defaultAgentSettingsPath } from '@guildhall/levers'
@@ -524,6 +524,7 @@ export interface ParsedRelease {
   id: string
   label: string
   source?: ProjectRelease['source']
+  state?: ProjectRelease['state']
 }
 
 export interface ParsedGoal {
@@ -642,6 +643,12 @@ export function workspaceImportYamlErrors(spec: string): string[] {
 function normStringList(value: unknown): string[] {
   if (!Array.isArray(value)) return []
   return value.filter((v): v is string => typeof v === 'string')
+}
+
+function parseProjectReleaseState(value: unknown): ProjectRelease['state'] | undefined {
+  if (typeof value !== 'string') return undefined
+  const parsed = ProjectReleaseState.safeParse(value.trim())
+  return parsed.success ? parsed.data : undefined
 }
 
 function parseImportedAcceptanceCriteria(
@@ -1221,10 +1228,12 @@ export function parseWorkspaceImport(spec: string): ParsedImport {
         const source = typeof release['source'] === 'string'
           ? release['source'].trim()
           : undefined
+        const state = parseProjectReleaseState(release['state'])
         releases.push({
           id,
           label,
           ...(source ? { source: source as ProjectRelease['source'] } : {}),
+          ...(state ? { state } : {}),
         })
       }
     }
@@ -1368,6 +1377,7 @@ export function formatDetectedDraftAsSpec(draft: WorkspaceImportDraft): string {
       lines.push(`  - id: ${escape(release.id)}`)
       lines.push(`    label: ${escape(release.label)}`)
       lines.push('    source: release_plan')
+      lines.push(`    state: ${release.scope === 'later' ? 'planned' : 'active'}`)
     }
     lines.push('```')
     lines.push('')
@@ -1451,6 +1461,7 @@ function parsedImportFromDraft(draft: WorkspaceImportDraft): ParsedImport {
             id: release.id,
             label: release.label,
             source: 'release_plan' as const,
+            state: release.scope === 'later' ? 'planned' as const : 'active' as const,
           })),
         }
       : {}),
@@ -2251,6 +2262,11 @@ function ensureImportedReleaseContainers(
       .map(release => [release.id.trim(), release.label.trim()] as const)
       .filter(([id, label]) => id.length > 0 && label.length > 0),
   )
+  const importedReleaseStates = new Map(
+    importedReleases
+      .map(release => [release.id.trim(), release.state] as const)
+      .filter((entry): entry is readonly [string, ProjectRelease['state']] => entry[0].length > 0 && Boolean(entry[1])),
+  )
   const releaseIds = [...new Set([
     ...importedReleases.map(release => release.id.trim()).filter(Boolean),
     ...queue.tasks
@@ -2269,7 +2285,7 @@ function ensureImportedReleaseContainers(
         id: releaseId,
         label: importedReleaseLabels.get(releaseId) ?? releaseLabelFromId(releaseId),
         kind: 'release',
-        state: 'active',
+        state: importedReleaseStates.get(releaseId) ?? 'active',
         source: importedReleases.find(candidate => candidate.id === releaseId)?.source ?? 'release_plan',
         nodeIds: [],
         deferredNodeIds: [],
@@ -2280,6 +2296,9 @@ function ensureImportedReleaseContainers(
       releases.push(release)
     } else if (importedReleaseLabels.has(releaseId)) {
       release.label = importedReleaseLabels.get(releaseId)!
+    }
+    if (importedReleaseStates.has(releaseId) && release.state !== 'shipped') {
+      release.state = importedReleaseStates.get(releaseId)!
     }
     const nodeIds = new Set(release.nodeIds ?? [])
     const deferredNodeIds = new Set(release.deferredNodeIds ?? [])
