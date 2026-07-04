@@ -112,9 +112,18 @@ function projectRootForTaskState(tasksPath: string, task: Task): string {
 function looksLikeRoutineVerificationEscalation(input: RaiseEscalationInput): boolean {
   const text = `${input.reason}\n${input.summary}\n${input.details ?? ''}`
   return (
-    /\bAC-\d+\b/i.test(text) &&
-    /\b(?:evidence|verification|test result|gate)\b/i.test(text) &&
+    /\bAC[- ]?\d+\b/i.test(text) &&
+    /\b(?:evidence|verification|test result|gate|proof)\b/i.test(text) &&
     /\b(?:pnpm|npm|yarn|bun|vitest|test|typecheck|build)\b/i.test(text)
+  )
+}
+
+function looksLikeSelfReferentialProofEscalation(input: RaiseEscalationInput): boolean {
+  const text = `${input.reason}\n${input.summary}\n${input.details ?? ''}`
+  return (
+    /\b(?:npx\s+)?guildhall\s+run\b/i.test(text) &&
+    /\s--task(?:=|\s)/i.test(text) &&
+    /\b(?:proof|verification|AC[- ]?\d+|acceptance criterion)\b/i.test(text)
   )
 }
 
@@ -142,6 +151,14 @@ export async function raiseEscalation(
     const effectiveTask = await buildEffectiveTask(projectRoot, task) as unknown as Task
     Object.assign(task, effectiveTask)
     const effectiveEscalations = await readEffectiveEscalations(projectRoot, task)
+
+    if (looksLikeSelfReferentialProofEscalation(input)) {
+      return {
+        success: false,
+        error:
+          'Do not raise a human escalation to decide whether `guildhall run --task=...` counts as project proof. It does not: that command delegates back to Guildhall orchestration. Use the project-local proof command, save its result in the task proof packet or checkpoint, and continue.',
+      }
+    }
 
     if (looksLikeRoutineVerificationEscalation(input)) {
       return {

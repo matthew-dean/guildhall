@@ -632,6 +632,27 @@ describe('engine tool wrappers', () => {
     expect(result.output).toMatch(/routine verification evidence/i)
   })
 
+  it('raiseEscalationTool rejects Guildhall task orchestration as owner proof policy work', async () => {
+    const result = await raiseEscalationTool.execute(
+      {
+        tasksPath,
+        taskId: 'task-001',
+        agentId: 'worker-agent',
+        reason: 'decision_required',
+        summary:
+          'AC4 cannot be satisfied by running `npx guildhall run --task=task-001` because Guildhall blocks that command as delegating back to orchestration.',
+        details:
+          'The project-level proof `npm run proof:ground-truth` has already passed, but reviewer feedback still asks whether the blocked command counts as proof.',
+      },
+      ctx,
+    )
+    expect(result.is_error).toBe(true)
+    expect(result.output).toMatch(/does not/i)
+
+    const { queue } = await readTasks({ tasksPath })
+    expect(queue?.tasks[0]?.status).toBe('in_progress')
+  })
+
   it('raiseEscalationTool marks unknown task as error', async () => {
     const result = await raiseEscalationTool.execute(
       {

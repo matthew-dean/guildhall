@@ -12,6 +12,39 @@ This is the active browser test plan for the Guildhall project surface. Keep it
 updated while auditing the active test project so another agent can resume
 without guessing.
 
+2026-07-04T23:12:00Z - Rejected false owner escalation for proof-command policy.
+
+- Work id: `codex:false-proof-escalation-guard-2026-07-04`.
+- User job: when Guildhall blocks `guildhall run --task=...` as invalid
+  project proof and has a successful project-local proof command instead, the
+  worker must not turn that into a Matthew decision. Guildhall already has
+  enough policy to continue.
+- Fix:
+  - The escalation tool now treats `AC4`/`AC 4`/`AC-4` proof requests as
+    routine verification instead of only matching `AC-4`.
+  - The escalation tool now explicitly rejects owner escalations asking whether
+    `guildhall run --task=...` counts as project proof; it tells the worker to
+    use the project-local proof command and record its result.
+- Contract Touch Decision:
+  - Work id: `codex:false-proof-escalation-guard-2026-07-04`.
+  - Touched contracts: escalation authorization; worker proof-blocker boundary.
+  - Contracts considered but not touched: persisted escalation schema, task
+    schema, review verdict schema.
+  - Existing data impact: no migration. Existing false escalations can still be
+    resolved through the normal retry/escalation-resolution path.
+  - Required follow-up: reinstall, resolve the existing Narrative Harness false
+    escalation with the newly encoded policy answer, and resume Stage 1.
+  - Proof required: focused escalation/tool regression, build, installed-app
+    readback.
+  - Proof provided: `./node_modules/.bin/vitest run src/tools/__tests__/escalation.test.ts src/tools/__tests__/shell.test.ts src/runtime/__tests__/task-gates.test.ts`
+    passed `109` tests; `CI=true pnpm lint:contracts` passed; direct
+    UI/runtime build passed; `node scripts/dev-install.mjs`, `guildhall stop`,
+    and `guildhall start` refreshed the installed app; `/api/stale-server`
+    returned `stale:false` for PID `47892` from
+    `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+  - Apply/revert behavior: revert the escalation predicate changes to allow
+    workers to ask the owner to adjudicate proof-command policy again.
+
 2026-07-04T23:00:00Z - Blocked self-referential Guildhall task proof scripts.
 
 - Work id: `codex:self-referential-proof-script-guard-2026-07-04`.
