@@ -1790,6 +1790,19 @@ function summarizeScopedReleaseWork(
     if (!releaseBlockersById.has(blocker.id)) releaseBlockersById.set(blocker.id, blocker)
   }
   const blockerSubject = (title: string) => title.trim().replace(/[.?!:;,\s]+$/g, '')
+  const inScopeMaterializedChildren = (task: Task): Task[] => {
+    const childIds = new Set<string>([
+      ...((task.hierarchy?.childIds ?? []).filter((id): id is string => typeof id === 'string' && id.trim().length > 0)),
+      ...tasks
+        .filter(candidate => candidate.hierarchy?.parentId === task.id)
+        .map(candidate => candidate.id),
+    ])
+    return [...childIds]
+      .map(childId => tasksById.get(childId))
+      .filter((child): child is Task => Boolean(child))
+      .filter(child => taskEligibleForSelectedScope(child, scope, { tasksById }).eligible)
+      .filter(child => !['archived', 'cancelled', 'shelved'].includes(String(child.status ?? '')))
+  }
 
   for (const t of scopedTasks) {
     const status = String((t as { status?: string }).status ?? 'unknown')
@@ -1801,7 +1814,17 @@ function summarizeScopedReleaseWork(
     const terminal = terminalStatuses.has(status)
     const reservedImportTask = id === WORKSPACE_IMPORT_TASK_ID
     const approvalPendingStatus = status === 'proposed' || status === 'ready'
-    if (brief && !brief.approvedAt && approvalPendingStatus && !terminal && !reservedImportTask) {
+    const hasMaterializedChildWork = inScopeMaterializedChildren(t).length > 0
+    const hasWorkerReadySpec = status === 'ready' && hasSpecDraftRecord(t)
+    if (
+      brief &&
+      !brief.approvedAt &&
+      approvalPendingStatus &&
+      !terminal &&
+      !reservedImportTask &&
+      !hasMaterializedChildWork &&
+      !hasWorkerReadySpec
+    ) {
       if (hasCompleteProductBriefRecord(t)) {
         unapprovedBriefs.push({ id, title })
         addReleaseBlocker({ id, title, label: `${blockerSubject(title)} is waiting for brief approval.` })
@@ -2024,7 +2047,7 @@ function hasSpecDraftRecord(task: Record<string, unknown>): boolean {
 }
 
 function isReadyForWorkerHandoffRecord(task: Record<string, unknown>): boolean {
-  return hasApprovedProductBriefRecord(task) && hasCompleteProductBriefRecord(task) && hasSpecDraftRecord(task)
+  return hasSpecDraftRecord(task) || (hasApprovedProductBriefRecord(task) && hasCompleteProductBriefRecord(task))
 }
 
 function summarizeTaskActivity(

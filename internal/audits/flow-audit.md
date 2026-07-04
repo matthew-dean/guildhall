@@ -12858,6 +12858,54 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-07-04T16:45:00Z - Corrected Narrative Harness release readiness so
+spec-shaped current work is not communicated as owner brief cleanup.
+
+- Work id: `codex:narrative-harness-spec-shaped-readiness-2026-07-04`.
+- User job: a project owner should be able to tell from Guildhall itself
+  whether the selected Narrative Harness scope is paused/runnable, blocked by
+  actual owner action, or merely unfinished. Spec-shaped ready work and active
+  child work must not be shown as if the owner still needs to clean up briefs.
+- Fix:
+  - Release readiness now treats materialized in-scope child work as satisfying
+    the parent container's split/brief obligation for blocker purposes.
+  - Release readiness and Start preflight now treat a ready task with a drafted
+    spec and acceptance criteria as worker-shaped work rather than as
+    incomplete brief cleanup.
+  - Thin ready tasks without a spec still produce the existing
+    `brief_cleanup` Start blocker.
+- Installed-app proof:
+  - `pnpm build`; `pnpm dev:install`; `guildhall stop`; `guildhall start`;
+    `/api/stale-server` returned `stale:false` for PID `21787`.
+  - Live
+    `/api/project/release-readiness?projectId=narrative-harness` returned
+    `statusCounts: { ready: 6, archived: 1 }`, `incompleteBriefs: []`,
+    `unapprovedBriefs: []`, `humanBlockingCount: 0`, and
+    `incompleteBriefBlockingCount: 0`.
+  - Live `/api/project?projectId=narrative-harness` returned
+    `startReadiness.code: paused_live_work`, `runControl.label: Resume`,
+    `runControl.href:
+    /work?task=task-import-9s8tkc-split-shape-fixture-and-expected-record-ground-truth-2`,
+    headline `Stage 1: Fixture And Evaluation Harness is paused with work in
+    progress.`, `topBlocker: null`, `nextAction: Resume the current work.`,
+    `progress.ready: 5`, `progress.active: 1`, and `release.blockers: []`.
+  - Live `/api/project/spine?projectId=narrative-harness` returned the same
+    Stage 1 headline, selected scope, pinned work, and empty release blockers.
+- Browser note:
+  - In-app browser automation timed out while hydrating
+    `/projects/narrative-harness/overview`, so this entry does not claim
+    screenshot-level proof. The installed service API evidence above is the
+    shared source consumed by Overview/Map/Release surfaces and proves the
+    corrected communication model, but a follow-up browser geometry pass should
+    still be run once the browser tool is responsive.
+- Verification:
+  - `CI=true /opt/homebrew/bin/pnpm exec vitest run src/runtime/__tests__/serve-settings.test.ts -t "brief cleanup|ready tasks with a spec|selected release|paused_live_work"`
+    passed `6` focused tests.
+  - `CI=true /opt/homebrew/bin/pnpm exec vitest run src/runtime/__tests__/serve-release-readiness.test.ts`
+    passed `17` tests.
+
+source: codex:narrative-harness-spec-shaped-readiness-2026-07-04
+
 2026-07-04T14:40:00Z - Continued Narrative Harness Stage 1 proof with
 installed-app import refresh, approval, and start validation.
 

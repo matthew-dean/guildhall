@@ -1914,7 +1914,6 @@ describe('POST /api/project/start', () => {
           },
         ],
       })
-
     const { app } = buildServeApp({ projectPath: tmpDir })
     await applyStorageBoundaryMigration(app)
     const projectRes = await app.fetch(new Request(scoped('/api/project')))
@@ -1933,6 +1932,55 @@ describe('POST /api/project/start', () => {
     })
     expect(projectBody.startReadiness?.message).toContain('Thin ready task')
     expect(projectBody.startReadiness?.message).toContain('clearer brief')
+  })
+
+  it('does not treat ready tasks with a spec and acceptance criteria as brief cleanup', async () => {
+    const now = new Date().toISOString()
+    await writeSystemTasks({
+      version: 1,
+      lastUpdated: now,
+      tasks: [
+        {
+          id: 'task-spec-shaped-ready',
+          title: 'Add the first tiny fiction fixture and human-authored expected records.',
+          description: 'Spec-shaped ready work should be runnable even if imported brief copy is thin.',
+          domain: 'core',
+          status: 'ready',
+          priority: 'normal',
+          productBrief: {
+            userJob: 'Build a no-UI fixture proof.',
+            whyItMattersNow: 'The MVP needs reusable ground truth.',
+            successMetric: 'Fixture records are available.',
+            nonGoals: [],
+          },
+          spec: 'Fixture spec.',
+          acceptanceCriteria: [{ id: 'AC-1', description: 'Fixture records exist.', verifiedBy: 'test', met: false }],
+          outOfScope: [],
+          dependsOn: [],
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          adjudications: [],
+          escalations: [],
+          agentIssues: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+    })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await applyStorageBoundaryMigration(app)
+    const projectRes = await app.fetch(new Request(scoped('/api/project')))
+    const projectBody = (await projectRes.json()) as {
+      startReadiness?: { canStart?: boolean; code?: string; actionHref?: string; message?: string; focusKind?: string }
+    }
+
+    expect(projectBody.startReadiness?.code).not.toBe('no_unattended_progress')
+    expect(projectBody.startReadiness?.focusKind).not.toBe('brief_cleanup')
+    expect(projectBody.startReadiness?.message ?? '').not.toContain('clearer brief')
   })
 
   it('points owner-input Start blockers at the linked Thread session', async () => {

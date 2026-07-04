@@ -266,6 +266,118 @@ describe('GET /api/project/release-readiness', () => {
     expect(body.statusCounts).toEqual({ ready: 1 })
   })
 
+  it('does not turn active materialized child work into parent brief-cleanup blockers', async () => {
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: 'headless-mvp',
+      releases: [{
+        id: 'headless-mvp',
+        label: 'Headless MVP',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-contracts'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [
+        makeTask({
+          id: 'task-contracts',
+          title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+          status: 'ready',
+          releaseIds: ['headless-mvp'],
+          requestIntake: { createdBy: 'workspace-importer' } as Task['requestIntake'],
+          productBrief: {
+            userJob: 'Shape the headless fixture harness.',
+            whyItMattersNow: 'The first proof loop needs contract records.',
+            successMetric: 'Contracts are ready for child implementation.',
+            nonGoals: [],
+          },
+          spec: 'Parent contract spec.',
+          acceptanceCriteria: [{ id: 'AC-1', description: 'Contracts are named.', verifiedBy: 'review', met: false }],
+          hierarchy: { childIds: ['task-ground-truth'], relation: 'contains' } as Task['hierarchy'],
+        }),
+        makeTask({
+          id: 'task-ground-truth',
+          title: 'Shape fixture and expected-record ground truth',
+          status: 'in_progress',
+          assignedTo: 'worker-agent',
+          hierarchy: { parentId: 'task-contracts', childIds: [], order: 0, relation: 'decomposes' } as Task['hierarchy'],
+          notes: [{ agentId: 'task-sizing', role: 'coordinator', content: 'Generated split child.' }] as Task['notes'],
+          productBrief: {
+            userJob: 'Define fixture ground truth.',
+            whyItMattersNow: 'The current worker is implementing this child.',
+            successMetric: 'Fixture records can drive the proof loop.',
+            nonGoals: ['Prototype run records'],
+            approvedAt: '2026-07-04T16:00:00.000Z',
+          },
+          spec: 'Child fixture spec.',
+          acceptanceCriteria: [{ id: 'AC-1', description: 'Fixture records exist.', verifiedBy: 'test', met: false }],
+        }),
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await approveDesignSystem(app)
+    await commitAndPush('active child release readiness')
+
+    const res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
+    const body = await res.json() as any
+
+    expect(body.incompleteBriefs).toEqual([])
+    expect(body.unapprovedBriefs).toEqual([])
+    expect(body.totals.humanBlockingCount).toBe(0)
+    expect(body.statusCounts).toEqual({ ready: 1 })
+    expect(body.totals.unfinishedCount).toBe(1)
+    expect(body.ready).toBe(false)
+  })
+
+  it('does not treat ready spec-shaped work as incomplete brief cleanup', async () => {
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: 'headless-mvp',
+      releases: [{
+        id: 'headless-mvp',
+        label: 'Headless MVP',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-fixture'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [
+        makeTask({
+          id: 'task-fixture',
+          title: 'Add the first tiny fiction fixture and human-authored expected records.',
+          status: 'ready',
+          releaseIds: ['headless-mvp'],
+          productBrief: {
+            userJob: 'Build a no-UI fixture proof.',
+            whyItMattersNow: 'The MVP needs reusable ground truth.',
+            successMetric: 'Fixture records are available.',
+            nonGoals: [],
+          },
+          spec: 'Fixture spec.',
+          acceptanceCriteria: [{ id: 'AC-1', description: 'Fixture records exist.', verifiedBy: 'test', met: false }],
+        }),
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await approveDesignSystem(app)
+    await commitAndPush('ready spec shaped work')
+
+    const res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
+    const body = await res.json() as any
+
+    expect(body.incompleteBriefs).toEqual([])
+    expect(body.unapprovedBriefs).toEqual([])
+    expect(body.totals.humanBlockingCount).toBe(0)
+    expect(body.statusCounts).toEqual({ ready: 1 })
+    expect(body.totals.unfinishedCount).toBe(1)
+  })
+
   it('returns a plain release-readiness load error when task state cannot be read', async () => {
     await writeProjectStateTextAsync(tmpDir, 'TASKS.json', '{ broken json')
     const { app } = buildServeApp({ projectPath: tmpDir })
