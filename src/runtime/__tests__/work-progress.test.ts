@@ -174,4 +174,49 @@ describe('deriveProjectWorkProgress', () => {
       countInProjectTotals: false,
     })
   })
+
+  it('hides workspace-imported spec criteria fragments from visible project totals', () => {
+    const progress = deriveProjectWorkProgress([
+      {
+        id: 'editor-spec',
+        title: 'Editor primitives',
+        status: 'ready',
+        requestIntake: { createdBy: 'workspace-importer' },
+        references: ['/repo/knit/specs/v1-editor.md'],
+      },
+      {
+        id: 'editor-ac1',
+        title: 'AC1: Given an editor user, when they type bold text, then it renders bold.',
+        status: 'import_draft',
+        requestIntake: {
+          createdBy: 'workspace-importer',
+          evidenceRefs: ['import:/repo/knit/specs/v1-editor.md'],
+        },
+        references: ['/repo/knit/specs/v1-editor.md'],
+      },
+      {
+        id: 'template-placeholder',
+        title: 'Migration: [describe]',
+        status: 'import_draft',
+        requestIntake: {
+          createdBy: 'workspace-importer',
+          evidenceRefs: ['import:/repo/knit/specs/_template.md'],
+        },
+        references: ['/repo/knit/specs/_template.md'],
+      },
+    ])
+
+    expect(progress.counts.visibleTotal).toBe(1)
+    expect(progress.byTaskId['editor-spec']?.visibility.kind).toBe('primary')
+    expect(progress.byTaskId['editor-ac1']?.visibility).toEqual({
+      kind: 'hidden',
+      countInProjectTotals: false,
+      label: undefined,
+    })
+    expect(progress.byTaskId['template-placeholder']?.visibility).toEqual({
+      kind: 'hidden',
+      countInProjectTotals: false,
+      label: undefined,
+    })
+  })
 })

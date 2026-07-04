@@ -805,11 +805,12 @@ function buildNodes(
     const existing = byId.get(taskNodeId(task.id))
     if (existing) return existing
     const maturity = maturityForTask(task, childIdsByParent, scope, tasksById)
+    const visibility = visibilityForTask(task, tasksById)
     const children = (childIdsByParent.get(task.id) ?? [])
       .map(childId => tasksById.get(childId))
       .filter((child): child is OrientationTaskInput => Boolean(child))
       .map(build)
-    const visibility = visibilityForTask(task, tasksById)
+      .filter(child => child.visibility.kind !== 'hidden')
     const childProgress = children.reduce(
       (progress, child) => child.visibility.countInProjectTotals
         ? addProgress(progress, child.progress)
@@ -866,6 +867,7 @@ function buildNodes(
   const taskRoots = tasks
     .filter(task => !parentIdFor(task, tasksById))
     .map(build)
+    .filter(root => root.visibility.kind !== 'hidden')
   const roots = groupFlatRootsByDomain(taskRoots, tasks, scope, now, byId)
   return { roots, byId, gaps }
 }
@@ -917,6 +919,16 @@ function orientationAreaDescriptorFromRefs(
   }
   if (hasPath(/(?:^|\/)docs\/specs\/[^/]+\.md$/i)) {
     return { key: 'story-intelligence-specs', title: 'Story Intelligence Specs' }
+  }
+  const firstSpecRef = normalizedRefs.find(ref => /(?:^|\/)specs\/[^/]+\.md$/i.test(ref))
+  if (firstSpecRef) {
+    const stem = firstSpecRef.split('/').pop()
+    if (stem) {
+      return {
+        key: `spec:${normalizeText(stem).replace(/\s+/g, '-') || 'spec'}`,
+        title: `${humanizeFileStem(stem)} Spec`,
+      }
+    }
   }
 
   const firstDocRef = normalizedRefs.find(ref => /(?:^|\/)docs\/.+\.md$/i.test(ref))
@@ -1092,11 +1104,13 @@ function groupFlatRootsByDomain(
   byId: Map<string, OrientationNode>,
 ): OrientationNode[] {
   if (roots.length < 2) return roots
-  if (roots.some(root => root.children.length > 0 || root.kind === 'feature' || root.kind === 'area')) return roots
+  const structuredRoots = roots.filter(root => root.children.length > 0 || root.kind === 'area')
+  const flatRoots = roots.filter(root => root.children.length === 0 && root.kind !== 'area')
+  if (flatRoots.length < 2) return roots
   const tasksByNodeId = new Map(tasks.map(task => [taskNodeId(task.id), task]))
   const groups = new Map<string, OrientationNode[]>()
   const groupMeta = new Map<string, { title: string; structuralDomainId?: string }>()
-  for (const root of roots) {
+  for (const root of flatRoots) {
     const task = tasksByNodeId.get(root.id)
     const importedArea = orientationAreaDescriptorFromRefs(task?.references)
     const key = importedArea?.key || task?.domain?.trim() || 'unsorted'
@@ -1163,7 +1177,10 @@ function groupFlatRootsByDomain(
     byId.set(area.id, area)
     areaRoots.push(area)
   }
-  return areaRoots.sort((left, right) => left.title.localeCompare(right.title))
+  return [
+    ...structuredRoots,
+    ...areaRoots.sort((left, right) => left.title.localeCompare(right.title)),
+  ]
 }
 
 function visibilityForTask(

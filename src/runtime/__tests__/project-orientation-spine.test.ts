@@ -147,6 +147,138 @@ describe('buildProjectOrientationSpine', () => {
     ]))
   })
 
+  it('does not promote imported spec acceptance criteria or templates into project skeleton work', () => {
+    const spine = buildProjectOrientationSpine({
+      projectId: 'looma-knit',
+      now: '2026-06-18T12:00:00.000Z',
+      tasks: [
+        {
+          id: 'editor-spec',
+          title: 'Editor primitives',
+          description: 'Build the editor primitive spec.',
+          domain: 'knit',
+          projectPath: '/repo/knit',
+          status: 'ready',
+          priority: 'normal',
+          requestIntake: { createdBy: 'workspace-importer' },
+          references: ['/repo/knit/specs/v1-editor.md'],
+        },
+        {
+          id: 'editor-ac1',
+          title: 'AC1: Given an editor user, when they type bold text, then it renders bold.',
+          description: 'knit/specs/v1-editor.md acceptance criteria.',
+          domain: 'knit',
+          projectPath: '/repo/knit',
+          status: 'import_draft',
+          priority: 'normal',
+          requestIntake: {
+            createdBy: 'workspace-importer',
+            evidenceRefs: ['import:/repo/knit/specs/v1-editor.md'],
+          },
+          references: ['/repo/knit/specs/v1-editor.md'],
+        },
+        {
+          id: 'template-placeholder',
+          title: 'AC1: Given [context], when [action], then [outcome]',
+          description: 'Spec template placeholder.',
+          domain: 'knit',
+          projectPath: '/repo/knit',
+          status: 'import_draft',
+          priority: 'normal',
+          requestIntake: {
+            createdBy: 'workspace-importer',
+            evidenceRefs: ['import:/repo/knit/specs/_template.md'],
+          },
+          references: ['/repo/knit/specs/_template.md'],
+        },
+      ],
+    })
+
+    expect(spine.summary.includedWorkCount).toBe(1)
+    expect(spine.roots.map(root => root.title)).toEqual(['Editor primitives'])
+    expect(spine.nodes['work:editor-spec']?.visibility).toEqual({ kind: 'primary', countInProjectTotals: true })
+    expect(spine.nodes['work:editor-ac1']?.visibility).toEqual({ kind: 'hidden', countInProjectTotals: false })
+    expect(spine.nodes['work:template-placeholder']?.visibility).toEqual({ kind: 'hidden', countInProjectTotals: false })
+    expect(spine.proofContracts.map(contract => contract.title)).toEqual(['Editor primitives'])
+  })
+
+  it('groups flat imported feature roots by source document instead of flooding the map', () => {
+    const spine = buildProjectOrientationSpine({
+      projectId: 'looma-knit',
+      now: '2026-06-18T12:00:00.000Z',
+      tasks: [
+        {
+          id: 'review-parent',
+          title: 'Review release readiness',
+          description: 'Structured work that should stay as its own parent tree.',
+          domain: 'knit',
+          projectPath: '/repo/knit',
+          status: 'ready',
+          priority: 'normal',
+          hierarchy: { childIds: ['review-proof'] },
+        },
+        {
+          id: 'review-proof',
+          title: 'Run release proof',
+          description: 'Structured child work.',
+          domain: 'knit',
+          projectPath: '/repo/knit',
+          status: 'ready',
+          priority: 'normal',
+          hierarchy: { parentId: 'review-parent' },
+        },
+        {
+          id: 'follow-pages',
+          title: '"Follow" a page to get updates',
+          description: 'Feature catalog item.',
+          domain: 'knit',
+          projectPath: '/repo/knit',
+          status: 'shelved',
+          priority: 'normal',
+          workKind: 'feature',
+          requestIntake: { createdBy: 'workspace-importer' },
+          references: ['/repo/knit/docs/features.md'],
+        },
+        {
+          id: 'ai-search',
+          title: 'AI-powered search',
+          description: 'Feature catalog item.',
+          domain: 'knit',
+          projectPath: '/repo/knit',
+          status: 'shelved',
+          priority: 'normal',
+          workKind: 'feature',
+          requestIntake: { createdBy: 'workspace-importer' },
+          references: ['/repo/knit/docs/features.md'],
+        },
+        {
+          id: 'editor-spec',
+          title: 'Editor primitives',
+          description: 'Build the editor primitive spec.',
+          domain: 'knit',
+          projectPath: '/repo/knit',
+          status: 'ready',
+          priority: 'normal',
+          workKind: 'feature_spec',
+          requestIntake: { createdBy: 'workspace-importer' },
+          references: ['/repo/knit/specs/v1-editor.md'],
+        },
+      ],
+    })
+
+    expect(spine.roots.map(root => root.title)).toEqual(['Review release readiness', 'Features', 'V1 Editor Spec'])
+    expect(spine.roots.find(root => root.title === 'Review release readiness')?.children.map(child => child.title)).toEqual([
+      'Run release proof',
+    ])
+    expect(spine.roots.find(root => root.title === 'Features')?.children.map(child => child.title)).toEqual([
+      '"Follow" a page to get updates',
+      'AI-powered search',
+    ])
+    expect(spine.roots.find(root => root.title === 'V1 Editor Spec')?.children.map(child => child.title)).toEqual([
+      'Editor primitives',
+    ])
+  })
+
   it('treats shelved tasks as deferred in the fallback current-work scope', () => {
     const spine = buildProjectOrientationSpine({
       projectId: 'narrative-harness',
