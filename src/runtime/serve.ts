@@ -366,7 +366,7 @@ import {
   progressForTask,
   type WizardsState,
 } from './wizards.js'
-import { readCachedJson } from './file-read-cache.js'
+import { invalidateCachedFile, readCachedJson } from './file-read-cache.js'
 import { applyProjectMigrations, getProjectMigrationStatus } from './migrations.js'
 import { stringify as stringifyYaml } from 'yaml'
 import {
@@ -803,7 +803,7 @@ async function collectProjectReintakeSources(projectPath: string): Promise<Array
       } catch {
         continue
       }
-      if (!/Deliverable|Foundation|Consumer|should say|missing|Recommended first task title|Stage alignment|Current Next Milestone/i.test(content)) continue
+      if (!/Deliverable|Foundation|Consumer|should say|missing|Needed contracts|Recommended first task title|Stage alignment|Current Next Milestone/i.test(content)) continue
       sources.push({ path: relative(projectPath, absolute) || entry.name, content })
     }
   }
@@ -952,6 +952,12 @@ function isCompletedBlockedContradiction(task: Record<string, unknown>): boolean
 const normalizedTasksCache = new Map<string, { raw: unknown; tasks: Array<Record<string, unknown>> }>()
 const normalizedTaskQueueCache = new Map<string, { raw: unknown; queue: { tasks: Array<Record<string, unknown>>; releases: ProjectRelease[]; selectedReleaseId?: string } }>()
 
+function invalidateTaskQueueReadCaches(tasksPath: string): void {
+  normalizedTasksCache.delete(tasksPath)
+  normalizedTaskQueueCache.delete(tasksPath)
+  invalidateCachedFile(tasksPath)
+}
+
 function sameSerializedTasks(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right)
 }
@@ -1055,14 +1061,6 @@ async function readTaskQueueFileNormalized(
   >(tasksPath)
   if (rawParsed == null) return { tasks: [], releases: [] }
   const parsed = normalizeLegacyTaskQueueShape(rawParsed)
-  const cached = normalizedTaskQueueCache.get(tasksPath)
-  if (cached && sameSerializedTasks(cached.raw, parsed)) {
-    return {
-      tasks: cached.queue.tasks.map(task => ({ ...task })),
-      releases: cached.queue.releases.map(release => ({ ...release, nodeIds: [...(release.nodeIds ?? [])], deferredNodeIds: [...(release.deferredNodeIds ?? [])] })),
-      ...(cached.queue.selectedReleaseId ? { selectedReleaseId: cached.queue.selectedReleaseId } : {}),
-    }
-  }
   const tasks = await readTasksFileNormalized(tasksPath)
   const releases = Array.isArray(parsed) ? [] : Array.isArray(parsed.releases) ? parsed.releases.map(release => ({ ...release })) : []
   const selectedReleaseId = Array.isArray(parsed) ? undefined : typeof parsed.selectedReleaseId === 'string' ? parsed.selectedReleaseId : undefined
@@ -6894,10 +6892,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
         return c.json({ error: 'Project not initialized. Complete /setup first.' }, 400)
       }
       const body = await c.req.json().catch(() => ({})) as { groupIds?: string[] }
+      const tasksPath = projectTasksPath(project.path)
       const result = await applyProjectReintakeDraft({
         memoryDir: getProjectStateDir(project.path),
         selectedGroupIds: Array.isArray(body.groupIds) ? body.groupIds : undefined,
       })
+      if (result.success) invalidateTaskQueueReadCaches(tasksPath)
       return c.json(result, result.success ? 200 : 400)
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)

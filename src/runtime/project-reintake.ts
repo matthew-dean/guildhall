@@ -78,6 +78,7 @@ export interface ReintakeTaskDraft {
   references?: string[]
   releaseIds?: string[]
   stageAlignment?: string
+  spec?: string
   proofPaths?: unknown[]
 }
 
@@ -137,6 +138,7 @@ export function planProjectReintake(input: ProjectReintakeInput): ProjectReintak
       graphPlan.reconciliations,
       input.tasks,
       selectedRelease,
+      input.sources,
     ))
   if (graphChanges.length > 0) {
     groups.push({
@@ -257,9 +259,15 @@ export async function applyProjectReintakeDraft(input: {
   const groups = selected
     ? draft.groups.filter(group => selected.has(group.id))
     : draft.groups
+  const refreshedTaskIds = new Set<string>()
+  for (const change of groups.flatMap(group => group.changes)) {
+    if (change.kind === 'create') refreshedTaskIds.add(change.task.id)
+    if (change.kind === 'reframe') refreshedTaskIds.add(change.taskId)
+  }
 
   for (const group of groups) {
     for (const change of group.changes) {
+      if (change.kind === 'archive' && refreshedTaskIds.has(change.taskId)) continue
       applyChange(queue.tasks, change, now)
     }
   }
@@ -295,7 +303,36 @@ function applyChange(tasks: Array<Record<string, unknown>>, change: ReintakeChan
   }
 
   if (change.kind === 'create') {
-    if (tasks.some(task => task.id === change.task.id)) return
+    const existing = tasks.find(task => task.id === change.task.id)
+    if (existing) {
+      if (isStartedOrCompletedTask(existing)) return
+      const notes = Array.isArray(existing.notes) ? existing.notes : []
+      Object.assign(existing, {
+        ...change.task,
+        projectPath: typeof existing.projectPath === 'string' ? existing.projectPath : '',
+        outOfScope: Array.isArray(existing.outOfScope) ? existing.outOfScope : [],
+        notes: [
+          ...notes,
+          {
+            agentId: 'project-reintake',
+            role: 'system',
+            content: `Re-intake replaced this not-yet-started task with current source evidence: ${change.reason}`,
+            timestamp: now,
+          },
+        ],
+        gateResults: Array.isArray(existing.gateResults) ? existing.gateResults : [],
+        reviewVerdicts: Array.isArray(existing.reviewVerdicts) ? existing.reviewVerdicts : [],
+        adjudications: Array.isArray(existing.adjudications) ? existing.adjudications : [],
+        escalations: Array.isArray(existing.escalations) ? existing.escalations : [],
+        agentIssues: Array.isArray(existing.agentIssues) ? existing.agentIssues : [],
+        revisionCount: typeof existing.revisionCount === 'number' ? existing.revisionCount : 0,
+        remediationAttempts: typeof existing.remediationAttempts === 'number' ? existing.remediationAttempts : 0,
+        origination: existing.origination ?? 'human',
+        createdAt: typeof existing.createdAt === 'string' ? existing.createdAt : now,
+        updatedAt: now,
+      })
+      return
+    }
     tasks.push({
       ...change.task,
       projectPath: '',
@@ -380,11 +417,12 @@ function graphTaskChange(
   reconciliations: EvidenceReconciliation[],
   existingTasks: Array<Record<string, unknown>>,
   selectedRelease: SelectedRelease | null,
+  sources: ProjectReintakeSource[],
 ): ReintakeChange {
   const reframe = reconciliations.find(change =>
     'existingTaskId' in change && change.existingTaskId === task.id,
   ) as { existingTaskId?: string; reason?: string } | undefined
-  const draft = evidenceTaskToDraft(task, selectedRelease)
+  const draft = evidenceTaskToDraft(task, selectedRelease, sources)
 
   if (reframe) {
     const existing = existingTasks.find(candidate => stringField(candidate, 'id') === task.id)
@@ -408,8 +446,22 @@ function graphTaskChange(
   }
 }
 
-function evidenceTaskToDraft(task: EvidenceTask, selectedRelease: SelectedRelease | null): ReintakeTaskDraft {
+function evidenceTaskToDraft(
+  task: EvidenceTask,
+  selectedRelease: SelectedRelease | null,
+  sources: ProjectReintakeSource[],
+): ReintakeTaskDraft {
   const later = selectedRelease ? taskIsAfterSelectedRelease(task, selectedRelease) : false
+  const references = unique([
+    ...task.sourceRefs.map(ref => ref.path),
+    ...supportingEvidenceRefsForTask(task, sources),
+  ])
+  const acceptanceCriteria = task.acceptanceCriteria.map(criterion => ({
+    id: criterion.id,
+    description: criterion.description,
+    verifiedBy: criterion.id.includes('automated') || criterion.id.includes('regression') ? 'automated' : 'review',
+    met: false,
+  }))
   return {
     id: task.id,
     title: task.title,
@@ -418,17 +470,73 @@ function evidenceTaskToDraft(task: EvidenceTask, selectedRelease: SelectedReleas
     status: later ? 'shelved' : 'import_draft',
     priority: evidenceTaskPriority(task),
     dependsOn: task.dependsOn,
-    acceptanceCriteria: task.acceptanceCriteria.map(criterion => ({
-      id: criterion.id,
-      description: criterion.description,
-      verifiedBy: criterion.id.includes('automated') || criterion.id.includes('regression') ? 'automated' : 'review',
-      met: false,
-    })),
-    references: unique(task.sourceRefs.map(ref => ref.path)),
+    acceptanceCriteria,
+    references,
     ...(later || !selectedRelease ? {} : { releaseIds: [selectedRelease.id] }),
     ...(task.stageAlignment ? { stageAlignment: task.stageAlignment } : {}),
+    spec: evidenceTaskSpec({ task, references, acceptanceCriteria, sources }),
     proofPaths: task.proofPaths,
   }
+}
+
+function supportingEvidenceRefsForTask(task: EvidenceTask, sources: ProjectReintakeSource[]): string[] {
+  if (!/\b(schema|schemas|fixture|expected-record|prototype-run|evaluation)\b/i.test(task.title)) return []
+  return sources
+    .filter(source => /\bneeded contracts\s*:/i.test(source.content))
+    .map(source => source.path)
+}
+
+function evidenceTaskSpec(input: {
+  task: EvidenceTask
+  references: string[]
+  acceptanceCriteria: Task['acceptanceCriteria']
+  sources: ProjectReintakeSource[]
+}): string {
+  const sourcesByPath = new Map(input.sources.map(source => [source.path, source.content]))
+  const referencedContent = input.references
+    .map(reference => sourcesByPath.get(reference))
+    .filter((content): content is string => Boolean(content))
+  const contractNames = unique(referencedContent.flatMap(extractNeededContractNames))
+  return [
+    '## What this is',
+    input.task.title,
+    '',
+    '## Problem / context',
+    evidenceTaskDescription(input.task),
+    '',
+    '## Goals',
+    `- Deliver ${input.task.title} from the cited project evidence.`,
+    ...(contractNames.length > 0
+      ? [`- Define and use the concrete contracts named in the cited docs: ${contractNames.map(name => `\`${name}\``).join(', ')}.`]
+      : []),
+    '',
+    '## Imported evidence',
+    ...input.references.map(reference => `- ${reference}`),
+    '',
+    '## Acceptance criteria',
+    ...input.acceptanceCriteria.map((criterion, index) => `${index + 1}. ${criterion.description}`),
+  ].join('\n')
+}
+
+function extractNeededContractNames(content: string): string[] {
+  const names: string[] = []
+  const lines = content.split(/\r?\n/)
+  let collecting = false
+  for (const line of lines) {
+    const trimmed = line.trim()
+    if (/^needed contracts\s*:/i.test(trimmed)) {
+      collecting = true
+      continue
+    }
+    if (collecting && (/^#{1,6}\s+/.test(trimmed) || /^[A-Z][A-Za-z ]+\s*:\s*$/.test(trimmed))) {
+      collecting = false
+    }
+    if (!collecting || !/^[-*]\s+/.test(trimmed)) continue
+    const match = /^[-*]\s+`([^`\n]{2,80})`/.exec(trimmed)
+    const name = match?.[1]?.trim()
+    if (name && /^[A-Za-z][A-Za-z0-9_-]+$/.test(name)) names.push(name)
+  }
+  return names
 }
 
 type SelectedRelease = {

@@ -693,6 +693,17 @@ test('Narrative Harness re-intake apply remains visible in the project map', asy
   expect(detail.orientationSpine?.summary?.selectedReleaseLabel).toBe('Stage 1: Fixture And Evaluation Harness')
   expect(detail.orientationSpine?.summary?.includedWorkCount).toBeGreaterThanOrEqual(6)
   expect(detail.orientationSpine?.summary?.deferredWorkCount).toBeGreaterThanOrEqual(2)
+  const schemaTask = detail.tasks?.find((task: { title?: string }) =>
+    task.title === 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+  )
+  expect(schemaTask?.spec).toContain('`PrototypeRun`')
+  expect(schemaTask?.spec).toContain('`FixtureManifest`')
+  expect(schemaTask?.spec).not.toContain('`coherence-reviewer-mvp`')
+  expect(schemaTask?.spec).not.toContain('`decision-trace-pipeline`')
+  expect(schemaTask?.spec).not.toContain('`author-voice-loop-mvp`')
+  expect(schemaTask?.spec).not.toContain('`context-packet-compaction-core`')
+  expect(schemaTask?.spec).not.toContain('`done`')
+  expect(schemaTask?.spec).not.toContain('`expansion-task-full-decomposition-split-verify-and-update-the-migration-record`')
 
   await page.goto('/projects/narrative-harness/map')
   const projectMap = page.locator('.project-map')

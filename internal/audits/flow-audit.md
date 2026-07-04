@@ -12,6 +12,89 @@ This is the active browser test plan for the Guildhall project surface. Keep it
 updated while auditing the active test project so another agent can resume
 without guessing.
 
+2026-07-04T06:30:00Z - Proved Narrative Harness source truth is visible through
+Guildhall surfaces, not just recoverable by Codex.
+
+- Work id: `codex:narrative-harness-visible-spec-truth-2026-07-04`.
+- User job: after Narrative Harness is re-intaked, the owner-facing project
+  list, task detail, and orientation map must all show the same current release
+  scope and the same source-grounded task specs. Clean draft data is not enough
+  if the displayed project still contains stale release IDs, archived current
+  work, or historical task IDs masquerading as schema contracts.
+- Failure reproduced:
+  - Workspace import harvested backticked historical task IDs from decomposition
+    inventory tables and displayed them as contract names in specs.
+  - Re-intake generated cleaner draft tasks, but apply skipped deterministic
+    task IDs that already existed, leaving stale owner-visible specs in
+    `TASKS.json`.
+  - A later archive cleanup group could archive a task refreshed by the same
+    re-intake apply.
+  - `/api/project/task/task-import-9s8tkc` showed clean release membership while
+    `/api/project` showed stale `stage-0-spec-baseline`, because
+    `buildProjectOrientationSpine()` mutated the task objects returned by the
+    project API.
+- Fix:
+  - Contract extraction from backticked text is limited to explicit
+    contract-like sections instead of arbitrary ranked/tabled evidence.
+  - Re-intake source collection includes docs with `Needed contracts`, and
+    regenerated task specs cite the source docs and concrete contracts such as
+    `FixtureManifest` and `PrototypeRun`.
+  - Re-intake apply now upserts not-yet-started tasks with deterministic IDs,
+    skips stale archive changes for tasks refreshed in the same apply, and
+    invalidates project task read caches after a successful apply.
+  - Project orientation now clones task inputs before augmenting release hints,
+    so map construction cannot mutate the `/api/project` task list.
+- Visible proof:
+  - Installed app was rebuilt/reinstalled and `/api/stale-server` returned
+    `stale:false`.
+  - Live `POST /api/project/reintake/rerun?projectId=narrative-harness` then
+    `POST /api/project/reintake/apply?projectId=narrative-harness` returned
+    `{ "success": true, "appliedGroups": 3 }`.
+  - Live `/api/project?projectId=narrative-harness` and
+    `/api/project/task/task-import-9s8tkc?projectId=narrative-harness` both
+    returned `status: import_draft`, `releaseIds:
+    ["stage-1-fixture-and-evaluation-harness"]`, references to
+    `docs/harness/implementation-roadmap.md` and
+    `docs/specs/schema-contract-roadmap.md`, `FixtureManifest: true`,
+    `PrototypeRun: true`, and no historical IDs such as
+    `coherence-reviewer-mvp` or `decision-trace-pipeline`.
+  - Live orientation selected release was `Stage 1: Fixture And Evaluation
+    Harness` with `7` included node IDs and `8` deferred node IDs.
+- Contract Touch Decision:
+  - Work id: `codex:narrative-harness-visible-spec-truth-2026-07-04`.
+  - Touched contracts: re-intake draft task fields, re-intake apply semantics,
+    workspace-import contract extraction, file-read cache invalidation, and
+    orientation-spine task input handling.
+  - Contracts considered but not touched: persisted task schema shape, release
+    schema shape, orchestrator picker selection rules, and task-detail API
+    response shape.
+  - Required follow-up: narrow `Needed contracts` matching further so a schema
+    task receives only its relevant contract family, not every contract named in
+    a broad roadmap source.
+  - Proof required/provided: unit tests for contaminated import, re-intake
+    upsert/archive collision, and orientation no-mutation; rendered project
+    flow proof; installed-app live API proof.
+  - Apply/revert behavior: apply replaces only not-yet-started deterministic
+    task IDs and preserves started/completed work; revert removes the upsert,
+    cache invalidation, and no-mutation safeguards.
+- Verification:
+  - `/opt/homebrew/bin/pnpm vitest run
+    src/runtime/__tests__/project-orientation-spine.test.ts --testNamePattern
+    "does not mutate"` passed.
+  - `/opt/homebrew/bin/pnpm vitest run
+    src/runtime/__tests__/workspace-importer.test.ts
+    src/runtime/__tests__/project-reintake.test.ts
+    src/runtime/__tests__/project-reintake-apply.test.ts
+    src/runtime/__tests__/evidence-work-graph-intake.test.ts
+    src/runtime/__tests__/serve-settings.test.ts
+    src/runtime/__tests__/project-orientation-spine.test.ts` passed `232`
+    tests.
+  - `/opt/homebrew/bin/pnpm build` passed.
+  - `/opt/homebrew/bin/pnpm dev:install && guildhall stop && guildhall start`
+    completed, followed by live `stale:false` proof.
+
+source: codex:narrative-harness-visible-spec-truth-2026-07-04
+
 2026-07-04T05:03:55Z - Proved Narrative Harness re-intake can repopulate scoped
 release truth and make it visible in the Project Map.
 

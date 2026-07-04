@@ -415,6 +415,52 @@ describe('buildProjectOrientationSpine', () => {
     expect(spine.nodes['work:workspace-import:task-authoring-ui']?.maturity).toBe('deferred')
   })
 
+  it('does not mutate served task objects when workspace import release hints are stale', () => {
+    const tasks = [{
+      id: 'task-context-packet',
+      title: 'Build the context packet runner',
+      description: 'Current headless MVP work.',
+      domain: 'harness',
+      status: 'import_draft',
+      priority: 'high',
+      releaseIds: ['stage-1-fixture-and-evaluation-harness'],
+      references: ['docs/harness/implementation-roadmap.md'],
+    }]
+
+    buildProjectOrientationSpine({
+      projectId: 'narrative-harness',
+      now: '2026-07-03T12:00:00.000Z',
+      tasks,
+      workspaceImportDraft: {
+        releases: [{
+          id: 'stage-0-spec-baseline',
+          label: 'Stage 0: Spec Baseline',
+          source: 'release_plan',
+        }],
+        tasks: [{
+          id: 'task-context-packet',
+          title: 'Build the context packet runner',
+          description: 'Stale saved import release hint.',
+          domain: 'harness',
+          scope: 'current',
+          releaseIds: ['stage-0-spec-baseline'],
+          refs: ['import:docs/harness/implementation-roadmap.md'],
+        }],
+        source: {
+          kind: 'inferred',
+          refs: ['workspace-import:approved'],
+          confidence: 'high',
+          freshness: 'fresh',
+          inferred: false,
+          refreshedAt: '2026-07-03T12:00:00.000Z',
+        },
+      },
+    })
+
+    expect(tasks[0]?.releaseIds).toEqual(['stage-1-fixture-and-evaluation-harness'])
+    expect(tasks[0]?.references).toEqual(['docs/harness/implementation-roadmap.md'])
+  })
+
   it('uses action-shaped labels for question-shaped task nodes', () => {
     const spine = buildProjectOrientationSpine({
       projectId: 'narrative-harness',

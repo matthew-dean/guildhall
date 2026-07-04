@@ -4085,6 +4085,25 @@ tasks:
       ].join('\n'),
       'utf-8',
     )
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'harness', 'remaining-spec-decomposition-inventory.md'),
+      [
+        '# Remaining Spec Decomposition Inventory',
+        '',
+        '## Already-Decomposed Specs',
+        '',
+        '| Spec File | Matching Task(s) | Notes |',
+        '|-----------|------------------|-------|',
+        '| `story-memory-schemas.md` | `coherence-reviewer-mvp`, `decision-trace-pipeline`, `author-voice-loop-mvp`, `context-packet-compaction-core`, `done`, `expansion-task-full-decomposition-split-verify-and-update-the-migration-record` | Historical task references, not schema contracts. |',
+        '',
+        '## 2.10 `schema-contract-roadmap.md`',
+        '',
+        '- **Covers:** A roadmap document identifying contract surfaces that need explicit treatment before implementation grows.',
+        '- **Recommended first task title:** Implement fixture-and-expected-record schemas (from schema-contract-roadmap)',
+        '- **Stage alignment:** Stage 1 (Fixture And Evaluation Harness)',
+      ].join('\n'),
+      'utf-8',
+    )
 
     await seedImporterWithSpec(`
 \`\`\`yaml
@@ -4098,6 +4117,7 @@ tasks:
       - docs/harness/implementation-roadmap.md
       - docs/specs/schema-contract-roadmap.md
       - docs/harness/prototype-iteration-workflow.md
+      - docs/harness/remaining-spec-decomposition-inventory.md
     acceptanceCriteria:
       - id: source-implementation
         description: Define fixture, expected-record, prototype-run, and evaluation schemas. is implemented in harness.
@@ -4133,6 +4153,12 @@ tasks:
     expect(task?.spec).toContain('`FixtureManifest`')
     expect(task?.spec).toContain('`ExpectedRecordSet`')
     expect(task?.spec).toContain('`PrototypeRun`')
+    expect(task?.spec).not.toContain('`coherence-reviewer-mvp`')
+    expect(task?.spec).not.toContain('`decision-trace-pipeline`')
+    expect(task?.spec).not.toContain('`author-voice-loop-mvp`')
+    expect(task?.spec).not.toContain('`context-packet-compaction-core`')
+    expect(task?.spec).not.toContain('`done`')
+    expect(task?.spec).not.toContain('`expansion-task-full-decomposition-split-verify-and-update-the-migration-record`')
     expect(task?.spec).toContain('build a no-UI test harness that proves story-memory and packet contracts against small fiction fixtures before any product UI is designed.')
     expect(task?.spec).toContain('Proof target: Add bounded local workspace proof')
     expect(task?.spec).not.toContain('pnpm test -- define-fixture-expected-record-prototype-run-and-evaluation-schemas')

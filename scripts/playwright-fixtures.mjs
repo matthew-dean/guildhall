@@ -429,6 +429,12 @@ function narrativeHarnessInventoryDoc() {
   return [
     '# Remaining Spec Decomposition Inventory',
     '',
+    '## 1. Already-Decomposed Specs (Reference)',
+    '',
+    '| Spec File | Matching Task(s) | Notes |',
+    '|-----------|------------------|-------|',
+    '| `story-memory-schemas.md` | `coherence-reviewer-mvp`, `decision-trace-pipeline`, `author-voice-loop-mvp`, `context-packet-compaction-core`, `done`, `expansion-task-full-decomposition-split-verify-and-update-the-migration-record` | Historical task references, not schema contracts. |',
+    '',
     '### 2.2 `dialogue-and-character-voice.md`',
     '',
     '- **Recommended first task title:** Implement dialogue-and-character-voice reviewer lane',
@@ -440,6 +446,34 @@ function narrativeHarnessInventoryDoc() {
     '- **Recommended first task title:** Implement scene-and-chapter-intelligence reviewer lane',
     '- **Recommended domain:** coherence',
     '- **Stage alignment:** Stage 2 (Agent Coordination)',
+  ].join('\n')
+}
+
+function narrativeHarnessSchemaContractDoc() {
+  return [
+    '# Schema Contract Roadmap',
+    '',
+    '## Fixture And Expected-Record Schema',
+    '',
+    'Needed contracts:',
+    '',
+    '- `FixtureManifest`',
+    '- `ExpectedRecordSet`',
+    '- `ExpectedSignal`',
+    '',
+    'Purpose:',
+    '',
+    '- compare generated traces to human-authored ground truth',
+    '- avoid using private real manuscripts in early evals',
+    '',
+    '## Prototype Run And Evaluation Schema',
+    '',
+    'Needed contracts:',
+    '',
+    '- `PrototypeRun`',
+    '- `RunEvaluation`',
+    '- `SchemaFieldUsage`',
+    '- `PacketQualityScore`',
   ].join('\n')
 }
 
@@ -765,6 +799,11 @@ const projects = [
         dir: 'docs/harness',
         path: 'docs/harness/remaining-spec-decomposition-inventory.md',
         content: narrativeHarnessInventoryDoc(),
+      },
+      {
+        dir: 'docs/specs',
+        path: 'docs/specs/schema-contract-roadmap.md',
+        content: narrativeHarnessSchemaContractDoc(),
       },
     ],
   },

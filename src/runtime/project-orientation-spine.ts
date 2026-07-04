@@ -448,7 +448,11 @@ function augmentTasksWithWorkspaceImportDraft(input: {
     return { tasks: input.tasks, scope: null, releases: [], selectedReleaseId: null, contexts: draft?.contexts ?? [] }
   }
 
-  const augmented = [...input.tasks]
+  const augmented = input.tasks.map(task => ({
+    ...task,
+    ...(task.references ? { references: [...task.references] } : {}),
+    ...(task.releaseIds ? { releaseIds: [...task.releaseIds] } : {}),
+  }))
   const titleToTask = new Map<string, OrientationTaskInput>()
   for (const task of augmented) titleToTask.set(normalizeText(taskTitle(task)), task)
 

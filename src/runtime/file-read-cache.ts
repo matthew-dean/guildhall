@@ -11,6 +11,12 @@ const jsonCache = new Map<string, CacheEntry<unknown>>()
 const textCache = new Map<string, CacheEntry<string>>()
 const yamlCache = new Map<string, CacheEntry<unknown>>()
 
+export function invalidateCachedFile(file: string): void {
+  jsonCache.delete(file)
+  textCache.delete(file)
+  yamlCache.delete(file)
+}
+
 async function readStat(file: string): Promise<{ mtimeMs: number; size: number } | null> {
   try {
     const stat = await fsp.stat(file)

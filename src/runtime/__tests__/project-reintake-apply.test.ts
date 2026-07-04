@@ -94,6 +94,24 @@ const narrativeRemainingInventory = [
   '- **Stage alignment:** Stage 2 (Agent Coordination)',
 ].join('\n')
 
+const narrativeSchemaRoadmap = [
+  '# Schema Contract Roadmap',
+  '',
+  '## Fixture contracts',
+  '',
+  'Needed contracts:',
+  '- `FixtureManifest`',
+  '- `ExpectedRecordSet`',
+  '- `ExpectedSignal`',
+  '',
+  '## Run contracts',
+  '',
+  'Needed contracts:',
+  '- `PrototypeRun`',
+  '- `RunEvaluation`',
+  '- `PacketQualityScore`',
+].join('\n')
+
 describe('project re-intake apply', () => {
   it('applies reframes in place and appends a re-intake note', async () => {
     const memoryDir = await makeState([
@@ -266,6 +284,90 @@ describe('project re-intake apply', () => {
       stageAlignment: 'stage 2 (agent coordination)',
     })
     expect(laterTask?.releaseIds ?? []).toEqual([])
+  })
+
+  it('replaces stale not-started task content when the regenerated source-truth task keeps the same deterministic id', async () => {
+    const legacyTask = task({
+      id: 'task-import-9s8tkc',
+      title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+      status: 'spec_review',
+      spec: [
+        '## What this is',
+        'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+        '',
+        '## Goals',
+        '- Define and use stale historical ids: `coherence-reviewer-mvp`, `decision-trace-pipeline`, `done`.',
+      ].join('\n'),
+      acceptanceCriteria: [{
+        id: 'stale-contracts',
+        description: 'Use `coherence-reviewer-mvp`, `decision-trace-pipeline`, and `done`.',
+        verifiedBy: 'review',
+        met: false,
+      }],
+    })
+    const memoryDir = await makeState([legacyTask])
+    const draft = planProjectReintake({
+      now,
+      sources: [
+        { path: 'docs/harness/implementation-roadmap.md', content: narrativeRoadmap },
+        { path: 'docs/specs/schema-contract-roadmap.md', content: narrativeSchemaRoadmap },
+      ],
+      tasks: [legacyTask],
+    })
+    await writeProjectReintakeDraft(memoryDir, draft)
+
+    const result = await applyProjectReintakeDraft({ memoryDir, now })
+    expect(result.success).toBe(true)
+
+    const queue = await readQueue(memoryDir)
+    const refreshed = queue.tasks.find(task => task.id === 'task-import-9s8tkc')
+    expect(refreshed).toMatchObject({
+      title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+      status: 'import_draft',
+      references: ['docs/harness/implementation-roadmap.md', 'docs/specs/schema-contract-roadmap.md'],
+    })
+    expect(refreshed?.spec).toContain('`FixtureManifest`')
+    expect(refreshed?.spec).toContain('`PrototypeRun`')
+    expect(refreshed?.spec).not.toMatch(/coherence-reviewer-mvp|decision-trace-pipeline|author-voice-loop-mvp|context-packet-compaction-core/)
+    expect(refreshed?.notes.some((note: { content?: string }) => note.content?.includes('Re-intake'))).toBe(true)
+  })
+
+  it('does not archive a task refreshed by the same re-intake apply', async () => {
+    const legacyTask = task({
+      id: 'task-import-9s8tkc',
+      title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+      status: 'import_draft',
+      spec: '## Stale\nUse `coherence-reviewer-mvp`.',
+    })
+    const memoryDir = await makeState([legacyTask])
+    const draft = planProjectReintake({
+      now,
+      sources: [
+        { path: 'docs/harness/implementation-roadmap.md', content: narrativeRoadmap },
+        { path: 'docs/specs/schema-contract-roadmap.md', content: narrativeSchemaRoadmap },
+      ],
+      tasks: [legacyTask],
+    })
+    draft.groups.push({
+      id: 'archive-stale-collision',
+      title: 'Archive stale collision',
+      rationale: 'Regression fixture for stale cleanup colliding with current source-truth work.',
+      changes: [{
+        kind: 'archive',
+        taskId: 'task-import-9s8tkc',
+        reason: 'This stale cleanup must not override refreshed source-truth work.',
+      }],
+    })
+    await writeProjectReintakeDraft(memoryDir, draft)
+
+    const result = await applyProjectReintakeDraft({ memoryDir, now })
+    expect(result.success).toBe(true)
+
+    const queue = await readQueue(memoryDir)
+    expect(queue.tasks.find(task => task.id === 'task-import-9s8tkc')).toMatchObject({
+      status: 'import_draft',
+      releaseIds: ['stage-1-fixture-and-evaluation-harness'],
+    })
   })
 
   it('archives without deleting and creates graph tasks with dependency proof fields', async () => {

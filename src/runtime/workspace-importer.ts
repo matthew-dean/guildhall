@@ -3371,6 +3371,17 @@ function importedBulletLooksLikeVerification(bullet: string): boolean {
   return /\b(proof flow|proof loop|deterministic proof|verification|pass signal|evaluation output|trace capture|run summary)\b/i.test(bullet)
 }
 
+function markdownSectionAllowsContractNameExtraction(section: {
+  body: string
+  contractSection: boolean
+  genericSequenceSection: boolean
+  sectionMatchesReferenceSlug: boolean
+}): boolean {
+  if (!section.contractSection || section.genericSequenceSection) return false
+  if (/\bneeded contracts\s*:/i.test(section.body)) return true
+  return section.sectionMatchesReferenceSlug
+}
+
 function extractGoalStatements(content: string): string[] {
   const lines = content.split(/\r?\n/)
   const statements: string[] = []
@@ -3560,9 +3571,11 @@ function extractReferenceEvidenceDetail(
 
     for (const section of rankedSections) {
       const sectionLines = section.body.split(/\r?\n/).map(line => line.trim()).filter(Boolean)
-      for (const match of section.body.matchAll(/`([^`\n]{2,80})`/g)) {
-        const name = match[1]!.trim()
-        if (/^[A-Za-z][A-Za-z0-9_-]+$/.test(name)) contractNames.add(name)
+      if (markdownSectionAllowsContractNameExtraction(section)) {
+        for (const match of section.body.matchAll(/`([^`\n]{2,80})`/g)) {
+          const name = match[1]!.trim()
+          if (/^[A-Za-z][A-Za-z0-9_-]+$/.test(name)) contractNames.add(name)
+        }
       }
       for (const line of sectionLines) {
         if (!/^[-*]\s+/.test(line) && !/^\d+[.)]\s+/.test(line)) continue
