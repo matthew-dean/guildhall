@@ -4267,7 +4267,7 @@ function deriveContractWorkUnits(
   if (allContracts.length > 0) {
     units.push({
       id: `unit-${task.id}-contracts`,
-      title: `Define the cited contracts for ${task.title}`,
+      title: titleForImportedContractWorkUnit(evidenceDetail),
       deliverable: `Code defines and uses ${allContracts.map(name => `\`${name}\``).join(', ')}.`,
       rationale: 'Imported contract work should materialize the named schema and record surfaces directly from the cited docs.',
       suggestedDomain: task.domain,
@@ -4310,6 +4310,22 @@ function deriveContractWorkUnits(
   }
 
   return units.length > 0 ? units : [defaultImportedWorkUnit(task, evidenceDetail)]
+}
+
+function titleForImportedContractWorkUnit(evidenceDetail: ImportedEvidenceDetail): string {
+  const contractNames = evidenceDetail.contractNames
+  const hasFixtureSurface = contractNames.some(name => /(fixture|expected)/i.test(name))
+  const hasRunSurface = contractNames.some(name => /(prototype|run)/i.test(name))
+  const hasEvaluationSurface = contractNames.some(name => /(evaluation|score|trace|signal)/i.test(name))
+  if (hasFixtureSurface && hasRunSurface && hasEvaluationSurface) {
+    return 'Define fixture, expected-record, prototype-run, and evaluation contracts'
+  }
+  if (hasFixtureSurface && hasEvaluationSurface) {
+    return 'Define fixture and evaluation contracts'
+  }
+  if (hasFixtureSurface) return 'Define fixture and expected-record contracts'
+  if (hasEvaluationSurface || hasRunSurface) return 'Define run and evaluation contracts'
+  return 'Define the imported contract surface'
 }
 
 function deriveReviewerLaneWorkUnits(

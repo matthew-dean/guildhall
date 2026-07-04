@@ -380,7 +380,7 @@
       </section>
     {:else}
       <UtilityPanel tone="ok">
-        <p class="muted">Nothing is blocked right now. The remaining items are optional cleanup or recent history.</p>
+        <p class="muted">No project alerts are waiting here. The remaining items are optional cleanup or recent history.</p>
       </UtilityPanel>
     {/if}
 

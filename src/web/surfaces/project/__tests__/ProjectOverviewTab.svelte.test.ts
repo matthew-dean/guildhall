@@ -1373,4 +1373,42 @@ describe('ProjectOverviewTab', () => {
     expect(screen.getByLabelText('Work mix: 1 tasks')).toBeInTheDocument()
     expect(screen.queryByText('2 total tasks')).not.toBeInTheDocument()
   })
+
+  it('does not leak archived generated tasks into overview signals', () => {
+    render(ProjectOverviewTab, {
+      detail: {
+        id: 'narrative-harness',
+        name: 'Narrative Harness',
+        path: '/Users/matthew/git/oss/narrative-harness',
+        tasks: [
+          {
+            id: 'live-contract-work',
+            title: 'Define fixture, expected-record, prototype-run, and evaluation contracts',
+            status: 'ready',
+            proofPaths: [{ title: 'Fixture contract proof', status: 'pending' }],
+          },
+          {
+            id: 'archived-generated-child',
+            title: 'Define the cited contracts for Implement fixture-and-expected-record schemas (from schema-contract-roadmap)',
+            status: 'archived',
+            proofPaths: [{ title: 'Define the cited contracts for Implement fixture-and-expected-record schemas (from schema-contract-roadmap)', status: 'blocked' }],
+          },
+        ],
+      },
+      inboxLoaded: true,
+      inboxItems: [],
+      projectTicker: {
+        label: 'Not running',
+        actorLabel: 'Guildhall',
+        message: 'Project is waiting.',
+        tone: 'idle',
+        pulse: false,
+      },
+      activeProjectId: 'narrative-harness',
+    })
+
+    expect(screen.getAllByText('Define fixture, expected-record, prototype-run, and evaluation contracts').length).toBeGreaterThan(0)
+    expect(screen.queryAllByText('Define the cited contracts for Implement fixture-and-expected-record schemas (from schema-contract-roadmap)')).toHaveLength(0)
+    expect(screen.getByLabelText('Work mix: 1 tasks')).toBeInTheDocument()
+  })
 })

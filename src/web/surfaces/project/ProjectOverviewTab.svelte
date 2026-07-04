@@ -72,7 +72,11 @@
     return id === 'task-meta-intake' || id === 'task-workspace-import'
   }
 
-  const tasks = $derived((detail.tasks ?? []).filter(task => !isProjectSetupTask(task)))
+  function isArchivedTask(task: Task | null | undefined): boolean {
+    return task?.status === 'archived' || task?.status === 'cancelled'
+  }
+
+  const tasks = $derived((detail.tasks ?? []).filter(task => !isProjectSetupTask(task) && !isArchivedTask(task)))
   const displayPath = $derived(formatUserPath(detail.path))
   const running = $derived(detail.run?.status === 'running')
   const requiredMigrationBlocked = $derived(detail.startReadiness?.code === 'required_migration_pending')

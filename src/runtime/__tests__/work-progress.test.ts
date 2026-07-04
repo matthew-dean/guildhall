@@ -150,7 +150,7 @@ describe('deriveProjectWorkProgress', () => {
     expect(progress.byTaskId['duplicate-split-child']?.rollup.primaryState).toBe('shelved')
   })
 
-  it('hides archived tasks from visible project totals', () => {
+  it('omits archived tasks from active project progress state', () => {
     const progress = deriveProjectWorkProgress([
       {
         id: 'stale-shadow-import',
@@ -169,10 +169,7 @@ describe('deriveProjectWorkProgress', () => {
       visibleActive: 0,
       visibleShelved: 0,
     })
-    expect(progress.byTaskId['stale-shadow-import']?.visibility).toEqual({
-      kind: 'hidden',
-      countInProjectTotals: false,
-    })
+    expect(progress.byTaskId['stale-shadow-import']).toBeUndefined()
   })
 
   it('hides workspace-imported spec criteria fragments from visible project totals', () => {

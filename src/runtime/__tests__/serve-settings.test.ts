@@ -6295,6 +6295,78 @@ describe('GET /api/project/inbox — blockers', () => {
     )).toBe(true)
   })
 
+  it('keeps archived generated task titles out of owner-facing inbox history', async () => {
+    await writeSystemJson(
+      'TASKS.json',
+      {
+        version: 1,
+        lastUpdated: '2026-07-04T18:00:00.000Z',
+        tasks: [
+          {
+            id: 'task-live',
+            title: 'Define fixture, expected-record, prototype-run, and evaluation contracts',
+            status: 'ready',
+            acceptanceCriteria: [],
+            escalations: [],
+          },
+          {
+            id: 'task-stale-generated',
+            title: 'Define the cited contracts for Implement fixture-and-expected-record schemas',
+            status: 'archived',
+            acceptanceCriteria: [],
+            escalations: [],
+          },
+        ],
+      },
+    )
+    await writeSystemJson(
+      'attention.json',
+      {
+        version: 1,
+        records: [
+          {
+            id: 'spec_fill_pending:task-live',
+            status: 'open',
+            kind: 'spec_fill_pending',
+            severity: 'low',
+            taskId: 'task-live',
+            title: 'Define fixture, expected-record, prototype-run, and evaluation contracts',
+            detail: 'Optional cleanup: add acceptance criteria so agents and reviewers have a clearer brief.',
+            actionHref: '/task/task-live?tab=spec',
+            missingSteps: ['acceptance'],
+            createdAt: '2026-07-04T18:00:00.000Z',
+            updatedAt: '2026-07-04T18:00:00.000Z',
+          },
+          {
+            id: 'spec_fill_pending:task-stale-generated',
+            status: 'resolved',
+            resolution: 'verified',
+            kind: 'spec_fill_pending',
+            severity: 'low',
+            taskId: 'task-stale-generated',
+            title: 'Define the cited contracts for Implement fixture-and-expected-record schemas',
+            detail: 'Old generated split title.',
+            actionHref: '/task/task-stale-generated?tab=spec',
+            missingSteps: ['acceptance'],
+            createdAt: '2026-07-04T17:00:00.000Z',
+            updatedAt: '2026-07-04T17:00:00.000Z',
+          },
+        ],
+      },
+    )
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(scoped('/api/project/inbox')))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      history?: Array<{ taskId?: string; title?: string }>
+    }
+
+    expect(body.history?.some(item => item.taskId === 'task-live')).toBe(true)
+    expect(JSON.stringify(body.history ?? [])).not.toContain('Define the cited contracts')
+    expect(body.history?.some(item => item.taskId === 'task-stale-generated')).toBe(false)
+  })
+
   it('returns only needs-you alerts sorted by current inbox priority instead of stale record recency', async () => {
     const yamlPath = path.join(tmpDir, 'guildhall.yaml')
     const current = await fs.readFile(yamlPath, 'utf8')

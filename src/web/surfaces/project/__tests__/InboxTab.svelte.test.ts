@@ -274,6 +274,26 @@ describe('InboxTab', () => {
     expect(screen.getByText('Recent history')).toBeInTheDocument()
   })
 
+  it('does not claim the whole project is unblocked when only optional inbox rows remain', async () => {
+    render(InboxTab, {
+      items: [
+        {
+          id: 'low',
+          kind: 'lever_questions',
+          severity: 'low',
+          title: 'Levers',
+          detail: 'Optional.',
+          actionHref: '/settings/advanced',
+          status: 'open',
+        },
+      ] as any,
+      loaded: true,
+    })
+
+    expect(screen.getByText('No project alerts are waiting here. The remaining items are optional cleanup or recent history.')).toBeInTheDocument()
+    expect(screen.queryByText(/Nothing is blocked right now/i)).not.toBeInTheDocument()
+  })
+
   it('uses compact utility-panel groups instead of the old wide inbox table', async () => {
     const items = [
       {

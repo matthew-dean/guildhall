@@ -290,6 +290,7 @@ import {
   markAttentionDismissed,
   reconcileAttentionRecords,
   recordReconciliationResolved,
+  type AttentionRecord,
 } from './attention.js'
 import { projectRuntimeCompatibilityBlocker } from './runtime-compatibility.js'
 import { ProjectRuntimeSupervisor } from './project-runtime-supervisor.js'
@@ -1455,12 +1456,28 @@ async function buildProjectInboxSnapshot(input: {
     projectPath: input.projectPath,
     openItems: computedItems,
   })
+  const history = await activeAttentionHistory(input.projectPath, attention.history)
   const blockers = buildInboxBlockers(attention.openItems)
   return {
     items: attention.openItems.filter(isAttentionOwnedInboxItem),
-    history: attention.history.filter(isAttentionOwnedInboxItem),
+    history: history.filter(isAttentionOwnedInboxItem),
     blockers,
   }
+}
+
+async function activeAttentionHistory(projectPath: string, history: readonly AttentionRecord[]): Promise<AttentionRecord[]> {
+  const tasks = await readTasksFileNormalized(projectTasksPath(projectPath)).catch(() => [])
+  const hiddenTaskIds = new Set(
+    tasks
+      .filter(task => task.status === 'archived' || task.status === 'cancelled')
+      .map(task => typeof task.id === 'string' ? task.id : '')
+      .filter(Boolean),
+  )
+  if (hiddenTaskIds.size === 0) return [...history]
+  return history.filter(record => {
+    const taskId = 'taskId' in record && typeof record.taskId === 'string' ? record.taskId : ''
+    return !taskId || !hiddenTaskIds.has(taskId)
+  })
 }
 
 // ---------------------------------------------------------------------------

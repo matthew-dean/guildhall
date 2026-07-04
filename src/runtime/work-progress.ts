@@ -141,6 +141,8 @@ export function deriveProjectWorkProgress(tasks: TaskRecord[]): ProjectWorkProgr
 function deriveTaskWorkProgress(task: TaskRecord, byId: Map<string, TaskRecord>): TaskWorkProgress | null {
   const id = stringValue(task.id)
   if (!id) return null
+  const status = stringValue(task.status)
+  if (status && TASK_HIDDEN_STATUSES.has(status)) return null
   const childTasks = directChildTasks(task, byId)
   const visibility = deriveWorkVisibility(task, byId)
   const internalChildTasks = childTasks.filter(child => deriveWorkVisibility(child, byId).kind === 'internal_step')

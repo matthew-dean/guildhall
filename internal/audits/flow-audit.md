@@ -12607,6 +12607,80 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-07-04T14:10:00-07:00 - Cleaned imported split work communication and
+proved the installed Narrative Harness surfaces expose the remaining import
+refresh blocker instead of archived generated titles.
+
+- Work id: `codex:narrative-harness-import-communication-2026-07-04`.
+- User job: a project owner should be able to open Narrative Harness and trust
+  that Guildhall is showing the current release/import truth, not stale
+  generated split titles that Codex can mentally ignore but the UI still
+  resurfaces.
+- Fix:
+  - Imported contract split work units now get contract-surface titles such as
+    `Define fixture, expected-record, prototype-run, and evaluation contracts`
+    instead of wrapping the parent title as `Define the cited contracts for …`.
+  - Active project work progress omits archived/cancelled tasks, so archived
+    generated split work cannot keep contributing active progress signals.
+  - Project Overview filters archived/cancelled tasks before computing active
+    orientation sections.
+  - Needs You history filters archived/cancelled task-linked attention records,
+    so recent alert history does not resurrect obsolete generated work.
+  - Needs You empty-alert copy now says only that no project alerts are waiting
+    there; it no longer claims the whole project is unblocked when Start or
+    release readiness has a separate blocker.
+- Contract Touch Decision:
+  - Work id: `codex:narrative-harness-import-communication-2026-07-04`.
+  - Touched contracts: workspace-import generated work-unit title text; active
+    project work-progress projection; Project Overview active task projection;
+    owner-facing Needs You history projection and no-alert copy.
+  - Contracts considered but not touched: persisted task schema, raw task
+    archive/history retention, release container schema, selected release
+    semantics, workspace-import approval/write contract, attention record
+    persisted schema.
+  - Required follow-up: refresh/regenerate the Narrative Harness saved import so
+    the one remaining stale active task is removed from the selected release,
+    then continue delegated Codex-human review and Start execution for Stage 1.
+  - Proof required: installed app API and rendered routes must show no stale
+    `Define the cited contracts…` titles in active progress, Project Overview,
+    Project Map, or Needs You, and must visibly communicate any remaining
+    release/import blocker.
+  - Proof provided: focused red/green tests, broader focused suite, build,
+    installed-app restart with `/api/stale-server` `stale:false`, API inspection
+    of `/api/project` and `/api/project/inbox`, and rendered screenshots for
+    Overview, Map, and Needs You.
+  - Waivers: raw `/api/project.tasks` still contains archived task history with
+    old generated titles. That is kept as audit/history data for now; active
+    progress and owner-facing inbox/history projections filter it out.
+  - Owner-review items: the installed app now visibly warns
+    `workspace_import_refresh_needed` for Narrative Harness. This slice proves
+    Guildhall communicates the remaining problem instead of hiding it; it does
+    not claim the Narrative Harness MVP/release is complete.
+  - Apply/revert behavior: revert the importer title change together with the
+    active-progress/Overview/Needs You filters if the imported split work
+    projection needs to be rolled back. Reverting only UI filters would preserve
+    stale active progress; reverting only importer titles would leave archived
+    generated records visible through owner-facing surfaces.
+- Verification:
+  - `CI=true /opt/homebrew/bin/pnpm exec vitest run src/runtime/__tests__/workspace-importer.test.ts src/runtime/__tests__/work-progress.test.ts src/runtime/workspace-import/__tests__/detect.test.ts src/runtime/workspace-import/__tests__/hypothesis.test.ts src/runtime/__tests__/project-orientation-spine.test.ts src/runtime/__tests__/serve-settings.test.ts src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts src/web/surfaces/project/__tests__/InboxTab.svelte.test.ts`
+    passed `344` tests.
+  - `/opt/homebrew/bin/pnpm build && /opt/homebrew/bin/pnpm dev:install &&
+    guildhall stop && guildhall start` completed.
+  - `/api/stale-server` returned `stale:false` for PID `91645` from
+    `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+  - Live API proof for Narrative Harness: `workProgressHasStale:false`,
+    `inboxHasStale:false`, `projectInboxHasStale:false`, selected release
+    `Stage 1: Fixture And Evaluation Harness`, and primary action code
+    `workspace_import_refresh_needed`.
+  - Rendered installed-app proof:
+    `/tmp/guildhall-nh-overview-import-communication-final2.png`,
+    `/tmp/guildhall-nh-map-import-communication-final2.png`, and
+    `/tmp/guildhall-nh-needs-you-import-communication-final2.png` all had
+    `overflowX:0`, no stale generated split titles, and visible import-refresh
+    communication where relevant.
+
+source: codex:narrative-harness-import-communication-2026-07-04
+
 2026-07-04T13:58:00Z - Stopped decomposed parent work from masquerading as
 completed release work in Narrative Harness orientation.
 

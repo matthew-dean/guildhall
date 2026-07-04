@@ -4232,7 +4232,7 @@ tasks:
       'deterministic-proof',
     ])
     expect(task?.workUnitAnalysis?.units.map(unit => unit.title)).toEqual([
-      'Define the cited contracts for Define fixture, expected-record, prototype-run, and evaluation schemas.',
+      'Define fixture, expected-record, prototype-run, and evaluation contracts',
       'Shape fixture and expected-record ground truth',
       'Capture prototype run and evaluation records',
     ])
@@ -4265,7 +4265,7 @@ tasks:
     expect(task?.taskReadiness?.recommendation).toBe('ready')
     expect(task?.taskReadiness?.summary).toContain('continue through the child tasks')
     expect(childTasks.map(candidate => candidate.title)).toEqual([
-      'Define the cited contracts for Define fixture, expected-record, prototype-run, and evaluation schemas.',
+      'Define fixture, expected-record, prototype-run, and evaluation contracts',
       'Shape fixture and expected-record ground truth',
       'Capture prototype run and evaluation records',
     ])
