@@ -293,7 +293,7 @@ test('required migration blocks thread work until it is applied', async ({ page 
     await expect(page.getByText('Migration complete.')).toBeVisible()
     await page.getByRole('dialog', { name: 'Migrate project' }).getByRole('button', { name: 'Close' }).last().click()
   }
-  await page.getByRole('complementary', { name: 'Thread list' }).getByRole('button', { name: /Block menu \/ block side menu/ }).click()
+  await page.getByRole('complementary', { name: 'Thread list' }).getByRole('button', { name: /Unit tests: use-collections/ }).click()
   const composer = page.getByRole('region', { name: 'Selected thread' }).getByRole('textbox')
   if (await composer.count() > 0) {
     await expect(composer).toBeVisible()
@@ -502,6 +502,39 @@ test('Narrative Harness overview and map show the documented current release sco
   await expect(projectMap.getByText('Stage 1: Fixture And Evaluation Harness contains 6 assigned work items and 12 later.')).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Source trail' })).toBeVisible()
   await expect(projectMap.getByText('implementation-roadmap.md').first()).toBeVisible()
+})
+
+test('Looma + Knit map shows V1 hardening as current and Looma convergence as later', async ({ page }) => {
+  await expectProjectOrientationSpineAgreement(page, {
+    projectId: 'looma-knit',
+    requireInferredPurpose: true,
+  })
+
+  const response = await page.request.get('/api/project?projectId=looma-knit')
+  expect(response.ok()).toBe(true)
+  const detail = await response.json()
+
+  expect(detail.orientationSpine?.summary?.selectedReleaseLabel).toBe('Stage 1: V1 Release Hardening')
+  expect(detail.orientationSpine?.summary?.includedWorkCount).toBe(5)
+  expect(detail.orientationSpine?.summary?.deferredWorkCount).toBe(8)
+
+  await page.goto('/projects/looma-knit/overview')
+  await expect(page.getByRole('region', { name: 'Project overview' })).toBeVisible()
+  await expect(page.getByText('Stage 1: V1 Release Hardening').first()).toBeVisible()
+  await expect(page.getByText('5 work items in view')).toBeVisible()
+  await expect(page.getByRole('button', { name: '8 Deferred', exact: true })).toBeVisible()
+
+  await page.goto('/projects/looma-knit/map')
+  await expect(page.getByRole('heading', { name: 'Project map' })).toBeVisible()
+  const projectMap = page.locator('.project-map')
+  await expect(projectMap.getByText('Stage 1: V1 Release Hardening').first()).toBeVisible()
+  await expect(projectMap.getByText('Unit tests: use-collections, use-presence, subdomain utils').first()).toBeVisible()
+  await expect(projectMap.getByText('E2E tests: login -> create page -> edit -> search flow').first()).toBeVisible()
+  await expect(projectMap.getByText('Stage 1: V1 Release Hardening contains 5 assigned work items and 8 later.')).toBeVisible()
+  await expect(projectMap.getByText('Looma Primitive Convergence').first()).toBeVisible()
+  await expect(projectMap.getByText('Looma Editor Integration').first()).toBeVisible()
+  await expect(projectMap.getByText('release-plan.md').first()).toBeVisible()
+  await expect(projectMap.getByText('PROJECT_STATE.md').first()).toBeVisible()
 })
 
 test('project shell uses stopped-project language consistently across flow surfaces', async ({ page }) => {

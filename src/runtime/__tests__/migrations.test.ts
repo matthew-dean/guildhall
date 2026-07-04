@@ -450,6 +450,71 @@ describe('applyProjectMigrations', () => {
       .resolves.toContain('Readable completed task')
   })
 
+  it('restores evacuated release containers even when task records already exist', async () => {
+    const systemTasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    await fs.mkdir(path.dirname(systemTasksPath), { recursive: true })
+    await fs.writeFile(systemTasksPath, JSON.stringify({
+      version: 1,
+      tasks: [
+        {
+          id: 'task-knit-unit-tests',
+          title: 'Unit tests: use-collections, use-presence, subdomain utils',
+          status: 'spec_review',
+          releaseIds: ['stage-1-v1-release-hardening'],
+        },
+      ],
+    }, null, 2), 'utf8')
+    const evacuatedTasksPath = path.join(getProjectLocalHistoryDir(projectRoot), 'project-state-evacuation', 'TASKS.json')
+    await fs.mkdir(path.dirname(evacuatedTasksPath), { recursive: true })
+    await fs.writeFile(evacuatedTasksPath, JSON.stringify({
+      version: 1,
+      selectedReleaseId: 'stage-1-v1-release-hardening',
+      releases: [{
+        id: 'stage-1-v1-release-hardening',
+        label: 'Stage 1: V1 Release Hardening',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-knit-unit-tests'],
+        deferredNodeIds: ['work:task-looma-editor-integration'],
+      }],
+      tasks: [
+        {
+          id: 'task-knit-unit-tests',
+          title: 'Unit tests: use-collections, use-presence, subdomain utils',
+          status: 'spec_review',
+          releaseIds: ['stage-1-v1-release-hardening'],
+        },
+      ],
+    }, null, 2), 'utf8')
+
+    const before = await getProjectMigrationStatus({ projectRoot })
+    expect(before.blocked.some(item => item.id === '0.10.0/restore-evacuated-task-state')).toBe(true)
+
+    const result = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.10.0/restore-evacuated-task-state'],
+    })
+
+    expect(result.applied.some(item => item.id === '0.10.0/restore-evacuated-task-state')).toBe(true)
+    const restored = JSON.parse(await fs.readFile(systemTasksPath, 'utf8')) as {
+      selectedReleaseId?: string
+      releases?: Array<{ id: string; label: string; deferredNodeIds?: string[] }>
+      tasks: Array<{ id: string }>
+    }
+    expect(restored.selectedReleaseId).toBe('stage-1-v1-release-hardening')
+    expect(restored.releases).toEqual([
+      expect.objectContaining({
+        id: 'stage-1-v1-release-hardening',
+        label: 'Stage 1: V1 Release Hardening',
+        deferredNodeIds: ['work:task-looma-editor-integration'],
+      }),
+    ])
+    expect(restored.tasks).toEqual([
+      expect.objectContaining({ id: 'task-knit-unit-tests' }),
+    ])
+  })
+
   it('rewrites stale thin repo state into only the current-shape manifest', async () => {
     await fs.writeFile(path.join(projectRoot, 'guildhall.yaml'), [
       'name: Migration Test',

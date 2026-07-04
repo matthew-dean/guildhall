@@ -12,6 +12,50 @@ This is the active browser test plan for the Guildhall project surface. Keep it
 updated while auditing the active test project so another agent can resume
 without guessing.
 
+2026-07-04T04:12:35Z - Proved Looma + Knit release truth is restored and visible
+in the project map instead of only existing in recovered task data.
+
+- Work id: `codex:looma-knit-release-map-visible-proof-2026-07-04`.
+- User job: a project owner should be able to open Looma + Knit and understand
+  the current bounded scope, what is included now, what is deferred, and which
+  source docs support that shape without relying on Codex repo access or hidden
+  scheduling data.
+- Failure reproduced:
+  - The fixture could recover Looma + Knit task records, but the evacuated
+    `TASKS.json` release container metadata was dropped when the system queue
+    already had matching task ids.
+  - The map could show current task counts while `selectedReleaseLabel` stayed
+    `null`, and later work was reduced to a count without named deferred Looma
+    stages.
+- Fix:
+  - `restoreEvacuatedTaskState()` now restores selected release metadata and
+    release containers even when task records already exist.
+  - The Looma + Knit rendered fixture now seeds `Stage 1: V1 Release Hardening`
+    from real planning docs, with five current V1 hardening tasks and eight
+    later Looma/Knit tasks.
+  - Project Map now renders deferred work from the selected release boundary via
+    existing `Card`, `CardList`, and `CardListItem` primitives, so the UI shows
+    named later work such as `Looma Primitive Convergence` and
+    `Looma Editor Integration`.
+- Visible proof:
+  - `/projects/looma-knit/overview` shows `Stage 1: V1 Release Hardening`,
+    `5 work items in view`, and `8 Deferred`.
+  - `/projects/looma-knit/map` shows `Release scope`, `Stage 1: V1 Release
+    Hardening`, the current tasks `Unit tests: use-collections, use-presence,
+    subdomain utils` and `E2E tests: login -> create page -> edit -> search
+    flow`, source docs `release-plan.md` and `PROJECT_STATE.md`, and the later
+    work names `Looma Primitive Convergence` and `Looma Editor Integration`.
+- Verification:
+  - `/opt/homebrew/bin/pnpm vitest run src/runtime/__tests__/migrations.test.ts
+    src/runtime/__tests__/project-orientation-spine.test.ts
+    src/runtime/__tests__/serve-settings.test.ts` passed `136` tests.
+  - `/opt/homebrew/bin/pnpm exec playwright test
+    tests/rendered-ui/project-flow.spec.ts` passed `35` tests.
+  - `/opt/homebrew/bin/pnpm build` passed.
+  - `/opt/homebrew/bin/pnpm lint:contracts` passed.
+
+source: codex:looma-knit-release-map-visible-proof-2026-07-04
+
 2026-07-04T01:45:00Z - Fixed selected-release Start readiness so Guildhall
 cannot say a scoped release is startable while the visible spine says it is
 waiting for spec review.

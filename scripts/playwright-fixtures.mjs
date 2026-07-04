@@ -55,6 +55,7 @@ async function writeProject({
   initialized = true,
   tasks: explicitTasks,
   taskQueue,
+  taskQueueMigrated = true,
   capabilityRequests = [],
   dirtyGuildhallFile = false,
 }) {
@@ -150,7 +151,7 @@ async function writeProject({
   }))
   const persistedTasks = taskQueue ?? tasks
   await writeFile(join(memoryDir, 'TASKS.json'), JSON.stringify(persistedTasks, null, 2), 'utf8')
-  if (taskQueue) {
+  if (taskQueue && taskQueueMigrated) {
     const localHistoryDir = projectLocalHistoryDir(projectPath)
     const managedStateDir = join(localHistoryDir, 'project-state')
     await mkdir(managedStateDir, { recursive: true })
@@ -393,6 +394,57 @@ function narrativeHarnessReleaseQueue() {
   }
 }
 
+function loomaKnitReleaseQueue() {
+  const projectPath = join(projectsRoot, 'looma-knit')
+  const releaseId = 'stage-1-v1-release-hardening'
+  const current = [
+    ['task-knit-unit-tests', 'Unit tests: use-collections, use-presence, subdomain utils', 'spec_review'],
+    ['task-knit-e2e-smoke', 'E2E tests: login -> create page -> edit -> search flow', 'spec_review'],
+    ['task-knit-db-types', 'TypeScript: generate proper types from Supabase (pnpm db:types)', 'ready'],
+    ['task-knit-mobile-sanity', 'Mobile: test on real device (Safari iOS, Chrome Android)', 'spec_review'],
+    ['task-knit-invite-flow', 'Proper invite flow (Supabase Auth invite by email)', 'spec_review'],
+  ].map(([id, title, status]) => fixtureTask(projectPath, {
+    id,
+    title,
+    status,
+    domain: 'knit',
+    releaseIds: [releaseId],
+    references: ['knit/docs/release-plan.md', 'knit/PROJECT_STATE.md'],
+  }))
+  const later = [
+    ['task-knit-stage-2-looma-primitive-convergence', 'Looma Primitive Convergence', 'knit/docs/release-plan.md'],
+    ['task-knit-stage-3-looma-editor-integration', 'Looma Editor Integration', 'knit/docs/release-plan.md'],
+    ['task-knit-stage-4-launch-readiness', 'Launch Readiness And V2 Cut Line', 'knit/docs/release-plan.md'],
+    ['task-looma-listbox', 'Listbox', 'looma/docs/component-roadmap.md'],
+    ['task-looma-combobox', 'Combobox after select/listbox baseline is stable', 'looma/docs/component-roadmap.md'],
+    ['task-looma-block-menu', 'EditorBlockMenu / block side menu', 'looma/docs/component-roadmap.md'],
+    ['task-looma-floating-toolbar', 'EditorFloatingToolbar', 'looma/docs/component-roadmap.md'],
+    ['task-looma-link-editor', 'EditorLinkEditor / link popover', 'looma/docs/component-roadmap.md'],
+  ].map(([id, title, reference]) => fixtureTask(projectPath, {
+    id,
+    title,
+    status: 'shelved',
+    domain: id.startsWith('task-looma') ? 'looma' : 'knit',
+    spec: '',
+    references: [reference],
+  }))
+
+  return {
+    version: 1,
+    selectedReleaseId: releaseId,
+    releases: [{
+      id: releaseId,
+      label: 'Stage 1: V1 Release Hardening',
+      kind: 'release',
+      state: 'active',
+      source: 'release_plan',
+      nodeIds: current.map(task => `work:${task.id}`),
+      deferredNodeIds: later.map(task => `work:${task.id}`),
+    }],
+    tasks: [...current, ...later],
+  }
+}
+
 function projectRef(id, label, projectPath) {
   return {
     id: `local-project:${id}`,
@@ -544,6 +596,8 @@ const projects = [
     name: 'Looma + Knit',
     statuses: ['spec_review', 'exploring', 'in_progress', 'review', 'gate_check', 'done', 'done', 'shelved'],
     withQuestion: true,
+    taskQueue: loomaKnitReleaseQueue(),
+    taskQueueMigrated: false,
   },
   {
     id: 'font-something',

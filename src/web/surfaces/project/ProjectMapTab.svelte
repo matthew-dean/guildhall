@@ -33,6 +33,13 @@
       : selectedTaskScope?.nodeIds ?? []
     return new Set(ids)
   })
+  const selectedDeferredNodeIds = $derived.by(() => new Set(selectedRelease?.deferredNodeIds ?? selectedTaskScope?.deferredNodeIds ?? []))
+  const selectedDeferredNodes = $derived.by(() => {
+    if (!spine || selectedDeferredNodeIds.size === 0) return []
+    return [...selectedDeferredNodeIds]
+      .map(id => spine.nodes?.[id])
+      .filter((node): node is ProjectOrientationNode => Boolean(node))
+  })
   const scopedLanes = $derived.by(() => {
     if (selectedScopeNodeIds.size === 0) return lanes
     return lanes
@@ -64,6 +71,7 @@
   const documentedLaterCount = $derived.by(() =>
     allSkeletonRoots.reduce((sum, root) => sum + deferredSupportingChildren(root).length, 0),
   )
+  const deferredWorkCount = $derived(spine?.summary?.deferredWorkCount ?? spine?.summary?.deferredCount ?? selectedDeferredNodes.length)
   const documentedCurrentCount = $derived.by(() =>
     documentedCapabilityCount - documentedLaterCount,
   )
@@ -327,7 +335,7 @@
       <div class="scope-stack">
         <Chip label={taskScopeLabel} tone={sourceIsInferred(selectedScopeSource) ? 'warn' : 'accent'} />
         <strong>{countLabel(spine?.summary?.includedWorkCount ?? spine?.summary?.includedCount, 'assigned work item')}</strong>
-        <span>{countLabel(documentedCapabilityCount, 'documented capability', 'documented capabilities')} · {countLabel(documentedLaterCount, 'later capability', 'later capabilities')} · {countLabel(sourceGapCount, 'gap')}</span>
+        <span>{countLabel(deferredWorkCount, 'later work item')} · {countLabel(documentedCapabilityCount, 'documented capability', 'documented capabilities')} · {countLabel(sourceGapCount, 'gap')}</span>
       </div>
     </Card>
     <Card title="Proof mode" titleTag="h2" padding="compact" density="dense" className="map-boundary-card">
@@ -361,8 +369,8 @@
         <strong>{progress?.active ?? 0}</strong>
         <span>Active</span>
       </UtilityPanel>
-      <UtilityPanel className="stat" tone={documentedLaterCount ? 'neutral' : 'ok'}>
-        <strong>{documentedLaterCount}</strong>
+      <UtilityPanel className="stat" tone={deferredWorkCount ? 'neutral' : 'ok'}>
+        <strong>{deferredWorkCount}</strong>
         <span>Later</span>
       </UtilityPanel>
       <UtilityPanel className="stat" tone={proofGapCount ? 'warn' : 'ok'}>
@@ -434,6 +442,41 @@
         </CardList>
         {/if}
       </Card>
+
+      {#if selectedDeferredNodes.length > 0}
+        <Card title="Later in this scope" titleTag="h2" padding="compact" density="dense" className="map-deferred-card">
+          <div class="lane-meta">
+            <span>{countLabel(deferredWorkCount, 'work item')} outside the current run boundary.</span>
+          </div>
+          <CardList className="lane-list">
+            {#each selectedDeferredNodes.slice(0, 8) as node (node.id ?? node.title)}
+              <CardListItem
+                as={childHref(node) ? 'button' : 'div'}
+                interactive={Boolean(childHref(node))}
+                className="child-row"
+                tone="neutral"
+                dense
+                ariaLabel={childHref(node) ? `${node.title ?? 'Untitled work'} Later` : undefined}
+                onclick={() => {
+                  const href = childHref(node)
+                  if (href) go(href)
+                }}
+              >
+                <span>
+                  {node.title ?? 'Untitled work'}
+                  {#if nodeSourceSummary(node)}
+                    <small>{nodeSourceSummary(node)}</small>
+                  {/if}
+                </span>
+                <Chip label="Later" tone="neutral" />
+              </CardListItem>
+            {/each}
+          </CardList>
+          {#if deferredWorkCount > selectedDeferredNodes.length || selectedDeferredNodes.length > 8}
+            <p class="overflow-summary">{countLabel(Math.max(deferredWorkCount - Math.min(selectedDeferredNodes.length, 8), selectedDeferredNodes.length - 8), 'additional work item')} summarized in the release counts above.</p>
+          {/if}
+        </Card>
+      {/if}
 
       <Card title="Documented skeleton" titleTag="h2" padding="compact" density="dense" className="map-structure-card">
         <div class="lane-meta">
