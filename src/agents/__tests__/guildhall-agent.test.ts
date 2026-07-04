@@ -460,6 +460,7 @@ describe('agent factories', () => {
     expect(workerPrompt).toContain('Proof path updates')
     expect(workerPrompt).toContain('separate automated proof from manual/provider proof')
     expect(workerPrompt).toContain('Reviewer feedback cannot invent a proof command')
+    expect(workerPrompt).toContain('delegates back to')
     expect(reviewerPrompt).toContain('task-scoped proof path is missing')
     expect(reviewerPrompt).toContain('manual/provider proof')
     expect(reviewerPrompt).toContain('Do not invent a proof command')

@@ -84,6 +84,19 @@ function normalizeCommand(command: string): string {
   return command.trim().replace(/\s+/g, ' ')
 }
 
+function isSelfReferentialGuildhallTaskCommand(command: string): boolean {
+  const normalized = normalizeCommand(command)
+  return /\b(?:npx\s+)?guildhall\s+run\b/i.test(normalized) && /\s--task(?:=|\s)/i.test(normalized)
+}
+
+function isValidPackageScriptProofCommand(
+  parsed: { scriptBodies: Record<string, string> } | null | undefined,
+  script: string,
+): boolean {
+  const body = parsed?.scriptBodies[script]?.trim() ?? ''
+  return body.length === 0 || !isSelfReferentialGuildhallTaskCommand(body)
+}
+
 function isWithin(parent: string, child: string): boolean {
   const normalizedParent = path.resolve(parent)
   const normalizedChild = path.resolve(child)
@@ -664,7 +677,7 @@ function validateOrNormalizePnpmCommand(command: string, projectPath: string): s
     const [, relDir, script, rest = ''] = dirCommand
     const targetDir = path.resolve(projectPath, relDir!)
     const parsed = readPackageScripts(targetDir)
-    if (script && parsed?.scripts.has(script)) {
+    if (script && parsed?.scripts.has(script) && isValidPackageScriptProofCommand(parsed, script)) {
       const pkg: WorkspacePackage | null =
         typeof parsed.name === 'string'
           ? {
@@ -695,13 +708,15 @@ function validateOrNormalizePnpmCommand(command: string, projectPath: string): s
     const selectorMatches = packages.find(
       (pkg) => pkg.name === selector || path.basename(pkg.relativeDir) === selector,
     )
-    if (selectorMatches?.scripts.has(script)) {
+    if (selectorMatches?.scripts.has(script) && isValidPackageScriptProofCommand(selectorMatches, script)) {
       const rewritten = maybeRewritePnpmVitestCommand(selectorMatches, script, rest)
       if (rewritten) return rewritten
       return reordered
     }
 
-    const scriptOwners = script ? packages.filter((pkg) => pkg.scripts.has(script)) : []
+    const scriptOwners = script
+      ? packages.filter((pkg) => pkg.scripts.has(script) && isValidPackageScriptProofCommand(pkg, script))
+      : []
     if (scriptOwners.length === 1) {
       const owner = scriptOwners[0]!
       const rewritten = maybeRewritePnpmVitestCommand(owner, script!, rest)
@@ -729,7 +744,7 @@ function validateOrNormalizePnpmCommand(command: string, projectPath: string): s
   const rootScriptCommand = /^pnpm\s+([a-z0-9:_-]+)(.*)$/i.exec(normalized)
   if (rootScriptCommand) {
     const [, script, rest = ''] = rootScriptCommand
-    if (script && rootScripts.has(script)) {
+    if (script && rootScripts.has(script) && isValidPackageScriptProofCommand(rootPackage, script)) {
       const pkg: WorkspacePackage | null =
         typeof rootPackage?.name === 'string'
           ? {
@@ -744,7 +759,9 @@ function validateOrNormalizePnpmCommand(command: string, projectPath: string): s
       if (rewritten) return rewritten
       return normalizeCommand(`pnpm ${script}${rest}`)
     }
-    const scriptOwners = script ? packages.filter((pkg) => pkg.scripts.has(script)) : []
+    const scriptOwners = script
+      ? packages.filter((pkg) => pkg.scripts.has(script) && isValidPackageScriptProofCommand(pkg, script))
+      : []
     if (scriptOwners.length === 1) {
       const owner = scriptOwners[0]!
       const rewritten = maybeRewritePnpmVitestCommand(owner, script!, rest)

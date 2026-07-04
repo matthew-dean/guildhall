@@ -435,6 +435,35 @@ describe('resolveEffectiveTaskSuccessGates', () => {
     ])
   })
 
+  it('rejects self-referential Guildhall task scripts as automated proof commands', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, 'package.json'),
+      JSON.stringify({
+        scripts: {
+          proof: 'npx guildhall run --task=task-import-9s8tkc-split-define-fixture',
+        },
+      }),
+      'utf8',
+    )
+
+    const result = resolveEffectiveTaskVerificationCommands({
+      task: {
+        projectPath: tmpDir,
+        acceptanceCriteria: [
+          {
+            id: 'ac-1',
+            description: 'local proof command runs',
+            verifiedBy: 'automated',
+            command: 'pnpm proof',
+          },
+        ],
+      } as any,
+      workspaceProjectPath: tmpDir,
+    })
+
+    expect(result).toBeUndefined()
+  })
+
   it('rewrites pnpm test -- <file> vitest commands into direct single-file runs', async () => {
     const webDir = path.join(tmpDir, 'web')
     await fs.mkdir(path.join(webDir, 'tests/unit/shared'), { recursive: true })

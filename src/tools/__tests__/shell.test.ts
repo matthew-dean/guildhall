@@ -575,6 +575,30 @@ describe('shellTool — engine-tool interface', () => {
     })
   })
 
+  it('blocks package proof scripts that delegate back to Guildhall task orchestration', async () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'guildhall-shell-self-proof-'))
+    fs.writeFileSync(
+      path.join(cwd, 'package.json'),
+      JSON.stringify({
+        scripts: {
+          proof: 'npx guildhall run --task=task-import-9s8tkc-split-define-fixture',
+        },
+      }),
+    )
+
+    const result = await shellTool.execute(
+      { command: 'pnpm proof', cwd, timeoutMs: 5000 },
+      { cwd, metadata: { current_task_project_path: cwd } },
+    )
+
+    expect(result.is_error).toBe(true)
+    expect(result.output).toContain('delegates back to Guildhall orchestration')
+    expect(result.metadata).toMatchObject({
+      requestedCommand: 'pnpm proof',
+      blockedSelfReferentialGuildhallTaskProof: true,
+    })
+  })
+
   it('allows focused package test commands as supplemental verification', async () => {
     const cwd = makeScopedWorkspaceScriptPackage()
     const result = await shellTool.execute(

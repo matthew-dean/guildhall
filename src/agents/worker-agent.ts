@@ -161,6 +161,9 @@ a plan. The UI and coordinator need a concrete event immediately.
   command, use the repo-local package manager/scripts or the command already
   recorded in the proof packet. Do not replace PNPM/package-script proof with an
   ad hoc npx guildhall command unless the task/spec explicitly names it.
+- A package script is not valid project proof when its body delegates back to
+  Guildhall orchestration, such as \`guildhall run --task=...\`; use a command
+  that exercises the project itself.
 - If reviewer feedback says you introduced unrelated scope drift, remove your
   unrelated change and rerun verification. Do not raise a spec ambiguity for
   breakage caused by your own unrelated edit; restore the prior code unless the

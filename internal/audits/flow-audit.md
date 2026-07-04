@@ -12,6 +12,44 @@ This is the active browser test plan for the Guildhall project surface. Keep it
 updated while auditing the active test project so another agent can resume
 without guessing.
 
+2026-07-04T23:00:00Z - Blocked self-referential Guildhall task proof scripts.
+
+- Work id: `codex:self-referential-proof-script-guard-2026-07-04`.
+- User job: while driving Narrative Harness, Guildhall should not treat a stale
+  package `proof` script that calls `guildhall run --task=...` as evidence that
+  the project task has been verified. That script proves orchestration loops,
+  not the Narrative Harness fixture/schema work.
+- Fix:
+  - Task-gate command normalization now rejects package scripts whose body
+    delegates back to `guildhall run --task=...`, so automated acceptance
+    criteria cannot turn that stale script into authoritative task proof.
+  - The shell tool now blocks direct execution of such package scripts during
+    active task verification, even if a worker discovers the script by reading
+    `package.json`.
+  - Worker instructions now state that package scripts are invalid project proof
+    when they simply delegate back to Guildhall orchestration.
+- Contract Touch Decision:
+  - Work id: `codex:self-referential-proof-script-guard-2026-07-04`.
+  - Touched contracts: task proof-command normalization; shell verification
+    authorization; worker proof-path guidance.
+  - Contracts considered but not touched: persisted task schema, package script
+    storage, review verdict schema, release schema.
+  - Existing data impact: no migration. Existing stale package scripts remain in
+    project worktrees or repos, but Guildhall refuses to use them as proof.
+  - Required follow-up: reinstall this guard, resume Narrative Harness Stage 1,
+    and confirm the fixture task moves to project-local verification instead of
+    running `guildhall run --task=...`.
+  - Proof required: focused task-gate regression, shell-tool regression, worker
+    prompt assertion, build, installed-app readback.
+  - Proof provided: `./node_modules/.bin/vitest run src/runtime/__tests__/task-gates.test.ts src/tools/__tests__/shell.test.ts src/agents/__tests__/guildhall-agent.test.ts`
+    passed `149` tests; `CI=true pnpm lint:contracts` passed; direct
+    UI/runtime build passed; `node scripts/dev-install.mjs`, `guildhall stop`,
+    and `guildhall start` refreshed the installed app; `/api/stale-server`
+    returned `stale:false` for PID `21546` from
+    `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+  - Apply/revert behavior: revert the command predicate/filter and shell guard
+    to allow package `proof` scripts to be used as before.
+
 2026-07-04T22:02:00Z - Routed task execution through child repos and filtered
 invented proof-command feedback.
 
