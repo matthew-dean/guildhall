@@ -328,6 +328,41 @@ describe('project re-intake apply', () => {
         verifiedBy: 'review',
         met: false,
       }],
+      definitionOfDone: {
+        items: ['Define `coherence-reviewer-mvp`, `decision-trace-pipeline`, and `done`.'],
+        evidenceRequired: ['Old proof requirement.'],
+      },
+      workUnitAnalysis: {
+        summary: 'Old split model',
+        units: [{
+          id: 'old-contracts',
+          title: 'Define old historical contract ids',
+          deliverable: 'Code defines `coherence-reviewer-mvp` and `decision-trace-pipeline`.',
+        }],
+      },
+      taskReadiness: {
+        recommendation: 'needs_one_question',
+        summary: 'Old readiness',
+        definitionOfDone: {
+          items: ['`coherence-reviewer-mvp` is done.'],
+          evidenceRequired: [],
+        },
+      },
+      decomposition: {
+        action: 'ask_one_question',
+        reasons: [{ code: 'old', detail: 'Old split required.' }],
+      },
+      hierarchy: {
+        childIds: ['stale-child'],
+        order: 0,
+        relation: 'contains',
+      },
+      archivedEvidence: {
+        retention: 'archive',
+        archivedAt: now,
+        reason: 'Old archive marker.',
+        source: 'project-reintake',
+      },
     })
     const memoryDir = await makeState([legacyTask])
     const draft = planProjectReintake({
@@ -356,6 +391,12 @@ describe('project re-intake apply', () => {
     expect(refreshed?.spec).not.toContain('`ImportManifest`')
     expect(refreshed?.spec).not.toContain('`SchemaVersion`')
     expect(refreshed?.spec).not.toMatch(/coherence-reviewer-mvp|decision-trace-pipeline|author-voice-loop-mvp|context-packet-compaction-core/)
+    expect(JSON.stringify(refreshed?.definitionOfDone ?? '')).not.toMatch(/coherence-reviewer-mvp|decision-trace-pipeline|done/)
+    expect(JSON.stringify(refreshed?.workUnitAnalysis ?? '')).not.toMatch(/coherence-reviewer-mvp|decision-trace-pipeline|done/)
+    expect(JSON.stringify(refreshed?.taskReadiness ?? '')).not.toMatch(/coherence-reviewer-mvp|decision-trace-pipeline|done/)
+    expect(refreshed?.decomposition).toBeUndefined()
+    expect(refreshed?.hierarchy).toBeUndefined()
+    expect(refreshed?.archivedEvidence).toBeUndefined()
     expect(refreshed?.notes.some((note: { content?: string }) => note.content?.includes('Re-intake'))).toBe(true)
   })
 

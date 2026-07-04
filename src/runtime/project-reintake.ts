@@ -285,6 +285,7 @@ function applyChange(tasks: Array<Record<string, unknown>>, change: ReintakeChan
     const existing = tasks.find(task => task.id === change.taskId)
     if (!existing) return
     const notes = Array.isArray(existing.notes) ? existing.notes : []
+    clearStaleReintakeDerivedFields(existing)
     Object.assign(existing, {
       ...change.after,
       id: change.taskId,
@@ -307,6 +308,7 @@ function applyChange(tasks: Array<Record<string, unknown>>, change: ReintakeChan
     if (existing) {
       if (isStartedOrCompletedTask(existing)) return
       const notes = Array.isArray(existing.notes) ? existing.notes : []
+      clearStaleReintakeDerivedFields(existing)
       Object.assign(existing, {
         ...change.task,
         projectPath: typeof existing.projectPath === 'string' ? existing.projectPath : '',
@@ -387,6 +389,25 @@ function applyChange(tasks: Array<Record<string, unknown>>, change: ReintakeChan
     for (const mergedTaskId of change.mergedTaskIds) {
       applyChange(tasks, { kind: 'archive', taskId: mergedTaskId, reason: `Superseded by ${change.survivorTaskId}. ${change.reason}` }, now)
     }
+  }
+}
+
+function clearStaleReintakeDerivedFields(task: Record<string, unknown>): void {
+  for (const key of [
+    'archivedEvidence',
+    'blockerPlans',
+    'contextBudget',
+    'decomposition',
+    'definitionOfDone',
+    'deliverySteps',
+    'hierarchy',
+    'productBrief',
+    'requestIntake',
+    'sizePlan',
+    'taskReadiness',
+    'workUnitAnalysis',
+  ]) {
+    delete task[key]
   }
 }
 

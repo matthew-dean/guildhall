@@ -80,6 +80,63 @@ task specs do not absorb adjacent roadmap contracts.
 
 source: codex:narrative-harness-contract-family-visible-proof-2026-07-04
 
+2026-07-04T06:55:00Z - Cleared stale derived task-shaping fields during
+Narrative Harness re-intake replacement.
+
+- Work id: `codex:narrative-harness-reintake-derived-field-refresh-2026-07-04`.
+- User job: when Guildhall replaces an imported task from current project
+  evidence, every owner-visible planning field must agree with that replacement.
+  A clean `spec` is not enough if Definition of Done, readiness, hierarchy, or
+  work-unit fields still describe archived children or historical task IDs.
+- Failure reproduced:
+  - Live `task-import-9s8tkc` had a clean current spec, but retained
+    `definitionOfDone`, `taskReadiness`, `workUnitAnalysis`, `decomposition`,
+    `hierarchy`, and `archivedEvidence` from the stale pre-reintake task.
+  - Those stale fields still named historical IDs such as
+    `coherence-reviewer-mvp`, `decision-trace-pipeline`, and `done`, so
+    Guildhall could still display false work truth from a different field.
+- Fix:
+  - Re-intake replacement/reframe now clears generated shaping/readiness fields
+    before applying the current source-truth task draft.
+  - Durable operational fields such as notes, review arrays, counters, and
+    runtime/workspace metadata are preserved separately by the existing apply
+    path.
+- Contract Touch Decision:
+  - Work id:
+    `codex:narrative-harness-reintake-derived-field-refresh-2026-07-04`.
+  - Touched contracts: re-intake apply semantics for regenerated task records.
+  - Contracts considered but not touched: persisted task schema shape,
+    orientation-spine API shape, task-detail API shape, and release schema.
+  - Required follow-up: continue into owner-visible brief/spec shaping for the
+    selected Stage 1 import drafts.
+  - Proof required/provided: focused failing test for stale derived fields, then
+    full re-intake/importer suites.
+  - Apply/revert behavior: reverting this can preserve stale generated fields
+    after a source-truth replacement and make visible task detail contradict the
+    regenerated spec.
+- Verification:
+  - `./node_modules/.bin/vitest run
+    src/runtime/__tests__/project-reintake-apply.test.ts
+    src/runtime/__tests__/workspace-importer.test.ts` passed `83` tests.
+  - `/opt/homebrew/bin/pnpm build`, `/opt/homebrew/bin/pnpm lint:contracts`,
+    and `git diff --check` passed.
+  - Installed-app proof after `/opt/homebrew/bin/pnpm dev:install`,
+    `guildhall stop`, and `guildhall start`: `/api/stale-server` returned
+    `stale:false`.
+  - Live Narrative Harness proof after re-intake rerun/apply:
+    `POST /api/project/reintake/apply?projectId=narrative-harness` returned
+    `{ "success": true, "appliedGroups": 4 }`.
+  - Live `/api/project/task/task-import-9s8tkc?projectId=narrative-harness`
+    and `/api/project?projectId=narrative-harness` both showed no
+    `definitionOfDone`, `taskReadiness`, `workUnitAnalysis`, `decomposition`,
+    `hierarchy`, or `archivedEvidence` on the refreshed task; neither the spec
+    nor those derived fields contained stale historical IDs.
+  - The same live APIs still showed selected release `Stage 1: Fixture And
+    Evaluation Harness`, `7` included work items, `8` deferred work items, and
+    correct positive contracts `FixtureManifest` and `PrototypeRun`.
+
+source: codex:narrative-harness-reintake-derived-field-refresh-2026-07-04
+
 2026-07-04T06:30:00Z - Proved Narrative Harness source truth is visible through
 Guildhall surfaces, not just recoverable by Codex.
 
