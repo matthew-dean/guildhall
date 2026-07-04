@@ -311,7 +311,7 @@ function fixtureTask(projectPath, input) {
     status: input.status,
     priority: input.priority ?? 'normal',
     spec: input.spec ?? 'Fixture spec for rendered UI coverage.',
-    acceptanceCriteria: [],
+    acceptanceCriteria: input.acceptanceCriteria ?? [],
     outOfScope: [],
     dependsOn: input.dependsOn ?? [],
     notes: [],
@@ -323,6 +323,7 @@ function fixtureTask(projectPath, input) {
     escalations: [],
     agentIssues: [],
     origination: 'human',
+    ...(input.assignedTo ? { assignedTo: input.assignedTo } : {}),
     ...(input.references ? { references: input.references } : {}),
     ...(input.releaseIds ? { releaseIds: input.releaseIds } : {}),
     ...(input.hierarchy ? { hierarchy: input.hierarchy } : {}),
@@ -333,12 +334,12 @@ function narrativeHarnessReleaseQueue() {
   const projectPath = join(projectsRoot, 'narrative-harness')
   const releaseId = 'stage-1-fixture-and-evaluation-harness'
   const current = [
-    ['task-import-9s8tkc', 'Define fixture, expected-record, prototype-run, and evaluation schemas.', 'spec_review'],
-    ['task-import-dh34s5', 'Add the first tiny fiction fixture and human-authored expected records.', 'spec_review'],
+    ['task-import-9s8tkc', 'Define fixture, expected-record, prototype-run, and evaluation schemas.', 'ready'],
+    ['task-import-dh34s5', 'Add the first tiny fiction fixture and human-authored expected records.', 'ready'],
     ['task-import-14yqvl7', 'Implement a no-UI runner that builds a packet from fixture records.', 'ready'],
-    ['task-import-1isf6n0', 'Add deterministic evaluation output that reports missing, noisy, stale, and useful context.', 'spec_review'],
-    ['task-import-1nfemy6', 'Generate a developer-readable debug report for each run.', 'spec_review'],
-    ['task-import-1v2ehs', 'Use the first run to narrow the MVP story-memory schema.', 'spec_review'],
+    ['task-import-1isf6n0', 'Add deterministic evaluation output that reports missing, noisy, stale, and useful context.', 'ready'],
+    ['task-import-1nfemy6', 'Generate a developer-readable debug report for each run.', 'ready'],
+    ['task-import-1v2ehs', 'Use the first run to narrow the MVP story-memory schema.', 'ready'],
   ].map(([id, title, status]) => fixtureTask(projectPath, {
     id,
     title,
@@ -346,6 +347,10 @@ function narrativeHarnessReleaseQueue() {
     domain: 'harness',
     releaseIds: [releaseId],
     references: ['docs/harness/implementation-roadmap.md'],
+    acceptanceCriteria: ['The scoped headless proof work has a runnable verification path.'],
+    ...(id === 'task-import-9s8tkc'
+      ? { hierarchy: { childIds: ['task-import-9s8tkc-split-shape-fixture-and-expected-record-ground-truth'], relation: 'contains' } }
+      : {}),
   }))
   const laterTitles = [
     'manuscript import or simple editor shell',
@@ -372,9 +377,11 @@ function narrativeHarnessReleaseQueue() {
   const child = fixtureTask(projectPath, {
     id: 'task-import-9s8tkc-split-shape-fixture-and-expected-record-ground-truth',
     title: 'Shape fixture and expected-record ground truth',
-    status: 'exploring',
+    status: 'in_progress',
     domain: 'harness',
-    spec: '',
+    spec: 'Shape the fiction fixture and expected-record ground truth used by the headless proof runner.',
+    acceptanceCriteria: ['Fixture records and expected records exist for the first proof run.'],
+    assignedTo: 'worker-agent',
     hierarchy: { parentId: 'task-import-9s8tkc', relation: 'child' },
   })
 
@@ -1071,6 +1078,27 @@ await writeFile(
       '    tags: []',
       `    registeredAt: '${entry.registeredAt}'`,
     ]),
+    '',
+  ].join('\n'),
+  'utf8',
+)
+await writeFile(
+  join(guildhallHome, 'config.yaml'),
+  [
+    'version: 1',
+    'preferredProvider: anthropic-api',
+    '',
+  ].join('\n'),
+  'utf8',
+)
+await writeFile(
+  join(guildhallHome, 'providers.yaml'),
+  [
+    'version: 1',
+    'providers:',
+    '  anthropic-api:',
+    '    apiKey: sk-rendered-ui-fixture',
+    "    verifiedAt: '2026-05-18T00:00:00.000Z'",
     '',
   ].join('\n'),
   'utf8',

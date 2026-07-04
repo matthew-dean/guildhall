@@ -12893,16 +12893,33 @@ spec-shaped current work is not communicated as owner brief cleanup.
     Stage 1 headline, selected scope, pinned work, and empty release blockers.
 - Browser note:
   - In-app browser automation timed out while hydrating
-    `/projects/narrative-harness/overview`, so this entry does not claim
-    screenshot-level proof. The installed service API evidence above is the
-    shared source consumed by Overview/Map/Release surfaces and proves the
-    corrected communication model, but a follow-up browser geometry pass should
-    still be run once the browser tool is responsive.
+    `/projects/narrative-harness/overview`, so this entry still does not claim
+    in-app-browser screenshot proof.
+  - Rendered UI proof now covers the same communication contract through
+    Playwright: Overview and Map render Stage 1, `6 work items in view`, the
+    API-derived deferred count, `Resume`, `Shape fixture and expected-record
+    ground truth`, the implementation-roadmap source trail, and no stale
+    spec-review or brief-cleanup blocker.
+- Data-model diagnosis:
+  - The hard part was not only stale copy. The model currently lets release
+    scope be reconstructed from `ProjectRelease.nodeIds`,
+    `ProjectRelease.deferredNodeIds`, `Task.releaseIds`, `Task.hierarchy`, task
+    status, and spec/brief readiness in multiple readers. That allowed
+    installed app state, rendered fixture state, and Playwright expectations to
+    diverge while each looked locally plausible.
+  - The retooling target is a canonical runtime projection documented in
+    `internal/plans/2026-07-04-release-scope-projection-retool.md`: one
+    project scope read model should own included/deferred rows, child rollups,
+    runnable/paused/blocked state, release blockers, and Start/Resume
+    messaging, then feed orientation, release readiness, orchestration
+    preflight, fixtures, and UI assertions.
 - Verification:
   - `CI=true /opt/homebrew/bin/pnpm exec vitest run src/runtime/__tests__/serve-settings.test.ts -t "brief cleanup|ready tasks with a spec|selected release|paused_live_work"`
     passed `6` focused tests.
   - `CI=true /opt/homebrew/bin/pnpm exec vitest run src/runtime/__tests__/serve-release-readiness.test.ts`
     passed `17` tests.
+  - `CI=true /opt/homebrew/bin/pnpm exec playwright test tests/rendered-ui/project-flow.spec.ts -g "Narrative Harness overview and map show"`
+    passed `1` rendered UI test.
 
 source: codex:narrative-harness-spec-shaped-readiness-2026-07-04
 

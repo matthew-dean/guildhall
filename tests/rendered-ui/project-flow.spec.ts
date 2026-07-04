@@ -471,26 +471,36 @@ test('Narrative Harness overview and map show the documented current release sco
   const response = await page.request.get('/api/project?projectId=narrative-harness')
   expect(response.ok()).toBe(true)
   const detail = await response.json()
-  const blocker = 'specs are waiting for review before work can start'
+  const summary = detail.orientationSpine?.summary ?? {}
+  const included = summary.includedWorkCount
+  const deferred = summary.deferredWorkCount
+  const pausedTask = 'Shape fixture and expected-record ground truth'
 
-  expect(detail.orientationSpine?.summary?.selectedReleaseLabel).toBe('Stage 1: Fixture And Evaluation Harness')
-  expect(detail.orientationSpine?.summary?.includedWorkCount).toBe(6)
-  expect(detail.orientationSpine?.summary?.deferredWorkCount).toBe(12)
+  expect(summary.selectedReleaseLabel).toBe('Stage 1: Fixture And Evaluation Harness')
+  expect(included).toBe(6)
+  expect(deferred).toBeGreaterThanOrEqual(8)
   expect(detail.startReadiness).toMatchObject({
-    canStart: false,
-    code: 'no_unattended_progress',
-    focusKind: 'spec_review',
-    count: 5,
+    canStart: true,
+    code: 'paused_live_work',
+    focusKind: 'paused_work',
+    count: 1,
   })
-  expect(detail.startReadiness?.message).toContain(blocker)
-  expect(detail.orientationSpine?.summary?.topBlocker).toBe(detail.startReadiness?.message)
+  expect(detail.startReadiness?.message).toContain(pausedTask)
+  expect(detail.actionModel?.runControl).toMatchObject({
+    label: 'Resume',
+  })
+  expect(summary.topBlocker).toBeNull()
+  expect(detail.orientationSpine?.release?.blockers ?? []).toEqual([])
 
   await page.goto('/projects/narrative-harness/overview')
   await expect(page.getByRole('region', { name: 'Project overview' })).toBeVisible()
   await expect(page.getByText('Stage 1: Fixture And Evaluation Harness').first()).toBeVisible()
-  await expect(page.getByText('6 work items in view')).toBeVisible()
-  await expect(page.getByRole('button', { name: '12 Deferred', exact: true })).toBeVisible()
-  await expect(page.getByText(new RegExp(blocker)).first()).toBeVisible()
+  await expect(page.getByText(`${included} work items in view`)).toBeVisible()
+  await expect(page.getByRole('button', { name: `${deferred} Deferred`, exact: true })).toBeVisible()
+  await expect(page.getByText(pausedTask).first()).toBeVisible()
+  await expect(page.getByText('Resume', { exact: true }).first()).toBeVisible()
+  await expect(page.getByText(/specs are waiting for review before work can start/i)).toHaveCount(0)
+  await expect(page.getByText(/needs a clearer brief|need fuller briefs|brief cleanup/i)).toHaveCount(0)
 
   await page.goto('/projects/narrative-harness/map')
   await expect(page.getByRole('heading', { name: 'Project map' })).toBeVisible()
@@ -499,7 +509,9 @@ test('Narrative Harness overview and map show the documented current release sco
   await expect(projectMap.getByText('Stage 1: Fixture And Evaluation Harness').first()).toBeVisible()
   await expect(projectMap.getByText('Define fixture, expected-record, prototype-run, and evaluation schemas.').first()).toBeVisible()
   await expect(projectMap.getByText('Implement a no-UI runner that builds a packet from fixture records.').first()).toBeVisible()
-  await expect(projectMap.getByText('Stage 1: Fixture And Evaluation Harness contains 6 assigned work items and 12 later.')).toBeVisible()
+  await expect(projectMap.getByText(`Stage 1: Fixture And Evaluation Harness contains ${included} assigned work items and ${deferred} later.`)).toBeVisible()
+  await expect(projectMap.getByText(/specs are waiting for review before work can start/i)).toHaveCount(0)
+  await expect(projectMap.getByText(/needs a clearer brief|need fuller briefs|brief cleanup/i)).toHaveCount(0)
   await expect(page.getByRole('heading', { name: 'Source trail' })).toBeVisible()
   await expect(projectMap.getByText('implementation-roadmap.md').first()).toBeVisible()
 })
