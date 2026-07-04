@@ -322,6 +322,7 @@ function fixtureTask(projectPath, input) {
     escalations: [],
     agentIssues: [],
     origination: 'human',
+    ...(input.references ? { references: input.references } : {}),
     ...(input.releaseIds ? { releaseIds: input.releaseIds } : {}),
     ...(input.hierarchy ? { hierarchy: input.hierarchy } : {}),
   }
@@ -329,7 +330,7 @@ function fixtureTask(projectPath, input) {
 
 function narrativeHarnessReleaseQueue() {
   const projectPath = join(projectsRoot, 'narrative-harness')
-  const releaseId = 'stage-0-spec-baseline'
+  const releaseId = 'stage-1-fixture-and-evaluation-harness'
   const current = [
     ['task-import-9s8tkc', 'Define fixture, expected-record, prototype-run, and evaluation schemas.', 'spec_review'],
     ['task-import-dh34s5', 'Add the first tiny fiction fixture and human-authored expected records.', 'spec_review'],
@@ -343,6 +344,7 @@ function narrativeHarnessReleaseQueue() {
     status,
     domain: 'harness',
     releaseIds: [releaseId],
+    references: ['docs/harness/implementation-roadmap.md'],
   }))
   const laterTitles = [
     'manuscript import or simple editor shell',
@@ -364,6 +366,7 @@ function narrativeHarnessReleaseQueue() {
     status: 'shelved',
     domain: 'harness',
     spec: '',
+    references: ['docs/harness/implementation-roadmap.md'],
   }))
   const child = fixtureTask(projectPath, {
     id: 'task-import-9s8tkc-split-shape-fixture-and-expected-record-ground-truth',
@@ -379,7 +382,7 @@ function narrativeHarnessReleaseQueue() {
     selectedReleaseId: releaseId,
     releases: [{
       id: releaseId,
-      label: 'Stage 0: Spec Baseline',
+      label: 'Stage 1: Fixture And Evaluation Harness',
       kind: 'release',
       state: 'active',
       source: 'release_plan',

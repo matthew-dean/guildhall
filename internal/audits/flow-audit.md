@@ -14222,6 +14222,57 @@ Project Map.
 
 source: codex:project-map-selected-scope-rendering-2026-07-04
 
+2026-07-04T03:38:01Z - Corrected Narrative Harness rendered proof to require
+the documented current release/scope, not just any imported release container.
+
+- Work id: `codex:narrative-harness-current-release-visible-proof-2026-07-04`.
+- User job: a project owner should be able to open Narrative Harness Overview or
+  Project Map and understand the current scoped release from Guildhall itself,
+  including what is included now, what is deferred, what concrete tasks are in
+  scope, and which source document backs the claim. Codex-only repo access or
+  API-only truth does not count as success.
+- Finding corrected:
+  - The rendered fixture was selecting `Stage 0: Spec Baseline` even though the
+    real roadmap says `The next milestone is Stage 1: Fixture And Evaluation
+    Harness` and the six current task titles are the Stage 1 starter tasks.
+  - That meant Guildhall could appear to know a release boundary while telling
+    the user the wrong current execution scope.
+- Fix:
+  - The Narrative Harness rendered fixture now uses release id
+    `stage-1-fixture-and-evaluation-harness` and label
+    `Stage 1: Fixture And Evaluation Harness`.
+  - The six current tasks remain assigned to that selected release; the twelve
+    later tasks remain deferred.
+  - Current and deferred fixture tasks now carry
+    `docs/harness/implementation-roadmap.md` references so the Project Map
+    source trail can visibly cite the roadmap instead of relying on hidden
+    fixture knowledge.
+  - The rendered test now checks both `/projects/narrative-harness/overview`
+    and `/projects/narrative-harness/map` for the Stage 1 label, `6 work items
+    in view`, `12 Deferred`, scoped task titles, source-trail heading, and the
+    `implementation-roadmap.md` source label.
+- Proof:
+  - Red: the new rendered assertion first failed because `/api/project` returned
+    selected release `Stage 0: Spec Baseline`.
+  - Green: after correcting fixture state and source refs,
+    `/projects/narrative-harness/overview` and `/projects/narrative-harness/map`
+    visibly communicated `Stage 1: Fixture And Evaluation Harness`, the six
+    current work items, twelve deferred items, and the roadmap source trail.
+  - Full rendered route proof passed:
+    `/opt/homebrew/bin/pnpm exec playwright test tests/rendered-ui/project-flow.spec.ts`
+    passed `34` tests.
+  - Runtime/importer proof passed:
+    `/opt/homebrew/bin/pnpm vitest run src/runtime/__tests__/project-orientation-spine.test.ts src/runtime/__tests__/serve-settings.test.ts src/runtime/workspace-import/__tests__/detect.test.ts src/runtime/workspace-import/__tests__/hypothesis.test.ts`
+    passed `205` tests.
+- Remaining larger goal:
+  - This proves Guildhall can visibly communicate the corrected Narrative Harness
+    current release/scope in the rendered fixture. It does not yet complete the
+    larger goal of repopulating all Narrative Harness tasks from real docs,
+    proving Looma + Knit with the same standard, or executing the true NH MVP to
+    completion.
+
+source: codex:narrative-harness-current-release-visible-proof-2026-07-04
+
 2026-06-15T23:52:00Z - Completed the Project Orientation Spine cross-route
 implementation and installed-app audit.
 

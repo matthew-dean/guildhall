@@ -467,13 +467,13 @@ test('project orientation spine agrees across overview, work, thread, release, a
   })
 })
 
-test('Narrative Harness overview shows selected release review blockers instead of a startable queue', async ({ page }) => {
+test('Narrative Harness overview and map show the documented current release scope', async ({ page }) => {
   const response = await page.request.get('/api/project?projectId=narrative-harness')
   expect(response.ok()).toBe(true)
   const detail = await response.json()
   const blocker = 'specs are waiting for review before work can start'
 
-  expect(detail.orientationSpine?.summary?.selectedReleaseLabel).toBe('Stage 0: Spec Baseline')
+  expect(detail.orientationSpine?.summary?.selectedReleaseLabel).toBe('Stage 1: Fixture And Evaluation Harness')
   expect(detail.orientationSpine?.summary?.includedWorkCount).toBe(6)
   expect(detail.orientationSpine?.summary?.deferredWorkCount).toBe(12)
   expect(detail.startReadiness).toMatchObject({
@@ -487,10 +487,21 @@ test('Narrative Harness overview shows selected release review blockers instead 
 
   await page.goto('/projects/narrative-harness/overview')
   await expect(page.getByRole('region', { name: 'Project overview' })).toBeVisible()
-  await expect(page.getByText('Stage 0: Spec Baseline').first()).toBeVisible()
+  await expect(page.getByText('Stage 1: Fixture And Evaluation Harness').first()).toBeVisible()
   await expect(page.getByText('6 work items in view')).toBeVisible()
   await expect(page.getByRole('button', { name: '12 Deferred', exact: true })).toBeVisible()
   await expect(page.getByText(new RegExp(blocker)).first()).toBeVisible()
+
+  await page.goto('/projects/narrative-harness/map')
+  await expect(page.getByRole('heading', { name: 'Project map' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Release scope' })).toBeVisible()
+  const projectMap = page.locator('.project-map')
+  await expect(projectMap.getByText('Stage 1: Fixture And Evaluation Harness').first()).toBeVisible()
+  await expect(projectMap.getByText('Define fixture, expected-record, prototype-run, and evaluation schemas.').first()).toBeVisible()
+  await expect(projectMap.getByText('Implement a no-UI runner that builds a packet from fixture records.').first()).toBeVisible()
+  await expect(projectMap.getByText('Stage 1: Fixture And Evaluation Harness contains 6 assigned work items and 12 later.')).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Source trail' })).toBeVisible()
+  await expect(projectMap.getByText('implementation-roadmap.md').first()).toBeVisible()
 })
 
 test('project shell uses stopped-project language consistently across flow surfaces', async ({ page }) => {
@@ -597,7 +608,7 @@ test('task drawer direct route renders tabs and closes to the overview backgroun
 
   await expect(page.getByRole('complementary', { name: 'Task drawer' })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Review existing project work' })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Spec' })).toBeVisible()
+  await expect(page.getByRole('complementary', { name: 'Task drawer' }).getByRole('tab', { name: 'Spec' })).toBeVisible()
 
   await page.getByRole('button', { name: 'Close', exact: true }).click()
   await expect(page).toHaveURL(/\/projects\/looma-knit\/overview$/)
