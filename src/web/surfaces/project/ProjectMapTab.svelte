@@ -87,6 +87,11 @@
   const taskScopeLabel = $derived(spine?.summary?.selectedScopeLabel ?? selectedTaskScope?.label ?? spine?.summary?.selectedReleaseLabel ?? selectedRelease?.label ?? 'Current task scope')
   const selectedScopeSource = $derived(selectedRelease?.source ?? selectedTaskScope?.source)
   const workContainerTitle = $derived(selectedRelease ? 'Release scope' : 'Task scope')
+  const scopeRows = $derived(spine?.scopeRows ?? [])
+  const currentScopeRows = $derived(scopeRows.filter(row => row.scope !== 'deferred'))
+  const laterScopeRows = $derived(scopeRows.filter(row => row.scope === 'deferred'))
+  const visibleScopeRows = $derived([...currentScopeRows.slice(0, 8), ...laterScopeRows.slice(0, 4)])
+  const hiddenScopeRowCount = $derived(Math.max(0, scopeRows.length - visibleScopeRows.length))
   const mapGaps = $derived.by(() => {
     return (spine?.gaps ?? []).slice(0, 5).map(gap => ({
       ...gap,
@@ -317,6 +322,35 @@
     return parts.at(-1) ?? value
   }
 
+  function scopeReasonLabel(reason: string | undefined): string {
+    if (reason === 'included') return 'directly assigned'
+    if (reason === 'included_ancestor') return 'inside selected work'
+    if (reason === 'included_prerequisite') return 'needed prerequisite'
+    if (reason === 'deferred') return 'later scope'
+    if (reason === 'no_scope') return 'current by default'
+    return friendlyStatus(reason ?? 'mapped')
+  }
+
+  function scopeRowTone(row: { scope?: string; handoffState?: string; humanBlocking?: boolean; blocksRelease?: boolean }): Tone {
+    if (row.scope === 'deferred') return 'neutral'
+    if (row.humanBlocking || row.blocksRelease || row.handoffState === 'blocked' || row.handoffState === 'brief_cleanup') return 'warn'
+    if (row.handoffState === 'paused' || row.handoffState === 'review') return 'accent'
+    if (row.handoffState === 'done') return 'ok'
+    return 'neutral'
+  }
+
+  function scopeRowSourceSummary(row: { sourceRefs?: string[] }): string {
+    const labels = (row.sourceRefs ?? [])
+      .filter(ref => ref.startsWith('import:'))
+      .map(sourceRefLabel)
+      .filter(Boolean)
+    return labels.length > 0 ? `Source: ${labels.slice(0, 2).join(', ')}` : 'Source: task record'
+  }
+
+  function scopeRowHref(row: { taskId?: string }): string | null {
+    return row.taskId ? currentTaskHref(row.taskId, activeProjectId) : null
+  }
+
   function gapHref(gap: { refs?: string[]; nodeId?: string }): string | null {
     const taskRef = gap.refs?.find(ref => ref.startsWith('task:'))
     const taskId = taskRef?.slice('task:'.length)
@@ -415,6 +449,42 @@
             </CardListItem>
           {/each}
         </CardList>
+      </Card>
+    {/if}
+
+    {#if scopeRows.length > 0}
+      <Card title="Scope ledger" titleTag="h2" padding="compact" density="dense" className="scope-ledger-card">
+        <div class="lane-meta">
+          <span>{countLabel(currentScopeRows.length, 'current work item')} · {countLabel(laterScopeRows.length, 'later work item')}</span>
+        </div>
+        <CardList className="scope-ledger-list">
+          {#each visibleScopeRows as row (`${row.scope}:${row.taskId}`)}
+            <CardListItem
+              as={scopeRowHref(row) ? 'button' : 'div'}
+              interactive={Boolean(scopeRowHref(row))}
+              className="scope-ledger-row"
+              tone={scopeRowTone(row)}
+              dense
+              ariaLabel={scopeRowHref(row) ? `${row.title ?? 'Untitled work'} ${row.scope === 'deferred' ? 'Later' : 'Now'} ${friendlyStatus(row.handoffState ?? row.status ?? 'mapped')}` : undefined}
+              onclick={() => {
+                const href = scopeRowHref(row)
+                if (href) go(href)
+              }}
+            >
+              <div>
+                <div class="scope-ledger-title">
+                  <Chip label={row.scope === 'deferred' ? 'Later' : 'Now'} tone={row.scope === 'deferred' ? 'neutral' : 'accent'} />
+                  <strong>{row.title ?? 'Untitled work'}</strong>
+                </div>
+                <p>{friendlyStatus(row.handoffState ?? row.status ?? 'mapped')} · {scopeReasonLabel(row.eligibilityReason)} · {scopeRowSourceSummary(row)}</p>
+              </div>
+              <Chip label={friendlyStatus(row.handoffState ?? row.status ?? 'mapped')} tone={scopeRowTone(row)} />
+            </CardListItem>
+          {/each}
+        </CardList>
+        {#if hiddenScopeRowCount > 0}
+          <p class="overflow-summary">{countLabel(hiddenScopeRowCount, 'additional scoped row')} summarized in the counts above.</p>
+        {/if}
       </Card>
     {/if}
 
@@ -755,6 +825,42 @@
 
   :global(.release-roadmap-row strong) {
     color: var(--text);
+    overflow-wrap: anywhere;
+  }
+
+  :global(.scope-ledger-list) {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(22rem, 100%), 1fr));
+    gap: var(--s-3);
+  }
+
+  :global(.scope-ledger-row) {
+    min-width: 0;
+  }
+
+  :global(.scope-ledger-row > div:first-child) {
+    display: grid;
+    gap: var(--s-1);
+    min-width: 0;
+  }
+
+  .scope-ledger-title {
+    display: flex;
+    align-items: center;
+    gap: var(--s-2);
+    min-width: 0;
+  }
+
+  .scope-ledger-title strong {
+    color: var(--text);
+    overflow-wrap: anywhere;
+  }
+
+  :global(.scope-ledger-row p) {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
     overflow-wrap: anywhere;
   }
 

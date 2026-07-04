@@ -112,6 +112,36 @@ describe('ProjectMapTab', () => {
               refs: { taskIds: ['task-a'] },
             },
           },
+          scopeRows: [
+            {
+              taskId: 'task-a',
+              nodeId: 'work:task-a',
+              title: 'Coherence reviewer MVP',
+              scope: 'included',
+              eligibilityReason: 'included',
+              hierarchyRole: 'root',
+              status: 'in_progress',
+              handoffState: 'paused',
+              blocksStart: false,
+              blocksRelease: false,
+              humanBlocking: false,
+              sourceRefs: ['import:docs/harness/implementation-roadmap.md'],
+            },
+            {
+              taskId: 'task-later',
+              nodeId: 'work:task-later',
+              title: 'Production story UI',
+              scope: 'deferred',
+              eligibilityReason: 'deferred',
+              hierarchyRole: 'root',
+              status: 'ready',
+              handoffState: 'done',
+              blocksStart: false,
+              blocksRelease: false,
+              humanBlocking: false,
+              sourceRefs: ['import:docs/harness/architecture-notes.md'],
+            },
+          ],
           gaps: [{
             kind: 'proof_needed',
             label: 'Proof needed: Coherence reviewer MVP.',
@@ -138,6 +168,10 @@ describe('ProjectMapTab', () => {
     expect(screen.getByRole('button', { name: 'Hide internal steps' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Proof mode' })).toBeInTheDocument()
     expect(screen.getAllByText('Headless proof').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getByRole('heading', { name: 'Scope ledger' })).toBeInTheDocument()
+    expect(screen.getByText('1 current work item · 1 later work item')).toBeInTheDocument()
+    expect(screen.getByText('Paused · directly assigned · Source: implementation-roadmap.md')).toBeInTheDocument()
+    expect(screen.getByText('Done · later scope · Source: architecture-notes.md')).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Proof contract' })).toBeInTheDocument()
     expect(screen.getByText('Script or command proof for Coherence reviewer MVP.')).toBeInTheDocument()
     expect(screen.getByText('2 source documents')).toBeInTheDocument()

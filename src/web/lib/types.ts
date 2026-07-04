@@ -814,6 +814,20 @@ export interface ProjectOrientationSpine {
   roots?: ProjectOrientationNode[]
   nodes?: Record<string, ProjectOrientationNode>
   activePins?: Array<{ id?: string; nodeId?: string; label?: string; kind?: string; href?: string }>
+  scopeRows?: Array<{
+    taskId?: string
+    nodeId?: string
+    title?: string
+    scope?: 'included' | 'deferred' | string
+    eligibilityReason?: string
+    hierarchyRole?: string
+    status?: string
+    handoffState?: string
+    blocksStart?: boolean
+    blocksRelease?: boolean
+    humanBlocking?: boolean
+    sourceRefs?: string[]
+  }>
   gaps?: Array<{ kind?: string; label?: string; detail?: string; severity?: string; nodeId?: string; refs?: string[] }>
   sourceHealth?: {
     status?: string

@@ -46,6 +46,27 @@ projection instead of separate scope/readiness guesses.
     serve layer provides it, orientation summary progress, release state, and
     release blockers follow the projection instead of stale per-view
     release-readiness guesses.
+  - The spine now exposes `scopeRows`, and Project Map renders those rows as a
+    `Scope ledger` using existing `Card`, `CardList`, `CardListItem`, and
+    `Chip` primitives. Each row shows Now/Later, handoff state, inclusion
+    reason, source, and task navigation.
+- Contract Touch Decision:
+  - Work id: `codex:project-scope-projection-runtime-2026-07-04`.
+  - Touched contracts: `/api/project.orientationSpine.scopeRows`,
+    `ProjectOrientationSpine.scopeRows`, `ProjectMapTab` UI component
+    contract, and the map help/documentation-facing communication contract.
+  - Contracts considered but not touched: persisted task queue schema,
+    persisted release schema, `/api/project.startReadiness`, and
+    `/api/project/release-readiness` response shape.
+  - Required follow-up: continue migrating lower-level release and Overview
+    affordances to projection rows where they currently infer row state
+    indirectly.
+  - Proof required: unit/component test for the map ledger, rendered UI proof
+    that Narrative Harness exposes the ledger from real fixture/API state, and
+    build/contract checks.
+  - Apply/revert behavior: removing `scopeRows` or the ledger should leave
+    existing orientation summary fields intact, but would remove the user-facing
+    proof path for why work is Now/Later.
 - Verification:
   - `CI=true /opt/homebrew/bin/pnpm exec vitest run src/runtime/__tests__/project-scope-projection.test.ts src/runtime/__tests__/orchestrator-picker.test.ts src/runtime/__tests__/serve-release-readiness.test.ts src/runtime/__tests__/serve-settings.test.ts -t "brief cleanup|ready tasks with a spec|selected release|paused_live_work"`
     passed `11` focused tests.

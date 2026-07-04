@@ -203,6 +203,21 @@ export interface OrientationSourceHealth {
   gaps: number
 }
 
+export interface OrientationScopeRow {
+  taskId: string
+  nodeId: string
+  title: string
+  scope: 'included' | 'deferred'
+  eligibilityReason: string
+  hierarchyRole: string
+  status: string
+  handoffState: string
+  blocksStart: boolean
+  blocksRelease: boolean
+  humanBlocking: boolean
+  sourceRefs: string[]
+}
+
 export interface ProjectOrientationSpine {
   projectId: string
   updatedAt: string
@@ -221,6 +236,7 @@ export interface ProjectOrientationSpine {
   roots: OrientationNode[]
   nodes: Record<string, OrientationNode>
   activePins: OrientationPin[]
+  scopeRows: OrientationScopeRow[]
   gaps: OrientationGap[]
   release: OrientationReleaseSummary
   sourceHealth: OrientationSourceHealth
@@ -823,13 +839,31 @@ function progressFromScopeProjection(
   return {
     ...fallback,
     scopeId,
-    total: projection.counts.included + projection.counts.deferred,
+    total: fallback.total,
     ready: projection.counts.ready,
     active: projection.counts.active,
     done: projection.counts.done,
     blocked: projection.counts.ownerBlocked + projection.counts.proofBlocked,
-    deferred: projection.counts.deferred,
+    deferred: fallback.deferred,
   }
+}
+
+function scopeRowsFromProjection(projection: ProjectScopeProjection | null | undefined): OrientationScopeRow[] {
+  if (!projection) return []
+  return projection.rows.map(row => ({
+    taskId: row.taskId,
+    nodeId: taskNodeId(row.taskId),
+    title: row.title,
+    scope: row.scope,
+    eligibilityReason: row.eligibilityReason,
+    hierarchyRole: row.hierarchyRole,
+    status: row.status,
+    handoffState: row.handoffState,
+    blocksStart: row.blocksStart,
+    blocksRelease: row.blocksRelease,
+    humanBlocking: row.humanBlocking,
+    sourceRefs: [...row.sourceRefs],
+  }))
 }
 
 function emptyRefs(taskId: string): OrientationRefs {
@@ -1746,6 +1780,7 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
     roots,
     nodes: Object.fromEntries(byId.entries()),
     activePins: pins,
+    scopeRows: scopeRowsFromProjection(input.scopeProjection),
     gaps,
     release: {
       state: releaseState,
