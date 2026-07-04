@@ -3574,14 +3574,6 @@ export function buildServeApp(opts: ServeOptions = {}): {
         runStatus: run?.status ?? 'stopped',
         recentEvents: recent,
       })
-      const actionModel = buildProjectActionModel({
-        startReadiness,
-        inbox,
-        tasks: tasks as never,
-        thread,
-        runStatus: run?.status ?? 'stopped',
-        availability,
-      })
       const orientationWorkspaceImportDraft = await workspaceImportDraftForOrientation(project.path, startReadiness)
       const { orientationSpine } = buildOrientationSpineWithScopedReleaseTruth({
         projectId: project.id,
@@ -3592,6 +3584,28 @@ export function buildServeApp(opts: ServeOptions = {}): {
         startReadiness,
         workspaceImportDraft: orientationWorkspaceImportDraft,
         sourceRefs: projectOrientationSourceRefs(project.path),
+      })
+      const actionScope = orientationSpine.selectedTaskScope ?? orientationSpine.scope ?? null
+      const actionTasksById = new Map((tasks as unknown as Task[]).map(candidate => [candidate.id, candidate]))
+      const scopedActionTaskIds = actionScope
+        ? new Set(
+            (tasks as unknown as Task[])
+              .filter(task => taskEligibleForSelectedScope(task, actionScope, {
+                tasksById: actionTasksById,
+              }).eligible)
+              .map(task => task.id),
+          )
+        : null
+      const actionTasks = scopedActionTaskIds
+        ? tasks.filter(task => typeof task.id === 'string' && scopedActionTaskIds.has(task.id))
+        : tasks
+      const actionModel = buildProjectActionModel({
+        startReadiness,
+        inbox,
+        tasks: actionTasks as never,
+        thread,
+        runStatus: run?.status ?? 'stopped',
+        availability,
       })
       return c.json({
         initializationNeeded: false,

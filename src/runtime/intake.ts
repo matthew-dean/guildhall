@@ -410,7 +410,10 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
       // `settleMaterializedSplitReadiness` has already rewritten stale parent split metadata.
     } else if (duplicateSiblingSplit) {
       settleAlreadyRepresentedSplitRecommendations(queue, task, now)
-    } else if (task.sizePlan?.action === 'split_required' && shouldKeepFixedSpecRunnable(task)) {
+    } else if (
+      (task.sizePlan?.action === 'split_required' || task.sizePlan?.action === 'decompose_before_execution') &&
+      shouldKeepFixedSpecRunnable(task)
+    ) {
       task.sizePlan = {
         ...task.sizePlan,
         action: 'proceed_with_warning',
@@ -443,6 +446,7 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
       now,
     })
   }
+  approveReintakeBriefWithSpec(task, now)
   task.updatedAt = now
   resolveSupersededEscalations(task, {
     now,
@@ -513,10 +517,28 @@ function shouldKeepFixedSpecRunnable(task: Task): boolean {
     task.productBrief?.userJob,
     task.productBrief?.successMetric,
   ].filter(Boolean).join('\n')
-  if (!/\bPantry Pulse\b/i.test(text)) return false
-  if (!/\bfixed(?:-| )spec\b|\bcompletion boundary\b/i.test(text)) return false
+  if (!/\bcompletion boundary\b/i.test(text)) return false
   const splitBoundary = task.spec?.match(/what must be split or blocked\s*:\s*([^\n]+)/i)?.[1] ?? ''
-  return /^(none|nothing|not required|nothing to split)/i.test(splitBoundary.trim())
+  if (!/^(none|nothing|not required|nothing to split)/i.test(splitBoundary.trim())) return false
+  return (
+    /\bPantry Pulse\b/i.test(text) ||
+    task.productBrief?.authoredBy === 'project-reintake'
+  )
+}
+
+function approveReintakeBriefWithSpec(task: Task, now: string): void {
+  const brief = task.productBrief
+  if (!brief || brief.authoredBy !== 'project-reintake') return
+  if (typeof brief.approvedAt === 'string' && brief.approvedAt.trim().length > 0) return
+  brief.approvedBy = 'human'
+  brief.approvedAt = now
+  brief.nonGoals = removeDraftApprovalWarnings(brief.nonGoals)
+  brief.antiPatterns = removeDraftApprovalWarnings(brief.antiPatterns)
+}
+
+function removeDraftApprovalWarnings(items: string[] | undefined): string[] | undefined {
+  if (!Array.isArray(items)) return items
+  return items.filter(item => !/treat this draft as approved until/i.test(item))
 }
 
 function splitRecommendationsDuplicateExistingSiblings(queue: TaskQueue, task: Task): boolean {

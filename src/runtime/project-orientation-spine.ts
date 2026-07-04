@@ -732,7 +732,7 @@ function progressForTask(task: OrientationTaskInput, maturity: OrientationMaturi
   if (hasBrief(task)) progress.briefed = 1
   if (hasSpec(task)) progress.specced = 1
   if (maturity === 'sliced') progress.sliced = 1
-  if (maturity === 'ready') progress.ready = 1
+  if (maturity === 'ready' || (maturity === 'proof_needed' && task.status === 'ready')) progress.ready = 1
   if (maturity === 'active') progress.active = 1
   if (maturity === 'proven') progress.proven = 1
   if (maturity === 'done' || maturity === 'proven') progress.done = 1

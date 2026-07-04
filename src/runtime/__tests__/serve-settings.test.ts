@@ -1154,6 +1154,17 @@ describe('POST /api/project/start', () => {
         code?: string
         message?: string
       }
+      actionModel?: {
+        primaryAction?: {
+          source?: string
+          taskId?: string
+          label?: string
+        } | null
+        runControl?: {
+          label?: string
+          startEnabled?: boolean
+        }
+      }
     }
 
     expect(projectBody.startReadiness).toMatchObject({
@@ -1164,6 +1175,12 @@ describe('POST /api/project/start', () => {
     expect(projectBody.startReadiness?.message).toContain('complete')
     expect(projectBody.startReadiness?.message).toContain('1 ready')
     expect(projectBody.startReadiness?.message).toContain('outside this release')
+    expect(projectBody.actionModel?.primaryAction?.taskId).not.toBe('later-ready')
+    expect(projectBody.actionModel?.primaryAction?.label ?? '').not.toContain('Start next release feature')
+    expect(projectBody.actionModel?.runControl).toMatchObject({
+      label: 'No runnable tasks',
+      startEnabled: false,
+    })
 
     const startRes = await app.fetch(
       new Request(scoped('/api/project/start'), { method: 'POST', body: '{}' }),

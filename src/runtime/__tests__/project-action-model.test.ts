@@ -397,6 +397,36 @@ describe('buildProjectActionModel', () => {
     expect(model.primaryAction?.label).not.toMatch(/answer/i)
   })
 
+  it('chooses the first dependency-unblocked ready task over newer blocked ready work', () => {
+    const model = buildProjectActionModel({
+      startReadiness: { canStart: true },
+      inbox: { items: [] },
+      tasks: [
+        {
+          id: 'task-define-schemas',
+          title: 'Define fixture schemas',
+          status: 'ready',
+          updatedAt: '2026-07-04T07:58:36.633Z',
+        },
+        {
+          id: 'task-build-fixture',
+          title: 'Add the first tiny fiction fixture',
+          status: 'ready',
+          dependsOn: ['task-define-schemas'],
+          updatedAt: '2026-07-04T07:58:36.937Z',
+        },
+      ],
+      thread: { activeTurnId: null, turns: [] },
+      runStatus: 'stopped',
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      source: 'task',
+      label: 'Define fixture schemas',
+      href: '/work?task=task-define-schemas',
+    })
+  })
+
   it('does not treat an inflight execution turn as an owner-answer action', () => {
     const model = buildProjectActionModel({
       startReadiness: { canStart: true },

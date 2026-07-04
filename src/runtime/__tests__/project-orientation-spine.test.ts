@@ -640,6 +640,40 @@ describe('buildProjectOrientationSpine', () => {
     expect(spine.proofContracts[0]?.state).toBe('needed')
   })
 
+  it('counts ready work with missing proof as ready but not proven', () => {
+    const spine = buildProjectOrientationSpine({
+      projectId: 'narrative-harness',
+      now: '2026-06-18T12:00:00.000Z',
+      scope: {
+        id: 'headless-proof',
+        label: 'Headless proof',
+        kind: 'release',
+        source: 'release_plan',
+        nodeIds: ['work:ready-proof-task'],
+        deferredNodeIds: [],
+      },
+      tasks: [{
+        id: 'ready-proof-task',
+        title: 'Run fixture proof',
+        description: 'Ready to run, but proof has not been recorded.',
+        domain: 'harness',
+        status: 'ready',
+        productBrief: { approvedAt: '2026-06-18T12:00:00.000Z' },
+        spec: 'Run the fixture proof.',
+        acceptanceCriteria: [{ id: 'proof', description: 'Proof is recorded.', verifiedBy: 'review', met: false }],
+        proofPaths: [{
+          kind: 'command',
+          command: 'pnpm test -- fixture-proof',
+          expectedEvidence: ['Fixture proof should pass.'],
+        }],
+      }],
+    })
+
+    expect(spine.nodes['work:ready-proof-task']?.maturity).toBe('proof_needed')
+    expect(spine.summary.progress.ready).toBe(1)
+    expect(spine.summary.progress.proven).toBe(0)
+  })
+
   it('uses live workspace-import draft scope to surface current and deferred work before approval', () => {
     const spine = buildProjectOrientationSpine({
       projectId: 'narrative-harness',

@@ -12607,6 +12607,89 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-07-04T08:21:00Z - Repaired Narrative Harness re-intake so Guildhall
+communicates and executes the selected release from its own project surfaces.
+
+- Work id: `codex:narrative-harness-selected-release-proof-2026-07-04`.
+- User job: a project owner should be able to open Narrative Harness and see
+  which release/scope is current, which tasks are included now vs later, what is
+  approved, what can start, what is running, and where live Guildhall work is
+  pinned without relying on Codex repo access or hidden inference.
+- Failures found:
+  - Project re-intake generated reviewable specs but approval left re-intake
+    product briefs unapproved, so Start immediately asked for duplicate brief
+    review after spec approval.
+  - Re-intake archived stale split children but left archived child hierarchy and
+    dependency edges attached to regenerated parents. The UI counted the parent
+    tasks as ready, while the executor treated them as containing stale work.
+  - Approved fixed re-intake specs with an accepted completion boundary could
+    still carry `sizePlan.action = decompose_before_execution`, so Start showed
+    `canStart:true` but the orchestrator idled with fresh tasks and no eligible
+    picks.
+  - The action model originally selected ready work outside the final selected
+    orientation scope or newer dependency-blocked work instead of the first
+    dependency-unblocked current-scope task.
+  - Earlier browser DOM proof for Overview timed out in the Browser harness.
+    API/event-stream proof below is current; visual screenshot proof remains a
+    separate proof gap.
+- Fix:
+  - `approveSpec` now stamps `project-reintake` product briefs as approved in
+    the same persistence write and removes the stale "do not treat this draft as
+    approved" warning.
+  - Re-intake archive/replacement now detaches archived work from live hierarchy
+    and dependency graph edges so historical records remain auditable without
+    shaping current executable work.
+  - Fixed-spec approval now collapses both `split_required` and
+    `decompose_before_execution` into `proceed_with_warning` when the accepted
+    completion boundary says nothing else must be split or blocked.
+  - `/api/project` builds the action model from the final orientation selected
+    task scope, and task action ranking prefers dependency-unblocked ready work.
+  - Orientation progress counts ready tasks with missing proof as ready but not
+    proven, so the user sees "ready to run" and "proof missing" as separate
+    facts.
+- Live Narrative Harness installed-app proof:
+  - `pnpm dev:install && guildhall stop && guildhall start` installed the
+    current branch; `/api/stale-server` returned `stale:false`.
+  - Re-intake was rerun and applied through
+    `/api/project/reintake/rerun?projectId=narrative-harness` and
+    `/api/project/reintake/apply?projectId=narrative-harness`.
+  - The selected release reported by `/api/project?projectId=narrative-harness`
+    is `Stage 1: Fixture And Evaluation Harness`.
+  - Before approval, Start correctly reported `7 specs are waiting for review`
+    and pointed at `task-import-9s8tkc`.
+  - After delegated Codex-human approval through the approve-spec API,
+    `/api/project` reported `startReadiness.canStart:true`, `briefed:7`,
+    `ready:7`, `deferred:8`, approved product-brief timestamps on all seven
+    scoped tasks, and `sizePlan.action:"proceed_with_warning"` for each.
+  - After Start, `/api/project` reported `run.status:"running"`,
+    `progress.active:1`, `ready:6`, primary action pinned to
+    `task-import-9s8tkc`, and `task-import-9s8tkc` in `in_progress` assigned to
+    `worker-agent`.
+  - `/api/project/events?projectId=narrative-harness` showed live worker stream
+    events for `task-import-9s8tkc`, including the worker describing the schema
+    files it intended to create.
+- Contract Touch Decision:
+  - Touched contracts: project re-intake task application, `approveSpec`
+    approval semantics, selected-release action model scoping, action ranking,
+    and orientation progress rollup.
+  - Contracts considered but not changed: persisted task schema, persisted
+    release schema, release-selection algorithm, orchestrator dispatch loop, and
+    UI layout components.
+  - Schema migration decision: no migration required. Existing fields
+    `productBrief.approvedAt`, `sizePlan.action`, `hierarchy`, and `dependsOn`
+    are reused; re-intake only sanitizes newly applied or archived records.
+  - Apply/revert behavior: if reverted, re-intake may again show approved ready
+    work that Start cannot execute, and archived split children may again shape
+    live parent execution.
+- Verification:
+  - Focused re-intake regression:
+    `./node_modules/.bin/vitest run src/runtime/__tests__/project-reintake-apply.test.ts --testNamePattern "Narrative Harness|replaces stale"`.
+  - Installed build proof:
+    `/opt/homebrew/bin/pnpm build`; `/opt/homebrew/bin/pnpm dev:install`;
+    `guildhall stop && guildhall start`; `/api/stale-server`.
+
+source: codex:narrative-harness-selected-release-proof-2026-07-04
+
 2026-07-04T02:55:00Z - Added rendered proof that Narrative Harness release
 scope truth is communicated by Guildhall surfaces, not just available through
 Codex or raw project state.

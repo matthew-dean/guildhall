@@ -13,6 +13,8 @@ import {
   planProjectReintake,
   writeProjectReintakeDraft,
 } from '../project-reintake.js'
+import { approveSpec } from '../intake.js'
+import { deriveWorkExecutionState } from '../work-execution-state.js'
 
 const now = '2026-05-30T20:00:00.000Z'
 
@@ -182,7 +184,25 @@ describe('project re-intake apply', () => {
       spec: '## Summary\nBuild Tooltip.\n\n## Acceptance Criteria\n- The feature is reviewable.',
       acceptanceCriteria: [{ id: 'legacy', description: 'Feature is reviewable.', verifiedBy: 'review', met: false }],
     })
-    const memoryDir = await makeState([legacyTask])
+    const staleChild = task({
+      id: 'stale-child',
+      title: 'Stale split child',
+      status: 'archived',
+      dependsOn: ['stale-dependency'],
+      hierarchy: {
+        parentId: 'task-import-9s8tkc',
+        childIds: [],
+        order: 0,
+        relation: 'decomposes',
+      },
+      archivedEvidence: {
+        retention: 'archive',
+        archivedAt: now,
+        reason: 'Old child archive marker.',
+        source: 'project-reintake',
+      },
+    })
+    const memoryDir = await makeState([legacyTask, staleChild])
     const draft = planProjectReintake({
       now,
       sources: [],
@@ -375,6 +395,21 @@ describe('project re-intake apply', () => {
       stageAlignment: 'stage 2 (agent coordination)',
     })
     expect(laterTask?.releaseIds ?? []).toEqual([])
+
+    const approval = await approveSpec({
+      memoryDir,
+      taskId: currentTask!.id,
+      approvalNote: 'Generated current-release re-intake spec is concrete enough for approval.',
+    })
+    expect(approval).toMatchObject({ success: true, newStatus: 'ready' })
+    const approvedQueue = await readQueue(memoryDir)
+    const approvedTask = approvedQueue.tasks.find(task => task.id === currentTask!.id)
+    expect(approvedTask?.productBrief).toMatchObject({
+      approvedBy: 'human',
+      approvedAt: expect.stringMatching(/\d{4}-\d{2}-\d{2}T/),
+    })
+    expect(JSON.stringify(approvedTask?.productBrief ?? '')).not.toContain('Do not treat this draft as approved')
+    expect(approvedTask?.sizePlan?.action).toBe('proceed_with_warning')
   })
 
   it('replaces stale not-started task content when the regenerated source-truth task keeps the same deterministic id', async () => {
@@ -473,7 +508,13 @@ describe('project re-intake apply', () => {
     expect(JSON.stringify(refreshed?.taskReadiness ?? '')).not.toMatch(/coherence-reviewer-mvp|decision-trace-pipeline|done/)
     expect(refreshed?.decomposition).toBeUndefined()
     expect(refreshed?.hierarchy).toBeUndefined()
+    expect(refreshed?.dependsOn).toEqual([])
     expect(refreshed?.archivedEvidence).toBeUndefined()
+    expect(queue.tasks.find(task => task.id === 'stale-child')?.hierarchy).toBeUndefined()
+    expect(deriveWorkExecutionState(queue.tasks as any, 'task-import-9s8tkc')).toMatchObject({
+      isContaining: false,
+      isRunnable: true,
+    })
     expect(refreshed?.notes.some((note: { content?: string }) => note.content?.includes('Re-intake'))).toBe(true)
   })
 

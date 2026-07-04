@@ -27,6 +27,7 @@ export interface ProjectActionTask {
   description?: string
   status?: string
   updatedAt?: string
+  dependsOn?: string[]
   productBrief?: {
     approvedAt?: string | null
     userJob?: string
@@ -349,8 +350,20 @@ function inboxAction(item: ProjectActionInboxItem): ProjectAction {
   }
 }
 
+function dependencyBlockedRank(task: ProjectActionTask, tasksById: ReadonlyMap<string, ProjectActionTask>): number {
+  if (task.status !== 'ready') return 0
+  const dependencies = Array.isArray(task.dependsOn) ? task.dependsOn.filter(Boolean) : []
+  if (dependencies.length === 0) return 0
+  const allSatisfied = dependencies.every(dependency => {
+    const dependencyTask = tasksById.get(dependency)
+    return dependencyTask?.status === 'done'
+  })
+  return allSatisfied ? 0 : 1
+}
+
 function bestTaskAction(tasks: ProjectActionTask[], running: boolean): ProjectAction | null {
   const priority = ['in_progress', 'review', 'gate_check', 'ready', 'spec_review', 'exploring', 'import_draft', 'blocked']
+  const tasksById = new Map(tasks.map(task => [task.id, task]))
   const ranked = [...tasks]
     .filter(task => priority.includes(task.status ?? ''))
     .sort((left, right) => {
@@ -358,6 +371,8 @@ function bestTaskAction(tasks: ProjectActionTask[], running: boolean): ProjectAc
       if (briefDelta !== 0) return briefDelta
       const statusDelta = priority.indexOf(left.status ?? '') - priority.indexOf(right.status ?? '')
       if (statusDelta !== 0) return statusDelta
+      const dependencyDelta = dependencyBlockedRank(left, tasksById) - dependencyBlockedRank(right, tasksById)
+      if (dependencyDelta !== 0) return dependencyDelta
       return (right.updatedAt ?? '').localeCompare(left.updatedAt ?? '')
     })
   const task = ranked[0]

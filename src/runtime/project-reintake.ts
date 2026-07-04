@@ -131,11 +131,20 @@ export function planProjectReintake(input: ProjectReintakeInput): ProjectReintak
     .filter(task => stringField(task, 'status') === 'done')
     .map(task => stringField(task, 'id'))
     .filter((id): id is string => Boolean(id)))
+  const graphTaskIds = new Set(graphPlan.tasks.map(task => task.id))
+  const allowedDependencyIds = new Set([...graphTaskIds, ...protectedProgressTaskIds])
   const graphChanges = graphPlan.tasks
     .filter(task => !completedTaskIds.has(task.id))
     .filter(task => !protectedProgressTaskIds.has(task.id))
     .map(task => graphTaskChange(
-      { ...task, dependsOn: task.dependsOn.filter(dependency => !completedTaskIds.has(dependency)) },
+      {
+        ...task,
+        dependsOn: task.dependsOn.filter(dependency =>
+          dependency !== task.id &&
+          !completedTaskIds.has(dependency) &&
+          allowedDependencyIds.has(dependency),
+        ),
+      },
       graphPlan.reconciliations,
       input.tasks,
       selectedRelease,
@@ -301,6 +310,7 @@ function applyChange(tasks: Array<Record<string, unknown>>, change: ReintakeChan
         },
       ],
     })
+    detachArchivedDescendantsForParent(tasks, change.taskId)
     return
   }
 
@@ -334,6 +344,7 @@ function applyChange(tasks: Array<Record<string, unknown>>, change: ReintakeChan
         createdAt: typeof existing.createdAt === 'string' ? existing.createdAt : now,
         updatedAt: now,
       })
+      detachArchivedDescendantsForParent(tasks, change.task.id)
       return
     }
     tasks.push({
@@ -364,8 +375,10 @@ function applyChange(tasks: Array<Record<string, unknown>>, change: ReintakeChan
     const existing = tasks.find(task => task.id === change.taskId)
     if (!existing) return
     const notes = Array.isArray(existing.notes) ? existing.notes : []
+    detachTaskFromLiveGraph(tasks, change.taskId)
     Object.assign(existing, {
       status: 'archived',
+      dependsOn: [],
       updatedAt: now,
       archivedEvidence: {
         retention: 'archive',
@@ -410,6 +423,33 @@ function clearStaleReintakeDerivedFields(task: Record<string, unknown>): void {
   ]) {
     delete task[key]
   }
+}
+
+function detachTaskFromLiveGraph(tasks: Array<Record<string, unknown>>, taskId: string): void {
+  for (const task of tasks) {
+    const hierarchy = hierarchyRecord(task)
+    if (!hierarchy) continue
+    if (Array.isArray(hierarchy.childIds)) {
+      hierarchy.childIds = hierarchy.childIds.filter(childId => childId !== taskId)
+    }
+  }
+  const task = tasks.find(candidate => candidate.id === taskId)
+  if (task) delete task.hierarchy
+}
+
+function detachArchivedDescendantsForParent(tasks: Array<Record<string, unknown>>, parentId: string): void {
+  for (const task of tasks) {
+    if (task.status !== 'archived') continue
+    const hierarchy = hierarchyRecord(task)
+    if (hierarchy?.parentId === parentId) delete task.hierarchy
+  }
+}
+
+function hierarchyRecord(task: Record<string, unknown>): Record<string, unknown> | null {
+  const hierarchy = task.hierarchy
+  return hierarchy && typeof hierarchy === 'object' && !Array.isArray(hierarchy)
+    ? hierarchy as Record<string, unknown>
+    : null
 }
 
 function reintakeDraftPath(memoryDir: string): string {
@@ -738,7 +778,9 @@ function evidenceTaskSpec(input: {
     '- What Guildhall can complete in code: repo-local implementation, fixtures, schema records, tests, docs, and proof artifacts named by the approved spec.',
     '- External dependencies: none expected beyond the local project checkout and documented proof commands.',
     '- Owner-only setup: explicit approval of this reviewable blueprint before worker execution.',
+    '- Verification environment: local project checkout with documented pnpm/script proof commands available in the execution environment.',
     '- What counts as done: the accepted proof demonstrates the scoped Stage work and records evidence against the acceptance criteria.',
+    '- What must be split or blocked: nothing else should be split before this task runs; block only if the approved proof commands require missing local setup, credentials, or unrelated later-release work.',
   ].join('\n')
 }
 
