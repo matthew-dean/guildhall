@@ -186,10 +186,10 @@
       sum + (root.children ?? []).filter(child => child.visibility?.kind === 'supporting' && child.maturity === 'deferred').length,
     0)
     const pieces = [
-      progress?.specced ? `${progress.specced} specced` : null,
-      progress?.active ? `${progress.active} active` : null,
-      progress?.blocked ? `${progress.blocked} blocked` : null,
-      laterDocumented ? `${laterDocumented} later` : null,
+      progress?.specced ? `${progress.specced} specced work items` : null,
+      progress?.active ? `${progress.active} active work items` : null,
+      progress?.blocked ? `${progress.blocked} blocked work items` : null,
+      laterDocumented ? `${laterDocumented} later capabilities` : null,
       orientationProofGapCount ? `${orientationProofGapCount} proof gaps` : null,
     ].filter(Boolean)
     return pieces.length ? pieces.join(' · ') : orientationScopeDetail
@@ -395,7 +395,7 @@
       {
         label: 'Work',
         title: orientationSpine
-          ? `${displayedTotalCount} scoped ${displayedTotalCount === 1 ? 'work item' : 'work items'}`
+          ? `${displayedTotalCount} mapped ${displayedTotalCount === 1 ? 'work item' : 'work items'}`
           : `${displayedTotalCount} total ${displayedTotalCount === 1 ? 'work item' : 'work items'}`,
         detail: orientationSpine
           ? `${displayedActiveCount} in current scope · ${displayedDoneCount} completed · ${displayedBlockedCount} blocked.`

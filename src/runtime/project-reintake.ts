@@ -501,7 +501,7 @@ function evidenceTaskToDraft(
     references,
     ...(later || !selectedRelease ? {} : { releaseIds: [selectedRelease.id] }),
     ...(task.stageAlignment ? { stageAlignment: task.stageAlignment } : {}),
-    spec: evidenceTaskSpec({ task, references, acceptanceCriteria, sources }),
+    spec: evidenceTaskSpec({ task, references, acceptanceCriteria, sources, contractNames }),
     ...(reviewableBlueprint ? { productBrief: reintakeProductBrief(task, contractNames) } : {}),
     proofPaths: task.proofPaths,
   }
@@ -588,6 +588,25 @@ function reintakeAcceptanceCriteria(
       },
     ]
   }
+  if (prototypeKind === 'schema_prune') {
+    return [
+      {
+        id: 'first-run-schema-findings',
+        description: `${task.title} records what the first fixture run proved, disproved, or left ambiguous about the MVP story-memory schema.`,
+        verifiedBy: 'review',
+      },
+      {
+        id: 'schema-narrowing-decision',
+        description: 'The narrowed schema keeps only fields needed by the Stage 1 fixture/evaluation loop and names any fields intentionally deferred.',
+        verifiedBy: 'review',
+      },
+      {
+        id: 'schema-proof-update',
+        description: 'Fixture, runner, evaluation, and debug-report proof artifacts are updated or explicitly declared unchanged after the schema narrowing.',
+        verifiedBy: 'review',
+      },
+    ]
+  }
   if (contractNames.length > 0 && /\b(schema|schemas|contract|contracts)\b/i.test(task.title)) {
     const fixtureContracts = contractNames.filter(name => /fixture|expected|signal/i.test(name))
     const runContracts = contractNames.filter(name => /prototype|run|evaluation|score|disagreement/i.test(name))
@@ -648,9 +667,21 @@ function hasReviewableReintakeBlueprint(
 }
 
 function reintakeProductBrief(task: EvidenceTask, contractNames: string[]): NonNullable<Task['productBrief']> {
-  const successMetric = contractNames.length > 0
-    ? `${task.title} defines the cited Stage 1 contracts and records proof that they support the no-UI fixture/evaluation harness.`
-    : `${task.title} is specified from current source evidence with a clear proof boundary before implementation starts.`
+  const prototypeKind = reintakePrototypeTaskKind(task.title)
+  let successMetric = `${task.title} is specified from current source evidence with a clear proof boundary before implementation starts.`
+  if (prototypeKind === 'fixture') {
+    successMetric = `${task.title} creates a safe first fiction fixture plus expected records that the no-UI Stage 1 harness can load.`
+  } else if (prototypeKind === 'runner') {
+    successMetric = `${task.title} creates a no-UI command path that turns fixture records into a repeatable prototype-run record.`
+  } else if (prototypeKind === 'evaluation') {
+    successMetric = `${task.title} produces deterministic missing/noisy/stale/useful context evaluation output from the first fixture run.`
+  } else if (prototypeKind === 'debug_report') {
+    successMetric = `${task.title} writes a developer-readable local artifact that explains each run's inputs, outputs, and evaluation result.`
+  } else if (prototypeKind === 'schema_prune') {
+    successMetric = `${task.title} uses first-run proof to narrow the MVP story-memory schema without pulling in later-release scope.`
+  } else if (contractNames.length > 0) {
+    successMetric = `${task.title} defines the cited Stage 1 contracts and records proof that they support the no-UI fixture/evaluation harness.`
+  }
   return {
     userJob: `I want ${task.title} shaped into reviewable project work from the cited planning docs, without asking me to reconstruct the source trail manually.`,
     whyItMattersNow: task.stageAlignment
@@ -678,12 +709,11 @@ function evidenceTaskSpec(input: {
   references: string[]
   acceptanceCriteria: Task['acceptanceCriteria']
   sources: ProjectReintakeSource[]
+  contractNames: string[]
 }): string {
-  const sourcesByPath = new Map(input.sources.map(source => [source.path, source.content]))
-  const referencedContent = input.references
-    .map(reference => sourcesByPath.get(reference))
-    .filter((content): content is string => Boolean(content))
-  const contractNames = unique(referencedContent.flatMap(content => extractNeededContractNames(content, input.task.title)))
+  const contractNames = shouldNameContractsInReintakeSpec(input.task)
+    ? input.contractNames
+    : []
   return [
     '## What this is',
     input.task.title,
@@ -710,6 +740,10 @@ function evidenceTaskSpec(input: {
     '- Owner-only setup: explicit approval of this reviewable blueprint before worker execution.',
     '- What counts as done: the accepted proof demonstrates the scoped Stage work and records evidence against the acceptance criteria.',
   ].join('\n')
+}
+
+function shouldNameContractsInReintakeSpec(task: EvidenceTask): boolean {
+  return /\b(schema|schemas|contract|contracts)\b/i.test(task.title)
 }
 
 function splitMarkdownSectionsForReintake(content: string): Array<{ heading: string; body: string }> {

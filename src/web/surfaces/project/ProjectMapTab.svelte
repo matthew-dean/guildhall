@@ -355,7 +355,7 @@
     <section class="map-stats" aria-label="Project map progress">
       <UtilityPanel className="stat" tone="neutral">
         <strong>{countLabel(progress?.total, 'work item')}</strong>
-        <span>Tasks in scope</span>
+        <span>Mapped work</span>
       </UtilityPanel>
       <UtilityPanel className="stat" tone="neutral">
         <strong>{countLabel(documentedCapabilityCount, 'documented capability', 'documented capabilities')}</strong>

@@ -82,7 +82,11 @@ const narrativeRoadmap = [
   'The next milestone is Stage 1: Fixture And Evaluation Harness.',
   '',
   '1. Define fixture, expected-record, prototype-run, and evaluation schemas.',
-  '2. Generate a developer-readable debug report for each run.',
+  '2. Add the first tiny fiction fixture and human-authored expected records.',
+  '3. Implement a no-UI runner that builds a packet from fixture records.',
+  '4. Add deterministic evaluation output for missing/noisy/stale/useful context.',
+  '5. Generate a developer-readable debug report for each run.',
+  '6. Use the first run to narrow the MVP story-memory schema.',
 ].join('\n')
 
 const narrativeRemainingInventory = [
@@ -291,7 +295,11 @@ describe('project re-intake apply', () => {
       tasks: Array<Record<string, any>>
     }
     const currentTask = queue.tasks.find(task => task.title === 'Define fixture, expected-record, prototype-run, and evaluation schemas.')
+    const fixtureTask = queue.tasks.find(task => task.title === 'Add the first tiny fiction fixture and human-authored expected records.')
+    const runnerTask = queue.tasks.find(task => task.title === 'Implement a no-UI runner that builds a packet from fixture records.')
+    const evaluationTask = queue.tasks.find(task => task.title === 'Add deterministic evaluation output for missing/noisy/stale/useful context.')
     const debugTask = queue.tasks.find(task => task.title === 'Generate a developer-readable debug report for each run.')
+    const schemaPruneTask = queue.tasks.find(task => task.title === 'Use the first run to narrow the MVP story-memory schema.')
     const laterTask = queue.tasks.find(task => task.title === 'Implement dialogue-and-character-voice reviewer lane')
 
     expect(queue.selectedReleaseId).toBe('stage-1-fixture-and-evaluation-harness')
@@ -311,6 +319,33 @@ describe('project re-intake apply', () => {
         authoredBy: 'project-reintake',
       }),
     })
+    expect(fixtureTask).toMatchObject({
+      releaseIds: ['stage-1-fixture-and-evaluation-harness'],
+      status: 'spec_review',
+      acceptanceCriteria: [
+        expect.objectContaining({ id: 'fiction-fixture-source' }),
+        expect.objectContaining({ id: 'human-expected-records' }),
+        expect.objectContaining({ id: 'fixture-load-proof' }),
+      ],
+    })
+    expect(runnerTask).toMatchObject({
+      releaseIds: ['stage-1-fixture-and-evaluation-harness'],
+      status: 'spec_review',
+      acceptanceCriteria: [
+        expect.objectContaining({ id: 'fixture-packet-build' }),
+        expect.objectContaining({ id: 'no-ui-command' }),
+        expect.objectContaining({ id: 'deterministic-run-record' }),
+      ],
+    })
+    expect(evaluationTask).toMatchObject({
+      releaseIds: ['stage-1-fixture-and-evaluation-harness'],
+      status: 'spec_review',
+      acceptanceCriteria: [
+        expect.objectContaining({ id: 'packet-quality-categories' }),
+        expect.objectContaining({ id: 'repeatable-evaluation-record' }),
+        expect.objectContaining({ id: 'reviewer-readable-failures' }),
+      ],
+    })
     expect(debugTask).toMatchObject({
       releaseIds: ['stage-1-fixture-and-evaluation-harness'],
       status: 'spec_review',
@@ -321,6 +356,19 @@ describe('project re-intake apply', () => {
       ],
     })
     expect(JSON.stringify(debugTask?.acceptanceCriteria ?? '')).not.toMatch(/accessibility|design-system|target-area conventions/i)
+    for (const task of [fixtureTask, runnerTask, evaluationTask, debugTask]) {
+      expect(task?.spec ?? '').not.toContain('Define and use the concrete contracts named in the cited docs')
+    }
+    expect(schemaPruneTask).toMatchObject({
+      releaseIds: ['stage-1-fixture-and-evaluation-harness'],
+      status: 'spec_review',
+      acceptanceCriteria: [
+        expect.objectContaining({ id: 'first-run-schema-findings' }),
+        expect.objectContaining({ id: 'schema-narrowing-decision' }),
+        expect.objectContaining({ id: 'schema-proof-update' }),
+      ],
+    })
+    expect(JSON.stringify(schemaPruneTask?.acceptanceCriteria ?? '')).not.toMatch(/migration|rollback/i)
     expect(laterTask).toMatchObject({
       status: 'shelved',
       references: ['docs/harness/remaining-spec-decomposition-inventory.md'],

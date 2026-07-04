@@ -14774,6 +14774,82 @@ deferred work cannot masquerade as the current next action.
 
 source: codex:selected-release-consumed-visible-proof-2026-07-04
 
+2026-07-04T07:29:00Z - Tightened Narrative Harness re-intake specificity and
+Overview scope wording so Guildhall communicates the current release instead
+of merely preparing schedulable work.
+
+- Work id: `codex:narrative-harness-reintake-spec-specificity-2026-07-04`.
+- User job: while using Narrative Harness as the live proof project, the owner
+  should see what the current release contains, what is deferred, why Start is
+  paused, and what each reviewable spec is for without needing Codex to inspect
+  hidden docs or raw task JSON.
+- Failure found during proof:
+  - Non-schema Stage 1 tasks inherited schema-contract evidence and displayed
+    a generic "define and use concrete contracts" goal even when the work was
+    actually fixture data, runner, evaluation output, or debug-report proof.
+  - The story-memory schema narrowing task used migration-shaped criteria even
+    though the work is a first-run learning loop, not a migration plan.
+  - Overview's At a glance Work card called current + deferred work "scoped",
+    which conflicted with the current-scope count already shown above it.
+- Fix:
+  - Re-intake specs now name contract-definition goals only for schema/contract
+    tasks; fixture, runner, evaluation, debug-report, and schema-narrowing work
+    get role-specific product brief success metrics and acceptance criteria.
+  - The first-run story-memory schema task now asks for schema findings,
+    narrowing decision, and proof updates rather than migration rollback work.
+  - Overview now labels current + deferred task total as "mapped work items" so
+    current scope remains the bounded release count.
+- Contract Touch Decision:
+  - Work id: `codex:narrative-harness-reintake-spec-specificity-2026-07-04`.
+  - Touched contracts: project re-intake generated spec content; project
+    re-intake generated acceptance criteria; Project Overview orientation Work
+    card wording; Project Overview map-preview wording; Project Map progress
+    stat wording.
+  - Contracts considered but not touched: persisted task schema, release
+    container schema, selected-release start semantics, task approval
+    mechanics, workspace-import source detector schema, project-map source
+    trail layout.
+  - Required follow-up: continue approving only the now-reviewable Narrative
+    Harness Stage 1 specs as delegated Codex-human, then run Start until the
+    release is consumed or another real Guildhall communication/runtime blocker
+    appears.
+  - Proof required: API and rendered UI must show Stage 1 as the selected
+    release, 7 current work items, 8 deferred work items, Start blocked on spec
+    review, and role-specific specs without non-schema contract-definition
+    goals.
+  - Proof provided: focused re-intake regression, Overview component
+    regression, broader import/start/release test slice, build, contract lint,
+    installed-app stale check, and live API/rendered route inspection.
+  - Waivers: no schema migration decision required because no persisted schema
+    shape changed.
+  - Owner-review items: "mapped work items" is intentionally used for the
+    current + deferred rollup; "current scope" remains reserved for the
+    selected release boundary. Later documented capabilities are labeled as
+    capabilities so they do not compete with deferred release-work counts.
+  - Apply/revert behavior: revert generated spec/criteria changes and Overview
+    wording together if the release proof needs to be rolled back; reverting
+    only Overview keeps bad spec communication, while reverting only re-intake
+    keeps confusing scope wording.
+- Verification:
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/project-reintake-apply.test.ts`
+    passed `10` tests.
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/project-reintake-apply.test.ts src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts src/web/surfaces/project/__tests__/ProjectMapTab.svelte.test.ts`
+    passed `36` tests.
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/project-reintake-apply.test.ts src/runtime/__tests__/workspace-importer.test.ts src/runtime/__tests__/serve-settings.test.ts src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts src/web/surfaces/project/__tests__/ProjectMapTab.svelte.test.ts --testNamePattern "re-intake|import|release|Start|Narrative Harness|orientation|scoped|terminal|migration|map"`
+    passed `117` tests.
+  - `/opt/homebrew/bin/pnpm build` passed.
+  - `/opt/homebrew/bin/pnpm lint:contracts` passed.
+  - `git diff --check` passed.
+  - `pnpm dev:install && guildhall stop && guildhall start` installed the
+    current branch; `/api/stale-server` returned `stale:false`.
+  - Rendered route proof on installed `localhost:7777` wrote screenshots:
+    `/tmp/nh-overview-final2-desktop.png`,
+    `/tmp/nh-map-final2-desktop.png`,
+    `/tmp/nh-overview-final2-mobile.png`, and
+    `/tmp/nh-map-final2-mobile.png`.
+
+source: codex:narrative-harness-reintake-spec-specificity-2026-07-04
+
 2026-06-15T23:52:00Z - Completed the Project Orientation Spine cross-route
 implementation and installed-app audit.
 
