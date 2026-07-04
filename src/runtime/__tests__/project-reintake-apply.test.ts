@@ -82,6 +82,7 @@ const narrativeRoadmap = [
   'The next milestone is Stage 1: Fixture And Evaluation Harness.',
   '',
   '1. Define fixture, expected-record, prototype-run, and evaluation schemas.',
+  '2. Generate a developer-readable debug report for each run.',
 ].join('\n')
 
 const narrativeRemainingInventory = [
@@ -155,8 +156,12 @@ describe('project re-intake apply', () => {
     const reframed = queue.tasks.find((candidate: { id?: string }) => candidate.id === 'task-039')
     expect(reframed).toMatchObject({
       title: 'Build AlertDialog',
-      status: 'import_draft',
+      status: 'spec_review',
       acceptanceCriteria: expect.arrayContaining([expect.objectContaining({ id: 'source-implementation' })]),
+      productBrief: expect.objectContaining({
+        authoredBy: 'project-reintake',
+        userJob: expect.stringContaining('Build AlertDialog'),
+      }),
     })
     expect(reframed!.notes.some((note: { content?: string }) => note.content?.includes('Re-intake reframed this task'))).toBe(true)
   })
@@ -286,6 +291,7 @@ describe('project re-intake apply', () => {
       tasks: Array<Record<string, any>>
     }
     const currentTask = queue.tasks.find(task => task.title === 'Define fixture, expected-record, prototype-run, and evaluation schemas.')
+    const debugTask = queue.tasks.find(task => task.title === 'Generate a developer-readable debug report for each run.')
     const laterTask = queue.tasks.find(task => task.title === 'Implement dialogue-and-character-voice reviewer lane')
 
     expect(queue.selectedReleaseId).toBe('stage-1-fixture-and-evaluation-harness')
@@ -300,8 +306,21 @@ describe('project re-intake apply', () => {
     expect(currentTask).toMatchObject({
       releaseIds: ['stage-1-fixture-and-evaluation-harness'],
       references: ['docs/harness/implementation-roadmap.md'],
-      status: 'import_draft',
+      status: 'spec_review',
+      productBrief: expect.objectContaining({
+        authoredBy: 'project-reintake',
+      }),
     })
+    expect(debugTask).toMatchObject({
+      releaseIds: ['stage-1-fixture-and-evaluation-harness'],
+      status: 'spec_review',
+      acceptanceCriteria: [
+        expect.objectContaining({ id: 'debug-report-inputs' }),
+        expect.objectContaining({ id: 'debug-report-traceability' }),
+        expect.objectContaining({ id: 'debug-report-local-artifact' }),
+      ],
+    })
+    expect(JSON.stringify(debugTask?.acceptanceCriteria ?? '')).not.toMatch(/accessibility|design-system|target-area conventions/i)
     expect(laterTask).toMatchObject({
       status: 'shelved',
       references: ['docs/harness/remaining-spec-decomposition-inventory.md'],
@@ -382,9 +401,19 @@ describe('project re-intake apply', () => {
     const refreshed = queue.tasks.find(task => task.id === 'task-import-9s8tkc')
     expect(refreshed).toMatchObject({
       title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
-      status: 'import_draft',
+      status: 'spec_review',
       references: ['docs/harness/implementation-roadmap.md', 'docs/specs/schema-contract-roadmap.md'],
+      productBrief: expect.objectContaining({
+        authoredBy: 'project-reintake',
+        successMetric: expect.stringContaining('cited Stage 1 contracts'),
+      }),
     })
+    expect(refreshed?.acceptanceCriteria?.map((criterion: { id?: string }) => criterion.id)).toEqual([
+      'contracts-defined',
+      'fixture-ground-truth-shape',
+      'run-evaluation-shape',
+      'deterministic-proof',
+    ])
     expect(refreshed?.spec).toContain('`FixtureManifest`')
     expect(refreshed?.spec).toContain('`PrototypeRun`')
     expect(refreshed?.spec).not.toContain('`ProviderRegistryEntry`')
@@ -433,7 +462,7 @@ describe('project re-intake apply', () => {
 
     const queue = await readQueue(memoryDir)
     expect(queue.tasks.find(task => task.id === 'task-import-9s8tkc')).toMatchObject({
-      status: 'import_draft',
+      status: 'spec_review',
       releaseIds: ['stage-1-fixture-and-evaluation-harness'],
     })
   })

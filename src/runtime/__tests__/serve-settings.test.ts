@@ -269,7 +269,8 @@ describe('project re-intake endpoints', () => {
     const tasks = await readTasks(tmpDir)
     expect(tasks.find(task => task.id === 'task-039')).toMatchObject({
       title: 'Build AlertDialog',
-      status: 'import_draft',
+      status: 'spec_review',
+      productBrief: expect.objectContaining({ authoredBy: 'project-reintake' }),
     })
     expect(tasks.find(task => task.id === 'task-alert-dialog-integration')).toMatchObject({
       dependsOn: ['task-039'],

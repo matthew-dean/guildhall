@@ -71,7 +71,7 @@ export interface ReintakeTaskDraft {
   title: string
   description: string
   domain: string
-  status: 'import_draft' | 'shelved'
+  status: 'import_draft' | 'spec_review' | 'shelved'
   priority: 'critical' | 'high' | 'normal' | 'low'
   dependsOn: string[]
   acceptanceCriteria: Task['acceptanceCriteria']
@@ -79,6 +79,7 @@ export interface ReintakeTaskDraft {
   releaseIds?: string[]
   stageAlignment?: string
   spec?: string
+  productBrief?: Task['productBrief']
   proofPaths?: unknown[]
 }
 
@@ -477,18 +478,23 @@ function evidenceTaskToDraft(
     ...task.sourceRefs.map(ref => ref.path),
     ...supportingEvidenceRefsForTask(task, sources),
   ])
-  const acceptanceCriteria = task.acceptanceCriteria.map(criterion => ({
+  const contractNames = unique(references
+    .map(reference => sources.find(source => source.path === reference)?.content)
+    .filter((content): content is string => Boolean(content))
+    .flatMap(content => extractNeededContractNames(content, task.title)))
+  const acceptanceCriteria = reintakeAcceptanceCriteria(task, contractNames).map(criterion => ({
     id: criterion.id,
     description: criterion.description,
     verifiedBy: criterion.id.includes('automated') || criterion.id.includes('regression') ? 'automated' : 'review',
     met: false,
   }))
+  const reviewableBlueprint = hasReviewableReintakeBlueprint(task, references, acceptanceCriteria, contractNames)
   return {
     id: task.id,
     title: task.title,
     description: evidenceTaskDescription(task),
     domain: task.targetArea,
-    status: later ? 'shelved' : 'import_draft',
+    status: later ? 'shelved' : reviewableBlueprint ? 'spec_review' : 'import_draft',
     priority: evidenceTaskPriority(task),
     dependsOn: task.dependsOn,
     acceptanceCriteria,
@@ -496,7 +502,167 @@ function evidenceTaskToDraft(
     ...(later || !selectedRelease ? {} : { releaseIds: [selectedRelease.id] }),
     ...(task.stageAlignment ? { stageAlignment: task.stageAlignment } : {}),
     spec: evidenceTaskSpec({ task, references, acceptanceCriteria, sources }),
+    ...(reviewableBlueprint ? { productBrief: reintakeProductBrief(task, contractNames) } : {}),
     proofPaths: task.proofPaths,
+  }
+}
+
+function reintakeAcceptanceCriteria(
+  task: EvidenceTask,
+  contractNames: string[],
+): Array<{ id: string; description: string; verifiedBy?: string }> {
+  const prototypeKind = reintakePrototypeTaskKind(task.title)
+  if (prototypeKind === 'fixture') {
+    return [
+      {
+        id: 'fiction-fixture-source',
+        description: `${task.title} adds a tiny safe fiction fixture with enough manuscript/context detail to exercise story-memory behavior without private real-manuscript data.`,
+        verifiedBy: 'review',
+      },
+      {
+        id: 'human-expected-records',
+        description: 'Human-authored expected records describe the ground-truth reader knowledge, scene facts, and expected signals the first run should compare against.',
+        verifiedBy: 'review',
+      },
+      {
+        id: 'fixture-load-proof',
+        description: 'The fixture and expected records can be loaded by the no-UI Stage 1 harness without needing product UI.',
+        verifiedBy: 'review',
+      },
+    ]
+  }
+  if (prototypeKind === 'runner') {
+    return [
+      {
+        id: 'fixture-packet-build',
+        description: `${task.title} reads the first fixture records and builds the context packet inputs used by the prototype run.`,
+        verifiedBy: 'review',
+      },
+      {
+        id: 'no-ui-command',
+        description: 'The runner is callable from a script or CLI entrypoint without requiring a completed product UI.',
+        verifiedBy: 'review',
+      },
+      {
+        id: 'deterministic-run-record',
+        description: 'The run writes a deterministic prototype-run record that later evaluation/debug steps can consume.',
+        verifiedBy: 'review',
+      },
+    ]
+  }
+  if (prototypeKind === 'evaluation') {
+    return [
+      {
+        id: 'packet-quality-categories',
+        description: `${task.title} reports whether context is missing, noisy, stale, or useful against the human-authored expected records.`,
+        verifiedBy: 'review',
+      },
+      {
+        id: 'repeatable-evaluation-record',
+        description: 'Evaluation output is deterministic enough to compare repeated runs of the same fixture.',
+        verifiedBy: 'review',
+      },
+      {
+        id: 'reviewer-readable-failures',
+        description: 'Failures identify which fixture expectation or packet signal was violated so the next prototype iteration is actionable.',
+        verifiedBy: 'review',
+      },
+    ]
+  }
+  if (prototypeKind === 'debug_report') {
+    return [
+      {
+        id: 'debug-report-inputs',
+        description: `${task.title} records the fixture id, source records, packet inputs, prototype output, and evaluation result for each run.`,
+        verifiedBy: 'review',
+      },
+      {
+        id: 'debug-report-traceability',
+        description: 'The report lets a developer trace why a context item was considered missing, noisy, stale, or useful.',
+        verifiedBy: 'review',
+      },
+      {
+        id: 'debug-report-local-artifact',
+        description: 'The report is written as a local artifact that can be attached to Guildhall task evidence.',
+        verifiedBy: 'review',
+      },
+    ]
+  }
+  if (contractNames.length > 0 && /\b(schema|schemas|contract|contracts)\b/i.test(task.title)) {
+    const fixtureContracts = contractNames.filter(name => /fixture|expected|signal/i.test(name))
+    const runContracts = contractNames.filter(name => /prototype|run|evaluation|score|disagreement/i.test(name))
+    return [
+      {
+        id: 'contracts-defined',
+        description: `${task.title} defines the cited contracts: ${contractNames.map(name => `\`${name}\``).join(', ')}.`,
+        verifiedBy: 'review',
+      },
+      {
+        id: 'fixture-ground-truth-shape',
+        description: fixtureContracts.length > 0
+          ? `Fixture and expected-record data can represent human-authored ground truth using ${fixtureContracts.map(name => `\`${name}\``).join(', ')}.`
+          : 'Fixture and expected-record data can represent human-authored ground truth for the first no-UI proof.',
+        verifiedBy: 'review',
+      },
+      {
+        id: 'run-evaluation-shape',
+        description: runContracts.length > 0
+          ? `Prototype run and evaluation records can report packet quality and reviewer outcomes using ${runContracts.map(name => `\`${name}\``).join(', ')}.`
+          : 'Prototype run and evaluation records can report packet quality and reviewer outcomes.',
+        verifiedBy: 'review',
+      },
+      {
+        id: 'deterministic-proof',
+        description: `${task.title} has deterministic review or command proof before Stage 1 execution continues.`,
+        verifiedBy: 'review',
+      },
+    ]
+  }
+  return task.acceptanceCriteria
+}
+
+function reintakePrototypeTaskKind(title: string): 'fixture' | 'runner' | 'evaluation' | 'debug_report' | 'schema_prune' | null {
+  if (/^add the first tiny fiction fixture and human-authored expected records\.?$/i.test(title)) return 'fixture'
+  if (/\bno-ui runner\b/i.test(title) || /\bbuilds a packet from fixture records\b/i.test(title)) return 'runner'
+  if (/\bdeterministic evaluation output\b/i.test(title)) return 'evaluation'
+  if (/\bdebug report\b/i.test(title)) return 'debug_report'
+  if (/\bnarrow the mvp story-memory schema\b/i.test(title)) return 'schema_prune'
+  return null
+}
+
+function hasReviewableReintakeBlueprint(
+  task: EvidenceTask,
+  references: string[],
+  acceptanceCriteria: Task['acceptanceCriteria'],
+  contractNames: string[],
+): boolean {
+  return (
+    references.length > 0 &&
+    acceptanceCriteria.length > 0 &&
+    (
+      contractNames.length > 0 ||
+      task.proofPaths.length > 0 ||
+      task.sourceRefs.length > 0
+    )
+  )
+}
+
+function reintakeProductBrief(task: EvidenceTask, contractNames: string[]): NonNullable<Task['productBrief']> {
+  const successMetric = contractNames.length > 0
+    ? `${task.title} defines the cited Stage 1 contracts and records proof that they support the no-UI fixture/evaluation harness.`
+    : `${task.title} is specified from current source evidence with a clear proof boundary before implementation starts.`
+  return {
+    userJob: `I want ${task.title} shaped into reviewable project work from the cited planning docs, without asking me to reconstruct the source trail manually.`,
+    whyItMattersNow: task.stageAlignment
+      ? `${task.stageAlignment} is the selected release scope, so this work must be reviewed before Guildhall can safely execute that release.`
+      : 'This work is part of the current recovered project scope and needs a source-grounded implementation boundary before execution.',
+    successMetric,
+    nonGoals: [
+      'Do not include unrelated roadmap contracts or later-release work in this task.',
+      'Do not treat this draft as approved until the owner or delegated Codex-human explicitly approves the spec.',
+    ],
+    authoredBy: 'project-reintake',
+    authoredAt: new Date().toISOString(),
   }
 }
 
@@ -536,6 +702,13 @@ function evidenceTaskSpec(input: {
     '',
     '## Acceptance criteria',
     ...input.acceptanceCriteria.map((criterion, index) => `${index + 1}. ${criterion.description}`),
+    '',
+    '## Completion Boundary',
+    `- Product outcome: ${input.task.title} is reviewable and executable from the cited source evidence without importing unrelated roadmap work.`,
+    '- What Guildhall can complete in code: repo-local implementation, fixtures, schema records, tests, docs, and proof artifacts named by the approved spec.',
+    '- External dependencies: none expected beyond the local project checkout and documented proof commands.',
+    '- Owner-only setup: explicit approval of this reviewable blueprint before worker execution.',
+    '- What counts as done: the accepted proof demonstrates the scoped Stage work and records evidence against the acceptance criteria.',
   ].join('\n')
 }
 

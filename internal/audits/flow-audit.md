@@ -12,6 +12,80 @@ This is the active browser test plan for the Guildhall project surface. Keep it
 updated while auditing the active test project so another agent can resume
 without guessing.
 
+2026-07-04T07:20:00Z - Re-intake now turns source-grounded Narrative Harness
+Stage 1 work into reviewable specs instead of generic import drafts.
+
+- Work id:
+  `codex:narrative-harness-reintake-reviewable-specs-2026-07-04`.
+- User job: after Guildhall recovers Stage 1 from Narrative Harness planning
+  docs, the owner should see reviewable task briefs/specs with concrete source
+  trails and task-specific acceptance criteria, not generic filler drafts that
+  still require the owner to reconstruct what the docs meant.
+- Failure reproduced:
+  - Live Narrative Harness Stage 1 showed `7 imported current-scope tasks still
+    need real briefs`.
+  - `task-import-9s8tkc` had no `productBrief` and still carried generic
+    evidence-graph criteria in some paths, while re-intake always collapsed
+    evidence tasks to `import_draft`.
+  - The debug-report Stage 1 task could inherit generic criteria such as
+    target-area conventions/accessibility instead of debug-report-specific
+    proof.
+- Fix:
+  - Project re-intake drafts can now materialize reviewable `spec_review` tasks
+    when current source evidence is strong enough to produce a blueprint.
+  - Re-intake records an unapproved `productBrief`, concrete completion
+    boundary, source references, and proof-oriented acceptance criteria while
+    still preserving the owner/Codex-human approval gate before execution.
+  - Narrative Harness Stage 1 prototype tasks now receive task-specific
+    criteria for fixture records, no-UI runner output, deterministic evaluation,
+    and developer-readable debug reports. Schema/contract tasks still receive
+    contract-specific criteria and reject unrelated contracts.
+- Contract Touch Decision:
+  - Work id:
+    `codex:narrative-harness-reintake-reviewable-specs-2026-07-04`.
+  - Touched contracts: project re-intake draft/apply task shape, task status
+    produced by re-intake, `productBrief` presence on re-intake-created tasks,
+    and `/api/project` Start readiness as observed after re-intake apply.
+  - Contracts considered but not touched: persisted task schema shape,
+    release schema shape, workspace-import approval API shape, and
+    `approve-spec`/`approve-brief` API shape.
+  - Required follow-up: act as the delegated Codex-human reviewer only after the
+    visible Stage 1 specs are inspected; then approve and run the selected
+    release through Start without widening scope.
+  - Proof required/provided: re-intake apply regression tests, endpoint tests,
+    installed-app re-intake apply against the real Narrative Harness project,
+    API proof, and rendered Overview proof.
+  - Apply/revert behavior: reverting returns re-intake to generic
+    `import_draft` work and can erase the product brief/spec review state the
+    user needs before safe execution.
+- Verification:
+  - `./node_modules/.bin/vitest run
+    src/runtime/__tests__/project-reintake-apply.test.ts
+    src/runtime/__tests__/workspace-importer.test.ts
+    src/runtime/__tests__/serve-settings.test.ts --testNamePattern
+    "re-intake|import|release|Start|Narrative Harness"` passed `89` tests.
+  - `/opt/homebrew/bin/pnpm build`, `/opt/homebrew/bin/pnpm lint:contracts`,
+    and `git diff --check` passed.
+  - Installed-app proof after `/opt/homebrew/bin/pnpm dev:install`,
+    `guildhall stop`, and `guildhall start`: `/api/stale-server` returned
+    `stale:false` for PID `24863` from
+    `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+  - Live `POST /api/project/reintake/rerun?projectId=narrative-harness` then
+    `POST /api/project/reintake/apply?projectId=narrative-harness` succeeded,
+    applying `4` groups after the final rerun.
+  - Live `/api/project?projectId=narrative-harness` returned Stage 1 with `7`
+    current tasks, all `spec_review`, `8` deferred tasks, and Start blocked
+    with `7 specs are waiting for review before work can start`.
+  - Live Stage 1 criteria are task-specific: schema tasks use
+    `contracts-defined`, fixture task uses `fiction-fixture-source`, runner uses
+    `fixture-packet-build`, evaluation uses `packet-quality-categories`, and
+    debug report uses `debug-report-inputs`; none of the seven current tasks
+    matched `accessibility`, `design-system`, or `target-area conventions`.
+  - Rendered Overview proof at desktop `1280x820` showed `Review needed`,
+    `Review next spec`, `7 Current scope`, `8 Deferred`, scope
+    `Stage 1: Fixture And Evaluation Harness`, and the visible blocker
+    `7 specs are waiting for review before work can start...`.
+
 2026-07-04T07:05:00Z - Kept shaped import drafts from making the selected
 Narrative Harness release look runnable.
 
