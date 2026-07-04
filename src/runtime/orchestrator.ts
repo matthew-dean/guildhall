@@ -8948,17 +8948,19 @@ export class Orchestrator {
   }
 
   private latestSelfCritique(task: Task): string[] {
-    const note = [...task.notes]
-      .reverse()
-      .find((candidate) => isWorkerSelfCritiqueNote(candidate))
+    const note = this.latestWorkerSelfCritiqueNote(task)
     if (!note?.content?.trim()) return ['- None recorded.']
     return [note.content.trim()]
   }
 
-  private hasStructuredSelfCritique(task: Task): boolean {
-    const note = [...task.notes]
+  private latestWorkerSelfCritiqueNote(task: Task): Task['notes'][number] | undefined {
+    return [...task.notes]
       .reverse()
       .find((candidate) => isWorkerSelfCritiqueNote(candidate))
+  }
+
+  private hasStructuredSelfCritique(task: Task): boolean {
+    const note = this.latestWorkerSelfCritiqueNote(task)
     const content = note?.content?.trim() ?? ''
     if (!content) return false
     const hasAcceptanceCoverage =
@@ -8971,9 +8973,7 @@ export class Orchestrator {
   }
 
   private hasReviewProofPacket(task: Task): boolean {
-    const note = [...task.notes]
-      .reverse()
-      .find((candidate) => isWorkerSelfCritiqueNote(candidate))
+    const note = this.latestWorkerSelfCritiqueNote(task)
     const content = note?.content?.trim() ?? ''
     if (!content || !this.hasStructuredSelfCritique(task)) return false
     const hasProofPacket =
@@ -8986,6 +8986,25 @@ export class Orchestrator {
     return hasProofPacket && hasVerificationProof && hasDiffScope
   }
 
+  private hasNewerSubstantiveReviewFeedback(task: Task): boolean {
+    const selfCritique = this.latestWorkerSelfCritiqueNote(task)
+    if (!selfCritique?.timestamp) return false
+    const selfCritiqueTime = Date.parse(selfCritique.timestamp)
+    if (!Number.isFinite(selfCritiqueTime)) return false
+    return task.notes.some((note) => {
+      if (!note.timestamp) return false
+      const noteTime = Date.parse(note.timestamp)
+      if (!Number.isFinite(noteTime) || noteTime <= selfCritiqueTime) return false
+      const content = note.content ?? ''
+      return (
+        /recommended task-local revisions/i.test(content) ||
+        /coordinator adjudicated:\s*worker to address/i.test(content) ||
+        /latest substantive review feedback/i.test(content) ||
+        /review revision cap/i.test(content)
+      )
+    })
+  }
+
   private async maybePromoteExistingWorkerReviewProof(input: {
     task: Task
     beforeStatus: TaskStatus
@@ -8994,6 +9013,7 @@ export class Orchestrator {
     if (input.beforeStatus !== 'in_progress') return null
     if (input.task.assignedTo && input.task.assignedTo !== 'worker-agent') return null
     if (!this.hasReviewProofPacket(input.task)) return null
+    if (this.hasNewerSubstantiveReviewFeedback(input.task)) return null
 
     let hasTaskWorktreeChanges = false
     const proofWorktreePath = input.task.worktreePath?.trim()
@@ -9011,6 +9031,7 @@ export class Orchestrator {
     if (!queuedTask) return null
     if (queuedTask.status !== 'in_progress') return null
     if (!this.hasReviewProofPacket(queuedTask)) return null
+    if (this.hasNewerSubstantiveReviewFeedback(queuedTask)) return null
 
     ensureReviewerOwnership(queuedTask)
     transitionTaskStatus({

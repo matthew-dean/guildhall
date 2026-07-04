@@ -81,6 +81,48 @@ through Guildhall's own action/readiness surfaces.
 
 source: codex:narrative-harness-recovered-work-visible-proof-2026-07-04
 
+2026-07-04T15:43:00Z - Stopped stale review-proof recovery from overriding
+newer reviewer feedback in Narrative Harness.
+
+- Work id:
+  `codex:narrative-harness-stale-review-proof-recovery-2026-07-04`.
+- User job: when Narrative Harness reviewers ask the worker to revise a task,
+  Guildhall should send the task back to the worker with the latest scoped
+  feedback. It must not keep using an older worker self-critique/proof packet
+  to auto-promote the task back to review.
+- Failure reproduced:
+  - The contract task reached `max_revisions_exceeded` after repeated
+    coordinator adjudication rounds.
+  - Recovery notes alternated between reopening the task for the worker and
+    immediately saying Guildhall found an existing worker self-critique with a
+    review proof packet, moving the task back to review.
+  - Live `/api/project?projectId=narrative-harness` showed the task blocked
+    with `revisionCount:11`, while the visible primary action still pointed at
+    the same work item.
+- Fix:
+  - Existing worker proof-packet promotion now checks whether any newer
+    substantive review/adjudication feedback exists after the latest worker
+    self-critique.
+  - If newer feedback exists, Guildhall leaves the task in the worker lane
+    instead of replaying stale handoff proof.
+- Live installed-app proof:
+  - `/api/stale-server` returned `stale:false` for PID `82601`.
+  - After `POST /api/project/start?projectId=narrative-harness`, the task moved
+    from blocked max-revisions state to `status:"in_progress"` with
+    `assignedTo:"worker-agent"`.
+  - The latest recovery note said the task was reopened so the worker can
+    address the latest substantive review feedback; after another 45 seconds,
+    the task remained in `in_progress`/`worker-agent` with no new stale
+    `existing worker self-critique with a review proof packet` recovery note.
+- Verification:
+  - `CI=true /opt/homebrew/bin/pnpm exec vitest run
+    src/runtime/__tests__/orchestrator.test.ts -t
+    "promotes an existing worker review proof|does not promote stale worker proof|latest substantive review feedback"`
+    passed `2` focused tests.
+  - `/opt/homebrew/bin/pnpm build` passed before install.
+
+source: codex:narrative-harness-stale-review-proof-recovery-2026-07-04
+
 2026-07-04T07:20:00Z - Re-intake now turns source-grounded Narrative Harness
 Stage 1 work into reviewable specs instead of generic import drafts.
 

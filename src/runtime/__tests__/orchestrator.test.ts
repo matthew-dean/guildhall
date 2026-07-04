@@ -8238,6 +8238,109 @@ describe('Orchestrator.run — full loops', () => {
     )).toBe(true)
   })
 
+  it('does not promote stale worker proof when newer review feedback requests revisions', async () => {
+    const worktreePath = path.join(tmpDir, 'stale-proof-worktree')
+    await fs.mkdir(worktreePath, { recursive: true })
+    await writeQueue([
+      mkTask({
+        id: 'schema-narrowing',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        worktreePath,
+        spec: VALID_SPEC,
+        notes: [
+          {
+            agentId: 'worker-agent',
+            role: 'backend-engineer',
+            content: [
+              '**Self-critique:**',
+              '',
+              'For each acceptance criterion:',
+              '- AC1: Met — docs/specs/mvp-story-memory-schema-narrowing.md records the narrowed schema.',
+              '',
+              'Minimum-scope check:',
+              '- Files changed: docs/specs/mvp-story-memory-schema-narrowing.md.',
+              '- Smallest useful change?: yes.',
+              '',
+              'Review proof packet:',
+              '- Changed files / diff scope: docs/specs/mvp-story-memory-schema-narrowing.md.',
+              '- Verification commands passed: npm run build passed.',
+              '- Working hypothesis at handoff: The schema-narrowing proof is ready for review.',
+            ].join('\n'),
+            timestamp: '2026-07-04T11:45:33.236Z',
+          },
+          {
+            agentId: 'reviewer-fanout',
+            role: 'reviewer',
+            content: [
+              '**Aggregated revisions from 1 persona:**',
+              '',
+              'Recommended task-local revisions:',
+              '- Add the missing proof command capture before acceptance.',
+            ].join('\n'),
+            timestamp: '2026-07-04T11:50:33.236Z',
+          },
+          {
+            agentId: 'coordinator-harness-prototype',
+            role: 'coordinator',
+            content: [
+              '**Coordinator adjudication (round 5):**',
+              '',
+              'Coordinator adjudicated: worker to address 1 scoped item from security-engineer',
+              '',
+              '**Scoped instructions (address exactly these items):**',
+              '- Add the missing proof command capture before acceptance.',
+            ].join('\n'),
+            timestamp: '2026-07-04T11:51:33.236Z',
+          },
+          {
+            agentId: 'coordinator',
+            role: 'recovery',
+            content:
+              'User restarted the project after Guildhall hit the review revision cap. Reopened the task so the worker can address the latest substantive review feedback instead of treating that cap as terminal.',
+            timestamp: '2026-07-04T11:52:33.236Z',
+          },
+        ],
+      }),
+    ])
+
+    let workerCalled = false
+    const worker: OrchestratorAgent = {
+      name: 'worker-agent',
+      async generate() {
+        workerCalled = true
+        await mutateTask('schema-narrowing', {
+          status: 'in_progress',
+          assignedTo: 'worker-agent',
+        })
+        return { text: 'worker resumed' }
+      },
+    }
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+      gitDriver: new InMemoryGitDriver({ clean: false }),
+    })
+    const out = await orch.tick()
+
+    expect(workerCalled).toBe(true)
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.beforeStatus).toBe('in_progress')
+      expect(out.afterStatus).toBe('in_progress')
+      expect(out.agent).toBe('worker-agent')
+    }
+
+    const task = (await readQueue()).tasks.find((candidate) => candidate.id === 'schema-narrowing')
+    expect(task?.status).toBe('in_progress')
+    expect(task?.assignedTo).toBe('worker-agent')
+    expect(task?.notes.some((note) =>
+      note.role === 'recovery' &&
+      note.content.includes('existing worker self-critique with a review proof packet'),
+    )).toBe(false)
+  })
+
   it('uses handoff-specific immediate resume instructions instead of file-open instructions when a review handoff checkpoint exists', async () => {
     await writeQueue([
       mkTask({
