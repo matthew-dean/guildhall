@@ -951,7 +951,7 @@ export function mergeWorkspaceImportDraft(
         ? task.acceptanceCriteria ?? parsedTask.acceptanceCriteria
         : parsedTask.acceptanceCriteria ?? task.acceptanceCriteria
       const resolvedDependsOn = preserveDetectedScope
-        ? task.dependsOn ?? parsedTask.dependsOn
+        ? task.dependsOn ?? []
         : parsedTask.dependsOn ?? task.dependsOn
       const resolvedProofPaths = preserveDetectedScope
         ? task.proofPaths ?? parsedTask.proofPaths
@@ -2444,11 +2444,12 @@ function importedCompletionBoundary(
 ): string {
   const successMetric = summarizeImportedSuccessMetric(task)
   const proofCommand = firstImportedProofCommand(task)
-  const verificationEnvironment = proofCommand
+  const verificationPlan = proofCommand
     ? evidenceDetail.verificationBullets.length > 0
       ? `Local workspace proof using: ${evidenceDetail.verificationBullets.join('; ')}`
       : `Local workspace proof using: ${summarizeImportedVerification(task)}`
     : `Add bounded local workspace proof for ${task.title} before treating this work as execution-complete.`
+  const verificationEnvironment = `Local filesystem and repo-local tooling already available in the execution environment; run the cited proof plan. ${verificationPlan}`
   const missingInformation = cleanImportedMissingInformation(task.missingInformation ?? [])
   const splitOrBlock = missingInformation.length > 0
     ? `Split only if these unresolved imported gaps still change the implementation boundary: ${missingInformation.join('; ')}. Block only for missing external credentials, unavailable services, or absent source evidence.`
@@ -2459,7 +2460,7 @@ function importedCompletionBoundary(
     `- What Guildhall can complete in code: Implement ${task.title} within the boundary already described by the cited sources, acceptance criteria, and proof plan.`,
     '- External dependencies: None beyond the cited repo-local evidence and the local tooling needed to run the proof plan.',
     '- Owner-only setup: None expected. If the imported evidence is stale or points at the wrong task-scope boundary, reshape the task before execution instead of silently changing scope.',
-    `- Proof target: ${verificationEnvironment}`,
+    `- Verification environment: ${verificationEnvironment}`,
     `- What counts as done: ${successMetric} Record the proof result against the imported acceptance criteria.`,
     `- What must be split or blocked: ${splitOrBlock}`,
   ].join('\n')
@@ -4825,6 +4826,9 @@ export async function approveWorkspaceImport(
       refreshedAcceptanceCriteria,
       materializedProof,
     )
+    if (!['done', 'pending_pr'].includes(existing.status)) {
+      delete existing.completedAt
+    }
     existing.outOfScope = seededBlueprint.outOfScope
     existing.spec = seededBlueprint.spec
     existing.productBrief = seededBlueprint.productBrief
@@ -4930,6 +4934,8 @@ export async function approveWorkspaceImport(
     tasksAdded++
   }
 
+  pruneInactiveImportedSplitDependencies(queue, now)
+
   // Mark the importer task done.
   if (approvedSpec) {
     task.spec = approvedSpec
@@ -5020,6 +5026,32 @@ export async function approveWorkspaceImport(
     tasksAdded,
     goalsRecorded: parsed.goals.length,
     milestonesLogged,
+  }
+}
+
+function pruneInactiveImportedSplitDependencies(queue: TaskQueue, now: string): void {
+  const inactiveGeneratedSplitIds = new Set(
+    queue.tasks
+      .filter(task =>
+        (task.status === 'archived' || task.status === 'cancelled') &&
+        task.id.includes('-split-') &&
+        (
+          task.proposedBy === 'task-sizing' ||
+          task.origination === 'system' ||
+          task.hierarchy?.relation === 'decomposes' ||
+          task.requestIntake?.createdBy === 'workspace-importer' ||
+          task.notes?.some(note => note.agentId === 'task-sizing' || note.agentId === 'workspace-importer')
+        ),
+      )
+      .map(task => task.id),
+  )
+  if (inactiveGeneratedSplitIds.size === 0) return
+
+  for (const task of queue.tasks) {
+    if (task.status === 'archived' || task.status === 'cancelled') continue
+    if (!task.dependsOn.some(dependency => inactiveGeneratedSplitIds.has(dependency))) continue
+    task.dependsOn = task.dependsOn.filter(dependency => !inactiveGeneratedSplitIds.has(dependency))
+    task.updatedAt = now
   }
 }
 

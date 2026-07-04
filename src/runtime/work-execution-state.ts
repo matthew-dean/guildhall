@@ -171,7 +171,9 @@ function deriveLeafRunnableState(tasks: Task[], workId: string): boolean {
   if (descendantsFor(tasks, workId).length > 0) return false
   if (DECOMPOSE_ACTIONS.has(task.sizePlan?.action ?? '')) return false
   const visibility = visibilityForTask(task, tasks)
-  if (!visibility.countInProjectTotals || visibility.kind === 'internal_step' || visibility.kind === 'hidden') return false
+  if (visibility.kind === 'hidden') return false
+  if (visibility.kind === 'internal_step' && !task.hierarchy?.parentId) return false
+  if (!visibility.countInProjectTotals && visibility.kind !== 'internal_step') return false
   return ACTIVE_STATUSES.has(task.status) && !BLOCKED_STATUSES.has(task.status) && !TERMINAL_STATUSES.has(task.status)
 }
 

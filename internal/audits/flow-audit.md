@@ -12607,6 +12607,65 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-07-04T14:40:00Z - Continued Narrative Harness Stage 1 proof with
+installed-app import refresh, approval, and start validation.
+
+- Work id: `codex:narrative-harness-import-execution-truth-2026-07-04`.
+- User job: a project owner should be able to trust that Guildhall's visible
+  Stage 1 scope, dependencies, start state, and live/pinned work all describe
+  the same execution reality. Codex may act as the human reviewer, but
+  Guildhall must not silently approve owner checkpoints for itself.
+- Fixes:
+  - Imported generated specs now use the exact `Verification environment`
+    completion-boundary field required by the approval contract instead of
+    the non-approvable `Proof target` wording.
+  - Workspace import refresh no longer inherits stale parsed dependencies when
+    the fresh detected current scope has no dependency edge.
+  - Refreshing non-terminal imported tasks clears stale `completedAt` values
+    so Guildhall cannot show `ready` work as historically complete.
+  - Import approval prunes active dependencies pointing at archived/cancelled
+    generated split children, including legacy `task-sizing` split records.
+  - Internal child steps under containing work are runnable, while orphaned
+    hidden/internal bookkeeping remains non-runnable.
+- Installed-app proof:
+  - Rebuilt and installed the app with `/opt/homebrew/bin/pnpm build`,
+    `/opt/homebrew/bin/pnpm dev:install`, `guildhall stop`, and
+    `guildhall start`.
+  - `/api/stale-server` returned `stale:false` from the installed
+    `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+  - Reran and approved the Narrative Harness workspace import through
+    `/api/project/workspace-import/rerun?projectId=narrative-harness` and
+    `/api/project/workspace-import/approve?projectId=narrative-harness`.
+  - Live project API showed six current Stage 1 tasks, zero active
+    dependencies on inactive generated split children, and zero active current
+    tasks with stale `completedAt`.
+  - Codex, acting as the human reviewer, approved the four generated Stage 1
+    specs via `/api/project/task/:id/approve-spec`; `startReadiness` then
+    returned `canStart:true` and the current release dependency chain was
+    visible as schema contracts -> fixture -> runner -> evaluation output ->
+    debug report -> schema narrowing.
+  - Starting the project initially stopped with `idle_limit` while the UI still
+    said `canStart:true`; after allowing internal child execution, the installed
+    run streamed live spec-agent events for
+    `task-import-9s8tkc-split-define-fixture-expected-record-prototype-run-and-evaluat`.
+  - The current top action now points at that same internal step when it blocks,
+    with the real reason: `human_judgment_required: Spec agent kept researching
+    after Guildhall asked for durable progress.`
+- Remaining failure exposed:
+  - The durable-progress failure is still classified as human judgment even
+    though it is a recoverable agent/process failure during Codex-supervised
+    automation. The next slice should make Guildhall recover or retry this
+    without presenting it as Matthew-only work, while still preserving real
+    owner approval boundaries.
+- Verification:
+  - `CI=true /opt/homebrew/bin/pnpm exec vitest run src/runtime/__tests__/workspace-importer.test.ts -t "reopens stale imported done|stale parsed dependencies|replaces stale imported split children"` passed.
+  - `CI=true /opt/homebrew/bin/pnpm exec vitest run src/runtime/__tests__/orchestrator-picker.test.ts src/runtime/__tests__/work-progress.test.ts src/runtime/__tests__/workspace-importer.test.ts` passed `94` tests.
+  - Earlier focused suite in this slice passed `345` tests across importer,
+    serve settings, work progress, workspace import detection/hypothesis,
+    orientation spine, Overview, and Inbox.
+
+source: codex:narrative-harness-import-execution-truth-2026-07-04
+
 2026-07-04T14:10:00-07:00 - Cleaned imported split work communication and
 proved the installed Narrative Harness surfaces expose the remaining import
 refresh blocker instead of archived generated titles.

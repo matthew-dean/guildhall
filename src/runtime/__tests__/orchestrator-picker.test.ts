@@ -240,4 +240,26 @@ describe('pickNextTask bounded scope eligibility', () => {
 
     expect(pickNextTask(q)?.id).toBe('visible-work')
   })
+
+  it('can pick internal child steps from selected release containing work', () => {
+    const q = queueWithRelease([
+      {
+        id: 'included',
+        title: 'Selected release feature',
+        priority: 'normal',
+        releaseIds: ['2-0-alpha'],
+        hierarchy: { childIds: ['internal-step'], order: 0 },
+      },
+      {
+        id: 'internal-step',
+        title: 'Runnable internal step',
+        priority: 'normal',
+        hierarchy: { parentId: 'included', childIds: [], order: 0 },
+        workVisibility: { kind: 'internal_step', countInProjectTotals: false },
+      },
+    ])
+    const scope = selectedReleaseScopeForQueue(q)
+
+    expect(pickNextTask(q, undefined, undefined, undefined, undefined, { scope })?.id).toBe('internal-step')
+  })
 })

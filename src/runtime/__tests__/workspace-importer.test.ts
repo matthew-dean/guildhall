@@ -1197,6 +1197,7 @@ tasks:
         }),
       ],
     })
+    expect(refreshedQueue.tasks.find((t) => t.id === 'task-headless-schema')?.completedAt).toBeUndefined()
   })
 
   it('preserves exact imported release labels instead of deriving labels from ids', async () => {
@@ -3387,6 +3388,8 @@ tasks:
       recommendedNextAction: 'proceed_to_implementation_spec',
     })
     expect(alertDialog.spec).toContain('## Completion Boundary')
+    expect(alertDialog.spec).toContain('Verification environment:')
+    expect(alertDialog.spec).not.toContain('Proof target:')
     expect(alertDialog.productBrief).toMatchObject({
       authoredBy: 'workspace-importer',
     })
@@ -3401,6 +3404,11 @@ tasks:
     expect(drawerIntegration).toMatchObject({ domain: 'knit', dependsOn: ['task-drawer'] })
     expect(q.tasks.some((task) => task.title === 'looma/docs/component-library-audit.md: AlertDialog')).toBe(false)
 
+    await expect(approveSpec({
+      memoryDir,
+      taskId: 'task-039',
+      approvalNote: 'Generated workspace-import spec should satisfy the same approval contract the UI uses.',
+    })).resolves.toMatchObject({ success: true, newStatus: 'ready' })
   })
 
   it('preserves richer parsed references when the evidence graph reframes an existing survivor task', async () => {
@@ -4250,7 +4258,8 @@ tasks:
     expect(task?.spec).not.toContain('`done`')
     expect(task?.spec).not.toContain('`expansion-task-full-decomposition-split-verify-and-update-the-migration-record`')
     expect(task?.spec).toContain('build a no-UI test harness that proves story-memory and packet contracts against small fiction fixtures before any product UI is designed.')
-    expect(task?.spec).toContain('Proof target: Add bounded local workspace proof')
+    expect(task?.spec).toContain('Verification environment: Local filesystem and repo-local tooling already available in the execution environment')
+    expect(task?.spec).not.toContain('Proof target:')
     expect(task?.spec).not.toContain('pnpm test -- define-fixture-expected-record-prototype-run-and-evaluation-schemas')
     expect(task?.proofPaths?.some(path => path.kind === 'command')).toBe(false)
     expect(task?.acceptanceCriteria?.find(criterion => criterion.id === 'deterministic-proof')).toMatchObject({
@@ -4379,6 +4388,8 @@ tasks:
     description: Implement a no-UI runner that builds a packet from fixture records.
     domain: harness
     priority: high
+    dependsOn:
+      - task-runner-split-execute-the-packet-run-without-ui-help
     references:
       - docs/harness/implementation-roadmap.md
       - docs/harness/prototype-iteration-workflow.md
@@ -4536,7 +4547,7 @@ tasks:
           priority: 'high',
           acceptanceCriteria: [],
           outOfScope: [],
-          dependsOn: [],
+          dependsOn: ['task-runner-split-execute-the-packet-run-without-ui-help'],
           notes: [],
           gateResults: [],
           reviewVerdicts: [],
@@ -4676,6 +4687,10 @@ tasks:
       })
     expect(q.tasks.find(candidate => candidate.id === 'task-runner-split-execute-the-packet-run-without-ui-help')?.hierarchy?.parentId).toBeUndefined()
     expect(q.tasks.find(candidate => candidate.id === 'task-runner-split-prove-the-runner-over-a-bounded-fixture')?.hierarchy?.parentId).toBeUndefined()
+    expect(q.tasks
+      .filter(candidate => candidate.status !== 'archived')
+      .some(candidate => candidate.dependsOn.includes('task-runner-split-execute-the-packet-run-without-ui-help')))
+      .toBe(false)
   })
 
   it('materializes current milestone starter work without cloning a narrower spec echo beside it', async () => {
@@ -4911,6 +4926,41 @@ tasks:
       confidence: 'medium',
       references: ['docs/harness/prototype-iteration-workflow.md'],
     })
+  })
+
+  it('does not inherit stale parsed dependencies when fresh detected scope has none', () => {
+    const detected = formWorkspaceHypothesis(invWith([
+      {
+        source: 'planning-docs',
+        kind: 'open_work',
+        title: 'Build packet runner',
+        evidence: 'Stage 1 harness deliverable.',
+        confidence: 'high',
+        references: ['docs/harness/implementation-roadmap.md'],
+      },
+    ]))
+    const parsed = parseWorkspaceImport(`
+\`\`\`yaml
+tasks:
+  - id: task-runner
+    title: Build packet runner
+    description: Old approved runner scope.
+    domain: harness
+    priority: high
+    dependsOn:
+      - task-runner-split-execute-the-packet-run-without-ui-help
+\`\`\`
+`)
+
+    const merged = mergeWorkspaceImportDraft(detected, parsed, {
+      preserveDetectedScope: true,
+    })
+
+    expect(merged.tasks.find(task => task.title === 'Build packet runner')).toMatchObject({
+      suggestedId: 'task-runner',
+      source: 'planning-docs',
+    })
+    expect(merged.tasks.find(task => task.title === 'Build packet runner')?.dependsOn).toEqual([])
   })
 
   it('suppresses parsed current-milestone deliverable echoes when the same roadmap also names a numbered current-task sequence', () => {
