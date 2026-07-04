@@ -1,4 +1,9 @@
 import { taskDisplayLabel } from '../shared/task-display-label.js'
+import {
+  taskScopeEligibility,
+  taskScopeNodeId,
+  type ProjectScope,
+} from './project-scope-projection.js'
 import { deriveTaskWorkVisibility } from './work-visibility.js'
 
 export type OrientationScopeKind =
@@ -320,7 +325,7 @@ export interface ScopeEligibilityOptions {
 }
 
 export function taskNodeId(taskId: string): string {
-  return `work:${taskId}`
+  return taskScopeNodeId(taskId)
 }
 
 function isProjectSetupTask(taskId: string): boolean {
@@ -335,22 +340,8 @@ export function taskEligibleForSelectedScope(
   eligible: boolean
   reason: 'no_scope' | 'included' | 'included_ancestor' | 'deferred' | 'explicit_target' | 'included_prerequisite'
 } {
-  if (!scope) return { eligible: true, reason: 'no_scope' }
   if (options.explicitTaskId === task.id) return { eligible: true, reason: 'explicit_target' }
-  const nodeId = taskNodeId(task.id)
-  if (scope.nodeIds.includes(nodeId)) return { eligible: true, reason: 'included' }
-  if (options.includedDependencyIds?.has(task.id)) return { eligible: true, reason: 'included_prerequisite' }
-  if (scope.deferredNodeIds.includes(nodeId)) return { eligible: false, reason: 'deferred' }
-  if (options.tasksById) {
-    let parentId = task.hierarchy?.parentId?.trim() || null
-    while (parentId) {
-      const parentNodeId = taskNodeId(parentId)
-      if (scope.nodeIds.includes(parentNodeId)) return { eligible: true, reason: 'included_ancestor' }
-      if (scope.deferredNodeIds.includes(parentNodeId)) return { eligible: false, reason: 'deferred' }
-      parentId = options.tasksById.get(parentId)?.hierarchy?.parentId?.trim() || null
-    }
-  }
-  return { eligible: false, reason: 'deferred' }
+  return taskScopeEligibility(task, scope as ProjectScope | null | undefined, options)
 }
 
 function emptyProgress(scopeId: string | null): OrientationProgress {

@@ -12,6 +12,40 @@ This is the active browser test plan for the Guildhall project surface. Keep it
 updated while auditing the active test project so another agent can resume
 without guessing.
 
+2026-07-04T17:10:00Z - Selected scope readiness now has one runtime
+projection instead of separate scope/readiness guesses.
+
+- Work id: `codex:project-scope-projection-runtime-2026-07-04`.
+- User job: a project owner should see one coherent answer for the selected
+  release/scope: what is included, what is deferred, what is paused, what can
+  run, and what blocks release. Overview, Map, Start, and release readiness
+  should not each reinterpret task/release fields differently.
+- Data-model diagnosis:
+  - The hard-to-sync state came from multiple authoritative-ish fields and
+    readers: release `nodeIds`, release `deferredNodeIds`, task `releaseIds`,
+    task hierarchy, task status, product brief/spec state, and per-view
+    readiness helpers.
+  - The first fix is not a new persisted schema. It is a canonical runtime read
+    model, `ProjectScopeProjection`, that normalizes those fields into scoped
+    rows, counts, start summary, and release blockers.
+- Fix:
+  - Added `src/runtime/project-scope-projection.ts` with selected-scope
+    resolution, task node ids, eligibility, row handoff state, start summary,
+    and release summary.
+  - `project-orientation-spine.ts` and `orchestrator-picker.ts` now keep their
+    public wrappers but delegate scope node ids/eligibility/selected release
+    scope to the projection module.
+  - `summarizeScopedReleaseWork()` now derives scoped membership, human blocker
+    count, and release blockers from projection rows while preserving the
+    existing API response shape.
+  - `startBlockerForTaskReadiness()` now uses `ProjectScopeProjection.start`
+    for selected release/current-scope task readiness. Import-draft shaping
+    stays in the import-draft preflight because it is a distinct workflow
+    blocker, not generic brief cleanup.
+- Verification:
+  - `CI=true /opt/homebrew/bin/pnpm exec vitest run src/runtime/__tests__/project-scope-projection.test.ts src/runtime/__tests__/orchestrator-picker.test.ts src/runtime/__tests__/serve-release-readiness.test.ts src/runtime/__tests__/serve-settings.test.ts -t "brief cleanup|ready tasks with a spec|selected release|paused_live_work"`
+    passed `11` focused tests.
+
 2026-07-04T16:34:00Z - Orientation summary now follows paused Narrative
 Harness live work instead of stale parent cleanup copy.
 

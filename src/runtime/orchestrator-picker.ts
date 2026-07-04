@@ -20,6 +20,7 @@ import { WORKSPACE_IMPORT_TASK_ID } from './workspace-importer.js'
 import { taskHasUnansweredVisibleQuestion } from './question-visibility.js'
 import { workSubtreeIds } from './work-hierarchy.js'
 import { taskEligibleForSelectedScope, taskNodeId, type OrientationScope } from './project-orientation-spine.js'
+import { selectedProjectScopeForQueue } from './project-scope-projection.js'
 import { deriveWorkExecutionState } from './work-execution-state.js'
 
 export type TaskLane = 'spec' | 'worker' | 'review' | 'coordinator'
@@ -30,28 +31,7 @@ export interface PickNextTaskOptions {
 }
 
 export function selectedReleaseScopeForQueue(queue: Pick<TaskQueue, 'tasks' | 'releases' | 'selectedReleaseId'>): OrientationScope | null {
-  const releases = queue.releases ?? []
-  if (releases.length === 0) return null
-  const release =
-    releases.find(candidate => candidate.id === queue.selectedReleaseId) ??
-    releases.find(candidate => candidate.state === 'active') ??
-    releases.find(candidate => candidate.state === 'planned') ??
-    releases[0]
-  if (!release) return null
-  const nodeIds = new Set<string>()
-  for (const id of release.nodeIds ?? []) nodeIds.add(id)
-  for (const task of queue.tasks) {
-    if (task.releaseIds?.includes(release.id)) nodeIds.add(taskNodeId(task.id))
-  }
-  const deferredNodeIds = new Set<string>(release.deferredNodeIds ?? [])
-  return {
-    id: release.id,
-    label: release.label,
-    kind: release.kind === 'milestone' ? 'milestone' : release.kind === 'release' ? 'release' : 'proposed_feature_set',
-    source: release.source,
-    nodeIds: [...nodeIds],
-    deferredNodeIds: [...deferredNodeIds],
-  }
+  return selectedProjectScopeForQueue(queue)
 }
 
 export function selectedTaskScopeForQueue(

@@ -168,7 +168,6 @@ import {
   recordExternalAgentLink,
 } from './external-agent-links.js'
 import { deriveProjectWorkProgress, type ProjectWorkProgress } from './work-progress.js'
-import { deriveTaskWorkVisibility } from './work-visibility.js'
 import {
   buildProjectOrientationSpine,
   taskNodeId,
@@ -177,6 +176,7 @@ import {
   type OrientationScope,
   type ProjectOrientationCharter,
 } from './project-orientation-spine.js'
+import { buildProjectScopeProjection, type ProjectScope } from './project-scope-projection.js'
 import type { SurfaceReviewPacket } from './contract-surfaces.js'
 import {
   acceptProjectDependencyDelivery,
@@ -1770,11 +1770,12 @@ function summarizeScopedReleaseWork(
   scopedTasks: Task[]
 } {
   const tasksById = new Map(tasks.map(task => [task.id, task]))
-  const scopedTasks = tasks.filter((task) => {
-    if (!taskEligibleForSelectedScope(task, scope, { tasksById }).eligible) return false
-    const parent = task.hierarchy?.parentId ? tasksById.get(task.hierarchy.parentId) ?? null : null
-    return deriveTaskWorkVisibility(task, parent).countInProjectTotals
-  })
+  const scopeProjection = buildProjectScopeProjection(
+    { version: 1, lastUpdated: new Date(0).toISOString(), tasks, releases: [] },
+    { selectedScope: scope as ProjectScope | null | undefined },
+  )
+  const scopedTaskIds = new Set(scopeProjection.rows.filter(row => row.scope === 'included').map(row => row.taskId))
+  const scopedTasks = tasks.filter(task => scopedTaskIds.has(task.id))
   const statusCounts: Record<string, number> = {}
   const openEscalations: Array<{ taskId: string; taskTitle: string; escalationId: string; reason: string; summary: string }> = []
   const incompleteBriefs: Array<{ id: string; title: string; reason: string }> = []
@@ -1866,6 +1867,15 @@ function summarizeScopedReleaseWork(
   for (const spec of unapprovedSpecs) humanBlockingKeys.add(`task:${spec.id}`)
   for (const blocked of blockedByAgent) humanBlockingKeys.add(`task:${blocked.id}`)
 
+  const projectionReleaseBlockers = scopeProjection.release.blockers.map(blocker => {
+    const task = blocker.owningTaskId ? tasksById.get(blocker.owningTaskId) : null
+    return {
+      id: blocker.id,
+      title: task?.title ?? blocker.id,
+      label: blocker.label,
+    }
+  })
+
   return {
     statusCounts,
     openEscalations,
@@ -1874,8 +1884,8 @@ function summarizeScopedReleaseWork(
     unapprovedSpecs,
     shelvedUnclaimed,
     blockedByAgent,
-    releaseBlockers: [...releaseBlockersById.values()],
-    humanBlockingCount: humanBlockingKeys.size,
+    releaseBlockers: projectionReleaseBlockers.length > 0 ? projectionReleaseBlockers : [...releaseBlockersById.values()],
+    humanBlockingCount: scopeProjection.counts.humanBlocking || humanBlockingKeys.size,
     unfinishedCount,
     scopedTasks,
   }
@@ -5883,6 +5893,26 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
     const selectedReleaseScope = selectedReleaseScopeForQueue(typedQueue) ?? selectedReleaseScopeFromTaskMembership(typedQueue.tasks)
     const tasksById = new Map(typedQueue.tasks.map(task => [task.id, task]))
+    if (selectedReleaseScope) {
+      const projection = buildProjectScopeProjection(typedQueue, {
+        selectedScope: selectedReleaseScope as ProjectScope,
+      })
+      if (projection.rows.some(row => row.scope === 'included' && row.status === 'import_draft')) return null
+      if (projection.start.canStart) return null
+      if (projection.start.code === 'no_unattended_progress') {
+        return {
+          canStart: false,
+          code: 'no_unattended_progress',
+          message: projection.start.message,
+          actionHref: projection.start.actionHref,
+          ...(projection.start.focusTaskId ? { focusTaskId: projection.start.focusTaskId } : {}),
+          ...(projection.start.focusTaskTitle ? { focusTaskTitle: projection.start.focusTaskTitle } : {}),
+          ...(projection.start.focusKind ? { focusKind: projection.start.focusKind } : {}),
+          ...(typeof projection.start.count === 'number' ? { count: projection.start.count } : {}),
+        }
+      }
+      return null
+    }
     const tasks = selectedReleaseScope
       ? typedQueue.tasks.filter(task => taskEligibleForSelectedScope(task, selectedReleaseScope, { tasksById }).eligible)
       : typedQueue.tasks

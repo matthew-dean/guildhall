@@ -95,7 +95,7 @@ Important semantics:
 - Create: `src/runtime/project-scope-projection.ts`
 - Test: `src/runtime/__tests__/project-scope-projection.test.ts`
 
-- [ ] **Step 1: Write tests for parent/child scope rows**
+- [x] **Step 1: Write tests for parent/child scope rows**
 
 Add a test that creates a selected release with parent `task-contracts` in `nodeIds`, child `task-ground-truth` with `hierarchy.parentId = task-contracts`, parent status `ready`, child status `in_progress`, and asserts:
 
@@ -117,7 +117,7 @@ expect(projection.start).toMatchObject({
 })
 ```
 
-- [ ] **Step 2: Write tests for spec-shaped ready work**
+- [x] **Step 2: Write tests for spec-shaped ready work**
 
 Add a ready task with `spec` and at least one `acceptanceCriteria` entry but a thin imported `productBrief`. Assert:
 
@@ -128,7 +128,7 @@ expect(row.humanBlocking).toBe(false)
 expect(projection.release.blockers).toEqual([])
 ```
 
-- [ ] **Step 3: Write tests for genuinely thin ready work**
+- [x] **Step 3: Write tests for genuinely thin ready work**
 
 Add a ready task with no spec and no acceptance criteria. Assert:
 
@@ -139,7 +139,7 @@ expect(row.humanBlocking).toBe(true)
 expect(projection.start.focusKind).toBe('brief_cleanup')
 ```
 
-- [ ] **Step 4: Implement `buildProjectScopeProjection()`**
+- [x] **Step 4: Implement `buildProjectScopeProjection()`**
 
 Move the shared pieces out of the current call sites:
 
@@ -150,7 +150,9 @@ Move the shared pieces out of the current call sites:
 
 Keep wrappers in the old files temporarily so call sites can migrate incrementally.
 
-- [ ] **Step 5: Run projection tests**
+Status 2026-07-04: `src/runtime/project-scope-projection.ts` now owns selected release scope resolution, task node ids, scope eligibility, scope rows, start summary, and release blockers. `project-orientation-spine.ts` and `orchestrator-picker.ts` keep their old exports as compatibility wrappers.
+
+- [x] **Step 5: Run projection tests**
 
 Run:
 
@@ -160,6 +162,8 @@ CI=true /opt/homebrew/bin/pnpm exec vitest run src/runtime/__tests__/project-sco
 
 Expected: all projection tests pass.
 
+Proof 2026-07-04: `CI=true /opt/homebrew/bin/pnpm exec vitest run src/runtime/__tests__/project-scope-projection.test.ts` passed.
+
 ## Task 2: Replace Start And Release Readiness Local Logic
 
 **Files:**
@@ -167,17 +171,23 @@ Expected: all projection tests pass.
 - Test: `src/runtime/__tests__/serve-settings.test.ts`
 - Test: `src/runtime/__tests__/serve-release-readiness.test.ts`
 
-- [ ] **Step 1: Route `startBlockerForTaskReadiness()` through `ProjectScopeProjection.start`**
+- [x] **Step 1: Route `startBlockerForTaskReadiness()` through `ProjectScopeProjection.start`**
 
 Keep provider, migration, and owner-input preflights outside the projection. Replace task-specific brief/spec/paused logic with the projection result.
 
-- [ ] **Step 2: Route `summarizeScopedReleaseWork()` through projection rows**
+Status 2026-07-04: selected release/current-scope task readiness now uses `ProjectScopeProjection.start`. Import-draft shaping remains owned by the import-draft preflight because it is a distinct workflow blocker, not generic scoped task readiness.
+
+- [x] **Step 2: Route `summarizeScopedReleaseWork()` through projection rows**
 
 Release blockers should come from `row.blocksRelease` and `row.humanBlocking`, not independent status/brief/spec checks.
 
-- [ ] **Step 3: Preserve existing API shape**
+Status 2026-07-04: scoped task membership, human blocking count, and release blockers now come from projection rows/release summary. Legacy arrays remain populated for compatibility while API consumers migrate.
+
+- [x] **Step 3: Preserve existing API shape**
 
 Do not change `/api/project` or `/api/project/release-readiness` response shapes in this task. Populate existing fields from the projection so UI stays compatible.
+
+Status 2026-07-04: no public response fields were renamed or removed in this slice.
 
 - [ ] **Step 4: Run focused runtime tests**
 

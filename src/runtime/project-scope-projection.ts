@@ -1,0 +1,432 @@
+import type { ProjectRelease, Task, TaskQueue, TaskStatus } from '@guildhall/core'
+import { taskDisplayLabel } from '../shared/task-display-label.js'
+import { deriveTaskWorkVisibility } from './work-visibility.js'
+import { META_INTAKE_TASK_ID } from './meta-intake.js'
+import { WORKSPACE_IMPORT_TASK_ID } from './workspace-importer.js'
+
+export type ProjectScopeKind = 'release' | 'milestone' | 'proposed_feature_set'
+export type ProjectScopeSource = 'owner_approved' | 'spec' | 'release_plan' | 'inferred'
+export type ProjectScopeEligibilityReason = 'included' | 'included_ancestor' | 'included_prerequisite' | 'deferred' | 'no_scope'
+export type ProjectScopeHierarchyRole = 'root' | 'parent' | 'child'
+export type ProjectScopeHandoffState =
+  | 'not_shaped'
+  | 'brief_cleanup'
+  | 'spec_review'
+  | 'ready'
+  | 'paused'
+  | 'review'
+  | 'done'
+  | 'blocked'
+
+export interface ProjectScope {
+  id: string
+  label: string
+  kind: ProjectScopeKind
+  source: ProjectScopeSource
+  nodeIds: string[]
+  deferredNodeIds: string[]
+}
+
+export interface ProjectScopeRow {
+  taskId: string
+  title: string
+  scope: 'included' | 'deferred'
+  eligibilityReason: ProjectScopeEligibilityReason
+  hierarchyRole: ProjectScopeHierarchyRole
+  status: TaskStatus
+  handoffState: ProjectScopeHandoffState
+  blocksStart: boolean
+  blocksRelease: boolean
+  humanBlocking: boolean
+  sourceRefs: string[]
+}
+
+export interface ProjectScopeProjection {
+  selectedScope: ProjectScope | null
+  rows: ProjectScopeRow[]
+  counts: {
+    included: number
+    deferred: number
+    ready: number
+    paused: number
+    active: number
+    done: number
+    ownerBlocked: number
+    proofBlocked: number
+    humanBlocking: number
+  }
+  start: {
+    canStart: boolean
+    code?: string
+    label: 'Start' | 'Resume' | 'Review' | 'Configure'
+    focusTaskId?: string
+    focusTaskTitle?: string
+    focusKind?: 'paused_work' | 'ready_work' | 'spec_review' | 'brief_cleanup' | 'provider' | 'terminal'
+    count?: number
+    message: string
+    actionHref: string
+  }
+  release: {
+    state: 'ready' | 'blocked' | 'active' | 'shaping' | 'unknown'
+    blockers: Array<{ id: string; label: string; owningTaskId?: string }>
+  }
+}
+
+export interface BuildProjectScopeProjectionOptions {
+  includedDependencyIds?: ReadonlySet<string>
+  selectedScope?: ProjectScope | null
+}
+
+export interface ProjectScopeTaskInput {
+  id: string
+  hierarchy?: { parentId?: string; childIds?: string[] }
+}
+
+export function taskScopeNodeId(taskId: string): string {
+  return `work:${taskId}`
+}
+
+export function selectedProjectScopeForQueue(
+  queue: Pick<TaskQueue, 'tasks' | 'releases' | 'selectedReleaseId'>,
+): ProjectScope | null {
+  const releases = queue.releases ?? []
+  if (releases.length === 0) return null
+  const release =
+    releases.find(candidate => candidate.id === queue.selectedReleaseId) ??
+    releases.find(candidate => candidate.state === 'active') ??
+    releases.find(candidate => candidate.state === 'planned') ??
+    releases[0]
+  if (!release) return null
+  return releaseToProjectScope(release, queue.tasks)
+}
+
+export function releaseToProjectScope(release: ProjectRelease, tasks: readonly Task[]): ProjectScope {
+  const nodeIds = new Set<string>(release.nodeIds ?? [])
+  for (const task of tasks) {
+    if (task.releaseIds?.includes(release.id)) nodeIds.add(taskScopeNodeId(task.id))
+  }
+  return {
+    id: release.id,
+    label: release.label,
+    kind: release.kind === 'milestone' ? 'milestone' : release.kind === 'release' ? 'release' : 'proposed_feature_set',
+    source: release.source,
+    nodeIds: [...nodeIds],
+    deferredNodeIds: [...new Set(release.deferredNodeIds ?? [])],
+  }
+}
+
+export function taskScopeEligibility(
+  task: ProjectScopeTaskInput,
+  scope: ProjectScope | null | undefined,
+  options: {
+    includedDependencyIds?: ReadonlySet<string>
+    tasksById?: ReadonlyMap<string, ProjectScopeTaskInput>
+  } = {},
+): { eligible: boolean; reason: ProjectScopeEligibilityReason } {
+  if (!scope) return { eligible: true, reason: 'no_scope' }
+  const nodeId = taskScopeNodeId(task.id)
+  if (scope.nodeIds.includes(nodeId)) return { eligible: true, reason: 'included' }
+  if (options.includedDependencyIds?.has(task.id)) return { eligible: true, reason: 'included_prerequisite' }
+  if (scope.deferredNodeIds.includes(nodeId)) return { eligible: false, reason: 'deferred' }
+  let parentId = task.hierarchy?.parentId?.trim() || null
+  while (parentId) {
+    const parentNodeId = taskScopeNodeId(parentId)
+    if (scope.nodeIds.includes(parentNodeId)) return { eligible: true, reason: 'included_ancestor' }
+    if (scope.deferredNodeIds.includes(parentNodeId)) return { eligible: false, reason: 'deferred' }
+    parentId = options.tasksById?.get(parentId)?.hierarchy?.parentId?.trim() || null
+  }
+  return { eligible: false, reason: 'deferred' }
+}
+
+export function buildProjectScopeProjection(
+  queue: Pick<TaskQueue, 'tasks' | 'releases' | 'selectedReleaseId'>,
+  options: BuildProjectScopeProjectionOptions = {},
+): ProjectScopeProjection {
+  const selectedScope = 'selectedScope' in options ? options.selectedScope ?? null : selectedProjectScopeForQueue(queue)
+  const tasksById = new Map(queue.tasks.map(task => [task.id, task] as const))
+  const childIdsByParent = buildChildMap(queue.tasks)
+  const rows = queue.tasks
+    .map(task => buildScopeRow(task, {
+      selectedScope,
+      tasksById,
+      childIdsByParent,
+      includedDependencyIds: options.includedDependencyIds,
+    }))
+    .filter((row): row is ProjectScopeRow => Boolean(row))
+  const counts = summarizeRows(rows)
+  return {
+    selectedScope,
+    rows,
+    counts,
+    start: summarizeStart(rows, selectedScope),
+    release: summarizeRelease(rows),
+  }
+}
+
+function buildScopeRow(
+  task: Task,
+  input: {
+    selectedScope: ProjectScope | null
+    tasksById: ReadonlyMap<string, Task>
+    childIdsByParent: ReadonlyMap<string, string[]>
+    includedDependencyIds?: ReadonlySet<string>
+  },
+): ProjectScopeRow | null {
+  if (isProjectSetupTask(task.id) || task.status === 'archived' || task.status === 'cancelled') return null
+  const parent = task.hierarchy?.parentId ? input.tasksById.get(task.hierarchy.parentId) ?? null : null
+  if (!deriveTaskWorkVisibility(task, parent).countInProjectTotals) return null
+  const eligibility = taskScopeEligibility(task, input.selectedScope, {
+    tasksById: input.tasksById,
+    includedDependencyIds: input.includedDependencyIds,
+  })
+  const scope = eligibility.eligible ? 'included' : 'deferred'
+  const role = hierarchyRoleFor(task, input.childIdsByParent)
+  const handoffState = handoffStateForTask(task, {
+    scope,
+    tasksById: input.tasksById,
+    childIdsByParent: input.childIdsByParent,
+    selectedScope: input.selectedScope,
+  })
+  const humanBlocking = humanBlockingFor(task, handoffState, scope)
+  return {
+    taskId: task.id,
+    title: taskDisplayLabel(task, task.id),
+    scope,
+    eligibilityReason: eligibility.reason,
+    hierarchyRole: role,
+    status: task.status,
+    handoffState,
+    blocksStart: scope === 'included' && humanBlocking,
+    blocksRelease: scope === 'included' && (humanBlocking || handoffState === 'blocked'),
+    humanBlocking,
+    sourceRefs: sourceRefsForTask(task),
+  }
+}
+
+function buildChildMap(tasks: readonly Task[]): Map<string, string[]> {
+  const tasksById = new Set(tasks.map(task => task.id))
+  const childIdsByParent = new Map<string, Set<string>>()
+  const addChild = (parentId: string, childId: string) => {
+    const set = childIdsByParent.get(parentId) ?? new Set<string>()
+    set.add(childId)
+    childIdsByParent.set(parentId, set)
+  }
+  for (const task of tasks) {
+    for (const childId of task.hierarchy?.childIds ?? []) {
+      if (tasksById.has(childId)) addChild(task.id, childId)
+    }
+    const parentId = task.hierarchy?.parentId?.trim()
+    if (parentId && tasksById.has(parentId)) addChild(parentId, task.id)
+  }
+  return new Map([...childIdsByParent].map(([parentId, childIds]) => [parentId, [...childIds]]))
+}
+
+function hierarchyRoleFor(task: Task, childIdsByParent: ReadonlyMap<string, string[]>): ProjectScopeHierarchyRole {
+  if (task.hierarchy?.parentId) return 'child'
+  return (task.hierarchy?.childIds?.length ?? 0) > 0 || (childIdsByParent.get(task.id)?.length ?? 0) > 0
+    ? 'parent'
+    : 'root'
+}
+
+function handoffStateForTask(
+  task: Task,
+  input: {
+    scope: 'included' | 'deferred'
+    tasksById: ReadonlyMap<string, Task>
+    childIdsByParent: ReadonlyMap<string, string[]>
+    selectedScope: ProjectScope | null
+  },
+): ProjectScopeHandoffState {
+  if (input.scope === 'deferred' || task.status === 'shelved') return 'done'
+  if (task.status === 'blocked') return 'blocked'
+  if (task.status === 'done' || task.status === 'pending_pr') return 'done'
+  if (task.status === 'in_progress') return 'paused'
+  if (task.status === 'review' || task.status === 'gate_check') return 'review'
+  if (task.status === 'spec_review') return 'spec_review'
+  if (task.status === 'ready') {
+    if (isReadyForWorkerHandoff(task) || hasInScopeMaterializedChildWork(task, input)) return 'ready'
+    return 'brief_cleanup'
+  }
+  return 'not_shaped'
+}
+
+function hasInScopeMaterializedChildWork(
+  task: Task,
+  input: {
+    tasksById: ReadonlyMap<string, Task>
+    childIdsByParent: ReadonlyMap<string, string[]>
+    selectedScope: ProjectScope | null
+  },
+): boolean {
+  return (input.childIdsByParent.get(task.id) ?? [])
+    .map(childId => input.tasksById.get(childId))
+    .some((child): child is Task => {
+      if (!child || ['archived', 'cancelled', 'shelved'].includes(child.status)) return false
+      return taskScopeEligibility(child, input.selectedScope, { tasksById: input.tasksById }).eligible
+    })
+}
+
+function humanBlockingFor(task: Task, handoffState: ProjectScopeHandoffState, scope: 'included' | 'deferred'): boolean {
+  if (scope === 'deferred') return false
+  if (handoffState === 'brief_cleanup' || handoffState === 'not_shaped' || handoffState === 'blocked') return true
+  return handoffState === 'spec_review' && specReviewRequiresOwnerApproval(task)
+}
+
+function specReviewRequiresOwnerApproval(task: Pick<Task, 'id'>): boolean {
+  return task.id === META_INTAKE_TASK_ID || task.id === WORKSPACE_IMPORT_TASK_ID
+}
+
+function isProjectSetupTask(taskId: string): boolean {
+  return taskId === META_INTAKE_TASK_ID || taskId === WORKSPACE_IMPORT_TASK_ID
+}
+
+function isReadyForWorkerHandoff(task: Task): boolean {
+  return hasSpecDraft(task) || hasApprovedCompleteBrief(task)
+}
+
+function hasSpecDraft(task: Task): boolean {
+  return Boolean(task.spec?.trim()) && task.acceptanceCriteria.length > 0
+}
+
+function hasApprovedCompleteBrief(task: Task): boolean {
+  const brief = task.productBrief
+  if (!brief?.approvedAt) return false
+  return Boolean(
+    brief.userJob?.trim() &&
+    brief.whyItMattersNow?.trim() &&
+    brief.successMetric?.trim() &&
+    ((brief.nonGoals?.length ?? 0) > 0 || (brief.antiPatterns?.length ?? 0) > 0),
+  )
+}
+
+function sourceRefsForTask(task: Task): string[] {
+  const refs = task.references?.filter(ref => ref.trim().length > 0) ?? []
+  return refs.length > 0 ? refs : [`task:${task.id}`]
+}
+
+function summarizeRows(rows: readonly ProjectScopeRow[]): ProjectScopeProjection['counts'] {
+  const included = rows.filter(row => row.scope === 'included')
+  return {
+    included: included.length,
+    deferred: rows.filter(row => row.scope === 'deferred').length,
+    ready: included.filter(row => row.handoffState === 'ready').length,
+    paused: included.filter(row => row.handoffState === 'paused').length,
+    active: included.filter(row => row.handoffState === 'paused' || row.handoffState === 'review').length,
+    done: included.filter(row => row.handoffState === 'done').length,
+    ownerBlocked: included.filter(row => row.humanBlocking).length,
+    proofBlocked: 0,
+    humanBlocking: included.filter(row => row.humanBlocking).length,
+  }
+}
+
+function summarizeStart(rows: readonly ProjectScopeRow[], selectedScope: ProjectScope | null): ProjectScopeProjection['start'] {
+  const included = rows.filter(row => row.scope === 'included')
+  const paused = included.find(row => row.handoffState === 'paused')
+  if (paused) {
+    return {
+      canStart: true,
+      code: 'paused_live_work',
+      label: 'Resume',
+      focusTaskId: paused.taskId,
+      focusTaskTitle: paused.title,
+      focusKind: 'paused_work',
+      message: `"${paused.title}" is paused in live work. Resume continues from that pinned task.`,
+      actionHref: `/work?task=${encodeURIComponent(paused.taskId)}`,
+    }
+  }
+  const ready = included.find(row => row.handoffState === 'ready')
+  if (ready) {
+    return {
+      canStart: true,
+      code: 'ready_work',
+      label: 'Start',
+      focusTaskId: ready.taskId,
+      focusTaskTitle: ready.title,
+      focusKind: 'ready_work',
+      message: `"${ready.title}" is ready to run.`,
+      actionHref: `/work?task=${encodeURIComponent(ready.taskId)}`,
+    }
+  }
+  const specWork = included.find(row => row.handoffState === 'spec_review' && !row.humanBlocking)
+  if (specWork) {
+    return {
+      canStart: true,
+      code: 'ready_work',
+      label: 'Start',
+      focusTaskId: specWork.taskId,
+      focusTaskTitle: specWork.title,
+      focusKind: 'ready_work',
+      message: `"${specWork.title}" is ready for spec work.`,
+      actionHref: `/work?task=${encodeURIComponent(specWork.taskId)}`,
+    }
+  }
+  const briefCleanup = included.find(row => row.handoffState === 'brief_cleanup' || row.handoffState === 'not_shaped')
+  if (briefCleanup) {
+    const count = included.filter(row => row.handoffState === 'brief_cleanup' || row.handoffState === 'not_shaped').length
+    return {
+      canStart: false,
+      code: 'no_unattended_progress',
+      label: 'Review',
+      focusTaskId: briefCleanup.taskId,
+      focusTaskTitle: briefCleanup.title,
+      focusKind: 'brief_cleanup',
+      count,
+      message: count === 1
+        ? `"${briefCleanup.title}" needs a clearer brief before unattended work can run.`
+        : `${count} tasks still need fuller briefs before unattended work can run. Start with "${briefCleanup.title}".`,
+      actionHref: `/work?task=${encodeURIComponent(briefCleanup.taskId)}`,
+    }
+  }
+  const specReview = included.find(row => row.handoffState === 'spec_review' && row.humanBlocking)
+  if (specReview) {
+    const count = included.filter(row => row.handoffState === 'spec_review' && row.humanBlocking).length
+    return {
+      canStart: false,
+      code: 'no_unattended_progress',
+      label: 'Review',
+      focusTaskId: specReview.taskId,
+      focusTaskTitle: specReview.title,
+      focusKind: 'spec_review',
+      count,
+      message: count === 1
+        ? `"${specReview.title}" is waiting for review before work can start.`
+        : `${count} specs are waiting for review before work can start. Start with "${specReview.title}".`,
+      actionHref: `/thread?thread=${encodeURIComponent(`task:${specReview.taskId}`)}`,
+    }
+  }
+  const scopeLabel = selectedScope?.label ?? 'Current work'
+  return {
+    canStart: false,
+    code: 'all_terminal',
+    label: 'Review',
+    focusKind: 'terminal',
+    message: `${scopeLabel} has no runnable work remaining.`,
+    actionHref: '/work',
+  }
+}
+
+function summarizeRelease(rows: readonly ProjectScopeRow[]): ProjectScopeProjection['release'] {
+  const blockers = rows
+    .filter(row => row.scope === 'included' && row.blocksRelease)
+    .map(row => ({
+      id: row.taskId,
+      owningTaskId: row.taskId,
+      label: blockerLabelFor(row),
+    }))
+  if (blockers.length > 0) return { state: 'blocked', blockers }
+  if (rows.some(row => row.scope === 'included' && (row.handoffState === 'paused' || row.handoffState === 'review'))) {
+    return { state: 'active', blockers: [] }
+  }
+  if (rows.some(row => row.scope === 'included' && row.handoffState === 'ready')) return { state: 'ready', blockers: [] }
+  if (rows.some(row => row.scope === 'included' && row.handoffState === 'not_shaped')) return { state: 'shaping', blockers: [] }
+  return { state: 'unknown', blockers: [] }
+}
+
+function blockerLabelFor(row: ProjectScopeRow): string {
+  if (row.handoffState === 'brief_cleanup' || row.handoffState === 'not_shaped') {
+    return `${row.title} needs a clearer brief before unattended work can run.`
+  }
+  if (row.handoffState === 'spec_review') return `${row.title} is waiting for review before work can start.`
+  if (row.handoffState === 'blocked') return `${row.title} is blocked.`
+  return `${row.title} needs attention.`
+}
