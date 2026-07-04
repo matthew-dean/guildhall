@@ -85,6 +85,7 @@ export interface DraftContext {
   role?: 'capability' | 'reference' | 'brief_input'
   structure?: 'record' | 'note'
   scopeHint?: 'current' | 'later'
+  releaseIds?: readonly string[]
   linkedTaskHints?: readonly string[]
 }
 
@@ -660,6 +661,7 @@ function addContext(
   index: Map<string, DraftContext>,
   sig: WorkspaceSignal,
 ): void {
+  const releaseIds = releaseIdsFromSignal(sig)
   const mergeByStructure =
     (sig.role === 'brief_input' || sig.role === 'capability') &&
     sig.structure === 'record'
@@ -671,6 +673,7 @@ function addContext(
   if (existing) {
     const mergedReferences = mergeReferences(existing.references, sig.references)
     const mergedHints = mergeReferences(existing.linkedTaskHints, sig.linkedTaskHints)
+    const mergedReleaseIds = mergeReferences(existing.releaseIds, releaseIds)
     const nextExcerpt = existing.excerpt.length >= sig.evidence.length
       ? existing.excerpt
       : sig.evidence
@@ -683,6 +686,7 @@ function addContext(
       excerpt: nextExcerpt,
       ...(nextScopeHint ? { scopeHint: nextScopeHint } : {}),
       ...(mergedReferences ? { references: mergedReferences } : {}),
+      ...(mergedReleaseIds ? { releaseIds: mergedReleaseIds } : {}),
       ...(mergedHints ? { linkedTaskHints: mergedHints } : {}),
     })
     return
@@ -696,6 +700,7 @@ function addContext(
     ...(sig.role ? { role: sig.role } : {}),
     ...(sig.structure ? { structure: sig.structure } : {}),
     ...(sig.scopeHint ? { scopeHint: sig.scopeHint } : {}),
+    ...(releaseIds ? { releaseIds } : {}),
     ...(sig.linkedTaskHints?.length ? { linkedTaskHints: [...sig.linkedTaskHints] } : {}),
   })
 }

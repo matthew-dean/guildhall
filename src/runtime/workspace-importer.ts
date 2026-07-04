@@ -1748,6 +1748,7 @@ export function parseWorkspaceGoalsState(raw: unknown): WorkspaceGoalsState | nu
         ...(entry.role ? { role: entry.role } : {}),
         ...(entry.structure ? { structure: entry.structure } : {}),
         ...(entry.scopeHint ? { scopeHint: entry.scopeHint } : {}),
+        ...(Array.isArray(entry.releaseIds) ? { releaseIds: [...entry.releaseIds] } : {}),
         ...(entry.linkedTaskHints ? { linkedTaskHints: [...entry.linkedTaskHints] } : {}),
       }))
     : []
@@ -1969,6 +1970,16 @@ function importedTaskCanBeArchivedDuringScopeRefresh(status: Task['status']): bo
     'ready',
     'shelved',
   ].includes(status)
+}
+
+function isWorkspaceImportManagedTask(task: Task): boolean {
+  if (task.requestIntake?.createdBy === 'workspace-importer') return true
+  if (!task.id.startsWith('task-import-')) return false
+  if (task.origination !== 'human') return false
+  return (task.references ?? []).some(ref => {
+    const normalized = ref.replaceAll('\\', '/')
+    return normalized.includes('/docs/') || normalized.includes('docs/')
+  })
 }
 
 async function evidenceSourcesForParsedTasks(
@@ -4870,8 +4881,7 @@ export async function approveWorkspaceImport(
     for (const existingTask of queue.tasks) {
       if (existingTask.id === WORKSPACE_IMPORT_TASK_ID) continue
       if (!importedTaskCanBeArchivedDuringScopeRefresh(existingTask.status)) continue
-      if (existingTask.origination !== 'human') continue
-      if (existingTask.requestIntake?.createdBy !== 'workspace-importer') continue
+      if (!isWorkspaceImportManagedTask(existingTask)) continue
       if (approvedQueueTaskIds.has(existingTask.id)) continue
       existingTask.status = 'archived'
       existingTask.updatedAt = now

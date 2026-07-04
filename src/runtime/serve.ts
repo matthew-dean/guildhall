@@ -5628,16 +5628,19 @@ export function buildServeApp(opts: ServeOptions = {}): {
     })
     const hasExplicitDeferredScope =
       detected.tasks.some(task => task.scope === 'later') ||
-      parsed.tasks.some(task => task.scope === 'later')
+      parsed.tasks.some(task => task.scope === 'later') ||
+      detected.context.some(context => context.scopeHint === 'later') ||
+      (workspaceGoalsState?.context ?? []).some(context => context.scopeHint === 'later')
     const uncoveredCapabilitySpecs = hasExplicitDeferredScope
       ? []
       : detected.context.filter(context => {
-      if (context.role !== 'capability') return false
-      const refs = refsFromRecord(context)
-      const specRefs = refs.filter(ref => /(^|\/)docs\/specs\//.test(ref))
-      if (specRefs.length === 0) return false
-      return specRefs.every(ref => !coveredRefs.has(ref))
-    })
+          if (context.scopeHint === 'later') return false
+          if (context.role !== 'capability') return false
+          const refs = refsFromRecord(context)
+          const specRefs = refs.filter(ref => /(^|\/)docs\/specs\//.test(ref))
+          if (specRefs.length === 0) return false
+          return specRefs.every(ref => !coveredRefs.has(ref))
+        })
     if (
       missing.length === 0 &&
       currentScopeMissing.length === 0 &&
@@ -5824,6 +5827,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
               refs: context.references?.map(ref => `import:${ref}`) ?? [`import:${context.source}`],
               role: context.role,
               scopeHint: context.scopeHint,
+              releaseIds: context.releaseIds ? [...context.releaseIds] : undefined,
               linkedTaskHints: context.linkedTaskHints ? [...context.linkedTaskHints] : undefined,
             })),
           source: {
@@ -5884,6 +5888,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           refs: context.references?.map(ref => `import:${ref}`) ?? [`import:${context.source}`],
           role: context.role,
           scopeHint: context.scopeHint,
+          releaseIds: context.releaseIds ? [...context.releaseIds] : undefined,
           linkedTaskHints: context.linkedTaskHints ? [...context.linkedTaskHints] : undefined,
         })),
         source: {

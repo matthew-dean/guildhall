@@ -498,7 +498,8 @@ function stageDeliverableSignal(
 ): { kind: WorkspaceSignal['kind']; scopeHint?: WorkspaceSignal['scopeHint']; role?: WorkspaceSignal['role'] } {
   if (isFutureStage(currentSection, currentMilestoneStage)) {
     return {
-      kind: 'open_work',
+      kind: 'context',
+      role: 'capability',
       scopeHint: 'later',
     }
   }

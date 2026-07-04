@@ -189,6 +189,39 @@ describe('formWorkspaceHypothesis', () => {
     })
   })
 
+  it('keeps owner-visible release containers on scoped capability context', () => {
+    const draft = formWorkspaceHypothesis(
+      invFrom([
+        {
+          source: 'planning-docs',
+          kind: 'context',
+          role: 'capability',
+          title: 'Mastra workflow for the prototype iteration loop',
+          evidence: 'docs/harness/implementation-roadmap.md: - Mastra workflow for the prototype iteration loop',
+          references: ['docs/harness/implementation-roadmap.md'],
+          scopeHint: 'later',
+          releaseId: 'stage-2-mastra-agent-prototype',
+          releaseLabel: 'Stage 2: Mastra Agent Prototype',
+          confidence: 'medium',
+        },
+      ]),
+    )
+
+    expect(draft.releases).toEqual([
+      expect.objectContaining({
+        id: 'stage-2-mastra-agent-prototype',
+        label: 'Stage 2: Mastra Agent Prototype',
+      }),
+    ])
+    expect(draft.tasks).toEqual([])
+    expect(draft.context[0]).toMatchObject({
+      label: 'Mastra workflow for the prototype iteration loop',
+      role: 'capability',
+      scopeHint: 'later',
+      releaseIds: ['stage-2-mastra-agent-prototype'],
+    })
+  })
+
   it('assigns untagged current work to the matching documented current release scope', () => {
     const draft = formWorkspaceHypothesis(
       invFrom([

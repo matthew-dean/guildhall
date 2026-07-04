@@ -2358,6 +2358,30 @@ tasks:
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
         } as Task,
+        {
+          id: 'task-import-legacy-stage-two',
+          title: 'Implement dialogue-and-character-voice reviewer lane',
+          description: 'Imported before workspace-import requestIntake metadata existed.',
+          domain: 'harness',
+          projectPath: tmpDir,
+          status: 'shelved',
+          priority: 'normal',
+          acceptanceCriteria: [],
+          dependsOn: [],
+          outOfScope: [],
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          adjudications: [],
+          escalations: [],
+          agentIssues: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          origination: 'human',
+          references: ['/repo/docs/harness/remaining-spec-decomposition-inventory.md'],
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        } as Task,
       ],
     })
 
@@ -2422,6 +2446,9 @@ tasks:
     expect(q.tasks.find(task => task.id === 'task-import-stage-two')?.notes?.at(-1)?.content ?? '').toContain(
       'no longer part of the approved import scope',
     )
+    expect(q.tasks.find(task => task.id === 'task-import-legacy-stage-two')).toMatchObject({
+      status: 'archived',
+    })
   })
 
   it('archives generated split descendants when an imported parent is removed from the approved import scope', async () => {
@@ -3645,7 +3672,7 @@ tasks:
     ])
   })
 
-  it('treats later roadmap stages as deferred when a current milestone bounds the active scope', async () => {
+  it('keeps later roadmap stages as release-scoped capability context when a current milestone bounds active work', async () => {
     await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
     await fs.writeFile(
       path.join(tmpDir, 'docs', 'harness', 'implementation-roadmap.md'),
@@ -3678,13 +3705,9 @@ tasks:
     const draft = formWorkspaceHypothesis(inventory)
 
     expect(draft.tasks.map(task => task.title)).toEqual([
-      'Mastra workflow for the prototype iteration loop',
-      'specialist editor agent calls for the first review lanes',
       'Define fixture, expected-record, prototype-run, and evaluation schemas.',
       'Add the first tiny fiction fixture and human-authored expected records.',
     ])
-    expect(draft.tasks.find(task => task.title === 'Mastra workflow for the prototype iteration loop')?.scope).toBe('later')
-    expect(draft.tasks.find(task => task.title === 'specialist editor agent calls for the first review lanes')?.scope).toBe('later')
     expect(draft.tasks.find(task => task.title === 'Define fixture, expected-record, prototype-run, and evaluation schemas.')?.scope).toBe('current')
     expect(draft.context).toEqual(expect.arrayContaining([
       expect.objectContaining({
@@ -3694,6 +3717,18 @@ tasks:
       expect.objectContaining({
         label: 'typed fixture and expected-record contracts',
         role: 'capability',
+      }),
+      expect.objectContaining({
+        label: 'Mastra workflow for the prototype iteration loop',
+        role: 'capability',
+        scopeHint: 'later',
+        releaseIds: ['stage-2-mastra-agent-prototype'],
+      }),
+      expect.objectContaining({
+        label: 'specialist editor agent calls for the first review lanes',
+        role: 'capability',
+        scopeHint: 'later',
+        releaseIds: ['stage-2-mastra-agent-prototype'],
       }),
     ]))
 
@@ -3712,8 +3747,8 @@ tasks:
     expect(approved).toMatchObject({ success: true })
 
     const q = await readQueue()
-    expect(q.tasks.find(task => task.title === 'Mastra workflow for the prototype iteration loop')?.status).toBe('shelved')
-    expect(q.tasks.find(task => task.title === 'specialist editor agent calls for the first review lanes')?.status).toBe('shelved')
+    expect(q.tasks.find(task => task.title === 'Mastra workflow for the prototype iteration loop')).toBeUndefined()
+    expect(q.tasks.find(task => task.title === 'specialist editor agent calls for the first review lanes')).toBeUndefined()
   })
 
   it('prefers decomposed spec tasks over coarse later-stage roadmap deliverables when a current milestone and inventory both exist', async () => {
@@ -3880,18 +3915,26 @@ tasks:
 
     const inventory = await detectWorkspaceSignals({ projectPath: tmpDir })
     const draft = formWorkspaceHypothesis(inventory)
-    expect(draft.tasks.map(task => task.title)).toEqual(expect.arrayContaining([
+    expect(draft.tasks.map(task => task.title)).not.toEqual(expect.arrayContaining([
       'provider/model registry schema',
       'fiction bakeoff scenarios for writer, editor, reviewer, and safety lanes',
       'manuscript import or simple editor shell',
       'project brief and author-provenance capture',
     ]))
-    expect(draft.tasks.filter(task => [
-      'provider/model registry schema',
-      'fiction bakeoff scenarios for writer, editor, reviewer, and safety lanes',
-      'manuscript import or simple editor shell',
-      'project brief and author-provenance capture',
-    ].includes(task.title)).every(task => task.scope === 'later')).toBe(true)
+    expect(draft.context).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        label: 'provider/model registry schema',
+        role: 'capability',
+        scopeHint: 'later',
+        releaseIds: ['stage-3-model-bakeoff-and-safety-policy'],
+      }),
+      expect.objectContaining({
+        label: 'manuscript import or simple editor shell',
+        role: 'capability',
+        scopeHint: 'later',
+        releaseIds: ['stage-4-local-authoring-shell'],
+      }),
+    ]))
     const materialized = await materializeWorkspaceImportDraft({
       memoryDir,
       projectPath: tmpDir,
@@ -3909,7 +3952,7 @@ tasks:
       'project brief and author-provenance capture',
       'Mastra workflow for the prototype iteration loop',
       'specialist editor agent calls for the first review lanes',
-    ].includes(task.title)).every(task => task.scope === 'later')).toBe(true)
+    ].includes(task.title))).toEqual([])
     expect(materialized.tasks.find(task => task.title === 'Implement dialogue-and-character-voice reviewer lane')).toBeUndefined()
     expect(materialized.context).toEqual(expect.arrayContaining([
       expect.objectContaining({

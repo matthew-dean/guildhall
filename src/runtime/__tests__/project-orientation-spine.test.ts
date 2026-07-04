@@ -1261,6 +1261,7 @@ describe('buildProjectOrientationSpine', () => {
             refs: ['import:docs/harness/architecture-notes.md'],
             role: 'capability',
             scopeHint: 'later',
+            releaseIds: ['stage-2-mastra-agent-prototype'],
           },
         ],
       },
@@ -1281,7 +1282,7 @@ describe('buildProjectOrientationSpine', () => {
         id: 'stage-2-mastra-agent-prototype',
         label: 'Stage 2: Mastra Agent Prototype',
         nodeIds: [],
-        deferredNodeIds: ['work:workspace-import:task-later'],
+        deferredNodeIds: ['work:workspace-import:task-later', 'capability:capability-core-loop'],
       }),
     ])
     expect(spine.summary.includedWorkCount).toBe(1)

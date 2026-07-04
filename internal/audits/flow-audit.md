@@ -13023,6 +13023,86 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-07-04T18:35:00Z - Corrected workspace import so future release
+deliverables remain project-map skeleton instead of becoming fake runnable
+tasks.
+
+- Work id: `codex:workspace-import-release-context-2026-07-04`.
+- User job: a project owner should be able to see future releases/scopes and
+  their planned capability shape without Guildhall filling the current queue
+  with coarse roadmap bullets that have no acceptance criteria or proof path.
+- Data-model fix:
+  - Stage deliverables after the documented current milestone now emit
+    `context` signals with `role: capability`, `scopeHint: later`, and the
+    documented `releaseId` / `releaseLabel`.
+  - Draft contexts now support optional `releaseIds`, so release membership is
+    preserved on structural capability nodes without pretending those nodes are
+    tasks.
+  - Project orientation attaches later release-scoped contexts to release
+    `deferredNodeIds`, allowing the map/release skeleton to stay visible while
+    current work counts and Start/Resume stay task-based.
+  - Workspace-import refresh cleanup now recognizes legacy imported
+    `task-import-*` records with docs references, not only newer records with
+    `requestIntake.createdBy: workspace-importer`, so stale pseudo-tasks leave
+    the active release after refresh.
+  - Start readiness no longer treats later release capability/spec contexts as
+    current-scope structural blockers.
+- Schema Migration Decision:
+  - Persisted schema touched: workspace import approved/detected context
+    entries in `WorkspaceGoalsState.context`.
+  - Scope: additive optional `releaseIds?: string[]` on context records.
+  - Change class: backward-compatible reader/writer expansion.
+  - Existing data impact: old context records parse normally with no
+    `releaseIds`; malformed non-array values are ignored by the parser.
+  - Migration id: none required; no stored records must be rewritten before
+    run.
+  - Safety: future release membership moves from fake later tasks to
+    capability context, reducing queue churn while keeping roadmap visibility.
+  - Owner-facing plan text: future roadmap deliverables are shown as planned
+    release skeleton until a doc or owner action decomposes them into runnable
+    tasks.
+  - Rollback/revert behavior: removing the optional field returns contexts to
+    unassigned map nodes; it does not delete tasks or releases.
+- Contract Touch Decision:
+  - Touched contracts: workspace import signal-to-draft classification,
+    persisted draft context shape, orientation workspace-import draft context,
+    release `deferredNodeIds` composition.
+  - Contracts considered but not touched: task `releaseIds`, queue task schema,
+    release container schema, selected release selection, and run scheduling.
+  - Required follow-up: installed API proof must show Narrative Harness future
+    deliverables in `detected.context` / release deferred capability nodes, not
+    in `detected.tasks`.
+  - Proof provided: focused runtime tests passed; installed API proof shows the
+    corrected selected-release and future-release split.
+- Installed-app proof:
+  - `pnpm dev:install`; `guildhall stop && guildhall start`; `/api/stale-server`
+    returned `stale:false` for PID `70588` from
+    `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+  - `POST /api/project/workspace-import/approve?projectId=narrative-harness`
+    returned `ok:true`, `tasksAdded:0`, `goalsRecorded:1`.
+  - `/api/project/workspace-import/draft?projectId=narrative-harness` returned
+    detected/parsed/effective `taskCount:6`, `laterTaskCount:0`,
+    `futureContextCount:35`.
+  - `/api/project?projectId=narrative-harness` selected release
+    `Stage 1: Fixture And Evaluation Harness` had exactly six `nodeIds` and
+    empty `deferredNodeIds`; summary showed `includedWorkCount:6` and
+    `deferredWorkCount:0`.
+  - Future releases kept map skeleton without runnable work:
+    Stage 2 had `6` capability deferred nodes and `0` work deferred nodes;
+    Stage 3 had `5`/`0`; Stage 4 had `5`/`0`; Stage 5 had `7`/`0`.
+  - Start readiness no longer claimed import refresh was needed; it reported
+    the real current blocker: `no_unattended_progress` because four specs need
+    review before work can start.
+- Verification:
+  - `CI=true NODE_ENV=development pnpm vitest run src/runtime/workspace-import/__tests__/detect.test.ts src/runtime/workspace-import/__tests__/hypothesis.test.ts src/runtime/__tests__/workspace-importer.test.ts src/runtime/__tests__/project-orientation-spine.test.ts --reporter=dot`
+    passed `203` tests.
+  - `CI=true NODE_ENV=development pnpm vitest run src/runtime/__tests__/workspace-importer.test.ts src/runtime/workspace-import/__tests__/detect.test.ts src/runtime/workspace-import/__tests__/hypothesis.test.ts src/runtime/__tests__/project-orientation-spine.test.ts src/runtime/__tests__/serve-settings.test.ts -t "does not treat later release spec capabilities as current import blockers|blocks readiness when spec-backed capability docs still have no linked imported work|archives previously imported work that is no longer part of the approved import set|keeps roadmap deliverables as release-scoped capability context until decomposed|keeps owner-visible release containers on scoped capability context" --reporter=dot`
+    passed `5` selected tests.
+  - `CI=true pnpm build` passed.
+  - `CI=true pnpm lint:contracts` passed.
+
+source: codex:workspace-import-release-context-2026-07-04
+
 2026-07-04T18:13:49Z - Fixed task repo-root resolution so workspace containers
 and imported source docs do not masquerade as failed git repositories.
 

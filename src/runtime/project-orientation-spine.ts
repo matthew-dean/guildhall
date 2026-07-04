@@ -301,6 +301,7 @@ export interface OrientationWorkspaceImportDraftContext {
   refs?: string[]
   role?: 'capability' | 'reference' | 'brief_input'
   scopeHint?: 'current' | 'later'
+  releaseIds?: string[]
   linkedTaskHints?: string[]
 }
 
@@ -531,6 +532,18 @@ function augmentTasksWithWorkspaceImportDraft(input: {
       }
     }
   }
+
+  for (const context of draft.contexts ?? []) {
+    if (context.scopeHint !== 'later' || !context.releaseIds?.length) continue
+    const nodeId = capabilityNodeId(context.id)
+    deferredNodeIds.push(nodeId)
+    for (const releaseId of context.releaseIds) {
+      const bucket = releaseDeferredNodeIds.get(releaseId) ?? new Set<string>()
+      bucket.add(nodeId)
+      releaseDeferredNodeIds.set(releaseId, bucket)
+    }
+  }
+
   const releases = (draft.releases ?? []).map(release => ({
     id: release.id,
     label: release.label,
