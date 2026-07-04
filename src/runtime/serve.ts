@@ -340,6 +340,7 @@ import {
 } from './git-story.js'
 import {
   effectiveGitStoryPolicy,
+  resolveGitStoryWorkspaceProject,
   resolveWorkspaceProjectPaths,
 } from './git-story-policy.js'
 import { taskHasUnansweredVisibleQuestion } from './question-visibility.js'
@@ -2499,11 +2500,28 @@ async function gitStoryForTask(
   projectPath: string,
   task: Record<string, unknown>,
   workspace?: { worktreePath?: string },
+  workspaceProjects?: ReturnType<typeof resolveWorkspaceProjectPaths>,
 ) {
   const driver = new NodeGitDriver()
   const inspectedPath = taskGitStoryRepoPath(projectPath, task, workspace)
+  const resolvedWorkspaceProjects = workspaceProjects ?? (() => {
+    const workspaceConfig = readWorkspaceConfig(projectPath)
+    return workspaceConfig.kind === 'workspace'
+      ? resolveWorkspaceProjectPaths(projectPath, workspaceConfig)
+      : []
+  })()
+  const childProject = resolveGitStoryWorkspaceProject({
+    workspacePath: projectPath,
+    workspaceProjectPath: projectPath,
+    workspaceProjects: resolvedWorkspaceProjects,
+    task,
+  })
+  const repoRoot = childProject?.path ??
+    (typeof task.projectPath === 'string' && task.projectPath.trim() ? task.projectPath.trim() : projectPath)
   return inspectGitStory(driver, {
-    repoRoot: typeof task.projectPath === 'string' && task.projectPath.trim() ? task.projectPath.trim() : projectPath,
+    repoRoot,
+    ...(childProject?.id ? { repoId: childProject.id } : {}),
+    ...(childProject?.label ?? childProject?.id ? { repoLabel: childProject.label ?? childProject.id } : {}),
     inspectedPath,
     task: taskForGitStory(task, workspace),
     inspectPr: false,
@@ -2520,6 +2538,8 @@ async function buildProjectGitStorySummary(projectPath: string, tasks?: Array<Re
     ? await Promise.all(workspaceProjects.map(child =>
         inspectGitStory(driver, {
           repoRoot: child.path,
+          repoId: child.id,
+          repoLabel: child.label ?? child.id,
           inspectedPath: child.path,
           inspectPr: false,
         }),
@@ -2550,7 +2570,7 @@ async function buildProjectGitStorySummary(projectPath: string, tasks?: Array<Re
       mergeRecord?.result === 'conflict' ||
       taskStatus === 'pending_pr'
     if (!hasUnresolvedTaskGit) continue
-    snapshots.push(await gitStoryForTask(projectPath, task, workspace))
+    snapshots.push(await gitStoryForTask(projectPath, task, workspace, workspaceProjects))
   }
   return summarizeGitStories(snapshots)
 }

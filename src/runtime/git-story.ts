@@ -21,6 +21,8 @@ export type GitStoryClosureState = z.infer<typeof GitStoryClosureState>
 export const GitStorySnapshot = z.object({
   state: GitStoryClosureState,
   repoRoot: z.string(),
+  repoId: z.string().optional(),
+  repoLabel: z.string().optional(),
   inspectedPath: z.string(),
   branch: z.string().optional(),
   upstream: z.string().optional(),
@@ -162,6 +164,8 @@ export function reasonForGitStorySnapshot(input: {
 
 export interface InspectGitStoryInput {
   repoRoot: string
+  repoId?: string
+  repoLabel?: string
   inspectedPath?: string
   task?: {
     id?: string
@@ -214,6 +218,8 @@ export async function inspectGitStory(
     return GitStorySnapshot.parse({
       state,
       repoRoot: input.repoRoot,
+      repoId: input.repoId,
+      repoLabel: input.repoLabel,
       inspectedPath,
       branch: status.branch,
       upstream: status.upstream,
@@ -247,6 +253,8 @@ export async function inspectGitStory(
     return GitStorySnapshot.parse({
       state: 'unknown',
       repoRoot: input.repoRoot,
+      repoId: input.repoId,
+      repoLabel: input.repoLabel,
       inspectedPath,
       reason: err instanceof Error ? err.message : String(err),
       nextAction: nextActionForGitStory('unknown'),
@@ -261,6 +269,8 @@ export async function inspectGitStory(
 export interface GitStoryBlocker {
   id: string
   label: string
+  repoId?: string
+  repoLabel?: string
   state: GitStoryClosureState
   reason: string
   nextAction: string
@@ -303,7 +313,12 @@ export function summarizeGitStories(snapshots: GitStorySnapshot[]): GitStorySumm
     .filter((snapshot) => !NON_BLOCKING_STATES.has(snapshot.state))
     .map((snapshot, index) => ({
       id: snapshot.taskId ? `task:${snapshot.taskId}` : `repo:${index}`,
-      label: snapshot.taskTitle ?? snapshot.branch ?? snapshot.inspectedPath,
+      label: [
+        snapshot.repoLabel,
+        snapshot.taskTitle ?? snapshot.branch ?? snapshot.inspectedPath,
+      ].filter(Boolean).join(': '),
+      ...(snapshot.repoId ? { repoId: snapshot.repoId } : {}),
+      ...(snapshot.repoLabel ? { repoLabel: snapshot.repoLabel } : {}),
       state: snapshot.state,
       reason: snapshot.reason,
       nextAction: snapshot.nextAction,

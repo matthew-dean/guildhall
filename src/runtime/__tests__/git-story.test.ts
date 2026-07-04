@@ -175,6 +175,36 @@ describe('inspectGitStory', () => {
   })
 })
 
+describe('summarizeGitStories', () => {
+  it('keeps workspace child repo identity on blockers', () => {
+    const summary = summarizeGitStories([
+      {
+        state: 'dirty_uncommitted',
+        repoRoot: '/workspace/knit',
+        repoId: 'knit',
+        repoLabel: 'Knit',
+        inspectedPath: '/workspace/knit',
+        branch: 'main',
+        ahead: 0,
+        behind: 0,
+        changedCount: 2,
+        untrackedCount: 0,
+        samplePaths: ['web/app.ts'],
+        localCommits: [],
+        reason: '2 changed files are not committed.',
+        nextAction: 'Review the diff, then commit or mark the work local-only/deferred.',
+        inspectedAt: '2026-07-04T18:00:00.000Z',
+      },
+    ])
+
+    expect(summary.blockers[0]).toMatchObject({
+      label: 'Knit: main',
+      repoId: 'knit',
+      repoLabel: 'Knit',
+    })
+  })
+})
+
 describe('effectiveGitStoryPolicy', () => {
   it('prefers the matching workspace child project policy for task git closure', () => {
     const policy = effectiveGitStoryPolicy({

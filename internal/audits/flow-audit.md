@@ -15755,6 +15755,69 @@ for Looma + Knit.
 
 source: codex:workspace-import-stale-scope-refresh-2026-07-04
 
+2026-07-04T18:04:00Z - Made workspace child Git repositories visible in Git
+Story instead of treating the workspace container as the repo boundary.
+
+- Work id: `codex:workspace-child-git-story-boundaries-2026-07-04`.
+- User job: for a Guildhall workspace such as Looma + Knit, the owner should
+  see Git Story state for the actual child repositories (`looma`, `knit`) even
+  when the registered Guildhall workspace path is only a container. Guildhall
+  must not communicate "not a git repository" or anonymous checkout blockers
+  when the child repos are the real git boundaries.
+- Root cause:
+  - `buildProjectGitStorySummary()` already inspected workspace child project
+    paths, but the `GitStorySnapshot`/`GitStoryBlocker` contract did not carry
+    child repo identity through to the UI.
+  - Task-level Git Story also had direct callers that could miss the
+    workspace-child resolver and fall back toward the container path.
+  - Release then converted blockers into friendly owner copy, which was useful,
+    but stripped the remaining repo identity from visible rows.
+- Contract Touch Decision:
+  - Work id: `codex:workspace-child-git-story-boundaries-2026-07-04`.
+  - Touched contracts: `GitStorySnapshot` and `GitStoryBlocker` served through
+    `/api/project`, `/api/project/release`, and task Git Story endpoints.
+  - Change class: additive optional fields only: `repoId` and `repoLabel`.
+  - Contracts considered but not touched: persisted task queue schema and
+    workspace config schema. No persisted migration is needed because repo
+    identity is derived from existing `guildhall.yaml` workspace projects.
+  - Required follow-up: collapse remaining local release/git copy into the
+    shared Git Story presenter if another surface needs the same friendly
+    owner-facing wording.
+  - Proof required: unit/API/rendered proof that child repo labels survive from
+    runtime summary to Release UI.
+  - Apply/revert behavior: removing the optional fields restores the prior
+    anonymous Git Story labels without requiring data migration.
+- Fix:
+  - `inspectGitStory()` snapshots can now carry optional `repoId` and
+    `repoLabel`.
+  - `summarizeGitStories()` preserves those fields and prefixes blocker labels
+    with the repo label.
+  - `gitStoryForTask()` now resolves the workspace child project inside the
+    shared helper, so direct task-detail callers and project-summary callers use
+    the same repo boundary.
+  - Release keeps friendly owner copy but prefixes it with the child repo label
+    when present.
+- Live proof:
+  - `/Users/matthew/git/oss/looma-knit` is not a git repository, but
+    `/Users/matthew/git/oss/looma-knit/looma` and
+    `/Users/matthew/git/oss/looma-knit/knit` are git repositories.
+  - Installed `/api/project?projectId=looma-knit` returned root Git Story
+    snapshots for `Looma` and `Knit`, with repo roots pointing at the child repo
+    paths.
+  - The same response returned blockers labeled `Looma:
+    codex/component-audit-roadmap`, `Knit: main`, and task blockers such as
+    `Looma: Floating toolbar`.
+  - Rendered Release proof on `/projects/looma-knit/release` showed visible
+    `Looma:` and `Knit:` Git Story blockers, no container-level "not a git
+    repository" error, and no horizontal overflow at `1280x820`.
+- Verification:
+  - `CI=true /opt/homebrew/bin/pnpm exec vitest run src/runtime/__tests__/git-story.test.ts src/web/surfaces/project/__tests__/ReleaseTab.svelte.test.ts`
+    passed `31` tests.
+  - `/opt/homebrew/bin/pnpm build` passed.
+  - `/opt/homebrew/bin/pnpm lint:contracts` passed.
+
+source: codex:workspace-child-git-story-boundaries-2026-07-04
+
 2026-07-04T14:57:00Z - Recovered Narrative Harness spec no-progress work and
 fixed the project action model so Guildhall communicates the actual shaped
 work item, not only the containing parent.

@@ -66,6 +66,8 @@
       blockers?: Array<{
         id?: string
         label?: string
+        repoId?: string
+        repoLabel?: string
         state?: string
         reason?: string
         nextAction?: string
@@ -237,28 +239,32 @@
     )
   }
 
+  function repoAwareGitLabel(blocker: GitStoryBlocker, label: string): string {
+    return blocker.repoLabel ? `${blocker.repoLabel}: ${label}` : label
+  }
+
   function gitBlockerCopy(blocker: GitStoryBlocker): { label: string; detail: string } {
     if (isGitInspectionFailure(blocker)) {
       return {
-        label: 'Could not inspect this checkout.',
+        label: repoAwareGitLabel(blocker, 'Could not inspect this checkout.'),
         detail: 'Check that this project path is a Git checkout and that git is available to the runtime.',
       }
     }
     const haystack = `${blocker.state ?? ''}\n${blocker.reason ?? ''}\n${blocker.nextAction ?? ''}`.toLowerCase()
     if (haystack.includes('no upstream')) {
       return {
-        label: 'A branch needs a sharing decision.',
+        label: repoAwareGitLabel(blocker, 'A branch needs a sharing decision.'),
         detail: 'Push it, open a PR, or mark the work local-only/deferred if it should not be shared.',
       }
     }
     if (haystack.includes('dirty') || haystack.includes('uncommitted')) {
       return {
-        label: 'A checkout has uncommitted work.',
+        label: repoAwareGitLabel(blocker, 'A checkout has uncommitted work.'),
         detail: 'Review the diff, then commit it or mark the work local-only/deferred.',
       }
     }
     return {
-      label: blocker.reason ?? blocker.label ?? blocker.state ?? 'Git story needs closure.',
+      label: repoAwareGitLabel(blocker, blocker.reason ?? blocker.label ?? blocker.state ?? 'Git story needs closure.'),
       detail: blocker.nextAction ?? (blocker.label && blocker.reason ? blocker.reason : ''),
     }
   }

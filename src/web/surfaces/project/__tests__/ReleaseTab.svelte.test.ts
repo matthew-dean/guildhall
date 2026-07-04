@@ -416,6 +416,47 @@ describe('ReleaseTab', () => {
     expect(screen.queryByText(/has no upstream branch/)).toBeNull()
   })
 
+  it('shows workspace child repo labels on friendly git story blockers', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        json({
+          ...readyPayload,
+          gitStory: {
+            state: 'dirty_uncommitted',
+            blockers: [
+              {
+                id: 'repo-knit',
+                repoId: 'knit',
+                repoLabel: 'Knit',
+                label: 'Knit: main',
+                state: 'dirty_uncommitted',
+                reason: '28 changed files are not committed.',
+                nextAction: 'Review the diff, then commit or mark the work local-only/deferred.',
+              },
+              {
+                id: 'task-looma',
+                taskId: 'task-toolbar',
+                repoId: 'looma',
+                repoLabel: 'Looma',
+                label: 'Looma: Floating toolbar',
+                state: 'no_upstream',
+                reason: 'guildhall/task-toolbar has no upstream branch',
+              },
+            ],
+          },
+          totals: { ...readyPayload.totals, gitStoryBlockingCount: 2 },
+        }),
+      ),
+    )
+
+    render(ReleaseTab, { props: { subView: 'criteria' } })
+
+    expect(await screen.findByText('Scope checks')).toBeTruthy()
+    expect(screen.getByText('Knit: A checkout has uncommitted work.')).toBeTruthy()
+    expect(screen.getByText('Looma: A branch needs a sharing decision.')).toBeTruthy()
+  })
+
   it('opens git story task links inside the current project route', async () => {
     window.history.replaceState({}, '', '/projects/looma-knit/release/criteria')
     path.value = '/projects/looma-knit/release/criteria'
