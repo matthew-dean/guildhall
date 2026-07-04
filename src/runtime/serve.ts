@@ -2553,7 +2553,7 @@ async function buildProjectGitStorySummary(projectPath: string, tasks?: Array<Re
   const workspaceConfig = readWorkspaceConfig(projectPath)
   const workspaceProjects = workspaceConfig.kind === 'workspace'
     ? resolveWorkspaceProjectPaths(projectPath, workspaceConfig)
-    : []
+    : discoverChildGitProjects(projectPath)
   const rootSnapshots = workspaceProjects.length > 0
     ? await Promise.all(workspaceProjects.map(child =>
         inspectGitStory(driver, {
@@ -2593,6 +2593,28 @@ async function buildProjectGitStorySummary(projectPath: string, tasks?: Array<Re
     snapshots.push(await gitStoryForTask(projectPath, task, workspace, workspaceProjects))
   }
   return summarizeGitStories(snapshots)
+}
+
+function discoverChildGitProjects(projectPath: string): ReturnType<typeof resolveWorkspaceProjectPaths> {
+  if (existsSync(join(projectPath, '.git'))) return []
+  let entries: Dirent[]
+  try {
+    entries = readdirSync(projectPath, { withFileTypes: true })
+  } catch {
+    return []
+  }
+  return entries
+    .filter(entry => entry.isDirectory() && !['.git', '.guildhall', 'node_modules', 'dist', 'build', 'coverage'].includes(entry.name))
+    .map(entry => {
+      const childPath = join(projectPath, entry.name)
+      return {
+        id: slugify(entry.name),
+        label: entry.name,
+        path: childPath,
+      }
+    })
+    .filter(child => existsSync(join(child.path, '.git')))
+    .sort((left, right) => left.label.localeCompare(right.label))
 }
 
 function gitStoryAutomationFor(
@@ -10607,9 +10629,6 @@ export function buildServeApp(opts: ServeOptions = {}): {
         loadCodebaseMap(memoryDir).catch(() => null),
       ])
       const designSystem = releaseDesignSystemStatus(ds, project.config, codebaseMap)
-      const dirtyCheckout = await guildhallOwnedDirtyCheckout(project.path)
-      const gitStory = await buildProjectGitStorySummary(project.path, tasks)
-
       const {
         scopedTasks,
         statusCounts,
@@ -10622,6 +10641,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
         humanBlockingCount,
         unfinishedCount,
       } = releaseTruth
+      const dirtyCheckout = await guildhallOwnedDirtyCheckout(project.path)
+      const gitStory = await buildProjectGitStorySummary(project.path, scopedTasks)
       const designSystemBlockingCount = tasks.length > 0 && !designSystem.approved ? 1 : 0
       const dirtyCheckoutBlockingCount = dirtyCheckout.ownedCount > 0 || dirtyCheckout.error ? 1 : 0
       const gitStoryBlockingCount = gitStory.blockers.length

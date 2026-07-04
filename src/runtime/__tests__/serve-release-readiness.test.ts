@@ -222,6 +222,48 @@ describe('GET /api/project/release-readiness', () => {
     expect(body.totals.unfinishedCount).toBe(1)
   })
 
+  it('does not let out-of-scope task git stories block the selected release', async () => {
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: 'headless-mvp',
+      releases: [{
+        id: 'headless-mvp',
+        label: 'Headless MVP',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-current'],
+        deferredNodeIds: ['work:task-archived'],
+        proofStyle: 'script_only',
+      }],
+      tasks: [
+        makeTask({ id: 'task-current', title: 'Current proof lane', status: 'done', releaseIds: ['headless-mvp'] }),
+        makeTask({
+          id: 'task-archived',
+          title: 'Archived residue with stale merge story',
+          status: 'archived',
+          mergeRecord: {
+            result: 'skipped',
+            detail: 'Old out-of-scope task completed before this release was selected.',
+          },
+        } as any),
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await approveDesignSystem(app)
+    await commitAndPush('selected release git story scope')
+
+    const res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
+    const body = await res.json() as any
+
+    expect(body.totals.tasks).toBe(1)
+    expect(body.statusCounts).toEqual({ done: 1 })
+    expect(body.totals.gitStoryBlockingCount).toBe(0)
+    expect(body.gitStory.blockers).toEqual([])
+    expect(body.ready).toBe(true)
+  })
+
   it('does not count importer-generated decomposition children as scoped release tasks', async () => {
     await seedQueue({
       version: 1,
@@ -717,5 +759,37 @@ describe('GET /api/project/release-readiness', () => {
       label: 'detected in repo',
     })
     expect(body.totals.designSystemBlockingCount).toBe(0)
+  })
+
+  it('summarizes immediate child git repositories when the attached path is only a container', async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-release-container-'))
+    const loomaDir = path.join(workspaceDir, 'looma')
+    const knitDir = path.join(workspaceDir, 'knit')
+    try {
+      const containerProjectId = bootstrapWorkspace(workspaceDir, { name: 'Looma + Knit' }).id ?? path.basename(workspaceDir)
+      for (const childDir of [loomaDir, knitDir]) {
+        await fs.mkdir(childDir, { recursive: true })
+        await execFileP('git', ['init', '-b', 'main'], { cwd: childDir })
+        await execFileP('git', ['config', 'user.email', 'guildhall@example.test'], { cwd: childDir })
+        await execFileP('git', ['config', 'user.name', 'Guildhall Test'], { cwd: childDir })
+        await fs.writeFile(path.join(childDir, 'README.md'), `# ${path.basename(childDir)}\n`, 'utf8')
+        await execFileP('git', ['add', '.'], { cwd: childDir })
+        await execFileP('git', ['commit', '-m', `baseline ${path.basename(childDir)}`], { cwd: childDir })
+      }
+      const { app } = buildServeApp({ projectPath: workspaceDir })
+      const url = new URL('http://localhost/api/project/release-readiness')
+      url.searchParams.set('projectId', containerProjectId)
+
+      const res = await app.fetch(new Request(url))
+      const body = await res.json() as any
+
+      const repoLabels = new Set(
+        body.gitStory.snapshots.map((snapshot: any) => String(snapshot.repoLabel).toLowerCase()),
+      )
+      expect(repoLabels).toEqual(new Set(['knit', 'looma']))
+      expect(body.gitStory.snapshots.map((snapshot: any) => snapshot.state)).not.toContain('not_git')
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true })
+    }
   })
 })

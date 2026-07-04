@@ -12,6 +12,69 @@ This is the active browser test plan for the Guildhall project surface. Keep it
 updated while auditing the active test project so another agent can resume
 without guessing.
 
+2026-07-04T19:59:23Z - Scoped release Git Story blockers to the selected
+release and hardened container repo discovery.
+
+- Work id: `codex:release-readiness-scoped-git-story-2026-07-04`.
+- User job: when a user selects a release or bounded scope, Start/readiness
+  should only be blocked by work inside that scope plus real repo-level
+  publication safety. Archived, deferred, or stale task merge records from
+  other scopes should not make the current release look blocked. When the
+  registered project path is a folder containing repos, Guildhall should inspect
+  the child repos instead of telling the user the folder is not a git
+  repository.
+- Fix:
+  - `/api/project/release-readiness` now passes the shared `releaseTruth`
+    `scopedTasks` into task-level Git Story inspection, so task-specific
+    blockers follow the same release boundary as counts, briefs, specs, and
+    unfinished work.
+  - Project Git Story summary now discovers immediate child git repositories
+    when the attached path is a non-git container without an explicit workspace
+    config. This aligns release readiness with workspace import's child-repo
+    detection and avoids parent-folder `not_git` snapshots for Looma + Knit-like
+    folders.
+- Contract Touch Decision:
+  - Work id: `codex:release-readiness-scoped-git-story-2026-07-04`.
+  - Touched contracts: `/api/project/release-readiness` Git Story blocker
+    semantics; project Git Story repo discovery semantics for container paths.
+  - Contracts considered but not touched: persisted task schema, release schema,
+    task Git Story endpoint shape, workspace config schema, Release UI props.
+  - Existing data impact: no migration. Existing archived/deferred task merge
+    records remain stored, but no longer block a different selected release via
+    release-readiness task-level Git Story.
+  - Required follow-up: continue the Narrative Harness MVP run after the
+    remaining real blockers are addressed: four selected-scope specs still need
+    owner approval, the project repo has unpublished local commits, and selected
+    Stage 1 tasks `task-import-1isf6n0` / `task-import-1nfemy6` still have
+    unresolved task merge records.
+  - Proof required: focused regression for out-of-scope task Git Story blockers,
+    focused regression for container paths with child repos, build, contract
+    lint, installed-app API readback.
+  - Proof provided: focused release-readiness test file passed; installed-app
+    live API readback listed below.
+  - Apply/revert behavior: revert the scoped `buildProjectGitStorySummary`
+    argument and child-repo fallback helper to restore previous all-task/root
+    inspection behavior; no data rollback required.
+- Verification:
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/serve-release-readiness.test.ts`
+    passed `19` tests.
+  - `CI=true pnpm build` passed.
+  - `CI=true pnpm lint:contracts` passed.
+  - `CI=true pnpm dev:install` completed, followed by `guildhall stop` and
+    `guildhall start`; `/api/stale-server` returned `stale:false` for PID
+    `43088` from `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+  - Live `/api/project/release-readiness?projectId=narrative-harness` returned
+    selected release `Stage 1: Fixture And Evaluation Harness`, `tasks:6`, and
+    `gitStoryBlockingCount:3`. The remaining Git Story blockers are the repo
+    unpublished-local-commits blocker plus selected-scope task blockers
+    `task-import-1isf6n0` and `task-import-1nfemy6`; archived
+    `task-import-1g9oq7m` and the unscoped generated split child no longer
+    block this selected release.
+  - Live `/api/project/release-readiness?projectId=looma-knit` returned Git
+    Story snapshot labels `Looma` and `Knit`; the serialized Git Story payload
+    contained no `not_git`, `not a git repository`, `Cannot resolve git root`,
+    or `fatal` text.
+
 2026-07-04T18:45:00Z - Refreshed Looma + Knit nested Git Story proof.
 
 - Work id: `codex:looma-knit-nested-repo-proof-2026-07-04`.
