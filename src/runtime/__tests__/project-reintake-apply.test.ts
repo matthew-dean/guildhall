@@ -605,7 +605,9 @@ describe('project re-intake apply', () => {
     expect(result.success).toBe(true)
 
     const queue = await readQueue(memoryDir)
-    const task = queue.tasks.find(task => task.title === 'Implement author-involvement-modes contract and involvement-dial types')
+    const task = queue.tasks.find(task =>
+      task.title === 'Recover source-backed contract surface for author-involvement-modes contract and involvement-dial types',
+    )
     expect(task).toMatchObject({
       status: 'import_draft',
       references: [
@@ -614,7 +616,7 @@ describe('project re-intake apply', () => {
       ],
     })
     expect(task?.productBrief).toBeUndefined()
-    expect(task?.taskReadiness).toBeUndefined()
+    expect(task?.taskReadiness?.recommendation).toBe('needs_research_spike')
     expect(JSON.stringify(task?.acceptanceCriteria ?? '')).not.toContain('usable in code: .')
   })
 

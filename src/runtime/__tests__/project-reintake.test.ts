@@ -207,6 +207,108 @@ describe('project re-intake planner', () => {
     expect(taskChanges).toEqual([])
   })
 
+  it('does not preserve started imported contract work when the handoff is structurally hollow', () => {
+    const inventory = [
+      '# Remaining Spec Decomposition Inventory',
+      '',
+      '### 2.6 `author-involvement-modes.md`',
+      '',
+      '- **Recommended first task title:** Implement author-involvement-modes contract and involvement-dial types',
+      '- **Recommended domain:** workflow',
+      '- **Stage alignment:** Stage 2 (Agent Coordination)',
+    ].join('\n')
+    const specWithoutContracts = [
+      '# Author Involvement Modes',
+      '',
+      'Define how the author can choose light, normal, or heavy involvement before the harness applies editor feedback.',
+      '',
+      '## Verification',
+      '',
+      '- Run one bounded feedback scenario through each involvement mode.',
+    ].join('\n')
+    const draft = planProjectReintake({
+      now,
+      projectPath: '/workspace',
+      sources: [
+        { path: 'docs/harness/implementation-roadmap.md', content: narrativeRoadmap },
+        { path: 'docs/harness/remaining-spec-decomposition-inventory.md', content: inventory },
+        { path: 'docs/specs/author-involvement-modes.md', content: specWithoutContracts },
+      ],
+      tasks: [
+        task({
+          id: 'task-import-author-involvement',
+          title: 'Implement author-involvement-modes contract and involvement-dial types',
+          description: 'Source-backed task from remaining spec inventory.',
+          status: 'in_progress',
+          references: [
+            'docs/harness/remaining-spec-decomposition-inventory.md',
+            'docs/specs/author-involvement-modes.md',
+          ],
+          requestIntake: {
+            createdBy: 'workspace-importer',
+          },
+          spec: [
+            '## What this is',
+            'Implement author-involvement-modes contract and involvement-dial types',
+            '',
+            '## Acceptance criteria',
+            '1. The cited contracts are explicitly defined and usable in code: .',
+          ].join('\n'),
+          acceptanceCriteria: [{
+            id: 'contracts-defined',
+            description: 'The cited contracts are explicitly defined and usable in code: .',
+            verifiedBy: 'review',
+            met: false,
+          }],
+          definitionOfDone: {
+            items: ['The cited contracts are explicitly defined and usable in code: .'],
+            evidenceRequired: [],
+          },
+        }),
+        task({
+          id: 'task-import-archived-contract-noise',
+          title: 'Define fixture and evaluation contracts',
+          description: 'Old duplicate imported work.',
+          status: 'archived',
+          references: [
+            'docs/harness/remaining-spec-decomposition-inventory.md',
+            'docs/specs/author-involvement-modes.md',
+          ],
+          acceptanceCriteria: [{
+            id: 'contracts-defined',
+            description: 'The cited contracts are explicitly defined and usable in code: .',
+            verifiedBy: 'review',
+            met: false,
+          }],
+        }),
+      ],
+    })
+
+    const changes = draft.groups.flatMap(group => group.changes)
+    expect(changes).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'preserve_progress',
+        taskId: 'task-import-author-involvement',
+      }),
+    ]))
+    expect(changes).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'reframe',
+        taskId: 'task-import-author-involvement',
+        after: expect.objectContaining({
+          title: 'Recover source-backed contract surface for author-involvement-modes contract and involvement-dial types',
+          status: 'shelved',
+        }),
+      }),
+    ]))
+    expect(changes).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'reframe',
+        taskId: 'task-import-archived-contract-noise',
+      }),
+    ]))
+  })
+
   it('archives unsupported blocked task noise without deleting it', () => {
     const draft = planProjectReintake({
       now,
@@ -267,7 +369,7 @@ describe('project re-intake planner', () => {
           id: 'task-deliverable',
           title: 'typed fixture and expected-record contracts',
           description: 'docs/harness/implementation-roadmap.md: - typed fixture and expected-record contracts',
-          status: 'shelved',
+          status: 'import_draft',
         }),
         task({
           id: 'task-later',

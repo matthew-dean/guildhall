@@ -5463,13 +5463,6 @@ export function buildServeApp(opts: ServeOptions = {}): {
       typeof task === 'object' &&
       (task as { id?: unknown }).id === WORKSPACE_IMPORT_TASK_ID,
     ) as { status?: unknown } | undefined
-    const runnable = tasks.some(t => {
-      if (!t || typeof t !== 'object') return false
-      if (importedTaskNeedsBriefShaping(t)) return false
-      const status = String((t as { status?: unknown }).status ?? '')
-      return ['proposed', 'ready', 'exploring', 'in_progress', 'review', 'gate_check', 'spec_review'].includes(status)
-    })
-    if (runnable) return null
     const first = importedShapingTasks[0] as { id?: unknown; title?: unknown; status?: unknown }
     const title = typeof first.title === 'string' && first.title.trim() ? first.title.trim() : 'the first imported draft'
     const id = typeof first.id === 'string' ? first.id : ''

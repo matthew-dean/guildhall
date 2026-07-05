@@ -18527,6 +18527,77 @@ source: codex:resolve-escalation-canonical-blocker-sync-2026-07-04
     entries for child repos `Looma:` and `Knit:`, did not show `not a git
     repository`, and had no horizontal overflow.
 
+2026-07-05T15:15:00Z - Block Start from skipping current-scope source-repair drafts.
+
+- Work id: `codex:reintake-structural-repair-start-gate-2026-07-05`.
+- User job: when Guildhall discovers that current Narrative Harness release
+  work was imported from hollow contract/type handoffs, the product must show
+  that work as source-repair/spec-shaping work and must not let Start/Resume
+  run past it to a different ready task in the same selected scope.
+- Root-cause classification:
+  1. Data model/schema problem: legacy imported tasks could lose importer
+     provenance while still carrying source references and hollow acceptance
+     criteria.
+  2. Project structure/scope/release modeling problem: selected-release Start
+     treated import-draft shaping gaps as secondary when other release work was
+     runnable.
+  3. Task hierarchy/dependency/proof modeling problem: evidence graph intake
+     could still generate generic contract implementation handoffs without
+     concrete contract/type names.
+  4. Scheduler/action-state logic problem: `startBlockerForImportDrafts`
+     returned `null` whenever any scoped task was runnable.
+  5. UI communication/orientation problem: the visible action model could say
+     "Resume" while the same current release still had source-repair drafts.
+  7. Bad project data produced by an earlier Guildhall bug: Narrative Harness
+     contained active/ready imported contract tasks with empty proof targets.
+- Fix:
+  - Added a project re-intake structural-repair stage for non-terminal imported
+    contract/type work whose proof target is hollow.
+  - Moved the same integrity gate into evidence-graph `create`/`reframe`
+    generation so generic fallback implementation drafts cannot bypass it.
+  - Reframed repair tasks with owner-visible recovery titles while preserving
+    original imported title, task id, release membership, references, and
+    source trail.
+  - Kept archived hollow imports terminal so re-intake does not resurrect old
+    duplicate/split noise.
+  - Made scoped import drafts a hard Start/Resume blocker even when another
+    task in the selected release is runnable.
+- Live Narrative Harness proof after applying the repair group through
+  `/api/project/reintake/apply?projectId=narrative-harness`:
+  - `task-import-1g9oq7m`, `task-import-1q84363`, and `task-import-1u8es55`
+    were reframed from `in_progress`/`ready` implementation work to
+    `import_draft` source-repair work in `near-term-proof-scope`.
+  - Each has `taskKind:"research"`,
+    `taskReadiness.recommendation:"needs_research_spike"`, and
+    `structuralIntegrity.status:"needs_repair"`.
+  - The draft repair pass reported `reframed:3`, `repairCount:3`, and
+    `archivedRepairs:0`.
+- Contract Touch Decision:
+  - Work id: `codex:reintake-structural-repair-start-gate-2026-07-05`.
+  - Touched contracts: project re-intake draft generation, imported contract
+    integrity/readiness interpretation, selected-scope Start/Resume readiness,
+    action-model source of truth via shared `startReadiness`.
+  - Contracts considered but not touched: persisted task schema, release schema,
+    workspace-import draft schema, task transition schema, inbox item schema.
+  - Existing data impact: no migration. Existing bad tasks are repaired through
+    the normal re-intake draft/apply flow; archived tasks remain archived.
+  - Required follow-up: continue Narrative Harness re-intake from the visible
+    source-repair drafts, then prove the selected release can progress only
+    after the current-scope handoffs are shaped.
+  - Proof required: focused re-intake/server tests, contract lint, build,
+    installed-app stale-server proof, live Narrative Harness re-intake/apply
+    proof, and Start/Resume readiness proof.
+  - Proof provided: focused re-intake/server tests passed; installed app
+    returned `stale:false`; live re-intake produced three repair reframes and
+    zero archived repairs; live apply rewrote the three current-scope hollow
+    tasks into visible repair drafts; live Start/Resume readiness returned
+    `canStart:false`, `code:"imported_scope_shaping"`, run control
+    `startEnabled:false`, and primary action `Draft first brief` pointing at
+    `task-import-1g9oq7m`.
+  - Apply/revert behavior: revert the re-intake integrity gate, repair draft
+    helper, Start/Resume import-draft gate change, and associated tests to
+    restore previous behavior. No schema rollback is required.
+
 2026-07-05T10:45:00Z - Aligned release proof/orientation communication with
 shared readiness state.
 

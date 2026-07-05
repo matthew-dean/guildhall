@@ -18,7 +18,11 @@ import {
   buildImportedBlueprintSeed,
   type MaterializedImportTask,
 } from './workspace-importer.js'
-import { contractShapedImportHasNoConcreteContracts } from './imported-work-integrity.js'
+import {
+  contractShapedImportHasNoConcreteContracts,
+  importedContractStructuralRepairReadiness,
+  importedContractWorkIsStructurallyIncomplete,
+} from './imported-work-integrity.js'
 
 export type ProjectReintakeSource = EvidenceSource
 
@@ -118,7 +122,7 @@ export function planProjectReintake(input: ProjectReintakeInput): ProjectReintak
   const usedTaskIds = new Set<string>()
   const selectedRelease = detectSelectedRelease(input.sources)
   const protectedProgressTaskIds = new Set(input.tasks
-    .filter(task => isStartedOrCompletedTask(task))
+    .filter(task => isStartedOrCompletedTask(task) && !importedContractWorkIsStructurallyIncomplete(task))
     .map(task => stringField(task, 'id'))
     .filter((id): id is string => Boolean(id)))
 
@@ -185,6 +189,22 @@ export function planProjectReintake(input: ProjectReintakeInput): ProjectReintak
         changes: [singleEdit],
       })
     }
+  }
+
+  const structuralRepairChanges = repairStructurallyIncompleteImportedContractWork(
+    input.tasks,
+    usedTaskIds,
+    selectedRelease,
+    now,
+  )
+  if (structuralRepairChanges.length > 0) {
+    groups.push({
+      id: 'repair-structurally-incomplete-imports',
+      title: 'Repair structurally incomplete imported work',
+      rationale: 'Imported contract/type work with hollow proof targets must be reshaped before Guildhall can schedule it.',
+      changes: structuralRepairChanges,
+    })
+    for (const change of structuralRepairChanges) usedTaskIds.add(change.taskId)
   }
 
   const progressChanges = preserveProgressChanges(input.tasks, usedTaskIds)
@@ -517,6 +537,9 @@ function graphTaskChange(
     'existingTaskId' in change && change.existingTaskId === task.id,
   ) as { existingTaskId?: string; reason?: string } | undefined
   const draft = evidenceTaskToDraft(task, selectedRelease, sources, projectPath, now)
+  const after = importedContractWorkIsStructurallyIncomplete(draft)
+    ? structurallyIncompleteImportRepairDraft(draft, selectedRelease, now)
+    : draft
 
   if (reframe) {
     const existing = existingTasks.find(candidate => stringField(candidate, 'id') === task.id)
@@ -528,15 +551,98 @@ function graphTaskChange(
         title: stringField(existing ?? {}, 'title') ?? task.title,
         status: stringField(existing ?? {}, 'status') ?? 'unknown',
       },
-      after: draft,
+      after,
       reason: `Reframe from current evidence: ${reframe.reason ?? task.title}`,
     }
   }
 
   return {
     kind: 'create',
-    task: draft,
+    task: after,
     reason: 'Create missing work from current source evidence.',
+  }
+}
+
+function repairStructurallyIncompleteImportedContractWork(
+  tasks: Array<Record<string, unknown>>,
+  usedTaskIds: Set<string>,
+  selectedRelease: SelectedRelease | null,
+  now: string,
+): ReintakeChange[] {
+  return tasks
+    .filter(task => {
+      const id = stringField(task, 'id')
+      if (!id || usedTaskIds.has(id)) return false
+      if (isTerminalTask(task)) return false
+      return importedContractWorkIsStructurallyIncomplete(task)
+    })
+    .map(task => {
+      const taskId = stringField(task, 'id') ?? ''
+      const title = stringField(task, 'title') ?? 'Imported contract work'
+      return {
+        kind: 'reframe' as const,
+        taskId,
+        before: {
+          id: taskId,
+          title,
+          status: stringField(task, 'status') ?? 'unknown',
+        },
+        after: structurallyIncompleteImportRepairDraft(task, selectedRelease, now),
+        reason: 'Imported contract/type work has a hollow proof target and must recover concrete source-backed contract names before execution.',
+      }
+    })
+}
+
+function structurallyIncompleteImportRepairDraft(
+  task: Record<string, unknown>,
+  selectedRelease: SelectedRelease | null,
+  now: string,
+): ReintakeTaskDraft {
+  const originalTitle = stringField(task, 'title') ?? 'Imported contract work'
+  const title = structuralRepairTitle(originalTitle)
+  const taskId = stringField(task, 'id') ?? slugify(originalTitle)
+  const releaseIds = arrayStringField(task.releaseIds)
+  const inSelectedRelease = selectedRelease ? releaseIds.includes(selectedRelease.id) : false
+  const readiness = importedContractStructuralRepairReadiness(task, now)
+
+  return {
+    id: taskId,
+    title,
+    description: [
+      stringField(task, 'description') || 'Source-backed imported work needs structural repair.',
+      `Original imported title: ${originalTitle}`,
+      'Guildhall imported this as executable contract/type work, but the saved task does not name the concrete contract or type surfaces it owns.',
+    ].join('\n\n'),
+    domain: stringField(task, 'domain') ?? 'planning',
+    status: selectedRelease && !inSelectedRelease ? 'shelved' : 'import_draft',
+    priority: priorityField(task.priority),
+    dependsOn: arrayStringField(task.dependsOn),
+    acceptanceCriteria: [{
+      id: 'contract-surface-recovered',
+      description: `${originalTitle} names the concrete contract/type surfaces recovered from cited sources, or is reshaped to match the documented source structure before implementation.`,
+      verifiedBy: 'review',
+      met: false,
+    }],
+    references: arrayStringField(task.references),
+    ...(inSelectedRelease && selectedRelease ? { releaseIds: [selectedRelease.id] } : {}),
+    spec: [
+      `## What this is`,
+      `Repair the imported handoff for ${originalTitle}.`,
+      '',
+      '## Problem / context',
+      'The task is currently shaped like implementation work, but its proof target is hollow: it asks for contract/type implementation without naming the concrete source-backed contract or type surfaces.',
+      '',
+      '## Acceptance criteria',
+      `1. ${originalTitle} names the concrete contract/type surfaces recovered from cited sources, or is reshaped to match the documented source structure before implementation.`,
+      '',
+      '## Verification',
+      '- Review the cited source trail and confirm the worker handoff no longer depends on an empty contract placeholder.',
+    ].join('\n'),
+    taskReadiness: readiness,
+    taskKind: 'research',
+    definitionOfDone: readiness.definitionOfDone,
+    blockerPlans: readiness.blockerPlans,
+    contextBudget: readiness.contextBudget,
   }
 }
 
@@ -1280,6 +1386,23 @@ function stringField(source: Record<string, unknown>, key: string): string | und
   return typeof value === 'string' ? value : undefined
 }
 
+function arrayStringField(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    : []
+}
+
+function priorityField(value: unknown): ReintakeTaskDraft['priority'] {
+  return value === 'critical' || value === 'high' || value === 'normal' || value === 'low'
+    ? value
+    : 'normal'
+}
+
+function structuralRepairTitle(originalTitle: string): string {
+  if (/^recover\b/i.test(originalTitle)) return originalTitle
+  return `Recover source-backed contract surface for ${originalTitle.replace(/^implement\s+/i, '')}`
+}
+
 function normalize(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
 }
@@ -1299,6 +1422,11 @@ function unique<T>(values: T[]): T[] {
 function isStartedOrCompletedTask(task: Record<string, unknown>): boolean {
   const status = stringField(task, 'status') ?? ''
   return ['done', 'in_progress', 'review', 'gate_check', 'pending_pr'].includes(status)
+}
+
+function isTerminalTask(task: Record<string, unknown>): boolean {
+  const status = stringField(task, 'status') ?? ''
+  return ['done', 'archived', 'cancelled'].includes(status)
 }
 
 function isOpenPreImplementationTask(task: Record<string, unknown>): boolean {
