@@ -126,7 +126,7 @@ describe('ProjectMapTab', () => {
               blocksStart: false,
               blocksRelease: false,
               humanBlocking: false,
-              sourceRefs: ['import:docs/harness/implementation-roadmap.md'],
+              sourceRefs: ['/Users/matthew/git/oss/narrative-harness/docs/harness/implementation-roadmap.md'],
             },
             {
               taskId: 'task-later',

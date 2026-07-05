@@ -114,7 +114,7 @@
       for (const ref of refs) {
         if (ref.startsWith('task:')) taskRefs.add(ref)
         if (ref.startsWith('artifact:')) artifactRefs.add(ref)
-        if (ref.startsWith('import:')) importRefs.add(ref)
+        if (isSourceDocumentRef(ref)) importRefs.add(ref)
       }
       for (const artifactId of node.refs?.artifactIds ?? []) artifactRefs.add(`artifact:${artifactId}`)
     }
@@ -329,7 +329,7 @@
     const source = canonicalNode(node).source
     const refs = source && typeof source === 'object' ? source.refs ?? [] : []
     return refs
-      .filter(ref => ref.startsWith('import:'))
+      .filter(isSourceDocumentRef)
       .map(sourceRefLabel)
       .filter(Boolean)
   }
@@ -343,6 +343,12 @@
     const value = ref.startsWith('import:') ? ref.slice('import:'.length) : ref
     const parts = value.split('/').filter(Boolean)
     return parts.at(-1) ?? value
+  }
+
+  function isSourceDocumentRef(ref: string): boolean {
+    if (ref.startsWith('task:') || ref.startsWith('artifact:')) return false
+    if (ref.startsWith('import:')) return true
+    return /[/\\]/.test(ref) || /\.(md|mdx|txt|json|ya?ml)$/i.test(ref)
   }
 
   function scopeReasonLabel(reason: string | undefined): string {
@@ -364,7 +370,7 @@
 
   function scopeRowSourceSummary(row: { sourceRefs?: string[] }): string {
     const labels = (row.sourceRefs ?? [])
-      .filter(ref => ref.startsWith('import:'))
+      .filter(isSourceDocumentRef)
       .map(sourceRefLabel)
       .filter(Boolean)
     return labels.length > 0 ? `Source: ${labels.slice(0, 2).join(', ')}` : 'Source: task record'

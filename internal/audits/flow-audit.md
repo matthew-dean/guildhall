@@ -17547,6 +17547,49 @@ visibly blocked after the false proof-policy escalation.
 
 source: codex:resolve-escalation-canonical-blocker-sync-2026-07-04
 
+2026-07-05T11:08:00Z - Kept Map source trail visible for raw source paths.
+
+- Work id: `codex:project-map-raw-source-path-labels-2026-07-05`.
+- User job: when Guildhall recovers work from real planning docs, the Project
+  Map should show those source docs on the scoped work rows. A user should not
+  need repo access, API inspection, or Codex inference to know where a Now/Later
+  row came from.
+- Finding:
+  - `/api/project?projectId=narrative-harness` returned `scopeRows.sourceRefs`
+    as raw absolute planning-doc paths such as
+    `/Users/matthew/git/oss/narrative-harness/docs/harness/implementation-roadmap.md`.
+  - `ProjectMapTab.svelte` only treated refs prefixed with `import:` as source
+    documents, so raw recovered source paths could render as `Source: task
+    record` even though Guildhall had recovered the real doc provenance.
+- Fix:
+  - Project Map source-labeling now treats `import:` refs, file-like refs, and
+    path-like refs as source documents while still excluding task/artifact ids.
+  - The existing Map regression now uses a raw absolute source path on a scope
+    row and expects the visible label `Source: implementation-roadmap.md`.
+- Contract Touch Decision:
+  - Work id: `codex:project-map-raw-source-path-labels-2026-07-05`.
+  - Touched contracts: Project Map presentation of orientation `sourceRefs`.
+  - Contracts considered but not touched: orientation spine schema,
+    project-scope projection schema, workspace-import output schema, task
+    storage schema.
+  - Existing data impact: no migration. Existing raw path source refs render
+    with their basename instead of falling back to task-record copy.
+  - Proof required: focused Project Map component regression, build, installed
+    Narrative Harness Map browser proof showing source document labels on scope
+    rows.
+  - Apply/revert behavior: restore `ProjectMapTab.svelte` source filtering to
+    `import:`-only behavior; no data rollback required.
+- Proof provided:
+  - `./node_modules/.bin/vitest run src/web/surfaces/project/__tests__/ProjectMapTab.svelte.test.ts --reporter=dot`
+    passed 3 tests.
+  - `CI=true pnpm lint:contracts` passed.
+  - `CI=true pnpm build` passed after restoring dev dependencies pruned by the
+    contract-lint install step.
+  - Installed app reported `/api/stale-server` with `stale:false`.
+  - Rendered `/projects/narrative-harness/map` at `1280x820`, `900x820`, and
+    `390x844` showed `Source: implementation-roadmap.md` in the Scope ledger,
+    did not show `Source: task record`, and had no horizontal overflow.
+
 2026-07-05T10:52:00Z - Corrected completed-scope next-run communication.
 
 - Work id: `codex:completed-scope-next-run-copy-2026-07-05`.
