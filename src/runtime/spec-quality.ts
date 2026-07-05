@@ -75,6 +75,22 @@ function isFilled(value: string | undefined): value is string {
   return Boolean(value && value.trim().length > 0 && !EMPTY_FIELD_PATTERN.test(value.trim()))
 }
 
+export function productBriefFromSpecCompletionBoundary(spec: string): NonNullable<Task['productBrief']> | null {
+  const boundary = sectionBody(spec, 'Completion Boundary')
+  if (!boundary) return null
+  const fields = completionBoundaryFields(boundary)
+  const userJob = fields.get('product outcome')
+  const successMetric = fields.get('what counts as done')
+  if (!isFilled(userJob) || !isFilled(successMetric)) return null
+  const nonGoals = fields.get('what must be split or blocked')
+  return {
+    userJob,
+    successMetric,
+    ...(isFilled(nonGoals) ? { nonGoals: [nonGoals], antiPatterns: [nonGoals] } : {}),
+    authoredBy: 'system:completion-boundary',
+  }
+}
+
 export function validateSpecCompletionBoundary(task: Pick<Task,
   'spec' | 'acceptanceCriteria' | 'productBrief'
 >): SpecQualityResult {

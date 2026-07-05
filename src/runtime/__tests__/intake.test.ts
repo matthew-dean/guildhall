@@ -361,6 +361,40 @@ describe('approveSpec', () => {
     expect(queue.tasks[0]!.status).toBe('ready')
   })
 
+  it('derives the product brief from a complete completion boundary before approval', async () => {
+    const queue = await readQueue()
+    delete queue.tasks[0]!.productBrief
+    queue.tasks[0]!.spec = [
+      '## Summary',
+      '',
+      'Run a deterministic backend harness script.',
+      '',
+      '## Completion Boundary',
+      '- Product outcome: A developer can run the fixture loop and inspect a saved run record.',
+      '- What Guildhall can complete in code: Add the script and local proof.',
+      '- External dependencies: None.',
+      '- Owner-only setup: None.',
+      '- Verification environment: Local Node.js command.',
+      '- What counts as done: The fixture loop exits 0 and saves reviewer and writer output.',
+      '- What must be split or blocked: Real LLM calls belong to a later stage.',
+      '',
+      '## Acceptance Criteria',
+      '1. The fixture loop exits 0.',
+    ].join('\n')
+    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+
+    const result = await approveSpec({ memoryDir, taskId: 'task-001' })
+
+    expect(result.success).toBe(true)
+    const updated = await readQueue()
+    expect(updated.tasks[0]!.status).toBe('ready')
+    expect(updated.tasks[0]!.productBrief).toMatchObject({
+      userJob: 'A developer can run the fixture loop and inspect a saved run record.',
+      successMetric: 'The fixture loop exits 0 and saves reviewer and writer output.',
+      authoredBy: 'system:completion-boundary',
+    })
+  })
+
   it('approves needs-research-spike specs when no child work is materialized', async () => {
     const queue = await readQueue()
     queue.tasks[0]!.title = 'Define fixture, expected-record, prototype-run, and evaluation contracts'

@@ -29,6 +29,7 @@ import { analyzeRequestIntake, type RequestIntakeOwnerInput } from './request-in
 import { routeRequest, type RouteRequestResult, type RoutedAction } from './request-routing.js'
 import {
   extractAcceptanceCriteriaFromSpec,
+  productBriefFromSpecCompletionBoundary,
   validateSpecCompletionBoundary,
 } from './spec-quality.js'
 import { applyTaskShaping } from './task-decomposition.js'
@@ -383,6 +384,15 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
     }
   }
   backfillAcceptanceCriteriaFromSpec(task)
+  if (!task.productBrief?.userJob?.trim() || !task.productBrief?.successMetric?.trim()) {
+    const derivedBrief = productBriefFromSpecCompletionBoundary(task.spec)
+    if (derivedBrief) {
+      task.productBrief = {
+        ...derivedBrief,
+        authoredAt: new Date().toISOString(),
+      }
+    }
+  }
   const specQuality = validateSpecCompletionBoundary(task)
   if (!specQuality.ok) {
     return {

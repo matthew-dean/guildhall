@@ -43,6 +43,38 @@ requests blocked.
 
 source: codex:task-answer-owner-input-sync-2026-07-05
 
+2026-07-05T04:19:00Z - Fixed spec approval dead-end for backend harness tasks.
+
+- Work id: `codex:completion-boundary-brief-backfill-2026-07-05`.
+- User job: when Codex approves a non-UI/backend spec on the owner's behalf,
+  Guildhall should not trap the work in `spec_review` because the spec agent
+  skipped a separate product brief while still writing a complete Completion
+  Boundary.
+- Finding:
+  - Narrative Harness task
+    `task-import-14yqvl7-split-run-the-bounded-reviewer-and-writer-loop-headlessly-2`
+    had a scoped structured spec for the Stage 1 deterministic
+    reviewer/writer loop, but `/approve-spec` rejected it with
+    `Product brief must name the user/project job and observable success
+    metric.`
+  - The project then stopped as `awaiting approval`, so the UI asked for owner
+    approval while the approval endpoint refused the owner approval. That is a
+    dead-end state.
+- Fix:
+  - `approveSpec` now derives a draft `productBrief` from the spec's
+    Completion Boundary when the brief is missing. `product outcome` becomes
+    `userJob`; `what counts as done` becomes `successMetric`; split/block text
+    becomes the non-goal boundary.
+  - The normal spec quality validator still requires the concrete Completion
+    Boundary fields and acceptance criteria before approval.
+- Verification:
+  - Added an approval regression for a backend harness spec with no product
+    brief but a complete Completion Boundary.
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/intake.test.ts -t 'approveSpec'`
+    passed `24` selected approval tests.
+
+source: codex:completion-boundary-brief-backfill-2026-07-05
+
 2026-07-04T23:12:00Z - Rejected false owner escalation for proof-command policy.
 
 - Work id: `codex:false-proof-escalation-guard-2026-07-04`.
