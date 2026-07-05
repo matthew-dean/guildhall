@@ -6178,6 +6178,12 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
       mkTask({
         id: 'a',
         status: 'gate_check',
+        acceptanceCriteria: [{
+          id: 'review-copy',
+          description: 'Reviewer confirmed the script stays deterministic.',
+          verifiedBy: 'review',
+          met: false,
+        }],
         gateResults: [{
           gateId: 'npm-run-build',
           type: 'hard',
@@ -6206,7 +6212,53 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
     }
     const queue = await readQueue()
     expect(queue.tasks[0]!.status).toBe('done')
+    expect(queue.tasks[0]!.acceptanceCriteria[0]?.met).toBe(true)
     expect(queue.tasks[0]!.notes.at(-1)?.content).toContain('recorded passing hard gates')
+  })
+
+  it('repairs completed task evidence display from recorded passing hard gates', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'done',
+        acceptanceCriteria: [
+          {
+            id: 'ac-3',
+            description: 'Saved reviewer finding is inspectable.',
+            verifiedBy: 'automated',
+            command: 'node -e "const r=require(\'./runs/\'+require(\'fs\').readdirSync(\'runs\').find(f=>f.startsWith(\'run-fixture-demo\'))); console.log(JSON.stringify(r.reviewerFinding))"',
+            met: true,
+          },
+          {
+            id: 'ac-5',
+            description: 'Reviewer confirmed the script stays deterministic.',
+            verifiedBy: 'review',
+            met: false,
+          },
+        ],
+        gateResults: [{
+          gateId: 'ac-3',
+          type: 'hard',
+          passed: true,
+          checkedAt: '2026-07-04T10:07:21.557Z',
+          output:
+            'node -e "const r=require(\'./runs/\'+require(\'fs\').readdirSync(\'runs\').find(f=>f.startsWith(\'run-fixture-demo\')&&f.endsWith(\'.json\'))); console.log(JSON.stringify(r.reviewerFinding))" — exit 0',
+        }],
+      }),
+    ])
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet(),
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('idle')
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    expect(task.acceptanceCriteria[0]?.command).toContain("f.endsWith('.json')")
+    expect(task.acceptanceCriteria.every((criterion) => criterion.met)).toBe(true)
+    expect(task.notes.at(-1)?.content).toContain('normalized completed task proof evidence')
   })
 
   it('preserves gate_check when the gate checker times out after recording passing hard gates', async () => {

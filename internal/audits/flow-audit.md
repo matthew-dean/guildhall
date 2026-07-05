@@ -41,6 +41,37 @@ without guessing.
 
 source: codex:run-record-json-proof-command-normalization-2026-07-05
 
+2026-07-05T05:39:00Z - Repaired completed task evidence display.
+
+- Work id: `codex:completed-task-evidence-display-repair-2026-07-05`.
+- User job: when Guildhall marks a task done from recorded proof, the task
+  drawer, work list, and overview state must not still show stale proof
+  commands or unmet review-backed acceptance criteria.
+- Finding:
+  - Narrative Harness task
+    `task-import-14yqvl7-split-run-the-bounded-reviewer-and-writer-loop-headlessly-2`
+    reached `done` after the normalized AC-3/AC-4 command gates passed, but
+    the stored acceptance criteria still displayed the old same-prefix command
+    and AC-5 still showed `met:false`.
+  - Root cause: acceptance-command gates normalized the command only at
+    execution time, and the recorded-hard-gates completion path could complete
+    a task without reconciling non-command/review criteria.
+- Fix:
+  - Acceptance-command gates now persist the normalized command they actually
+    ran back onto the criterion.
+  - Recorded-hard-gates completion marks review-backed/non-command criteria as
+    met when all recorded hard gates pass.
+  - Orchestrator startup now repairs already-completed tasks whose displayed
+    evidence lags the recorded passing gates, so existing project state is
+    corrected on the next run rather than only future tasks.
+- Verification:
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/task-gates.test.ts -t "filters run-record proof commands|normalizeAutomatedAcceptanceCriterionCommands"`
+    passed `3` selected tests.
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/orchestrator.test.ts -t "acceptance command gates|recorded passing hard gates|repairs completed task evidence"`
+    passed `5` selected tests.
+
+source: codex:completed-task-evidence-display-repair-2026-07-05
+
 2026-07-05T03:52:00Z - Fixed task answer submissions leaving owner-input
 requests blocked.
 

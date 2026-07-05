@@ -2776,6 +2776,8 @@ export class Orchestrator {
     const resolvedCapacity = await this.resolveCapacity()
     queueBefore = await this.normalizeQueuedReviewOwnership(queueBefore, resolvedCapacity)
     queueBefore = await this.reopenRecoverableDirtyRepoTasks(queueBefore)
+    const completedEvidenceRepair = this.reconcileCompletedTaskEvidence(queueBefore)
+    if (completedEvidenceRepair.changed) await this.writeQueue(queueBefore)
     const staleRepair = repairStaleBlockersInQueue(queueBefore, this.now())
     if (staleRepair.changed) await this.writeQueue(queueBefore)
     const landingRepair = await this.reconcileCompletedTaskLanding(queueBefore)
@@ -6929,7 +6931,11 @@ export class Orchestrator {
       ]
       for (const criterion of current.acceptanceCriteria) {
         const result = resultByGateId.get(criterion.id)
-        if (result) criterion.met = result.passed
+        if (result) {
+          criterion.met = result.passed
+          const command = commandByGateId.get(criterion.id)
+          if (command) criterion.command = command
+        }
       }
 
       const now = this.now()
@@ -7127,6 +7133,16 @@ export class Orchestrator {
       if (currentHardGates.length === 0 || !currentHardGates.every((gate) => gate.passed)) return null
 
       const now = this.now()
+      const passedHardGateIds = new Set(currentHardGates.map((gate) => gate.gateId))
+      for (const criterion of current.acceptanceCriteria) {
+        if (
+          passedHardGateIds.has(criterion.id) ||
+          criterion.verifiedBy !== 'automated' ||
+          !criterion.command?.trim()
+        ) {
+          criterion.met = true
+        }
+      }
       transitionTaskStatus({
         task: current,
         event: 'complete',
@@ -8481,6 +8497,57 @@ export class Orchestrator {
     queue.lastUpdated = now
     await this.writeQueue(queue)
     return queue
+  }
+
+  private reconcileCompletedTaskEvidence(queue: TaskQueue): { changed: boolean } {
+    let changed = false
+    const now = this.now()
+    for (const task of queue.tasks) {
+      if (task.status !== 'done') continue
+      let taskChanged = false
+      for (const criterion of task.acceptanceCriteria) {
+        const normalizedCommand = normalizeRunRecordJsonSelectionCommand(criterion.command ?? '')
+        if (normalizedCommand && normalizedCommand !== criterion.command) {
+          criterion.command = normalizedCommand
+          taskChanged = true
+        }
+      }
+      const latestHardGates = latestHardGateResults(task)
+      if (latestHardGates.length > 0 && latestHardGates.every((gate) => gate.passed)) {
+        const passedHardGateIds = new Set(latestHardGates.map((gate) => gate.gateId))
+        for (const criterion of task.acceptanceCriteria) {
+          if (
+            passedHardGateIds.has(criterion.id) ||
+            criterion.verifiedBy !== 'automated' ||
+            !criterion.command?.trim()
+          ) {
+            if (!criterion.met) {
+              criterion.met = true
+              taskChanged = true
+            }
+          }
+        }
+      }
+      if (!taskChanged) continue
+      const alreadyRecorded = task.notes.some((note) =>
+        note.agentId === 'coordinator' &&
+        note.role === 'evidence-repair' &&
+        /normalized completed task proof evidence/i.test(note.content),
+      )
+      if (!alreadyRecorded) {
+        task.notes.push({
+          agentId: 'coordinator',
+          role: 'evidence-repair',
+          content:
+            'Guildhall normalized completed task proof evidence so displayed acceptance commands and met flags match the recorded passing gates.',
+          timestamp: now,
+        })
+      }
+      task.updatedAt = now
+      changed = true
+    }
+    if (changed) queue.lastUpdated = now
+    return { changed }
   }
 
   private async isRecoverableSelfAuthoredVerificationBlockedTask(task: Task): Promise<boolean> {
