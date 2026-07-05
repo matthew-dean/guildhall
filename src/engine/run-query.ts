@@ -1314,6 +1314,7 @@ export async function* runQuery(
   let noProgressToolTurns = 0
   let noProgressReadOnlyGraceTurns = 0
   let repeatedReadOnlyRefusals = 0
+  let repeatedSelfReportedFileMutationFailures = 0
   const initialCheckpointNextAction = latestCheckpointNextAction(context.toolMetadata)
   const initialAuthoritativeVerificationCommands = context.toolMetadata
     ? (parseAuthoritativeCommands(context.toolMetadata) ?? [])
@@ -1575,6 +1576,63 @@ export async function* runQuery(
       return
     }
     sawToolCall = true
+    const selfReportedFileMutationFailure = fileMutationFailureSelfReport(assistantText)
+    const hasFileMutationToolCall = toolCalls.some((tc) => isFileMutationToolName(tc.name))
+    if (selfReportedFileMutationFailure && hasFileMutationToolCall) {
+      repeatedSelfReportedFileMutationFailures += 1
+      const refusalMessage = [
+        'You just said the previous file mutation was wrong, incomplete, truncated, or targeted at the wrong path.',
+        'Do not immediately try another file mutation.',
+        'First use read-file on the exact target path to ground the current file contents, or use write-checkpoint / raise-escalation if the path or contents are no longer safe.',
+      ].join(' ')
+      for (const tc of toolCalls) {
+        yield {
+          event: { type: 'tool_execution_started', tool_name: tc.name, tool_input: tc.input },
+          usage: null,
+        }
+        yield {
+          event: {
+            type: 'tool_execution_completed',
+            tool_name: tc.name,
+            output: refusalMessage,
+            is_error: true,
+          },
+          usage: null,
+        }
+      }
+      messages.push({
+        role: 'user',
+        content: toolCalls.map((tc) => ({
+          type: 'tool_result',
+          tool_use_id: tc.id,
+          content: refusalMessage,
+          is_error: true,
+        })),
+      })
+      yield {
+        event: {
+          type: 'status',
+          message:
+            'Assistant self-reported a failed file mutation and tried another mutation immediately; requiring a grounded read, checkpoint, or escalation first.',
+        },
+        usage: null,
+      }
+      if (repeatedSelfReportedFileMutationFailures >= 2) {
+        yield {
+          event: {
+            type: 'status',
+            message:
+              'Assistant kept retrying file mutations after self-reporting mutation failure; ending the turn so the orchestrator can treat the work as stalled instead of burning tokens.',
+          },
+          usage: null,
+        }
+        return
+      }
+      continue
+    }
+    if (!selfReportedFileMutationFailure) {
+      repeatedSelfReportedFileMutationFailures = 0
+    }
     const hadProgressToolCall =
       progressToolNames.size > 0 && toolCalls.some((tc) => progressToolNames.has(tc.name))
     if (hadProgressToolCall) {
@@ -2266,6 +2324,25 @@ function isMalformedEditFileToolResult(toolName: string, result: ToolResultBlock
   return message.includes('Invalid input for edit-file')
 }
 
+function fileMutationFailureSelfReport(text: string): boolean {
+  const normalized = text.toLowerCase()
+  if (!normalized) return false
+  if (!/\b(file|edit-file|write-file|path|write|wrote|mutation|content)\b/.test(normalized)) {
+    return false
+  }
+  return (
+    /\bwrong path\b/.test(normalized) ||
+    /\bincorrect path\b/.test(normalized) ||
+    /\bpath mismatch\b/.test(normalized) ||
+    /\bonly wrote\b.*\b(fragment|partial|part)\b/.test(normalized) ||
+    /\b(fragment|partial|truncated)\b/.test(normalized) ||
+    /\bgot truncated\b/.test(normalized) ||
+    /\bwas truncated\b/.test(normalized) ||
+    /\bwrite-file\b.*\b(fragment|partial|truncated|wrong path)\b/.test(normalized) ||
+    /\bedit-file\b.*\b(fragment|partial|truncated|wrong path)\b/.test(normalized)
+  )
+}
+
 function editFileOldStringMissTarget(
   cwd: string,
   toolCall: ToolUseBlock,
@@ -2481,6 +2558,10 @@ function isWriteToolName(name: string): boolean {
 
 function isEditToolName(name: string): boolean {
   return name === 'edit-file' || name === 'Edit'
+}
+
+function isFileMutationToolName(name: string): boolean {
+  return isWriteToolName(name) || isEditToolName(name)
 }
 
 function reviewHandoffEvidence(

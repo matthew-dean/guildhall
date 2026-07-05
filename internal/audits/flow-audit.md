@@ -16844,6 +16844,39 @@ ready but not dispatchable because stale decomposition metadata survived.
 
 source: codex:approved-spec-empty-decomposition-dispatch-2026-07-04
 
+2026-07-04T20:08:00-07:00 - Contained worker file-mutation loops after
+self-reported truncated or wrong-path writes.
+
+- Work id: `codex:file-mutation-self-report-loop-2026-07-04`.
+- User job: when a worker says its own file mutation was wrong, truncated, or
+  targeted at the wrong path, Guildhall should stop the repeated mutation loop
+  and make the worker reground or checkpoint instead of burning tokens.
+- Finding:
+  - Narrative Harness task
+    `task-import-14yqvl7-split-build-the-bounded-writer-packet-instead-of-rereading-the-2`
+    became runnable after the recovery-spec and picker fixes, but the worker
+    then entered a file mutation loop.
+  - Live drawer evidence showed assistant messages like "write-file only wrote
+    a fragment", "the file got truncated again", and "edit-file is resolving to
+    a wrong path", followed by more file mutation tools. Guildhall treated the
+    successful tool returns as progress and let the loop continue until the run
+    was manually stopped after roughly 500k input tokens.
+- Fix:
+  - `runQuery` now detects assistant text that self-reports a failed file
+    mutation and refuses immediate `write-file` / `edit-file` retries.
+  - The refusal tells the worker to read the exact target file, write a
+    checkpoint, or raise an escalation before any further mutation.
+  - A second self-reported mutation retry ends the turn so the orchestrator can
+    mark the work as stalled instead of continuing a token-burning loop.
+- Verification:
+  - Added a regression where the assistant performs one successful write, says
+    the file was truncated, and tries another write. Guildhall now rejects the
+    second write without executing it.
+  - `./node_modules/.bin/vitest run src/engine/__tests__/run-query.test.ts -t 'file mutations|focused repair turn|malformed write-file|malformed edit-file'`
+    passed `3` tests.
+
+source: codex:file-mutation-self-report-loop-2026-07-04
+
 2026-07-04T16:31:00-07:00 - Fixed resolved escalation state leaving tasks
 visibly blocked after the false proof-policy escalation.
 

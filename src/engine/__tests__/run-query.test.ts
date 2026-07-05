@@ -6619,6 +6619,89 @@ Uncertainties: none`,
     )).toBe(true)
   })
 
+  it('refuses immediate repeat file mutations after the assistant says the prior write failed', async () => {
+    const registry = new ToolRegistry()
+    const writes: string[] = []
+    registry.register(
+      defineTool({
+        name: 'write-file',
+        description: '',
+        inputSchema: z.object({
+          filePath: z.string(),
+          content: z.string(),
+        }),
+        execute: async (input) => {
+          writes.push(input.content)
+          return { output: `wrote ${input.filePath}`, is_error: false }
+        },
+      }),
+    )
+    const client = new ScriptedApiClient([
+      {
+        message: assistantToolUse(
+          'write-file',
+          {
+            filePath: '/workspace/project/src/writer.ts',
+            content: 'export const first = true\\n',
+          },
+          'toolu_1',
+        ),
+      },
+      {
+        message: {
+          role: 'assistant',
+          content: [
+            {
+              type: 'text',
+              text: 'The file got truncated again. Let me write the complete file in one shot.',
+            },
+            {
+              type: 'tool_use',
+              id: 'toolu_2',
+              name: 'write-file',
+              input: {
+                filePath: '/workspace/project/src/writer.ts',
+                content: 'export const second = true\\n',
+              },
+            },
+          ],
+        },
+      },
+      { message: assistantText('done') },
+    ])
+    const messages: ConversationMessage[] = [
+      { role: 'user', content: [{ type: 'text', text: 'go' }] },
+    ]
+
+    const events = await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 4,
+        },
+        messages,
+      ),
+    )
+
+    expect(writes).toEqual(['export const first = true\\n'])
+    expect(events.some(e =>
+      e.type === 'status' &&
+      e.message.includes('self-reported a failed file mutation'),
+    )).toBe(true)
+    expect(events.some(e =>
+      e.type === 'tool_execution_completed' &&
+      e.tool_name === 'write-file' &&
+      e.is_error === true &&
+      String(e.output).includes('Do not immediately try another file mutation'),
+    )).toBe(true)
+  })
+
   it('nudges the agent after repeating the same no-match tool call', async () => {
     const registry = new ToolRegistry()
     registry.register(
