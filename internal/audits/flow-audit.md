@@ -12,6 +12,49 @@ This is the active browser test plan for the Guildhall project surface. Keep it
 updated while auditing the active test project so another agent can resume
 without guessing.
 
+2026-07-05T11:10:00Z - Tightened multi-repo envelope language.
+
+- Work id: `codex:workspace-envelope-child-repo-language-2026-07-05`.
+- User job: when a project path is a workspace envelope such as Looma + Knit,
+  the owner should never be told that the parent folder itself must be a Git
+  checkout. Guildhall should describe the actual invariant: the attached path
+  may be an envelope, and the child repositories are the Git boundaries it must
+  inspect and use.
+- Fix:
+  - Release Git Story inspection fallback now says to check that the attached
+    path or child repo is reachable, instead of implying the project path must
+    itself be a Git checkout.
+  - Added a ReleaseTab regression proving unknown Git Story blockers keep the
+    raw `fatal: not a git repository` text hidden and do not use the old parent
+    checkout wording.
+- Live/API proof:
+  - `/api/project?projectId=looma-knit` reported Git Story snapshots for child
+    repos `Looma` and `Knit`, with repo roots under
+    `/Users/matthew/git/oss/looma-knit/looma` and
+    `/Users/matthew/git/oss/looma-knit/knit`.
+- Contract Touch Decision:
+  - Work id: `codex:workspace-envelope-child-repo-language-2026-07-05`.
+  - Touched contracts: ReleaseTab owner-facing Git Story fallback copy.
+  - Contracts considered but not touched: Git Story summary schema, task schema,
+    workspace import schema, child repo discovery policy.
+  - Required follow-up: continue treating any root-level "not a git repository"
+    surfaced for a child-repo envelope as a routing/model bug, not a user setup
+    instruction.
+  - Proof required: component regression for copy; runtime regression that child
+    repos remain discovered for non-git envelopes.
+  - Proof provided: focused ReleaseTab test passed; focused release-readiness
+    child-repo tests passed.
+  - Waivers: installed-app rebuild deferred because this slice changes copy and
+    tests only; the live API already showed child repo snapshots.
+  - Owner-review items: none.
+  - Apply/revert behavior: revert the ReleaseTab copy and regression test to
+    restore prior wording; no persisted data rollback.
+- Verification:
+  - `./node_modules/.bin/vitest run src/web/surfaces/project/__tests__/ReleaseTab.svelte.test.ts --reporter=dot`
+    passed.
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/serve-release-readiness.test.ts -t 'child repos|immediate child git repositories' --reporter=dot`
+    passed.
+
 2026-07-05T08:18:00Z - Tightened Stage 1 readiness and child-repo envelope
 truth.
 

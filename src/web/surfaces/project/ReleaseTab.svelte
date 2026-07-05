@@ -255,7 +255,7 @@
     if (isGitInspectionFailure(blocker)) {
       return {
         label: repoAwareGitLabel(blocker, 'Could not inspect this checkout.'),
-        detail: 'Check that this project path is a Git checkout and that git is available to the runtime.',
+        detail: 'Check that the attached path or child repo is reachable and that git is available to the runtime.',
       }
     }
     const haystack = `${blocker.state ?? ''}\n${blocker.reason ?? ''}\n${blocker.nextAction ?? ''}`.toLowerCase()

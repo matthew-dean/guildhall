@@ -485,6 +485,40 @@ describe('ReleaseTab', () => {
     expect(screen.getByText('Looma: A branch needs a sharing decision.')).toBeTruthy()
   })
 
+  it('does not tell workspace envelopes that the parent path must be a git checkout', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        json({
+          ...readyPayload,
+          gitStory: {
+            state: 'unknown',
+            blockers: [
+              {
+                id: 'repo-knit',
+                repoId: 'knit',
+                repoLabel: 'Knit',
+                label: 'Knit',
+                state: 'unknown',
+                reason: 'fatal: not a git repository',
+                nextAction: 'Inspect git state manually; Guildhall could not read it.',
+              },
+            ],
+          },
+          totals: { ...readyPayload.totals, gitStoryBlockingCount: 1 },
+        }),
+      ),
+    )
+
+    render(ReleaseTab, { props: { subView: 'criteria' } })
+
+    expect(await screen.findByText('Scope checks')).toBeTruthy()
+    expect(screen.getByText('Knit: Could not inspect this checkout.')).toBeTruthy()
+    expect(screen.getByText(/attached path or child repo is reachable/)).toBeTruthy()
+    expect(screen.queryByText(/project path is a Git checkout/)).toBeNull()
+    expect(screen.queryByText(/fatal: not a git repository/)).toBeNull()
+  })
+
   it('opens git story task links inside the current project route', async () => {
     window.history.replaceState({}, '', '/projects/looma-knit/release/criteria')
     path.value = '/projects/looma-knit/release/criteria'
