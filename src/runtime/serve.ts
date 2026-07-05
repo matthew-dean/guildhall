@@ -285,7 +285,11 @@ import {
   detectRepoAnchors,
   isAttentionOwnedInboxItem,
 } from './inbox.js'
-import { listOwnerInputRequestsSync, markOwnerInputRequestForBoundedChatReview } from './owner-input-store.js'
+import {
+  findOwnerInputRequestBySource,
+  listOwnerInputRequestsSync,
+  markOwnerInputRequestForBoundedChatReview,
+} from './owner-input-store.js'
 import {
   buildProjectMigrationAdvisories,
   buildProjectUnderstandingAdvisories,
@@ -6190,6 +6194,30 @@ export function buildServeApp(opts: ServeOptions = {}): {
     return `/thread?thread=${encodeURIComponent(request.boundedChatSessionId)}`
   }
 
+  async function submitLinkedTaskOwnerInput(input: {
+    taskId: string
+    questionId: string
+    answer: string
+  }): Promise<void> {
+    const request = await findOwnerInputRequestBySource(project.path, {
+      kind: 'task',
+      taskId: input.taskId,
+      questionId: input.questionId,
+    })
+    if (request?.status !== 'waiting_for_owner') return
+    const stateDir = getProjectStateDir(project.path)
+    await submitBoundedChatUserResponse({
+      memoryDir: stateDir,
+      sessionId: request.boundedChatSessionId,
+      subObjectiveId: input.questionId,
+      response: input.answer,
+    })
+    await markOwnerInputRequestForBoundedChatReview({
+      projectRoot: project.path,
+      boundedChatSessionId: request.boundedChatSessionId,
+    })
+  }
+
   app.post('/api/project/task/:id/start', async c => {
     try {
       const taskId = c.req.param('id')
@@ -9825,6 +9853,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
           taskId: id,
           message: `Answer to "${(q as { id?: string }).id}": ${body.answer.trim()}`,
         })
+        await submitLinkedTaskOwnerInput({
+          taskId: id,
+          questionId: body.questionId,
+          answer: body.answer.trim(),
+        })
         return c.json({ ok: true })
       }
 
@@ -9894,6 +9927,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         const now = new Date().toISOString()
         const transcriptLines: string[] = []
         const missing: string[] = []
+        const ownerInputResponses: Array<{ questionId: string; answer: string }> = []
         for (const a of list) {
           const q = questions.find(x => (x as { id?: string }).id === a.questionId)
           if (!q) { missing.push(a.questionId!); continue }
@@ -9901,6 +9935,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           q.answeredAt = now
           q.answer = a.answer!.trim()
           transcriptLines.push(`Answer to "${a.questionId}": ${a.answer!.trim()}`)
+          ownerInputResponses.push({ questionId: a.questionId!, answer: a.answer!.trim() })
         }
         if (missing.length > 0) {
           return c.json({ error: `question(s) not found: ${missing.join(', ')}` }, 404)
@@ -9916,6 +9951,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
           taskId: id,
           message: transcriptLines.join('\n'),
         })
+        for (const response of ownerInputResponses) {
+          await submitLinkedTaskOwnerInput({
+            taskId: id,
+            questionId: response.questionId,
+            answer: response.answer,
+          })
+        }
         return c.json({ ok: true, count: list.length })
       }
 

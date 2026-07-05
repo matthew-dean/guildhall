@@ -12,6 +12,37 @@ This is the active browser test plan for the Guildhall project surface. Keep it
 updated while auditing the active test project so another agent can resume
 without guessing.
 
+2026-07-05T03:52:00Z - Fixed task answer submissions leaving owner-input
+requests blocked.
+
+- Work id: `codex:task-answer-owner-input-sync-2026-07-05`.
+- User job: when Codex is acting as the delegated owner and answers a visible
+  Guildhall question, Overview, Start, Thread, and Work must all agree that the
+  question is answered and Guildhall can continue.
+- Finding:
+  - Narrative Harness task
+    `task-import-14yqvl7-split-run-the-bounded-reviewer-and-writer-loop-headlessly-2`
+    accepted `/api/project/task/:id/answer-questions` with `{ ok: true }` and
+    appended the answer to the exploring transcript, but the project action
+    model still showed `owner_input_required`, `Answer in Thread`, and
+    `Waiting on answer`.
+  - Root cause: `answer-questions` and `answer-question` only updated legacy
+    `task.openQuestions`. The start gate correctly reads the newer
+    owner-input store, whose matching request still had
+    `status: waiting_for_owner`.
+- Fix:
+  - Both task answer endpoints now submit the linked bounded-chat response and
+    mark the matching owner-input request for coordinator review.
+  - The code reuses the existing bounded-chat transition/receipt path instead
+    of inventing another local "answered" flag.
+- Verification:
+  - Added a regression for a migrated task question with a linked
+    owner-input request.
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/serve-task-endpoints.test.ts -t 'linked owner-input request|answers current-shape task questions|generic owner-input task shaping'`
+    passed `3` tests.
+
+source: codex:task-answer-owner-input-sync-2026-07-05
+
 2026-07-04T23:12:00Z - Rejected false owner escalation for proof-command policy.
 
 - Work id: `codex:false-proof-escalation-guard-2026-07-04`.

@@ -3064,6 +3064,64 @@ describe('POST /api/project/task/:id/stage-answer', () => {
     const transcript = (await readExploringTranscript({ memoryDir, taskId: 'task-1' })).content ?? ''
     expect(transcript).toContain('Answer to "q-1": A')
   })
+
+  it('answers the linked owner-input request when a migrated task question is submitted', async () => {
+    await seedTask('task-1', {
+      status: 'exploring',
+      openQuestions: [
+        {
+          kind: 'choice',
+          id: 'q-1',
+          askedBy: 'spec-agent',
+          askedAt: new Date().toISOString(),
+          prompt: 'Pick one',
+          choices: ['A', 'B'],
+          selectionMode: 'single',
+          draftAnswer: 'A',
+        },
+      ],
+    })
+    const ownerInput = await createOwnerInputRequest({
+      projectRoot: tmpDir,
+      projectId,
+      commandId: 'test:task-q-1',
+      now: '2026-06-03T12:00:00.000Z',
+      actor: 'test',
+      source: { kind: 'task', taskId: 'task-1', questionId: 'q-1' },
+      target: { kind: 'thread' },
+      objective: {
+        kind: 'task_shaping',
+        label: 'Clarify Seeded task for tests',
+        successCriteria: ['Owner answers the linked bounded-chat session.'],
+      },
+      question: {
+        kind: 'choice',
+        prompt: 'Pick one',
+        choices: ['A', 'B'],
+        selectionMode: 'single',
+      },
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-1/answer-questions'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ answers: [{ questionId: 'q-1', answer: 'A' }] }),
+      }),
+    )
+
+    expect(res.status).toBe(200)
+    const requests = await listOwnerInputRequests(tmpDir)
+    expect(requests[0]).toMatchObject({
+      id: ownerInput.request.id,
+      status: 'coordinator_review',
+      boundedChatSessionId: ownerInput.session.id,
+    })
+    const session = await loadBoundedChatSession({ memoryDir, sessionId: ownerInput.session.id })
+    expect(session.status).toBe('coordinator_review')
+    expect(session.subObjectives[0]?.localTurns.at(-1)?.content).toBe('A')
+  })
 })
 
 describe('POST /api/project/task/:id/unshelve', () => {
