@@ -3816,6 +3816,7 @@ describe('GET /api/project/activity', () => {
 
   it('repairs phantom worker claims when the project run is stopped', async () => {
     const now = new Date().toISOString()
+    const staleClaimAt = new Date(Date.now() - 10 * 60 * 1000).toISOString()
     await writeRawTaskQueue({
       version: 1,
       lastUpdated: now,
@@ -3868,7 +3869,7 @@ describe('GET /api/project/activity', () => {
               agentId: 'task-claimer',
               role: 'orchestrator',
               content: 'Claimed ready task for worker-agent.',
-              timestamp: now,
+              timestamp: staleClaimAt,
             },
           ],
         },
@@ -3896,6 +3897,79 @@ describe('GET /api/project/activity', () => {
     expect(queue.tasks[0].escalations[0].resolvedBy).toBe('system')
     const effective = await readEffectiveTask('t1')
     expect(effective.runtime?.openEscalationIds).toEqual([])
+  })
+
+  it('does not repair fresh worker claims while external CLI work may still be active', async () => {
+    const now = new Date().toISOString()
+    await writeRawTaskQueue({
+      version: 1,
+      lastUpdated: now,
+      tasks: [
+        {
+          id: 't1',
+          title: 'Fresh active claim',
+          description: '',
+          domain: 'd',
+          projectPath: tmpDir,
+          status: 'in_progress',
+          assignedTo: 'worker-agent',
+          priority: 'normal',
+          revisionCount: 0,
+          remediationAttempts: 0,
+          origination: 'human',
+          createdAt: now,
+          updatedAt: now,
+          spec: [
+            '## Summary',
+            'Do the thing.',
+            '',
+            '## Acceptance Criteria',
+            '1. Works.',
+            '',
+            '## Completion Boundary',
+            '- Product outcome: Works.',
+            '- What Guildhall can complete in code: Update local files.',
+            '- External dependencies: None.',
+            '- Owner-only setup: None.',
+            '- Verification environment: Local checkout.',
+            '- What counts as done: Verified.',
+            '- What must be split or blocked: None.',
+          ].join('\n'),
+          acceptanceCriteria: [
+            { id: 'ac-1', description: 'Works.', verifiedBy: 'review', met: false },
+          ],
+          notes: [
+            {
+              agentId: 'task-claimer',
+              role: 'orchestrator',
+              content: 'Claimed ready task for worker-agent.',
+              timestamp: now,
+            },
+          ],
+        },
+      ],
+    })
+    await upsertTaskRuntimeState(tmpDir, 't1', {
+      assignedTo: 'worker-agent',
+      openEscalationIds: [],
+      updatedAt: now,
+    })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(projectUrl('/api/project/activity')))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, any>
+    expect(body.counts.in_progress).toBe(1)
+    expect(body.inFlight[0]).toMatchObject({
+      id: 't1',
+      status: 'in_progress',
+    })
+
+    const queue = await readTaskQueue()
+    expect(queue.tasks[0]).toMatchObject({
+      status: 'in_progress',
+      assignedTo: 'worker-agent',
+    })
   })
 
   it('returns empty summary when no tasks file exists yet', async () => {

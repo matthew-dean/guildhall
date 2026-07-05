@@ -14104,6 +14104,70 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-07-05T22:45:00Z - Repaired fresh worker claims being reset by read-side
+phantom-active cleanup during Narrative Harness MVP execution.
+
+- Work id: `codex:narrative-harness-fresh-worker-claim-2026-07-05`.
+- User job: when the owner starts the Narrative Harness MVP, Guildhall must
+  keep current work visibly live until the worker records proof, a retry note,
+  or a real blocker. Overview/Work/activity polling must not silently turn
+  active work back into a calm `ready` card.
+- Failing evidence:
+  - Running `guildhall run narrative-harness --max-ticks 4` claimed
+    `task-150-split-select-and-prove-deepinfra-drafting-model`.
+  - While the browser app was open, the task repeatedly logged
+    `ready -> in_progress` followed by `in_progress -> ready` with no proof,
+    review, gate, or worktree diff.
+  - The task later recorded `The worker timed out before producing visible
+    progress`, but the task state still displayed `ready`; that hid the fact
+    that the worker lane had actually failed to make progress.
+- Root cause:
+  - `repairStoppedRunPhantomActiveTasks()` was callable from ordinary project
+    and activity API reads when the web supervisor did not know about an
+    external CLI run.
+  - The detector treated any `in_progress` task whose last note was
+    `Claimed ready task for worker-agent` as a stopped-run phantom claim.
+  - A fresh claim is also the healthy intermediate state between task claiming
+    and first worker evidence, so read-side polling could mutate active work
+    back to `ready`.
+- Fix:
+  - Fresh task-claimer notes are no longer eligible for stopped-run phantom
+    repair. The repair only applies to stale claims older than the active
+    worker grace window.
+  - Added regression coverage for both sides: old abandoned claims are repaired
+    to `ready`; fresh external-CLI claims remain `in_progress` when
+    `/api/project/activity` is polled.
+- Root-cause taxonomy:
+  - `4 scheduler/action-state logic`: read-side repair mutated scheduler state.
+  - `6 UI/product communication`: activity/Overview could falsely present
+    active failed work as simply ready.
+- Verification:
+  - `CI=true pnpm exec vitest run src/runtime/__tests__/serve-task-endpoints.test.ts -t "phantom worker claims|fresh worker claims"`.
+  - `node scripts/contract-touch-detector.mjs`.
+  - `node ./build.mjs`.
+  - Installed-app proof: `node scripts/dev-install.mjs`; `guildhall stop`;
+    `guildhall start`; `/api/stale-server` returned `stale:false` for PID
+    `42304`.
+  - Live Narrative Harness proof after install: `guildhall run
+    narrative-harness --max-ticks 1` claimed
+    `task-150-split-select-and-prove-deepinfra-drafting-model`; immediate
+    `/api/project/activity?projectId=narrative-harness` reported
+    `counts.in_progress: 1`, and `/api/project?projectId=narrative-harness`
+    showed the task still `in_progress` with `assignedTo: worker-agent`.
+  - Follow-up run no longer bounced the task to fake `ready`; it remained
+    `in_progress` after the first worker timeout and then blocked with
+    `human_judgment_required: Worker timed out after producing no visible
+    progress.`
+- Residual follow-up:
+  - The external CLI process printed `Coordinator stopped after ... ticks` but
+    did not return to the shell until interrupted. That is a separate runtime
+    exit defect and should be fixed before unattended MVP runs are considered
+    robust.
+  - The DeepInfra model-selection task is now honestly blocked on worker
+    timeout/provider routing. The next structural fix should decide how
+    Guildhall retries or switches model/provider for model-selection work
+    without presenting a fake owner blocker during a delegated calibration run.
+
 2026-07-05T22:18:00Z - Repaired import-draft source recovery so Narrative
 Harness current scope can start.
 

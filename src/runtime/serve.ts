@@ -1373,10 +1373,19 @@ function lastTaskNote(task: Record<string, unknown>): Record<string, unknown> | 
   return notes.at(-1)
 }
 
-function isPhantomWorkerClaimAfterStoppedRun(task: Record<string, unknown>): boolean {
+const PHANTOM_WORKER_CLAIM_MIN_AGE_MS = 5 * 60 * 1000
+
+function noteTimestampMs(note: Record<string, unknown> | undefined): number | null {
+  const timestamp = typeof note?.timestamp === 'string' ? Date.parse(note.timestamp) : NaN
+  return Number.isFinite(timestamp) ? timestamp : null
+}
+
+function isPhantomWorkerClaimAfterStoppedRun(task: Record<string, unknown>, nowMs = Date.now()): boolean {
   if (task.status !== 'in_progress') return false
   if (!taskHasRunnableSpec(task)) return false
   const last = lastTaskNote(task)
+  const claimTimestampMs = noteTimestampMs(last)
+  if (claimTimestampMs == null || nowMs - claimTimestampMs < PHANTOM_WORKER_CLAIM_MIN_AGE_MS) return false
   return (
     last?.agentId === 'task-claimer' &&
     /Claimed ready task for worker-agent/i.test(String(last.content ?? ''))
@@ -1396,7 +1405,7 @@ async function repairStoppedRunPhantomActiveTasks(projectPath: string): Promise<
   let repaired = 0
   for (const task of queue.tasks) {
     const effectiveTask = await buildEffectiveTask(projectPath, task as Task) as unknown as Record<string, unknown>
-    if (!isPhantomWorkerClaimAfterStoppedRun(effectiveTask)) continue
+    if (!isPhantomWorkerClaimAfterStoppedRun(effectiveTask, Date.parse(now))) continue
     if (!taskHasRunnableSpec(task) && taskHasRunnableSpec(effectiveTask)) {
       task.spec = effectiveTask.spec
       task.acceptanceCriteria = effectiveTask.acceptanceCriteria
