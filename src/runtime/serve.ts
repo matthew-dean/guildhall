@@ -169,6 +169,7 @@ import {
   recordExternalAgentLink,
 } from './external-agent-links.js'
 import { deriveProjectWorkProgress, type ProjectWorkProgress } from './work-progress.js'
+import { deriveTaskWorkVisibility } from './work-visibility.js'
 import {
   buildProjectOrientationSpine,
   taskNodeId,
@@ -1824,15 +1825,21 @@ function summarizeScopedReleaseWork(
   humanBlockingCount: number
   unfinishedCount: number
   scopedTasks: Task[]
+  gitStoryTasks: Task[]
 } {
   const tasksById = new Map(tasks.map(task => [task.id, task]))
   const scopeProjection = buildProjectScopeProjection(
     { version: 1, lastUpdated: new Date(0).toISOString(), tasks, releases: [] },
     { selectedScope: scope as ProjectScope | null | undefined },
   )
-  const scopedTasks = tasksEligibleForScopeExecution(tasks, scope)
+  const executionScopedTasks = tasksEligibleForScopeExecution(tasks, scope)
     .filter(task => task.id !== META_INTAKE_TASK_ID && task.id !== WORKSPACE_IMPORT_TASK_ID)
     .filter(task => !['archived', 'cancelled'].includes(String(task.status ?? '')))
+  const scopedTasks = executionScopedTasks.filter((task) => {
+    const parentId = task.hierarchy?.parentId?.trim()
+    const parent = parentId ? tasksById.get(parentId) ?? null : null
+    return deriveTaskWorkVisibility(task, parent).countInProjectTotals
+  })
   const statusCounts: Record<string, number> = {}
   const openEscalations: Array<{ taskId: string; taskTitle: string; escalationId: string; reason: string; summary: string }> = []
   const incompleteBriefs: Array<{ id: string; title: string; reason: string }> = []
@@ -1945,6 +1952,7 @@ function summarizeScopedReleaseWork(
     humanBlockingCount: Math.max(scopeProjection.counts.humanBlocking, humanBlockingKeys.size),
     unfinishedCount,
     scopedTasks,
+    gitStoryTasks: executionScopedTasks,
   }
 }
 
@@ -10697,9 +10705,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
       blockedByAgent,
       humanBlockingCount,
       unfinishedCount,
+      gitStoryTasks,
     } = releaseTruth
     const dirtyCheckout = await guildhallOwnedDirtyCheckout(project.path)
-    const gitStory = await buildProjectGitStorySummary(project.path, scopedTasks)
+    const gitStory = await buildProjectGitStorySummary(project.path, gitStoryTasks)
     const designSystemBlockingCount =
       scopedTasks.length > 0 &&
       scopedWorkNeedsDesignSystem(scopedTasks, release) &&

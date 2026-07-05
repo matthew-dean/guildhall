@@ -16844,6 +16844,45 @@ envelopes that contain child repositories.
 
 source: codex:workspace-envelope-child-repo-readiness-proof-2026-07-05
 
+2026-07-05T09:40:00Z - Kept workspace child repo proof while fixing release
+unit accounting for materialized child work.
+
+- Work id: `codex:release-readiness-visible-unit-accounting-2026-07-05`.
+- User job: when a project envelope such as Looma + Knit contains real child
+  repositories, Guildhall should still inspect those child repos for run safety,
+  but release progress should not double-count internal/materialized child tasks
+  as separate release units.
+- Root cause:
+  - Release readiness reused the execution-scoped task set for both Git Story
+    inspection and owner-facing totals.
+  - That was too broad for progress math: materialized children are useful for
+    execution and repo/worktree inspection, but some of them are intentionally
+    hidden from project totals because the parent is the visible release unit.
+- Fix:
+  - Release readiness now keeps two scoped sets: execution-scoped tasks for Git
+    Story inspection, and visible release units for totals, status counts,
+    blocker math, and readiness copy.
+  - The visible release-unit set uses the shared work-visibility model instead
+    of a Looma/Narrative Harness special case.
+- Installed-app proof:
+  - Rebuilt, installed, and restarted the local app; `/api/stale-server`
+    returned `stale:false`.
+  - Live `/api/project/release-readiness?projectId=looma-knit` returned
+    `totals.tasks:9` while still returning Git Story snapshots for child repo ids
+    `looma` and `knit`, plus a Looma worktree blocker for
+    `task-import-1v8sume`.
+  - The same response reported blockers labeled `Looma:` and `Knit:` instead of
+    a container-level `not a git repository` failure.
+- Verification:
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/serve-release-readiness.test.ts`
+    passed `24` tests.
+  - `CI=true pnpm build` passed.
+  - `./node_modules/.bin/vitest run src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts src/runtime/__tests__/project-scope-projection.test.ts src/runtime/__tests__/work-execution-state.test.ts src/runtime/__tests__/project-orientation-spine.test.ts`
+    passed `79` tests.
+  - `CI=true pnpm lint:contracts` passed.
+
+source: codex:release-readiness-visible-unit-accounting-2026-07-05
+
 2026-07-04T18:04:00Z - Made workspace child Git repositories visible in Git
 Story instead of treating the workspace container as the repo boundary.
 
