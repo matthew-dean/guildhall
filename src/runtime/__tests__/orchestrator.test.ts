@@ -3629,6 +3629,94 @@ describe('Orchestrator.tick — routing', () => {
     expect(task.notes.at(-1)?.content).toContain('stale source-recovery readiness')
   })
 
+  it('repairs stale readiness on approved fixed-spec reviewer lanes', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'dialogue-lane',
+        title: 'Implement dialogue-and-character-voice reviewer lane',
+        status: 'ready',
+        domain: 'coherence',
+        description: 'Evaluate documented review questions and add bounded local workspace proof.',
+        spec: [
+          '## Acceptance Criteria',
+          '1. Implement dialogue-and-character-voice reviewer lane can ask and answer documented review prompts.',
+          '',
+          '## Completion Boundary',
+          '- Product outcome: The reviewer lane records documented fiction-specific findings for a bounded proof fixture.',
+          '- What counts as done: The lane emits actionable findings and proof is recorded.',
+          '- What must be split or blocked: Nothing to split before this source-backed task runs.',
+        ].join('\n'),
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          description: 'The lane can ask and answer documented review prompts.',
+          verifiedBy: 'review',
+          source: 'documented',
+          met: false,
+        }],
+        sizePlan: {
+          taskId: 'dialogue-lane',
+          score: 5,
+          band: 'large',
+          action: 'proceed_with_warning',
+          factors: [],
+          recommendedChildren: [],
+          reviewBudgetHint: 'thorough',
+          reasons: [
+            'Task size score: 5.',
+            'Kept as runnable fixed-spec work because the accepted completion boundary says nothing must be split or blocked.',
+          ],
+          createdAt: '2026-07-05T13:48:19.876Z',
+          createdBy: 'task-shaping',
+        },
+        taskReadiness: {
+          taskKind: 'research',
+          recommendation: 'needs_research_spike',
+          summary: 'Task should run research or a spike before implementation.',
+          dimensions: [],
+          definitionOfDone: {
+            items: ['Research output names the recommended option.'],
+            evidenceRequired: ['Acceptance criteria are checked or explicitly marked unverified.'],
+            updatedAt: '2026-07-05T13:48:19.876Z',
+            createdBy: 'task-readiness',
+          },
+          blockerPlans: [],
+          contextBudget: {
+            estimatedTokens: 100,
+            risk: 'low',
+            fitsInOneWorkerBrief: true,
+            reasons: [],
+          },
+          assessedAt: '2026-07-05T13:48:19.876Z',
+          assessedBy: 'coordinator-readiness',
+        },
+      }),
+    ])
+    const worker = stubAgent('worker-agent', async () => {
+      throw new Error('worker should not run during readiness repair')
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out).toMatchObject({
+      kind: 'processed',
+      taskId: 'dialogue-lane',
+      agent: 'coordinator-recovery',
+      beforeStatus: 'ready',
+      afterStatus: 'ready',
+      transitioned: false,
+    })
+    expect(worker.calls).toHaveLength(0)
+    const queue = await readQueue()
+    const task = queue.tasks.find(candidate => candidate.id === 'dialogue-lane')!
+    expect(task.taskReadiness?.recommendation).toBe('ready')
+    expect(task.taskReadiness?.dimensions.find(dimension => dimension.id === 'uncertainty')?.status).toBe('ok')
+    expect(task.notes.at(-1)?.content).toContain('settled fixed-spec work')
+  })
+
   it('seeds empty source-backed split children without waiting for a recovery note', async () => {
     await writeQueue([
       mkTask({

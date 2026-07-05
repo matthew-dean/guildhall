@@ -130,6 +130,49 @@ describe('assessTaskReadiness', () => {
     expect(assessment.dimensions.find(dimension => dimension.id === 'uncertainty')?.status).toBe('blocked')
   })
 
+  it('keeps approved fixed-spec work ready even when review prompts look like research', () => {
+    const assessment = assessTaskReadiness(task({
+      title: 'Implement dialogue-and-character-voice reviewer lane',
+      status: 'ready',
+      description: 'Evaluate documented review questions and add bounded local workspace proof.',
+      spec: [
+        '## Acceptance Criteria',
+        '1. Implement dialogue-and-character-voice reviewer lane can ask and answer documented review prompts.',
+        '',
+        '## Completion Boundary',
+        '- Product outcome: The reviewer lane records documented fiction-specific findings for a bounded proof fixture.',
+        '- What counts as done: The lane emits actionable findings and proof is recorded.',
+        '- What must be split or blocked: Nothing to split before this source-backed task runs.',
+      ].join('\n'),
+      acceptanceCriteria: [
+        {
+          id: 'ac-1',
+          description: 'The lane can ask and answer documented review prompts.',
+          verifiedBy: 'review',
+          met: false,
+        },
+      ],
+      sizePlan: {
+        taskId: 'dialogue',
+        score: 5,
+        band: 'large',
+        action: 'proceed_with_warning',
+        factors: [],
+        recommendedChildren: [],
+        reviewBudgetHint: 'thorough',
+        reasons: [
+          'Task size score: 5.',
+          'Kept as runnable fixed-spec work because the accepted completion boundary says nothing must be split or blocked.',
+        ],
+        createdAt: '2026-07-05T13:48:19.876Z',
+        createdBy: 'task-shaping',
+      },
+    }))
+
+    expect(assessment.recommendation).toBe('ready')
+    expect(assessment.dimensions.find(dimension => dimension.id === 'uncertainty')?.status).toBe('ok')
+  })
+
   it('marks work as requiring child work when the context budget exceeds one worker brief', () => {
     const hugeSpec = Array.from({ length: 120 }, (_, index) => `Step ${index}: update a distinct screen, API, migration, and docs.`).join('\n')
     const assessment = assessTaskReadiness(task({

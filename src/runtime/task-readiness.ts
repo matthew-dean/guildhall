@@ -285,9 +285,17 @@ export function hasImportedExecutionBlueprint(task: Task): boolean {
 }
 
 function mixesResearchAndImplementation(task: Task): boolean {
+  if (hasSettledFixedSpecBoundary(task)) return false
   const text = taskText(task)
   return /\b(research|investigate|compare|evaluate)\b/i.test(text) &&
     /\b(implement|build|wire|add|change|migrate)\b/i.test(text)
+}
+
+export function hasSettledFixedSpecBoundary(task: Task): boolean {
+  if (task.sizePlan?.action !== 'proceed_with_warning') return false
+  if ((task.sizePlan.recommendedChildren?.length ?? 0) > 0) return false
+  const splitBoundary = task.spec?.match(/what must be split or blocked\s*:\s*([^\n]+)/i)?.[1] ?? ''
+  return /^(none|nothing|not required|nothing to split)/i.test(splitBoundary.trim())
 }
 
 function uncertaintyWarning(text: string, kind: TaskKind): boolean {

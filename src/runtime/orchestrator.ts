@@ -125,6 +125,7 @@ import {
   tickOutcomeToBackendEvent,
   agentIssueToBackendEvent,
 } from './wire-events.js'
+import { assessTaskReadiness, hasSettledFixedSpecBoundary } from './task-readiness.js'
 import type { BackendEvent } from '@guildhall/backend-host'
 import type { StreamEvent } from '@guildhall/protocol'
 import {
@@ -3307,6 +3308,8 @@ export class Orchestrator {
     if (sourceRecoveryRepair) return sourceRecoveryRepair
     const staleSourceRecoveryReadinessRepair = await this.repairStaleSourceRecoveryReadinessInQueue(queueBefore)
     if (staleSourceRecoveryReadinessRepair) return staleSourceRecoveryReadinessRepair
+    const fixedSpecReadinessRepair = await this.repairStaleFixedSpecReadinessInQueue(queueBefore)
+    if (fixedSpecReadinessRepair) return fixedSpecReadinessRepair
     const weakRecoverySpecRepair = await this.repairWeakRecoverySpecReviewSeedsInQueue(queueBefore)
     if (weakRecoverySpecRepair) return weakRecoverySpecRepair
     const landingRepair = await this.reconcileCompletedTaskLanding(queueBefore)
@@ -10610,6 +10613,45 @@ export class Orchestrator {
       agent_name: 'coordinator-recovery',
       message:
         'Guildhall repaired stale source-recovery readiness now that the named contract/type surfaces are present.',
+    })
+    return {
+      kind: 'processed',
+      taskId: liveTask.id,
+      agent: 'coordinator-recovery',
+      beforeStatus: liveTask.status,
+      afterStatus: liveTask.status,
+      transitioned: false,
+      revisionCount: liveTask.revisionCount,
+    }
+  }
+
+  private async repairStaleFixedSpecReadinessInQueue(queue: TaskQueue): Promise<TickOutcome | null> {
+    const liveTask = queue.tasks.find((task) =>
+      (task.status === 'ready' || task.status === 'in_progress' || task.status === 'done') &&
+      task.taskReadiness?.recommendation !== 'ready' &&
+      hasSettledFixedSpecBoundary(task),
+    )
+    if (!liveTask) return null
+    const now = this.now()
+    const readiness = assessTaskReadiness(liveTask, { now })
+    if (readiness.recommendation !== 'ready') return null
+    liveTask.taskReadiness = readiness
+    liveTask.updatedAt = now
+    liveTask.notes.push({
+      agentId: 'coordinator-recovery',
+      role: 'system',
+      content:
+        'Guildhall repaired stale readiness for settled fixed-spec work; the accepted completion boundary already says no child split or research precursor is required.',
+      timestamp: now,
+    })
+    queue.lastUpdated = now
+    await this.writeQueue(queue)
+    await this.emitBackendEvent({
+      type: 'line_complete',
+      task_id: liveTask.id,
+      agent_name: 'coordinator-recovery',
+      message:
+        'Guildhall repaired stale readiness for settled fixed-spec work.',
     })
     return {
       kind: 'processed',

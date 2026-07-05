@@ -14159,6 +14159,56 @@ blockers.
 
 source: codex:narrative-harness-source-recovery-ready-2026-07-05
 
+2026-07-05T21:06:00Z - Repaired settled fixed-spec reviewer lanes that still
+looked like research blockers.
+
+- Work id: `codex:narrative-harness-fixed-spec-readiness-2026-07-05`.
+- User job: when Guildhall has approved a source-backed reviewer-lane spec and
+  explicitly settled its split plan as runnable fixed-spec work, Release
+  readiness must not keep listing it as an incomplete research spike.
+- Failure taxonomy:
+  - `3 task hierarchy/dependency/proof modeling problem`: the accepted
+    `dialogue-and-character-voice` spec contained four work units, but the
+    size plan had already been settled to `proceed_with_warning` with no child
+    recommendations because the completion boundary said nothing must be split.
+  - `4 scheduler/action-state logic problem`: the task was `ready` and
+    dispatchable, but release readiness still treated
+    `taskReadiness.recommendation:"needs_research_spike"` as an incomplete
+    shaping blocker.
+  - `5 UI communication/orientation problem`: the product told the user the
+    lane needed research even though the accepted spec and proof plan were
+    already concrete enough to run.
+  - `7 bad project data produced by an earlier Guildhall bug`: the live
+    Narrative Harness row preserved stale readiness after approval had settled
+    the spec as runnable fixed-spec work.
+- Fix:
+  - `task-readiness` now treats settled fixed-spec boundaries as bounded work
+    instead of mixed research/implementation. The guard is narrow: it requires
+    `sizePlan.action:"proceed_with_warning"`, no recommended children, and a
+    completion-boundary line saying nothing must be split or blocked.
+  - The orchestrator repairs existing stale fixed-spec readiness before
+    dispatch, preserving task status and recomputing the shared readiness
+    assessment.
+- Live installed-app proof:
+  - `node ./build.mjs`; `node scripts/dev-install.mjs`; `guildhall stop`;
+    `guildhall start`; `/api/stale-server` returned `stale:false` for PID
+    `47346`.
+  - `guildhall run narrative-harness --max-ticks 1` applied the repair to
+    `task-import-lho60m`.
+  - Live `/api/project?projectId=narrative-harness` then reported
+    `task-import-lho60m` as `status:"ready"`,
+    `taskReadiness.recommendation:"ready"`, and uncertainty `status:"ok"`.
+  - Release readiness dropped from `6` incomplete source-backed shaping tasks
+    to `5`; the next honest blocker is now `Recover source-backed contract
+    surface for editor-writer feedback chain contract and weighted-feedback
+    pipeline`.
+- Verification:
+  - Focused readiness/orchestrator/reintake tests passed `5` tests.
+  - `git diff --check`, `node scripts/contract-touch-detector.mjs`, and
+    `node ./build.mjs` passed.
+
+source: codex:narrative-harness-fixed-spec-readiness-2026-07-05
+
 2026-07-05T19:31:52Z - Repaired Narrative Harness MVP recovery work so
 split-required owner requirements become visible child work instead of hidden
 spec prose.
