@@ -191,6 +191,8 @@ describe('ProjectOverviewTab', () => {
     })
 
     expect(screen.getByRole('heading', { name: 'Current release' })).toBeInTheDocument()
+    expect(screen.getByText('Not complete')).toBeInTheDocument()
+    expect(screen.queryByText('Not ready')).toBeNull()
     expect(screen.getByText('Stage 1: V1 Release Hardening')).toBeInTheDocument()
     expect(screen.getByText(/0 \/ 9 done/)).toBeInTheDocument()
     expect(screen.getByText(/9 unfinished/)).toBeInTheDocument()

@@ -226,6 +226,53 @@ describe('GET /api/project/release-readiness', () => {
     expect(body.ready).toBe(true)
   })
 
+  it('uses the orientation execution boundary when the release proof style is unspecified', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, 'README.md'),
+      [
+        '# Narrative Harness',
+        '',
+        'The first MVP is headless: script-only proofs of all systems.',
+      ].join('\n'),
+      'utf8',
+    )
+    await execFileP('git', ['add', 'README.md'], { cwd: tmpDir })
+    await execFileP('git', ['commit', '-m', 'document headless boundary'], { cwd: tmpDir })
+    await execFileP('git', ['push'], { cwd: tmpDir })
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: 'near-term-proof',
+      releases: [{
+        id: 'near-term-proof',
+        label: 'Near-term proof',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-review-plan'],
+        deferredNodeIds: [],
+        proofStyle: 'unspecified',
+      }],
+      tasks: [
+        makeTask({
+          id: 'task-review-plan',
+          title: 'Define reviewer UI context plan',
+          description: 'Specify which review dimensions participate in the script-only proof run.',
+          status: 'done',
+          completedAt: '2026-05-08T00:00:00Z',
+          releaseIds: ['near-term-proof'],
+        }),
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
+    const body = await res.json() as any
+
+    expect(body.release).toMatchObject({ id: 'near-term-proof', proofStyle: 'unspecified' })
+    expect(body.totals.designSystemBlockingCount).toBe(0)
+  })
+
   it('does not treat negated UI copy as release UI work', async () => {
     await seedQueue({
       version: 1,

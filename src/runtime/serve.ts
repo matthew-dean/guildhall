@@ -10776,9 +10776,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
     } = releaseTruth
     const dirtyCheckout = await guildhallOwnedDirtyCheckout(project.path)
     const gitStory = await buildProjectGitStorySummary(project.path, gitStoryTasks)
+    const readinessProofStyle = readinessSpine.executionBoundary.proofStyle === 'script_only'
+      ? 'script_only'
+      : release?.proofStyle
     const designSystemBlockingCount =
       scopedTasks.length > 0 &&
-      scopedWorkNeedsDesignSystem(scopedTasks, release) &&
+      scopedWorkNeedsDesignSystem(scopedTasks, { proofStyle: readinessProofStyle }) &&
       !designSystem.approved
         ? 1
         : 0

@@ -1040,7 +1040,7 @@
               railStrength="strong"
               onclick={() => go(currentProjectHref('/release', activeProjectId))}
             >
-              <Chip label={releaseReadiness?.ready ? 'Ready' : 'Not ready'} tone={releaseReadinessTone === 'warn' ? 'warn' : releaseReadinessTone === 'ok' ? 'ok' : 'neutral'} />
+              <Chip label={releaseReadiness?.ready ? 'Complete' : 'Not complete'} tone={releaseReadinessTone === 'warn' ? 'warn' : releaseReadinessTone === 'ok' ? 'ok' : 'neutral'} />
               <div>
                 <strong>{releaseReadinessLabel}</strong>
                 <p>{releaseReadinessProgress}</p>

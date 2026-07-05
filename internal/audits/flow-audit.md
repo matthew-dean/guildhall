@@ -12,6 +12,65 @@ This is the active browser test plan for the Guildhall project surface. Keep it
 updated while auditing the active test project so another agent can resume
 without guessing.
 
+2026-07-05T14:08:00Z - Clarified scoped readiness language and headless proof
+boundaries.
+
+- Work id: `codex:release-readiness-scope-language-and-headless-boundary-2026-07-05`.
+- User job: when a project is a workspace envelope like Looma + Knit, Guildhall
+  should recognize and present child repositories as the real git boundaries
+  instead of telling the owner the parent folder is not a repository. When
+  Narrative Harness is scoped as a headless/script-only proof, Guildhall should
+  not invent a design-system blocker just because a task title contains UI-ish
+  planning words. Release/scope copy should distinguish unfinished work from
+  genuine blockers.
+- Root cause:
+  - The runtime already discovers Looma and Knit child repo snapshots, but
+    overview/release wording still leaned on generic "blocked/not ready"
+    labels that made normal unfinished scope checks sound like hard failures.
+  - Release readiness computed a project orientation spine with an execution
+    boundary, then separately guessed whether a design-system guardrail was
+    needed from task text plus `release.proofStyle`. If a release record was
+    unspecified while the project boundary said script-only, the duplicate
+    guess could create a false design-system blocker.
+- Fix:
+  - Overview release chips now say `Complete` / `Not complete` so release
+    closure is not confused with runnability.
+  - Release readiness labels unfinished runnable work as `Work remaining`, and
+    the summary counts use `Open checks` instead of "total blockers" for normal
+    unfinished/current-scope accounting.
+  - Release readiness now passes the orientation spine's script-only execution
+    boundary into the design-system relevance check, keeping headless proof
+    scopes from requiring unrelated visual guardrails.
+- Contract Touch Decision:
+  - Touched contracts: `/api/project/release-readiness` design-system blocking
+    semantics, Release and Overview owner-facing readiness copy.
+  - Contracts considered but not touched: persisted release schema, persisted
+    task schema, Git Story summary schema, workspace child repository discovery
+    policy.
+  - Required follow-up: browser proof still needs a fresh pass after installed
+    build because the Browser connector timed out earlier in this run.
+  - Proof required: focused release-readiness regression, focused Overview and
+    Release UI copy regressions, installed-app build/stale-server proof, live
+    API check for Narrative Harness and Looma + Knit.
+  - Proof provided so far:
+    `./node_modules/.bin/vitest run src/runtime/__tests__/serve-release-readiness.test.ts src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts src/web/surfaces/project/__tests__/ReleaseTab.svelte.test.ts --reporter=dot`
+    passed `73` tests; `git diff --check` passed;
+    `CI=true PNPM_CONFIG_CONFIRM_MODULES_PURGE=false pnpm lint:contracts`
+    passed with contract decision evidence. `packages/ui` generated styles and
+    `tsc -p tsconfig.json`; `node ./build.mjs`; `node
+    ./scripts/dev-install.mjs`; installed `/api/stale-server` returned
+    `stale:false`.
+  - Live Narrative Harness proof: `/api/project/release-readiness` reported
+    selected release `near-term-proof-scope`, `tasks:9`, `unfinishedCount:9`,
+    `designSystemBlockingCount:0`, `gitStoryBlockingCount:0`, and
+    `dirtyCheckoutBlockingCount:0`; the selected release record itself remains
+    `proofStyle:"unspecified"`, so the zero design-system blocker comes from
+    the orientation execution boundary.
+  - Live Looma + Knit proof: `/api/project?projectId=looma-knit` reported
+    child repo snapshots for `Looma` and `Knit`; release-scoped Git Story had
+    three child-repo blockers, and the serialized project payload did not
+    contain `not a git repository`.
+
 2026-07-05T14:00:00Z - Stabilized Narrative Harness re-intake release truth and
 nested-repo proof.
 

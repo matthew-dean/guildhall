@@ -324,6 +324,8 @@
   const readinessNoun = $derived(hasNamedRelease ? 'release' : 'scope')
   const readinessTitle = $derived(hasNamedRelease ? 'Release readiness' : 'Scope readiness')
   const blockerNoun = $derived(hasNamedRelease ? 'release blocker' : 'scope blocker')
+  const openCheckNoun = $derived(hasNamedRelease ? 'release check' : 'scope check')
+  const openCheckCount = $derived(Math.max(data?.totals.blockingCount ?? 0, unfinishedCount))
 
   const verdict = $derived.by(() => {
     if (!data) return { label: 'Loading', tone: 'neutral' as const, reason: '' }
@@ -350,7 +352,7 @@
     }
     if (unfinishedCount > 0) {
       return {
-        label: 'Blocked',
+        label: 'Work remaining',
         tone: 'warn' as const,
         reason: `${unfinishedCount} task${unfinishedCount === 1 ? '' : 's'} still need shaping, worker execution, review, or recovery.`,
       }
@@ -417,8 +419,8 @@
   )
   const releaseBlockerLabel = $derived(
     data
-      ? `${data.totals.blockingCount} ${blockerNoun}${data.totals.blockingCount === 1 ? '' : 's'}`
-      : `0 ${blockerNoun}s`,
+      ? `${openCheckCount} open ${openCheckNoun}${openCheckCount === 1 ? '' : 's'}`
+      : `0 open ${openCheckNoun}s`,
   )
   const taskDoneLabel = $derived(data?.totals.tasks === 0 ? 'No tracked work yet' : `${data?.totals.done ?? 0}/${data?.totals.tasks ?? 0} done`)
   const spineReleaseBlocker = $derived(spine?.release?.blockers?.[0] ?? null)
@@ -527,8 +529,8 @@
             <strong>{data.totals.tasks === 0 ? 'No tracked work' : `${data.totals.done}/${data.totals.tasks}`}</strong>
           </div>
           <div class="summary-stat">
-            <span class="summary-label">Total {hasNamedRelease ? 'release blockers' : 'blockers'}</span>
-            <strong>{data.totals.blockingCount}</strong>
+            <span class="summary-label">Open {hasNamedRelease ? 'release checks' : 'checks'}</span>
+            <strong>{openCheckCount}</strong>
           </div>
           <div class="summary-stat">
             <span class="summary-label">Unfinished tasks</span>

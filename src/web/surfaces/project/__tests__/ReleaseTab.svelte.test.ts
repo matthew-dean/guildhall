@@ -63,7 +63,7 @@ describe('ReleaseTab', () => {
     expect(screen.getByText('Scope readiness')).toBeTruthy()
     expect(screen.getByText('4/4 tasks done · no open scope blockers.')).toBeTruthy()
     expect(screen.getByText('Current counts')).toBeTruthy()
-    expect(screen.getByText('Total blockers')).toBeTruthy()
+    expect(screen.getByText('Open checks')).toBeTruthy()
     expect(screen.getByText('Unfinished tasks')).toBeTruthy()
     expect(screen.getByText('approved · rev 4')).toBeTruthy()
   })
@@ -79,7 +79,7 @@ describe('ReleaseTab', () => {
     expect(await screen.findByText('2.0 alpha')).toBeTruthy()
     expect(screen.getByText('Release readiness')).toBeTruthy()
     expect(screen.getByText('4/4 tasks done · no open release blockers.')).toBeTruthy()
-    expect(screen.getByText('Total release blockers')).toBeTruthy()
+    expect(screen.getByText('Open release checks')).toBeTruthy()
   })
 
   it('renders the shared orientation spine blocker before release details', async () => {
@@ -318,7 +318,7 @@ describe('ReleaseTab', () => {
     expect(screen.queryByText('not drafted')).toBeFalsy()
   })
 
-  it('prioritizes unfinished work over design-system readiness', async () => {
+  it('labels unfinished runnable work as remaining work instead of blocked', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () =>
@@ -334,8 +334,9 @@ describe('ReleaseTab', () => {
     render(ReleaseTab)
 
     expect(await screen.findByText('Current task scope')).toBeTruthy()
-    expect(screen.getAllByText('Blocked')).toHaveLength(2)
+    expect(screen.getAllByText('Work remaining')).toHaveLength(2)
     expect(screen.getByText('38 tasks still need shaping, worker execution, review, or recovery.')).toBeTruthy()
+    expect(screen.getByText('38 open scope checks')).toBeTruthy()
   })
 
   it('blocks current work readiness on Guildhall-owned dirty checkout residue', async () => {
