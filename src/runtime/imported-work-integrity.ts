@@ -158,7 +158,7 @@ function extractConcreteContractNames(text: string): string[] {
     .filter((name): name is string => Boolean(name))
     .filter(name =>
       /^[A-Z][A-Za-z0-9]*(?:[A-Z][A-Za-z0-9]*)?$/.test(name) ||
-      /\b(?:schema|schemas|contract|contracts|type|types)\b/i.test(name),
+      /\b(?:schema|schemas|contract|contracts|type|types|pipeline|pipelines|workflow|workflows|coordinator|coordinators)\b/i.test(name),
     )
     .filter(name => !/\b(?:placeholder|unnamed|missing|unknown|todo)\b/i.test(name))
     .filter(name => !['TODO', 'MVP', 'CLI', 'API', 'UI', 'JSON', 'YAML', 'PNPM'].includes(name))

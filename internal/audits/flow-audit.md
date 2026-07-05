@@ -14104,6 +14104,54 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-07-05T22:18:00Z - Repaired import-draft source recovery so Narrative
+Harness current scope can start.
+
+- Work id: `codex:narrative-harness-import-draft-source-recovery-2026-07-05`.
+- User job: after Guildhall imports real Narrative Harness planning docs, a
+  source-backed contract/workflow recovery task should not sit forever as an
+  incomplete brief when the task title, refs, and importer evidence already
+  name enough structure for Guildhall-owned shaping.
+- Failure taxonomy:
+  - `3 task hierarchy/dependency/proof modeling problem`: source-recovery tasks
+    were modeled as hollow contract work even when the title/refs named
+    recoverable contract/workflow surfaces.
+  - `4 scheduler/action-state logic problem`: the coordinator repair path only
+    accepted `blocked`/`exploring`, so `import_draft` rows kept release
+    readiness blocked.
+  - `7 bad project data produced by an earlier Guildhall bug`: existing
+    Narrative Harness import rows were created with hollow contract/type proof
+    targets and no durable product brief.
+- Fix:
+  - Source-recovery repair now includes `import_draft` rows when the task is
+    a Guildhall-owned source-recovery problem with no owner question.
+  - Recovery surface extraction now preserves workflow-ish structural surfaces
+    such as `weighted-feedback pipeline` and `revision-orchestration
+    coordinator contract`, instead of throwing away anything that does not say
+    contract/type/schema.
+  - Imported-work integrity now treats backticked pipeline/workflow/coordinator
+    surfaces as concrete source-backed surfaces so Release/Inbox do not
+    reclassify repaired workflow work as incomplete.
+- Proof:
+  - `CI=true pnpm exec vitest run src/runtime/__tests__/orchestrator.test.ts -t
+    "source-recovery|import-draft source recovery|stale source-recovery"
+    src/runtime/__tests__/imported-work-integrity.test.ts` passed the focused
+    orchestrator tests; `CI=true pnpm exec vitest run
+    src/runtime/__tests__/imported-work-integrity.test.ts` passed `2` tests.
+  - `node scripts/contract-touch-detector.mjs` reported all touched contract
+    paths have decision evidence.
+  - `node ./build.mjs` passed, `node scripts/dev-install.mjs` installed the
+    repaired app, and `/api/stale-server` returned `stale:false` for PID
+    `47335`.
+  - Two live `guildhall run narrative-harness --max-ticks 1` runs repaired
+    `task-import-1q84363` and `task-import-1u8es55` from `import_draft` to
+    `ready` through `coordinator-recovery`.
+  - Live `/api/project?projectId=narrative-harness` then returned
+    `startReadiness.canStart: true`, no `incompleteBriefs`, no
+    `unapprovedSpecs`, and no `blockedByAgent` after Codex explicitly approved
+    the three newly scoped Narrative Harness MVP specs as Matthew's stand-in
+    for this calibration run.
+
 2026-07-05T21:39:00Z - Repaired Narrative Harness numbered child scope
 recovery for drafting-model and physical-world review tasks.
 

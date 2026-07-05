@@ -518,7 +518,7 @@ function sourceRecoverySurfaceTerms(task: Task): string[] {
     ...[...sources.matchAll(/source-backed contract surface for ([^\n.]+)/gi)].map(match => match[1] ?? ''),
     ...[...sources.matchAll(/(?:recommended first task title|original imported title):\s*(?:implement\s+)?([^\n.]+)/gi)].map(match => match[1] ?? ''),
   ]
-  const raw = phrases.find(phrase => /contract|type|schema/i.test(phrase)) ?? ''
+  const raw = phrases.find(phrase => /contract|type|schema|pipeline|workflow|coordinator/i.test(phrase)) ?? ''
   if (!raw) return []
   return uniqueStrings(raw
     .replace(/^implement\s+/i, '')
@@ -526,17 +526,17 @@ function sourceRecoverySurfaceTerms(task: Task): string[] {
     .replace(/\s+and\s+/gi, '\n')
     .split('\n')
     .map(term => normalizeFallbackWhitespace(term).replace(/[.;:,]+$/g, ''))
-    .filter(term => /contract|type|schema/i.test(term)))
+    .filter(term => /contract|type|schema|pipeline|workflow|coordinator/i.test(term)))
 }
 
 function shouldSeedSourceRecoveryResearchTask(task: Task): boolean {
   if (task.id === META_INTAKE_TASK_ID) return false
-  if (task.status !== 'exploring' && task.status !== 'blocked') return false
+  if (task.status !== 'import_draft' && task.status !== 'exploring' && task.status !== 'blocked') return false
   if (task.taskReadiness?.recommendation !== 'needs_research_spike') return false
   if (taskHasUnansweredVisibleQuestion(task)) return false
   if (sourceRecoverySurfaceTerms(task).length === 0) return false
   const text = `${semanticTaskTitle(task)}\n${task.description ?? ''}\n${task.spec ?? ''}\n${task.taskReadiness?.summary ?? ''}`
-  return /source-backed|contract surface|contract\/type|contract names?|type surfaces?|source trail|cited sources/i.test(text)
+  return /source-backed|contract surface|contract\/type|contract names?|type surfaces?|workflow surface|pipeline|source trail|cited sources/i.test(text)
 }
 
 function shouldRepairStaleSourceRecoveryReadiness(task: Task): boolean {
@@ -564,12 +564,12 @@ function buildSourceRecoveryResearchSpecSeed(task: Task, now: string): RecoveryS
     '## Source Trail',
     ...sourceTrail,
     '',
-    '## Contract / Type Surfaces',
+    '## Contract / Type / Workflow Surfaces',
     ...surfaceLines,
     '',
     '## Acceptance Criteria',
     `1. Given the cited source trail, when this recovery is complete, then Guildhall accounts for ${surfaces.map(surface => `\`${surface}\``).join(' and ')} as implemented, explicitly created, or explicitly deferred with source evidence.`,
-    `2. Given the worker handoff, when implementation starts, then proof targets ${surfaces.map(surface => `\`${surface}\``).join(' and ')} instead of an unnamed contract/type placeholder.`,
+    `2. Given the worker handoff, when implementation starts, then proof targets ${surfaces.map(surface => `\`${surface}\``).join(' and ')} instead of an unnamed contract/type/workflow placeholder.`,
     '3. Given the cited docs are insufficient, when the worker cannot prove the surface from source, then Guildhall records the exact missing source fact and reshapes the task without asking the owner to approve stale placeholder text.',
     '',
     '## Out of Scope',
@@ -580,8 +580,8 @@ function buildSourceRecoveryResearchSpecSeed(task: Task, now: string): RecoveryS
     '- None known from the current task record. If a true product decision is missing, ask one direct question with a question mark and concrete choices.',
     '',
     '## Completion Boundary',
-    `- Product outcome: ${taskTitle} has concrete source-backed contract/type targets and proof evidence.`,
-    '- What Guildhall can complete in code: inspect cited docs, update or create repo-local contract/type records, update proof fixtures/tests, and record evidence.',
+    `- Product outcome: ${taskTitle} has concrete source-backed contract/type/workflow targets and proof evidence.`,
+    '- What Guildhall can complete in code: inspect cited docs, update or create repo-local contract/type/workflow records, update proof fixtures/tests, and record evidence.',
     '- External dependencies: None known from the current task record.',
     '- Owner-only setup: None known.',
     '- Verification environment: the local project checkout and repo-local package scripts.',
@@ -593,15 +593,15 @@ function buildSourceRecoveryResearchSpecSeed(task: Task, now: string): RecoveryS
     spec,
     acceptanceCriteria: parseAcceptanceCriteriaFromSpec(spec),
     productBrief: {
-      userJob: `I want ${taskTitle} to name and prove its source-backed contract/type targets from the cited docs.`,
-      whyItMattersNow: 'This is blocking the current scope because Guildhall must not run implementation from an unnamed contract/type placeholder.',
+      userJob: `I want ${taskTitle} to name and prove its source-backed contract/type/workflow targets from the cited docs.`,
+      whyItMattersNow: 'This is blocking the current scope because Guildhall must not run implementation from an unnamed contract/type/workflow placeholder.',
       successMetric: `${surfaces.join(' and ')} are accounted for with source evidence and worker-proof targets.`,
       nonGoals: [
         'Do not expand into unrelated reviewer lanes or later Narrative Harness intelligence work.',
         'Do not ask the owner to approve stale placeholder text.',
       ],
       antiPatterns: [
-        'Do not preserve hollow contract/type wording as an approvable spec.',
+        'Do not preserve hollow contract/type/workflow wording as an approvable spec.',
         'Do not turn source recovery into owner approval when cited docs or task evidence can be inspected.',
       ],
       authoredBy: 'coordinator-recovery',
@@ -616,12 +616,12 @@ function readyReadinessForSourceRecoveryTask(task: Task, seed: RecoverySpecSeed,
   return {
     taskKind: task.taskReadiness?.taskKind ?? task.taskKind ?? 'research',
     recommendation: 'ready',
-    summary: 'Source-recovery work has named contract/type targets and can run without owner approval.',
+    summary: 'Source-recovery work has named contract/type/workflow targets and can run without owner approval.',
     dimensions: [
       {
         id: 'outcome_clarity',
         status: 'ok',
-        summary: 'The contract/type targets are named.',
+        summary: 'The contract/type/workflow targets are named.',
         evidence,
       },
       {
@@ -643,7 +643,7 @@ function readyReadinessForSourceRecoveryTask(task: Task, seed: RecoverySpecSeed,
         'The proof result is recorded on the task.',
       ],
       evidenceRequired: [
-        'Source-backed contract/type targets are present.',
+        'Source-backed contract/type/workflow targets are present.',
         'Proof result references the named surfaces.',
       ],
       updatedAt: now,

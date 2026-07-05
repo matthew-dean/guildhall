@@ -3650,6 +3650,84 @@ describe('Orchestrator.tick — routing', () => {
     expect(task.notes.at(-1)?.content).toContain('Guildhall-owned shaping')
   })
 
+  it('turns import-draft source recovery tasks with workflow surfaces into ready work', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'contract-recovery',
+        title: 'Recover source-backed contract surface for editor-writer feedback chain contract and weighted-feedback pipeline',
+        status: 'import_draft',
+        domain: 'harness',
+        taskKind: 'research',
+        description: [
+          'Recommended first task title: Implement editor-writer feedback chain contract and weighted-feedback pipeline',
+          '',
+          'Original imported title: Implement editor-writer feedback chain contract and weighted-feedback pipeline',
+          '',
+          'Guildhall imported this as executable contract/type work, but the saved task does not name the concrete contract or type surfaces it owns.',
+        ].join('\n'),
+        references: [
+          'docs/harness/remaining-spec-decomposition-inventory.md',
+          'docs/specs/editor-writer-feedback-chain.md',
+        ],
+        spec: [
+          '## What this is',
+          'Repair the imported handoff for Implement editor-writer feedback chain contract and weighted-feedback pipeline.',
+          '',
+          '## Acceptance criteria',
+          '1. Implement editor-writer feedback chain contract and weighted-feedback pipeline names the concrete contract/type surfaces recovered from cited sources, or is reshaped to match the documented source structure before implementation.',
+        ].join('\n'),
+        taskReadiness: {
+          taskKind: 'research',
+          recommendation: 'needs_research_spike',
+          summary: 'Recover source-backed contract surface for editor-writer feedback chain contract and weighted-feedback pipeline needs concrete contract names before Guildhall can hand it to a worker.',
+          dimensions: [],
+          definitionOfDone: {
+            items: ['Recover source-backed contract surface names the concrete contracts/types it owns.'],
+            evidenceRequired: ['Source-backed contract/type names are present.'],
+            updatedAt: '2026-07-05T22:02:31.420Z',
+            createdBy: 'imported-work-integrity',
+          },
+          blockerPlans: [],
+          contextBudget: {
+            estimatedTokens: 1088,
+            risk: 'medium',
+            fitsInOneWorkerBrief: true,
+            reasons: ['The task needs source repair before implementation context matters.'],
+          },
+          assessedAt: '2026-07-05T22:02:31.420Z',
+          assessedBy: 'imported-work-integrity',
+        },
+      }),
+    ])
+    const spec = stubAgent('spec-agent', async () => {
+      throw new Error('spec agent should not rerun when import-draft source recovery can be seeded deterministically')
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out).toMatchObject({
+      kind: 'processed',
+      taskId: 'contract-recovery',
+      agent: 'coordinator-recovery',
+      beforeStatus: 'import_draft',
+      afterStatus: 'ready',
+    })
+    expect(spec.calls).toHaveLength(0)
+    const queue = await readQueue()
+    const task = queue.tasks.find(candidate => candidate.id === 'contract-recovery')!
+    expect(task.status).toBe('ready')
+    expect(task.taskReadiness?.recommendation).toBe('ready')
+    expect(task.spec).toContain('## Contract / Type / Workflow Surfaces')
+    expect(task.spec).toContain('`editor-writer feedback chain contract`')
+    expect(task.spec).toContain('`weighted-feedback pipeline`')
+    expect(task.productBrief?.successMetric).toContain('weighted-feedback pipeline')
+    expect(task.notes.at(-1)?.content).toContain('Guildhall-owned shaping')
+  })
+
   it('repairs stale source-recovery readiness after named surfaces exist', async () => {
     await writeQueue([
       mkTask({

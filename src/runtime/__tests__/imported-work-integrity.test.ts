@@ -26,4 +26,25 @@ describe('imported work integrity', () => {
     expect(taskHasConcreteContractNames(task)).toBe(true)
     expect(importedContractWorkIsStructurallyIncomplete(task)).toBe(false)
   })
+
+  it('accepts source-backed workflow pipeline surface names as concrete', () => {
+    const task = {
+      title: 'Recover source-backed contract surface for editor-writer feedback chain contract and weighted-feedback pipeline',
+      references: ['docs/specs/editor-writer-feedback-chain.md'],
+      spec: [
+        '## Contract / Type / Workflow Surfaces',
+        '- `editor-writer feedback chain contract`',
+        '- `weighted-feedback pipeline`',
+      ].join('\n'),
+      acceptanceCriteria: [
+        {
+          description:
+            'Proof targets `editor-writer feedback chain contract` and `weighted-feedback pipeline` instead of an unnamed placeholder.',
+        },
+      ],
+    }
+
+    expect(taskHasConcreteContractNames(task)).toBe(true)
+    expect(importedContractWorkIsStructurallyIncomplete(task)).toBe(false)
+  })
 })
