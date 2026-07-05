@@ -12,6 +12,59 @@ This is the active browser test plan for the Guildhall project surface. Keep it
 updated while auditing the active test project so another agent can resume
 without guessing.
 
+2026-07-05T11:35:00Z - Made workspace-envelope bootstrap child-project aware.
+
+- Work id: `codex:workspace-envelope-child-bootstrap-2026-07-05`.
+- User job: Looma + Knit is a workspace envelope whose parent path is not the
+  product repo. Guildhall must still recognize and operate through the Looma
+  and Knit child repos transparently, including readiness/bootstrap actions
+  launched from the project UI.
+- Root cause:
+  - Git Story already discovered and summarized Looma/Knit child repos, but
+    `/api/project/bootstrap/status` and `/api/project/bootstrap/run` only
+    respected the root `bootstrap.commands` block. If a workspace relied on
+    child project bootstrap blocks, the Run endpoint fell back to root
+    structural detection and could write `packageManager: none` plus
+    `no package.json` gate noise for the empty envelope path.
+- Fix:
+  - Bootstrap status now derives an effective bootstrap from configured child
+    projects when the root workspace has no command block.
+  - Bootstrap run now executes synthesized `cd child && ...` commands for
+    those child bootstraps instead of detecting the wrapper folder as a
+    package.
+  - The detector fallback remains only for projects/workspaces with no root or
+    child bootstrap commands.
+- Contract Touch Decision:
+  - Work id: `codex:workspace-envelope-child-bootstrap-2026-07-05`.
+  - Touched contracts: bootstrap status/run API behavior for workspace
+    envelopes with configured child project bootstrap blocks.
+  - Contracts considered but not touched: persisted workspace config schema,
+    bootstrap status schema, Git Story schema, release/readiness schema.
+  - Required follow-up: installed-app proof against Looma + Knit should confirm
+    Git Story still reports Looma/Knit child repo labels and the bootstrap
+    status endpoint does not make the envelope look like a broken package.
+  - Proof required: endpoint regression for a non-package workspace envelope
+    with child project bootstraps; existing child Git discovery tests.
+  - Proof provided: focused `serve-settings` bootstrap endpoint regression and
+    full `git-story.test.ts` passed.
+  - Waivers: no schema migration because this derives an effective command set
+    from existing `projects[].bootstrap` data and writes no new persisted shape.
+  - Owner-review items: none.
+  - Apply/revert behavior: revert `workspaceChildBootstrap` and its endpoint
+    callers to restore root-only bootstrap detection.
+- Verification:
+  - `CI=true pnpm vitest run src/runtime/__tests__/serve-settings.test.ts -t "workspace envelope|auto-detect fallback"`
+    passed.
+  - `CI=true pnpm vitest run src/runtime/__tests__/git-story.test.ts` passed.
+  - Installed app proof after `CI=true pnpm build`,
+    `CI=true pnpm dev:install`, and `guildhall stop && guildhall start`:
+    `/api/stale-server` returned `stale:false`;
+    `/api/project/bootstrap/status?projectId=looma-knit` returned
+    `configured:true` with `cd knit && ...` root bootstrap commands plus Looma
+    and Knit child bootstrap metadata; `/api/project?projectId=looma-knit`
+    returned root Git Story snapshots for `repoLabel:"Looma"` and
+    `repoLabel:"Knit"` in both project and release readiness payloads.
+
 2026-07-05T11:15:00Z - Repaired cropped imported task titles from source-backed
 refreshes.
 

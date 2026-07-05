@@ -2563,6 +2563,74 @@ describe('POST /api/project/bootstrap/run — auto-detect fallback', () => {
     expect(yamlText).toMatch(/verifiedAt/)
     expect(yamlText).toMatch(/packageManager/)
   })
+
+  it('runs configured child project bootstraps for a workspace envelope', async () => {
+    await fs.mkdir(path.join(tmpDir, 'looma'), { recursive: true })
+    await fs.mkdir(path.join(tmpDir, 'knit'), { recursive: true })
+    writeWorkspaceConfig(tmpDir, {
+      ...readWorkspaceConfig(tmpDir),
+      kind: 'workspace',
+      projectPath: '.',
+      bootstrap: undefined,
+      projects: [
+        {
+          id: 'looma',
+          label: 'Looma',
+          path: 'looma',
+          bootstrap: {
+            commands: ['node -e "process.exit(0)"'],
+            successGates: ['node -e "process.exit(0)"'],
+            timeoutMs: 30_000,
+          },
+        },
+        {
+          id: 'knit',
+          label: 'Knit',
+          path: 'knit',
+          bootstrap: {
+            commands: ['node -e "process.exit(0)"'],
+            successGates: ['node -e "process.exit(0)"'],
+            timeoutMs: 30_000,
+          },
+        },
+      ],
+    })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const statusRes = await app.fetch(new Request(scoped('/api/project/bootstrap/status')))
+    expect(statusRes.status).toBe(200)
+    const statusBefore = (await statusRes.json()) as {
+      configured: boolean
+      bootstrap?: { commands?: string[]; successGates?: string[] }
+    }
+    expect(statusBefore.configured).toBe(true)
+    expect(statusBefore.bootstrap?.commands).toEqual([
+      `cd 'looma' && node -e "process.exit(0)"`,
+      `cd 'knit' && node -e "process.exit(0)"`,
+    ])
+
+    const runRes = await app.fetch(
+      new Request(scoped('/api/project/bootstrap/run'), { method: 'POST' }),
+    )
+    expect(runRes.status).toBe(200)
+    const body = (await runRes.json()) as {
+      success: boolean
+      status?: { steps?: Array<{ command: string; result: string }> }
+      detected?: unknown
+    }
+    expect(body.success).toBe(true)
+    expect(body.detected).toBeUndefined()
+    expect(body.status?.steps?.map(step => [step.command, step.result])).toEqual([
+      [`cd 'looma' && node -e "process.exit(0)"`, 'pass'],
+      [`cd 'knit' && node -e "process.exit(0)"`, 'pass'],
+      [`cd 'looma' && node -e "process.exit(0)"`, 'pass'],
+      [`cd 'knit' && node -e "process.exit(0)"`, 'pass'],
+    ])
+
+    const yamlText = await fs.readFile(path.join(tmpDir, 'guildhall.yaml'), 'utf8')
+    expect(yamlText).not.toMatch(/packageManager/)
+    expect(yamlText).not.toMatch(/no package\.json/)
+  })
 })
 
 // Facts endpoint: aggregates identity, environment, workspace discoveries,

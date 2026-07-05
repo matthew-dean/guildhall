@@ -6916,6 +6916,40 @@ export function buildServeApp(opts: ServeOptions = {}): {
   // on `project.config.bootstrap` being present — absent means meta-intake
   // hasn't established a bootstrap yet.
   // -------------------------------------------------------------------------
+  function quoteShellPath(pathname: string): string {
+    return `'${pathname.replace(/'/g, `'\\''`)}'`
+  }
+
+  function workspaceChildBootstrap(projectPath: string): {
+    commands: string[]
+    successGates: string[]
+    timeoutMs: number
+    provenance: null
+  } | null {
+    const workspaceConfig = readWorkspaceConfig(projectPath)
+    if (workspaceConfig.kind !== 'workspace') return null
+    const children = resolveWorkspaceProjectPathsOrDiscover(projectPath, workspaceConfig)
+      .filter(child => child.bootstrap && (
+        child.bootstrap.commands.length > 0 ||
+        child.bootstrap.successGates.length > 0
+      ))
+    if (children.length === 0) return null
+
+    const prefix = (childPath: string, command: string) => {
+      const childRelativePath = relative(projectPath, childPath) || '.'
+      return childRelativePath === '.'
+        ? command
+        : `cd ${quoteShellPath(childRelativePath)} && ${command}`
+    }
+
+    return {
+      commands: children.flatMap(child => child.bootstrap!.commands.map(command => prefix(child.path, command))),
+      successGates: children.flatMap(child => child.bootstrap!.successGates.map(command => prefix(child.path, command))),
+      timeoutMs: Math.max(...children.map(child => child.bootstrap!.timeoutMs)),
+      provenance: null,
+    }
+  }
+
   app.get('/api/project/bootstrap/status', c => {
     try {
       const workspaceProjects = (project.config?.projects ?? []).map((child) => ({
@@ -6933,7 +6967,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (project.initializationNeeded) {
         return c.json({ configured: false, needed: false, status: null, workspaceProjects })
       }
-      const bootstrap = project.config?.bootstrap
+      const bootstrap = project.config?.bootstrap?.commands.length
+        ? project.config.bootstrap
+        : workspaceChildBootstrap(project.path)
       if (!bootstrap || bootstrap.commands.length === 0) {
         return c.json({ configured: false, needed: false, status: null, workspaceProjects })
       }
@@ -6969,21 +7005,29 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
       const bootstrap = project.config?.bootstrap
       const memoryDir = getProjectStateDir(project.path)
+      const childBootstrap = bootstrap?.commands.length
+        ? null
+        : workspaceChildBootstrap(project.path)
 
       // Legacy path: run the array-based commands from guildhall.yaml when
       // present. Fall through to detection-based bootstrap otherwise so
       // workspaces without a pre-authored bootstrap block still get the
       // environment verified (detect package manager, install, probe gates).
-      if (bootstrap && bootstrap.commands.length > 0) {
+      if ((bootstrap && bootstrap.commands.length > 0) || childBootstrap) {
+        const effectiveBootstrap = childBootstrap ?? bootstrap!
         const result = runBootstrap({
           projectPath: project.path,
           memoryDir,
-          commands: bootstrap.commands,
-          successGates: bootstrap.successGates,
-          timeoutMs: bootstrap.timeoutMs,
+          commands: effectiveBootstrap.commands,
+          successGates: effectiveBootstrap.successGates,
+          timeoutMs: effectiveBootstrap.timeoutMs,
         })
         const status = readBootstrapStatus(memoryDir)
-        return c.json({ success: result.success, status })
+        return c.json({
+          success: result.success,
+          status,
+          ...(childBootstrap ? { workspaceBootstrap: childBootstrap } : {}),
+        })
       }
 
       const detected = runDetectedBootstrap(project.path)
