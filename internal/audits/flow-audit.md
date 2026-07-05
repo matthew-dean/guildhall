@@ -18973,6 +18973,67 @@ claimed stale worker execution state.
     repaired Narrative Harness rows would need a fresh re-intake if the old
     docs-folder task paths were intentionally desired.
 
+2026-07-05T17:20:00Z - Reclassified spec shaping timeouts as Guildhall-owned
+recovery work.
+
+- Work id: `codex:nh-spec-timeout-recovery-2026-07-05`.
+- User job: when Narrative Harness source recovery work stalls because the
+  spec lane times out, Guildhall should not convert that into a fake owner
+  decision. The owner should see that Guildhall owns the retry/recovery path,
+  and Start should be able to reopen the shaping lane instead of leaving the
+  task blocked with no actionable human question.
+- Finding:
+  - Live Narrative Harness task `task-import-1g9oq7m` had an open escalation
+    with summary `Spec shaping timed out before saving durable progress.` and
+    agent `spec-agent`, but the blocked-state recovery classifier only matched
+    older no-progress wording such as `no durable draft` or durable-progress
+    nudge refusals.
+  - That left the task blocked while the API still projected source-recovery
+    readiness, making the selected current scope look stuck on owner action
+    even though the blocker was Guildhall's model/runtime recovery problem.
+- Fix:
+  - Added the spec-timeout wording to the existing recoverable spec no-progress
+    classifier and resolver, so the same system recovery path handles both
+    old and new failure vocabulary.
+  - Added a regression proving a blocked spec-timeout task is reopened by the
+    coordinator recovery lane and the stale escalation is resolved by system
+    action, not by owner approval.
+- Contract Touch Decision:
+  - Work id: `codex:nh-spec-timeout-recovery-2026-07-05`.
+  - Touched contracts: task escalation recovery classification and blocked task
+    resume semantics for spec-agent no-progress/timeouts.
+  - Contracts considered but not touched: persisted task schema, escalation
+    schema, provider runtime schema, task readiness schema, release/scope
+    schema, project orientation API shape.
+  - Existing data impact: no migration. Existing blocked tasks with matching
+    spec-timeout escalation text now recover through the existing system
+    resolver the next time the orchestrator sees them.
+  - Required follow-up: the next slice must stop fresh spec-timeout escalations
+    from being owner-shaped when the spec lane continues read-only exploration
+    after the durable-progress nudge. The recovery classifier now resolves the
+    stale escalation on restart, but the timeout branch can still create a new
+    owner-shaped escalation after another read-only retry.
+  - Proof required: focused orchestrator regression, build, contract lint,
+    installed-app API proof on Narrative Harness after reinstall/restart.
+  - Proof provided so far: `./node_modules/.bin/vitest run
+    src/runtime/__tests__/orchestrator.test.ts --testNamePattern 'recovers
+    spec shaping timeout blockers|recovers the live durable-progress
+    spec-agent blocker|blocks the task after repeated spec-agent inactivity
+    timeouts'` passed 3 tests.
+  - Installed-app proof: after reinstall/restart, `POST
+    /api/project/task/task-import-1g9oq7m/start?projectId=narrative-harness`
+    returned `mode:"one_task"` and `scope:{type:"work_item",taskId:
+    "task-import-1g9oq7m"}`. Task detail then showed escalation
+    `esc-task-import-1g9oq7m-1` resolved by `system`, status reopened to
+    `exploring`, and an active spec-agent turn with fresh read activity.
+  - New failing evidence: the live retry later emitted the durable-progress
+    nudge, kept doing read-only source exploration, timed out again, and raised
+    `esc-task-import-1g9oq7m-2` with the same owner-shaped timeout summary. That
+    is not fixed by this slice and remains a runtime-policy/data-model follow-up.
+  - Apply/revert behavior: reverting the two classifier text additions restores
+    the previous behavior where this timeout wording remains a terminal blocked
+    owner-facing escalation until manually resolved.
+
 2026-07-05T10:45:00Z - Aligned release proof/orientation communication with
 shared readiness state.
 

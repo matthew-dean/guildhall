@@ -699,7 +699,7 @@ function isRecoverableSpecNoProgressBlocker(task: Task): boolean {
       .map((escalation) => `${escalation.agentId}\n${escalation.summary ?? ''}\n${escalation.details ?? ''}`),
   ].join('\n')
   return /spec-agent|Spec agent/i.test(text) &&
-    /made no visible progress|no saved spec|no durable draft|kept researching after Guildhall asked for durable progress|ignored the durable-progress nudge/i.test(text)
+    /made no visible progress|no saved spec|no durable draft|kept researching after Guildhall asked for durable progress|ignored the durable-progress nudge|spec shaping timed out before saving durable progress/i.test(text)
 }
 
 function isRecoverableToolPathMismatchBlocker(task: Task): boolean {
@@ -808,7 +808,7 @@ function resolveRecoverableSpecNoProgressEscalations(task: Task, resolvedAt: str
     const text = `${escalation.agentId}\n${escalation.summary ?? ''}\n${escalation.details ?? ''}`
     if (
       /spec-agent|Spec agent/i.test(text) &&
-      /made no visible progress|no saved spec|no durable draft|kept researching after Guildhall asked for durable progress|ignored the durable-progress nudge/i.test(text)
+      /made no visible progress|no saved spec|no durable draft|kept researching after Guildhall asked for durable progress|ignored the durable-progress nudge|spec shaping timed out before saving durable progress/i.test(text)
     ) {
       escalation.resolvedAt = resolvedAt
       escalation.resolvedBy = 'system'
@@ -8692,7 +8692,7 @@ export class Orchestrator {
         recoveryStatus = 'exploring'
         recoveryAssignee = 'spec-agent'
         recoveryNote =
-          'User restarted the project after the spec agent failed to save a durable draft. Reopened intake so Guildhall can retry from the preserved transcript notes.'
+          'Guildhall reopened the project after the spec agent failed to save a durable draft. Reopened intake so Guildhall can retry from the preserved transcript notes.'
       } else if (isRecoverableBlueprintToolingBlocker(task)) {
         resolveRecoverableBlueprintToolingEscalations(task, now)
         if (activeEscalations(task).length > 0) continue
