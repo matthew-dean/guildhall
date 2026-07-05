@@ -748,6 +748,73 @@ function importTaskReferenceBasenames(refs: readonly string[] | undefined): Set<
   )
 }
 
+function importTasksShareSourceReferences(
+  left: readonly string[] | undefined,
+  right: readonly string[] | undefined,
+): boolean {
+  const leftRefs = importTaskReferenceBasenames(left)
+  if (leftRefs.size === 0) return false
+  const rightRefs = importTaskReferenceBasenames(right)
+  if (rightRefs.size === 0) return false
+  return [...leftRefs].some(ref => rightRefs.has(ref))
+}
+
+function importedTaskHasSourceBackedDescriptionMatch(
+  existing: Task,
+  importedTitle: string,
+  importedReferences: readonly string[] | undefined,
+): boolean {
+  const existingSourcePath = importTaskSourcePath(existing.description ?? '')
+  if (!existingSourcePath) return false
+  const importedRefs = importTaskReferenceBasenames(importedReferences)
+  if (importedRefs.size === 0 || !importedRefs.has(path.basename(existingSourcePath))) return false
+  const existingDescription = normalizeImportText(existing.description ?? '')
+  return importedTitle.length >= 50 && existingDescription.includes(importedTitle)
+}
+
+function sourceTitleFromImportedDescription(description: string): string | null {
+  const sourcePath = importTaskSourcePath(description)
+  if (!sourcePath) return null
+  const body = description
+    .replace(/^(.+?\.md):\s+/, '')
+    .replace(/^\s*[-*]\s+/, '')
+    .replace(/^\s*\[[ xX]\]\s+/, '')
+    .replace(/\*\*/g, '')
+    .replace(/`/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return body.length > 0 ? body : null
+}
+
+function repairImportedTaskTitleFromSourceDescription(task: Task): boolean {
+  if (!isWorkspaceImportManagedTask(task)) return false
+  const sourceTitle = sourceTitleFromImportedDescription(task.description ?? '')
+  if (!sourceTitle || sourceTitle.length <= task.title.length) return false
+  const normalizedTitle = normalizeImportText(task.title)
+  const normalizedSourceTitle = normalizeImportText(sourceTitle)
+  if (!normalizedTitle || !normalizedSourceTitle.startsWith(normalizedTitle)) return false
+  task.title = sourceTitle
+  return true
+}
+
+function existingImportedTaskMatchesIncoming(
+  existing: Task,
+  imported: MaterializedImportTask,
+): boolean {
+  if (!isWorkspaceImportManagedTask(existing)) return false
+  const existingTitle = normalizeImportText(existing.title)
+  const importedTitle = normalizeImportText(imported.title)
+  if (!existingTitle || !importedTitle) return false
+  if (existingTitle === importedTitle) return true
+  const sourceBacked =
+    importTasksShareSourceReferences(existing.references, imported.references) ||
+    importedTaskHasSourceBackedDescriptionMatch(existing, importedTitle, imported.references)
+  if (!sourceBacked) return false
+  const shorter = existingTitle.length < importedTitle.length ? existingTitle : importedTitle
+  const longer = existingTitle.length < importedTitle.length ? importedTitle : existingTitle
+  return shorter.length >= 50 && longer.startsWith(shorter)
+}
+
 function importTaskStructuralForm(
   description: string,
 ): 'numbered' | 'bullet' | null {
@@ -1978,10 +2045,12 @@ function isWorkspaceImportManagedTask(task: Task): boolean {
   if (task.requestIntake?.createdBy === 'workspace-importer') return true
   if (!task.id.startsWith('task-import-')) return false
   if (task.origination !== 'human') return false
-  return (task.references ?? []).some(ref => {
+  if ((task.references ?? []).some(ref => {
     const normalized = ref.replaceAll('\\', '/')
     return normalized.includes('/docs/') || normalized.includes('docs/')
-  })
+  })) return true
+  const sourcePath = importTaskSourcePath(task.description ?? '')?.replaceAll('\\', '/') ?? ''
+  return sourcePath.includes('/docs/') || sourcePath.includes('docs/')
 }
 
 async function evidenceSourcesForParsedTasks(
@@ -4814,8 +4883,11 @@ export async function approveWorkspaceImport(
     ? formatParsedImportAsSpec(normalizeParsedImportForSpec(materializedParsed, input.projectPath))
     : null
   const existingImportedTasksByTitle = new Map<string, Task>()
+  const existingImportedTasks: Task[] = []
   for (const existingTask of queue.tasks) {
     if (existingTask.id === WORKSPACE_IMPORT_TASK_ID) continue
+    repairImportedTaskTitleFromSourceDescription(existingTask)
+    existingImportedTasks.push(existingTask)
     const normalizedTitle = normalizeImportText(existingTask.title)
     if (!normalizedTitle || existingImportedTasksByTitle.has(normalizedTitle)) continue
     existingImportedTasksByTitle.set(normalizedTitle, existingTask)
@@ -4826,6 +4898,7 @@ export async function approveWorkspaceImport(
     const normalizedTitle = normalizeImportText(task.title)
     if (!normalizedTitle) return true
     const existing = existingImportedTasksByTitle.get(normalizedTitle)
+      ?? existingImportedTasks.find(candidate => existingImportedTaskMatchesIncoming(candidate, task))
     if (existing) {
       refreshableTasks.push({ existing, imported: task })
       return false
@@ -4905,7 +4978,7 @@ export async function approveWorkspaceImport(
     const seededBlueprint = buildImportedBlueprintSeed(imported, normalizedReferences, input.projectPath, now)
     const refreshedAcceptanceCriteria = materializedAcceptanceCriteria(imported, evidenceDetail)
     const materializedProof = materializedProofPaths(imported, evidenceDetail) ?? []
-    existing.title = effectiveTaskTitle({ title: existing.title, description: normalizedDescription }) ?? existing.title
+    existing.title = effectiveTaskTitle({ title: imported.title, description: normalizedDescription }) ?? imported.title
     existing.description = normalizedDescription
     existing.domain = domain
     existing.projectPath = taskProjectPath

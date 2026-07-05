@@ -1200,6 +1200,91 @@ tasks:
     expect(refreshedQueue.tasks.find((t) => t.id === 'task-headless-schema')?.completedAt).toBeUndefined()
   })
 
+  it('repairs cropped saved imported titles from matching source-backed imports', async () => {
+    const croppedTitle = 'Keep ui-top-bar, ui-search-shell, and ui-search-result-row as recipe-level primitives rather than forcing them into lowe'
+    const fullTitle = 'Keep ui-top-bar, ui-search-shell, and ui-search-result-row as recipe-level primitives rather than forcing them into lower-level generic atoms'
+    await seedImporterWithSpec(`
+\`\`\`yaml
+tasks:
+  - id: task-recipe-primitives
+    title: >-
+      ${fullTitle}
+    description: >-
+      looma/docs/component-roadmap.md: - ${fullTitle}
+    domain: looma
+    priority: normal
+    references:
+      - looma/docs/component-roadmap.md
+\`\`\`
+`)
+    const q = await readQueue()
+    q.tasks.push({
+      id: 'task-import-2h8fxk',
+      title: croppedTitle,
+      description: `looma/docs/component-roadmap.md: - ${fullTitle}`,
+      domain: 'looma',
+      projectPath: path.join(tmpDir, 'looma'),
+      status: 'ready',
+      priority: 'normal',
+      dependsOn: [],
+      outOfScope: [],
+      acceptanceCriteria: [],
+      references: [],
+      notes: [],
+      gateResults: [],
+      reviewVerdicts: [],
+      adjudications: [],
+      escalations: [],
+      agentIssues: [],
+      revisionCount: 0,
+      remediationAttempts: 0,
+      origination: 'human',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    })
+    q.tasks.push({
+      id: 'task-import-8y19xf',
+      title: 'Auto-embed pages on save — whenever a page is created or edited, its content is automatically chunked and converted into',
+      description: 'knit/docs/features.md: - [ ] **Auto-embed pages on save** — whenever a page is created or edited, its content is automatically chunked and converted into vector embeddings; this is what enables semantic search and AI-powered features',
+      domain: 'knit',
+      projectPath: path.join(tmpDir, 'knit'),
+      status: 'archived',
+      priority: 'normal',
+      dependsOn: [],
+      outOfScope: [],
+      acceptanceCriteria: [],
+      references: [path.join(tmpDir, 'knit/docs/features.md')],
+      notes: [],
+      gateResults: [],
+      reviewVerdicts: [],
+      adjudications: [],
+      escalations: [],
+      agentIssues: [],
+      revisionCount: 0,
+      remediationAttempts: 0,
+      origination: 'human',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    })
+    await writeQueue(q)
+
+    const refreshed = await approveWorkspaceImport({
+      memoryDir,
+      projectPath: tmpDir,
+      replacePreviouslyImportedTasks: true,
+    })
+    expect(refreshed, refreshed.success ? undefined : refreshed.error).toMatchObject({ success: true, tasksAdded: 0 })
+
+    const refreshedQueue = await readQueue()
+    const repaired = refreshedQueue.tasks.find((t) => t.id === 'task-import-2h8fxk')
+    expect(repaired?.title).toBe(fullTitle)
+    expect(repaired?.description).toContain(fullTitle)
+    expect(refreshedQueue.tasks.filter((t) => t.title === fullTitle)).toHaveLength(1)
+    expect(refreshedQueue.tasks.find((t) => t.id === 'task-import-8y19xf')?.title).toBe(
+      'Auto-embed pages on save — whenever a page is created or edited, its content is automatically chunked and converted into vector embeddings; this is what enables semantic search and AI-powered features',
+    )
+  })
+
   it('keeps refreshed current work done when durable completion evidence survived status drift', async () => {
     const spec = `
 \`\`\`yaml

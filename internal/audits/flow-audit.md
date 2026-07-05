@@ -12,6 +12,60 @@ This is the active browser test plan for the Guildhall project surface. Keep it
 updated while auditing the active test project so another agent can resume
 without guessing.
 
+2026-07-05T11:15:00Z - Repaired cropped imported task titles from source-backed
+refreshes.
+
+- Work id: `codex:no-cropped-imported-task-titles-2026-07-05`.
+- User job: imported task titles are durable data, not display strings. When
+  a planning doc contains the full title, Guildhall must preserve and repair
+  the full task title in `TASKS.json`; visual components may shorten display,
+  but the saved task record must never contain a cropped title.
+- Fix:
+  - Workspace import approval now recognizes a stale cropped imported task as
+    the same work item when it is workspace-import-managed, source references
+    overlap or the saved description still has a source-prefixed full line,
+    and the normalized long title is a prefix match.
+  - Workspace import approval also repairs any workspace-import-managed task
+    title from its source-prefixed description before matching, so archived
+    stale rows do not keep illegal cropped data.
+  - Refreshing an existing imported task now writes the imported/source title
+    back into `existing.title` instead of preserving the stale saved title.
+  - Added Looma/Knit-shaped regressions for the `ui-top-bar` /
+    `ui-search-shell` / `ui-search-result-row` recipe-primitive title and the
+    `Auto-embed pages on save` title that were previously persisted cropped
+    even though their descriptions still held the full source-backed titles.
+- Contract Touch Decision:
+  - Work id: `codex:no-cropped-imported-task-titles-2026-07-05`.
+  - Touched contracts: workspace import approval reconciliation and imported
+    task title refresh semantics.
+  - Contracts considered but not touched: persisted task schema, display-label
+    helpers, workspace import YAML schema, release/scope schema.
+  - Required follow-up: after installed-app refresh, verify Looma + Knit no
+    longer exposes the cropped `lowe` task title and does not duplicate the
+    repaired task.
+  - Proof required: importer regression for active and archived saved cropped
+    titles with matching source-backed descriptions; focused workspace import
+    drift/readiness checks.
+  - Proof provided: focused and full `workspace-importer.test.ts` passed;
+    focused `serve-settings` workspace-import checks passed.
+  - Waivers: no schema migration because the stored task shape is unchanged;
+    this repairs reconciliation behavior and data values on refresh.
+  - Owner-review items: none.
+  - Apply/revert behavior: revert the title-matching helper, refresh assignment,
+    and regression test to restore prior exact-title-only reconciliation.
+- Verification:
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/workspace-importer.test.ts --reporter=dot`
+    passed.
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/serve-settings.test.ts -t 'does not report import drift|workspace import|structurally incomplete' --reporter=dot`
+    passed.
+  - Installed app proof after `pnpm build`, `pnpm dev:install`, and restart:
+    `/api/stale-server` returned `stale:false`; approving Looma + Knit's
+    workspace import returned `tasksAdded:0`; querying
+    `/api/project?projectId=looma-knit` for titles ending in `lowe` or
+    `converted into` returned `[]`.
+  - Live Looma + Knit rows now show the full source-backed titles for
+    `task-import-2h8fxk`, `task-import-mkmvvh`, and `task-import-8y19xf`.
+
 2026-07-05T11:10:00Z - Tightened multi-repo envelope language.
 
 - Work id: `codex:workspace-envelope-child-repo-language-2026-07-05`.
