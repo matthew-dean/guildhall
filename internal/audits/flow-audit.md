@@ -14104,6 +14104,90 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-07-05T14:55:00Z - Blocked hollow imported contract work before Start can run it.
+
+- Work id: `codex:narrative-harness-hollow-contract-readiness-2026-07-05`.
+- User job: a project owner should be able to trust that a source-backed
+  Narrative Harness task marked ready has enough concrete contract/proof shape
+  for unattended execution. If Guildhall only recovered a title like
+  `Implement author-involvement-modes contract and involvement-dial types` but
+  no actual contract names, Start must stop and say what needs repair instead
+  of handing a hollow spec to a worker.
+- Escaped miss:
+  - Live Narrative Harness state had an imported contract task with
+    `taskReadiness.recommendation: ready` and a definition of done containing
+    `The cited contracts are explicitly defined and usable in code: .`.
+  - Root-cause classification:
+    1. data model/schema problem: readiness could store an empty contract claim
+       as if it were a usable proof contract.
+    2. task hierarchy/dependency/proof modeling problem: source references and
+       generic proof paths counted as sufficient even when the semantic slot
+       the task title requested, concrete contract names, was empty.
+    3. scheduler/action-state logic problem: Start previously trusted stale
+       `ready` state unless the task was explicitly blocked.
+    4. UI communication/orientation problem: the owner-facing action model did
+       not distinguish "ready" from "source-backed but structurally hollow."
+    7. bad project data produced by an earlier Guildhall bug: the persisted
+       task already contained the empty contract handoff.
+- Fix:
+  - Added shared runtime integrity checks for imported/source-backed contract
+    work:
+    - hollow `contracts: .` claims are structurally incomplete;
+    - tasks explicitly asking for contracts/types must name concrete contract
+      identifiers before blueprint seeding can promote them to reviewable work.
+  - Workspace-import blueprint seeding now keeps contract/type tasks without
+    recovered contract names in draft instead of manufacturing a worker
+    handoff.
+  - Project re-intake uses the same rule, so regenerating Narrative Harness
+    from the same docs does not immediately recreate the hollow ready task.
+  - Start/readiness uses the same rule over persisted tasks, so old bad data
+    disables Start and points to the work item for brief repair.
+- Contract Touch Decision:
+  - Work id:
+    `codex:narrative-harness-hollow-contract-readiness-2026-07-05`.
+  - Touched contracts: workspace-import blueprint seed status, project
+    re-intake task status, Start/readiness `no_unattended_progress`, action
+    model presentation via existing `brief_cleanup` focus kind.
+  - Contracts considered but not touched: task schema version, workspace-goals
+    persisted schema, release schema. The fix uses derived integrity over
+    existing fields and does not require migration.
+  - Required follow-up: re-run Narrative Harness re-intake after this model
+    fix, then verify the product map/overview shows either a shaped contract
+    task with concrete contract names or an honest draft/repair state.
+  - Proof required: focused importer/re-intake/start-readiness regressions,
+    contract lint, installed-app API proof against Narrative Harness.
+  - Proof provided: focused regressions passed locally; contract lint passed;
+    build/install/restart proof passed; installed Narrative Harness API now
+    shows Start disabled and the hollow author-involvement task's visible
+    readiness downgraded from `ready` to `needs_research_spike` with
+    `structuralIntegrity.status: needs_repair`.
+  - Waivers: none.
+  - Owner-review items: none; this is an autonomous modeling/readiness fix, not
+    an owner approval bypass.
+  - Apply/revert behavior: revert
+    `src/runtime/imported-work-integrity.ts` and its imports/uses in
+    `workspace-importer.ts`, `project-reintake.ts`, and `serve.ts` to restore
+    previous seeding/start behavior; no data migration rollback required.
+- Verification:
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/workspace-importer.test.ts src/runtime/__tests__/project-reintake-apply.test.ts src/runtime/__tests__/serve-settings.test.ts src/runtime/__tests__/work-execution-state.test.ts src/runtime/__tests__/orchestrator-picker.test.ts --reporter=dot`
+    passed `227` tests.
+  - `git diff --check` passed.
+  - `CI=true PNPM_CONFIG_CONFIRM_MODULES_PURGE=false pnpm lint:contracts`
+    passed; it pruned dev dependencies as expected, then
+    `CI=true PNPM_CONFIG_CONFIRM_MODULES_PURGE=false pnpm install` restored
+    them and exited with the expected ignored-build-scripts warning.
+  - `node ./build.mjs` passed.
+  - `CI=true PNPM_CONFIG_CONFIRM_MODULES_PURGE=false node ./scripts/dev-install.mjs && guildhall stop && guildhall start`
+    installed the current branch and restarted `localhost:7777`.
+  - `/api/stale-server` returned `stale:false` for PID `61932` with matching
+    boot/current build mtimes.
+  - `/api/project?projectId=narrative-harness` returned
+    `startReadiness.canStart:false`, `focusKind:"blocked_work"`,
+    run control `label:"Needs recovery"`, and for task
+    `task-import-1g9oq7m` returned
+    `taskReadiness.recommendation:"needs_research_spike"` plus
+    `structuralIntegrity.status:"needs_repair"`.
+
 2026-07-05T13:06:16Z - Preserved selected release metadata during task
 Git Story closure actions.
 

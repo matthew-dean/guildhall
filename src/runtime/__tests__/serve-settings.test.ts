@@ -4566,6 +4566,99 @@ describe('Workspace Import review endpoints', () => {
     expect(body.startReadiness?.message).toContain('Spec: World And Object Continuity')
   })
 
+  it('blocks Start when an imported contract task has a hollow worker handoff', async () => {
+    await fs.writeFile(path.join(tmpDir, 'package.json'), JSON.stringify({ name: 'hollow-contract-handoff' }), 'utf8')
+    await writeSystemText(
+      'TASKS.json',
+      JSON.stringify(
+        {
+          version: 1,
+          lastUpdated: '2026-01-01T00:00:00.000Z',
+          tasks: [
+            {
+              id: 'task-import-author-involvement',
+              title: 'Implement author-involvement-modes contract and involvement-dial types',
+              description: 'Source-backed task from remaining spec inventory.',
+              domain: 'workflow',
+              projectPath: tmpDir,
+              status: 'ready',
+              priority: 'normal',
+              references: [
+                'docs/harness/remaining-spec-decomposition-inventory.md',
+                'docs/specs/author-involvement-modes.md',
+              ],
+              requestIntake: {
+                createdBy: 'workspace-importer',
+              },
+              acceptanceCriteria: [
+                {
+                  id: 'contracts-defined',
+                  description: 'The cited contracts are explicitly defined and usable in code: .',
+                  verifiedBy: 'review',
+                  met: false,
+                },
+              ],
+              spec: [
+                '## What this is',
+                'Implement author-involvement-modes contract and involvement-dial types',
+                '',
+                '## Acceptance criteria',
+                '1. The cited contracts are explicitly defined and usable in code: .',
+              ].join('\n'),
+              definitionOfDone: {
+                items: ['The cited contracts are explicitly defined and usable in code: .'],
+                evidenceRequired: [],
+              },
+              taskReadiness: {
+                recommendation: 'ready',
+                summary: 'Task is ready for a focused worker pass.',
+                definitionOfDone: {
+                  items: ['The cited contracts are explicitly defined and usable in code: .'],
+                  evidenceRequired: [],
+                },
+              },
+              dependsOn: [],
+              outOfScope: [],
+              createdAt: '2026-01-01T00:00:00.000Z',
+              updatedAt: '2026-01-01T00:00:00.000Z',
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+    )
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(scoped('/api/project')))
+    expect(res.status).toBe(200)
+    const body = await res.json() as {
+      startReadiness?: { canStart?: boolean; code?: string; message?: string; actionHref?: string; focusKind?: string }
+      actionModel?: { runControl?: { startEnabled?: boolean; label?: string } }
+      tasks?: Array<{ id?: string; taskReadiness?: { recommendation?: string; summary?: string }; structuralIntegrity?: { status?: string } }>
+    }
+    expect(body.startReadiness).toMatchObject({
+      canStart: false,
+      code: 'no_unattended_progress',
+      actionHref: '/work?task=task-import-author-involvement',
+      focusKind: 'brief_cleanup',
+    })
+    expect(body.startReadiness?.message).toContain('needs concrete contract names')
+    expect(body.actionModel?.runControl).toMatchObject({
+      startEnabled: false,
+      label: 'Review brief',
+    })
+    expect(body.tasks?.find(task => task.id === 'task-import-author-involvement')).toMatchObject({
+      taskReadiness: {
+        recommendation: 'needs_research_spike',
+        summary: expect.stringContaining('needs concrete contract names'),
+      },
+      structuralIntegrity: {
+        status: 'needs_repair',
+      },
+    })
+  })
+
   it('does not treat later release spec capabilities as current import blockers', async () => {
     await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
     await fs.mkdir(path.join(tmpDir, 'docs', 'specs'), { recursive: true })

@@ -37,6 +37,10 @@ import {
 import { applyTaskShaping } from './task-decomposition.js'
 import { isMaterializableSplitAction, materializeSplitChildren } from '../tools/task-queue.js'
 import { effectiveTaskTitle } from '../shared/task-display-label.js'
+import {
+  contractShapedImportHasNoConcreteContracts,
+  titleLooksContractShaped,
+} from './imported-work-integrity.js'
 
 // ---------------------------------------------------------------------------
 // FR-34: reserved workspace-importer task.
@@ -2564,7 +2568,14 @@ function materializedAcceptanceCriteria(
   return normalized
 }
 
-function importedTaskHasBlueprintSeed(task: MaterializedImportTask): boolean {
+function importedTaskHasBlueprintSeed(task: MaterializedImportTask, evidenceDetail?: ImportedEvidenceDetail): boolean {
+  if (contractShapedImportHasNoConcreteContracts({
+    title: task.title,
+    contractNames: evidenceDetail?.contractNames,
+    hasAlternativeStructuralEvidence: evidenceDetail ? importedTaskHasAlternativeStructuralEvidence(evidenceDetail) : false,
+  })) {
+    return false
+  }
   return (
     Boolean(task.evidenceGraphTask) ||
     (
@@ -2578,8 +2589,19 @@ function importedTaskHasBlueprintSeed(task: MaterializedImportTask): boolean {
   )
 }
 
+function importedTaskHasAlternativeStructuralEvidence(evidenceDetail: ImportedEvidenceDetail): boolean {
+  return (
+    evidenceDetail.weightDimensions.length > 0 ||
+    evidenceDetail.severityLevels.length > 0 ||
+    evidenceDetail.decisionSteps.length > 0 ||
+    evidenceDetail.coreLoopSteps.length > 0 ||
+    evidenceDetail.systemRecords.length > 0 ||
+    evidenceDetail.packetFields.length > 0
+  )
+}
+
 function summarizeImportedSuccessMetric(task: MaterializedImportTask, evidenceDetail?: ImportedEvidenceDetail): string {
-  if (importedTaskLooksContractDriven(task)) {
+  if (titleLooksContractShaped(task.title)) {
     return `${task.title} defines and proves the cited local contracts.`
   }
   if (/\breviewer lane\b/i.test(task.title)) {
@@ -2672,7 +2694,7 @@ function cleanImportedMissingInformation(items: readonly string[]): string[] {
 }
 
 function importedTaskLooksContractDriven(task: MaterializedImportTask): boolean {
-  return /\b(schema|schemas|contract|contracts|typed?\b|types)\b/i.test(task.title)
+  return titleLooksContractShaped(task.title)
 }
 
 function importedPrototypeTaskKind(
@@ -4714,7 +4736,7 @@ export function buildImportedBlueprintSeed(
       }]
     : []
 
-  if (!importedTaskHasBlueprintSeed(normalizedTask)) {
+  if (!importedTaskHasBlueprintSeed(normalizedTask, evidenceDetail)) {
     return {
       status: normalizedTask.scope === 'later' ? 'shelved' : 'import_draft',
       outOfScope: [],

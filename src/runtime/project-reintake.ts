@@ -18,6 +18,7 @@ import {
   buildImportedBlueprintSeed,
   type MaterializedImportTask,
 } from './workspace-importer.js'
+import { contractShapedImportHasNoConcreteContracts } from './imported-work-integrity.js'
 
 export type ProjectReintakeSource = EvidenceSource
 
@@ -794,6 +795,7 @@ function hasReviewableReintakeBlueprint(
   acceptanceCriteria: Task['acceptanceCriteria'],
   contractNames: string[],
 ): boolean {
+  if (contractShapedImportHasNoConcreteContracts({ title: task.title, contractNames })) return false
   return (
     references.length > 0 &&
     acceptanceCriteria.length > 0 &&

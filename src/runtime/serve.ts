@@ -388,6 +388,10 @@ import {
   writeProjectReintakeDraft,
 } from './project-reintake.js'
 import { deriveWorkExecutionState } from './work-execution-state.js'
+import {
+  importedContractStructuralRepairReadiness,
+  importedContractWorkIsStructurallyIncomplete,
+} from './imported-work-integrity.js'
 
 // ---------------------------------------------------------------------------
 // guildhall serve — local service over many projects
@@ -2229,6 +2233,7 @@ function hasSpecDraftRecord(task: Record<string, unknown>): boolean {
 }
 
 function isReadyForWorkerHandoffRecord(task: Record<string, unknown>): boolean {
+  if (importedContractWorkIsStructurallyIncomplete(task)) return false
   return hasSpecDraftRecord(task) || (hasApprovedProductBriefRecord(task) && hasCompleteProductBriefRecord(task))
 }
 
@@ -2791,6 +2796,14 @@ async function enrichTaskForServe(
 ): Promise<Record<string, unknown>> {
   const effective = await buildEffectiveTask(projectPath, task as Task)
   const normalized = normalizeTaskForDrawer(effective)
+  if (importedContractWorkIsStructurallyIncomplete(normalized)) {
+    normalized.taskReadiness = importedContractStructuralRepairReadiness(normalized)
+    normalized.structuralIntegrity = {
+      status: 'needs_repair',
+      reason: 'Imported contract/type work is missing concrete contract names.',
+      source: 'imported-work-integrity',
+    }
+  }
   const taskId = typeof normalized.id === 'string' ? normalized.id : ''
   const memoryDir = getProjectStateDir(projectPath)
   const checkpoint = taskId ? await readCheckpoint(memoryDir, taskId) : null
@@ -6100,6 +6113,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
     let needsBriefCleanup = 0
     let firstBriefCleanupTaskId: string | null = null
     let firstBriefCleanupTaskTitle: string | null = null
+    let structurallyIncomplete = 0
+    let firstStructurallyIncompleteTaskId: string | null = null
+    let firstStructurallyIncompleteTaskTitle: string | null = null
     let waitingForApproval = 0
     let firstWaitingSpecTaskId: string | null = null
     let firstWaitingSpecTaskTitle: string | null = null
@@ -6113,6 +6129,18 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const status = String((task as { status?: unknown }).status ?? '')
       if (['done', 'blocked', 'shelved', 'pending_pr', 'archived', 'cancelled'].includes(status)) {
         terminal += 1
+        continue
+      }
+      if (importedContractWorkIsStructurallyIncomplete(task as Record<string, unknown>)) {
+        structurallyIncomplete += 1
+        if (!firstStructurallyIncompleteTaskId) {
+          const id = (task as { id?: unknown }).id
+          firstStructurallyIncompleteTaskId = typeof id === 'string' && id.trim() ? id.trim() : null
+          firstStructurallyIncompleteTaskTitle =
+            typeof (task as { title?: unknown }).title === 'string' && (task as { title: string }).title.trim()
+              ? (task as { title: string }).title.trim()
+              : null
+        }
         continue
       }
       if (status === 'spec_review') {
@@ -6182,6 +6210,22 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
     }
     if (runnable > 0 || terminal === tasks.length) return null
+    if (structurallyIncomplete > 0) {
+      const focusTitle = firstStructurallyIncompleteTaskTitle ?? 'the first imported contract task'
+      return {
+        canStart: false,
+        code: 'no_unattended_progress',
+        message:
+          structurallyIncomplete === 1
+            ? `"${focusTitle}" needs concrete contract names before unattended work can run. Refresh or reshape the imported work so Guildhall can prove the actual contract surface.`
+            : `${structurallyIncomplete} imported contract tasks need concrete contract names before unattended work can run. Start with "${focusTitle}".`,
+        actionHref: firstStructurallyIncompleteTaskId ? `/work?task=${encodeURIComponent(firstStructurallyIncompleteTaskId)}` : '/work',
+        focusTaskId: firstStructurallyIncompleteTaskId ?? undefined,
+        focusTaskTitle: firstStructurallyIncompleteTaskTitle ?? undefined,
+        focusKind: 'brief_cleanup',
+        count: structurallyIncomplete,
+      }
+    }
     if (blockedExecution > 0) {
       const focusTitle = firstBlockedExecutionTaskTitle ?? 'the first blocked task'
       return {

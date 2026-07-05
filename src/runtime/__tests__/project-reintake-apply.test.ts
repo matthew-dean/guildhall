@@ -212,6 +212,21 @@ const dialogueAndCharacterVoiceSpec = [
   '- Run the reviewer lane against one bounded dialogue fixture and record structured findings.',
 ].join('\n')
 
+const authorInvolvementModesSpecWithoutContracts = [
+  '# Author Involvement Modes',
+  '',
+  'Define how the author can choose light, normal, or heavy involvement before the harness applies editor feedback.',
+  '',
+  '## Behavior',
+  '',
+  '- The author can tune how much the system asks before applying a proposed change.',
+  '- The harness records whether a decision was automatic, suggested, or owner-confirmed.',
+  '',
+  '## Verification',
+  '',
+  '- Run one bounded feedback scenario through each involvement mode.',
+].join('\n')
+
 describe('project re-intake apply', () => {
   it('applies reframes in place and appends a re-intake note', async () => {
     const memoryDir = await makeState([
@@ -560,6 +575,47 @@ describe('project re-intake apply', () => {
       status: 'shelved',
     })
     expect(shellTask?.releaseIds ?? []).toEqual([])
+  })
+
+  it('keeps source-backed contract tasks in draft when the cited specs do not name concrete contracts', async () => {
+    const memoryDir = await makeState([])
+    const projectPath = path.dirname(memoryDir)
+    const inventory = [
+      '# Remaining Spec Decomposition Inventory',
+      '',
+      '### 2.6 `author-involvement-modes.md`',
+      '',
+      '- **Recommended first task title:** Implement author-involvement-modes contract and involvement-dial types',
+      '- **Recommended domain:** workflow',
+      '- **Stage alignment:** Stage 2 (Agent Coordination)',
+    ].join('\n')
+    const draft = planProjectReintake({
+      now,
+      projectPath,
+      sources: [
+        { path: 'docs/harness/implementation-roadmap.md', content: narrativeNearTermProofRoadmap },
+        { path: 'docs/harness/remaining-spec-decomposition-inventory.md', content: inventory },
+        { path: 'docs/specs/author-involvement-modes.md', content: authorInvolvementModesSpecWithoutContracts },
+      ],
+      tasks: [],
+    })
+    await writeProjectReintakeDraft(memoryDir, draft)
+
+    const result = await applyProjectReintakeDraft({ memoryDir, now })
+    expect(result.success).toBe(true)
+
+    const queue = await readQueue(memoryDir)
+    const task = queue.tasks.find(task => task.title === 'Implement author-involvement-modes contract and involvement-dial types')
+    expect(task).toMatchObject({
+      status: 'import_draft',
+      references: [
+        'docs/harness/remaining-spec-decomposition-inventory.md',
+        'docs/specs/author-involvement-modes.md',
+      ],
+    })
+    expect(task?.productBrief).toBeUndefined()
+    expect(task?.taskReadiness).toBeUndefined()
+    expect(JSON.stringify(task?.acceptanceCriteria ?? '')).not.toContain('usable in code: .')
   })
 
   it('replaces stale not-started task content when the regenerated source-truth task keeps the same deterministic id', async () => {
