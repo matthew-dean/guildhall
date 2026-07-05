@@ -272,6 +272,125 @@ describe('ProjectMapTab', () => {
     expect(screen.getByText('Stage 1: V1 Release Hardening contains 2 assigned work items and 80 later.')).toBeInTheDocument()
   })
 
+  it('scopes proof contracts to the selected release instead of borrowing later work', () => {
+    render(ProjectMapTab, {
+      detail: {
+        id: 'looma-knit',
+        name: 'Looma + Knit',
+        tasks: [],
+        orientationSpine: {
+          charter: {
+            goal: 'Keep Looma generic while Knit drives primitive priority.',
+            source: 'inferred',
+          },
+          selectedRelease: {
+            id: 'stage-1',
+            label: 'Stage 1',
+            kind: 'release',
+            state: 'active',
+            source: 'release_plan',
+            nodeIds: ['work:current-parent'],
+            deferredNodeIds: ['work:later-proof'],
+          },
+          summary: {
+            selectedScopeLabel: 'Stage 1',
+            selectedReleaseLabel: 'Stage 1',
+            includedWorkCount: 1,
+            deferredWorkCount: 1,
+            progress: { total: 2 },
+          },
+          roots: [
+            {
+              id: 'work:current-parent',
+              kind: 'work',
+              title: 'Current release work',
+              summary: 'Selected release work.',
+              maturity: 'active',
+              progress: { total: 1, active: 1 },
+              visibility: { kind: 'primary', countInProjectTotals: true },
+              source: { kind: 'task', refs: ['task:current-parent'] },
+              refs: { taskIds: ['current-parent'] },
+              children: [{
+                id: 'work:current-proof',
+                kind: 'work',
+                title: 'Current descendant proof',
+                summary: 'Internal proof for the selected release work.',
+                maturity: 'proof_needed',
+                progress: { total: 0 },
+                visibility: { kind: 'internal_step', countInProjectTotals: false },
+                source: { kind: 'task', refs: ['task:current-proof'] },
+                refs: { taskIds: ['current-proof'] },
+              }],
+            },
+            {
+              id: 'work:later-proof',
+              kind: 'work',
+              title: 'Later proof should not appear',
+              summary: 'Deferred proof from a broader import.',
+              maturity: 'proof_needed',
+              progress: { total: 1, deferred: 1 },
+              visibility: { kind: 'supporting', countInProjectTotals: true },
+              source: { kind: 'task', refs: ['task:later-proof'] },
+              refs: { taskIds: ['later-proof'] },
+            },
+          ],
+          nodes: {
+            'work:current-parent': {
+              id: 'work:current-parent',
+              title: 'Current release work',
+              children: [{
+                id: 'work:current-proof',
+                title: 'Current descendant proof',
+                source: { kind: 'task', refs: ['task:current-proof'] },
+                refs: { taskIds: ['current-proof'] },
+              }],
+            },
+            'work:current-proof': {
+              id: 'work:current-proof',
+              title: 'Current descendant proof',
+              source: { kind: 'task', refs: ['task:current-proof'] },
+              refs: { taskIds: ['current-proof'] },
+            },
+            'work:later-proof': {
+              id: 'work:later-proof',
+              title: 'Later proof should not appear',
+              source: { kind: 'task', refs: ['task:later-proof'] },
+              refs: { taskIds: ['later-proof'] },
+            },
+          },
+          proofContracts: [
+            {
+              nodeId: 'work:later-proof',
+              title: 'Later proof should not appear',
+              state: 'needed',
+              required: ['Verification evidence for later work.'],
+              missing: ['Verification evidence for later work.'],
+              verified: [],
+              refs: ['task:later-proof'],
+            },
+            {
+              nodeId: 'work:current-proof',
+              title: 'Current descendant proof',
+              state: 'needed',
+              required: ['Verification evidence for current work.'],
+              missing: ['Verification evidence for current work.'],
+              verified: [],
+              refs: ['task:current-proof'],
+            },
+          ],
+          gaps: [],
+          sourceHealth: { inferred: 1, gaps: 0 },
+        },
+      },
+      activeProjectId: 'looma-knit',
+    })
+
+    expect(screen.getByRole('heading', { name: 'Proof contract' })).toBeInTheDocument()
+    expect(screen.getByText('Current descendant proof')).toBeInTheDocument()
+    expect(screen.getByText('Verification evidence for current work.')).toBeInTheDocument()
+    expect(screen.queryByText('Verification evidence for later work.')).not.toBeInTheDocument()
+  })
+
   it('lets the user select a different release boundary from the map', async () => {
     const refresh = vi.fn()
     const fetchCalls: Array<{ url: string; body: unknown }> = []

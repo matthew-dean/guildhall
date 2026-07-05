@@ -13882,6 +13882,45 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-07-05T12:31:00Z - Scoped Project Map proof contracts to the selected
+release boundary.
+
+- Work id: `codex:project-map-scoped-proof-contracts-2026-07-05`.
+- User job: a project owner using the 1,000-foot map should trust that the
+  Proof contract panel describes the selected current release/scope, not a
+  random prefix of broader imported work. Later work may be visible as later,
+  but its missing proof must not masquerade as a current-release proof blocker.
+- Finding:
+  - Looma + Knit selected `Stage 1: V1 Release Hardening`, but the Project Map
+    proof panel rendered the first six project-level proof contracts. Those
+    contracts included later/out-of-scope items such as `Block menu / block side
+    menu` and `Floating toolbar`, while the selected release node ids were
+    different current V1 hardening tasks.
+- Fix:
+  - Project Map now builds a selected-scope node id set, expands selected parent
+    nodes to descendants, and filters `proofContracts` to that scoped set before
+    rendering the panel.
+  - Added a regression where a later proof contract appears before selected
+    current proof data; the proof panel renders only the current/descendant
+    contract evidence.
+- Proof provided:
+  - `./node_modules/.bin/vitest run src/web/surfaces/project/__tests__/ProjectMapTab.svelte.test.ts --reporter=dot`
+    passed `4` tests.
+  - `CI=true NODE_ENV=development PNPM_CONFIG_PRODUCTION=false npm_config_production=false pnpm build:ui`
+    passed after restoring the full dev dependency tree.
+  - `node ./build.mjs`, `CI=true ... pnpm dev:install`, `guildhall stop`, and
+    `guildhall start` refreshed the installed app; `/api/stale-server` returned
+    `stale:false`.
+  - Live browser proof on `/projects/looma-knit/map`: the narrowed `Proof
+    contract` card contained selected current work such as `Unit tests:
+    use-collections...` and `E2E tests: login...`, and did not contain later
+    proof rows `Block menu / block side menu` or `Floating toolbar`.
+- Apply/revert behavior: revert the `ProjectMapTab.svelte` scoped proof
+  filtering and the corresponding component regression to restore the previous
+  order-based proof contract panel; no persisted project data changes.
+
+source: codex:project-map-scoped-proof-contracts-2026-07-05
+
 2026-07-05T12:20:00Z - Tightened workspace-envelope git copy around child
 repositories.
 

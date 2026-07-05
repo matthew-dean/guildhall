@@ -84,7 +84,26 @@
   const sourceGapCount = $derived(spine?.sourceHealth?.gaps ?? spine?.gaps?.length ?? 0)
   const sourceInferredCount = $derived(spine?.sourceHealth?.inferred ?? 0)
   const executionBoundary = $derived(spine?.executionBoundary ?? null)
-  const proofContracts = $derived((spine?.proofContracts ?? []).slice(0, 6))
+  const selectedScopeDescendantIds = $derived.by(() => {
+    const ids = new Set(selectedScopeNodeIds)
+    if (!spine || selectedScopeNodeIds.size === 0) return ids
+    const visit = (node: ProjectOrientationNode | undefined) => {
+      if (!node) return
+      if (node.id) ids.add(node.id)
+      for (const child of node.children ?? []) visit(child)
+    }
+    for (const nodeId of selectedScopeNodeIds) {
+      visit(spine.nodes?.[nodeId])
+    }
+    return ids
+  })
+  const proofContracts = $derived.by(() => {
+    const contracts = spine?.proofContracts ?? []
+    if (selectedScopeDescendantIds.size === 0) return contracts.slice(0, 6)
+    return contracts
+      .filter(contract => selectedScopeDescendantIds.has(contract.nodeId ?? ''))
+      .slice(0, 6)
+  })
   const mapHeadline = $derived(spine?.charter?.goal ?? spine?.summary?.purpose ?? `${detail.name ?? detail.id ?? 'Project'} needs a confirmed project goal.`)
   const targetAudience = $derived(spine?.charter?.targetAudience ?? null)
   const taskScopeLabel = $derived(spine?.summary?.selectedScopeLabel ?? selectedTaskScope?.label ?? spine?.summary?.selectedReleaseLabel ?? selectedRelease?.label ?? 'Current task scope')
