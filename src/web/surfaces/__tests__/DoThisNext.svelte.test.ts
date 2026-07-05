@@ -64,6 +64,53 @@ describe('DoThisNext', () => {
     expect(screen.queryByText('Review project discovery update')).toBeNull()
   })
 
+  it('does not resurrect stale Thread prompts after the selected scope is complete', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/project?projectId=looma-knit') {
+        return json({
+          startReadiness: {
+            canStart: false,
+            code: 'all_terminal',
+            message: 'Stage 1: Fixture And Evaluation Harness is complete.',
+          },
+          actionModel: {
+            primaryAction: null,
+            secondaryActions: [],
+            runControl: {
+              label: 'No runnable tasks',
+              startEnabled: false,
+              disabledReason: 'Stage 1: Fixture And Evaluation Harness is complete.',
+            },
+            ownerInput: { active: false },
+            setup: { state: 'ready', freshIntakeNeeded: false },
+          },
+        })
+      }
+      if (url === '/api/project/thread?projectId=looma-knit') {
+        return json({
+          activeTurnId: 'setup:project-check-in',
+          turns: [{
+            id: 'setup:project-check-in',
+            kind: 'setup_step',
+            status: 'active',
+            actionHref: '/thread',
+            question: { prompt: 'Stale setup prompt' },
+          }],
+        })
+      }
+      return json({ items: [] })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(DoThisNext)
+
+    await waitFor(() => {
+      expect(screen.queryByText('Do this next')).toBeNull()
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
   it('prescribes the highest-priority non-current action and keeps project routing', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)

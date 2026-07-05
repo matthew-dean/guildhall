@@ -29,6 +29,12 @@
   let actionModel = $state<ProjectActionModel | null>(null)
   let loaded = $state(false)
 
+  interface StartReadiness {
+    canStart?: boolean
+    code?: string
+    message?: string
+  }
+
   interface ThreadTurn {
     id: string
     kind: string
@@ -47,9 +53,22 @@
     try {
       const projectRes = await projectFetch('/api/project')
       if (projectRes.ok) {
-        const projectJson = (await projectRes.json()) as { actionModel?: ProjectActionModel | null }
+        const projectJson = (await projectRes.json()) as {
+          actionModel?: ProjectActionModel | null
+          startReadiness?: StartReadiness | null
+        }
         actionModel = projectJson.actionModel ?? null
         if (actionModel?.primaryAction) {
+          items = []
+          threadTurn = null
+          return
+        }
+        const terminalScope =
+          projectJson.startReadiness?.canStart === false &&
+          projectJson.startReadiness.code === 'all_terminal' &&
+          actionModel?.runControl?.startEnabled === false &&
+          actionModel.ownerInput?.active !== true
+        if (terminalScope) {
           items = []
           threadTurn = null
           return

@@ -12,6 +12,66 @@ This is the active browser test plan for the Guildhall project surface. Keep it
 updated while auditing the active test project so another agent can resume
 without guessing.
 
+2026-07-05T12:05:00Z - Kept completed selected-scope truth above stale Thread fallbacks.
+
+- Work id: `codex:completed-scope-do-this-next-suppression-2026-07-05`.
+- User job: when a selected release/scope is complete, the project surface must
+  not tell the owner to answer an unrelated stale Thread/setup prompt. The same
+  owner-facing rule applies to workspace envelopes: lower-level implementation
+  details, such as a non-git wrapper folder, must not override the real project
+  truth when Guildhall has discovered child repos.
+- Root cause:
+  - `DoThisNext` correctly fetched `/api/project` first, but when the shared
+    action model had no primary action it continued into Inbox/Thread fallback
+    logic. Narrative Harness Stage 1 had `startReadiness.code:"all_terminal"`
+    and no owner input, while `/api/project/thread` still had an active
+    setup/check-in turn. The fallback resurrected that stale Thread state as
+    `Answer in Thread`.
+- Fix:
+  - `DoThisNext` now treats a terminal selected scope from the shared project
+    model as authoritative: if `startReadiness.code` is `all_terminal`, run
+    control is disabled, and owner input is inactive, it clears local fallback
+    state and does not query Thread for a competing action.
+- Contract Touch Decision:
+  - Work id: `codex:completed-scope-do-this-next-suppression-2026-07-05`.
+  - Touched contracts: owner-facing next-action precedence in the web surface.
+  - Contracts considered but not touched: persisted task schema,
+    thread/setup-turn schema, project action model schema, release readiness
+    schema.
+  - Required follow-up: none for this slice; installed-app proof verified
+    Narrative Harness Map no longer shows `Do this next` / `Answer in Thread`
+    when Stage 1 is complete, and Looma + Knit still shows child repo roots
+    rather than a wrapper-folder git failure.
+  - Proof required: component regression with terminal shared project state and
+    stale active Thread state; build; installed-app API/browser proof.
+  - Proof provided: focused `DoThisNext.svelte.test.ts` passed; production
+    build passed; installed-app API/browser proof passed.
+  - Waivers: no schema migration because this changes UI precedence only.
+  - Owner-review items: none.
+  - Apply/revert behavior: revert the terminal-scope guard and regression test
+    to restore the previous Inbox/Thread fallback behavior.
+- Verification:
+  - `CI=true NODE_ENV=development PNPM_CONFIG_PRODUCTION=false npm_config_production=false ./node_modules/.bin/vitest run src/web/surfaces/__tests__/DoThisNext.svelte.test.ts --reporter=dot`
+    passed `9` tests.
+  - `CI=true NODE_ENV=development PNPM_CONFIG_PRODUCTION=false npm_config_production=false pnpm build`
+    passed.
+  - Installed app proof passed after
+    `CI=true NODE_ENV=development PNPM_CONFIG_PRODUCTION=false npm_config_production=false pnpm dev:install`,
+    `guildhall stop`, and `guildhall start`; `/api/stale-server` reported
+    `stale:false` for `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+  - Live Narrative Harness Map proof:
+    `http://localhost:7777/projects/narrative-harness/map` showed `Project
+    map` and `Stage 1: Fixture And Evaluation Harness is complete.` while not
+    showing `Do this next`, `Answer in Thread`, or `Thread is waiting for your
+    answer`.
+  - Live Looma + Knit API/rendered Release proof: `/api/project` and
+    `/api/project/release-readiness` reported the workspace envelope path
+    `/Users/matthew/git/oss/looma-knit` plus child repo roots
+    `/Users/matthew/git/oss/looma-knit/looma` and
+    `/Users/matthew/git/oss/looma-knit/knit`; the API payloads and rendered
+    Release page contained no `not a git repository`, `not_git`, or `Cannot
+    resolve git root` text.
+
 2026-07-05T11:45:00Z - Repaired imported split-child scope inheritance.
 
 - Work id: `codex:imported-split-child-scope-inheritance-2026-07-05`.
