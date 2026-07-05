@@ -13882,6 +13882,47 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-07-05T12:20:00Z - Tightened workspace-envelope git copy around child
+repositories.
+
+- Work id: `codex:workspace-envelope-git-copy-2026-07-05`.
+- User job: when a project path is a workspace envelope such as Looma + Knit,
+  the owner should understand that the child repositories are the git
+  boundaries Guildhall inspects. The product should not phrase the parent
+  folder's lack of `.git` as a project failure when child repos exist.
+- Fix:
+  - Updated friendly runtime/git copy to refer to the configured repository
+    boundary rather than "this project path."
+  - Updated Release checkout inspection copy to ask for git availability and
+    reachable workspace child repos, without implying the parent folder must be
+    the git checkout.
+  - Added a runtime-message regression so raw `fatal: not a git repository`
+    errors do not teach the wrong envelope model.
+- Proof provided:
+  - `./node_modules/.bin/vitest run src/web/lib/__tests__/runtime-message.test.ts src/web/surfaces/project/__tests__/ReleaseTab.svelte.test.ts --reporter=dot`
+    passed `21` tests.
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/serve-release-readiness.test.ts -t 'child repos|immediate child git repositories|non-git workspace envelope' --reporter=dot`
+    passed the two child-repo envelope regressions.
+  - Installed-app proof: `pnpm build:ui` and `node ./build.mjs` passed after
+    restoring the full dev+prod dependency tree; `CI=true pnpm dev:install`,
+    `guildhall stop`, and `guildhall start` refreshed the installed app.
+    `/api/stale-server` returned `stale:false`.
+  - Live API proof: `/api/project?projectId=looma-knit` reported Git Story
+    snapshot repo labels `Knit` and `Looma` for both project and release
+    readiness, with no `not a git repository`, `Cannot resolve git root`, or
+    `not_git` text in the serialized project payload.
+  - Live Ready proof: `/projects/looma-knit/settings/ready` showed the
+    workspace note and child project bootstrap contracts for `Looma` and
+    `Knit`.
+  - Live Release proof: expanding `Git story` on
+    `/projects/looma-knit/release/criteria` showed repo-scoped labels including
+    `Looma:` and `Knit:`, with no parent-folder git failure copy.
+- Apply/revert behavior: revert the three copy changes and the runtime-message
+  test to restore previous wording; no data migration or project-state rollback
+  required.
+
+source: codex:workspace-envelope-git-copy-2026-07-05
+
 2026-07-05T10:18:00Z - Fixed workspace import refresh so durable completion
 evidence cannot regress current release work back into spec review.
 

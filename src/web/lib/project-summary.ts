@@ -339,7 +339,7 @@ function gitStoryTitle(state: string, reason: string | undefined): string {
     return 'This checkout has uncommitted work. Review the diff, then commit it or mark it local-only/deferred.'
   }
   if (text.includes('fatal: not a git repository') || text.includes('spawn git enoent')) {
-    return 'Guildhall could not inspect this project or its repos with git.'
+    return 'Guildhall could not inspect the configured repository boundary with git.'
   }
   return reason ?? 'Git story needs closure.'
 }
