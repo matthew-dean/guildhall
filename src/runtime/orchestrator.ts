@@ -3358,6 +3358,11 @@ export class Orchestrator {
       if (recordedHardGateOutcome) return recordedHardGateOutcome
     }
 
+    if (task.status === 'gate_check') {
+      const approvedReviewOutcome = await this.completeGateCheckWithApprovedReviewOnlyInline(task)
+      if (approvedReviewOutcome) return approvedReviewOutcome
+    }
+
     // Handoff sequence pre-pass at `review`: when the task is running a
     // multi-step handoff and the current step is NOT the last, we capture
     // the step's handoff note, advance `handoffStep`, and revert status to
@@ -7399,43 +7404,91 @@ export class Orchestrator {
 
   private async completeGateCheckWithRecordedPassingHardGatesInline(task: Task): Promise<TickOutcome | null> {
     if (task.status !== 'gate_check') return null
-    const latestHardGates = latestHardGateResults(task)
+    const effectiveTask = await this.hydrateEffectiveTaskForDispatch(task)
+    const latestHardGates = latestHardGateResults(effectiveTask)
     if (latestHardGates.length === 0 || !latestHardGates.every((gate) => gate.passed)) return null
 
+    return await this.completeGateCheckFromRecordedEvidence(task, {
+      actor: 'recorded-hard-gates',
+      evidenceRefs: latestHardGates.map((result) => `gate:${result.gateId}`),
+      noteContent:
+        `Guildhall completed this gate check from recorded passing hard gates: ${latestHardGates.map((gate) => gate.gateId).join(', ')}.`,
+      logNote: `recorded hard gates passed (${latestHardGates.length})`,
+      applyCriteria: (current, currentEffectiveTask) => {
+        const currentHardGates = latestHardGateResults(currentEffectiveTask)
+        if (currentHardGates.length === 0 || !currentHardGates.every((gate) => gate.passed)) return false
+        const passedHardGateIds = new Set(currentHardGates.map((gate) => gate.gateId))
+        for (const criterion of current.acceptanceCriteria) {
+          if (
+            passedHardGateIds.has(criterion.id) ||
+            criterion.verifiedBy !== 'automated' ||
+            !criterion.command?.trim()
+          ) {
+            criterion.met = true
+          }
+        }
+        return true
+      },
+    })
+  }
+
+  private async completeGateCheckWithApprovedReviewOnlyInline(task: Task): Promise<TickOutcome | null> {
+    if (task.status !== 'gate_check') return null
+    const effectiveTask = await this.hydrateEffectiveTaskForDispatch(task)
+    if (!canCompleteGateCheckFromApprovedReviewOnly(effectiveTask)) return null
+
+    return await this.completeGateCheckFromRecordedEvidence(task, {
+      actor: 'approved-review-gates',
+      evidenceRefs: latestApprovingReviewEvidenceRefs(effectiveTask),
+      noteContent:
+        'Guildhall completed this gate check from the recorded approving review; no command-backed hard gate was required for this review-verified task.',
+      logNote: 'approved review completed review-verified gate check',
+      applyCriteria: (current, currentEffectiveTask) => {
+        if (!canCompleteGateCheckFromApprovedReviewOnly(currentEffectiveTask)) return false
+        for (const criterion of current.acceptanceCriteria) {
+          if (criterion.verifiedBy !== 'automated' || !criterion.command?.trim()) {
+            criterion.met = true
+          }
+        }
+        return true
+      },
+    })
+  }
+
+  private async completeGateCheckFromRecordedEvidence(
+    task: Task,
+    input: {
+      actor: string
+      evidenceRefs: string[]
+      noteContent: string
+      logNote: string
+      applyCriteria: (current: Task, currentEffectiveTask: Task) => boolean
+    },
+  ): Promise<TickOutcome | null> {
+    if (task.status !== 'gate_check') return null
     const beforeStatus = task.status
     return await this.withQueueWriteLock(async () => {
       const queue = await this.readQueue()
       const current = queue.tasks.find((candidate) => candidate.id === task.id)
       if (!current || current.status !== 'gate_check') return null
-      const currentHardGates = latestHardGateResults(current)
-      if (currentHardGates.length === 0 || !currentHardGates.every((gate) => gate.passed)) return null
+      const currentEffectiveTask = await this.hydrateEffectiveTaskForDispatch(current)
+      if (!input.applyCriteria(current, currentEffectiveTask)) return null
 
       const now = this.now()
-      const passedHardGateIds = new Set(currentHardGates.map((gate) => gate.gateId))
-      for (const criterion of current.acceptanceCriteria) {
-        if (
-          passedHardGateIds.has(criterion.id) ||
-          criterion.verifiedBy !== 'automated' ||
-          !criterion.command?.trim()
-        ) {
-          criterion.met = true
-        }
-      }
       transitionTaskStatus({
         task: current,
         event: 'complete',
-        actor: 'recorded-hard-gates',
-        evidenceRefs: currentHardGates.map((result) => `gate:${result.gateId}`),
+        actor: input.actor,
+        evidenceRefs: input.evidenceRefs,
         now,
         requiredEvidencePresent: true,
       })
       current.assignedTo = undefined
       current.completedAt = now
       current.notes.push({
-        agentId: 'recorded-hard-gates',
+        agentId: input.actor,
         role: 'gate-checker',
-        content:
-          `Guildhall completed this gate check from recorded passing hard gates: ${currentHardGates.map((gate) => gate.gateId).join(', ')}.`,
+        content: input.noteContent,
         timestamp: now,
       })
 
@@ -7504,20 +7557,24 @@ export class Orchestrator {
       current.updatedAt = this.now()
       queue.lastUpdated = current.updatedAt
       await this.writeQueue(queue)
+      await upsertTaskRuntimeState(inferProjectRootFromMemoryDir(this.opts.config.memoryDir), current.id, {
+        assignedTo: null,
+        updatedAt: current.updatedAt,
+      })
       await this.maybeCleanupWorktree(current, await this.resolveWorktreeModeSafe())
       const afterStatus = current.status
       await this.logTickProgress({
         task: current,
-        agent: 'recorded-hard-gates',
+        agent: input.actor,
         beforeStatus,
         afterStatus,
         transitioned: true,
-        note: `recorded hard gates passed (${currentHardGates.length}) → ${afterStatus}`,
+        note: `${input.logNote} → ${afterStatus}`,
       })
       return {
         kind: 'processed',
         taskId: current.id,
-        agent: 'recorded-hard-gates',
+        agent: input.actor,
         beforeStatus,
         afterStatus,
         transitioned: true,
@@ -9850,7 +9907,8 @@ export class Orchestrator {
     const queue = await this.readQueue()
     const task = queue.tasks.find((candidate) => candidate.id === input.taskId)
     if (!task || task.status !== 'gate_check') return null
-    const latestHardGates = latestHardGateResults(task)
+    const effectiveTask = await this.hydrateEffectiveTaskForDispatch(task)
+    const latestHardGates = latestHardGateResults(effectiveTask)
     if (latestHardGates.length === 0 || !latestHardGates.every((gate) => gate.passed)) return null
 
     const now = this.now()
@@ -11967,6 +12025,31 @@ function latestHardGateResultForId(
     if (gate?.type === 'hard' && gate.gateId === gateId) return gate
   }
   return undefined
+}
+
+function canCompleteGateCheckFromApprovedReviewOnly(task: Task): boolean {
+  if (task.status !== 'gate_check') return false
+  if (!latestApprovingReviewVerdict(task)) return false
+  if (task.gateResults.some((gate) => gate.passed === false)) return false
+  return !task.acceptanceCriteria.some((criterion) =>
+    criterion.verifiedBy === 'automated' &&
+    Boolean(criterion.command?.trim()) &&
+    criterion.met !== true
+  )
+}
+
+function latestApprovingReviewVerdict(task: Task): ReviewVerdict | null {
+  for (let index = task.reviewVerdicts.length - 1; index >= 0; index -= 1) {
+    const verdict = task.reviewVerdicts[index]
+    if (verdict?.verdict === 'approve') return verdict
+    if (verdict?.verdict === 'revise') return null
+  }
+  return null
+}
+
+function latestApprovingReviewEvidenceRefs(task: Task): string[] {
+  const verdict = latestApprovingReviewVerdict(task)
+  return verdict ? [`review:${verdict.recordedAt}`] : ['review:approved']
 }
 
 function isProceduralOnlyFanoutDissent(dissenting: readonly PersonaVerdict[]): boolean {

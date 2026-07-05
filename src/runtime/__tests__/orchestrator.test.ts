@@ -6453,6 +6453,120 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
     expect(queue.tasks[0]!.notes.at(-1)?.content).toContain('recorded passing hard gates')
   })
 
+  it('completes gate_check from sidecar-recorded passing hard gates without another model turn', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'gate_check',
+        acceptanceCriteria: [{
+          id: 'review-copy',
+          description: 'Reviewer confirmed the script stays deterministic.',
+          verifiedBy: 'review',
+          met: false,
+        }],
+        gateResults: [],
+      }),
+    ])
+    await appendTaskEvidence(tmpDir, 'a', {
+      id: 'a-gate-npm-run-build',
+      kind: 'gate_result',
+      recordedAt: '2026-07-04T10:07:21.557Z',
+      payload: {
+        gateId: 'npm-run-build',
+        type: 'hard',
+        passed: true,
+        checkedAt: '2026-07-04T10:07:21.557Z',
+        output: 'npm run build passed',
+      },
+    })
+    const gc = stubAgent('gate-checker-agent', async () => {
+      throw new Error('gate-checker should not run when sidecar hard gates already passed')
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ gateChecker: gc }),
+    })
+
+    const out = await orch.tick()
+
+    expect(gc.calls).toHaveLength(0)
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.beforeStatus).toBe('gate_check')
+      expect(out.afterStatus).toBe('done')
+      expect(out.agent).toBe('recorded-hard-gates')
+    }
+    const queue = await readQueue()
+    expect(queue.tasks[0]!.status).toBe('done')
+    expect(queue.tasks[0]!.acceptanceCriteria[0]?.met).toBe(true)
+    expect(queue.tasks[0]!.notes.at(-1)?.content).toContain('recorded passing hard gates')
+  })
+
+  it('completes review-verified gate_check from an approving sidecar review without another model turn', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'gate_check',
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          description: 'Reviewer confirmed stale context is invalidated.',
+          verifiedBy: 'review',
+          met: false,
+        }],
+        reviewVerdicts: [],
+        gateResults: [],
+      }),
+    ])
+    await appendTaskEvidence(tmpDir, 'a', {
+      id: 'a-review-approve',
+      kind: 'review_verdict',
+      recordedAt: '2026-07-04T10:07:21.557Z',
+      payload: {
+        verdict: 'approve',
+        reviewerPath: 'llm',
+        reason: 'Reviewer approved.',
+        reasoning: 'AC 1: Met.',
+        failingSignals: [],
+        recordedAt: '2026-07-04T10:07:21.557Z',
+      },
+    })
+    await appendTaskEvidence(tmpDir, 'a', {
+      id: 'a-gate-content',
+      kind: 'gate_result',
+      recordedAt: '2026-07-04T10:07:22.557Z',
+      payload: {
+        gateId: 'content.no-truncated-data',
+        type: 'soft',
+        passed: true,
+        checkedAt: '2026-07-04T10:07:22.557Z',
+        output: 'no ellipsized semantic task data detected',
+      },
+    })
+    const gc = stubAgent('gate-checker-agent', async () => {
+      throw new Error('gate-checker should not run when review-only criteria are already approved')
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ gateChecker: gc }),
+    })
+
+    const out = await orch.tick()
+
+    expect(gc.calls).toHaveLength(0)
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.beforeStatus).toBe('gate_check')
+      expect(out.afterStatus).toBe('done')
+      expect(out.agent).toBe('approved-review-gates')
+    }
+    const queue = await readQueue()
+    expect(queue.tasks[0]!.status).toBe('done')
+    expect(queue.tasks[0]!.acceptanceCriteria[0]?.met).toBe(true)
+    expect(queue.tasks[0]!.notes.at(-1)?.content).toContain('recorded approving review')
+    const runtime = await readTaskRuntimeStore(tmpDir)
+    expect(runtime.tasks.a?.assignedTo).toBeNull()
+  })
+
   it('repairs completed task evidence display from recorded passing hard gates', async () => {
     await writeQueue([
       mkTask({
