@@ -1788,6 +1788,27 @@ function releaseDesignSystemStatus(
   }
 }
 
+function scopedWorkNeedsDesignSystem(
+  tasks: Array<Record<string, unknown>>,
+  release: { proofStyle?: string | null } | null | undefined,
+): boolean {
+  if (release?.proofStyle === 'script_only') return false
+  return tasks.some((task) => {
+    const text = [
+      task.title,
+      task.description,
+      task.spec,
+      typeof task.productBrief === 'object' && task.productBrief
+        ? Object.values(task.productBrief as Record<string, unknown>).join(' ')
+        : '',
+    ].join(' ').toLowerCase()
+    if (/\b(no-ui|no ui|headless|script-only|script only|cli|command-line|without a frontend)\b|do not add ui\b|do not add .*?\bui\b|without ui\b/.test(text)) {
+      return false
+    }
+    return /\b(ui|frontend|front-end|screen|view|layout|component|design system|design-system|visual|palette|responsive|mobile|browser)\b/.test(text)
+  })
+}
+
 function summarizeScopedReleaseWork(
   tasks: Task[],
   scope: OrientationScope | null | undefined,
@@ -10685,7 +10706,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
       } = releaseTruth
       const dirtyCheckout = await guildhallOwnedDirtyCheckout(project.path)
       const gitStory = await buildProjectGitStorySummary(project.path, scopedTasks)
-      const designSystemBlockingCount = tasks.length > 0 && !designSystem.approved ? 1 : 0
+      const designSystemBlockingCount =
+        scopedTasks.length > 0 &&
+        scopedWorkNeedsDesignSystem(scopedTasks, release) &&
+        !designSystem.approved
+          ? 1
+          : 0
       const dirtyCheckoutBlockingCount = dirtyCheckout.ownedCount > 0 || dirtyCheckout.error ? 1 : 0
       const gitStoryBlockingCount = gitStory.blockers.length
       const blockingCount =

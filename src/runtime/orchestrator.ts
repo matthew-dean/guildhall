@@ -426,7 +426,24 @@ function shouldRepairWeakRecoverySpecReviewSeed(task: Task, queue: TaskQueue): b
     /turned into concrete project work using the evidence and owner decisions already recorded/i.test(brief?.userJob ?? '') ||
     /has a reviewable spec, acceptance criteria, and a clear completion boundary before implementation starts/i.test(brief?.successMetric ?? '') ||
     /\.\s+from\s+/i.test(`${brief?.userJob ?? ''}\n${specText}`) ||
-    /including privacy manifest says what was included/i.test(specText)
+    /including privacy manifest says what was included/i.test(specText) ||
+    /including affected records become stale/i.test(specText)
+  )
+}
+
+function shouldSeedSourceBackedExploringSplit(task: Task, queue: TaskQueue): boolean {
+  if (task.status !== 'exploring') return false
+  if (typeof task.spec === 'string' && task.spec.trim().length > 0) return false
+  if (task.acceptanceCriteria.length > 0) return false
+  if (Array.isArray(task.references) && task.references.length > 0) return false
+  const parentId = task.hierarchy?.parentId ?? task.delivery?.supports?.[0]
+  if (!parentId) return false
+  const parentTask = queue.tasks.find((candidate) => candidate.id === parentId)
+  if (!parentTask) return false
+  return (
+    parentTask.acceptanceCriteria.length > 0 ||
+    Boolean(parentTask.spec?.trim()) ||
+    (Array.isArray(parentTask.references) && parentTask.references.length > 0)
   )
 }
 
@@ -1547,6 +1564,7 @@ function scopedRecoveryParentAcceptance(taskTitle: string, parentAcceptance: str
 function cleanRecoveryAcceptanceText(value: string): string {
   return normalizeFallbackWhitespace(value)
     .replace(/\s*,\s*including privacy manifest says what was included\b/gi, '')
+    .replace(/\s*,\s*including affected records become stale\b/gi, '')
     .replace(/\s*,\s*including ([^,.]+)([,.])\s*\1\b/gi, '$2')
     .replace(/\s+/g, ' ')
     .trim()
@@ -10193,7 +10211,6 @@ export class Orchestrator {
     const isRecoveryRetry = notes.some((note) =>
       /reframe requested|fresh spec pass|retry.*spec|rebuild the task|failed to save a durable draft|preserved transcript notes/i.test(note.content ?? ''),
     )
-    if (!isRecoveryRetry && opts.force !== true) return null
 
     const now = this.now()
     const queue = await this.readQueue()
@@ -10201,12 +10218,18 @@ export class Orchestrator {
     if (!liveTask || liveTask.status !== 'exploring') return null
     if (typeof liveTask.spec === 'string' && liveTask.spec.trim().length > 0) return null
     if (taskHasUnansweredVisibleQuestion(liveTask)) return null
+    const shouldSeedFromParent = shouldSeedSourceBackedExploringSplit(liveTask, queue)
+    if (!isRecoveryRetry && !shouldSeedFromParent && opts.force !== true) return null
 
     const seed = buildRecoverySpecSeedForTask(liveTask, queue, now)
+    const parentId = liveTask.hierarchy?.parentId ?? liveTask.delivery?.supports?.[0]
+    const parentTask = parentId ? queue.tasks.find((candidate) => candidate.id === parentId) : undefined
     liveTask.spec = seed.spec
     liveTask.acceptanceCriteria = seed.acceptanceCriteria
     liveTask.productBrief = seed.productBrief
     if (seed.references) liveTask.references = seed.references
+    if ((!liveTask.domain || liveTask.domain === 'core') && parentTask?.domain) liveTask.domain = parentTask.domain
+    if (liveTask.releaseIds.length === 0 && parentTask?.releaseIds?.length) liveTask.releaseIds = [...parentTask.releaseIds]
     liveTask.status = 'spec_review'
     liveTask.assignedTo = null
     liveTask.updatedAt = now

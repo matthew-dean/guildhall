@@ -3122,6 +3122,74 @@ describe('Orchestrator.tick — routing', () => {
     expect(task.notes.at(-1)?.content).toContain('under-shaped recovery spec')
   })
 
+  it('seeds empty source-backed split children without waiting for a recovery note', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'parent',
+        status: 'done',
+        domain: 'harness',
+        releaseIds: ['stage-1-fixture-and-evaluation-harness'],
+        title: 'Implement a no-UI runner that builds a packet from fixture records.',
+        references: [
+          '/repo/docs/harness/implementation-roadmap.md',
+          '/repo/docs/specs/agent-context-packets-and-compaction.md',
+        ],
+        acceptanceCriteria: [
+          {
+            id: 'invalidation-boundary',
+            description: 'The runner marks stale packet context after source edits: existing traces and findings; a source-text edit that changes a character belief or object state; invalidation edges; affected records become stale; unrelated records stay available; packet builder excludes or flags stale context, including affected records become stale.',
+            verifiedBy: 'review',
+            met: false,
+          },
+        ],
+        hierarchy: { childIds: ['stale-child'], order: 0, relation: 'contains' },
+      }),
+      mkTask({
+        id: 'stale-child',
+        status: 'exploring',
+        domain: 'core',
+        title: 'Invalidate stale packet context after source edits',
+        description: 'The runner should prove stale-context handling before later phases pile more intelligence on top.',
+        proposalRationale: 'The runner should prove stale-context handling before later phases pile more intelligence on top.',
+        delivery: { supports: ['parent'], usesPrimitives: [], provesPrimitives: [] },
+        hierarchy: { parentId: 'parent', childIds: [], order: 4, relation: 'decomposes' },
+      }),
+    ])
+    const spec = stubAgent('spec-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out).toMatchObject({
+      kind: 'processed',
+      taskId: 'stale-child',
+      agent: 'coordinator-recovery',
+      beforeStatus: 'exploring',
+      afterStatus: 'spec_review',
+    })
+    expect(spec.calls).toHaveLength(0)
+    const queue = await readQueue()
+    const task = queue.tasks.find(candidate => candidate.id === 'stale-child')!
+    expect(task.domain).toBe('harness')
+    expect(task.releaseIds).toEqual(['stage-1-fixture-and-evaluation-harness'])
+    expect(task.references).toEqual([
+      '/repo/docs/harness/implementation-roadmap.md',
+      '/repo/docs/specs/agent-context-packets-and-compaction.md',
+    ])
+    expect(task.productBrief?.userJob).toBe('I want Invalidate stale packet context after source edits implemented or proven from The runner should prove stale-context handling before later phases pile more intelligence on top.')
+    expect(task.productBrief?.successMetric).toContain('affected records become stale')
+    expect(task.spec).toContain('Parent acceptance this child satisfies')
+    expect(task.spec).toContain('unrelated records stay available')
+    expect(task.spec).not.toContain('including affected records become stale')
+    expect(task.spec).not.toContain('bounded writer packet')
+    const criteria = task.acceptanceCriteria.map((criterion) => criterion.description).join('\n')
+    expect(criteria).toContain('packet builder excludes or flags stale context')
+    expect(criteria).not.toContain('including affected records become stale')
+  })
+
   it('narrows recovered fixture child specs instead of copying parent prototype scope', async () => {
     await writeQueue([
       mkTask({

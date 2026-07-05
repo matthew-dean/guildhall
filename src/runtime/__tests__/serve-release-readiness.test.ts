@@ -185,6 +185,127 @@ describe('GET /api/project/release-readiness', () => {
     expect(body.scope).toMatchObject({ id: '2-0-alpha', label: '2.0 alpha' })
   })
 
+  it('does not require a design-system guardrail for no-UI headless release work', async () => {
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: 'headless-mvp',
+      releases: [{
+        id: 'headless-mvp',
+        label: 'Headless MVP',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-runner'],
+        deferredNodeIds: [],
+        proofStyle: 'unspecified',
+      }],
+      tasks: [
+        makeTask({
+          id: 'task-runner',
+          title: 'Implement a no-UI runner that builds a packet from fixture records',
+          description: 'The harness run works without a frontend and stays inside the no-UI prototype boundary.',
+          status: 'done',
+          completedAt: '2026-05-08T00:00:00Z',
+          releaseIds: ['headless-mvp'],
+        }),
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await commitAndPush('headless proof landed')
+
+    const res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
+    const body = await res.json() as any
+
+    expect(body.designSystem).toMatchObject({
+      drafted: false,
+      approved: false,
+      source: 'none',
+    })
+    expect(body.totals.designSystemBlockingCount).toBe(0)
+    expect(body.ready).toBe(true)
+  })
+
+  it('does not treat negated UI copy as release UI work', async () => {
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: 'contract-proof',
+      releases: [{
+        id: 'contract-proof',
+        label: 'Contract proof',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-contract'],
+        deferredNodeIds: [],
+        proofStyle: 'unspecified',
+      }],
+      tasks: [
+        makeTask({
+          id: 'task-contract',
+          title: 'Define fixture contracts',
+          description: 'Do not add UI copy or API endpoints for this contract-only child task.',
+          status: 'done',
+          completedAt: '2026-05-08T00:00:00Z',
+          releaseIds: ['contract-proof'],
+        }),
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await commitAndPush('contract proof landed')
+
+    const res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
+    const body = await res.json() as any
+
+    expect(body.totals.designSystemBlockingCount).toBe(0)
+    expect(body.ready).toBe(true)
+  })
+
+  it('still requires a design-system guardrail when a mixed release includes UI work', async () => {
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: 'mixed-alpha',
+      releases: [{
+        id: 'mixed-alpha',
+        label: 'Mixed alpha',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-runner', 'work:task-ui'],
+        deferredNodeIds: [],
+        proofStyle: 'unspecified',
+      }],
+      tasks: [
+        makeTask({
+          id: 'task-runner',
+          title: 'Implement a no-UI runner that builds a packet from fixture records',
+          description: 'The harness run works without a frontend.',
+          status: 'done',
+          completedAt: '2026-05-08T00:00:00Z',
+          releaseIds: ['mixed-alpha'],
+        }),
+        makeTask({
+          id: 'task-ui',
+          title: 'Add the review screen layout',
+          description: 'The browser view shows reviewer findings responsively.',
+          status: 'done',
+          completedAt: '2026-05-08T00:00:00Z',
+          releaseIds: ['mixed-alpha'],
+        }),
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await commitAndPush('mixed proof landed')
+
+    const res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
+    const body = await res.json() as any
+
+    expect(body.totals.designSystemBlockingCount).toBe(1)
+    expect(body.ready).toBe(false)
+  })
+
   it('counts only the selected scope when later or stale tasks remain elsewhere in the queue', async () => {
     await seedQueue({
       version: 1,

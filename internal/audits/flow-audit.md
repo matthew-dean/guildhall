@@ -12,6 +12,55 @@ This is the active browser test plan for the Guildhall project surface. Keep it
 updated while auditing the active test project so another agent can resume
 without guessing.
 
+2026-07-05T08:18:00Z - Tightened Stage 1 readiness and child-repo envelope
+truth.
+
+- Work id: `codex:narrative-harness-source-backed-split-and-child-repos-2026-07-05`.
+- User job: when a project envelope is not itself a git repository, Guildhall
+  must still recognize child repositories transparently; when a selected
+  release is headless/no-UI, readiness must not invent a design-system blocker;
+  and when a child split was already sourced from a parent spec, Guildhall must
+  recover it from that graph instead of waiting for another intake note.
+- Fix:
+  - Empty `exploring` split children with a source-backed parent now get a
+    deterministic `spec_review` seed from parent acceptance, references,
+    domain, and selected release membership.
+  - The stale-context recovery seed now cleans duplicated
+    "including affected records become stale" text before approval.
+  - Release readiness only requires a design-system guardrail for scoped work
+    whose own task text is UI/design-facing; no-UI/headless release tasks do
+    not create a false blocker, while mixed releases with real UI work still
+    do.
+  - Negated boundaries such as "do not add UI copy" now count as evidence that
+    the scoped work is not UI work instead of accidentally triggering a design
+    blocker.
+- Live proof:
+  - `/api/project/release-readiness?projectId=narrative-harness` reported
+    Stage 1 with `tasks:14`, `done:13`, `in_progress:1`,
+    `designSystemBlockingCount:0`, `dirtyCheckoutBlockingCount:0`, and
+    `humanBlockingCount:0`.
+  - The remaining Stage 1 task
+    `task-import-14yqvl7-split-invalidate-stale-packet-context-after-source-edits-2`
+    is in `in_progress` with inherited `harness` domain and
+    `stage-1-fixture-and-evaluation-harness` release membership.
+  - `/api/project/release-readiness?projectId=looma-knit` reported child repo
+    snapshots for `Looma` and `Knit`, including Knit dirty-checkout state, and
+    the payload did not contain `not a git repository`.
+- Still open:
+  - The final Narrative Harness Stage 1 task is claimed by `worker-agent` but
+    has no visible work evidence yet. Treat this as a Guildhall liveness and
+    live-work-visibility failure until the worker either progresses, times out
+    into a clear recoverable state, or the runtime records why it cannot act.
+- Verification:
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/serve-release-readiness.test.ts -t 'no-UI headless|negated UI|mixed release|child repos|immediate child git repositories'`
+    passed.
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/git-story.test.ts -t 'discoverChildGitProjects|child project policy|summarize'`
+    passed.
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/orchestrator.test.ts -t 'source-backed split|under-shaped recovery specs'`
+    passed.
+
+source: codex:narrative-harness-source-backed-split-and-child-repos-2026-07-05
+
 2026-07-05T08:05:00Z - Repaired Narrative Harness recovery-spec intake and
 verified non-git workspace envelopes still surface child repos.
 
