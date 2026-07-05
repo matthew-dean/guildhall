@@ -17547,6 +17547,56 @@ visibly blocked after the false proof-policy escalation.
 
 source: codex:resolve-escalation-canonical-blocker-sync-2026-07-04
 
+2026-07-05T10:45:00Z - Aligned release proof/orientation communication with
+shared readiness state.
+
+- Work id: `codex:release-orientation-proof-state-sync-2026-07-05`.
+- User job: when a scoped release has completed work with recorded completion
+  proof, Guildhall should communicate that the release is complete across
+  Overview, Map, Release, and API surfaces. It must not say "proof needed",
+  "missing verification", or "blocked" from stale view-local calculations when
+  the shared readiness model says the current release has zero blockers.
+- Fix:
+  - Added a shared runtime helper for recorded completion proof so release
+    readiness and the project orientation spine recognize the same durable
+    evidence from done summaries, passed gates, and approved reviews.
+  - Updated the orientation spine to treat completed imported work with durable
+    evidence as proven, eliminating stale proof gaps for completed current
+    scope work.
+  - Updated Release so the verdict uses
+    `totals.designSystemBlockingCount` from the shared readiness payload
+    instead of locally turning informational design-system status into a
+    release blocker.
+  - Reconfirmed Looma + Knit is a workspace envelope with child git
+    repositories: installed API and rendered Release page report child repo
+    labels `Looma` and `Knit` without "not a git repository" copy.
+- Contract Touch Decision:
+  - Work id: `codex:release-orientation-proof-state-sync-2026-07-05`.
+  - Touched contracts: Release UI verdict semantics;
+    project-orientation proof summary semantics; shared recorded completion
+    proof interpretation.
+  - Contracts considered but not touched: persisted task schema, release schema,
+    workspace-import draft schema, Git Story payload shape, design-system
+    persistence schema.
+  - Existing data impact: no migration. Existing done-summary, gate-result, and
+    review-verdict records are now read consistently by orientation and
+    readiness; no stored task rows are rewritten.
+  - Required follow-up: keep rendered route proof in the same pass before
+    claiming the active Narrative Harness MVP communication loop is done.
+  - Proof required: focused runtime/component regressions, build, contract
+    lint, installed-app API proof, rendered Overview/Map/Release proof.
+  - Proof provided: focused runtime/component tests passed; build passed;
+    installed API returned Narrative Harness Stage 1 ready with `6` proven
+    current work items and `0` proof gaps; rendered Narrative Harness
+    Overview/Map/Release showed Stage 1 complete with no false proof blockers
+    or Release "Blocked" verdict; Looma + Knit API/rendered Release proof
+    returned child repo labels `Looma` and `Knit` without container-level
+    "not a git repository" copy.
+  - Apply/revert behavior: revert the helper import/use in `serve.ts` and
+    `project-orientation-spine.ts`, plus the Release verdict
+    `designSystemBlockingCount` guard, to restore previous local calculations;
+    no data rollback required.
+
 2026-06-15T23:52:00Z - Completed the Project Orientation Spine cross-route
 implementation and installed-app audit.
 

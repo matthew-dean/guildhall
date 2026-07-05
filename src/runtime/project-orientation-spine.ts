@@ -5,6 +5,7 @@ import {
   type ProjectScope,
   type ProjectScopeProjection,
 } from './project-scope-projection.js'
+import { recordedCompletionProofForTask } from './task-completion-proof.js'
 import { deriveTaskWorkVisibility } from './work-visibility.js'
 
 export type OrientationScopeKind =
@@ -256,6 +257,9 @@ export interface OrientationTaskInput {
   productBrief?: { approvedAt?: string | null } | null
   acceptanceCriteria?: Array<{ met?: boolean; [key: string]: unknown }>
   proofPaths?: unknown[]
+  doneSummaryBundle?: unknown
+  gateResults?: unknown[]
+  reviewVerdicts?: unknown[]
   completionHandoff?: {
     verified?: string[]
     notVerified?: string[]
@@ -718,6 +722,7 @@ function hasBrief(task: OrientationTaskInput): boolean {
 }
 
 function proofForTask(task: OrientationTaskInput): OrientationProofSummary {
+  const recorded = recordedCompletionProofForTask(task)
   const handoff = task.completionHandoff && typeof task.completionHandoff === 'object'
     ? task.completionHandoff as {
         verified?: string[]
@@ -725,7 +730,7 @@ function proofForTask(task: OrientationTaskInput): OrientationProofSummary {
         remainingRisks?: string[]
       }
     : null
-  const verified = handoff?.verified ?? []
+  const verified = [...recorded.verified, ...(handoff?.verified ?? [])]
   const missing = [...(handoff?.notVerified ?? []), ...(handoff?.remainingRisks ?? [])].filter(Boolean)
   const plannedProof = Array.isArray(task.proofPaths) ? task.proofPaths.length : 0
   if (plannedProof === 0 && verified.length === 0 && missing.length === 0) {

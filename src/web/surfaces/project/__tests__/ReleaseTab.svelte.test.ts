@@ -232,7 +232,7 @@ describe('ReleaseTab', () => {
         json({
           ...readyPayload,
           designSystem: { drafted: false, approved: false, source: 'none' },
-          totals: { blockingCount: 0, tasks: 3, done: 3 },
+          totals: { blockingCount: 1, designSystemBlockingCount: 1, tasks: 3, done: 3 },
         }),
       ),
     )
@@ -242,6 +242,34 @@ describe('ReleaseTab', () => {
     expect(await screen.findByText('Current task scope')).toBeTruthy()
     expect(screen.getAllByText('Blocked')).toHaveLength(2)
     expect(screen.getByText('No design-system guardrail is captured yet.')).toBeTruthy()
+  })
+
+  it('does not override a ready release when the shared model says design-system capture is informational', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        json({
+          ...readyPayload,
+          ready: true,
+          designSystem: {
+            drafted: false,
+            approved: false,
+            source: 'none',
+            label: 'not captured',
+            reason: 'No design-system guardrail is captured yet.',
+          },
+          totals: { blockingCount: 0, designSystemBlockingCount: 0, unfinishedCount: 0, tasks: 3, done: 3 },
+        }),
+      ),
+    )
+
+    render(ReleaseTab)
+
+    expect(await screen.findByText('Current task scope')).toBeTruthy()
+    expect(screen.getAllByText('Ready')).toHaveLength(2)
+    expect(screen.getByText('3/3 tasks done · no open scope blockers.')).toBeTruthy()
+    expect(screen.getByText('not captured')).toBeTruthy()
+    expect(screen.queryByText('No design-system guardrail is captured yet.')).toBeNull()
   })
 
   it('prioritizes API not-ready reasons over generic design-system readiness copy', async () => {

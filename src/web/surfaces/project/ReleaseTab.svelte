@@ -319,6 +319,7 @@
 
   const gitStoryBlockers = $derived(dedupeGitBlockers(data?.gitStory?.blockers ?? []))
   const visibleGitStoryBlockers = $derived(gitStoryBlockers.slice(0, 5))
+  const designSystemBlockingCount = $derived(data?.totals.designSystemBlockingCount ?? (dsLabel().clear ? 0 : 1))
   const hasNamedRelease = $derived(Boolean(data?.release?.label))
   const readinessNoun = $derived(hasNamedRelease ? 'release' : 'scope')
   const readinessTitle = $derived(hasNamedRelease ? 'Release readiness' : 'Scope readiness')
@@ -340,7 +341,7 @@
         reason: `No tracked work yet. Shape the first task before judging ${readinessNoun} readiness.`,
       }
     }
-    if (data.totals.blockingCount === 0 && unfinishedCount === 0 && dirtyCheckoutCount === 0 && !dirtyCheckoutError && dsLabel().clear) {
+    if (data.totals.blockingCount === 0 && unfinishedCount === 0 && dirtyCheckoutCount === 0 && !dirtyCheckoutError && designSystemBlockingCount === 0) {
       return {
         label: 'Ready',
         tone: 'ok' as const,
@@ -375,7 +376,7 @@
         reason: `${gitStoryBlockers.length} git stor${gitStoryBlockers.length === 1 ? 'y needs' : 'ies need'} closure.`,
       }
     }
-    if (!dsLabel().clear) {
+    if (designSystemBlockingCount > 0) {
       return {
         label: 'Blocked',
         tone: 'warn' as const,

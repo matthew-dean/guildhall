@@ -1122,6 +1122,77 @@ describe('buildProjectOrientationSpine', () => {
     expect(spine.activePins.map(pin => pin.kind)).toEqual(['proof', 'proof'])
   })
 
+  it('keeps completed imported work proven when durable completion evidence exists', () => {
+    const spine = buildProjectOrientationSpine({
+      projectId: 'narrative-harness',
+      now: '2026-07-05T10:00:00.000Z',
+      scope: {
+        id: 'stage-1-fixture-and-evaluation-harness',
+        label: 'Stage 1: Fixture And Evaluation Harness',
+        kind: 'release',
+        source: 'release_plan',
+        nodeIds: ['work:fixture-schema', 'work:runner-proof'],
+        deferredNodeIds: [],
+      },
+      tasks: [
+        {
+          id: 'fixture-schema',
+          title: 'Define fixture schemas.',
+          status: 'done',
+          spec: 'Done.',
+          proofPaths: ['src/verify-fixture-schema.ts'],
+          doneSummaryBundle: {
+            taskId: 'fixture-schema',
+            status: 'done',
+            completedAt: '2026-07-05T09:00:00.000Z',
+            summary: {
+              journey: 'Defined the fixture schema.',
+              decision: 'Use JSON fixtures.',
+              evidence: 'pnpm test -- fixture-schema passed.',
+              learningCandidates: [],
+              openResidue: 'None.',
+            },
+            retention: {
+              transcriptPrimaryArtifact: false,
+              compactedFullTranscript: true,
+              fullEvidenceAvailable: true,
+            },
+            evidenceRefs: [],
+            createdAt: '2026-07-05T09:00:00.000Z',
+            createdBy: 'test',
+          },
+        },
+        {
+          id: 'runner-proof',
+          title: 'Implement no-UI runner.',
+          status: 'done',
+          spec: 'Done.',
+          proofPaths: [{ expectedEvidence: ['runner smoke test'] }],
+          gateResults: [{ gateId: 'runner-smoke', status: 'pass' }],
+          reviewVerdicts: [{ reviewerPath: 'deterministic', verdict: 'approve' }],
+        },
+      ],
+      startReadiness: {
+        canStart: false,
+        code: 'all_terminal',
+        message: 'Stage 1: Fixture And Evaluation Harness is complete.',
+      },
+    })
+
+    expect(spine.summary.headline).toBe('Stage 1: Fixture And Evaluation Harness is complete.')
+    expect(spine.summary.progress.proven).toBe(2)
+    expect(spine.summary.progress.done).toBe(2)
+    expect(spine.nodes['work:fixture-schema']?.maturity).toBe('proven')
+    expect(spine.nodes['work:runner-proof']?.maturity).toBe('proven')
+    expect(spine.nodes['work:fixture-schema']?.proof.verified[0]).toContain('pnpm test -- fixture-schema passed')
+    expect(spine.nodes['work:runner-proof']?.proof.verified).toEqual(expect.arrayContaining([
+      'Gate passed: runner-smoke',
+      'Review approved: deterministic',
+    ]))
+    expect(spine.gaps.filter(gap => gap.kind === 'proof_needed')).toHaveLength(0)
+    expect(spine.activePins.map(pin => pin.kind)).toEqual([])
+  })
+
   it('does not count a split parent as completed while its child work is unfinished', () => {
     const spine = buildProjectOrientationSpine({
       projectId: 'narrative-harness',
