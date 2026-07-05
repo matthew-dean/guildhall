@@ -14158,6 +14158,51 @@ spec prose.
   `vitest` focused recovery/intake slice passed `19` tests; `git diff --check`;
   `node scripts/contract-touch-detector.mjs`; `node ./build.mjs`.
 
+2026-07-05T20:01:09Z - Kept hollow recovered research tasks in shaping instead
+of promoting them to owner approval.
+
+- Work id: `codex:research-spike-stale-repair-status-2026-07-05`.
+- User job: when a model/tool-use failure is repaired, Guildhall must continue
+  with Guildhall-owned source recovery unless the task actually contains an
+  approvable spec. A markdown-shaped placeholder that says contract names are
+  missing is not owner-approval-ready.
+- Failure taxonomy:
+  - `3 task hierarchy/dependency/proof modeling problem`: repair used
+    `taskHasUsableBlueprint` as a structural markdown check even when
+    `taskReadiness.recommendation` still said `needs_research_spike`.
+  - `4 scheduler/action-state logic problem`: the next focused start repaired
+    the model/tool-use blocker but moved the task to `spec_review`, producing
+    `awaiting_human` for a Guildhall-owned source-recovery problem.
+  - `5 UI communication/orientation problem`: Overview/Work would tell the
+    user approval was needed even though the spec itself said the concrete
+    source-backed contract surface was still missing.
+- Fix:
+  - `repairStaleBlockersInQueue` now keeps `needs_research_spike` tasks in
+    `exploring`, even if stale spec text and acceptance criteria exist.
+- Live evidence before fix:
+  - Focused start on `task-import-1g9oq7m` repaired the turn-limit escalation
+    but left the task in `spec_review`.
+  - The run stopped with `awaiting_human`: `No runnable tasks remain right now:
+    1 awaiting approval.`
+- Verification:
+  `vitest` focused stale-blocker/recovery slice passed `8` tests;
+  `git diff --check`; `node scripts/contract-touch-detector.mjs`;
+  `node ./build.mjs`.
+- Live installed-app proof:
+  - `pnpm dev:install`; `guildhall stop`; `guildhall start`;
+    `/api/stale-server` returned `stale:false` for PID `25957`.
+  - Focused start on `task-import-1g9oq7m` moved the already-stuck task from
+    `spec_review` back to `exploring` with `needs_research_spike`, so
+    Guildhall no longer immediately says the hollow source-recovery task is
+    approval-ready.
+- Newly exposed blocker:
+  - The spec lane still exhausted the turn limit after that repair and raised a
+    fresh `model_tool_use_failure` escalation with `needsHuman:true`, despite
+    its own summary saying Guildhall should use a bounded repair prompt.
+  - Next fix should stop routing this as owner input and make source-recovery
+    shaping deterministic or bounded enough to name the contract surface from
+    the cited source refs without another giant no-progress model turn.
+
 2026-07-05T16:58:35Z - Fixed focused source-recovery shaping dead end.
 
 - Work id: `codex:source-recovery-shaping-action-2026-07-05`.

@@ -78,6 +78,10 @@ function isHighConfidenceInternalBlocker(task: Task): boolean {
   )
 }
 
+function isResearchSpikeStuckInSpecReview(task: Task): boolean {
+  return task.status === 'spec_review' && task.taskReadiness?.recommendation === 'needs_research_spike'
+}
+
 function unresolvedEscalationCount(task: Task): number {
   return (task.escalations ?? []).filter((escalation) => !escalation.resolvedAt).length
 }
@@ -104,6 +108,7 @@ function resolveStaleEscalations(task: Task, now: string): void {
 }
 
 function nextStatusForRepairedTask(task: Task): Task['status'] {
+  if (task.taskReadiness?.recommendation === 'needs_research_spike') return 'exploring'
   if (taskHasUsableBlueprint(task)) return 'spec_review'
   if (task.productBrief || task.status === 'exploring' || task.status === 'blocked') return 'exploring'
   return task.status
@@ -116,10 +121,13 @@ export function repairStaleBlockersInQueue(
   const repairs: StaleBlockerRepair[] = []
 
   for (const task of queue.tasks) {
-    if (!isHighConfidenceInternalBlocker(task)) continue
+    const researchSpikeApproval = isResearchSpikeStuckInSpecReview(task)
+    if (!researchSpikeApproval && !isHighConfidenceInternalBlocker(task)) continue
     const beforeUnresolved = unresolvedEscalationCount(task)
     const previousStatus = task.status
-    const repairReason = hasModelToolUseFailureClassification(task) && MODEL_TOOL_USE_RECOVERY_BLOCKER.test(blockerText(task))
+    const repairReason = researchSpikeApproval
+      ? 'research_spike_not_approval'
+      : hasModelToolUseFailureClassification(task) && MODEL_TOOL_USE_RECOVERY_BLOCKER.test(blockerText(task))
       ? 'model_tool_use_recovery_blocker'
       : 'stale_internal_tooling_blocker'
 
@@ -141,10 +149,10 @@ export function repairStaleBlockersInQueue(
       )
     if (blockReasonLooksStale) task.blockReason = undefined
 
-    if (beforeUnresolved > 0 && unresolvedEscalationCount(task) > 0) continue
+    if (!researchSpikeApproval && beforeUnresolved > 0 && unresolvedEscalationCount(task) > 0) continue
     if (task.blockReason && task.status === 'blocked') continue
 
-    const nextStatus = task.status === 'blocked'
+    const nextStatus = task.status === 'blocked' || researchSpikeApproval
       ? nextStatusForRepairedTask(task)
       : task.status
 

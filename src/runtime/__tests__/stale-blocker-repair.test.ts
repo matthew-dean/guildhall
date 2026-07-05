@@ -143,6 +143,125 @@ describe('repairStaleBlockersInQueue', () => {
     expect(q.tasks[0]?.assignedTo).toBe('spec-agent')
     expect(q.tasks[0]?.notes.at(-1)?.role).toBe('state-repair')
   })
+
+  it('keeps repaired research-spike tasks in shaping even when stale spec text exists', () => {
+    const q = queue([
+      task({
+        id: 'task-hollow-contract',
+        spec: [
+          '## What this is',
+          'Repair the imported handoff.',
+          '',
+          '## Acceptance criteria',
+          '1. The task names the concrete contract surface recovered from cited sources.',
+        ].join('\n'),
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          description: 'The task names the concrete contract surface recovered from cited sources.',
+          verifiedBy: 'review',
+          met: false,
+        }],
+        taskReadiness: {
+          taskKind: 'research',
+          recommendation: 'needs_research_spike',
+          summary: 'This task needs concrete contract names before Guildhall can hand it to a worker.',
+          dimensions: [],
+          definitionOfDone: {
+            items: ['The concrete contract surface is named.'],
+            evidenceRequired: ['Source-backed contract/type names are present.'],
+            updatedAt: '2026-05-23T00:00:00.000Z',
+            createdBy: 'test',
+          },
+          blockerPlans: [],
+          contextBudget: {
+            estimatedTokens: 1000,
+            risk: 'medium',
+            fitsInOneWorkerBrief: true,
+            reasons: ['The task needs source repair before implementation context matters.'],
+          },
+          assessedAt: '2026-05-23T00:00:00.000Z',
+          assessedBy: 'test',
+        },
+        blockReason: 'human_judgment_required: Spec author stopped after hitting its turn limit.',
+        notes: [
+          {
+            agentId: 'coordinator',
+            role: 'policy-classification',
+            timestamp: '2026-05-23T00:00:00.000Z',
+            content: JSON.stringify({
+              class: 'model_tool_use_failure',
+              confidence: 'medium',
+              scope: 'task',
+              needsHuman: true,
+              safePlaybooks: ['ask_concrete_human_question'],
+              evidence: [],
+              summary: 'The model failed to produce a usable tool call, so Guildhall should use a bounded repair prompt.',
+            }),
+          },
+        ],
+      }),
+    ])
+
+    const result = repairStaleBlockersInQueue(q, '2026-05-23T12:00:00.000Z')
+
+    expect(result.repairs[0]).toMatchObject({
+      taskId: 'task-hollow-contract',
+      previousStatus: 'blocked',
+      nextStatus: 'exploring',
+    })
+    expect(q.tasks[0]?.status).toBe('exploring')
+    expect(q.tasks[0]?.assignedTo).toBe('spec-agent')
+  })
+
+  it('moves research-spike spec_review tasks back to shaping instead of waiting for approval', () => {
+    const q = queue([
+      task({
+        id: 'task-hollow-contract',
+        status: 'spec_review',
+        spec: '## What this is\nRepair the imported handoff.\n\n## Acceptance criteria\n1. Name the concrete contract surface.',
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          description: 'Name the concrete contract surface.',
+          verifiedBy: 'review',
+          met: false,
+        }],
+        taskReadiness: {
+          taskKind: 'research',
+          recommendation: 'needs_research_spike',
+          summary: 'This task needs concrete contract names before Guildhall can hand it to a worker.',
+          dimensions: [],
+          definitionOfDone: {
+            items: ['The concrete contract surface is named.'],
+            evidenceRequired: ['Source-backed contract/type names are present.'],
+            updatedAt: '2026-05-23T00:00:00.000Z',
+            createdBy: 'test',
+          },
+          blockerPlans: [],
+          contextBudget: {
+            estimatedTokens: 1000,
+            risk: 'medium',
+            fitsInOneWorkerBrief: true,
+            reasons: ['The task needs source repair before implementation context matters.'],
+          },
+          assessedAt: '2026-05-23T00:00:00.000Z',
+          assessedBy: 'test',
+        },
+      }),
+    ])
+
+    const result = repairStaleBlockersInQueue(q, '2026-05-23T12:00:00.000Z')
+
+    expect(result.repairs).toEqual([
+      {
+        taskId: 'task-hollow-contract',
+        previousStatus: 'spec_review',
+        nextStatus: 'exploring',
+        reason: 'research_spike_not_approval',
+      },
+    ])
+    expect(q.tasks[0]?.status).toBe('exploring')
+    expect(q.tasks[0]?.assignedTo).toBe('spec-agent')
+  })
 })
 
 describe('repairStaleBlockersForProject', () => {
