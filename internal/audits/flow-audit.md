@@ -12,6 +12,69 @@ This is the active browser test plan for the Guildhall project surface. Keep it
 updated while auditing the active test project so another agent can resume
 without guessing.
 
+2026-07-05T11:45:00Z - Repaired imported split-child scope inheritance.
+
+- Work id: `codex:imported-split-child-scope-inheritance-2026-07-05`.
+- User job: the project map and overview must show real scoped work, including
+  work that was split into child tasks. A current release cannot honestly
+  claim completion from six parent tasks while active generated split children
+  are detached from their parent, release, source trail, and proof context.
+- Root cause:
+  - `materializeSplitChildren` recognized an existing split child only when it
+    was linked through `hierarchy.parentId` or an exact saved
+    `createdTaskId`. Narrative Harness had done split rows whose ids and
+    titles still proved they were generated child work, but their hierarchy
+    had been detached during prior refresh/archive handling. The materializer
+    would create or preserve parallel child rows instead of reclaiming the
+    existing child truth.
+- Fix:
+  - Existing non-archived `parent-id-split-*` rows with a planned child title
+    are now reclaimed as the same child work.
+  - Reclaimed and newly created split children inherit missing parent
+    `releaseIds` and `references`, then get linked back through
+    `hierarchy.parentId`.
+  - Workspace-import regression now verifies that refreshed Narrative
+    Harness-shaped split children carry parent release/source truth and
+    internal-step visibility.
+- Contract Touch Decision:
+  - Work id: `codex:imported-split-child-scope-inheritance-2026-07-05`.
+  - Touched contracts: split child materialization and imported split refresh
+    reconciliation semantics.
+  - Contracts considered but not touched: persisted task schema, release
+    schema, orientation-spine schema, task visibility schema.
+  - Required follow-up: installed-app proof should approve/refresh Narrative
+    Harness import and verify active generated split children are no longer
+    parentless/source-less in `/api/project?projectId=narrative-harness`.
+  - Proof required: shared task-queue regression for reclaiming an orphaned
+    split row; workspace-import regression for Narrative Harness-shaped split
+    refresh.
+  - Proof provided: focused `task-queue.test.ts` and
+    `workspace-importer.test.ts` passed.
+  - Waivers: no schema migration because this fills existing task fields from
+    the parent and restores hierarchy links; no new persisted field is added.
+  - Owner-review items: none.
+  - Apply/revert behavior: revert the split-child matching/inheritance changes
+    and the two regressions to restore previous parent-id-only matching.
+- Verification:
+  - `./node_modules/.bin/vitest run src/tools/__tests__/task-queue.test.ts -t "reattaches generated split rows|does not inherit reserved"`
+    passed.
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/workspace-importer.test.ts -t "replaces stale imported split children"`
+    passed.
+  - Installed app proof passed after `CI=true NODE_ENV=development PNPM_CONFIG_PRODUCTION=false npm_config_production=false pnpm dev:install`,
+    `guildhall stop`, and `guildhall start`; `/api/stale-server` reported
+    `stale:false`.
+  - Live Narrative Harness refresh proof: approving the workspace import for
+    `projectId=narrative-harness` returned `ok:true`, and active generated
+    split children in `/api/project?projectId=narrative-harness` reported
+    `count:8`, `orphanCount:0`.
+  - Live Looma + Knit envelope proof: `/api/project?projectId=looma-knit`
+    reported root Git Story snapshots for child repos `Looma`
+    (`/Users/matthew/git/oss/looma-knit/looma`) and `Knit`
+    (`/Users/matthew/git/oss/looma-knit/knit`) instead of treating the
+    envelope path as the only git root.
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/serve-release-readiness.test.ts -t "child repos|child git repositories|non-git workspace envelope"`
+    passed, covering non-git workspace envelopes with child git repositories.
+
 2026-07-05T11:35:00Z - Made workspace-envelope bootstrap child-project aware.
 
 - Work id: `codex:workspace-envelope-child-bootstrap-2026-07-05`.

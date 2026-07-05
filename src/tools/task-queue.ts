@@ -481,7 +481,12 @@ export function materializeSplitChildren(
       : undefined
     const existingByTitle = queue.tasks.find((task) =>
       task.id !== parent.id &&
-      task.hierarchy?.parentId === parent.id &&
+      task.status !== 'archived' &&
+      task.status !== 'cancelled' &&
+      (
+        task.hierarchy?.parentId === parent.id ||
+        task.id.startsWith(`${parent.id}-split-`)
+      ) &&
       normalizeTaskTitle(task.title) === normalizeTaskTitle(childPlan.title),
     )
     const task = existingById ?? existingByTitle ?? createSplitChildTask({
@@ -495,6 +500,8 @@ export function materializeSplitChildren(
     })
     if (!queue.tasks.some((candidate) => candidate.id === task.id)) queue.tasks.push(task)
     if (usesSavedChildPlans) childPlan.createdTaskId = task.id
+    if (task.releaseIds.length === 0 && parent.releaseIds.length > 0) task.releaseIds = [...parent.releaseIds]
+    if (task.references.length === 0 && parent.references.length > 0) task.references = [...parent.references]
     task.hierarchy = {
       ...(task.hierarchy ?? {}),
       parentId: parent.id,
@@ -986,6 +993,8 @@ function createSplitChildTask(input: {
     proposedBy: 'task-sizing',
     proposalRationale: input.reason,
     workKind,
+    releaseIds: [...input.parent.releaseIds],
+    references: [...input.parent.references],
     delivery: {
       ...(input.parent.delivery ?? {}),
       supports: [

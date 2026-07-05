@@ -843,6 +843,69 @@ describe('updateTask', () => {
     expect(child?.domain).toBe('harness')
   })
 
+  it('reattaches generated split rows and inherits parent release/source truth', async () => {
+    const timestamp = '2026-06-12T00:00:00.000Z'
+    const queue = TaskQueue.parse({
+      version: 1,
+      lastUpdated: timestamp,
+      tasks: [
+        {
+          ...structuredClone(seedQueue.tasks[0]!),
+          id: 'task-runner',
+          title: 'Implement a no-UI runner',
+          status: 'ready',
+          releaseIds: ['stage-1-fixture-and-evaluation-harness'],
+          references: ['docs/harness/implementation-roadmap.md'],
+          sizePlan: {
+            taskId: 'task-runner',
+            score: 8,
+            band: 'large',
+            action: 'split_required',
+            factors: [],
+            recommendedChildren: [
+              {
+                title: 'Build the bounded writer packet',
+                reason: 'Prove packet discipline as a separate runnable child.',
+                dependsOn: [],
+              },
+            ],
+            reasons: ['Broad enough to split.'],
+            reviewBudgetHint: 'balanced',
+            createdAt: timestamp,
+            createdBy: 'test',
+          },
+        },
+        {
+          ...structuredClone(seedQueue.tasks[0]!),
+          id: 'task-runner-split-build-the-bounded-writer-packet',
+          title: 'Build the bounded writer packet',
+          description: 'Split from containing work task-runner: Implement a no-UI runner.',
+          status: 'done',
+          releaseIds: [],
+          references: [],
+          hierarchy: { childIds: [], order: 0 },
+        },
+      ],
+    })
+    const parent = queue.tasks[0]!
+
+    const result = materializeSplitChildren(queue, parent, timestamp)
+
+    expect(result.childTaskIds).toEqual(['task-runner-split-build-the-bounded-writer-packet'])
+    expect(queue.tasks).toHaveLength(2)
+    expect(queue.tasks[1]).toMatchObject({
+      status: 'done',
+      releaseIds: ['stage-1-fixture-and-evaluation-harness'],
+      references: ['docs/harness/implementation-roadmap.md'],
+      hierarchy: {
+        parentId: 'task-runner',
+        order: 0,
+        relation: 'decomposes',
+      },
+    })
+    expect(parent.hierarchy?.childIds).toContain('task-runner-split-build-the-bounded-writer-packet')
+  })
+
   it('settles duplicate sibling child-work plans without creating nested duplicate children', async () => {
     const timestamp = '2026-06-12T00:00:00.000Z'
     const queue = TaskQueue.parse({

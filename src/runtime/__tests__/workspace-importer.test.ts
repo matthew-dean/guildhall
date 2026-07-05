@@ -5065,6 +5065,8 @@ tasks:
       - docs/harness/implementation-roadmap.md
       - docs/harness/prototype-iteration-workflow.md
       - docs/specs/agent-context-packets-and-compaction.md
+    releaseIds:
+      - stage-1-fixture-and-evaluation-harness
 \`\`\`
 `)
 
@@ -5088,6 +5090,16 @@ tasks:
     })
     expect(q.tasks.find(candidate => candidate.id === 'task-runner-split-load-fixture-inputs-and-canonical-story-records'))
       .toMatchObject({
+        releaseIds: ['stage-1-fixture-and-evaluation-harness'],
+        references: expect.arrayContaining([
+          path.join(tmpDir, 'docs', 'harness', 'implementation-roadmap.md'),
+          path.join(tmpDir, 'docs', 'harness', 'prototype-iteration-workflow.md'),
+          path.join(tmpDir, 'docs', 'specs', 'agent-context-packets-and-compaction.md'),
+        ]),
+        hierarchy: {
+          parentId: 'task-runner',
+          relation: 'decomposes',
+        },
         workVisibility: {
           kind: 'internal_step',
           countInProjectTotals: false,
