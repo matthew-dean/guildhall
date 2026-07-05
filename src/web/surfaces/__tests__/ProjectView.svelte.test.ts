@@ -782,13 +782,64 @@ describe('ProjectView', () => {
     await renderProjectView('thread', null, 'looma-knit', projectPayload)
 
     expect(screen.getByText('Stable')).toBeTruthy()
-    expect(screen.getByText('All tasks are already finished.')).toBeInTheDocument()
+    expect(screen.getAllByText('All tasks are already finished.').length).toBeGreaterThan(0)
     expect(screen.queryByRole('button', { name: 'No tasks to start: No tasks to start' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'No tasks to start' })).toBeNull()
     expect(screen.queryByRole('button', { name: /^start$/i })).toBeNull()
     expect(screen.queryByRole('button', { name: /readiness checks need attention/i })).toBeNull()
     expect(screen.queryByText('Paused')).toBeNull()
     expect(screen.queryByText('Setup')).toBeNull()
+  })
+
+  it('does not show stale stop-requested chrome when the selected scope is complete', async () => {
+    const projectPayload = detail({
+      startReadiness: {
+        canStart: false,
+        code: 'all_terminal',
+        message: 'Stage 1: Fixture And Evaluation Harness is complete.',
+      },
+      actionModel: {
+        primaryAction: null,
+        secondaryActions: [],
+        runControl: {
+          label: 'No runnable tasks',
+          startEnabled: false,
+          disabledReason: 'Stage 1: Fixture And Evaluation Harness is complete.',
+        },
+        ownerInput: { active: false },
+        setup: { state: 'ready', freshIntakeNeeded: false },
+      },
+      run: {
+        status: 'stopped',
+        mode: 'continuous',
+        stopSummary: {
+          stopReason: 'stop_requested',
+          stopMessage: 'Stop requested after tick 4.',
+        },
+      },
+      recentEvents: [
+        {
+          at: now,
+          event: {
+            type: 'supervisor_stopped',
+            reason: 'stop_requested',
+            message: 'Stop requested after tick 4.',
+          },
+        },
+      ],
+      tasks: [
+        task({ id: 'task-stage-1', title: 'Stage 1 proof', status: 'done' }),
+        task({ id: 'task-later', title: 'Later release feature', status: 'ready' }),
+      ],
+      totals: { blockingCount: 0, tasks: 2, done: 1 },
+      statusCounts: { done: 1, ready: 1 },
+    } as Partial<ProjectDetail>)
+    installFetchFakes(projectPayload)
+
+    await renderProjectView('map', null, 'looma-knit', projectPayload)
+
+    expect(screen.getAllByText('Stage 1: Fixture And Evaluation Harness is complete.').length).toBeGreaterThan(0)
+    expect(screen.queryByText('Stop requested after tick 4.')).toBeNull()
   })
 
   it('shows all-terminal supervisor stop detail in the project ticker footer', async () => {

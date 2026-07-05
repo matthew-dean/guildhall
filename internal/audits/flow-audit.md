@@ -12,6 +12,61 @@ This is the active browser test plan for the Guildhall project surface. Keep it
 updated while auditing the active test project so another agent can resume
 without guessing.
 
+2026-07-05T12:25:00Z - Suppressed stale runtime stop chrome for completed selected scopes.
+
+- Work id: `codex:completed-scope-runtime-chrome-suppression-2026-07-05`.
+- User job: when a selected release/scope is complete, the shell chrome should
+  communicate that current scope truth without also showing stale coordinator
+  trivia such as `Stop requested after tick 4.` The owner should not have to
+  decide whether the release is complete or merely stopped.
+- Root cause:
+  - `ProjectView` rendered the correct all-terminal `startReadiness` message
+    separately, but the run-stop notice pipeline still fell through to the
+    persisted supervisor stop summary when the full project contained later
+    work outside the selected scope. That made old runtime stop text appear
+    directly under the current release-complete message.
+- Fix:
+  - The shell run-stop notice now suppresses runtime stop summaries whenever
+    the selected scope's shared `startReadiness.code` is `all_terminal`. The
+    existing supervisor all-terminal footer behavior remains available for
+    projects that do not have selected-scope readiness.
+  - The shared project ticker now treats selected-scope `all_terminal`
+    readiness as the current ticker state, so stale supervisor events cannot
+    reappear in the footer after the release is complete.
+- Contract Touch Decision:
+  - Work id: `codex:completed-scope-runtime-chrome-suppression-2026-07-05`.
+  - Touched contracts: project shell attention-notice precedence.
+  - Contracts considered but not touched: persisted supervisor event schema,
+    project action model schema, release readiness schema.
+  - Required follow-up: none for this slice; installed-app browser proof
+    verified Narrative Harness Map still shows Stage 1 complete but no longer
+    shows `Stop requested after tick 4.`.
+  - Proof required: ProjectView regression for all-terminal selected scope plus
+    stale `stop_requested` run summary; build; installed-app browser proof.
+  - Proof provided: focused ProjectView/project-activity tests passed; build
+    passed; installed-app browser proof passed.
+  - Waivers: no schema migration because this changes presentation precedence
+    only.
+  - Owner-review items: none.
+  - Apply/revert behavior: revert the `allTerminalStart` guard in
+    `runStopSummaryText`, the `all_terminal` branch in `readinessTicker`, and
+    the regression tests to restore previous runtime stop notice behavior.
+- Verification:
+  - `CI=true NODE_ENV=development PNPM_CONFIG_PRODUCTION=false npm_config_production=false ./node_modules/.bin/vitest run src/web/lib/__tests__/project-activity.test.ts src/web/surfaces/__tests__/ProjectView.svelte.test.ts --reporter=dot`
+    passed `70` tests.
+  - `CI=true NODE_ENV=development PNPM_CONFIG_PRODUCTION=false npm_config_production=false pnpm build`
+    passed after restoring dev dependencies with
+    `pnpm install --prod=false`.
+  - Installed app proof passed after
+    `CI=true NODE_ENV=development PNPM_CONFIG_PRODUCTION=false npm_config_production=false pnpm dev:install`,
+    `guildhall stop`, and `guildhall start`; `/api/stale-server` reported
+    `stale:false` for `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+  - Live Narrative Harness Map proof:
+    `http://localhost:7777/projects/narrative-harness/map` showed `Project
+    map`, `Stage 1: Fixture And Evaluation Harness is complete.`, and footer
+    `COMPLETE` / `Stage 1: Fixture And Evaluation Harness is complete.`;
+    it did not show `Stop requested after tick 4.` or `Do this next`.
+
 2026-07-05T12:05:00Z - Kept completed selected-scope truth above stale Thread fallbacks.
 
 - Work id: `codex:completed-scope-do-this-next-suppression-2026-07-05`.

@@ -249,6 +249,16 @@ function ownerInputTickerMessage(message: string | undefined): string {
 function readinessTicker(detail: ProjectDetail | null | undefined): ProjectActivityLine | null {
   const readiness = detail?.startReadiness
   if (!readiness || readiness.canStart) return null
+  if (readiness.code === 'all_terminal') {
+    return {
+      tone: 'ok',
+      pulse: false,
+      actorLabel: 'Complete',
+      label: 'Complete',
+      message: readiness.message || 'Current scope is complete.',
+      timeLabel: null,
+    }
+  }
   if (readiness.code === 'owner_input_required') {
     return {
       tone: 'warn',

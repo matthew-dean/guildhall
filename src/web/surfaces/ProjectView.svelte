@@ -836,6 +836,7 @@
   }
   const runStopSummaryText = $derived.by(() => {
     if (runStatus === 'running' || runStatus === 'stopping') return null
+    if (allTerminalStart) return null
     const summary = runStopSummary
     if (!summary?.stopMessage) return null
     if (startReadinessNoticeHref && summary.stopReason === 'all_terminal') return null

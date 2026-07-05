@@ -87,6 +87,55 @@ describe('buildProjectTicker', () => {
     })
   })
 
+  it('lets selected-scope completion override stale stopped run events', () => {
+    expect(
+      buildProjectTicker(
+        {
+          startReadiness: {
+            canStart: false,
+            code: 'all_terminal',
+            message: 'Stage 1: Fixture And Evaluation Harness is complete.',
+          },
+          run: {
+            status: 'stopped',
+            stopSummary: {
+              stopReason: 'stop_requested',
+              stopMessage: 'Stop requested after tick 4.',
+            },
+          },
+          recentEvents: [
+            {
+              at: now.toISOString(),
+              event: {
+                type: 'supervisor_stopped',
+                reason: 'stop_requested',
+                message: 'Stop requested after tick 4.',
+              },
+            },
+          ],
+          tasks: [
+            { id: 'task-stage-1', title: 'Stage 1 proof', status: 'done' },
+            { id: 'task-later', title: 'Later release feature', status: 'ready' },
+          ],
+        },
+        {
+          at: now.toISOString(),
+          event: {
+            type: 'supervisor_stopped',
+            reason: 'stop_requested',
+            message: 'Stop requested after tick 4.',
+          },
+        },
+        now,
+      ),
+    ).toMatchObject({
+      label: 'Complete',
+      actorLabel: 'Complete',
+      message: 'Stage 1: Fixture And Evaluation Harness is complete.',
+      tone: 'ok',
+    })
+  })
+
   it('surfaces active worker progress from recent events', () => {
     const detail: ProjectDetail = {
       run: { status: 'running' },
