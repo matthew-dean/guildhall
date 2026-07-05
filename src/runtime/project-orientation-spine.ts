@@ -1606,7 +1606,7 @@ function summarizeStartReadiness(input: {
       return {
         headline: `${genericWorkLabel} is being shaped.`,
         topBlocker: message,
-        nextAction: 'Draft the first current-scope brief.',
+        nextAction: 'Shape the first current-scope task.',
       }
     case 'workspace_import_refresh_needed':
       if (input.progress.done > 0 && input.progress.active === 0 && input.progress.ready === 0 && input.progress.blocked === 0) {

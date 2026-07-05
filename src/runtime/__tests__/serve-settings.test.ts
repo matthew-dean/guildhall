@@ -1265,7 +1265,7 @@ describe('POST /api/project/start', () => {
       canStart: false,
       code: 'all_terminal',
     })
-    expect(projectBody.startReadiness?.message).toContain('headless-mvp')
+    expect(projectBody.startReadiness?.message).toContain('Headless MVP')
     expect(projectBody.startReadiness?.message).toContain('outside this release')
     expect(projectBody.actionModel?.runControl?.startEnabled).toBe(false)
 
@@ -1872,10 +1872,10 @@ describe('POST /api/project/start', () => {
       code: 'imported_scope_shaping',
       actionHref: '/task/task-import-1',
     })
-    expect(projectBody.startReadiness?.message).toContain('still needs a real brief')
+    expect(projectBody.startReadiness?.message).toContain('still needs source-backed shaping')
     expect(projectBody.orientationSpine?.summary).toMatchObject({
       headline: 'Current task scope is being shaped.',
-      nextAction: 'Draft the first current-scope brief.',
+      nextAction: 'Shape the first current-scope task.',
       includedCount: 1,
       progress: { total: 1, done: 0 },
     })
@@ -2074,7 +2074,7 @@ describe('POST /api/project/start', () => {
       code: 'imported_scope_shaping',
       actionHref: '/task/task-import-shaped',
     })
-    expect(projectBody.startReadiness?.message).toContain('2 imported current-scope tasks')
+    expect(projectBody.startReadiness?.message).toContain('2 current-scope tasks')
     expect(projectBody.startReadiness?.message).toContain('Define fixture manifest and run result schemas')
 
     const startRes = await app.fetch(
@@ -6122,7 +6122,7 @@ describe('Workspace Import review endpoints', () => {
       actionHref: '/workspace-import',
     })
     expect(body.startReadiness?.message).toContain('outside the approved current scope')
-    expect(body.startReadiness?.message).not.toContain('still need real briefs')
+    expect(body.startReadiness?.message).not.toContain('still need source-backed shaping')
   })
 
   it('status counts a completed importer task from its saved curated spec', async () => {

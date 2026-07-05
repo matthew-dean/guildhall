@@ -878,6 +878,65 @@ describe('GET /api/project/release-readiness', () => {
     expect(body.ready).toBe(false)
   })
 
+  it('keeps imported source-recovery work visible as incomplete brief cleanup', async () => {
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: 'near-term-proof-scope',
+      releases: [{
+        id: 'near-term-proof-scope',
+        label: 'Near Term Proof Scope',
+        kind: 'release',
+        state: 'active',
+        source: 'inferred',
+        nodeIds: ['work:task-imported'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [
+        makeTask({
+          id: 'task-imported',
+          title: 'Recover source-backed contract surface',
+          status: 'exploring',
+          releaseIds: ['near-term-proof-scope'],
+          notes: [{
+            agentId: 'workspace-importer',
+            role: 'importer',
+            content: 'Imported from docs/specs/contract.md',
+          }],
+          productBrief: {
+            userJob: 'Recover the contract surface.',
+            whyItMattersNow: 'Workers need concrete contracts before implementation.',
+            successMetric: 'The relevant contract names are recovered from source.',
+            nonGoals: ['Do not invent contracts.'],
+          },
+          acceptanceCriteria: [{ id: 'AC-1', description: 'Contract surfaces are named.', verifiedBy: 'review', met: false }],
+          taskReadiness: {
+            recommendation: 'needs_research_spike',
+            summary: 'This imported task still needs concrete contract names before Guildhall can hand it to a worker.',
+          },
+        }),
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await approveDesignSystem(app)
+    await commitAndPush('imported source recovery release readiness')
+
+    const res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
+    const body = await res.json() as any
+
+    expect(body.incompleteBriefs).toEqual([
+      {
+        id: 'task-imported',
+        title: 'Recover source-backed contract surface',
+        reason: 'This imported task still needs concrete contract names before Guildhall can hand it to a worker.',
+      },
+    ])
+    expect(body.totals.incompleteBriefBlockingCount).toBe(1)
+    expect(body.totals.humanBlockingCount).toBe(1)
+    expect(body.ready).toBe(false)
+  })
+
   it('keeps external setup blockers owner-facing in release readiness', async () => {
     await seed([
       makeTask({

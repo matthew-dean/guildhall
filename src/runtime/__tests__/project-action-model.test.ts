@@ -40,14 +40,14 @@ describe('buildProjectActionModel', () => {
     })
     expect(importedScopeShaping.primaryAction).toMatchObject({
       source: 'start_readiness',
-      label: 'Imported scope needs briefs',
+      label: 'Imported scope needs shaping',
       detail: '12 imported current-scope tasks still need real briefs before Guildhall can build unattended. Start with "Define fixture schemas".',
-      buttonLabel: 'Draft first brief',
+      buttonLabel: 'Shape first task',
       href: '/task/task-import-1',
       tone: 'warn',
     })
     expect(importedScopeShaping.runControl).toMatchObject({
-      label: 'Needs briefs',
+      label: 'Needs shaping',
       startEnabled: false,
     })
 

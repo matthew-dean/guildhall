@@ -15,10 +15,19 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { getProjectLocalHistoryDir, projectStatePathWithRoot } from '@guildhall/sessions'
 import { parse as parseYaml } from 'yaml'
-import type { Task } from '@guildhall/core'
+import type { Task, TaskQueue } from '@guildhall/core'
 import { META_INTAKE_TASK_ID } from './meta-intake.js'
 import type { BootstrapStatus } from './bootstrap-runner.js'
 import { readProjectDeliveryModelSync } from './delivery-spine.js'
+import { selectedReleaseScopeForQueue } from './orchestrator-picker.js'
+import {
+  taskEligibleForSelectedScope,
+  type OrientationScope,
+} from './project-orientation-spine.js'
+import {
+  deriveReleaseContainersFromTaskMembership,
+  type ProjectScope,
+} from './project-scope-projection.js'
 import {
   buildSnapshot,
   buildTaskSnapshot,
@@ -29,6 +38,7 @@ import {
   progressForTask,
   emptyWizardsState,
 } from './wizards.js'
+import { taskShapingBlockers } from '../shared/task-shaping-blockers.js'
 
 export type InboxSeverity = 'high' | 'medium' | 'low'
 
@@ -238,6 +248,38 @@ function tasksArray(raw: unknown): Task[] {
   return []
 }
 
+function selectedInboxScope(raw: unknown, tasks: Task[]): OrientationScope | null {
+  if (raw && typeof raw === 'object' && Array.isArray((raw as { releases?: unknown }).releases)) {
+    const queueScope = selectedReleaseScopeForQueue({
+      version: 1,
+      lastUpdated: new Date(0).toISOString(),
+      tasks,
+      releases: (raw as { releases: TaskQueue['releases'] }).releases,
+      ...(typeof (raw as { selectedReleaseId?: unknown }).selectedReleaseId === 'string'
+        ? { selectedReleaseId: (raw as { selectedReleaseId: string }).selectedReleaseId }
+        : {}),
+    })
+    if (queueScope) return queueScope as OrientationScope
+  }
+  const { releases, selectedReleaseId } = deriveReleaseContainersFromTaskMembership(tasks)
+  const release = releases.find(candidate => candidate.id === selectedReleaseId)
+  if (!release || !selectedReleaseId) return null
+  return {
+    id: selectedReleaseId,
+    label: release.label,
+    kind: release.kind === 'milestone' ? 'milestone' : release.kind === 'release' ? 'release' : 'proposed_feature_set',
+    source: release.source,
+    nodeIds: release.nodeIds,
+    deferredNodeIds: release.deferredNodeIds,
+  }
+}
+
+function scopeTasks(tasks: Task[], scope: OrientationScope | null): Task[] {
+  if (!scope) return tasks
+  const tasksById = new Map(tasks.map(task => [task.id, task]))
+  return tasks.filter(task => taskEligibleForSelectedScope(task, scope as ProjectScope, { tasksById }).eligible)
+}
+
 function contractResultReviewItems(projectPath: string): InboxItem[] {
   const records = readProjectDeliveryModelSync(projectPath).validationEvidence
   return records
@@ -343,7 +385,9 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
   }
 
   const tasksPath = projectStatePathWithRoot(projectPath, 'TASKS.json', projectStateDir)
-  const tasks = tasksArray(readJsonSafe(tasksPath))
+  const rawTaskState = readJsonSafe(tasksPath)
+  const tasks = tasksArray(rawTaskState)
+  const executionTasks = scopeTasks(tasks, selectedInboxScope(rawTaskState, tasks))
   const workspaceImportTask = tasks.find(t => t?.id === 'task-workspace-import')
   const workspaceImportTaskStatus =
     workspaceImportTask && typeof workspaceImportTask.status === 'string'
@@ -393,7 +437,11 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
   }
 
   // --- tasks: briefs / specs / escalations / spec-fill gaps ----------------
-  const importDrafts = tasks.filter(t => t && typeof t === 'object' && t.status === 'import_draft')
+  const importDrafts = executionTasks.filter(t =>
+    t &&
+    typeof t === 'object' &&
+    (t.status === 'import_draft' || taskShapingBlockers(t).length > 0),
+  )
   const setupStillOwnsNextAction = activeSetupStep != null && activeSetupStep.id !== 'workspaceImport'
   if (importDrafts.length > 0 && !setupStillOwnsNextAction) {
     const nextDraft = importDrafts[0]!
@@ -401,19 +449,28 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
     const nextDraftTitle = typeof nextDraft.title === 'string' && nextDraft.title.trim()
       ? nextDraft.title.trim()
       : 'Imported draft'
+    const allRawDrafts = importDrafts.every(task => task.status === 'import_draft')
     if (nextDraftId) {
       const queuedDetail =
         importDrafts.length === 1
-          ? `Review the imported draft "${nextDraftTitle}" and decide whether to shape it now.`
-          : `Start with "${nextDraftTitle}". ${importDrafts.length - 1} more imported drafts are waiting behind it.`
+          ? allRawDrafts
+            ? `Review the imported draft "${nextDraftTitle}" and decide whether to shape it now.`
+            : `Shape "${nextDraftTitle}" before Guildhall can build unattended.`
+          : allRawDrafts
+            ? `Start with "${nextDraftTitle}". ${importDrafts.length - 1} more imported drafts are waiting behind it.`
+            : `Start with "${nextDraftTitle}". ${importDrafts.length - 1} more imported tasks need shaping behind it.`
       items.push({
         kind: 'import_draft_queue',
         severity: 'medium',
         taskId: nextDraftId,
         title:
-          importDrafts.length === 1
+          allRawDrafts && importDrafts.length === 1
             ? '1 imported draft needs a task brief'
-            : `${importDrafts.length} imported drafts need task briefs`,
+            : allRawDrafts
+              ? `${importDrafts.length} imported drafts need task briefs`
+              : importDrafts.length === 1
+                ? '1 imported task needs shaping'
+                : `${importDrafts.length} imported tasks need shaping`,
         detail: queuedDetail,
         actionHref: nextDraftId === 'task-workspace-import'
           ? '/workspace-import'

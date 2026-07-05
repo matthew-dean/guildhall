@@ -1704,7 +1704,7 @@
           <span class="project-ticker-message">
             {projectTicker.message}
             {#if projectTicker.detail}
-              <span class="project-ticker-detail"> - {projectTicker.detail}</span>
+              {' - '}{projectTicker.detail}
             {/if}
           </span>
         </div>

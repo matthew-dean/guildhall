@@ -286,6 +286,7 @@ import {
   resetProjectSkillProposals,
 } from '@guildhall/skills'
 import { importedTaskNeedsBriefShaping, importedTaskNeedsSourceRecovery, normalizeImportedDraftTask } from './import-drafts.js'
+import { taskShapingBlockers } from '../shared/task-shaping-blockers.js'
 import { selectedReleaseScopeForQueue } from './orchestrator-picker.js'
 import { specReviewRequiresOwnerApproval } from './spec-review-ownership.js'
 import {
@@ -2052,15 +2053,16 @@ function summarizeScopedReleaseWork(
     const approvalPendingStatus = status === 'proposed' || status === 'ready'
     const hasMaterializedChildWork = inScopeMaterializedChildren(t).length > 0
     const hasWorkerReadySpec = status === 'ready' && hasSpecDraftRecord(t)
+    const shapingBlockers = taskShapingBlockers(t)
     if (
-      importedTaskNeedsBriefShaping(t) &&
+      shapingBlockers.length > 0 &&
       !terminal &&
       !reservedImportTask &&
       !hasMaterializedChildWork
     ) {
-      const reason = 'Imported current work needs a real brief before Guildhall can build unattended.'
+      const reason = shapingBlockers[0]?.summary ?? 'Current work needs shaping before Guildhall can build unattended.'
       incompleteBriefs.push({ id, title, reason })
-      addReleaseBlocker({ id, title, label: `${blockerSubject(title)} needs a real brief before unattended work can start.` })
+      addReleaseBlocker({ id, title, label: `${blockerSubject(title)} needs shaping before unattended work can start.` })
       continue
     }
     if (status === 'done' && taskDoneButProofMissing(t)) {
@@ -5094,9 +5096,6 @@ export function buildServeApp(opts: ServeOptions = {}): {
 	    if (input.allowTaskReadinessBlocker !== false) {
 	      const selectedReleaseReviewBlocker = await startBlockerForSelectedReleaseReview(input.projectPath, input.resolvedConfig)
 	      if (selectedReleaseReviewBlocker) return selectedReleaseReviewBlocker
-
-	      const taskReadinessBlocker = await startBlockerForTaskReadiness(input.projectPath)
-	      if (taskReadinessBlocker) return taskReadinessBlocker
 	    }
 
 	    const terminal = await terminalStartState(input.projectPath, input.requestedTaskId)
@@ -5112,6 +5111,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
         ...(terminal.count ? { count: terminal.count } : {}),
       }
     }
+
+	    if (input.allowTaskReadinessBlocker !== false) {
+	      const taskReadinessBlocker = await startBlockerForTaskReadiness(input.projectPath)
+	      if (taskReadinessBlocker) return taskReadinessBlocker
+	    }
 
     try {
       const settings = await loadLeverSettings({
@@ -5597,7 +5601,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
     const selectedReleaseScope = selectedReleaseScopeFromQueueLike(typedQueue)
     const tasks = tasksEligibleForScopeExecution(typedQueue.tasks, selectedReleaseScope)
-    const importedShapingTasks = tasks.filter(importedTaskNeedsBriefShaping)
+    const importedShapingTasks = tasks.filter(task => taskShapingBlockers(task).length > 0)
     if (importedShapingTasks.length === 0) return null
     const importerTask = typedQueue.tasks.find(task =>
       task &&
@@ -5612,14 +5616,16 @@ export function buildServeApp(opts: ServeOptions = {}): {
     const shapingCount = importedShapingTasks.length
     const rawImportDraftCount = importedShapingTasks.filter(task => task.status === 'import_draft').length
     const shapingStarted = first.status === 'exploring' || rawImportDraftCount < shapingCount
+    const shapingMessage =
+      shapingCount === 1
+        ? `Current scoped work still needs source-backed shaping before Guildhall can build unattended. Start with "${title}".`
+        : `${shapingCount} current-scope tasks still need source-backed shaping before Guildhall can build unattended. Start with "${title}".`
     return {
       canStart: false,
       code: importerDone || shapingStarted ? 'imported_scope_shaping' : 'import_drafts_waiting',
       message:
         importerDone || shapingStarted
-          ? shapingCount === 1
-            ? `Imported current work still needs a real brief before Guildhall can build unattended. Start with "${title}".`
-            : `${shapingCount} imported current-scope tasks still need real briefs before Guildhall can build unattended. Start with "${title}".`
+          ? shapingMessage
           : shapingCount === 1
             ? `Review the imported draft "${title}" and turn it into a task brief before starting.`
             : `Review ${shapingCount} imported drafts before starting. Start with "${title}".`,

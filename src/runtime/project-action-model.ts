@@ -192,7 +192,7 @@ function startReadinessButtonLabel(readiness: ProjectActionStartReadiness): stri
     return /question|answer/i.test(readiness.message ?? '') ? 'Open Thread' : 'Open item'
   }
   if (readiness.code === 'import_drafts_waiting') return 'Review drafts'
-  if (readiness.code === 'imported_scope_shaping') return 'Draft first brief'
+  if (readiness.code === 'imported_scope_shaping') return 'Shape first task'
   if (readiness.code === 'proof_evidence_missing') return 'Attach proof'
   if (readiness.code === 'paused_live_work') return 'Open Work'
   if (readiness.code === 'no_unattended_progress') {
@@ -219,7 +219,7 @@ function runControlLabel(readiness: ProjectActionStartReadiness | null | undefin
   if (readiness.code === 'required_migration_pending') return 'Migrate'
   if (isProviderReadinessCode(readiness.code)) return 'Needs provider'
   if (readiness.code === 'all_terminal') return 'No runnable tasks'
-  if (readiness.code === 'imported_scope_shaping') return 'Needs briefs'
+  if (readiness.code === 'imported_scope_shaping') return 'Needs shaping'
   if (readiness.code === 'proof_evidence_missing') return 'Needs proof'
   if (readiness.code === 'paused_live_work') return 'Resume'
   if (readiness.code === 'no_unattended_progress' && readiness.focusKind === 'blocked_work') return 'Needs recovery'
@@ -244,7 +244,7 @@ function isProviderReadinessCode(code: string | undefined): boolean {
 function startReadinessActionLabel(readiness: ProjectActionStartReadiness): string {
   if (readiness.code === 'required_migration_pending') return 'Required migration'
   if (readiness.code === 'import_drafts_waiting') return 'Review imported drafts'
-  if (readiness.code === 'imported_scope_shaping') return 'Imported scope needs briefs'
+  if (readiness.code === 'imported_scope_shaping') return 'Imported scope needs shaping'
   if (readiness.code === 'proof_evidence_missing') return readiness.focusTaskTitle?.trim() || 'Proof evidence missing'
   if (readiness.code === 'paused_live_work') return readiness.focusTaskTitle?.trim() || 'Paused live work'
   if (isProviderReadinessCode(readiness.code)) return 'Provider unavailable'
@@ -483,7 +483,7 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
     .filter(item => item.severity !== 'low')
     .map(inboxAction)
   const scopeAction = scopeAuthorityAction(input.scopeAuthorityRequests ?? [])
-  const taskAction = bestTaskAction(tasks, running)
+  const taskAction = startReadiness?.code === 'all_terminal' ? null : bestTaskAction(tasks, running)
   const candidates: ProjectAction[] = []
 
   if (startReadiness && !startReadiness.canStart && startReadiness.code !== 'all_terminal') {

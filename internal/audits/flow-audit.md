@@ -14104,6 +14104,76 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-07-05T16:45:00Z - Synced imported shaping blockers across Start,
+Release readiness, Inbox, Overview, and the project ticker.
+
+- Work id: `codex:imported-shaping-readiness-sync-2026-07-05`.
+- User job: when Narrative Harness current-scope work is not runnable because
+  imported docs still need source-backed shaping, every owner-facing surface
+  should say the same thing: how many current-scope items are blocked, which
+  task to shape first, why Start/Resume is disabled, and where to go next.
+- Root-cause classification:
+  - Data model/schema problem: imported brief-shaping and source-recovery
+    blockers existed as related but separately consumed predicates.
+  - Project structure/scope/release modeling problem: Inbox counted imported
+    shaping work across the whole project instead of the selected execution
+    scope/release.
+  - Task hierarchy/dependency/proof modeling problem: source-recovery
+    readiness (`needs_research_spike`) was visible on task context packets but
+    missing from release readiness and Start blockers.
+  - Scheduler/action-state logic problem: whole-project task cleanup could
+    outrank a selected release that was already consumed or waiting on proof.
+  - UI communication/orientation problem: the primary action said "briefs"
+    while the actual blocker could be source recovery, and the project ticker
+    wrapped detail copy in an unnecessary inline span that produced clipped
+    geometry.
+- Fix:
+  - `importedTaskNeedsBriefShaping()` now delegates to the shared
+    `taskNeedsImportedBriefShaping()` predicate.
+  - Release readiness and Start blockers use `taskShapingBlockers()` so
+    imported draft shaping and source recovery produce one shared current
+    blocker model.
+  - Start readiness checks selected-release review first, then selected-scope
+    terminal/proof state, then general task-readiness cleanup, so later work
+    cannot override the selected release boundary.
+  - Project action labels now say `Shape first task` / `Needs shaping` for
+    mixed imported shaping/source-recovery blockers.
+  - Inbox keeps the existing import-shaping item shape but filters it through
+    the selected execution scope before counting, so it agrees with Start and
+    release readiness.
+  - The project ticker detail wrapper was removed; the parent ticker message
+    owns truncation/ellipsis and no child span creates a clipped geometry box.
+- Contract Touch Decision:
+  - Work id: `codex:imported-shaping-readiness-sync-2026-07-05`.
+  - Touched contracts: selected-scope Start/Resume readiness, release-readiness
+    blocker derivation, project action labels, Inbox import-shaping item
+    derivation, Overview/project ticker rendering.
+  - Contracts considered but not touched: persisted task schema, release
+    schema, workspace-import draft schema, inbox item wire schema, project
+    orientation spine schema.
+  - Existing data impact: no migration. Existing Narrative Harness task data is
+    interpreted through the shared shaping blocker model; stored task rows are
+    not rewritten by this change.
+  - Required follow-up: continue shaping the seven visible Narrative Harness
+    current-scope blockers from Guildhall UI, then rerun Start only after those
+    blockers have source-backed briefs/spec handoffs.
+  - Proof required: focused runtime tests for release readiness, Start,
+    action model, and Inbox; contract detector; build; installed-app
+    stale-server proof; live Narrative Harness API proof; rendered Overview
+    text/geometry proof.
+  - Proof provided: focused suites passed `196` tests; contract detector passed
+    after this decision; build passed; installed app returned `stale:false`;
+    live Narrative Harness APIs agreed on `7` current-scope shaping blockers
+    in `Near Term Proof Scope`, first task
+    `task-import-1g9oq7m`, disabled run control `Needs shaping`, primary
+    button `Shape first task`, and Inbox `7 imported tasks need shaping`;
+    rendered Overview showed the same visible text at `1440x1000` with
+    `horizontalOverflowSample: []`.
+  - Apply/revert behavior: revert the shared shaping predicate delegation,
+    `serve.ts` blocker ordering/derivation, Inbox selected-scope filtering,
+    action/orientation copy changes, ticker markup cleanup, and associated
+    tests. No schema rollback is required.
+
 2026-07-05T11:30:00Z - Corrected task context packet runnable state for
 imported source-recovery work.
 

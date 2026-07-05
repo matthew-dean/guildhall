@@ -539,6 +539,106 @@ describe('buildInbox', () => {
     expect(hit.actionHref).toBe('/task/task-import-a')
   })
 
+  it('import_draft_queue: includes imported source-recovery work that is not runnable yet', async () => {
+    await writeYaml('guildhall.yaml', {
+      name: 'Inbox Test',
+      id: 'inbox-test',
+      coordinators: [{ id: 'frontend', name: 'Frontend' }],
+      bootstrap: {
+        verifiedAt: '2026-05-11T00:00:00.000Z',
+        install: ['pnpm install'],
+        gates: ['pnpm typecheck'],
+      },
+    })
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
+    await writeFile('.guildhall/project-brief.md', 'Project brief exists so setup no longer owns the next action.')
+    await writeJson('.guildhall/TASKS.json', {
+      version: 1,
+      lastUpdated: '',
+      tasks: [
+        {
+          id: 'task-import-a',
+          title: 'Recover source-backed contract surface',
+          status: 'exploring',
+          notes: [{ agentId: 'workspace-importer', role: 'importer', content: 'Imported from docs.' }],
+          productBrief: {
+            userJob: 'Recover the contract surface.',
+            whyItMattersNow: 'Workers need concrete contracts before implementation.',
+            successMetric: 'The relevant contract names are recovered from source.',
+            nonGoals: ['Do not invent contracts.'],
+          },
+          acceptanceCriteria: [{ id: 'AC-1', description: 'Contract surfaces are named.', verifiedBy: 'review', met: false }],
+          taskReadiness: {
+            recommendation: 'needs_research_spike',
+            summary: 'This imported task still needs concrete contract names before Guildhall can hand it to a worker.',
+          },
+        },
+      ],
+    })
+
+    const items = buildInboxWithProviderSetup()
+    const hit = items.find(i => i.kind === 'import_draft_queue')
+    expect(hit).toBeDefined()
+    if (!hit || hit.kind !== 'import_draft_queue') throw new Error('unreachable')
+    expect(hit.taskId).toBe('task-import-a')
+    expect(hit.title).toBe('1 imported task needs shaping')
+    expect(hit.detail).toContain('Recover source-backed contract surface')
+    expect(hit.actionHref).toBe('/task/task-import-a')
+  })
+
+  it('import_draft_queue: counts only the selected release shaping work', async () => {
+    await writeYaml('guildhall.yaml', {
+      name: 'Inbox Test',
+      id: 'inbox-test',
+      coordinators: [{ id: 'frontend', name: 'Frontend' }],
+      bootstrap: {
+        verifiedAt: '2026-05-11T00:00:00.000Z',
+        install: ['pnpm install'],
+        gates: ['pnpm typecheck'],
+      },
+    })
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
+    await writeFile('.guildhall/project-brief.md', 'Project brief exists so setup no longer owns the next action.')
+    await writeJson('.guildhall/TASKS.json', {
+      version: 1,
+      selectedReleaseId: 'current-release',
+      lastUpdated: '',
+      releases: [
+        {
+          id: 'current-release',
+          label: 'Current Release',
+          kind: 'release',
+          state: 'active',
+          source: 'release_plan',
+          nodeIds: ['work:task-import-current'],
+          deferredNodeIds: ['work:task-import-later'],
+        },
+      ],
+      tasks: [
+        {
+          id: 'task-import-current',
+          title: 'Shape current release work',
+          status: 'import_draft',
+          releaseIds: ['current-release'],
+        },
+        {
+          id: 'task-import-later',
+          title: 'Shape later release work',
+          status: 'import_draft',
+          scope: 'later',
+        },
+      ],
+    })
+
+    const items = buildInboxWithProviderSetup()
+    const hit = items.find(i => i.kind === 'import_draft_queue')
+    expect(hit).toBeDefined()
+    if (!hit || hit.kind !== 'import_draft_queue') throw new Error('unreachable')
+    expect(hit.taskId).toBe('task-import-current')
+    expect(hit.title).toBe('1 imported draft needs a task brief')
+    expect(hit.detail).not.toContain('later')
+  })
+
   it('suppresses import_draft_queue while a later setup step still owns the next user action', async () => {
     await writeYaml('guildhall.yaml', {
       name: 'Inbox Test',

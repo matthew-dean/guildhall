@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs'
 import type { Task } from '@guildhall/core'
 import { appendExploringTranscript } from '@guildhall/tools'
 import { transitionTaskStatus } from './task-transition.js'
+import { taskNeedsImportedBriefShaping } from '../shared/task-shaping-blockers.js'
 
 function trimmed(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
@@ -152,11 +153,7 @@ export function shouldUseImportDraftState(task: Task): boolean {
 }
 
 export function importedTaskNeedsBriefShaping(task: Task): boolean {
-  if (task.status === 'import_draft') return true
-  if (!hasWorkspaceImportProvenance(task)) return false
-  if (task.status !== 'exploring') return false
-  if (!hasShapingRequest(task)) return false
-  return !hasProductBriefShape(task) || !hasAnyAcceptanceCriteria(task)
+  return taskNeedsImportedBriefShaping(task)
 }
 
 export function importedTaskNeedsSourceRecovery(task: Task): boolean {
