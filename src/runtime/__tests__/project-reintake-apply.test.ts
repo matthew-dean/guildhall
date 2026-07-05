@@ -91,6 +91,46 @@ const narrativeRoadmap = [
   '6. Use the first run to narrow the MVP story-memory schema.',
 ].join('\n')
 
+const narrativeNearTermProofRoadmap = [
+  '# Implementation Roadmap',
+  '',
+  'The near-term goal is not a polished editor. The near-term goal is to prove',
+  'that story memory, packet building, editor agents, writer agents, and',
+  'model/provider evaluation can improve fiction drafting without flattening',
+  'author voice.',
+  '',
+  '## Stage 1: Fixture And Evaluation Harness',
+  '',
+  'Deliverables:',
+  '',
+  '- scripts or tests that ingest a fixture, build records, run a packet, and save',
+  '  the run output',
+  '',
+  '## Stage 2: Mastra Agent Prototype',
+  '',
+  'Deliverables:',
+  '',
+  '- specialist editor agent calls for the first review lanes',
+  '',
+  '## Stage 3: Model Bakeoff And Safety Policy',
+  '',
+  'Deliverables:',
+  '',
+  '- fiction bakeoff scenarios for writer, editor, reviewer, and safety lanes',
+  '',
+  '## Stage 4: Local Authoring Shell',
+  '',
+  'Deliverables:',
+  '',
+  '- manuscript import or simple editor shell',
+  '',
+  '## Current Next Milestone',
+  '',
+  'The next milestone is Stage 1: Fixture And Evaluation Harness.',
+  '',
+  '1. Implement a no-UI runner that builds a packet from fixture records.',
+].join('\n')
+
 const narrativeRemainingInventory = [
   '# Remaining Spec Decomposition Inventory',
   '',
@@ -99,6 +139,18 @@ const narrativeRemainingInventory = [
   '- **Recommended first task title:** Implement dialogue-and-character-voice reviewer lane',
   '- **Recommended domain:** coherence',
   '- **Stage alignment:** Stage 2 (Agent Coordination)',
+  '',
+  '### 2.9 `theme-and-meaning-review.md`',
+  '',
+  '- **Recommended first task title:** Implement theme-and-meaning-review reviewer lane',
+  '- **Recommended domain:** coherence',
+  '- **Stage alignment:** Stage 3 (Reviewer Refinement)',
+  '',
+  '### 2.11 `local-authoring-shell.md`',
+  '',
+  '- **Recommended first task title:** Build local authoring shell',
+  '- **Recommended domain:** app',
+  '- **Stage alignment:** Stage 4 (Local Authoring Shell)',
 ].join('\n')
 
 const narrativeSchemaRoadmap = [
@@ -206,7 +258,7 @@ describe('project re-intake apply', () => {
     const draft = planProjectReintake({
       now,
       sources: [],
-      tasks: [legacyTask],
+      tasks: [legacyTask, staleChild],
     })
     await writeProjectReintakeDraft(memoryDir, draft)
 
@@ -410,6 +462,59 @@ describe('project re-intake apply', () => {
     })
     expect(JSON.stringify(approvedTask?.productBrief ?? '')).not.toContain('Do not treat this draft as approved')
     expect(approvedTask?.sizePlan?.action).toBe('proceed_with_warning')
+  })
+
+  it('does not collapse a documented near-term proof scope into only the next milestone', async () => {
+    const memoryDir = await makeState([])
+    const draft = planProjectReintake({
+      now,
+      sources: [
+        { path: 'docs/harness/implementation-roadmap.md', content: narrativeNearTermProofRoadmap },
+        { path: 'docs/harness/remaining-spec-decomposition-inventory.md', content: narrativeRemainingInventory },
+      ],
+      tasks: [],
+    })
+    await writeProjectReintakeDraft(memoryDir, draft)
+
+    const result = await applyProjectReintakeDraft({ memoryDir, now })
+    expect(result.success).toBe(true)
+
+    const queue = await readQueue(memoryDir) as {
+      selectedReleaseId?: string
+      releases?: Array<{ id: string; label: string; nodeIds?: string[]; deferredNodeIds?: string[] }>
+      tasks: Array<Record<string, any>>
+    }
+    const runnerTask = queue.tasks.find(task => task.title === 'Implement a no-UI runner that builds a packet from fixture records.')
+    const dialogueTask = queue.tasks.find(task => task.title === 'Implement dialogue-and-character-voice reviewer lane')
+    const themeTask = queue.tasks.find(task => task.title === 'Implement theme-and-meaning-review reviewer lane')
+    const shellTask = queue.tasks.find(task => task.title === 'Build local authoring shell')
+
+    expect(queue.selectedReleaseId).toBe('near-term-proof-scope')
+    expect(queue.releases).toEqual([
+      expect.objectContaining({
+        id: 'near-term-proof-scope',
+        label: 'Near-term proof scope',
+        source: 'inferred_scope',
+        nodeIds: expect.arrayContaining([
+          `work:${runnerTask?.id}`,
+          `work:${dialogueTask?.id}`,
+          `work:${themeTask?.id}`,
+        ]),
+        deferredNodeIds: expect.arrayContaining([`work:${shellTask?.id}`]),
+      }),
+    ])
+    expect(dialogueTask).toMatchObject({
+      releaseIds: ['near-term-proof-scope'],
+      status: 'spec_review',
+    })
+    expect(themeTask).toMatchObject({
+      releaseIds: ['near-term-proof-scope'],
+      status: 'spec_review',
+    })
+    expect(shellTask).toMatchObject({
+      status: 'shelved',
+    })
+    expect(shellTask?.releaseIds ?? []).toEqual([])
   })
 
   it('replaces stale not-started task content when the regenerated source-truth task keeps the same deterministic id', async () => {

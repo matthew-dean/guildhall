@@ -13882,6 +13882,78 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-07-05T12:46:53Z - Tightened re-intake release/scope recovery for
+Narrative Harness-style proof scopes.
+
+- Work id: `codex:project-reintake-scope-2026-07-05`.
+- User job: Guildhall should not tell the owner a project is ready just because
+  the next milestone is complete when the docs describe a broader current
+  proof scope before later product/UI work.
+- Finding:
+  - Narrative Harness docs name Stage 1 as the current next milestone, but the
+    same roadmap describes a near-term proof goal before the first authoring UI
+    stage. Re-intake collapsed those two concepts and selected only Stage 1,
+    making Stage 2/3 proof work disappear from the current scope.
+  - This is the same modeling class as workspace folders that contain child git
+    repositories: a top-level label is not enough when the project state has a
+    richer internal structure.
+- Fix:
+  - Project re-intake now distinguishes documented release plans from inferred
+    bounded scopes.
+  - When docs describe a near-term proof goal that explicitly excludes UI,
+    editor, shell, frontend, or product-surface work, re-intake can infer a
+    `Near-term proof scope` through the stage before the first UI/shell stage.
+  - The inferred scope is marked with `source: inferred_scope` instead of
+    pretending the docs contained a formal release name.
+  - Explicit release/scope names remain the stronger model and can be used for
+    arbitrary markers such as `2.0 alpha`, `V1 hardening`, or any owner-defined
+    bounded scope.
+- Contract Touch Decision:
+  - Work id: `codex:project-reintake-scope-2026-07-05`.
+  - Touched contracts: `ProjectReintakeReleaseDraft.source`.
+  - Contracts considered but not touched: task `releaseIds`, release `nodeIds`,
+    release `deferredNodeIds`, selected release id, workspace-import
+    `DraftRelease`.
+  - Required follow-up: UI/API surfaces that show release source should present
+    `inferred_scope` as inferred bounded scope, not as an owner-defined release.
+  - Proof required: focused re-intake tests, workspace-import release tests,
+    installed-app stale-server check before live mutation.
+  - Proof provided: focused tests listed below.
+  - Waivers: no data rewrite is required because existing `release_plan` values
+    remain valid and old readers treat release objects structurally.
+  - Owner-review items: none before code commit; actual Narrative Harness task
+    repopulation still requires the committed/pushed code baseline first.
+  - Apply/revert behavior: revert the `ProjectReintakeReleaseDraft.source`
+    union and `detectNearTermProofScope` use to restore milestone-only
+    selection.
+- Schema Migration Decision:
+  - Persisted schema touched: project re-intake draft/release records stored in
+    Guildhall task queue state.
+  - Scope: additive enum value for release source only.
+  - Change class: backward-compatible additive metadata.
+  - Existing data impact: existing releases with `source: release_plan` remain
+    unchanged; no migration of old records.
+  - Migration id: none required.
+  - Safety: readers already consume release objects structurally; the selected
+    release id and task `releaseIds` formats are unchanged.
+  - Required before run: no.
+  - Compatibility reader: release surfaces must tolerate both `release_plan` and
+    `inferred_scope`.
+  - Fixtures/tests: project re-intake regression asserts `source:
+    inferred_scope`; workspace-import release tests cover explicit release
+    labels and arbitrary release ids.
+  - Owner-facing plan text: inferred bounded scopes must be labeled as inferred
+    until docs define a formal release.
+  - Rollback/revert behavior: remove inferred source value and re-run re-intake
+    to return to milestone-only release selection.
+- Verification:
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/project-reintake-apply.test.ts --reporter=dot`
+    passed `11` tests.
+  - `./node_modules/.bin/vitest run src/runtime/workspace-import/__tests__/hypothesis.test.ts --reporter=dot`
+    passed `38` tests.
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/project-reintake-apply.test.ts src/runtime/workspace-import/__tests__/hypothesis.test.ts --reporter=dot`
+    passed `49` tests.
+
 2026-07-05T12:35:16Z - Kept workspace child repos and selected-scope proof
 contracts in the shared orientation model.
 
