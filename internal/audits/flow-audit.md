@@ -12,6 +12,44 @@ This is the active browser test plan for the Guildhall project surface. Keep it
 updated while auditing the active test project so another agent can resume
 without guessing.
 
+2026-07-05T14:15:00Z - Made durable completion evidence win over stale active
+task status.
+
+- Work id: `codex:effective-task-durable-completion-normalization-2026-07-05`.
+- User job: before Guildhall resumes the Narrative Harness MVP, the current
+  action model should not recommend already-proven/landed work. If durable
+  completion evidence says a task is done, Overview, Release, Work, and Start
+  should all see that same effective status even if raw task status drifted
+  back to `ready`.
+- Root cause:
+  - The orchestrator already knows how to reconcile durable done-summary or
+    merge evidence back to `done` while a run is active, but read-only API
+    projection built effective tasks without applying that same terminal
+    evidence normalization.
+  - Narrative Harness task `task-import-1c4eedx` had `status:"ready"` while
+    also carrying `completedAt`, `doneSummaryBundle.status:"done"`,
+    `mergeRecord.result:"merged"`, reviewer approval, passing gates, and
+    evidence-repair notes. The action model therefore recommended already
+    landed work.
+- Fix:
+  - `buildEffectiveTask()` now projects a task as `done` when non-terminal raw
+    status is contradicted by a real `completedAt` plus durable done-summary or
+    merged-branch evidence.
+  - Added a regression for stale `ready` status with durable completion
+    evidence so effective task consumers see `status:"done"` and cleared
+    assignment.
+- Proof:
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/effective-task.test.ts src/runtime/__tests__/serve-release-readiness.test.ts --reporter=dot`
+    passed `33` tests; `git diff --check` passed.
+  - `packages/ui` generated styles and `tsc -p tsconfig.json`; `node
+    ./build.mjs`; `node ./scripts/dev-install.mjs`; installed
+    `/api/stale-server` returned `stale:false`.
+  - Live Narrative Harness proof: `/api/project?projectId=narrative-harness`
+    now reports `task-import-1c4eedx` as `done`, release readiness totals as
+    `done:1`, `unfinishedCount:8`, and primary action as
+    `task-import-1rmp3f` (`Implement theme-and-meaning-review reviewer lane`)
+    instead of the already-proven fixture/schema task.
+
 2026-07-05T14:08:00Z - Clarified scoped readiness language and headless proof
 boundaries.
 

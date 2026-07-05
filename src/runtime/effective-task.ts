@@ -173,6 +173,7 @@ export async function buildEffectiveTask(
   const workspace = workspaceStore.workspaces[task.id] ?? legacyWorkspaceFromTask(task)
   const evidence = storedEvidence.length > 0 ? storedEvidence : legacyEvidenceFromTask(task)
   const projected = legacyFieldsFromEvidence(evidence)
+  const normalized = normalizeTerminalCompletionEvidence({ ...task, ...projected })
   return {
     ...task,
     title: effectiveTaskTitle(task) ?? task.title,
@@ -187,7 +188,34 @@ export async function buildEffectiveTask(
     ...(workspace?.baseBranch !== undefined ? { baseBranch: workspace.baseBranch } : {}),
     ...(runtime ? { runtime } : {}),
     ...(workspace ? { workspace } : {}),
+    ...normalized,
     evidence,
+  }
+}
+
+function normalizeTerminalCompletionEvidence(task: Record<string, unknown>): Record<string, unknown> {
+  if (task.status === 'done' || task.status === 'shelved') return {}
+  const completedAt = typeof task.completedAt === 'string' && task.completedAt.trim().length > 0
+    ? task.completedAt.trim()
+    : null
+  const doneSummary = task.doneSummaryBundle && typeof task.doneSummaryBundle === 'object' && !Array.isArray(task.doneSummaryBundle)
+    ? task.doneSummaryBundle as Record<string, unknown>
+    : null
+  const mergeRecord = task.mergeRecord && typeof task.mergeRecord === 'object' && !Array.isArray(task.mergeRecord)
+    ? task.mergeRecord as Record<string, unknown>
+    : null
+  const hasDurableDoneEvidence = doneSummary?.status === 'done' || mergeRecord?.result === 'merged'
+  if (!completedAt || !hasDurableDoneEvidence) return {}
+  const durableCompletedAt = typeof doneSummary?.completedAt === 'string'
+    ? doneSummary.completedAt
+    : typeof mergeRecord?.mergedAt === 'string'
+      ? mergeRecord.mergedAt
+      : completedAt
+
+  return {
+    status: 'done',
+    assignedTo: null,
+    completedAt: durableCompletedAt,
   }
 }
 

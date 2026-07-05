@@ -153,4 +153,36 @@ describe('effective task projection', () => {
 
     expect(effective.title).toBe('Continue the Knit-to-Looma promotion work from the now-complete first M6 queue into the next generic surfaces, while the primitive normalization wave continues in Knit.')
   })
+
+  it('treats durable completion evidence as done when stored status drifted active', async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-effective-task-'))
+
+    const effective = await buildEffectiveTask(projectRoot, legacyTask({
+      status: 'ready',
+      assignedTo: 'worker-agent',
+      completedAt: '2026-07-04T09:16:20.780Z',
+      doneSummaryBundle: {
+        taskId: 'task-auth-complete',
+        status: 'done',
+        completedAt: '2026-07-04T09:16:20.780Z',
+        summary: {
+          journey: 'worker completed the task',
+          decision: 'Task finished as done.',
+          evidence: 'npm build passed.',
+          learningCandidates: [],
+          openResidue: 'No open residue recorded.',
+        },
+      },
+      mergeRecord: {
+        result: 'merged',
+        mergedAt: '2026-07-04T09:18:47.938Z',
+        fromBranch: 'guildhall/task-task-auth-complete',
+        toBranch: 'main',
+      },
+    } as Partial<Task>))
+
+    expect(effective.status).toBe('done')
+    expect(effective.assignedTo).toBeNull()
+    expect(effective.completedAt).toBe('2026-07-04T09:16:20.780Z')
+  })
 })
