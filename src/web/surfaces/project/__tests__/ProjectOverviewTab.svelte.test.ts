@@ -335,6 +335,9 @@ describe('ProjectOverviewTab', () => {
     expect(screen.queryByRole('heading', { name: 'Ready to resume' })).not.toBeInTheDocument()
     expect(screen.getByText(/3 deferred/)).toBeInTheDocument()
     expect(screen.getByText(/0 missing verification/)).toBeInTheDocument()
+    expect(screen.getByText('The selected scope is complete. Choose another release or open Work to inspect completed and deferred items.')).toBeInTheDocument()
+    expect(screen.queryByText('The next run is blocked until the project blocker is resolved.')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Blocked/ })).not.toBeInTheDocument()
   })
 
   it('renders the shared primary project action instead of choosing a local inbox winner', () => {

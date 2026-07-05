@@ -324,7 +324,9 @@
   const emptyWorkMixLabel = $derived(
     requiredMigrationBlocked
       ? 'Run the required migration before creating or running work.'
-      : startBlocked
+      : allTerminalStart
+        ? 'The selected scope has no runnable work left.'
+        : startBlocked
         ? 'Resolve the project blocker before adding more work.'
         : 'No tasks yet. Create a request when you are ready.',
   )
@@ -663,7 +665,7 @@
 
   const runBlocker = $derived.by(() => {
     const shared = detail.actionModel?.primaryAction
-    if (detail.startReadiness?.canStart === false) {
+    if (detail.startReadiness?.canStart === false && detail.startReadiness.code !== 'all_terminal') {
       return {
         label: shared?.label ?? startReadinessLabel(detail.startReadiness.code),
         detail: shared?.detail ?? detail.startReadiness.message ?? 'Resolve the blocker before starting more work.',
@@ -1175,6 +1177,8 @@
         <p class="muted">
           {#if requiredMigrationBlocked}
             The next run is blocked until the required migration is applied.
+          {:else if allTerminalStart}
+            The selected scope is complete. Choose another release or open Work to inspect completed and deferred items.
           {:else if startBlocked}
             The next run is blocked until the project blocker is resolved.
           {:else}

@@ -17547,6 +17547,49 @@ visibly blocked after the false proof-policy escalation.
 
 source: codex:resolve-escalation-canonical-blocker-sync-2026-07-04
 
+2026-07-05T10:52:00Z - Corrected completed-scope next-run communication.
+
+- Work id: `codex:completed-scope-next-run-copy-2026-07-05`.
+- User job: when the selected release/scope has no runnable work because all
+  scoped tasks are terminal, Overview should not tell the owner the next run is
+  blocked by a project blocker. It should communicate that the selected scope
+  is complete and point the owner toward Work or another release/scope.
+- Fix:
+  - Overview no longer builds a `runBlocker` for `startReadiness.code:
+    all_terminal`.
+  - The empty Next run panel now says the selected scope is complete instead
+    of inventing blocker copy.
+  - The work-mix empty label treats `all_terminal` as consumed scope, not a
+    project blocker.
+- Contract Touch Decision:
+  - Work id: `codex:completed-scope-next-run-copy-2026-07-05`.
+  - Touched contracts: Overview next-run presentation semantics for
+    `all_terminal`; shared start-readiness presentation consistency.
+  - Contracts considered but not touched: `startReadiness` API shape,
+    action-model API shape, release-readiness API shape, task schema.
+  - Existing data impact: no migration. Existing terminal task state is
+    rendered differently; no stored state is rewritten.
+  - Proof required: focused Overview component regression, contract lint,
+    build, installed-app rendered Narrative Harness Overview proof.
+  - Apply/revert behavior: restore local `canStart:false` blocker handling in
+    `ProjectOverviewTab.svelte` to return to the prior copy; no data rollback
+    required.
+- Proof provided:
+  - `./node_modules/.bin/vitest run src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts --reporter=dot`
+    passed 26 tests.
+  - `CI=true pnpm lint:contracts` passed.
+  - `CI=true pnpm build` passed.
+  - Installed app reported `/api/stale-server` with `stale:false`.
+  - Rendered `/projects/narrative-harness/overview` at `1280x820` showed
+    `Stage 1: Fixture And Evaluation Harness is complete.` and `The selected
+    scope is complete. Choose another release or open Work to inspect completed
+    and deferred items.` It did not show `The next run is blocked until the
+    project blocker is resolved.` or `Next run BLOCKED`, and had no horizontal
+    overflow.
+  - Rendered `/projects/looma-knit/release` at `1280x820` showed Git Story
+    entries for child repos `Looma:` and `Knit:`, did not show `not a git
+    repository`, and had no horizontal overflow.
+
 2026-07-05T10:45:00Z - Aligned release proof/orientation communication with
 shared readiness state.
 
