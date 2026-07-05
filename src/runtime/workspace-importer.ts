@@ -551,11 +551,26 @@ export interface ParsedTask {
   releaseIds?: readonly string[]
 }
 
-interface MaterializedImportTask extends ParsedTask {
+export interface MaterializedImportTask extends ParsedTask {
   acceptanceCriteria?: Array<{ id: string; description: string; verifiedBy?: string; source?: 'documented' | 'inferred' }>
   dependsOn?: readonly string[]
   proofPaths?: Task['proofPaths']
   evidenceGraphTask?: boolean
+}
+
+type SimpleImportedProofPath = {
+  kind: 'command' | 'review' | 'browser'
+  command?: string
+  expectedEvidence?: string[]
+  source?: 'documented' | 'inferred'
+}
+
+function simpleImportedProofPaths(paths: Task['proofPaths'] | undefined): SimpleImportedProofPath[] {
+  return (paths ?? []).filter((path): path is SimpleImportedProofPath => {
+    if (!path || typeof path !== 'object' || Array.isArray(path)) return false
+    const kind = (path as { kind?: unknown }).kind
+    return kind === 'command' || kind === 'review' || kind === 'browser'
+  })
 }
 
 type ImportedEvidenceDetail = {
@@ -579,6 +594,7 @@ type ImportedEvidenceDetail = {
 type ImportedBlueprintSeed = {
   status: Task['status']
   requestIntake: Task['requestIntake']
+  acceptanceCriteria?: Task['acceptanceCriteria']
   productBrief?: Task['productBrief']
   spec?: Task['spec']
   outOfScope: Task['outOfScope']
@@ -2562,7 +2578,7 @@ function importedTaskHasBlueprintSeed(task: MaterializedImportTask): boolean {
   )
 }
 
-function summarizeImportedSuccessMetric(task: MaterializedImportTask): string {
+function summarizeImportedSuccessMetric(task: MaterializedImportTask, evidenceDetail?: ImportedEvidenceDetail): string {
   if (importedTaskLooksContractDriven(task)) {
     return `${task.title} defines and proves the cited local contracts.`
   }
@@ -2572,20 +2588,27 @@ function summarizeImportedSuccessMetric(task: MaterializedImportTask): string {
   if (/\b(feedback chain|pipeline|orchestration|coordinator|involvement modes|packet)\b/i.test(task.title)) {
     return `${task.title} preserves the documented workflow, weighting, and fiction-first decision boundary.`
   }
+  if (evidenceDetail?.goalStatements[0]) {
+    return evidenceDetail.goalStatements[0]
+  }
+  if (evidenceDetail?.implementationBullets[0]) {
+    return `${task.title} implements the documented boundary: ${evidenceDetail.implementationBullets[0].replace(/\.$/, '')}.`
+  }
   const acceptance = (task.acceptanceCriteria ?? [])
     .map(criterion => criterion.description.trim())
+    .filter(description => !/\b(expected public contract|target-area conventions|accessibility, security, or reliability)\b/i.test(description))
     .filter(Boolean)
   if (acceptance.length === 0) {
     return `${task.title} is delivered according to the cited project evidence and recorded proof.`
   }
-  const first = acceptance[0]
+  const first = acceptance[0] ?? `${task.title} is delivered according to the cited project evidence and recorded proof.`
   const second = acceptance[1]
   if (second) return `${first} Also: ${second}`
   return first
 }
 
 function summarizeImportedVerification(task: MaterializedImportTask): string {
-  const steps = (task.proofPaths ?? []).map((path) => {
+  const steps = simpleImportedProofPaths(task.proofPaths).map((path) => {
     if (path.kind === 'command' && typeof path.command === 'string' && path.command.trim()) {
       return `Run \`${path.command.trim()}\``
     }
@@ -2606,7 +2629,7 @@ function importedCompletionBoundary(
   task: MaterializedImportTask,
   evidenceDetail: ImportedEvidenceDetail,
 ): string {
-  const successMetric = summarizeImportedSuccessMetric(task)
+  const successMetric = summarizeImportedSuccessMetric(task, evidenceDetail)
   const proofCommand = firstImportedProofCommand(task)
   const verificationPlan = proofCommand
     ? evidenceDetail.verificationBullets.length > 0
@@ -2617,6 +2640,8 @@ function importedCompletionBoundary(
   const missingInformation = cleanImportedMissingInformation(task.missingInformation ?? [])
   const splitOrBlock = missingInformation.length > 0
     ? `Split only if these unresolved imported gaps still change the implementation boundary: ${missingInformation.join('; ')}. Block only for missing external credentials, unavailable services, or absent source evidence.`
+    : task.evidenceGraphTask
+      ? 'Nothing to split before this source-backed task runs; reshape only if live implementation discovers a truly separate deliverable.'
     : 'Split only if the cited work turns out to contain more than one independently verifiable deliverable. Block only for missing external credentials, unavailable services, or absent source evidence.'
   return [
     '## Completion Boundary',
@@ -3234,7 +3259,7 @@ function deriveGeneralImportedAcceptanceCriteria(
 }
 
 function firstImportedProofCommand(task: MaterializedImportTask): string | null {
-  const proofCommand = (task.proofPaths ?? []).find(
+  const proofCommand = simpleImportedProofPaths(task.proofPaths).find(
     proof =>
       proof.kind === 'command' &&
       proof.source !== 'inferred' &&
@@ -3593,6 +3618,10 @@ function importedBulletIsAuditNoise(bullet: string): boolean {
     /\bcannot run\b/i.test(bullet) ||
     /\bartifact missing\b/i.test(bullet) ||
     /\bseparate remediation task\b/i.test(bullet) ||
+    /\bworker timed out\b/i.test(bullet) ||
+    /\bwas never written to disk\b/i.test(bullet) ||
+    /\bcreated this inventory document\b/i.test(bullet) ||
+    /\bas recorded in TASKS\.json\b/i.test(bullet) ||
     /`test -d [^`]+`/i.test(bullet) ||
     /\bmissing\b/i.test(bullet) && /packages\/schemas|on disk|directory/i.test(bullet)
   )
@@ -3847,6 +3876,7 @@ function extractReferenceEvidenceDetail(
       .slice(0, 6)
 
     for (const section of rankedSections) {
+      const lowerHeading = section.heading.toLowerCase()
       const sectionLines = section.body.split(/\r?\n/).map(line => line.trim()).filter(Boolean)
       if (markdownSectionAllowsContractNameExtraction(section)) {
         for (const match of section.body.matchAll(/`([^`\n]{2,80})`/g)) {
@@ -3872,6 +3902,7 @@ function extractReferenceEvidenceDetail(
         if (importedBulletIsPlanningMetadata(bullet)) continue
         if (!allowGenericSequenceBullet) continue
         if (section.genericSequenceSection && !section.contractSection) continue
+        if (/examples/i.test(lowerHeading)) continue
         if (titleSuggestsContracts && !section.contractSection && /^(\d+\.|stage\s+\d+)/i.test(line)) continue
         if (implementationBullets.length < 6) implementationBullets.push(bullet)
       }
@@ -3930,7 +3961,7 @@ function importedTaskSpec(
   const missingInformation = cleanImportedMissingInformation(task.missingInformation ?? [])
   const importedContext = summarizeImportedProblemContext(task, evidenceDetail)
   const proposedDesignBullets = importedTaskProposedDesignBullets(task, evidenceDetail)
-  const proofPlan = materializedProofPaths(task, evidenceDetail).map((path) => {
+  const proofPlan = simpleImportedProofPaths(materializedProofPaths(task, evidenceDetail)).map((path) => {
     if (path.kind === 'command' && typeof path.command === 'string' && path.command.trim()) {
       return `- Run \`${path.command.trim()}\``
     }
@@ -3950,7 +3981,7 @@ function importedTaskSpec(
     importedContext,
     '',
     '## Goals',
-    `- ${summarizeImportedSuccessMetric(task)}`,
+    `- ${summarizeImportedSuccessMetric(task, evidenceDetail)}`,
     ...(evidenceDetail.contractNames.length > 0
       ? [`- Define and use the concrete contracts named in the cited docs: ${evidenceDetail.contractNames.map(name => `\`${name}\``).join(', ')}.`]
       : []),
@@ -3994,6 +4025,20 @@ function importedTaskProposedDesignBullets(
   task: MaterializedImportTask,
   evidenceDetail: ImportedEvidenceDetail,
 ): string[] {
+  if (/\breviewer lane\b|\breview\b/i.test(task.title)) {
+    const bullets: string[] = []
+    if (evidenceDetail.reviewQuestions.length > 0) {
+      bullets.push(`Evaluate the documented review questions: ${evidenceDetail.reviewQuestions.join(' ')}`)
+    }
+    if (evidenceDetail.rules.length > 0) {
+      bullets.push(`Shape findings around the documented review contract: ${evidenceDetail.rules.join('; ')}.`)
+    }
+    const scope = evidenceDetail.implementationBullets.find(item => !/\?$/.test(item))
+    if (scope) {
+      bullets.push(`Keep the lane scoped to the documented boundary: ${scope.replace(/\.$/, '')}.`)
+    }
+    if (bullets.length > 0) return bullets
+  }
   if (importedPrototypeTaskKind(task) === 'runner') {
     const bullets: string[] = []
     if (evidenceDetail.systemRecords.length > 0) {
@@ -4027,7 +4072,7 @@ function importedTaskBrief(
   return {
     userJob: summarizeImportedProblemContext(task, evidenceDetail),
     whyItMattersNow: summarizeImportedProblemContext(task, evidenceDetail),
-    successMetric: summarizeImportedSuccessMetric(task),
+    successMetric: summarizeImportedSuccessMetric(task, evidenceDetail),
     nonGoals: cleanedNonGoals,
     authoredBy: 'workspace-importer',
     authoredAt: now,
@@ -4041,7 +4086,7 @@ function importedTaskWorkUnitAnalysis(
 ): Task['workUnitAnalysis'] {
   const units = deriveImportedWorkUnits(task, evidenceDetail)
   const proofOnlyItems = [
-    ...materializedProofPaths(task, evidenceDetail).map((path) => {
+    ...simpleImportedProofPaths(materializedProofPaths(task, evidenceDetail)).map((path) => {
       if (path.kind === 'command' && typeof path.command === 'string' && path.command.trim()) {
         return `Run ${path.command.trim()}`
       }
@@ -4260,7 +4305,7 @@ function defaultImportedWorkUnit(
   return {
     id: `unit-${task.id}`,
     title: task.title,
-    deliverable: summarizeImportedSuccessMetric(task),
+    deliverable: summarizeImportedSuccessMetric(task, evidenceDetail),
     rationale: summarizeImportedProblemContext(task, evidenceDetail),
     suggestedDomain: task.domain,
     dependsOn: [...(task.dependsOn ?? [])],
@@ -4641,7 +4686,7 @@ function deriveWorkflowWorkUnits(
   return units.length > 0 ? units : [defaultImportedWorkUnit(task, evidenceDetail)]
 }
 
-function buildImportedBlueprintSeed(
+export function buildImportedBlueprintSeed(
   task: MaterializedImportTask,
   normalizedReferences: readonly string[],
   workspaceProjectPath: string,
@@ -4792,6 +4837,7 @@ function buildImportedBlueprintSeed(
   return {
     status: normalizedTask.scope === 'later' ? 'shelved' : 'spec_review',
     requestIntake: shapedSeedTask.requestIntake,
+    acceptanceCriteria,
     productBrief: seededProductBrief,
     spec: seededSpec,
     outOfScope: [...(task.missingInformation ?? [])],

@@ -7416,7 +7416,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const memoryDir = getProjectStateDir(project.path)
       const tasks = await readTasksFileNormalized(projectTasksPath(project.path)).catch(() => [])
       const sources = await collectProjectReintakeSources(project.path)
-      const draft = planProjectReintake({ sources, tasks })
+      const draft = planProjectReintake({ projectPath: project.path, sources, tasks })
       await writeProjectReintakeDraft(memoryDir, draft)
       return c.json({ ok: true, draft })
     } catch (err) {

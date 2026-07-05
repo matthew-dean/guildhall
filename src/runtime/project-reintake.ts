@@ -11,13 +11,19 @@ import {
 import {
   evidenceTaskDescription,
   evidenceTaskPriority,
+  evidenceTaskWhyThisMayMatter,
 } from './evidence-task-import-draft.js'
 import { detectShadowedCurrentMilestoneDeliverableImports as detectShadowedCurrentMilestoneDeliverables } from './current-milestone-shadowing.js'
+import {
+  buildImportedBlueprintSeed,
+  type MaterializedImportTask,
+} from './workspace-importer.js'
 
 export type ProjectReintakeSource = EvidenceSource
 
 export interface ProjectReintakeInput {
   now?: string
+  projectPath?: string
   sources: ProjectReintakeSource[]
   tasks: Array<Record<string, unknown>>
 }
@@ -80,7 +86,13 @@ export interface ReintakeTaskDraft {
   stageAlignment?: string
   spec?: string
   productBrief?: Task['productBrief']
-  proofPaths?: unknown[]
+  proofPaths?: Task['proofPaths']
+  workUnitAnalysis?: Task['workUnitAnalysis']
+  taskReadiness?: Task['taskReadiness']
+  taskKind?: Task['taskKind']
+  definitionOfDone?: Task['definitionOfDone']
+  blockerPlans?: Task['blockerPlans']
+  contextBudget?: Task['contextBudget']
 }
 
 export interface ProjectReintakeReleaseDraft {
@@ -149,6 +161,8 @@ export function planProjectReintake(input: ProjectReintakeInput): ProjectReintak
       input.tasks,
       selectedRelease,
       input.sources,
+      input.projectPath,
+      now,
     ))
   if (graphChanges.length > 0) {
     groups.push({
@@ -216,7 +230,7 @@ export function planProjectReintake(input: ProjectReintakeInput): ProjectReintak
     })
   }
 
-  const releases = selectedRelease ? releaseDraftsFor(selectedRelease, groups) : []
+  const releases = selectedRelease ? releaseDraftsFor(selectedRelease, groups, input.tasks) : []
   return {
     id: `reintake-${now.replace(/[^0-9A-Za-z]/g, '').slice(0, 14)}`,
     createdAt: now,
@@ -281,7 +295,7 @@ export async function applyProjectReintakeDraft(input: {
       applyChange(queue.tasks, change, now)
     }
   }
-  applyReleaseDrafts(queue, draft, groups)
+  applyReleaseDrafts(queue, draft)
 
   queue.lastUpdated = now
   await writeManagedTextFile(queuePath, JSON.stringify(queue, null, 2), 'utf-8')
@@ -310,7 +324,7 @@ function applyChange(tasks: Array<Record<string, unknown>>, change: ReintakeChan
         },
       ],
     })
-    detachArchivedDescendantsForParent(tasks, change.taskId)
+    archiveOpenPreImplementationDescendantsForParent(tasks, change.taskId, now)
     return
   }
 
@@ -344,7 +358,7 @@ function applyChange(tasks: Array<Record<string, unknown>>, change: ReintakeChan
         createdAt: typeof existing.createdAt === 'string' ? existing.createdAt : now,
         updatedAt: now,
       })
-      detachArchivedDescendantsForParent(tasks, change.task.id)
+      archiveOpenPreImplementationDescendantsForParent(tasks, change.task.id, now)
       return
     }
     tasks.push({
@@ -437,11 +451,26 @@ function detachTaskFromLiveGraph(tasks: Array<Record<string, unknown>>, taskId: 
   if (task) delete task.hierarchy
 }
 
-function detachArchivedDescendantsForParent(tasks: Array<Record<string, unknown>>, parentId: string): void {
+function archiveOpenPreImplementationDescendantsForParent(
+  tasks: Array<Record<string, unknown>>,
+  parentId: string,
+  now: string,
+): void {
   for (const task of tasks) {
-    if (task.status !== 'archived') continue
     const hierarchy = hierarchyRecord(task)
-    if (hierarchy?.parentId === parentId) delete task.hierarchy
+    if (hierarchy?.parentId !== parentId) continue
+    if (task.status === 'archived') {
+      delete task.hierarchy
+      continue
+    }
+    if (!isOpenPreImplementationTask(task)) continue
+    const taskId = stringField(task, 'id')
+    if (!taskId) continue
+    applyChange(tasks, {
+      kind: 'archive',
+      taskId,
+      reason: `Parent ${parentId} was refreshed from source-backed re-intake; stale generated child work should not remain as separate current-scope work.`,
+    }, now)
   }
 }
 
@@ -480,11 +509,13 @@ function graphTaskChange(
   existingTasks: Array<Record<string, unknown>>,
   selectedRelease: SelectedRelease | null,
   sources: ProjectReintakeSource[],
+  projectPath: string | undefined,
+  now: string,
 ): ReintakeChange {
   const reframe = reconciliations.find(change =>
     'existingTaskId' in change && change.existingTaskId === task.id,
   ) as { existingTaskId?: string; reason?: string } | undefined
-  const draft = evidenceTaskToDraft(task, selectedRelease, sources)
+  const draft = evidenceTaskToDraft(task, selectedRelease, sources, projectPath, now)
 
   if (reframe) {
     const existing = existingTasks.find(candidate => stringField(candidate, 'id') === task.id)
@@ -512,20 +543,22 @@ function evidenceTaskToDraft(
   task: EvidenceTask,
   selectedRelease: SelectedRelease | null,
   sources: ProjectReintakeSource[],
+  projectPath: string | undefined,
+  now: string,
 ): ReintakeTaskDraft {
   const later = selectedRelease ? taskIsAfterSelectedRelease(task, selectedRelease) : false
-  const references = unique([
-    ...task.sourceRefs.map(ref => ref.path),
-    ...supportingEvidenceRefsForTask(task, sources),
-  ])
+  const references = evidenceReferencesForTask(task, sources)
   const contractNames = unique(references
     .map(reference => sources.find(source => source.path === reference)?.content)
     .filter((content): content is string => Boolean(content))
     .flatMap(content => extractNeededContractNames(content, task.title)))
-  const acceptanceCriteria = reintakeAcceptanceCriteria(task, contractNames).map(criterion => ({
+  const importedBlueprint = projectPath
+    ? buildImportedBlueprintSeed(evidenceTaskToMaterializedImportTask(task, references), references, projectPath, now)
+    : null
+  const acceptanceCriteria = (importedBlueprint?.acceptanceCriteria ?? reintakeAcceptanceCriteria(task, contractNames)).map(criterion => ({
     id: criterion.id,
     description: criterion.description,
-    verifiedBy: criterion.id.includes('automated') || criterion.id.includes('regression') ? 'automated' : 'review',
+    verifiedBy: criterion.verifiedBy ?? (criterion.id.includes('automated') || criterion.id.includes('regression') ? 'automated' : 'review'),
     met: false,
   }))
   const reviewableBlueprint = hasReviewableReintakeBlueprint(task, references, acceptanceCriteria, contractNames)
@@ -541,9 +574,75 @@ function evidenceTaskToDraft(
     references,
     ...(later || !selectedRelease ? {} : { releaseIds: [selectedRelease.id] }),
     ...(task.stageAlignment ? { stageAlignment: task.stageAlignment } : {}),
-    spec: evidenceTaskSpec({ task, references, acceptanceCriteria, sources, contractNames }),
-    ...(reviewableBlueprint ? { productBrief: reintakeProductBrief(task, contractNames) } : {}),
+    spec: importedBlueprint?.spec ?? evidenceTaskSpec({ task, references, acceptanceCriteria, sources, contractNames }),
+    ...(reviewableBlueprint ? { productBrief: reintakeOwnedProductBrief(importedBlueprint?.productBrief) ?? reintakeProductBrief(task, contractNames) } : {}),
+    proofPaths: importedBlueprint?.proofPaths ?? task.proofPaths,
+    ...(importedBlueprint?.workUnitAnalysis ? { workUnitAnalysis: importedBlueprint.workUnitAnalysis } : {}),
+    ...(importedBlueprint?.taskReadiness ? { taskReadiness: importedBlueprint.taskReadiness } : {}),
+    ...(importedBlueprint?.taskKind ? { taskKind: importedBlueprint.taskKind } : {}),
+    ...(importedBlueprint?.definitionOfDone ? { definitionOfDone: importedBlueprint.definitionOfDone } : {}),
+    ...(importedBlueprint?.blockerPlans ? { blockerPlans: importedBlueprint.blockerPlans } : {}),
+    ...(importedBlueprint?.contextBudget ? { contextBudget: importedBlueprint.contextBudget } : {}),
+  }
+}
+
+function reintakeOwnedProductBrief(productBrief: Task['productBrief'] | undefined): Task['productBrief'] | undefined {
+  if (!productBrief) return undefined
+  return {
+    ...productBrief,
+    authoredBy: 'project-reintake',
+  }
+}
+
+function evidenceReferencesForTask(task: EvidenceTask, sources: ProjectReintakeSource[]): string[] {
+  return unique([
+    ...task.sourceRefs.map(ref => ref.path),
+    ...inventorySiblingSpecRefsForTask(task, sources),
+    ...supportingEvidenceRefsForTask(task, sources),
+  ])
+}
+
+function inventorySiblingSpecRefsForTask(task: EvidenceTask, sources: ProjectReintakeSource[]): string[] {
+  const refs: string[] = []
+  for (const source of sources) {
+    if (!/(^|\/)docs\/harness\/remaining-spec-decomposition-inventory\.md$/i.test(source.path.replaceAll('\\', '/'))) continue
+    for (const section of splitMarkdownSectionsForReintake(source.content)) {
+      if (!section.body.includes(task.title)) continue
+      const fileNames = [
+        ...[section.heading, section.body].flatMap(value =>
+          [...value.matchAll(/`([^`\n]+\.md)`/g)].map(match => match[1]?.trim()).filter((name): name is string => Boolean(name)),
+        ),
+      ]
+      for (const fileName of fileNames) {
+        refs.push(`docs/specs/${fileName}`)
+      }
+    }
+  }
+  return refs
+}
+
+function evidenceTaskToMaterializedImportTask(
+  task: EvidenceTask,
+  references: string[],
+): MaterializedImportTask {
+  const evidenceSnippets = task.sourceRefs
+    .map(ref => ref.snippet)
+    .filter(snippet => !/^Recommended first task title:/i.test(snippet.trim()))
+  return {
+    id: task.id,
+    title: task.title,
+    description: evidenceSnippets.length > 0
+      ? evidenceTaskDescription(task)
+      : evidenceTaskWhyThisMayMatter(task),
+    whyThisMayMatter: evidenceSnippets.join(' '),
+    domain: task.targetArea,
+    scope: 'current',
+    priority: evidenceTaskPriority(task),
+    references,
+    acceptanceCriteria: task.acceptanceCriteria,
+    dependsOn: task.dependsOn,
     proofPaths: task.proofPaths,
+    evidenceGraphTask: true,
   }
 }
 
@@ -955,9 +1054,25 @@ function stageNumber(value: string | undefined): number | null {
   return match?.[1] ? Number(match[1]) : null
 }
 
-function releaseDraftsFor(selectedRelease: SelectedRelease, groups: ReintakeChangeGroup[]): ProjectReintakeReleaseDraft[] {
+function releaseDraftsFor(
+  selectedRelease: SelectedRelease,
+  groups: ReintakeChangeGroup[],
+  existingTasks: Array<Record<string, unknown>>,
+): ProjectReintakeReleaseDraft[] {
   const nodeIds: string[] = []
   const deferredNodeIds: string[] = []
+  for (const task of existingTasks) {
+    const id = stringField(task, 'id')
+    if (!id || stringField(task, 'status') === 'archived') continue
+    const releaseIds = Array.isArray(task.releaseIds) ? task.releaseIds : []
+    if (!releaseIds.includes(selectedRelease.id)) continue
+    const nodeId = `work:${id}`
+    if (stringField(task, 'status') === 'shelved') {
+      deferredNodeIds.push(nodeId)
+    } else {
+      nodeIds.push(nodeId)
+    }
+  }
   for (const change of groups.flatMap(group => group.changes)) {
     const task = change.kind === 'create' ? change.task : change.kind === 'reframe' ? change.after : null
     if (!task) continue
@@ -983,26 +1098,10 @@ function releaseDraftsFor(selectedRelease: SelectedRelease, groups: ReintakeChan
 function applyReleaseDrafts(
   queue: { selectedReleaseId?: string; releases?: ProjectReintakeReleaseDraft[]; tasks: Array<Record<string, unknown>> },
   draft: ProjectReintakeDraft,
-  groups: ReintakeChangeGroup[],
 ): void {
   if (!draft.selectedReleaseId || !draft.releases?.length) return
-  const appliedTaskIds = new Set<string>()
-  for (const change of groups.flatMap(group => group.changes)) {
-    if (change.kind === 'create') appliedTaskIds.add(change.task.id)
-    if (change.kind === 'reframe') appliedTaskIds.add(change.taskId)
-  }
-  if (appliedTaskIds.size === 0) return
-
   const releaseDrafts = draft.releases
-    .map(release => ({
-      ...release,
-      nodeIds: release.nodeIds.filter(nodeId => appliedTaskIds.has(nodeId.replace(/^work:/, ''))),
-      deferredNodeIds: release.deferredNodeIds.filter(nodeId => appliedTaskIds.has(nodeId.replace(/^work:/, ''))),
-    }))
-    .filter(release => release.nodeIds.length > 0 || release.deferredNodeIds.length > 0)
-  if (releaseDrafts.length === 0) return
-
-  queue.selectedReleaseId = queue.selectedReleaseId ?? draft.selectedReleaseId
+  queue.selectedReleaseId = draft.selectedReleaseId
   const existing = new Map((queue.releases ?? []).map(release => [release.id, release]))
   for (const release of releaseDrafts) {
     const prior = existing.get(release.id)
@@ -1108,6 +1207,7 @@ function archiveShadowedCurrentMilestoneDeliverableTasks(
     .filter(task => {
       const id = stringField(task, 'id')
       if (!id || usedTaskIds.has(id)) return false
+      if (!isOpenPreImplementationTask(task)) return false
       const title = stringField(task, 'title')
       const description = stringField(task, 'description') ?? ''
       if (!title) return false

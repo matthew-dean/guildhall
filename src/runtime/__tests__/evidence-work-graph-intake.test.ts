@@ -438,6 +438,31 @@ describe('evidence-to-work-graph intake', () => {
     expect(plan.tasks.map(task => task.title)).not.toContain('*(none — umbrella doc, covered by child specs)*')
   })
 
+  it('does not recreate ready source-backed tasks as missing evidence work', () => {
+    const plan = planEvidenceWorkGraph({
+      sources: [{ path: 'docs/harness/remaining-spec-decomposition-inventory.md', content: narrativeRemainingInventoryEvidence }],
+      existingTasks: [{
+        id: 'task-import-lho60m',
+        title: 'Implement dialogue-and-character-voice reviewer lane',
+        status: 'ready',
+        description: 'Implement the source-backed reviewer lane.',
+        references: ['docs/harness/remaining-spec-decomposition-inventory.md', 'docs/specs/dialogue-and-character-voice.md'],
+        acceptanceCriteria: [{ id: 'source-implementation', description: 'The lane is implemented.', verifiedBy: 'review' }],
+        productBrief: {
+          userJob: 'Prove the dialogue reviewer lane from docs.',
+          whyItMattersNow: 'The current scope needs source-backed reviewer proof.',
+          successMetric: 'The reviewer lane follows the cited spec.',
+        },
+        spec: '## What this is\nA source-backed implementation spec.',
+        proofPaths: [{ kind: 'review', expectedEvidence: ['Spec evidence is attached.'] }],
+      }],
+    })
+
+    expect(plan.tasks.map(task => task.title)).not.toContain('Implement dialogue-and-character-voice reviewer lane')
+    expect(plan.reconciliations).toEqual([])
+    expect(plan.tasks.map(task => task.title)).toContain('Implement scene-and-chapter-intelligence reviewer lane')
+  })
+
   it('keeps later-stage inventory recommendations inside the same MVP task graph when a roadmap names the active milestone stage', () => {
     const plan = planEvidenceWorkGraph({
       sources: [

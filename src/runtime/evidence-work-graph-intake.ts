@@ -76,6 +76,7 @@ type ExistingTaskMatch = {
 }
 
 const DONEISH_STATUSES = new Set(['done', 'review', 'gate_check'])
+const STRUCTURED_PLAN_STATUSES = new Set(['ready', 'spec_review'])
 const workGraphDomainAdapter = genericWorkGraphDomainAdapter
 
 export function planEvidenceWorkGraph(input: EvidenceWorkGraphInput): EvidenceWorkGraphPlan {
@@ -100,7 +101,7 @@ export function planEvidenceWorkGraph(input: EvidenceWorkGraphInput): EvidenceWo
       continue
     }
 
-    if (isAlreadyShipped && existingMatch?.structuredEnough) {
+    if (existingMatch?.structuredEnough) {
       continue
     }
 
@@ -880,6 +881,8 @@ function findExistingTaskByDeliverable(deliverable: string, existingTasks: Array
 
     const acceptanceCriteria = Array.isArray(task.acceptanceCriteria) ? task.acceptanceCriteria : []
     const dependsOn = Array.isArray(task.dependsOn) ? task.dependsOn : []
+    const references = Array.isArray(task.references) ? task.references : []
+    const proofPaths = Array.isArray(task.proofPaths) ? task.proofPaths : []
     const productBrief = task.productBrief && typeof task.productBrief === 'object' && !Array.isArray(task.productBrief)
       ? task.productBrief as Record<string, unknown>
       : null
@@ -888,13 +891,24 @@ function findExistingTaskByDeliverable(deliverable: string, existingTasks: Array
       && typeof productBrief?.successMetric === 'string' && productBrief.successMetric.trim().length > 0
     const spec = typeof task.spec === 'string' ? task.spec : ''
     const hasStructuredSpec = Boolean(task.structuredSpec && typeof task.structuredSpec === 'object' && !Array.isArray(task.structuredSpec))
+    const status = typeof task.status === 'string' ? task.status : undefined
+    const hasSourceBackedPlanShape = Boolean(
+      status &&
+      STRUCTURED_PLAN_STATUSES.has(status) &&
+      hasBriefShape &&
+      spec.trim().length > 0 &&
+      references.length > 0 &&
+      acceptanceCriteria.length > 0 &&
+      proofPaths.length > 0,
+    )
     const structuredEnough = hasStructuredSpec
       || (markdownLooksLikeModernSpec(spec) && hasBriefShape && acceptanceCriteria.length > 0)
       || (hasBriefShape && acceptanceCriteria.length > 0 && dependsOn.length > 0)
+      || hasSourceBackedPlanShape
 
     return {
       id,
-      status: typeof task.status === 'string' ? task.status : undefined,
+      status,
       producedArtifact: typeof task.producedArtifact === 'string' ? task.producedArtifact : undefined,
       structuredEnough,
     }

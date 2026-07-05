@@ -449,6 +449,13 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
           'Kept as runnable fixed-spec work because the accepted completion boundary says nothing must be split or blocked.',
         ],
       }
+      if (task.decomposition?.action === 'split') {
+        task.decomposition = {
+          ...task.decomposition,
+          action: 'keep',
+          reasons: task.decomposition.reasons.filter(reason => reason.code !== 'too_broad'),
+        }
+      }
     }
     transitionTaskStatus({
       task,

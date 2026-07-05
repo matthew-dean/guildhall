@@ -195,6 +195,23 @@ const narrativeSchemaRoadmap = [
   '- `ExportManifest`',
 ].join('\n')
 
+const dialogueAndCharacterVoiceSpec = [
+  '# Dialogue And Character Voice',
+  '',
+  '## Reviewer questions',
+  '',
+  '- Could the line be reassigned to another character without anyone noticing?',
+  '- Does diction, rhythm, or register drift away from the speaker profile?',
+  '',
+  '## Finding contract',
+  '',
+  '- Return structured findings with character id, quote span, severity, and suggested revision direction.',
+  '',
+  '## Verification',
+  '',
+  '- Run the reviewer lane against one bounded dialogue fixture and record structured findings.',
+].join('\n')
+
 describe('project re-intake apply', () => {
   it('applies reframes in place and appends a re-intake note', async () => {
     const memoryDir = await makeState([
@@ -281,7 +298,7 @@ describe('project re-intake apply', () => {
       id: 'task-deliverable',
       title: 'typed fixture and expected-record contracts',
       description: 'docs/harness/implementation-roadmap.md: - typed fixture and expected-record contracts',
-      status: 'shelved',
+      status: 'import_draft',
     })
     const memoryDir = await makeState([legacyTask])
     const draft = planProjectReintake({
@@ -324,7 +341,7 @@ describe('project re-intake apply', () => {
       id: 'task-wrapped-deliverable',
       title: 'scripts or tests that ingest a fixture, build records, run a packet, and save the run output',
       description: 'docs/harness/implementation-roadmap.md: - scripts or tests that ingest a fixture, build records, run a packet, and save the run output',
-      status: 'shelved',
+      status: 'import_draft',
     })
     const memoryDir = await makeState([legacyTask])
     const draft = planProjectReintake({
@@ -443,7 +460,10 @@ describe('project re-intake apply', () => {
     expect(JSON.stringify(schemaPruneTask?.acceptanceCriteria ?? '')).not.toMatch(/migration|rollback/i)
     expect(laterTask).toMatchObject({
       status: 'shelved',
-      references: ['docs/harness/remaining-spec-decomposition-inventory.md'],
+      references: [
+        'docs/harness/remaining-spec-decomposition-inventory.md',
+        'docs/specs/dialogue-and-character-voice.md',
+      ],
       stageAlignment: 'stage 2 (agent coordination)',
     })
     expect(laterTask?.releaseIds ?? []).toEqual([])
@@ -466,11 +486,19 @@ describe('project re-intake apply', () => {
 
   it('does not collapse a documented near-term proof scope into only the next milestone', async () => {
     const memoryDir = await makeState([])
+    const projectPath = path.dirname(memoryDir)
+    await fs.mkdir(path.join(projectPath, 'docs', 'harness'), { recursive: true })
+    await fs.mkdir(path.join(projectPath, 'docs', 'specs'), { recursive: true })
+    await fs.writeFile(path.join(projectPath, 'docs', 'harness', 'implementation-roadmap.md'), narrativeNearTermProofRoadmap, 'utf8')
+    await fs.writeFile(path.join(projectPath, 'docs', 'harness', 'remaining-spec-decomposition-inventory.md'), narrativeRemainingInventory, 'utf8')
+    await fs.writeFile(path.join(projectPath, 'docs', 'specs', 'dialogue-and-character-voice.md'), dialogueAndCharacterVoiceSpec, 'utf8')
     const draft = planProjectReintake({
       now,
+      projectPath,
       sources: [
         { path: 'docs/harness/implementation-roadmap.md', content: narrativeNearTermProofRoadmap },
         { path: 'docs/harness/remaining-spec-decomposition-inventory.md', content: narrativeRemainingInventory },
+        { path: 'docs/specs/dialogue-and-character-voice.md', content: dialogueAndCharacterVoiceSpec },
       ],
       tasks: [],
     })
@@ -506,11 +534,28 @@ describe('project re-intake apply', () => {
     expect(dialogueTask).toMatchObject({
       releaseIds: ['near-term-proof-scope'],
       status: 'spec_review',
+      references: [
+        'docs/harness/remaining-spec-decomposition-inventory.md',
+        'docs/specs/dialogue-and-character-voice.md',
+      ],
     })
+    expect(dialogueTask?.spec ?? '').toContain('Could the line be reassigned to another character without anyone noticing?')
+    expect(dialogueTask?.spec ?? '').not.toContain('exposes the expected public contract')
+    expect(dialogueTask?.decomposition).toBeUndefined()
+    expect(dialogueTask?.sizePlan).toBeUndefined()
     expect(themeTask).toMatchObject({
       releaseIds: ['near-term-proof-scope'],
       status: 'spec_review',
     })
+    const approval = await approveSpec({ memoryDir, taskId: dialogueTask!.id })
+    expect(approval).toMatchObject({ success: true, newStatus: 'ready' })
+    const approvedQueue = await readQueue(memoryDir)
+    expect(approvedQueue.tasks.find(task => task.id === dialogueTask!.id)).toMatchObject({
+      status: 'ready',
+    })
+    expect(approvedQueue.tasks.find(task => task.id === dialogueTask!.id)?.sizePlan?.action).not.toBe('split_required')
+    expect(approvedQueue.tasks.find(task => task.id === dialogueTask!.id)?.decomposition?.action).not.toBe('split')
+    expect(approvedQueue.tasks.filter(task => task.hierarchy?.parentId === dialogueTask!.id)).toEqual([])
     expect(shellTask).toMatchObject({
       status: 'shelved',
     })
@@ -571,14 +616,25 @@ describe('project re-intake apply', () => {
         source: 'project-reintake',
       },
     })
-    const memoryDir = await makeState([legacyTask])
+    const staleChild = task({
+      id: 'stale-child',
+      title: 'Define old historical contract ids',
+      status: 'exploring',
+      releaseIds: ['stage-1-fixture-and-evaluation-harness'],
+      hierarchy: {
+        parentId: 'task-import-9s8tkc',
+        order: 0,
+        relation: 'part_of',
+      },
+    })
+    const memoryDir = await makeState([legacyTask, staleChild])
     const draft = planProjectReintake({
       now,
       sources: [
         { path: 'docs/harness/implementation-roadmap.md', content: narrativeRoadmap },
         { path: 'docs/specs/schema-contract-roadmap.md', content: narrativeSchemaRoadmap },
       ],
-      tasks: [legacyTask],
+      tasks: [legacyTask, staleChild],
     })
     await writeProjectReintakeDraft(memoryDir, draft)
 
@@ -615,6 +671,14 @@ describe('project re-intake apply', () => {
     expect(refreshed?.hierarchy).toBeUndefined()
     expect(refreshed?.dependsOn).toEqual([])
     expect(refreshed?.archivedEvidence).toBeUndefined()
+    expect(queue.tasks.find(task => task.id === 'stale-child')).toMatchObject({
+      status: 'archived',
+      releaseIds: ['stage-1-fixture-and-evaluation-harness'],
+      archivedEvidence: expect.objectContaining({
+        retention: 'archive',
+        source: 'project-reintake',
+      }),
+    })
     expect(queue.tasks.find(task => task.id === 'stale-child')?.hierarchy).toBeUndefined()
     expect(deriveWorkExecutionState(queue.tasks as any, 'task-import-9s8tkc')).toMatchObject({
       isContaining: false,

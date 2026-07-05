@@ -96,6 +96,106 @@ describe('buildProjectOrientationSpine', () => {
     expect(spine.gaps.map(gap => gap.kind)).not.toContain('source_conflict')
   })
 
+  it('dedupes release blockers and anchors them to the exact task before fuzzy matching', () => {
+    const spine = buildProjectOrientationSpine({
+      projectId: 'narrative-harness',
+      now: '2026-07-05T13:30:00.000Z',
+      charter: {
+        goal: 'Prove the headless Narrative Harness MVP from fixture records.',
+        targetAudience: 'Authors and agent builders working on long-form fiction.',
+        currentReleaseTarget: 'Near-term proof scope',
+        successDefinition: 'The selected scope is ready only when specs are approved and proof is attached.',
+        nonGoals: ['Production UI'],
+        source: 'owner_approved',
+      },
+      releases: [{
+        id: 'near-term-proof-scope',
+        label: 'Near-term proof scope',
+        kind: 'release',
+        state: 'active',
+        source: 'inferred',
+        nodeIds: ['work:dialogue', 'work:fixture'],
+        deferredNodeIds: [],
+      }],
+      selectedReleaseId: 'near-term-proof-scope',
+      tasks: [
+        {
+          id: 'dialogue',
+          title: 'Implement dialogue-and-character-voice reviewer lane',
+          projectPath: '/tmp/narrative-harness',
+          status: 'spec_review',
+          priority: 'normal',
+          spec: 'Reviewer lane spec.',
+          acceptanceCriteria: [{ id: 'AC-1', description: 'Reviewer lane is defined.', verifiedBy: 'review', met: false }],
+        },
+        {
+          id: 'fixture',
+          title: 'Shape fixture and expected-record ground truth',
+          projectPath: '/tmp/narrative-harness',
+          status: 'ready',
+          priority: 'normal',
+        },
+      ],
+      scopeProjection: {
+        selectedScope: {
+          id: 'near-term-proof-scope',
+          label: 'Near-term proof scope',
+          kind: 'release',
+          source: 'inferred',
+          nodeIds: ['work:dialogue', 'work:fixture'],
+          deferredNodeIds: [],
+        },
+        rows: [],
+        counts: {
+          included: 2,
+          deferred: 0,
+          ready: 1,
+          paused: 0,
+          active: 0,
+          done: 0,
+          ownerBlocked: 1,
+          proofBlocked: 0,
+          humanBlocking: 1,
+        },
+        start: {
+          canStart: false,
+          label: 'Review',
+          message: 'Review 1 spec before work can start.',
+          actionHref: '/projects/narrative-harness/work',
+        },
+        release: {
+          id: 'near-term-proof-scope',
+          label: 'Near-term proof scope',
+          kind: 'release',
+          state: 'active',
+          source: 'inferred',
+          description: null,
+          nodeIds: ['work:dialogue', 'work:fixture'],
+          deferredNodeIds: [],
+          proofStyle: 'unspecified',
+          blockers: [{
+            id: 'dialogue',
+            label: 'Implement dialogue-and-character-voice reviewer lane: waiting for review before work can start.',
+          }],
+        },
+      },
+      startReadiness: { canStart: false },
+      releaseReadiness: {
+        verdict: 'blocked',
+        blockers: [{
+          id: 'dialogue',
+          label: 'Implement dialogue-and-character-voice reviewer lane: waiting for review before work can start.',
+        }],
+      },
+    })
+
+    expect(spine.release.blockers).toHaveLength(1)
+    expect(spine.release.blockers[0]).toMatchObject({
+      id: 'dialogue',
+      owningNodeId: 'work:dialogue',
+    })
+  })
+
   it('rolls active internal child work into the selected release summary', () => {
     const spine = buildProjectOrientationSpine({
       projectId: 'narrative-harness',

@@ -1358,13 +1358,18 @@ function attachReleaseBlockers(
 ): { blockers: OrientationBlocker[]; gaps: OrientationGap[] } {
   const gaps: OrientationGap[] = []
   const nodes = [...nodesById.values()]
-  const result = (Array.isArray(blockers) ? blockers : []).map((blocker, index) => {
+  const seen = new Set<string>()
+  const result = (Array.isArray(blockers) ? blockers : [])
+    .filter((blocker, index) => {
+      const label = blocker.label ?? blocker.title ?? blocker.id ?? `Release blocker ${index + 1}`
+      const key = `${blocker.id ?? ''}\n${normalizeText(label)}`
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+    .map((blocker, index) => {
     const label = blocker.label ?? blocker.title ?? blocker.id ?? `Release blocker ${index + 1}`
-    const normalized = normalizeText(label)
-    const owningNode = nodes.find(node =>
-      normalized.includes(normalizeText(node.title)) ||
-      sharedTokenCount(label, node.title) >= 1,
-    )
+    const owningNode = releaseBlockerOwnerNode(blocker.id ?? null, label, nodes)
     const output: OrientationBlocker = {
       id: blocker.id ?? `release-blocker-${index + 1}`,
       label,
@@ -1381,6 +1386,24 @@ function attachReleaseBlockers(
     return output
   })
   return { blockers: result, gaps }
+}
+
+function releaseBlockerOwnerNode(
+  blockerId: string | null,
+  label: string,
+  nodes: OrientationNode[],
+): OrientationNode | null {
+  if (blockerId) {
+    const direct = nodes.find(node => node.refs.taskIds.includes(blockerId) || node.id === `work:${blockerId}`)
+    if (direct) return direct
+  }
+  const normalized = normalizeText(label)
+  const exact = nodes.find(node => {
+    const title = normalizeText(node.title)
+    return title.length > 0 && (normalized === title || normalized.startsWith(`${title} `) || normalized.includes(`${title} `))
+  })
+  if (exact) return exact
+  return nodes.find(node => sharedTokenCount(label, node.title) >= 2) ?? null
 }
 
 function activePins(nodes: OrientationNode[]): OrientationPin[] {

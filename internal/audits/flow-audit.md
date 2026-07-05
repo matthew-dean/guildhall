@@ -12,6 +12,73 @@ This is the active browser test plan for the Guildhall project surface. Keep it
 updated while auditing the active test project so another agent can resume
 without guessing.
 
+2026-07-05T14:00:00Z - Stabilized Narrative Harness re-intake release truth and
+nested-repo proof.
+
+- Work id: `codex:narrative-harness-source-backed-release-reintake-2026-07-05`.
+- User job: when Guildhall re-intakes Narrative Harness from real docs, it
+  should keep the current release scope stable, avoid recreating already-ready
+  source-backed tasks, avoid approval-triggered fake child splits, and keep
+  Start/readiness scoped to the documented current release. For Looma + Knit,
+  the project root not being a git repo must not hide child repo state.
+- Root cause:
+  - Re-intake had two competing shapers: the source-aware workspace importer
+    and a weaker project-reintake fallback. That fallback rebuilt generic specs
+    and could leave `sizePlan` normalized while `decomposition.action` still
+    said `split`.
+  - Evidence graph reconciliation treated ready/spec-review source-backed tasks
+    as missing unless the source called them shipped, so reruns kept proposing
+    the same nine tasks as new work.
+  - Release metadata was generated only from create/reframe changes. Once the
+    task graph stabilized, the no-op draft stopped carrying the selected
+    release, letting older completed release state leak back into Start.
+  - Shadowed-roadmap cleanup kept proposing already-archived records, creating
+    noise that looked like work still needing action.
+- Fix:
+  - Project re-intake now reuses `buildImportedBlueprintSeed()` for
+    source-backed tasks, carries sibling spec references, and stamps
+    project-reintake briefs so owner-approved fixed-boundary specs become
+    runnable without materializing fake split children.
+  - Source-backed fixed-boundary approval normalizes both `sizePlan` and
+    `decomposition`.
+  - Evidence graph matching treats ready/spec-review tasks with references,
+    product brief, spec, acceptance criteria, and proof paths as satisfying the
+    evidence unit.
+  - Release drafts include existing active tasks assigned to the selected
+    release, and applying a re-intake draft updates selected release metadata
+    even when no tasks changed.
+  - Orientation release blockers are deduped and anchored by exact task id/title
+    before fuzzy matching.
+- Contract Touch Decision:
+  - Touched contracts: project re-intake draft/apply semantics, evidence graph
+    reconciliation semantics, release metadata apply semantics, orientation
+    blocker ownership.
+  - Contracts considered but not touched: persisted task schema, persisted
+    release schema, `/api/project` response shape, Git Story response shape.
+  - Required follow-up: `scopeProjection.selectedScope` is still null in the
+    live `/api/project` payload after the scheduler/readiness fix; map/overview
+    display should be checked before claiming the 1000-foot view is fully
+    solved.
+  - Proof required: focused unit regressions, installed-app build, installed
+    stale-server check, live Narrative Harness re-intake/readiness proof, live
+    Looma + Knit child repo proof.
+  - Proof provided:
+    `./node_modules/.bin/vitest run src/runtime/__tests__/evidence-work-graph-intake.test.ts src/runtime/__tests__/project-reintake-apply.test.ts src/runtime/__tests__/project-orientation-spine.test.ts src/runtime/__tests__/workspace-importer.test.ts --reporter=dot`
+    passed `152` tests; `packages/ui` generated styles and `tsc -p
+    tsconfig.json`; `node ./build.mjs`; `node ./scripts/dev-install.mjs`;
+    installed `/api/stale-server` returned `stale:false`.
+  - Live Narrative Harness proof: `/api/project/reintake/rerun` returned
+    selected release `near-term-proof-scope`, `created:0`, `archived:0`, and
+    one preserve-progress group; applying it succeeded. `/api/project` then
+    reported `9` ready near-term tasks, `0` active children, `0` split parents,
+    release readiness `tasks:9`, `blockers:0`, `unapprovedSpecs:0`, and
+    `startReadiness.canStart:true`.
+  - Live Looma + Knit proof: `/api/project/git-story?projectId=looma-knit`
+    returned `fatal:null` plus child snapshots for `Looma`
+    (`/Users/matthew/git/oss/looma-knit/looma`) and `Knit`
+    (`/Users/matthew/git/oss/looma-knit/knit`), so the non-git container root
+    does not suppress child repo state.
+
 2026-07-05T12:25:00Z - Suppressed stale runtime stop chrome for completed selected scopes.
 
 - Work id: `codex:completed-scope-runtime-chrome-suppression-2026-07-05`.
