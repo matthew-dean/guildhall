@@ -16561,6 +16561,37 @@ work item, not only the containing parent.
 
 source: codex:narrative-harness-spec-no-progress-recovery-2026-07-04
 
+2026-07-04T17:14:00-07:00 - Fixed approved recovery specs being visible as
+ready but not dispatchable because stale decomposition metadata survived.
+
+- Work id: `codex:approved-spec-empty-decomposition-dispatch-2026-07-04`.
+- User job: when Codex approves a concrete recovery spec on the owner's behalf,
+  Guildhall should either run it or say exactly why it cannot run. It should not
+  show ready work and then stop with "no actionable tasks".
+- Finding:
+  - Narrative Harness task
+    `task-import-9s8tkc-split-capture-prototype-run-and-evaluation-records-2`
+    moved from recovery `spec_review` to `ready`, but still carried
+    `sizePlan.action: decompose_before_execution` with no recommended children.
+  - The execution model treated that stale empty decomposition flag as a hard
+    runtime block, so Start stopped with `No actionable tasks remain` even
+    though the visible queue showed seven ready tasks.
+- Fix:
+  - `approveSpec` now normalizes bounded child contract/spec work with no
+    materializable children to `proceed_with_warning` before marking it ready.
+    That makes the approved unit match the actual model: run this bounded child
+    slice unless a real split has been planned.
+  - `deriveWorkExecutionState` now treats already-saved bounded child contract
+    work with empty stale `decompose_before_execution` metadata as runnable,
+    so old project state does not require a one-off rewrite to recover.
+  - Updated work-execution expectations so importer-generated internal children
+    stay hidden from visible totals while still being runnable as child work.
+- Verification:
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/intake.test.ts src/runtime/__tests__/orchestrator-picker.test.ts src/runtime/__tests__/work-execution-state.test.ts`
+    passed `67` tests.
+
+source: codex:approved-spec-empty-decomposition-dispatch-2026-07-04
+
 2026-07-04T16:31:00-07:00 - Fixed resolved escalation state leaving tasks
 visibly blocked after the false proof-policy escalation.
 

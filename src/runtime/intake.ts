@@ -454,6 +454,7 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
     task.status === 'spec_review' &&
     (task.taskReadiness?.recommendation === 'ready' || task.taskReadiness?.recommendation === 'needs_research_spike')
   ) {
+    settleBoundedChildContractWorkWithoutMaterializedChildren(task)
     transitionTaskStatus({
       task,
       event: 'mark_ready',
@@ -463,6 +464,7 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
     })
   }
   if (task.status === 'spec_review' && task.taskReadiness?.recommendation === 'needs_research_spike') {
+    settleBoundedChildContractWorkWithoutMaterializedChildren(task)
     transitionTaskStatus({
       task,
       event: 'mark_ready',
@@ -472,6 +474,7 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
     })
   }
   if (task.status === 'spec_review' && isBoundedChildContractWorkWithoutMaterializedChildren(task)) {
+    settleBoundedChildContractWorkWithoutMaterializedChildren(task)
     transitionTaskStatus({
       task,
       event: 'mark_ready',
@@ -567,6 +570,20 @@ function isBoundedChildContractWorkWithoutMaterializedChildren(task: Task): bool
   if (!hasContainingWork) return false
   const text = [task.title, task.description, task.spec].filter(Boolean).join('\n')
   return /\b(contract|schema|fixture|expected-record|prototype-run|evaluation)\b/i.test(text)
+}
+
+function settleBoundedChildContractWorkWithoutMaterializedChildren(task: Task): boolean {
+  if (!isBoundedChildContractWorkWithoutMaterializedChildren(task) || !task.sizePlan) return false
+  task.sizePlan = {
+    ...task.sizePlan,
+    action: 'proceed_with_warning',
+    recommendedChildren: [],
+    reasons: [
+      ...task.sizePlan.reasons,
+      'Kept as runnable bounded child contract work because no materializable split children were planned.',
+    ],
+  }
+  return true
 }
 
 function approveReintakeBriefWithSpec(task: Task, now: string): void {

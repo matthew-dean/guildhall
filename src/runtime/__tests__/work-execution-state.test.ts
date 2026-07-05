@@ -154,7 +154,7 @@ describe('work execution state', () => {
     expect(project.counts.internalTotal).toBe(1)
     expect(parent?.visibleChildIds).toEqual([])
     expect(parent?.internalChildIds).toEqual(['task-runner-split-load-fixture-inputs'])
-    expect(parent?.runnableChildIds).toEqual([])
+    expect(parent?.runnableChildIds).toEqual(['task-runner-split-load-fixture-inputs'])
   })
 
   it('does not treat legacy split recommendations as runtime authority when hierarchy already exists', () => {
@@ -225,5 +225,69 @@ describe('work execution state', () => {
     expect(state.scopeAuthority.needsOwnerDecision).toBe(false)
     expect(state.isRunnable).toBe(false)
     expect(state.summaryState).toBe('needs_decomposition')
+  })
+
+  it('runs approved bounded child contract work when stale decomposition has no children', () => {
+    const tasks = [
+      task({
+        id: 'parent',
+        title: 'Define fixture and evaluation schemas',
+        status: 'ready',
+        hierarchy: { childIds: ['child'], order: 0 },
+      }),
+      task({
+        id: 'child',
+        title: 'Capture prototype run and evaluation records',
+        description: 'Stage 1 prototype-run and evaluation contract work.',
+        status: 'ready',
+        spec: [
+          '## Summary',
+          'Define the concrete prototype-run and evaluation record surface.',
+          '',
+          '## Completion Boundary',
+          '- What must be split or blocked: any newly discovered product decision that changes which contracts belong in Stage 1 versus a later stage.',
+        ].join('\n'),
+        hierarchy: { parentId: 'parent', childIds: [], order: 1 },
+        sizePlan: {
+          taskId: 'child',
+          score: 5,
+          band: 'large',
+          action: 'decompose_before_execution',
+          factors: [],
+          recommendedChildren: [],
+          reasons: ['Stale empty decomposition flag from approved recovery spec.'],
+          reviewBudgetHint: 'balanced',
+          createdAt: '2026-07-04T00:00:00.000Z',
+          createdBy: 'test',
+        },
+        taskReadiness: {
+          taskKind: 'implementation',
+          recommendation: 'needs_research_spike',
+          summary: 'Task should run research or a spike before implementation.',
+          dimensions: [],
+          definitionOfDone: {
+            items: ['Prototype run and evaluation records exist.'],
+            evidenceRequired: ['Local proof command passes.'],
+            updatedAt: '2026-07-04T00:00:00.000Z',
+            createdBy: 'test',
+          },
+          blockerPlans: [],
+          contextBudget: {
+            estimatedTokens: 100,
+            risk: 'low',
+            fitsInOneWorkerBrief: true,
+            reasons: [],
+          },
+          assessedAt: '2026-07-04T00:00:00.000Z',
+          assessedBy: 'test',
+        },
+      }),
+    ]
+
+    const state = deriveWorkExecutionState(tasks, 'child')
+
+    expect(state.executionPlanning.needsDecomposition).toBe(false)
+    expect(state.isRunnable).toBe(true)
+    expect(state.summaryState).toBe('ready')
   })
 })

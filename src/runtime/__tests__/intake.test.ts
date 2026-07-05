@@ -405,6 +405,7 @@ describe('approveSpec', () => {
     expect(result.newStatus).toBe('ready')
     const updated = await readQueue()
     expect(updated.tasks[0]!.status).toBe('ready')
+    expect(updated.tasks[0]!.sizePlan?.action).toBe('proceed_with_warning')
     expect(updated.tasks[0]!.sizePlan?.recommendedChildren ?? []).toEqual([])
   })
 

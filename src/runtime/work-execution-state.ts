@@ -114,7 +114,7 @@ export function deriveWorkExecutionState(tasks: Task[], workId: string): WorkExe
     .map(child => child.id)
   const legacyRecommendationCount = task.sizePlan?.recommendedChildren?.length ?? 0
   const isContaining = descendantIds.length > 0
-  const needsDecomposition = !isContaining && DECOMPOSE_ACTIONS.has(task.sizePlan?.action ?? '')
+  const needsDecomposition = !isContaining && decompositionBlocksDispatch(task)
   const scopeRequestIds = scopeAuthorityRequestIds(task)
   const needsOwnerDecision = needsOwnerAction(task) || scopeRequestIds.length > 0
   const childStates = descendants.map(child => deriveLeafRunnableState(tasks, child.id))
@@ -169,12 +169,31 @@ function deriveLeafRunnableState(tasks: Task[], workId: string): boolean {
   const task = tasks.find(candidate => candidate.id === workId)
   if (!task) return false
   if (descendantsFor(tasks, workId).length > 0) return false
-  if (DECOMPOSE_ACTIONS.has(task.sizePlan?.action ?? '')) return false
+  if (decompositionBlocksDispatch(task)) return false
   const visibility = visibilityForTask(task, tasks)
   if (visibility.kind === 'hidden') return false
   if (visibility.kind === 'internal_step' && !task.hierarchy?.parentId) return false
   if (!visibility.countInProjectTotals && visibility.kind !== 'internal_step') return false
   return ACTIVE_STATUSES.has(task.status) && !BLOCKED_STATUSES.has(task.status) && !TERMINAL_STATUSES.has(task.status)
+}
+
+function decompositionBlocksDispatch(task: Task): boolean {
+  const action = task.sizePlan?.action ?? ''
+  if (!DECOMPOSE_ACTIONS.has(action)) return false
+  if (isRunnableEmptyBoundedChildContract(task)) return false
+  return true
+}
+
+function isRunnableEmptyBoundedChildContract(task: Task): boolean {
+  if (task.sizePlan?.action !== 'decompose_before_execution') return false
+  if ((task.sizePlan.recommendedChildren?.length ?? 0) > 0) return false
+  if (task.taskReadiness?.recommendation !== 'ready' && task.taskReadiness?.recommendation !== 'needs_research_spike') {
+    return false
+  }
+  const hasContainingWork = Boolean(task.hierarchy?.parentId) || (task.delivery?.supports?.length ?? 0) > 0
+  if (!hasContainingWork) return false
+  const text = [task.title, task.description, task.spec].filter(Boolean).join('\n')
+  return /\b(contract|schema|fixture|expected-record|prototype-run|evaluation)\b/i.test(text)
 }
 
 function descendantsFor(tasks: Task[], workId: string): string[] {
