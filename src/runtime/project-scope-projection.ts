@@ -88,6 +88,95 @@ export function taskScopeNodeId(taskId: string): string {
   return `work:${taskId}`
 }
 
+export function releaseLabelFromId(id: string): string {
+  const acronyms = new Set(['api', 'cli', 'mcp', 'mvp', 'nh', 'ui', 'ux'])
+  return id
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map(part => acronyms.has(part.toLowerCase()) ? part.toUpperCase() : part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ') || id
+}
+
+export function deriveReleaseContainersFromTaskMembership(
+  tasks: readonly Task[],
+  options: {
+    existingReleases?: readonly ProjectRelease[]
+    releaseIds?: readonly string[]
+    releaseLabels?: ReadonlyMap<string, string>
+    releaseStates?: ReadonlyMap<string, ProjectRelease['state']>
+    releaseSources?: ReadonlyMap<string, ProjectRelease['source']>
+    now?: string
+  } = {},
+): { releases: ProjectRelease[]; selectedReleaseId?: string } {
+  const releaseIds = uniqueReleaseIds([
+    ...(options.existingReleases ?? []).map(release => release.id),
+    ...(options.releaseIds ?? []),
+    ...tasks
+      .filter(task => task.status !== 'archived' && task.status !== 'cancelled')
+      .flatMap(task => task.releaseIds ?? []),
+  ])
+  if (releaseIds.length === 0) return { releases: [] }
+
+  const existingById = new Map((options.existingReleases ?? []).map(release => [release.id, release] as const))
+  const releases = releaseIds.map((releaseId): ProjectRelease => {
+    const existing = existingById.get(releaseId)
+    const nodeIds = new Set<string>()
+    const deferredNodeIds = new Set<string>()
+    for (const task of tasks) {
+      if (!task.releaseIds?.includes(releaseId)) continue
+      if (task.status === 'archived' || task.status === 'cancelled') continue
+      const nodeId = taskScopeNodeId(task.id)
+      if (task.status === 'shelved') {
+        deferredNodeIds.add(nodeId)
+      } else {
+        nodeIds.add(nodeId)
+      }
+    }
+    const label = options.releaseLabels?.get(releaseId) ?? existing?.label ?? releaseLabelFromId(releaseId)
+    return {
+      ...(existing ?? {
+        id: releaseId,
+        label,
+        kind: 'release',
+        state: 'active',
+        source: 'inferred',
+        proofStyle: 'unspecified',
+      }),
+      id: releaseId,
+      label,
+      state: options.releaseStates?.get(releaseId) ?? existing?.state ?? 'active',
+      source: options.releaseSources?.get(releaseId) ?? existing?.source ?? 'inferred',
+      nodeIds: [...nodeIds],
+      deferredNodeIds: [...deferredNodeIds],
+      ...(options.now ? { updatedAt: options.now, createdAt: existing?.createdAt ?? options.now } : {}),
+    }
+  })
+
+  const selectedReleaseId =
+    releases.find(release => tasks.some(task => task.releaseIds?.includes(release.id) && taskIsOpenCurrentScopeWork(task)))?.id ??
+    releases[0]?.id
+  return { releases, ...(selectedReleaseId ? { selectedReleaseId } : {}) }
+}
+
+function uniqueReleaseIds(ids: readonly string[]): string[] {
+  const seen = new Set<string>()
+  const result: string[] = []
+  for (const rawId of ids) {
+    const id = rawId.trim()
+    if (!id || seen.has(id)) continue
+    seen.add(id)
+    result.push(id)
+  }
+  return result
+}
+
+function taskIsOpenCurrentScopeWork(task: Task): boolean {
+  return task.status !== 'done' &&
+    task.status !== 'archived' &&
+    task.status !== 'cancelled' &&
+    task.status !== 'shelved'
+}
+
 export function selectedProjectScopeForQueue(
   queue: Pick<TaskQueue, 'tasks' | 'releases' | 'selectedReleaseId'>,
 ): ProjectScope | null {

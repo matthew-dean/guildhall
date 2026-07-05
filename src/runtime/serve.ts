@@ -181,13 +181,12 @@ import { deriveProjectWorkProgress, type ProjectWorkProgress } from './work-prog
 import { deriveTaskWorkVisibility } from './work-visibility.js'
 import {
   buildProjectOrientationSpine,
-  taskNodeId,
   taskEligibleForSelectedScope,
   type BuildProjectOrientationSpineInput,
   type OrientationScope,
   type ProjectOrientationCharter,
 } from './project-orientation-spine.js'
-import { buildProjectScopeProjection, type ProjectScope } from './project-scope-projection.js'
+import { buildProjectScopeProjection, deriveReleaseContainersFromTaskMembership, type ProjectScope } from './project-scope-projection.js'
 import type { SurfaceReviewPacket } from './contract-surfaces.js'
 import {
   acceptProjectDependencyDelivery,
@@ -1087,8 +1086,16 @@ async function readTaskQueueFileNormalized(
   if (rawParsed == null) return { tasks: [], releases: [] }
   const parsed = normalizeLegacyTaskQueueShape(rawParsed)
   const tasks = await readTasksFileNormalized(tasksPath)
-  const releases = Array.isArray(parsed) ? [] : Array.isArray(parsed.releases) ? parsed.releases.map(release => ({ ...release })) : []
-  const selectedReleaseId = Array.isArray(parsed) ? undefined : typeof parsed.selectedReleaseId === 'string' ? parsed.selectedReleaseId : undefined
+  const parsedReleases = Array.isArray(parsed) ? [] : Array.isArray(parsed.releases) ? parsed.releases.map(release => ({ ...release })) : []
+  const parsedSelectedReleaseId = Array.isArray(parsed) ? undefined : typeof parsed.selectedReleaseId === 'string' ? parsed.selectedReleaseId : undefined
+  const derivedQueue = deriveReleaseContainersFromTaskMembership(tasks as Task[], {
+    existingReleases: parsedReleases,
+  })
+  const releases = derivedQueue.releases
+  const selectedReleaseId =
+    parsedSelectedReleaseId && releases.some(release => release.id === parsedSelectedReleaseId)
+      ? parsedSelectedReleaseId
+      : derivedQueue.selectedReleaseId
   const queue = { tasks, releases, ...(selectedReleaseId ? { selectedReleaseId } : {}) }
   normalizedTaskQueueCache.set(tasksPath, {
     raw: parsed,
@@ -2154,20 +2161,16 @@ function buildOrientationSpineWithScopedReleaseTruth(
 }
 
 function selectedReleaseScopeFromTaskMembership(tasks: Task[]): OrientationScope | null {
-  const selectedReleaseId = tasks
-    .flatMap(task => Array.isArray(task.releaseIds) ? task.releaseIds : [])
-    .map(releaseId => releaseId.trim())
-    .find(Boolean)
-  if (!selectedReleaseId) return null
+  const { releases, selectedReleaseId } = deriveReleaseContainersFromTaskMembership(tasks)
+  const release = releases.find(candidate => candidate.id === selectedReleaseId)
+  if (!release || !selectedReleaseId) return null
   return {
     id: selectedReleaseId,
-    label: selectedReleaseId,
-    kind: 'release',
-    source: 'inferred',
-    nodeIds: tasks
-      .filter(task => task.releaseIds?.includes(selectedReleaseId))
-      .map(task => taskNodeId(task.id)),
-    deferredNodeIds: [],
+    label: release.label,
+    kind: release.kind === 'milestone' ? 'milestone' : release.kind === 'release' ? 'release' : 'proposed_feature_set',
+    source: release.source,
+    nodeIds: release.nodeIds,
+    deferredNodeIds: release.deferredNodeIds,
   }
 }
 
@@ -10870,23 +10873,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
     if (project.initializationNeeded) return { initializationNeeded: true, release: null, scope: fallbackRelease }
     const memoryDir = getProjectStateDir(project.path)
     const tasksPath = projectTasksPath(project.path)
-    const rawQueue: { tasks: Array<Record<string, unknown>>; releases: ProjectRelease[]; selectedReleaseId?: string } = (() => {
-      if (!existsSync(tasksPath)) return { tasks: [], releases: [] }
-      let raw: { tasks?: Array<Record<string, unknown>>; releases?: ProjectRelease[]; selectedReleaseId?: string } | Array<Record<string, unknown>>
-      try {
-        raw = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')) as
-          | { tasks?: Array<Record<string, unknown>>; releases?: ProjectRelease[]; selectedReleaseId?: string }
-          | Array<Record<string, unknown>>
-      } catch {
-        throw new Error('Could not read the saved task state file. Fix project-state/TASKS.json, then reload release checks.')
-      }
-      if (Array.isArray(raw)) return { tasks: raw, releases: [] }
-      return {
-        tasks: raw.tasks ?? [],
-        releases: Array.isArray(raw.releases) ? raw.releases : [],
-        ...(typeof raw.selectedReleaseId === 'string' ? { selectedReleaseId: raw.selectedReleaseId } : {}),
-      }
-    })()
+    const rawQueue: { tasks: Array<Record<string, unknown>>; releases: ProjectRelease[]; selectedReleaseId?: string } = existsSync(tasksPath)
+      ? await readTaskQueueFileNormalized(tasksPath)
+      : { tasks: [], releases: [] }
     const rawTasks = rawQueue.tasks
     const tasks = await Promise.all(rawTasks.map((task) => buildEffectiveTask(project.path, task as Task)))
     const releaseStartReadiness = await projectStartReadinessForProject(project.path)

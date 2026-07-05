@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Task, TaskQueue } from '@guildhall/core'
-import { buildProjectScopeProjection } from '../project-scope-projection.js'
+import { buildProjectScopeProjection, deriveReleaseContainersFromTaskMembership } from '../project-scope-projection.js'
 
 const now = '2026-07-04T12:00:00.000Z'
 
@@ -51,6 +51,51 @@ function queue(tasks: Task[]): TaskQueue {
 }
 
 describe('buildProjectScopeProjection', () => {
+  it('derives visible release containers from task membership and selects unfinished scoped work', () => {
+    const derived = deriveReleaseContainersFromTaskMembership([
+      task({
+        id: 'task-stage-1',
+        title: 'Completed prior stage',
+        status: 'done',
+        releaseIds: ['stage-1-fixture-and-evaluation-harness'],
+      }),
+      task({
+        id: 'task-current',
+        title: 'Recover source truth',
+        status: 'ready',
+        releaseIds: ['near-term-proof-scope'],
+      }),
+      task({
+        id: 'task-later',
+        title: 'Later shell',
+        status: 'shelved',
+        releaseIds: ['stage-4-local-authoring-shell'],
+      }),
+    ])
+
+    expect(derived.selectedReleaseId).toBe('near-term-proof-scope')
+    expect(derived.releases).toEqual([
+      expect.objectContaining({
+        id: 'stage-1-fixture-and-evaluation-harness',
+        label: 'Stage 1 Fixture And Evaluation Harness',
+        nodeIds: ['work:task-stage-1'],
+        deferredNodeIds: [],
+      }),
+      expect.objectContaining({
+        id: 'near-term-proof-scope',
+        label: 'Near Term Proof Scope',
+        nodeIds: ['work:task-current'],
+        deferredNodeIds: [],
+      }),
+      expect.objectContaining({
+        id: 'stage-4-local-authoring-shell',
+        label: 'Stage 4 Local Authoring Shell',
+        nodeIds: [],
+        deferredNodeIds: ['work:task-later'],
+      }),
+    ])
+  })
+
   it('treats materialized child work under an included parent as current paused work', () => {
     const projection = buildProjectScopeProjection(queue([
       task({

@@ -14104,6 +14104,50 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-07-05T15:45:00Z - Repaired invisible release-boundary derivation for
+Narrative Harness current scope.
+
+- Work id: `codex:release-boundary-read-model-2026-07-05`.
+- User job: a project owner should see the same current scope/release that
+  Guildhall uses for Start/Resume. Task-level `releaseIds` must not create a
+  hidden execution boundary while the product says no release/scope exists.
+- Root-cause classification:
+  - `2. project structure/scope/release modeling problem`: task membership could
+    exist without visible release containers.
+  - `4. scheduler/action-state logic problem`: Start readiness selected the
+    first task release id, so completed Stage 1 could block current-scope work.
+  - `5. UI communication/orientation problem`: Overview/Map could not explain
+    or change the hidden selected boundary.
+  - `7. bad project data produced by an earlier Guildhall bug`: Narrative
+    Harness had release-linked tasks but no persisted queue-level releases.
+- Fix:
+  - Added a shared `deriveReleaseContainersFromTaskMembership()` scope-model
+    helper that turns task `releaseIds` into visible release containers, keeps
+    shelved work deferred, and selects the first release with unfinished
+    current work when no owner selection exists.
+  - Reused that helper from the normalized task-queue read model, the private
+    scope fallback, release-readiness, and workspace import release synthesis.
+  - Removed the importer-only duplicate release-label/container logic.
+- Installed-app proof:
+  - `node ./scripts/dev-install.mjs`; `guildhall stop && guildhall start`;
+    `/api/stale-server` returned `stale:false` for PID `73534` from
+    `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+  - `/api/project?projectId=narrative-harness` returned selected release
+    `near-term-proof-scope` / `Near Term Proof Scope`, `9` included work items,
+    and Start readiness `imported_scope_shaping` with the real brief-shaping
+    blocker instead of `all_terminal` for completed Stage 1.
+  - `/api/project/release-readiness?projectId=narrative-harness` returned the
+    same selected release/scope `near-term-proof-scope` and the same `9`
+    current work items.
+  - Browser proof against installed `localhost:7777` at
+    `/projects/narrative-harness/map` rendered `Needs briefs`, `Near Term Proof
+    Scope`, `9 assigned work items`, `Release roadmap`, separate `Stage 1
+    Fixture And Evaluation Harness`, and `Selected` on `Near Term Proof Scope`.
+- Verification:
+  `./node_modules/.bin/vitest run src/runtime/__tests__/project-scope-projection.test.ts`
+  passed `8` tests; `node ./build.mjs`; `node scripts/contract-touch-detector.mjs`;
+  `git diff --check`.
+
 2026-07-05T14:55:00Z - Blocked hollow imported contract work before Start can run it.
 
 - Work id: `codex:narrative-harness-hollow-contract-readiness-2026-07-05`.

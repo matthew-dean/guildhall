@@ -34,6 +34,7 @@ import {
   detectShadowedCurrentMilestoneDeliverableImports,
   detectShadowedStageAlignedRoadmapDeliverables,
 } from './current-milestone-shadowing.js'
+import { deriveReleaseContainersFromTaskMembership, releaseLabelFromId } from './project-scope-projection.js'
 import { applyTaskShaping } from './task-decomposition.js'
 import { isMaterializableSplitAction, materializeSplitChildren } from '../tools/task-queue.js'
 import { effectiveTaskTitle } from '../shared/task-display-label.js'
@@ -2345,15 +2346,6 @@ function graphTaskDomain(task: EvidenceTask, parsedTask?: ParsedTask): string {
   return task.targetArea
 }
 
-function releaseLabelFromId(id: string): string {
-  const acronyms = new Set(['api', 'cli', 'mcp', 'mvp', 'nh', 'ui', 'ux'])
-  return id
-    .split(/[-_\s]+/)
-    .filter(Boolean)
-    .map(part => acronyms.has(part.toLowerCase()) ? part.toUpperCase() : part.charAt(0).toUpperCase() + part.slice(1))
-    .join(' ') || id
-}
-
 function ensureImportedReleaseContainers(
   queue: TaskQueue,
   now: string,
@@ -2379,77 +2371,26 @@ function ensureImportedReleaseContainers(
   ])]
   if (releaseIds.length === 0) return
 
-  const releases = [...(queue.releases ?? [])]
-  for (const releaseId of releaseIds) {
-    let release = releases.find(candidate => candidate.id === releaseId)
-    if (!release) {
-      release = {
-        id: releaseId,
-        label: importedReleaseLabels.get(releaseId) ?? releaseLabelFromId(releaseId),
-        kind: 'release',
-        state: importedReleaseStates.get(releaseId) ?? 'active',
-        source: importedReleases.find(candidate => candidate.id === releaseId)?.source ?? 'release_plan',
-        nodeIds: [],
-        deferredNodeIds: [],
-        proofStyle: 'unspecified',
-        createdAt: now,
-        updatedAt: now,
-      }
-      releases.push(release)
-    } else if (importedReleaseLabels.has(releaseId)) {
-      release.label = importedReleaseLabels.get(releaseId)!
-    }
-    if (importedReleaseStates.has(releaseId) && release.state !== 'shipped') {
-      release.state = importedReleaseStates.get(releaseId)!
-    }
-    const nodeIds = new Set(release.nodeIds ?? [])
-    const deferredNodeIds = new Set(release.deferredNodeIds ?? [])
-    for (const task of queue.tasks) {
-      if (task.status === 'archived' || task.status === 'cancelled') continue
-      if (task.releaseIds?.includes(releaseId)) nodeIds.add(`work:${task.id}`)
-      if (task.status === 'shelved' && task.releaseIds?.includes(releaseId)) {
-        nodeIds.delete(`work:${task.id}`)
-        deferredNodeIds.add(`work:${task.id}`)
-      }
-    }
-    const taskByNodeId = new Map(queue.tasks.map(task => [`work:${task.id}`, task] as const))
-    release.nodeIds = [...nodeIds].filter((nodeId) => {
-      if (!nodeId.startsWith('work:')) return true
-      const task = taskByNodeId.get(nodeId)
-      return Boolean(
-        task &&
-        task.releaseIds?.includes(releaseId) &&
-        task.status !== 'archived' &&
-        task.status !== 'cancelled' &&
-        task.status !== 'shelved',
-      )
-    })
-    release.deferredNodeIds = [...deferredNodeIds].filter((nodeId) => {
-      if (!nodeId.startsWith('work:')) return true
-      const task = taskByNodeId.get(nodeId)
-      return Boolean(
-        task &&
-        task.releaseIds?.includes(releaseId) &&
-        task.status === 'shelved',
-      )
-    })
-    release.updatedAt = now
-  }
-  queue.releases = releases
-  const releaseWithCurrentWork = releases.find(release =>
-    releaseIds.includes(release.id) &&
-    (release.nodeIds?.length ?? 0) > 0 &&
-    release.state === 'active',
-  ) ?? releases.find(release =>
-    releaseIds.includes(release.id) &&
-    (release.nodeIds?.length ?? 0) > 0,
+  const releaseSources = new Map(
+    importedReleases
+      .map(release => [release.id.trim(), release.source ?? 'release_plan'] as const)
+      .filter(([id]) => id.length > 0),
   )
+  const derived = deriveReleaseContainersFromTaskMembership(queue.tasks, {
+    existingReleases: queue.releases,
+    releaseIds,
+    releaseLabels: importedReleaseLabels,
+    releaseStates: importedReleaseStates,
+    releaseSources,
+    now,
+  })
+  queue.releases = derived.releases
   const selectedRelease = queue.selectedReleaseId
-    ? releases.find(release => release.id === queue.selectedReleaseId)
+    ? derived.releases.find(release => release.id === queue.selectedReleaseId)
     : undefined
   const selectedHasCurrentWork = (selectedRelease?.nodeIds?.length ?? 0) > 0
-  if (!queue.selectedReleaseId || (!selectedHasCurrentWork && releaseWithCurrentWork)) {
-    queue.selectedReleaseId = releaseWithCurrentWork?.id ?? releaseIds[0]
+  if (!queue.selectedReleaseId || (!selectedHasCurrentWork && derived.selectedReleaseId)) {
+    queue.selectedReleaseId = derived.selectedReleaseId ?? releaseIds[0]
   }
 }
 
