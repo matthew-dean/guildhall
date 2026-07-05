@@ -13305,6 +13305,39 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-07-05T00:49:00Z - Fixed imported execution blueprints being stranded by
+stale proofability readiness.
+
+- Work id: `codex:imported-blueprint-readiness-dispatch-2026-07-05`.
+- User job: when Guildhall has already shaped an imported task into a concrete
+  spec with verification, completion boundary, no owner-only setup, acceptance
+  criteria, and proof evidence, pressing Start should run that task instead of
+  reporting that no unattended work is eligible.
+- Observed failure:
+  - Narrative Harness completed `Capture prototype run and evaluation records`.
+  - The supervisor then stopped with `No actionable tasks remain right now:
+    0 active, 1 fresh, 0 escalated, 9 dependency-blocked.`
+  - The next task, `Add the first tiny fiction fixture and human-authored
+    expected records`, had a full seeded spec and proof plan but retained a
+    stale `taskReadiness.recommendation: needs_one_question` because the
+    importer proof detector ignored inferred proof once the import had been
+    shaped into an execution blueprint.
+- Fix:
+  - `task-readiness` now treats imported tasks as proofable only when they have
+    a concrete execution blueprint: `## Verification`, `## Completion
+    Boundary`, `What counts as done`, `Owner-only setup: None`, acceptance
+    criteria, and expected proof evidence.
+  - Raw inferred workspace-import proof remains blocked, so unshaped scraped
+    bullets do not become runnable work.
+  - The orchestrator picker uses the same imported-blueprint predicate as a
+    compatibility reader, so already-persisted tasks with stale
+    `needs_one_question` readiness do not strand the run.
+- Verification:
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/task-readiness.test.ts src/runtime/__tests__/orchestrator-picker.test.ts src/runtime/__tests__/work-execution-state.test.ts`
+    passed `33` tests.
+
+source: codex:imported-blueprint-readiness-dispatch-2026-07-05
+
 2026-07-04T19:35:00Z - Fixed workspace-import git history for multi-repo
 project folders whose parent path is not itself a Git repository.
 

@@ -21,6 +21,7 @@ import { taskEligibleForSelectedScope, taskNodeId, type OrientationScope } from 
 import { selectedProjectScopeForQueue } from './project-scope-projection.js'
 import { deriveWorkExecutionState } from './work-execution-state.js'
 import { specReviewRequiresOwnerApproval } from './spec-review-ownership.js'
+import { hasImportedExecutionBlueprint } from './task-readiness.js'
 
 export type TaskLane = 'spec' | 'worker' | 'review' | 'coordinator'
 
@@ -81,6 +82,7 @@ function finishabilityAllowsDispatch(task: Task): boolean {
     task.taskReadiness == null ||
     task.taskReadiness.recommendation === 'ready' ||
     task.taskReadiness.recommendation === 'needs_research_spike' ||
+    hasImportedExecutionBlueprint(task) ||
     hasCompleteWorkerHandoff(task)
 }
 

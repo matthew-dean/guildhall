@@ -265,11 +265,23 @@ function hasProof(task: Task, definitionOfDone: DefinitionOfDone): boolean {
   if (task.requestIntake?.createdBy === 'workspace-importer') {
     if ((task.proofPaths ?? []).some(path => path.source !== 'inferred')) return true
     if ((task.acceptanceCriteria ?? []).some(ac => ac.source !== 'inferred' && Boolean(ac.verifiedBy))) return true
+    if (hasImportedExecutionBlueprint(task)) return true
     return false
   }
   if ((task.proofPaths?.length ?? 0) > 0) return true
   if ((task.acceptanceCriteria ?? []).some(ac => Boolean(ac.verifiedBy))) return true
   return definitionOfDone.evidenceRequired.length > 0 || /\b(test|typecheck|browser|proof|verify|screenshot|gate)\b/i.test(taskText(task))
+}
+
+export function hasImportedExecutionBlueprint(task: Task): boolean {
+  const spec = task.spec?.trim() ?? ''
+  if (!spec) return false
+  if (!/##\s*Verification\b/i.test(spec)) return false
+  if (!/##\s*Completion Boundary\b/i.test(spec)) return false
+  if (!/What counts as done:/i.test(spec)) return false
+  if (!/Owner-only setup:\s*None/i.test(spec)) return false
+  return (task.acceptanceCriteria ?? []).some(ac => Boolean(ac.verifiedBy)) &&
+    (task.proofPaths ?? []).some(path => path.source === 'inferred' && (path.expectedEvidence?.length ?? 0) > 0)
 }
 
 function mixesResearchAndImplementation(task: Task): boolean {

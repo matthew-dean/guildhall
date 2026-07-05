@@ -209,6 +209,86 @@ describe('assessTaskReadiness', () => {
     expect(assessment.dimensions.find(dimension => dimension.id === 'proofability')?.status).toBe('blocked')
   })
 
+  it('treats an imported execution blueprint with verification and a completion boundary as proofable', () => {
+    const assessment = assessTaskReadiness(task({
+      title: 'Add the first tiny fiction fixture and human-authored expected records',
+      description: 'Imported task for the first headless harness slice.',
+      status: 'ready',
+      requestIntake: {
+        intent: 'implementation',
+        recommendedNextAction: 'proceed_to_implementation_spec',
+        assumptions: [],
+        missingInformation: [],
+        evidenceRefs: ['import:docs/harness/implementation-roadmap.md'],
+        componentStack: [],
+        pressureTestSummary: {
+          systemOwned: true,
+          degree: 'guided',
+          qualityBar: 'Imported work should carry evidence into an execution blueprint.',
+          ownerQuestionPolicy: 'Ask only when the cited evidence conflicts.',
+          checks: [],
+        },
+        clarifyingQuestions: [],
+        createdAt: now,
+        createdBy: 'workspace-importer',
+      },
+      spec: [
+        '## What this is',
+        'Add the first tiny fiction fixture and human-authored expected records.',
+        '',
+        '## Verification',
+        '- Review recorded evidence: The fixture covers manuscript text, brief/profile context, notes, expected records, and author decisions.',
+        '',
+        '## Completion Boundary',
+        '- Product outcome: The fixture can represent manuscript text, book brief, author profile, project notes, expected records, and author decisions.',
+        '- What Guildhall can complete in code: Implement the bounded local fixture work.',
+        '- External dependencies: None beyond repo-local evidence and local tooling.',
+        '- Owner-only setup: None expected.',
+        '- Verification environment: Local filesystem and repo-local tooling already available in the execution environment.',
+        '- What counts as done: Expected records are human-authored, stable, and reusable across repeated fixture runs.',
+        '- What must be split or blocked: Split only if the cited work turns out to contain more than one independently verifiable deliverable.',
+      ].join('\n'),
+      acceptanceCriteria: [
+        {
+          id: 'fixture-shape',
+          description: 'The fixture can represent manuscript text, book brief, author profile, project notes, expected records, and author decisions.',
+          verifiedBy: 'review',
+          source: 'inferred',
+          met: false,
+        },
+        {
+          id: 'deterministic-proof',
+          description: 'Add bounded local workspace proof for the fixture.',
+          verifiedBy: 'review',
+          source: 'inferred',
+          met: false,
+        },
+      ],
+      proofPaths: [
+        {
+          id: 'imported-proof-plan',
+          scope: { type: 'task', id: 'task-1' },
+          title: 'Planned proof path',
+          summary: 'Review the fixture evidence and local proof output.',
+          kind: 'review',
+          status: 'planned',
+          source: 'inferred',
+          launchSteps: [],
+          expectedEvidence: [
+            { id: 'fixture-evidence', kind: 'manual', description: 'Fixture covers manuscript text and expected records.', required: true },
+          ],
+          verificationRecords: [],
+          createdAt: now,
+          updatedAt: now,
+          createdBy: 'workspace-importer',
+        },
+      ],
+    }))
+
+    expect(assessment.recommendation).toBe('ready')
+    expect(assessment.dimensions.find(dimension => dimension.id === 'proofability')?.status).toBe('ok')
+  })
+
   it('keeps an exact single-file release-notes patch ready instead of splitting it', () => {
     const assessment = assessTaskReadiness(task({
       title: 'release-note-patch',
@@ -347,5 +427,79 @@ describe('dispatch readiness guard', () => {
     })
 
     expect(pickNextTask({ version: 1, lastUpdated: now, tasks: [unready, ready] })?.id).toBe('ready')
+  })
+
+  it('dispatches a ready imported execution blueprint even when stored readiness is stale', () => {
+    const staleButShaped = task({
+      id: 'stale-shaped-import',
+      status: 'ready',
+      taskReadiness: {
+        taskKind: 'implementation',
+        recommendation: 'needs_one_question',
+        summary: 'Stale readiness stamp from before import proofability was recognized.',
+        dimensions: [],
+        definitionOfDone: { items: [], evidenceRequired: [], createdBy: 'test' },
+        blockerPlans: [],
+        contextBudget: { estimatedTokens: 20, risk: 'low', fitsInOneWorkerBrief: true, reasons: [] },
+        assessedAt: now,
+        assessedBy: 'test',
+      },
+      requestIntake: {
+        intent: 'implementation',
+        recommendedNextAction: 'proceed_to_implementation_spec',
+        assumptions: [],
+        missingInformation: [],
+        evidenceRefs: ['import:docs/harness/implementation-roadmap.md'],
+        componentStack: [],
+        pressureTestSummary: {
+          systemOwned: true,
+          degree: 'guided',
+          qualityBar: 'Imported work should carry evidence into an execution blueprint.',
+          ownerQuestionPolicy: 'Ask only when the cited evidence conflicts.',
+          checks: [],
+        },
+        clarifyingQuestions: [],
+        createdAt: now,
+        createdBy: 'workspace-importer',
+      },
+      spec: [
+        '## Verification',
+        '- Review recorded evidence.',
+        '',
+        '## Completion Boundary',
+        '- Owner-only setup: None expected.',
+        '- What counts as done: Proof is recorded against the imported acceptance criteria.',
+      ].join('\n'),
+      acceptanceCriteria: [
+        {
+          id: 'deterministic-proof',
+          description: 'Add bounded local workspace proof for the fixture.',
+          verifiedBy: 'review',
+          source: 'inferred',
+          met: false,
+        },
+      ],
+      proofPaths: [
+        {
+          id: 'imported-proof-plan',
+          scope: { type: 'task', id: 'stale-shaped-import' },
+          title: 'Planned proof path',
+          summary: 'Review local proof output.',
+          kind: 'review',
+          status: 'planned',
+          source: 'inferred',
+          launchSteps: [],
+          expectedEvidence: [
+            { id: 'fixture-evidence', kind: 'manual', description: 'Fixture proof is recorded.', required: true },
+          ],
+          verificationRecords: [],
+          createdAt: now,
+          updatedAt: now,
+          createdBy: 'workspace-importer',
+        },
+      ],
+    })
+
+    expect(pickNextTask({ version: 1, lastUpdated: now, tasks: [staleButShaped] })?.id).toBe('stale-shaped-import')
   })
 })
