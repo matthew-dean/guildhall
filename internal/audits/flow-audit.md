@@ -13554,6 +13554,76 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-07-05T10:10:00Z - Fixed workspace-import release selection and stale
+done-task cleanup after live Narrative Harness repopulation.
+
+- Work id: `codex:workspace-import-selected-release-refresh-2026-07-05`.
+- User job: approving corrected project import should repopulate the real
+  project state without selecting an empty release, resurrecting stale done
+  tasks, or hiding later scoped work.
+- Finding:
+  - Live Narrative Harness import approval exposed a release-selection bug:
+    `Stage 0: Spec Baseline` was selected because it appeared first in the
+    imported release list, even though it had zero current tasks.
+  - That made `/api/project` report Start as available for an empty scope while
+    the real Stage 1 MVP work sat in the next release.
+  - The same refresh left the old done task `Implement fixture-and-expected-record
+    schemas (from schema-contract-roadmap)` attached to Stage 1 after the
+    corrected importer had folded that work back into `Define fixture,
+    expected-record, prototype-run, and evaluation schemas.`
+- Contract Touch Decision:
+  - Touched persisted task queue write behavior inside workspace-import
+    approval: selected release defaulting, imported-task archival during full
+    refresh, and release `nodeIds` / `deferredNodeIds` rebuilding.
+  - Contracts considered but not touched: task schema, release schema,
+    selected-release field shape, workspace-import API request/response shape,
+    and Start status codes.
+  - Change class: compatibility-preserving model cleanup. Existing queues read
+    the same schema; full refresh writes more accurate selected release and
+    release membership.
+  - Apply/revert behavior: re-approving workspace import with the fixed app
+    repairs selected release and archives dropped imported tasks; reverting the
+    code does not require a data migration but may allow stale release
+    membership to recur on future approvals.
+- Fix:
+  - `ensureImportedReleaseContainers` now selects the first imported release
+    that actually has current work, preferring active releases, instead of
+    blindly selecting the first release ID.
+  - Full workspace-import refresh can archive dropped workspace-import-managed
+    tasks even when their old status is `done`.
+  - Release work-node membership is rebuilt from current task state so archived
+    or cancelled work cannot linger in `nodeIds`.
+  - Later stage deliverables are codified as deferred release-scoped work in
+    tests, not passive capability context.
+- Installed-app proof:
+  - Installed current branch with `CI=true pnpm dev:install`, restarted
+    Guildhall, and `/api/stale-server` returned `stale:false` for PID `93068`
+    from `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+  - Re-approved Narrative Harness workspace import through
+    `POST /api/project/workspace-import/approve?projectId=narrative-harness`.
+  - `/api/project?projectId=narrative-harness` now reports selected release
+    `Stage 1: Fixture And Evaluation Harness`, `nodeIds:6`,
+    `deferredNodeIds:0`, and six current rows.
+  - Stage 0 remains present but empty/planned. Stage 4 and Stage 5 later work
+    remains shelved/deferred outside the current release.
+  - `/api/project/release-readiness?projectId=narrative-harness` now reports
+    `tasks:6`, `done:0`, `proofEvidenceBlockingCount:0`,
+    `unfinishedCount:6`, and four spec-review blockers. The stale schema echo
+    no longer counts in the current release.
+  - `/api/project/task/task-import-1c4eedx?projectId=narrative-harness`
+    reports status `archived`.
+- Verification:
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/workspace-importer.test.ts src/runtime/__tests__/serve-settings.test.ts src/runtime/__tests__/serve-release-readiness.test.ts src/runtime/__tests__/project-orientation-spine.test.ts src/runtime/__tests__/orchestrator-picker.test.ts --reporter=dot`
+    passed `268` tests.
+  - `git diff --check` passed.
+  - `CI=true pnpm lint:contracts` passed.
+  - `CI=true pnpm build` passed after restoring dev dependencies with
+    `CI=true pnpm install`; the install exits nonzero in CI because dependency
+    build scripts are intentionally ignored, but it restores the missing dev
+    dependencies.
+
+source: codex:workspace-import-selected-release-refresh-2026-07-05
+
 2026-07-05T09:58:00Z - Aligned release proof blockers, orientation spine, and
 workspace child-repo truth.
 

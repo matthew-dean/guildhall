@@ -1969,6 +1969,7 @@ function importedTaskCanBeArchivedDuringScopeRefresh(status: Task['status']): bo
     'import_draft',
     'spec_review',
     'ready',
+    'done',
     'shelved',
   ].includes(status)
 }
@@ -2322,13 +2323,44 @@ function ensureImportedReleaseContainers(
         deferredNodeIds.add(`work:${task.id}`)
       }
     }
-    release.nodeIds = [...nodeIds]
-    release.deferredNodeIds = [...deferredNodeIds]
+    const taskByNodeId = new Map(queue.tasks.map(task => [`work:${task.id}`, task] as const))
+    release.nodeIds = [...nodeIds].filter((nodeId) => {
+      if (!nodeId.startsWith('work:')) return true
+      const task = taskByNodeId.get(nodeId)
+      return Boolean(
+        task &&
+        task.releaseIds?.includes(releaseId) &&
+        task.status !== 'archived' &&
+        task.status !== 'cancelled' &&
+        task.status !== 'shelved',
+      )
+    })
+    release.deferredNodeIds = [...deferredNodeIds].filter((nodeId) => {
+      if (!nodeId.startsWith('work:')) return true
+      const task = taskByNodeId.get(nodeId)
+      return Boolean(
+        task &&
+        task.releaseIds?.includes(releaseId) &&
+        task.status === 'shelved',
+      )
+    })
     release.updatedAt = now
   }
   queue.releases = releases
-  if (!queue.selectedReleaseId) {
-    queue.selectedReleaseId = releaseIds[0]
+  const releaseWithCurrentWork = releases.find(release =>
+    releaseIds.includes(release.id) &&
+    (release.nodeIds?.length ?? 0) > 0 &&
+    release.state === 'active',
+  ) ?? releases.find(release =>
+    releaseIds.includes(release.id) &&
+    (release.nodeIds?.length ?? 0) > 0,
+  )
+  const selectedRelease = queue.selectedReleaseId
+    ? releases.find(release => release.id === queue.selectedReleaseId)
+    : undefined
+  const selectedHasCurrentWork = (selectedRelease?.nodeIds?.length ?? 0) > 0
+  if (!queue.selectedReleaseId || (!selectedHasCurrentWork && releaseWithCurrentWork)) {
+    queue.selectedReleaseId = releaseWithCurrentWork?.id ?? releaseIds[0]
   }
 }
 

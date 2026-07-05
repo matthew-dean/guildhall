@@ -1200,6 +1200,74 @@ tasks:
     expect(refreshedQueue.tasks.find((t) => t.id === 'task-headless-schema')?.completedAt).toBeUndefined()
   })
 
+  it('archives dropped imported done work during a full scope refresh', async () => {
+    await seedImporterWithSpec(`
+\`\`\`yaml
+tasks:
+  - id: task-current-schema
+    title: Define fixture, expected-record, prototype-run, and evaluation schemas.
+    description: Current Stage 1 schema task.
+    domain: harness
+    releaseIds:
+      - stage-1-fixture-and-evaluation-harness
+    references:
+      - docs/harness/implementation-roadmap.md
+  - id: task-stale-schema-echo
+    title: Implement fixture-and-expected-record schemas (from schema-contract-roadmap)
+    description: Old standalone schema echo.
+    domain: harness
+    releaseIds:
+      - stage-1-fixture-and-evaluation-harness
+    references:
+      - docs/specs/schema-contract-roadmap.md
+\`\`\`
+`)
+    const first = await approveWorkspaceImport({
+      memoryDir,
+      projectPath: tmpDir,
+    })
+    expect(first).toMatchObject({ success: true, tasksAdded: 2 })
+
+    const q = await readQueue()
+    const stale = q.tasks.find((t) => t.id === 'task-stale-schema-echo')!
+    stale.status = 'done'
+    stale.completedAt = '2026-07-04T00:00:00.000Z'
+    await writeQueue(q)
+
+    await seedImporterWithSpec(`
+\`\`\`yaml
+tasks:
+  - id: task-current-schema
+    title: Define fixture, expected-record, prototype-run, and evaluation schemas.
+    description: Corrected current Stage 1 schema task.
+    domain: harness
+    releaseIds:
+      - stage-1-fixture-and-evaluation-harness
+    references:
+      - docs/harness/implementation-roadmap.md
+\`\`\`
+`)
+    const refreshed = await approveWorkspaceImport({
+      memoryDir,
+      projectPath: tmpDir,
+      replacePreviouslyImportedTasks: true,
+    })
+    expect(refreshed).toMatchObject({ success: true })
+
+    const refreshedQueue = await readQueue()
+    expect(refreshedQueue.tasks.find((t) => t.id === 'task-current-schema')).toMatchObject({
+      status: 'import_draft',
+      releaseIds: ['stage-1-fixture-and-evaluation-harness'],
+    })
+    expect(refreshedQueue.tasks.find((t) => t.id === 'task-stale-schema-echo')).toMatchObject({
+      status: 'archived',
+      releaseIds: ['stage-1-fixture-and-evaluation-harness'],
+    })
+    expect(refreshedQueue.releases?.find(release => release.id === 'stage-1-fixture-and-evaluation-harness')).toMatchObject({
+      nodeIds: ['work:task-current-schema'],
+    })
+  })
+
   it('preserves exact imported release labels instead of deriving labels from ids', async () => {
     await seedImporterWithSpec(`
 \`\`\`yaml
@@ -1290,6 +1358,64 @@ tasks:
       expect.objectContaining({
         id: 'stage-2-authoring-shell',
         state: 'planned',
+        nodeIds: [],
+        deferredNodeIds: ['work:task-authoring-shell'],
+      }),
+    ]))
+  })
+
+  it('selects the first imported release that actually contains current work', async () => {
+    await seedImporterWithSpec(`
+\`\`\`yaml
+releases:
+  - id: stage-0-spec-baseline
+    label: "Stage 0: Spec Baseline"
+    source: release_plan
+    state: active
+  - id: stage-1-fixture-and-evaluation-harness
+    label: "Stage 1: Fixture And Evaluation Harness"
+    source: release_plan
+    state: active
+  - id: stage-4-local-authoring-shell
+    label: "Stage 4: Local Authoring Shell"
+    source: release_plan
+    state: planned
+tasks:
+  - id: task-headless-runner
+    title: Implement no-UI runner
+    description: Current Stage 1 work.
+    domain: harness
+    releaseIds:
+      - stage-1-fixture-and-evaluation-harness
+  - id: task-authoring-shell
+    title: Build authoring shell
+    description: Later UI work.
+    domain: app
+    scope: later
+    releaseIds:
+      - stage-4-local-authoring-shell
+\`\`\`
+`)
+
+    const res = await approveWorkspaceImport({
+      memoryDir,
+      projectPath: tmpDir,
+    })
+    expect(res, res.success ? undefined : res.error).toMatchObject({ success: true, tasksAdded: 2 })
+
+    const q = await readQueue()
+    expect(q.selectedReleaseId).toBe('stage-1-fixture-and-evaluation-harness')
+    expect(q.releases).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'stage-0-spec-baseline',
+        nodeIds: [],
+      }),
+      expect.objectContaining({
+        id: 'stage-1-fixture-and-evaluation-harness',
+        nodeIds: ['work:task-headless-runner'],
+      }),
+      expect.objectContaining({
+        id: 'stage-4-local-authoring-shell',
         nodeIds: [],
         deferredNodeIds: ['work:task-authoring-shell'],
       }),
@@ -3672,7 +3798,7 @@ tasks:
     ])
   })
 
-  it('keeps later roadmap stages as release-scoped capability context when a current milestone bounds active work', async () => {
+  it('keeps later roadmap stages as deferred release-scoped work when a current milestone bounds active work', async () => {
     await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
     await fs.writeFile(
       path.join(tmpDir, 'docs', 'harness', 'implementation-roadmap.md'),
@@ -3704,11 +3830,21 @@ tasks:
     const inventory = await detectWorkspaceSignals({ projectPath: tmpDir })
     const draft = formWorkspaceHypothesis(inventory)
 
-    expect(draft.tasks.map(task => task.title)).toEqual([
+    expect(draft.tasks.map(task => task.title)).toEqual(expect.arrayContaining([
       'Define fixture, expected-record, prototype-run, and evaluation schemas.',
       'Add the first tiny fiction fixture and human-authored expected records.',
-    ])
+      'Mastra workflow for the prototype iteration loop',
+      'specialist editor agent calls for the first review lanes',
+    ]))
     expect(draft.tasks.find(task => task.title === 'Define fixture, expected-record, prototype-run, and evaluation schemas.')?.scope).toBe('current')
+    expect(draft.tasks.find(task => task.title === 'Mastra workflow for the prototype iteration loop')).toMatchObject({
+      scope: 'later',
+      releaseIds: ['stage-2-mastra-agent-prototype'],
+    })
+    expect(draft.tasks.find(task => task.title === 'specialist editor agent calls for the first review lanes')).toMatchObject({
+      scope: 'later',
+      releaseIds: ['stage-2-mastra-agent-prototype'],
+    })
     expect(draft.context).toEqual(expect.arrayContaining([
       expect.objectContaining({
         label: 'fixture directory shape for at least one small story fixture',
@@ -3717,18 +3853,6 @@ tasks:
       expect.objectContaining({
         label: 'typed fixture and expected-record contracts',
         role: 'capability',
-      }),
-      expect.objectContaining({
-        label: 'Mastra workflow for the prototype iteration loop',
-        role: 'capability',
-        scopeHint: 'later',
-        releaseIds: ['stage-2-mastra-agent-prototype'],
-      }),
-      expect.objectContaining({
-        label: 'specialist editor agent calls for the first review lanes',
-        role: 'capability',
-        scopeHint: 'later',
-        releaseIds: ['stage-2-mastra-agent-prototype'],
       }),
     ]))
 
@@ -3747,8 +3871,14 @@ tasks:
     expect(approved).toMatchObject({ success: true })
 
     const q = await readQueue()
-    expect(q.tasks.find(task => task.title === 'Mastra workflow for the prototype iteration loop')).toBeUndefined()
-    expect(q.tasks.find(task => task.title === 'specialist editor agent calls for the first review lanes')).toBeUndefined()
+    expect(q.tasks.find(task => task.title === 'Mastra workflow for the prototype iteration loop')).toMatchObject({
+      status: 'shelved',
+      releaseIds: ['stage-2-mastra-agent-prototype'],
+    })
+    expect(q.tasks.find(task => task.title === 'specialist editor agent calls for the first review lanes')).toMatchObject({
+      status: 'shelved',
+      releaseIds: ['stage-2-mastra-agent-prototype'],
+    })
   })
 
   it('prefers decomposed spec tasks over coarse later-stage roadmap deliverables when a current milestone and inventory both exist', async () => {
@@ -3856,7 +3986,7 @@ tasks:
     expect(milestoneTerminal?.scope).toBe('current')
   })
 
-  it('keeps later-stage roadmap deliverables in capability context when only one intermediate stage has decomposed replacements', async () => {
+  it('keeps later-stage roadmap deliverables as deferred release work when only one intermediate stage has decomposed replacements', async () => {
     await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
     await fs.mkdir(path.join(tmpDir, 'docs', 'specs'), { recursive: true })
     await fs.writeFile(
@@ -3915,26 +4045,20 @@ tasks:
 
     const inventory = await detectWorkspaceSignals({ projectPath: tmpDir })
     const draft = formWorkspaceHypothesis(inventory)
-    expect(draft.tasks.map(task => task.title)).not.toEqual(expect.arrayContaining([
+    expect(draft.tasks.map(task => task.title)).toEqual(expect.arrayContaining([
       'provider/model registry schema',
       'fiction bakeoff scenarios for writer, editor, reviewer, and safety lanes',
       'manuscript import or simple editor shell',
       'project brief and author-provenance capture',
     ]))
-    expect(draft.context).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        label: 'provider/model registry schema',
-        role: 'capability',
-        scopeHint: 'later',
-        releaseIds: ['stage-3-model-bakeoff-and-safety-policy'],
-      }),
-      expect.objectContaining({
-        label: 'manuscript import or simple editor shell',
-        role: 'capability',
-        scopeHint: 'later',
-        releaseIds: ['stage-4-local-authoring-shell'],
-      }),
-    ]))
+    expect(draft.tasks.find(task => task.title === 'provider/model registry schema')).toMatchObject({
+      scope: 'later',
+      releaseIds: ['stage-3-model-bakeoff-and-safety-policy'],
+    })
+    expect(draft.tasks.find(task => task.title === 'manuscript import or simple editor shell')).toMatchObject({
+      scope: 'later',
+      releaseIds: ['stage-4-local-authoring-shell'],
+    })
     const materialized = await materializeWorkspaceImportDraft({
       memoryDir,
       projectPath: tmpDir,
@@ -3952,7 +4076,22 @@ tasks:
       'project brief and author-provenance capture',
       'Mastra workflow for the prototype iteration loop',
       'specialist editor agent calls for the first review lanes',
-    ].includes(task.title))).toEqual([])
+    ].includes(task.title)).map(task => ({
+      title: task.title,
+      scope: task.scope,
+      releaseIds: task.releaseIds,
+    }))).toEqual(expect.arrayContaining([
+      {
+        title: 'provider/model registry schema',
+        scope: 'later',
+        releaseIds: ['stage-3-model-bakeoff-and-safety-policy'],
+      },
+      {
+        title: 'manuscript import or simple editor shell',
+        scope: 'later',
+        releaseIds: ['stage-4-local-authoring-shell'],
+      },
+    ]))
     expect(materialized.tasks.find(task => task.title === 'Implement dialogue-and-character-voice reviewer lane')).toBeUndefined()
     expect(materialized.context).toEqual(expect.arrayContaining([
       expect.objectContaining({
