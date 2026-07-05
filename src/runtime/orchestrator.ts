@@ -4588,6 +4588,13 @@ export class Orchestrator {
           const shouldEscalateNow = checkpointNoProgressStatusSeen ||
             attempts >= EXPLORING_NO_PROGRESS_ESCALATION_AFTER
           if (shouldEscalateNow) {
+            if (checkpointNoProgressStatusSeen) {
+              const seededSpec = await this.maybeWriteExploringRecoverySpecSeed(taskAfter, { force: true })
+              if (seededSpec) {
+                this.clearExploringNoProgress(task.id)
+                return seededSpec
+              }
+            }
             const summary = checkpointNoProgressStatusSeen
               ? 'Spec agent kept researching after Guildhall asked for durable progress.'
               : `Spec agent made no visible progress after ${attempts} passes.`
@@ -9776,7 +9783,10 @@ export class Orchestrator {
     }
   }
 
-  private async maybeWriteExploringRecoverySpecSeed(task: Task): Promise<TickOutcome | null> {
+  private async maybeWriteExploringRecoverySpecSeed(
+    task: Task,
+    opts: { force?: boolean } = {},
+  ): Promise<TickOutcome | null> {
     if (task.status !== 'exploring') return null
     if (typeof task.spec === 'string' && task.spec.trim().length > 0) return null
     if (taskHasUnansweredVisibleQuestion(task)) return null
@@ -9784,7 +9794,7 @@ export class Orchestrator {
     const isRecoveryRetry = notes.some((note) =>
       /reframe requested|fresh spec pass|retry.*spec|rebuild the task|failed to save a durable draft|preserved transcript notes/i.test(note.content ?? ''),
     )
-    if (!isRecoveryRetry) return null
+    if (!isRecoveryRetry && opts.force !== true) return null
 
     const now = this.now()
     const queue = await this.readQueue()

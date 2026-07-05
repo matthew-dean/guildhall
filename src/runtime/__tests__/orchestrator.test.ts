@@ -1469,7 +1469,7 @@ describe('Orchestrator.tick — routing', () => {
     expect(task.escalations[0]!.reason).toBe('human_judgment_required')
   })
 
-  it('escalates immediately when the spec agent ignores the durable-progress nudge', async () => {
+  it('seeds a recovery spec immediately when the spec agent ignores the durable-progress nudge', async () => {
     await writeQueue([mkTask({ id: 'a', status: 'exploring', title: 'Build AlertDialog primitive' })])
     const spec = {
       name: 'spec-agent',
@@ -1495,13 +1495,18 @@ describe('Orchestrator.tick — routing', () => {
 
     const out = await orch.tick()
 
-    expect(out.kind).toBe('escalated')
-    if (out.kind === 'escalated') expect(out.reason).toContain('kept researching')
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.agent).toBe('coordinator-recovery')
+      expect(out.beforeStatus).toBe('exploring')
+      expect(out.afterStatus).toBe('spec_review')
+    }
     const queue = await readQueue()
     const task = queue.tasks[0]!
-    expect(task.status).toBe('blocked')
-    expect(task.blockReason).toContain('Spec agent kept researching')
-    expect(task.escalations[0]?.details).toContain('durable-progress nudge')
+    expect(task.status).toBe('spec_review')
+    expect(task.blockReason).toBeUndefined()
+    expect(task.spec).toContain('## Completion Boundary')
+    expect(task.escalations ?? []).toHaveLength(0)
   })
 
   it('treats the live durable-progress refusal wording as spec-agent no-progress', async () => {
@@ -1530,11 +1535,12 @@ describe('Orchestrator.tick — routing', () => {
 
     const out = await orch.tick()
 
-    expect(out.kind).toBe('escalated')
+    expect(out.kind).toBe('processed')
     const queue = await readQueue()
     const task = queue.tasks[0]!
-    expect(task.status).toBe('blocked')
-    expect(task.blockReason).toContain('Spec agent kept researching')
+    expect(task.status).toBe('spec_review')
+    expect(task.blockReason).toBeUndefined()
+    expect(task.spec).toContain('## Completion Boundary')
   })
 
   it('recovers the live durable-progress spec-agent blocker on resume', async () => {
@@ -1653,7 +1659,7 @@ describe('Orchestrator.tick — routing', () => {
     expect(task.blockReason).toBeUndefined()
   })
 
-  it('treats the live durable-progress nudge wording as spec-agent no-progress', async () => {
+  it('seeds a recovery spec for live durable-progress nudge wording', async () => {
     await writeQueue([mkTask({ id: 'a', status: 'exploring', title: 'Build AlertDialog primitive' })])
     const spec = {
       name: 'spec-agent',
@@ -1679,11 +1685,12 @@ describe('Orchestrator.tick — routing', () => {
 
     const out = await orch.tick()
 
-    expect(out.kind).toBe('escalated')
+    expect(out.kind).toBe('processed')
     const queue = await readQueue()
     const task = queue.tasks[0]!
-    expect(task.status).toBe('blocked')
-    expect(task.blockReason).toContain('Spec agent kept researching')
+    expect(task.status).toBe('spec_review')
+    expect(task.blockReason).toBeUndefined()
+    expect(task.spec).toContain('## Completion Boundary')
   })
 
   it('persists a visible question from the whole spec turn before escalating durable-progress nudges', async () => {

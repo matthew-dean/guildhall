@@ -13361,6 +13361,33 @@ evidence into landing recovery.
 
 source: codex:done-summary-landing-reconciliation-2026-07-05
 
+2026-07-05T02:12:44Z - Converted durable-progress spec-agent stalls into
+deterministic spec recovery instead of owner blockers.
+
+- Work id: `codex:durable-progress-spec-seed-2026-07-05`.
+- User job: when Guildhall has enough task and parent evidence to shape an
+  internal split, the project should keep moving without asking the owner to
+  repair a spec-agent no-op. The owner can review the resulting spec, but the
+  no-op itself is Guildhall's problem.
+- Observed failure:
+  - Narrative Harness task
+    `task-import-14yqvl7-split-build-the-bounded-writer-packet-instead-of-rereading-the-2`
+    was blocked with `human_judgment_required: Spec agent kept researching
+    after Guildhall asked for durable progress.`
+  - The transcript only showed the spec agent continuing read-only exploration,
+    while the task already had parent evidence and a clear internal split title.
+- Fix:
+  - When a spec-agent turn trips the durable-progress no-op detector, the
+    orchestrator now calls the existing deterministic recovery spec seeder
+    immediately with `force:true`.
+  - Ordinary repeated blank spec passes still escalate; the automatic seed is
+    limited to the explicit durable-progress refusal/no-op path.
+- Verification:
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/orchestrator.test.ts -t 'durable-progress|repeated spec-agent no-change|recovery spec seed'`
+    passed `9` focused tests.
+
+source: codex:durable-progress-spec-seed-2026-07-05
+
 2026-07-05T00:49:00Z - Fixed imported execution blueprints being stranded by
 stale proofability readiness.
 
