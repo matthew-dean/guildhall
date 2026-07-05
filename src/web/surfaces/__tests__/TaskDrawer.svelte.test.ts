@@ -1942,6 +1942,94 @@ describe('TaskDrawer', () => {
     })
   })
 
+  it('continues source-recovery shaping from the current card when project start is blocked by that task', async () => {
+    openDrawerOn('current')
+    const blockedProject = {
+      ...projectDetail(),
+      startReadiness: {
+        canStart: false,
+        code: 'imported_scope_shaping',
+        message: 'Current scoped work still needs source-backed shaping before Guildhall can build unattended. Start with "Recover source-backed contract surface".',
+        actionHref: '/task/task-link-editor',
+      },
+    }
+    project.detail = blockedProject
+    const payload = drawerPayload({
+      task: {
+        ...drawerPayload().task,
+        status: 'exploring',
+        taskReadiness: {
+          recommendation: 'needs_research_spike',
+          summary: 'Needs concrete source-backed contract names before worker handoff.',
+        },
+        notes: [
+          {
+            agentId: 'workspace-importer',
+            role: 'importer',
+            content: 'Imported from docs/specs/author-involvement-modes.md',
+            timestamp: now,
+          },
+        ],
+      },
+      threadTurns: [
+        {
+          id: 'turn-source-recovery',
+          kind: 'inflight',
+          at: now,
+          persona: 'spec',
+          status: 'active',
+          phase: 'spec',
+          taskId: 'task-link-editor',
+          taskTitle: 'Recover source-backed contract surface',
+          taskStatus: 'exploring',
+          summary: 'Source recovery is queued.',
+          shapingBlockers: [
+            {
+              code: 'source_recovery',
+              summary: 'Needs concrete source-backed contract names before worker handoff.',
+            },
+          ],
+        },
+      ],
+    })
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor/shape-draft')) {
+        expect(url).toContain('projectId=looma-knit')
+        expect(init?.method).toBe('POST')
+        return json({ ok: true, status: 'exploring' })
+      }
+      if (url.startsWith('/api/project/task/task-link-editor/start')) {
+        expect(JSON.parse(String(init?.body))).toMatchObject({
+          projectId: 'looma-knit',
+          mode: 'one_task',
+        })
+        return json({ ok: true })
+      }
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(blockedProject)
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByText(/recover the source-backed task brief/i)
+    const button = screen.getByRole('button', { name: /continue shaping brief/i })
+    expect(button).toBeEnabled()
+    await userEvent.click(button)
+
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/shape-draft'))).toBe(true)
+      expect(fetchMock.mock.calls.some(([input]) => String(input).startsWith('/api/project/task/task-link-editor/start'))).toBe(true)
+    })
+  })
+
   it('adds acceptance criteria and follow-up notes from the optional drawer details path', async () => {
     openDrawerOn('spec')
     const payload = drawerPayload({ threadTurns: [] })

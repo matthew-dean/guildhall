@@ -185,6 +185,7 @@
   function runButtonLabel(task: Task, busy: boolean, active: boolean): string {
     if (active) return 'Running...'
     if (task.status === 'import_draft') return busy ? 'Drafting...' : 'Draft task brief'
+    if (taskShapingBlockers(task).length > 0) return busy ? 'Shaping...' : 'Continue shaping brief'
     return busy ? 'Starting...' : 'Start work'
   }
 

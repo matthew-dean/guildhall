@@ -14104,6 +14104,67 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-07-05T16:58:35Z - Fixed focused source-recovery shaping dead end.
+
+- Work id: `codex:source-recovery-shaping-action-2026-07-05`.
+- User job: when Overview/Start says the current scope is blocked by an
+  imported source-recovery task, opening that task must show the shaping action
+  that continues it. Project-wide Start should still stay blocked, but the
+  selected blocker task must not dead-end.
+- Root-cause classification:
+  - data model/schema problem: the thread turn did not carry the shared
+    shaping blocker, so the UI could not distinguish source recovery from a
+    generic paused `exploring` task.
+  - scheduler/action-state logic problem: focused task Start was routed through
+    the project-level imported-scope blocker before recognizing that the
+    requested task was the blocker to shape.
+  - UI communication/orientation problem: the drawer could describe source
+    recovery while still labeling the primary action as generic spec drafting,
+    and Work inspector labels implied implementation rather than shaping.
+- Contract Touch Decision:
+  - Touched contracts: `shapeImportDraft` action semantics, project Start
+    readiness for `requestedTaskId`, Thread `InFlightTurn` payload, TaskDrawer
+    current-card actions, Work inspector actions.
+  - Contracts considered but not touched: persisted task schema and release
+    scope schema. Existing `taskReadiness.recommendation =
+    needs_research_spike` plus shared `taskShapingBlockers()` already model the
+    required state; no migration is needed.
+  - Required follow-up: continue using Narrative Harness to prove that shaping
+    actually resolves source-recovery blockers rather than only making the
+    action reachable.
+  - Proof required: focused runtime endpoint tests, drawer/work component tests,
+    contract detector, build, installed-app API/browser proof on
+    Narrative Harness.
+  - Proof provided: focused runtime/component suites passed `250` tests across
+    Thread, task endpoints, TaskDrawer, and WorkTab; `git diff --check`
+    passed; contract detector passed; `node ./build.mjs` passed.
+    Installed-app proof on `localhost:7777` returned `stale:false` for
+    `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`. Narrative Harness
+    task `task-import-1g9oq7m` now returns only an `inflight` Thread turn with
+    `phase:intake` and `shapingBlockers:[source_recovery]`; no `spec_review`
+    owner-approval turn is projected while source recovery remains blocking.
+    Browser proof at `1280x820` showed one `Continue shaping brief` button, no
+    `Needs your approval` copy, no `Approve spec` button, and no horizontal
+    overflow. Live `shape-draft` returned `ok:true`, and focused
+    `/api/project/task/task-import-1g9oq7m/start` returned HTTP 200 with
+    `mode:"one_task"` instead of self-blocking with `imported_scope_shaping`.
+    Owner intake for the next Narrative Harness MVP correction was recorded in
+    Guildhall as `task-150`, covering DeepInfra model selection/proof for
+    drafting across genres including adult work, world-state continuity over
+    time, object/property state transitions, spatial/geographic continuity,
+    travel distance, and walking-speed plausibility review lanes.
+  - Residual verification note: broad `pnpm typecheck` remains red on existing
+    repo-wide schema drift unrelated to this slice, including required
+    `Task.references`, acceptance-criteria `source`, and archived/cancelled
+    task-state tables. Focused tests and production build cover this change.
+  - Owner-review items: none; this preserves the owner boundary by allowing
+    Codex/user-triggered focused shaping while keeping project-wide unattended
+    Start blocked until shaping blockers are cleared.
+  - Apply/revert behavior: revert the helper additions in
+    `import-drafts.ts`/`intake.ts`, the `requestedTaskId` exemption in
+    `serve.ts`, the turn shaping-blocker projection in `thread.ts`, and the
+    Drawer/Work action wiring. No data rollback required.
+
 2026-07-05T16:45:00Z - Synced imported shaping blockers across Start,
 Release readiness, Inbox, Overview, and the project ticker.
 

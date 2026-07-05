@@ -1806,6 +1806,77 @@ describe('buildThread', () => {
     }
   })
 
+  it('keeps source-recovery tasks in shaping even when a draft spec exists', async () => {
+    const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
+    try {
+      await mkdir(statePath(projectPath), { recursive: true })
+      await writeFile(
+        statePath(projectPath, 'TASKS.json'),
+        JSON.stringify({
+          tasks: [
+            {
+              id: 'task-source-recovery',
+              title: 'Recover source-backed contract surface',
+              status: 'exploring',
+              createdAt: '2026-06-04T00:00:00.000Z',
+              updatedAt: '2026-06-04T00:01:00.000Z',
+              spec: '## Summary\n\nRepair the imported handoff.',
+              acceptanceCriteria: [{ description: 'Names the concrete source-backed surface.' }],
+              taskReadiness: {
+                recommendation: 'needs_research_spike',
+                summary: 'Needs concrete contract names before worker handoff.',
+              },
+              notes: [
+                {
+                  agentId: 'workspace-importer',
+                  role: 'importer',
+                  content: 'Imported from docs/specs/source.md',
+                  timestamp: '2026-06-04T00:00:00.000Z',
+                },
+              ],
+            },
+          ],
+        }),
+      )
+      const snapshot: ProjectSnapshot = {
+        projectPath,
+        config: {
+          id: 'demo',
+          name: 'Demo',
+          bootstrap: { verifiedAt: new Date().toISOString() },
+          coordinators: [{ id: 'frontend', name: 'Frontend' }],
+        },
+        bootstrapVerified: true,
+        hasProvider: true,
+        hasDirection: true,
+        workspaceImportReviewed: true,
+        taskCount: 1,
+        wizardState: emptyWizardsState(),
+      }
+
+      const thread = buildThread({
+        projectPath,
+        snapshot,
+        recentEvents: [],
+      })
+
+      expect(thread.turns.some(turn => turn.id === 'spec:task-source-recovery')).toBe(false)
+      const turn = thread.turns.find(item => item.id === 'inflight:task-source-recovery')
+      expect(turn).toMatchObject({
+        kind: 'inflight',
+        phase: 'intake',
+        shapingBlockers: expect.arrayContaining([
+          {
+            code: 'source_recovery',
+            summary: 'Needs concrete contract names before worker handoff.',
+          },
+        ]),
+      })
+    } finally {
+      await rm(projectPath, { recursive: true, force: true })
+    }
+  })
+
   it('does not render operational receipts as answerable questions', async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), 'guildhall-thread-'))
     try {

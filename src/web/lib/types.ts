@@ -1060,6 +1060,8 @@ export interface TaskThreadInFlightTurn extends TaskThreadTurnBase {
   taskStatus?: string
   summary: string
   importedDraft?: boolean
+  shapingBlockers?: Array<{ code?: string; summary?: string }>
+  taskReadiness?: Record<string, unknown>
   liveAgent?: TaskTurnLiveAgent
   activity?: TaskTurnLiveActivity[]
   checklist?: TaskTurnChecklist

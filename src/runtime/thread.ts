@@ -41,6 +41,7 @@ import { getProjectStateDir, getProjectSystemStatePath } from '@guildhall/sessio
 import type { GitStorySnapshot } from './git-story.js'
 import { userFacingText } from './user-facing-text.js'
 import { specReviewRequiresOwnerApproval } from './spec-review-ownership.js'
+import { taskShapingBlockers, type TaskShapingBlocker } from '../shared/task-shaping-blockers.js'
 
 // ---------------------------------------------------------------------------
 // Turn shape
@@ -233,6 +234,7 @@ export interface InFlightTurn extends TurnBase {
   taskStatus?: string | undefined
   summary: string
   importedDraft?: boolean | undefined
+  shapingBlockers?: TaskShapingBlocker[] | undefined
   liveAgent?: {
     name: string
     startedAt?: string | undefined
@@ -509,6 +511,7 @@ function taskNeedsSpecFill(task: Pick<Task, 'spec' | 'acceptanceCriteria' | 'pro
 }
 
 function isQueuedSpecRevision(task: Task): boolean {
+  if (taskShapingBlockers(task).length > 0) return false
   return (
     (task.status === 'exploring' || task.status === 'spec_review') &&
     hasSpecDraftContent(task)
@@ -2086,6 +2089,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
     const hasUnansweredQuestions = openQs.some(q => !q.answeredAt)
     const hasActiveBriefTurn = hasReviewableProductBrief(brief) && !approvedAt && taskStatus === 'exploring' && !hasSpecDraft
     const importedDraft = taskStatus === 'import_draft' || shouldUseImportDraftState(t)
+    const shapingBlockers = taskShapingBlockers(t)
     if (importedDraft && taskId !== leadingImportDraftId) {
       continue
     }
@@ -2093,7 +2097,8 @@ export function buildThread(opts: BuildThreadOptions): Thread {
     // Spec review
     const shouldSurfaceSpecReview =
       (taskStatus === 'spec_review' || (taskStatus === 'exploring' && hasSpecDraft)) &&
-      specReviewRequiresOwnerApproval(t)
+      specReviewRequiresOwnerApproval(t) &&
+      shapingBlockers.length === 0
     if (shouldSurfaceSpecReview && !hasUnansweredQuestions) {
       const status: TurnStatus = hasUnansweredQuestions
         ? 'pending'
@@ -2209,6 +2214,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
         taskStatus,
         summary,
         importedDraft,
+        shapingBlockers: shapingBlockers.length > 0 ? shapingBlockers : undefined,
         liveAgent: effectiveLiveAgent,
         activity: liveActivity.get(taskId),
         checklist:

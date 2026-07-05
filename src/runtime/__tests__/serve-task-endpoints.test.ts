@@ -1370,6 +1370,83 @@ describe('POST /api/project/task/:id/start', () => {
     expect(starts).toHaveLength(0)
   })
 
+  it('lets the selected source-recovery shaping task start while project Start remains blocked', async () => {
+    const now = new Date().toISOString()
+    await seedTasks([
+      {
+        id: 'task-source-recovery',
+        title: 'Recover source-backed contract surface',
+        status: 'exploring',
+        taskReadiness: {
+          recommendation: 'needs_research_spike',
+          summary: 'Needs concrete contract names before worker handoff.',
+        },
+        notes: [
+          {
+            agentId: 'workspace-importer',
+            role: 'importer',
+            content: 'Imported from docs/specs/source.md',
+            timestamp: now,
+          },
+        ],
+      },
+      {
+        id: 'task-ready',
+        title: 'Ready implementation task',
+        status: 'ready',
+        productBrief: {
+          approvedAt: now,
+          userJob: 'Run a ready task.',
+          whyItMattersNow: 'It belongs to current scope.',
+          successMetric: 'The task completes.',
+          nonGoals: ['Do not skip source recovery.'],
+        },
+        spec: '## Summary\nRun ready implementation.\n\n## Acceptance Criteria\n- It completes.',
+        acceptanceCriteria: [{ id: 'ac-1', description: 'It completes.', verifiedBy: 'review' }],
+      },
+    ])
+    const { supervisor, starts } = createTrackingSupervisor()
+    const { app } = buildServeApp({ projectPath: tmpDir, supervisor })
+    await applyStorageBoundaryMigration(app)
+    setProvider('anthropic-api', { apiKey: 'sk-ant-test' })
+    updateGlobalConfig({ preferredProvider: 'anthropic-api' })
+
+    try {
+      const projectStart = await app.fetch(
+        new Request(projectUrl('/api/project/start'), {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ mode: 'continuous' }),
+        }),
+      )
+      expect(projectStart.status).toBe(400)
+      await expect(projectStart.json()).resolves.toMatchObject({
+        code: 'imported_scope_shaping',
+        actionHref: '/task/task-source-recovery',
+      })
+
+      const focusedStart = await app.fetch(
+        new Request(projectUrl('/api/project/task/task-source-recovery/start'), {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ mode: 'one_task', scope: 'work_item' }),
+        }),
+      )
+
+      expect(focusedStart.status).toBe(200)
+      const body = (await focusedStart.json()) as Record<string, any>
+      expect(body.scope).toEqual({ type: 'work_item', taskId: 'task-source-recovery' })
+      await vi.waitFor(() => {
+        expect(starts.at(-1)).toMatchObject({
+          preferredTaskId: 'task-source-recovery',
+          stopAfterOneTask: true,
+        })
+      })
+    } finally {
+      await supervisor.stopAll({ reason: 'test-teardown' }).catch(() => {})
+    }
+  })
+
   it('starts a scoped max-revision task when an earlier LLM review already cleared the rubric', async () => {
     await seedTasks([
       {
@@ -2399,6 +2476,70 @@ describe('POST /api/project/task/:id/resume', () => {
     const workspaceStore = await readTaskWorkspaceStore(tmpDir)
     expect(runtimeStore.tasks['task-1']).toBeUndefined()
     expect(workspaceStore.workspaces['task-1']).toBeUndefined()
+  })
+
+  it('continues source recovery for an already-shaped imported task', async () => {
+    await fs.mkdir(path.join(tmpDir, 'docs/specs'), { recursive: true })
+    const sourcePath = path.join(tmpDir, 'docs/specs/author-involvement-modes.md')
+    await fs.writeFile(
+      sourcePath,
+      [
+        '# Author involvement modes',
+        '',
+        'The author can shape how much intervention each review lane may perform.',
+      ].join('\n'),
+      'utf8',
+    )
+    const now = new Date().toISOString()
+    await seedTask('task-1', {
+      status: 'exploring',
+      title: 'Recover source-backed contract surface for author involvement modes',
+      description: 'Imported contract target needs concrete source recovery.',
+      assignedTo: null,
+      acceptanceCriteria: [{
+        id: 'contract-surface-recovered',
+        description: 'Names concrete source-backed surfaces.',
+        verifiedBy: 'review',
+      }],
+      references: [sourcePath],
+      taskReadiness: {
+        recommendation: 'needs_research_spike',
+        summary: 'Needs concrete contract names before Guildhall can hand it to a worker.',
+      },
+      notes: [
+        {
+          agentId: 'workspace-importer',
+          role: 'importer',
+          content: 'Imported from docs/specs/author-involvement-modes.md',
+          timestamp: now,
+        },
+        {
+          agentId: 'human',
+          role: 'shaping-request',
+          content: 'User asked Guildhall to shape this imported draft into a complete task.',
+          timestamp: now,
+        },
+      ],
+    })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-1/shape-draft'), {
+        method: 'POST',
+      }),
+    )
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, any>
+    expect(body.status).toBe('exploring')
+    const queue = JSON.parse(
+      await fs.readFile(taskQueuePath(), 'utf8'),
+    ) as { tasks: Array<Record<string, any>> }
+    expect(queue.tasks[0]!.status).toBe('exploring')
+    expect(queue.tasks[0]!.notes.filter((note: Record<string, unknown>) => note.role === 'shaping-request')).toHaveLength(1)
+    const transcript = (await readExploringTranscript({ memoryDir, taskId: 'task-1' })).content ?? ''
+    expect(transcript).toMatch(/Imported draft context/)
+    expect(transcript).toMatch(/author can shape how much intervention/i)
   })
 
   it('shelves an imported draft immediately when it is an obvious duplicate of finished work', async () => {

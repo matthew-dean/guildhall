@@ -23,7 +23,7 @@
   import { buildWorkSurface } from '../../lib/project-data.js'
   import { friendlyRuntimeMessage } from '../../lib/runtime-message.js'
   import { hasUnmetDependencies, unmetDependencyIds } from '../../lib/task-dependencies.js'
-  import { isCompleteForWorkerHandoff, needsWorkerHandoffSpecCleanup } from '../../lib/task-state.js'
+  import { isCompleteForWorkerHandoff, needsSourceRecoveryShaping, needsWorkerHandoffSpecCleanup } from '../../lib/task-state.js'
   import { taskStagePresentation, type TaskPresentationTone } from '../../lib/task-presentation.js'
   import { buildWorkHierarchy, nestedWorkCountLabel, workKindLabel } from '../../lib/work-hierarchy.js'
   import { deliveryProgressBadge, type DeliveryProgressBadge } from '../../lib/work-progress-display.js'
@@ -268,7 +268,7 @@
     runWorkError = null
     try {
       const task = allWorkItems.find(item => item.id === taskId)
-      if (task?.status === 'import_draft') {
+      if (task?.status === 'import_draft' || (task && needsSourceRecoveryShaping(task))) {
         const shapeRes = await postTaskAction(taskId, 'shape-draft', { projectId: detail.id })
         if (!shapeRes.ok) {
           const body = await shapeRes.json().catch(() => ({})) as { error?: string }

@@ -215,3 +215,38 @@ export async function promoteImportDraftToExploring(task: Task, memoryDir: strin
     content: evidenceSummary,
   })
 }
+
+export async function continueImportedSourceRecovery(task: Task, memoryDir: string): Promise<void> {
+  const now = new Date().toISOString()
+  const projectRoot = inferProjectRootFromMemoryDir(memoryDir)
+  task.assignedTo = null
+  delete task.blockReason
+  delete task.worktreePath
+  delete task.branchName
+  delete task.baseBranch
+  task.updatedAt = now
+  if (!hasShapingRequest(task)) {
+    task.notes = [
+      ...noteArray(task),
+      {
+        agentId: 'human',
+        role: 'shaping-request',
+        content: 'User asked Guildhall to continue shaping this imported task from its source evidence.',
+        timestamp: now,
+      },
+    ]
+  }
+  if (projectRoot) {
+    await Promise.all([
+      clearTaskRuntimeState(projectRoot, task.id),
+      clearTaskWorkspaceState(projectRoot, task.id),
+    ])
+  }
+  const evidenceSummary = await buildImportedEvidenceSummary(task)
+  await appendExploringTranscript({
+    memoryDir,
+    taskId: task.id,
+    role: 'system',
+    content: evidenceSummary,
+  })
+}

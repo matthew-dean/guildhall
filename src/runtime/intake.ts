@@ -19,7 +19,12 @@ import {
   settleAlreadyRepresentedSplitRecommendations,
   settleMaterializedSplitReadiness,
 } from '@guildhall/tools'
-import { normalizeImportedDraftTask, promoteImportDraftToExploring } from './import-drafts.js'
+import {
+  continueImportedSourceRecovery,
+  importedTaskNeedsSourceRecovery,
+  normalizeImportedDraftTask,
+  promoteImportDraftToExploring,
+} from './import-drafts.js'
 import {
   createPressureTestIntake,
   inspectPressureTestEvidence,
@@ -32,6 +37,7 @@ import {
   productBriefFromSpecCompletionBoundary,
   validateSpecCompletionBoundary,
 } from './spec-quality.js'
+import { taskShapingBlockers } from '../shared/task-shaping-blockers.js'
 import { applyTaskShaping } from './task-decomposition.js'
 import { transitionTaskStatus } from './task-transition.js'
 import { createOwnerInputRequest } from './owner-input-store.js'
@@ -1073,7 +1079,8 @@ export async function shapeImportDraft(
   if (task.status === 'done' || task.status === 'shelved' || task.status === 'blocked') {
     return { success: false, error: `Task ${input.taskId} is ${task.status}` }
   }
-  if (task.status !== 'import_draft') {
+  const hasShapingBlocker = taskShapingBlockers(task).length > 0 || importedTaskNeedsSourceRecovery(task)
+  if (task.status !== 'import_draft' && !(task.status === 'exploring' && hasShapingBlocker)) {
     return {
       success: false,
       error: `Task ${input.taskId} is in status '${task.status}', expected 'import_draft'`,
@@ -1103,7 +1110,11 @@ export async function shapeImportDraft(
     return { success: true, newStatus: 'shelved' }
   }
 
-  await promoteImportDraftToExploring(task, input.memoryDir)
+  if (task.status === 'exploring') {
+    await continueImportedSourceRecovery(task, input.memoryDir)
+  } else {
+    await promoteImportDraftToExploring(task, input.memoryDir)
+  }
   queue.lastUpdated = task.updatedAt ?? new Date().toISOString()
   await writeQueue(input.memoryDir, queue)
   return { success: true, newStatus: 'exploring' }

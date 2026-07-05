@@ -689,6 +689,66 @@ describe('WorkTab', () => {
     expect(runningButton).toBeDisabled()
   })
 
+  it('continues source-recovery shaping before starting a selected work item', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.includes('/api/project/task/task-source-recovery/shape-draft')) {
+        expect(init?.method).toBe('POST')
+        expect(String(init.body)).toContain('"projectId":"looma-knit"')
+        return json({ ok: true, status: 'exploring' })
+      }
+      if (url.includes('/api/project/task/task-source-recovery/start')) {
+        return json({ status: 'running', mode: 'one_task', scope: { type: 'work_item', taskId: 'task-source-recovery' } })
+      }
+      if (url.includes('/api/project?')) {
+        return json({ id: 'looma-knit', name: 'Looma + Knit', run: { status: 'running', mode: 'one_task' }, tasks: [] })
+      }
+      return json({ progress: 'Recent worker progress.' })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(WorkTab, {
+      props: {
+        detail: detail([
+          task({
+            id: 'task-source-recovery',
+            title: 'Recover source-backed contract surface',
+            status: 'exploring',
+            domain: 'harness',
+            taskReadiness: {
+              recommendation: 'needs_research_spike',
+              summary: 'Needs concrete source-backed contract names before worker handoff.',
+            },
+            notes: [
+              {
+                agentId: 'workspace-importer',
+                role: 'importer',
+                content: 'Imported from docs/specs/author-involvement-modes.md',
+                timestamp: '2026-05-19T10:00:00.000Z',
+              },
+            ],
+          }),
+        ]),
+      },
+    })
+
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: /^show$/i }), 'planning')
+    await userEvent.click(await screen.findByRole('button', { name: /inspect work recover source-backed contract surface/i }))
+    await userEvent.click(within(screen.getByLabelText('Selected work inspector')).getByRole('button', { name: /continue shaping brief/i }))
+
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([input]) =>
+        String(input).includes('/api/project/task/task-source-recovery/shape-draft?projectId=looma-knit'),
+      )).toBe(true)
+      expect(fetchMock.mock.calls.some(([input, init]) =>
+        String(input).includes('/api/project/task/task-source-recovery/start?projectId=looma-knit') &&
+        init?.method === 'POST' &&
+        String(init.body).includes('"mode":"one_task"') &&
+        String(init.body).includes('"scope":"work_item"'),
+      )).toBe(true)
+    })
+  })
+
   it('does not show an empty new-request prompt when a zero-task project is blocked by migration', async () => {
     render(WorkTab, {
       props: {

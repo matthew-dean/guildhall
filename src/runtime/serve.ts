@@ -5090,7 +5090,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     const workspaceImportCoverageBlocker = await startBlockerForWorkspaceImportCoverage(input.projectPath)
     if (workspaceImportCoverageBlocker) return workspaceImportCoverageBlocker
 
-	    const importDraftBlocker = await startBlockerForImportDrafts(input.projectPath)
+	    const importDraftBlocker = await startBlockerForImportDrafts(input.projectPath, input.requestedTaskId)
 	    if (importDraftBlocker) return importDraftBlocker
 
 	    if (input.allowTaskReadinessBlocker !== false) {
@@ -5585,7 +5585,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
 	    })
 	  }
 
-  async function startBlockerForImportDrafts(projectPath: string): Promise<{
+  async function startBlockerForImportDrafts(projectPath: string, requestedTaskId?: string): Promise<{
     canStart: false
     code: 'import_drafts_waiting' | 'imported_scope_shaping'
     message: string
@@ -5603,6 +5603,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     const tasks = tasksEligibleForScopeExecution(typedQueue.tasks, selectedReleaseScope)
     const importedShapingTasks = tasks.filter(task => taskShapingBlockers(task).length > 0)
     if (importedShapingTasks.length === 0) return null
+    if (requestedTaskId && importedShapingTasks.some(task => task.id === requestedTaskId)) return null
     const importerTask = typedQueue.tasks.find(task =>
       task &&
       typeof task === 'object' &&
