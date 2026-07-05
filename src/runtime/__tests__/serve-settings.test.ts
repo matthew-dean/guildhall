@@ -2343,6 +2343,78 @@ describe('POST /api/project/start', () => {
     expect(projectBody.startReadiness?.message).toContain('Choose recovery path for Current blocked task')
   })
 
+  it('does not treat in-progress work with a block reason as resumable Start work', async () => {
+    const now = new Date().toISOString()
+    await writeSystemTasks({
+      version: 1,
+      lastUpdated: now,
+      tasks: [
+        {
+          id: 'task-stage-2',
+          title: 'Implement Stage 2 reviewer',
+          description: 'This task was selected before its prerequisites were modeled.',
+          domain: 'core',
+          status: 'in_progress',
+          priority: 'normal',
+          assignedTo: 'worker-agent',
+          blockReason: 'Stage sequencing violation: Stage 1 is not complete.',
+          acceptanceCriteria: [],
+          outOfScope: [],
+          dependsOn: [],
+          notes: [],
+          openQuestions: [],
+          escalations: [],
+          agentIssues: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          adjudications: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          id: 'task-ready',
+          title: 'Runnable sibling',
+          description: 'Another task in the same current scope.',
+          domain: 'core',
+          status: 'ready',
+          priority: 'normal',
+          acceptanceCriteria: ['Run the sibling proof.'],
+          outOfScope: [],
+          dependsOn: [],
+          notes: [],
+          openQuestions: [],
+          escalations: [],
+          agentIssues: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          adjudications: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+    })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await applyStorageBoundaryMigration(app)
+    const projectRes = await app.fetch(new Request(scoped('/api/project')))
+    const projectBody = (await projectRes.json()) as {
+      startReadiness?: { canStart?: boolean; code?: string; actionHref?: string; message?: string; focusKind?: string }
+    }
+
+    expect(projectBody.startReadiness).toMatchObject({
+      canStart: false,
+      code: 'no_unattended_progress',
+      actionHref: '/work?task=task-stage-2',
+      focusKind: 'blocked_work',
+    })
+    expect(projectBody.startReadiness?.message).toContain('Implement Stage 2 reviewer')
+    expect(projectBody.startReadiness?.message).toContain('Stage sequencing violation')
+  })
+
   it('rejects focused task starts while project-level owner input is still blocking Start', async () => {
     const now = new Date().toISOString()
     await writeSystemTasks({

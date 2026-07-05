@@ -419,6 +419,41 @@ describe('buildProjectActionModel', () => {
       label: 'Pause',
       startEnabled: true,
     })
+
+    const stopping = buildProjectActionModel({
+      startReadiness: { canStart: true },
+      tasks: [{ id: 'task-ready', title: 'Ready task', status: 'ready' }],
+      thread: { turns: [], activeTurnId: null },
+      runStatus: 'stopping',
+    })
+    expect(stopping.runControl).toMatchObject({
+      label: 'Stopping',
+      startEnabled: false,
+      disabledReason: 'Pause requested. Guildhall is waiting for active work to stop.',
+    })
+  })
+
+  it('surfaces active work with a block reason as warning state', () => {
+    const model = buildProjectActionModel({
+      startReadiness: { canStart: true },
+      tasks: [{
+        id: 'task-stage-2',
+        title: 'Implement Stage 2 reviewer',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        blockReason: 'Stage sequencing violation: Stage 1 is not complete.',
+      }],
+      thread: { turns: [], activeTurnId: null },
+      runStatus: 'running',
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      source: 'task',
+      label: 'Implement Stage 2 reviewer',
+      detail: 'Stage sequencing violation: Stage 1 is not complete.',
+      tone: 'warn',
+      taskId: 'task-stage-2',
+    })
   })
 
   it('does not show stale Answer in Thread when no live owner-input turn exists', () => {
@@ -772,6 +807,44 @@ describe('buildProjectActionModel', () => {
       label: 'Resume',
       startEnabled: true,
       href: '/work?task=contract-task',
+    })
+  })
+
+  it('labels blocked live work as recovery even when the reason mentions specs', () => {
+    const model = buildProjectActionModel({
+      startReadiness: {
+        canStart: false,
+        code: 'no_unattended_progress',
+        message: '"Implement Stage 2 reviewer" is blocked before unattended work can run: spec is a placeholder.',
+        actionHref: '/work?task=stage-2-reviewer',
+        focusTaskId: 'stage-2-reviewer',
+        focusTaskTitle: 'Implement Stage 2 reviewer',
+        focusKind: 'blocked_work',
+        count: 1,
+      },
+      tasks: [
+        {
+          id: 'stage-2-reviewer',
+          title: 'Implement Stage 2 reviewer',
+          description: 'Stage 2 reviewer implementation.',
+          status: 'in_progress',
+          assignedTo: 'worker-agent',
+          blockReason: 'spec is a placeholder.',
+        },
+      ],
+      thread: { turns: [], activeTurnId: null },
+      runStatus: 'stopped',
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      source: 'start_readiness',
+      label: 'Implement Stage 2 reviewer',
+      buttonLabel: 'Open Work',
+      tone: 'warn',
+    })
+    expect(model.runControl).toMatchObject({
+      label: 'Needs recovery',
+      startEnabled: false,
     })
   })
 })

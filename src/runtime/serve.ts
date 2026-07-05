@@ -387,6 +387,7 @@ import {
   readProjectReintakeDraft,
   writeProjectReintakeDraft,
 } from './project-reintake.js'
+import { deriveWorkExecutionState } from './work-execution-state.js'
 
 // ---------------------------------------------------------------------------
 // guildhall serve — local service over many projects
@@ -5103,7 +5104,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
     const pausedTasks = scopedTasks.filter(task => {
       if (!task || typeof task !== 'object') return false
       if (requestedTaskId && task.id !== requestedTaskId) return false
-      return ['in_progress', 'review', 'gate_check'].includes(String(task.status ?? ''))
+      if (!['in_progress', 'review', 'gate_check'].includes(String(task.status ?? ''))) return false
+      return deriveWorkExecutionState(typedQueue.tasks, task.id).summaryState !== 'blocked'
     })
     if (pausedTasks.length === 0) return null
     const first = pausedTasks
@@ -6074,6 +6076,26 @@ export function buildServeApp(opts: ServeOptions = {}): {
     const tasks = tasksEligibleForScopeExecution(typedQueue.tasks, selectedReleaseScope)
     if (tasks.length === 0) return null
 
+    const activeBlocked = tasks
+      .filter(task => ['in_progress', 'review', 'gate_check'].includes(String(task.status ?? '')))
+      .find(task => deriveWorkExecutionState(typedQueue.tasks, task.id).summaryState === 'blocked')
+    if (activeBlocked) {
+      const focusTitle = typeof activeBlocked.title === 'string' && activeBlocked.title.trim()
+        ? activeBlocked.title.trim()
+        : activeBlocked.id
+      const blockReason = typeof activeBlocked.blockReason === 'string' ? activeBlocked.blockReason.trim() : ''
+      return {
+        canStart: false,
+        code: 'no_unattended_progress',
+        message: `"${focusTitle}" is blocked before unattended work can run${blockReason ? `: ${blockReason}` : '.'}`,
+        actionHref: `/work?task=${encodeURIComponent(activeBlocked.id)}`,
+        focusTaskId: activeBlocked.id,
+        focusTaskTitle: focusTitle,
+        focusKind: 'blocked_work',
+        count: 1,
+      }
+    }
+
     let runnable = 0
     let needsBriefCleanup = 0
     let firstBriefCleanupTaskId: string | null = null
@@ -6081,6 +6103,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
     let waitingForApproval = 0
     let firstWaitingSpecTaskId: string | null = null
     let firstWaitingSpecTaskTitle: string | null = null
+    let blockedExecution = 0
+    let firstBlockedExecutionTaskId: string | null = null
+    let firstBlockedExecutionTaskTitle: string | null = null
+    let firstBlockedExecutionReason: string | null = null
     let terminal = 0
     for (const task of tasks) {
       if (!task || typeof task !== 'object') continue
@@ -6119,6 +6145,19 @@ export function buildServeApp(opts: ServeOptions = {}): {
         }
         continue
       }
+      const executionState = deriveWorkExecutionState(typedQueue.tasks, task.id)
+      if (!executionState.isRunnable && executionState.summaryState === 'blocked') {
+        blockedExecution += 1
+        if (!firstBlockedExecutionTaskId) {
+          firstBlockedExecutionTaskId = task.id
+          firstBlockedExecutionTaskTitle = typeof task.title === 'string' && task.title.trim()
+            ? task.title.trim()
+            : task.id
+          const blockReason = typeof task.blockReason === 'string' ? task.blockReason.trim() : ''
+          firstBlockedExecutionReason = blockReason.length > 0 ? blockReason : null
+        }
+        continue
+      }
       if (['proposed', 'exploring', 'ready', 'in_progress', 'review', 'gate_check'].includes(status)) {
         runnable += 1
       }
@@ -6143,6 +6182,21 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
     }
     if (runnable > 0 || terminal === tasks.length) return null
+    if (blockedExecution > 0) {
+      const focusTitle = firstBlockedExecutionTaskTitle ?? 'the first blocked task'
+      return {
+        canStart: false,
+        code: 'no_unattended_progress',
+        message: blockedExecution === 1
+          ? `"${focusTitle}" is blocked before unattended work can run${firstBlockedExecutionReason ? `: ${firstBlockedExecutionReason}` : '.'}`
+          : `${blockedExecution} work items are blocked before unattended work can run. Start with "${focusTitle}".`,
+        actionHref: firstBlockedExecutionTaskId ? `/work?task=${encodeURIComponent(firstBlockedExecutionTaskId)}` : '/work',
+        focusTaskId: firstBlockedExecutionTaskId ?? undefined,
+        focusTaskTitle: firstBlockedExecutionTaskTitle ?? undefined,
+        focusKind: 'blocked_work',
+        count: blockedExecution,
+      }
+    }
     if (needsBriefCleanup > 0) {
       const focusTitle = firstBriefCleanupTaskTitle ?? 'the first task'
       return {

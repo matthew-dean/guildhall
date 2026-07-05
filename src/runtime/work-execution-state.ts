@@ -57,6 +57,10 @@ const DONE_STATUSES = new Set(['done', 'pending_pr'])
 const DEFERRED_STATUSES = new Set(['shelved'])
 const DECOMPOSE_ACTIONS = new Set(['split_required', 'split_recommended', 'decompose_before_execution'])
 
+function hasBlockReason(task: Task): boolean {
+  return typeof task.blockReason === 'string' && task.blockReason.trim().length > 0
+}
+
 export function deriveProjectWorkExecutionState(tasks: Task[]): ProjectWorkExecutionState {
   const progress = deriveProjectWorkProgress(tasks)
   const byTaskId: Record<string, WorkExecutionState> = {}
@@ -104,10 +108,10 @@ export function deriveWorkExecutionState(tasks: Task[], workId: string): WorkExe
     })
     .map(child => child.id)
   const blockedChildIds = descendants
-    .filter(child => BLOCKED_STATUSES.has(child.status))
+    .filter(child => BLOCKED_STATUSES.has(child.status) || hasBlockReason(child))
     .map(child => child.id)
   const activeChildIds = descendants
-    .filter(child => ACTIVE_STATUSES.has(child.status) && !TERMINAL_STATUSES.has(child.status))
+    .filter(child => ACTIVE_STATUSES.has(child.status) && !TERMINAL_STATUSES.has(child.status) && !hasBlockReason(child))
     .map(child => child.id)
   const terminalChildIds = descendants
     .filter(child => TERMINAL_STATUSES.has(child.status))
@@ -125,7 +129,7 @@ export function deriveWorkExecutionState(tasks: Task[], workId: string): WorkExe
   const requiredDelivery = deliverySteps.filter(step => step.required !== false && step.blocksCompletion !== false)
   const requiredDeliveryDone = requiredDelivery.filter(step => step.status === 'done' || step.status === 'waived').length
   const blockedInternalProofCount = descendants.filter(child =>
-    BLOCKED_STATUSES.has(child.status) &&
+    (BLOCKED_STATUSES.has(child.status) || hasBlockReason(child)) &&
     (visibilityForTask(child, tasks).kind === 'internal_step' || child.workKind === 'verification' || child.workKind === 'test'),
   ).length
   const missingProofCount = blockedInternalProofCount + requiredDelivery.filter(step => step.status === 'blocked').length
@@ -169,6 +173,7 @@ function deriveLeafRunnableState(tasks: Task[], workId: string): boolean {
   const task = tasks.find(candidate => candidate.id === workId)
   if (!task) return false
   if (descendantsFor(tasks, workId).length > 0) return false
+  if (hasBlockReason(task)) return false
   if (decompositionBlocksDispatch(task)) return false
   const visibility = visibilityForTask(task, tasks)
   if (visibility.kind === 'hidden') return false
@@ -225,7 +230,7 @@ function summaryStateFor(input: {
 }): WorkExecutionSummaryState {
   if (input.needsOwnerDecision) return 'waiting_on_scope_authority'
   if (input.needsDecomposition) return 'needs_decomposition'
-  if (BLOCKED_STATUSES.has(input.task.status) || input.blockedChildIds.length > 0) return 'blocked'
+  if (BLOCKED_STATUSES.has(input.task.status) || hasBlockReason(input.task) || input.blockedChildIds.length > 0) return 'blocked'
   if (RUNNING_STATUSES.has(input.task.status) || input.activeChildIds.some(id => {
     const child = input.descendants.find(task => task.id === id)
     return child ? RUNNING_STATUSES.has(child.status) : false

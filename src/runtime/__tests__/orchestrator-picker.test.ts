@@ -211,6 +211,27 @@ describe('pickNextTask bounded scope eligibility', () => {
     expect(pickNextTask(q)).toBeUndefined()
   })
 
+  it('does not keep dispatching active work after it records a block reason', () => {
+    const q = queue([
+      {
+        id: 'stage-2-reviewer',
+        title: 'Implement Stage 2 reviewer',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        blockReason: 'Stage sequencing violation: Stage 1 is not complete.',
+        updatedAt: '2026-07-05T14:16:00.000Z',
+      },
+      {
+        id: 'stage-1-prerequisite',
+        title: 'Build Stage 1 prerequisite',
+        status: 'ready',
+        updatedAt: '2026-07-05T14:10:00.000Z',
+      },
+    ])
+
+    expect(pickNextTask(q)?.id).toBe('stage-1-prerequisite')
+  })
+
   it('dispatches bounded child work after split readiness is settled as proceed-with-warning', () => {
     const q = queue([
       {

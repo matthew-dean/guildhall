@@ -12,6 +12,64 @@ This is the active browser test plan for the Guildhall project surface. Keep it
 updated while auditing the active test project so another agent can resume
 without guessing.
 
+2026-07-05T14:20:00Z - Promoted `blockReason` into shared execution truth.
+
+- Work id: `codex:block-reason-execution-state-normalization-2026-07-05`.
+- Goal framing update:
+  - Treat Narrative Harness and Looma + Knit as live calibration projects for
+    Guildhall's core model, not merely projects to get green. Each escaped miss
+    must be classified as data model/schema, project structure/scope modeling,
+    scheduler/action-state logic, UI communication, or runtime infrastructure
+    before moving on.
+- User job: when a worker discovers that a task cannot run because the selected
+  scope is out of order or underspecified, Guildhall should stop presenting
+  that task as runnable. Overview, Work, Release, Start, and the orchestrator
+  picker should agree that the task is blocked until the model is corrected or
+  the prerequisite work is selected.
+- Root cause:
+  - `blockReason` was persisted as an informal sidecar on tasks. A task could
+    stay `in_progress` with `assignedTo:"worker-agent"` and a real block
+    reason, while derived execution state still called it runnable, the picker
+    kept selecting it, and the action model rendered it as ordinary running or
+    resumable work.
+  - This is a model/schema smell: raw task status, durable execution truth, and
+    UI action state were not a single derived contract.
+- Fix:
+  - `deriveWorkExecutionState()` now treats any non-empty `blockReason` as
+    blocked execution truth, excluding that task from runnable/active sets and
+    summarizing it as blocked.
+  - The orchestrator picker inherits that shared execution truth and skips
+    active tasks with block reasons instead of continuing to dispatch them.
+  - Project start readiness now treats active scoped work with blocked execution
+    as a recovery blocker before more unattended work can start, even if other
+    sibling tasks still look runnable.
+  - The project action model now distinguishes `stopping` from `stopped`, and
+    renders active tasks with block reasons as warning/recovery actions rather
+    than normal running/accent actions.
+- Contract Touch Decision:
+  - Touched contracts: derived work execution state semantics, orchestrator
+    picker eligibility, project action-model run control and primary-action
+    semantics.
+  - Contracts considered but not touched: persisted task schema, release schema,
+    provider/run supervisor schema, workspace import schema.
+  - Required follow-up: the Stage 2 before Stage 1 selection is still a
+    project-structure/scope modeling miss. Guildhall must infer or represent
+    stage dependencies from Narrative Harness docs instead of relying on a
+    worker pre-rejection to discover them.
+- Proof:
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/work-execution-state.test.ts src/runtime/__tests__/orchestrator-picker.test.ts src/runtime/__tests__/project-action-model.test.ts --reporter=dot`
+    passed `40` tests; `git diff --check` passed.
+  - Expanded proof: `./node_modules/.bin/vitest run src/runtime/__tests__/work-execution-state.test.ts src/runtime/__tests__/orchestrator-picker.test.ts src/runtime/__tests__/project-action-model.test.ts src/runtime/__tests__/serve-settings.test.ts --reporter=dot`
+    passed `153` tests.
+  - `pnpm lint:contracts` passed with the advisory detector reporting that all
+    touched contract paths have decision evidence.
+  - Installed-app proof after `node ./build.mjs`, `node ./scripts/dev-install.mjs`,
+    `guildhall stop && guildhall start`: `/api/stale-server` returned
+    `stale:false`, and `/api/project?projectId=narrative-harness` returned
+    `startReadiness.canStart:false`, `focusKind:"blocked_work"`,
+    `actionModel.runControl.label:"Needs recovery"`, `startEnabled:false`, and
+    primary action button `Open Work` for `task-import-1g9oq7m`.
+
 2026-07-05T14:15:00Z - Made durable completion evidence win over stale active
 task status.
 

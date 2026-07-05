@@ -227,6 +227,23 @@ describe('work execution state', () => {
     expect(state.summaryState).toBe('needs_decomposition')
   })
 
+  it('treats a block reason as non-runnable execution state even before status is terminal', () => {
+    const tasks = [
+      task({
+        id: 'stage-2-reviewer',
+        title: 'Implement Stage 2 reviewer',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        blockReason: 'Stage sequencing violation: Stage 1 is not complete.',
+      }),
+    ]
+
+    const state = deriveWorkExecutionState(tasks, 'stage-2-reviewer')
+
+    expect(state.isRunnable).toBe(false)
+    expect(state.summaryState).toBe('blocked')
+  })
+
   it('runs approved bounded child contract work when stale decomposition has no children', () => {
     const tasks = [
       task({
