@@ -967,6 +967,26 @@ function isRecoverableWorkerTimeoutBlocker(task: Task): boolean {
   return /Worker timed out after failing to mutate the likely target file/i.test(blockReason)
 }
 
+function isRecoverableProviderNoProgressTimeoutBlocker(task: Task): boolean {
+  const blockReason = task.blockReason ?? ''
+  if (/Worker timed out after producing no visible progress/i.test(blockReason)) return true
+  return (task.escalations ?? []).some((escalation) => {
+    if (escalation.resolvedAt) return false
+    const summary = escalation.summary ?? ''
+    const details = escalation.details ?? ''
+    return (
+      escalation.reason === 'human_judgment_required' &&
+      (
+        /Worker timed out after producing no visible progress/i.test(summary) ||
+        (
+          /timed out after \d+ms of inactivity/i.test(details) &&
+          /without visible worktree edits, a checkpoint, focused verification, or an explicit escalation/i.test(details)
+        )
+      )
+    )
+  })
+}
+
 function isRecoverableEnvironmentSetupBlocker(task: Task): boolean {
   const blockReason = task.blockReason ?? ''
   if (/Test environment setup failed/i.test(blockReason)) return true
@@ -1192,6 +1212,29 @@ function resolveRecoverableWorkerTimeoutEscalations(task: Task, resolvedAt: stri
       escalation.resolvedAt = resolvedAt
       escalation.resolvedBy = 'system'
       escalation.resolution = 'Superseded after the project was explicitly resumed from the latest recovery checkpoint.'
+    }
+  }
+}
+
+function resolveRecoverableProviderNoProgressTimeoutEscalations(task: Task, resolvedAt: string): void {
+  for (const escalation of task.escalations ?? []) {
+    if (escalation.resolvedAt) continue
+    const summary = escalation.summary ?? ''
+    const details = escalation.details ?? ''
+    if (
+      escalation.reason === 'human_judgment_required' &&
+      (
+        /Worker timed out after producing no visible progress/i.test(summary) ||
+        (
+          /timed out after \d+ms of inactivity/i.test(details) &&
+          /without visible worktree edits, a checkpoint, focused verification, or an explicit escalation/i.test(details)
+        )
+      )
+    ) {
+      escalation.resolvedAt = resolvedAt
+      escalation.resolvedBy = 'system'
+      escalation.resolution =
+        'Superseded after Guildhall classified no-output worker timeouts as provider/runtime recovery instead of owner judgment.'
     }
   }
 }
@@ -4967,6 +5010,65 @@ export class Orchestrator {
           const summary = hasLikelyTargets
             ? 'Worker timed out after failing to mutate the likely target file.'
             : 'Worker timed out after producing no visible progress.'
+          if (!hasLikelyTargets) {
+            const classification: FailureClassification = {
+              class: 'provider_unavailable',
+              confidence: 'medium',
+              evidence: [{
+                kind: 'task',
+                summary: 'Worker timed out before producing visible progress.',
+                ref: message,
+              }],
+              scope: 'task',
+              safePlaybooks: ['resume_from_checkpoint'],
+              needsHuman: false,
+            }
+            const recoveryPlan = resolveRecoveryPlan({
+              taskId: task.id,
+              classification,
+              notes: task.notes,
+            })
+            const now = this.now()
+            const queue = await this.readQueue()
+            const liveTask = queue.tasks.find((candidate) => candidate.id === task.id)
+            if (liveTask && liveTask.status === 'in_progress') {
+              appendFailureClassificationNote(liveTask, classification, {
+                agentId: 'coordinator',
+                timestamp: now,
+              })
+              appendRecoveryPlaybookNote(liveTask, recoveryPlan, {
+                agentId: 'coordinator',
+                timestamp: now,
+                status: 'started',
+                summary:
+                  'Worker timed out without visible progress after a retry. Guildhall kept this in provider recovery instead of asking the owner to choose retry or provider switch.',
+              })
+              liveTask.assignedTo = 'worker-agent'
+              liveTask.updatedAt = now
+              queue.lastUpdated = now
+              await this.writeQueue(queue)
+              this.likelyTargetWorkerTimeoutRetries.delete(retryKey)
+              if (typeof agent.resetConversation === 'function') {
+                agent.resetConversation()
+              }
+              await this.emitBackendEvent({
+                type: 'line_complete',
+                task_id: task.id,
+                agent_name: agent.name,
+                message:
+                  'Worker timed out without visible progress after a retry. Guildhall kept the task in provider recovery instead of surfacing a human blocker.',
+              })
+              return {
+                kind: 'processed',
+                taskId: task.id,
+                agent: 'coordinator-provider-recovery',
+                beforeStatus,
+                afterStatus: 'in_progress',
+                transitioned: false,
+                revisionCount: liveTask.revisionCount,
+              }
+            }
+          }
           const escalation = await raiseEscalation({
             tasksPath,
             progressPath: this.progressPath(),
@@ -9104,6 +9206,40 @@ export class Orchestrator {
         if (activeEscalations(task).length > 0) continue
         recoveryNote =
           'User restarted the project after the worker timed out before mutating the likely target file. Reopened the task so Guildhall can retry the worker lane from the current task plan instead of treating an internal execution miss as owner judgment.'
+      } else if (isRecoverableProviderNoProgressTimeoutBlocker(task)) {
+        const classification: FailureClassification = {
+          class: 'provider_unavailable',
+          confidence: 'medium',
+          evidence: [{
+            kind: 'task',
+            summary: 'Worker timed out before producing visible progress.',
+            ref: task.blockReason ?? 'worker timeout',
+          }],
+          scope: 'task',
+          safePlaybooks: ['resume_from_checkpoint'],
+          needsHuman: false,
+        }
+        const recoveryPlan = resolveRecoveryPlan({
+          taskId: task.id,
+          classification,
+          notes: task.notes,
+        })
+        resolveRecoverableProviderNoProgressTimeoutEscalations(task, now)
+        if (activeEscalations(task).length > 0) continue
+        appendFailureClassificationNote(task, classification, {
+          agentId: 'coordinator',
+          timestamp: now,
+        })
+        appendRecoveryPlaybookNote(task, recoveryPlan, {
+          agentId: 'coordinator',
+          timestamp: now,
+          status: 'started',
+          summary:
+            'Guildhall reopened a stale no-output worker timeout as provider/runtime recovery instead of asking the owner to choose a retry or provider switch.',
+        })
+        recoveryRole = 'provider-recovery'
+        recoveryNote =
+          'Guildhall reopened a stale no-output worker timeout as provider/runtime recovery. The task stays in automation so Guildhall can retry from checkpoint or route to another provider lane without asking the owner to debug internal execution.'
       } else if (
         await this.isRecoverableSelfAuthoredVerificationBlockedTask(task)
       ) {

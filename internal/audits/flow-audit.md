@@ -14168,6 +14168,77 @@ phantom-active cleanup during Narrative Harness MVP execution.
     Guildhall retries or switches model/provider for model-selection work
     without presenting a fake owner blocker during a delegated calibration run.
 
+2026-07-05T23:00:00Z - Reclassified no-target worker turn-budget failures as
+Guildhall-owned provider recovery instead of owner blockers.
+
+- Work id: `codex:narrative-harness-provider-recovery-2026-07-05`.
+- User job: unattended current-scope execution should not ask the owner to
+  choose retry vs provider switch when the failure class is provider/runtime
+  infrastructure and no product decision is missing.
+- Failing evidence:
+  - `task-150-split-select-and-prove-deepinfra-drafting-model` blocked with
+    `human_judgment_required: Worker timed out after producing no visible
+    progress.`
+  - Its policy note already classified the failure as
+    `provider_unavailable`, whose product meaning says Guildhall should
+    preserve state and retry or switch lanes.
+  - No owner-only choice was present: the task acceptance already names the
+    required model-selection proof.
+- Root cause:
+  - The no-target worker timeout branch classified provider failure after
+    raising a human escalation, so the scheduler stopped the selected scope
+    even though recovery was a Guildhall/provider concern.
+- Fix:
+  - Repeated no-target worker timeouts now append a structured
+    `provider_unavailable` classification and a `resume_from_checkpoint`
+    recovery-playbook note, reset the worker conversation when possible, keep
+    the task `in_progress`, and avoid creating a human escalation.
+  - Likely-target implementation timeouts keep their stricter escalation path
+    because those can indicate a focused file-mutation failure.
+  - Stale already-blocked no-output worker timeouts now recover through the
+    same provider/runtime path on project resume: Guildhall resolves the old
+    escalation by `system`, appends a fresh `needsHuman:false`
+    `provider_unavailable` policy classification and `resume_from_checkpoint`
+    playbook, clears `blockReason`, and keeps the task in automation.
+- Root-cause taxonomy:
+  - `6 runtime/provider/infrastructure`: model/provider timeout.
+  - `4 scheduler/action-state logic`: scheduler converted provider recovery
+    into a human block.
+  - `5 UI communication/orientation`: Release/Overview showed the blocker as
+    needing Matthew even though the system owned the next move.
+- Verification:
+  - `CI=true pnpm exec vitest run src/runtime/__tests__/orchestrator.test.ts
+    -t "keeps provider-unavailable no-progress worker timeouts|records a
+    visible retry note when a worker times out without likely target
+    paths|retries once before escalating when a resumed worker times out
+    without mutating likely target files"`.
+  - Added stale-live-shape regression:
+    `reopens stale no-output worker timeouts as provider recovery instead of
+    owner judgment`; focused timeout/recovery suite passed `5` tests.
+  - `node scripts/contract-touch-detector.mjs`, `git diff --check`, and
+    `node ./build.mjs` passed.
+  - Installed-app proof: after `node scripts/dev-install.mjs`,
+    `guildhall stop`, `guildhall start`, `/api/stale-server` returned
+    `stale:false` for PID `59906`. Before repair, live Narrative Harness
+    `/api/project?projectId=narrative-harness` showed
+    `task-150-split-select-and-prove-deepinfra-drafting-model` blocked with
+    `human_judgment_required: Worker timed out after producing no visible
+    progress`, while the same payload exposed the requested current-scope
+    criteria for a DeepInfra drafting model across genres including adult,
+    world-state/object-state transitions over time such as wet hair drying by
+    climate, and spatial/geographic continuity such as travel distance and
+    walking speed for fantasy epics.
+  - Live repair proof: `guildhall run narrative-harness --max-ticks 1` reported
+    `task-150-split-select-and-prove-deepinfra-drafting-model in_progress →
+    in_progress via worker-agent (no change)`. Afterward the installed API
+    showed `statusCounts:{done:2,ready:10,in_progress:1}`,
+    `blockedByAgent:[]`, `openEscalations:[]`, `humanBlockingCount:0`, and
+    `task-150-split-select-and-prove-deepinfra-drafting-model` with
+    `status:"in_progress"`, `assignedTo:"worker-agent"`,
+    `blockReason:null`, a fresh `needsHuman:false` `provider_unavailable`
+    policy-classification note, a `resume_from_checkpoint` recovery-playbook
+    note, and a `provider-recovery` note.
+
 2026-07-05T22:18:00Z - Repaired import-draft source recovery so Narrative
 Harness current scope can start.
 

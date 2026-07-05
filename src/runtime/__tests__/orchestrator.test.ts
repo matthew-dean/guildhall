@@ -8888,6 +8888,88 @@ describe('Orchestrator.run — full loops', () => {
     )).toBe(true)
   })
 
+  it('reopens stale no-output worker timeouts as provider recovery instead of owner judgment', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        title: 'Select and prove DeepInfra drafting model',
+        status: 'blocked',
+        assignedTo: 'worker-agent',
+        spec: 'Select and prove a DeepInfra-accessible drafting model across genres.',
+        blockReason: 'human_judgment_required: Worker timed out after producing no visible progress.',
+        notes: [
+          {
+            agentId: 'coordinator',
+            role: 'failure-classification',
+            content: JSON.stringify({
+              class: 'provider_unavailable',
+              confidence: 'medium',
+              needsHuman: true,
+              humanQuestion:
+                'The worker timed out without producing visible progress. Should Guildhall retry this lane, switch provider, or narrow the task?',
+            }),
+            timestamp: '2026-05-03T00:00:00.000Z',
+          },
+        ],
+        escalations: [
+          {
+            id: 'esc-a',
+            taskId: 'a',
+            agentId: 'worker-agent',
+            reason: 'human_judgment_required',
+            summary: 'Worker timed out after producing no visible progress.',
+            details:
+              'worker-agent timed out after 10ms of inactivity.\n\n' +
+              'Task stayed in progress without visible worktree edits, a checkpoint, focused verification, or an explicit escalation after Guildhall retried the worker lane.',
+            raisedAt: '2026-05-03T00:00:00.000Z',
+          } as any,
+        ],
+      }),
+    ])
+
+    const agents: OrchestratorAgentSet = {
+      spec: stubAgent('spec-agent'),
+      worker: stubAgent('worker-agent', async () => {
+        await mutateTask('a', { status: 'review' })
+      }),
+      reviewer: stubAgent('reviewer-agent'),
+      gateChecker: stubAgent('gate-checker-agent'),
+      coordinators: {},
+    }
+
+    const orch = new Orchestrator({
+      config: baseConfig({ projectPath: tmpDir }),
+      agents,
+      gitDriver: new InMemoryGitDriver(),
+    })
+
+    const out = await orch.tick()
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.beforeStatus).toBe('in_progress')
+      expect(out.afterStatus).toBe('review')
+    }
+
+    const queue = await readQueue()
+    const task = queue.tasks.find((candidate) => candidate.id === 'a')
+    expect(task?.status).toBe('review')
+    expect(task?.blockReason ?? null).toBeNull()
+    expect(task?.escalations[0]?.resolvedBy).toBe('system')
+    expect(task?.escalations[0]?.resolution).toContain('provider/runtime recovery')
+    expect(task?.notes.some((note) =>
+      note.role === 'provider-recovery' &&
+      note.content.includes('stale no-output worker timeout as provider/runtime recovery'),
+    )).toBe(true)
+    expect(task?.notes.some((note) =>
+      note.role === 'recovery-playbook' &&
+      note.content.includes('"playbook":"resume_from_checkpoint"'),
+    )).toBe(true)
+    expect(task?.notes.some((note) =>
+      note.role === 'policy-classification' &&
+      note.content.includes('"needsHuman":false'),
+    )).toBe(true)
+  })
+
   it('reopens a stale review-handoff tool-loop blocker after the validator bug is fixed', async () => {
     await writeQueue([
       mkTask({
@@ -14452,17 +14534,68 @@ describe('Orchestrator worker no-progress escalation', () => {
       .toContain('timed out before producing visible progress')
 
     const second = await orch.tick({ dispatchLimit: 1 })
-    expect(second.kind).toBe('escalated')
-    if (second.kind === 'escalated') {
-      expect(second.reason).toContain('exceeded 100ms total turn budget')
+    expect(second.kind).toBe('processed')
+    if (second.kind === 'processed') {
+      expect(second.afterStatus).toBe('in_progress')
+      expect(second.transitioned).toBe(false)
     }
 
-    const blocked = await readEffectiveTaskFromQueue('task-no-targets')
-    expect(blocked?.status).toBe('blocked')
-    expect(blocked?.escalations.at(-1)?.summary)
-      .toContain('Worker timed out after producing no visible progress')
-    expect(blocked?.notes.find((note) => note.role === 'policy-classification')?.content)
+    const recovered = await readEffectiveTaskFromQueue('task-no-targets')
+    expect(recovered?.status).toBe('in_progress')
+    expect(recovered?.escalations.length).toBe(0)
+    expect(recovered?.notes.find((note) => note.role === 'policy-classification')?.content)
       .toContain('"class":"provider_unavailable"')
+    expect(recovered?.notes.find((note) => note.role === 'recovery-playbook')?.content)
+      .toContain('"playbook":"resume_from_checkpoint"')
+  })
+
+  it('keeps provider-unavailable no-progress worker timeouts in Guildhall recovery instead of asking the owner', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'task-provider-recovery',
+        title: 'Select and prove DeepInfra drafting model',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        projectPath: tmpDir,
+        spec: 'Select and prove a DeepInfra-accessible drafting model across genres.',
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          description: 'DeepInfra drafting model is selected and proven.',
+          verifiedBy: 'review',
+          met: false,
+        } as any],
+      }),
+    ])
+
+    const worker = stubAgent('worker-agent')
+    worker.generate = async () => await new Promise(() => {}) as never
+    const gitDriver = new InMemoryGitDriver()
+    gitDriver.setClean(true)
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+      gitDriver,
+      agentGenerateTimeoutMs: 60_000,
+      agentGenerateWallClockTimeoutMs: 100,
+    })
+
+    await orch.tick({ dispatchLimit: 1 })
+    const second = await orch.tick({ dispatchLimit: 1 })
+    expect(second.kind).toBe('processed')
+    if (second.kind === 'processed') {
+      expect(second.afterStatus).toBe('in_progress')
+      expect(second.transitioned).toBe(false)
+    }
+
+    const task = await readEffectiveTaskFromQueue('task-provider-recovery')
+    expect(task?.status).toBe('in_progress')
+    expect(task?.assignedTo).toBe('worker-agent')
+    expect(task?.blockReason).toBeUndefined()
+    expect(task?.escalations.length).toBe(0)
+    expect(task?.notes.find((note) => note.role === 'policy-classification')?.content)
+      .toContain('"class":"provider_unavailable"')
+    expect(task?.notes.find((note) => note.role === 'recovery-playbook')?.content)
+      .toContain('"playbook":"resume_from_checkpoint"')
   })
 
   it('preserves dirty worktree progress when a worker exceeds its total turn budget', async () => {
