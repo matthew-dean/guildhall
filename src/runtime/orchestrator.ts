@@ -8493,6 +8493,34 @@ export class Orchestrator {
     const worktreeMode = await this.resolveWorktreeModeSafe()
     const landingStrategy = await this.resolveLandingStrategySafe()
     for (const task of queue.tasks) {
+      const completedButActive =
+        task.status !== 'done' &&
+        task.doneSummaryBundle?.status === 'done'
+      if (completedButActive) {
+        const now = this.now()
+        task.status = 'done'
+        task.assignedTo = null
+        task.completedAt = task.completedAt ?? task.doneSummaryBundle?.completedAt ?? now
+        if (
+          task.mergeRecord?.result === 'skipped' &&
+          task.worktreePath?.trim() &&
+          task.branchName?.trim() &&
+          task.baseBranch?.trim()
+        ) {
+          task.mergeRecord = undefined
+        }
+        delete task.blockReason
+        task.notes.push({
+          agentId: 'landing-reconciliation',
+          role: 'git-story',
+          content: 'Moved completed work back into landing from durable done-summary evidence instead of dispatching another worker pass.',
+          timestamp: now,
+        })
+        task.updatedAt = now
+        queue.lastUpdated = now
+        changed = true
+      }
+
       const alreadyLanded =
         task.status !== 'done' &&
         task.mergeRecord?.result === 'merged'

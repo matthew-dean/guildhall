@@ -10451,6 +10451,76 @@ describe('Orchestrator.run — full loops', () => {
     })
   })
 
+  it('lands completed active rows from done-summary evidence instead of rerunning the worker', async () => {
+    const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'test-ws', 'task-done-summary')
+    await writeQueue([
+      mkTask({
+        id: 'task-done-summary',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        worktreePath,
+        branchName: 'guildhall/task-done-summary',
+        baseBranch: 'main',
+        doneSummaryBundle: {
+          taskId: 'task-done-summary',
+          status: 'done',
+          completedAt: '2026-04-01T00:20:00.000Z',
+          summary: {
+            journey: 'Worker finished and reviewer approved.',
+            decision: 'Task finished as done.',
+            evidence: 'npm-run-build passed.',
+            learningCandidates: [],
+            openResidue: 'No open residue recorded.',
+          },
+          retention: {
+            transcriptPrimaryArtifact: false,
+            compactedFullTranscript: false,
+            fullEvidenceAvailable: true,
+          },
+          evidenceRefs: [],
+          createdAt: '2026-04-01T00:20:00.000Z',
+          createdBy: 'orchestrator',
+        },
+        mergeRecord: {
+          fromBranch: 'guildhall/task-done-summary',
+          toBranch: 'main',
+          strategy: 'cherry_pick_local',
+          result: 'skipped',
+          mergedAt: '2026-04-01T00:21:00.000Z',
+          detail: 'previous cherry-pick failed before retry',
+        },
+      }),
+    ])
+
+    const gitDriver = new InMemoryGitDriver({ clean: true })
+    const worker = stubAgent('worker-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+      gitDriver,
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('idle')
+    expect(worker.calls).toHaveLength(0)
+    expect(gitDriver.state.cherryPicks).toEqual([
+      expect.objectContaining({
+        branch: 'guildhall/task-done-summary',
+        baseBranch: 'main',
+      }),
+    ])
+    const q = await readQueue()
+    expect(q.tasks[0]?.status).toBe('done')
+    expect(q.tasks[0]?.assignedTo).toBeNull()
+    expect(q.tasks[0]?.completedAt).toBe('2026-04-01T00:20:00.000Z')
+    expect(q.tasks[0]?.mergeRecord).toMatchObject({
+      result: 'merged',
+      fromBranch: 'guildhall/task-done-summary',
+      toBranch: 'main',
+    })
+  })
+
   it('marks pending PR tasks done and removes the worktree once the PR is merged', async () => {
     const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'test-ws', 'task-pr')
     await writeQueue([

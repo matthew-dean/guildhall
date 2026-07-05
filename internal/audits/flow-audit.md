@@ -13333,6 +13333,34 @@ before dispatch.
 
 source: codex:merged-evidence-status-reconciliation-2026-07-05
 
+2026-07-05T01:50:19Z - Reconciled completed active rows from done-summary
+evidence into landing recovery.
+
+- Work id: `codex:done-summary-landing-reconciliation-2026-07-05`.
+- User job: once a task has passed worker/reviewer/gate proof, Guildhall should
+  stop asking implementation agents to redo it. If the work did not land, the
+  visible state should be landing or integration recovery, not fresh worker
+  execution.
+- Observed failure:
+  - Narrative Harness task `task-import-1isf6n0` had a durable
+    `doneSummaryBundle.status:"done"`, passing gate evidence, reviewer
+    approval, and an isolated task commit.
+  - A prior `merge_record.result:"skipped"` from a patch apply failure left the
+    canonical row active, so Guildhall claimed it for a worker again and wrote a
+    second self-critique instead of retrying landing or surfacing integration
+    state.
+- Fix:
+  - `reconcileCompletedTaskLanding()` now treats a `doneSummaryBundle` with
+    status `done` as authoritative completion evidence for active rows.
+  - If that completed row also has an isolated branch/worktree and a stale
+    skipped merge record, Guildhall clears the stale merge marker for the tick
+    and runs the existing landing dispatcher. The worker is not called.
+- Verification:
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/orchestrator.test.ts -t 'reconciles active queue rows to done|lands completed active rows'`
+    passed `2` focused tests.
+
+source: codex:done-summary-landing-reconciliation-2026-07-05
+
 2026-07-05T00:49:00Z - Fixed imported execution blueprints being stranded by
 stale proofability readiness.
 
