@@ -13338,6 +13338,32 @@ stale proofability readiness.
 
 source: codex:imported-blueprint-readiness-dispatch-2026-07-05
 
+2026-07-05T01:05:00Z - Fixed stale task-worktree registry paths crashing the
+supervisor.
+
+- Work id: `codex:stale-task-worktree-reattach-2026-07-05`.
+- User job: when Guildhall resumes a task whose recorded per-task worktree was
+  removed from disk, Start should recreate or reattach the task worktree rather
+  than crashing the supervisor with raw git output.
+- Observed failure:
+  - Narrative Harness successfully claimed `Add the first tiny fiction fixture
+    and human-authored expected records`.
+  - The supervisor then errored with `Command failed: /usr/bin/git rev-parse
+    --show-toplevel` and `fatal: not a git repository`.
+  - The task workspace store still pointed at
+    `/Users/matthew/.guildhall/worktrees/narrative-harness/task-import-dh34s5`,
+    but that directory no longer existed.
+- Fix:
+  - `ensureWorktreeForDispatch` now reuses a recorded worktree only when the
+    directory still exists.
+  - Missing recorded worktrees fall through to the existing attach/create path,
+    preserving the task branch contract while repairing stale runtime state.
+- Verification:
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/worktree-manager.test.ts src/runtime/__tests__/task-readiness.test.ts src/runtime/__tests__/orchestrator-picker.test.ts`
+    passed `43` tests.
+
+source: codex:stale-task-worktree-reattach-2026-07-05
+
 2026-07-04T19:35:00Z - Fixed workspace-import git history for multi-repo
 project folders whose parent path is not itself a Git repository.
 
