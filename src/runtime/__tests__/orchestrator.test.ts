@@ -13462,6 +13462,126 @@ describe('Orchestrator worker no-progress escalation', () => {
       .toContain('"class":"provider_unavailable"')
   })
 
+  it('enforces the default worker turn budget even when hidden stream events reset inactivity', async () => {
+    const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'task-hidden-stream')
+    await fs.mkdir(path.join(worktreePath, 'src'), { recursive: true })
+    await writeQueue([
+      mkTask({
+        id: 'task-hidden-stream',
+        title: 'Invalidate stale packet context after source edits',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        projectPath: tmpDir,
+        worktreePath,
+        spec: `Edit \`${path.join(worktreePath, 'src', 'packet-context.ts')}\` and verify stale packet context invalidation.`,
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          description: 'stale packet context invalidates after source edits',
+          verifiedBy: 'automated',
+          command: 'pnpm test stale-packet-context',
+          met: false,
+        } as any],
+      }),
+    ])
+
+    const worker: OrchestratorAgent = {
+      name: 'worker-agent',
+      async generate() {
+        return { text: '' }
+      },
+      async generateWithEvents(_prompt, onEvent, options) {
+        await new Promise<void>((resolve) => {
+          const interval = setInterval(() => {
+            void onEvent({ type: 'hidden_stream_tick' } as any)
+          }, 10)
+          options?.signal?.addEventListener('abort', () => {
+            clearInterval(interval)
+            resolve()
+          }, { once: true })
+        })
+        return { text: '' }
+      },
+    }
+    const gitDriver = new InMemoryGitDriver()
+    gitDriver.setClean(true)
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+      gitDriver,
+      agentGenerateTimeoutMs: 100,
+    })
+
+    const first = await orch.tick({ dispatchLimit: 1 })
+    expect(first.kind).toBe('processed')
+    if (first.kind === 'processed') {
+      expect(first.afterStatus).toBe('in_progress')
+      expect(first.transitioned).toBe(false)
+    }
+
+    const task = await readEffectiveTaskFromQueue('task-hidden-stream')
+    expect(task?.status).toBe('in_progress')
+    expect(task?.escalations.length).toBe(0)
+    expect(task?.notes.find((note) => note.role === 'runtime')?.content)
+      .toContain('will retry once')
+  }, 1000)
+
+  it('records a visible retry note when a worker times out without likely target paths', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'task-no-targets',
+        title: 'Finish the harness behavior',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        projectPath: tmpDir,
+        spec: 'Finish the harness behavior and record proof.',
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          description: 'behavior is proven',
+          verifiedBy: 'review',
+          met: false,
+        } as any],
+      }),
+    ])
+
+    const worker = stubAgent('worker-agent')
+    worker.generate = async () => await new Promise(() => {}) as never
+    const gitDriver = new InMemoryGitDriver()
+    gitDriver.setClean(true)
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+      gitDriver,
+      agentGenerateTimeoutMs: 60_000,
+      agentGenerateWallClockTimeoutMs: 100,
+    })
+
+    const first = await orch.tick({ dispatchLimit: 1 })
+    expect(first.kind).toBe('processed')
+    if (first.kind === 'processed') {
+      expect(first.afterStatus).toBe('in_progress')
+      expect(first.transitioned).toBe(false)
+    }
+
+    const retried = await readEffectiveTaskFromQueue('task-no-targets')
+    expect(retried?.status).toBe('in_progress')
+    expect(retried?.escalations.length).toBe(0)
+    expect(retried?.notes.find((note) => note.role === 'runtime')?.content)
+      .toContain('timed out before producing visible progress')
+
+    const second = await orch.tick({ dispatchLimit: 1 })
+    expect(second.kind).toBe('escalated')
+    if (second.kind === 'escalated') {
+      expect(second.reason).toContain('exceeded 100ms total turn budget')
+    }
+
+    const blocked = await readEffectiveTaskFromQueue('task-no-targets')
+    expect(blocked?.status).toBe('blocked')
+    expect(blocked?.escalations.at(-1)?.summary)
+      .toContain('Worker timed out after producing no visible progress')
+    expect(blocked?.notes.find((note) => note.role === 'policy-classification')?.content)
+      .toContain('"class":"provider_unavailable"')
+  })
+
   it('preserves dirty worktree progress when a worker exceeds its total turn budget', async () => {
     const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'task-013')
     await fs.mkdir(worktreePath, { recursive: true })

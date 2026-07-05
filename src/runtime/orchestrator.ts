@@ -2404,8 +2404,13 @@ function resolveAgentGenerateTimeoutMs(
 function resolveAgentGenerateWallClockTimeoutMs(
   agentName: string,
   configured: OrchestratorOptions['agentGenerateWallClockTimeoutMs'],
+  defaultMs?: number,
 ): number | undefined {
-  if (configured == null) return undefined
+  if (configured == null) {
+    return agentName === 'worker-agent' && defaultMs != null
+      ? Math.max(100, Math.floor(defaultMs))
+      : undefined
+  }
   if (typeof configured === 'number') return Math.max(100, Math.floor(configured))
   const role = roleForAgentName(agentName)
   const value = configured[role as keyof typeof configured]
@@ -4080,6 +4085,7 @@ export class Orchestrator {
     const agentGenerateWallClockTimeoutMs = resolveAgentGenerateWallClockTimeoutMs(
       agent.name,
       this.opts.agentGenerateWallClockTimeoutMs,
+      agentGenerateTimeoutMs,
     )
     const controller = new AbortController()
     const externalAbort = this.opts.abortSignal
@@ -4555,12 +4561,28 @@ export class Orchestrator {
             revisionCount: task.revisionCount,
           }
         }
-        if (likelyWorkerTargets.length > 0 && !worktreeDirty) {
-          const likelyTargetTimeoutRetries = (this.likelyTargetWorkerTimeoutRetries.get(retryKey) ?? 0) + 1
+        if (!worktreeDirty) {
+          const hasLikelyTargets = likelyWorkerTargets.length > 0
+          const durableLikelyTargetTimeoutRetries = countRuntimeNotes(
+            task,
+            /worker timed out before mutating a likely target file/i,
+          )
+          const durableNoVisibleProgressTimeoutRetries = countRuntimeNotes(
+            task,
+            /worker timed out before producing visible progress/i,
+          )
+          const likelyTargetTimeoutRetries =
+            Math.max(
+              this.likelyTargetWorkerTimeoutRetries.get(retryKey) ?? 0,
+              hasLikelyTargets
+                ? durableLikelyTargetTimeoutRetries
+                : durableNoVisibleProgressTimeoutRetries,
+            ) + 1
           this.likelyTargetWorkerTimeoutRetries.set(retryKey, likelyTargetTimeoutRetries)
           if (likelyTargetTimeoutRetries <= 1) {
-            const runtimeNote =
-              'The worker timed out before mutating a likely target file. Guildhall will retry once with the same task context and require a concrete file-tool mutation or focused verification before asking for owner intervention.'
+            const runtimeNote = hasLikelyTargets
+              ? 'The worker timed out before mutating a likely target file. Guildhall will retry once with the same task context and require a concrete file-tool mutation or focused verification before asking for owner intervention.'
+              : 'The worker timed out before producing visible progress. Guildhall will retry once with the same task context and require a concrete file-tool mutation, focused verification, checkpoint, or explicit escalation before asking for owner intervention.'
             await this.appendRuntimeTaskNote({
               taskId: task.id,
               agentId: agent.name,
@@ -4582,17 +4604,24 @@ export class Orchestrator {
               revisionCount: task.revisionCount,
             }
           }
+          const summary = hasLikelyTargets
+            ? 'Worker timed out after failing to mutate the likely target file.'
+            : 'Worker timed out after producing no visible progress.'
           const escalation = await raiseEscalation({
             tasksPath,
             progressPath: this.progressPath(),
             taskId: task.id,
             agentId: agent.name,
             reason: 'human_judgment_required',
-            summary: 'Worker timed out after failing to mutate the likely target file.',
+            summary,
             details:
               `${message}\n\n` +
-              `Task stayed in progress without visible worktree edits after Guildhall ` +
-              `demanded concrete progress on the authoritative likely target files.`,
+              (
+                hasLikelyTargets
+                  ? `Task stayed in progress without visible worktree edits after Guildhall ` +
+                    `demanded concrete progress on the authoritative likely target files.`
+                  : `Task stayed in progress without visible worktree edits, a checkpoint, focused verification, or an explicit escalation after Guildhall retried the worker lane.`
+              ),
           })
           if (escalation.success && escalation.escalationId) {
             this.likelyTargetWorkerTimeoutRetries.delete(retryKey)
@@ -4604,14 +4633,18 @@ export class Orchestrator {
                 confidence: 'medium',
                 evidence: [{
                   kind: 'task',
-                  summary: 'Worker timed out before mutating the likely target file.',
+                  summary: hasLikelyTargets
+                    ? 'Worker timed out before mutating the likely target file.'
+                    : 'Worker timed out before producing visible progress.',
                   ref: message,
                 }],
                 scope: 'task',
                 safePlaybooks: ['ask_concrete_human_question'],
                 needsHuman: true,
                 humanQuestion:
-                  'The worker timed out without touching the likely target file. Should Guildhall retry this lane, switch provider, or narrow the task?',
+                  hasLikelyTargets
+                    ? 'The worker timed out without touching the likely target file. Should Guildhall retry this lane, switch provider, or narrow the task?'
+                    : 'The worker timed out without producing visible progress. Should Guildhall retry this lane, switch provider, or narrow the task?',
               },
             })
             return {

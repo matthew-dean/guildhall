@@ -17200,6 +17200,56 @@ self-reported truncated or wrong-path writes.
 
 source: codex:file-mutation-self-report-loop-2026-07-04
 
+2026-07-05T01:34:00-07:00 - Fixed silent worker streams that could pin the
+Narrative Harness MVP runner without visible progress.
+
+- Work id: `codex:worker-hidden-stream-wall-clock-2026-07-05`.
+- User job: when Guildhall says it is advancing a work item, the owner should
+  see either visible work, durable progress, a retry note, or a real blocker.
+  Hidden provider stream activity must not let a worker stay claimed forever.
+- Finding:
+  - Narrative Harness task
+    `task-import-14yqvl7-split-invalidate-stale-packet-context-after-source-edits-2`
+    was reclaimed as `in_progress`, then produced no user-visible output,
+    checkpoint, worktree change, worker note, or terminal summary for more than
+    the default worker inactivity window.
+  - The stream wrapper reset its inactivity timer for every provider stream
+    event before converting the event into a Guildhall-visible backend event.
+    A provider could therefore keep the worker technically alive with hidden
+    stream events while the project owner saw silence and the MVP runner never
+    advanced.
+  - The first live proof after adding a default wall-clock budget exposed a
+    second sync miss: the CLI and progress history recorded
+    `worker-agent exceeded 120000ms total turn budget`, but the task had no
+    likely target file paths, so the worker-specific timeout handler fell
+    through without appending a task note or making readiness explain the
+    retry/blocker.
+- Fix:
+  - Worker turns now default their total wall-clock budget to the same duration
+    as the configured worker inactivity timeout when no explicit wall-clock
+    timeout is provided.
+  - Hidden stream ticks can still reset the inactivity timer, but they cannot
+    bypass the total worker turn budget.
+  - Clean worker timeouts with no likely target paths now use the same durable
+    no-visible-progress path: first timeout writes a retry note; repeated
+    timeout escalates with a specific provider/tool-use classification.
+- Verification:
+  - Added a regression where `worker-agent.generateWithEvents` emits hidden
+    stream events every `10ms` and never returns until aborted. Guildhall now
+    exits through the worker timeout/retry path instead of hanging.
+  - Added a regression for clean worker timeout with no likely target paths; it
+    now records a visible retry note and escalates only after the repeated
+    no-progress timeout.
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/orchestrator.test.ts -t 'hidden stream|without likely target paths|source-backed split|under-shaped recovery specs'`
+    passed `4` tests.
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/git-story.test.ts -t 'discoverChildGitProjects|child project policy|summarize'`
+    passed `6` tests.
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/serve-release-readiness.test.ts -t 'child repos|immediate child git repositories|no-UI headless|negated UI|mixed release'`
+    passed `5` tests, including the Looma+Knit-style case where a non-git
+    workspace envelope contains child Git repositories.
+
+source: codex:worker-hidden-stream-wall-clock-2026-07-05
+
 2026-07-04T16:31:00-07:00 - Fixed resolved escalation state leaving tasks
 visibly blocked after the false proof-policy escalation.
 
