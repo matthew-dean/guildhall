@@ -82,6 +82,7 @@ export interface ReintakeTaskDraft {
   title: string
   description: string
   domain: string
+  projectPath?: string
   status: 'import_draft' | 'spec_review' | 'shelved'
   priority: 'critical' | 'high' | 'normal' | 'low'
   dependsOn: string[]
@@ -195,6 +196,7 @@ export function planProjectReintake(input: ProjectReintakeInput): ProjectReintak
     input.tasks,
     usedTaskIds,
     selectedRelease,
+    input.projectPath,
     now,
   )
   if (structuralRepairChanges.length > 0) {
@@ -357,7 +359,7 @@ function applyChange(tasks: Array<Record<string, unknown>>, change: ReintakeChan
       clearStaleReintakeDerivedFields(existing)
       Object.assign(existing, {
         ...change.task,
-        projectPath: typeof existing.projectPath === 'string' ? existing.projectPath : '',
+        projectPath: change.task.projectPath ?? (typeof existing.projectPath === 'string' ? existing.projectPath : ''),
         outOfScope: Array.isArray(existing.outOfScope) ? existing.outOfScope : [],
         notes: [
           ...notes,
@@ -384,7 +386,7 @@ function applyChange(tasks: Array<Record<string, unknown>>, change: ReintakeChan
     }
     tasks.push({
       ...change.task,
-      projectPath: '',
+      projectPath: change.task.projectPath ?? '',
       outOfScope: [],
       notes: [{
         agentId: 'project-reintake',
@@ -538,7 +540,7 @@ function graphTaskChange(
   ) as { existingTaskId?: string; reason?: string } | undefined
   const draft = evidenceTaskToDraft(task, selectedRelease, sources, projectPath, now)
   const after = importedContractWorkIsStructurallyIncomplete(draft)
-    ? structurallyIncompleteImportRepairDraft(draft, selectedRelease, now)
+    ? structurallyIncompleteImportRepairDraft(draft, selectedRelease, projectPath, now)
     : draft
 
   if (reframe) {
@@ -567,6 +569,7 @@ function repairStructurallyIncompleteImportedContractWork(
   tasks: Array<Record<string, unknown>>,
   usedTaskIds: Set<string>,
   selectedRelease: SelectedRelease | null,
+  projectPath: string | undefined,
   now: string,
 ): ReintakeChange[] {
   return tasks
@@ -587,7 +590,7 @@ function repairStructurallyIncompleteImportedContractWork(
           title,
           status: stringField(task, 'status') ?? 'unknown',
         },
-        after: structurallyIncompleteImportRepairDraft(task, selectedRelease, now),
+        after: structurallyIncompleteImportRepairDraft(task, selectedRelease, projectPath, now),
         reason: 'Imported contract/type work has a hollow proof target and must recover concrete source-backed contract names before execution.',
       }
     })
@@ -596,6 +599,7 @@ function repairStructurallyIncompleteImportedContractWork(
 function structurallyIncompleteImportRepairDraft(
   task: Record<string, unknown>,
   selectedRelease: SelectedRelease | null,
+  projectPath: string | undefined,
   now: string,
 ): ReintakeTaskDraft {
   const originalTitle = stringField(task, 'title') ?? 'Imported contract work'
@@ -614,6 +618,7 @@ function structurallyIncompleteImportRepairDraft(
       'Guildhall imported this as executable contract/type work, but the saved task does not name the concrete contract or type surfaces it owns.',
     ].join('\n\n'),
     domain: stringField(task, 'domain') ?? 'planning',
+    ...(projectPath ? { projectPath } : {}),
     status: selectedRelease && !inSelectedRelease ? 'shelved' : 'import_draft',
     priority: priorityField(task.priority),
     dependsOn: arrayStringField(task.dependsOn),
@@ -674,6 +679,7 @@ function evidenceTaskToDraft(
     title: task.title,
     description: evidenceTaskDescription(task),
     domain: task.targetArea,
+    ...(projectPath ? { projectPath } : {}),
     status: later ? 'shelved' : reviewableBlueprint ? 'spec_review' : 'import_draft',
     priority: evidenceTaskPriority(task),
     dependsOn: task.dependsOn,

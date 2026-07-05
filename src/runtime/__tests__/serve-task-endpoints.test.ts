@@ -9,6 +9,8 @@ import {
   getProjectRecentEventsPath,
   getProjectStateDir,
   getProjectSystemStatePath,
+  readTaskRuntimeStore,
+  readTaskWorkspaceStore,
   upsertTaskRuntimeState,
   upsertTaskWorkspaceState,
 } from '@guildhall/sessions'
@@ -2234,6 +2236,10 @@ describe('POST /api/project/task/:id/resume', () => {
       status: 'import_draft',
       title: 'Knit: add link editor controls',
       description: 'Draft imported from planning docs.',
+      assignedTo: 'worker-agent',
+      blockReason: 'Old implementation blocker should not survive draft shaping.',
+      worktreePath: path.join(tmpDir, '.guildhall', 'worktrees', 'task-1'),
+      branchName: 'guildhall/task-task-1',
       acceptanceCriteria: [],
       requestIntake: {
         intent: 'spec_only',
@@ -2262,6 +2268,18 @@ describe('POST /api/project/task/:id/resume', () => {
         },
       ],
     })
+    await upsertTaskRuntimeState(tmpDir, 'task-1', {
+      assignedTo: 'worker-agent',
+      revisionCount: 2,
+      remediationAttempts: 1,
+      updatedAt: new Date().toISOString(),
+    })
+    await upsertTaskWorkspaceState(tmpDir, 'task-1', {
+      worktreePath: path.join(tmpDir, '.guildhall', 'worktrees', 'task-1'),
+      branchName: 'guildhall/task-task-1',
+      baseBranch: 'main',
+      updatedAt: new Date().toISOString(),
+    })
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
       new Request(projectUrl('/api/project/task/task-1/shape-draft'), {
@@ -2275,7 +2293,15 @@ describe('POST /api/project/task/:id/resume', () => {
       await fs.readFile(taskQueuePath(), 'utf8'),
     ) as { tasks: Array<Record<string, any>> }
     expect(queue.tasks[0]!.status).toBe('exploring')
+    expect(queue.tasks[0]!.assignedTo).toBeNull()
+    expect(queue.tasks[0]!.blockReason).toBeUndefined()
+    expect(queue.tasks[0]!.worktreePath).toBeUndefined()
+    expect(queue.tasks[0]!.branchName).toBeUndefined()
     expect(queue.tasks[0]!.notes?.at(-1)?.role).toBe('shaping-request')
+    const runtimeStore = await readTaskRuntimeStore(tmpDir)
+    const workspaceStore = await readTaskWorkspaceStore(tmpDir)
+    expect(runtimeStore.tasks['task-1']).toBeUndefined()
+    expect(workspaceStore.workspaces['task-1']).toBeUndefined()
     const transcript = (await readExploringTranscript({ memoryDir, taskId: 'task-1' })).content ?? ''
     expect(transcript).toMatch(/Imported draft context/)
     expect(transcript).toMatch(/Knit: add link editor controls/)
@@ -2287,6 +2313,92 @@ describe('POST /api/project/task/:id/resume', () => {
     expect(detailRes.status).toBe(200)
     const detailBody = (await detailRes.json()) as Record<string, any>
     expect(detailBody.task?.status).toBe('exploring')
+    expect(detailBody.task?.assignedTo).toBeNull()
+    expect(detailBody.task?.runtime).toMatchObject({
+      assignedTo: null,
+      revisionCount: 0,
+      remediationAttempts: 0,
+      openEscalationIds: [],
+      openIssueIds: [],
+    })
+    expect(detailBody.task?.workspace).toBeUndefined()
+  })
+
+  it('repairs stale worker overlays on imported tasks already back in shaping', async () => {
+    const staleProjectPath = path.join(tmpDir, 'docs', 'harness')
+    await seedRawTaskDefinition('task-1', {
+      status: 'exploring',
+      title: 'Recover source-backed contract surface for author-involvement-modes contract and involvement-dial types',
+      projectPath: staleProjectPath,
+      assignedTo: 'worker-agent',
+      blockReason: 'Old implementation blocker should not survive imported draft shaping.',
+      worktreePath: path.join(tmpDir, '.guildhall', 'worktrees', 'task-1'),
+      branchName: 'guildhall/task-task-1',
+      notes: [
+        {
+          agentId: 'workspace-importer',
+          role: 'importer',
+          content: 'Imported from planning docs.',
+          timestamp: new Date().toISOString(),
+        },
+      ],
+      taskKind: 'research',
+      acceptanceCriteria: [{
+        id: 'contract-surface-recovered',
+        description: 'Contract surface is recovered from cited sources.',
+        verifiedBy: 'review',
+        source: 'documented',
+        met: false,
+      }],
+      taskReadiness: {
+        recommendation: 'needs_research_spike',
+        summary: 'Needs concrete source-backed contract names before worker handoff.',
+      },
+      requestIntake: {
+        createdBy: 'workspace-importer',
+      },
+    })
+    await upsertTaskRuntimeState(tmpDir, 'task-1', {
+      assignedTo: 'worker-agent',
+      revisionCount: 2,
+      remediationAttempts: 1,
+      updatedAt: new Date().toISOString(),
+    })
+    await upsertTaskWorkspaceState(tmpDir, 'task-1', {
+      worktreePath: path.join(tmpDir, '.guildhall', 'worktrees', 'task-1'),
+      branchName: 'guildhall/task-task-1',
+      baseBranch: 'main',
+      updatedAt: new Date().toISOString(),
+    })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const projectRes = await app.fetch(new Request(projectUrl('/api/project')))
+    expect(projectRes.status).toBe(200)
+    const projectBody = (await projectRes.json()) as Record<string, any>
+    expect(projectBody.tasks.find((task: Record<string, any>) => task.id === 'task-1')).toMatchObject({
+      status: 'exploring',
+      projectPath: tmpDir,
+      assignedTo: null,
+    })
+    expect(projectBody.tasks.find((task: Record<string, any>) => task.id === 'task-1')?.blockReason).toBeUndefined()
+    expect(projectBody.tasks.find((task: Record<string, any>) => task.id === 'task-1')?.workspace).toBeUndefined()
+
+    const queue = await readTaskQueue()
+    expect(queue.tasks[0]).toMatchObject({
+      projectPath: tmpDir,
+      assignedTo: null,
+      revisionCount: 0,
+      remediationAttempts: 0,
+    })
+    expect(queue.tasks[0].blockReason).toBeUndefined()
+    expect(queue.tasks[0].worktreePath).toBeUndefined()
+    expect(queue.tasks[0].branchName).toBeUndefined()
+    expect(queue.tasks[0].notes.some((note: { role?: string }) => note.role === 'state-repair')).toBe(true)
+
+    const runtimeStore = await readTaskRuntimeStore(tmpDir)
+    const workspaceStore = await readTaskWorkspaceStore(tmpDir)
+    expect(runtimeStore.tasks['task-1']).toBeUndefined()
+    expect(workspaceStore.workspaces['task-1']).toBeUndefined()
   })
 
   it('shelves an imported draft immediately when it is an obvious duplicate of finished work', async () => {

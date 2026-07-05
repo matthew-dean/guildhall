@@ -610,6 +610,7 @@ describe('project re-intake apply', () => {
     )
     expect(task).toMatchObject({
       status: 'import_draft',
+      projectPath,
       references: [
         'docs/harness/remaining-spec-decomposition-inventory.md',
         'docs/specs/author-involvement-modes.md',
@@ -618,6 +619,48 @@ describe('project re-intake apply', () => {
     expect(task?.productBrief).toBeUndefined()
     expect(task?.taskReadiness?.recommendation).toBe('needs_research_spike')
     expect(JSON.stringify(task?.acceptanceCriteria ?? '')).not.toContain('usable in code: .')
+  })
+
+  it('repairs stale imported task project paths back to the project root', async () => {
+    const memoryDir = await makeState([
+      task({
+        id: 'task-hollow-contract',
+        title: 'Implement author-involvement-modes contract and involvement-dial types',
+        description: 'Imported from Narrative Harness docs.',
+        projectPath: '/workspace/docs/harness',
+        status: 'spec_review',
+        references: ['docs/harness/remaining-spec-decomposition-inventory.md'],
+        spec: '## Verification\n- Define contracts named in the cited docs: .',
+      }),
+    ])
+    const projectPath = path.dirname(memoryDir)
+    const draft = planProjectReintake({
+      now,
+      projectPath,
+      sources: [],
+      tasks: [
+        task({
+          id: 'task-hollow-contract',
+          title: 'Implement author-involvement-modes contract and involvement-dial types',
+          description: 'Imported from Narrative Harness docs.',
+          projectPath: '/workspace/docs/harness',
+          status: 'spec_review',
+          references: ['docs/harness/remaining-spec-decomposition-inventory.md'],
+          spec: '## Verification\n- Define contracts named in the cited docs: .',
+        }),
+      ],
+    })
+    await writeProjectReintakeDraft(memoryDir, draft)
+
+    const result = await applyProjectReintakeDraft({ memoryDir, now })
+    expect(result.success).toBe(true)
+
+    const queue = await readQueue(memoryDir)
+    expect(queue.tasks.find(task => task.id === 'task-hollow-contract')).toMatchObject({
+      status: 'import_draft',
+      projectPath,
+      taskReadiness: expect.objectContaining({ recommendation: 'needs_research_spike' }),
+    })
   })
 
   it('replaces stale not-started task content when the regenerated source-truth task keeps the same deterministic id', async () => {

@@ -11,7 +11,15 @@ import type { Context } from 'hono'
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import { serve } from '@hono/node-server'
-import { atomicWriteText, getProjectStateDir, getProjectSystemStatePath, getProjectTranscriptPath, upsertTaskRuntimeState } from '@guildhall/sessions'
+import {
+  atomicWriteText,
+  clearTaskRuntimeState,
+  clearTaskWorkspaceState,
+  getProjectStateDir,
+  getProjectSystemStatePath,
+  getProjectTranscriptPath,
+  upsertTaskRuntimeState,
+} from '@guildhall/sessions'
 import { readTaskWorkspaceStore } from './task-state-store.js'
 import { taskHasRecordedCompletionProof } from './task-completion-proof.js'
 import {
@@ -278,7 +286,7 @@ import {
   readProjectSkillProposals,
   resetProjectSkillProposals,
 } from '@guildhall/skills'
-import { importedTaskNeedsBriefShaping, normalizeImportedDraftTask } from './import-drafts.js'
+import { importedTaskNeedsBriefShaping, importedTaskNeedsSourceRecovery, normalizeImportedDraftTask } from './import-drafts.js'
 import { selectedReleaseScopeForQueue } from './orchestrator-picker.js'
 import { specReviewRequiresOwnerApproval } from './spec-review-ownership.js'
 import {
@@ -1406,6 +1414,89 @@ async function repairStoppedRunPhantomActiveTasks(projectPath: string): Promise<
       openEscalationIds: [],
       updatedAt: now,
     })
+    repaired += 1
+  }
+  if (repaired > 0) {
+    queue.lastUpdated = now
+    writeManagedTextFileSync(tasksPath, JSON.stringify(queue, null, 2) + '\n')
+  }
+  return repaired
+}
+
+async function repairImportedShapingExecutionState(projectPath: string): Promise<number> {
+  const tasksPath = projectTasksPath(projectPath)
+  if (!existsSync(tasksPath)) return 0
+  const parsed = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')) as
+    | { tasks?: Array<Record<string, unknown>>; version?: number; lastUpdated?: string }
+    | Array<Record<string, unknown>>
+  const queue = Array.isArray(parsed)
+    ? { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
+    : { version: parsed.version ?? 1, lastUpdated: parsed.lastUpdated ?? new Date().toISOString(), tasks: parsed.tasks ?? [] }
+  const now = new Date().toISOString()
+  let repaired = 0
+  for (const task of queue.tasks) {
+    const taskId = String(task.id ?? '')
+    if (!taskId) continue
+    const effectiveTask = await buildEffectiveTask(projectPath, task as Task) as unknown as Task & Record<string, unknown>
+    if (!importedTaskNeedsBriefShaping(effectiveTask) && !importedTaskNeedsSourceRecovery(effectiveTask)) continue
+
+    const hadExecutionOverlay = Boolean(
+      effectiveTask.assignedTo != null ||
+      effectiveTask.blockReason ||
+      effectiveTask.worktreePath ||
+      effectiveTask.branchName ||
+      effectiveTask.baseBranch ||
+      effectiveTask.workspace ||
+      effectiveTask.runtime?.assignedTo != null,
+    )
+    let changed = false
+    if (task.projectPath !== projectPath) {
+      task.projectPath = projectPath
+      changed = true
+    }
+    if (task.assignedTo !== null) {
+      task.assignedTo = null
+      changed = true
+    }
+    for (const key of ['blockReason', 'worktreePath', 'branchName', 'baseBranch', 'retryWindow', 'handoffStep']) {
+      if (key in task) {
+        delete task[key]
+        changed = true
+      }
+    }
+    if (typeof task.revisionCount === 'number' && task.revisionCount !== 0) {
+      task.revisionCount = 0
+      changed = true
+    }
+    if (typeof task.remediationAttempts === 'number' && task.remediationAttempts !== 0) {
+      task.remediationAttempts = 0
+      changed = true
+    }
+    if (hadExecutionOverlay) {
+      await Promise.all([
+        clearTaskRuntimeState(projectPath, taskId),
+        clearTaskWorkspaceState(projectPath, taskId),
+      ])
+      changed = true
+    }
+    if (!changed) continue
+
+    const notes = Array.isArray(task.notes) ? [...task.notes as Array<Record<string, unknown>>] : []
+    if (!notes.some(note =>
+      note.agentId === 'system' &&
+      note.role === 'state-repair' &&
+      /imported draft shaping/i.test(String(note.content ?? '')),
+    )) {
+      notes.push({
+        agentId: 'system',
+        role: 'state-repair',
+        content:
+          'Cleared stale execution state from imported draft shaping. Guildhall will keep this work in owner/spec shaping until the brief names the real source-backed contract surface.',
+        timestamp: now,
+      })
+      task.notes = notes
+    }
+    task.updatedAt = now
     repaired += 1
   }
   if (repaired > 0) {
@@ -3728,6 +3819,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
           setupUrl: `/projects/${encodeURIComponent(project.id)}/setup`,
         })
       }
+      const run = supervisor.get(project.id)
+      if (run?.status !== 'running' && run?.status !== 'stopping') {
+        await repairStoppedRunPhantomActiveTasks(project.path)
+        await repairImportedShapingExecutionState(project.path)
+      }
       const tasksPath = projectTasksPath(project.path)
       const rawQueue = await readTaskQueueFileNormalized(tasksPath)
       const rawTasks = rawQueue.tasks
@@ -3746,7 +3842,6 @@ export function buildServeApp(opts: ServeOptions = {}): {
       })
       const deliveryPrimitives = listPrimitivesWithRelations(deliveryModel, rawTasks as Task[])
       const gitStory = await buildProjectGitStorySummary(project.path, rawTasks as Array<Record<string, unknown>>)
-      const run = supervisor.get(project.id)
       const resolvedConfig = resolveConfig({ workspacePath: project.path })
       const runtimeProvider = getRuntimeProviderConfig({
         projectPath: project.path,
@@ -8666,6 +8761,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
       const tasksPath = projectTasksPath(project.path)
       if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
+      const run = supervisor.get(project.id)
+      if (run?.status !== 'running' && run?.status !== 'stopping') {
+        await repairStoppedRunPhantomActiveTasks(project.path)
+        await repairImportedShapingExecutionState(project.path)
+      }
       const tasks = await readTasksFileNormalized(tasksPath)
       const workProgress = deriveProjectWorkProgress(tasks as Array<Record<string, unknown>>)
       const id = c.req.param('id')
@@ -8690,14 +8790,14 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const thread = buildThread({
         projectPath: project.path,
         snapshot,
-        runStatus: supervisor.get(project.id)?.status ?? 'stopped',
+        runStatus: run?.status ?? 'stopped',
         recentEvents: supervisor.recent(project.id, undefined, project.path),
       })
       const threadTurns = thread.turns.filter(turn => {
         if (!('taskId' in turn)) return false
         return turn.taskId === id
       })
-      const runStatus = supervisor.get(project.id)?.status ?? 'stopped'
+      const runStatus = run?.status ?? 'stopped'
       const availability = await readProjectAvailability(project.path)
       const relatedTaskIds = new Set<string>()
       const rawTask = task as Record<string, unknown>
@@ -10281,6 +10381,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (!existsSync(tasksPath)) return c.json(empty)
       if (run?.status !== 'running' && run?.status !== 'stopping') {
         await repairStoppedRunPhantomActiveTasks(project.path)
+        await repairImportedShapingExecutionState(project.path)
       }
       const raw = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')) as
         | { tasks?: Array<Record<string, unknown>> }

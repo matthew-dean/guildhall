@@ -1,4 +1,5 @@
 import { readManagedTextFile } from '@guildhall/persistence'
+import { clearTaskRuntimeState, clearTaskWorkspaceState, inferProjectRootFromMemoryDir } from '@guildhall/sessions'
 import { existsSync } from 'node:fs'
 import type { Task } from '@guildhall/core'
 import { appendExploringTranscript } from '@guildhall/tools'
@@ -158,6 +159,12 @@ export function importedTaskNeedsBriefShaping(task: Task): boolean {
   return !hasProductBriefShape(task) || !hasAnyAcceptanceCriteria(task)
 }
 
+export function importedTaskNeedsSourceRecovery(task: Task): boolean {
+  if (!hasWorkspaceImportProvenance(task)) return false
+  if (task.status === 'done' || task.status === 'shelved' || task.status === 'archived') return false
+  return task.taskReadiness?.recommendation === 'needs_research_spike'
+}
+
 export function normalizeImportedDraftTask(task: Task): boolean {
   if (!shouldUseImportDraftState(task)) return false
   if (task.status === 'import_draft') return false
@@ -174,6 +181,7 @@ export function normalizeImportedDraftTask(task: Task): boolean {
 
 export async function promoteImportDraftToExploring(task: Task, memoryDir: string): Promise<void> {
   const now = new Date().toISOString()
+  const projectRoot = inferProjectRootFromMemoryDir(memoryDir)
   transitionTaskStatus({
     task,
     event: 'start_intake',
@@ -182,6 +190,10 @@ export async function promoteImportDraftToExploring(task: Task, memoryDir: strin
     now,
   })
   task.assignedTo = null
+  delete task.blockReason
+  delete task.worktreePath
+  delete task.branchName
+  delete task.baseBranch
   task.updatedAt = now
   task.notes = [
     ...noteArray(task),
@@ -193,6 +205,12 @@ export async function promoteImportDraftToExploring(task: Task, memoryDir: strin
     },
   ]
   const evidenceSummary = await buildImportedEvidenceSummary(task)
+  if (projectRoot) {
+    await Promise.all([
+      clearTaskRuntimeState(projectRoot, task.id),
+      clearTaskWorkspaceState(projectRoot, task.id),
+    ])
+  }
   await appendExploringTranscript({
     memoryDir,
     taskId: task.id,

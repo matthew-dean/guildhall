@@ -18598,6 +18598,73 @@ source: codex:resolve-escalation-canonical-blocker-sync-2026-07-04
     helper, Start/Resume import-draft gate change, and associated tests to
     restore previous behavior. No schema rollback is required.
 
+2026-07-05T15:35:00Z - Repaired imported source-recovery tasks that still
+claimed stale worker execution state.
+
+- Work id: `codex:imported-source-recovery-state-repair-2026-07-05`.
+- User job: when Guildhall says an imported Narrative Harness task still needs
+  source recovery or brief shaping, the product must not also show that task as
+  owned by a worker, blocked by an old implementation failure, or pinned to an
+  obsolete worktree. The user should see one honest current state.
+- Root-cause classification:
+  - Data model/schema problem: legacy task rows and task runtime/workspace
+    side stores could disagree about current owner/status.
+  - Project structure/scope/release modeling problem: imported repair tasks
+    preserved a docs subdirectory as `projectPath` instead of the project root.
+  - Scheduler/action-state logic problem: worker assignment survived a return
+    to source-recovery shaping.
+  - UI communication/orientation problem: Overview/Work/task detail could show
+    "needs source recovery" and "worker-agent/worktree/blocker" at the same
+    time.
+  - Bad project data produced by an earlier Guildhall bug: Narrative Harness
+    already had one stranded source-recovery task from before the transition
+    cleanup existed.
+- Fix:
+  - `promoteImportDraftToExploring()` now clears stale runtime/workspace side
+    stores via the authoritative project root inferred from `memoryDir`, not
+    the task's possibly-corrupted `projectPath`.
+  - Project re-intake drafts now carry `projectPath` and apply the current
+    project root when creating/reframing imported repair work, so future
+    re-intake does not preserve docs-folder execution paths.
+  - Project, task-detail, and activity API reads now run an idempotent
+    imported-shaping/source-recovery state repair when the coordinator is not
+    active. It clears worker assignment, old block reason, worktree/branch
+    fields, runtime/workspace side-store rows, and rewrites the task path to
+    the project root.
+  - Added `importedTaskNeedsSourceRecovery()` so source-recovery repair is
+    based on the task readiness model (`needs_research_spike`), not on a
+    brittle note/title shape.
+- Contract Touch Decision:
+  - Work id: `codex:imported-source-recovery-state-repair-2026-07-05`.
+  - Touched contracts: effective task/runtime side-store interpretation;
+    imported draft/source-recovery task lifecycle; project re-intake draft
+    application semantics.
+  - Contracts considered but not touched: persisted task schema version,
+    release schema, workspace-import draft schema, owner-approval semantics,
+    task transition state machine.
+  - Existing data impact: read-time repair updates only contradictory imported
+    shaping/source-recovery tasks while the coordinator is stopped. It does not
+    auto-approve owner decisions or mark the source-recovery work complete.
+  - Required follow-up: continue Narrative Harness source recovery/re-intake
+    from the now-honest current state; the repair does not claim the broader
+    NH MVP is complete.
+  - Proof required: focused regression tests for transition cleanup and
+    pre-existing stale overlays; re-intake project-path regression; affected
+    runtime tests; build/install/restart; installed-app API proof with
+    `stale:false`.
+  - Proof provided: `vitest` affected suite passed `114` tests; contract
+    detector passed; `git diff --check` passed; `node ./build.mjs` passed;
+    installed app restarted with `/api/stale-server` returning `stale:false`;
+    Narrative Harness `/api/project` and task detail for
+    `task-import-1g9oq7m` now show project root
+    `/Users/matthew/git/oss/narrative-harness`, `assignedTo:null`, no
+    `blockReason`, no worktree/branch, and `workspace:null`.
+  - Apply/revert behavior: revert the imported source-recovery predicate, the
+    imported-shaping repair call sites, the side-store clear helpers, and the
+    re-intake projectPath propagation to restore previous behavior. Existing
+    repaired Narrative Harness rows would need a fresh re-intake if the old
+    docs-folder task paths were intentionally desired.
+
 2026-07-05T10:45:00Z - Aligned release proof/orientation communication with
 shared readiness state.
 

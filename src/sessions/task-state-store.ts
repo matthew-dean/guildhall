@@ -97,6 +97,14 @@ export async function upsertTaskRuntimeState(
   return next
 }
 
+export async function clearTaskRuntimeState(projectRoot: string, taskId: string): Promise<void> {
+  const store = await readTaskRuntimeStore(projectRoot)
+  if (!store.tasks[taskId]) return
+  delete store.tasks[taskId]
+  store.lastUpdated = nowIso()
+  await writeTaskRuntimeStore(projectRoot, store)
+}
+
 export async function readTaskWorkspaceStore(projectRoot: string): Promise<TaskWorkspaceStateStore> {
   const fallback = {
     version: 1,
@@ -134,6 +142,14 @@ export async function upsertTaskWorkspaceState(
   store.lastUpdated = updatedAt
   await writeTaskWorkspaceStore(projectRoot, store)
   return next
+}
+
+export async function clearTaskWorkspaceState(projectRoot: string, taskId: string): Promise<void> {
+  const store = await readTaskWorkspaceStore(projectRoot)
+  if (!store.workspaces[taskId]) return
+  delete store.workspaces[taskId]
+  store.lastUpdated = nowIso()
+  await writeTaskWorkspaceStore(projectRoot, store)
 }
 
 export async function appendTaskEvidence(
