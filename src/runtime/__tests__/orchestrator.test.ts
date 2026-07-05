@@ -2860,6 +2860,7 @@ describe('Orchestrator.tick — routing', () => {
       mkTask({
         id: 'parent',
         status: 'done',
+        domain: 'harness',
         title: 'Implement a no-UI runner that builds a packet from fixture records.',
         description: '3. Implement a no-UI runner that builds a packet from fixture records.',
         spec: [
@@ -2951,6 +2952,174 @@ describe('Orchestrator.tick — routing', () => {
     expect(task.spec).not.toContain('Spec agent kept researching')
     expect(task.acceptanceCriteria.map((criterion) => criterion.description).join('\n')).toContain('BookBrief')
     expect(task.acceptanceCriteria.map((criterion) => criterion.description).join('\n')).not.toContain('provenance/privacy')
+  })
+
+  it('writes source-backed recovery specs for provenance privacy child work', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'parent',
+        status: 'done',
+        title: 'Implement a no-UI runner that builds a packet from fixture records.',
+        description: '3. Implement a no-UI runner that builds a packet from fixture records.',
+        references: [
+          '/repo/docs/harness/implementation-roadmap.md',
+          '/repo/docs/specs/agent-context-packets-and-compaction.md',
+        ],
+        spec: [
+          '## What this is',
+          'Implement a no-UI runner that builds a packet from fixture records.',
+          '',
+          '## Acceptance Criteria',
+          '1. The runner builds a bounded writer packet from the documented fields: `BookBrief`; `ManuscriptUnit`; `CharacterTrace`; `ReaderStateTrace`; `OutlineNode`; one `AuthorDecision`; writer packet names what the character believes; writer packet names what the reader knows.',
+          '2. The runner records provenance/privacy scope in packet output: one global author profile note; one project author note; one session check-in; permissions that allow one and block another; packet includes only allowed author material; privacy manifest says what was included, including privacy manifest says what was included.',
+        ].join('\n'),
+        acceptanceCriteria: [
+          {
+            id: 'bounded-writer-packet',
+            description: 'The runner builds a bounded writer packet from the documented fields: `BookBrief`; `ManuscriptUnit`; `CharacterTrace`; `ReaderStateTrace`; `OutlineNode`; one `AuthorDecision`; writer packet names what the character believes; writer packet names what the reader knows.',
+            verifiedBy: 'review',
+            met: false,
+          },
+          {
+            id: 'privacy-scope',
+            description: 'The runner records provenance/privacy scope in packet output: one global author profile note; one project author note; one session check-in; permissions that allow one and block another; packet includes only allowed author material; privacy manifest says what was included, including privacy manifest says what was included.',
+            verifiedBy: 'review',
+            met: false,
+          },
+        ],
+        hierarchy: { childIds: ['privacy-child'], order: 0, relation: 'contains' },
+      }),
+      mkTask({
+        id: 'privacy-child',
+        status: 'exploring',
+        title: 'Prove provenance/privacy scope in packet output',
+        description: 'The docs treat provenance scope as part of the proof loop, not a later polish layer.',
+        proposalRationale: 'The docs treat provenance scope as part of the proof loop, not a later polish layer.',
+        hierarchy: { parentId: 'parent', childIds: [], order: 3, relation: 'decomposes' },
+        notes: [{
+          agentId: 'coordinator',
+          role: 'recovery',
+          content: 'User restarted the project after the spec agent failed to save a durable draft. Reopened intake so Guildhall can retry from the preserved transcript notes.',
+          timestamp: '2026-07-04T15:06:27.010Z',
+        }],
+      }),
+    ])
+    const spec = stubAgent('spec-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out).toMatchObject({
+      kind: 'processed',
+      taskId: 'privacy-child',
+      agent: 'coordinator-recovery',
+      afterStatus: 'spec_review',
+    })
+    expect(spec.calls).toHaveLength(0)
+    const queue = await readQueue()
+    const task = queue.tasks.find(candidate => candidate.id === 'privacy-child')!
+    const criteria = task.acceptanceCriteria.map((criterion) => criterion.description).join('\n')
+    expect(task.references).toEqual([
+      '/repo/docs/harness/implementation-roadmap.md',
+      '/repo/docs/specs/agent-context-packets-and-compaction.md',
+    ])
+    expect(task.productBrief?.userJob).toBe('I want Prove provenance/privacy scope in packet output implemented or proven from The docs treat provenance scope as part of the proof loop, not a later polish layer.')
+    expect(task.productBrief?.whyItMattersNow).toContain('one child of "Implement a no-UI runner that builds a packet from fixture records."')
+    expect(task.productBrief?.successMetric).toBe('The runner records provenance/privacy scope in packet output: one global author profile note; one project author note; one session check-in; permissions that allow one and block another; packet includes only allowed author material; privacy manifest says what was included.')
+    expect(task.spec).toContain('Parent acceptance this child satisfies')
+    expect(task.spec).toContain('privacy manifest says what was included.')
+    expect(task.spec).not.toContain('including privacy manifest says what was included')
+    expect(task.spec).not.toContain('bounded writer packet')
+    expect(task.spec).not.toContain('appropriate repo surface')
+    expect(criteria).toContain('privacy manifest says what was included.')
+    expect(criteria).not.toContain('including privacy manifest says what was included')
+  })
+
+  it('repairs under-shaped recovery specs from the task graph before approval', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'parent',
+        status: 'done',
+        title: 'Implement a no-UI runner that builds a packet from fixture records.',
+        references: [
+          '/repo/docs/harness/implementation-roadmap.md',
+          '/repo/docs/specs/agent-context-packets-and-compaction.md',
+        ],
+        acceptanceCriteria: [
+          {
+            id: 'privacy-scope',
+            description: 'The runner records provenance/privacy scope in packet output: one global author profile note; one project author note; one session check-in; permissions that allow one and block another; packet includes only allowed author material; privacy manifest says what was included, including privacy manifest says what was included.',
+            verifiedBy: 'review',
+            met: false,
+          },
+        ],
+        hierarchy: { childIds: ['privacy-child'], order: 0, relation: 'contains' },
+      }),
+      mkTask({
+        id: 'privacy-child',
+        status: 'spec_review',
+        domain: 'harness',
+        title: 'Prove provenance/privacy scope in packet output',
+        description: 'The docs treat provenance scope as part of the proof loop, not a later polish layer.',
+        proposalRationale: 'The docs treat provenance scope as part of the proof loop, not a later polish layer.',
+        spec: [
+          '## Summary',
+          'Prove provenance/privacy scope in packet output from the current project evidence.',
+          '',
+          '## Acceptance Criteria',
+          '1. The runner records provenance/privacy scope in packet output: privacy manifest says what was included, including privacy manifest says what was included.',
+          '',
+          '## Completion Boundary',
+          '- Product outcome: bad generic recovery text.',
+        ].join('\n'),
+        productBrief: {
+          userJob: 'I want Prove provenance/privacy scope in packet output turned into concrete project work using the evidence and owner decisions already recorded.',
+          successMetric: 'Prove provenance/privacy scope in packet output has a reviewable spec, acceptance criteria, and a clear completion boundary before implementation starts.',
+          antiPatterns: [],
+          authoredBy: 'coordinator-recovery',
+          authoredAt: '2026-07-05T05:33:44.793Z',
+        },
+        hierarchy: { parentId: 'parent', childIds: [], order: 3, relation: 'decomposes' },
+        notes: [{
+          agentId: 'coordinator-recovery',
+          role: 'system',
+          content: 'Guildhall wrote a deterministic recovery spec seed from the current task evidence before redispatching the spec lane.',
+          timestamp: '2026-07-05T05:33:44.793Z',
+        }],
+      }),
+    ])
+    const coord = stubAgent('harness-coordinator', async () => {
+      throw new Error('coordinator should not review an under-shaped recovery spec before repair')
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec: stubAgent('spec-agent'), coordinators: { harness: coord } }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out).toMatchObject({
+      kind: 'processed',
+      taskId: 'privacy-child',
+      agent: 'coordinator-recovery',
+      afterStatus: 'spec_review',
+    })
+    expect(coord.calls).toHaveLength(0)
+    const queue = await readQueue()
+    const task = queue.tasks.find(candidate => candidate.id === 'privacy-child')!
+    expect(task.status).toBe('spec_review')
+    expect(task.references).toEqual([
+      '/repo/docs/harness/implementation-roadmap.md',
+      '/repo/docs/specs/agent-context-packets-and-compaction.md',
+    ])
+    expect(task.productBrief?.userJob).toBe('I want Prove provenance/privacy scope in packet output implemented or proven from The docs treat provenance scope as part of the proof loop, not a later polish layer.')
+    expect(task.productBrief?.successMetric).toContain('privacy manifest says what was included.')
+    expect(task.spec).toContain('Parent acceptance this child satisfies')
+    expect(task.spec).not.toContain('including privacy manifest says what was included')
+    expect(task.notes.at(-1)?.content).toContain('under-shaped recovery spec')
   })
 
   it('narrows recovered fixture child specs instead of copying parent prototype scope', async () => {

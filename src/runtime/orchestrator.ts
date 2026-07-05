@@ -405,6 +405,31 @@ function hasDeterministicSpecRepairNote(task: Task): boolean {
   )
 }
 
+function shouldRepairWeakRecoverySpecReviewSeed(task: Task, queue: TaskQueue): boolean {
+  if (task.status !== 'spec_review') return false
+  if (task.id === META_INTAKE_TASK_ID) return false
+  const brief = task.productBrief
+  const fromRecovery = brief?.authoredBy === 'coordinator-recovery' || task.notes.some((note) =>
+    note.agentId === 'coordinator-recovery' &&
+    /deterministic recovery spec seed|repaired a malformed spec_review blueprint deterministically/i.test(note.content ?? ''),
+  )
+  if (!fromRecovery) return false
+  const parentId = task.hierarchy?.parentId ?? task.delivery?.supports?.[0]
+  const parentTask = parentId ? queue.tasks.find((candidate) => candidate.id === parentId) : undefined
+  const parentHasRefs = Array.isArray(parentTask?.references) && parentTask.references.length > 0
+  const taskMissingRefs = !Array.isArray(task.references) || task.references.length === 0
+  const specText = `${task.spec ?? ''}\n${task.acceptanceCriteria.map((criterion) =>
+    typeof criterion === 'string' ? criterion : criterion.description,
+  ).join('\n')}`
+  return (
+    (parentHasRefs && taskMissingRefs) ||
+    /turned into concrete project work using the evidence and owner decisions already recorded/i.test(brief?.userJob ?? '') ||
+    /has a reviewable spec, acceptance criteria, and a clear completion boundary before implementation starts/i.test(brief?.successMetric ?? '') ||
+    /\.\s+from\s+/i.test(`${brief?.userJob ?? ''}\n${specText}`) ||
+    /including privacy manifest says what was included/i.test(specText)
+  )
+}
+
 function hasUsableBlueprint(task: Task): boolean {
   return validateSpecCompletionBoundary(task).ok
 }
@@ -1472,39 +1497,239 @@ function scopedRecoveryContractAcceptance(taskTitle: string): string[] {
 function scopedRecoveryParentAcceptance(taskTitle: string, parentAcceptance: string[]): string[] {
   const title = taskTitle.toLowerCase()
   if (/bounded writer|writer packet|rereading|manuscript/.test(title)) {
-    return parentAcceptance.filter((item) =>
-      /bounded writer packet|writer packet|bookbrief|manuscriptunit|charactertrace|readerstatetrace|outlinenode|authordecision|character believes|reader knows/i.test(item),
-    )
+    return parentAcceptance
+      .filter((item) =>
+        /bounded writer packet|writer packet|bookbrief|manuscriptunit|charactertrace|readerstatetrace|outlinenode|authordecision|character believes|reader knows/i.test(item),
+      )
+      .map(cleanRecoveryAcceptanceText)
   }
   if (/reviewer|writer loop|headless/.test(title)) {
-    return parentAcceptance.filter((item) =>
-      /runner|fixture|headless|no-ui|no frontend|run output|reviewer|writer loop/i.test(item) &&
-      !/bounded writer packet|writer packet|bookbrief|manuscriptunit|charactertrace|readerstatetrace|outlinenode|authordecision|character believes|reader knows|provenance|privacy|author profile|project author|session check-in|permission|privacy manifest|stale|source-text edit|source edit|invalidation|affected records|unrelated records/i.test(item),
-    )
+    return parentAcceptance
+      .filter((item) =>
+        /runner|fixture|headless|no-ui|no frontend|run output|reviewer|writer loop/i.test(item) &&
+        !/bounded writer packet|writer packet|bookbrief|manuscriptunit|charactertrace|readerstatetrace|outlinenode|authordecision|character believes|reader knows|provenance|privacy|author profile|project author|session check-in|permission|privacy manifest|stale|source-text edit|source edit|invalidation|affected records|unrelated records/i.test(item),
+      )
+      .map(cleanRecoveryAcceptanceText)
   }
   if (/provenance|privacy/.test(title)) {
-    return parentAcceptance.filter((item) =>
-      /provenance|privacy|author profile|project author|session check-in|permission|allowed author|privacy manifest/i.test(item),
-    )
+    return parentAcceptance
+      .filter((item) =>
+        /provenance|privacy|author profile|project author|session check-in|permission|allowed author|privacy manifest/i.test(item),
+      )
+      .map(cleanRecoveryAcceptanceText)
   }
   if (/stale|invalidate|source edit/.test(title)) {
-    return parentAcceptance.filter((item) =>
-      /stale|source-text edit|source edit|character belief|object state|invalidation|affected records|unrelated records|excludes or flags/i.test(item),
-    )
+    return parentAcceptance
+      .filter((item) =>
+        /stale|source-text edit|source edit|character belief|object state|invalidation|affected records|unrelated records|excludes or flags/i.test(item),
+      )
+      .map(cleanRecoveryAcceptanceText)
   }
   if (/fixture|expected-record|ground truth/.test(title) && !/prototype|evaluation/.test(title)) {
     const scoped = parentAcceptance.filter((item) =>
       /fixture|expected|ground truth|signal|permission|profile/i.test(item) &&
       !/prototype|runevaluation|run evaluation|packet quality|schema field/i.test(item),
     )
-    return scoped
+    return scoped.map(cleanRecoveryAcceptanceText)
   }
   if (/prototype|evaluation/.test(title) && !/fixture|ground truth/.test(title)) {
-    return parentAcceptance.filter((item) =>
-      /prototype|evaluation|packet|trace|signal|run/i.test(item),
-    )
+    return parentAcceptance
+      .filter((item) =>
+        /prototype|evaluation|packet|trace|signal|run/i.test(item),
+      )
+      .map(cleanRecoveryAcceptanceText)
   }
-  return parentAcceptance.filter((item) => recoveryParentAcceptanceMatchesTitle(taskTitle, item))
+  return parentAcceptance
+    .filter((item) => recoveryParentAcceptanceMatchesTitle(taskTitle, item))
+    .map(cleanRecoveryAcceptanceText)
+}
+
+function cleanRecoveryAcceptanceText(value: string): string {
+  return normalizeFallbackWhitespace(value)
+    .replace(/\s*,\s*including privacy manifest says what was included\b/gi, '')
+    .replace(/\s*,\s*including ([^,.]+)([,.])\s*\1\b/gi, '$2')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function recoveryProductBriefForChildScope(input: {
+  taskTitle: string
+  sourceIntent: string
+  parentTask?: Task
+  inheritedAcceptance: string[]
+  outOfScope: string[]
+  now: string
+}): Task['productBrief'] {
+  const source = (input.sourceIntent === input.taskTitle
+    ? 'the cited project evidence'
+    : input.sourceIntent
+  ).replace(/[.。]+$/, '')
+  const scopeLine = input.inheritedAcceptance[0] ?? `${input.taskTitle} has a concrete completion boundary.`
+  return {
+    userJob: `I want ${input.taskTitle} implemented or proven from ${source}.`,
+    whyItMattersNow: input.parentTask
+      ? `This is one child of "${semanticTaskTitle(input.parentTask)}"; it must prove its own Stage 1 slice without absorbing sibling work.`
+      : `This task is inside the current scope and needs a source-backed spec before Guildhall can implement it.`,
+    successMetric: scopeLine,
+    nonGoals: input.outOfScope.length > 0
+      ? input.outOfScope.map((item) => item.replace(/^-\s*/, '').trim()).filter(Boolean)
+      : ['Do not ask the owner to re-answer decisions already recorded on the task.'],
+    antiPatterns: [
+      'Do not preserve stale recovery-loop wording as the task brief.',
+      'Do not ask the owner to re-answer decisions already recorded on the task.',
+    ],
+    authoredBy: 'coordinator-recovery',
+    authoredAt: input.now,
+  }
+}
+
+type RecoverySpecSeed = {
+  spec: string
+  acceptanceCriteria: Task['acceptanceCriteria']
+  productBrief: Task['productBrief']
+  references?: string[]
+}
+
+function buildRecoverySpecSeedForTask(liveTask: Task, queue: TaskQueue, now: string): RecoverySpecSeed {
+  const answeredDecisions = recoverySpecSeedDecisionTexts(liveTask)
+  const taskTitle = semanticTaskTitle(liveTask)
+  const sourceIntent = formatRecoverySpecSourceIntent(liveTask.proposalRationale || liveTask.description || taskTitle)
+  const parentId = liveTask.hierarchy?.parentId ?? liveTask.delivery?.supports?.[0]
+  const parentTask = parentId ? queue.tasks.find((candidate) => candidate.id === parentId) : undefined
+  const parentSpec = typeof parentTask?.spec === 'string' ? parentTask.spec : ''
+  const contractTerms = uniqueStrings([
+    ...extractBacktickTerms(parentSpec),
+    ...extractBacktickTerms(liveTask.description),
+    ...extractBacktickTerms(liveTask.proposalRationale),
+  ])
+  const parentAcceptance = Array.isArray(parentTask?.acceptanceCriteria)
+    ? parentTask.acceptanceCriteria
+        .map((criterion) => {
+          if (typeof criterion === 'string') return criterion
+          if (criterion && typeof criterion === 'object') {
+            const description = (criterion as { description?: unknown }).description
+            return typeof description === 'string' ? description : ''
+          }
+          return ''
+        })
+        .map((value) => value.trim())
+        .filter(Boolean)
+    : []
+  const contractFocusedSeed =
+    contractTerms.length > 0 &&
+    /contract|schema|fixture|expected-record|prototype-run|evaluation/i.test(taskTitle)
+  const scopedContractTerms = scopedRecoveryContractTerms(taskTitle, contractTerms)
+  const scopedContractAcceptance = scopedRecoveryContractAcceptance(taskTitle)
+  const scopedParentAcceptance = scopedRecoveryParentAcceptance(taskTitle, parentAcceptance)
+  const decisionLines = answeredDecisions.length > 0
+    ? answeredDecisions.map((decision) => `- ${decision}`).join('\n')
+    : '- No unresolved owner decisions are recorded on the task.'
+  const outOfScope = answeredDecisions
+    .filter((decision) => /\bout of scope|separate|not in scope|do not|don't/i.test(decision))
+    .map((decision) => `- ${decision}`)
+  const inheritedAcceptance = scopedParentAcceptance.length > 0
+    ? scopedParentAcceptance.slice(0, 5)
+    : []
+  const inheritedAcceptanceLines = inheritedAcceptance.map((item, index) => `${index + 1}. ${item.replace(/^\d+[.)]\s*/, '')}`)
+  const genericAcceptanceLines = inheritedAcceptanceLines.length > 0
+    ? inheritedAcceptanceLines
+    : [
+        `1. Given the current project evidence, when ${taskTitle} is implemented, then the repo-local proof demonstrates that exact child outcome without adding unrelated later-stage work.`,
+        '2. Given the parent task boundary, when this task is reviewed, then it satisfies the relevant parent acceptance criteria and leaves sibling child work to its own task.',
+        '3. Given the implementation is complete, when the local proof command runs, then Guildhall records the command and result against this task.',
+      ]
+  const spec = contractFocusedSeed ? [
+    '## Summary',
+    `Define the concrete ${taskTitle} surface for this Stage 1 harness work, using the imported parent task as the source of truth instead of restarting open-ended research.`,
+    '',
+    'Source intent:',
+    `- ${sourceIntent}`,
+    ...(parentTask?.title ? [`- Containing work: ${semanticTaskTitle(parentTask)}`] : []),
+    '',
+    'Contract terms to account for:',
+    ...scopedContractTerms.map((term) => `- \`${term}\``),
+    '',
+    'Parent acceptance context:',
+    ...(scopedParentAcceptance.length > 0
+      ? scopedParentAcceptance.slice(0, 6).map((item) => `- ${item}`)
+      : ['- No parent acceptance criteria were available; stay within the child proposal and cited contract terms.']),
+    '',
+    'Resolved owner decisions:',
+    decisionLines,
+    '',
+    '## Acceptance Criteria',
+    ...scopedContractAcceptance,
+    '',
+    '## Out of Scope',
+    '- Do not introduce Rust contracts for this TypeScript project.',
+    '- Do not add UI copy or API endpoints for this contract-only child task.',
+    '- Do not expand into later-stage story intelligence beyond the contracts named by the parent/import evidence.',
+    '',
+    '## Open Questions',
+    '- None known from the current task record. If a real product decision is missing, ask one direct question with a question mark and concrete choices.',
+    '',
+    '## Completion Boundary',
+    `- Product outcome: ${taskTitle} is represented by concrete TypeScript schema/record contracts and proof evidence in the Narrative Harness project.`,
+    '- What Guildhall can complete in code: schema/type updates, fixture or evaluation record updates, exports, and local proof scripts/tests needed for this child work.',
+    '- External dependencies: None known from the current task record.',
+    '- Owner-only setup: None known.',
+    '- Verification environment: the local Narrative Harness checkout and repo-local package scripts.',
+    '- What counts as done: the contract terms above are defined or verified, acceptance criteria are checked, and the proof result is recorded.',
+    '- What must be split or blocked: any newly discovered product decision that changes which contracts belong in Stage 1 versus a later stage.',
+  ].join('\n') : [
+    '## Summary',
+    `${taskTitle} from the current project evidence, preserving the source intent: ${sourceIntent}`,
+    ...(parentTask?.title ? [`Containing work: ${semanticTaskTitle(parentTask)}`] : []),
+    ...(inheritedAcceptance.length > 0
+      ? [
+          '',
+          'Parent acceptance this child satisfies:',
+          ...inheritedAcceptance.map((item) => `- ${item}`),
+        ]
+      : []),
+    '',
+    'Resolved owner decisions:',
+    decisionLines,
+    '',
+    '## Acceptance Criteria',
+    ...genericAcceptanceLines,
+    '',
+    '## Out of Scope',
+    ...(outOfScope.length > 0 ? outOfScope : ['- Work not implied by the source evidence or resolved owner decisions.']),
+    '',
+    '## Open Questions',
+    '- None known from the current task record. If the coordinator finds a product decision still missing, send this task back to exploring with one focused question.',
+    '',
+    '## Completion Boundary',
+    `- Product outcome: ${taskTitle} is proven inside the no-UI Narrative Harness Stage 1 boundary.`,
+    '- What Guildhall can complete in code: repo-local runner/schema/fixture updates, tests, docs/story evidence, and proof artifacts required by this child task.',
+    '- External dependencies: None known from the current task record.',
+    '- Owner-only setup: None known.',
+    '- Verification environment: the local project checkout and repo-local package scripts.',
+    '- What counts as done: the scoped acceptance criteria above are implemented or verified, and the proof result is recorded.',
+    '- What must be split or blocked: sibling parent criteria, external setup, or a newly discovered product decision that cannot be resolved from current evidence.',
+  ].join('\n')
+  const inheritedParentReferences =
+    parentTask &&
+    (!Array.isArray(liveTask.references) || liveTask.references.length === 0) &&
+    Array.isArray(parentTask.references) &&
+    parentTask.references.length > 0
+      ? parentTask.references
+      : undefined
+
+  return {
+    spec,
+    acceptanceCriteria: parseAcceptanceCriteriaFromSpec(spec),
+    productBrief: recoveryProductBriefForChildScope({
+      taskTitle,
+      sourceIntent,
+      parentTask,
+      inheritedAcceptance,
+      outOfScope,
+      now,
+    }),
+    ...(inheritedParentReferences ? { references: inheritedParentReferences } : {}),
+  }
 }
 
 function recoveryParentAcceptanceMatchesTitle(taskTitle: string, acceptance: string): boolean {
@@ -2780,6 +3005,8 @@ export class Orchestrator {
     if (completedEvidenceRepair.changed) await this.writeQueue(queueBefore)
     const staleRepair = repairStaleBlockersInQueue(queueBefore, this.now())
     if (staleRepair.changed) await this.writeQueue(queueBefore)
+    const weakRecoverySpecRepair = await this.repairWeakRecoverySpecReviewSeedsInQueue(queueBefore)
+    if (weakRecoverySpecRepair) return weakRecoverySpecRepair
     const landingRepair = await this.reconcileCompletedTaskLanding(queueBefore)
     if (landingRepair.changed) await this.writeQueue(queueBefore)
     const pendingPrRepair = await this.reconcilePendingPrLanding(queueBefore)
@@ -9751,7 +9978,7 @@ export class Orchestrator {
 
     const answeredDecisions = recoverySpecSeedDecisionTexts(liveTask)
     const taskTitle = semanticTaskTitle(liveTask)
-    const sourceIntent = formatRecoverySpecSourceIntent(liveTask.description || taskTitle)
+    const sourceIntent = formatRecoverySpecSourceIntent(liveTask.proposalRationale || liveTask.description || taskTitle)
     const decisionLines = answeredDecisions.length > 0
       ? answeredDecisions.map((decision) => `- ${decision}`).join('\n')
       : '- No unresolved owner decisions are recorded on the task.'
@@ -9833,6 +10060,46 @@ export class Orchestrator {
       beforeStatus,
       afterStatus: 'spec_review',
       transitioned: beforeStatus !== 'spec_review',
+      revisionCount: liveTask.revisionCount,
+    }
+  }
+
+  private async repairWeakRecoverySpecReviewSeedsInQueue(queue: TaskQueue): Promise<TickOutcome | null> {
+    const liveTask = queue.tasks.find((candidate) => shouldRepairWeakRecoverySpecReviewSeed(candidate, queue))
+    if (!liveTask) return null
+    const now = this.now()
+    const seed = buildRecoverySpecSeedForTask(liveTask, queue, now)
+
+    liveTask.spec = seed.spec
+    liveTask.acceptanceCriteria = seed.acceptanceCriteria
+    liveTask.productBrief = seed.productBrief
+    if (seed.references) liveTask.references = seed.references
+    liveTask.status = 'spec_review'
+    liveTask.assignedTo = null
+    liveTask.updatedAt = now
+    liveTask.notes.push({
+      agentId: 'coordinator-recovery',
+      role: 'system',
+      content:
+        'Guildhall repaired an under-shaped recovery spec from the current task graph before approval, inheriting source refs and scoped parent acceptance instead of preserving generic recovery text.',
+      timestamp: now,
+    })
+    queue.lastUpdated = now
+    await this.writeQueue(queue)
+    await this.emitBackendEvent({
+      type: 'line_complete',
+      task_id: liveTask.id,
+      agent_name: 'coordinator-recovery',
+      message:
+        'Guildhall repaired the recovery spec from task graph evidence before review continued.',
+    })
+    return {
+      kind: 'processed',
+      taskId: liveTask.id,
+      agent: 'coordinator-recovery',
+      beforeStatus: 'spec_review',
+      afterStatus: 'spec_review',
+      transitioned: false,
       revisionCount: liveTask.revisionCount,
     }
   }
@@ -9935,137 +10202,11 @@ export class Orchestrator {
     if (typeof liveTask.spec === 'string' && liveTask.spec.trim().length > 0) return null
     if (taskHasUnansweredVisibleQuestion(liveTask)) return null
 
-    const answeredDecisions = recoverySpecSeedDecisionTexts(liveTask)
-    const taskTitle = semanticTaskTitle(liveTask)
-    const sourceIntent = formatRecoverySpecSourceIntent(liveTask.description || taskTitle)
-    const parentId = liveTask.hierarchy?.parentId ?? liveTask.delivery?.supports?.[0]
-    const parentTask = parentId ? queue.tasks.find((candidate) => candidate.id === parentId) : undefined
-    const parentSpec = typeof parentTask?.spec === 'string' ? parentTask.spec : ''
-    const contractTerms = uniqueStrings([
-      ...extractBacktickTerms(parentSpec),
-      ...extractBacktickTerms(liveTask.description),
-      ...extractBacktickTerms(liveTask.proposalRationale),
-    ])
-    const parentAcceptance = Array.isArray(parentTask?.acceptanceCriteria)
-      ? parentTask.acceptanceCriteria
-          .map((criterion) => {
-            if (typeof criterion === 'string') return criterion
-            if (criterion && typeof criterion === 'object') {
-              const description = (criterion as { description?: unknown }).description
-              return typeof description === 'string' ? description : ''
-            }
-            return ''
-          })
-          .map((value) => value.trim())
-          .filter(Boolean)
-      : []
-    const contractFocusedSeed =
-      contractTerms.length > 0 &&
-      /contract|schema|fixture|expected-record|prototype-run|evaluation/i.test(taskTitle)
-    const scopedContractTerms = scopedRecoveryContractTerms(taskTitle, contractTerms)
-    const scopedContractAcceptance = scopedRecoveryContractAcceptance(taskTitle)
-    const scopedParentAcceptance = scopedRecoveryParentAcceptance(taskTitle, parentAcceptance)
-    const decisionLines = answeredDecisions.length > 0
-      ? answeredDecisions.map((decision) => `- ${decision}`).join('\n')
-      : '- No unresolved owner decisions are recorded on the task.'
-    const outOfScope = answeredDecisions
-      .filter((decision) => /\bout of scope|separate|not in scope|do not|don't/i.test(decision))
-      .map((decision) => `- ${decision}`)
-    const inheritedAcceptance = scopedParentAcceptance.length > 0
-      ? scopedParentAcceptance.slice(0, 5)
-      : []
-    const inheritedAcceptanceLines = inheritedAcceptance.map((item, index) => `${index + 1}. ${item.replace(/^\d+[.)]\s*/, '')}`)
-    const genericAcceptanceLines = inheritedAcceptanceLines.length > 0
-      ? inheritedAcceptanceLines
-      : [
-          `1. Given the current project evidence, when ${taskTitle} is implemented, then the repo-local proof demonstrates that exact child outcome without adding unrelated later-stage work.`,
-          '2. Given the parent task boundary, when this task is reviewed, then it satisfies the relevant parent acceptance criteria and leaves sibling child work to its own task.',
-          '3. Given the implementation is complete, when the local proof command runs, then Guildhall records the command and result against this task.',
-        ]
-    const spec = contractFocusedSeed ? [
-      '## Summary',
-      `Define the concrete ${taskTitle} surface for this Stage 1 harness work, using the imported parent task as the source of truth instead of restarting open-ended research.`,
-      '',
-      'Source intent:',
-      `- ${sourceIntent}`,
-      ...(parentTask?.title ? [`- Containing work: ${semanticTaskTitle(parentTask)}`] : []),
-      '',
-      'Contract terms to account for:',
-      ...scopedContractTerms.map((term) => `- \`${term}\``),
-      '',
-      'Parent acceptance context:',
-      ...(scopedParentAcceptance.length > 0
-        ? scopedParentAcceptance.slice(0, 6).map((item) => `- ${item}`)
-        : ['- No parent acceptance criteria were available; stay within the child proposal and cited contract terms.']),
-      '',
-      'Resolved owner decisions:',
-      decisionLines,
-      '',
-      '## Acceptance Criteria',
-      ...scopedContractAcceptance,
-      '',
-      '## Out of Scope',
-      '- Do not introduce Rust contracts for this TypeScript project.',
-      '- Do not add UI copy or API endpoints for this contract-only child task.',
-      '- Do not expand into later-stage story intelligence beyond the contracts named by the parent/import evidence.',
-      '',
-      '## Open Questions',
-      '- None known from the current task record. If a real product decision is missing, ask one direct question with a question mark and concrete choices.',
-      '',
-      '## Completion Boundary',
-      `- Product outcome: ${taskTitle} is represented by concrete TypeScript schema/record contracts and proof evidence in the Narrative Harness project.`,
-      '- What Guildhall can complete in code: schema/type updates, fixture or evaluation record updates, exports, and local proof scripts/tests needed for this child work.',
-      '- External dependencies: None known from the current task record.',
-      '- Owner-only setup: None known.',
-      '- Verification environment: the local Narrative Harness checkout and repo-local package scripts.',
-      '- What counts as done: the contract terms above are defined or verified, acceptance criteria are checked, and the proof result is recorded.',
-      '- What must be split or blocked: any newly discovered product decision that changes which contracts belong in Stage 1 versus a later stage.',
-    ].join('\n') : [
-      '## Summary',
-      `${taskTitle} from the current project evidence, preserving the source intent: ${sourceIntent}`,
-      ...(parentTask?.title ? [`Containing work: ${semanticTaskTitle(parentTask)}`] : []),
-      ...(inheritedAcceptance.length > 0
-        ? [
-            '',
-            'Parent acceptance this child satisfies:',
-            ...inheritedAcceptance.map((item) => `- ${item}`),
-          ]
-        : []),
-      '',
-      'Resolved owner decisions:',
-      decisionLines,
-      '',
-      '## Acceptance Criteria',
-      ...genericAcceptanceLines,
-      '',
-      '## Out of Scope',
-      ...(outOfScope.length > 0 ? outOfScope : ['- Work not implied by the source evidence or resolved owner decisions.']),
-      '',
-      '## Open Questions',
-      '- None known from the current task record. If the coordinator finds a product decision still missing, send this task back to exploring with one focused question.',
-      '',
-      '## Completion Boundary',
-      `- Product outcome: ${taskTitle} is proven inside the no-UI Narrative Harness Stage 1 boundary.`,
-      '- What Guildhall can complete in code: repo-local runner/schema/fixture updates, tests, docs/story evidence, and proof artifacts required by this child task.',
-      '- External dependencies: None known from the current task record.',
-      '- Owner-only setup: None known.',
-      '- Verification environment: the local project checkout and repo-local package scripts.',
-      '- What counts as done: the scoped acceptance criteria above are implemented or verified, and the proof result is recorded.',
-      '- What must be split or blocked: sibling parent criteria, external setup, or a newly discovered product decision that cannot be resolved from current evidence.',
-    ].join('\n')
-
-    liveTask.spec = spec
-    liveTask.acceptanceCriteria = parseAcceptanceCriteriaFromSpec(spec)
-    liveTask.productBrief = {
-      userJob: `I want ${taskTitle} turned into concrete project work using the evidence and owner decisions already recorded.`,
-      successMetric: `${taskTitle} has a reviewable spec, acceptance criteria, and a clear completion boundary before implementation starts.`,
-      antiPatterns: [
-        'Do not preserve stale recovery-loop wording as the task brief.',
-        'Do not ask the owner to re-answer decisions already recorded on the task.',
-      ],
-      authoredBy: 'coordinator-recovery',
-      authoredAt: now,
-    }
+    const seed = buildRecoverySpecSeedForTask(liveTask, queue, now)
+    liveTask.spec = seed.spec
+    liveTask.acceptanceCriteria = seed.acceptanceCriteria
+    liveTask.productBrief = seed.productBrief
+    if (seed.references) liveTask.references = seed.references
     liveTask.status = 'spec_review'
     liveTask.assignedTo = null
     liveTask.updatedAt = now
@@ -11886,6 +12027,8 @@ function preservedAnsweredQuestionDecisionTexts(task: Task): string[] {
 
 function formatRecoverySpecSourceIntent(source: string | undefined): string {
   const raw = normalizeFallbackWhitespace(source ?? '')
+    .replace(/\s*Split from containing work\b.*$/i, '')
+    .trim()
   if (!raw) return 'the task title'
 
   const markdownSource = raw.match(/^([^:\n]+):\s*(?:[-*]\s*)?(?:\*\*)?(.+?)(?:\*\*)?$/)

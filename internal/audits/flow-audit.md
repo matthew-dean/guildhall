@@ -12,6 +12,53 @@ This is the active browser test plan for the Guildhall project surface. Keep it
 updated while auditing the active test project so another agent can resume
 without guessing.
 
+2026-07-05T08:05:00Z - Repaired Narrative Harness recovery-spec intake and
+verified non-git workspace envelopes still surface child repos.
+
+- Work id: `codex:narrative-harness-recovery-spec-and-envelope-git-2026-07-05`.
+- User job: when Guildhall is driving the Narrative Harness Stage 1 scope, it
+  must recover source-backed child specs from the existing task graph, avoid
+  false dirty-checkout blockers from importer scratch files, and never tell the
+  owner a workspace envelope has no git story when child repos exist.
+- Fix:
+  - Recovery spec seeding now rebuilds weak `spec_review` children from parent
+    acceptance criteria, proposal rationale, and inherited references before a
+    coordinator can approve or reject stale generic recovery copy.
+  - Recovery acceptance text is scoped by child title and cleaned so provenance
+    / privacy children do not inherit bounded-writer sibling criteria or
+    duplicated "privacy manifest" text.
+  - Release readiness ignores `.guildhall/exploring/*` scratch transcripts when
+    checking Guildhall-owned dirty files.
+- Live proof:
+  - Narrative Harness recovery repaired
+    `task-import-14yqvl7-split-prove-provenance-privacy-scope-in-packet-output-2`
+    with inherited docs references, approved it, verified
+    `node scripts/run-provenance-packet.mjs fixtures/the-last-lighthouse --out runs/provenance-proof.json`,
+    committed the task branch, and merged it into `main`.
+  - After app API repair, `/api/project/release-readiness?projectId=narrative-harness`
+    reported Stage 1 with `done:13`, `exploring:1`, `humanBlockingCount:0`,
+    `dirtyCheckoutBlockingCount:0`, and only the repo-level unpushed `main`
+    git-story blocker plus the remaining unfinished work item.
+  - `/api/project/release-readiness?projectId=looma-knit` reported child repo
+    snapshots for `Looma` and `Knit` under the non-git
+    `/Users/matthew/git/oss/looma-knit` envelope; the payload contains child
+    repo labels and no `not a git repository` text.
+- Still open:
+  - `guildhall run narrative-harness --max-ticks 4` started the coordinator but
+    emitted no tick and left the final Stage 1 task in `exploring`. This is a
+    live-work visibility/progress bug, not evidence of completion.
+  - The worker for the provenance/privacy task previously wrote raw model/tool
+    transcript text into `scripts/run-provenance-packet.mjs`; Codex repaired the
+    generated file manually to complete the task, but Guildhall still needs a
+    guard that rejects transcript/tool-call residue in code output.
+- Verification:
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/orchestrator.test.ts -t 'recovery specs|under-shaped recovery specs|provenance privacy'`
+    passed.
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/serve-release-readiness.test.ts src/runtime/__tests__/orchestrator.test.ts -t 'blocks current work closure|exploring scratch|child repos|recovery specs|under-shaped recovery specs|provenance privacy'`
+    passed.
+
+source: codex:narrative-harness-recovery-spec-and-envelope-git-2026-07-05
+
 2026-07-05T05:09:00Z - Normalized fragile run-record proof commands.
 
 - Work id: `codex:run-record-json-proof-command-normalization-2026-07-05`.

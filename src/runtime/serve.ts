@@ -10773,6 +10773,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         .map(line => line.trim())
         .filter(Boolean)
         .map(line => line.replace(/^[ MADRCU?!]{1,2}\s+/, '').trim())
+        .filter(file => !file.replace(/\\/g, '/').startsWith('.guildhall/exploring/'))
         .filter(Boolean)
       return { ownedCount: files.length, files: files.slice(0, 12) }
     } catch (err) {

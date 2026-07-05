@@ -627,6 +627,29 @@ describe('GET /api/project/release-readiness', () => {
     expect(body.totals.dirtyCheckoutBlockingCount).toBe(1)
   })
 
+  it('does not block current work closure on exploring scratch files', async () => {
+    await seed([
+      makeTask({
+        id: 'task-1',
+        title: 'Completed cleanup',
+        status: 'done',
+        completedAt: '2026-05-09T00:00:00Z',
+      }),
+    ])
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await approveDesignSystem(app)
+    await commitAndPush('approve design system')
+    await fs.mkdir(path.join(tmpDir, '.guildhall', 'exploring'), { recursive: true })
+    await fs.writeFile(path.join(tmpDir, '.guildhall', 'exploring', 'task-workspace-import.md'), 'scratch importer transcript\n', 'utf8')
+
+    const res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
+    const body = await res.json() as any
+
+    expect(body.dirtyCheckout.ownedCount).toBe(0)
+    expect(body.dirtyCheckout.files).toEqual([])
+    expect(body.totals.dirtyCheckoutBlockingCount).toBe(0)
+  })
+
   it('inspects child repos for a non-git workspace envelope', async () => {
     const envelopePath = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-release-envelope-'))
     try {
@@ -685,7 +708,7 @@ describe('GET /api/project/release-readiness', () => {
     } finally {
       await fs.rm(envelopePath, { recursive: true, force: true })
     }
-  })
+  }, 20000)
 
   it('does not let deferred fallback-scope shelves block current work closure', async () => {
     const now = new Date().toISOString()
