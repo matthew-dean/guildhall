@@ -6,6 +6,7 @@ import {
   type GuildhallPersistence,
   type PersistencePlacement,
 } from '@guildhall/persistence'
+import { taskShapingBlockers } from '../shared/task-shaping-blockers.js'
 
 const DELIVERY_SPINE_COLLECTION = 'delivery-spine'
 const DELIVERY_SPINE_RECORD_ID = 'project-delivery-model'
@@ -231,6 +232,7 @@ export interface TaskContextPacket {
   }
   executionOrder: TaskRelationshipSummary['dependencies'] & {
     runnableNow: boolean
+    shapingBlockers: Array<{ code: string; summary: string }>
   }
   primitiveContext: {
     direct: PrimitiveWithRelations[]
@@ -1535,6 +1537,7 @@ export function buildTaskContextPacket(input: {
   )
   const executionBlockers = relationships.dependencies.recursiveBlockers.filter(blocker => !isTerminalTaskStatus(blocker.status))
   const primitiveBlockers = relationships.primitiveUse.blockers
+  const shapingBlockers = taskShapingBlockers(task)
   const persona = selectPersona(task, primitiveSet)
   const packageLabel = relationships.hierarchy.parent?.title ?? task.title
   const whyParts = [
@@ -1544,7 +1547,9 @@ export function buildTaskContextPacket(input: {
       ? `after ${executionBlockers[0]?.title ?? executionBlockers[0]?.id} is resolved`
       : primitiveBlockers.length > 0
         ? `once ${primitiveBlockers[0]?.label ?? primitiveBlockers[0]?.id} has proof`
-        : 'and it is runnable now',
+        : shapingBlockers.length > 0
+          ? 'after Guildhall repairs the source-backed brief'
+          : 'and it is runnable now',
   ].filter(Boolean)
 
   return {
@@ -1558,7 +1563,8 @@ export function buildTaskContextPacket(input: {
     },
     executionOrder: {
       ...relationships.dependencies,
-      runnableNow: executionBlockers.length === 0 && primitiveBlockers.length === 0,
+      runnableNow: executionBlockers.length === 0 && primitiveBlockers.length === 0 && shapingBlockers.length === 0,
+      shapingBlockers,
     },
     primitiveContext: {
       direct: relationships.primitiveUse.direct,

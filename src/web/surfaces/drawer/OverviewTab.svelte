@@ -71,6 +71,7 @@
   const reviewerGroupCount = $derived(reviewPlan?.requiredRecipes?.length ?? 0)
   const blockingTaskIds = $derived(task.dependsOn ?? [])
   const contextPacket = $derived(deliverySpine?.contextPacket ?? null)
+  const shapingBlockers = $derived(contextPacket?.executionOrder?.shapingBlockers ?? [])
   const relationships = $derived(deliverySpine?.relationships ?? null)
   const usedPrimitives = $derived(
     contextPacket?.primitiveContext?.direct ??
@@ -225,7 +226,7 @@
         </div>
       {/if}
 
-      {#if contextPacket?.deliveryIntent?.driver || contextPacket?.deliveryIntent?.provider || task.delivery?.proofKind}
+      {#if contextPacket?.deliveryIntent?.driver || contextPacket?.deliveryIntent?.provider || task.delivery?.proofKind || shapingBlockers.length > 0}
         <div>
           <h4>Delivery</h4>
           <Row wrap gap="2">
@@ -241,6 +242,21 @@
           </Row>
           {#if contextPacket?.whyThisNow}
             <p class="muted">{contextPacket.whyThisNow}</p>
+          {/if}
+          {#if shapingBlockers.length > 0}
+            <div class="delivery-blockers">
+              <h4>Not runnable yet</h4>
+              <Row wrap gap="2">
+                {#each shapingBlockers as blocker (`shape-${blocker.code ?? blocker.summary}`)}
+                  <Chip label={token(blocker.code)} tone="warn" />
+                {/each}
+              </Row>
+              <ul class="link-list">
+                {#each shapingBlockers as blocker (`shape-summary-${blocker.code ?? blocker.summary}`)}
+                  <li>{blocker.summary}</li>
+                {/each}
+              </ul>
+            </div>
           {/if}
         </div>
       {/if}

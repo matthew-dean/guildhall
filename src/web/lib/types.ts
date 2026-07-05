@@ -616,6 +616,7 @@ export interface TaskContextPacket {
     directBlockers?: Array<{ id?: string; title?: string; status?: string }>
     recursiveBlockers?: Array<{ id?: string; title?: string; status?: string }>
     blocks?: Array<{ id?: string; title?: string; status?: string }>
+    shapingBlockers?: Array<{ code?: string; summary?: string }>
   }
   primitiveContext?: {
     direct?: PrimitiveSummary[]

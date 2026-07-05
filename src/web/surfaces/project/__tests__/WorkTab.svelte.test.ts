@@ -196,6 +196,38 @@ describe('WorkTab', () => {
     expect(within(inspector).getByRole('button', { name: /running/i })).toBeDisabled()
   })
 
+  it('explains why an imported source-recovery task is not runnable in the selected work inspector', async () => {
+    window.history.replaceState({}, '', '/projects/narrative-harness/work?task=task-import-contract')
+    path.value = '/projects/narrative-harness/work?task=task-import-contract'
+
+    render(WorkTab, {
+      props: {
+        detail: detail([
+          task({
+            id: 'task-import-contract',
+            title: 'Recover source-backed contract surface',
+            status: 'import_draft',
+            domain: 'harness',
+            taskReadiness: {
+              recommendation: 'needs_research_spike',
+              summary: 'Needs concrete contract names before worker handoff.',
+            },
+          }),
+        ], {
+          id: 'narrative-harness',
+          name: 'Narrative Harness',
+        }),
+      },
+    })
+
+    const inspector = await screen.findByLabelText('Selected work inspector')
+    expect(inspector).toHaveTextContent('Not runnable yet')
+    expect(inspector).toHaveTextContent('Imported current work needs a real brief before Guildhall can build unattended.')
+    expect(inspector).toHaveTextContent('Needs concrete contract names before worker handoff.')
+    expect(within(inspector).getByRole('button', { name: /draft task brief/i })).toBeInTheDocument()
+    expect(within(inspector).queryByRole('button', { name: /draft and run/i })).not.toBeInTheDocument()
+  })
+
   it('shows delivery-step progress on visible work rows', async () => {
     render(WorkTab, {
       props: {
@@ -640,7 +672,7 @@ describe('WorkTab', () => {
 
     await userEvent.selectOptions(screen.getByRole('combobox', { name: /^show$/i }), 'planning')
     await userEvent.click(await screen.findByRole('button', { name: /inspect work knit draft task/i }))
-    await userEvent.click(screen.getByRole('button', { name: /draft and run/i }))
+    await userEvent.click(within(screen.getByLabelText('Selected work inspector')).getByRole('button', { name: /draft task brief/i }))
 
     await waitFor(() => {
       expect(fetchMock.mock.calls.some(([input]) =>

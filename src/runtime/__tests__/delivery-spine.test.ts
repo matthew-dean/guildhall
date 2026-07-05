@@ -526,6 +526,40 @@ describe('project-local delivery spine', () => {
     ]))
   })
 
+  it('does not mark imported source-recovery tasks runnable before the brief is repaired', () => {
+    const tasks = [
+      task({
+        id: 'task-imported-contract',
+        title: 'Recover source-backed contract surface',
+        status: 'import_draft',
+        notes: [{
+          agentId: 'workspace-importer',
+          role: 'importer',
+          content: 'Imported from docs/specs/editor-writer-feedback-chain.md',
+        }],
+        taskReadiness: {
+          recommendation: 'needs_research_spike',
+          summary: 'Needs concrete contract names before worker handoff.',
+        },
+      }),
+    ]
+
+    const packet = buildTaskContextPacket({ model, tasks, taskId: 'task-imported-contract' })
+
+    expect(packet.executionOrder.runnableNow).toBe(false)
+    expect(packet.executionOrder.shapingBlockers).toEqual([
+      expect.objectContaining({
+        code: 'imported_brief_shaping',
+        summary: 'Imported current work needs a real brief before Guildhall can build unattended.',
+      }),
+      expect.objectContaining({
+        code: 'source_recovery',
+        summary: 'Needs concrete contract names before worker handoff.',
+      }),
+    ])
+    expect(packet.whyThisNow).toContain('after Guildhall repairs the source-backed brief')
+  })
+
   it('selects deterministic personas for component, primitive, proof, security, data, and runtime contexts', () => {
     const personaModel = ProjectDeliveryModel.parse({
       ...model,

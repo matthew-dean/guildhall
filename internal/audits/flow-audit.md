@@ -14104,6 +14104,97 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-07-05T11:30:00Z - Corrected task context packet runnable state for
+imported source-recovery work.
+
+- Work id: `codex:context-packet-shaping-blockers-2026-07-05`.
+- User job: when Narrative Harness has imported current-scope work whose brief
+  still needs source-backed recovery, Guildhall must not tell the UI or an
+  agent that the work item is runnable. The task detail, project action state,
+  context packet, visible task drawer, and Work selected-work inspector must
+  agree that Guildhall has to repair the brief first.
+- Live failure found:
+  - `/api/project/task/task-import-1q84363?projectId=narrative-harness`
+    reported `status:"import_draft"`,
+    `taskReadiness.recommendation:"needs_research_spike"`, structural
+    integrity `needs_repair`, no product brief, and a Guildhall-owned blocker
+    summary requiring concrete contract names before worker handoff.
+  - `/api/project/task/task-import-1q84363/context-packet?projectId=narrative-harness`
+    simultaneously reported `executionOrder.runnableNow:true` and
+    `whyThisNow:"...and it is runnable now"`.
+- Root-cause classification:
+  - Task hierarchy/dependency/proof modeling problem: imported source-recovery
+    shaping was not represented as an execution blocker inside the task context
+    packet.
+  - Scheduler/action-state logic problem: the context packet could greenlight a
+    task that the shared readiness model already considered not worker-ready.
+  - UI communication/orientation problem: the drawer could explain why a worker
+    should run a task before Guildhall had recovered the source-backed brief
+    required for that work.
+- Fix:
+  - Added a shared task shaping-blocker helper used by the delivery-spine
+    context packet and Work selected-work inspector.
+  - `buildTaskContextPacket()` now adds `executionOrder.shapingBlockers` for
+    imported draft/source-recovery tasks.
+  - `executionOrder.runnableNow` now requires dependency blockers, primitive
+    proof blockers, and shaping blockers all to be empty.
+  - `whyThisNow` now says the work can proceed only after Guildhall repairs the
+    source-backed brief when shaping blockers exist.
+  - The Work selected-work inspector now shows `Not runnable yet` with the
+    imported-brief and source-recovery summaries, and labels the action `Draft
+    task brief` instead of `Draft and run`.
+- Contract Touch Decision:
+  - Work id: `codex:context-packet-shaping-blockers-2026-07-05`.
+  - Touched contracts: task context packet runtime/read model; UI-visible
+    `TaskContextPacket.executionOrder` shape; delivery-spine runnable-state
+    semantics for imported source-recovery work; Work selected-inspector
+    owner-facing action/readiness communication.
+  - Contracts considered but not touched: persisted task schema, release schema,
+    migration schema, task transition storage, owner-approval semantics,
+    workspace-import draft storage.
+  - Existing data impact: no durable rows are rewritten. Existing imported
+    draft/source-recovery tasks are read more honestly by the context packet.
+  - Required follow-up: continue Narrative Harness re-intake/source recovery
+    from Guildhall-visible evidence; broader follow-up should put the same
+    shaping blockers into one shared API read model for all project surfaces
+    instead of deriving them separately per payload.
+  - Proof required: focused delivery-spine regression, affected release/runtime
+    tests, contract detector, diff whitespace check, build/install/restart,
+    installed-app API proof with `stale:false`.
+  - Proof provided: `vitest` affected suite passed `94` tests covering
+    delivery-spine, release readiness, scope projection, drawer Overview, and
+    WorkTab; contract detector passed; `git diff --check` passed;
+    `node ./build.mjs` passed; installed app restarted with
+    `/api/stale-server` returning `stale:false`; installed
+    `/api/project/task/task-import-1q84363/context-packet?projectId=narrative-harness`
+    returned `executionOrder.runnableNow:false`, `whyThisNow` ending with
+    `after Guildhall repairs the source-backed brief`, and shaping blockers
+    `imported_brief_shaping` plus `source_recovery`; rendered
+    `/projects/narrative-harness/work?task=task-import-1q84363` at
+    `1280x820` showed `Not runnable yet`, the real-brief and concrete-contract
+    blocker summaries, `Draft task brief`, and no `Draft and run` copy.
+  - Apply/revert behavior: revert the shared shaping-blocker helper, the
+    delivery-spine context packet guard, the web type extension, the drawer and
+    Work inspector render changes, and the regression tests to restore previous
+    behavior. No data rollback required.
+- Schema Migration Decision:
+  - Work id: `codex:context-packet-shaping-blockers-2026-07-05`.
+  - Persisted schema touched: none.
+  - Scope: read-model/API payload extension only.
+  - Change class: compatible runtime contract extension; existing clients can
+    ignore `executionOrder.shapingBlockers`.
+  - Existing data impact: none; no task/release/memory files are migrated.
+  - Migration id: none.
+  - Compatibility reader: not required because the new field is derived at read
+    time and optional in the web type.
+  - Fixtures/tests: delivery-spine regression covers imported source-recovery
+    tasks as not runnable; WorkTab and drawer regressions cover owner-facing
+    visibility.
+  - Owner-facing plan text: no owner approval is implied or automated; Guildhall
+    is correcting its own shaping/readiness state before worker execution.
+  - Rollback/revert behavior: remove the derived field and guard; stored project
+    state remains unchanged.
+
 2026-07-05T15:45:00Z - Repaired invisible release-boundary derivation for
 Narrative Harness current scope.
 

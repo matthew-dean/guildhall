@@ -8,6 +8,7 @@
   import { taskStagePresentation, type TaskPresentationTone } from '../../lib/task-presentation.js'
   import { buildWorkHierarchy } from '../../lib/work-hierarchy.js'
   import { taskDisplayLabel, taskSourceQuestion } from '../../../shared/task-display-label.js'
+  import { taskShapingBlockerLabel, taskShapingBlockers } from '../../../shared/task-shaping-blockers.js'
   import type { ProjectDetail, Task } from '../../lib/types.js'
 
   interface Props {
@@ -39,6 +40,7 @@
   const tasksById = $derived(new Map(visibleTasks.map(task => [task.id, task])))
   const selectedTask = $derived(selectedTaskId ? tasksById.get(selectedTaskId) ?? null : null)
   const containedWork = $derived(selectedTask ? childTasksFor(selectedTask) : [])
+  const selectedShapingBlockers = $derived(selectedTask ? taskShapingBlockers(selectedTask) : [])
 
   function childTasksFor(task: Task): Task[] {
     return (hierarchy.byId.get(task.id)?.childIds ?? [])
@@ -182,7 +184,7 @@
 
   function runButtonLabel(task: Task, busy: boolean, active: boolean): string {
     if (active) return 'Running...'
-    if (task.status === 'import_draft') return busy ? 'Drafting...' : 'Draft and run'
+    if (task.status === 'import_draft') return busy ? 'Drafting...' : 'Draft task brief'
     return busy ? 'Starting...' : 'Start work'
   }
 
@@ -197,6 +199,7 @@
     if (status === 'waived') return 'Waived'
     return 'Todo'
   }
+
 </script>
 
 <aside class="work-inspector" aria-label="Selected work inspector">
@@ -258,6 +261,23 @@
             <li>
               <span>{step.title}</span>
               <Chip label={stepStatusLabel(step.status)} tone={step.status === 'blocked' ? 'warn' : step.status === 'done' ? 'ok' : step.status === 'active' ? 'running' : 'neutral'} size="compact" />
+            </li>
+          {/each}
+        </ul>
+      </section>
+    {/if}
+
+    {#if selectedShapingBlockers.length > 0}
+      <section class="inspector-section" aria-label="Runnable blockers">
+        <div class="section-head">
+          <strong>Not runnable yet</strong>
+          <span>{selectedShapingBlockers.length} blocker{selectedShapingBlockers.length === 1 ? '' : 's'}</span>
+        </div>
+        <ul class="delivery-step-list">
+          {#each selectedShapingBlockers as blocker (`shape-${blocker.code}`)}
+            <li>
+              <span>{blocker.summary}</span>
+              <Chip label={taskShapingBlockerLabel(blocker.code)} tone="warn" size="compact" />
             </li>
           {/each}
         </ul>
