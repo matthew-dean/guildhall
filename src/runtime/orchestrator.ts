@@ -8493,6 +8493,38 @@ export class Orchestrator {
     const worktreeMode = await this.resolveWorktreeModeSafe()
     const landingStrategy = await this.resolveLandingStrategySafe()
     for (const task of queue.tasks) {
+      const alreadyLanded =
+        task.status !== 'done' &&
+        task.mergeRecord?.result === 'merged'
+      if (alreadyLanded) {
+        const now = this.now()
+        task.status = 'done'
+        task.assignedTo = null
+        task.completedAt = task.completedAt ?? task.mergeRecord?.mergedAt ?? now
+        if (Array.isArray(task.escalations)) {
+          task.escalations = task.escalations.map(escalation => escalation.resolvedAt
+            ? escalation
+            : {
+                ...escalation,
+                resolvedAt: now,
+                resolvedBy: 'landing-reconciliation',
+                resolution: 'Resolved because durable merge evidence shows the task already landed.',
+              })
+        }
+        delete task.blockReason
+        task.notes.push({
+          agentId: 'landing-reconciliation',
+          role: 'git-story',
+          content: 'Marked task done from durable merge evidence after canonical status drifted back to active work.',
+          timestamp: now,
+        })
+        task.updatedAt = now
+        queue.lastUpdated = now
+        changed = true
+        await this.maybeCleanupWorktree(task, worktreeMode)
+        continue
+      }
+
       const hasAutoCommitLandingFailure =
         task.status === 'blocked' &&
         typeof task.blockReason === 'string' &&

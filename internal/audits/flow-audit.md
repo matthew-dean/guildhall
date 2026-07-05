@@ -13305,6 +13305,34 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-07-05T01:36:22Z - Reconciled active task rows from durable merge evidence
+before dispatch.
+
+- Work id: `codex:merged-evidence-status-reconciliation-2026-07-05`.
+- User job: when Guildhall has durable evidence that a task already landed, the
+  project should show that task as complete and move on. It should not ask an
+  owner or worker to rerun already-merged work because a canonical row drifted
+  back to an active status.
+- Observed failure:
+  - Narrative Harness task `task-import-dh34s5` had a review packet saying the
+    task was complete and merged, plus a `merge_record` with `result:"merged"`.
+  - The canonical queue row was still `in_progress`, so the orchestrator
+    dispatched it again, hit the likely-target timeout guard, and raised a
+    false escalation.
+- Fix:
+  - `reconcileCompletedTaskLanding()` now treats
+    `task.mergeRecord.result === "merged"` as authoritative for non-done tasks:
+    it marks the task `done`, clears assignment/block state, resolves open
+    escalations, preserves the merge timestamp as `completedAt`, and skips
+    worker dispatch.
+  - Added a regression proving an active row with merged evidence is repaired
+    without invoking the worker.
+- Verification:
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/orchestrator.test.ts -t 'reconciles active queue rows to done'`
+    passed `1` focused test.
+
+source: codex:merged-evidence-status-reconciliation-2026-07-05
+
 2026-07-05T00:49:00Z - Fixed imported execution blueprints being stranded by
 stale proofability readiness.
 

@@ -1162,6 +1162,56 @@ describe('Orchestrator.tick — idle handling', () => {
     if (out.kind === 'idle') expect(out.consecutiveIdleTicks).toBe(2)
   })
 
+  it('reconciles active queue rows to done when durable merge evidence already exists', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'already-landed',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        escalations: [{
+          id: 'esc-already-landed',
+          taskId: 'already-landed',
+          agentId: 'worker-agent',
+          reason: 'human_judgment_required',
+          summary: 'Stale escalation after provider timeout.',
+          details: 'Should not survive durable merge evidence.',
+          raisedAt: '2026-04-01T00:10:00.000Z',
+          raisedBy: 'worker-agent',
+        }],
+      }),
+    ])
+    await appendTaskEvidence(tmpDir, 'already-landed', {
+      id: 'merge-already-landed',
+      taskId: 'already-landed',
+      kind: 'merge_record',
+      recordedAt: '2026-04-01T00:20:00.000Z',
+      payload: {
+        fromBranch: 'guildhall/task-already-landed',
+        toBranch: 'main',
+        strategy: 'cherry_pick_local',
+        result: 'merged',
+        mergedAt: '2026-04-01T00:20:00.000Z',
+        commitSha: 'abc123',
+      },
+    })
+
+    const worker = stubAgent('worker-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+    })
+
+    const out = await orch.tick()
+    expect(out.kind).toBe('idle')
+    expect(worker.calls).toHaveLength(0)
+    const task = await readEffectiveTaskFromQueue('already-landed')
+    expect(task?.status).toBe('done')
+    expect(task?.assignedTo).toBeNull()
+    expect(task?.completedAt).toBe('2026-04-01T00:20:00.000Z')
+    expect(task?.escalations.every(escalation => escalation.resolvedAt)).toBe(true)
+    expect(task?.notes.some(note => note.content.includes('durable merge evidence'))).toBe(true)
+  })
+
   it('reports broader documented work when the current task scope is exhausted but later scope remains', async () => {
     await writeQueue([mkTask({ id: 'a', status: 'done' })])
     await fs.writeFile(
