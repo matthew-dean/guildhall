@@ -98,6 +98,7 @@ import {
   pickPrimaryEngineer,
 } from '@guildhall/guilds'
 import { OrchestratorSupervisor } from './serve-supervisor.js'
+import { repairWeakRecoverySpecReviewSeedInQueue } from './orchestrator.js'
 import { resolveFanoutCapacity } from './fanout-dispatcher.js'
 import { detectShadowedCurrentMilestoneDeliverableImports as detectShadowedCurrentMilestoneDeliverables } from './current-milestone-shadowing.js'
 import {
@@ -1512,6 +1513,80 @@ async function repairImportedShapingExecutionState(projectPath: string): Promise
     writeManagedTextFileSync(tasksPath, JSON.stringify(queue, null, 2) + '\n')
   }
   return repaired
+}
+
+async function repairSpecTimeoutBlockedTask(projectPath: string, requestedTaskId: string): Promise<boolean> {
+  const tasksPath = projectTasksPath(projectPath)
+  if (!existsSync(tasksPath)) return false
+  const parsed = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')) as
+    | { tasks?: Array<Record<string, unknown>>; version?: number; lastUpdated?: string }
+    | Array<Record<string, unknown>>
+  const queue = Array.isArray(parsed)
+    ? { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
+    : { version: parsed.version ?? 1, lastUpdated: parsed.lastUpdated ?? new Date().toISOString(), tasks: parsed.tasks ?? [] }
+  const task = queue.tasks.find(candidate => String(candidate.id ?? '') === requestedTaskId)
+  if (!task || task.status !== 'blocked') return false
+  const blockReason = String(task.blockReason ?? '')
+  if (!/human_judgment_required:\s*Spec shaping timed out before saving durable progress/i.test(blockReason)) return false
+  const now = new Date().toISOString()
+  task.status = 'exploring'
+  task.assignedTo = null
+  delete task.blockReason
+  task.updatedAt = now
+  if (Array.isArray(task.escalations)) {
+    task.escalations = task.escalations.map((escalation) => {
+      if (!escalation || typeof escalation !== 'object') return escalation
+      const summary = String((escalation as { summary?: unknown }).summary ?? '')
+      if (!/Spec shaping timed out before saving durable progress/i.test(summary)) return escalation
+      return {
+        ...escalation,
+        resolvedAt: (escalation as { resolvedAt?: unknown }).resolvedAt ?? now,
+        resolvedBy: (escalation as { resolvedBy?: unknown }).resolvedBy ?? 'system',
+        resolution:
+          (escalation as { resolution?: unknown }).resolution ??
+          'Reopened as Guildhall-owned spec timeout recovery before a focused task start.',
+      }
+    })
+  }
+  const notes = Array.isArray(task.notes) ? [...task.notes as Array<Record<string, unknown>>] : []
+  notes.push({
+    agentId: 'system',
+    role: 'state-repair',
+    content:
+      'Reopened a stale spec-timeout blocker as Guildhall-owned runtime recovery before the focused task start.',
+    timestamp: now,
+  })
+  task.notes = notes
+  queue.lastUpdated = now
+  writeManagedTextFileSync(tasksPath, JSON.stringify(queue, null, 2) + '\n')
+  await upsertTaskRuntimeState(projectPath, requestedTaskId, {
+    assignedTo: null,
+    openEscalationIds: [],
+    updatedAt: now,
+  })
+  return true
+}
+
+async function repairWeakRecoverySpecReviewTask(projectPath: string, requestedTaskId: string): Promise<boolean> {
+  const tasksPath = projectTasksPath(projectPath)
+  if (!existsSync(tasksPath)) return false
+  const now = new Date().toISOString()
+  const normalized = await readTaskQueueFileNormalized(tasksPath)
+  const queue = {
+    version: 1,
+    lastUpdated: now,
+    tasks: normalized.tasks as Task[],
+    releases: normalized.releases,
+    ...(normalized.selectedReleaseId ? { selectedReleaseId: normalized.selectedReleaseId } : {}),
+  } as TaskQueue
+  const repaired = repairWeakRecoverySpecReviewSeedInQueue(queue, {
+    taskId: requestedTaskId,
+    now,
+  })
+  if (!repaired) return false
+  writeManagedTextFileSync(tasksPath, JSON.stringify(queue, null, 2) + '\n')
+  invalidateTaskQueueReadCaches(tasksPath)
+  return true
 }
 
 function projectBriefPath(projectPath: string): string {
@@ -5603,7 +5678,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     const tasks = tasksEligibleForScopeExecution(typedQueue.tasks, selectedReleaseScope)
     const importedShapingTasks = tasks.filter(task => taskShapingBlockers(task).length > 0)
     if (importedShapingTasks.length === 0) return null
-    if (requestedTaskId && importedShapingTasks.some(task => task.id === requestedTaskId)) return null
+    if (requestedTaskId && typedQueue.tasks.some(task => task.id === requestedTaskId)) return null
     const importerTask = typedQueue.tasks.find(task =>
       task &&
       typeof task === 'object' &&
@@ -6579,6 +6654,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
         return c.json({ error: 'Project not initialized. Complete /setup first.' }, 400)
       }
       if (body.taskId) {
+        await repairSpecTimeoutBlockedTask(project.path, body.taskId)
+        await repairWeakRecoverySpecReviewTask(project.path, body.taskId)
         const queueTasks = await readTasksFileNormalized(projectTasksPath(project.path)).catch(() => [])
         const scopedTask = queueTasks.find(task => task.id === body.taskId)
         if (scopedTask?.status === 'spec_review' && typeof scopedTask.spec === 'string' && scopedTask.spec.trim().length > 0) {

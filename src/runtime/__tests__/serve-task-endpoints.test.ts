@@ -1363,11 +1363,84 @@ describe('POST /api/project/task/:id/start', () => {
       }),
     )
 
-    expect(res.status).toBe(400)
     const body = (await res.json()) as Record<string, any>
+    expect(res.status).toBe(400)
     expect(body.code).toBe('no_unattended_progress')
     expect(body.error ?? body.message).toMatch(/spec.*waiting for review/i)
     expect(starts).toHaveLength(0)
+  })
+
+  it('repairs weak recovery specs before blocking focused start for spec review', async () => {
+    await seedTasks([
+      {
+        id: 'task-model-proof',
+        title: 'Define Narrative Harness MVP drafting model and physical-world review lanes',
+        status: 'spec_review',
+        description:
+          'For the Narrative Harness current MVP/current bounded scope, make sure Guildhall shapes explicit work for: (1) selecting and proving a DeepInfra-accessible model that can do drafting/writing work across genres, including adult genres, rather than assuming the current default model is sufficient; (2) defining review lanes for world-state continuity over time, including object/property state transitions such as wet hair drying after enough time in a given climate; (3) defining spatial/geographic continuity reviews, including scene geography, travel distance, walking speed for fantasy epics, and other physical plausibility checks.',
+        productBrief: {
+          userJob: 'I want Define Narrative Harness MVP drafting model and physical-world review lanes implemented or proven from current evidence.',
+          successMetric: 'Define Narrative Harness MVP drafting model and physical-world review lanes has a concrete completion boundary.',
+          antiPatterns: [],
+          authoredBy: 'coordinator-recovery',
+          authoredAt: '2026-07-05T18:15:02.867Z',
+        },
+        spec: [
+          '## Summary',
+          'Define Narrative Harness MVP drafting model and physical-world review lanes from the current project evidence.',
+          '',
+          '## Acceptance Criteria',
+          '1. Given the current project evidence, when Define Narrative Harness MVP drafting model and physical-world review lanes is implemented, then the repo-local proof demonstrates that exact child outcome without adding unrelated later-stage work.',
+          '2. Given the parent task boundary, when this task is reviewed, then it satisfies the relevant parent acceptance criteria and leaves sibling child work to its own task.',
+          '',
+          '## Completion Boundary',
+          '- Product outcome: Define Narrative Harness MVP drafting model and physical-world review lanes is proven inside the no-UI Narrative Harness Stage 1 boundary.',
+        ].join('\n'),
+        acceptanceCriteria: [
+          {
+            id: 'ac-1',
+            description: 'Given the current project evidence, when Define Narrative Harness MVP drafting model and physical-world review lanes is implemented, then the repo-local proof demonstrates that exact child outcome without adding unrelated later-stage work.',
+            verifiedBy: 'review',
+          },
+        ],
+        notes: [{
+          agentId: 'coordinator-recovery',
+          role: 'system',
+          content: 'Guildhall wrote a deterministic recovery spec seed from the current task evidence before redispatching the spec lane.',
+          timestamp: '2026-07-05T18:15:02.867Z',
+        }],
+      },
+    ])
+    const { supervisor, starts } = createTrackingSupervisor()
+    const { app } = buildServeApp({ projectPath: tmpDir, supervisor })
+    await applyStorageBoundaryMigration(app)
+    setProvider('anthropic-api', { apiKey: 'sk-ant-test' })
+    updateGlobalConfig({ preferredProvider: 'anthropic-api' })
+
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-model-proof/start'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ mode: 'one_task', scope: 'work_item' }),
+      }),
+    )
+
+    const body = (await res.json()) as Record<string, any>
+    expect(res.status).toBe(400)
+    expect(body.code).toBe('no_unattended_progress')
+    expect(starts).toHaveLength(0)
+    const queue = await readTaskQueue()
+    const task = queue.tasks.find(candidate => candidate.id === 'task-model-proof')
+    const criteria = (task?.acceptanceCriteria ?? []).map((criterion: Record<string, unknown>) => String(criterion.description ?? '')).join('\n')
+    expect(criteria).toContain('DeepInfra-accessible model')
+    expect(criteria).toContain('adult genres')
+    expect(criteria).toContain('wet hair drying')
+    expect(criteria).toContain('walking speed for fantasy epics')
+    expect(criteria).not.toContain('repo-local proof demonstrates that exact child outcome')
+    expect(criteria).not.toContain(';.')
+    expect(criteria).not.toContain('These should become source-backed MVP scope/tasks')
+    expect(task?.productBrief?.successMetric).toContain('DeepInfra-accessible model')
+    expect(task?.notes?.at(-1)?.content).toContain('under-shaped recovery spec')
   })
 
   it('lets the selected source-recovery shaping task start while project Start remains blocked', async () => {
@@ -1442,6 +1515,121 @@ describe('POST /api/project/task/:id/start', () => {
           stopAfterOneTask: true,
         })
       })
+    } finally {
+      await supervisor.stopAll({ reason: 'test-teardown' }).catch(() => {})
+    }
+  })
+
+  it('lets a specifically requested shaping task start while unrelated import shaping blocks project Start', async () => {
+    const now = new Date().toISOString()
+    await seedTasks([
+      {
+        id: 'task-source-recovery',
+        title: 'Recover source-backed contract surface',
+        status: 'exploring',
+        taskReadiness: {
+          recommendation: 'needs_research_spike',
+          summary: 'Needs concrete contract names before worker handoff.',
+        },
+        notes: [
+          {
+            agentId: 'workspace-importer',
+            role: 'importer',
+            content: 'Imported from docs/specs/source.md',
+            timestamp: now,
+          },
+        ],
+      },
+      {
+        id: 'task-model-proof',
+        title: 'Define drafting model proof',
+        status: 'exploring',
+        description: 'Select and prove the current drafting model lane.',
+      },
+    ])
+    const { supervisor, starts } = createTrackingSupervisor()
+    const { app } = buildServeApp({ projectPath: tmpDir, supervisor })
+    await applyStorageBoundaryMigration(app)
+    setProvider('anthropic-api', { apiKey: 'sk-ant-test' })
+    updateGlobalConfig({ preferredProvider: 'anthropic-api' })
+
+    try {
+      const projectStart = await app.fetch(
+        new Request(projectUrl('/api/project/start'), {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ mode: 'continuous' }),
+        }),
+      )
+      expect(projectStart.status).toBe(400)
+      await expect(projectStart.json()).resolves.toMatchObject({
+        code: 'imported_scope_shaping',
+        actionHref: '/task/task-source-recovery',
+      })
+
+      const focusedStart = await app.fetch(
+        new Request(projectUrl('/api/project/task/task-model-proof/start'), {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ mode: 'one_task', scope: 'work_item' }),
+        }),
+      )
+
+      expect(focusedStart.status).toBe(200)
+      const body = (await focusedStart.json()) as Record<string, any>
+      expect(body.scope).toEqual({ type: 'work_item', taskId: 'task-model-proof' })
+      await vi.waitFor(() => {
+        expect(starts.at(-1)).toMatchObject({
+          preferredTaskId: 'task-model-proof',
+          stopAfterOneTask: true,
+        })
+      })
+    } finally {
+      await supervisor.stopAll({ reason: 'test-teardown' }).catch(() => {})
+    }
+  })
+
+  it('reopens stale spec-timeout blockers before a focused task start', async () => {
+    const now = new Date().toISOString()
+    await seedTasks([
+      {
+        id: 'task-model-proof',
+        title: 'Define drafting model proof',
+        status: 'blocked',
+        blockReason: 'human_judgment_required: Spec shaping timed out before saving durable progress.',
+        description: 'Select and prove the current drafting model lane.',
+      },
+    ])
+    const { supervisor, starts } = createTrackingSupervisor()
+    const { app } = buildServeApp({ projectPath: tmpDir, supervisor })
+    await applyStorageBoundaryMigration(app)
+    setProvider('anthropic-api', { apiKey: 'sk-ant-test' })
+    updateGlobalConfig({ preferredProvider: 'anthropic-api' })
+
+    try {
+      const focusedStart = await app.fetch(
+        new Request(projectUrl('/api/project/task/task-model-proof/start'), {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ mode: 'one_task', scope: 'work_item' }),
+        }),
+      )
+
+      expect(focusedStart.status).toBe(200)
+      await vi.waitFor(() => {
+        expect(starts.at(-1)).toMatchObject({
+          preferredTaskId: 'task-model-proof',
+          stopAfterOneTask: true,
+        })
+      })
+      const queue = await readTaskQueue()
+      const task = queue.tasks.find(candidate => candidate.id === 'task-model-proof')
+      expect(task).toMatchObject({
+        status: 'exploring',
+        assignedTo: null,
+      })
+      expect(task?.blockReason).toBeUndefined()
+      expect(task?.notes?.at(-1)?.content).toContain('stale spec-timeout blocker')
     } finally {
       await supervisor.stopAll({ reason: 'test-teardown' }).catch(() => {})
     }

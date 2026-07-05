@@ -2708,7 +2708,7 @@ describe('Orchestrator.tick — routing', () => {
     expect(task.escalations ?? []).toHaveLength(0)
   })
 
-  it('blocks the task after repeated spec-agent inactivity timeouts without durable progress', async () => {
+  it('preserves repeated spec-agent inactivity timeouts as runtime recovery instead of owner input', async () => {
     await writeQueue([mkTask({ id: 'a', status: 'exploring', title: 'Build AlertDialog primitive' })])
     const spec = {
       name: 'spec-agent',
@@ -2725,18 +2725,22 @@ describe('Orchestrator.tick — routing', () => {
 
     await orch.tick()
     const out = await orch.tick()
-    expect(out.kind).toBe('escalated')
-    if (out.kind !== 'escalated') throw new Error(`expected escalation, got ${out.kind}`)
-    expect(out.reason).toBe('Spec shaping timed out before saving durable progress.')
+    expect(out).toMatchObject({
+      kind: 'processed',
+      taskId: 'a',
+      agent: 'spec-agent',
+      beforeStatus: 'exploring',
+      afterStatus: 'exploring',
+      transitioned: false,
+    })
 
     const queue = await readQueue()
     const task = queue.tasks[0]!
-    expect(task.status).toBe('blocked')
-    expect(task.escalations[0]).toMatchObject({
-      reason: 'human_judgment_required',
-      summary: 'Spec shaping timed out before saving durable progress.',
-    })
-    expect(task.blockReason).toContain('Spec shaping timed out')
+    expect(task.status).toBe('exploring')
+    expect(task.assignedTo).toBeNull()
+    expect(task.escalations ?? []).toHaveLength(0)
+    expect(task.blockReason ?? '').not.toContain('Spec shaping timed out')
+    expect(task.notes.at(-1)?.content).toContain('instead of asking the owner')
   })
 
   it('preserves spec timeout after durable-progress nudge as runtime recovery instead of owner input', async () => {
@@ -3293,6 +3297,73 @@ describe('Orchestrator.tick — routing', () => {
     expect(task.productBrief?.successMetric).toContain('privacy manifest says what was included.')
     expect(task.spec).toContain('Parent acceptance this child satisfies')
     expect(task.spec).not.toContain('including privacy manifest says what was included')
+    expect(task.notes.at(-1)?.content).toContain('under-shaped recovery spec')
+  })
+
+  it('repairs standalone recovery specs with numbered owner requirements into concrete criteria', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'model-proof',
+        status: 'spec_review',
+        domain: 'harness',
+        title: 'Define Narrative Harness MVP drafting model and physical-world review lanes',
+        description:
+          'For the Narrative Harness current MVP/current bounded scope, make sure Guildhall shapes explicit work for: (1) selecting and proving a DeepInfra-accessible model that can do drafting/writing work across genres, including adult genres, rather than assuming the current default model is sufficient; (2) defining review lanes for world-state continuity over time, including object/property state transitions such as wet hair drying after enough time in a given climate; (3) defining spatial/geographic continuity reviews, including scene geography, travel distance, walking speed for fantasy epics, and other physical plausibility checks.',
+        spec: [
+          '## Summary',
+          'Define Narrative Harness MVP drafting model and physical-world review lanes from the current project evidence.',
+          '',
+          '## Acceptance Criteria',
+          '1. Given the current project evidence, when Define Narrative Harness MVP drafting model and physical-world review lanes is implemented, then the repo-local proof demonstrates that exact child outcome without adding unrelated later-stage work.',
+          '2. Given the parent task boundary, when this task is reviewed, then it satisfies the relevant parent acceptance criteria and leaves sibling child work to its own task.',
+          '',
+          '## Completion Boundary',
+          '- Product outcome: Define Narrative Harness MVP drafting model and physical-world review lanes is proven inside the no-UI Narrative Harness Stage 1 boundary.',
+        ].join('\n'),
+        productBrief: {
+          userJob: 'I want Define Narrative Harness MVP drafting model and physical-world review lanes implemented or proven from current evidence.',
+          successMetric: 'Define Narrative Harness MVP drafting model and physical-world review lanes has a concrete completion boundary.',
+          antiPatterns: [],
+          authoredBy: 'coordinator-recovery',
+          authoredAt: '2026-07-05T18:15:02.867Z',
+        },
+        notes: [{
+          agentId: 'coordinator-recovery',
+          role: 'system',
+          content: 'Guildhall wrote a deterministic recovery spec seed from the current task evidence before redispatching the spec lane.',
+          timestamp: '2026-07-05T18:15:02.867Z',
+        }],
+      }),
+    ])
+    const coord = stubAgent('harness-coordinator', async () => {
+      throw new Error('coordinator should not review generic numbered recovery specs before repair')
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec: stubAgent('spec-agent'), coordinators: { harness: coord } }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out).toMatchObject({
+      kind: 'processed',
+      taskId: 'model-proof',
+      agent: 'coordinator-recovery',
+      afterStatus: 'spec_review',
+    })
+    expect(coord.calls).toHaveLength(0)
+    const queue = await readQueue()
+    const task = queue.tasks.find(candidate => candidate.id === 'model-proof')!
+    const criteria = task.acceptanceCriteria.map((criterion) => criterion.description).join('\n')
+    expect(criteria).toContain('DeepInfra-accessible model')
+    expect(criteria).toContain('adult genres')
+    expect(criteria).toContain('wet hair drying')
+    expect(criteria).toContain('walking speed for fantasy epics')
+    expect(criteria).not.toContain('repo-local proof demonstrates that exact child outcome')
+    expect(criteria).not.toContain('satisfies the relevant parent acceptance criteria')
+    expect(criteria).not.toContain(';.')
+    expect(criteria).not.toContain('These should become source-backed MVP scope/tasks')
+    expect(task.productBrief?.successMetric).toContain('DeepInfra-accessible model')
     expect(task.notes.at(-1)?.content).toContain('under-shaped recovery spec')
   })
 

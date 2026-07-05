@@ -409,7 +409,9 @@ function shouldRepairWeakRecoverySpecReviewSeed(task: Task, queue: TaskQueue): b
   if (task.status !== 'spec_review') return false
   if (task.id === META_INTAKE_TASK_ID) return false
   const brief = task.productBrief
-  const fromRecovery = brief?.authoredBy === 'coordinator-recovery' || task.notes.some((note) =>
+  const notes = Array.isArray(task.notes) ? task.notes : []
+  const acceptanceCriteria = Array.isArray(task.acceptanceCriteria) ? task.acceptanceCriteria : []
+  const fromRecovery = brief?.authoredBy === 'coordinator-recovery' || notes.some((note) =>
     note.agentId === 'coordinator-recovery' &&
     /deterministic recovery spec seed|repaired a malformed spec_review blueprint deterministically/i.test(note.content ?? ''),
   )
@@ -418,17 +420,50 @@ function shouldRepairWeakRecoverySpecReviewSeed(task: Task, queue: TaskQueue): b
   const parentTask = parentId ? queue.tasks.find((candidate) => candidate.id === parentId) : undefined
   const parentHasRefs = Array.isArray(parentTask?.references) && parentTask.references.length > 0
   const taskMissingRefs = !Array.isArray(task.references) || task.references.length === 0
-  const specText = `${task.spec ?? ''}\n${task.acceptanceCriteria.map((criterion) =>
+  const specText = `${task.spec ?? ''}\n${acceptanceCriteria.map((criterion) =>
     typeof criterion === 'string' ? criterion : criterion.description,
   ).join('\n')}`
   return (
     (parentHasRefs && taskMissingRefs) ||
     /turned into concrete project work using the evidence and owner decisions already recorded/i.test(brief?.userJob ?? '') ||
     /has a reviewable spec, acceptance criteria, and a clear completion boundary before implementation starts/i.test(brief?.successMetric ?? '') ||
+    /repo-local proof demonstrates that exact child outcome/i.test(specText) ||
+    /satisfies the relevant parent acceptance criteria/i.test(specText) ||
+    /;\./.test(specText) ||
+    /These should become source-backed MVP scope\/tasks or explicit deferred work/i.test(specText) ||
     /\.\s+from\s+/i.test(`${brief?.userJob ?? ''}\n${specText}`) ||
     /including privacy manifest says what was included/i.test(specText) ||
     /including affected records become stale/i.test(specText)
   )
+}
+
+export function repairWeakRecoverySpecReviewSeedInQueue(
+  queue: TaskQueue,
+  input: { taskId?: string; now: string },
+): { taskId: string } | null {
+  const liveTask = input.taskId
+    ? queue.tasks.find((candidate) => candidate.id === input.taskId)
+    : queue.tasks.find((candidate) => shouldRepairWeakRecoverySpecReviewSeed(candidate, queue))
+  if (!liveTask || !shouldRepairWeakRecoverySpecReviewSeed(liveTask, queue)) return null
+  const seed = buildRecoverySpecSeedForTask(liveTask, queue, input.now)
+
+  liveTask.spec = seed.spec
+  liveTask.acceptanceCriteria = seed.acceptanceCriteria
+  liveTask.productBrief = seed.productBrief
+  if (seed.references) liveTask.references = seed.references
+  liveTask.status = 'spec_review'
+  liveTask.assignedTo = null
+  liveTask.updatedAt = input.now
+  if (!Array.isArray(liveTask.notes)) liveTask.notes = []
+  liveTask.notes.push({
+    agentId: 'coordinator-recovery',
+    role: 'system',
+    content:
+      'Guildhall repaired an under-shaped recovery spec from the current task graph before approval, inheriting source refs and scoped parent acceptance instead of preserving generic recovery text.',
+    timestamp: input.now,
+  })
+  queue.lastUpdated = input.now
+  return { taskId: liveTask.id }
 }
 
 function shouldSeedSourceBackedExploringSplit(task: Task, queue: TaskQueue): boolean {
@@ -1648,10 +1683,15 @@ function buildRecoverySpecSeedForTask(liveTask: Task, queue: TaskQueue, now: str
   const inheritedAcceptance = scopedParentAcceptance.length > 0
     ? scopedParentAcceptance.slice(0, 5)
     : []
+  const sourceRequirements = extractNumberedRecoveryRequirements(sourceIntent).slice(0, 6)
   const inheritedAcceptanceLines = inheritedAcceptance.map((item, index) => `${index + 1}. ${item.replace(/^\d+[.)]\s*/, '')}`)
   const genericAcceptanceLines = inheritedAcceptanceLines.length > 0
     ? inheritedAcceptanceLines
-    : [
+    : sourceRequirements.length > 0
+      ? sourceRequirements.map((requirement, index) =>
+          `${index + 1}. Given the current MVP scope, when ${taskTitle} is complete, then Guildhall records source-backed MVP work, proof, or explicit deferral for ${requirement}.`,
+        )
+      : [
         `1. Given the current project evidence, when ${taskTitle} is implemented, then the repo-local proof demonstrates that exact child outcome without adding unrelated later-stage work.`,
         '2. Given the parent task boundary, when this task is reviewed, then it satisfies the relevant parent acceptance criteria and leaves sibling child work to its own task.',
         '3. Given the implementation is complete, when the local proof command runs, then Guildhall records the command and result against this task.',
@@ -1742,12 +1782,32 @@ function buildRecoverySpecSeedForTask(liveTask: Task, queue: TaskQueue, now: str
       taskTitle,
       sourceIntent,
       parentTask,
-      inheritedAcceptance,
+      inheritedAcceptance: inheritedAcceptance.length > 0
+        ? inheritedAcceptance
+        : genericAcceptanceLines.map((line) => line.replace(/^\d+[.)]\s*/, '')),
       outOfScope,
       now,
     }),
     ...(inheritedParentReferences ? { references: inheritedParentReferences } : {}),
   }
+}
+
+function extractNumberedRecoveryRequirements(text: string): string[] {
+  const normalized = normalizeFallbackWhitespace(text)
+  const matches = [...normalized.matchAll(/\((\d+)\)\s*([\s\S]*?)(?=\s*\(\d+\)\s*|$)/g)]
+  return matches
+    .sort((a, b) => Number(a[1] ?? 0) - Number(b[1] ?? 0))
+    .map((match) => cleanRecoveryRequirement(match[2] ?? ''))
+    .filter(Boolean)
+}
+
+function cleanRecoveryRequirement(value: string): string {
+  return normalizeFallbackWhitespace(value)
+    .replace(/^(?:and|or)\s+/i, '')
+    .replace(/\s+These should become source-backed MVP scope\/tasks or explicit deferred work[\s\S]*$/i, '')
+    .replace(/\s*(?:\.|;|,)?\s*from\s+For\s+the\s+.+$/i, '')
+    .replace(/[.;。；]+$/, '')
+    .trim()
 }
 
 function recoveryParentAcceptanceMatchesTitle(taskTitle: string, acceptance: string): boolean {
@@ -4468,7 +4528,7 @@ export class Orchestrator {
             task_id: task.id,
             agent_name: agent.name,
             message:
-              'Spec shaping timed out before saving durable progress. Guildhall will retry this shaping lane once before asking for owner intervention.',
+              'Spec shaping timed out before saving durable progress. Guildhall will retry this shaping lane once before preserving it as runtime recovery.',
           })
           return {
             kind: 'processed',
@@ -4481,44 +4541,39 @@ export class Orchestrator {
           }
         }
         const summary = 'Spec shaping timed out before saving durable progress.'
-        const escalation = await raiseEscalation({
-          tasksPath,
-          progressPath: this.progressPath(),
-          taskId: task.id,
-          agentId: agent.name,
-          reason: 'human_judgment_required',
-          summary,
-          details:
-            `${message}\n\n` +
-            'Guildhall did not get a saved brief, question, spec, or task transition before the spec lane timed out. Retry the shaping lane, switch provider, or reframe the task before attempting autonomous work again.',
-        })
-        if (escalation.success && escalation.escalationId) {
-          this.specTimeoutRetries.delete(retryKey)
-          await this.annotateWorkerBlockedClassification({
-            taskId: task.id,
+        const now = this.now()
+        const queue = await this.readQueue()
+        const liveTask = queue.tasks.find((candidate) => candidate.id === task.id)
+        if (liveTask) {
+          liveTask.assignedTo = null
+          liveTask.updatedAt = now
+          if (!Array.isArray(liveTask.notes)) liveTask.notes = []
+          liveTask.notes.push({
             agentId: 'coordinator',
-            classification: {
-              class: 'provider_unavailable',
-              confidence: 'medium',
-              evidence: [{
-                kind: 'task',
-                summary,
-                ref: message,
-              }],
-              scope: 'task',
-              safePlaybooks: ['ask_concrete_human_question'],
-              needsHuman: true,
-              humanQuestion:
-                'The spec lane timed out before saving a brief, question, or spec. Should Guildhall retry this lane, switch provider, or reframe the task?',
-            },
+            role: 'runtime',
+            content:
+              'The spec lane timed out twice before saving durable progress. Guildhall preserved the task for runtime recovery instead of asking the owner to decide whether to retry.',
+            timestamp: now,
           })
-          return {
-            kind: 'escalated',
-            taskId: task.id,
-            agent: agent.name,
-            reason: summary,
-            escalationId: escalation.escalationId,
-          }
+          queue.lastUpdated = now
+          await this.writeQueue(queue)
+        }
+        this.specTimeoutRetries.delete(retryKey)
+        await this.emitBackendEvent({
+          type: 'line_complete',
+          task_id: task.id,
+          agent_name: agent.name,
+          message:
+            `${summary} Guildhall preserved this as runtime recovery instead of owner input.`,
+        })
+        return {
+          kind: 'processed',
+          taskId: task.id,
+          agent: agent.name,
+          beforeStatus,
+          afterStatus: liveTask?.status ?? task.status,
+          transitioned: false,
+          revisionCount: liveTask?.revisionCount ?? task.revisionCount,
         }
       }
       if (
@@ -10243,42 +10298,25 @@ export class Orchestrator {
   }
 
   private async repairWeakRecoverySpecReviewSeedsInQueue(queue: TaskQueue): Promise<TickOutcome | null> {
-    const liveTask = queue.tasks.find((candidate) => shouldRepairWeakRecoverySpecReviewSeed(candidate, queue))
-    if (!liveTask) return null
     const now = this.now()
-    const seed = buildRecoverySpecSeedForTask(liveTask, queue, now)
-
-    liveTask.spec = seed.spec
-    liveTask.acceptanceCriteria = seed.acceptanceCriteria
-    liveTask.productBrief = seed.productBrief
-    if (seed.references) liveTask.references = seed.references
-    liveTask.status = 'spec_review'
-    liveTask.assignedTo = null
-    liveTask.updatedAt = now
-    liveTask.notes.push({
-      agentId: 'coordinator-recovery',
-      role: 'system',
-      content:
-        'Guildhall repaired an under-shaped recovery spec from the current task graph before approval, inheriting source refs and scoped parent acceptance instead of preserving generic recovery text.',
-      timestamp: now,
-    })
-    queue.lastUpdated = now
+    const repaired = repairWeakRecoverySpecReviewSeedInQueue(queue, { now })
+    if (!repaired) return null
     await this.writeQueue(queue)
     await this.emitBackendEvent({
       type: 'line_complete',
-      task_id: liveTask.id,
+      task_id: repaired.taskId,
       agent_name: 'coordinator-recovery',
       message:
         'Guildhall repaired the recovery spec from task graph evidence before review continued.',
     })
     return {
       kind: 'processed',
-      taskId: liveTask.id,
+      taskId: repaired.taskId,
       agent: 'coordinator-recovery',
       beforeStatus: 'spec_review',
       afterStatus: 'spec_review',
       transitioned: false,
-      revisionCount: liveTask.revisionCount,
+      revisionCount: queue.tasks.find((candidate) => candidate.id === repaired.taskId)?.revisionCount,
     }
   }
 
@@ -12192,13 +12230,13 @@ function sortedDissenterSlugsFromRecord(dissenters: readonly string[]): string[]
 }
 
 function resolvedScopeDecisionTexts(task: Task): string[] {
-  return task.escalations
+  return (task.escalations ?? [])
     .filter((escalation) => escalation.resolvedAt && escalation.resolution?.trim())
     .map((escalation) => [escalation.summary, escalation.details ?? '', escalation.resolution ?? ''].join('\n'))
 }
 
 function answeredQuestionDecisionTexts(task: Task): string[] {
-  const questionDecisions = (task.openQuestions ?? [])
+  const questionDecisions = (Array.isArray(task.openQuestions) ? task.openQuestions : [])
     .filter((question) => question.answeredAt && typeof question.answer === 'string' && question.answer.trim())
     .filter((question) => {
       const prompt = 'prompt' in question && typeof question.prompt === 'string' ? question.prompt.trim() : ''
@@ -12272,12 +12310,12 @@ function semanticTaskTitle(task: Task): string {
 }
 
 function recoverySpecSeedDecisionTexts(task: Task): string[] {
-  const durableEscalationDecisions = resolvedScopeDecisionTexts(task)
+  const durableEscalationDecisions = (resolvedScopeDecisionTexts(task) ?? [])
     .filter((decision) => !/superseded by a task (?:reframe|enrichment) request/i.test(decision))
     .filter((decision) => !/build failing due to unresolved import|required source directories not found/i.test(decision))
     .filter((decision) => !/spec agent kept researching|durable progress|read-only exploration|provider behavior/i.test(decision))
   return uniqueNonEmptyStrings([
-    ...answeredQuestionDecisionTexts(task),
+    ...(answeredQuestionDecisionTexts(task) ?? []),
     ...durableEscalationDecisions,
   ])
 }

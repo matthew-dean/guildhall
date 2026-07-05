@@ -19120,6 +19120,96 @@ read model.
     behavior where unassigned active work can be visible in Work but missing
     from the selected release summary.
 
+2026-07-05T18:00:00Z - Let specifically requested shaping work start while
+unrelated import shaping blocks project Start.
+
+- Work id: `codex:focused-shaping-start-import-blocker-2026-07-05`.
+- User job: when the user explicitly asks Guildhall to work on a specific
+  current-scope item, imported source-recovery blockers elsewhere in the
+  release should not prevent that focused shaping run. Project-wide Start must
+  still stay blocked until the imported shaping queue is cleared.
+- Root-cause classification:
+  - action-gate problem: `startBlockerForImportDrafts()` only exempted the
+    requested task when that exact task was one of the imported source-recovery
+    blockers. It still blocked a different specifically requested shaping task,
+    which made `task-150` unreachable even though the user had explicitly asked
+    to shape it.
+  - orientation/workflow problem: the UI could show the DeepInfra/model-review
+    task in current scope, but the primary action could not start it because
+    unrelated source-recovery work owned the project-level Start gate.
+- Contract Touch Decision:
+  - Touched contracts: focused `POST /api/project/task/:id/start` readiness
+    semantics for the imported-shaping gate.
+  - Contracts considered but not touched: project-wide Start readiness,
+    owner-input blocking, spec-review approval blocking, persisted task schema.
+    Those gates still run after the import-shaping gate yields for an explicit
+    task id.
+  - Required follow-up: rebuild/reinstall and prove
+    `POST /api/project/task/task-150/start?projectId=narrative-harness`
+    starts a focused `work_item` run instead of returning
+    `imported_scope_shaping`.
+  - Proof provided so far: `./node_modules/.bin/vitest run
+    src/runtime/__tests__/serve-task-endpoints.test.ts --testNamePattern 'lets
+    the selected source-recovery shaping task start|lets a specifically
+    requested shaping task start|blocks a scoped spec_review task start'` passed
+    `3` focused tests.
+  - Installed-app proof: after `node ./build.mjs`,
+    `node scripts/dev-install.mjs`, `guildhall stop && guildhall start`, and
+    `/api/stale-server` reporting `stale:false` for PID `50488`,
+    `POST /api/project/task/task-150/start?projectId=narrative-harness`
+    returned `status:"running"`, `mode:"one_task"`, and
+    `scope:{type:"work_item",taskId:"task-150"}` instead of
+    `code:"imported_scope_shaping"`.
+  - New evidence after the focused-start fix: the task reached the spec lane,
+    but the spec lane still failed to save durable progress in the first
+    window and retried. That is a separate shaping/runtime reliability issue,
+    not a focused-start gate issue.
+  - Follow-up runtime fix: the repeated spec-inactivity timeout branch no
+    longer raises `human_judgment_required` after the retry. It clears stale
+    assignment, records a runtime note, emits a runtime-recovery event, and
+    leaves the task in `exploring` for Guildhall-owned recovery.
+  - Additional proof: `./node_modules/.bin/vitest run
+    src/runtime/__tests__/orchestrator.test.ts
+    src/runtime/__tests__/serve-task-endpoints.test.ts --testNamePattern
+    'preserves repeated spec-agent inactivity timeouts|retries a spec-agent
+    inactivity timeout once|preserves spec timeout after durable-progress
+    nudge|preserves durable-progress nudge stalls|recovers spec shaping timeout
+    blockers|lets a specifically requested shaping task start|lets the selected
+    source-recovery shaping task start|blocks a scoped spec_review task start'`
+    passed `8` focused tests.
+  - Follow-up shared-model fix: weak deterministic recovery specs now repair
+    through one shared queue helper used by both the orchestrator tick and the
+    focused Start preflight. The repair extracts numbered owner requirements
+    from task evidence into concrete acceptance criteria instead of preserving
+    generic "repo-local proof demonstrates that exact child outcome" text.
+  - Specific Narrative Harness proof: after reinstalling the built app,
+    `/api/stale-server` returned `stale:false` for PID `17409`; focused Start
+    for `task-150` still returned `code:"no_unattended_progress"` because the
+    spec is waiting for review, but the saved task detail now exposes concrete
+    acceptance criteria for a DeepInfra-accessible drafting model across genres
+    including adult genres, world-state/object-state transitions such as wet
+    hair drying by time and climate, and spatial/geographic continuity such as
+    walking speed for fantasy epics. The proof query also returned
+    `hasBadPunctuation:false` and `hasMetaSentence:false`.
+  - Updated proof: `./node_modules/.bin/vitest run
+    src/runtime/__tests__/orchestrator.test.ts
+    src/runtime/__tests__/serve-task-endpoints.test.ts --testNamePattern
+    'repairs weak recovery specs before blocking|standalone recovery specs with
+    numbered owner requirements|repairs under-shaped recovery specs|recovery spec
+    seed|preserves repeated spec-agent inactivity timeouts|retries a spec-agent
+    inactivity timeout once|preserves spec timeout after durable-progress
+    nudge|preserves durable-progress nudge stalls|recovers spec shaping timeout
+    blockers|lets a specifically requested shaping task start|lets the selected
+    source-recovery shaping task start|blocks a scoped spec_review task
+    start|reopens stale spec-timeout blockers'` passed `14` focused tests;
+    `git diff --check`, `node scripts/contract-touch-detector.mjs`, and
+    `node ./build.mjs` passed.
+  - Owner-review items: none. This preserves the owner boundary because true
+    owner-input/spec-review gates still reject focused starts.
+  - Apply/revert behavior: reverting the gate change restores the previous
+    behavior where unrelated imported shaping blockers stop targeted shaping
+    runs.
+
 2026-07-05T10:45:00Z - Aligned release proof/orientation communication with
 shared readiness state.
 
