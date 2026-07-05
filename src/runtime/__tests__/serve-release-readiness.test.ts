@@ -109,6 +109,16 @@ async function commitAndPush(message: string): Promise<void> {
   await execFileP('git', ['push'], { cwd: tmpDir })
 }
 
+async function initChildRepo(repoPath: string): Promise<void> {
+  await fs.mkdir(repoPath, { recursive: true })
+  await execFileP('git', ['init', '-b', 'main'], { cwd: repoPath })
+  await execFileP('git', ['config', 'user.email', 'guildhall@example.test'], { cwd: repoPath })
+  await execFileP('git', ['config', 'user.name', 'Guildhall Test'], { cwd: repoPath })
+  await fs.writeFile(path.join(repoPath, 'README.md'), '# child repo\n', 'utf8')
+  await execFileP('git', ['add', '.'], { cwd: repoPath })
+  await execFileP('git', ['commit', '-m', 'baseline'], { cwd: repoPath })
+}
+
 describe('GET /api/project/release-readiness', () => {
   it('reports initializationNeeded for an attached-but-uninitialized project shell', async () => {
     const emptyDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-release-uninitialized-'))
@@ -615,6 +625,66 @@ describe('GET /api/project/release-readiness', () => {
     expect(body.dirtyCheckout.ownedCount).toBe(1)
     expect(body.dirtyCheckout.files).toEqual(['.guildhall/release-note.md'])
     expect(body.totals.dirtyCheckoutBlockingCount).toBe(1)
+  })
+
+  it('inspects child repos for a non-git workspace envelope', async () => {
+    const envelopePath = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-release-envelope-'))
+    try {
+      const envelopeId = bootstrapWorkspace(envelopePath, { name: 'Looma + Knit' }).id ?? path.basename(envelopePath)
+      await initChildRepo(path.join(envelopePath, 'looma'))
+      await initChildRepo(path.join(envelopePath, 'knit'))
+      await fs.writeFile(path.join(envelopePath, 'knit', '.gitignore'), 'node_modules\n', 'utf8')
+      const queue: TaskQueue = {
+        version: 1,
+        lastUpdated: new Date().toISOString(),
+        tasks: [
+          {
+            ...makeTask({
+              id: 'task-workspace-import',
+              title: 'Review existing project work',
+              status: 'done',
+              completedAt: '2026-05-08T00:00:00Z',
+            }),
+            projectPath: envelopePath,
+          },
+          {
+            ...makeTask({
+              id: 'task-envelope-1',
+              title: 'Completed envelope task',
+              status: 'done',
+              completedAt: '2026-05-09T00:00:00Z',
+            }),
+            projectPath: envelopePath,
+          },
+        ],
+      }
+      await writeProjectStateJsonAsync(envelopePath, 'TASKS.json', queue)
+      const { app } = buildServeApp({ projectPath: envelopePath })
+      const url = new URL('http://localhost/api/project/release-readiness')
+      url.searchParams.set('projectId', envelopeId)
+
+      const res = await app.fetch(new Request(url))
+      const body = await res.json() as any
+
+      expect(res.status).toBe(200)
+      expect(body.dirtyCheckout).toMatchObject({
+        ownedCount: 1,
+        files: ['knit/.gitignore'],
+      })
+      expect(body.dirtyCheckout.error).toBeUndefined()
+      expect(JSON.stringify(body)).not.toContain('not a git repository')
+      const repoIds = body.gitStory.snapshots.map((snapshot: any) => snapshot.repoId)
+      expect(new Set(repoIds)).toEqual(new Set(['knit', 'looma']))
+      expect(repoIds.every((repoId: string | undefined) => repoId === 'knit' || repoId === 'looma')).toBe(true)
+
+      const projectRes = await app.fetch(new Request(`http://localhost/api/project?projectId=${encodeURIComponent(envelopeId)}`))
+      const projectBody = await projectRes.json() as any
+      expect(projectRes.status).toBe(200)
+      expect(JSON.stringify(projectBody)).not.toContain('not a git repository')
+      expect(projectBody.tasks.find((task: any) => task.id === 'task-workspace-import')?.gitStory).toBeUndefined()
+    } finally {
+      await fs.rm(envelopePath, { recursive: true, force: true })
+    }
   })
 
   it('does not let deferred fallback-scope shelves block current work closure', async () => {

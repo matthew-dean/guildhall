@@ -1340,6 +1340,10 @@ function taskHasRunnableSpec(task: Record<string, unknown>): boolean {
   )
 }
 
+function shouldAttachTaskGitStory(taskId: string): boolean {
+  return taskId !== 'task-meta-intake' && taskId !== WORKSPACE_IMPORT_TASK_ID
+}
+
 function lastTaskNote(task: Record<string, unknown>): Record<string, unknown> | undefined {
   const notes = Array.isArray(task.notes) ? task.notes as Array<Record<string, unknown>> : []
   return notes.at(-1)
@@ -2712,7 +2716,9 @@ async function enrichTaskForServe(
   const terminalSummary = buildTerminalSummary(normalized)
   const workspaceStore = await readTaskWorkspaceStore(projectPath).catch(() => undefined)
   const workspace = taskId ? workspaceStore?.workspaces[taskId] : undefined
-  const gitStory = await gitStoryForTask(projectPath, normalized, workspace).catch(() => undefined)
+  const gitStory = taskId && shouldAttachTaskGitStory(taskId)
+    ? await gitStoryForTask(projectPath, normalized, workspace).catch(() => undefined)
+    : undefined
   const reviewAudit = taskId
     ? await createReviewAuditStore({
         projectRoot: projectPath,
@@ -8170,7 +8176,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         const workspaceStore = await readTaskWorkspaceStore(project.path).catch(() => undefined)
         for (const task of state.tasks) {
           const id = typeof task.id === 'string' ? task.id : ''
-          if (!id || !taskIds.has(id)) continue
+          if (!id || !taskIds.has(id) || !shouldAttachTaskGitStory(id)) continue
           const gitStory = await gitStoryForTask(project.path, task, workspaceStore?.workspaces[id]).catch(() => undefined)
           if (gitStory) taskGitStories[id] = gitStory
         }

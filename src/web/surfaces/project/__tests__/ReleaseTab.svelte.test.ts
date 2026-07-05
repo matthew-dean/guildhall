@@ -353,7 +353,7 @@ describe('ReleaseTab', () => {
 
     expect(await screen.findByText('Current task scope')).toBeTruthy()
     expect(screen.getByText('Could not inspect checkout')).toBeTruthy()
-    expect(screen.getByText(/This checkout could not be inspected with git/)).toBeTruthy()
+    expect(screen.getByText(/Guildhall could not inspect this project or its repos with git/)).toBeTruthy()
     expect(screen.queryByText(/fatal: not a git repository/)).toBeNull()
     expect(screen.queryByText('Project checkout clean.')).toBeNull()
   })

@@ -221,7 +221,7 @@
   const checkoutInspectionError = $derived(
     dirtyCheckoutError
       ? /git status|fatal: not a git repository|spawn git enoent/i.test(dirtyCheckoutError)
-        ? 'This checkout could not be inspected with git. Check that the project path is a Git checkout and that git is available to the runtime.'
+        ? 'Guildhall could not inspect this project or its repos with git. Check that git is available and that any child repos are reachable from the project path.'
         : dirtyCheckoutError
       : '',
   )

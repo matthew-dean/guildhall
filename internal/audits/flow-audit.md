@@ -16710,6 +16710,44 @@ for Looma + Knit.
 
 source: codex:workspace-import-stale-scope-refresh-2026-07-04
 
+2026-07-05T07:00:00Z - Locked release-readiness proof for non-git workspace
+envelopes that contain child repositories.
+
+- Work id: `codex:workspace-envelope-child-repo-readiness-proof-2026-07-05`.
+- User job: when a registered project path is a container such as Looma + Knit,
+  the owner should not be told the project failed because the container itself
+  is not a git repository. Guildhall should transparently inspect and summarize
+  the child repositories (`looma`, `knit`) as the actual git boundaries.
+- Fix:
+  - Added release-readiness regression coverage for a non-git workspace
+    envelope containing `looma` and `knit` child repos.
+  - The test proves dirty Guildhall-owned files are reported with child prefixes
+    such as `knit/.gitignore`, no `not a git repository` text appears in the
+    response, and every Git Story snapshot resolves to a child repo id.
+  - The same regression now loads `/api/project` and proves reserved structural
+    tasks such as `task-workspace-import` do not receive root-level task Git
+    Story failures.
+  - Updated remaining generic UI/runtime copy so fallback git errors say
+    "project or repos" instead of implying the registered project path must be
+    the git checkout.
+- Installed-app proof:
+  - Rebuilt, installed, and restarted the local app; `/api/stale-server`
+    returned `stale:false` with matching boot/current build mtimes.
+  - Live `/api/project?projectId=looma-knit` returned repo ids `looma` and
+    `knit`, visible blocker labels prefixed with `Looma:` and `Knit:`, no
+    `not a git repository`/`not_git`/`Cannot resolve git root` text, and
+    `task-workspace-import` had no task-level Git Story.
+  - Live `/api/project/release-readiness?projectId=looma-knit` returned
+    `dirtyCheckout.files:["knit/.gitignore"]`, repo ids `looma` and `knit`, and
+    no root-level git inspection failure text.
+- Verification:
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/serve-release-readiness.test.ts -t "child repos|Guildhall-owned project files"`
+    passed `2` focused tests.
+  - `./node_modules/.bin/vitest run src/web/surfaces/project/__tests__/ReleaseTab.svelte.test.ts -t "checkout inspection errors"`
+    passed `1` focused test.
+
+source: codex:workspace-envelope-child-repo-readiness-proof-2026-07-05
+
 2026-07-04T18:04:00Z - Made workspace child Git repositories visible in Git
 Story instead of treating the workspace container as the repo boundary.
 
