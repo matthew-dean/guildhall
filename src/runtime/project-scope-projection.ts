@@ -81,6 +81,8 @@ export interface BuildProjectScopeProjectionOptions {
 
 export interface ProjectScopeTaskInput {
   id: string
+  status?: TaskStatus
+  releaseIds?: readonly string[]
   hierarchy?: { parentId?: string; childIds?: string[] }
 }
 
@@ -209,15 +211,25 @@ export function releaseToProjectScope(release: ProjectRelease, tasks: readonly T
   const nodeIds = new Set<string>(release.nodeIds ?? [])
   const deferredNodeIds = new Set<string>(release.deferredNodeIds ?? [])
   for (const task of tasks) {
-    if (!task.releaseIds?.includes(release.id)) continue
     const nodeId = taskScopeNodeId(task.id)
+    if (isProjectSetupTask(task.id)) {
+      nodeIds.delete(nodeId)
+      deferredNodeIds.delete(nodeId)
+      continue
+    }
     if (task.status === 'archived' || task.status === 'cancelled') {
       nodeIds.delete(nodeId)
       deferredNodeIds.delete(nodeId)
-    } else if (task.status === 'shelved') {
+      continue
+    }
+    if (task.status === 'shelved') {
       nodeIds.delete(nodeId)
-      deferredNodeIds.add(nodeId)
-    } else {
+      if (task.releaseIds?.includes(release.id) || deferredNodeIds.has(nodeId)) deferredNodeIds.add(nodeId)
+      continue
+    }
+    const taskReleaseIds = task.releaseIds ?? []
+    if (taskReleaseIds.length === 0 && task.hierarchy?.parentId) continue
+    if (taskReleaseIds.includes(release.id) || taskReleaseIds.length === 0) {
       nodeIds.add(nodeId)
     }
   }
@@ -244,6 +256,7 @@ export function taskScopeEligibility(
   if (scope.nodeIds.includes(nodeId)) return { eligible: true, reason: 'included' }
   if (options.includedDependencyIds?.has(task.id)) return { eligible: true, reason: 'included_prerequisite' }
   if (scope.deferredNodeIds.includes(nodeId)) return { eligible: false, reason: 'deferred' }
+  if (task.status === 'shelved') return { eligible: false, reason: 'deferred' }
   let parentId = task.hierarchy?.parentId?.trim() || null
   while (parentId) {
     const parentNodeId = taskScopeNodeId(parentId)
@@ -251,6 +264,7 @@ export function taskScopeEligibility(
     if (scope.deferredNodeIds.includes(parentNodeId)) return { eligible: false, reason: 'deferred' }
     parentId = options.tasksById?.get(parentId)?.hierarchy?.parentId?.trim() || null
   }
+  if ((task.releaseIds?.length ?? 0) === 0) return { eligible: true, reason: 'included' }
   return { eligible: false, reason: 'deferred' }
 }
 
@@ -258,7 +272,10 @@ export function buildProjectScopeProjection(
   queue: Pick<TaskQueue, 'tasks' | 'releases' | 'selectedReleaseId'>,
   options: BuildProjectScopeProjectionOptions = {},
 ): ProjectScopeProjection {
-  const selectedScope = 'selectedScope' in options ? options.selectedScope ?? null : selectedProjectScopeForQueue(queue)
+  const selectedScope = normalizeSelectedScope(
+    'selectedScope' in options ? options.selectedScope ?? null : selectedProjectScopeForQueue(queue),
+    queue.tasks,
+  )
   const tasksById = new Map(queue.tasks.map(task => [task.id, task] as const))
   const childIdsByParent = buildChildMap(queue.tasks)
   const rows = queue.tasks
@@ -276,6 +293,37 @@ export function buildProjectScopeProjection(
     counts,
     start: summarizeStart(rows, selectedScope),
     release: summarizeRelease(rows),
+  }
+}
+
+function normalizeSelectedScope(scope: ProjectScope | null, tasks: readonly Task[]): ProjectScope | null {
+  if (!scope) return null
+  const nodeIds = new Set(scope.nodeIds)
+  const deferredNodeIds = new Set(scope.deferredNodeIds)
+  for (const task of tasks) {
+    const nodeId = taskScopeNodeId(task.id)
+    if (isProjectSetupTask(task.id)) {
+      nodeIds.delete(nodeId)
+      deferredNodeIds.delete(nodeId)
+      continue
+    }
+    if (task.status === 'archived' || task.status === 'cancelled') {
+      nodeIds.delete(nodeId)
+      deferredNodeIds.delete(nodeId)
+      continue
+    }
+    if (task.status === 'shelved') {
+      nodeIds.delete(nodeId)
+      if (deferredNodeIds.has(nodeId)) deferredNodeIds.add(nodeId)
+      continue
+    }
+    if ((task.releaseIds?.length ?? 0) > 0 || task.hierarchy?.parentId) continue
+    if (!deferredNodeIds.has(nodeId)) nodeIds.add(nodeId)
+  }
+  return {
+    ...scope,
+    nodeIds: [...nodeIds],
+    deferredNodeIds: [...deferredNodeIds],
   }
 }
 

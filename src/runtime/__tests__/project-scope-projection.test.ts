@@ -215,6 +215,94 @@ describe('buildProjectScopeProjection', () => {
     })
   })
 
+  it('keeps unassigned current work in the selected release until it is explicitly deferred', () => {
+    const projection = buildProjectScopeProjection(queue([
+      task({
+        id: 'task-contracts',
+        title: 'Current scoped task',
+        spec: 'Current work spec.',
+        acceptanceCriteria: [{ id: 'AC-1', description: 'Current work is verifiable.', verifiedBy: 'test', met: false }],
+      }),
+      task({
+        id: 'task-model-proof',
+        title: 'Define drafting model proof',
+        status: 'exploring',
+        description: 'Select and prove a drafting model for the current bounded scope.',
+      }),
+      task({
+        id: 'task-future-release',
+        title: 'Future release task',
+        status: 'ready',
+        releaseIds: ['stage-2'],
+      }),
+      task({
+        id: 'task-shelved',
+        title: 'Explicitly shelved task',
+        status: 'shelved',
+      }),
+    ]))
+
+    expect(projection.selectedScope).toMatchObject({
+      nodeIds: ['work:task-contracts', 'work:task-model-proof'],
+      deferredNodeIds: ['work:task-later'],
+    })
+    expect(projection.rows.find(row => row.taskId === 'task-model-proof')).toMatchObject({
+      scope: 'included',
+      eligibilityReason: 'included',
+      handoffState: 'not_shaped',
+    })
+    expect(projection.rows.find(row => row.taskId === 'task-future-release')).toMatchObject({
+      scope: 'deferred',
+      eligibilityReason: 'deferred',
+    })
+    expect(projection.rows.find(row => row.taskId === 'task-shelved')).toMatchObject({
+      scope: 'deferred',
+      handoffState: 'deferred',
+    })
+  })
+
+  it('normalizes supplied selected scopes with unassigned current work', () => {
+    const projection = buildProjectScopeProjection({
+      version: 1,
+      lastUpdated: now,
+      releases: [],
+      tasks: [
+        task({
+          id: 'task-current',
+          title: 'Current task from provisional scope',
+          spec: 'Current work spec.',
+          acceptanceCriteria: [{ id: 'AC-1', description: 'Current work is verifiable.', verifiedBy: 'test', met: false }],
+        }),
+        task({
+          id: 'task-model-proof',
+          title: 'Define drafting model proof',
+          status: 'exploring',
+          description: 'Select and prove a drafting model for the current bounded scope.',
+        }),
+        task({
+          id: 'task-workspace-import',
+          title: 'Import project notes and plans',
+          status: 'done',
+        }),
+      ],
+    }, {
+      selectedScope: {
+        id: 'near-term-proof-scope',
+        label: 'Near Term Proof Scope',
+        kind: 'release',
+        source: 'inferred',
+        nodeIds: ['work:task-current', 'work:task-workspace-import'],
+        deferredNodeIds: [],
+      },
+    })
+
+    expect(projection.selectedScope?.nodeIds).toEqual(['work:task-current', 'work:task-model-proof'])
+    expect(projection.rows.find(row => row.taskId === 'task-model-proof')).toMatchObject({
+      scope: 'included',
+      eligibilityReason: 'included',
+    })
+  })
+
   it('drops archived release-linked work from the selected scope', () => {
     const projection = buildProjectScopeProjection(queue([
       task({

@@ -19055,6 +19055,71 @@ recovery work.
     the previous behavior where this timeout wording remains a terminal blocked
     owner-facing escalation until manually resolved.
 
+2026-07-05T17:48:00Z - Kept unassigned current work inside the selected release
+read model.
+
+- Work id: `codex:unassigned-current-work-release-scope-2026-07-05`.
+- User job: when a user adds or Codex records new current Narrative Harness MVP
+  work, the 1,000-foot release/scope summary should count it in the current
+  bounded scope unless it has been explicitly shelved, deferred, or assigned to
+  another release.
+- Root-cause classification:
+  - data model/read-model problem: `task-150` existed as primary active work,
+    but had no `releaseIds`, so the selected release summary excluded it while
+    the work list still displayed it. That made the project look like it had
+    fewer current-scope items than it actually did.
+  - orientation problem: the DeepInfra drafting model and physical-world
+    reviewer work was present as a task but absent from the selected release
+    rollup, so Guildhall could not honestly prove the MVP scope from the
+    owner-facing spine.
+- Contract Touch Decision:
+  - Touched contracts: selected release/project-scope projection, task scope
+    eligibility, release read-model node membership for unassigned active work.
+    The orientation spine now consumes that same selected-scope projection for
+    its selected release, visible release list, headline counts, and scope rows
+    instead of rebuilding release membership from raw persisted release nodes.
+  - Contracts considered but not touched: persisted task/release schema. No
+    migration is required; persisted `releaseIds` remain the explicit
+    assignment mechanism, and `shelved`/other-release membership still wins.
+  - Required follow-up: rebuild/reinstall and prove Narrative Harness
+    `task-150` appears in the selected scope count and release node set in the
+    installed app.
+  - Proof required: scope projection regression, focused orientation regression,
+    contract detector, build, installed-app Narrative Harness API proof.
+  - Proof provided so far: `./node_modules/.bin/vitest run
+    src/runtime/__tests__/project-scope-projection.test.ts` passed `9` tests;
+    `./node_modules/.bin/vitest run
+    src/runtime/__tests__/project-orientation-spine.test.ts --testNamePattern
+    'release|deferred|current|scope|selected'` passed `28` focused tests.
+    After unifying the orientation spine with the scope projection,
+    `./node_modules/.bin/vitest run
+    src/runtime/__tests__/project-scope-projection.test.ts
+    src/runtime/__tests__/project-orientation-spine.test.ts --testNamePattern
+    'unassigned current work|scope projection|explicit non-MVP|release records
+    recovered|release|deferred|current|scope|selected'` passed `36` focused
+    tests. After closing the provisional-scope path,
+    `./node_modules/.bin/vitest run
+    src/runtime/__tests__/project-scope-projection.test.ts
+    src/runtime/__tests__/project-orientation-spine.test.ts --testNamePattern
+    'unassigned current work|supplied selected scopes|scope projection|explicit
+    non-MVP|release records recovered|release|deferred|current|scope|selected'`
+    passed `37` focused tests.
+  - Installed-app proof: after `node ./build.mjs`,
+    `node scripts/dev-install.mjs`, `guildhall stop && guildhall start`,
+    `/api/stale-server` reported `stale:false` for PID `29977`. On
+    `GET /api/project/spine?projectId=narrative-harness`, the selected scope
+    and selected release both reported `10` node IDs, `task-150` appeared in
+    both at index `9`, `task-workspace-import` appeared in neither, and summary
+    progress reported `total:10`, `includedWorkCount:10`. The full
+    `GET /api/project?projectId=narrative-harness` payload agreed:
+    `orientationSpine.summary.includedWorkCount:10`, `task150InScope:9`, and
+    release readiness totals counted `10` tasks.
+  - Owner-review items: none. This implements the owner rule that unsegmented
+    work belongs to the current bounded scope until explicitly segmented later.
+  - Apply/revert behavior: reverting the projection change restores the prior
+    behavior where unassigned active work can be visible in Work but missing
+    from the selected release summary.
+
 2026-07-05T10:45:00Z - Aligned release proof/orientation communication with
 shared readiness state.
 

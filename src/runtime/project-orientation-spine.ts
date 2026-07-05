@@ -606,6 +606,19 @@ function releaseToScope(release: OrientationRelease | null): OrientationScope | 
   }
 }
 
+function orientationScopeFromProjection(projection: ProjectScopeProjection | null | undefined): OrientationScope | null {
+  const scope = projection?.selectedScope
+  if (!scope) return null
+  return {
+    id: scope.id,
+    label: scope.label,
+    kind: scope.kind,
+    source: scope.source,
+    nodeIds: [...scope.nodeIds],
+    deferredNodeIds: [...scope.deferredNodeIds],
+  }
+}
+
 function normalizeRelease(input: BuildProjectOrientationSpineInput, tasks: OrientationTaskInput[]): OrientationRelease | null {
   const releases = input.releases ?? []
   const selected =
@@ -1746,6 +1759,14 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
     selectedReleaseId: input.selectedReleaseId ?? draftAugmentation.selectedReleaseId,
     releases,
   }, tasks)
+  const projectionScope = orientationScopeFromProjection(input.scopeProjection)
+  const selectedReleaseForReadModel = selectedRelease && projectionScope?.id === selectedRelease.id
+    ? {
+        ...selectedRelease,
+        nodeIds: [...projectionScope.nodeIds],
+        deferredNodeIds: [...projectionScope.deferredNodeIds],
+      }
+    : selectedRelease
   const normalizedReleases = releases
     .map(release => normalizeRelease({
       ...input,
@@ -1753,8 +1774,11 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
       releases: [release],
     }, tasks))
     .filter((release): release is OrientationRelease => Boolean(release))
-    .map(release => normalizeReadModelReleaseState(release, selectedRelease?.id ?? null))
-  const rawScope = releaseToScope(selectedRelease) ?? draftAugmentation.scope ?? normalizeScope(input, tasks)
+    .map(release => projectionScope?.id === release.id
+      ? { ...release, nodeIds: [...projectionScope.nodeIds], deferredNodeIds: [...projectionScope.deferredNodeIds] }
+      : release)
+    .map(release => normalizeReadModelReleaseState(release, selectedReleaseForReadModel?.id ?? null))
+  const rawScope = projectionScope ?? releaseToScope(selectedReleaseForReadModel) ?? draftAugmentation.scope ?? normalizeScope(input, tasks)
   const scope = rawScope ? normalizeScopeTaskLists(rawScope, tasks) : null
   const built = buildNodes(tasks, scope, now)
   const roots = mergeWorkspaceImportContexts({
@@ -1827,7 +1851,7 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
   return {
     projectId: input.projectId,
     updatedAt: now,
-    selectedRelease,
+    selectedRelease: selectedReleaseForReadModel,
     releases: normalizedReleases,
     selectedTaskScope: scope,
     scope,
@@ -1837,7 +1861,7 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
     summary: buildSummary({
       projectId: input.projectId,
       charter,
-      selectedRelease,
+      selectedRelease: selectedReleaseForReadModel,
       scope,
       progress,
       pins,

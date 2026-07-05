@@ -3,6 +3,7 @@ import {
   buildProjectOrientationSpine,
   taskEligibleForSelectedScope,
 } from '../project-orientation-spine.js'
+import { buildProjectScopeProjection } from '../project-scope-projection.js'
 
 describe('buildProjectOrientationSpine', () => {
   it('builds a scoped state-of-the-union spine from charter, release scope, work hierarchy, and proof', () => {
@@ -718,6 +719,72 @@ describe('buildProjectOrientationSpine', () => {
     expect(spine.summary.deferredWorkCount).toBe(1)
     expect(spine.nodes['work:parser-api']?.maturity).not.toBe('deferred')
     expect(spine.nodes['work:theme-editor']?.maturity).toBe('deferred')
+  })
+
+  it('uses the scope projection so unassigned current work appears in selected release counts', () => {
+    const tasks = [
+      {
+        id: 'task-current',
+        title: 'Recover source-backed contract surface',
+        description: 'Current release work.',
+        domain: 'harness',
+        projectPath: '/tmp/narrative-harness',
+        status: 'ready',
+        priority: 'normal',
+        releaseIds: ['near-term-proof-scope'],
+      },
+      {
+        id: 'task-model-proof',
+        title: 'Define MVP drafting model and physical-world review lanes',
+        description: 'Select a drafting model and define physical-world continuity reviewers.',
+        domain: 'product',
+        projectPath: '/tmp/narrative-harness',
+        status: 'exploring',
+        priority: 'normal',
+      },
+    ] as any[]
+    const scopeProjection = buildProjectScopeProjection({
+      version: 1,
+      lastUpdated: '2026-07-05T12:00:00.000Z',
+      selectedReleaseId: 'near-term-proof-scope',
+      releases: [{
+        id: 'near-term-proof-scope',
+        label: 'Near Term Proof Scope',
+        kind: 'release',
+        state: 'active',
+        source: 'inferred',
+        nodeIds: ['work:task-current'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks,
+    })
+
+    const spine = buildProjectOrientationSpine({
+      projectId: 'narrative-harness',
+      now: '2026-07-05T12:00:00.000Z',
+      selectedReleaseId: 'near-term-proof-scope',
+      releases: [{
+        id: 'near-term-proof-scope',
+        label: 'Near Term Proof Scope',
+        kind: 'release',
+        state: 'active',
+        source: 'inferred',
+        nodeIds: ['work:task-current'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks,
+      scopeProjection,
+    })
+
+    expect(spine.selectedRelease?.nodeIds).toEqual(['work:task-current', 'work:task-model-proof'])
+    expect(spine.scope?.nodeIds).toEqual(['work:task-current', 'work:task-model-proof'])
+    expect(spine.summary.includedWorkCount).toBe(2)
+    expect(spine.scopeRows.find(row => row.taskId === 'task-model-proof')).toMatchObject({
+      scope: 'included',
+      handoffState: 'not_shaped',
+    })
   })
 
   it('uses release records recovered from the workspace import draft as the visible scope', () => {
