@@ -494,7 +494,7 @@ describe('project re-intake apply', () => {
       expect.objectContaining({
         id: 'near-term-proof-scope',
         label: 'Near-term proof scope',
-        source: 'inferred_scope',
+        source: 'inferred',
         nodeIds: expect.arrayContaining([
           `work:${runnerTask?.id}`,
           `work:${dialogueTask?.id}`,

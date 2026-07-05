@@ -13903,7 +13903,7 @@ Narrative Harness-style proof scopes.
   - When docs describe a near-term proof goal that explicitly excludes UI,
     editor, shell, frontend, or product-surface work, re-intake can infer a
     `Near-term proof scope` through the stage before the first UI/shell stage.
-  - The inferred scope is marked with `source: inferred_scope` instead of
+  - The inferred scope is marked with `source: inferred` instead of
     pretending the docs contained a formal release name.
   - Explicit release/scope names remain the stronger model and can be used for
     arbitrary markers such as `2.0 alpha`, `V1 hardening`, or any owner-defined
@@ -13915,7 +13915,7 @@ Narrative Harness-style proof scopes.
     release `deferredNodeIds`, selected release id, workspace-import
     `DraftRelease`.
   - Required follow-up: UI/API surfaces that show release source should present
-    `inferred_scope` as inferred bounded scope, not as an owner-defined release.
+    `inferred` as inferred bounded scope, not as an owner-defined release.
   - Proof required: focused re-intake tests, workspace-import release tests,
     installed-app stale-server check before live mutation.
   - Proof provided: focused tests listed below.
@@ -13929,23 +13929,24 @@ Narrative Harness-style proof scopes.
 - Schema Migration Decision:
   - Persisted schema touched: project re-intake draft/release records stored in
     Guildhall task queue state.
-  - Scope: additive enum value for release source only.
-  - Change class: backward-compatible additive metadata.
+  - Scope: existing `inferred` release source value is reused for re-intake
+    scopes inferred from docs.
+  - Change class: compatible producer change.
   - Existing data impact: existing releases with `source: release_plan` remain
     unchanged; no migration of old records.
   - Migration id: none required.
   - Safety: readers already consume release objects structurally; the selected
     release id and task `releaseIds` formats are unchanged.
   - Required before run: no.
-  - Compatibility reader: release surfaces must tolerate both `release_plan` and
-    `inferred_scope`.
+  - Compatibility reader: release surfaces already tolerate both `release_plan`
+    and `inferred`.
   - Fixtures/tests: project re-intake regression asserts `source:
-    inferred_scope`; workspace-import release tests cover explicit release
+    inferred`; workspace-import release tests cover explicit release
     labels and arbitrary release ids.
   - Owner-facing plan text: inferred bounded scopes must be labeled as inferred
     until docs define a formal release.
-  - Rollback/revert behavior: remove inferred source value and re-run re-intake
-    to return to milestone-only release selection.
+  - Rollback/revert behavior: remove `detectNearTermProofScope` and re-run
+    re-intake to return to milestone-only release selection.
 - Verification:
   - `./node_modules/.bin/vitest run src/runtime/__tests__/project-reintake-apply.test.ts --reporter=dot`
     passed `11` tests.
@@ -13953,6 +13954,20 @@ Narrative Harness-style proof scopes.
     passed `38` tests.
   - `./node_modules/.bin/vitest run src/runtime/__tests__/project-reintake-apply.test.ts src/runtime/workspace-import/__tests__/hypothesis.test.ts --reporter=dot`
     passed `49` tests.
+  - Installed-app proof after correcting the source contract: `pnpm
+    dev:install`; `guildhall stop && guildhall start`; `/api/stale-server`
+    returned `stale:false` for PID `28541` from
+    `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+  - Re-ran and applied Narrative Harness re-intake from installed
+    `localhost:7777`. The applied draft selects `near-term-proof-scope`,
+    labels it `Near-term proof scope`, marks `source: inferred`, and includes
+    9 scoped work items.
+  - `/api/project?projectId=narrative-harness` now reports
+    `startReadiness.code: no_unattended_progress` instead of `all_terminal`,
+    with `9 specs are waiting for review before work can start`.
+  - `/api/project/spine?projectId=narrative-harness` reports the same
+    `Near-term proof scope` and proof contracts for the Stage 2/3 reviewer and
+    agent lanes plus the Stage 1 schema remediation task.
 
 2026-07-05T12:35:16Z - Kept workspace child repos and selected-scope proof
 contracts in the shared orientation model.

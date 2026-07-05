@@ -88,7 +88,7 @@ export interface ProjectReintakeReleaseDraft {
   label: string
   kind: 'release'
   state: 'active'
-  source: 'release_plan' | 'inferred_scope'
+  source: 'release_plan' | 'inferred'
   nodeIds: string[]
   deferredNodeIds: string[]
 }
@@ -929,7 +929,7 @@ function detectNearTermProofScope(content: string, currentStageNumber: number): 
     id: 'near-term-proof-scope',
     label: 'Near-term proof scope',
     stageNumber: maxProofStage,
-    source: 'inferred_scope',
+    source: 'inferred',
   }
 }
 
