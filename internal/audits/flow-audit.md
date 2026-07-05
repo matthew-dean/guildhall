@@ -13882,6 +13882,64 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-07-05T13:06:16Z - Preserved selected release metadata during task
+Git Story closure actions.
+
+- Work id: `codex:git-story-action-release-metadata-preservation-2026-07-05`.
+- User job: when a task-level Git Story action records that a dirty checkout is
+  local-only or deferred, Guildhall must keep the selected release/scope
+  container intact. The owner should not see the project snap back to an older
+  release, nor should Start/Resume change its run boundary because a task row
+  action rewrote the queue.
+- Finding:
+  - Narrative Harness was re-intaken into the inferred selected scope
+    `near-term-proof-scope`.
+  - Recording the generated `package-lock.json` churn as `local-only` through
+    `/api/project/task/:id/git-story/local-only` rewrote `TASKS.json` with only
+    `version`, `lastUpdated`, and `tasks`.
+  - That silently dropped top-level `selectedReleaseId` and `releases`, causing
+    project/release readiness to fall back to the older
+    `stage-1-fixture-and-evaluation-harness` scope and communicate the wrong
+    completion story.
+- Fix:
+  - The task Git Story closure endpoint now preserves the parsed queue object
+    when the stored task state is object-shaped, only normalizing missing
+    `version`, `lastUpdated`, and `tasks`.
+  - Added a focused regression where a selected inferred release survives a
+    `local-only` Git Story override.
+- Contract Touch Decision:
+  - Work id:
+    `codex:git-story-action-release-metadata-preservation-2026-07-05`.
+  - Touched contracts: task Git Story closure endpoint persistence behavior.
+  - Contracts considered but not touched: persisted task queue schema, release
+    schema, Git Story payload shape, Start/Resume execution picker.
+  - Existing data impact: no migration. Existing queue-level release metadata is
+    preserved on future task Git Story writes instead of being erased.
+  - Required follow-up: audit the remaining task-write endpoints for the same
+    anti-pattern and consolidate queue writes behind a shared helper when the
+    next touched endpoint needs it.
+  - Proof required: focused endpoint regression, build/install proof,
+    installed API agreement after applying the Git Story action.
+  - Proof provided:
+    - `./node_modules/.bin/vitest run src/runtime/__tests__/serve-task-endpoints.test.ts -t 'git-story' --reporter=dot`
+      passed.
+    - `CI=true NODE_ENV=development PNPM_CONFIG_PRODUCTION=false npm_config_production=false pnpm build:ui`
+      and `CI=true NODE_ENV=development PNPM_CONFIG_PRODUCTION=false npm_config_production=false node ./build.mjs`
+      passed.
+    - `pnpm dev:install`; `guildhall stop && guildhall start`; installed
+      `/api/stale-server` returned `stale:false` for PID `78265`.
+    - After reintake/apply plus the `local-only` action, installed
+      `/api/project?projectId=narrative-harness`,
+      `/api/project/release-readiness?projectId=narrative-harness`, and
+      `/api/project/spine?projectId=narrative-harness` all reported selected
+      scope `near-term-proof-scope` with `9` current spec-review work items and
+      `0` Git Story blockers.
+  - Apply/revert behavior: reverting the endpoint preservation restores the
+    metadata-drop bug; no data rollback is required beyond re-running reintake
+    if a live queue was flattened.
+
+source: codex:git-story-action-release-metadata-preservation-2026-07-05
+
 2026-07-05T12:46:53Z - Tightened re-intake release/scope recovery for
 Narrative Harness-style proof scopes.
 

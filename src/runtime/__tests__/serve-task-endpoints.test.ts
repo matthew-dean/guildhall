@@ -1058,6 +1058,61 @@ describe('POST /api/project/task/:id/git-story/:closureAction', () => {
       recordedBy: 'user',
     })
   })
+
+  it('preserves selected release metadata when recording a git story override', async () => {
+    const now = new Date().toISOString()
+    await writeTaskQueue({
+      version: 1,
+      lastUpdated: now,
+      selectedReleaseId: 'near-term-proof-scope',
+      releases: [{
+        id: 'near-term-proof-scope',
+        label: 'Near-term proof scope',
+        kind: 'release',
+        state: 'active',
+        source: 'inferred',
+        nodeIds: ['work:task-1'],
+        deferredNodeIds: [],
+      }],
+      tasks: [{
+        id: 'task-1',
+        title: 'Review scoped proof lane',
+        description: 'A test task',
+        domain: 'harness',
+        projectPath: tmpDir,
+        status: 'spec_review',
+        priority: 'normal',
+        releaseIds: ['near-term-proof-scope'],
+        revisionCount: 0,
+        remediationAttempts: 0,
+        origination: 'human',
+        createdAt: now,
+        updatedAt: now,
+      }],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const res = await app.fetch(new Request(projectUrl('/api/project/task/task-1/git-story/local-only'), {
+      method: 'POST',
+      body: JSON.stringify({ reason: 'Generated lockfile metadata churn.' }),
+      headers: { 'content-type': 'application/json' },
+    }))
+    expect(res.status).toBe(200)
+
+    const raw = await readTaskQueue()
+    expect(raw.selectedReleaseId).toBe('near-term-proof-scope')
+    expect(raw.releases).toEqual([
+      expect.objectContaining({
+        id: 'near-term-proof-scope',
+        source: 'inferred',
+        nodeIds: ['work:task-1'],
+      }),
+    ])
+    expect(raw.tasks[0]?.gitStory).toMatchObject({
+      override: 'local_only',
+      reason: 'Generated lockfile metadata churn.',
+    })
+  })
 })
 
 describe('filterEventsForTask (drawer live feed)', () => {
