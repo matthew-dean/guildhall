@@ -13882,6 +13882,41 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-07-05T12:35:16Z - Kept workspace child repos and selected-scope proof
+contracts in the shared orientation model.
+
+- Work id: `codex:workspace-child-repos-selected-proof-contracts-2026-07-05`.
+- User job: when a project path is a workspace envelope such as Looma + Knit,
+  Guildhall should transparently use the real child repositories as git
+  boundaries and should not make the owner infer which proof contracts belong
+  to the currently selected release.
+- Finding:
+  - Installed `/api/project/release-readiness?projectId=looma-knit` already
+    reported child repo blockers for `Looma` and `Knit` with no
+    `not a git repository` payload text.
+  - The shared orientation spine still exported proof contracts for deferred
+    work, leaving each view to remember to filter them locally.
+- Fix:
+  - `proofContractsForNodes()` now omits nodes whose computed maturity is
+    `deferred`, so the shared spine only hands views proof contracts for the
+    selected/current scope.
+  - The generic runtime fallback for raw `fatal: not a git repository` text now
+    explains the workspace-folder/child-repo distinction directly.
+- Verification:
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/project-orientation-spine.test.ts src/web/lib/__tests__/runtime-message.test.ts --reporter=dot`
+    passed `44` tests.
+  - Installed app proof: `pnpm build:ui`, `node ./build.mjs`,
+    `pnpm dev:install`, `guildhall stop && guildhall start`, then
+    `/api/stale-server` returned `stale:false` for PID `66276`.
+  - Live `/api/project/release-readiness?projectId=looma-knit` returned
+    repo ids `looma`, `knit`, `looma`, child dirty file `knit/.gitignore`,
+    and `rawHasNotGit:false`.
+  - Live `/api/project?projectId=looma-knit` returned selected release
+    `Stage 1: V1 Release Hardening`, scoped proof contracts for Stage 1 work,
+    repo labels `Looma`, `Knit`, `Looma`, and `rawHasNotGit:false`.
+
+source: codex:workspace-child-repos-selected-proof-contracts-2026-07-05
+
 2026-07-05T12:31:00Z - Scoped Project Map proof contracts to the selected
 release boundary.
 

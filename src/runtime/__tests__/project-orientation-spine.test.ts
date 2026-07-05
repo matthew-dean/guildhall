@@ -2025,6 +2025,36 @@ describe('buildProjectOrientationSpine', () => {
     })
   })
 
+  it('does not export deferred work as proof contracts for the selected scope', () => {
+    const spine = buildProjectOrientationSpine({
+      projectId: 'looma-knit',
+      scope: {
+        id: 'stage-1',
+        label: 'Stage 1',
+        kind: 'release',
+        source: 'release_plan',
+        nodeIds: ['work:current-proof'],
+        deferredNodeIds: ['work:later-proof'],
+      },
+      tasks: [
+        {
+          id: 'current-proof',
+          title: 'Current proof lane',
+          status: 'done',
+          proofPaths: ['tests/current.spec.ts'],
+        },
+        {
+          id: 'later-proof',
+          title: 'Later proof lane',
+          status: 'shelved',
+          proofPaths: ['tests/later.spec.ts'],
+        },
+      ],
+    })
+
+    expect(spine.proofContracts.map(contract => contract.title)).toEqual(['Current proof lane'])
+  })
+
   it('does not describe active task state as running while the project run is stopping', () => {
     const spine = buildProjectOrientationSpine({
       projectId: 'narrative-harness',
