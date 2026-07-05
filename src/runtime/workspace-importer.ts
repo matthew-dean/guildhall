@@ -2369,6 +2369,7 @@ function importedCurrentCompletionNeedsFreshProof(input: {
   refreshedAcceptanceCriteria: Task['acceptanceCriteria']
   refreshedProofPaths: Task['proofPaths']
 }): boolean {
+  if (taskHasDurableCompletionEvidence(input.existing)) return false
   const hasUnmetRefreshedCriteria = (input.refreshedAcceptanceCriteria ?? [])
     .some(criterion => criterion.met !== true)
   const hasUnverifiedRefreshedProof = (input.refreshedProofPaths ?? [])
@@ -2379,11 +2380,42 @@ function importedCurrentCompletionNeedsFreshProof(input: {
 
 function taskHasVerifiedCompletionEvidence(task: Task): boolean {
   return (
+    taskHasDurableCompletionEvidence(task) ||
     completionHandoffHasVerifiedEvidence(task.completionHandoff) ||
     (task.proofPaths ?? []).some(proofPathHasPassedEvidence) ||
     (task.gateResults ?? []).some(result => result.status === 'pass') ||
     (task.reviewVerdicts ?? []).some(verdict => verdict.decision === 'approved')
   )
+}
+
+function taskHasDurableCompletionEvidence(task: Task): boolean {
+  return task.doneSummaryBundle?.status === 'done' || task.mergeRecord?.result === 'merged'
+}
+
+function durableCompletedAt(task: Task): string | undefined {
+  return task.completedAt ?? task.doneSummaryBundle?.completedAt ?? task.mergeRecord?.mergedAt
+}
+
+function mergeImportedRefreshNotes(existing: Task['notes'], seeded: Task['notes']): Task['notes'] {
+  const merged = [...(existing ?? [])]
+  const seen = new Set(merged.map(note => [
+    note.agentId,
+    note.role,
+    note.timestamp,
+    note.content,
+  ].join('\u0000')))
+  for (const note of seeded ?? []) {
+    const key = [
+      note.agentId,
+      note.role,
+      note.timestamp,
+      note.content,
+    ].join('\u0000')
+    if (seen.has(key)) continue
+    seen.add(key)
+    merged.push(note)
+  }
+  return merged
 }
 
 function completionHandoffHasVerifiedEvidence(handoff: unknown): boolean {
@@ -4833,6 +4865,7 @@ export async function approveWorkspaceImport(
   ): Task['status'] => {
     const existingStatus = existing.status
     if (importedScope === 'later') return 'shelved'
+    if (taskHasDurableCompletionEvidence(existing)) return 'done'
     if (
       ['done', 'pending_pr'].includes(existingStatus) &&
       importedCurrentCompletionNeedsFreshProof({
@@ -4882,7 +4915,7 @@ export async function approveWorkspaceImport(
     existing.acceptanceCriteria = refreshedAcceptanceCriteria
     existing.requestIntake = seededBlueprint.requestIntake
     existing.references = normalizedReferences
-    existing.notes = seededBlueprint.notes
+    existing.notes = mergeImportedRefreshNotes(existing.notes, seededBlueprint.notes)
     existing.status = refreshedStatusForImportedTask(
       existing,
       imported.scope,
@@ -4890,6 +4923,9 @@ export async function approveWorkspaceImport(
       refreshedAcceptanceCriteria,
       materializedProof,
     )
+    if (existing.status === 'done' && !existing.completedAt) {
+      existing.completedAt = durableCompletedAt(existing) ?? now
+    }
     if (!['done', 'pending_pr'].includes(existing.status)) {
       delete existing.completedAt
     }

@@ -1200,6 +1200,94 @@ tasks:
     expect(refreshedQueue.tasks.find((t) => t.id === 'task-headless-schema')?.completedAt).toBeUndefined()
   })
 
+  it('keeps refreshed current work done when durable completion evidence survived status drift', async () => {
+    const spec = `
+\`\`\`yaml
+tasks:
+  - id: task-headless-schema
+    title: Define fixture, expected-record, prototype-run, and evaluation schemas.
+    description: First headless proof task for the documented MVP release.
+    domain: harness
+    priority: high
+    releaseIds:
+      - nh-headless-mvp
+    references:
+      - docs/harness/implementation-roadmap.md
+    acceptanceCriteria:
+      - id: contracts-defined
+        description: Fixture and run contracts are defined.
+        verifiedBy: review
+        source: documented
+    proofPaths:
+      - kind: review
+        source: inferred
+        expectedEvidence:
+          - Fixture and run contracts are visible in code or docs.
+\`\`\`
+`
+    await seedImporterWithSpec(spec)
+    await approveWorkspaceImport({
+      memoryDir,
+      projectPath: tmpDir,
+    })
+
+    const q = await readQueue()
+    const importedTask = q.tasks.find((t) => t.id === 'task-headless-schema')!
+    importedTask.status = 'spec_review'
+    importedTask.completedAt = undefined
+    importedTask.mergeRecord = {
+      fromBranch: 'guildhall/task-task-headless-schema',
+      toBranch: 'main',
+      strategy: 'cherry_pick_local',
+      result: 'merged',
+      mergedAt: '2026-07-04T00:20:00.000Z',
+      commitSha: 'abc123',
+    }
+    importedTask.doneSummaryBundle = {
+      taskId: importedTask.id,
+      status: 'done',
+      completedAt: '2026-07-04T00:10:00.000Z',
+      summary: {
+        journey: 'Worker completed the schema task.',
+        decision: 'Task finished as done.',
+        evidence: 'build passed.',
+        learningCandidates: [],
+        openResidue: 'No open residue recorded.',
+      },
+      retention: {
+        transcriptPrimaryArtifact: false,
+        compactedFullTranscript: false,
+        fullEvidenceAvailable: true,
+      },
+      evidenceRefs: [],
+      createdAt: '2026-07-04T00:10:00.000Z',
+      createdBy: 'orchestrator',
+    }
+    importedTask.notes.push({
+      agentId: 'landing-reconciliation',
+      role: 'git-story',
+      content: 'Marked task done from durable merge evidence after canonical status drifted back to active work.',
+      timestamp: '2026-07-04T00:20:00.000Z',
+    })
+    await writeQueue(q)
+
+    await seedImporterWithSpec(spec)
+    const refreshed = await approveWorkspaceImport({
+      memoryDir,
+      projectPath: tmpDir,
+      replacePreviouslyImportedTasks: true,
+    })
+    expect(refreshed).toMatchObject({ success: true })
+
+    const refreshedTask = (await readQueue()).tasks.find((t) => t.id === 'task-headless-schema')
+    expect(refreshedTask).toMatchObject({
+      status: 'done',
+      completedAt: '2026-07-04T00:10:00.000Z',
+      releaseIds: ['nh-headless-mvp'],
+    })
+    expect(refreshedTask?.notes.some(note => note.content.includes('durable merge evidence'))).toBe(true)
+  })
+
   it('archives dropped imported done work during a full scope refresh', async () => {
     await seedImporterWithSpec(`
 \`\`\`yaml

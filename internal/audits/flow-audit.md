@@ -13554,6 +13554,39 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-07-05T10:18:00Z - Fixed workspace import refresh so durable completion
+evidence cannot regress current release work back into spec review.
+
+- Work id: `codex:workspace-import-durable-completion-refresh-2026-07-05`.
+- User job: a project owner should be able to trust the current release map and
+  release readiness. If Guildhall-visible evidence says a task is merged/done,
+  re-import must not keep showing the same task as waiting for spec approval.
+- Finding:
+  - Narrative Harness Stage 1 showed four `spec_review` blockers even though
+    those task payloads contained `doneSummaryBundle.status = done`,
+    `mergeRecord.result = merged`, passing gates, and approved review verdicts.
+  - The orchestrator knew how to repair this drift, but workspace import refresh
+    could later re-open the same rows from regenerated import status.
+- Fix:
+  - Workspace import refresh now treats `doneSummaryBundle.status = done` and
+    `mergeRecord.result = merged` as durable completion evidence.
+  - Refreshed current work with durable completion evidence stays `done` and
+    backfills `completedAt` from the durable record when needed.
+  - Refresh preserves existing task notes instead of replacing visible history
+    with only the new import seed note.
+  - Release readiness now accepts recorded completion proof from done summaries,
+    passed gates, and approved reviews even when imported `proofPaths` lack
+    inline verification records.
+- Verification:
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/workspace-importer.test.ts --reporter=dot`
+    passed `80` tests, including the regression for a `spec_review` row with
+    durable done/merge evidence.
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/workspace-importer.test.ts src/runtime/__tests__/serve-release-readiness.test.ts --reporter=dot`
+    passed `106` tests, including the regression for done work with recorded
+    gates/review/done-summary proof and stale imported proof-path verification.
+
+source: codex:workspace-import-durable-completion-refresh-2026-07-05
+
 2026-07-05T10:10:00Z - Fixed workspace-import release selection and stale
 done-task cleanup after live Narrative Harness repopulation.
 

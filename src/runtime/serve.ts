@@ -1828,8 +1828,36 @@ function taskDoneButProofMissing(task: unknown): boolean {
   const handoffMissing = nonEmptyStringArray(handoffObject?.notVerified).length > 0 ||
     nonEmptyStringArray(handoffObject?.remainingRisks).length > 0
 
+  if (taskHasRecordedCompletionProof(task)) return false
   if (proofPaths.length === 0) return handoffMissing && !handoffVerified
   return proofPaths.some(proofPathMissingEvidence)
+}
+
+function taskHasRecordedCompletionProof(task: object): boolean {
+  const record = task as Record<string, unknown>
+  const doneSummary = record.doneSummaryBundle && typeof record.doneSummaryBundle === 'object' && !Array.isArray(record.doneSummaryBundle)
+    ? record.doneSummaryBundle as Record<string, unknown>
+    : null
+  const doneSummarySummary = doneSummary?.summary && typeof doneSummary.summary === 'object' && !Array.isArray(doneSummary.summary)
+    ? doneSummary.summary as Record<string, unknown>
+    : null
+  const doneSummaryEvidence = typeof doneSummarySummary?.evidence === 'string' && doneSummarySummary.evidence.trim().length > 0
+  if (doneSummary?.status === 'done' && doneSummaryEvidence) return true
+
+  const gateResults = Array.isArray(record.gateResults) ? record.gateResults : []
+  if (gateResults.some(item => {
+    if (!item || typeof item !== 'object') return false
+    const gate = item as Record<string, unknown>
+    return gate.passed === true || gate.status === 'pass' || gate.status === 'passed'
+  })) return true
+
+  const reviewVerdicts = Array.isArray(record.reviewVerdicts) ? record.reviewVerdicts : []
+  return reviewVerdicts.some(item => {
+    if (!item || typeof item !== 'object') return false
+    const verdict = item as Record<string, unknown>
+    return verdict.verdict === 'approve' || verdict.verdict === 'approved' ||
+      verdict.decision === 'approve' || verdict.decision === 'approved'
+  })
 }
 
 function proofPathMissingEvidence(proofPath: unknown): boolean {
