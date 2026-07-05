@@ -308,7 +308,9 @@ describe('buildProjectOrientationSpine', () => {
     })
 
     expect(spine.nodes['work:parent-contracts']?.maturity).toBe('active')
+    expect(spine.summary.progress.total).toBe(2)
     expect(spine.summary.progress.active).toBe(1)
+    expect(spine.summary.progress.ready).toBe(1)
     expect(spine.summary.headline).toBe('Stage 1: Fixture And Evaluation Harness is paused with work in progress.')
     expect(spine.summary.topBlocker).toBeNull()
     expect(spine.summary.nextAction).toBe('Resume the current work.')

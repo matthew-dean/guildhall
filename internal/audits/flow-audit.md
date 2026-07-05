@@ -14239,6 +14239,74 @@ Guildhall-owned provider recovery instead of owner blockers.
     policy-classification note, a `resume_from_checkpoint` recovery-playbook
     note, and a `provider-recovery` note.
 
+2026-07-05T23:45:00Z - Stopped double-counting materialized split parents as
+release execution work.
+
+- Work id: `codex:materialized-parent-execution-counts-2026-07-05`.
+- User job: when a parent work item has visible materialized child tasks,
+  Guildhall should use the parent to orient the project map and use the
+  children as execution/readiness units. The release should not look larger
+  or more ready because both parent and children are counted as runnable work.
+- Failing evidence:
+  - Live Narrative Harness showed `task-150` as a ready parent row while its
+    three child tasks were also current work. Release readiness counted `13`
+    tasks (`2 done`, `10 ready`, `1 in_progress`) even though the parent was
+    only the containing work for the DeepInfra/world-state/spatial children.
+  - The orientation progress denominator also mixed release parent nodes with
+    projected child execution counts: `total:10` while
+    `ready:9 + active:1 + done:2 = 12`.
+- Root cause:
+  - `3 task hierarchy/dependency/proof modeling problem`: the read model did
+    not distinguish containing work rows from visible child execution rows.
+  - `2 project structure/scope/release modeling problem`: selected release
+    node membership and execution-count membership were treated as the same
+    thing, even though a release can include a parent node whose children
+    supply the actual execution units.
+  - `5 UI communication/orientation problem`: Overview could summarize the
+    release with impossible arithmetic, making the project look amorphous
+    despite having the right hierarchy.
+- Fix:
+  - `ProjectScopeRow` now carries `parentTaskId`; shared scope projection
+    counts and Start/Release summaries exclude a parent only when it has
+    visible/countable included child rows. Parents with only hidden/internal
+    generated children remain the visible execution unit.
+  - Release readiness now uses the same distinction before building status
+    counts and unfinished totals.
+  - Orientation progress now takes its total/deferred denominator from the
+    scope projection execution counts when available, so summary progress
+    cannot combine parent-node totals with child execution states.
+- Verification:
+  - Added regressions for the Narrative Harness shape:
+    `counts materialized split children as execution work instead of
+    double-counting their parent`,
+    `counts materialized split children as release execution units instead of
+    counting the parent twice`, and an orientation progress assertion on
+    materialized child work.
+  - `CI=true pnpm exec vitest run
+    src/runtime/__tests__/project-orientation-spine.test.ts
+    src/runtime/__tests__/project-scope-projection.test.ts
+    src/runtime/__tests__/serve-release-readiness.test.ts` passed `86` tests.
+  - `node scripts/contract-touch-detector.mjs`, `git diff --check`, and
+    `node ./build.mjs` passed.
+  - Installed-app proof: after `node scripts/dev-install.mjs`,
+    `guildhall stop`, `guildhall start`, `/api/stale-server` returned
+    `stale:false` for PID `85242`. Live Narrative Harness
+    `/api/project/release-readiness?projectId=narrative-harness` now reports
+    `statusCounts:{done:2,ready:9,in_progress:1}`, `totals.tasks:12`,
+    `unfinishedCount:10`, `humanBlockingCount:0`, and `blockedByAgent:[]`
+    while the selected scope still contains parent node `work:task-150`.
+  - Live `/api/project?projectId=narrative-harness` shows
+    `includedWorkCount:12`, `progress.total:30`, `progress.deferred:18`,
+    `progress.ready:9`, `progress.active:1`, and `progress.done:2`; the
+    `task-150` scope row remains `hierarchyRole:"parent"`, while the
+    DeepInfra/world-state/spatial rows are `hierarchyRole:"child"`.
+  - Rendered Overview proof in the in-app browser at
+    `/projects/narrative-harness/overview`: first screen shows
+    `12 current tasks; 18 later`, `12 Current scope`, `18 Deferred`,
+    `2 / 12 done · 10 unfinished · 2 git blockers`, and the `Do this next`
+    card points to `Select and prove DeepInfra drafting model` with parent
+    context shown as supporting orientation, not the next runnable parent.
+
 2026-07-05T22:18:00Z - Repaired import-draft source recovery so Narrative
 Harness current scope can start.
 

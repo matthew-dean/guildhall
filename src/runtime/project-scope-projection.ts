@@ -32,6 +32,7 @@ export interface ProjectScope {
 export interface ProjectScopeRow {
   taskId: string
   title: string
+  parentTaskId?: string
   scope: 'included' | 'deferred'
   eligibilityReason: ProjectScopeEligibilityReason
   hierarchyRole: ProjectScopeHierarchyRole
@@ -355,6 +356,7 @@ function buildScopeRow(
   return {
     taskId: task.id,
     title: taskDisplayLabel(task, task.id),
+    ...(parent ? { parentTaskId: parent.id } : {}),
     scope,
     eligibilityReason: eligibility.reason,
     hierarchyRole: role,
@@ -466,10 +468,10 @@ function sourceRefsForTask(task: Task): string[] {
 }
 
 function summarizeRows(rows: readonly ProjectScopeRow[]): ProjectScopeProjection['counts'] {
-  const included = rows.filter(row => row.scope === 'included')
+  const included = executionRows(rows).filter(row => row.scope === 'included')
   return {
     included: included.length,
-    deferred: rows.filter(row => row.scope === 'deferred').length,
+    deferred: executionRows(rows).filter(row => row.scope === 'deferred').length,
     ready: included.filter(row => row.handoffState === 'ready').length,
     paused: included.filter(row => row.handoffState === 'paused').length,
     active: included.filter(row => row.handoffState === 'paused' || row.handoffState === 'review').length,
@@ -480,8 +482,17 @@ function summarizeRows(rows: readonly ProjectScopeRow[]): ProjectScopeProjection
   }
 }
 
+function executionRows(rows: readonly ProjectScopeRow[]): ProjectScopeRow[] {
+  const visibleChildParentIds = new Set(
+    rows
+      .filter(row => row.parentTaskId && row.scope === 'included')
+      .map(row => row.parentTaskId!),
+  )
+  return rows.filter(row => row.hierarchyRole !== 'parent' || !visibleChildParentIds.has(row.taskId))
+}
+
 function summarizeStart(rows: readonly ProjectScopeRow[], selectedScope: ProjectScope | null): ProjectScopeProjection['start'] {
-  const included = rows.filter(row => row.scope === 'included')
+  const included = executionRows(rows).filter(row => row.scope === 'included')
   const paused = included.find(row => row.handoffState === 'paused')
   if (paused) {
     return {
@@ -567,8 +578,8 @@ function summarizeStart(rows: readonly ProjectScopeRow[], selectedScope: Project
 }
 
 function summarizeRelease(rows: readonly ProjectScopeRow[]): ProjectScopeProjection['release'] {
-  const included = rows.filter(row => row.scope === 'included')
-  const blockers = rows
+  const included = executionRows(rows).filter(row => row.scope === 'included')
+  const blockers = executionRows(rows)
     .filter(row => row.scope === 'included' && row.blocksRelease)
     .map(row => ({
       id: row.taskId,

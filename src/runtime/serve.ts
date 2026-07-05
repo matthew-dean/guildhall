@@ -2086,10 +2086,25 @@ function summarizeScopedReleaseWork(
   const executionScopedTasks = tasksEligibleForScopeExecution(tasks, scope)
     .filter(task => task.id !== META_INTAKE_TASK_ID && task.id !== WORKSPACE_IMPORT_TASK_ID)
     .filter(task => !['archived', 'cancelled'].includes(String(task.status ?? '')))
+  const inScopeMaterializedChildren = (task: Task): Task[] => {
+    const childIds = new Set<string>([
+      ...((task.hierarchy?.childIds ?? []).filter((id): id is string => typeof id === 'string' && id.trim().length > 0)),
+      ...tasks
+        .filter(candidate => candidate.hierarchy?.parentId === task.id)
+        .map(candidate => candidate.id),
+    ])
+    return [...childIds]
+      .map(childId => tasksById.get(childId))
+      .filter((child): child is Task => Boolean(child))
+      .filter(child => taskEligibleForSelectedScope(child, scope, { tasksById }).eligible)
+      .filter(child => !['archived', 'cancelled', 'shelved'].includes(String(child.status ?? '')))
+      .filter(child => deriveTaskWorkVisibility(child, task).countInProjectTotals)
+  }
   const scopedTasks = executionScopedTasks.filter((task) => {
     const parentId = task.hierarchy?.parentId?.trim()
     const parent = parentId ? tasksById.get(parentId) ?? null : null
-    return deriveTaskWorkVisibility(task, parent).countInProjectTotals
+    if (!deriveTaskWorkVisibility(task, parent).countInProjectTotals) return false
+    return inScopeMaterializedChildren(task).length === 0
   })
   const statusCounts: Record<string, number> = {}
   const openEscalations: Array<{ taskId: string; taskTitle: string; escalationId: string; reason: string; summary: string }> = []
@@ -2107,20 +2122,6 @@ function summarizeScopedReleaseWork(
     if (!releaseBlockersById.has(blocker.id)) releaseBlockersById.set(blocker.id, blocker)
   }
   const blockerSubject = (title: string) => title.trim().replace(/[.?!:;,\s]+$/g, '')
-  const inScopeMaterializedChildren = (task: Task): Task[] => {
-    const childIds = new Set<string>([
-      ...((task.hierarchy?.childIds ?? []).filter((id): id is string => typeof id === 'string' && id.trim().length > 0)),
-      ...tasks
-        .filter(candidate => candidate.hierarchy?.parentId === task.id)
-        .map(candidate => candidate.id),
-    ])
-    return [...childIds]
-      .map(childId => tasksById.get(childId))
-      .filter((child): child is Task => Boolean(child))
-      .filter(child => taskEligibleForSelectedScope(child, scope, { tasksById }).eligible)
-      .filter(child => !['archived', 'cancelled', 'shelved'].includes(String(child.status ?? '')))
-  }
-
   for (const t of scopedTasks) {
     const status = String((t as { status?: string }).status ?? 'unknown')
     statusCounts[status] = (statusCounts[status] ?? 0) + 1

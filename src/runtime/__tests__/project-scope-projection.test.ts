@@ -139,6 +139,50 @@ describe('buildProjectScopeProjection', () => {
     })
   })
 
+  it('counts materialized split children as execution work instead of double-counting their parent', () => {
+    const projection = buildProjectScopeProjection(queue([
+      task({
+        id: 'task-contracts',
+        title: 'Define harness contracts',
+        hierarchy: { childIds: ['task-model', 'task-world'], order: 0 },
+        spec: 'Define the fixture contract.',
+        acceptanceCriteria: [{ id: 'AC-1', description: 'Contract is defined.', verifiedBy: 'test', met: false }],
+      }),
+      task({
+        id: 'task-model',
+        title: 'Select and prove DeepInfra drafting model',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        hierarchy: { parentId: 'task-contracts', childIds: [], order: 0 },
+        spec: 'Select a DeepInfra model.',
+        acceptanceCriteria: [{ id: 'AC-1', description: 'Model is selected.', verifiedBy: 'test', met: false }],
+      }),
+      task({
+        id: 'task-world',
+        title: 'Define world-state continuity review lane',
+        status: 'ready',
+        hierarchy: { parentId: 'task-contracts', childIds: [], order: 1 },
+        spec: 'Define the world-state reviewer.',
+        acceptanceCriteria: [{ id: 'AC-1', description: 'Reviewer lane is defined.', verifiedBy: 'test', met: false }],
+      }),
+    ]))
+
+    expect(projection.rows.find(row => row.taskId === 'task-contracts')).toMatchObject({
+      hierarchyRole: 'parent',
+      scope: 'included',
+    })
+    expect(projection.rows.filter(row => row.scope === 'included')).toHaveLength(3)
+    expect(projection.counts.included).toBe(2)
+    expect(projection.counts.paused).toBe(1)
+    expect(projection.counts.ready).toBe(1)
+    expect(projection.start).toMatchObject({
+      canStart: true,
+      label: 'Resume',
+      focusTaskId: 'task-model',
+      focusKind: 'paused_work',
+    })
+  })
+
   it('treats spec-shaped ready work as runnable even when the imported brief is thin', () => {
     const projection = buildProjectScopeProjection(queue([
       task({

@@ -697,6 +697,79 @@ describe('GET /api/project/release-readiness', () => {
     expect(body.ready).toBe(false)
   })
 
+  it('counts materialized split children as release execution units instead of counting the parent twice', async () => {
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: 'headless-mvp',
+      releases: [{
+        id: 'headless-mvp',
+        label: 'Headless MVP',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-contracts'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [
+        makeTask({
+          id: 'task-contracts',
+          title: 'Define Narrative Harness MVP drafting model and physical-world review lanes',
+          status: 'ready',
+          releaseIds: ['headless-mvp'],
+          spec: 'Parent spec represented by linked child tasks.',
+          acceptanceCriteria: [{ id: 'AC-1', description: 'Child work is complete.', verifiedBy: 'review', met: false }],
+          hierarchy: {
+            childIds: [
+              'task-contracts-split-model',
+              'task-contracts-split-world',
+              'task-contracts-split-space',
+            ],
+            relation: 'contains',
+          } as Task['hierarchy'],
+        }),
+        makeTask({
+          id: 'task-contracts-split-model',
+          title: 'Select and prove DeepInfra drafting model',
+          status: 'in_progress',
+          assignedTo: 'worker-agent',
+          hierarchy: { parentId: 'task-contracts', childIds: [], order: 0, relation: 'decomposes' } as Task['hierarchy'],
+          spec: 'Select and prove a DeepInfra-accessible drafting model.',
+          acceptanceCriteria: [{ id: 'AC-1', description: 'Model is proven across genres.', verifiedBy: 'review', met: false }],
+        }),
+        makeTask({
+          id: 'task-contracts-split-world',
+          title: 'Define world-state continuity review lane',
+          status: 'ready',
+          hierarchy: { parentId: 'task-contracts', childIds: [], order: 1, relation: 'decomposes' } as Task['hierarchy'],
+          spec: 'Define world-state continuity.',
+          acceptanceCriteria: [{ id: 'AC-1', description: 'World state reviewer exists.', verifiedBy: 'review', met: false }],
+        }),
+        makeTask({
+          id: 'task-contracts-split-space',
+          title: 'Define spatial/geographic continuity review lane',
+          status: 'ready',
+          hierarchy: { parentId: 'task-contracts', childIds: [], order: 2, relation: 'decomposes' } as Task['hierarchy'],
+          spec: 'Define spatial continuity.',
+          acceptanceCriteria: [{ id: 'AC-1', description: 'Spatial reviewer exists.', verifiedBy: 'review', met: false }],
+        }),
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await approveDesignSystem(app)
+    await commitAndPush('materialized children are execution units')
+
+    const res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
+    const body = await res.json() as any
+
+    expect(body.statusCounts).toEqual({ in_progress: 1, ready: 2 })
+    expect(body.totals.tasks).toBe(3)
+    expect(body.totals.unfinishedCount).toBe(3)
+    expect(body.blockedByAgent).toEqual([])
+    expect(body.releaseBlockers ?? []).toEqual([])
+  })
+
   it('does not treat ready spec-shaped work as incomplete brief cleanup', async () => {
     await seedQueue({
       version: 1,

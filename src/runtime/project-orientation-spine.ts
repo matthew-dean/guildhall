@@ -883,12 +883,12 @@ function progressFromScopeProjection(
   return {
     ...fallback,
     scopeId,
-    total: fallback.total,
+    total: Math.max(fallback.total, projection.counts.included + projection.counts.deferred),
     ready: projection.counts.ready,
     active: Math.max(projection.counts.active, fallback.active),
     done: projection.counts.done,
     blocked: projection.counts.ownerBlocked + projection.counts.proofBlocked,
-    deferred: fallback.deferred,
+    deferred: Math.max(fallback.deferred, projection.counts.deferred),
   }
 }
 
