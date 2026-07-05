@@ -13388,6 +13388,36 @@ deterministic spec recovery instead of owner blockers.
 
 source: codex:durable-progress-spec-seed-2026-07-05
 
+2026-07-05T02:21:00Z - Routed container-workspace tasks to named child git
+repos before worktree and Git Story decisions.
+
+- Work id: `codex:container-child-repo-resolution-2026-07-05`.
+- User job: when a project is an envelope like Looma + Knit, Guildhall should
+  recognize the child git repos it already discovered and run against the repo
+  named by the task. The owner should not see "not a git repository" just
+  because the envelope folder itself is not a repo.
+- Observed failure:
+  - The resolver could use explicit `domain` or `projectPath`, but an imported
+    task with `projectPath` set to the envelope and text such as "Knit
+    destructive confirmation flow" could still resolve to the envelope path.
+  - Git Story policy could also fall back to workspace-level policy when the
+    task text clearly named one child repo.
+- Fix:
+  - `resolveEffectiveTaskProjectPath` now matches a single child project named
+    in task domain/title/description before treating an envelope `projectPath`
+    as the executable repo.
+  - Git Story policy now uses the same conservative single-child match so
+    execution repo and closure policy do not disagree.
+  - Ambiguous task text naming multiple child repos stays on the workspace
+    envelope instead of guessing.
+- Verification:
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/task-gates.test.ts -t 'resolveEffectiveTaskProjectPath'`
+    passed `9` focused tests.
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/git-story.test.ts -t 'discoverChildGitProjects|effectiveGitStoryPolicy'`
+    passed `5` focused tests.
+
+source: codex:container-child-repo-resolution-2026-07-05
+
 2026-07-05T00:49:00Z - Fixed imported execution blueprints being stranded by
 stale proofability readiness.
 

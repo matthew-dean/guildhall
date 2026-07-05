@@ -5,6 +5,7 @@ import { resolveRuntimePath } from './path-utils.js'
 import type { ResolvedConfig } from '@guildhall/config'
 import { detectGateCommands, detectPackageManager, type PackageManager } from './bootstrap.js'
 import { detectBootstrapHypothesis } from './detect-bootstrap.js'
+import { workspaceProjectNamedInText } from './workspace-project-match.js'
 
 type BootstrapBlock = NonNullable<ResolvedConfig['bootstrap']>
 type WorkspaceProjectBlock = NonNullable<ResolvedConfig['projects']>[number]
@@ -1066,7 +1067,7 @@ function mergeVerificationCommands(
 }
 
 function workspaceProjectForTask(
-  task: Pick<Task, 'projectPath' | 'domain'>,
+  task: Pick<Task, 'projectPath' | 'domain'> & Partial<Pick<Task, 'title' | 'description'>>,
   workspaceProjects: readonly WorkspaceProjectBlock[] | undefined,
 ): WorkspaceProjectBlock | undefined {
   if (!workspaceProjects || workspaceProjects.length === 0) return undefined
@@ -1077,6 +1078,8 @@ function workspaceProjectForTask(
     )
     if (domainMatch) return domainMatch
   }
+  const textMatch = workspaceProjectNamedInTask(task, workspaceProjects)
+  if (textMatch) return textMatch
   const taskProjectPath = typeof task.projectPath === 'string' ? task.projectPath.trim() : ''
   if (!taskProjectPath) return undefined
   const resolvedTaskProjectPath = resolveRuntimePath(taskProjectPath)
@@ -1084,7 +1087,7 @@ function workspaceProjectForTask(
 }
 
 export function resolveEffectiveTaskProjectPath(
-  task: Pick<Task, 'projectPath' | 'domain'>,
+  task: Pick<Task, 'projectPath' | 'domain'> & Partial<Pick<Task, 'title' | 'description'>>,
   workspaceProjectPath: string,
   options: { workspaceProjects?: readonly WorkspaceProjectBlock[] } = {},
 ): string {
@@ -1096,6 +1099,12 @@ export function resolveEffectiveTaskProjectPath(
       : resolveRuntimePath(path.join(workspaceProjectPath, taskProjectPath))
     const resolvedWorkspaceProjectPath = resolveRuntimePath(workspaceProjectPath)
     if (
+      workspaceProject &&
+      path.resolve(resolvedTaskProjectPath) === path.resolve(resolvedWorkspaceProjectPath)
+    ) {
+      return resolveRuntimePath(workspaceProject.path)
+    }
+    if (
       isDocumentationSourcePath(resolvedTaskProjectPath, resolvedWorkspaceProjectPath) &&
       !hasExecutionProjectMarker(resolvedTaskProjectPath)
     ) {
@@ -1106,6 +1115,17 @@ export function resolveEffectiveTaskProjectPath(
   }
   if (workspaceProject) return resolveRuntimePath(workspaceProject.path)
   return resolveRuntimePath(workspaceProjectPath)
+}
+
+function workspaceProjectNamedInTask(
+  task: Pick<Task, 'projectPath' | 'domain'> & Partial<Pick<Task, 'title' | 'description'>>,
+  workspaceProjects: readonly WorkspaceProjectBlock[],
+): WorkspaceProjectBlock | undefined {
+  return workspaceProjectNamedInText(workspaceProjects, [
+    task.domain,
+    task.title,
+    task.description,
+  ])
 }
 
 export function resolveEffectiveTaskBootstrapBlock(input: {

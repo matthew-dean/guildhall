@@ -283,4 +283,118 @@ describe('effectiveGitStoryPolicy', () => {
     expect(policy.policyRoot).toBe('/workspace/looma')
     expect(policy.source).toBe('workspace-project')
   })
+
+  it('uses the child project policy when task text names one child repo', () => {
+    const policy = effectiveGitStoryPolicy({
+      workspacePath: '/workspace',
+      workspaceProjectPath: '/workspace',
+      workspaceGitStory: {
+        completionTarget: 'open_pr',
+        commit: 'ask',
+        push: 'ask',
+        pullRequest: 'ask',
+        merge: 'ask',
+        localOnlyAllowed: true,
+        deferAllowed: true,
+        requireCleanRelease: true,
+        allowForcePush: false,
+        allowSharedBranchRebase: false,
+        discoveredFrom: [],
+      },
+      workspaceProjects: [
+        {
+          id: 'looma',
+          path: '/workspace/looma',
+        },
+        {
+          id: 'knit',
+          path: '/workspace/knit',
+          gitStory: {
+            completionTarget: 'open_pr',
+            commit: 'auto',
+            push: 'ask',
+            pullRequest: 'ask',
+            merge: 'ask',
+            localOnlyAllowed: true,
+            deferAllowed: true,
+            requireCleanRelease: true,
+            allowForcePush: false,
+            allowSharedBranchRebase: false,
+            discoveredFrom: [],
+          },
+        },
+      ],
+      task: {
+        projectPath: '/workspace',
+        title: 'Integrate AlertDialog into Knit destructive confirmation flow',
+      },
+    })
+
+    expect(policy.commit).toBe('auto')
+    expect(policy.policyRoot).toBe('/workspace/knit')
+    expect(policy.source).toBe('workspace-project')
+  })
+
+  it('keeps workspace policy when task text names multiple child repos', () => {
+    const policy = effectiveGitStoryPolicy({
+      workspacePath: '/workspace',
+      workspaceProjectPath: '/workspace',
+      workspaceGitStory: {
+        completionTarget: 'open_pr',
+        commit: 'ask',
+        push: 'ask',
+        pullRequest: 'ask',
+        merge: 'ask',
+        localOnlyAllowed: true,
+        deferAllowed: true,
+        requireCleanRelease: true,
+        allowForcePush: false,
+        allowSharedBranchRebase: false,
+        discoveredFrom: [],
+      },
+      workspaceProjects: [
+        {
+          id: 'looma',
+          path: '/workspace/looma',
+          gitStory: {
+            completionTarget: 'open_pr',
+            commit: 'auto',
+            push: 'ask',
+            pullRequest: 'ask',
+            merge: 'ask',
+            localOnlyAllowed: true,
+            deferAllowed: true,
+            requireCleanRelease: true,
+            allowForcePush: false,
+            allowSharedBranchRebase: false,
+            discoveredFrom: [],
+          },
+        },
+        {
+          id: 'knit',
+          path: '/workspace/knit',
+          gitStory: {
+            completionTarget: 'open_pr',
+            commit: 'auto',
+            push: 'ask',
+            pullRequest: 'ask',
+            merge: 'ask',
+            localOnlyAllowed: true,
+            deferAllowed: true,
+            requireCleanRelease: true,
+            allowForcePush: false,
+            allowSharedBranchRebase: false,
+            discoveredFrom: [],
+          },
+        },
+      ],
+      task: {
+        title: 'Coordinate Looma and Knit release proof',
+      },
+    })
+
+    expect(policy.commit).toBe('ask')
+    expect(policy.policyRoot).toBe('/workspace')
+    expect(policy.source).toBe('workspace')
+  })
 })

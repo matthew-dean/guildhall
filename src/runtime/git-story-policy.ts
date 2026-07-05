@@ -7,6 +7,7 @@ import {
   type ResolvedConfig,
   type WorkspaceYamlConfig,
 } from '@guildhall/config'
+import { workspaceProjectNamedInText } from './workspace-project-match.js'
 
 type WorkspaceProject = NonNullable<ResolvedConfig['projects']>[number]
 const IGNORED_CHILD_GIT_PROJECT_DIRS = new Set(['.git', '.guildhall', 'node_modules', 'dist', 'build', 'coverage'])
@@ -20,6 +21,8 @@ export interface GitStoryPolicyContext {
     domain?: string
     projectPath?: string
     worktreePath?: string
+    title?: string
+    description?: string
   } | Record<string, unknown>
 }
 
@@ -80,7 +83,7 @@ export function resolveWorkspaceProjectPathsOrDiscover(
   return configured.length > 0 ? configured : discoverChildGitProjects(resolveWorkspaceBaseProjectPath(workspacePath, config))
 }
 
-function taskString(task: GitStoryPolicyContext['task'], key: 'domain' | 'projectPath' | 'worktreePath'): string | undefined {
+function taskString(task: GitStoryPolicyContext['task'], key: string): string | undefined {
   if (!task) return undefined
   const value = (task as Record<string, unknown>)[key]
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined
@@ -112,12 +115,27 @@ export function resolveGitStoryWorkspaceProject(input: GitStoryPolicyContext): W
     if (domainMatch) return domainMatch
   }
 
+  const namedMatch = workspaceProjectNamedInTask(input.task, projects)
+  if (namedMatch) return namedMatch
+
   if (taskWorktreePath) {
     const worktreeMatch = projects.find(project => isInside(taskWorktreePath, project.path))
     if (worktreeMatch) return worktreeMatch
   }
 
   return undefined
+}
+
+function workspaceProjectNamedInTask(
+  task: GitStoryPolicyContext['task'],
+  projects: readonly WorkspaceProject[],
+): WorkspaceProject | undefined {
+  if (!task) return undefined
+  return workspaceProjectNamedInText(projects, [
+    taskString(task, 'domain'),
+    taskString(task, 'title'),
+    taskString(task, 'description'),
+  ])
 }
 
 export function effectiveGitStoryPolicy(input: GitStoryPolicyContext): GitStoryPolicyType & {

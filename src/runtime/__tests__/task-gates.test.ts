@@ -87,6 +87,63 @@ describe('resolveEffectiveTaskProjectPath', () => {
     ).toBe(knitPath)
   })
 
+  it('routes container-scoped tasks to the child repo named in task text', async () => {
+    const loomaPath = path.join(tmpDir, 'looma')
+    const knitPath = path.join(tmpDir, 'knit')
+
+    expect(
+      resolveEffectiveTaskProjectPath(
+        {
+          projectPath: tmpDir,
+          title: 'Integrate AlertDialog into Knit destructive confirmation flow',
+        },
+        tmpDir,
+        {
+          workspaceProjects: [
+            { id: 'looma', path: loomaPath } as any,
+            { id: 'knit', path: knitPath } as any,
+          ],
+        },
+      ),
+    ).toBe(knitPath)
+  })
+
+  it('routes broad domain labels to the named child repo', async () => {
+    const loomaPath = path.join(tmpDir, 'looma')
+    const knitPath = path.join(tmpDir, 'knit')
+
+    expect(
+      resolveEffectiveTaskProjectPath(
+        { domain: 'Knit destructive confirmation flow' },
+        tmpDir,
+        {
+          workspaceProjects: [
+            { id: 'looma', path: loomaPath } as any,
+            { id: 'knit', path: knitPath } as any,
+          ],
+        },
+      ),
+    ).toBe(knitPath)
+  })
+
+  it('does not guess a child repo when task text names multiple child repos', async () => {
+    const loomaPath = path.join(tmpDir, 'looma')
+    const knitPath = path.join(tmpDir, 'knit')
+
+    expect(
+      resolveEffectiveTaskProjectPath(
+        { title: 'Coordinate Looma and Knit release proof' },
+        tmpDir,
+        {
+          workspaceProjects: [
+            { id: 'looma', path: loomaPath } as any,
+            { id: 'knit', path: knitPath } as any,
+          ],
+        },
+      ),
+    ).toBe(tmpDir)
+  })
+
   it('keeps docs as source trail while routing domain-scoped execution to the child repo', async () => {
     const docsPath = path.join(tmpDir, 'docs', 'looma')
     const loomaPath = path.join(tmpDir, 'looma')
