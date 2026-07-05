@@ -310,6 +310,48 @@ describe('formWorkspaceHypothesis', () => {
     expect(draft.tasks.find(task => task.title === 'Finish later visual polish')?.releaseIds).toBeUndefined()
   })
 
+  it('assigns untagged later work to the matching documented later release scope', () => {
+    const draft = formWorkspaceHypothesis(
+      invFrom([
+        {
+          source: 'planning-docs',
+          kind: 'context',
+          title: 'Stage 1: V1 Release Hardening',
+          evidence: 'docs/release-plan.md: ## Stage 1: V1 Release Hardening',
+          references: ['docs/release-plan.md'],
+          scopeHint: 'current',
+          releaseId: 'stage-1-v1-release-hardening',
+          releaseLabel: 'Stage 1: V1 Release Hardening',
+          confidence: 'medium',
+        },
+        {
+          source: 'planning-docs',
+          kind: 'context',
+          title: 'Stage 2: Primitive Convergence',
+          evidence: 'docs/release-plan.md: ## Stage 2: Primitive Convergence',
+          references: ['docs/release-plan.md'],
+          scopeHint: 'later',
+          releaseId: 'stage-2-primitive-convergence',
+          releaseLabel: 'Stage 2: Primitive Convergence',
+          confidence: 'medium',
+        },
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'Finish remaining high-use primitive replacement',
+          evidence: 'docs/release-plan.md: - Finish remaining high-use primitive replacement',
+          references: ['docs/release-plan.md'],
+          scopeHint: 'later',
+          confidence: 'high',
+        },
+      ]),
+    )
+
+    expect(draft.tasks.find(task => task.title === 'Finish remaining high-use primitive replacement')?.releaseIds).toEqual([
+      'stage-2-primitive-convergence',
+    ])
+  })
+
   it('lets explicit later scope win when duplicate planning signals disagree', () => {
     const draft = formWorkspaceHypothesis(
       invFrom([

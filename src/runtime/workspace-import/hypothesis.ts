@@ -759,16 +759,20 @@ function assignCurrentReleaseScopes(
   const releasesWithRefs = releases.map(release => ({
     release,
     refs: new Set(release.references ?? []),
-  })).filter(entry => entry.release.scope !== 'later')
+  }))
   return tasks.map(task => {
-    if (task.scope === 'later' || task.releaseIds?.length) return task
+    if (task.releaseIds?.length) return task
     const matching = releasesWithRefs
       .filter(entry => {
-        if (releases.length === 1) return true
+        if (task.scope === 'later' && entry.release.scope !== 'later') return false
+        if (task.scope !== 'later' && entry.release.scope === 'later') return false
+        if (releases.length === 1 && task.scope !== 'later') return true
         return (task.references ?? []).some(ref => entry.refs.has(ref))
       })
       .map(entry => entry.release.id)
-    const selected = selectAutomaticCurrentReleaseIds(matching, releases)
+    const selected = task.scope === 'later'
+      ? [...new Set(matching)]
+      : selectAutomaticCurrentReleaseIds(matching, releases)
     if (selected.length === 0) return task
     return {
       ...task,

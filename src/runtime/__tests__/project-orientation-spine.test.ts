@@ -1192,6 +1192,77 @@ describe('buildProjectOrientationSpine', () => {
     expect(spine.summary.nextAction).toBe('Refresh import for newly documented work.')
   })
 
+  it('does not let import-refresh follow-up hide release proof blockers', () => {
+    const spine = buildProjectOrientationSpine({
+      projectId: 'narrative-harness',
+      now: '2026-07-05T10:00:00.000Z',
+      scope: {
+        id: 'stage-1-fixture-and-evaluation-harness',
+        label: 'Stage 1: Fixture And Evaluation Harness',
+        kind: 'release',
+        source: 'release_plan',
+        nodeIds: ['work:fixture-schema', 'work:runner-proof'],
+        deferredNodeIds: ['work:later-ui'],
+      },
+      tasks: [
+        { id: 'fixture-schema', title: 'Define fixture schemas.', status: 'done', spec: 'Done.', acceptanceCriteria: [{ met: true }] },
+        { id: 'runner-proof', title: 'Implement no-UI runner.', status: 'done', spec: 'Done.', acceptanceCriteria: [{ met: true }] },
+        { id: 'later-ui', title: 'Later UI lane.', status: 'shelved', spec: 'Later.', acceptanceCriteria: [{ met: false }] },
+      ],
+      startReadiness: {
+        canStart: false,
+        code: 'workspace_import_refresh_needed',
+        message: 'Workspace import is under-scoped for newly documented work.',
+        actionHref: '/workspace-import',
+      },
+      releaseReadiness: {
+        verdict: 'blocked',
+        blockers: [
+          { id: 'fixture-schema', label: 'Define fixture schemas needs proof evidence before the release is complete.' },
+          { id: 'runner-proof', label: 'Implement no-UI runner needs proof evidence before the release is complete.' },
+        ],
+      },
+      scopeProjection: {
+        selectedScope: {
+          id: 'stage-1-fixture-and-evaluation-harness',
+          label: 'Stage 1: Fixture And Evaluation Harness',
+          kind: 'release',
+          source: 'release_plan',
+          nodeIds: ['work:fixture-schema', 'work:runner-proof'],
+          deferredNodeIds: ['work:later-ui'],
+        },
+        rows: [],
+        counts: {
+          included: 2,
+          deferred: 1,
+          ready: 0,
+          paused: 0,
+          active: 0,
+          done: 2,
+          ownerBlocked: 0,
+          proofBlocked: 2,
+          humanBlocking: 0,
+        },
+        start: {
+          canStart: false,
+          code: 'workspace_import_refresh_needed',
+          label: 'Start blocked',
+          message: 'Workspace import is under-scoped for newly documented work.',
+          actionHref: '/workspace-import',
+        },
+        release: {
+          state: 'done',
+          blockers: [],
+        },
+      },
+    })
+
+    expect(spine.summary.headline).toBe('Stage 1: Fixture And Evaluation Harness is blocked on proof.')
+    expect(spine.summary.topBlocker).toBe('Define fixture schemas needs proof evidence before the release is complete.')
+    expect(spine.summary.nextAction).toBe('Review blocker: Define fixture schemas needs proof evidence before the release is complete.')
+    expect(spine.release.blockers.map(blocker => blocker.id)).toEqual(['fixture-schema', 'runner-proof'])
+  })
+
   it('uses live workspace-import draft scope to surface current and deferred work before approval', () => {
     const spine = buildProjectOrientationSpine({
       projectId: 'narrative-harness',

@@ -502,7 +502,7 @@ describe('planningDocsSource', () => {
     expect(sigs.filter((signal) => signal.kind === 'open_work' || signal.kind === 'milestone')).toEqual([])
   })
 
-  it('keeps roadmap deliverables as release-scoped capability context until decomposed', async () => {
+  it('keeps current roadmap deliverables as context and future roadmap deliverables as deferred release work', async () => {
     mkdirSync(join(dir, 'docs', 'harness'), { recursive: true })
     writeFileSync(
       join(dir, 'docs', 'harness', 'implementation-roadmap.md'),
@@ -550,16 +550,14 @@ The next milestone is Stage 1: Fixture And Evaluation Harness.
         scopeHint: 'current',
       }),
       expect.objectContaining({
-        kind: 'context',
-        role: 'capability',
+        kind: 'open_work',
         title: 'Mastra workflow for the prototype iteration loop',
         scopeHint: 'later',
         releaseId: 'stage-2-mastra-agent-prototype',
         releaseLabel: 'Stage 2: Mastra Agent Prototype',
       }),
       expect.objectContaining({
-        kind: 'context',
-        role: 'capability',
+        kind: 'open_work',
         title: 'specialist editor agent calls for the first review lanes',
         scopeHint: 'later',
         releaseId: 'stage-2-mastra-agent-prototype',
@@ -577,11 +575,11 @@ The next milestone is Stage 1: Fixture And Evaluation Harness.
       }),
       expect.objectContaining({
         kind: 'open_work',
-        title: 'Mastra workflow for the prototype iteration loop',
+        title: 'fixture directory shape for at least one small story fixture',
       }),
       expect.objectContaining({
         kind: 'open_work',
-        title: 'specialist editor agent calls for the first review lanes',
+        title: 'typed fixture and expected-record contracts',
       }),
     ]))
   })
@@ -670,10 +668,10 @@ Done gate:
         scopeHint: 'current',
       }),
       expect.objectContaining({
-        kind: 'context',
-        role: 'capability',
+        kind: 'open_work',
         title: 'Finish remaining high-use primitive replacement.',
         scopeHint: 'later',
+        releaseId: 'stage-2-primitive-convergence',
       }),
     ]))
     expect(sigs).not.toEqual(expect.arrayContaining([
@@ -804,10 +802,11 @@ Scope:
       releaseLabel: 'Stage 1: V1 Release Hardening',
     }))
     expect(sigs).toContainEqual(expect.objectContaining({
-      kind: 'context',
-      role: 'capability',
+      kind: 'open_work',
       title: 'Finish remaining high-use primitive replacement.',
       scopeHint: 'later',
+      releaseId: 'stage-2-primitive-convergence',
+      releaseLabel: 'Stage 2: Primitive Convergence',
     }))
     expect(sigs).not.toEqual(expect.arrayContaining([
       expect.objectContaining({
@@ -902,16 +901,16 @@ The next milestone is Stage 1: Fixture And Evaluation Harness.
         role: 'capability',
       }),
       expect.objectContaining({
-        kind: 'context',
+        kind: 'open_work',
         title: 'Mastra workflow for the prototype iteration loop',
-        role: 'capability',
         scopeHint: 'later',
+        releaseId: 'stage-2-mastra-agent-prototype',
       }),
       expect.objectContaining({
-        kind: 'context',
+        kind: 'open_work',
         title: 'specialist editor agent calls for the first review lanes',
-        role: 'capability',
         scopeHint: 'later',
+        releaseId: 'stage-2-mastra-agent-prototype',
       }),
     ]))
     expect(sigs).not.toEqual(expect.arrayContaining([
@@ -925,11 +924,11 @@ The next milestone is Stage 1: Fixture And Evaluation Harness.
       }),
       expect.objectContaining({
         kind: 'open_work',
-        title: 'Mastra workflow for the prototype iteration loop',
+        title: 'fixture directory shape for at least one small story fixture',
       }),
       expect.objectContaining({
         kind: 'open_work',
-        title: 'specialist editor agent calls for the first review lanes',
+        title: 'typed fixture and expected-record contracts',
       }),
     ]))
   })

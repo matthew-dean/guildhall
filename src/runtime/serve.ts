@@ -1810,6 +1810,66 @@ function scopedWorkNeedsDesignSystem(
   })
 }
 
+function taskDoneButProofMissing(task: unknown): boolean {
+  if (!task || typeof task !== 'object') return false
+  const proofPaths = Array.isArray((task as { proofPaths?: unknown }).proofPaths)
+    ? (task as { proofPaths: unknown[] }).proofPaths
+    : []
+  const handoff = (task as { completionHandoff?: unknown }).completionHandoff
+  const handoffObject = handoff && typeof handoff === 'object' && !Array.isArray(handoff)
+    ? handoff as Record<string, unknown>
+    : null
+
+  const handoffVerified = nonEmptyStringArray(handoffObject?.verified).length > 0 ||
+    passedVerificationRecords(handoffObject?.automatedProof).length > 0 ||
+    passedVerificationRecords(handoffObject?.manualProof).length > 0 ||
+    passedVerificationRecords(handoffObject?.providerProof).length > 0 ||
+    nonEmptyArray(handoffObject?.evidenceRefs).length > 0
+  const handoffMissing = nonEmptyStringArray(handoffObject?.notVerified).length > 0 ||
+    nonEmptyStringArray(handoffObject?.remainingRisks).length > 0
+
+  if (proofPaths.length === 0) return handoffMissing && !handoffVerified
+  return proofPaths.some(proofPathMissingEvidence)
+}
+
+function proofPathMissingEvidence(proofPath: unknown): boolean {
+  if (!proofPath || typeof proofPath !== 'object') return true
+  const record = proofPath as Record<string, unknown>
+  const expectedEvidence = Array.isArray(record.expectedEvidence) ? record.expectedEvidence : []
+  const verificationRecords = Array.isArray(record.verificationRecords) ? record.verificationRecords : []
+  const passedEvidence = new Set(
+    verificationRecords
+      .filter(item => Boolean(item && typeof item === 'object' && (item as { status?: unknown }).status === 'passed'))
+      .map(item => (item as { evidenceId?: unknown }).evidenceId)
+      .filter((id): id is string => typeof id === 'string' && id.trim().length > 0),
+  )
+  const requiredEvidenceIds = expectedEvidence
+    .filter(item => Boolean(item && typeof item === 'object' && (item as { required?: unknown }).required !== false))
+    .map(item => (item as { id?: unknown }).id)
+    .filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
+  if (requiredEvidenceIds.length > 0) {
+    return requiredEvidenceIds.some(id => !passedEvidence.has(id))
+  }
+  if (record.status === 'verified') return false
+  return verificationRecords.every(item => !Boolean(item && typeof item === 'object' && (item as { status?: unknown }).status === 'passed'))
+}
+
+function nonEmptyStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+    : []
+}
+
+function nonEmptyArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value.filter(Boolean) : []
+}
+
+function passedVerificationRecords(value: unknown): unknown[] {
+  return Array.isArray(value)
+    ? value.filter(item => Boolean(item && typeof item === 'object' && (item as { status?: unknown }).status === 'passed'))
+    : []
+}
+
 function summarizeScopedReleaseWork(
   tasks: Task[],
   scope: OrientationScope | null | undefined,
@@ -1821,6 +1881,7 @@ function summarizeScopedReleaseWork(
   unapprovedSpecs: Array<{ id: string; title: string }>
   shelvedUnclaimed: Array<{ id: string; title: string; detail?: string }>
   blockedByAgent: Array<{ id: string; title: string; reason?: string }>
+  proofMissingDoneTasks: Array<{ id: string; title: string }>
   releaseBlockers: Array<{ id: string; title: string; label: string }>
   humanBlockingCount: number
   unfinishedCount: number
@@ -1847,6 +1908,7 @@ function summarizeScopedReleaseWork(
   const unapprovedSpecs: Array<{ id: string; title: string }> = []
   const shelvedUnclaimed: Array<{ id: string; title: string; detail?: string }> = []
   const blockedByAgent: Array<{ id: string; title: string; reason?: string }> = []
+  const proofMissingDoneTasks: Array<{ id: string; title: string }> = []
   const releaseBlockersById = new Map<string, { id: string; title: string; label: string }>()
   const terminalStatuses = new Set(['done', 'shelved', 'cancelled', 'archived', 'pending_pr'])
   let unfinishedCount = 0
@@ -1873,6 +1935,10 @@ function summarizeScopedReleaseWork(
     const status = String((t as { status?: string }).status ?? 'unknown')
     statusCounts[status] = (statusCounts[status] ?? 0) + 1
     if (!terminalStatuses.has(status)) unfinishedCount += 1
+  }
+
+  for (const t of executionScopedTasks) {
+    const status = String((t as { status?: string }).status ?? 'unknown')
     const id = String((t as { id?: string }).id ?? '')
     const title = String((t as { title?: string }).title ?? id)
     const brief = (t as { productBrief?: { approvedAt?: string } }).productBrief
@@ -1881,6 +1947,10 @@ function summarizeScopedReleaseWork(
     const approvalPendingStatus = status === 'proposed' || status === 'ready'
     const hasMaterializedChildWork = inScopeMaterializedChildren(t).length > 0
     const hasWorkerReadySpec = status === 'ready' && hasSpecDraftRecord(t)
+    if (status === 'done' && taskDoneButProofMissing(t)) {
+      proofMissingDoneTasks.push({ id, title })
+      addReleaseBlocker({ id, title, label: `${blockerSubject(title)} needs proof evidence before the release is complete.` })
+    }
     if (
       brief &&
       !brief.approvedAt &&
@@ -1948,6 +2018,7 @@ function summarizeScopedReleaseWork(
     unapprovedSpecs,
     shelvedUnclaimed,
     blockedByAgent,
+    proofMissingDoneTasks,
     releaseBlockers: projectionReleaseBlockers.length > 0 ? projectionReleaseBlockers : [...releaseBlockersById.values()],
     humanBlockingCount: Math.max(scopeProjection.counts.humanBlocking, humanBlockingKeys.size),
     unfinishedCount,
@@ -4860,16 +4931,16 @@ export function buildServeApp(opts: ServeOptions = {}): {
     const workspaceImportCoverageBlocker = await startBlockerForWorkspaceImportCoverage(input.projectPath)
     if (workspaceImportCoverageBlocker) return workspaceImportCoverageBlocker
 
-    const importDraftBlocker = await startBlockerForImportDrafts(input.projectPath)
-    if (importDraftBlocker) return importDraftBlocker
+	    const importDraftBlocker = await startBlockerForImportDrafts(input.projectPath)
+	    if (importDraftBlocker) return importDraftBlocker
 
-    if (input.allowTaskReadinessBlocker !== false) {
-      const taskReadinessBlocker = await startBlockerForTaskReadiness(input.projectPath)
-      if (taskReadinessBlocker) return taskReadinessBlocker
+	    if (input.allowTaskReadinessBlocker !== false) {
+	      const selectedReleaseReviewBlocker = await startBlockerForSelectedReleaseReview(input.projectPath, input.resolvedConfig)
+	      if (selectedReleaseReviewBlocker) return selectedReleaseReviewBlocker
 
-      const selectedReleaseReviewBlocker = await startBlockerForSelectedReleaseReview(input.projectPath, input.resolvedConfig)
-      if (selectedReleaseReviewBlocker) return selectedReleaseReviewBlocker
-    }
+	      const taskReadinessBlocker = await startBlockerForTaskReadiness(input.projectPath)
+	      if (taskReadinessBlocker) return taskReadinessBlocker
+	    }
 
 	    const terminal = await terminalStartState(input.projectPath, input.requestedTaskId)
     if (terminal) {
@@ -5157,13 +5228,17 @@ export function buildServeApp(opts: ServeOptions = {}): {
           : undefined,
       })
       : null
-    const tasksById = selectedReleaseScope
-      ? new Map(typedTasks.map(task => [task.id, task] as const))
-      : null
-    const scopedTasks = selectedReleaseScope
-      ? tasksEligibleForScopeExecution(typedTasks, selectedReleaseScope)
-      : tasks
-    if (selectedReleaseScope && scopedTasks.length === 0) return null
+	    const tasksById = new Map(typedTasks.map(task => [task.id, task] as const))
+	    const scopedTasks = selectedReleaseScope
+	      ? tasksEligibleForScopeExecution(typedTasks, selectedReleaseScope)
+	        .filter(task => task.id !== META_INTAKE_TASK_ID && task.id !== WORKSPACE_IMPORT_TASK_ID)
+	        .filter(task => {
+	          const parentId = task.hierarchy?.parentId?.trim()
+	          const parent = parentId ? tasksById.get(parentId) ?? null : null
+	          return deriveTaskWorkVisibility(task, parent).countInProjectTotals
+	        })
+	      : typedTasks.filter(task => task.id !== META_INTAKE_TASK_ID && task.id !== WORKSPACE_IMPORT_TASK_ID)
+	    if (selectedReleaseScope && scopedTasks.length === 0) return null
 
     let done = 0
     let blocked = 0
@@ -5244,10 +5319,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
     let message = done === scopedTasks.length
       ? 'All tasks are already finished.'
       : detailMessage
-    if (selectedReleaseScope && tasksById) {
-      const outsideActionableByStatus = new Map<string, number>()
-      for (const task of typedTasks) {
-        if (taskEligibleForSelectedScope(task, selectedReleaseScope, { tasksById }).eligible) continue
+	    if (selectedReleaseScope) {
+	      const outsideActionableByStatus = new Map<string, number>()
+	      for (const task of typedTasks) {
+	        if (taskEligibleForSelectedScope(task, selectedReleaseScope, { tasksById }).eligible) continue
         const status = String(task.status ?? '')
         if (['done', 'blocked', 'shelved', 'pending_pr', 'archived', 'cancelled'].includes(status)) continue
         outsideActionableByStatus.set(status, (outsideActionableByStatus.get(status) ?? 0) + 1)
@@ -5284,67 +5359,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
 	    }
 	  }
 
-  function taskDoneButProofMissing(task: unknown): boolean {
-    if (!task || typeof task !== 'object') return false
-    const proofPaths = Array.isArray((task as { proofPaths?: unknown }).proofPaths)
-      ? (task as { proofPaths: unknown[] }).proofPaths
-      : []
-    const handoff = (task as { completionHandoff?: unknown }).completionHandoff
-    const handoffObject = handoff && typeof handoff === 'object' && !Array.isArray(handoff)
-      ? handoff as Record<string, unknown>
-      : null
-
-    const handoffVerified = nonEmptyStringArray(handoffObject?.verified).length > 0 ||
-      passedVerificationRecords(handoffObject?.automatedProof).length > 0 ||
-      passedVerificationRecords(handoffObject?.manualProof).length > 0 ||
-      passedVerificationRecords(handoffObject?.providerProof).length > 0 ||
-      nonEmptyArray(handoffObject?.evidenceRefs).length > 0
-    const handoffMissing = nonEmptyStringArray(handoffObject?.notVerified).length > 0 ||
-      nonEmptyStringArray(handoffObject?.remainingRisks).length > 0
-
-    if (proofPaths.length === 0) return handoffMissing && !handoffVerified
-    return proofPaths.some(proofPathMissingEvidence)
-  }
-
-  function proofPathMissingEvidence(proofPath: unknown): boolean {
-    if (!proofPath || typeof proofPath !== 'object') return true
-    const record = proofPath as Record<string, unknown>
-    const expectedEvidence = Array.isArray(record.expectedEvidence) ? record.expectedEvidence : []
-    const verificationRecords = Array.isArray(record.verificationRecords) ? record.verificationRecords : []
-    const passedEvidence = new Set(
-      verificationRecords
-        .filter(item => Boolean(item && typeof item === 'object' && (item as { status?: unknown }).status === 'passed'))
-        .map(item => (item as { evidenceId?: unknown }).evidenceId)
-        .filter((id): id is string => typeof id === 'string' && id.trim().length > 0),
-    )
-    const requiredEvidenceIds = expectedEvidence
-      .filter(item => Boolean(item && typeof item === 'object' && (item as { required?: unknown }).required !== false))
-      .map(item => (item as { id?: unknown }).id)
-      .filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
-    if (requiredEvidenceIds.length > 0) {
-      return requiredEvidenceIds.some(id => !passedEvidence.has(id))
-    }
-    if (record.status === 'verified') return false
-    return verificationRecords.every(item => !Boolean(item && typeof item === 'object' && (item as { status?: unknown }).status === 'passed'))
-  }
-
-  function nonEmptyStringArray(value: unknown): string[] {
-    return Array.isArray(value)
-      ? value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
-      : []
-  }
-
-  function nonEmptyArray(value: unknown): unknown[] {
-    return Array.isArray(value) ? value.filter(Boolean) : []
-  }
-
-  function passedVerificationRecords(value: unknown): unknown[] {
-    return Array.isArray(value)
-      ? value.filter(item => Boolean(item && typeof item === 'object' && (item as { status?: unknown }).status === 'passed'))
-      : []
-  }
-
-	  async function hasRecoverableBlockedStartTask(
+		  async function hasRecoverableBlockedStartTask(
 	    projectPath: string,
 	    tasks: unknown[],
 	    requestedTaskId: string,
@@ -10703,6 +10718,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       unapprovedSpecs,
       shelvedUnclaimed,
       blockedByAgent,
+      proofMissingDoneTasks,
       humanBlockingCount,
       unfinishedCount,
       gitStoryTasks,
@@ -10720,6 +10736,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     const blockingCount =
       humanBlockingCount
       + unfinishedCount
+      + proofMissingDoneTasks.length
       + designSystemBlockingCount
       + dirtyCheckoutBlockingCount
       + gitStoryBlockingCount
@@ -10736,6 +10753,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       unapprovedSpecs,
       shelvedUnclaimed,
       blockedByAgent,
+      proofMissingDoneTasks,
       designSystem,
       dirtyCheckout,
       gitStory,
@@ -10744,6 +10762,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         blockingCount,
         humanBlockingCount,
         incompleteBriefBlockingCount: incompleteBriefs.length,
+        proofEvidenceBlockingCount: proofMissingDoneTasks.length,
         unfinishedCount,
         designSystemBlockingCount,
         dirtyCheckoutBlockingCount,

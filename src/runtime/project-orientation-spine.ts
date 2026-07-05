@@ -1621,13 +1621,21 @@ function buildSummary(input: {
   const purpose = input.charter.goal ?? `Project ${input.projectId} needs a confirmed purpose.`
   const releaseLabel = input.selectedRelease?.label ?? null
   const workLabel = releaseLabel ?? input.scope?.label ?? null
-  const readinessSummary = input.startReadiness
+  const rawReadinessSummary = input.startReadiness
     ? summarizeStartReadiness({
         workLabel,
         progress: input.progress,
         startReadiness: input.startReadiness,
       })
     : null
+  const readinessSummary = input.startReadiness?.canStart === false &&
+    input.blockers.length > 0 &&
+    (
+      rawReadinessSummary?.topBlocker === null ||
+      input.startReadiness.code === 'workspace_import_refresh_needed'
+    )
+    ? null
+    : rawReadinessSummary
   const topBlocker = readinessSummary ? readinessSummary.topBlocker : input.blockers[0]?.label ?? null
   const hasActionableWork =
     input.progress.ready > 0 ||
@@ -1728,12 +1736,16 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
     now,
   })
   const { byId, gaps: nodeGaps } = built
-  const releaseBlockerInput = input.scopeProjection
+  const projectionBlockers = input.scopeProjection
     ? input.scopeProjection.release.blockers.map(blocker => ({
         id: blocker.id,
         label: blocker.label,
       }))
-    : input.releaseReadiness?.blockers ?? []
+    : []
+  const releaseBlockerInput = [
+    ...projectionBlockers,
+    ...(input.startReadiness?.canStart !== true ? input.releaseReadiness?.blockers ?? [] : []),
+  ]
   const { blockers, gaps: blockerGaps } = attachReleaseBlockers(releaseBlockerInput, byId)
   const executionBoundary = buildExecutionBoundary({
     charter,

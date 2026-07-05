@@ -13554,6 +13554,75 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-07-05T09:58:00Z - Aligned release proof blockers, orientation spine, and
+workspace child-repo truth.
+
+- Work id: `codex:release-proof-and-child-repo-truth-2026-07-05`.
+- User job: when a selected release has completed tasks without proof,
+  Guildhall should not call the scope complete; when a workspace envelope is not
+  itself a Git repository, Guildhall should still inspect the child repositories
+  and label them plainly.
+- Contract Touch Decision:
+  - Touched contracts:
+    - `/api/project/release-readiness` additive fields
+      `proofMissingDoneTasks` and `totals.proofEvidenceBlockingCount`.
+    - `/api/project` and `/api/project/spine` orientation summary consumption
+      of release-readiness blockers.
+    - Workspace-import draft shaping for future stage `Scope:` and
+      `Deliverables:` bullets so later work attaches to later release
+      containers instead of becoming loose context.
+  - Contracts considered but not touched: persisted task schema, persisted
+    release schema, selected release storage, task proof-path schema, Git Story
+    snapshot schema, and Start status codes.
+  - Safety: additive API fields and read-model behavior only; existing readers
+    can ignore the new fields.
+  - Owner-facing plan text: selected release readiness, Overview, and Project
+    Map should agree that terminal-but-unproven scoped work still needs proof.
+- Fix:
+  - Release readiness now counts visible release units while using
+    execution-scoped tasks for Git Story, proof, review, and blocker checks.
+  - Completed scoped tasks with planned proof but no attached proof evidence now
+    appear in `proofMissingDoneTasks`, increment
+    `proofEvidenceBlockingCount`, and block release readiness.
+  - Orientation spine now merges release-readiness blockers even when a
+    scope-projection object exists, so an import-refresh follow-up cannot hide
+    proof blockers and make the headline say complete.
+  - The merge deliberately does not override paused live work when Start can
+    continue; Resume remains the top action in that case.
+  - Future-stage planning bullets now become later `open_work` attached to
+    their release IDs.
+- Installed-app proof:
+  - `CI=true pnpm dev:install && guildhall stop && guildhall start` installed
+    the current branch artifact.
+  - `/api/stale-server` returned `stale:false` for PID `879` from
+    `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+  - `/api/project/release-readiness?projectId=narrative-harness` returned
+    `ready:false`, selected scope `Stage 1: Fixture And Evaluation Harness`,
+    `tasks:6`, `done:6`, `proofEvidenceBlockingCount:6`,
+    `blockingCount:6`, and six `proofMissingDoneTasks`.
+  - `/api/project?projectId=narrative-harness` and
+    `/api/project/spine?projectId=narrative-harness` both returned headline
+    `Stage 1: Fixture And Evaluation Harness is waiting on proof`, top blocker
+    `Define fixture, expected-record, prototype-run, and evaluation schemas
+    needs proof evidence before the release is complete.`, progress `total:6`,
+    `done:6`, `proven:0`, and six release blockers.
+  - `/api/project/release-readiness?projectId=looma-knit` inspected the
+    non-git workspace envelope by child repo: snapshots included `Looma` and
+    `Knit`, dirty checkout reported `knit/.gitignore`, and the response
+    contained no `not a git repository`, `not_git`, or `Cannot resolve git
+    root` text.
+- Verification:
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/project-orientation-spine.test.ts src/runtime/__tests__/serve-settings.test.ts src/runtime/__tests__/serve-release-readiness.test.ts src/runtime/workspace-import/__tests__/detect.test.ts src/runtime/workspace-import/__tests__/hypothesis.test.ts src/web/surfaces/project/__tests__/ReleaseTab.svelte.test.ts src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts --reporter=dot`
+    passed `310` tests.
+  - `git diff --check` passed.
+  - `CI=true pnpm build` passed after restoring dev dependencies with
+    `CI=true pnpm install`; the install exits nonzero in CI because dependency
+    build scripts are intentionally ignored, but it restores the missing dev
+    dependencies.
+  - `CI=true pnpm lint:contracts` passed.
+
+source: codex:release-proof-and-child-repo-truth-2026-07-05
+
 2026-07-05T02:45:00Z - Repaired Narrative Harness recovery specs and the
 ready-but-idle runner mismatch found while driving Stage 1 forward.
 
@@ -16882,6 +16951,62 @@ unit accounting for materialized child work.
   - `CI=true pnpm lint:contracts` passed.
 
 source: codex:release-readiness-visible-unit-accounting-2026-07-05
+
+2026-07-05T10:00:00Z - Aligned proof-missing release readiness with Start and
+attached later planning work to future releases.
+
+- Work id: `codex:release-proof-and-later-scope-truth-2026-07-05`.
+- User job: when a selected release has completed work without recorded proof,
+  Overview, Release, and Start should all communicate the same blocker. When
+  planning docs name future release scopes, the future work should stay deferred
+  but remain attached to that release instead of floating as loose context.
+- Root cause:
+  - Project Start checked proof evidence for completed scoped work, but
+    `/api/project/release-readiness` did not include proof-missing done tasks in
+    readiness math or UI criteria.
+  - Start counted reserved import scaffolding as proof-missing release work.
+  - Workspace import emitted future `Scope:` deliverables as capability context,
+    so future release containers could exist without the deferred work inside
+    them.
+- Contract Touch Decision:
+  - Work id: `codex:release-proof-and-later-scope-truth-2026-07-05`.
+  - Touched contracts: `/api/project/release-readiness` additive response fields
+    `proofMissingDoneTasks` and `totals.proofEvidenceBlockingCount`; Release UI
+    criteria rendering; workspace-import detected task/release shape for future
+    stage `Scope:` and `Deliverables:` bullets.
+  - Contracts considered but not touched: persisted task schema, persisted
+    release schema, selected release storage, task proof-path schema, and Start
+    request/response status codes.
+  - Existing data impact: no migration; proof evidence is read from existing task
+    proof paths and completion handoffs, and later release assignment is derived
+    from existing source references/release headings during import detection.
+  - Required follow-up: installed-app proof on Narrative Harness should show
+    Release and Overview agreeing on the Stage 1 proof blocker; later releases
+    should show deferred work attached in map/import views after re-intake.
+  - Proof required: focused release-readiness regression, Start/readiness
+    agreement regression, workspace-import detector/hypothesis/API regressions,
+    UI component regressions, build, contract detector, and installed API proof.
+  - Proof provided so far: tests and build listed below; installed proof follows
+    after reinstall.
+  - Apply/revert behavior: reverting may make Release say a selected release is
+    ready while Start blocks on missing proof, may count reserved import
+    scaffolding as proof-missing work, and may leave future release work detached
+    from its release container.
+- Fix:
+  - Release readiness now reports proof-missing completed scoped work as a
+    blocker and exposes it as a Release criteria row.
+  - Start all-terminal proof checks now count visible release units and ignore
+    reserved import scaffolding.
+  - Selected-release spec review now outranks generic task-readiness cleanup, so
+    out-of-scope or hidden child cleanup cannot steal the release blocker.
+  - Workspace-import detection now treats future stage `Scope:`/`Deliverables:`
+    bullets as later work attached to the future release.
+- Verification:
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/serve-settings.test.ts src/runtime/__tests__/serve-release-readiness.test.ts src/runtime/workspace-import/__tests__/detect.test.ts src/runtime/workspace-import/__tests__/hypothesis.test.ts src/web/surfaces/project/__tests__/ReleaseTab.svelte.test.ts src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts`
+    passed `269` tests.
+  - `CI=true pnpm build` passed.
+
+source: codex:release-proof-and-later-scope-truth-2026-07-05
 
 2026-07-04T18:04:00Z - Made workspace child Git repositories visible in Git
 Story instead of treating the workspace container as the repo boundary.

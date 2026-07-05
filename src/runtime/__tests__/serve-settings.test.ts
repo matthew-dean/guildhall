@@ -1361,11 +1361,11 @@ describe('POST /api/project/start', () => {
       unapprovedSpecs?: Array<{ id: string }>
     }
     expect(readiness.totals).toMatchObject({
-      tasks: 2,
-      unfinishedCount: 1,
+      tasks: 1,
+      unfinishedCount: 0,
       humanBlockingCount: 1,
     })
-    expect(readiness.statusCounts?.spec_review).toBe(1)
+    expect(readiness.statusCounts?.spec_review).toBeUndefined()
     expect(readiness.unapprovedSpecs?.map(spec => spec.id)).toContain('release-parent-split-review-proof')
   })
 

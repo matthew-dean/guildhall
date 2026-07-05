@@ -47,6 +47,7 @@
     unapprovedSpecs: ReleaseItem[]
     shelvedUnclaimed: ReleaseItem[]
     blockedByAgent: ReleaseItem[]
+    proofMissingDoneTasks?: ReleaseItem[]
     designSystem: {
       drafted: boolean
       approved: boolean
@@ -79,6 +80,7 @@
       blockingCount: number
       humanBlockingCount?: number
       unfinishedCount?: number
+      proofEvidenceBlockingCount?: number
       designSystemBlockingCount?: number
       dirtyCheckoutBlockingCount?: number
       gitStoryBlockingCount?: number
@@ -179,6 +181,12 @@
             label: 'Specs awaiting approval',
             items: data.unapprovedSpecs,
             clearLabel: 'No specs awaiting approval.',
+          },
+          {
+            key: 'proof',
+            label: 'Proof evidence',
+            items: data.proofMissingDoneTasks ?? [],
+            clearLabel: 'Completed work has proof evidence.',
           },
           {
             key: 'shelved',

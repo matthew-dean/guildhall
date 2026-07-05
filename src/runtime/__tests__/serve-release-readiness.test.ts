@@ -395,6 +395,69 @@ describe('GET /api/project/release-readiness', () => {
     expect(body.ready).toBe(true)
   })
 
+  it('blocks release readiness on proof-missing completed work without counting reserved import scaffolding', async () => {
+    const missingProofPath = {
+      path: 'artifacts/fixture-run.md',
+      expectedEvidence: [{ id: 'fixture-run', required: true }],
+      verificationRecords: [],
+    }
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: 'headless-mvp',
+      releases: [{
+        id: 'headless-mvp',
+        label: 'Headless MVP',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-workspace-import', 'work:task-current'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [
+        makeTask({
+          id: 'task-workspace-import',
+          title: 'Import project notes and plans',
+          status: 'done',
+          releaseIds: ['headless-mvp'],
+          proofPaths: [missingProofPath],
+        } as Partial<Task>),
+        makeTask({
+          id: 'task-current',
+          title: 'Run fixture evaluator proof',
+          status: 'done',
+          releaseIds: ['headless-mvp'],
+          proofPaths: [missingProofPath],
+        } as Partial<Task>),
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await approveDesignSystem(app)
+    await commitAndPush('proof missing release readiness')
+
+    const readinessRes = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
+    const readiness = await readinessRes.json() as any
+
+    expect(readiness.ready).toBe(false)
+    expect(readiness.totals).toMatchObject({
+      tasks: 1,
+      done: 1,
+      blockingCount: 1,
+      proofEvidenceBlockingCount: 1,
+    })
+    expect(readiness.proofMissingDoneTasks).toEqual([{ id: 'task-current', title: 'Run fixture evaluator proof' }])
+
+    const projectRes = await app.fetch(new Request(projectUrl('/api/project')))
+    const project = await projectRes.json() as any
+    expect(project.startReadiness).toMatchObject({
+      canStart: false,
+      code: 'proof_evidence_missing',
+      focusTaskId: 'task-current',
+      count: 1,
+    })
+  })
+
   it('does not count importer-generated decomposition children as scoped release tasks', async () => {
     await seedQueue({
       version: 1,
