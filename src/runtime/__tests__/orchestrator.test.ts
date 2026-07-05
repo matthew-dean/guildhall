@@ -3467,6 +3467,102 @@ describe('Orchestrator.tick — routing', () => {
     ])
   })
 
+  it('scopes numbered-requirement child recovery specs to the matching child requirement', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'model-proof',
+        status: 'ready',
+        domain: 'harness',
+        title: 'Define Narrative Harness MVP drafting model and physical-world review lanes',
+        description:
+          'For the Narrative Harness current MVP/current bounded scope, make sure Guildhall shapes explicit work for: (1) selecting and proving a DeepInfra-accessible model that can do drafting/writing work across genres, including adult genres, rather than assuming the current default model is sufficient; (2) defining review lanes for world-state continuity over time, including object/property state transitions such as wet hair drying after enough time in a given climate; (3) defining spatial/geographic continuity reviews, including scene geography, travel distance, walking speed for fantasy epics, and other physical plausibility checks.',
+        acceptanceCriteria: [
+          {
+            id: 'model',
+            description: 'Given the current MVP scope, when Define Narrative Harness MVP drafting model and physical-world review lanes is complete, then Guildhall records source-backed MVP work, proof, or explicit deferral for selecting and proving a DeepInfra-accessible model that can do drafting/writing work across genres, including adult genres, rather than assuming the current default model is sufficient.',
+            verifiedBy: 'review',
+            met: false,
+          },
+          {
+            id: 'world',
+            description: 'Given the current MVP scope, when Define Narrative Harness MVP drafting model and physical-world review lanes is complete, then Guildhall records source-backed MVP work, proof, or explicit deferral for defining review lanes for world-state continuity over time, including object/property state transitions such as wet hair drying after enough time in a given climate.',
+            verifiedBy: 'review',
+            met: false,
+          },
+          {
+            id: 'space',
+            description: 'Given the current MVP scope, when Define Narrative Harness MVP drafting model and physical-world review lanes is complete, then Guildhall records source-backed MVP work, proof, or explicit deferral for defining spatial/geographic continuity reviews, including scene geography, travel distance, walking speed for fantasy epics, and other physical plausibility checks.',
+            verifiedBy: 'review',
+            met: false,
+          },
+        ],
+        hierarchy: {
+          childIds: ['model-child'],
+          order: 0,
+          relation: 'contains',
+        },
+      }),
+      mkTask({
+        id: 'model-child',
+        status: 'spec_review',
+        domain: 'harness',
+        title: 'Select and prove DeepInfra drafting model',
+        description: 'Recovered from numbered owner requirement 1 for Define Narrative Harness MVP drafting model and physical-world review lanes.',
+        spec: [
+          '## Summary',
+          'Select and prove DeepInfra drafting model from the current project evidence.',
+          '',
+          '## Acceptance Criteria',
+          '1. Given the current MVP scope, when Define Narrative Harness MVP drafting model and physical-world review lanes is complete, then Guildhall records source-backed MVP work, proof, or explicit deferral for selecting and proving a DeepInfra-accessible model that can do drafting/writing work across genres, including adult genres, rather than assuming the current default model is sufficient.',
+          '2. Given the current MVP scope, when Define Narrative Harness MVP drafting model and physical-world review lanes is complete, then Guildhall records source-backed MVP work, proof, or explicit deferral for defining review lanes for world-state continuity over time, including object/property state transitions such as wet hair drying after enough time in a given climate.',
+          '3. Given the current MVP scope, when Define Narrative Harness MVP drafting model and physical-world review lanes is complete, then Guildhall records source-backed MVP work, proof, or explicit deferral for defining spatial/geographic continuity reviews, including scene geography, travel distance, walking speed for fantasy epics, and other physical plausibility checks.',
+        ].join('\n'),
+        productBrief: {
+          userJob: 'I want Select and prove DeepInfra drafting model implemented or proven from current evidence.',
+          successMetric: 'The DeepInfra-accessible drafting model proof is scoped.',
+          antiPatterns: [],
+          authoredBy: 'coordinator-recovery',
+          authoredAt: '2026-07-05T18:15:02.867Z',
+        },
+        hierarchy: {
+          parentId: 'model-proof',
+          childIds: [],
+          order: 1,
+          relation: 'decomposes',
+        },
+        notes: [{
+          agentId: 'task-sizing',
+          role: 'coordinator',
+          content: 'Created from execution-planning decomposition of model-proof. Recovered from numbered owner requirement 1 for Define Narrative Harness MVP drafting model and physical-world review lanes.',
+          timestamp: '2026-07-05T19:31:37.428Z',
+        }],
+      }),
+    ])
+    const coord = stubAgent('harness-coordinator', async () => {
+      throw new Error('coordinator should not review an over-broad numbered child before repair')
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec: stubAgent('spec-agent'), coordinators: { harness: coord } }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out).toMatchObject({ kind: 'processed', taskId: 'model-child', agent: 'coordinator-recovery' })
+    expect(coord.calls).toHaveLength(0)
+    const queue = await readQueue()
+    const task = queue.tasks.find(candidate => candidate.id === 'model-child')!
+    const criteria = task.acceptanceCriteria.map((criterion) => criterion.description).join('\n')
+    expect(criteria).toContain('DeepInfra-accessible model')
+    expect(criteria).toContain('adult genres')
+    expect(criteria).not.toContain('wet hair drying')
+    expect(criteria).not.toContain('walking speed for fantasy epics')
+    expect(task.spec).toContain('Parent acceptance this child satisfies:')
+    expect(task.spec).toContain('DeepInfra-accessible model')
+    expect(task.spec).not.toContain('wet hair drying')
+    expect(task.productBrief?.successMetric).toContain('DeepInfra-accessible model')
+  })
+
   it('turns source-recovery research spikes with named surfaces into ready work', async () => {
     await writeQueue([
       mkTask({

@@ -14104,6 +14104,53 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-07-05T21:39:00Z - Repaired Narrative Harness numbered child scope
+recovery for drafting-model and physical-world review tasks.
+
+- Work id: `codex:narrative-harness-numbered-child-scope-2026-07-05`.
+- User job: when the owner adds MVP requirements such as DeepInfra drafting
+  model proof, world-state continuity review, and spatial/geographic review,
+  Guildhall must show those as concrete MVP work items without hiding them in
+  chat context or copying every parent criterion onto every child task.
+- Failure taxonomy:
+  - `3 task hierarchy/dependency/proof modeling problem`: child tasks created
+    from numbered owner requirements only recorded "requirement 1/2/3" in
+    prose, then recovery re-derived scope by fuzzy matching against the parent.
+  - `4 scheduler/action-state logic problem`: the stale `spec_review` child
+    could be skipped because the repair detector did not treat sibling
+    numbered scope inside a child spec as a repair-worthy error.
+  - `5 UI communication/orientation problem`: release readiness could show the
+    right child labels while the opened child spec still claimed sibling work.
+- Fix:
+  - Recovery now detects a child produced from `numbered owner requirement N`
+    and scopes the repaired spec/brief/acceptance criteria to the matching
+    numbered requirement from the parent task.
+  - The weak recovery detector now treats sibling numbered requirement text
+    inside a child spec as over-broad stale recovery state.
+  - Added a regression using the exact Narrative Harness DeepInfra/adult genre,
+    wet-hair world-state, and fantasy walking-speed geography requirements.
+- Proof so far:
+  - `CI=true pnpm vitest run src/runtime/__tests__/orchestrator.test.ts -t
+    "numbered-requirement child|standalone recovery specs|clean recovery
+    specs"` passed `3` focused tests.
+  - `node scripts/contract-touch-detector.mjs` reported all touched contract
+    paths have decision evidence.
+  - `node ./build.mjs` passed, then `node scripts/dev-install.mjs` installed
+    the repaired app; `/api/stale-server` returned `stale:false` for PID
+    `45216`.
+  - Live `guildhall run narrative-harness --max-ticks 1` repaired the
+    world-state child from `exploring` to `spec_review`, and a second tick
+    repaired the spatial/geographic child from `exploring` to `spec_review`.
+  - Live `/api/project?projectId=narrative-harness` shows all three MVP
+    additions as separate unapproved specs: `Select and prove DeepInfra
+    drafting model`, `Define world-state continuity review lane`, and `Define
+    spatial/geographic continuity review lane`.
+  - The DeepInfra child has one criterion containing `DeepInfra-accessible
+    model` and `adult genres`, with no `wet hair drying` or `walking speed for
+    fantasy epics`; the world-state child contains `wet hair drying` and not
+    sibling model/geography scope; the spatial child contains `walking speed for
+    fantasy epics` and not sibling model/world-state scope.
+
 2026-07-05T20:46:00Z - Repaired source-recovery contract tasks so model-loop
 failures become Guildhall-owned ready work instead of stale human-shaped
 blockers.

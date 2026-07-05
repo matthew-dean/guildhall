@@ -427,6 +427,15 @@ function shouldRepairWeakRecoverySpecReviewSeed(task: Task, queue: TaskQueue): b
   const sourceRequirements = extractNumberedRecoveryRequirements(
     formatRecoverySpecSourceIntent(task.proposalRationale || task.description || task.title),
   )
+  const childRequirementOrdinal = recoveryChildRequirementOrdinal(task)
+  const parentNumberedRequirements = parentTask ? numberedRecoveryRequirementsForTask(parentTask) : []
+  const normalizedSpecText = normalizeFallbackWhitespace(specText).toLowerCase()
+  const hasSiblingNumberedScope = childRequirementOrdinal !== undefined && parentNumberedRequirements
+    .filter((_, index) => index !== childRequirementOrdinal - 1)
+    .some((requirement) => {
+      const signature = normalizeFallbackWhitespace(requirement).toLowerCase().slice(0, 80)
+      return signature.length > 20 && normalizedSpecText.includes(signature)
+    })
   const needsMaterializableRecoveryUnits =
     (task.sizePlan?.action === 'decompose_before_execution' ||
       task.sizePlan?.action === 'split_required' ||
@@ -436,6 +445,7 @@ function shouldRepairWeakRecoverySpecReviewSeed(task: Task, queue: TaskQueue): b
     (task.hierarchy?.childIds.length ?? 0) === 0
   return (
     (parentHasRefs && taskMissingRefs) ||
+    hasSiblingNumberedScope ||
     needsMaterializableRecoveryUnits ||
     /turned into concrete project work using the evidence and owner decisions already recorded/i.test(brief?.userJob ?? '') ||
     /has a reviewable spec, acceptance criteria, and a clear completion boundary before implementation starts/i.test(brief?.successMetric ?? '') ||
@@ -1826,6 +1836,12 @@ function buildRecoverySpecSeedForTask(liveTask: Task, queue: TaskQueue, now: str
   const sourceIntent = formatRecoverySpecSourceIntent(liveTask.proposalRationale || liveTask.description || taskTitle)
   const parentId = liveTask.hierarchy?.parentId ?? liveTask.delivery?.supports?.[0]
   const parentTask = parentId ? queue.tasks.find((candidate) => candidate.id === parentId) : undefined
+  const childRequirementOrdinal = recoveryChildRequirementOrdinal(liveTask)
+  const parentNumberedRequirements = parentTask ? numberedRecoveryRequirementsForTask(parentTask) : []
+  const childScopedRequirement = childRequirementOrdinal
+    ? parentNumberedRequirements[childRequirementOrdinal - 1]
+    : undefined
+  const effectiveSourceIntent = childScopedRequirement ?? sourceIntent
   const parentSpec = typeof parentTask?.spec === 'string' ? parentTask.spec : ''
   const contractTerms = uniqueStrings([
     ...extractBacktickTerms(parentSpec),
@@ -1850,7 +1866,9 @@ function buildRecoverySpecSeedForTask(liveTask: Task, queue: TaskQueue, now: str
     /contract|schema|fixture|expected-record|prototype-run|evaluation/i.test(taskTitle)
   const scopedContractTerms = scopedRecoveryContractTerms(taskTitle, contractTerms)
   const scopedContractAcceptance = scopedRecoveryContractAcceptance(taskTitle)
-  const scopedParentAcceptance = scopedRecoveryParentAcceptance(taskTitle, parentAcceptance)
+  const scopedParentAcceptance = childScopedRequirement
+    ? [`Given the current MVP scope, when ${taskTitle} is complete, then Guildhall records source-backed MVP work, proof, or explicit deferral for ${childScopedRequirement}.`]
+    : scopedRecoveryParentAcceptance(taskTitle, parentAcceptance)
   const decisionLines = answeredDecisions.length > 0
     ? answeredDecisions.map((decision) => `- ${decision}`).join('\n')
     : '- No unresolved owner decisions are recorded on the task.'
@@ -1860,7 +1878,7 @@ function buildRecoverySpecSeedForTask(liveTask: Task, queue: TaskQueue, now: str
   const inheritedAcceptance = scopedParentAcceptance.length > 0
     ? scopedParentAcceptance.slice(0, 5)
     : []
-  const sourceRequirements = extractNumberedRecoveryRequirements(sourceIntent).slice(0, 6)
+  const sourceRequirements = extractNumberedRecoveryRequirements(effectiveSourceIntent).slice(0, 6)
   const inheritedAcceptanceLines = inheritedAcceptance.map((item, index) => `${index + 1}. ${item.replace(/^\d+[.)]\s*/, '')}`)
   const genericAcceptanceLines = inheritedAcceptanceLines.length > 0
     ? inheritedAcceptanceLines
@@ -1878,7 +1896,7 @@ function buildRecoverySpecSeedForTask(liveTask: Task, queue: TaskQueue, now: str
     `Define the concrete ${taskTitle} surface for this Stage 1 harness work, using the imported parent task as the source of truth instead of restarting open-ended research.`,
     '',
     'Source intent:',
-    `- ${sourceIntent}`,
+    `- ${effectiveSourceIntent}`,
     ...(parentTask?.title ? [`- Containing work: ${semanticTaskTitle(parentTask)}`] : []),
     '',
     'Contract terms to account for:',
@@ -1913,7 +1931,7 @@ function buildRecoverySpecSeedForTask(liveTask: Task, queue: TaskQueue, now: str
     '- What must be split or blocked: any newly discovered product decision that changes which contracts belong in Stage 1 versus a later stage.',
   ].join('\n') : [
     '## Summary',
-    `${taskTitle} from the current project evidence, preserving the source intent: ${sourceIntent}`,
+    `${taskTitle} from the current project evidence, preserving the source intent: ${effectiveSourceIntent}`,
     ...(parentTask?.title ? [`Containing work: ${semanticTaskTitle(parentTask)}`] : []),
     ...(inheritedAcceptance.length > 0
       ? [
@@ -1957,7 +1975,7 @@ function buildRecoverySpecSeedForTask(liveTask: Task, queue: TaskQueue, now: str
     acceptanceCriteria: parseAcceptanceCriteriaFromSpec(spec),
     productBrief: recoveryProductBriefForChildScope({
       taskTitle,
-      sourceIntent,
+      sourceIntent: effectiveSourceIntent,
       parentTask,
       inheritedAcceptance: inheritedAcceptance.length > 0
         ? inheritedAcceptance
@@ -2015,6 +2033,26 @@ function extractNumberedRecoveryRequirements(text: string): string[] {
     .sort((a, b) => Number(a[1] ?? 0) - Number(b[1] ?? 0))
     .map((match) => cleanRecoveryRequirement(match[2] ?? ''))
     .filter(Boolean)
+}
+
+function recoveryChildRequirementOrdinal(task: Task): number | undefined {
+  const text = [
+    task.description,
+    task.proposalRationale,
+    ...(Array.isArray(task.notes) ? task.notes.map((note) => note.content) : []),
+  ].filter((value): value is string => typeof value === 'string' && value.trim().length > 0).join('\n')
+  const match = text.match(/\bnumbered owner requirement\s+(\d+)\b/i)
+  if (!match) return undefined
+  const ordinal = Number(match[1])
+  return Number.isInteger(ordinal) && ordinal > 0 ? ordinal : undefined
+}
+
+function numberedRecoveryRequirementsForTask(task: Task): string[] {
+  return uniqueStrings([
+    ...extractNumberedRecoveryRequirements(task.proposalRationale ?? ''),
+    ...extractNumberedRecoveryRequirements(task.description ?? ''),
+    ...extractNumberedRecoveryRequirements(task.spec ?? ''),
+  ])
 }
 
 function cleanRecoveryRequirement(value: string): string {
