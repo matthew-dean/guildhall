@@ -828,6 +828,56 @@ describe('GET /api/project/release-readiness', () => {
     expect(body.totals.humanBlockingCount).toBe(2)
   })
 
+  it('keeps imported current-scope shaping work visible as incomplete brief cleanup', async () => {
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: 'near-term-proof-scope',
+      releases: [{
+        id: 'near-term-proof-scope',
+        label: 'Near Term Proof Scope',
+        kind: 'release',
+        state: 'active',
+        source: 'inferred',
+        nodeIds: ['work:task-imported'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [
+        makeTask({
+          id: 'task-imported',
+          title: 'Recover source-backed contract surface',
+          status: 'import_draft',
+          releaseIds: ['near-term-proof-scope'],
+          notes: [{
+            agentId: 'workspace-importer',
+            role: 'importer',
+            content: 'Imported from docs/specs/contract.md',
+          }],
+          spec: 'Imported repair spec.',
+          acceptanceCriteria: [{ id: 'AC-1', description: 'Contract surfaces are named.', verifiedBy: 'review', met: false }],
+        }),
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await approveDesignSystem(app)
+    await commitAndPush('import draft release readiness')
+
+    const res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
+    const body = await res.json() as any
+
+    expect(body.incompleteBriefs).toEqual([
+      {
+        id: 'task-imported',
+        title: 'Recover source-backed contract surface',
+        reason: 'Imported current work needs a real brief before Guildhall can build unattended.',
+      },
+    ])
+    expect(body.totals.incompleteBriefBlockingCount).toBe(1)
+    expect(body.totals.humanBlockingCount).toBe(1)
+    expect(body.ready).toBe(false)
+  })
+
   it('keeps external setup blockers owner-facing in release readiness', async () => {
     await seed([
       makeTask({
@@ -966,7 +1016,7 @@ describe('GET /api/project/release-readiness', () => {
   it('inspects child repos for a non-git workspace envelope', async () => {
     const envelopePath = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-release-envelope-'))
     try {
-      const envelopeId = bootstrapWorkspace(envelopePath, { name: 'Looma + Knit' }).id ?? path.basename(envelopePath)
+      const envelopeId = bootstrapWorkspace(envelopePath, { name: 'Release Envelope Fixture' }).id ?? path.basename(envelopePath)
       await initChildRepo(path.join(envelopePath, 'looma'))
       await initChildRepo(path.join(envelopePath, 'knit'))
       await fs.writeFile(path.join(envelopePath, 'knit', '.gitignore'), 'node_modules\n', 'utf8')

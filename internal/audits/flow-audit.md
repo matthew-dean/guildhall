@@ -14148,6 +14148,48 @@ Narrative Harness current scope.
   passed `8` tests; `node ./build.mjs`; `node scripts/contract-touch-detector.mjs`;
   `git diff --check`.
 
+2026-07-05T15:58:00Z - Synchronized imported brief blockers across Start,
+Release readiness, and task git-story surfaces.
+
+- Work id: `codex:imported-brief-release-readiness-2026-07-05`.
+- User job: when Guildhall says the current scope cannot start because imported
+  work needs briefs, Release/Overview must show the same blocker and task cards
+  must not leak unrelated non-git envelope errors for child-repo workspaces.
+- Root-cause classification:
+  - `3. task hierarchy/dependency/proof modeling problem`: imported shaping
+    tasks with no `productBrief` were not counted as incomplete briefs in
+    release truth.
+  - `4. scheduler/action-state logic problem`: Start readiness and Release
+    readiness could disagree on the same current-scope blocker.
+  - `5. UI communication/orientation problem`: Release could hide the blocker
+    that the top action surfaced.
+  - `2. project structure/scope/release modeling problem`: task-level git
+    stories inspected non-git workspace envelopes even when child repositories
+    were the real project repos.
+- Fix:
+  - `summarizeScopedReleaseWork()` now includes `importedTaskNeedsBriefShaping`
+    tasks in `incompleteBriefs` with an explicit imported-brief reason.
+  - Per-task git stories are attached only when the task has a child repo,
+    worktree, PR/merge, or override signal; otherwise child-repo workspace state
+    stays in the project-level git story.
+  - The non-git envelope regression test now uses a unique fixture id so it
+    cannot collide with the live Looma + Knit calibration project.
+- Installed-app proof:
+  - `node ./scripts/dev-install.mjs`; `guildhall stop`; `guildhall start`;
+    `/api/stale-server` returned `stale:false` for PID `15058` from
+    `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+  - `/api/project/release-readiness?projectId=narrative-harness` returned
+    selected scope `near-term-proof-scope`, `2` `incompleteBriefs`, and
+    `incompleteBriefBlockingCount: 2`.
+  - `/api/project?projectId=narrative-harness` returned the same two
+    `releaseReadiness.incompleteBriefs`; `startReadiness.code` remained
+    `imported_scope_shaping`; and `actionModel.primaryAction` showed
+    `Imported scope needs briefs` with `Draft first brief`.
+- Verification:
+  `./node_modules/.bin/vitest run src/runtime/__tests__/serve-release-readiness.test.ts src/runtime/__tests__/project-scope-projection.test.ts`
+  passed `36` tests; `node ./build.mjs`; `node scripts/contract-touch-detector.mjs`;
+  `git diff --check`.
+
 2026-07-05T14:55:00Z - Blocked hollow imported contract work before Start can run it.
 
 - Work id: `codex:narrative-harness-hollow-contract-readiness-2026-07-05`.

@@ -2052,6 +2052,17 @@ function summarizeScopedReleaseWork(
     const approvalPendingStatus = status === 'proposed' || status === 'ready'
     const hasMaterializedChildWork = inScopeMaterializedChildren(t).length > 0
     const hasWorkerReadySpec = status === 'ready' && hasSpecDraftRecord(t)
+    if (
+      importedTaskNeedsBriefShaping(t) &&
+      !terminal &&
+      !reservedImportTask &&
+      !hasMaterializedChildWork
+    ) {
+      const reason = 'Imported current work needs a real brief before Guildhall can build unattended.'
+      incompleteBriefs.push({ id, title, reason })
+      addReleaseBlocker({ id, title, label: `${blockerSubject(title)} needs a real brief before unattended work can start.` })
+      continue
+    }
     if (status === 'done' && taskDoneButProofMissing(t)) {
       proofMissingDoneTasks.push({ id, title })
       addReleaseBlocker({ id, title, label: `${blockerSubject(title)} needs proof evidence before the release is complete.` })
@@ -2774,14 +2785,46 @@ async function gitStoryForTask(
     task,
   })
   const repoRoot = childProject?.path ?? resolveEffectiveTaskProjectPath(task as Pick<Task, 'projectPath'>, projectPath)
+  const effectiveInspectedPath = childProject?.path ?? inspectedPath
   return inspectGitStory(driver, {
     repoRoot,
     ...(childProject?.id ? { repoId: childProject.id } : {}),
     ...(childProject?.label ?? childProject?.id ? { repoLabel: childProject.label ?? childProject.id } : {}),
-    inspectedPath,
+    inspectedPath: effectiveInspectedPath,
     task: taskForGitStory(task, workspace),
     inspectPr: false,
   })
+}
+
+async function gitStoryForTaskIfUseful(
+  projectPath: string,
+  task: Record<string, unknown>,
+  workspace?: { worktreePath?: string },
+) {
+  const workspaceConfig = readWorkspaceConfig(projectPath)
+  const workspaceProjects = workspaceConfig.kind === 'workspace'
+    ? resolveWorkspaceProjectPathsOrDiscover(projectPath, workspaceConfig)
+    : discoverChildGitProjects(projectPath)
+  const childProject = resolveGitStoryWorkspaceProject({
+    workspacePath: projectPath,
+    workspaceProjectPath: projectPath,
+    workspaceProjects,
+    task,
+  })
+  const mergeRecord =
+    task.mergeRecord && typeof task.mergeRecord === 'object' && !Array.isArray(task.mergeRecord)
+      ? task.mergeRecord as { result?: string }
+      : undefined
+  const hasTaskSpecificGitStory =
+    Boolean(childProject) ||
+    typeof workspace?.worktreePath === 'string' ||
+    typeof task.worktreePath === 'string' ||
+    Boolean(taskGitStoryOverride(task)) ||
+    mergeRecord?.result === 'skipped' ||
+    mergeRecord?.result === 'conflict' ||
+    task.status === 'pending_pr'
+  if (!hasTaskSpecificGitStory && workspaceProjects.length > 0) return undefined
+  return gitStoryForTask(projectPath, task, workspace, workspaceProjects)
 }
 
 async function buildProjectGitStorySummary(projectPath: string, tasks?: Array<Record<string, unknown>>): Promise<GitStorySummary> {
@@ -2927,7 +2970,7 @@ async function enrichTaskForServe(
   const workspaceStore = await readTaskWorkspaceStore(projectPath).catch(() => undefined)
   const workspace = taskId ? workspaceStore?.workspaces[taskId] : undefined
   const gitStory = taskId && shouldAttachTaskGitStory(taskId)
-    ? await gitStoryForTask(projectPath, normalized, workspace).catch(() => undefined)
+    ? await gitStoryForTaskIfUseful(projectPath, normalized, workspace).catch(() => undefined)
     : undefined
   const reviewAudit = taskId
     ? await createReviewAuditStore({
@@ -8458,7 +8501,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         for (const task of state.tasks) {
           const id = typeof task.id === 'string' ? task.id : ''
           if (!id || !taskIds.has(id) || !shouldAttachTaskGitStory(id)) continue
-          const gitStory = await gitStoryForTask(project.path, task, workspaceStore?.workspaces[id]).catch(() => undefined)
+          const gitStory = await gitStoryForTaskIfUseful(project.path, task, workspaceStore?.workspaces[id]).catch(() => undefined)
           if (gitStory) taskGitStories[id] = gitStory
         }
       }
@@ -9093,7 +9136,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const task = tasks.find(t => (t as { id?: string }).id === id) as Record<string, unknown> | undefined
       if (!task) return c.json({ error: 'task not found' }, 404)
       const workspaceStore = await readTaskWorkspaceStore(project.path).catch(() => undefined)
-      const snapshot = await gitStoryForTask(project.path, task, workspaceStore?.workspaces[id])
+      const snapshot = await gitStoryForTaskIfUseful(project.path, task, workspaceStore?.workspaces[id])
       return c.json({ taskId: id, gitStory: snapshot })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
@@ -10874,7 +10917,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
     const memoryDir = getProjectStateDir(project.path)
     const tasksPath = projectTasksPath(project.path)
     const rawQueue: { tasks: Array<Record<string, unknown>>; releases: ProjectRelease[]; selectedReleaseId?: string } = existsSync(tasksPath)
-      ? await readTaskQueueFileNormalized(tasksPath)
+      ? await readTaskQueueFileNormalized(tasksPath).catch((err) => {
+        const detail = err instanceof Error ? err.message : String(err)
+        throw new Error(`Could not read the saved task state file at TASKS.json. ${detail}`)
+      })
       : { tasks: [], releases: [] }
     const rawTasks = rawQueue.tasks
     const tasks = await Promise.all(rawTasks.map((task) => buildEffectiveTask(project.path, task as Task)))

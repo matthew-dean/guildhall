@@ -120,15 +120,22 @@ export function deriveReleaseContainersFromTaskMembership(
   const existingById = new Map((options.existingReleases ?? []).map(release => [release.id, release] as const))
   const releases = releaseIds.map((releaseId): ProjectRelease => {
     const existing = existingById.get(releaseId)
-    const nodeIds = new Set<string>()
-    const deferredNodeIds = new Set<string>()
+    const nodeIds = new Set(existing?.nodeIds ?? [])
+    const deferredNodeIds = new Set(existing?.deferredNodeIds ?? [])
     for (const task of tasks) {
-      if (!task.releaseIds?.includes(releaseId)) continue
-      if (task.status === 'archived' || task.status === 'cancelled') continue
       const nodeId = taskScopeNodeId(task.id)
+      const listed = nodeIds.has(nodeId) || deferredNodeIds.has(nodeId)
+      const assigned = task.releaseIds?.includes(releaseId) ?? false
+      if (!listed && !assigned) continue
+      if (task.status === 'archived' || task.status === 'cancelled') {
+        nodeIds.delete(nodeId)
+        deferredNodeIds.delete(nodeId)
+        continue
+      }
       if (task.status === 'shelved') {
+        nodeIds.delete(nodeId)
         deferredNodeIds.add(nodeId)
-      } else {
+      } else if (assigned || listed) {
         nodeIds.add(nodeId)
       }
     }
@@ -153,7 +160,7 @@ export function deriveReleaseContainersFromTaskMembership(
   })
 
   const selectedReleaseId =
-    releases.find(release => tasks.some(task => task.releaseIds?.includes(release.id) && taskIsOpenCurrentScopeWork(task)))?.id ??
+    releases.find(release => tasks.some(task => releaseIncludesTask(release, task) && taskIsOpenCurrentScopeWork(task)))?.id ??
     releases[0]?.id
   return { releases, ...(selectedReleaseId ? { selectedReleaseId } : {}) }
 }
@@ -175,6 +182,13 @@ function taskIsOpenCurrentScopeWork(task: Task): boolean {
     task.status !== 'archived' &&
     task.status !== 'cancelled' &&
     task.status !== 'shelved'
+}
+
+function releaseIncludesTask(release: ProjectRelease, task: Task): boolean {
+  const nodeId = taskScopeNodeId(task.id)
+  return release.nodeIds.includes(nodeId) ||
+    release.deferredNodeIds.includes(nodeId) ||
+    (task.releaseIds?.includes(release.id) ?? false)
 }
 
 export function selectedProjectScopeForQueue(
