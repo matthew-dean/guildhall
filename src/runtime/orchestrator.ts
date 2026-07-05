@@ -4420,6 +4420,46 @@ export class Orchestrator {
           this.specTimeoutRetries.delete(retryKey)
           return preserved
         }
+        if (checkpointNoProgressStatusSeen) {
+          const seededSpec = await this.maybeWriteExploringRecoverySpecSeed(task, { force: true })
+          if (seededSpec) {
+            this.specTimeoutRetries.delete(retryKey)
+            return seededSpec
+          }
+          const now = this.now()
+          const queue = await this.readQueue()
+          const liveTask = queue.tasks.find((candidate) => candidate.id === task.id)
+          if (liveTask && liveTask.status === 'exploring') {
+            liveTask.assignedTo = null
+            liveTask.updatedAt = now
+            liveTask.notes.push({
+              agentId: 'coordinator',
+              role: 'runtime',
+              content:
+                'The spec lane timed out after continuing read-only exploration despite a durable-progress nudge. Guildhall preserved the task for runtime recovery instead of asking the owner to decide whether to retry.',
+              timestamp: now,
+            })
+            queue.lastUpdated = now
+            await this.writeQueue(queue)
+            await this.emitBackendEvent({
+              type: 'line_complete',
+              task_id: task.id,
+              agent_name: agent.name,
+              message:
+                'Spec shaping timed out after the durable-progress nudge. Guildhall preserved this as runtime recovery instead of owner input.',
+            })
+            this.specTimeoutRetries.delete(retryKey)
+            return {
+              kind: 'processed',
+              taskId: task.id,
+              agent: agent.name,
+              beforeStatus,
+              afterStatus: liveTask.status,
+              transitioned: false,
+              revisionCount: liveTask.revisionCount,
+            }
+          }
+        }
         const specTimeoutRetries = (this.specTimeoutRetries.get(retryKey) ?? 0) + 1
         this.specTimeoutRetries.set(retryKey, specTimeoutRetries)
         if (specTimeoutRetries <= 1) {
@@ -4943,6 +4983,35 @@ export class Orchestrator {
               if (seededSpec) {
                 this.clearExploringNoProgress(task.id)
                 return seededSpec
+              }
+              taskAfter.assignedTo = null
+              taskAfter.updatedAt = this.now()
+              taskAfter.notes.push({
+                agentId: 'coordinator',
+                role: 'runtime',
+                content:
+                  'The spec lane kept using read-only exploration after Guildhall asked for durable progress. Guildhall preserved the task for runtime recovery instead of asking the owner to decide whether to retry.',
+                timestamp: taskAfter.updatedAt,
+              })
+              queueAfter.lastUpdated = taskAfter.updatedAt
+              await this.writeQueue(queueAfter)
+              await this.emitBackendEvent({
+                type: 'line_complete',
+                task_id: task.id,
+                agent_name: agent.name,
+                message:
+                  'Spec shaping kept researching after the durable-progress nudge. Guildhall preserved this as runtime recovery instead of owner input.',
+              })
+              this.clearExploringNoProgress(task.id)
+              await this.maybeCleanupWorktree(taskAfter, worktreeMode)
+              return {
+                kind: 'processed',
+                taskId: task.id,
+                agent: agent.name,
+                beforeStatus,
+                afterStatus: taskAfter.status,
+                transitioned: false,
+                revisionCount: taskAfter.revisionCount,
               }
             }
             const summary = checkpointNoProgressStatusSeen

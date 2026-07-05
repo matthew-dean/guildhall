@@ -19008,11 +19008,11 @@ recovery work.
   - Existing data impact: no migration. Existing blocked tasks with matching
     spec-timeout escalation text now recover through the existing system
     resolver the next time the orchestrator sees them.
-  - Required follow-up: the next slice must stop fresh spec-timeout escalations
-    from being owner-shaped when the spec lane continues read-only exploration
-    after the durable-progress nudge. The recovery classifier now resolves the
-    stale escalation on restart, but the timeout branch can still create a new
-    owner-shaped escalation after another read-only retry.
+  - Required follow-up: continue Narrative Harness MVP advancement after live
+    proof confirms fresh spec-timeout retries no longer create owner-shaped
+    escalations. The remaining source-recovery difficulty should feed the
+    DeepInfra drafting/model-selection work rather than turning into a Matthew
+    decision.
   - Proof required: focused orchestrator regression, build, contract lint,
     installed-app API proof on Narrative Harness after reinstall/restart.
   - Proof provided so far: `./node_modules/.bin/vitest run
@@ -19026,10 +19026,31 @@ recovery work.
     "task-import-1g9oq7m"}`. Task detail then showed escalation
     `esc-task-import-1g9oq7m-1` resolved by `system`, status reopened to
     `exploring`, and an active spec-agent turn with fresh read activity.
-  - New failing evidence: the live retry later emitted the durable-progress
-    nudge, kept doing read-only source exploration, timed out again, and raised
-    `esc-task-import-1g9oq7m-2` with the same owner-shaped timeout summary. That
-    is not fixed by this slice and remains a runtime-policy/data-model follow-up.
+  - Follow-up fix in same slice: the timeout branch now detects when the
+    durable-progress nudge fired before the timeout. If it can seed a recovery
+    spec, it does; if an existing spec is already present, it clears the stale
+    spec-agent claim, records runtime recovery, and returns `processed` without
+    raising owner input.
+  - Second follow-up fix: the repeated no-progress branch now does the same
+    when the durable-progress nudge fired and an existing spec prevents
+    deterministic reseeding. This closes the live `esc-task-import-1g9oq7m-3`
+    failure family where no timeout escalation was raised, but the nudge path
+    still created owner-shaped input.
+  - Regressions added: a spec-agent turn that emits the durable-progress nudge
+    and then times out with an existing source-recovery spec leaves the task in
+    `exploring`, clears assignment to `null`, records a runtime note, and
+    creates zero escalations; the same is true when the nudge path returns no
+    durable mutation before the timeout branch fires.
+  - Installed-app proof after reinstall/restart: `node ./build.mjs`,
+    `node scripts/dev-install.mjs`, `guildhall stop && guildhall start`, and
+    `/api/stale-server` reported `stale:false` for PID `7244`. Starting
+    Narrative Harness `task-import-1g9oq7m` through
+    `POST /api/project/task/task-import-1g9oq7m/start?projectId=narrative-harness`
+    returned `mode:"one_task"` scoped to the work item. The installed app
+    resolved stale escalations `esc-task-import-1g9oq7m-1`,
+    `esc-task-import-1g9oq7m-2`, and `esc-task-import-1g9oq7m-3` by `system`;
+    after the live durable-progress warning, the task remained `exploring` with
+    no `blockReason` and no open escalations.
   - Apply/revert behavior: reverting the two classifier text additions restores
     the previous behavior where this timeout wording remains a terminal blocked
     owner-facing escalation until manually resolved.

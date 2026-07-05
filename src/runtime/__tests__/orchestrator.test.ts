@@ -1753,6 +1753,63 @@ describe('Orchestrator.tick — routing', () => {
     expect(task.spec).toContain('## Completion Boundary')
   })
 
+  it('preserves durable-progress nudge stalls with an existing spec as runtime recovery', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'exploring',
+        title: 'Recover source-backed contract surface',
+        assignedTo: 'spec-agent',
+        spec: [
+          '## What this is',
+          'Repair the imported handoff.',
+          '',
+          '## Verification',
+          '- Confirm the worker handoff no longer depends on an empty placeholder.',
+        ].join('\n'),
+      }),
+    ])
+    const spec = {
+      name: 'spec-agent',
+      calls: [] as { prompt: string }[],
+      async generate(prompt: string) {
+        this.calls.push({ prompt })
+        return { text: '' }
+      },
+      async generateWithEvents(prompt: string, onEvent: (event: any) => void | Promise<void>) {
+        this.calls.push({ prompt })
+        await onEvent({
+          type: 'status',
+          message:
+            'Assistant kept researching without recording durable progress; asking it to write the brief, question, spec, or escalation now.',
+        })
+        return { text: '' }
+      },
+    }
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out).toMatchObject({
+      kind: 'processed',
+      taskId: 'a',
+      agent: 'spec-agent',
+      beforeStatus: 'exploring',
+      afterStatus: 'exploring',
+      transitioned: false,
+    })
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    expect(task.status).toBe('exploring')
+    expect(task.assignedTo).toBeNull()
+    expect(task.escalations ?? []).toHaveLength(0)
+    expect(task.notes.at(-1)?.content)
+      .toContain('instead of asking the owner')
+  })
+
   it('persists a visible question from the whole spec turn before escalating durable-progress nudges', async () => {
     await writeQueue([mkTask({ id: 'a', status: 'exploring', title: 'Verify and update the migration record' })])
     const spec = {
@@ -2680,6 +2737,63 @@ describe('Orchestrator.tick — routing', () => {
       summary: 'Spec shaping timed out before saving durable progress.',
     })
     expect(task.blockReason).toContain('Spec shaping timed out')
+  })
+
+  it('preserves spec timeout after durable-progress nudge as runtime recovery instead of owner input', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'exploring',
+        title: 'Recover source-backed contract surface',
+        assignedTo: 'spec-agent',
+        spec: [
+          '## What this is',
+          'Repair the imported handoff.',
+          '',
+          '## Verification',
+          '- Confirm the worker handoff no longer depends on an empty placeholder.',
+        ].join('\n'),
+      }),
+    ])
+    const spec = {
+      name: 'spec-agent',
+      calls: [] as Array<{ prompt: string }>,
+      async generate(prompt: string) {
+        this.calls.push({ prompt })
+        throw new Error('spec-agent timed out after 120000ms of inactivity')
+      },
+      async generateWithEvents(prompt: string, onEvent: (event: any) => void | Promise<void>) {
+        this.calls.push({ prompt })
+        await onEvent({
+          type: 'status',
+          message:
+            'Assistant kept researching without recording durable progress; asking it to write the brief, question, spec, or escalation now.',
+        })
+        throw new Error('spec-agent timed out after 120000ms of inactivity')
+      },
+    }
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec: spec as any }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out).toMatchObject({
+      kind: 'processed',
+      taskId: 'a',
+      agent: 'spec-agent',
+      beforeStatus: 'exploring',
+      afterStatus: 'exploring',
+      transitioned: false,
+    })
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    expect(task.status).toBe('exploring')
+    expect(task.assignedTo).toBeNull()
+    expect(task.escalations ?? []).toHaveLength(0)
+    expect(task.notes.at(-1)?.content)
+      .toContain('instead of asking the owner')
   })
 
   it('preserves newly saved durable spec progress when the spec agent times out', async () => {
