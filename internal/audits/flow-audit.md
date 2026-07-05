@@ -12,6 +12,35 @@ This is the active browser test plan for the Guildhall project surface. Keep it
 updated while auditing the active test project so another agent can resume
 without guessing.
 
+2026-07-05T05:09:00Z - Normalized fragile run-record proof commands.
+
+- Work id: `codex:run-record-json-proof-command-normalization-2026-07-05`.
+- User job: when Guildhall generates or stores an automated acceptance command
+  that inspects a saved run record, the command must select the JSON run record
+  it claims to inspect, not the first same-prefix artifact in `runs/`.
+- Finding:
+  - Narrative Harness task
+    `task-import-14yqvl7-split-run-the-bounded-reviewer-and-writer-loop-headlessly-2`
+    repeatedly failed AC-3/AC-4 because the generated command used
+    `readdirSync('runs').find(f=>f.startsWith(...))`.
+  - The `runs/` directory contained a same-prefix Markdown debug report, so
+    Node tried to `require()` the `.md` report instead of the JSON run record.
+  - Workers then tried to delete historical run records as the "fix", which is
+    data cleanup churn caused by an underspecified acceptance command.
+- Fix:
+  - Added shared command normalization for Node run-record proof commands so
+    same-prefix scans require `.json` artifacts.
+  - Reused that helper both when persisted automated acceptance criteria are
+    normalized and when the inline acceptance-command gate runner executes a
+    command.
+- Verification:
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/task-gates.test.ts -t "filters run-record proof commands|normalizeAutomatedAcceptanceCriterionCommands"`
+    passed `3` selected tests.
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/orchestrator.test.ts -t "acceptance command gates"`
+    passed `3` selected tests.
+
+source: codex:run-record-json-proof-command-normalization-2026-07-05
+
 2026-07-05T03:52:00Z - Fixed task answer submissions leaving owner-input
 requests blocked.
 

@@ -218,6 +218,31 @@ describe('normalizeAutomatedAcceptanceCriterionCommands', () => {
     expect(changed).toBe(false)
     expect(task.acceptanceCriteria[0].command).toBe('cargo test')
   })
+
+  it('filters run-record proof commands to JSON artifacts', async () => {
+    const command = 'node -e "const r=require(\'./runs/\'+require(\'fs\').readdirSync(\'runs\').find(f=>f.startsWith(\'run-fixture-the-last-lighthouse\'))); console.log(JSON.stringify(r.reviewerFinding))"'
+    const task = {
+      projectPath: tmpDir,
+      acceptanceCriteria: [
+        {
+          id: 'ac-run-record',
+          description: 'reviewerFinding exists on the saved JSON run record',
+          verifiedBy: 'automated',
+          command,
+        },
+      ],
+    } as any
+
+    const changed = normalizeAutomatedAcceptanceCriterionCommands({
+      workspaceProjectPath: tmpDir,
+      task,
+    })
+
+    expect(changed).toBe(true)
+    expect(task.acceptanceCriteria[0].command).toBe(
+      'node -e "const r=require(\'./runs/\'+require(\'fs\').readdirSync(\'runs\').find(f=>f.startsWith(\'run-fixture-the-last-lighthouse\')&&f.endsWith(\'.json\'))); console.log(JSON.stringify(r.reviewerFinding))"',
+    )
+  })
 })
 
 describe('resolveEffectiveTaskBootstrapBlock', () => {

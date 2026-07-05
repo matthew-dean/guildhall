@@ -85,6 +85,24 @@ function normalizeCommand(command: string): string {
   return command.trim().replace(/\s+/g, ' ')
 }
 
+export function normalizeRunRecordJsonSelectionCommand(command: string): string {
+  const normalized = normalizeCommand(command)
+  if (
+    !/require\(['"]\.\/runs\/['"]\s*\+/.test(normalized) ||
+    !/readdirSync\(['"]runs['"]\)/.test(normalized) ||
+    !/\.find\(\s*(\w+)\s*=>/.test(normalized)
+  ) {
+    return normalized
+  }
+  return normalized.replace(
+    /\.find\(\s*(\w+)\s*=>\s*\1\.startsWith\(([^)]*)\)\s*\)/g,
+    (match, name: string, prefix: string) =>
+      match.includes('.endsWith(')
+        ? match
+        : `.find(${name}=>${name}.startsWith(${prefix})&&${name}.endsWith('.json'))`,
+  )
+}
+
 function isSelfReferentialGuildhallTaskCommand(command: string): boolean {
   const normalized = normalizeCommand(command)
   return /\b(?:npx\s+)?guildhall\s+run\b/i.test(normalized) && /\s--task(?:=|\s)/i.test(normalized)
@@ -849,7 +867,7 @@ function normalizeCriterionCommand(
   projectPath: string,
 ): string | null {
   if (typeof command !== 'string' || command.trim().length === 0) return null
-  return validateOrNormalizePnpmCommand(command, projectPath)
+  return validateOrNormalizePnpmCommand(normalizeRunRecordJsonSelectionCommand(command), projectPath)
 }
 
 export function normalizeAutomatedAcceptanceCriterionCommands(input: {

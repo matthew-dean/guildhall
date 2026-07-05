@@ -104,6 +104,7 @@ import { writeProjectTaskQueue } from './project-state-boundary.js'
 import {
   effectiveBootstrapGateCommands,
   normalizeAutomatedAcceptanceCriterionCommands,
+  normalizeRunRecordJsonSelectionCommand,
   reconcileAutomatedAcceptanceCommandsFromVerifiedWork,
   renderTaskScopedGateInstructions,
   renderTaskScopedVerificationInstructions,
@@ -313,6 +314,8 @@ function shouldRunAcceptanceCommandCriterion(
 }
 
 function normalizeAcceptanceCommandForGuildhallState(command: string): string {
+  const jsonArtifactCommand = normalizeRunRecordJsonSelectionCommand(command)
+  if (jsonArtifactCommand !== command) return jsonArtifactCommand
   if (!/^git\s+diff\b/.test(command)) return command
   const operatorMatch = command.match(/\s(?:\||&&|\|\||;)\s/)
   const gitDiffSegment = operatorMatch ? command.slice(0, operatorMatch.index) : command
