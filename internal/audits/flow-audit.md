@@ -72,6 +72,36 @@ source: codex:run-record-json-proof-command-normalization-2026-07-05
 
 source: codex:completed-task-evidence-display-repair-2026-07-05
 
+2026-07-05T05:54:00Z - Kept release Start and readiness on the same inferred scope.
+
+- Work id: `codex:start-respects-inferred-release-scope-2026-07-05`.
+- User job: pressing Start/Resume on a project with a selected current
+  release must only advance work that belongs to that release, and the
+  release-readiness summary must include the same runnable child work.
+- Finding:
+  - Narrative Harness Stage 1 readiness reported the selected release as
+    `6/6` done, while `/api/project` still returned
+    `startReadiness.canStart: true`.
+  - The active tasks were generated child splits under a Stage 1 parent. They
+    were hidden from project totals as internal steps, but execution still
+    treated them as in-scope descendants.
+  - That split-brain made readiness say the release was consumed while Start
+    could still advance selected-release child work.
+- Fix:
+  - Start/readiness helpers now share the same release-scope resolver: explicit
+    release container first, inferred task membership second.
+  - Release readiness now counts execution-scoped descendant work even when
+    that work is compressed out of visible project totals.
+  - Start readiness now checks execution-scoped children before declaring the
+    selected release terminal.
+- Verification:
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/serve-settings.test.ts -t "selected release as consumed|inferred release membership|selected release consumed"`
+    passed `3` selected tests.
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/serve-settings.test.ts -t "inferred release child splits|inferred release membership|selected release as consumed"`
+    passed `3` selected tests.
+
+source: codex:start-respects-inferred-release-scope-2026-07-05
+
 2026-07-05T03:52:00Z - Fixed task answer submissions leaving owner-input
 requests blocked.
 

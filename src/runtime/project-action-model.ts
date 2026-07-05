@@ -532,7 +532,7 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
     secondaryActions,
     runControl: {
       label: setupBlocksStart && !running ? 'Waiting on setup' : runControlLabel(startReadiness, running),
-      startEnabled: running || availabilityPaused || (startReadiness?.canStart !== false && !setupBlocksStart),
+      startEnabled: running || (startReadiness?.canStart !== false && !setupBlocksStart),
       disabledReason,
       href: startReadiness?.actionHref ?? setup.href,
     },

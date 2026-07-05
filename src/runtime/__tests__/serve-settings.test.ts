@@ -1198,6 +1198,177 @@ describe('POST /api/project/start', () => {
     })
   })
 
+  it('treats inferred release membership as consumed when only later work remains runnable', async () => {
+    const now = new Date().toISOString()
+    await writeSystemTasks({
+      version: 1,
+      lastUpdated: now,
+      tasks: [
+        {
+          id: 'current-done',
+          title: 'Finish current release proof',
+          description: 'The inferred selected release work is finished.',
+          domain: 'core',
+          status: 'done',
+          releaseIds: ['headless-mvp'],
+          priority: 'normal',
+          acceptanceCriteria: [],
+          outOfScope: [],
+          dependsOn: [],
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          adjudications: [],
+          escalations: [],
+          agentIssues: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          id: 'later-ready',
+          title: 'Start next release feature',
+          description: 'This is outside the inferred selected release.',
+          domain: 'core',
+          status: 'ready',
+          scope: 'later',
+          priority: 'critical',
+          acceptanceCriteria: [],
+          outOfScope: [],
+          dependsOn: [],
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          adjudications: [],
+          escalations: [],
+          agentIssues: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+    })
+    setProvider('anthropic-api', { apiKey: 'sk-ant-test' })
+    updateGlobalConfig({ preferredProvider: 'anthropic-api' })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await applyStorageBoundaryMigration(app)
+    const projectRes = await app.fetch(new Request(scoped('/api/project')))
+    const projectBody = await projectRes.json() as {
+      startReadiness?: { canStart?: boolean; code?: string; message?: string }
+      actionModel?: { runControl?: { startEnabled?: boolean } }
+    }
+
+    expect(projectBody.startReadiness).toMatchObject({
+      canStart: false,
+      code: 'all_terminal',
+    })
+    expect(projectBody.startReadiness?.message).toContain('headless-mvp')
+    expect(projectBody.startReadiness?.message).toContain('outside this release')
+    expect(projectBody.actionModel?.runControl?.startEnabled).toBe(false)
+
+    const startRes = await app.fetch(
+      new Request(scoped('/api/project/start'), { method: 'POST', body: '{}' }),
+    )
+    expect(startRes.status).toBe(200)
+    const startBody = await startRes.json() as { status?: string; code?: string; stopSummary?: { reason?: string } }
+    expect(startBody).toMatchObject({
+      status: 'stopped',
+      code: 'all_terminal',
+      stopSummary: { reason: 'all_terminal' },
+    })
+  })
+
+  it('keeps inferred release child splits in start readiness even when they are hidden from project totals', async () => {
+    const now = new Date().toISOString()
+    await writeSystemTasks({
+      version: 1,
+      lastUpdated: now,
+      tasks: [
+        {
+          id: 'release-parent',
+          title: 'Build release harness',
+          description: 'Selected release container.',
+          domain: 'core',
+          status: 'done',
+          releaseIds: ['headless-mvp'],
+          requestIntake: { createdBy: 'workspace-importer' },
+          priority: 'normal',
+          acceptanceCriteria: [],
+          outOfScope: [],
+          dependsOn: [],
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          adjudications: [],
+          escalations: [],
+          agentIssues: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          id: 'release-parent-split-review-proof',
+          title: 'Review proof packet',
+          description: 'A generated child split under the selected release parent.',
+          domain: 'core',
+          status: 'spec_review',
+          hierarchy: { parentId: 'release-parent', childIds: [], relation: 'decomposes', order: 0 },
+          spec: 'Spec that needs owner review.',
+          priority: 'normal',
+          acceptanceCriteria: [{ text: 'Reviewed.', met: false }],
+          outOfScope: [],
+          dependsOn: [],
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          adjudications: [],
+          escalations: [],
+          agentIssues: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+    })
+    setProvider('anthropic-api', { apiKey: 'sk-ant-test' })
+    updateGlobalConfig({ preferredProvider: 'anthropic-api' })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await applyStorageBoundaryMigration(app)
+    const projectRes = await app.fetch(new Request(scoped('/api/project')))
+    const projectBody = await projectRes.json() as {
+      startReadiness?: { canStart?: boolean; code?: string; message?: string; focusTaskId?: string }
+      actionModel?: { runControl?: { startEnabled?: boolean } }
+    }
+
+    expect(projectBody.startReadiness).toMatchObject({
+      canStart: false,
+      code: 'no_unattended_progress',
+      focusTaskId: 'release-parent-split-review-proof',
+    })
+    expect(projectBody.startReadiness?.message).toContain('Review proof packet')
+    expect(projectBody.actionModel?.runControl?.startEnabled).toBe(false)
+
+    const readinessRes = await app.fetch(new Request(scoped('/api/project/release-readiness')))
+    const readiness = await readinessRes.json() as {
+      totals?: { tasks?: number; unfinishedCount?: number; humanBlockingCount?: number }
+      statusCounts?: Record<string, number>
+      unapprovedSpecs?: Array<{ id: string }>
+    }
+    expect(readiness.totals).toMatchObject({
+      tasks: 2,
+      unfinishedCount: 1,
+      humanBlockingCount: 1,
+    })
+    expect(readiness.statusCounts?.spec_review).toBe(1)
+    expect(readiness.unapprovedSpecs?.map(spec => spec.id)).toContain('release-parent-split-review-proof')
+  })
+
   it('does not call a selected release consumed when completed current work is still missing proof', async () => {
     const now = new Date().toISOString()
     await writeSystemTasks({

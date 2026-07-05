@@ -1805,8 +1805,9 @@ function summarizeScopedReleaseWork(
     { version: 1, lastUpdated: new Date(0).toISOString(), tasks, releases: [] },
     { selectedScope: scope as ProjectScope | null | undefined },
   )
-  const scopedTaskIds = new Set(scopeProjection.rows.filter(row => row.scope === 'included').map(row => row.taskId))
-  const scopedTasks = tasks.filter(task => scopedTaskIds.has(task.id))
+  const scopedTasks = tasksEligibleForScopeExecution(tasks, scope)
+    .filter(task => task.id !== META_INTAKE_TASK_ID && task.id !== WORKSPACE_IMPORT_TASK_ID)
+    .filter(task => !['archived', 'cancelled'].includes(String(task.status ?? '')))
   const statusCounts: Record<string, number> = {}
   const openEscalations: Array<{ taskId: string; taskTitle: string; escalationId: string; reason: string; summary: string }> = []
   const incompleteBriefs: Array<{ id: string; title: string; reason: string }> = []
@@ -1966,6 +1967,29 @@ function selectedReleaseScopeFromTaskMembership(tasks: Task[]): OrientationScope
       .map(task => taskNodeId(task.id)),
     deferredNodeIds: [],
   }
+}
+
+function selectedReleaseScopeFromQueueLike(input: {
+  tasks: Task[]
+  releases?: TaskQueue['releases']
+  selectedReleaseId?: string
+}): OrientationScope | null {
+  const queueScope = Array.isArray(input.releases)
+    ? selectedReleaseScopeForQueue({
+      version: 1,
+      lastUpdated: new Date(0).toISOString(),
+      tasks: input.tasks,
+      releases: input.releases,
+      ...(input.selectedReleaseId ? { selectedReleaseId: input.selectedReleaseId } : {}),
+    })
+    : null
+  return queueScope ?? selectedReleaseScopeFromTaskMembership(input.tasks)
+}
+
+function tasksEligibleForScopeExecution(tasks: Task[], scope: OrientationScope | null | undefined): Task[] {
+  if (!scope) return tasks
+  const tasksById = new Map(tasks.map(task => [task.id, task] as const))
+  return tasks.filter(task => taskEligibleForSelectedScope(task, scope, { tasksById }).eligible)
 }
 
 async function chooseProjectFolderMacOS(): Promise<string | null> {
@@ -4964,11 +4988,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
       releases: queue.releases,
       ...(queue.selectedReleaseId ? { selectedReleaseId: queue.selectedReleaseId } : {}),
     }
-    const selectedReleaseScope = selectedReleaseScopeForQueue(typedQueue) ?? selectedReleaseScopeFromTaskMembership(typedQueue.tasks)
-    const tasksById = new Map(typedQueue.tasks.map(task => [task.id, task]))
-    const scopedTasks = selectedReleaseScope
-      ? typedQueue.tasks.filter(task => taskEligibleForSelectedScope(task, selectedReleaseScope, { tasksById }).eligible)
-      : typedQueue.tasks
+    const selectedReleaseScope = selectedReleaseScopeFromQueueLike(typedQueue)
+    const scopedTasks = tasksEligibleForScopeExecution(typedQueue.tasks, selectedReleaseScope)
     const pausedTasks = scopedTasks.filter(task => {
       if (!task || typeof task !== 'object') return false
       if (requestedTaskId && task.id !== requestedTaskId) return false
@@ -5087,26 +5108,23 @@ export function buildServeApp(opts: ServeOptions = {}): {
 	      return null
 	    }
 
-    const rawQueue = !Array.isArray(raw) && raw && typeof raw === 'object'
-      ? raw as { releases?: unknown; selectedReleaseId?: unknown }
-      : null
     const typedTasks = tasks.filter((task): task is Task => Boolean(task && typeof task === 'object'))
-    const selectedReleaseScope = !requestedTaskId && rawQueue && Array.isArray(rawQueue.releases)
-      ? selectedReleaseScopeForQueue({
-          version: 1,
-          lastUpdated: new Date(0).toISOString(),
-          tasks: typedTasks,
-          releases: rawQueue.releases as TaskQueue['releases'],
-          ...(typeof rawQueue.selectedReleaseId === 'string'
-            ? { selectedReleaseId: rawQueue.selectedReleaseId }
-            : {}),
-        })
+    const selectedReleaseScope = !requestedTaskId
+      ? selectedReleaseScopeFromQueueLike({
+        tasks: typedTasks,
+        releases: !Array.isArray(raw) && raw && typeof raw === 'object' && Array.isArray((raw as { releases?: unknown }).releases)
+          ? (raw as { releases: TaskQueue['releases'] }).releases
+          : undefined,
+        selectedReleaseId: !Array.isArray(raw) && raw && typeof raw === 'object' && typeof (raw as { selectedReleaseId?: unknown }).selectedReleaseId === 'string'
+          ? (raw as { selectedReleaseId: string }).selectedReleaseId
+          : undefined,
+      })
       : null
     const tasksById = selectedReleaseScope
       ? new Map(typedTasks.map(task => [task.id, task] as const))
       : null
-    const scopedTasks = selectedReleaseScope && tasksById
-      ? typedTasks.filter(task => taskEligibleForSelectedScope(task, selectedReleaseScope, { tasksById }).eligible)
+    const scopedTasks = selectedReleaseScope
+      ? tasksEligibleForScopeExecution(typedTasks, selectedReleaseScope)
       : tasks
     if (selectedReleaseScope && scopedTasks.length === 0) return null
 
@@ -5367,11 +5385,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
       releases: queue.releases,
       ...(queue.selectedReleaseId ? { selectedReleaseId: queue.selectedReleaseId } : {}),
     }
-    const selectedReleaseScope = selectedReleaseScopeForQueue(typedQueue) ?? selectedReleaseScopeFromTaskMembership(typedQueue.tasks)
-    const tasksById = new Map(typedQueue.tasks.map(task => [task.id, task]))
-    const tasks = selectedReleaseScope
-      ? typedQueue.tasks.filter(task => taskEligibleForSelectedScope(task, selectedReleaseScope, { tasksById }).eligible)
-      : typedQueue.tasks
+    const selectedReleaseScope = selectedReleaseScopeFromQueueLike(typedQueue)
+    const tasks = tasksEligibleForScopeExecution(typedQueue.tasks, selectedReleaseScope)
     const importedShapingTasks = tasks.filter(importedTaskNeedsBriefShaping)
     if (importedShapingTasks.length === 0) return null
     const importerTask = typedQueue.tasks.find(task =>
@@ -5982,14 +5997,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
       releases: queue.releases,
       ...(queue.selectedReleaseId ? { selectedReleaseId: queue.selectedReleaseId } : {}),
     }
-    const selectedReleaseScope = selectedReleaseScopeForQueue(typedQueue) ?? selectedReleaseScopeFromTaskMembership(typedQueue.tasks)
+    const selectedReleaseScope = selectedReleaseScopeFromQueueLike(typedQueue)
     const tasksById = new Map(typedQueue.tasks.map(task => [task.id, task]))
     if (selectedReleaseScope) {
       const projection = buildProjectScopeProjection(typedQueue, {
         selectedScope: selectedReleaseScope as ProjectScope,
       })
       if (projection.rows.some(row => row.scope === 'included' && row.status === 'import_draft')) return null
-      if (projection.start.canStart) return null
       if (projection.start.code === 'no_unattended_progress') {
         return {
           canStart: false,
@@ -6002,11 +6016,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
           ...(typeof projection.start.count === 'number' ? { count: projection.start.count } : {}),
         }
       }
-      return null
     }
-    const tasks = selectedReleaseScope
-      ? typedQueue.tasks.filter(task => taskEligibleForSelectedScope(task, selectedReleaseScope, { tasksById }).eligible)
-      : typedQueue.tasks
+    const tasks = tasksEligibleForScopeExecution(typedQueue.tasks, selectedReleaseScope)
     if (tasks.length === 0) return null
 
     let runnable = 0

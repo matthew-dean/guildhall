@@ -116,6 +116,27 @@ describe('buildProjectActionModel', () => {
       startEnabled: false,
     })
 
+    const pausedSpecReview = buildProjectActionModel({
+      startReadiness: {
+        canStart: false,
+        code: 'no_unattended_progress',
+        message: '"Continue drafted spec work" is waiting for review before work can start.',
+        actionHref: '/thread?thread=task%3Atask-spec-a',
+        focusTaskId: 'task-spec-a',
+        focusTaskTitle: 'Continue drafted spec work',
+        focusKind: 'spec_review',
+        count: 1,
+      },
+      tasks: [],
+      thread: { turns: [], activeTurnId: null },
+      runStatus: 'stopped',
+      availability: { status: 'paused' },
+    })
+    expect(pausedSpecReview.runControl).toMatchObject({
+      label: 'Review needed',
+      startEnabled: false,
+    })
+
     const provider = buildProjectActionModel({
       startReadiness: {
         canStart: false,
