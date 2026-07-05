@@ -1377,7 +1377,7 @@ describe('POST /api/project/task/:id/start', () => {
         title: 'Define Narrative Harness MVP drafting model and physical-world review lanes',
         status: 'spec_review',
         description:
-          'For the Narrative Harness current MVP/current bounded scope, make sure Guildhall shapes explicit work for: (1) selecting and proving a DeepInfra-accessible model that can do drafting/writing work across genres, including adult genres, rather than assuming the current default model is sufficient; (2) defining review lanes for world-state continuity over time, including object/property state transitions such as wet hair drying after enough time in a given climate; (3) defining spatial/geographic continuity reviews, including scene geography, travel distance, walking speed for fantasy epics, and other physical plausibility checks.',
+          'For the Narrative Harness current MVP/current bounded scope, make sure Guildhall shapes explicit work for: (1) selecting and proving a DeepInfra-accessible model that can do drafting/writing work across genres, including adult genres, rather than assuming the current default model is sufficient; (2) defining review lanes for world-state continuity over time, including object/property state transitions such as wet hair drying after enough time in a given climate; (3) defining spatial/geographic continuity reviews, including scene geography, travel distance, walking speed for fantasy epics, and other physical plausibility checks. These should become source-backed MVP scope/tasks or explicit deferred work, and Guildhall should show them clearly in the project map/overview/work queue instead of treating them as hidden Codex knowledge. from For the Narrative Harness current MVP/current bounded scope, make sure Guildhall shapes explicit work for.',
         productBrief: {
           userJob: 'I want Define Narrative Harness MVP drafting model and physical-world review lanes implemented or proven from current evidence.',
           successMetric: 'Define Narrative Harness MVP drafting model and physical-world review lanes has a concrete completion boundary.',
@@ -1436,9 +1436,18 @@ describe('POST /api/project/task/:id/start', () => {
     expect(criteria).toContain('adult genres')
     expect(criteria).toContain('wet hair drying')
     expect(criteria).toContain('walking speed for fantasy epics')
+    expect(task?.workUnitAnalysis?.units.map(unit => unit.title)).toEqual([
+      'Select and prove DeepInfra drafting model',
+      'Define world-state continuity review lane',
+      'Define spatial/geographic continuity review lane',
+    ])
     expect(criteria).not.toContain('repo-local proof demonstrates that exact child outcome')
     expect(criteria).not.toContain(';.')
     expect(criteria).not.toContain('These should become source-backed MVP scope/tasks')
+    expect(task?.spec).not.toContain('These should become source-backed MVP scope/tasks')
+    expect(task?.spec).not.toContain('from For the Narrative Harness')
+    expect(task?.productBrief?.userJob).not.toContain('These should become source-backed MVP scope/tasks')
+    expect(task?.productBrief?.userJob).not.toContain('from For the Narrative Harness')
     expect(task?.productBrief?.successMetric).toContain('DeepInfra-accessible model')
     expect(task?.notes?.at(-1)?.content).toContain('under-shaped recovery spec')
   })

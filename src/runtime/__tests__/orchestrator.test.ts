@@ -3308,7 +3308,7 @@ describe('Orchestrator.tick — routing', () => {
         domain: 'harness',
         title: 'Define Narrative Harness MVP drafting model and physical-world review lanes',
         description:
-          'For the Narrative Harness current MVP/current bounded scope, make sure Guildhall shapes explicit work for: (1) selecting and proving a DeepInfra-accessible model that can do drafting/writing work across genres, including adult genres, rather than assuming the current default model is sufficient; (2) defining review lanes for world-state continuity over time, including object/property state transitions such as wet hair drying after enough time in a given climate; (3) defining spatial/geographic continuity reviews, including scene geography, travel distance, walking speed for fantasy epics, and other physical plausibility checks.',
+          'For the Narrative Harness current MVP/current bounded scope, make sure Guildhall shapes explicit work for: (1) selecting and proving a DeepInfra-accessible model that can do drafting/writing work across genres, including adult genres, rather than assuming the current default model is sufficient; (2) defining review lanes for world-state continuity over time, including object/property state transitions such as wet hair drying after enough time in a given climate; (3) defining spatial/geographic continuity reviews, including scene geography, travel distance, walking speed for fantasy epics, and other physical plausibility checks. These should become source-backed MVP scope/tasks or explicit deferred work, and Guildhall should show them clearly in the project map/overview/work queue instead of treating them as hidden Codex knowledge. from For the Narrative Harness current MVP/current bounded scope, make sure Guildhall shapes explicit work for.',
         spec: [
           '## Summary',
           'Define Narrative Harness MVP drafting model and physical-world review lanes from the current project evidence.',
@@ -3359,12 +3359,112 @@ describe('Orchestrator.tick — routing', () => {
     expect(criteria).toContain('adult genres')
     expect(criteria).toContain('wet hair drying')
     expect(criteria).toContain('walking speed for fantasy epics')
+    expect(task.workUnitAnalysis?.units.map(unit => unit.title)).toEqual([
+      'Select and prove DeepInfra drafting model',
+      'Define world-state continuity review lane',
+      'Define spatial/geographic continuity review lane',
+    ])
     expect(criteria).not.toContain('repo-local proof demonstrates that exact child outcome')
     expect(criteria).not.toContain('satisfies the relevant parent acceptance criteria')
     expect(criteria).not.toContain(';.')
     expect(criteria).not.toContain('These should become source-backed MVP scope/tasks')
+    expect(task.spec).not.toContain('These should become source-backed MVP scope/tasks')
+    expect(task.spec).not.toContain('from For the Narrative Harness')
+    expect(task.productBrief?.userJob).not.toContain('These should become source-backed MVP scope/tasks')
+    expect(task.productBrief?.userJob).not.toContain('from For the Narrative Harness')
     expect(task.productBrief?.successMetric).toContain('DeepInfra-accessible model')
     expect(task.notes.at(-1)?.content).toContain('under-shaped recovery spec')
+  })
+
+  it('repairs clean recovery specs that still cannot materialize required child work', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'model-proof',
+        status: 'spec_review',
+        domain: 'harness',
+        title: 'Define Narrative Harness MVP drafting model and physical-world review lanes',
+        description:
+          'For the Narrative Harness current MVP/current bounded scope, make sure Guildhall shapes explicit work for: (1) selecting and proving a DeepInfra-accessible model that can do drafting/writing work across genres, including adult genres, rather than assuming the current default model is sufficient; (2) defining review lanes for world-state continuity over time, including object/property state transitions such as wet hair drying after enough time in a given climate; (3) defining spatial/geographic continuity reviews, including scene geography, travel distance, walking speed for fantasy epics, and other physical plausibility checks.',
+        spec: [
+          '## Summary',
+          'Define Narrative Harness MVP drafting model and physical-world review lanes from the current project evidence.',
+          '',
+          '## Acceptance Criteria',
+          '1. The DeepInfra-accessible drafting model proof is scoped.',
+          '2. The world-state continuity review lane is scoped.',
+          '3. The spatial/geographic continuity review lane is scoped.',
+          '',
+          '## Completion Boundary',
+          '- Product outcome: Define Narrative Harness MVP drafting model and physical-world review lanes is proven inside the no-UI Narrative Harness Stage 1 boundary.',
+          '- What must be split or blocked: split before execution.',
+        ].join('\n'),
+        productBrief: {
+          userJob: 'I want Define Narrative Harness MVP drafting model and physical-world review lanes implemented or proven from current evidence.',
+          successMetric: 'The DeepInfra-accessible drafting model proof is scoped.',
+          antiPatterns: [],
+          authoredBy: 'coordinator-recovery',
+          authoredAt: '2026-07-05T18:15:02.867Z',
+        },
+        sizePlan: {
+          taskId: 'model-proof',
+          score: 5,
+          band: 'large',
+          action: 'decompose_before_execution',
+          factors: [],
+          recommendedChildren: [],
+          reviewBudgetHint: 'thorough',
+          reasons: ['Task size score: 5.'],
+          createdAt: '2026-07-05T18:15:02.867Z',
+          createdBy: 'task-sizing',
+        },
+        taskReadiness: {
+          taskKind: 'decision',
+          recommendation: 'requires_child_work',
+          summary: 'Task must be planned as smaller child work before execution.',
+          dimensions: [],
+          definitionOfDone: {
+            items: ['The drafting model and physical-world review lanes are scoped.'],
+            evidenceRequired: ['Source-backed child tasks exist.'],
+            updatedAt: '2026-07-05T18:15:02.867Z',
+            createdBy: 'task-sizing',
+          },
+          blockerPlans: [],
+          contextBudget: {
+            estimatedTokens: 12000,
+            risk: 'high',
+            fitsInOneWorkerBrief: false,
+            reasons: ['Requires child work.'],
+          },
+          assessedAt: '2026-07-05T18:15:02.867Z',
+          assessedBy: 'task-sizing',
+        },
+        notes: [{
+          agentId: 'coordinator-recovery',
+          role: 'system',
+          content: 'Guildhall repaired an under-shaped recovery spec from the current task graph before approval.',
+          timestamp: '2026-07-05T18:15:02.867Z',
+        }],
+      }),
+    ])
+    const coord = stubAgent('harness-coordinator', async () => {
+      throw new Error('coordinator should not run before missing child units are repaired')
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec: stubAgent('spec-agent'), coordinators: { harness: coord } }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out).toMatchObject({ kind: 'processed', taskId: 'model-proof', agent: 'coordinator-recovery' })
+    expect(coord.calls).toHaveLength(0)
+    const queue = await readQueue()
+    const task = queue.tasks.find(candidate => candidate.id === 'model-proof')!
+    expect(task.workUnitAnalysis?.units.map(unit => unit.title)).toEqual([
+      'Select and prove DeepInfra drafting model',
+      'Define world-state continuity review lane',
+      'Define spatial/geographic continuity review lane',
+    ])
   })
 
   it('seeds empty source-backed split children without waiting for a recovery note', async () => {

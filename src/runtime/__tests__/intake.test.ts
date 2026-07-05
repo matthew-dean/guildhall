@@ -1003,6 +1003,121 @@ describe('approveSpec', () => {
     expect(updated.tasks[2]!.dependsOn).toEqual(['task-001-split-component-implementation'])
   })
 
+  it('materializes semantic work-unit children when a split-required spec is approved', async () => {
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    task.title = 'Define Narrative Harness MVP drafting model and physical-world review lanes'
+    task.description = 'Shape the Narrative Harness MVP drafting model and physical-world review lanes.'
+    task.domain = 'harness'
+    task.spec = [
+      '## Summary',
+      'Define the Narrative Harness MVP drafting model and physical-world review lanes.',
+      '',
+      '## Acceptance Criteria',
+      '1. The DeepInfra drafting model proof is scoped.',
+      '2. The world-state continuity review lane is scoped.',
+      '3. The spatial/geographic continuity review lane is scoped.',
+      '',
+      '## Completion Boundary',
+      '- Product outcome: Narrative Harness has source-backed MVP work for the drafting model and physical-world review lanes.',
+      '- What Guildhall can complete in code: task shaping, proof scripts, tests, and recorded evidence.',
+      '- External dependencies: None known.',
+      '- Owner-only setup: None known.',
+      '- Verification environment: local project scripts.',
+      '- What counts as done: all scoped child units are linked and independently reviewable.',
+      '- What must be split or blocked: split the model proof, world-state review lane, and spatial/geographic review lane into child work.',
+    ].join('\n')
+    task.acceptanceCriteria = []
+    task.workUnitAnalysis = {
+      summary: '3 independently reviewable requirements were recovered from numbered owner scope.',
+      units: [
+        {
+          id: 'recovered-requirement-1',
+          title: 'Select and prove DeepInfra drafting model',
+          deliverable: 'Guildhall records source-backed MVP work, proof, or explicit deferral for DeepInfra drafting.',
+          rationale: 'Recovered from numbered owner requirement 1.',
+          dependsOn: [],
+          suggestedDomain: 'harness',
+        },
+        {
+          id: 'recovered-requirement-2',
+          title: 'Define world-state continuity review lane',
+          deliverable: 'Guildhall records source-backed MVP work, proof, or explicit deferral for world-state continuity.',
+          rationale: 'Recovered from numbered owner requirement 2.',
+          dependsOn: ['recovered-requirement-1'],
+          suggestedDomain: 'harness',
+        },
+        {
+          id: 'recovered-requirement-3',
+          title: 'Define spatial/geographic continuity review lane',
+          deliverable: 'Guildhall records source-backed MVP work, proof, or explicit deferral for spatial/geographic continuity.',
+          rationale: 'Recovered from numbered owner requirement 3.',
+          dependsOn: ['recovered-requirement-1'],
+          suggestedDomain: 'harness',
+        },
+      ],
+      proofOnlyItems: [],
+      createdAt: '2026-07-05T18:54:18.292Z',
+      createdBy: 'coordinator-recovery',
+    }
+    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+
+    const result = await approveSpec({ memoryDir, taskId: 'task-001' })
+
+    expect(result.success).toBe(true)
+    expect(result.newStatus).toBe('ready')
+    const updated = await readQueue()
+    const parent = updated.tasks.find(candidate => candidate.id === 'task-001')!
+    expect(parent.hierarchy?.childIds).toEqual([
+      'task-001-split-select-and-prove-deepinfra-drafting-model',
+      'task-001-split-define-world-state-continuity-review-lane',
+      'task-001-split-define-spatial-geographic-continuity-review-lane',
+    ])
+    expect(updated.tasks.map(candidate => candidate.title)).toContain('Select and prove DeepInfra drafting model')
+    expect(updated.tasks.find(candidate => candidate.title === 'Define world-state continuity review lane')?.dependsOn).toEqual([
+      'task-001-split-select-and-prove-deepinfra-drafting-model',
+    ])
+    expect(parent.taskReadiness?.recommendation).toBe('ready')
+    expect(parent.spec).toContain('Already split into linked child tasks')
+  })
+
+  it('does not report spec approval as successful when split-required work has no child units', async () => {
+    const queue = await readQueue()
+    const task = queue.tasks[0]!
+    task.title = 'Define a broad delivery program'
+    task.description = 'Implement model selection, review lanes, release coordination, telemetry, docs, and migration planning.'
+    task.spec = [
+      '## Summary',
+      'Define a broad delivery program.',
+      '',
+      '## Acceptance Criteria',
+      '1. Model selection is covered.',
+      '2. Review lanes are covered.',
+      '3. Release coordination is covered.',
+      '4. Telemetry is covered.',
+      '',
+      '## Completion Boundary',
+      '- Product outcome: broad program work is ready.',
+      '- What Guildhall can complete in code: implementation, tests, docs, telemetry, and release coordination.',
+      '- External dependencies: None known.',
+      '- Owner-only setup: None known.',
+      '- Verification environment: local project scripts.',
+      '- What counts as done: the whole program is shipped.',
+      '- What must be split or blocked: split before execution.',
+    ].join('\n')
+    task.acceptanceCriteria = []
+    delete task.workUnitAnalysis
+    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+
+    const result = await approveSpec({ memoryDir, taskId: 'task-001' })
+
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('could not materialize any child tasks')
+    const updated = await readQueue()
+    expect(updated.tasks).toHaveLength(1)
+    expect(updated.tasks[0]!.status).toBe('spec_review')
+  })
+
   it('backfills acceptance criteria from approved markdown specs before blueprint sanity', async () => {
     const queue = await readQueue()
     const task = queue.tasks[0]!

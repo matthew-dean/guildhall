@@ -14104,6 +14104,60 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-07-05T19:31:52Z - Repaired Narrative Harness MVP recovery work so
+split-required owner requirements become visible child work instead of hidden
+spec prose.
+
+- Work id: `codex:narrative-harness-mvp-recovery-units-2026-07-05`.
+- User job: when the owner adds Narrative Harness MVP requirements such as
+  proving a DeepInfra drafting/writing model across genres including adult
+  genres, world-state/time/object-state review lanes, and spatial/geographic
+  plausibility review lanes, Guildhall must show those as real scoped work and
+  must not report approval success if the task still cannot run or split.
+- Failure taxonomy:
+  - `3 task hierarchy/dependency/proof modeling problem`: `task-150` was
+    marked `requires_child_work` with `decompose_before_execution`, but had no
+    `workUnitAnalysis` or child drafts to materialize.
+  - `4 scheduler/action-state logic problem`: `approve-spec` returned
+    `ok:true` while the task remained `spec_review` when no children could be
+    created.
+  - `5 UI communication/orientation problem`: clean task prose still hid that
+    the split-required task had no executable child units.
+- Fix:
+  - `repairWeakRecoverySpecReviewSeedInQueue` now writes semantic
+    `workUnitAnalysis` from numbered recovered owner requirements.
+  - Clean recovery specs are still repaired when they require child work but
+    have no materializable units.
+  - `approveSpec` now returns a failure instead of claiming approval success if
+    the task remains in `spec_review` after attempted approval.
+- Live installed-app proof:
+  - `pnpm dev:install`; `guildhall stop`; `guildhall start`;
+    `/api/stale-server` returned `stale:false` for PID `40418`.
+  - Focused start on
+    `/api/project/task/task-150/start?projectId=narrative-harness` returned
+    `no_unattended_progress` with the correct spec-review boundary.
+  - The live project API then showed `task-150.workUnitAnalysis.units` as
+    `Select and prove DeepInfra drafting model`,
+    `Define world-state continuity review lane`, and
+    `Define spatial/geographic continuity review lane`.
+  - Owner-Codex approval on
+    `/api/project/task/task-150/approve-spec?projectId=narrative-harness`
+    returned `ok:true,status:"ready"` and materialized:
+    `task-150-split-select-and-prove-deepinfra-drafting-model`,
+    `task-150-split-define-world-state-continuity-review-lane`, and
+    `task-150-split-define-spatial-geographic-continuity-review-lane`.
+  - `releaseReadiness.unapprovedSpecs` became empty; remaining start blocker is
+    still the honest source-backed shaping queue:
+    `7 current-scope tasks still need source-backed shaping`.
+- Follow-up watch item: the inferred release `nodeIds` still list the
+  containing parent `work:task-150` rather than each child id, while readiness
+  totals count the child tasks through containment. That may be acceptable, but
+  the UI must make scope inheritance obvious enough that users do not think the
+  new child work is orphaned.
+- Verification:
+  `vitest` focused recovery/intake slice passed `19` tests; `git diff --check`;
+  `node scripts/contract-touch-detector.mjs`; `node ./build.mjs`.
+
 2026-07-05T16:58:35Z - Fixed focused source-recovery shaping dead end.
 
 - Work id: `codex:source-recovery-shaping-action-2026-07-05`.

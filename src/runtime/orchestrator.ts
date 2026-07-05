@@ -423,8 +423,19 @@ function shouldRepairWeakRecoverySpecReviewSeed(task: Task, queue: TaskQueue): b
   const specText = `${task.spec ?? ''}\n${acceptanceCriteria.map((criterion) =>
     typeof criterion === 'string' ? criterion : criterion.description,
   ).join('\n')}`
+  const sourceRequirements = extractNumberedRecoveryRequirements(
+    formatRecoverySpecSourceIntent(task.proposalRationale || task.description || task.title),
+  )
+  const needsMaterializableRecoveryUnits =
+    (task.sizePlan?.action === 'decompose_before_execution' ||
+      task.sizePlan?.action === 'split_required' ||
+      task.sizePlan?.action === 'split_recommended') &&
+    sourceRequirements.length > 1 &&
+    (task.workUnitAnalysis?.units.length ?? 0) === 0 &&
+    (task.hierarchy?.childIds.length ?? 0) === 0
   return (
     (parentHasRefs && taskMissingRefs) ||
+    needsMaterializableRecoveryUnits ||
     /turned into concrete project work using the evidence and owner decisions already recorded/i.test(brief?.userJob ?? '') ||
     /has a reviewable spec, acceptance criteria, and a clear completion boundary before implementation starts/i.test(brief?.successMetric ?? '') ||
     /repo-local proof demonstrates that exact child outcome/i.test(specText) ||
@@ -450,6 +461,7 @@ export function repairWeakRecoverySpecReviewSeedInQueue(
   liveTask.spec = seed.spec
   liveTask.acceptanceCriteria = seed.acceptanceCriteria
   liveTask.productBrief = seed.productBrief
+  if (seed.workUnitAnalysis) liveTask.workUnitAnalysis = seed.workUnitAnalysis
   if (seed.references) liveTask.references = seed.references
   liveTask.status = 'spec_review'
   liveTask.assignedTo = null
@@ -1640,6 +1652,7 @@ type RecoverySpecSeed = {
   spec: string
   acceptanceCriteria: Task['acceptanceCriteria']
   productBrief: Task['productBrief']
+  workUnitAnalysis?: Task['workUnitAnalysis']
   references?: string[]
 }
 
@@ -1788,8 +1801,47 @@ function buildRecoverySpecSeedForTask(liveTask: Task, queue: TaskQueue, now: str
       outOfScope,
       now,
     }),
+    ...(sourceRequirements.length > 1
+      ? { workUnitAnalysis: recoveryWorkUnitAnalysisFromRequirements({ taskTitle, sourceRequirements, now, domain: liveTask.domain }) }
+      : {}),
     ...(inheritedParentReferences ? { references: inheritedParentReferences } : {}),
   }
+}
+
+function recoveryWorkUnitAnalysisFromRequirements(input: {
+  taskTitle: string
+  sourceRequirements: string[]
+  now: string
+  domain?: string
+}): Task['workUnitAnalysis'] {
+  return {
+    summary: `${input.sourceRequirements.length} independently reviewable requirements were recovered from numbered owner scope.`,
+    units: input.sourceRequirements.map((requirement, index) => ({
+      id: `recovered-requirement-${index + 1}`,
+      title: recoveryWorkUnitTitle(requirement, index),
+      deliverable: `Guildhall records source-backed MVP work, proof, or explicit deferral for ${requirement}.`,
+      rationale: `Recovered from numbered owner requirement ${index + 1} for ${input.taskTitle}.`,
+      dependsOn: [],
+      ...(input.domain ? { suggestedDomain: input.domain } : {}),
+    })),
+    proofOnlyItems: [],
+    createdAt: input.now,
+    createdBy: 'coordinator-recovery',
+  }
+}
+
+function recoveryWorkUnitTitle(requirement: string, index: number): string {
+  const normalized = normalizeFallbackWhitespace(requirement)
+  if (/\bdeepinfra\b/i.test(normalized) && /\b(?:drafting|writing)\b/i.test(normalized)) {
+    return 'Select and prove DeepInfra drafting model'
+  }
+  if (/\bworld-state\b|\bobject\/property\b|\bwet hair\b|\bclimate\b|\bcontinuity over time\b/i.test(normalized)) {
+    return 'Define world-state continuity review lane'
+  }
+  if (/\bspatial\b|\bgeographic\b|\bwalking speed\b|\btravel distance\b|\bscene geography\b/i.test(normalized)) {
+    return 'Define spatial/geographic continuity review lane'
+  }
+  return `Recover source-backed requirement ${index + 1}`
 }
 
 function extractNumberedRecoveryRequirements(text: string): string[] {
@@ -12284,13 +12336,21 @@ function formatRecoverySpecSourceIntent(source: string | undefined): string {
       ?.replace(/\*\*/g, '')
       .replace(/`/g, '')
       .trim()
-    if (sourcePath && label) return `${label} from ${sourcePath}`
+    if (sourcePath && label) return cleanRecoverySourceIntent(`${label} from ${sourcePath}`)
   }
 
-  return raw
+  return cleanRecoverySourceIntent(raw
     .replace(/\*\*/g, '')
     .replace(/`/g, '')
     .replace(/:\s*[-*]\s*/g, ': ')
+    .trim())
+}
+
+function cleanRecoverySourceIntent(value: string): string {
+  return normalizeFallbackWhitespace(value)
+    .replace(/\s+These should become source-backed MVP scope\/tasks or explicit deferred work[\s\S]*$/i, '')
+    .replace(/\s+from\s+For\s+the\s+.+$/i, '')
+    .replace(/[.;。；]+$/, '')
     .trim()
 }
 

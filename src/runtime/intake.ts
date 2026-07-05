@@ -506,6 +506,14 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
       now,
     })
   }
+  if (task.status === 'spec_review') {
+    return {
+      success: false,
+      error: attemptedSplitMaterialization
+        ? `Spec approval did not create runnable work for ${task.id}: Guildhall still needs child work but could not materialize any child tasks.`
+        : `Spec approval did not advance ${task.id}; the task is still waiting for spec review.`,
+    }
+  }
   approveReintakeBriefWithSpec(task, now)
   task.updatedAt = now
   resolveSupersededEscalations(task, {
