@@ -1481,6 +1481,18 @@ Anything less is not the feature; it is another dashboard.
 - **Owner-review items:** confirm the term "Project Orientation Spine"; confirm whether charter fields can be inferred initially or must be owner-approved before display; confirm whether Narrative Harness is the first calibration project; confirm the first supported scope kinds are `release` and `proposed_feature_set`.
 - **Apply/revert behavior:** first implementation should be read-model only. If later persisted metadata lands, provide a migration backup and read-time fallback.
 
+## Contract Touch Decision: Overview Release Readiness Card
+
+- **Work id:** overview-release-readiness-card-2026-07-05
+- **Touched contracts:** `/api/project` project detail read model now includes optional `releaseReadiness`, reusing the existing `/api/project/release-readiness` payload shape; `ProjectDetail` web type includes the same optional field; Project Overview renders that field with existing card/list primitives.
+- **Contracts considered but not touched:** persisted task queue schema, release schema, workspace child-project schema, git-story snapshot schema, `/api/project/release-readiness` route shape, Start/Resume scheduling contracts.
+- **Required follow-up:** reconcile release-readiness scoped-task accounting for materialized child work; the existing release-readiness suite still exposes two scope-accounting failures unrelated to the Overview card.
+- **Proof required:** project detail exposes child-repo-aware release readiness for a non-git envelope; Overview shows the selected release/scope, done/unfinished/needs-you/git blocker counts, and named child repo blockers without interpreting the root folder as the git repo.
+- **Proof provided:** `ProjectOverviewTab.svelte.test.ts` covers current release readiness with Looma/Knit blockers; `serve-release-readiness.test.ts` covers project detail release readiness for a non-git envelope with child repos; live Looma + Knit `/api/project` reports `repoIds: looma, knit`; installed browser proof shows the Overview card on desktop and mobile with no horizontal overflow.
+- **Waivers:** no persisted migration is needed because the new field is optional and derived at read time.
+- **Owner-review items:** confirm whether Overview should show two git blockers or a denser grouped repo summary when blocker lists are long.
+- **Apply/revert behavior:** remove `releaseReadiness` from project detail and the Overview card; `/api/project/release-readiness` remains unchanged.
+
 ## Schema Migration Decision
 
 No schema migration is approved by this document.

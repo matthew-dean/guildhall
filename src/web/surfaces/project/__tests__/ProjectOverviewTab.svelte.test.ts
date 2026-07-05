@@ -133,6 +133,72 @@ describe('ProjectOverviewTab', () => {
     expect(screen.getByRole('heading', { name: 'Do this next' })).toBeInTheDocument()
   })
 
+  it('shows current release readiness from child repo git state', () => {
+    render(ProjectOverviewTab, {
+      detail: {
+        id: 'looma-knit',
+        name: 'Looma + Knit',
+        path: '/Users/matthew/git/oss/looma-knit',
+        tasks: [],
+        releaseReadiness: {
+          release: { id: 'stage-1', label: 'Stage 1: V1 Release Hardening', kind: 'release', state: 'active', source: 'release_plan' },
+          scope: { id: 'stage-1', label: 'Stage 1: V1 Release Hardening', kind: 'release', state: 'active', source: 'release_plan' },
+          ready: false,
+          totals: {
+            tasks: 9,
+            done: 0,
+            unfinishedCount: 9,
+            humanBlockingCount: 1,
+            gitStoryBlockingCount: 2,
+            dirtyCheckoutBlockingCount: 1,
+          },
+          gitStory: {
+            ready: false,
+            state: 'dirty_uncommitted',
+            blockers: [
+              {
+                id: 'repo:looma',
+                label: 'Looma: codex/component-audit-roadmap',
+                state: 'pushed',
+                reason: 'codex/component-audit-roadmap is pushed.',
+                nextAction: 'Open a PR or mark this pushed branch as the intended closure.',
+              },
+              {
+                id: 'repo:knit',
+                label: 'Knit: main',
+                state: 'dirty_uncommitted',
+                reason: '28 changed files are not committed.',
+                nextAction: 'Review the diff, then commit or mark the work local-only/deferred.',
+              },
+            ],
+            snapshots: [
+              { repoId: 'looma', repoLabel: 'Looma', state: 'pushed' },
+              { repoId: 'knit', repoLabel: 'Knit', state: 'dirty_uncommitted' },
+            ],
+          },
+        },
+      },
+      inboxLoaded: true,
+      inboxItems: [],
+      projectTicker: {
+        label: 'Not running',
+        actorLabel: 'Guildhall',
+        message: 'Project is waiting.',
+        tone: 'idle',
+        pulse: false,
+      },
+      activeProjectId: 'looma-knit',
+    })
+
+    expect(screen.getByRole('heading', { name: 'Current release' })).toBeInTheDocument()
+    expect(screen.getByText('Stage 1: V1 Release Hardening')).toBeInTheDocument()
+    expect(screen.getByText(/0 \/ 9 done/)).toBeInTheDocument()
+    expect(screen.getByText(/9 unfinished/)).toBeInTheDocument()
+    expect(screen.getByText(/2 git blockers/)).toBeInTheDocument()
+    expect(screen.getByText(/Looma: codex\/component-audit-roadmap/)).toBeInTheDocument()
+    expect(screen.getByText(/Knit: main/)).toBeInTheDocument()
+  })
+
   it('labels proof waits as waiting instead of blocking when scoped blocked count is zero', () => {
     const { container } = render(ProjectOverviewTab, {
       detail: {

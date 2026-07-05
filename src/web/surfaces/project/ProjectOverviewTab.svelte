@@ -96,6 +96,42 @@
   const orientationSpine = $derived(detail.orientationSpine ?? null)
   const releaseRoadmap = $derived(orientationSpine?.releases ?? (orientationSpine?.selectedRelease ? [orientationSpine.selectedRelease] : []))
   const laterReleaseCount = $derived(releaseRoadmap.filter(release => release.id !== orientationSpine?.selectedRelease?.id).length)
+  const releaseReadiness = $derived(detail.releaseReadiness ?? null)
+  const releaseReadinessLabel = $derived(
+    releaseReadiness?.release?.label ??
+    releaseReadiness?.scope?.label ??
+    orientationSpine?.summary?.selectedReleaseLabel ??
+    orientationSpine?.summary?.selectedScopeLabel ??
+    'Current scope',
+  )
+  const releaseReadinessTitle = $derived(
+    releaseReadiness?.release?.kind === 'release' || releaseReadiness?.scope?.kind === 'release'
+      ? 'Current release'
+      : 'Current scope',
+  )
+  const releaseReadinessTone = $derived<Tone>(
+    releaseReadiness?.ready
+      ? 'ok'
+      : (releaseReadiness?.totals?.blockingCount ?? 0) > 0
+        || (releaseReadiness?.totals?.unfinishedCount ?? 0) > 0
+        || (releaseReadiness?.totals?.gitStoryBlockingCount ?? 0) > 0
+          ? 'warn'
+          : 'neutral',
+  )
+  const releaseReadinessProgress = $derived.by(() => {
+    const totals = releaseReadiness?.totals
+    if (!totals) return releaseReadiness?.notReadyReason ?? 'Open Release for the current scope check.'
+    const done = totals.done ?? 0
+    const total = totals.tasks ?? 0
+    const pieces = [
+      `${done} / ${total} done`,
+      totals.unfinishedCount ? `${totals.unfinishedCount} unfinished` : null,
+      totals.humanBlockingCount ? `${totals.humanBlockingCount} ${totals.humanBlockingCount === 1 ? 'needs you' : 'need you'}` : null,
+      totals.gitStoryBlockingCount ? `${totals.gitStoryBlockingCount} git ${totals.gitStoryBlockingCount === 1 ? 'blocker' : 'blockers'}` : null,
+    ].filter(Boolean)
+    return pieces.length ? pieces.join(' · ') : 'No release blockers reported.'
+  })
+  const releaseGitBlockers = $derived((releaseReadiness?.gitStory?.blockers ?? []).slice(0, 2))
   const primaryProofPaths = $derived.by(() => {
     return tasks
       .flatMap(task => (task.proofPaths ?? []).map(proofPath => ({ task, proofPath })))
@@ -992,6 +1028,42 @@
           onLegendClick={() => go(currentProjectHref('/work', activeProjectId))}
         />
       </Card>
+
+      {#if releaseReadiness}
+        <Card title={releaseReadinessTitle} titleTag="h2" padding="compact" density="dense" className="overview-card orientation-release-readiness">
+          <CardList className="release-readiness-list">
+            <CardListItem
+              as="button"
+              tone={releaseReadinessTone === 'warn' ? 'warn' : releaseReadinessTone === 'ok' ? 'ok' : 'neutral'}
+              railStrength="strong"
+              onclick={() => go(currentProjectHref('/release', activeProjectId))}
+            >
+              <Chip label={releaseReadiness?.ready ? 'Ready' : 'Not ready'} tone={releaseReadinessTone === 'warn' ? 'warn' : releaseReadinessTone === 'ok' ? 'ok' : 'neutral'} />
+              <div>
+                <strong>{releaseReadinessLabel}</strong>
+                <p>{releaseReadinessProgress}</p>
+                {#if releaseReadiness?.notReadyReason}
+                  <p>{releaseReadiness.notReadyReason}</p>
+                {/if}
+              </div>
+              <span class="preview-action">Open release</span>
+            </CardListItem>
+            {#each releaseGitBlockers as blocker (blocker.id ?? blocker.label)}
+              <CardListItem
+                as="button"
+                tone="warn"
+                onclick={() => go(currentProjectHref('/release', activeProjectId))}
+              >
+                <Icon name="git-branch" size={16} />
+                <div>
+                  <strong>{blocker.label ?? 'Git story needs closure'}</strong>
+                  <p>{friendlyBlockerText(blocker.reason ?? blocker.nextAction ?? 'Review the git story before this scope can close.')}</p>
+                </div>
+              </CardListItem>
+            {/each}
+          </CardList>
+        </Card>
+      {/if}
 
       <Card title="Project map" titleTag="h2" padding="compact" density="dense" className="overview-card orientation-map-preview-card">
         <CardList className="orientation-map-preview-list">

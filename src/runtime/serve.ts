@@ -3636,6 +3636,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const tasksPath = projectTasksPath(project.path)
       const rawQueue = await readTaskQueueFileNormalized(tasksPath)
       const rawTasks = rawQueue.tasks
+      const releaseReadiness = await buildProjectReleaseReadinessPayload()
       const workProgress = deriveProjectWorkProgress(rawTasks as Array<Record<string, unknown>>)
       const tasks = await Promise.all(rawTasks.map((task) => enrichTaskForServe(project.path, task)))
       const deliveryModel = await readProjectDeliveryModel(project.path)
@@ -3795,6 +3796,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         ...(structuralMapReview ? { structuralMapReview } : {}),
         taskRoutingContexts,
         gitStory,
+        releaseReadiness,
         startReadiness,
         actionModel,
         orientationSpine,
@@ -10590,6 +10592,158 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
   })
 
+  async function buildProjectReleaseReadinessPayload(): Promise<Record<string, unknown>> {
+    const fallbackRelease = {
+      id: 'current-work',
+      kind: 'current_work',
+      label: 'Current task scope',
+      state: 'active',
+      source: 'inferred',
+      description: 'Guildhall is checking the currently selected task scope. No named release is defined for this project yet.',
+    }
+    if (project.initializationNeeded) return { initializationNeeded: true, release: null, scope: fallbackRelease }
+    const memoryDir = getProjectStateDir(project.path)
+    const tasksPath = projectTasksPath(project.path)
+    const rawQueue: { tasks: Array<Record<string, unknown>>; releases: ProjectRelease[]; selectedReleaseId?: string } = (() => {
+      if (!existsSync(tasksPath)) return { tasks: [], releases: [] }
+      let raw: { tasks?: Array<Record<string, unknown>>; releases?: ProjectRelease[]; selectedReleaseId?: string } | Array<Record<string, unknown>>
+      try {
+        raw = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')) as
+          | { tasks?: Array<Record<string, unknown>>; releases?: ProjectRelease[]; selectedReleaseId?: string }
+          | Array<Record<string, unknown>>
+      } catch {
+        throw new Error('Could not read the saved task state file. Fix project-state/TASKS.json, then reload release checks.')
+      }
+      if (Array.isArray(raw)) return { tasks: raw, releases: [] }
+      return {
+        tasks: raw.tasks ?? [],
+        releases: Array.isArray(raw.releases) ? raw.releases : [],
+        ...(typeof raw.selectedReleaseId === 'string' ? { selectedReleaseId: raw.selectedReleaseId } : {}),
+      }
+    })()
+    const rawTasks = rawQueue.tasks
+    const tasks = await Promise.all(rawTasks.map((task) => buildEffectiveTask(project.path, task as Task)))
+    const releaseStartReadiness = await projectStartReadinessForProject(project.path)
+    const { orientationSpine: readinessSpine, releaseTruth } = buildOrientationSpineWithScopedReleaseTruth({
+      projectId: project.id,
+      charter: inferProjectCharterFromExistingSources(project.path, project.config),
+      selectedReleaseId: rawQueue.selectedReleaseId,
+      releases: rawQueue.releases,
+      tasks: tasks as unknown as Task[],
+      runStatus: supervisor.get(project.id)?.status ?? 'stopped',
+      startReadiness: releaseStartReadiness,
+      workspaceImportDraft: await workspaceImportDraftForOrientation(project.path, releaseStartReadiness),
+      sourceRefs: projectOrientationSourceRefs(project.path),
+    })
+    const release = readinessSpine.selectedRelease
+    const readinessScope = release ?? readinessSpine.scope ?? fallbackRelease
+    const activePressureTest = listPressureTestIntakes(memoryDir)
+      .find(intake => intake.status === 'active' && intake.pendingQuestion)
+    if (activePressureTest?.pendingQuestion) {
+      return {
+        release,
+        scope: readinessScope,
+        ready: false,
+        notReadyReason: `Guildhall has one more question for ${activePressureTest.target.title}. Answer it before judging whether current work is ready.`,
+        statusCounts: {},
+        openEscalations: [],
+        incompleteBriefs: [],
+        unapprovedBriefs: [],
+        unapprovedSpecs: [],
+        shelvedUnclaimed: [],
+        blockedByAgent: [],
+        designSystem: {
+          drafted: false,
+          approved: false,
+          revision: 0,
+          source: 'none',
+          label: 'not captured',
+          reason: 'No design-system guardrail is captured yet.',
+        },
+        dirtyCheckout: {
+          ownedCount: 0,
+          samplePaths: [],
+        },
+        gitStory: {
+          ready: true,
+          blockers: [],
+          snapshots: [],
+        },
+        totals: {
+          tasks: rawTasks.length,
+          blockingCount: 0,
+          humanBlockingCount: 0,
+          unfinishedCount: 0,
+          designSystemBlockingCount: 0,
+          dirtyCheckoutBlockingCount: 0,
+          gitStoryBlockingCount: 0,
+          done: rawTasks.filter(task => task.status === 'done').length,
+        },
+      }
+    }
+    const [ds, codebaseMap] = await Promise.all([
+      loadDesignSystem(memoryDir).catch(() => undefined),
+      loadCodebaseMap(memoryDir).catch(() => null),
+    ])
+    const designSystem = releaseDesignSystemStatus(ds, project.config, codebaseMap)
+    const {
+      scopedTasks,
+      statusCounts,
+      openEscalations,
+      incompleteBriefs,
+      unapprovedBriefs,
+      unapprovedSpecs,
+      shelvedUnclaimed,
+      blockedByAgent,
+      humanBlockingCount,
+      unfinishedCount,
+    } = releaseTruth
+    const dirtyCheckout = await guildhallOwnedDirtyCheckout(project.path)
+    const gitStory = await buildProjectGitStorySummary(project.path, scopedTasks)
+    const designSystemBlockingCount =
+      scopedTasks.length > 0 &&
+      scopedWorkNeedsDesignSystem(scopedTasks, release) &&
+      !designSystem.approved
+        ? 1
+        : 0
+    const dirtyCheckoutBlockingCount = dirtyCheckout.ownedCount > 0 || dirtyCheckout.error ? 1 : 0
+    const gitStoryBlockingCount = gitStory.blockers.length
+    const blockingCount =
+      humanBlockingCount
+      + unfinishedCount
+      + designSystemBlockingCount
+      + dirtyCheckoutBlockingCount
+      + gitStoryBlockingCount
+
+    return {
+      release,
+      scope: readinessScope,
+      ready: scopedTasks.length > 0 && blockingCount === 0,
+      ...(scopedTasks.length === 0 ? { notReadyReason: 'No tasks in this scope yet.' } : {}),
+      statusCounts,
+      openEscalations,
+      incompleteBriefs,
+      unapprovedBriefs,
+      unapprovedSpecs,
+      shelvedUnclaimed,
+      blockedByAgent,
+      designSystem,
+      dirtyCheckout,
+      gitStory,
+      totals: {
+        tasks: scopedTasks.length,
+        blockingCount,
+        humanBlockingCount,
+        incompleteBriefBlockingCount: incompleteBriefs.length,
+        unfinishedCount,
+        designSystemBlockingCount,
+        dirtyCheckoutBlockingCount,
+        gitStoryBlockingCount,
+        done: statusCounts['done'] ?? 0,
+      },
+    }
+  }
+
   // -------------------------------------------------------------------------
   // API: release readiness
   //
@@ -10599,155 +10753,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   // -------------------------------------------------------------------------
   app.get('/api/project/release-readiness', async c => {
     try {
-      const fallbackRelease = {
-        id: 'current-work',
-        kind: 'current_work',
-        label: 'Current task scope',
-        state: 'active',
-        source: 'inferred',
-        description: 'Guildhall is checking the currently selected task scope. No named release is defined for this project yet.',
-      }
-      if (project.initializationNeeded) return c.json({ initializationNeeded: true, release: null, scope: fallbackRelease })
-      const memoryDir = getProjectStateDir(project.path)
-      const tasksPath = projectTasksPath(project.path)
-      const rawQueue: { tasks: Array<Record<string, unknown>>; releases: ProjectRelease[]; selectedReleaseId?: string } = (() => {
-        if (!existsSync(tasksPath)) return { tasks: [], releases: [] }
-        let raw: { tasks?: Array<Record<string, unknown>>; releases?: ProjectRelease[]; selectedReleaseId?: string } | Array<Record<string, unknown>>
-        try {
-          raw = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')) as
-            | { tasks?: Array<Record<string, unknown>>; releases?: ProjectRelease[]; selectedReleaseId?: string }
-            | Array<Record<string, unknown>>
-        } catch {
-          throw new Error('Could not read the saved task state file. Fix project-state/TASKS.json, then reload release checks.')
-        }
-        if (Array.isArray(raw)) return { tasks: raw, releases: [] }
-        return {
-          tasks: raw.tasks ?? [],
-          releases: Array.isArray(raw.releases) ? raw.releases : [],
-          ...(typeof raw.selectedReleaseId === 'string' ? { selectedReleaseId: raw.selectedReleaseId } : {}),
-        }
-      })()
-      const rawTasks = rawQueue.tasks
-      const tasks = await Promise.all(rawTasks.map((task) => buildEffectiveTask(project.path, task as Task)))
-      const releaseStartReadiness = await projectStartReadinessForProject(project.path)
-      const { orientationSpine: readinessSpine, releaseTruth } = buildOrientationSpineWithScopedReleaseTruth({
-        projectId: project.id,
-        charter: inferProjectCharterFromExistingSources(project.path, project.config),
-        selectedReleaseId: rawQueue.selectedReleaseId,
-        releases: rawQueue.releases,
-        tasks: tasks as unknown as Task[],
-        runStatus: supervisor.get(project.id)?.status ?? 'stopped',
-        startReadiness: releaseStartReadiness,
-        workspaceImportDraft: await workspaceImportDraftForOrientation(project.path, releaseStartReadiness),
-        sourceRefs: projectOrientationSourceRefs(project.path),
-      })
-      const release = readinessSpine.selectedRelease
-      const readinessScope = release ?? readinessSpine.scope ?? fallbackRelease
-      const activePressureTest = listPressureTestIntakes(memoryDir)
-        .find(intake => intake.status === 'active' && intake.pendingQuestion)
-      if (activePressureTest?.pendingQuestion) {
-        return c.json({
-          release,
-          scope: readinessScope,
-          ready: false,
-          notReadyReason: `Guildhall has one more question for ${activePressureTest.target.title}. Answer it before judging whether current work is ready.`,
-          statusCounts: {},
-          openEscalations: [],
-          incompleteBriefs: [],
-          unapprovedBriefs: [],
-          unapprovedSpecs: [],
-          shelvedUnclaimed: [],
-          blockedByAgent: [],
-          designSystem: {
-            drafted: false,
-            approved: false,
-            revision: 0,
-            source: 'none',
-            label: 'not captured',
-            reason: 'No design-system guardrail is captured yet.',
-          },
-          dirtyCheckout: {
-            ownedCount: 0,
-            samplePaths: [],
-          },
-          gitStory: {
-            ready: true,
-            blockers: [],
-            snapshots: [],
-          },
-          totals: {
-            tasks: rawTasks.length,
-            blockingCount: 0,
-            humanBlockingCount: 0,
-            unfinishedCount: 0,
-            designSystemBlockingCount: 0,
-            dirtyCheckoutBlockingCount: 0,
-            gitStoryBlockingCount: 0,
-            done: rawTasks.filter(task => task.status === 'done').length,
-          },
-        })
-      }
-      const [ds, codebaseMap] = await Promise.all([
-        loadDesignSystem(memoryDir).catch(() => undefined),
-        loadCodebaseMap(memoryDir).catch(() => null),
-      ])
-      const designSystem = releaseDesignSystemStatus(ds, project.config, codebaseMap)
-      const {
-        scopedTasks,
-        statusCounts,
-        openEscalations,
-        incompleteBriefs,
-        unapprovedBriefs,
-        unapprovedSpecs,
-        shelvedUnclaimed,
-        blockedByAgent,
-        humanBlockingCount,
-        unfinishedCount,
-      } = releaseTruth
-      const dirtyCheckout = await guildhallOwnedDirtyCheckout(project.path)
-      const gitStory = await buildProjectGitStorySummary(project.path, scopedTasks)
-      const designSystemBlockingCount =
-        scopedTasks.length > 0 &&
-        scopedWorkNeedsDesignSystem(scopedTasks, release) &&
-        !designSystem.approved
-          ? 1
-          : 0
-      const dirtyCheckoutBlockingCount = dirtyCheckout.ownedCount > 0 || dirtyCheckout.error ? 1 : 0
-      const gitStoryBlockingCount = gitStory.blockers.length
-      const blockingCount =
-        humanBlockingCount
-        + unfinishedCount
-        + designSystemBlockingCount
-        + dirtyCheckoutBlockingCount
-        + gitStoryBlockingCount
-
-      return c.json({
-        release,
-        scope: readinessScope,
-        ready: scopedTasks.length > 0 && blockingCount === 0,
-        ...(scopedTasks.length === 0 ? { notReadyReason: 'No tasks in this scope yet.' } : {}),
-        statusCounts,
-        openEscalations,
-        incompleteBriefs,
-        unapprovedBriefs,
-        unapprovedSpecs,
-        shelvedUnclaimed,
-        blockedByAgent,
-        designSystem,
-        dirtyCheckout,
-        gitStory,
-        totals: {
-          tasks: scopedTasks.length,
-          blockingCount,
-          humanBlockingCount,
-          incompleteBriefBlockingCount: incompleteBriefs.length,
-          unfinishedCount,
-          designSystemBlockingCount,
-          dirtyCheckoutBlockingCount,
-          gitStoryBlockingCount,
-          done: statusCounts['done'] ?? 0,
-        },
-      })
+      return c.json(await buildProjectReleaseReadinessPayload())
     } catch (err) {
       return c.json({
         error: 'Could not load release readiness for this project.',

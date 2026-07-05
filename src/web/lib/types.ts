@@ -390,6 +390,27 @@ export interface GitStorySummary {
   snapshots?: GitStorySnapshot[]
 }
 
+export interface ProjectReleaseReadiness {
+  initializationNeeded?: boolean
+  release?: ProjectOrientationRelease | null
+  scope?: ProjectOrientationRelease | null
+  ready?: boolean
+  notReadyReason?: string
+  statusCounts?: Record<string, number>
+  gitStory?: GitStorySummary
+  totals?: {
+    tasks?: number
+    blockingCount?: number
+    humanBlockingCount?: number
+    incompleteBriefBlockingCount?: number
+    unfinishedCount?: number
+    designSystemBlockingCount?: number
+    dirtyCheckoutBlockingCount?: number
+    gitStoryBlockingCount?: number
+    done?: number
+  }
+}
+
 export interface Task {
   id: string
   displayKey?: string
@@ -1435,6 +1456,7 @@ export interface ProjectDetail {
   structuralMapReview?: StructuralMapReviewSummary | null
   taskRoutingContexts?: Record<string, TaskRoutingContext>
   gitStory?: GitStorySummary | null
+  releaseReadiness?: ProjectReleaseReadiness | null
   startReadiness?: StartReadiness | null
   actionModel?: ProjectActionModel | null
   deliverySpine?: DeliverySpine | null

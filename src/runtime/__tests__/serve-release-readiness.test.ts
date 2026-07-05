@@ -825,6 +825,17 @@ describe('GET /api/project/release-readiness', () => {
       const projectBody = await projectRes.json() as any
       expect(projectRes.status).toBe(200)
       expect(JSON.stringify(projectBody)).not.toContain('not a git repository')
+      expect(projectBody.releaseReadiness).toMatchObject({
+        ready: body.ready,
+        totals: {
+          dirtyCheckoutBlockingCount: body.totals.dirtyCheckoutBlockingCount,
+        },
+      })
+      expect(projectBody.releaseReadiness.totals.gitStoryBlockingCount).toBeGreaterThan(0)
+      const projectRepoIds = new Set(projectBody.releaseReadiness.gitStory.snapshots.map((snapshot: any) => snapshot.repoId))
+      expect(projectRepoIds.has('knit')).toBe(true)
+      expect(projectRepoIds.has('looma')).toBe(true)
+      expect(projectBody.releaseReadiness.gitStory.snapshots.map((snapshot: any) => snapshot.state)).not.toContain('not_git')
       expect(projectBody.tasks.find((task: any) => task.id === 'task-workspace-import')?.gitStory).toBeUndefined()
     } finally {
       await fs.rm(envelopePath, { recursive: true, force: true })
