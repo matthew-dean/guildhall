@@ -13305,6 +13305,58 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-07-05T02:45:00Z - Repaired Narrative Harness recovery specs and the
+ready-but-idle runner mismatch found while driving Stage 1 forward.
+
+- Work id: `codex:recovery-spec-parent-scope-2026-07-05`.
+- User job: when Guildhall recovers a Narrative Harness child task from a
+  stalled spec pass, the regenerated spec should explain the exact child work
+  from the parent Stage 1 evidence, avoid internal durable-progress failure
+  prose, and leave the project with a truthful next action that can actually
+  advance when Resume is pressed.
+- Failing evidence from the live Narrative Harness project:
+  - The bounded writer packet child recovered to `spec_review`, but the first
+    generated spec said `Build Build...`, preserved `Spec agent kept
+    researching...` as an owner decision, and used generic `appropriate repo
+    surface` acceptance language.
+  - After approving the regenerated spec, `/api/project?projectId=narrative-harness`
+    reported `canStart: true` and `Resume`, then the run stopped after 12 ticks
+    with `idle_limit`: `0 active, 1 fresh, 0 escalated, 3 dependency-blocked`.
+    The top action still pointed at the dependency-blocked reviewer-loop
+    sibling instead of the runnable prerequisite.
+- Fix:
+  - Recovery spec seeding now filters operational durable-progress failures out
+    of owner-decision copy and scopes inherited parent acceptance to the child
+    lane, including the bounded writer packet, reviewer/writer loop,
+    provenance/privacy, and stale-context lanes.
+  - Settled bounded child contract work now clears stale
+    `requires_child_work` readiness when no materializable child split exists
+    and the accepted task is intentionally kept runnable.
+  - The picker treats already-saved `proceed_with_warning` bounded child tasks
+    with concrete spec/acceptance handoff as dispatchable, so existing project
+    data does not need a hand edit.
+  - The shared action model ranks dependency-unblocked work ahead of siblings
+    waiting on it, so Overview/Work top actions point at the work the runner can
+    actually consume.
+  - The shared action model no longer labels a ready task with an approved spec
+    and acceptance criteria as `Needs brief`; a spec handoff is enough to avoid
+    that owner-facing false blocker copy.
+- Verification:
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/orchestrator.test.ts -t 'recovery spec seed|bounded writer packet|malformed spec_review|durable-progress'`
+    passed `8` focused tests.
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/project-action-model.test.ts src/runtime/__tests__/orchestrator-picker.test.ts`
+    passed `31` tests.
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/project-action-model.test.ts -t 'dependency-blocked shaping siblings|brief cleanup|resumable'`
+    passed `4` focused tests after the false `Needs brief` copy fix.
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/orchestrator-picker.test.ts -t 'settled as proceed-with-warning|broad work'`
+    passed `2` focused picker tests against the saved-task compatibility shape.
+- Remaining branch caveat:
+  - The broader `src/runtime/__tests__/orchestrator.test.ts` suite still has
+    unrelated/current-branch spec-review picker failures. This slice proves the
+    recovered-spec and ready-but-idle regressions only.
+
+source: codex:recovery-spec-parent-scope-2026-07-05
+
 2026-07-05T01:36:22Z - Reconciled active task rows from durable merge evidence
 before dispatch.
 
@@ -13417,6 +13469,34 @@ repos before worktree and Git Story decisions.
     passed `5` focused tests.
 
 source: codex:container-child-repo-resolution-2026-07-05
+
+2026-07-05T02:34:00Z - Tightened deterministic recovery specs so they inherit
+real parent scope instead of generic implementation copy.
+
+- Work id: `codex:recovery-spec-parent-scope-2026-07-05`.
+- User job: when Guildhall recovers from a spec-agent no-op, the saved spec must
+  still tell the owner what exact work is being approved. A non-UI child task
+  must not say "feature appears in the appropriate repo surface" or preserve an
+  internal durable-progress failure as an owner decision.
+- Observed failure:
+  - Narrative Harness child task
+    `task-import-14yqvl7-split-build-the-bounded-writer-packet-instead-of-rereading-the-2`
+    recovered to `spec_review`, but the spec said `Build Build...`, included
+    stale durable-progress prose under "Resolved owner decisions", and used
+    generic "appropriate repo surface" acceptance criteria.
+- Fix:
+  - Operational spec-agent recovery failures are filtered out of recovered
+    owner-decision text.
+  - The recovery seeder now scopes parent acceptance for bounded writer packet,
+    headless reviewer/writer loop, provenance/privacy, and stale-context child
+    tasks.
+  - When scoped parent criteria exist, the fallback spec uses those concrete
+    criteria instead of invented generic implementation criteria.
+- Verification:
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/orchestrator.test.ts -t 'recovery spec seed|bounded writer packet|malformed spec_review|durable-progress'`
+    passed `8` focused tests.
+
+source: codex:recovery-spec-parent-scope-2026-07-05
 
 2026-07-05T00:49:00Z - Fixed imported execution blueprints being stranded by
 stale proofability readiness.

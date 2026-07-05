@@ -1468,6 +1468,26 @@ function scopedRecoveryContractAcceptance(taskTitle: string): string[] {
 
 function scopedRecoveryParentAcceptance(taskTitle: string, parentAcceptance: string[]): string[] {
   const title = taskTitle.toLowerCase()
+  if (/bounded writer|writer packet|rereading|manuscript/.test(title)) {
+    return parentAcceptance.filter((item) =>
+      /bounded writer packet|writer packet|bookbrief|manuscriptunit|charactertrace|readerstatetrace|outlinenode|authordecision|character believes|reader knows/i.test(item),
+    )
+  }
+  if (/reviewer|writer loop|headless/.test(title)) {
+    return parentAcceptance.filter((item) =>
+      /runner|fixture|headless|no-ui|no frontend|run output|reviewer|writer loop/i.test(item),
+    )
+  }
+  if (/provenance|privacy/.test(title)) {
+    return parentAcceptance.filter((item) =>
+      /provenance|privacy|author profile|project author|session check-in|permission|allowed author|privacy manifest/i.test(item),
+    )
+  }
+  if (/stale|invalidate|source edit/.test(title)) {
+    return parentAcceptance.filter((item) =>
+      /stale|source-text edit|source edit|character belief|object state|invalidation|affected records|unrelated records|excludes or flags/i.test(item),
+    )
+  }
   if (/fixture|expected-record|ground truth/.test(title) && !/prototype|evaluation/.test(title)) {
     const scoped = parentAcceptance.filter((item) =>
       /fixture|expected|ground truth|signal|permission|profile/i.test(item) &&
@@ -9839,6 +9859,17 @@ export class Orchestrator {
     const outOfScope = answeredDecisions
       .filter((decision) => /\bout of scope|separate|not in scope|do not|don't/i.test(decision))
       .map((decision) => `- ${decision}`)
+    const inheritedAcceptance = scopedParentAcceptance.length > 0
+      ? scopedParentAcceptance.slice(0, 5)
+      : []
+    const inheritedAcceptanceLines = inheritedAcceptance.map((item, index) => `${index + 1}. ${item.replace(/^\d+[.)]\s*/, '')}`)
+    const genericAcceptanceLines = inheritedAcceptanceLines.length > 0
+      ? inheritedAcceptanceLines
+      : [
+          `1. Given the current project evidence, when ${taskTitle} is implemented, then the repo-local proof demonstrates that exact child outcome without adding unrelated later-stage work.`,
+          '2. Given the parent task boundary, when this task is reviewed, then it satisfies the relevant parent acceptance criteria and leaves sibling child work to its own task.',
+          '3. Given the implementation is complete, when the local proof command runs, then Guildhall records the command and result against this task.',
+        ]
     const spec = contractFocusedSeed ? [
       '## Summary',
       `Define the concrete ${taskTitle} surface for this Stage 1 harness work, using the imported parent task as the source of truth instead of restarting open-ended research.`,
@@ -9879,15 +9910,21 @@ export class Orchestrator {
       '- What must be split or blocked: any newly discovered product decision that changes which contracts belong in Stage 1 versus a later stage.',
     ].join('\n') : [
       '## Summary',
-      `Build ${taskTitle} from the current project evidence, preserving the source intent: ${sourceIntent}`,
+      `${taskTitle} from the current project evidence, preserving the source intent: ${sourceIntent}`,
+      ...(parentTask?.title ? [`Containing work: ${semanticTaskTitle(parentTask)}`] : []),
+      ...(inheritedAcceptance.length > 0
+        ? [
+            '',
+            'Parent acceptance this child satisfies:',
+            ...inheritedAcceptance.map((item) => `- ${item}`),
+          ]
+        : []),
       '',
       'Resolved owner decisions:',
       decisionLines,
       '',
       '## Acceptance Criteria',
-      `1. Given the existing project conventions and source evidence, when ${taskTitle} is implemented, then the feature appears in the appropriate repo surface without introducing a one-off parallel pattern.`,
-      `2. Given the resolved owner decisions above, when the task is reviewed, then the implementation honors each recorded scope choice and leaves explicitly separate work out of this task.`,
-      '3. Given the implementation is complete, when the relevant project checks or review proof run, then Guildhall records the commands, screenshots, or manual verification needed to prove the behavior.',
+      ...genericAcceptanceLines,
       '',
       '## Out of Scope',
       ...(outOfScope.length > 0 ? outOfScope : ['- Work not implied by the source evidence or resolved owner decisions.']),
@@ -9896,13 +9933,13 @@ export class Orchestrator {
       '- None known from the current task record. If the coordinator finds a product decision still missing, send this task back to exploring with one focused question.',
       '',
       '## Completion Boundary',
-      `- Product outcome: A user can use ${taskTitle} in the intended project surface.`,
-      '- What Guildhall can complete in code: the repo-local component, integration, tests, docs/story evidence, and proof artifacts required by the implementation.',
+      `- Product outcome: ${taskTitle} is proven inside the no-UI Narrative Harness Stage 1 boundary.`,
+      '- What Guildhall can complete in code: repo-local runner/schema/fixture updates, tests, docs/story evidence, and proof artifacts required by this child task.',
       '- External dependencies: None known from the current task record.',
       '- Owner-only setup: None known.',
-      '- Verification environment: The local project checkout and any existing app/demo/story surface named by the repo.',
-      '- What counts as done: The behavior is implemented, reviewed against the resolved scope decisions, and backed by recorded verification.',
-      '- What must be split or blocked: Any external setup, missing dependency, or newly discovered product decision that cannot be resolved from current evidence.',
+      '- Verification environment: the local project checkout and repo-local package scripts.',
+      '- What counts as done: the scoped acceptance criteria above are implemented or verified, and the proof result is recorded.',
+      '- What must be split or blocked: sibling parent criteria, external setup, or a newly discovered product decision that cannot be resolved from current evidence.',
     ].join('\n')
 
     liveTask.spec = spec
@@ -11775,6 +11812,7 @@ function recoverySpecSeedDecisionTexts(task: Task): string[] {
   const durableEscalationDecisions = resolvedScopeDecisionTexts(task)
     .filter((decision) => !/superseded by a task (?:reframe|enrichment) request/i.test(decision))
     .filter((decision) => !/build failing due to unresolved import|required source directories not found/i.test(decision))
+    .filter((decision) => !/spec agent kept researching|durable progress|read-only exploration|provider behavior/i.test(decision))
   return uniqueNonEmptyStrings([
     ...answeredQuestionDecisionTexts(task),
     ...durableEscalationDecisions,

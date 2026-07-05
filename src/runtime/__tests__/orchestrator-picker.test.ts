@@ -211,6 +211,35 @@ describe('pickNextTask bounded scope eligibility', () => {
     expect(pickNextTask(q)).toBeUndefined()
   })
 
+  it('dispatches bounded child work after split readiness is settled as proceed-with-warning', () => {
+    const q = queue([
+      {
+        id: 'bounded-child',
+        title: 'Build the bounded writer packet instead of rereading the manuscript',
+        priority: 'normal',
+        status: 'ready',
+        spec: '## Spec\nBuild the writer packet.\n\nWhat counts as done: The packet is produced from bounded records.',
+        acceptanceCriteria: [{ description: 'The writer packet names character and reader knowledge.' }],
+        taskReadiness: {
+          recommendation: 'requires_child_work',
+        },
+        sizePlan: {
+          taskId: 'bounded-child',
+          score: 5,
+          band: 'large',
+          action: 'proceed_with_warning',
+          factors: [],
+          recommendedChildren: [],
+          reasons: ['Kept as runnable bounded child contract work because no materializable split children were planned.'],
+          createdAt: '2026-07-05T02:37:52.658Z',
+          createdBy: 'task-shaping',
+        },
+      },
+    ])
+
+    expect(pickNextTask(q)?.id).toBe('bounded-child')
+  })
+
   it('selects runnable leaves through arbitrary-depth containing work', () => {
     const q = queue([
       { id: 'release', title: 'Current MVP', priority: 'critical', hierarchy: { childIds: ['feature'], order: 0 } },

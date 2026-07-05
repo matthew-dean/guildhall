@@ -82,8 +82,22 @@ function finishabilityAllowsDispatch(task: Task): boolean {
     task.taskReadiness == null ||
     task.taskReadiness.recommendation === 'ready' ||
     task.taskReadiness.recommendation === 'needs_research_spike' ||
+    settledSplitAllowsDispatch(task) ||
     hasImportedExecutionBlueprint(task) ||
     hasCompleteWorkerHandoff(task)
+}
+
+function settledSplitAllowsDispatch(task: Task): boolean {
+  return task.taskReadiness?.recommendation === 'requires_child_work' &&
+    task.sizePlan?.action === 'proceed_with_warning' &&
+    (task.sizePlan.recommendedChildren?.length ?? 0) === 0 &&
+    hasSpecDraft(task)
+}
+
+function hasSpecDraft(task: Task): boolean {
+  return typeof task.spec === 'string' && task.spec.trim().length > 0 &&
+    Array.isArray(task.acceptanceCriteria) &&
+    task.acceptanceCriteria.length > 0
 }
 
 function hasCompleteWorkerHandoff(task: Task): boolean {

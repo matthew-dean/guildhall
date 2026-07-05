@@ -462,6 +462,41 @@ describe('buildProjectActionModel', () => {
     })
   })
 
+  it('keeps dependency-blocked shaping siblings behind their runnable prerequisite', () => {
+    const model = buildProjectActionModel({
+      startReadiness: { canStart: true },
+      inbox: { items: [] },
+      tasks: [
+        {
+          id: 'writer-packet',
+          title: 'Build the bounded writer packet instead of rereading the manuscript',
+          status: 'ready',
+          updatedAt: '2026-07-05T02:37:52.658Z',
+          spec: '## Spec\nBuild the writer packet.',
+          acceptanceCriteria: [{ description: 'The packet is built.' }],
+        },
+        {
+          id: 'reviewer-loop',
+          title: 'Run the bounded reviewer and writer loop headlessly',
+          status: 'exploring',
+          dependsOn: ['writer-packet'],
+          updatedAt: '2026-07-04T18:39:44.927Z',
+        },
+      ],
+      thread: { activeTurnId: null, turns: [] },
+      runStatus: 'stopped',
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      source: 'task',
+      label: 'Build the bounded writer packet instead of rereading the manuscript',
+      href: '/work?task=writer-packet',
+      tone: 'accent',
+      taskId: 'writer-packet',
+    })
+    expect(model.primaryAction?.detail ?? '').not.toContain('Needs brief')
+  })
+
   it('does not treat an inflight execution turn as an owner-answer action', () => {
     const model = buildProjectActionModel({
       startReadiness: { canStart: true },

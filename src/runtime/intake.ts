@@ -583,6 +583,20 @@ function settleBoundedChildContractWorkWithoutMaterializedChildren(task: Task): 
       'Kept as runnable bounded child contract work because no materializable split children were planned.',
     ],
   }
+  if (task.taskReadiness?.recommendation === 'requires_child_work') {
+    task.taskReadiness = {
+      ...task.taskReadiness,
+      recommendation: 'ready',
+      summary: 'Task is ready for a focused worker pass.',
+    }
+  }
+  if (task.decomposition?.action === 'split') {
+    task.decomposition = {
+      ...task.decomposition,
+      action: 'keep',
+      reasons: task.decomposition.reasons.filter(reason => reason.code !== 'too_broad'),
+    }
+  }
   return true
 }
 

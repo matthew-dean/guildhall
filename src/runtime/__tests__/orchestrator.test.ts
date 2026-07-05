@@ -2855,6 +2855,104 @@ describe('Orchestrator.tick — routing', () => {
     expect(task.acceptanceCriteria).toHaveLength(4)
   })
 
+  it('inherits scoped parent packet criteria for recovered Narrative Harness child specs', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'parent',
+        status: 'done',
+        title: 'Implement a no-UI runner that builds a packet from fixture records.',
+        description: '3. Implement a no-UI runner that builds a packet from fixture records.',
+        spec: [
+          '## What this is',
+          'Implement a no-UI runner that builds a packet from fixture records.',
+          '',
+          '## Acceptance Criteria',
+          '1. The runner ingests a fixture, builds records, runs a packet, and saves the run output.',
+          '2. The harness run works without a frontend and stays inside the no-UI prototype boundary.',
+          '3. The runner builds a bounded writer packet from the documented fields: `BookBrief`; `ManuscriptUnit`; `CharacterTrace`; `ReaderStateTrace`; `OutlineNode`; one `AuthorDecision`; writer packet names what the character believes; writer packet names what the reader knows.',
+          '4. The runner records provenance/privacy scope in packet output: one global author profile note; one project author note; one session check-in; permissions that allow one and block another; packet includes only allowed author material; privacy manifest says what was included.',
+        ].join('\n'),
+        acceptanceCriteria: [
+          {
+            id: 'runner-flow',
+            description: 'The runner ingests a fixture, builds records, runs a packet, and saves the run output.',
+            verifiedBy: 'review',
+            met: false,
+          },
+          {
+            id: 'no-ui-boundary',
+            description: 'The harness run works without a frontend and stays inside the no-UI prototype boundary.',
+            verifiedBy: 'review',
+            met: false,
+          },
+          {
+            id: 'bounded-writer-packet',
+            description: 'The runner builds a bounded writer packet from the documented fields: `BookBrief`; `ManuscriptUnit`; `CharacterTrace`; `ReaderStateTrace`; `OutlineNode`; one `AuthorDecision`; writer packet names what the character believes; writer packet names what the reader knows.',
+            verifiedBy: 'review',
+            met: false,
+          },
+          {
+            id: 'privacy-scope',
+            description: 'The runner records provenance/privacy scope in packet output: one global author profile note; one project author note; one session check-in; permissions that allow one and block another; packet includes only allowed author material; privacy manifest says what was included.',
+            verifiedBy: 'review',
+            met: false,
+          },
+        ],
+        hierarchy: { childIds: ['packet-child'], order: 0, relation: 'contains' },
+      }),
+      mkTask({
+        id: 'packet-child',
+        status: 'exploring',
+        title: 'Build the bounded writer packet instead of rereading the manuscript',
+        description: 'The documented harness loop is supposed to prove packet discipline, not brute-force full-manuscript prompts.',
+        proposalRationale: 'The documented harness loop is supposed to prove packet discipline, not brute-force full-manuscript prompts.',
+        hierarchy: { parentId: 'parent', childIds: [], order: 1, relation: 'decomposes' },
+        escalations: [{
+          id: 'esc-durable',
+          taskId: 'packet-child',
+          agentId: 'spec-agent',
+          reason: 'human_judgment_required',
+          summary: 'Spec agent kept researching after Guildhall asked for durable progress.',
+          details: 'Task remained in exploring after the agent ignored the durable-progress nudge and kept using read-only exploration. Review the task transcript or provider behavior before retrying.',
+          raisedAt: '2026-07-05T02:09:53.524Z',
+          resolvedAt: '2026-07-05T02:31:06.450Z',
+          resolvedBy: 'coordinator',
+          resolution: 'Superseded after Guildhall learned to preserve useful transcript context and retry spec drafting from the last durable notes.',
+        }],
+        notes: [{
+          agentId: 'coordinator',
+          role: 'recovery',
+          content: 'User restarted the project after the spec agent failed to save a durable draft. Reopened intake so Guildhall can retry from the preserved transcript notes.',
+          timestamp: '2026-07-04T15:06:27.010Z',
+        }],
+      }),
+    ])
+    const spec = stubAgent('spec-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out).toMatchObject({
+      kind: 'processed',
+      taskId: 'packet-child',
+      agent: 'coordinator-recovery',
+      afterStatus: 'spec_review',
+    })
+    expect(spec.calls).toHaveLength(0)
+    const queue = await readQueue()
+    const task = queue.tasks.find(candidate => candidate.id === 'packet-child')!
+    expect(task.spec).toContain('Parent acceptance this child satisfies')
+    expect(task.spec).toContain('bounded writer packet')
+    expect(task.spec).toContain('writer packet names what the character believes')
+    expect(task.spec).not.toContain('appropriate repo surface')
+    expect(task.spec).not.toContain('Spec agent kept researching')
+    expect(task.acceptanceCriteria.map((criterion) => criterion.description).join('\n')).toContain('BookBrief')
+    expect(task.acceptanceCriteria.map((criterion) => criterion.description).join('\n')).not.toContain('provenance/privacy')
+  })
+
   it('narrows recovered fixture child specs instead of copying parent prototype scope', async () => {
     await writeQueue([
       mkTask({

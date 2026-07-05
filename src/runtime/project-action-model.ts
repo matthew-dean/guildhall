@@ -161,7 +161,7 @@ function hasSpecDraft(task: ProjectActionTask): boolean {
 
 function needsBriefCleanup(task: ProjectActionTask): boolean {
   if (task.needsBriefCleanup === true) return true
-  return task.status === 'ready' && !(hasApprovedProductBrief(task) && hasCompleteProductBrief(task) && hasSpecDraft(task))
+  return task.status === 'ready' && !hasSpecDraft(task) && !(hasApprovedProductBrief(task) && hasCompleteProductBrief(task))
 }
 
 function taskLabel(task: ProjectActionTask): string {
@@ -359,7 +359,6 @@ function inboxAction(item: ProjectActionInboxItem): ProjectAction {
 }
 
 function dependencyBlockedRank(task: ProjectActionTask, tasksById: ReadonlyMap<string, ProjectActionTask>): number {
-  if (task.status !== 'ready') return 0
   const dependencies = Array.isArray(task.dependsOn) ? task.dependsOn.filter(Boolean) : []
   if (dependencies.length === 0) return 0
   const allSatisfied = dependencies.every(dependency => {
@@ -383,12 +382,12 @@ function bestTaskAction(tasks: ProjectActionTask[], running: boolean): ProjectAc
         const assignmentDelta = Number(taskHasLiveAssignment(right)) - Number(taskHasLiveAssignment(left))
         if (assignmentDelta !== 0) return assignmentDelta
       }
+      const dependencyDelta = dependencyBlockedRank(left, tasksById) - dependencyBlockedRank(right, tasksById)
+      if (dependencyDelta !== 0) return dependencyDelta
       const statusDelta = priority.indexOf(left.status ?? '') - priority.indexOf(right.status ?? '')
       if (statusDelta !== 0) return statusDelta
       const briefDelta = Number(needsBriefCleanup(right)) - Number(needsBriefCleanup(left))
       if (briefDelta !== 0) return briefDelta
-      const dependencyDelta = dependencyBlockedRank(left, tasksById) - dependencyBlockedRank(right, tasksById)
-      if (dependencyDelta !== 0) return dependencyDelta
       return (right.updatedAt ?? '').localeCompare(left.updatedAt ?? '')
     })
   const task = ranked[0]
