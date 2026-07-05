@@ -3467,6 +3467,168 @@ describe('Orchestrator.tick — routing', () => {
     ])
   })
 
+  it('turns source-recovery research spikes with named surfaces into ready work', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'contract-recovery',
+        title: 'Recover source-backed contract surface for author-involvement-modes contract and involvement-dial types',
+        status: 'blocked',
+        domain: 'harness',
+        taskKind: 'research',
+        description: [
+          'Recommended first task title: Implement author-involvement-modes contract and involvement-dial types',
+          '',
+          'Original imported title: Implement author-involvement-modes contract and involvement-dial types',
+          '',
+          'Guildhall imported this as executable contract/type work, but the saved task does not name the concrete contract or type surfaces it owns.',
+        ].join('\n'),
+        references: [
+          'docs/harness/remaining-spec-decomposition-inventory.md',
+          'docs/specs/author-involvement-modes.md',
+        ],
+        spec: [
+          '## What this is',
+          'Repair the imported handoff for Implement author-involvement-modes contract and involvement-dial types.',
+          '',
+          '## Acceptance criteria',
+          '1. Implement author-involvement-modes contract and involvement-dial types names the concrete contract/type surfaces recovered from cited sources, or is reshaped to match the documented source structure before implementation.',
+        ].join('\n'),
+        taskReadiness: {
+          taskKind: 'research',
+          recommendation: 'needs_research_spike',
+          summary: 'Recover source-backed contract surface for author-involvement-modes contract and involvement-dial types needs concrete contract names before Guildhall can hand it to a worker.',
+          dimensions: [],
+          definitionOfDone: {
+            items: ['Recover source-backed contract surface names the concrete contracts/types it owns.'],
+            evidenceRequired: ['Source-backed contract/type names are present.'],
+            updatedAt: '2026-07-05T20:18:20.333Z',
+            createdBy: 'imported-work-integrity',
+          },
+          blockerPlans: [],
+          contextBudget: {
+            estimatedTokens: 1056,
+            risk: 'medium',
+            fitsInOneWorkerBrief: true,
+            reasons: ['The task needs source repair before implementation context matters.'],
+          },
+          assessedAt: '2026-07-05T20:18:20.333Z',
+          assessedBy: 'imported-work-integrity',
+        },
+        escalations: [{
+          id: 'esc-contract-recovery-1',
+          taskId: 'contract-recovery',
+          agentId: 'spec-agent',
+          reason: 'human_judgment_required',
+          summary: 'Spec author stopped after hitting its turn limit.',
+          details: 'Exceeded maximum turn limit (8)',
+          raisedAt: '2026-07-05T20:11:43.063Z',
+        }],
+      }),
+    ])
+    const spec = stubAgent('spec-agent', async () => {
+      throw new Error('spec agent should not rerun when source recovery can be seeded deterministically')
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out).toMatchObject({
+      kind: 'processed',
+      taskId: 'contract-recovery',
+      agent: 'coordinator-recovery',
+      beforeStatus: 'blocked',
+      afterStatus: 'ready',
+    })
+    expect(spec.calls).toHaveLength(0)
+    const queue = await readQueue()
+    const task = queue.tasks.find(candidate => candidate.id === 'contract-recovery')!
+    expect(task.status).toBe('ready')
+    expect(task.taskReadiness?.recommendation).toBe('ready')
+    expect(task.spec).toContain('`author-involvement-modes contract`')
+    expect(task.spec).toContain('`involvement-dial types`')
+    expect(task.productBrief?.successMetric).toContain('author-involvement-modes contract')
+    expect(task.escalations?.[0]?.resolvedBy).toBe('system')
+    expect(task.notes.at(-1)?.content).toContain('Guildhall-owned shaping')
+  })
+
+  it('repairs stale source-recovery readiness after named surfaces exist', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'contract-recovery',
+        title: 'Recover source-backed contract surface for author-involvement-modes contract and involvement-dial types',
+        status: 'done',
+        domain: 'harness',
+        taskKind: 'research',
+        spec: [
+          '## Contract / Type Surfaces',
+          '- `author-involvement-modes contract`',
+          '- `involvement-dial types`',
+          '',
+          '## Acceptance Criteria',
+          '1. Proof targets `author-involvement-modes contract` and `involvement-dial types`.',
+          '',
+          '## Completion Boundary',
+          '- What counts as done: each named surface is proven.',
+        ].join('\n'),
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          description: 'Proof targets `author-involvement-modes contract` and `involvement-dial types`.',
+          verifiedBy: 'review',
+          source: 'documented',
+          met: true,
+        }],
+        taskReadiness: {
+          taskKind: 'research',
+          recommendation: 'needs_research_spike',
+          summary: 'Needs concrete contract names before Guildhall can hand it to a worker.',
+          dimensions: [],
+          definitionOfDone: {
+            items: ['The concrete contract surface is named.'],
+            evidenceRequired: ['Source-backed contract/type names are present.'],
+            updatedAt: '2026-07-05T20:18:20.333Z',
+            createdBy: 'imported-work-integrity',
+          },
+          blockerPlans: [],
+          contextBudget: {
+            estimatedTokens: 1056,
+            risk: 'medium',
+            fitsInOneWorkerBrief: true,
+            reasons: ['The task needs source repair before implementation context matters.'],
+          },
+          assessedAt: '2026-07-05T20:18:20.333Z',
+          assessedBy: 'imported-work-integrity',
+        },
+      }),
+    ])
+    const spec = stubAgent('spec-agent', async () => {
+      throw new Error('spec agent should not rerun for stale readiness repair')
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out).toMatchObject({
+      kind: 'processed',
+      taskId: 'contract-recovery',
+      agent: 'coordinator-recovery',
+      beforeStatus: 'done',
+      afterStatus: 'done',
+      transitioned: false,
+    })
+    expect(spec.calls).toHaveLength(0)
+    const queue = await readQueue()
+    const task = queue.tasks.find(candidate => candidate.id === 'contract-recovery')!
+    expect(task.status).toBe('done')
+    expect(task.taskReadiness?.recommendation).toBe('ready')
+    expect(task.notes.at(-1)?.content).toContain('stale source-recovery readiness')
+  })
+
   it('seeds empty source-backed split children without waiting for a recovery note', async () => {
     await writeQueue([
       mkTask({

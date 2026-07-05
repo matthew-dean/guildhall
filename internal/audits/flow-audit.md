@@ -14104,6 +14104,61 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-07-05T20:46:00Z - Repaired source-recovery contract tasks so model-loop
+failures become Guildhall-owned ready work instead of stale human-shaped
+blockers.
+
+- Work id: `codex:narrative-harness-source-recovery-ready-2026-07-05`.
+- User job: when Narrative Harness import recovery names a contract/type
+  surface such as `author-involvement-modes contract` and `involvement-dial
+  types`, Guildhall should use those source-backed surfaces to continue work
+  and must not keep asking the owner whether to retry a failed model loop.
+- Failure taxonomy:
+  - `3 task hierarchy/dependency/proof modeling problem`: the source-recovery
+    task already contained the contract/type surface names in its title/import
+    evidence, but the saved readiness model still treated the proof target as
+    hollow.
+  - `4 scheduler/action-state logic problem`: after a spec-agent turn-limit
+    failure, Guildhall resolved the stale escalation and could claim work, but
+    the durable readiness state could remain `needs_research_spike`.
+  - `5 UI communication/orientation problem`: Release readiness continued to
+    list the task as an incomplete brief even after the worker had proved the
+    named surfaces.
+  - `7 bad project data produced by an earlier Guildhall bug`: the live
+    Narrative Harness row reached `done` while still carrying stale
+    `needs_research_spike` readiness from the old integrity detector.
+- Fix:
+  - The orchestrator now seeds source-recovery research spikes from the task's
+    own title, cited refs, and import evidence when they already name
+    contract/type surfaces.
+  - The imported-work integrity detector now accepts backticked documented
+    contract/type/schema surface names, not only PascalCase TypeScript
+    identifiers.
+  - The orchestrator also reconciles stale source-recovery readiness when a
+    completed/in-progress task already contains the named surfaces.
+- Live installed-app proof:
+  - `node ./build.mjs`; `node scripts/dev-install.mjs`; `guildhall stop`;
+    `guildhall start`; `/api/stale-server` returned `stale:false` for PID
+    `87013`.
+  - Focused Start on `task-import-1g9oq7m` fired the deterministic repair,
+    then the worker proved `author-involvement-modes contract` and
+    `involvement-dial types` from `docs/specs/author-involvement-modes.md`.
+  - `guildhall run narrative-harness --max-ticks 1` applied the stale
+    readiness reconciliation. Live `/api/project?projectId=narrative-harness`
+    then reported `task-import-1g9oq7m` as `status:"done"`,
+    `taskReadiness.recommendation:"ready"`, `openEscalations:[]`, and
+    `specContainsSurfaces:true`.
+  - Release readiness dropped from `7` incomplete source-backed shaping tasks
+    to `6`; the next honest blocker is now `Implement
+    dialogue-and-character-voice reviewer lane`.
+- Verification:
+  - `vitest` focused source-recovery/import-integrity/serve endpoint slice
+    passed `4` tests.
+  - `git diff --check`, `node scripts/contract-touch-detector.mjs`, and
+    `node ./build.mjs` passed.
+
+source: codex:narrative-harness-source-recovery-ready-2026-07-05
+
 2026-07-05T19:31:52Z - Repaired Narrative Harness MVP recovery work so
 split-required owner requirements become visible child work instead of hidden
 spec prose.

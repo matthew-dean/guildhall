@@ -153,9 +153,14 @@ export function contractShapedImportHasNoConcreteContracts(input: {
 }
 
 function extractConcreteContractNames(text: string): string[] {
-  return [...text.matchAll(/`([A-Z][A-Za-z0-9]*(?:[A-Z][A-Za-z0-9]*)?)`/g)]
-    .map(match => match[1])
+  return [...text.matchAll(/`([^`\n]{2,120})`/g)]
+    .map(match => match[1]?.trim() ?? '')
     .filter((name): name is string => Boolean(name))
+    .filter(name =>
+      /^[A-Z][A-Za-z0-9]*(?:[A-Z][A-Za-z0-9]*)?$/.test(name) ||
+      /\b(?:schema|schemas|contract|contracts|type|types)\b/i.test(name),
+    )
+    .filter(name => !/\b(?:placeholder|unnamed|missing|unknown|todo)\b/i.test(name))
     .filter(name => !['TODO', 'MVP', 'CLI', 'API', 'UI', 'JSON', 'YAML', 'PNPM'].includes(name))
 }
 

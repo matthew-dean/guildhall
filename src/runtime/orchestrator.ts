@@ -494,6 +494,169 @@ function shouldSeedSourceBackedExploringSplit(task: Task, queue: TaskQueue): boo
   )
 }
 
+function sourceRecoverySurfaceTerms(task: Task): string[] {
+  const sources = [
+    semanticTaskTitle(task),
+    task.description,
+    task.proposalRationale,
+    task.spec,
+  ]
+    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    .join('\n')
+  const phrases = [
+    ...[...sources.matchAll(/source-backed contract surface for ([^\n.]+)/gi)].map(match => match[1] ?? ''),
+    ...[...sources.matchAll(/(?:recommended first task title|original imported title):\s*(?:implement\s+)?([^\n.]+)/gi)].map(match => match[1] ?? ''),
+  ]
+  const raw = phrases.find(phrase => /contract|type|schema/i.test(phrase)) ?? ''
+  if (!raw) return []
+  return uniqueStrings(raw
+    .replace(/^implement\s+/i, '')
+    .replace(/\s+needs\s+concrete[\s\S]*$/i, '')
+    .replace(/\s+and\s+/gi, '\n')
+    .split('\n')
+    .map(term => normalizeFallbackWhitespace(term).replace(/[.;:,]+$/g, ''))
+    .filter(term => /contract|type|schema/i.test(term)))
+}
+
+function shouldSeedSourceRecoveryResearchTask(task: Task): boolean {
+  if (task.id === META_INTAKE_TASK_ID) return false
+  if (task.status !== 'exploring' && task.status !== 'blocked') return false
+  if (task.taskReadiness?.recommendation !== 'needs_research_spike') return false
+  if (taskHasUnansweredVisibleQuestion(task)) return false
+  if (sourceRecoverySurfaceTerms(task).length === 0) return false
+  const text = `${semanticTaskTitle(task)}\n${task.description ?? ''}\n${task.spec ?? ''}\n${task.taskReadiness?.summary ?? ''}`
+  return /source-backed|contract surface|contract\/type|contract names?|type surfaces?|source trail|cited sources/i.test(text)
+}
+
+function shouldRepairStaleSourceRecoveryReadiness(task: Task): boolean {
+  if (task.id === META_INTAKE_TASK_ID) return false
+  if (task.taskReadiness?.recommendation !== 'needs_research_spike') return false
+  if (task.status === 'blocked' || task.status === 'exploring') return false
+  const surfaces = sourceRecoverySurfaceTerms(task)
+  if (surfaces.length === 0) return false
+  const text = `${task.spec ?? ''}\n${task.acceptanceCriteria.map(criterion => criterion.description).join('\n')}`
+  return surfaces.every(surface => text.includes(`\`${surface}\``))
+}
+
+function buildSourceRecoveryResearchSpecSeed(task: Task, now: string): RecoverySpecSeed {
+  const taskTitle = semanticTaskTitle(task)
+  const surfaces = sourceRecoverySurfaceTerms(task)
+  const sourceRefs = Array.isArray(task.references) ? task.references.filter(Boolean) : []
+  const sourceTrail = sourceRefs.length > 0
+    ? sourceRefs.map(ref => `- ${ref}`)
+    : ['- Current task import evidence; add a source reference before implementation if the task record is missing one.']
+  const surfaceLines = surfaces.map(surface => `- \`${surface}\``)
+  const spec = [
+    '## Summary',
+    `Recover the source-backed contract/type surface for ${taskTitle}, then hand the worker the named surface instead of a hollow placeholder.`,
+    '',
+    '## Source Trail',
+    ...sourceTrail,
+    '',
+    '## Contract / Type Surfaces',
+    ...surfaceLines,
+    '',
+    '## Acceptance Criteria',
+    `1. Given the cited source trail, when this recovery is complete, then Guildhall accounts for ${surfaces.map(surface => `\`${surface}\``).join(' and ')} as implemented, explicitly created, or explicitly deferred with source evidence.`,
+    `2. Given the worker handoff, when implementation starts, then proof targets ${surfaces.map(surface => `\`${surface}\``).join(' and ')} instead of an unnamed contract/type placeholder.`,
+    '3. Given the cited docs are insufficient, when the worker cannot prove the surface from source, then Guildhall records the exact missing source fact and reshapes the task without asking the owner to approve stale placeholder text.',
+    '',
+    '## Out of Scope',
+    '- Do not expand into unrelated reviewer lanes or later Narrative Harness intelligence work.',
+    '- Do not ask the owner to re-answer source facts already present in the cited docs or task import evidence.',
+    '',
+    '## Open Questions',
+    '- None known from the current task record. If a true product decision is missing, ask one direct question with a question mark and concrete choices.',
+    '',
+    '## Completion Boundary',
+    `- Product outcome: ${taskTitle} has concrete source-backed contract/type targets and proof evidence.`,
+    '- What Guildhall can complete in code: inspect cited docs, update or create repo-local contract/type records, update proof fixtures/tests, and record evidence.',
+    '- External dependencies: None known from the current task record.',
+    '- Owner-only setup: None known.',
+    '- Verification environment: the local project checkout and repo-local package scripts.',
+    '- What counts as done: each named surface is implemented/proven or explicitly deferred with source evidence, and the proof result is recorded.',
+    '- What must be split or blocked: any newly discovered product decision that changes which surfaces belong in the current scope.',
+  ].join('\n')
+
+  return {
+    spec,
+    acceptanceCriteria: parseAcceptanceCriteriaFromSpec(spec),
+    productBrief: {
+      userJob: `I want ${taskTitle} to name and prove its source-backed contract/type targets from the cited docs.`,
+      whyItMattersNow: 'This is blocking the current scope because Guildhall must not run implementation from an unnamed contract/type placeholder.',
+      successMetric: `${surfaces.join(' and ')} are accounted for with source evidence and worker-proof targets.`,
+      nonGoals: [
+        'Do not expand into unrelated reviewer lanes or later Narrative Harness intelligence work.',
+        'Do not ask the owner to approve stale placeholder text.',
+      ],
+      antiPatterns: [
+        'Do not preserve hollow contract/type wording as an approvable spec.',
+        'Do not turn source recovery into owner approval when cited docs or task evidence can be inspected.',
+      ],
+      authoredBy: 'coordinator-recovery',
+      authoredAt: now,
+    },
+    ...(sourceRefs.length > 0 ? { references: sourceRefs } : {}),
+  }
+}
+
+function readyReadinessForSourceRecoveryTask(task: Task, seed: RecoverySpecSeed, now: string): Task['taskReadiness'] {
+  const evidence = sourceRecoverySurfaceTerms(task).map(surface => `Recovered surface: ${surface}`)
+  return {
+    taskKind: task.taskReadiness?.taskKind ?? task.taskKind ?? 'research',
+    recommendation: 'ready',
+    summary: 'Source-recovery work has named contract/type targets and can run without owner approval.',
+    dimensions: [
+      {
+        id: 'outcome_clarity',
+        status: 'ok',
+        summary: 'The contract/type targets are named.',
+        evidence,
+      },
+      {
+        id: 'proofability',
+        status: 'ok',
+        summary: 'Acceptance criteria and cited source trail define the proof target.',
+        evidence: seed.acceptanceCriteria.map(criterion => criterion.description).slice(0, 2),
+      },
+      {
+        id: 'user_judgment_exposure',
+        status: 'ok',
+        summary: 'No owner-only judgment is hidden; the task asks Guildhall to inspect source evidence.',
+        evidence: [],
+      },
+    ],
+    definitionOfDone: {
+      items: [
+        ...seed.acceptanceCriteria.map(criterion => criterion.description),
+        'The proof result is recorded on the task.',
+      ],
+      evidenceRequired: [
+        'Source-backed contract/type targets are present.',
+        'Proof result references the named surfaces.',
+      ],
+      updatedAt: now,
+      createdBy: 'coordinator-recovery',
+    },
+    blockerPlans: [
+      {
+        if: 'The cited docs do not actually prove one of the named surfaces',
+        then: 'Record the exact missing source fact and reshape or defer that surface explicitly.',
+        owner: 'guildhall',
+        reason: 'Source recovery is Guildhall-owned unless a product decision is missing.',
+      },
+    ],
+    contextBudget: {
+      estimatedTokens: 2000,
+      risk: 'low',
+      fitsInOneWorkerBrief: true,
+      reasons: ['The task has named surfaces and a short cited source trail.'],
+    },
+    assessedAt: now,
+    assessedBy: 'coordinator-recovery',
+  }
+}
+
 function hasUsableBlueprint(task: Task): boolean {
   return validateSpecCompletionBoundary(task).ok
 }
@@ -3140,6 +3303,10 @@ export class Orchestrator {
     if (completedEvidenceRepair.changed) await this.writeQueue(queueBefore)
     const staleRepair = repairStaleBlockersInQueue(queueBefore, this.now())
     if (staleRepair.changed) await this.writeQueue(queueBefore)
+    const sourceRecoveryRepair = await this.repairSourceRecoveryResearchTasksInQueue(queueBefore)
+    if (sourceRecoveryRepair) return sourceRecoveryRepair
+    const staleSourceRecoveryReadinessRepair = await this.repairStaleSourceRecoveryReadinessInQueue(queueBefore)
+    if (staleSourceRecoveryReadinessRepair) return staleSourceRecoveryReadinessRepair
     const weakRecoverySpecRepair = await this.repairWeakRecoverySpecReviewSeedsInQueue(queueBefore)
     if (weakRecoverySpecRepair) return weakRecoverySpecRepair
     const landingRepair = await this.reconcileCompletedTaskLanding(queueBefore)
@@ -10369,6 +10536,89 @@ export class Orchestrator {
       afterStatus: 'spec_review',
       transitioned: false,
       revisionCount: queue.tasks.find((candidate) => candidate.id === repaired.taskId)?.revisionCount,
+    }
+  }
+
+  private async repairSourceRecoveryResearchTasksInQueue(queue: TaskQueue): Promise<TickOutcome | null> {
+    const liveTask = queue.tasks.find(shouldSeedSourceRecoveryResearchTask)
+    if (!liveTask) return null
+    const now = this.now()
+    const beforeStatus = liveTask.status
+    const seed = buildSourceRecoveryResearchSpecSeed(liveTask, now)
+    liveTask.spec = seed.spec
+    liveTask.acceptanceCriteria = seed.acceptanceCriteria
+    liveTask.productBrief = seed.productBrief
+    liveTask.taskReadiness = readyReadinessForSourceRecoveryTask(liveTask, seed, now)
+    liveTask.status = 'ready'
+    liveTask.assignedTo = null
+    liveTask.blockReason = undefined
+    liveTask.updatedAt = now
+    if (seed.references) liveTask.references = seed.references
+    for (const escalation of liveTask.escalations ?? []) {
+      if (escalation.resolvedAt) continue
+      escalation.resolvedAt = now
+      escalation.resolvedBy = 'system'
+      escalation.resolution =
+        'Auto-repaired as source-backed contract/type recovery. Guildhall seeded named surfaces from task/import evidence instead of asking the owner whether to retry a failed model loop.'
+    }
+    liveTask.notes.push({
+      agentId: 'coordinator-recovery',
+      role: 'system',
+      content:
+        'Guildhall converted the source-recovery research spike into ready source-backed contract/type work from the task title, cited refs, and import evidence; this is Guildhall-owned shaping, not owner approval.',
+      timestamp: now,
+    })
+    queue.lastUpdated = now
+    await this.writeQueue(queue)
+    await this.emitBackendEvent({
+      type: 'line_complete',
+      task_id: liveTask.id,
+      agent_name: 'coordinator-recovery',
+      message:
+        'Guildhall recovered named contract/type targets from the task evidence and made the source-recovery work ready.',
+    })
+    return {
+      kind: 'processed',
+      taskId: liveTask.id,
+      agent: 'coordinator-recovery',
+      beforeStatus,
+      afterStatus: 'ready',
+      transitioned: beforeStatus !== 'ready',
+      revisionCount: liveTask.revisionCount,
+    }
+  }
+
+  private async repairStaleSourceRecoveryReadinessInQueue(queue: TaskQueue): Promise<TickOutcome | null> {
+    const liveTask = queue.tasks.find(shouldRepairStaleSourceRecoveryReadiness)
+    if (!liveTask) return null
+    const now = this.now()
+    const seed = buildSourceRecoveryResearchSpecSeed(liveTask, now)
+    liveTask.taskReadiness = readyReadinessForSourceRecoveryTask(liveTask, seed, now)
+    liveTask.updatedAt = now
+    liveTask.notes.push({
+      agentId: 'coordinator-recovery',
+      role: 'system',
+      content:
+        'Guildhall repaired stale source-recovery readiness after the task already named its contract/type surfaces; status was preserved.',
+      timestamp: now,
+    })
+    queue.lastUpdated = now
+    await this.writeQueue(queue)
+    await this.emitBackendEvent({
+      type: 'line_complete',
+      task_id: liveTask.id,
+      agent_name: 'coordinator-recovery',
+      message:
+        'Guildhall repaired stale source-recovery readiness now that the named contract/type surfaces are present.',
+    })
+    return {
+      kind: 'processed',
+      taskId: liveTask.id,
+      agent: 'coordinator-recovery',
+      beforeStatus: liveTask.status,
+      afterStatus: liveTask.status,
+      transitioned: false,
+      revisionCount: liveTask.revisionCount,
     }
   }
 
