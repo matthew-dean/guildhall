@@ -1475,7 +1475,8 @@ function scopedRecoveryParentAcceptance(taskTitle: string, parentAcceptance: str
   }
   if (/reviewer|writer loop|headless/.test(title)) {
     return parentAcceptance.filter((item) =>
-      /runner|fixture|headless|no-ui|no frontend|run output|reviewer|writer loop/i.test(item),
+      /runner|fixture|headless|no-ui|no frontend|run output|reviewer|writer loop/i.test(item) &&
+      !/bounded writer packet|writer packet|bookbrief|manuscriptunit|charactertrace|readerstatetrace|outlinenode|authordecision|character believes|reader knows|provenance|privacy|author profile|project author|session check-in|permission|privacy manifest|stale|source-text edit|source edit|invalidation|affected records|unrelated records/i.test(item),
     )
   }
   if (/provenance|privacy/.test(title)) {
@@ -1500,7 +1501,48 @@ function scopedRecoveryParentAcceptance(taskTitle: string, parentAcceptance: str
       /prototype|evaluation|packet|trace|signal|run/i.test(item),
     )
   }
-  return parentAcceptance
+  return parentAcceptance.filter((item) => recoveryParentAcceptanceMatchesTitle(taskTitle, item))
+}
+
+function recoveryParentAcceptanceMatchesTitle(taskTitle: string, acceptance: string): boolean {
+  const titleTokens = meaningfulRecoveryTokens(taskTitle)
+  if (titleTokens.size === 0) return false
+  let hits = 0
+  for (const token of meaningfulRecoveryTokens(acceptance)) {
+    if (titleTokens.has(token)) hits += 1
+    if (hits >= 2) return true
+  }
+  return false
+}
+
+function meaningfulRecoveryTokens(text: string): Set<string> {
+  const stop = new Set([
+    'the',
+    'and',
+    'from',
+    'into',
+    'with',
+    'that',
+    'this',
+    'task',
+    'work',
+    'runner',
+    'run',
+    'runs',
+    'build',
+    'builds',
+    'records',
+    'record',
+    'output',
+    'stage',
+  ])
+  return new Set(
+    text
+      .toLowerCase()
+      .match(/[a-z][a-z0-9-]{3,}/g)
+      ?.map((token) => token.replace(/s$/, ''))
+      .filter((token) => !stop.has(token)) ?? [],
+  )
 }
 
 function sentenceCaseFallbackQuestion(value: string): string {

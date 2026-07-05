@@ -3013,6 +3013,84 @@ describe('Orchestrator.tick — routing', () => {
     expect(task.acceptanceCriteria.map((criterion) => criterion.description).join('\n')).not.toContain('prototype run record')
   })
 
+  it('narrows recovered reviewer-loop child specs instead of copying sibling packet/privacy/stale scope', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'parent',
+        status: 'ready',
+        title: 'Implement a no-UI runner that builds a packet from fixture records.',
+        acceptanceCriteria: [
+          {
+            id: 'run-output',
+            description: 'The runner ingests a fixture, builds records, runs a packet, and saves the run output.',
+            verifiedBy: 'review',
+            met: false,
+          },
+          {
+            id: 'no-ui-boundary',
+            description: 'The harness run works without a frontend and stays inside the no-UI prototype boundary.',
+            verifiedBy: 'review',
+            met: false,
+          },
+          {
+            id: 'bounded-writer-packet',
+            description: 'The runner builds a bounded writer packet from the documented fields: `BookBrief`; `ManuscriptUnit`; `CharacterTrace`; `ReaderStateTrace`; `OutlineNode`; one `AuthorDecision`; writer packet names what the character believes; writer packet names what the reader knows.',
+            verifiedBy: 'review',
+            met: false,
+          },
+          {
+            id: 'privacy-scope',
+            description: 'The runner records provenance/privacy scope in packet output: one global author profile note; permissions that allow one and block another; privacy manifest says what was included.',
+            verifiedBy: 'review',
+            met: false,
+          },
+          {
+            id: 'stale-context',
+            description: 'The runner marks stale packet context after source edits: affected records become stale and unrelated records stay available.',
+            verifiedBy: 'review',
+            met: false,
+          },
+        ],
+        hierarchy: { childIds: ['loop-child'], order: 0, relation: 'contains' },
+      }),
+      mkTask({
+        id: 'loop-child',
+        status: 'exploring',
+        title: 'Run the bounded reviewer and writer loop headlessly',
+        description: 'The Stage 1 harness should exercise the real review/writer loop, not a generic one-step command.',
+        hierarchy: { parentId: 'parent', childIds: [], order: 1, relation: 'decomposes' },
+        notes: [{
+          agentId: 'coordinator',
+          role: 'recovery',
+          content: 'User restarted the project after the spec agent failed to save a durable draft. Reopened intake so Guildhall can retry from the preserved transcript notes.',
+          timestamp: '2026-07-04T15:06:27.010Z',
+        }],
+      }),
+    ])
+    const spec = stubAgent('spec-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out).toMatchObject({
+      kind: 'processed',
+      taskId: 'loop-child',
+      agent: 'coordinator-recovery',
+      afterStatus: 'spec_review',
+    })
+    const queue = await readQueue()
+    const task = queue.tasks.find(candidate => candidate.id === 'loop-child')!
+    const criteria = task.acceptanceCriteria.map((criterion) => criterion.description).join('\n')
+    expect(criteria).toContain('saves the run output')
+    expect(criteria).toContain('without a frontend')
+    expect(criteria).not.toContain('BookBrief')
+    expect(criteria).not.toContain('provenance/privacy')
+    expect(criteria).not.toContain('stale packet context')
+  })
+
   it('does not fossilize legacy cropped task titles into recovered specs or briefs', async () => {
     const fullTitle = 'What commands should I run to smoke test this project without changing files?'
     await writeQueue([

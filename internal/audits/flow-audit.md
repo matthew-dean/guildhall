@@ -16844,6 +16844,42 @@ ready but not dispatchable because stale decomposition metadata survived.
 
 source: codex:approved-spec-empty-decomposition-dispatch-2026-07-04
 
+2026-07-04T20:24:00-07:00 - Narrowed recovery spec seeds so split children
+do not inherit sibling acceptance criteria.
+
+- Work id: `codex:recovery-spec-child-scope-2026-07-04`.
+- User job: when a split child task needs a recovery spec, Guildhall should
+  make the spec for that child, not quietly copy the whole containing task into
+  every child.
+- Finding:
+  - Narrative Harness task
+    `task-import-14yqvl7-split-run-the-bounded-reviewer-and-writer-loop-headlessly-2`
+    stalled during spec shaping and was saved by the deterministic recovery
+    spec path.
+  - The recovery spec moved the task to `spec_review`, but it copied sibling
+    parent acceptance into this child: bounded writer packet fields,
+    provenance/privacy scope, and stale-context invalidation all appeared as
+    requirements for the reviewer/writer loop task.
+  - That made the owner-facing spec unsafe to approve because it blurred three
+    separately scheduled child tasks back into one.
+- Fix:
+  - The reviewer/writer-loop recovery scope now includes only runner/no-UI/run
+    output criteria and excludes bounded-writer-packet, provenance/privacy, and
+    stale-context sibling criteria.
+  - The generic recovery fallback no longer returns every parent acceptance
+    criterion for unknown child titles; it only inherits semantically matching
+    parent criteria and otherwise falls back to child-specific generic proof
+    criteria.
+- Verification:
+  - Added a regression with a parent containing run-output, no-UI,
+    bounded-writer-packet, privacy, and stale-context criteria. The recovered
+    reviewer-loop child now keeps the run/no-UI criteria and excludes the
+    sibling packet/privacy/stale criteria.
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/orchestrator.test.ts -t 'recovery spec seed|bounded writer packet|reviewer-loop|fixture child specs'`
+    passed `4` focused tests.
+
+source: codex:recovery-spec-child-scope-2026-07-04
+
 2026-07-04T20:08:00-07:00 - Contained worker file-mutation loops after
 self-reported truncated or wrong-path writes.
 
