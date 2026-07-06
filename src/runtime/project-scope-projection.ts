@@ -358,6 +358,16 @@ function normalizeSelectedScope(scope: ProjectScope | null, tasks: readonly Task
   const deferredNodeIds = new Set(scope.deferredNodeIds)
   const tasksById = new Map(tasks.map(task => [task.id, task] as const))
   const childIdsByParent = buildChildMap(tasks)
+  const dropMaterializedImportPreview = (nodeId: string): boolean => {
+    const syntheticPrefix = 'work:workspace-import:'
+    return nodeId.startsWith(syntheticPrefix) && tasksById.has(nodeId.slice(syntheticPrefix.length))
+  }
+  for (const nodeId of [...nodeIds]) {
+    if (dropMaterializedImportPreview(nodeId)) nodeIds.delete(nodeId)
+  }
+  for (const nodeId of [...deferredNodeIds]) {
+    if (dropMaterializedImportPreview(nodeId)) deferredNodeIds.delete(nodeId)
+  }
   for (const task of tasks) {
     const nodeId = taskScopeNodeId(task.id)
     if (isProjectSetupTask(task.id)) {

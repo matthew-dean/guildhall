@@ -889,6 +889,41 @@ describe('buildProjectOrientationSpine', () => {
     ])
   })
 
+  it('does not count workspace-import preview nodes once the imported task is materialized', () => {
+    const spine = buildProjectOrientationSpine({
+      projectId: 'looma-knit',
+      now: '2026-07-06T07:20:00.000Z',
+      selectedReleaseId: 'stage-1-finish-knit-primitive-replacement-wave',
+      releases: [{
+        id: 'stage-1-finish-knit-primitive-replacement-wave',
+        label: 'Stage 1 Finish Knit Primitive Replacement Wave',
+        kind: 'release',
+        state: 'active',
+        source: 'inferred',
+        nodeIds: [
+          'work:task-import-1v8sume',
+          'work:workspace-import:task-import-1v8sume',
+        ],
+        deferredNodeIds: [],
+        proofStyle: 'unspecified',
+      }],
+      tasks: [{
+        id: 'task-import-1v8sume',
+        title: 'Continue the Knit-to-Looma promotion work',
+        description: 'Imported current work has a materialized task record.',
+        domain: 'looma',
+        projectPath: '/tmp/looma-knit',
+        status: 'import_draft',
+        priority: 'normal',
+        releaseIds: ['stage-1-finish-knit-primitive-replacement-wave'],
+      }] as any[],
+    })
+
+    expect(spine.selectedRelease?.nodeIds).toEqual(['work:task-import-1v8sume'])
+    expect(spine.scope?.nodeIds).toEqual(['work:task-import-1v8sume'])
+    expect(spine.summary.includedWorkCount).toBe(1)
+  })
+
   it('uses release records recovered from the workspace import draft as the visible scope', () => {
     const spine = buildProjectOrientationSpine({
       projectId: 'narrative-harness',

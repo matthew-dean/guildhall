@@ -697,7 +697,11 @@ function normalizeScopeTaskLists(scope: OrientationScope, tasks: OrientationTask
     const parentId = task.hierarchy?.parentId?.trim()
     if (parentId && taskById.has(parentId)) addChild(parentId, task.id)
   }
-  const keepMissingWorkNode = (nodeId: string): boolean => nodeId.startsWith('work:workspace-import:')
+  const keepMissingWorkNode = (nodeId: string): boolean => {
+    const syntheticPrefix = 'work:workspace-import:'
+    if (!nodeId.startsWith(syntheticPrefix)) return false
+    return !taskById.has(nodeId.slice(syntheticPrefix.length))
+  }
   const included = new Set(
     scope.nodeIds.filter((nodeId) => {
       if (!nodeId.startsWith('work:')) return true

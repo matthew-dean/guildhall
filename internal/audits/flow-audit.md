@@ -14553,6 +14553,73 @@ as release readiness.
 - Schema Migration Decision: none. This changes a derived read model only; no
   persisted project, task, release, or import state is rewritten.
 
+2026-07-06T07:09:48Z - Removed duplicate workspace-import preview nodes from
+materialized release scope.
+
+- Work id: `codex:materialized-import-preview-dedupe-2026-07-06`.
+- User job: when Looma + Knit has a real imported task row for detected work,
+  the Project Map should not count the older `workspace-import:` preview node
+  as a second current work item in the selected release. Draft-only detected
+  work should remain visible, but materialized task records are the executable
+  source of truth.
+- Root-cause classification:
+  - project structure/scope/release modeling problem: the selected release
+    could include both `work:task-import-1v8sume` and
+    `work:workspace-import:task-import-1v8sume` for the same imported work.
+  - task hierarchy/dependency/proof modeling problem: release counts treated
+    a preview node with no task row as additional executable current work after
+    the importer had already created the task row.
+  - bad project data produced by an earlier Guildhall bug: older
+    workspace-import preview membership survived beside the materialized task.
+- Fix:
+  - `normalizeScopeTaskLists()` now keeps `work:workspace-import:<id>` preview
+    nodes only when no real task `<id>` exists.
+  - Draft-only preview nodes still survive so first-run orientation can show
+    detected work before task materialization.
+- Contract Touch Decision:
+  - Work id: `codex:materialized-import-preview-dedupe-2026-07-06`.
+  - Touched contracts: project orientation spine selected release/scope node
+    normalization; Project Map release/scope count semantics.
+  - Contracts considered but not touched: persisted task schema, persisted
+    release schema, workspace-import draft schema, release-readiness payload,
+    Start readiness payload. Existing stored preview membership is not
+    rewritten; the read model filters it when a materialized task owns the same
+    imported id.
+  - Required follow-up: installed-app API and browser proof must show Looma +
+    Knit selected release node count matching executable scope rows.
+  - Proof required: failing regression for materialized import task plus
+    duplicate preview node, focused orientation/projection tests, contract
+    detector, diff check, build, installed-app API proof, browser proof on
+    Looma + Knit Map.
+  - Proof provided so far: the orientation-spine regression first failed with
+    `work:workspace-import:task-import-1v8sume` still present; after the first
+    model fix, `project-scope-projection.test.ts` and
+    `project-orientation-spine.test.ts` passed `59` tests. Installed API proof
+    then showed the duplicate still survived through the server-side scope
+    projection, so a second projection-layer regression was added; it failed
+    with the same duplicate preview node and then passed after
+    `normalizeSelectedScope()` learned the same materialized-import rule.
+    The combined projection/spine suites now pass `60` tests.
+  - Completed proof: after `node ./build.mjs`, macOS package reinstall,
+    `guildhall stop; guildhall start`, and `/api/stale-server` reporting
+    `stale:false` for PID `2136`, installed
+    `/api/project/spine?projectId=looma-knit` returned `releaseNodeCount:49`,
+    `includedWorkCount:49`, `scopeRowIncludedCount:49`,
+    `hasRealMaterializedTask:true`, `hasDuplicatePreview:false`, and no
+    release-only or row-only node ids.
+  - Browser proof: installed Looma + Knit Map at desktop `1280x720` showed
+    `49 assigned work items`, `49 current work items · 31 later work items`,
+    no `50 assigned/current` copy, the current owner blocker
+    `Clarify Templates needs your answer before work can continue`, and no
+    horizontal overflow.
+  - Owner-review items: none. This makes materialized task rows authoritative
+    without hiding draft-only discovered work.
+  - Apply/revert behavior: revert the `keepMissingWorkNode()` materialized-id
+    guard to restore duplicate preview membership in selected release/scope
+    lists; no data rollback is required.
+- Schema Migration Decision: none. This changes a derived read model only; no
+  stored project state is changed.
+
 2026-07-06T05:01:46Z - Fixed worker recovery ticks that falsely reported
 `(no change)` while Guildhall had preserved real progress or recorded a
 runtime recovery action.
