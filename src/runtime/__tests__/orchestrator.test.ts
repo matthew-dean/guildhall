@@ -1954,6 +1954,11 @@ describe('Orchestrator.tick — routing', () => {
 
     const out = await orch.tick()
     expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.afterStatus).toBe('gate_check')
+      expect(out.transitioned).toBe(true)
+      expect(out.revisionCount).toBeTypeOf('number')
+    }
 
     const queue = await readQueue()
     const task = queue.tasks[0]!

@@ -8595,6 +8595,9 @@ export class Orchestrator {
           agent: 'reviewer-fanout',
           beforeStatus,
           afterStatus: 'gate_check',
+          transitioned: true,
+          note: `fan-out approve (${verdicts.length} persona${verdicts.length === 1 ? '' : 's'})`,
+          revisionCount: t.revisionCount,
         } as TickOutcome
       }
 
@@ -8655,6 +8658,9 @@ export class Orchestrator {
         agent: 'reviewer-fanout',
         beforeStatus,
         afterStatus: 'in_progress',
+        transitioned: true,
+        note: `fan-out revise (dissenters: ${aggregate.dissenting.map((d) => d.guildSlug).join(', ')})`,
+        revisionCount: t.revisionCount,
       } as TickOutcome
     })
   }

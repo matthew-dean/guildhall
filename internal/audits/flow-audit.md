@@ -14427,6 +14427,9 @@ runtime recovery action.
   - A live Narrative Harness retry exposed the same flaw for durable
     `worker-progress-review` notes: Guildhall wrote "Worker made no visible
     progress pass N" while the CLI still printed `(no change)`.
+  - The same live run exposed an incomplete `reviewer-fanout` processed
+    outcome: Guildhall printed `review -> gate_check` with `(no change)`
+    because the returned outcome omitted `transitioned`.
 - Fix:
   - `processed` tick outcomes now carry an optional `note`.
   - CLI output renders that note for unchanged-status ticks and keeps
@@ -14435,6 +14438,8 @@ runtime recovery action.
     return the same progress signal to callers.
   - Shared worker-progress-review paths now pass their durable note summary
     through the same processed outcome.
+  - Reviewer fan-out approve/revise outcomes now return complete processed
+    outcomes with `transitioned`, `revisionCount`, and a note.
 - Verification:
   `NODE_ENV=test CI=true ./node_modules/.bin/vitest run src/runtime/__tests__/orchestrator.test.ts -t "resumed worker times out|timeout without likely target|provider-unavailable no-progress|preserves dirty worktree progress|preserves dirty worker progress" --reporter=dot`
   passed `4` focused tests.
