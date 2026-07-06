@@ -8,6 +8,76 @@ help_summary: |
 
 # Web UI flow audit
 
+2026-07-06T19:25:15Z - Start readiness uses the same documented current scope as project orientation.
+
+- Work id: `codex:orientation-start-readiness-scope-agreement-2026-07-06`.
+- User job: When the Overview, Map, Work, or Start/Resume control names the
+  current bounded scope, they should all point at the same scope/release and
+  the same proof blocker. A user should not see one surface say Stage 1 while
+  another tells them to resolve a stale inferred bucket.
+- Escaped live failure:
+  - Narrative Harness orientation recovered
+    `Stage 1: Headless Drafting And Evaluation MVP` from the fresh
+    workspace-import draft.
+  - Start readiness still said `Near-term proof scope is waiting on proof
+    evidence...` and focused stale task `task-import-1g9oq7m`.
+  - The API could therefore show the right current scope while the primary
+    Start/Resume blocker executed against an older inferred release boundary.
+- Root-cause classification:
+  - Data model/schema problem: approved workspace-import state preserved task
+    membership but had no persisted release/scope container field.
+  - Project structure/scope/release modeling problem: a fresh documented scope
+    could not always override a stale selected inferred release.
+  - Scheduler/action-state logic problem: terminal Start readiness recomputed
+    scope from the raw queue instead of reusing the same orientation/import
+    truth used by the project views.
+  - UI communication/orientation problem: owner-facing surfaces could name
+    different blockers for the same project state.
+- Fix:
+  - `WorkspaceGoalsState` now persists imported release containers.
+  - The orientation augmenter carries existing release membership forward when
+    fresh imported work matches an existing task, and lets fresh documented
+    import scope override stale inferred release selection.
+  - `terminalStartState` now derives its selected scope through
+    `buildOrientationSpineWithScopedReleaseTruth` with the same
+    workspace-import draft used by orientation surfaces.
+- Schema Migration Decision:
+  - Work id:
+    `codex:orientation-start-readiness-scope-agreement-2026-07-06`.
+  - Persisted schema touched: system-local `workspace-goals.json`
+    (`WorkspaceGoalsState`).
+  - Scope: add optional `releases` records for approved workspace-import
+    scopes while keeping existing task `releaseIds` valid.
+  - Change class: additive compatible reader/writer change.
+  - Existing data impact: old files without `releases` continue to load;
+    Guildhall hydrates owner-readable release containers from task membership
+    when only task `releaseIds` exist.
+  - Migration id: none required because the reader is backward compatible and
+    future approvals write the richer field naturally.
+  - Required before run: no blocking migration required.
+  - Compatibility reader: `parseWorkspaceGoalsState` accepts missing
+    `releases`; orientation/start readiness synthesize missing containers from
+    current task membership.
+  - Fixtures/tests: `serve-settings.test.ts` covers a stale inferred selected
+    release plus fresh documented Stage 1 workspace-import scope.
+  - Owner-facing plan text: the UI continues to call the visible boundary the
+    current scope/release; no fake MVP or mandatory release container is
+    introduced.
+  - Rollback/revert behavior: removing the optional field reverts to legacy
+    task-membership hydration; no existing task records need rewriting.
+- Verification:
+  - Red test first:
+    `CI=true pnpm exec vitest run src/runtime/__tests__/serve-settings.test.ts -t "keeps start readiness aligned"`
+    failed because orientation/Start selected `Near-term proof scope`.
+  - After the model/readiness fix, the focused regression passed and proves
+    Start readiness no longer mentions `Near-term proof scope`, focuses
+    `stage-1-model-proof`, and uses the same normalized Stage 1 scope label as
+    orientation.
+  - Broader affected tests passed:
+    `CI=true pnpm exec vitest run src/runtime/__tests__/project-orientation-spine.test.ts`
+    and
+    `CI=true pnpm exec vitest run src/runtime/__tests__/serve-settings.test.ts -t "project orientation keeps approved import scope|keeps start readiness aligned|draft endpoint prefers the approved workspace-goals state"`.
+
 2026-07-06T19:06:35Z - CLI workspace-import draft uses the same materialized task graph as the app draft.
 
 - Work id: `codex:cli-workspace-import-materialized-proof-2026-07-06`.

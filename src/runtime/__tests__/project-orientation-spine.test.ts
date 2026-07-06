@@ -1831,6 +1831,68 @@ describe('buildProjectOrientationSpine', () => {
     ])
   })
 
+  it('lets fresher documented import scope override stale inferred release membership', () => {
+    const spine = buildProjectOrientationSpine({
+      projectId: 'narrative-harness',
+      now: '2026-07-06T19:10:00.000Z',
+      selectedReleaseId: 'near-term-proof-scope',
+      releases: [{
+        id: 'near-term-proof-scope',
+        label: 'Near-term proof scope',
+        kind: 'release',
+        state: 'active',
+        source: 'inferred',
+        nodeIds: ['work:legacy-proof'],
+        deferredNodeIds: [],
+      }],
+      tasks: [{
+        id: 'legacy-proof',
+        title: 'Recover source-backed contract surface',
+        status: 'done',
+        releaseIds: ['near-term-proof-scope'],
+      }],
+      workspaceImportDraft: {
+        source: {
+          kind: 'inferred',
+          refs: ['workspace-import:draft'],
+          confidence: 'medium',
+          freshness: 'fresh',
+          inferred: true,
+          refreshedAt: '2026-07-06T19:10:00.000Z',
+        },
+        releases: [
+          {
+            id: 'stage-1-headless-drafting-and-evaluation-mvp',
+            label: 'Stage 1: Headless Drafting And Evaluation MVP',
+            source: 'release_plan',
+            state: 'active',
+          },
+        ],
+        tasks: [
+          {
+            id: 'stage-1-model-proof',
+            title: 'Select and prove a DeepInfra drafting model for broad-genre chapter writing.',
+            description: 'Current documented Stage 1 work.',
+            domain: 'harness',
+            scope: 'current',
+            releaseIds: ['stage-1-headless-drafting-and-evaluation-mvp'],
+            refs: ['import:docs/harness/implementation-roadmap.md'],
+          },
+        ],
+      },
+    })
+
+    expect(spine.summary.selectedScopeLabel).toBe('Stage 1: Headless Drafting And Evaluation MVP')
+    expect(spine.selectedRelease).toMatchObject({
+      id: 'stage-1-headless-drafting-and-evaluation-mvp',
+      label: 'Stage 1: Headless Drafting And Evaluation MVP',
+    })
+    expect(spine.scope).toMatchObject({
+      id: 'stage-1-headless-drafting-and-evaluation-mvp',
+      nodeIds: ['work:workspace-import:stage-1-model-proof'],
+    })
+  })
+
   it('shows only the selected release as the active run boundary', () => {
     const spine = buildProjectOrientationSpine({
       projectId: 'looma-knit',

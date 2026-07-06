@@ -1655,6 +1655,7 @@ export interface WorkspaceGoalsState {
   version: number
   recordedAt: string
   goals: ParsedGoal[]
+  releases?: ParsedRelease[]
   tasks: ParsedTask[]
   milestones: ParsedMilestone[]
   context: DraftContext[]
@@ -1822,6 +1823,11 @@ export function parseWorkspaceGoalsState(raw: unknown): WorkspaceGoalsState | nu
       && typeof (task as ParsedTask).priority === 'string'
       && Array.isArray((task as ParsedTask).references)
   }) : []
+  const releases = Array.isArray(record.releases) ? record.releases.filter((release): release is ParsedRelease => {
+    return Boolean(release) && typeof release === 'object'
+      && typeof (release as ParsedRelease).id === 'string'
+      && typeof (release as ParsedRelease).label === 'string'
+  }) : []
   const milestones = Array.isArray(record.milestones) ? record.milestones.filter((milestone): milestone is ParsedMilestone => {
     return Boolean(milestone) && typeof milestone === 'object'
       && typeof (milestone as ParsedMilestone).title === 'string'
@@ -1858,6 +1864,7 @@ export function parseWorkspaceGoalsState(raw: unknown): WorkspaceGoalsState | nu
     version: typeof record.version === 'number' ? record.version : 1,
     recordedAt,
     goals,
+    ...(releases.length > 0 ? { releases } : {}),
     tasks,
     milestones,
     context,
@@ -5405,6 +5412,7 @@ export async function approveWorkspaceImport(
           version: WORKSPACE_GOALS_STRUCTURAL_VERSION,
           recordedAt: now,
           goals: [...materializedParsed.goals],
+          ...(materializedParsed.releases?.length ? { releases: [...materializedParsed.releases] } : {}),
           tasks: [...materializedParsed.tasks],
           milestones: [...materializedParsed.milestones],
           context: approvedContext,

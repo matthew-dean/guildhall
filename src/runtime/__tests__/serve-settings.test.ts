@@ -3466,6 +3466,119 @@ describe('Workspace Import review endpoints', () => {
     })
   })
 
+  it('keeps start readiness aligned with a fresher documented import scope', async () => {
+    const now = '2026-07-06T19:15:00.000Z'
+    await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'harness', 'implementation-roadmap.md'),
+      [
+        '# Implementation Roadmap',
+        '',
+        '## Stage 1: Headless Drafting And Evaluation MVP',
+        '',
+        'Goal: prove the headless drafting loop before product UI work.',
+        '',
+        '## Current Next Milestone',
+        '',
+        'The next milestone is Stage 1: Headless Drafting And Evaluation MVP.',
+        '',
+        '1. Select and prove a DeepInfra drafting model for broad-genre chapter writing.',
+      ].join('\n'),
+      'utf8',
+    )
+    await writeSystemTasks({
+      version: 1,
+      lastUpdated: now,
+      selectedReleaseId: 'near-term-proof-scope',
+      releases: [{
+        id: 'near-term-proof-scope',
+        label: 'Near-term proof scope',
+        kind: 'release',
+        state: 'active',
+        source: 'inferred',
+        nodeIds: ['work:legacy-proof'],
+        deferredNodeIds: [],
+      }],
+      tasks: [
+        {
+          id: 'legacy-proof',
+          title: 'Recover source-backed contract surface',
+          description: 'Legacy inferred proof bucket work.',
+          domain: 'harness',
+          status: 'done',
+          releaseIds: ['near-term-proof-scope'],
+          priority: 'normal',
+          acceptanceCriteria: [{ id: 'proof', description: 'Attach proof.', met: false }],
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          id: 'stage-1-model-proof',
+          title: 'Select and prove a DeepInfra drafting model for broad-genre chapter writing.',
+          description: 'Current documented Stage 1 work.',
+          domain: 'harness',
+          status: 'done',
+          releaseIds: ['stage-1-headless-drafting-and-evaluation-mvp'],
+          priority: 'normal',
+          acceptanceCriteria: [{ id: 'proof', description: 'Attach proof.', met: false }],
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+    })
+    await writeSystemJson('workspace-goals.json', {
+      version: 3,
+      recordedAt: now,
+      goals: [],
+      releases: [{
+        id: 'stage-1-headless-drafting-and-evaluation-mvp',
+        label: 'Stage 1: Headless Drafting And Evaluation MVP',
+        source: 'release_plan',
+        state: 'active',
+      }],
+      tasks: [{
+        id: 'stage-1-model-proof',
+        title: 'Select and prove a DeepInfra drafting model for broad-genre chapter writing.',
+        description: 'Current documented Stage 1 work.',
+        domain: 'harness',
+        priority: 'normal',
+        scope: 'current',
+        releaseIds: ['stage-1-headless-drafting-and-evaluation-mvp'],
+        references: ['docs/harness/implementation-roadmap.md'],
+      }],
+      milestones: [],
+      context: [],
+      approved: {
+        goalCount: 0,
+        taskCount: 1,
+        milestoneCount: 0,
+        currentTaskCount: 1,
+        laterTaskCount: 0,
+        taskIds: ['stage-1-model-proof'],
+        currentTaskIds: ['stage-1-model-proof'],
+        laterTaskIds: [],
+      },
+      detected: null,
+    })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(scoped('/api/project')))
+    const body = await res.json() as {
+      startReadiness?: { code?: string; message?: string; focusTaskId?: string }
+      orientationSpine?: { summary?: { selectedScopeLabel?: string | null } }
+    }
+
+    expect(res.status).toBe(200)
+    const selectedScopeLabel = body.orientationSpine?.summary?.selectedScopeLabel ?? ''
+    expect(selectedScopeLabel).toContain('Stage 1')
+    expect(selectedScopeLabel).not.toContain('Near-term proof scope')
+    expect(body.startReadiness?.code).toBe('proof_evidence_missing')
+    const comparable = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+    expect(comparable(body.startReadiness?.message ?? '')).toContain(comparable(selectedScopeLabel))
+    expect(body.startReadiness?.message).not.toContain('Near-term proof scope')
+    expect(body.startReadiness?.focusTaskId).toBe('stage-1-model-proof')
+  })
+
   it('draft endpoint prefers the approved workspace-goals state over a stale importer task spec', async () => {
     await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
     await fs.writeFile(

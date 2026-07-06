@@ -196,7 +196,7 @@ import {
   type OrientationScope,
   type ProjectOrientationCharter,
 } from './project-orientation-spine.js'
-import { buildProjectScopeProjection, deriveReleaseContainersFromTaskMembership, type ProjectScope } from './project-scope-projection.js'
+import { buildProjectScopeProjection, deriveReleaseContainersFromTaskMembership, releaseLabelFromId, type ProjectScope } from './project-scope-projection.js'
 import type { SurfaceReviewPacket } from './contract-surfaces.js'
 import {
   acceptProjectDependencyDelivery,
@@ -6071,8 +6071,20 @@ export function buildServeApp(opts: ServeOptions = {}): {
     const rawSelectedReleaseId = !Array.isArray(raw) && raw && typeof raw === 'object' && typeof (raw as { selectedReleaseId?: unknown }).selectedReleaseId === 'string'
       ? (raw as { selectedReleaseId: string }).selectedReleaseId
       : undefined
+    const scopedOrientation = !requestedTaskId
+      ? buildOrientationSpineWithScopedReleaseTruth({
+        projectId: basename(projectPath),
+        charter: inferProjectCharterFromExistingSources(projectPath),
+        selectedReleaseId: rawSelectedReleaseId,
+        releases: rawReleases,
+        tasks: effectiveTasks,
+        runStatus: 'stopped',
+        workspaceImportDraft: await workspaceImportDraftForOrientation(projectPath, null),
+        sourceRefs: projectOrientationSourceRefs(projectPath),
+      })
+      : null
     const selectedReleaseScope = !requestedTaskId
-      ? selectedReleaseScopeFromQueueLike({
+      ? (scopedOrientation?.orientationSpine.scope as ProjectScope | null | undefined) ?? selectedReleaseScopeFromQueueLike({
         tasks: effectiveTasks,
         releases: rawReleases,
         selectedReleaseId: rawSelectedReleaseId,
@@ -6089,17 +6101,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
 	        })
 	      : effectiveTasks.filter(task => task.id !== META_INTAKE_TASK_ID && task.id !== WORKSPACE_IMPORT_TASK_ID)
 	    if (selectedReleaseScope && scopedTasks.length === 0) return null
-    const releaseTruth = selectedReleaseScope
-      ? buildOrientationSpineWithScopedReleaseTruth({
-        projectId: basename(projectPath),
-        charter: inferProjectCharterFromExistingSources(projectPath),
-        selectedReleaseId: rawSelectedReleaseId,
-        releases: rawReleases,
-        tasks: effectiveTasks,
-        runStatus: 'stopped',
-        sourceRefs: projectOrientationSourceRefs(projectPath),
-      }).releaseTruth
-      : null
+    const releaseTruth = selectedReleaseScope ? scopedOrientation?.releaseTruth ?? null : null
 
     let done = 0
     let blocked = 0
@@ -6824,6 +6826,41 @@ export function buildServeApp(opts: ServeOptions = {}): {
         const savedTaskTitles = new Set(savedWorkspaceGoals.tasks.map(task => task.title.trim().toLowerCase()))
         const detectedOnlyTasks = (detectedReleaseDraft?.tasks ?? [])
           .filter(task => !savedTaskTitles.has(task.title.trim().toLowerCase()))
+        const releaseById = new Map<string, {
+          id: string
+          label: string
+          source: 'release_plan' | 'spec' | 'owner_approved'
+          state: 'active'
+        }>()
+        for (const release of detectedReleaseDraft?.releases ?? []) {
+          releaseById.set(release.id, {
+            id: release.id,
+            label: release.label,
+            source: release.source === 'release_plan' || release.source === 'spec' || release.source === 'owner_approved'
+              ? release.source
+              : 'release_plan',
+            state: 'active',
+          })
+        }
+        for (const release of savedWorkspaceGoals.releases ?? []) {
+          releaseById.set(release.id, {
+            id: release.id,
+            label: release.label,
+            source: release.source === 'release_plan' || release.source === 'spec' || release.source === 'owner_approved'
+              ? release.source
+              : 'owner_approved',
+            state: 'active',
+          })
+        }
+        for (const releaseId of savedWorkspaceGoals.tasks.flatMap(task => task.releaseIds ?? [])) {
+          if (releaseById.has(releaseId)) continue
+          releaseById.set(releaseId, {
+            id: releaseId,
+            label: releaseLabelFromId(releaseId),
+            source: 'owner_approved',
+            state: 'active',
+          })
+        }
         const savedOrientationTasks = savedWorkspaceGoals.tasks.map(task => ({
           id: task.id,
           title: task.title,
@@ -6845,14 +6882,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           refs: draftTaskRefs(task),
         }))
         return {
-          releases: (detectedReleaseDraft?.releases ?? []).map(release => ({
-            id: release.id,
-            label: release.label,
-            source: release.source === 'release_plan' || release.source === 'spec' || release.source === 'owner_approved'
-              ? release.source
-              : 'release_plan' as const,
-            state: 'active' as const,
-          })),
+          releases: [...releaseById.values()],
           tasks: [...savedOrientationTasks, ...detectedOrientationTasks],
           contexts: savedWorkspaceGoals.context
             .filter(context => context.role === 'capability' || context.role === 'brief_input')

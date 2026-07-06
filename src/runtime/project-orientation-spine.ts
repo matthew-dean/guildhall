@@ -1,6 +1,7 @@
 import { taskDisplayLabel } from '../shared/task-display-label.js'
 import {
   executionScopeRows,
+  releaseLabelFromId,
   taskScopeEligibility,
   taskScopeNodeId,
   type ProjectScope,
@@ -522,7 +523,9 @@ export function augmentTasksWithWorkspaceImportDraft(input: {
     }
 
     const nodeId = taskNodeId(taskId)
-    const taskReleaseIds = draftTask.releaseIds ?? []
+    const taskReleaseIds = draftTask.releaseIds?.length
+      ? draftTask.releaseIds
+      : existing?.releaseIds ?? []
     if (draftTask.scope === 'later') {
       deferredNodeIds.push(nodeId)
       const owningReleaseIds = taskReleaseIds.length
@@ -555,7 +558,19 @@ export function augmentTasksWithWorkspaceImportDraft(input: {
     }
   }
 
-  const releases = (draft.releases ?? []).map(release => ({
+  const releaseInputs = [...(draft.releases ?? [])]
+  const existingReleaseIds = new Set(releaseInputs.map(release => release.id))
+  for (const releaseId of currentReleaseIds) {
+    if (existingReleaseIds.has(releaseId)) continue
+    releaseInputs.push({
+      id: releaseId,
+      label: releaseLabelFromId(releaseId),
+      source: draft.source.inferred ? 'inferred' : 'owner_approved',
+      state: 'active',
+    })
+  }
+
+  const releases = releaseInputs.map(release => ({
     id: release.id,
     label: release.label,
     kind: release.kind ?? 'release',
@@ -1811,9 +1826,10 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
   const tasks = draftAugmentation.tasks
   const charter = normalizeCharter(input)
   const releases = mergeOrientationReleaseInputs(input.releases, draftAugmentation.releases)
+  const selectedReleaseId = selectedReleaseIdForOrientation(input, draftAugmentation.selectedReleaseId, releases)
   const selectedRelease = normalizeRelease({
     ...input,
-    selectedReleaseId: input.selectedReleaseId ?? draftAugmentation.selectedReleaseId,
+    selectedReleaseId,
     releases,
   }, tasks)
   const projectionScope = orientationScopeFromProjection(input.scopeProjection)
@@ -1937,6 +1953,27 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
     },
     sourceHealth: sourceHealth(roots, gaps),
   }
+}
+
+function selectedReleaseIdForOrientation(
+  input: BuildProjectOrientationSpineInput,
+  draftSelectedReleaseId: string | null,
+  releases: BuildProjectOrientationSpineInput['releases'],
+): string | null {
+  const explicit = input.selectedReleaseId?.trim() || null
+  if (!explicit) return draftSelectedReleaseId
+  if (!draftSelectedReleaseId || draftSelectedReleaseId === explicit) return explicit
+  if (input.workspaceImportDraft?.source.freshness === 'stale') return explicit
+
+  const explicitRelease = releases?.find(release => release.id === explicit)
+  const draftRelease = releases?.find(release => release.id === draftSelectedReleaseId)
+  if (explicitRelease?.source === 'inferred' && draftRelease && input.workspaceImportDraft?.source.freshness === 'fresh') {
+    return draftSelectedReleaseId
+  }
+  if (explicitRelease?.source === 'inferred' && draftRelease?.source && draftRelease.source !== 'inferred') {
+    return draftSelectedReleaseId
+  }
+  return explicit
 }
 
 function normalizeReadModelReleaseState(release: OrientationRelease, selectedReleaseId: string | null): OrientationRelease {
