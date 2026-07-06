@@ -14104,6 +14104,35 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-07-06T01:53:00Z - Reused the shared project action model in the activity
+endpoint so live/project chrome does not go blank when work is blocked.
+
+- Work id: `codex:project-activity-shared-action-model-2026-07-06`.
+- User job: from any project surface, a project owner should be able to tell
+  what deserves attention next and where to open it, even when the coordinator
+  is stopped and the active release has both ready work and blocked work.
+- Failure found:
+  - After the Narrative Harness DeepInfra task repaired its malformed artifact,
+    `/api/project` correctly surfaced the blocked task through
+    `actionModel.primaryAction`, but `/api/project/activity` returned only
+    legacy `running`, `counts`, and `inFlight` fields.
+  - Consumers polling the activity endpoint therefore saw `topAction`,
+    `current`, and `summary` as absent even though the shared project action
+    model had a concrete `Open Work` target.
+- Root-cause classification:
+  - `4 scheduler/action-state logic problem`: the activity API had its own
+    legacy state projection instead of reusing the shared project action model.
+  - `5 UI communication/orientation problem`: live/project chrome could not
+    explain the next action for a stopped-but-blocked project.
+- Fix:
+  - `/api/project/activity` now keeps its legacy counts/in-flight fields while
+    also returning `actionModel`, `topAction`, `current`, and a compact
+    `summary` derived from `buildProjectActionModel`.
+- Calibration:
+  - Added an activity endpoint regression for a project with one blocked task
+    and one ready task; the endpoint now points at the blocked task with
+    `Open Work` instead of going silent.
+
 2026-07-06T01:40:00Z - Guarded file writes against leaked model/tool-control
 markup after Narrative Harness task 150 preserved malformed artifact output.
 

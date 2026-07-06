@@ -10726,11 +10726,31 @@ export function buildServeApp(opts: ServeOptions = {}): {
           })
         }
       }
+      const actionModel = buildProjectActionModel({
+        startReadiness: { canStart: true },
+        tasks: tasks as never,
+        runStatus: run?.status ?? 'stopped',
+      })
+      const topAction = actionModel.primaryAction
       return c.json({
         running: run?.status === 'running',
         runStatus: run?.status ?? 'stopped',
         counts,
         inFlight: inFlight.slice(0, 5),
+        actionModel,
+        topAction,
+        current: topAction,
+        summary: topAction
+          ? {
+              label: topAction.label,
+              message: topAction.detail ?? topAction.label,
+              actionHref: topAction.href,
+              actionLabel: topAction.buttonLabel,
+              tone: topAction.tone,
+              source: topAction.source,
+              ...(topAction.taskId ? { taskId: topAction.taskId } : {}),
+            }
+          : null,
       })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)

@@ -3761,6 +3761,79 @@ describe('GET /api/project/activity', () => {
     expect(body.inFlight.map((t: any) => t.id).sort()).toEqual(['t1', 't2'])
   })
 
+  it('reuses the shared action model so blocked work still has a visible next action', async () => {
+    const now = new Date().toISOString()
+    const queue = {
+      version: 1,
+      lastUpdated: now,
+      tasks: [
+        {
+          id: 'blocked-task',
+          title: 'Select and prove DeepInfra drafting model',
+          description: '',
+          domain: 'd',
+          projectPath: tmpDir,
+          status: 'blocked',
+          blockReason: 'human_judgment_required: Worker repeatedly hit its turn budget after saving partial work.',
+          priority: 'normal',
+          revisionCount: 0,
+          remediationAttempts: 0,
+          origination: 'human',
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          id: 'ready-task',
+          title: 'Implement dialogue reviewer lane',
+          description: '',
+          domain: 'd',
+          projectPath: tmpDir,
+          status: 'ready',
+          priority: 'normal',
+          revisionCount: 0,
+          remediationAttempts: 0,
+          origination: 'human',
+          createdAt: now,
+          updatedAt: now,
+          spec: [
+            '## Summary',
+            'Implement the lane.',
+            '',
+            '## Acceptance Criteria',
+            '1. Lane exists.',
+          ].join('\n'),
+          acceptanceCriteria: [
+            { id: 'ac-1', description: 'Lane exists.', verifiedBy: 'review', met: false },
+          ],
+        },
+      ],
+    }
+    await writeTaskQueue(queue)
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(projectUrl('/api/project/activity')))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, any>
+    expect(body.counts.blocked).toBe(1)
+    expect(body.counts.ready).toBe(1)
+    expect(body.topAction).toMatchObject({
+      source: 'task',
+      label: 'Select and prove DeepInfra drafting model',
+      buttonLabel: 'Open Work',
+      href: '/work?task=blocked-task',
+      tone: 'warn',
+      taskId: 'blocked-task',
+    })
+    expect(body.actionModel.primaryAction).toEqual(body.topAction)
+    expect(body.summary).toMatchObject({
+      label: 'Select and prove DeepInfra drafting model',
+      actionHref: '/work?task=blocked-task',
+      actionLabel: 'Open Work',
+      tone: 'warn',
+      taskId: 'blocked-task',
+    })
+  })
+
   it('includes the latest live event metadata for in-flight tasks', async () => {
     const older = '2026-05-23T18:00:00.000Z'
     const now = '2026-05-23T18:01:00.000Z'
