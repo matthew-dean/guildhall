@@ -1216,7 +1216,12 @@ function resolveRecoverableWorkerTimeoutEscalations(task: Task, resolvedAt: stri
   }
 }
 
-function resolveRecoverableProviderNoProgressTimeoutEscalations(task: Task, resolvedAt: string): void {
+function resolveRecoverableProviderNoProgressTimeoutEscalations(
+  task: Task,
+  resolvedAt: string,
+  resolution =
+    'Superseded after Guildhall classified no-output worker timeouts as provider/runtime recovery instead of owner judgment.',
+): void {
   for (const escalation of task.escalations ?? []) {
     if (escalation.resolvedAt) continue
     const summary = escalation.summary ?? ''
@@ -1233,8 +1238,7 @@ function resolveRecoverableProviderNoProgressTimeoutEscalations(task: Task, reso
     ) {
       escalation.resolvedAt = resolvedAt
       escalation.resolvedBy = 'system'
-      escalation.resolution =
-        'Superseded after Guildhall classified no-output worker timeouts as provider/runtime recovery instead of owner judgment.'
+      escalation.resolution = resolution
     }
   }
 }
@@ -9207,39 +9211,83 @@ export class Orchestrator {
         recoveryNote =
           'User restarted the project after the worker timed out before mutating the likely target file. Reopened the task so Guildhall can retry the worker lane from the current task plan instead of treating an internal execution miss as owner judgment.'
       } else if (isRecoverableProviderNoProgressTimeoutBlocker(task)) {
-        const classification: FailureClassification = {
-          class: 'provider_unavailable',
-          confidence: 'medium',
-          evidence: [{
-            kind: 'task',
-            summary: 'Worker timed out before producing visible progress.',
-            ref: task.blockReason ?? 'worker timeout',
-          }],
-          scope: 'task',
-          safePlaybooks: ['retry_current_task_context'],
-          needsHuman: false,
+        const taskWorktreePath = task.worktreePath?.trim() ?? ''
+        const dirtyTaskWorktree =
+          taskWorktreePath.length > 0 &&
+          !(await this.gitDriver.isClean(resolveRuntimePath(taskWorktreePath)))
+        if (dirtyTaskWorktree) {
+          const classification: FailureClassification = {
+            class: 'model_tool_use_failure',
+            confidence: 'medium',
+            evidence: [{
+              kind: 'task',
+              summary: 'Worker timeout was stale; the task worktree now contains partial output.',
+              ref: task.blockReason ?? 'worker timeout',
+            }],
+            scope: 'task',
+            safePlaybooks: ['retry_current_task_context'],
+            needsHuman: false,
+          }
+          const recoveryPlan = resolveRecoveryPlan({
+            taskId: task.id,
+            classification,
+            notes: task.notes,
+          })
+          resolveRecoverableProviderNoProgressTimeoutEscalations(
+            task,
+            now,
+            'Superseded after Guildhall found dirty task-worktree progress, so the old no-output timeout is no longer the current state.',
+          )
+          if (activeEscalations(task).length > 0) continue
+          appendFailureClassificationNote(task, classification, {
+            agentId: 'coordinator',
+            timestamp: now,
+          })
+          appendRecoveryPlaybookNote(task, recoveryPlan, {
+            agentId: 'coordinator',
+            timestamp: now,
+            status: 'started',
+            summary:
+              'Guildhall reopened a stale no-output worker timeout after finding dirty task-worktree progress. The task stays in automation so Guildhall can continue from the saved partial output instead of claiming there was no visible work.',
+          })
+          recoveryRole = 'recovery'
+          recoveryNote =
+            'Guildhall found current task-worktree changes after a stale no-output timeout. It is preserving that partial worker output and keeping the task in automation instead of asking the owner to debug an internal execution miss.'
+        } else {
+          const classification: FailureClassification = {
+            class: 'provider_unavailable',
+            confidence: 'medium',
+            evidence: [{
+              kind: 'task',
+              summary: 'Worker timed out before producing visible progress.',
+              ref: task.blockReason ?? 'worker timeout',
+            }],
+            scope: 'task',
+            safePlaybooks: ['retry_current_task_context'],
+            needsHuman: false,
+          }
+          const recoveryPlan = resolveRecoveryPlan({
+            taskId: task.id,
+            classification,
+            notes: task.notes,
+          })
+          resolveRecoverableProviderNoProgressTimeoutEscalations(task, now)
+          if (activeEscalations(task).length > 0) continue
+          appendFailureClassificationNote(task, classification, {
+            agentId: 'coordinator',
+            timestamp: now,
+          })
+          appendRecoveryPlaybookNote(task, recoveryPlan, {
+            agentId: 'coordinator',
+            timestamp: now,
+            status: 'started',
+            summary:
+              'Guildhall reopened a stale no-output worker timeout as provider/runtime recovery instead of asking the owner to choose a retry or provider switch.',
+          })
+          recoveryRole = 'provider-recovery'
+          recoveryNote =
+            'Guildhall reopened a stale no-output worker timeout as provider/runtime recovery. The task stays in automation so Guildhall can retry from the current task context or route to another provider lane without asking the owner to debug internal execution.'
         }
-        const recoveryPlan = resolveRecoveryPlan({
-          taskId: task.id,
-          classification,
-          notes: task.notes,
-        })
-        resolveRecoverableProviderNoProgressTimeoutEscalations(task, now)
-        if (activeEscalations(task).length > 0) continue
-        appendFailureClassificationNote(task, classification, {
-          agentId: 'coordinator',
-          timestamp: now,
-        })
-        appendRecoveryPlaybookNote(task, recoveryPlan, {
-          agentId: 'coordinator',
-          timestamp: now,
-          status: 'started',
-          summary:
-            'Guildhall reopened a stale no-output worker timeout as provider/runtime recovery instead of asking the owner to choose a retry or provider switch.',
-        })
-        recoveryRole = 'provider-recovery'
-        recoveryNote =
-          'Guildhall reopened a stale no-output worker timeout as provider/runtime recovery. The task stays in automation so Guildhall can retry from the current task context or route to another provider lane without asking the owner to debug internal execution.'
       } else if (
         await this.isRecoverableSelfAuthoredVerificationBlockedTask(task)
       ) {

@@ -1470,6 +1470,45 @@ function hasLegacyNoCheckpointProviderRecovery(task: Record<string, unknown>): b
   return /no-output|no visible progress|provider\/runtime recovery|provider recovery/i.test(searchable)
 }
 
+function hasStaleProviderNoProgressRecovery(task: Record<string, unknown>): boolean {
+  const notes = Array.isArray(task.notes) ? task.notes as Array<Record<string, unknown>> : []
+  const latestClassification = parseNoteJson(notes.filter(note => note.role === 'policy-classification').at(-1))
+  if (latestClassification?.class !== 'provider_unavailable') return false
+  const latestRecovery = parseNoteJson(notes.filter(note => note.role === 'recovery-playbook').at(-1))
+  if (latestRecovery?.playbook !== 'retry_current_task_context') return false
+  const latestNarrative = notes
+    .filter(note => note.role === 'recovery' || note.role === 'provider-recovery' || note.role === 'runtime')
+    .at(-1)
+  if (/partial worker output|task-worktree changes|dirty task-worktree/i.test(String(latestNarrative?.content ?? ''))) {
+    return false
+  }
+  const searchable = [
+    latestClassification.summary,
+    latestRecovery.summary,
+    latestRecovery.reason,
+    latestNarrative?.content,
+    task.blockReason,
+  ].map(value => String(value ?? '')).join('\n')
+  return /no-output|no visible progress|provider\/runtime recovery|provider recovery|provider is unavailable/i.test(searchable)
+}
+
+async function hasDirtyTaskWorktree(task: Record<string, unknown>): Promise<boolean> {
+  const worktreePath = typeof task.worktreePath === 'string' ? task.worktreePath.trim() : ''
+  if (!worktreePath || !existsSync(worktreePath)) return false
+  try {
+    const { stdout } = await execFileP('git', ['status', '--short', '--untracked-files=all'], {
+      cwd: worktreePath,
+      maxBuffer: 1024 * 1024,
+    })
+    return stdout
+      .split('\n')
+      .map(line => line.trim())
+      .some(Boolean)
+  } catch {
+    return false
+  }
+}
+
 async function repairLegacyNoCheckpointProviderRecoveryPlans(projectPath: string): Promise<number> {
   const tasksPath = projectTasksPath(projectPath)
   if (!existsSync(tasksPath)) return 0
@@ -1486,17 +1525,23 @@ async function repairLegacyNoCheckpointProviderRecoveryPlans(projectPath: string
     const taskId = typeof task.id === 'string' ? task.id : ''
     if (!taskId) continue
     const effectiveTask = await buildEffectiveTask(projectPath, task as Task) as unknown as Record<string, unknown>
-    if (!hasLegacyNoCheckpointProviderRecovery(effectiveTask)) continue
+    const dirtyTaskWorktree = await hasDirtyTaskWorktree(effectiveTask)
+    const shouldRepairLegacyNoCheckpoint = hasLegacyNoCheckpointProviderRecovery(effectiveTask)
+    const shouldRepairStaleDirtyProviderRecovery =
+      dirtyTaskWorktree && hasStaleProviderNoProgressRecovery(effectiveTask)
+    if (!shouldRepairLegacyNoCheckpoint && !shouldRepairStaleDirtyProviderRecovery) continue
     const checkpoint = await readCheckpoint(memoryDir, taskId).catch(() => null)
     if (checkpoint) continue
     const notes = Array.isArray(effectiveTask.notes) ? effectiveTask.notes as Task['notes'] : []
     const noteTarget = { id: taskId, notes: [...notes] as Task['notes'] }
     const classification: FailureClassification = {
-      class: 'provider_unavailable',
+      class: dirtyTaskWorktree ? 'model_tool_use_failure' : 'provider_unavailable',
       confidence: 'medium',
       evidence: [{
         kind: 'task',
-        summary: 'Worker timed out before producing visible progress and no durable checkpoint exists.',
+        summary: dirtyTaskWorktree
+          ? 'Legacy no-checkpoint recovery was stale; the task worktree contains partial output.'
+          : 'Worker timed out before producing visible progress and no durable checkpoint exists.',
         ref: typeof task.blockReason === 'string' ? task.blockReason : undefined,
       }],
       scope: 'task',
@@ -1516,14 +1561,16 @@ async function repairLegacyNoCheckpointProviderRecoveryPlans(projectPath: string
       agentId: 'coordinator',
       timestamp: now,
       status: 'started',
-      summary:
-        'Guildhall corrected legacy no-checkpoint provider recovery so the task retries from the current task context instead of pretending a checkpoint exists.',
+      summary: dirtyTaskWorktree
+        ? 'Guildhall corrected legacy no-checkpoint recovery after finding dirty task-worktree progress. The task retries from current partial output instead of claiming no visible work.'
+        : 'Guildhall corrected legacy no-checkpoint provider recovery so the task retries from the current task context instead of pretending a checkpoint exists.',
     })
     const providerRecoveryNote = {
       agentId: 'coordinator',
-      role: 'provider-recovery',
-      content:
-        'Guildhall corrected legacy no-checkpoint provider recovery. The task stays in automation so Guildhall can retry from the current task context or route to another provider lane without asking the owner to debug internal execution.',
+      role: dirtyTaskWorktree ? 'recovery' : 'provider-recovery',
+      content: dirtyTaskWorktree
+        ? 'Guildhall corrected legacy no-checkpoint recovery after finding current task-worktree changes. It is preserving that partial worker output and keeping the task in automation instead of claiming there was no visible work.'
+        : 'Guildhall corrected legacy no-checkpoint provider recovery. The task stays in automation so Guildhall can retry from the current task context or route to another provider lane without asking the owner to debug internal execution.',
       timestamp: now,
     } satisfies Task['notes'][number]
     noteTarget.notes.push(providerRecoveryNote)

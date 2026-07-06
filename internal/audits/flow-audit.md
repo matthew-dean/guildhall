@@ -14104,6 +14104,45 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-07-06T01:05:00Z - Repaired stale no-output recovery so dirty task
+worktree progress is not mislabeled as provider no-progress.
+
+- Work id: `codex:narrative-harness-dirty-timeout-recovery-2026-07-06`.
+- User job: while driving the Narrative Harness MVP, a project owner should be
+  able to trust the live work state. If Guildhall says a worker produced no
+  visible progress, that must agree with the current task worktree and Git
+  Story; dirty task output must surface as partial worker progress that
+  Guildhall can continue from.
+- Failure found:
+  - Narrative Harness task
+    `task-150-split-select-and-prove-deepinfra-drafting-model` showed stale
+    provider/no-progress recovery while Git Story reported an untracked
+    task-worktree artifact:
+    `docs/product/deepinfra-drafting-model-selection.md`.
+  - The artifact was substantive but malformed/truncated, which means the
+    correct state is not "no visible progress"; it is partial worker output
+    needing bounded automation repair/retry.
+- Fix:
+  - The stale no-output recovery branch now checks the current task worktree
+    before classifying the blocker as provider/runtime recovery.
+  - The installed-app serve repair for legacy no-checkpoint recovery performs
+    the same dirty task-worktree check, so `/api/project` and
+    `/api/project/activity` stop projecting stale provider/no-progress state
+    when the task already has partial output.
+  - Dirty current task worktree state now resolves the stale escalation as
+    superseded by task-worktree progress, records `model_tool_use_failure`
+    rather than `provider_unavailable`, and keeps the task in automation with
+    `retry_current_task_context`.
+  - Existing clean no-output timeouts still recover as provider/runtime
+    recovery without asking the owner to choose retry/provider switch.
+- Calibration:
+  - Added orchestrator coverage for stale no-output recovery with dirty
+    task-worktree progress.
+  - Added serve endpoint coverage for legacy no-checkpoint recovery with dirty
+    task-worktree progress.
+  - Kept explicit coverage for clean provider recovery and workspace-state
+    hydrated dirty timeout preservation.
+
 2026-07-06T00:45:00Z - Corrected no-checkpoint provider recovery for Narrative
 Harness MVP work.
 

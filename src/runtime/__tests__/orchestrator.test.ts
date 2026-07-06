@@ -8970,6 +8970,96 @@ describe('Orchestrator.run — full loops', () => {
     )).toBe(true)
   })
 
+  it('reopens stale no-output worker timeouts as partial progress when the task worktree is dirty', async () => {
+    const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'dirty-no-output')
+    await fs.mkdir(worktreePath, { recursive: true })
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        title: 'Select and prove DeepInfra drafting model',
+        status: 'blocked',
+        assignedTo: 'worker-agent',
+        spec: 'Select and prove a DeepInfra-accessible drafting model across genres.',
+        worktreePath,
+        blockReason: 'human_judgment_required: Worker timed out after producing no visible progress.',
+        notes: [
+          {
+            agentId: 'coordinator',
+            role: 'failure-classification',
+            content: JSON.stringify({
+              class: 'provider_unavailable',
+              confidence: 'medium',
+              needsHuman: true,
+              humanQuestion:
+                'The worker timed out without producing visible progress. Should Guildhall retry this lane, switch provider, or narrow the task?',
+            }),
+            timestamp: '2026-05-03T00:00:00.000Z',
+          },
+        ],
+        escalations: [
+          {
+            id: 'esc-a',
+            taskId: 'a',
+            agentId: 'worker-agent',
+            reason: 'human_judgment_required',
+            summary: 'Worker timed out after producing no visible progress.',
+            details:
+              'worker-agent timed out after 10ms of inactivity.\n\n' +
+              'Task stayed in progress without visible worktree edits, a checkpoint, focused verification, or an explicit escalation after Guildhall retried the worker lane.',
+            raisedAt: '2026-05-03T00:00:00.000Z',
+          } as any,
+        ],
+      }),
+    ])
+
+    const agents: OrchestratorAgentSet = {
+      spec: stubAgent('spec-agent'),
+      worker: stubAgent('worker-agent', async () => {
+        await mutateTask('a', { status: 'review' })
+      }),
+      reviewer: stubAgent('reviewer-agent'),
+      gateChecker: stubAgent('gate-checker-agent'),
+      coordinators: {},
+    }
+    const gitDriver = new InMemoryGitDriver()
+    gitDriver.setClean(false)
+    const orch = new Orchestrator({
+      config: baseConfig({ projectPath: tmpDir }),
+      agents,
+      gitDriver,
+    })
+
+    const out = await orch.tick()
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.beforeStatus).toBe('in_progress')
+      expect(out.afterStatus).toBe('review')
+    }
+
+    const queue = await readQueue()
+    const task = queue.tasks.find((candidate) => candidate.id === 'a')
+    expect(task?.status).toBe('review')
+    expect(task?.blockReason ?? null).toBeNull()
+    expect(task?.escalations[0]?.resolvedBy).toBe('system')
+    expect(task?.escalations[0]?.resolution).toContain('dirty task-worktree progress')
+    expect(task?.notes.some((note) =>
+      note.role === 'provider-recovery' &&
+      note.content.includes('provider/runtime recovery'),
+    )).toBe(false)
+    expect(task?.notes.some((note) =>
+      note.role === 'recovery' &&
+      note.content.includes('preserving that partial worker output'),
+    )).toBe(true)
+    expect(task?.notes.some((note) =>
+      note.role === 'recovery-playbook' &&
+      note.content.includes('"playbook":"retry_current_task_context"'),
+    )).toBe(true)
+    expect(task?.notes.some((note) =>
+      note.role === 'policy-classification' &&
+      note.content.includes('"class":"model_tool_use_failure"'),
+    )).toBe(true)
+  })
+
   it('reopens a stale review-handoff tool-loop blocker after the validator bug is fixed', async () => {
     await writeQueue([
       mkTask({
@@ -14649,6 +14739,66 @@ describe('Orchestrator worker no-progress escalation', () => {
       content:
         'The worker hit its turn budget after making worktree edits, so Guildhall is preserving that partial implementation for the next pass.',
     })
+  })
+
+  it('preserves dirty worker progress when the worktree path lives in task workspace state', async () => {
+    const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'task-013-workspace-state')
+    await fs.mkdir(worktreePath, { recursive: true })
+    await upsertTaskWorkspaceState(tmpDir, 'task-013-workspace-state', {
+      worktreePath,
+      branchName: 'guildhall/task-task-013-workspace-state',
+      baseBranch: 'main',
+      updatedAt: '2026-05-03T00:00:00.000Z',
+    })
+    await writeQueue([
+      mkTask({
+        id: 'task-013-workspace-state',
+        title: 'Select and prove a drafting model',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        projectPath: tmpDir,
+        spec: 'Select the model and save the proof artifact.',
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          description: 'model selection proof exists',
+          verifiedBy: 'review',
+          met: false,
+        } as any],
+      }),
+    ])
+
+    const worker = stubAgent('worker-agent')
+    worker.generate = async () => await new Promise(() => {}) as never
+    const gitDriver = new InMemoryGitDriver()
+    gitDriver.setClean(false)
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+      gitDriver,
+      agentGenerateTimeoutMs: 60_000,
+      agentGenerateWallClockTimeoutMs: 10,
+    })
+
+    const outcome = await orch.tick({ dispatchLimit: 1 })
+
+    expect(outcome.kind).toBe('processed')
+    if (outcome.kind === 'processed') {
+      expect(outcome.agent).toBe('worker-agent')
+      expect(outcome.beforeStatus).toBe('in_progress')
+      expect(outcome.afterStatus).toBe('in_progress')
+      expect(outcome.transitioned).toBe(false)
+    }
+    const task = await readEffectiveTaskFromQueue('task-013-workspace-state')
+    expect(task?.worktreePath).toBe(worktreePath)
+    expect(task?.status).toBe('in_progress')
+    expect(task?.escalations).toEqual([])
+    expect(task?.notes.at(-1)).toMatchObject({
+      agentId: 'worker-agent',
+      role: 'runtime',
+      content:
+        'The worker hit its turn budget after making worktree edits, so Guildhall is preserving that partial implementation for the next pass.',
+    })
+    expect(task?.notes.some((note) => note.role === 'policy-classification')).toBe(false)
   })
 
   it('blocks after repeated dirty worktree worker turn-budget retries', async () => {

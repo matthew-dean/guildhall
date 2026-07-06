@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
+import { execFileSync } from 'node:child_process'
 import { bootstrapWorkspace, setProvider, updateGlobalConfig, updateProjectConfig, writeWorkspaceConfig } from '@guildhall/config'
 import {
   appendTaskEvidence,
@@ -4045,6 +4046,178 @@ describe('GET /api/project/activity', () => {
       .toContain('"playbook":"retry_current_task_context"')
     expect(task.notes.findLast((note: Record<string, unknown>) => note.role === 'provider-recovery')?.content)
       .toContain('current task context')
+  })
+
+  it('repairs legacy no-checkpoint recovery as partial progress when the task worktree is dirty', async () => {
+    const now = new Date().toISOString()
+    const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'dirty-provider-recovery')
+    await fs.mkdir(path.join(worktreePath, 'docs', 'product'), { recursive: true })
+    execFileSync('git', ['init'], { cwd: worktreePath, stdio: 'ignore' })
+    await fs.writeFile(
+      path.join(worktreePath, 'docs', 'product', 'deepinfra-drafting-model-selection.md'),
+      '# DeepInfra Drafting Model Selection\n\nPartial output.\n',
+      'utf8',
+    )
+    await writeRawTaskQueue({
+      version: 1,
+      lastUpdated: now,
+      tasks: [
+        {
+          id: 't1',
+          title: 'Select and prove DeepInfra drafting model',
+          description: '',
+          domain: 'product',
+          projectPath: tmpDir,
+          worktreePath,
+          status: 'in_progress',
+          assignedTo: 'worker-agent',
+          priority: 'normal',
+          revisionCount: 0,
+          remediationAttempts: 0,
+          origination: 'human',
+          createdAt: now,
+          updatedAt: now,
+          spec: '## Summary\nSelect and prove a DeepInfra-accessible drafting model across genres.',
+          acceptanceCriteria: [
+            { id: 'ac-1', description: 'DeepInfra drafting model is selected and proven.', verifiedBy: 'review', met: false },
+          ],
+          notes: [
+            {
+              agentId: 'coordinator',
+              role: 'policy-classification',
+              timestamp: now,
+              content: JSON.stringify({
+                class: 'provider_unavailable',
+                confidence: 'medium',
+                scope: 'task',
+                needsHuman: false,
+                safePlaybooks: ['resume_from_checkpoint'],
+                evidence: [{ kind: 'task', summary: 'Worker timed out before producing visible progress.' }],
+              }),
+            },
+            {
+              agentId: 'coordinator',
+              role: 'recovery-playbook',
+              timestamp: now,
+              content: JSON.stringify({
+                status: 'started',
+                playbook: 'resume_from_checkpoint',
+                reason: 'Resume from the durable checkpoint instead of rediscovering context.',
+                allowedTools: ['read-file', 'edit-file', 'run-shell-command', 'write-checkpoint', 'raise-escalation'],
+                allowedPaths: [],
+                maxTurns: 2,
+                successSignals: ['checkpoint_next_action_completed'],
+                stopSignals: ['same_playbook_failed', 'checkpoint_invalid'],
+                summary: 'Guildhall reopened a stale no-output worker timeout as provider/runtime recovery.',
+              }),
+            },
+          ],
+        },
+      ],
+    })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(projectUrl('/api/project/activity')))
+    expect(res.status).toBe(200)
+
+    const queue = await readTaskQueue()
+    const task = await buildEffectiveTask(tmpDir, queue.tasks[0] as any) as Record<string, any>
+    expect(task.status).toBe('in_progress')
+    expect(task.assignedTo).toBe('worker-agent')
+    expect(task.notes.findLast((note: Record<string, unknown>) => note.role === 'policy-classification')?.content)
+      .toContain('"class":"model_tool_use_failure"')
+    expect(task.notes.findLast((note: Record<string, unknown>) => note.role === 'recovery-playbook')?.content)
+      .toContain('"playbook":"retry_current_task_context"')
+    expect(task.notes.findLast((note: Record<string, unknown>) => note.role === 'recovery')?.content)
+      .toContain('partial worker output')
+  })
+
+  it('repairs stale provider no-progress projection after the playbook was already corrected', async () => {
+    const now = new Date().toISOString()
+    const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'dirty-corrected-playbook')
+    await fs.mkdir(path.join(worktreePath, 'docs', 'product'), { recursive: true })
+    execFileSync('git', ['init'], { cwd: worktreePath, stdio: 'ignore' })
+    await fs.writeFile(
+      path.join(worktreePath, 'docs', 'product', 'deepinfra-drafting-model-selection.md'),
+      '# DeepInfra Drafting Model Selection\n\nPartial output.\n',
+      'utf8',
+    )
+    await writeRawTaskQueue({
+      version: 1,
+      lastUpdated: now,
+      tasks: [
+        {
+          id: 't1',
+          title: 'Select and prove DeepInfra drafting model',
+          description: '',
+          domain: 'product',
+          projectPath: tmpDir,
+          worktreePath,
+          status: 'in_progress',
+          assignedTo: 'worker-agent',
+          priority: 'normal',
+          revisionCount: 0,
+          remediationAttempts: 0,
+          origination: 'human',
+          createdAt: now,
+          updatedAt: now,
+          spec: '## Summary\nSelect and prove a DeepInfra-accessible drafting model across genres.',
+          acceptanceCriteria: [
+            { id: 'ac-1', description: 'DeepInfra drafting model is selected and proven.', verifiedBy: 'review', met: false },
+          ],
+          notes: [
+            {
+              agentId: 'coordinator',
+              role: 'policy-classification',
+              timestamp: now,
+              content: JSON.stringify({
+                class: 'provider_unavailable',
+                confidence: 'medium',
+                scope: 'task',
+                needsHuman: false,
+                safePlaybooks: ['retry_current_task_context'],
+                evidence: [{ kind: 'task', summary: 'Worker timed out before producing visible progress.' }],
+                summary: 'The model provider is unavailable, so Guildhall should preserve state and retry or switch lanes.',
+              }),
+            },
+            {
+              agentId: 'coordinator',
+              role: 'recovery-playbook',
+              timestamp: now,
+              content: JSON.stringify({
+                status: 'started',
+                playbook: 'retry_current_task_context',
+                reason: 'Retry from the current task brief/spec because no durable checkpoint exists yet.',
+                allowedTools: ['read-file', 'edit-file', 'run-shell-command', 'write-checkpoint', 'raise-escalation'],
+                allowedPaths: [],
+                maxTurns: 1,
+                successSignals: ['visible_progress_or_checkpoint_written'],
+                stopSignals: ['same_playbook_failed', 'no_visible_progress_after_retry'],
+                summary: 'Worker timed out without visible progress after a retry. Guildhall kept this in provider recovery.',
+              }),
+            },
+            {
+              agentId: 'coordinator',
+              role: 'provider-recovery',
+              timestamp: now,
+              content:
+                'Guildhall corrected legacy no-checkpoint provider recovery. The task stays in automation so Guildhall can retry from the current task context.',
+            },
+          ],
+        },
+      ],
+    })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(projectUrl('/api/project/activity')))
+    expect(res.status).toBe(200)
+
+    const queue = await readTaskQueue()
+    const task = await buildEffectiveTask(tmpDir, queue.tasks[0] as any) as Record<string, any>
+    expect(task.notes.findLast((note: Record<string, unknown>) => note.role === 'policy-classification')?.content)
+      .toContain('"class":"model_tool_use_failure"')
+    expect(task.notes.findLast((note: Record<string, unknown>) => note.role === 'recovery')?.content)
+      .toContain('partial worker output')
   })
 
   it('returns empty summary when no tasks file exists yet', async () => {
