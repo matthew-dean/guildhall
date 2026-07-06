@@ -188,6 +188,7 @@ import {
 import { deriveProjectWorkProgress, type ProjectWorkProgress } from './work-progress.js'
 import { deriveTaskWorkVisibility } from './work-visibility.js'
 import {
+  augmentTasksWithWorkspaceImportDraft,
   buildProjectOrientationSpine,
   taskEligibleForSelectedScope,
   type BuildProjectOrientationSpineInput,
@@ -2408,19 +2409,29 @@ function buildOrientationSpineWithScopedReleaseTruth(
   orientationSpine: ReturnType<typeof buildProjectOrientationSpine>
   releaseTruth: ReturnType<typeof summarizeScopedReleaseWork>
 } {
-  const provisionalSpine = buildProjectOrientationSpine(input)
+  const now = input.now ?? new Date().toISOString()
+  const augmentedTasks = augmentTasksWithWorkspaceImportDraft({
+    tasks: input.tasks ?? [],
+    workspaceImportDraft: input.workspaceImportDraft,
+    now,
+  }).tasks as unknown as Task[]
+  const provisionalSpine = buildProjectOrientationSpine({ ...input, now })
   const scopeProjection = buildProjectScopeProjection(
     {
       version: 1,
       lastUpdated: new Date(0).toISOString(),
-      tasks: (input.tasks ?? []) as Task[],
+      tasks: augmentedTasks,
       releases: [],
     },
     { selectedScope: provisionalSpine.scope as ProjectScope | null | undefined },
   )
-  const releaseTruth = summarizeScopedReleaseWork(input.tasks ?? [], provisionalSpine.scope)
+  const releaseTruth = summarizeScopedReleaseWork(
+    augmentedTasks,
+    scopeProjection.selectedScope ?? provisionalSpine.scope,
+  )
   const orientationSpine = buildProjectOrientationSpine({
     ...input,
+    now,
     scopeProjection,
     releaseReadiness: {
       verdict: releaseTruth.releaseBlockers.length > 0 ? 'blocked' : 'clear',
@@ -6739,8 +6750,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
     )
     if (releaseTruth.unapprovedSpecs.length === 0 && startBlockingReleaseBlockers.length === 0) return null
 
-    const first = releaseTruth.unapprovedSpecs[0]
-    if (first) {
+    const blocker = startBlockingReleaseBlockers[0]
+    if (!blocker) {
+      const first = releaseTruth.unapprovedSpecs[0]
+      if (!first) return null
       const focusTitle = first.title ?? 'the first spec'
       return {
         canStart: false,
@@ -6758,9 +6771,6 @@ export function buildServeApp(opts: ServeOptions = {}): {
         count: releaseTruth.unapprovedSpecs.length,
       }
     }
-
-    const blocker = startBlockingReleaseBlockers[0]
-    if (!blocker) return null
     const focusTitle = blocker.title?.trim() || 'the first blocker'
     const focusKind = /waiting for (spec )?review|review before work/i.test(blocker.label)
       ? 'spec_review'

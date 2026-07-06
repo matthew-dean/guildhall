@@ -12,6 +12,79 @@ This is the active browser test plan for the Guildhall project surface. Keep it
 updated while auditing the active test project so another agent can resume
 without guessing.
 
+2026-07-06T09:45:00Z - Release readiness counts the same selected-scope work
+as the project spine.
+
+- Work id: `codex:release-readiness-scope-count-agreement-2026-07-06`.
+- User job: when Narrative Harness shows a selected release/scope in the
+  1,000-foot project spine, Release readiness must report the same work count,
+  status mix, and blockers. Guildhall must not show the owner `16` scoped work
+  rows in one place and `9` tasks in another.
+- Root-cause classification:
+  - Project structure/scope/release modeling: release readiness computed
+    status counts from raw persisted release membership, while the spine used
+    workspace-import-augmented scope projection.
+  - Project structure/scope/release modeling: tasks with `releaseIds` matching
+    the selected release were not pulled into a stale/incomplete release
+    container's `nodeIds` during selected-scope normalization.
+  - Task hierarchy/proof modeling: internal split children with release
+    membership could leak into raw `scope.nodeIds` even though execution rows
+    correctly excluded them from owner-facing totals.
+  - UI communication/orientation: Start/Run could choose a different blocker
+    priority from Release readiness because it special-cased spec-review lists
+    before reading the canonical release-blocker order.
+- Fix:
+  - `buildOrientationSpineWithScopedReleaseTruth` now builds release truth from
+    the same workspace-import-augmented task set and normalized projection used
+    by the final orientation spine.
+  - Selected-scope normalization now includes tasks whose `releaseIds` match
+    the selected release, even when the release container's node list is stale,
+    while still excluding internal/hidden work from owner-facing scope nodes.
+  - Start readiness now uses canonical release-blocker order first, falling
+    back to unapproved-spec lists only when no release blockers exist.
+  - Regression coverage compares `/api/project` and
+    `/api/project/release-readiness` for imported selected-scope rows.
+- Contract Touch Decision:
+  - Work id: `codex:release-readiness-scope-count-agreement-2026-07-06`.
+  - Touched contracts: `/api/project` selected release/scope read model,
+    `/api/project/release-readiness` totals/statusCounts semantics, and
+    selected release normalization from task `releaseIds`.
+  - Contracts considered but not touched: persisted task schema, release
+    readiness response shape, project map UI contract, release select writer,
+    scheduler run payload.
+  - Existing data impact: no migration. Existing tasks with release membership
+    are now read as members of the selected release even if the release
+    container was stale. Hidden/internal work remains stored but no longer
+    inflates owner-facing selected-release node counts.
+  - Required follow-up: continue driving Narrative Harness blockers to zero and
+    verify Release readiness remains aligned as the selected release changes
+    from blocked to ready.
+  - Proof required: focused red/green regression, affected projection/dashboard
+    and release-readiness suites, contract detector, build/install/stale proof,
+    and live Narrative Harness API proof.
+  - Proof provided: the new regression first failed with Release readiness
+    reporting `1` task for `4` selected-scope rows, then passed after the model
+    fix. `./node_modules/.bin/vitest run
+    src/runtime/__tests__/project-scope-projection.test.ts
+    src/runtime/__tests__/serve-dashboard.test.ts
+    src/runtime/__tests__/serve-release-readiness.test.ts` passed `57` tests.
+    `git diff --check`, `node scripts/contract-touch-detector.mjs`, and
+    `pnpm build` passed. Installed runtime reported `stale:false`. Live
+    Narrative Harness `/api/project` reported selected release
+    `stage-1-fixture-and-evaluation-harness`, `includedWorkCount:16`,
+    `releaseNodeCount:16`, `9 done`, `3 ready`, `4 blocked/human-blocking`,
+    and Start/Run focused `context-packet-compaction-core`. Live
+    `/api/project/release-readiness` reported `scopeNodeCount:16`,
+    `totals.tasks:16`, `statusCounts:{done:9, ready:3, blocked:2,
+    spec_review:1, exploring:1}`, `humanBlockingCount:4`, and the same four
+    release blockers. Live proof also showed the Narrative Harness MVP includes
+    the done selected-scope rows `Select and prove DeepInfra drafting model`,
+    `Define world-state continuity review lane`, and
+    `Define spatial/geographic continuity review lane`.
+  - Apply/revert behavior: revert the projection normalization and
+    release-truth augmentation changes to restore raw-container-only counts;
+    no persisted data rollback is required.
+
 2026-07-06T08:00:00Z - Release selection accepts the same inferred releases
 the project map shows.
 

@@ -389,6 +389,16 @@ function normalizeSelectedScope(scope: ProjectScope | null, tasks: readonly Task
       if (deferredNodeIds.has(nodeId)) deferredNodeIds.add(nodeId)
       continue
     }
+    const parent = task.hierarchy?.parentId ? tasksById.get(task.hierarchy.parentId) ?? null : null
+    if (task.releaseIds?.includes(scope.id)) {
+      if (!deriveTaskWorkVisibility(task, parent).countInProjectTotals) {
+        nodeIds.delete(nodeId)
+        deferredNodeIds.delete(nodeId)
+        continue
+      }
+      nodeIds.add(nodeId)
+      continue
+    }
     if ((task.releaseIds?.length ?? 0) > 0 || task.hierarchy?.parentId || !taskIsOpenCurrentScopeWork(task)) continue
     if (!deferredNodeIds.has(nodeId)) nodeIds.add(nodeId)
   }

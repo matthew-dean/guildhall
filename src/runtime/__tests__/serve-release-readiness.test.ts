@@ -1010,6 +1010,136 @@ describe('GET /api/project/release-readiness', () => {
     ])
   })
 
+  it('counts imported selected-scope rows the same way as the project spine', async () => {
+    await writeProjectStateJsonAsync(tmpDir, 'workspace-goals.json', {
+      version: 3,
+      recordedAt: new Date().toISOString(),
+      goals: [],
+      tasks: [
+        {
+          id: 'task-done',
+          title: 'Completed release task',
+          description: 'Done work.',
+          domain: 'core',
+          priority: 'normal',
+          scope: 'current',
+          releaseIds: ['stage-1'],
+          references: [],
+        },
+        {
+          id: 'task-blocked',
+          title: 'Blocked release task',
+          description: 'Blocked work.',
+          domain: 'core',
+          priority: 'normal',
+          scope: 'current',
+          releaseIds: ['stage-1'],
+          references: [],
+        },
+        {
+          id: 'task-spec-review',
+          title: 'Review release spec',
+          description: 'Spec work.',
+          domain: 'core',
+          priority: 'normal',
+          scope: 'current',
+          releaseIds: ['stage-1'],
+          references: [],
+        },
+        {
+          id: 'task-ready',
+          title: 'Ready release task',
+          description: 'Ready work.',
+          domain: 'core',
+          priority: 'normal',
+          scope: 'current',
+          releaseIds: ['stage-1'],
+          references: [],
+        },
+      ],
+      milestones: [],
+      context: [],
+      approved: {
+        goalCount: 0,
+        taskCount: 4,
+        milestoneCount: 0,
+        currentTaskCount: 4,
+        laterTaskCount: 0,
+        taskIds: ['task-done', 'task-blocked', 'task-spec-review', 'task-ready'],
+        currentTaskIds: ['task-done', 'task-blocked', 'task-spec-review', 'task-ready'],
+        laterTaskIds: [],
+      },
+      detected: null,
+    })
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: 'stage-1',
+      releases: [{
+        id: 'stage-1',
+        label: 'Stage 1',
+        kind: 'release',
+        state: 'active',
+        source: 'inferred',
+        nodeIds: ['work:task-done'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [
+        makeTask({
+          id: 'task-done',
+          title: 'Completed release task',
+          status: 'done',
+          releaseIds: ['stage-1'],
+        }),
+        makeTask({
+          id: 'task-blocked',
+          title: 'Blocked release task',
+          status: 'blocked',
+          releaseIds: [],
+          spec: 'Imported repair spec.',
+          acceptanceCriteria: [{ id: 'AC-1', description: 'Blocked task is named.', verifiedBy: 'review', met: false }],
+        }),
+        makeTask({
+          id: 'task-spec-review',
+          title: 'Review release spec',
+          status: 'spec_review',
+          releaseIds: [],
+          spec: 'Imported review spec.',
+          acceptanceCriteria: [{ id: 'AC-1', description: 'Spec waits for review.', verifiedBy: 'review', met: false }],
+        }),
+        makeTask({
+          id: 'task-ready',
+          title: 'Ready release task',
+          status: 'ready',
+          releaseIds: [],
+          spec: 'Ready imported spec.',
+          acceptanceCriteria: [{ id: 'AC-1', description: 'Ready work is shaped.', verifiedBy: 'review', met: false }],
+        }),
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await approveDesignSystem(app)
+    await commitAndPush('selected scope count agreement')
+
+    const projectRes = await app.fetch(new Request(projectUrl('/api/project')))
+    const readinessRes = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
+    const projectBody = await projectRes.json() as any
+    const readinessBody = await readinessRes.json() as any
+
+    expect(projectBody.orientationSpine.summary.includedWorkCount).toBe(4)
+    expect(readinessBody.scope.nodeIds).toHaveLength(4)
+    expect(readinessBody.totals.tasks).toBe(4)
+    expect(readinessBody.statusCounts).toMatchObject({
+      done: 1,
+      blocked: 1,
+      spec_review: 1,
+      ready: 1,
+    })
+    expect(readinessBody.totals.humanBlockingCount).toBe(2)
+    expect(readinessBody.totals.unfinishedCount).toBe(3)
+  })
+
   it('keeps imported source-recovery work visible as incomplete brief cleanup', async () => {
     await seedQueue({
       version: 1,

@@ -449,7 +449,7 @@ function draftSyntheticTaskId(id: string): string {
   return `workspace-import:${id}`
 }
 
-function augmentTasksWithWorkspaceImportDraft(input: {
+export function augmentTasksWithWorkspaceImportDraft(input: {
   tasks: OrientationTaskInput[]
   workspaceImportDraft?: OrientationWorkspaceImportDraft | null
   now: string
