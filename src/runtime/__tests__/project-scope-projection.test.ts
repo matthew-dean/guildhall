@@ -146,6 +146,83 @@ describe('buildProjectScopeProjection', () => {
     })
   })
 
+  it('does not leak unscoped root tasks into every selected release', () => {
+    const projection = buildProjectScopeProjection({
+      version: 1,
+      lastUpdated: now,
+      selectedReleaseId: 'near-term-proof-scope',
+      releases: [{
+        id: 'near-term-proof-scope',
+        label: 'Near Term Proof Scope',
+        kind: 'release',
+        state: 'active',
+        source: 'inferred',
+        nodeIds: ['work:task-reviewer'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [
+        task({
+          id: 'task-reviewer',
+          title: 'Implement dialogue reviewer',
+          status: 'done',
+          releaseIds: ['near-term-proof-scope'],
+        }),
+        task({
+          id: 'task-unscoped',
+          title: 'Unassigned recovered owner request',
+          status: 'done',
+          releaseIds: [],
+        }),
+      ],
+    })
+
+    expect(projection.selectedScope?.nodeIds).toEqual(['work:task-reviewer'])
+    expect(projection.rows.find(row => row.taskId === 'task-reviewer')).toMatchObject({
+      scope: 'included',
+    })
+    expect(projection.rows.find(row => row.taskId === 'task-unscoped')).toMatchObject({
+      scope: 'deferred',
+      eligibilityReason: 'deferred',
+    })
+    expect(projection.counts.included).toBe(1)
+  })
+
+  it('keeps derived materialized child splits inside a release when only the parent has release membership', () => {
+    const parent = task({
+      id: 'release-parent',
+      title: 'Build release harness',
+      status: 'done',
+      releaseIds: ['headless-mvp'],
+      hierarchy: { childIds: ['release-parent-split-review-proof'], relation: 'contains' },
+    })
+    const child = task({
+      id: 'release-parent-split-review-proof',
+      title: 'Review proof packet',
+      status: 'spec_review',
+      hierarchy: { parentId: 'release-parent', childIds: [], relation: 'decomposes', order: 0 },
+    })
+    const derived = deriveReleaseContainersFromTaskMembership([parent, child])
+    const projection = buildProjectScopeProjection({
+      version: 1,
+      lastUpdated: now,
+      selectedReleaseId: derived.selectedReleaseId,
+      releases: derived.releases,
+      tasks: [parent, child],
+    })
+
+    expect(derived.releases[0]?.nodeIds).toContain('work:release-parent-split-review-proof')
+    expect(projection.selectedScope?.nodeIds).toContain('work:release-parent-split-review-proof')
+    expect(projection.rows.find(row => row.taskId === 'release-parent-split-review-proof')).toMatchObject({
+      scope: 'included',
+      status: 'spec_review',
+    })
+    expect(projection.start).toMatchObject({
+      code: 'no_unattended_progress',
+      focusTaskId: 'release-parent-split-review-proof',
+    })
+  })
+
   it('treats materialized child work under an included parent as current paused work', () => {
     const projection = buildProjectScopeProjection(queue([
       task({

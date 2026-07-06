@@ -70,6 +70,25 @@ export const ProofPathScope = z.object({
 export type ProofPathScope = z.infer<typeof ProofPathScope>
 
 export const ProofPath = z.preprocess((value) => {
+  if (typeof value === 'string') {
+    const path = value.trim()
+    if (!path) return value
+    const id = path
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 48) || 'legacy-proof-path'
+    return {
+      id,
+      scope: { type: 'task', id },
+      title: path,
+      summary: `Legacy proof path: ${path}`,
+      source: 'documented',
+      createdAt: LEGACY_TIMESTAMP,
+      updatedAt: LEGACY_TIMESTAMP,
+      createdBy: 'legacy-import',
+    }
+  }
   if (!value || typeof value !== 'object' || Array.isArray(value)) return value
   const record = value as Record<string, unknown>
   const id = typeof record.id === 'string' && record.id.trim() ? record.id.trim() : 'legacy-proof-path'

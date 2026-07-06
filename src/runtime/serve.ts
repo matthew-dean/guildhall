@@ -1095,7 +1095,11 @@ async function readTaskQueueFileNormalized(
   if (rawParsed == null) return { tasks: [], releases: [] }
   const parsed = normalizeLegacyTaskQueueShape(rawParsed)
   const tasks = await readTasksFileNormalized(tasksPath)
-  const parsedReleases = Array.isArray(parsed) ? [] : Array.isArray(parsed.releases) ? parsed.releases.map(release => ({ ...release })) : []
+  const parsedReleases = Array.isArray(parsed)
+    ? []
+    : Array.isArray(parsed.releases)
+      ? parsed.releases.map(release => persistableProjectRelease(release))
+      : []
   const parsedSelectedReleaseId = Array.isArray(parsed) ? undefined : typeof parsed.selectedReleaseId === 'string' ? parsed.selectedReleaseId : undefined
   const derivedQueue = deriveReleaseContainersFromTaskMembership(tasks as Task[], {
     existingReleases: parsedReleases,
@@ -1146,23 +1150,38 @@ async function writeTasksFilePreservingQueue(
 async function writeSelectedReleaseId(
   tasksPath: string,
   releaseId: string,
+  candidateReleases: readonly ProjectRelease[] = [],
 ): Promise<{ release: ProjectRelease; selectedReleaseId: string }> {
   if (!existsSync(tasksPath)) throw new Error('No task queue exists for this project.')
   const raw = JSON.parse(await readManagedTextFile(tasksPath, 'utf8')) as
     | { tasks?: Array<Record<string, unknown>>; releases?: ProjectRelease[]; selectedReleaseId?: string; version?: unknown; lastUpdated?: unknown }
     | Array<Record<string, unknown>>
   if (Array.isArray(raw)) throw new Error('This project has no release containers yet.')
-  const releases = Array.isArray(raw.releases) ? raw.releases : []
+  const releasesById = new Map<string, ProjectRelease>()
+  for (const release of Array.isArray(raw.releases) ? raw.releases : []) releasesById.set(release.id, persistableProjectRelease(release))
+  for (const release of candidateReleases) releasesById.set(release.id, persistableProjectRelease(release))
+  const releases = [...releasesById.values()]
   const release = releases.find(candidate => candidate.id === releaseId)
   if (!release) throw new Error('Release not found in this project.')
   const rewritten = {
     ...raw,
+    releases,
     selectedReleaseId: releaseId,
     lastUpdated: new Date().toISOString(),
   }
   await writeManagedTextFileSync(tasksPath, JSON.stringify(rewritten, null, 2) + '\n')
   invalidateTaskQueueReadCaches(tasksPath)
   return { release, selectedReleaseId: releaseId }
+}
+
+function persistableProjectRelease(release: ProjectRelease): ProjectRelease {
+  const description = (release as ProjectRelease & { description?: string | null }).description
+  return {
+    ...release,
+    nodeIds: [...(release.nodeIds ?? [])],
+    deferredNodeIds: [...(release.deferredNodeIds ?? [])],
+    ...(typeof description === 'string' ? { description } : { description: undefined }),
+  }
 }
 
 function stagedContractChangeSet(model: { validationEvidence?: Array<Record<string, unknown>> }, resultId: string): ContractChangeSet | null {
@@ -4353,9 +4372,21 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
       const releaseId = typeof body.releaseId === 'string' ? body.releaseId.trim() : ''
       if (!releaseId) return c.json({ error: 'releaseId is required.' }, 400)
-      const result = await writeSelectedReleaseId(projectTasksPath(project.path), releaseId)
-      const rawQueue = await readTaskQueueFileNormalized(projectTasksPath(project.path))
       const startReadiness = await projectStartReadinessForProject(project.path)
+      const queueBeforeSelection = await readTaskQueueFileNormalized(projectTasksPath(project.path))
+      const { orientationSpine: selectableSpine } = buildOrientationSpineWithScopedReleaseTruth({
+        projectId: project.id,
+        charter: inferProjectCharterFromExistingSources(project.path, project.config),
+        selectedReleaseId: queueBeforeSelection.selectedReleaseId,
+        releases: queueBeforeSelection.releases,
+        tasks: queueBeforeSelection.tasks as Task[],
+        runStatus: supervisor.get(project.id)?.status ?? 'stopped',
+        startReadiness,
+        workspaceImportDraft: await workspaceImportDraftForOrientation(project.path, startReadiness),
+        sourceRefs: projectOrientationSourceRefs(project.path),
+      })
+      const result = await writeSelectedReleaseId(projectTasksPath(project.path), releaseId, selectableSpine.releases as ProjectRelease[])
+      const rawQueue = await readTaskQueueFileNormalized(projectTasksPath(project.path))
       const { orientationSpine: spine } = buildOrientationSpineWithScopedReleaseTruth({
         projectId: project.id,
         charter: inferProjectCharterFromExistingSources(project.path, project.config),

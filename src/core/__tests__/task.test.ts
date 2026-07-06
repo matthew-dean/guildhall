@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { AcceptanceCriteria, Task, TaskQueue, TaskStatus } from '../task.js'
+import { AcceptanceCriteria, RequestIntake, Task, TaskQueue, TaskStatus } from '../task.js'
 
 describe('TaskStatus', () => {
   it('accepts all valid statuses', () => {
@@ -281,6 +281,43 @@ describe('AcceptanceCriteria', () => {
     })
     expect(result.verifiedBy).toBe('review')
   })
+
+  it('normalizes legacy string acceptance criteria to review criteria', () => {
+    const result = AcceptanceCriteria.parse('Later work has its own release boundary.')
+
+    expect(result).toMatchObject({
+      id: 'legacy-later-work-has-its-own-release-boundary',
+      description: 'Later work has its own release boundary.',
+      scenario: 'Later work has its own release boundary.',
+      expectation: 'Later work has its own release boundary.',
+      verifiedBy: 'review',
+      met: false,
+    })
+  })
+
+  it('normalizes legacy text acceptance criteria to review criteria', () => {
+    const result = AcceptanceCriteria.parse({ text: 'Reviewed.', met: false })
+
+    expect(result).toMatchObject({
+      id: 'legacy-reviewed',
+      description: 'Reviewed.',
+      verifiedBy: 'review',
+      met: false,
+    })
+  })
+})
+
+describe('RequestIntake', () => {
+  it('normalizes partial legacy request intake records', () => {
+    const result = RequestIntake.parse({ createdBy: 'workspace-importer' })
+
+    expect(result).toMatchObject({
+      intent: 'implementation',
+      recommendedNextAction: 'proceed_to_implementation_spec',
+      createdBy: 'workspace-importer',
+      createdAt: '1970-01-01T00:00:00.000Z',
+    })
+  })
 })
 
 describe('TaskQueue', () => {
@@ -321,6 +358,80 @@ describe('TaskQueue', () => {
     })
 
     expect(result.scopeAuthorityRequests).toEqual([])
+  })
+
+  it('normalizes legacy null release descriptions to absent descriptions', () => {
+    const result = TaskQueue.parse({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      tasks: [],
+      releases: [
+        {
+          id: 'release-1',
+          label: 'Release 1',
+          description: null,
+          nodeIds: [],
+          deferredNodeIds: [],
+        },
+      ],
+    })
+
+    expect(result.releases[0]?.description).toBeUndefined()
+  })
+
+  it('normalizes legacy string proof paths while parsing task queues', () => {
+    const result = TaskQueue.parse({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      tasks: [{
+        id: 'task-1',
+        title: 'Task',
+        description: 'Task.',
+        domain: 'core',
+        status: 'done',
+        priority: 'normal',
+        acceptanceCriteria: [],
+        outOfScope: [],
+        dependsOn: [],
+        notes: [],
+        gateResults: [],
+        reviewVerdicts: [],
+        adjudications: [],
+        escalations: [],
+        agentIssues: [],
+        revisionCount: 0,
+        remediationAttempts: 0,
+        proofPaths: ['artifacts/fixture-evaluator-proof.md'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }],
+    })
+
+    expect(result.tasks[0]?.proofPaths?.[0]).toMatchObject({
+      id: 'artifacts-fixture-evaluator-proof-md',
+      title: 'artifacts/fixture-evaluator-proof.md',
+    })
+  })
+
+  it('normalizes skeletal legacy tasks while parsing task queues', () => {
+    const result = TaskQueue.parse({
+      version: 1,
+      tasks: [{
+        id: 'task-1',
+        title: 'Review proof packet',
+        status: 'spec_review',
+        hierarchy: { parentId: 'task-parent', relation: 'child' },
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }],
+    })
+
+    expect(result.lastUpdated).toBe('1970-01-01T00:00:00.000Z')
+    expect(result.tasks[0]).toMatchObject({
+      description: 'Task',
+      domain: 'general',
+      hierarchy: { parentId: 'task-parent', relation: 'decomposes' },
+    })
   })
 
   it('defaults work hierarchy relation to contains', () => {

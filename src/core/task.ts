@@ -515,6 +515,7 @@ export type Checkpoint = z.infer<typeof Checkpoint>
 
 const ACCEPTANCE_VERIFIERS = ['automated', 'review', 'human'] as const
 const ACCEPTANCE_SOURCES = ['documented', 'inferred'] as const
+const LEGACY_SCHEMA_TIMESTAMP = '1970-01-01T00:00:00.000Z'
 
 function parseScenarioExpectationFromDescription(description: string): { scenario: string; expectation: string } {
   const normalized = description.trim().replace(/\s+/g, ' ')
@@ -529,10 +530,26 @@ function parseScenarioExpectationFromDescription(description: string): { scenari
 }
 
 function normalizeAcceptanceCriteria(input: unknown): unknown {
+  if (typeof input === 'string') {
+    const description = input.trim()
+    if (!description) return input
+    const normalizedScenarioExpectation = parseScenarioExpectationFromDescription(description)
+    return {
+      id: `legacy-${slugForLegacyAcceptanceCriterion(description)}`,
+      description,
+      scenario: normalizedScenarioExpectation.scenario,
+      expectation: normalizedScenarioExpectation.expectation,
+      verifiedBy: 'review',
+    }
+  }
   if (!input || typeof input !== 'object' || Array.isArray(input)) return input
   const criterion = input as Record<string, unknown>
   const verifiedBy = criterion.verifiedBy
-  const rawDescription = typeof criterion.description === 'string' ? criterion.description.trim() : ''
+  const rawDescription = typeof criterion.description === 'string'
+    ? criterion.description.trim()
+    : typeof criterion.text === 'string'
+      ? criterion.text.trim()
+      : ''
   const rawScenario = typeof criterion.scenario === 'string' ? criterion.scenario.trim() : ''
   const rawExpectation = typeof criterion.expectation === 'string' ? criterion.expectation.trim() : ''
   const normalizedDescription = rawDescription || (
@@ -546,9 +563,15 @@ function normalizeAcceptanceCriteria(input: unknown): unknown {
 
   const baseCriterion = {
     ...criterion,
+    id: typeof criterion.id === 'string' && criterion.id.trim()
+      ? criterion.id.trim()
+      : normalizedDescription
+        ? `legacy-${slugForLegacyAcceptanceCriterion(normalizedDescription)}`
+        : criterion.id,
     ...(normalizedDescription ? { description: normalizedDescription } : {}),
     ...(rawScenario ? { scenario: rawScenario } : normalizedScenarioExpectation.scenario ? { scenario: normalizedScenarioExpectation.scenario } : {}),
     ...(rawExpectation ? { expectation: rawExpectation } : normalizedScenarioExpectation.expectation ? { expectation: normalizedScenarioExpectation.expectation } : {}),
+    verifiedBy: verifiedBy ?? 'review',
   }
 
   if (verifiedBy === undefined && typeof criterion.command === 'string' && criterion.command.trim()) {
@@ -564,6 +587,15 @@ function normalizeAcceptanceCriteria(input: unknown): unknown {
     verifiedBy: looksLikeCommand ? 'automated' : 'review',
     ...(looksLikeCommand && typeof criterion.command !== 'string' ? { command: value } : {}),
   }
+}
+
+function slugForLegacyAcceptanceCriterion(value: string): string {
+  const slug = value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48)
+  return slug || 'acceptance-criterion'
 }
 
 export const AcceptanceCriteria = z.preprocess(normalizeAcceptanceCriteria, z.object({
@@ -680,14 +712,23 @@ export const WorkHierarchyRelation = z.enum([
 ])
 export type WorkHierarchyRelation = z.infer<typeof WorkHierarchyRelation>
 
-export const WorkHierarchy = z.object({
+function normalizeWorkHierarchy(input: unknown): unknown {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return input
+  const record = input as Record<string, unknown>
+  return {
+    ...record,
+    relation: record.relation === 'child' ? 'decomposes' : record.relation,
+  }
+}
+
+export const WorkHierarchy = z.preprocess(normalizeWorkHierarchy, z.object({
   parentId: z.string().optional(),
   childIds: z.array(z.string()).default([]),
   order: z.number().default(0),
   depth: z.number().int().nonnegative().optional(),
   path: z.array(z.string()).optional(),
   relation: WorkHierarchyRelation.default('contains'),
-})
+}))
 export type WorkHierarchy = Omit<z.infer<typeof WorkHierarchy>, 'relation'> & {
   relation?: WorkHierarchyRelation
 }
@@ -980,7 +1021,21 @@ const DEFAULT_PRESSURE_TEST_SUMMARY: PressureTestSummary = {
   ],
 }
 
-export const RequestIntake = z.object({
+function normalizeRequestIntake(input: unknown): unknown {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return input
+  const record = input as Record<string, unknown>
+  return {
+    ...record,
+    intent: typeof record.intent === 'string' ? record.intent : 'implementation',
+    recommendedNextAction: typeof record.recommendedNextAction === 'string'
+      ? record.recommendedNextAction
+      : 'proceed_to_implementation_spec',
+    createdAt: typeof record.createdAt === 'string' ? record.createdAt : LEGACY_SCHEMA_TIMESTAMP,
+    createdBy: typeof record.createdBy === 'string' ? record.createdBy : 'legacy-import',
+  }
+}
+
+export const RequestIntake = z.preprocess(normalizeRequestIntake, z.object({
   intent: z.enum([
     'spec_only',
     'implementation',
@@ -1008,7 +1063,7 @@ export const RequestIntake = z.object({
   clarifyingQuestions: z.array(z.string()).default([]),
   createdAt: z.string(),
   createdBy: z.string(),
-})
+}))
 export type RequestIntake = z.infer<typeof RequestIntake>
 
 export const ProjectReleaseKind = z.enum(['release', 'milestone', 'marker', 'current_work'])
@@ -1029,7 +1084,7 @@ export const ProjectRelease = z.object({
   kind: ProjectReleaseKind.default('release'),
   state: ProjectReleaseState.default('active'),
   source: ProjectReleaseSource.default('inferred'),
-  description: z.string().optional(),
+  description: z.preprocess(value => value === null ? undefined : value, z.string().optional()),
   nodeIds: z.array(z.string()).default([]),
   deferredNodeIds: z.array(z.string()).default([]),
   proofStyle: ProjectReleaseProofStyle.default('unspecified'),
@@ -1042,10 +1097,10 @@ export const Task = z.object({
   id: z.string(),
   displayKey: z.string().optional(),
   title: z.string(),
-  description: z.string(),
+  description: z.string().default('Task'),
 
   // Which coordinator domain owns this task
-  domain: z.string(),
+  domain: z.string().default('general'),
 
   // Which project directory this task operates on (absolute path)
   projectPath: z.preprocess(
@@ -1345,7 +1400,7 @@ export type Task = Omit<ParsedTask, 'hierarchy' | 'releaseIds'> & {
 
 export const TaskQueue = z.object({
   version: z.number().default(1),
-  lastUpdated: z.string(),
+  lastUpdated: z.string().default(LEGACY_SCHEMA_TIMESTAMP),
   tasks: z.array(Task),
   executionPlanActions: z.array(ExecutionPlanAction).default([]),
   scopeAuthorityRequests: z.array(ScopeAuthorityRequest).default([]),

@@ -1341,6 +1341,7 @@ describe('POST /api/project/start', () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
     await applyStorageBoundaryMigration(app)
     const projectRes = await app.fetch(new Request(scoped('/api/project')))
+    expect(projectRes.status).toBe(200)
     const projectBody = await projectRes.json() as {
       startReadiness?: { canStart?: boolean; code?: string; message?: string; focusTaskId?: string }
       actionModel?: { runControl?: { startEnabled?: boolean } }
@@ -7532,6 +7533,7 @@ describe('GET /api/project — bootstrap status', () => {
           kind: 'release',
           state: 'planned',
           source: 'release_plan',
+          description: null,
         },
       ],
       tasks: [
@@ -7567,8 +7569,52 @@ describe('GET /api/project — bootstrap status', () => {
     expect(body.release?.label).toBe('Agent review proof')
     expect(body.spine?.selectedRelease?.id).toBe('release-2')
 
-    const queue = await readProjectStateJsonAsync<{ selectedReleaseId?: string }>(tmpDir, 'TASKS.json')
+    const queue = await readProjectStateJsonAsync<{ selectedReleaseId?: string; releases?: Array<{ id?: string; description?: unknown }> }>(tmpDir, 'TASKS.json')
     expect(queue.selectedReleaseId).toBe('release-2')
+    expect(queue.releases?.find(release => release.id === 'release-2')?.description).toBeUndefined()
+  })
+
+  it('selects a release inferred from task membership through the owning project endpoint', async () => {
+    await writeSystemTasks({
+      version: 1,
+      lastUpdated: '2026-06-01T12:00:00.000Z',
+      selectedReleaseId: 'release-1',
+      tasks: [
+        {
+          id: 'task-1',
+          title: 'Run headless proof',
+          status: 'done',
+          releaseIds: ['release-1'],
+        },
+        {
+          id: 'task-2',
+          title: 'Run agent review proof',
+          status: 'ready',
+          releaseIds: ['release-2'],
+        },
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const select = await app.fetch(new Request(scoped('/api/project/release/select'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ releaseId: 'release-2' }),
+    }))
+
+    expect(select.status).toBe(200)
+    const body = (await select.json()) as {
+      selectedReleaseId?: string
+      release?: { id?: string; label?: string }
+      spine?: { selectedRelease?: { id?: string; label?: string } }
+    }
+    expect(body.selectedReleaseId).toBe('release-2')
+    expect(body.release?.label).toBe('Release 2')
+    expect(body.spine?.selectedRelease?.id).toBe('release-2')
+
+    const queue = await readProjectStateJsonAsync<{ selectedReleaseId?: string; releases?: Array<{ id?: string }> }>(tmpDir, 'TASKS.json')
+    expect(queue.selectedReleaseId).toBe('release-2')
+    expect(queue.releases?.map(release => release.id)).toEqual(['release-1', 'release-2'])
   })
 
   it('serves the scoped local project graph view for the selected project', async () => {

@@ -284,8 +284,8 @@ export function releaseToProjectScope(release: ProjectRelease, tasks: readonly T
     }
     const taskReleaseIds = task.releaseIds ?? []
     if (taskReleaseIds.length === 0 && task.hierarchy?.parentId) continue
-    if (taskReleaseIds.length === 0 && deferredNodeIds.has(nodeId)) continue
-    if (taskReleaseIds.includes(release.id) || taskReleaseIds.length === 0) {
+    if (taskReleaseIds.length === 0) continue
+    if (taskReleaseIds.includes(release.id)) {
       nodeIds.add(nodeId)
     }
   }
@@ -313,6 +313,10 @@ export function taskScopeEligibility(
   if (options.includedDependencyIds?.has(task.id)) return { eligible: true, reason: 'included_prerequisite' }
   if (scope.deferredNodeIds.includes(nodeId)) return { eligible: false, reason: 'deferred' }
   if (task.status === 'shelved') return { eligible: false, reason: 'deferred' }
+  const childIds = task.hierarchy?.childIds ?? []
+  if (childIds.some(childId => scope.nodeIds.includes(taskScopeNodeId(childId)))) {
+    return { eligible: true, reason: 'included_ancestor' }
+  }
   let parentId = task.hierarchy?.parentId?.trim() || null
   while (parentId) {
     const parentNodeId = taskScopeNodeId(parentId)
@@ -320,7 +324,7 @@ export function taskScopeEligibility(
     if (scope.deferredNodeIds.includes(parentNodeId)) return { eligible: false, reason: 'deferred' }
     parentId = options.tasksById?.get(parentId)?.hierarchy?.parentId?.trim() || null
   }
-  if ((task.releaseIds?.length ?? 0) === 0) return { eligible: true, reason: 'included' }
+  if ((task.releaseIds?.length ?? 0) === 0) return { eligible: false, reason: 'deferred' }
   return { eligible: false, reason: 'deferred' }
 }
 
@@ -385,7 +389,7 @@ function normalizeSelectedScope(scope: ProjectScope | null, tasks: readonly Task
       if (deferredNodeIds.has(nodeId)) deferredNodeIds.add(nodeId)
       continue
     }
-    if ((task.releaseIds?.length ?? 0) > 0 || task.hierarchy?.parentId) continue
+    if ((task.releaseIds?.length ?? 0) > 0 || task.hierarchy?.parentId || !taskIsOpenCurrentScopeWork(task)) continue
     if (!deferredNodeIds.has(nodeId)) nodeIds.add(nodeId)
   }
   expandMaterializedReleaseChildren({

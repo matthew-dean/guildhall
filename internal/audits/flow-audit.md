@@ -12,6 +12,107 @@ This is the active browser test plan for the Guildhall project surface. Keep it
 updated while auditing the active test project so another agent can resume
 without guessing.
 
+2026-07-06T08:00:00Z - Release selection accepts the same inferred releases
+the project map shows.
+
+- Work id: `codex:inferred-release-selection-2026-07-06`.
+- User job: when the project map shows a release/scope as selectable, pressing
+  Select must actually switch the current execution boundary. Guildhall must
+  not show an inferred release in the 1,000-foot map and then reject that same
+  release from `/api/project/release/select`.
+- Root-cause classification:
+  - Project structure/scope/release modeling: Map/Spine built a richer release
+    model from task membership and workspace-import orientation, but the
+    selection writer validated only the raw persisted `TASKS.json.releases`
+    array.
+  - Project structure/scope/release modeling: after selection succeeded,
+    projection exposed a second release-boundary leak: unscoped completed tasks
+    were normalized into every selected release, so a release with `9`
+    assigned nodes could display as `12` scoped nodes after unrelated completed
+    owner-recovery tasks leaked in.
+  - Task hierarchy/dependency/proof modeling: materialized child execution
+    rows still need their parent container visible as included orientation
+    context, but the parent should not be counted as a separate execution unit.
+  - Project state schema/modeling: older task queues could persist
+    `description:null` release records, string proof paths, string or
+    `{ text }` acceptance criteria, partial `requestIntake`, skeletal task
+    rows, and legacy hierarchy relation `child`. Typed project payload paths
+    then failed before Guildhall could show the selected release or the
+    Narrative Harness MVP tasks. The fix belongs at the schema boundary, not
+    in each view.
+  - Scheduler/action-state logic: Overview said the selected scope was
+    complete and told the owner to choose another release, but the action
+    endpoint could reject the next visible release, stranding Start at
+    `all_terminal`.
+  - UI communication/orientation: the visible release roadmap advertised
+    impossible Select actions for inferred release containers.
+  - Not a bad Narrative Harness data problem for this slice: the Near Term
+    Proof Scope release was visible in the shared map/spine read model and had
+    task membership. The write path failed to accept the same model.
+- Fix:
+  - Release selection now builds selectable candidates from the same
+    orientation spine used by Map/Spine, then persists the selected inferred
+    release container into `TASKS.json` so subsequent readiness/start paths
+    share the chosen boundary.
+  - Scope projection no longer leaks completed unscoped root tasks into every
+    selected release. Unassigned non-terminal work can still stay in the
+    current scope until explicitly deferred, and parent container rows remain
+    included when their materialized children are scoped execution units.
+  - Core task/release schemas now normalize legacy release descriptions,
+    acceptance criteria, request-intake records, proof paths, queue timestamps,
+    skeletal task fields, and `child` hierarchy relations so project pages can
+    repair old state instead of 500ing.
+  - Regression coverage proves an endpoint can select a release inferred from
+    task `releaseIds` even when the raw queue has no persisted `releases`
+    array yet, and projection coverage proves unscoped completed tasks do not
+    inflate a selected release.
+  - Regression coverage also pins the Narrative Harness MVP additions:
+    DeepInfra drafting/writing model selection across genres including adult
+    genres, world-state/object-state continuity over elapsed time such as wet
+    hair drying by climate, and spatial/geographic continuity such as fantasy
+    walking speed and travel plausibility.
+- Contract Touch Decision:
+  - Work id: `codex:inferred-release-selection-2026-07-06`.
+  - Touched contracts: `/api/project/release/select` behavior, persisted
+    `TASKS.json.releases` materialization when selecting an inferred release,
+    and read-compatibility for legacy `TASKS.json` task/release shapes.
+  - Contracts considered but not touched: task schema, release-readiness
+    response shape, orientation spine response shape, project re-intake draft
+    schema, scheduler run payload.
+  - Existing data impact: no migration. Selecting an inferred release now
+    writes the inferred container into the queue alongside `selectedReleaseId`;
+    existing persisted release containers are preserved unless a same-id
+    inferred candidate supplies the current read-model version. Existing
+    completed unscoped tasks stop being treated as members of every selected
+    release unless the selected release explicitly lists them. Legacy saved
+    task/release shapes are normalized on read and rewritten only through
+    normal persistence paths.
+  - Required follow-up: installed browser proof must select Narrative Harness
+    Near Term Proof Scope from the map and verify Overview/Release/Start use
+    the switched boundary.
+  - Proof required: focused release-select regression, scope-projection
+    regression, schema-compatibility regression, release-readiness regression,
+    contract detector, build/install/stale proof, and installed browser/API
+    proof on Narrative Harness.
+  - Proof provided: focused release-select, scope-projection,
+    schema-compatibility, and Narrative Harness MVP task-shaping regressions
+    passed. `node scripts/contract-touch-detector.mjs && git diff --check`
+    passed. `node ./build.mjs` passed. Installed-app proof on
+    `localhost:7777` reported `stale:false`. Live Narrative Harness API proof:
+    `/api/project` returned `153` tasks and `Near Term Proof Scope is complete`;
+    `/api/project/spine` selected `near-term-proof-scope` with `9` nodes and
+    `22` deferred rows; `/api/project/release-readiness` returned ready with
+    `9` scoped tasks, `9` done, and no release blockers;
+    `/api/project/release/select` accepted `near-term-proof-scope` and returned
+    the same selected release with `9` nodes. Live task proof showed the
+    DeepInfra drafting model, world-state continuity, and spatial/geographic
+    continuity child tasks are present and done with acceptance criteria for
+    adult-genre drafting, wet-hair/object-state time continuity, and fantasy
+    walking-speed/geography plausibility.
+  - Apply/revert behavior: revert the `release/select` writer candidate path
+    and the regression test to restore raw-release-only selection; no data
+    rollback is required beyond choosing a valid persisted release again.
+
 2026-07-06T07:40:00Z - Release readiness exposes concrete scope blockers on
 the real project route.
 
