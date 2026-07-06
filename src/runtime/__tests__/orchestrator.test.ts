@@ -4973,6 +4973,7 @@ describe('Orchestrator.tick — routing', () => {
     if (first.kind === 'processed') {
       expect(first.afterStatus).toBe('in_progress')
       expect(first.transitioned).toBe(false)
+      expect(first.note).toContain('will retry once')
     }
 
     const second = await orch.tick()
@@ -14699,6 +14700,7 @@ describe('Orchestrator worker no-progress escalation', () => {
       expect(second.agent).toBe('coordinator-worker-recovery')
       expect(second.afterStatus).toBe('in_progress')
       expect(second.transitioned).toBe(false)
+      expect(second.note).toBe('model/tool-use recovery recorded')
     }
 
     const task = await readEffectiveTaskFromQueue('task-012')
@@ -14768,6 +14770,7 @@ describe('Orchestrator worker no-progress escalation', () => {
     if (first.kind === 'processed') {
       expect(first.afterStatus).toBe('in_progress')
       expect(first.transitioned).toBe(false)
+      expect(first.note).toContain('will retry once')
     }
 
     const task = await readEffectiveTaskFromQueue('task-hidden-stream')
@@ -14825,6 +14828,7 @@ describe('Orchestrator worker no-progress escalation', () => {
     if (second.kind === 'processed') {
       expect(second.afterStatus).toBe('in_progress')
       expect(second.transitioned).toBe(false)
+      expect(second.note).toBe('provider recovery recorded')
     }
 
     const recovered = await readEffectiveTaskFromQueue('task-no-targets')
@@ -14872,6 +14876,7 @@ describe('Orchestrator worker no-progress escalation', () => {
     if (second.kind === 'processed') {
       expect(second.afterStatus).toBe('in_progress')
       expect(second.transitioned).toBe(false)
+      expect(second.note).toBe('provider recovery recorded')
     }
 
     const task = await readEffectiveTaskFromQueue('task-provider-recovery')
@@ -14926,6 +14931,7 @@ describe('Orchestrator worker no-progress escalation', () => {
       expect(outcome.beforeStatus).toBe('in_progress')
       expect(outcome.afterStatus).toBe('in_progress')
       expect(outcome.transitioned).toBe(false)
+      expect(outcome.note).toContain('preserving that partial implementation')
     }
     const task = (await readQueue()).tasks.find((candidate) => candidate.id === 'task-013')
     expect(task?.status).toBe('in_progress')
@@ -14984,6 +14990,7 @@ describe('Orchestrator worker no-progress escalation', () => {
       expect(outcome.beforeStatus).toBe('in_progress')
       expect(outcome.afterStatus).toBe('in_progress')
       expect(outcome.transitioned).toBe(false)
+      expect(outcome.note).toContain('preserving that partial implementation')
     }
     const task = await readEffectiveTaskFromQueue('task-013-workspace-state')
     expect(task?.worktreePath).toBe(worktreePath)

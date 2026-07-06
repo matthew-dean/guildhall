@@ -4900,6 +4900,7 @@ export class Orchestrator {
           beforeStatus,
           afterStatus: liveTask?.status ?? task.status,
           transitioned: false,
+          note: `${summary} Runtime recovery recorded.`,
           revisionCount: liveTask?.revisionCount ?? task.revisionCount,
         }
       }
@@ -4999,6 +5000,7 @@ export class Orchestrator {
             beforeStatus,
             afterStatus: beforeStatus,
             transitioned: false,
+            note: runtimeNote,
             revisionCount: task.revisionCount,
           }
         }
@@ -5042,6 +5044,7 @@ export class Orchestrator {
               beforeStatus,
               afterStatus: beforeStatus,
               transitioned: false,
+              note: runtimeNote,
               revisionCount: task.revisionCount,
             }
           }
@@ -5106,6 +5109,9 @@ export class Orchestrator {
               beforeStatus,
               afterStatus: 'in_progress',
               transitioned: false,
+              note: hasLikelyTargets
+                ? 'model/tool-use recovery recorded'
+                : 'provider recovery recorded',
               revisionCount: liveTask.revisionCount,
             }
           }
@@ -6478,8 +6484,11 @@ export class Orchestrator {
             break
           }
         } else if (outcome.kind === 'processed') {
+          const suffix = outcome.transitioned
+            ? ''
+            : ` (${outcome.note ?? 'no change'})`
           console.log(
-            `[guildhall] tick ${tick}: ${outcome.taskId} ${outcome.beforeStatus} → ${outcome.afterStatus} via ${outcome.agent}${outcome.transitioned ? '' : ' (no change)'}`,
+            `[guildhall] tick ${tick}: ${outcome.taskId} ${outcome.beforeStatus} → ${outcome.afterStatus} via ${outcome.agent}${suffix}`,
           )
         } else if (outcome.kind === 'blocked-max-revisions') {
           console.log(

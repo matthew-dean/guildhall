@@ -14411,6 +14411,29 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-07-06T05:01:46Z - Fixed worker recovery ticks that falsely reported
+`(no change)` while Guildhall had preserved real progress or recorded a
+runtime recovery action.
+
+- Work id: `codex:tick-progress-note-2026-07-06`.
+- User job: when a project run is advancing Narrative Harness work, the owner
+  should be able to tell whether Guildhall actually did something useful, even
+  if the task status stayed `in_progress`.
+- Failure found:
+  - The runtime wrote durable task notes for preserved dirty worktree progress,
+    first retry after no visible progress, and model/provider recovery.
+  - The processed tick outcome only exposed `transitioned: false`, so CLI
+    output collapsed all of those distinct states into `(no change)`.
+- Fix:
+  - `processed` tick outcomes now carry an optional `note`.
+  - CLI output renders that note for unchanged-status ticks and keeps
+    `(no change)` only when there is no meaningful runtime note.
+  - Worker timeout/recovery branches that already write runtime notes now
+    return the same progress signal to callers.
+- Verification:
+  `NODE_ENV=test CI=true ./node_modules/.bin/vitest run src/runtime/__tests__/orchestrator.test.ts -t "resumed worker times out|timeout without likely target|provider-unavailable no-progress|preserves dirty worktree progress|preserves dirty worker progress" --reporter=dot`
+  passed `4` focused tests.
+
 2026-07-06T01:59:00Z - Routed repeated dirty worker turn-budget failures to
 review instead of owner input.
 
