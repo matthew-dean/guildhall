@@ -397,6 +397,13 @@ describe('policy failure classifier', () => {
       maxTurns: 2,
       stopSignals: ['same_playbook_failed', 'checkpoint_invalid'],
     })
+    expect(planFor('retry_current_task_context')).toMatchObject({
+      reason: 'Retry from the current task brief/spec because no durable checkpoint exists yet.',
+      command: 'cd web && pnpm install',
+      maxTurns: 1,
+      successSignals: ['visible_progress_or_checkpoint_written'],
+      stopSignals: ['same_playbook_failed', 'no_visible_progress_after_retry'],
+    })
     expect(planFor('rebootstrap_project')).toMatchObject({
       command: 'cd web && pnpm install',
       successSignals: ['checkpoint_next_action_completed'],

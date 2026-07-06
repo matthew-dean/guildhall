@@ -14104,6 +14104,55 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-07-06T00:45:00Z - Corrected no-checkpoint provider recovery for Narrative
+Harness MVP work.
+
+- Work id: `codex:narrative-harness-provider-recovery-2026-07-06`.
+- User job: when the Narrative Harness MVP needs a DeepInfra-capable drafting
+  model and physical-world review lanes, Guildhall should show that work as
+  current scoped work and should keep provider/runtime failures in Guildhall
+  recovery without inventing checkpoint state or asking the owner to debug an
+  internal execution miss.
+- Failure taxonomy:
+  - `4 scheduler/action-state logic`: provider no-output recovery used
+    `resume_from_checkpoint` even when no checkpoint existed.
+  - `5 UI communication/orientation`: the effective task projected a confident
+    checkpoint recovery story that the user could not actually follow.
+  - `6 runtime/provider/infrastructure`: the original trigger was a
+    worker-provider timeout with no visible progress.
+  - `7 project data/schema boundary`: stale recovery notes lived in task-local
+    evidence (`tasks/<id>/notes.jsonl`), not raw `TASKS.json`, so repairs had
+    to target the effective task/evidence boundary.
+- Fix:
+  - Added `retry_current_task_context` as the recovery playbook for no-output
+    provider recovery when no durable checkpoint exists.
+  - Updated orchestrator timeout recovery to use that playbook instead of
+    `resume_from_checkpoint`.
+  - Added stopped-run API repair that detects legacy no-checkpoint provider
+    recovery on the effective task and appends corrected task evidence, so
+    Overview/Work/task detail inherit the corrected latest policy/playbook.
+- Narrative Harness proof from installed app:
+  - `/api/project/activity?projectId=narrative-harness` returns one in-flight
+    task: `task-150-split-select-and-prove-deepinfra-drafting-model`.
+  - `/api/project?projectId=narrative-harness` shows current task `task-150`
+    with acceptance criteria for a DeepInfra-accessible drafting model across
+    genres including adult genres, world-state continuity over time including
+    object/property changes like wet hair drying, and spatial/geographic
+    continuity including scene geography, travel distance, and walking speed.
+  - The DeepInfra child now projects latest policy
+    `safePlaybooks:["retry_current_task_context"]` and latest playbook
+    `playbook:"retry_current_task_context"` with stop signal
+    `no_visible_progress_after_retry`, instead of stale checkpoint language.
+- Installed-app proof: `node ./build.mjs`; `node scripts/dev-install.mjs`;
+  `guildhall stop && guildhall start`; `/api/stale-server` returned
+  `stale:false` for PID `89201`.
+- Verification:
+  `vitest` focused policy, orchestrator provider recovery, and serve activity
+  tests passed; `node scripts/contract-touch-detector.mjs` passed; `node
+  ./build.mjs` passed.
+
+source: codex:narrative-harness-provider-recovery-2026-07-06
+
 2026-07-05T22:45:00Z - Repaired fresh worker claims being reset by read-side
 phantom-active cleanup during Narrative Harness MVP execution.
 

@@ -8962,7 +8962,7 @@ describe('Orchestrator.run — full loops', () => {
     )).toBe(true)
     expect(task?.notes.some((note) =>
       note.role === 'recovery-playbook' &&
-      note.content.includes('"playbook":"resume_from_checkpoint"'),
+      note.content.includes('"playbook":"retry_current_task_context"'),
     )).toBe(true)
     expect(task?.notes.some((note) =>
       note.role === 'policy-classification' &&
@@ -14546,7 +14546,7 @@ describe('Orchestrator worker no-progress escalation', () => {
     expect(recovered?.notes.find((note) => note.role === 'policy-classification')?.content)
       .toContain('"class":"provider_unavailable"')
     expect(recovered?.notes.find((note) => note.role === 'recovery-playbook')?.content)
-      .toContain('"playbook":"resume_from_checkpoint"')
+      .toContain('"playbook":"retry_current_task_context"')
   })
 
   it('keeps provider-unavailable no-progress worker timeouts in Guildhall recovery instead of asking the owner', async () => {
@@ -14595,7 +14595,7 @@ describe('Orchestrator worker no-progress escalation', () => {
     expect(task?.notes.find((note) => note.role === 'policy-classification')?.content)
       .toContain('"class":"provider_unavailable"')
     expect(task?.notes.find((note) => note.role === 'recovery-playbook')?.content)
-      .toContain('"playbook":"resume_from_checkpoint"')
+      .toContain('"playbook":"retry_current_task_context"')
   })
 
   it('preserves dirty worktree progress when a worker exceeds its total turn budget', async () => {

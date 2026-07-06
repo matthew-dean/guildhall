@@ -5020,7 +5020,7 @@ export class Orchestrator {
                 ref: message,
               }],
               scope: 'task',
-              safePlaybooks: ['resume_from_checkpoint'],
+              safePlaybooks: ['retry_current_task_context'],
               needsHuman: false,
             }
             const recoveryPlan = resolveRecoveryPlan({
@@ -9216,7 +9216,7 @@ export class Orchestrator {
             ref: task.blockReason ?? 'worker timeout',
           }],
           scope: 'task',
-          safePlaybooks: ['resume_from_checkpoint'],
+          safePlaybooks: ['retry_current_task_context'],
           needsHuman: false,
         }
         const recoveryPlan = resolveRecoveryPlan({
@@ -9239,7 +9239,7 @@ export class Orchestrator {
         })
         recoveryRole = 'provider-recovery'
         recoveryNote =
-          'Guildhall reopened a stale no-output worker timeout as provider/runtime recovery. The task stays in automation so Guildhall can retry from checkpoint or route to another provider lane without asking the owner to debug internal execution.'
+          'Guildhall reopened a stale no-output worker timeout as provider/runtime recovery. The task stays in automation so Guildhall can retry from the current task context or route to another provider lane without asking the owner to debug internal execution.'
       } else if (
         await this.isRecoverableSelfAuthoredVerificationBlockedTask(task)
       ) {

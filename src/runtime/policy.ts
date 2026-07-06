@@ -24,6 +24,7 @@ export const RECOVERY_PLAYBOOK_IDS = [
   'repair_touched_file_failure',
   'refresh_stale_edit_target',
   'resume_from_checkpoint',
+  'retry_current_task_context',
   'rebootstrap_project',
   'package_owned_dirty_work',
   'ask_concrete_human_question',
@@ -483,19 +484,26 @@ export function resolveRecoveryPlan(input: ResolveRecoveryPlanInput): RecoveryPl
         auditRequired: true,
       }
     case 'resume_from_checkpoint':
+    case 'retry_current_task_context':
     case 'rebootstrap_project':
       return {
         playbook: firstPlaybook,
         reason:
           firstPlaybook === 'resume_from_checkpoint'
             ? 'Resume from the durable checkpoint instead of rediscovering context.'
+            : firstPlaybook === 'retry_current_task_context'
+              ? 'Retry from the current task brief/spec because no durable checkpoint exists yet.'
             : 'Re-run the project bootstrap path before returning to implementation.',
         allowedTools: ['read-file', 'edit-file', 'run-shell-command', 'write-checkpoint', 'raise-escalation'],
         allowedPaths: touchedFiles,
         command: failedVerification?.command,
-        maxTurns: 2,
-        successSignals: ['checkpoint_next_action_completed'],
-        stopSignals: ['same_playbook_failed', 'checkpoint_invalid'],
+        maxTurns: firstPlaybook === 'retry_current_task_context' ? 1 : 2,
+        successSignals: firstPlaybook === 'retry_current_task_context'
+          ? ['visible_progress_or_checkpoint_written']
+          : ['checkpoint_next_action_completed'],
+        stopSignals: firstPlaybook === 'retry_current_task_context'
+          ? ['same_playbook_failed', 'no_visible_progress_after_retry']
+          : ['same_playbook_failed', 'checkpoint_invalid'],
         auditRequired: true,
       }
     case 'package_owned_dirty_work':

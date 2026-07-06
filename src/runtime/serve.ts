@@ -13,6 +13,7 @@ import { streamSSE } from 'hono/streaming'
 import { serve } from '@hono/node-server'
 import {
   atomicWriteText,
+  appendTaskEvidence,
   clearTaskRuntimeState,
   clearTaskWorkspaceState,
   getProjectStateDir,
@@ -108,6 +109,12 @@ import {
   type ProviderName,
 } from './provider-selection.js'
 import { normalizeLegacyTaskQueueShape } from './task-queue-compat.js'
+import {
+  appendFailureClassificationNote,
+  appendRecoveryPlaybookNote,
+  resolveRecoveryPlan,
+  type FailureClassification,
+} from './policy.js'
 import { resolveEffectiveTaskProjectPath } from './task-gates.js'
 import {
   buildSelectApiClientOptions,
@@ -1432,6 +1439,105 @@ async function repairStoppedRunPhantomActiveTasks(projectPath: string): Promise<
       openEscalationIds: [],
       updatedAt: now,
     })
+    repaired += 1
+  }
+  if (repaired > 0) {
+    queue.lastUpdated = now
+    writeManagedTextFileSync(tasksPath, JSON.stringify(queue, null, 2) + '\n')
+  }
+  return repaired
+}
+
+function parseNoteJson(note: Record<string, unknown> | undefined): Record<string, unknown> | null {
+  if (typeof note?.content !== 'string') return null
+  try {
+    const parsed = JSON.parse(note.content) as unknown
+    return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : null
+  } catch {
+    return null
+  }
+}
+
+function hasLegacyNoCheckpointProviderRecovery(task: Record<string, unknown>): boolean {
+  const notes = Array.isArray(task.notes) ? task.notes as Array<Record<string, unknown>> : []
+  const recoveryNotes = notes.filter(note => note.role === 'recovery-playbook')
+  const latestRecovery = parseNoteJson(recoveryNotes.at(-1))
+  if (latestRecovery?.playbook === 'retry_current_task_context') return false
+  if (latestRecovery?.playbook !== 'resume_from_checkpoint') return false
+  const allowedPaths = latestRecovery.allowedPaths
+  if (Array.isArray(allowedPaths) && allowedPaths.length > 0) return false
+  const searchable = `${latestRecovery.reason ?? ''}\n${latestRecovery.summary ?? ''}\n${task.blockReason ?? ''}`
+  return /no-output|no visible progress|provider\/runtime recovery|provider recovery/i.test(searchable)
+}
+
+async function repairLegacyNoCheckpointProviderRecoveryPlans(projectPath: string): Promise<number> {
+  const tasksPath = projectTasksPath(projectPath)
+  if (!existsSync(tasksPath)) return 0
+  const parsed = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')) as
+    | { tasks?: Array<Record<string, unknown>>; version?: number; lastUpdated?: string }
+    | Array<Record<string, unknown>>
+  const queue = Array.isArray(parsed)
+    ? { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
+    : { version: parsed.version ?? 1, lastUpdated: parsed.lastUpdated ?? new Date().toISOString(), tasks: parsed.tasks ?? [] }
+  const memoryDir = getProjectStateDir(projectPath)
+  const now = new Date().toISOString()
+  let repaired = 0
+  for (const task of queue.tasks) {
+    const taskId = typeof task.id === 'string' ? task.id : ''
+    if (!taskId) continue
+    const effectiveTask = await buildEffectiveTask(projectPath, task as Task) as unknown as Record<string, unknown>
+    if (!hasLegacyNoCheckpointProviderRecovery(effectiveTask)) continue
+    const checkpoint = await readCheckpoint(memoryDir, taskId).catch(() => null)
+    if (checkpoint) continue
+    const notes = Array.isArray(effectiveTask.notes) ? effectiveTask.notes as Task['notes'] : []
+    const noteTarget = { id: taskId, notes: [...notes] as Task['notes'] }
+    const classification: FailureClassification = {
+      class: 'provider_unavailable',
+      confidence: 'medium',
+      evidence: [{
+        kind: 'task',
+        summary: 'Worker timed out before producing visible progress and no durable checkpoint exists.',
+        ref: typeof task.blockReason === 'string' ? task.blockReason : undefined,
+      }],
+      scope: 'task',
+      safePlaybooks: ['retry_current_task_context'],
+      needsHuman: false,
+    }
+    const plan = resolveRecoveryPlan({
+      taskId,
+      classification,
+      notes,
+    })
+    const classificationNote = appendFailureClassificationNote(noteTarget, classification, {
+      agentId: 'coordinator',
+      timestamp: now,
+    })
+    const playbookNote = appendRecoveryPlaybookNote(noteTarget, plan, {
+      agentId: 'coordinator',
+      timestamp: now,
+      status: 'started',
+      summary:
+        'Guildhall corrected legacy no-checkpoint provider recovery so the task retries from the current task context instead of pretending a checkpoint exists.',
+    })
+    const providerRecoveryNote = {
+      agentId: 'coordinator',
+      role: 'provider-recovery',
+      content:
+        'Guildhall corrected legacy no-checkpoint provider recovery. The task stays in automation so Guildhall can retry from the current task context or route to another provider lane without asking the owner to debug internal execution.',
+      timestamp: now,
+    } satisfies Task['notes'][number]
+    noteTarget.notes.push(providerRecoveryNote)
+    const notesToAppend = [classificationNote, playbookNote, providerRecoveryNote]
+    for (const [index, note] of notesToAppend.entries()) {
+      await appendTaskEvidence(projectPath, taskId, {
+        id: `note-${taskId}-${now.replace(/[^0-9A-Za-z]/g, '')}-provider-recovery-${index + 1}`,
+        kind: 'note',
+        recordedAt: now,
+        payload: note,
+      })
+    }
+    if (Array.isArray(task.notes)) task.notes = noteTarget.notes as unknown as Array<Record<string, unknown>>
+    task.updatedAt = now
     repaired += 1
   }
   if (repaired > 0) {
@@ -3955,6 +4061,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const run = supervisor.get(project.id)
       if (run?.status !== 'running' && run?.status !== 'stopping') {
         await repairStoppedRunPhantomActiveTasks(project.path)
+        await repairLegacyNoCheckpointProviderRecoveryPlans(project.path)
         await repairImportedShapingExecutionState(project.path)
       }
       const tasksPath = projectTasksPath(project.path)
@@ -8904,6 +9011,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const run = supervisor.get(project.id)
       if (run?.status !== 'running' && run?.status !== 'stopping') {
         await repairStoppedRunPhantomActiveTasks(project.path)
+        await repairLegacyNoCheckpointProviderRecoveryPlans(project.path)
         await repairImportedShapingExecutionState(project.path)
       }
       const tasks = await readTasksFileNormalized(tasksPath)
@@ -10521,6 +10629,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (!existsSync(tasksPath)) return c.json(empty)
       if (run?.status !== 'running' && run?.status !== 'stopping') {
         await repairStoppedRunPhantomActiveTasks(project.path)
+        await repairLegacyNoCheckpointProviderRecoveryPlans(project.path)
         await repairImportedShapingExecutionState(project.path)
       }
       const raw = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')) as
