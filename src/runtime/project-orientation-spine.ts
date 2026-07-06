@@ -1,5 +1,6 @@
 import { taskDisplayLabel } from '../shared/task-display-label.js'
 import {
+  executionScopeRows,
   taskScopeEligibility,
   taskScopeNodeId,
   type ProjectScope,
@@ -936,7 +937,7 @@ function progressFromScopeProjection(
 
 function scopeRowsFromProjection(projection: ProjectScopeProjection | null | undefined): OrientationScopeRow[] {
   if (!projection) return []
-  return projection.rows.map(row => ({
+  return executionScopeRows(projection.rows).map(row => ({
     taskId: row.taskId,
     nodeId: taskNodeId(row.taskId),
     title: row.title,

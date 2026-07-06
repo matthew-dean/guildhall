@@ -546,7 +546,7 @@ function summarizeRows(rows: readonly ProjectScopeRow[]): ProjectScopeProjection
   }
 }
 
-function executionRows(rows: readonly ProjectScopeRow[]): ProjectScopeRow[] {
+export function executionScopeRows(rows: readonly ProjectScopeRow[]): ProjectScopeRow[] {
   const visibleChildParentIds = new Set(
     rows
       .filter(row => row.parentTaskId && row.scope === 'included')
@@ -554,6 +554,8 @@ function executionRows(rows: readonly ProjectScopeRow[]): ProjectScopeRow[] {
   )
   return rows.filter(row => row.hierarchyRole !== 'parent' || !visibleChildParentIds.has(row.taskId))
 }
+
+const executionRows = executionScopeRows
 
 function summarizeStart(rows: readonly ProjectScopeRow[], selectedScope: ProjectScope | null): ProjectScopeProjection['start'] {
   const included = executionRows(rows).filter(row => row.scope === 'included')

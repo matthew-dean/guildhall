@@ -14485,6 +14485,74 @@ completion.
   semantics change only; no persisted project, task, release, or git-story
   fields are added, removed, or rewritten.
 
+2026-07-06T07:03:24Z - Kept Map scope ledger on the same executable-row model
+as release readiness.
+
+- Work id: `codex:map-executable-scope-rows-2026-07-06`.
+- User job: the 1,000-foot Project Map should not make the owner reconcile
+  two different counts for the same selected scope. If a parent task has been
+  split into materialized execution children, the ledger should count the
+  child work items that Guildhall can schedule and prove, while the hierarchy
+  view can still show the parent as a structural container.
+- Root-cause classification:
+  - project structure/scope/release modeling problem: selected release
+    membership had already replaced split parents with materialized children,
+    but `scopeRows` still exposed the raw parent row.
+  - task hierarchy/dependency/proof modeling problem: a done split parent with
+    unmet parent acceptance criteria could reappear as current ledger work even
+    after its child tasks satisfied the split.
+  - UI communication/orientation problem: Narrative Harness Map reported
+    `9 assigned work items` in the release header and `10 current work items`
+    in the scope ledger for the same Stage 1 scope.
+- Fix:
+  - Exported the existing executable-row projection helper from
+    `project-scope-projection.ts`.
+  - `project-orientation-spine.ts` now builds owner-facing `scopeRows` from
+    executable rows, matching the counts, Start model, and release readiness
+    semantics that already exclude split parents when included children exist.
+- Contract Touch Decision:
+  - Work id: `codex:map-executable-scope-rows-2026-07-06`.
+  - Touched contracts: project orientation spine `scopeRows` semantics;
+    project-scope projection helper surface; Project Map scope-ledger read
+    model.
+  - Contracts considered but not touched: persisted task schema, persisted
+    release schema, release readiness payload, Start readiness payload,
+    workspace-import draft schema. Split parents still exist in the structural
+    hierarchy and task records; they are only removed from executable ledger
+    rows when materialized child rows are present.
+  - Required follow-up: installed-app API and browser proof must show
+    Narrative Harness Stage 1 with `9` assigned/current executable work items
+    in Map, not `9` in one place and `10` in another.
+  - Proof required: failing regression for split-parent `scopeRows`, focused
+    scope-projection and orientation-spine tests, contract detector, diff
+    check, build, installed-app API proof, browser proof on Narrative Harness
+    Map.
+  - Proof provided so far: the regression first failed with
+    `task-parent` included alongside `task-model`, `task-world`, and
+    `task-spatial`; after the model fix,
+    `project-scope-projection.test.ts` and
+    `project-orientation-spine.test.ts` passed `58` tests.
+  - Completed proof: after `node ./build.mjs`, macOS package reinstall,
+    `guildhall stop; guildhall start`, and `/api/stale-server` reporting
+    `stale:false` for PID `30741`, installed
+    `/api/project/spine?projectId=narrative-harness` returned
+    `releaseNodeCount:9`, `includedWorkCount:9`, `scopeRowIncludedCount:9`,
+    and `hasParentInIncludedRows:false`. The included rows were the six Stage 1
+    proof tasks plus the three materialized child tasks for DeepInfra drafting
+    model, world-state continuity, and spatial/geographic continuity.
+  - Browser proof: installed Narrative Harness Map at desktop `1280x720`
+    showed `9 assigned work items`, `9 current work items · 21 later work
+    items`, no `10 current work items` ledger copy, and no split-parent row in
+    the scope ledger. Mobile `390x720` showed the same `9 assigned` and
+    `9 current` signals with no horizontal overflow. The split parent remains
+    visible later in the structural hierarchy, where it belongs.
+  - Owner-review items: none. This preserves the owner-understandable
+    structure while making the ledger match executable work.
+  - Apply/revert behavior: revert the `scopeRowsFromProjection()` helper use
+    to restore raw parent rows in the Map ledger; no data rollback is required.
+- Schema Migration Decision: none. This changes a derived read model only; no
+  persisted project, task, release, or import state is rewritten.
+
 2026-07-06T05:01:46Z - Fixed worker recovery ticks that falsely reported
 `(no change)` while Guildhall had preserved real progress or recorded a
 runtime recovery action.

@@ -789,6 +789,106 @@ describe('buildProjectOrientationSpine', () => {
     })
   })
 
+  it('uses executable scope rows so split parents do not inflate the map ledger', () => {
+    const tasks = [
+      {
+        id: 'task-parent',
+        title: 'Define Narrative Harness MVP drafting model and physical-world review lanes',
+        description: 'Parent split into concrete proof lanes.',
+        domain: 'product',
+        projectPath: '/tmp/narrative-harness',
+        status: 'done',
+        priority: 'normal',
+        hierarchy: { childIds: ['task-model', 'task-world', 'task-spatial'] },
+        releaseIds: [],
+        spec: 'Split parent.',
+        acceptanceCriteria: [{ id: 'ac-parent', description: 'Children define the lanes.', verifiedBy: 'review', met: false }],
+      },
+      {
+        id: 'task-model',
+        title: 'Select and prove DeepInfra drafting model',
+        description: 'Select the drafting model.',
+        domain: 'product',
+        projectPath: '/tmp/narrative-harness',
+        status: 'done',
+        priority: 'normal',
+        hierarchy: { parentId: 'task-parent', relation: 'decomposes' },
+        spec: 'Model spec.',
+        acceptanceCriteria: [{ id: 'ac-model', description: 'Model selected.', verifiedBy: 'review', met: true }],
+      },
+      {
+        id: 'task-world',
+        title: 'Define world-state continuity review lane',
+        description: 'Define world-state reviewer.',
+        domain: 'product',
+        projectPath: '/tmp/narrative-harness',
+        status: 'done',
+        priority: 'normal',
+        hierarchy: { parentId: 'task-parent', relation: 'decomposes' },
+        spec: 'World-state spec.',
+        acceptanceCriteria: [{ id: 'ac-world', description: 'Reviewer defined.', verifiedBy: 'review', met: true }],
+      },
+      {
+        id: 'task-spatial',
+        title: 'Define spatial/geographic continuity review lane',
+        description: 'Define spatial reviewer.',
+        domain: 'product',
+        projectPath: '/tmp/narrative-harness',
+        status: 'done',
+        priority: 'normal',
+        hierarchy: { parentId: 'task-parent', relation: 'decomposes' },
+        spec: 'Spatial spec.',
+        acceptanceCriteria: [{ id: 'ac-spatial', description: 'Reviewer defined.', verifiedBy: 'review', met: true }],
+      },
+    ] as any[]
+    const scopeProjection = buildProjectScopeProjection({
+      version: 1,
+      lastUpdated: '2026-07-06T07:10:00.000Z',
+      selectedReleaseId: 'stage-1-fixture-and-evaluation-harness',
+      releases: [{
+        id: 'stage-1-fixture-and-evaluation-harness',
+        label: 'Stage 1 Fixture And Evaluation Harness',
+        kind: 'release',
+        state: 'active',
+        source: 'inferred',
+        nodeIds: ['work:task-parent'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks,
+    })
+
+    const spine = buildProjectOrientationSpine({
+      projectId: 'narrative-harness',
+      now: '2026-07-06T07:10:00.000Z',
+      selectedReleaseId: 'stage-1-fixture-and-evaluation-harness',
+      releases: [{
+        id: 'stage-1-fixture-and-evaluation-harness',
+        label: 'Stage 1 Fixture And Evaluation Harness',
+        kind: 'release',
+        state: 'active',
+        source: 'inferred',
+        nodeIds: ['work:task-parent'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks,
+      scopeProjection,
+    })
+
+    expect(spine.selectedRelease?.nodeIds).toEqual([
+      'work:task-model',
+      'work:task-world',
+      'work:task-spatial',
+    ])
+    expect(spine.summary.includedWorkCount).toBe(3)
+    expect(spine.scopeRows.filter(row => row.scope === 'included').map(row => row.taskId)).toEqual([
+      'task-model',
+      'task-world',
+      'task-spatial',
+    ])
+  })
+
   it('uses release records recovered from the workspace import draft as the visible scope', () => {
     const spine = buildProjectOrientationSpine({
       projectId: 'narrative-harness',
