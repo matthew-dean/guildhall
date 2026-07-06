@@ -15266,6 +15266,118 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-07-06T15:18:00Z - Reconciled Narrative Harness MVP completion across
+release readiness, git story, start readiness, and project map communication.
+
+- Work id: `codex:narrative-harness-mvp-release-truth-2026-07-06`.
+- User job: a project owner should be able to open Narrative Harness and tell
+  that the selected near-term proof scope is complete, what work it includes,
+  and that Guildhall is not asking for stale workspace-import refresh work when
+  the bounded release is already consumed.
+- Root-cause triage:
+  - Data model/project structure: legacy skipped merge records could survive
+    after task work was already merged into the project history, leaving release
+    readiness blocked by stale repository state.
+  - Release/start ownership: `projectStartReadiness` asked workspace-import
+    coverage before selected-release terminal state, so stale broader import
+    drift could override the true bounded release answer.
+  - UI/orientation: Map and Release were downstream victims of the shared
+    readiness contradiction; the fix was made in the shared runtime model.
+- Fix:
+  - Added git-driver ancestry checks and reconciled legacy `skipped` merge
+    records to `reconciled` when the task worktree HEAD is already contained in
+    the project repository history.
+  - Treated recorded completion proof as authoritative enough to settle stale
+    blocked task status in release projection.
+  - Filtered release blockers through effective task status before counting
+    them as selected-release blockers.
+  - Let selected-release terminal start states return before stale workspace
+    import coverage blockers, while preserving import-drift blocking for
+    unbounded projects.
+  - Updated active Narrative Harness system-local task state so the DeepInfra
+    drafting task says "broad-genre and legal adult fiction" in the owner-facing
+    title, not only in hidden acceptance criteria.
+- Live Narrative Harness proof:
+  - API `/api/stale-server`: `stale:false`, installed app path
+    `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+  - API `/api/project?projectId=narrative-harness`: `startReadiness.code` is
+    `all_terminal`, primary action is `null`, run control says `No runnable
+    tasks`, release readiness is `ready:true`, totals are `14` tasks, `14` done,
+    and `0` blocking, human, proof, dirty-checkout, or git-story blockers.
+  - Release page at desktop `1280px`: visible text includes `Near-term proof
+    scope is complete.`, `Ready`, `14/14 done`, `0 open release checks`,
+    `Project checkout clean`, and `Repository follow-up clear`; page
+    `scrollWidth` equals `clientWidth`.
+  - Map page at desktop `1280px`: visible text includes the selected
+    near-term proof scope plus `Select and prove a DeepInfra drafting model for
+    broad-genre and legal adult fiction chapter writing.`, world-state
+    continuity review, and spatial/geographic continuity review covering travel,
+    walking speed, map consistency, weather, light, and physical plausibility;
+    no workspace-import refresh or under-scoped warning is visible.
+  - Map page at mobile `390px`: no horizontal overflow and the DeepInfra/adult,
+    world-state, and spatial/geographic tasks remain visible in the route text.
+- Narrative Harness repo proof landed separately:
+  - Merged and pushed the author-intent input task branch to Narrative Harness
+    `main`.
+  - `pnpm run prove:author-intent-inputs`, `pnpm run prove:generation`,
+    `pnpm run prove:world-state-continuity`,
+    `pnpm run prove:spatial-geographic-continuity`,
+    `pnpm run prove:dialogue-and-character-voice`,
+    `pnpm run prove:reader-knowledge-and-revelation`,
+    `pnpm run prove:theme-and-meaning-review`, and `pnpm run build` passed.
+- Verification:
+  - `CI=true pnpm vitest run src/runtime/__tests__/serve-release-readiness.test.ts src/runtime/__tests__/git-story.test.ts`
+    passed `56` tests.
+  - `CI=true pnpm vitest run src/runtime/__tests__/serve-settings.test.ts -t "keeps a completed selected release from being blocked by stale broader import coverage|does not call a selected release consumed"`
+    passed the two selected-release/start-readiness regression tests.
+  - `node ./build.mjs` passed.
+  - `CI=true pnpm lint:contracts` passed.
+  - `CI=true pnpm dev:install`; `guildhall stop`; `guildhall start`;
+    installed-app API/browser proof listed above.
+
+source: codex:narrative-harness-mvp-release-truth-2026-07-06
+
+2026-07-06T14:50:00Z - Fixed release readiness reconciliation for legacy
+skipped task merges and stale blocked status.
+
+- Work id: `codex:narrative-harness-mvp-readiness-reconciliation-2026-07-06`.
+- User job: when Narrative Harness MVP work has actually landed and been
+  proven, Guildhall must show the current release as ready instead of forcing
+  the owner to understand stale task worktree metadata.
+- Root-cause classification:
+  - `3` task hierarchy/dependency/proof modeling: a `mergeRecord.result:
+    skipped` marker was treated as permanently stronger than real git history.
+  - `4` scheduler/action-state: stale `blocked` task status and raw scope
+    projection counts could outvote later completion proof.
+  - `5` UI communication/orientation: the owner-facing release summary exposed
+    a false repository follow-up even after the repo was clean and pushed.
+- Fix:
+  - Added shared git-driver primitives for `headSha()` and `isAncestor()`.
+  - Release readiness now reconciles legacy skipped merge records when the task
+    worktree HEAD is already contained in the target project repository history
+    or upstream history.
+  - `reconciled` merge records classify as merged with an explicit reason.
+  - Recorded completion proof can settle stale `blocked` status, while active
+    in-progress statuses still cannot be silently marked done.
+  - Projection-derived release blockers and `humanBlockingCount` are filtered
+    through the same effective task status used by the visible blocker lists.
+- Narrative Harness repo action:
+  - Merged the previously unlanded author-intent task branch into
+    `/Users/matthew/git/oss/narrative-harness` main as `d8183f2`.
+  - Pushed Narrative Harness main to Bitbucket.
+  - Verified with PNPM: `prove:author-intent-inputs`, `prove:generation`,
+    `prove:world-state-continuity`, `prove:spatial-geographic-continuity`,
+    `prove:dialogue-and-character-voice`,
+    `prove:reader-knowledge-and-revelation`,
+    `prove:theme-and-meaning-review`, and `build`.
+- Verification:
+  - `CI=true pnpm vitest run src/runtime/__tests__/git-story.test.ts
+    src/runtime/__tests__/serve-release-readiness.test.ts` passed `56` tests.
+  - `node ./build.mjs` passed.
+  - `CI=true pnpm lint:contracts` passed.
+
+source: codex:narrative-harness-mvp-readiness-reconciliation-2026-07-06
+
 2026-07-06T13:27:00Z - Narrative Harness recovery wording and allowed progress tools.
 
 - Work id: `codex:narrative-harness-mvp-recovery-2026-07-06`.

@@ -85,6 +85,16 @@ describe('classifyGitStoryState', () => {
       mergeRecordResult: 'merged',
     })).toBe('merged')
   })
+
+  it('reports merged when a skipped merge record is reconciled from git history', () => {
+    expect(classifyGitStoryState({
+      changedCount: 0,
+      untrackedCount: 0,
+      ahead: 0,
+      hasUpstream: false,
+      mergeRecordResult: 'reconciled',
+    })).toBe('merged')
+  })
 })
 
 describe('inspectGitStory', () => {

@@ -78,7 +78,7 @@ export function recordedCompletionProofCanSettleTaskStatus(task: unknown): boole
   const record = recordValue(task)
   if (!record || !taskHasRecordedCompletionProof(record)) return false
   const status = stringValue(record.status)
-  return status === 'done' || status === 'pending_pr'
+  return status === 'done' || status === 'pending_pr' || status === 'blocked'
 }
 
 export function latestRecordedCompletionProofAt(task: unknown): string | null {

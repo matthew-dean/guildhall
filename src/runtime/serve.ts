@@ -2392,14 +2392,19 @@ function summarizeScopedReleaseWork(
   for (const spec of unapprovedSpecs) humanBlockingKeys.add(`task:${spec.id}`)
   for (const blocked of blockedByAgent) humanBlockingKeys.add(`task:${blocked.id}`)
 
-  const projectionReleaseBlockers = scopeProjection.release.blockers.map(blocker => {
-    const task = blocker.owningTaskId ? tasksById.get(blocker.owningTaskId) : null
-    return {
-      id: blocker.id,
-      title: task?.title ?? blocker.id,
-      label: blocker.label,
-    }
-  })
+  const projectionReleaseBlockers = scopeProjection.release.blockers
+    .filter((blocker) => {
+      const task = blocker.owningTaskId ? tasksById.get(blocker.owningTaskId) : null
+      return !task || !terminalStatuses.has(effectiveReleaseStatus(task))
+    })
+    .map(blocker => {
+      const task = blocker.owningTaskId ? tasksById.get(blocker.owningTaskId) : null
+      return {
+        id: blocker.id,
+        title: task?.title ?? blocker.id,
+        label: blocker.label,
+      }
+    })
 
   return {
     statusCounts,
@@ -2411,7 +2416,7 @@ function summarizeScopedReleaseWork(
     blockedByAgent,
     proofMissingDoneTasks,
     releaseBlockers: projectionReleaseBlockers.length > 0 ? projectionReleaseBlockers : [...releaseBlockersById.values()],
-    humanBlockingCount: Math.max(scopeProjection.counts.humanBlocking, humanBlockingKeys.size),
+    humanBlockingCount: Math.max(projectionReleaseBlockers.length, humanBlockingKeys.size),
     unfinishedCount,
     scopedTasks,
     gitStoryTasks: executionScopedTasks,
@@ -2988,11 +2993,15 @@ function taskNeedsTaskGitStory(
 function taskForGitStory(
   task: Record<string, unknown>,
   workspace?: { worktreePath?: string },
+  mergeRecordResultOverride?: string,
 ): Parameters<typeof inspectGitStory>[1]['task'] {
   const mergeRecord =
     task.mergeRecord && typeof task.mergeRecord === 'object' && !Array.isArray(task.mergeRecord)
       ? task.mergeRecord as { result?: string }
       : undefined
+  const effectiveMergeRecord = mergeRecordResultOverride
+    ? { ...(mergeRecord ?? {}), result: mergeRecordResultOverride }
+    : mergeRecord
   return {
     ...(typeof task.id === 'string' ? { id: task.id } : {}),
     ...(typeof task.title === 'string' ? { title: task.title } : {}),
@@ -3001,9 +3010,36 @@ function taskForGitStory(
       : typeof task.worktreePath === 'string'
         ? { worktreePath: task.worktreePath }
         : {}),
-    ...(mergeRecord ? { mergeRecord } : {}),
+    ...(effectiveMergeRecord ? { mergeRecord: effectiveMergeRecord } : {}),
     ...(taskGitStoryOverride(task) ? { gitStory: taskGitStoryOverride(task) } : {}),
   }
+}
+
+async function reconciledSkippedMergeResult(
+  driver: NodeGitDriver,
+  input: {
+    task: Record<string, unknown>
+    worktreePath: string | null
+    targetRepoRoot: string
+  },
+): Promise<string | undefined> {
+  const mergeRecord =
+    input.task.mergeRecord && typeof input.task.mergeRecord === 'object' && !Array.isArray(input.task.mergeRecord)
+      ? input.task.mergeRecord as { result?: string }
+      : undefined
+  if (mergeRecord?.result !== 'skipped' || !input.worktreePath) return undefined
+  if (input.task.status !== 'done' && input.task.status !== 'pending_pr') return undefined
+  try {
+    const taskHead = await driver.headSha(input.worktreePath)
+    if (await driver.isAncestor(input.targetRepoRoot, taskHead, 'HEAD')) return 'reconciled'
+    const targetStatus = await driver.statusSummary(input.targetRepoRoot)
+    if (targetStatus.upstream && await driver.isAncestor(input.targetRepoRoot, taskHead, targetStatus.upstream)) {
+      return 'reconciled'
+    }
+  } catch {
+    return undefined
+  }
+  return undefined
 }
 
 function taskGitStoryRepoPath(
@@ -3108,12 +3144,18 @@ async function gitStoryForTask(
   const existingWorktreePath = taskExistingWorktreePath(task, workspace)
   const repoRoot = existingWorktreePath ?? childProject?.path ?? resolveEffectiveTaskProjectPath(task as Pick<Task, 'projectPath'>, projectPath)
   const effectiveInspectedPath = existingWorktreePath ?? childProject?.path ?? inspectedPath
+  const targetRepoRoot = childProject?.path ?? resolveEffectiveTaskProjectPath(task as Pick<Task, 'projectPath'>, projectPath)
+  const mergeRecordResultOverride = await reconciledSkippedMergeResult(driver, {
+    task,
+    worktreePath: existingWorktreePath,
+    targetRepoRoot,
+  })
   return inspectGitStory(driver, {
     repoRoot,
     ...(childProject?.id ? { repoId: childProject.id } : {}),
     ...(childProject?.label ?? childProject?.id ? { repoLabel: childProject.label ?? childProject.id } : {}),
     inspectedPath: effectiveInspectedPath,
-    task: taskForGitStory(task, workspace),
+    task: taskForGitStory(task, workspace, mergeRecordResultOverride),
     inspectPr: false,
   })
 }
@@ -5399,6 +5441,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
     const ownerInputBlocker = startBlockerForOwnerInput(input.projectPath)
     if (ownerInputBlocker) return ownerInputBlocker
 
+    const terminal = await terminalStartState(input.projectPath, input.requestedTaskId)
+    if (terminal?.selectedReleaseTerminal) {
+      return startReadinessForTerminalState(terminal)
+    }
+
     const hasMaterializedStartWork = await hasMaterializedScopedStartWork(input.projectPath, input.requestedTaskId)
     const workspaceImportCoverageBlocker = hasMaterializedStartWork
       ? null
@@ -5413,18 +5460,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
 	      if (selectedReleaseReviewBlocker) return selectedReleaseReviewBlocker
 	    }
 
-	    const terminal = await terminalStartState(input.projectPath, input.requestedTaskId)
     if (terminal) {
-      return {
-        canStart: false,
-        code: terminal.code,
-        message: terminal.message,
-        ...(terminal.actionHref ? { actionHref: terminal.actionHref } : {}),
-        ...(terminal.focusTaskId ? { focusTaskId: terminal.focusTaskId } : {}),
-        ...(terminal.focusTaskTitle ? { focusTaskTitle: terminal.focusTaskTitle } : {}),
-        ...(terminal.focusKind ? { focusKind: terminal.focusKind } : {}),
-        ...(terminal.count ? { count: terminal.count } : {}),
-      }
+      return startReadinessForTerminalState(terminal)
     }
 
 	    if (input.allowTaskReadinessBlocker !== false) {
@@ -5554,6 +5591,28 @@ export function buildServeApp(opts: ServeOptions = {}): {
     return await startStatusForPausedLiveWork(projectPath, requestedTaskId) ?? { canStart: true }
   }
 
+  function startReadinessForTerminalState(terminal: Awaited<ReturnType<typeof terminalStartState>> & {}): {
+    canStart: false
+    code?: string
+    message?: string
+    actionHref?: string
+    focusTaskId?: string
+    focusTaskTitle?: string
+    focusKind?: string
+    count?: number
+  } {
+    return {
+      canStart: false,
+      code: terminal.code,
+      message: terminal.message,
+      ...(terminal.actionHref ? { actionHref: terminal.actionHref } : {}),
+      ...(terminal.focusTaskId ? { focusTaskId: terminal.focusTaskId } : {}),
+      ...(terminal.focusTaskTitle ? { focusTaskTitle: terminal.focusTaskTitle } : {}),
+      ...(terminal.focusKind ? { focusKind: terminal.focusKind } : {}),
+      ...(terminal.count ? { count: terminal.count } : {}),
+    }
+  }
+
   async function hasMaterializedScopedStartWork(projectPath: string, requestedTaskId?: string): Promise<boolean> {
     const tasksPath = projectTasksPath(projectPath)
     if (!existsSync(tasksPath)) return false
@@ -5677,6 +5736,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       focusTaskTitle?: string
       focusKind?: string
       count?: number
+      selectedReleaseTerminal?: boolean
     stopSummary: {
       reason: 'all_terminal'
       message: string
@@ -5811,6 +5871,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         focusTaskTitle: first.title,
         focusKind: 'proof',
         count: proofMissingDoneTasks.length,
+        ...(selectedReleaseScope ? { selectedReleaseTerminal: true } : {}),
         stopSummary: {
           reason: 'all_terminal',
           message: detailMessage,
@@ -5845,6 +5906,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         actionHref: '/release',
         focusKind: 'repository_followup',
         count: gitStory.blockers.length,
+        ...(selectedReleaseScope ? { selectedReleaseTerminal: true } : {}),
         stopSummary: {
           reason: 'all_terminal',
           message: detailMessage,
@@ -5887,6 +5949,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
 	      canStart: false,
 	      code: 'all_terminal',
       message,
+      ...(selectedReleaseScope ? { selectedReleaseTerminal: true } : {}),
       stopSummary: {
         reason: 'all_terminal',
         message: detailMessage,

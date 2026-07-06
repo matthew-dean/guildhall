@@ -1198,6 +1198,110 @@ describe('POST /api/project/start', () => {
     })
   })
 
+  it('keeps a completed selected release from being blocked by stale broader import coverage', async () => {
+    const now = new Date().toISOString()
+    await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'harness', 'implementation-roadmap.md'),
+      [
+        '# Implementation Roadmap',
+        '',
+        '## Stage 1: Fixture And Evaluation Harness',
+        '',
+        '## Current Next Milestone',
+        '',
+        'The next milestone is Stage 1: Fixture And Evaluation Harness.',
+        '',
+        '1. Define fixture, expected-record, prototype-run, and evaluation schemas.',
+      ].join('\n'),
+      'utf8',
+    )
+    await writeSystemTasks({
+      version: 1,
+      lastUpdated: now,
+      selectedReleaseId: 'headless-mvp',
+      releases: [
+        {
+          id: 'headless-mvp',
+          label: 'Headless MVP',
+          kind: 'release',
+          state: 'active',
+          source: 'release_plan',
+          nodeIds: ['work:current-done'],
+        },
+      ],
+      tasks: [
+        {
+          id: 'task-workspace-import',
+          title: 'Review existing project work',
+          description: 'Reserved importer',
+          domain: '_workspace_import',
+          projectPath: tmpDir,
+          status: 'done',
+          priority: 'normal',
+          acceptanceCriteria: [],
+          dependsOn: [],
+          outOfScope: [],
+          spec: [
+            '```yaml',
+            'goals:',
+            '  - id: imported-direction',
+            '    title: Narrative Harness',
+            '    rationale: A stale importer run only saved the project goal.',
+            '```',
+          ].join('\n'),
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          id: 'current-done',
+          title: 'Finish current release proof',
+          description: 'The selected release work is finished.',
+          domain: 'core',
+          status: 'done',
+          releaseIds: ['headless-mvp'],
+          priority: 'normal',
+          acceptanceCriteria: [],
+          outOfScope: [],
+          dependsOn: [],
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          adjudications: [],
+          escalations: [],
+          agentIssues: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+    })
+    setProvider('anthropic-api', { apiKey: 'sk-ant-test' })
+    updateGlobalConfig({ preferredProvider: 'anthropic-api' })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await applyStorageBoundaryMigration(app)
+    const projectRes = await app.fetch(new Request(scoped('/api/project')))
+    expect(projectRes.status).toBe(200)
+    const body = await projectRes.json() as {
+      startReadiness?: { canStart?: boolean; code?: string; message?: string; actionHref?: string }
+      actionModel?: {
+        primaryAction?: { source?: string; label?: string; detail?: string } | null
+        runControl?: { label?: string; startEnabled?: boolean }
+      }
+      orientationSpine?: { summary?: { headline?: string; topBlocker?: string; nextAction?: string } }
+    }
+
+    expect(body.startReadiness?.canStart).toBe(false)
+    expect(body.startReadiness?.code).not.toBe('workspace_import_refresh_needed')
+    expect(body.startReadiness?.message ?? '').not.toContain('under-scoped')
+    expect(body.actionModel?.primaryAction?.label ?? '').not.toContain('Workspace import')
+    expect(body.actionModel?.runControl?.startEnabled).toBe(false)
+    expect(body.orientationSpine?.summary?.headline ?? '').not.toContain('needs import refresh')
+    expect(body.orientationSpine?.summary?.topBlocker ?? '').not.toBe('Workspace import is under-scoped.')
+  })
+
   it('treats inferred release membership as consumed when only later work remains runnable', async () => {
     const now = new Date().toISOString()
     await writeSystemTasks({

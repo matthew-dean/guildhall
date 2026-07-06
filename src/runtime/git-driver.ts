@@ -164,6 +164,10 @@ export interface GitDriver {
   statusSummary(repoRoot: string): Promise<GitStatusSummary>
   /** Read local commits ahead of upstream. */
   localCommits(repoRoot: string, upstream: string): Promise<Array<{ sha: string; subject: string }>>
+  /** Read HEAD for a repo or worktree. */
+  headSha(repoRoot: string): Promise<string>
+  /** True when `ancestorSha` is already contained by `descendantRef`. */
+  isAncestor(repoRoot: string, ancestorSha: string, descendantRef: string): Promise<boolean>
   /** Read PR metadata for a branch, if the GitHub CLI can resolve one. */
   pullRequestForBranch(repoRoot: string, branch: string): Promise<PullRequestResult>
   /** Commit the current branch's dirty work without changing branches. */
@@ -258,6 +262,22 @@ export class NodeGitDriver implements GitDriver {
         return { sha, subject: subjectParts.join('\t') }
       })
       .filter((commit) => commit.sha.length > 0)
+  }
+
+  async headSha(repoRoot: string): Promise<string> {
+    const gitRoot = await resolveGitTopLevel(repoRoot)
+    const { stdout } = await execGit(['rev-parse', 'HEAD'], { cwd: gitRoot })
+    return stdout.trim()
+  }
+
+  async isAncestor(repoRoot: string, ancestorSha: string, descendantRef: string): Promise<boolean> {
+    const gitRoot = await resolveGitTopLevel(repoRoot)
+    try {
+      await execGit(['merge-base', '--is-ancestor', ancestorSha, descendantRef], { cwd: gitRoot })
+      return true
+    } catch {
+      return false
+    }
   }
 
   async pullRequestForBranch(repoRoot: string, branch: string): Promise<PullRequestResult> {
@@ -590,6 +610,8 @@ export interface InMemoryGitDriverState {
   currentBranch: string
   statuses: Record<string, GitStatusSummary>
   localCommits: Record<string, Array<{ sha: string; subject: string }>>
+  headShas: Record<string, string>
+  ancestors: Record<string, boolean>
   pullRequests: Record<string, PullRequestResult>
   commits: Array<{ repoRoot: string; message: string; result: CheckpointResult }>
   createdWorktrees: CreateWorktreeOptions[]
@@ -625,6 +647,8 @@ export class InMemoryGitDriver implements GitDriver {
       currentBranch: opts.currentBranch ?? 'main',
       statuses: {},
       localCommits: {},
+      headShas: {},
+      ancestors: {},
       pullRequests: {},
       commits: [],
       createdWorktrees: [],
@@ -670,6 +694,12 @@ export class InMemoryGitDriver implements GitDriver {
   setLocalCommits(repoRoot: string, commits: Array<{ sha: string; subject: string }>): void {
     this.state.localCommits[repoRoot] = commits
   }
+  setHeadSha(repoRoot: string, sha: string): void {
+    this.state.headShas[repoRoot] = sha
+  }
+  setAncestor(repoRoot: string, ancestorSha: string, descendantRef: string, value: boolean): void {
+    this.state.ancestors[`${repoRoot}\0${ancestorSha}\0${descendantRef}`] = value
+  }
   setPullRequest(repoRoot: string, result: PullRequestResult): void {
     this.state.pullRequests[repoRoot] = result
   }
@@ -697,6 +727,14 @@ export class InMemoryGitDriver implements GitDriver {
 
   async localCommits(repoRoot: string, _upstream: string): Promise<Array<{ sha: string; subject: string }>> {
     return this.state.localCommits[repoRoot] ?? []
+  }
+
+  async headSha(repoRoot: string): Promise<string> {
+    return this.state.headShas[repoRoot] ?? 'HEAD'
+  }
+
+  async isAncestor(repoRoot: string, ancestorSha: string, descendantRef: string): Promise<boolean> {
+    return this.state.ancestors[`${repoRoot}\0${ancestorSha}\0${descendantRef}`] ?? false
   }
 
   async pullRequestForBranch(repoRoot: string, _branch: string): Promise<PullRequestResult> {
