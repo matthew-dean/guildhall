@@ -14577,6 +14577,65 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-07-06T09:30:00Z - Stopped selected-release Start from calling visible
+release blockers complete.
+
+- Work id:
+  `codex:selected-release-start-readiness-release-truth-2026-07-06`.
+- User job: when Guildhall shows a selected release/current scope as blocked in
+  Overview, Map, or Release, Start/Resume must not tell the owner that the same
+  scope is complete or that no runnable/recoverable work remains.
+- Root-cause classification:
+  - project structure/scope/release modeling problem: orientation merged
+    workspace-import/current-scope truth into the selected release, but
+    Start/Resume still reasoned from only persisted task `releaseIds` and
+    persisted release containers.
+  - scheduler/action-state logic problem: `terminalStartState()` could return
+    `all_terminal` while the shared release truth exposed human-blocking
+    release blockers from the product-visible scope.
+  - UI communication/orientation problem: Overview could simultaneously show
+    release blockers and a disabled run control whose reason said the release
+    was complete.
+- Fix:
+  - `startBlockerForSelectedReleaseReview()` now falls back to shared
+    release-readiness blockers from `buildOrientationSpineWithScopedReleaseTruth`
+    when no materialized unapproved-spec list is available. Proof-only blockers
+    still flow through the existing `proof_evidence_missing` path.
+  - Added an API regression where `workspace-goals.json` provides current
+    release membership, the raw task queue lacks `releaseIds` on blocked/spec
+    tasks, and `/api/project` must not report `all_terminal`.
+  - Added a projection regression proving release `nodeIds` remain executable
+    scope membership even when individual task rows lack `releaseIds`.
+- Contract Touch Decision:
+  - Touched contracts: project Start readiness, project action model input,
+    selected release/current-scope execution boundary, release blocker
+    communication.
+  - Contracts considered but not touched: persisted task/release schema,
+    workspace-goals schema, proof-evidence schema. This change makes runtime
+    read models agree without rewriting project state.
+  - Required follow-up: reconcile release-readiness totals with orientation
+    included-work counts. Live Narrative Harness now reports the same blocker
+    truth across Start and Release, but Release totals still count only `9`
+    concrete execution tasks while orientation reports `16` included work
+    items.
+  - Proof provided: focused red regression failed with `code:"all_terminal"`;
+    after the fix, the focused regression passed. Full affected suites passed:
+    `project-scope-projection.test.ts`, `serve-dashboard.test.ts`, and
+    `serve-release-readiness.test.ts` passed `56` tests. `git diff --check`,
+    `node scripts/contract-touch-detector.mjs`, and `pnpm build` passed.
+  - Installed-app proof: after `pnpm dev:install`, `guildhall stop`,
+    `guildhall start`, `/api/stale-server` reported `stale:false` for PID
+    `90804`. Live `/api/project?projectId=narrative-harness` now returns
+    `startReadiness.code:"no_unattended_progress"`,
+    `focusTaskId:"context-packet-compaction-core"`, run control
+    `label:"Needs recovery"`, release `state:"blocked"`, and the same four
+    release blockers shown by `/api/project/release-readiness`. It no longer
+    says Stage 1 is complete while release blockers exist.
+  - Apply/revert behavior: reverting the `startBlockerForSelectedReleaseReview`
+    fallback restores the previous split-brain state where Start can report
+    selected release completion from persisted task membership while the
+    product-visible release spine remains blocked.
+
 2026-07-06T09:20:00Z - Attached recovered Narrative Harness MVP review work
 to the selected release.
 

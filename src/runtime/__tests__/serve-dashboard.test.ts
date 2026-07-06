@@ -219,6 +219,114 @@ describe('GET /api/project/spine', () => {
     }
   })
 
+  it('does not report a selected release complete when release node tasks still block start', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-spine-node-release-blockers-'))
+    tempDirs.push(tmpDir)
+    const projectId = bootstrapWorkspace(tmpDir, { name: `Spine Node Blockers ${path.basename(tmpDir)}` }).id ?? path.basename(tmpDir)
+    await writeProjectStateJsonAsync(tmpDir, 'workspace-goals.json', {
+      version: 3,
+      recordedAt: new Date().toISOString(),
+      goals: [],
+      tasks: [
+        {
+          id: 'task-done',
+          title: 'Completed release task',
+          description: 'Done work.',
+          domain: 'core',
+          priority: 'normal',
+          scope: 'current',
+          releaseIds: ['stage-1'],
+          references: [],
+        },
+        {
+          id: 'task-blocked',
+          title: 'Blocked release task',
+          description: 'Blocked work.',
+          domain: 'core',
+          priority: 'normal',
+          scope: 'current',
+          releaseIds: ['stage-1'],
+          references: [],
+        },
+        {
+          id: 'task-spec-review',
+          title: 'Review release spec',
+          description: 'Spec work.',
+          domain: 'core',
+          priority: 'normal',
+          scope: 'current',
+          releaseIds: ['stage-1'],
+          references: [],
+        },
+      ],
+      milestones: [],
+      context: [],
+      approved: {
+        goalCount: 0,
+        taskCount: 3,
+        milestoneCount: 0,
+        currentTaskCount: 3,
+        laterTaskCount: 0,
+        taskIds: ['task-done', 'task-blocked', 'task-spec-review'],
+        currentTaskIds: ['task-done', 'task-blocked', 'task-spec-review'],
+        laterTaskIds: [],
+      },
+      detected: null,
+    })
+    await writeProjectStateJsonAsync(tmpDir, 'TASKS.json', {
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      tasks: [
+        makeTask(tmpDir, {
+          id: 'task-done',
+          title: 'Completed release task',
+          status: 'done',
+          releaseIds: ['stage-1'],
+        }),
+        makeTask(tmpDir, {
+          id: 'task-blocked',
+          title: 'Blocked release task',
+          status: 'blocked',
+          releaseIds: [],
+          blockReason: 'Needs recovery.',
+        }),
+        makeTask(tmpDir, {
+          id: 'task-spec-review',
+          title: 'Review release spec',
+          status: 'spec_review',
+          releaseIds: [],
+          spec: 'Review the release spec.',
+          acceptanceCriteria: [{ id: 'AC-1', description: 'Spec is reviewed.', verifiedBy: 'review', met: false }],
+        }),
+      ],
+    } satisfies TaskQueue)
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const res = await app.fetch(new Request(projectUrl(projectId, '/api/project')))
+
+    expect(res.status).toBe(200)
+    const body = await res.json() as {
+      startReadiness?: { code?: string; message?: string; focusTaskId?: string; focusKind?: string }
+      actionModel?: { runControl?: { label?: string; startEnabled?: boolean; disabledReason?: string } }
+      orientationSpine?: { release?: { state?: string; blockers?: Array<{ id?: string }> } }
+    }
+    expect(body.orientationSpine?.release?.state).toBe('blocked')
+    expect(body.orientationSpine?.release?.blockers?.map(blocker => blocker.id)).toEqual([
+      'task-blocked',
+      'task-spec-review',
+    ])
+    expect(body.startReadiness).toMatchObject({
+      code: 'no_unattended_progress',
+      focusTaskId: 'task-blocked',
+      focusKind: 'blocked_work',
+    })
+    expect(body.startReadiness?.message).not.toContain('Stage 1 is complete')
+    expect(body.actionModel?.runControl).toMatchObject({
+      label: 'Needs recovery',
+      startEnabled: false,
+    })
+  })
+
   it('infers a charter from existing project docs without requiring new intake', async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-spine-charter-'))
     tempDirs.push(tmpDir)

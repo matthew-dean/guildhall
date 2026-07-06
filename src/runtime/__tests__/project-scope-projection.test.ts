@@ -188,6 +188,82 @@ describe('buildProjectScopeProjection', () => {
     expect(projection.counts.included).toBe(1)
   })
 
+  it('treats release node membership as executable scope even when tasks lack releaseIds', () => {
+    const projection = buildProjectScopeProjection({
+      version: 1,
+      lastUpdated: now,
+      selectedReleaseId: 'stage-1',
+      releases: [{
+        id: 'stage-1',
+        label: 'Stage 1',
+        kind: 'release',
+        state: 'active',
+        source: 'inferred',
+        nodeIds: [
+          'work:done-task',
+          'work:blocked-task',
+          'work:spec-review-task',
+        ],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [
+        task({
+          id: 'done-task',
+          title: 'Completed release work',
+          status: 'done',
+          releaseIds: ['stage-1'],
+        }),
+        task({
+          id: 'blocked-task',
+          title: 'Blocked release work',
+          status: 'blocked',
+          releaseIds: [],
+          blockReason: 'Needs recovery.',
+        }),
+        task({
+          id: 'spec-review-task',
+          title: 'Spec review release work',
+          status: 'spec_review',
+          releaseIds: [],
+          spec: 'Review this spec.',
+          acceptanceCriteria: [{ id: 'AC-1', description: 'Spec is reviewed.', verifiedBy: 'review', met: false }],
+        }),
+      ],
+    })
+
+    expect(projection.selectedScope?.nodeIds).toEqual([
+      'work:done-task',
+      'work:blocked-task',
+      'work:spec-review-task',
+    ])
+    expect(projection.rows.find(row => row.taskId === 'blocked-task')).toMatchObject({
+      scope: 'included',
+      eligibilityReason: 'included',
+      handoffState: 'blocked',
+      blocksRelease: true,
+    })
+    expect(projection.rows.find(row => row.taskId === 'spec-review-task')).toMatchObject({
+      scope: 'included',
+      eligibilityReason: 'included',
+      handoffState: 'spec_review',
+      blocksRelease: true,
+    })
+    expect(projection.start).toMatchObject({
+      canStart: false,
+      code: 'no_unattended_progress',
+      focusTaskId: 'spec-review-task',
+      focusKind: 'spec_review',
+    })
+    expect(projection.release).toMatchObject({
+      state: 'blocked',
+      blockers: [
+        expect.objectContaining({ id: 'blocked-task' }),
+        expect.objectContaining({ id: 'spec-review-task' }),
+      ],
+    })
+  })
+
   it('keeps derived materialized child splits inside a release when only the parent has release membership', () => {
     const parent = task({
       id: 'release-parent',

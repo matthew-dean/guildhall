@@ -6734,24 +6734,55 @@ export function buildServeApp(opts: ServeOptions = {}): {
       workspaceImportDraft: await workspaceImportDraftForOrientation(projectPath, null),
       sourceRefs: projectOrientationSourceRefs(projectPath),
     })
-    if (releaseTruth.unapprovedSpecs.length === 0) return null
+    const startBlockingReleaseBlockers = releaseTruth.releaseBlockers.filter(blocker =>
+      !/proof evidence|verification evidence/i.test(blocker.label),
+    )
+    if (releaseTruth.unapprovedSpecs.length === 0 && startBlockingReleaseBlockers.length === 0) return null
 
     const first = releaseTruth.unapprovedSpecs[0]
-    const focusTitle = first?.title ?? 'the first spec'
+    if (first) {
+      const focusTitle = first.title ?? 'the first spec'
+      return {
+        canStart: false,
+        code: 'no_unattended_progress',
+        message:
+          releaseTruth.unapprovedSpecs.length === 1
+            ? `"${focusTitle}" is waiting for review before work can start.`
+            : `${releaseTruth.unapprovedSpecs.length} specs are waiting for review before work can start. Start with "${focusTitle}".`,
+        actionHref: first.id
+          ? `/thread?thread=${encodeURIComponent(`task:${first.id}`)}`
+          : '/thread',
+        focusTaskId: first.id,
+        focusTaskTitle: first.title,
+        focusKind: 'spec_review',
+        count: releaseTruth.unapprovedSpecs.length,
+      }
+    }
+
+    const blocker = startBlockingReleaseBlockers[0]
+    if (!blocker) return null
+    const focusTitle = blocker.title?.trim() || 'the first blocker'
+    const focusKind = /waiting for (spec )?review|review before work/i.test(blocker.label)
+      ? 'spec_review'
+      : /brief|shaping/i.test(blocker.label)
+        ? 'brief_cleanup'
+        : 'blocked_work'
     return {
       canStart: false,
       code: 'no_unattended_progress',
       message:
-        releaseTruth.unapprovedSpecs.length === 1
-          ? `"${focusTitle}" is waiting for review before work can start.`
-          : `${releaseTruth.unapprovedSpecs.length} specs are waiting for review before work can start. Start with "${focusTitle}".`,
-      actionHref: first?.id
-        ? `/thread?thread=${encodeURIComponent(`task:${first.id}`)}`
-        : '/thread',
-      focusTaskId: first?.id,
-      focusTaskTitle: first?.title,
-      focusKind: 'spec_review',
-      count: releaseTruth.unapprovedSpecs.length,
+        startBlockingReleaseBlockers.length === 1
+          ? blocker.label
+          : `${startBlockingReleaseBlockers.length} release blockers remain. Start with "${focusTitle}".`,
+      actionHref: blocker.id
+        ? (focusKind === 'spec_review'
+            ? `/thread?thread=${encodeURIComponent(`task:${blocker.id}`)}`
+            : `/work?task=${encodeURIComponent(blocker.id)}`)
+        : '/work',
+      focusTaskId: blocker.id,
+      focusTaskTitle: blocker.title,
+      focusKind,
+      count: startBlockingReleaseBlockers.length,
     }
   }
 
