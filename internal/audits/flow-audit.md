@@ -8,6 +8,74 @@ help_summary: |
 
 # Web UI flow audit
 
+2026-07-06T14:38:00Z - Selected release scopes use durable task identity before import-preview titles.
+
+- Work id: `codex:selected-release-durable-import-identity-2026-07-06`.
+- User job: the 1,000-foot Project Map must show the selected release/current
+  scope as canonical work. It must not leak internal `workspace-import:*`
+  preview nodes or count duplicate rows created from stale imported titles.
+- Escaped live failure:
+  - Looma + Knit selected release `Stage 1 Finish Knit Primitive Replacement
+    Wave` exposed both `work:task-import-1v8sume` and
+    `work:workspace-import:task-import-1v8sume` for the same imported work.
+  - The current-scope count read as 39 even though one row was a duplicate
+    preview echo, which undermined the Project Map as a trustworthy
+    1,000-foot view.
+- Root-cause classification:
+  - Task hierarchy/dependency/proof modeling: workspace-import draft
+    augmentation matched draft work to saved tasks by title before durable id,
+    so a cleaned saved title could create a synthetic duplicate.
+  - Project structure/scope/release modeling: selected release/current-scope
+    normalization preserved missing `work:workspace-import:*` nodes in
+    execution scopes.
+  - Bad project data from earlier Guildhall bug: Looma retained historical
+    import preview membership after materialized task records existed.
+- Fix:
+  - Workspace-import draft augmentation now matches draft tasks to existing
+    tasks by durable task id before falling back to title matching.
+  - Selected execution scope projection strips `work:workspace-import:*`
+    preview node ids from release/current-scope membership.
+  - Orientation scope normalization drops missing `work:*` node ids instead
+    of preserving orphan import previews.
+- Contract Touch Decision:
+  - Work id: `codex:selected-release-durable-import-identity-2026-07-06`.
+  - Touched contracts: orientation-spine selected release/scope membership and
+    project-scope projection membership.
+  - Contracts considered but not touched: persisted TASKS schema,
+    workspace-import draft schema, release-readiness response schema, scheduler
+    task status model.
+  - Existing data impact: existing release records can contain stale
+    `work:workspace-import:*` ids, but read models now ignore those preview ids
+    when computing selected executable scope.
+  - Required follow-up: consider a cleanup migration only if stale preview ids
+    create owner-visible issues outside the read model.
+  - Proof required: projection/orientation regression tests plus live Looma +
+    Knit and Narrative Harness API/browser proof.
+  - Proof provided: see proof list below.
+  - Waivers: no persisted schema migration because this is a compatibility
+    reader/read-model cleanup.
+  - Apply/revert behavior: restore title-only draft matching and the
+    preview-node preservation filters; Looma + Knit should again show the
+    duplicate preview node.
+- Proof provided:
+  - `project-orientation-spine.test.ts` and
+    `project-scope-projection.test.ts` passed `66` tests.
+  - `node ./build.mjs` passed.
+  - Installed app proof: `/api/stale-server` returned `stale:false`.
+  - Live API proof: Narrative Harness selected release stayed at `14` nodes
+    with `0` stale nodes; Looma + Knit selected release dropped from `39` to
+    `38` nodes with `0` stale nodes.
+  - Live Browser proof on `/projects/looma-knit/map`: Project Map showed
+    `38 assigned work items`, `38 current work items`, no
+    `workspace-import:task-import-1v8sume` text, and no page-level horizontal
+    overflow at `1280px`.
+- Required follow-up: keep replacing duplicate release/scope builders with the
+  shared projection/read-model path so selected scope, release readiness,
+  scheduler scope, and Project Map cannot drift.
+- Apply/revert behavior: restore title-only draft matching and the preview-node
+  preservation filters, then rerun the Looma + Knit map proof to see the
+  duplicate `workspace-import` row return.
+
 2026-07-06T11:00:00Z - Narrative Harness MVP scope includes drafting model and continuity review proof.
 
 - Work id: `codex:narrative-harness-headless-mvp-scope-2026-07-06`.

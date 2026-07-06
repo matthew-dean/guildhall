@@ -723,7 +723,7 @@ describe('buildProjectOrientationSpine', () => {
     expect(spine.nodes['work:theme-editor']?.maturity).toBe('deferred')
   })
 
-  it('uses the scope projection so unassigned current work appears in selected release counts', () => {
+  it('uses the scope projection so unassigned current work appears in current-scope counts', () => {
     const tasks = [
       {
         id: 'task-current',
@@ -748,18 +748,17 @@ describe('buildProjectOrientationSpine', () => {
     const scopeProjection = buildProjectScopeProjection({
       version: 1,
       lastUpdated: '2026-07-05T12:00:00.000Z',
-      selectedReleaseId: 'near-term-proof-scope',
-      releases: [{
+      releases: [],
+      tasks,
+    }, {
+      selectedScope: {
         id: 'near-term-proof-scope',
         label: 'Near Term Proof Scope',
-        kind: 'release',
-        state: 'active',
+        kind: 'proposed_feature_set',
         source: 'inferred',
         nodeIds: ['work:task-current'],
         deferredNodeIds: [],
-        proofStyle: 'script_only',
-      }],
-      tasks,
+      },
     })
 
     const spine = buildProjectOrientationSpine({
@@ -769,7 +768,7 @@ describe('buildProjectOrientationSpine', () => {
       releases: [{
         id: 'near-term-proof-scope',
         label: 'Near Term Proof Scope',
-        kind: 'release',
+        kind: 'current_work',
         state: 'active',
         source: 'inferred',
         nodeIds: ['work:task-current'],
@@ -922,6 +921,53 @@ describe('buildProjectOrientationSpine', () => {
     expect(spine.selectedRelease?.nodeIds).toEqual(['work:task-import-1v8sume'])
     expect(spine.scope?.nodeIds).toEqual(['work:task-import-1v8sume'])
     expect(spine.summary.includedWorkCount).toBe(1)
+  })
+
+  it('matches workspace-import draft work to materialized tasks by durable id before title', () => {
+    const spine = buildProjectOrientationSpine({
+      projectId: 'looma-knit',
+      now: '2026-07-06T07:40:00.000Z',
+      tasks: [{
+        id: 'task-import-1v8sume',
+        title: 'Continue the Knit-to-Looma promotion work',
+        description: 'Saved task title was cleaned after import.',
+        domain: 'looma',
+        projectPath: '/tmp/looma-knit',
+        status: 'import_draft',
+        priority: 'normal',
+        releaseIds: ['stage-1-finish-knit-primitive-replacement-wave'],
+      }] as any[],
+      workspaceImportDraft: {
+        source: {
+          kind: 'inferred',
+          refs: ['workspace-import:draft'],
+          confidence: 'high',
+          freshness: 'fresh',
+          inferred: true,
+          refreshedAt: '2026-07-06T07:40:00.000Z',
+        },
+        releases: [{
+          id: 'stage-1-finish-knit-primitive-replacement-wave',
+          label: 'Stage 1 Finish Knit Primitive Replacement Wave',
+          source: 'release_plan',
+          state: 'active',
+        }],
+        tasks: [{
+          id: 'task-import-1v8sume',
+          title: 'Continue the Knit-to-Looma promotion work from the now-complete first M6 queue into the next generic surfaces, while the',
+          description: 'Stale imported title should not create a duplicate preview node.',
+          domain: 'looma',
+          scope: 'current',
+          releaseIds: ['stage-1-finish-knit-primitive-replacement-wave'],
+          refs: ['import:looma/PROJECT_STATE.md'],
+        }],
+        contexts: [],
+      },
+    })
+
+    expect(spine.selectedRelease?.nodeIds).toEqual(['work:task-import-1v8sume'])
+    expect(spine.scope?.nodeIds).toEqual(['work:task-import-1v8sume'])
+    expect(spine.nodes['work:workspace-import:task-import-1v8sume']).toBeUndefined()
   })
 
   it('uses release records recovered from the workspace import draft as the visible scope', () => {
@@ -2022,7 +2068,7 @@ describe('buildProjectOrientationSpine', () => {
     expect(spine.releases.find(release => release.id === 'stage-2-mastra-agent-prototype')?.state).toBe('planned')
   })
 
-  it('drops archived task ids from owner-visible release scope while preserving import-preview nodes', () => {
+  it('drops archived and orphan preview task ids from owner-visible release scope', () => {
     const spine = buildProjectOrientationSpine({
       projectId: 'narrative-harness',
       now: '2026-06-18T12:00:00.000Z',
@@ -2067,13 +2113,12 @@ describe('buildProjectOrientationSpine', () => {
 
     expect(spine.selectedRelease?.nodeIds).toEqual([
       'work:task-current',
-      'work:workspace-import:detected-task-stage-two',
     ])
     expect(spine.scope?.nodeIds).toEqual([
       'work:task-current',
-      'work:workspace-import:detected-task-stage-two',
     ])
     expect(spine.nodes['work:task-archived']).toBeUndefined()
+    expect(spine.nodes['work:workspace-import:detected-task-stage-two']).toBeUndefined()
   })
 
   it('groups imported Narrative Harness structure by document family instead of collapsing it into coarse domains', () => {

@@ -470,8 +470,12 @@ export function augmentTasksWithWorkspaceImportDraft(input: {
     ...(task.references ? { references: [...task.references] } : {}),
     ...(task.releaseIds ? { releaseIds: [...task.releaseIds] } : {}),
   }))
+  const idToTask = new Map<string, OrientationTaskInput>()
   const titleToTask = new Map<string, OrientationTaskInput>()
-  for (const task of augmented) titleToTask.set(normalizeText(taskTitle(task)), task)
+  for (const task of augmented) {
+    idToTask.set(task.id, task)
+    titleToTask.set(normalizeText(taskTitle(task)), task)
+  }
 
   const currentNodeIds: string[] = []
   const deferredNodeIds: string[] = []
@@ -480,7 +484,7 @@ export function augmentTasksWithWorkspaceImportDraft(input: {
   const currentReleaseIds = new Set<string>()
 
   for (const draftTask of draft.tasks) {
-    const existing = titleToTask.get(normalizeText(draftTask.title))
+    const existing = idToTask.get(draftTask.id) ?? titleToTask.get(normalizeText(draftTask.title))
     const taskId = existing?.id ?? draftSyntheticTaskId(draftTask.id)
     const importedRefs = draftTask.refs?.map(stripImportPrefix).filter(Boolean) ?? []
 
@@ -510,6 +514,7 @@ export function augmentTasksWithWorkspaceImportDraft(input: {
         },
       }
       augmented.push(synthetic)
+      idToTask.set(synthetic.id, synthetic)
       titleToTask.set(normalizeText(draftTask.title), synthetic)
     } else if (draftTask.releaseIds?.length) {
       existing.releaseIds = [...new Set([...(existing.releaseIds ?? []), ...draftTask.releaseIds])]
@@ -697,23 +702,18 @@ function normalizeScopeTaskLists(scope: OrientationScope, tasks: OrientationTask
     const parentId = task.hierarchy?.parentId?.trim()
     if (parentId && taskById.has(parentId)) addChild(parentId, task.id)
   }
-  const keepMissingWorkNode = (nodeId: string): boolean => {
-    const syntheticPrefix = 'work:workspace-import:'
-    if (!nodeId.startsWith(syntheticPrefix)) return false
-    return !taskById.has(nodeId.slice(syntheticPrefix.length))
-  }
   const included = new Set(
     scope.nodeIds.filter((nodeId) => {
       if (!nodeId.startsWith('work:')) return true
       const task = taskById.get(nodeId.slice('work:'.length))
-      return task ? visibilityForTask(task, taskById).countInProjectTotals : keepMissingWorkNode(nodeId)
+      return task ? visibilityForTask(task, taskById).countInProjectTotals : false
     }),
   )
   const deferred = new Set(
     scope.deferredNodeIds.filter((nodeId) => {
       if (!nodeId.startsWith('work:')) return true
       const task = taskById.get(nodeId.slice('work:'.length))
-      return task ? visibilityForTask(task, taskById).countInProjectTotals : keepMissingWorkNode(nodeId)
+      return task ? visibilityForTask(task, taskById).countInProjectTotals : false
     }),
   )
   for (const nodeId of [...included]) {

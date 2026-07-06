@@ -92,6 +92,10 @@ export function taskScopeNodeId(taskId: string): string {
   return `work:${taskId}`
 }
 
+function isWorkspaceImportPreviewNodeId(nodeId: string): boolean {
+  return nodeId.startsWith('work:workspace-import:')
+}
+
 export function releaseLabelFromId(id: string): string {
   const acronyms = new Set(['api', 'cli', 'mcp', 'mvp', 'nh', 'ui', 'ux'])
   return id
@@ -126,8 +130,8 @@ export function deriveReleaseContainersFromTaskMembership(
   const childIdsByParent = buildChildMap(tasks)
   const releases = releaseIds.map((releaseId): ProjectRelease => {
     const existing = existingById.get(releaseId)
-    const nodeIds = new Set(existing?.nodeIds ?? [])
-    const deferredNodeIds = new Set(existing?.deferredNodeIds ?? [])
+    const nodeIds = new Set((existing?.nodeIds ?? []).filter(nodeId => !isWorkspaceImportPreviewNodeId(nodeId)))
+    const deferredNodeIds = new Set((existing?.deferredNodeIds ?? []).filter(nodeId => !isWorkspaceImportPreviewNodeId(nodeId)))
     for (const task of tasks) {
       const nodeId = taskScopeNodeId(task.id)
       const listed = nodeIds.has(nodeId) || deferredNodeIds.has(nodeId)
@@ -264,8 +268,8 @@ export function selectedProjectScopeForQueue(
 }
 
 export function releaseToProjectScope(release: ProjectRelease, tasks: readonly Task[]): ProjectScope {
-  const nodeIds = new Set<string>(release.nodeIds ?? [])
-  const deferredNodeIds = new Set<string>(release.deferredNodeIds ?? [])
+  const nodeIds = new Set<string>((release.nodeIds ?? []).filter(nodeId => !isWorkspaceImportPreviewNodeId(nodeId)))
+  const deferredNodeIds = new Set<string>((release.deferredNodeIds ?? []).filter(nodeId => !isWorkspaceImportPreviewNodeId(nodeId)))
   for (const task of tasks) {
     const nodeId = taskScopeNodeId(task.id)
     if (isProjectSetupTask(task.id)) {
@@ -363,15 +367,11 @@ function normalizeSelectedScope(scope: ProjectScope | null, tasks: readonly Task
   const deferredNodeIds = new Set(scope.deferredNodeIds)
   const tasksById = new Map(tasks.map(task => [task.id, task] as const))
   const childIdsByParent = buildChildMap(tasks)
-  const dropMaterializedImportPreview = (nodeId: string): boolean => {
-    const syntheticPrefix = 'work:workspace-import:'
-    return nodeId.startsWith(syntheticPrefix) && tasksById.has(nodeId.slice(syntheticPrefix.length))
-  }
   for (const nodeId of [...nodeIds]) {
-    if (dropMaterializedImportPreview(nodeId)) nodeIds.delete(nodeId)
+    if (isWorkspaceImportPreviewNodeId(nodeId)) nodeIds.delete(nodeId)
   }
   for (const nodeId of [...deferredNodeIds]) {
-    if (dropMaterializedImportPreview(nodeId)) deferredNodeIds.delete(nodeId)
+    if (isWorkspaceImportPreviewNodeId(nodeId)) deferredNodeIds.delete(nodeId)
   }
   for (const task of tasks) {
     const nodeId = taskScopeNodeId(task.id)

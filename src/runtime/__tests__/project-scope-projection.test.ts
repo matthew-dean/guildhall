@@ -581,6 +581,42 @@ describe('buildProjectScopeProjection', () => {
     expect(projection.rows.filter(row => row.scope === 'included').map(row => row.taskId)).toEqual(['task-import-1v8sume'])
   })
 
+  it('drops orphan workspace-import preview nodes from selected execution scope', () => {
+    const projection = buildProjectScopeProjection({
+      version: 1,
+      lastUpdated: now,
+      releases: [],
+      tasks: [
+        task({
+          id: 'task-import-1v8sume',
+          title: 'Continue the Knit-to-Looma promotion work',
+          status: 'import_draft',
+          releaseIds: ['stage-1-finish-knit-primitive-replacement-wave'],
+        }),
+      ],
+    }, {
+      selectedScope: {
+        id: 'stage-1-finish-knit-primitive-replacement-wave',
+        label: 'Stage 1 Finish Knit Primitive Replacement Wave',
+        kind: 'release',
+        source: 'inferred',
+        nodeIds: [
+          'work:task-import-1v8sume',
+          'work:workspace-import:detected-task-import-1v8sume',
+        ],
+        deferredNodeIds: [
+          'work:workspace-import:detected-task-later',
+        ],
+      },
+    })
+
+    expect(projection.selectedScope).toMatchObject({
+      nodeIds: ['work:task-import-1v8sume'],
+      deferredNodeIds: [],
+    })
+    expect(projection.rows.filter(row => row.scope === 'included').map(row => row.taskId)).toEqual(['task-import-1v8sume'])
+  })
+
   it('drops archived release-linked work from the selected scope', () => {
     const projection = buildProjectScopeProjection(queue([
       task({
