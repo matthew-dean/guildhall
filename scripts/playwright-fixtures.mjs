@@ -401,6 +401,14 @@ function narrativeHarnessReleaseQueue() {
     assignedTo: 'worker-agent',
     hierarchy: { parentId: 'task-import-9s8tkc', relation: 'child' },
   })
+  const outOfScopeStaleProof = fixtureTask(projectPath, {
+    id: 'task-out-of-scope-stale-proof',
+    title: 'Clean up archived author voice proof',
+    status: 'done',
+    domain: 'harness',
+    releaseIds: ['stage-2-agent-coordination'],
+    acceptanceCriteria: [{ id: 'proof', description: 'Archived proof is attached.', met: false }],
+  })
 
   return {
     version: 1,
@@ -414,7 +422,7 @@ function narrativeHarnessReleaseQueue() {
       nodeIds: current.map(task => `work:${task.id}`),
       deferredNodeIds: deferred.map(task => `work:${task.id}`),
     }],
-    tasks: [...current, ...deferred, child],
+    tasks: [...current, ...deferred, child, outOfScopeStaleProof],
   }
 }
 

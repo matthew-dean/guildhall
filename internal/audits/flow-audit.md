@@ -22891,10 +22891,16 @@ execution boundary.
     selected release `near-term-proof-scope`, `ready:true`,
     `proofEvidenceBlockingCount:0`, `proofMissingDoneTasks:[]`, and
     `releaseBlockers:[]`.
-  - Browser/UI proof caveat: the in-app browser bridge connected but timed out
-    during the Overview navigation/read. The installed API proof verifies the
-    owner-facing data model; rendered UI proof remains required before claiming
-    the broader orientation loop complete.
+  - Rendered UI proof: the Narrative Harness rendered fixture now includes an
+    out-of-scope done task with stale unmet proof; `CI=true pnpm exec
+    playwright test tests/rendered-ui/project-flow.spec.ts -g "Narrative
+    Harness overview and map show the documented current release scope"` passed
+    and asserts Overview plus Needs You do not show `Review stale proof records`
+    or the out-of-scope stale proof task.
+  - Browser caveat: the in-app browser bridge connected but timed out during
+    the live Overview navigation/read. The installed API proves the live
+    owner-facing data model, and the rendered fixture proves the route UI
+    treatment for the same bug class.
   - Apply/revert behavior: revert the `proofMissingDoneTasks(executionTasks)`
     change in `src/runtime/inbox.ts` and the inbox regression to return to
     global proof cleanup in Needs You. No data rollback required.

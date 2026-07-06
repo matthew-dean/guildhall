@@ -501,6 +501,13 @@ test('Narrative Harness overview and map show the documented current release sco
   await expect(page.getByText('Resume', { exact: true }).first()).toBeVisible()
   await expect(page.getByText(/specs are waiting for review before work can start/i)).toHaveCount(0)
   await expect(page.getByText(/needs a clearer brief|need fuller briefs|brief cleanup/i)).toHaveCount(0)
+  await expect(page.getByText('Review stale proof records')).toHaveCount(0)
+  await expect(page.getByText('Clean up archived author voice proof')).toHaveCount(0)
+
+  await page.goto('/projects/narrative-harness/overview/inbox')
+  await expect(page.getByRole('heading', { name: 'Needs you' })).toBeVisible()
+  await expect(page.getByText('Review stale proof records')).toHaveCount(0)
+  await expect(page.getByText('Clean up archived author voice proof')).toHaveCount(0)
 
   await page.goto('/projects/narrative-harness/map')
   await expect(page.getByRole('heading', { name: 'Project map' })).toBeVisible()
