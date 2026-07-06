@@ -7754,6 +7754,78 @@ describe('GET /api/project — bootstrap status', () => {
     })
   })
 
+  it('prioritizes selected-release spec review over imported-scope shaping', async () => {
+    const migrationApp = buildServeApp({ projectPath: tmpDir })
+    await applyStorageBoundaryMigration(migrationApp.app)
+    await writeSystemTasks({
+      version: 1,
+      selectedReleaseId: 'stage-1',
+      releases: [{
+        id: 'stage-1',
+        label: 'Stage 1',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-review-spec', 'work:task-import-needs-shaping'],
+        deferredNodeIds: [],
+      }],
+      tasks: [
+        {
+          id: 'task-review-spec',
+          title: 'Approve current release spec',
+          status: 'spec_review',
+          releaseIds: ['stage-1'],
+          spec: 'Draft spec awaiting owner approval.',
+          createdAt: '2026-06-11T15:00:00.000Z',
+          updatedAt: '2026-06-11T15:00:00.000Z',
+        },
+        {
+          id: 'task-import-needs-shaping',
+          title: 'Shape imported current work',
+          status: 'exploring',
+          releaseIds: ['stage-1'],
+          requestIntake: {
+            createdBy: 'workspace-importer',
+            evidenceRefs: ['import:docs/current-scope.md'],
+          },
+          createdAt: '2026-06-11T15:01:00.000Z',
+          updatedAt: '2026-06-11T15:01:00.000Z',
+        },
+      ],
+    })
+    setProvider('anthropic-api', { apiKey: 'sk-ant-test' })
+    updateGlobalConfig({ preferredProvider: 'anthropic-api' })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const res = await app.fetch(new Request(scoped('/api/project')))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      startReadiness?: {
+        canStart?: boolean
+        code?: string
+        actionHref?: string
+        message?: string
+        focusTaskId?: string
+        focusKind?: string
+      }
+      actionModel?: { primaryAction?: { buttonLabel?: string; href?: string; code?: string } | null }
+    }
+
+    expect(body.startReadiness).toMatchObject({
+      canStart: false,
+      code: 'no_unattended_progress',
+      message: '"Approve current release spec" is waiting for review before work can start.',
+      actionHref: '/thread?thread=task%3Atask-review-spec',
+      focusTaskId: 'task-review-spec',
+      focusKind: 'spec_review',
+    })
+    expect(body.actionModel?.primaryAction).toMatchObject({
+      buttonLabel: 'Review spec',
+      href: '/thread?thread=task%3Atask-review-spec',
+      code: 'no_unattended_progress',
+    })
+  })
+
   it('includes the last bootstrap run status so the shell can explain async start failures', async () => {
     const bootstrapPath = path.join(getProjectLocalHistoryDir(tmpDir), 'bootstrap.json')
     await fs.writeFile(

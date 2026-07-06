@@ -24418,3 +24418,73 @@ chrome to current work.
   - Apply/revert behavior: reverting restores the contradiction where selected
     completed releases render as active and deferred blockers can dominate top
     chrome.
+
+2026-07-06T23:42:36Z - Prioritized selected-scope spec review before import
+shaping in Start readiness.
+
+- Work id: `codex:selected-release-spec-review-before-import-shaping`.
+- User job: when the selected scope/release contains work waiting for owner
+  spec review, Guildhall should make that explicit as the next action before
+  it talks about imported-scope shaping. The product must distinguish Codex
+  acting as Matthew during calibration from Guildhall autonomously treating
+  owner approval as implicit.
+- Root-cause classification:
+  - Scheduler/action-state logic problem: `projectStartReadiness()` checked
+    imported draft/shaping blockers before selected-release spec review, so a
+    lower-authority shaping problem could bury an explicit owner review gate.
+  - UI communication/orientation problem: Overview and top chrome rendered the
+    shared primary action from that readiness result, so the owner-facing page
+    could point at source-backed shaping instead of the real review decision.
+  - Project structure/scope/release modeling problem: the bug only escaped
+    when both conditions lived inside the selected scope, proving selected
+    release boundaries must order blockers by authority, not just by detector
+    sequence.
+- Fix:
+  - `projectStartReadiness()` now asks the selected-release review helper for
+    spec-review blockers before imported-scope shaping, then leaves the broader
+    selected-release review check in its existing later position so ordinary
+    imported-scope shaping still wins when no spec review is pending.
+  - Added regression coverage for a selected release that contains both
+    `spec_review` and workspace-import shaping work. The expected primary
+    action is `Review spec` with the spec-review task thread target.
+- Contract Touch Decision:
+  - Touched contracts: `/api/project.startReadiness` blocker ordering,
+    `actionModel.primaryAction` when selected-scope spec review and imported
+    shaping coexist, and selected-release review helper behavior.
+  - Contracts considered but not touched: persisted task/release schema,
+    imported workspace draft/shaping detector contract, task status lifecycle,
+    `/api/project/start` dispatch contract, and orientation spine response
+    shape.
+  - Existing data impact: no migration. Existing projects with both a selected
+    spec review and imported shaping now surface the owner review first; pure
+    imported-shaping projects keep the old `imported_scope_shaping` blocker.
+  - Required follow-up: keep moving blocker ordering and shell summary math
+    into shared action/readiness utilities so no page locally reinterprets
+    owner review, import shaping, or selected-release authority.
+  - Proof required: focused runtime tests for spec-review/import-shaping
+    ordering, contract detector, build/install/stale-server proof, live
+    Looma + Knit API proof, live Narrative Harness completion proof, and
+    rendered installed-app communication proof.
+  - Proof provided: focused `serve-settings` tests passed `4` targeted tests;
+    `git diff --check` passed; `node scripts/contract-touch-detector.mjs`
+    passed; direct build passed; `node ./scripts/dev-install.mjs`,
+    `guildhall stop`, and `guildhall start` installed the current build;
+    `/api/stale-server` returned `stale:false` for PID `93650`. Live
+    Looma + Knit API returned `startReadiness.code: no_unattended_progress`,
+    `focusKind: spec_review`, task `task-import-1v8sume`, and primary action
+    `Review spec` instead of `imported_scope_shaping`. Live Narrative Harness
+    API returned `startReadiness.code: all_terminal` with
+    `Stage 1: Headless Drafting And Evaluation MVP is complete.` Rendered
+    installed-app proof at `1440x1000` produced ignored screenshots
+    `artifacts/flow-audit/looma-overview-loaded-2026-07-06.png` and
+    `artifacts/flow-audit/nh-overview-loaded-2026-07-06.png`; Looma + Knit
+    visibly showed `Review needed`, the selected spec-review title, and
+    `Review spec` without the imported-shaping message; Narrative Harness
+    visibly showed Stage 1 complete, `11 / 11 done`, `0 blocked`, and
+    `32 Deferred`; both pages reported no horizontal overflow.
+  - Browser caveat: the in-app browser bridge timed out twice while loading
+    Looma + Knit, so installed visual proof used local Playwright against the
+    running `localhost:7777` app. Treat bridge timeout as continuing proof-path
+    risk, not as a product-state success.
+  - Apply/revert behavior: reverting restores the false ordering where
+    selected-scope owner review can be hidden behind imported-scope shaping.
