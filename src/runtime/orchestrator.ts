@@ -4394,6 +4394,16 @@ export class Orchestrator {
         modelId: modelForAgentName(agent.name, this.opts.config.models),
       }))
     }
+    const priorAgentTaskId = typeof agent.getToolMetadata === 'function'
+      ? String(agent.getToolMetadata()['current_task_id'] ?? '').trim()
+      : ''
+    if (
+      priorAgentTaskId &&
+      priorAgentTaskId !== task.id &&
+      typeof agent.resetConversation === 'function'
+    ) {
+      agent.resetConversation()
+    }
     if (typeof agent.loadToolMetadata === 'function') {
       const likelyTargetFiles = resolveLikelyTaskFiles(task)
       const scopeDecisionTexts = resolvedScopeDecisionTexts(task)

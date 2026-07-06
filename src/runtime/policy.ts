@@ -494,7 +494,9 @@ export function resolveRecoveryPlan(input: ResolveRecoveryPlanInput): RecoveryPl
             : firstPlaybook === 'retry_current_task_context'
               ? 'Retry from the current task brief/spec because no durable checkpoint exists yet.'
             : 'Re-run the project bootstrap path before returning to implementation.',
-        allowedTools: ['read-file', 'edit-file', 'run-shell-command', 'write-checkpoint', 'raise-escalation'],
+        allowedTools: firstPlaybook === 'retry_current_task_context'
+          ? ['edit-file', 'run-shell-command', 'write-checkpoint', 'raise-escalation']
+          : ['read-file', 'edit-file', 'run-shell-command', 'write-checkpoint', 'raise-escalation'],
         allowedPaths: touchedFiles,
         command: failedVerification?.command,
         maxTurns: firstPlaybook === 'retry_current_task_context' ? 1 : 2,

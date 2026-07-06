@@ -15198,6 +15198,88 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-07-06T12:12:00Z - Narrative Harness MVP continuous-run audit exposed
+role-scoped worker session bleed between tasks.
+
+- Work id: `codex:nh-mvp-session-boundary-2026-07-06`.
+- User job: when Guildhall runs the selected Narrative Harness MVP scope
+  continuously, each task should receive its own task context. The user should
+  not have to diagnose stale agent memory, prior task instructions, or a
+  worker that appears to be working on the next task while still carrying the
+  previous task's conversation.
+- Evidence:
+  - Installed app `/api/stale-server` returned `stale:false` before the run.
+  - Narrative Harness selected scope `near-term-proof-scope` had `9 done`,
+    `1 review`, and `4 ready` before resume.
+  - Resuming the project advanced
+    `task-select-and-prove-a-deep-infra-drafting-model-for-broad-genre-chapter-writing`
+    from review to done after reviewer approval and auto-commit.
+  - The next task,
+    `task-add-author-intent-inputs-for-voice-genre-audience-theme-synopsis-outline-characters-character-voices-world-state-facts-and-review-plan`,
+    began streaming as the active task, but the persisted worker snapshot still
+    contained the previous task's Forge context until the worker turn finally
+    returned and saved.
+  - The author-intent task eventually produced durable work and moved to review,
+    proving this was not owner input; it was a scheduler/session hygiene risk.
+- Root-cause class:
+  - Scheduler/action-state plus task hierarchy/proof integrity. Session resume
+    already checked persisted snapshot task freshness at process boot, but a
+    live role-scoped agent could keep in-memory conversation history when the
+    same worker moved from task A to task B inside one continuous run.
+- Fix:
+  - Before dispatch, the orchestrator now compares the role agent's previous
+    `current_task_id` metadata with the task being dispatched. If they differ,
+    it resets the role conversation before loading the new task metadata.
+  - Added a regression that simulates a long-lived worker carrying messages and
+    task metadata across two ready tasks; the second task must see a reset and
+    no prior messages.
+- Verification:
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/orchestrator.test.ts -t "resets a role-scoped worker conversation"` failed before the fix with
+    `priorMessages: 1` and `resetCount: 0`, then passed after the fix.
+  - A broader no-progress-filter run still exposed two existing remediation
+    timing failures that do not exercise `getToolMetadata` or this new reset
+    path; they remain separate scheduler debt, not evidence against the
+    task-boundary fix.
+
+source: codex:nh-mvp-session-boundary-2026-07-06
+
+2026-07-06T12:20:00Z - Narrative Harness MVP recovery playbook now
+prevents read-only retry loops after likely-target worker timeouts.
+
+- Work id: `codex:nh-mvp-retry-current-mutation-first-2026-07-06`.
+- User job: when a worker has already timed out before mutating a likely
+  target file, Guildhall should not restart the same task by allowing another
+  broad read-only exploration pass. The next autonomous pass should mutate,
+  run focused verification, checkpoint, or escalate a real blocker.
+- Evidence:
+  - During the Narrative Harness MVP run, the
+    `Generate a CLI-first story synopsis, outline, character/voice records,
+    and one chapter draft from the selected model` task first used `read-tasks`,
+    was nudged for non-durable progress, and then timed out before mutating a
+    likely target file.
+  - Guildhall correctly kept the failure as Guildhall-owned recovery instead
+    of owner input, but the resulting `retry_current_task_context` playbook
+    still allowed `read-file`.
+  - The retried worker immediately resumed with “let me read that file,” proving
+    the recovery plan could reproduce the same no-mutation loop.
+- Root-cause class:
+  - Scheduler/action-state plus task hierarchy/proof. The recovery model named
+    the right playbook but its allowed tool surface contradicted the failure
+    mode it was meant to repair.
+- Fix:
+  - `retry_current_task_context` now allows only `edit-file`,
+    `run-shell-command`, `write-checkpoint`, and `raise-escalation`.
+  - `resume_from_checkpoint` and `rebootstrap_project` keep their existing
+    read allowance because those playbooks are explicitly about a bounded
+    checkpoint/bootstrap surface.
+- Verification:
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/policy.test.ts`
+    passed after first failing on the old `read-file` allowance.
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/serve-task-endpoints.test.ts -t "retry_current_task_context|recovery-playbook|provider/runtime recovery|provider recovery"`
+    passed.
+
+source: codex:nh-mvp-retry-current-mutation-first-2026-07-06
+
 2026-07-06T09:30:00Z - Stopped selected-release Start from calling visible
 release blockers complete.
 

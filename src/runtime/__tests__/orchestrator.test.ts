@@ -11570,6 +11570,54 @@ describe('Orchestrator.run — full loops', () => {
     expect(q.tasks.find((t) => t.id === 'b')?.status).toBe('ready')
   })
 
+  it('resets a role-scoped worker conversation before dispatching a different task', async () => {
+    await writeQueue([
+      mkTask({ id: 'task-a', title: 'First task', status: 'ready', domain: 'looma', spec: VALID_SPEC }),
+      mkTask({ id: 'task-b', title: 'Second task', status: 'ready', domain: 'looma', spec: VALID_SPEC }),
+    ])
+
+    const seen: Array<{ taskId: string; resetCount: number; priorMessages: number }> = []
+    const worker = {
+      name: 'worker-agent',
+      messages: [] as Array<{ role?: string; content?: unknown }>,
+      metadata: {} as Record<string, unknown>,
+      resetCount: 0,
+      loadToolMetadata(metadata: Record<string, unknown>) {
+        this.metadata = { ...this.metadata, ...metadata }
+      },
+      getToolMetadata() {
+        return this.metadata
+      },
+      resetConversation() {
+        this.resetCount += 1
+        this.messages = []
+        this.metadata = {}
+      },
+      async generate(prompt: string) {
+        const taskId = prompt.match(/\*\*Current task ID \(for task tools\):\*\* ([^\n]+)/)?.[1]
+        if (!taskId) throw new Error('missing current task id in prompt')
+        seen.push({ taskId, resetCount: this.resetCount, priorMessages: this.messages.length })
+        this.messages.push({ role: 'user', content: prompt })
+        await mutateTask(taskId, { status: 'done' })
+        return { text: 'done' }
+      },
+    } satisfies OrchestratorAgent & {
+      metadata: Record<string, unknown>
+      resetCount: number
+    }
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+    })
+
+    await orch.run({ maxTicks: 5, tickDelayMs: 0 })
+
+    expect(seen.map((entry) => entry.taskId)).toEqual(['task-a', 'task-b'])
+    expect(seen[0]).toMatchObject({ resetCount: 0, priorMessages: 0 })
+    expect(seen[1]).toMatchObject({ resetCount: 1, priorMessages: 0 })
+  })
+
   it('scoped one-task runs finish selected parent child work before stopping', async () => {
     await writeQueue([
       mkTask({

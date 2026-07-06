@@ -399,6 +399,7 @@ describe('policy failure classifier', () => {
     })
     expect(planFor('retry_current_task_context')).toMatchObject({
       reason: 'Retry from the current task brief/spec because no durable checkpoint exists yet.',
+      allowedTools: ['edit-file', 'run-shell-command', 'write-checkpoint', 'raise-escalation'],
       command: 'cd web && pnpm install',
       maxTurns: 1,
       successSignals: ['visible_progress_or_checkpoint_written'],
