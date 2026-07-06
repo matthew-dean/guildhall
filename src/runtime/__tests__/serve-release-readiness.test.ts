@@ -700,6 +700,9 @@ describe('GET /api/project/release-readiness', () => {
   })
 
   it('does not let stale parent blockers override a later linked-child closure note', async () => {
+    const staleParentWorktree = path.join(tmpDir, '..', `${path.basename(tmpDir)}-stale-parent-worktree`)
+    await execFileP('git', ['worktree', 'add', '-b', 'guildhall/task-parent', staleParentWorktree], { cwd: tmpDir })
+    await execFileP('git', ['commit', '--allow-empty', '-m', 'stale parent checkpoint'], { cwd: staleParentWorktree })
     await seedQueue({
       version: 1,
       lastUpdated: new Date().toISOString(),
@@ -720,6 +723,7 @@ describe('GET /api/project/release-readiness', () => {
           title: 'Expand backlog into full decomposition',
           status: 'blocked',
           releaseIds: ['headless-mvp'],
+          worktreePath: staleParentWorktree,
           blockReason: 'human_judgment_required: Spec agent kept researching after Guildhall asked for durable progress.',
           escalations: [{
             id: 'esc-task-parent-1',
@@ -748,11 +752,13 @@ describe('GET /api/project/release-readiness', () => {
     expect(readiness.openEscalations).toEqual([])
     expect(readiness.blockedByAgent).toEqual([])
     expect(readiness.releaseBlockers).toEqual([])
+    expect(readiness.gitStory.blockers).toEqual([])
     expect(readiness.totals).toMatchObject({
       tasks: 1,
       done: 1,
       humanBlockingCount: 0,
       blockingCount: 0,
+      gitStoryBlockingCount: 0,
     })
     expect(readiness.ready).toBe(true)
   })

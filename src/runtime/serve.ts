@@ -2957,6 +2957,30 @@ function taskGitStoryOverride(task: Record<string, unknown>): {
   }
 }
 
+function taskHasExplicitGitStoryFollowup(task: Record<string, unknown>): boolean {
+  const mergeRecord =
+    task.mergeRecord && typeof task.mergeRecord === 'object' && !Array.isArray(task.mergeRecord)
+      ? task.mergeRecord as { result?: string }
+      : undefined
+  return Boolean(taskGitStoryOverride(task)) ||
+    mergeRecord?.result === 'skipped' ||
+    mergeRecord?.result === 'conflict' ||
+    task.status === 'pending_pr'
+}
+
+function taskNeedsTaskGitStory(
+  task: Record<string, unknown>,
+  workspace?: { worktreePath?: string },
+  childProject?: unknown,
+): boolean {
+  const hasExplicitFollowup = taskHasExplicitGitStoryFollowup(task)
+  if (taskHasRecordedCompletionProof(task as Task) && !hasExplicitFollowup) return false
+  return Boolean(childProject) ||
+    typeof workspace?.worktreePath === 'string' ||
+    typeof task.worktreePath === 'string' ||
+    hasExplicitFollowup
+}
+
 function taskForGitStory(
   task: Record<string, unknown>,
   workspace?: { worktreePath?: string },
@@ -3092,18 +3116,7 @@ async function gitStoryForTaskIfUseful(
     workspaceProjects,
     task,
   })
-  const mergeRecord =
-    task.mergeRecord && typeof task.mergeRecord === 'object' && !Array.isArray(task.mergeRecord)
-      ? task.mergeRecord as { result?: string }
-      : undefined
-  const hasTaskSpecificGitStory =
-    Boolean(childProject) ||
-    typeof workspace?.worktreePath === 'string' ||
-    typeof task.worktreePath === 'string' ||
-    Boolean(taskGitStoryOverride(task)) ||
-    mergeRecord?.result === 'skipped' ||
-    mergeRecord?.result === 'conflict' ||
-    task.status === 'pending_pr'
+  const hasTaskSpecificGitStory = taskNeedsTaskGitStory(task, workspace, childProject)
   if (!hasTaskSpecificGitStory && workspaceProjects.length > 0) return undefined
   return gitStoryForTask(projectPath, task, workspace, workspaceProjects)
 }
@@ -3137,18 +3150,7 @@ async function buildProjectGitStorySummary(projectPath: string, tasks?: Array<Re
   for (const task of taskRecords) {
     const taskId = typeof task.id === 'string' ? task.id : ''
     const workspace = taskId ? workspaceStore?.workspaces[taskId] : undefined
-    const taskStatus = typeof task.status === 'string' ? task.status : ''
-    const mergeRecord =
-      task.mergeRecord && typeof task.mergeRecord === 'object' && !Array.isArray(task.mergeRecord)
-        ? task.mergeRecord as { result?: string }
-        : undefined
-    const hasUnresolvedTaskGit =
-      typeof workspace?.worktreePath === 'string' ||
-      typeof task.worktreePath === 'string' ||
-      Boolean(taskGitStoryOverride(task)) ||
-      mergeRecord?.result === 'skipped' ||
-      mergeRecord?.result === 'conflict' ||
-      taskStatus === 'pending_pr'
+    const hasUnresolvedTaskGit = taskNeedsTaskGitStory(task, workspace)
     if (!hasUnresolvedTaskGit) continue
     snapshots.push(await gitStoryForTask(projectPath, task, workspace, workspaceProjects))
   }

@@ -1585,6 +1585,75 @@ invented proof-command feedback.
     approval in this environment; the restored local binaries were used for the
     direct build/install proof above.
 
+2026-07-06T10:15:00Z - Suppressed stale parent worktree blockers after linked
+child closure proof.
+
+- Work id: `codex:nh-stale-parent-git-story-followup-2026-07-06`.
+- User job: after Guildhall has decomposed parent work into linked child tasks
+  and recorded closure proof on the parent, release readiness should not keep
+  telling the owner to publish a stale parent worktree. Real repository
+  follow-up, explicit merge conflicts, skipped merges, pending PRs, and task
+  Git Story overrides must still remain visible.
+- Root-cause classification:
+  - Task hierarchy/dependency/proof modeling: the parent task had durable
+    closure proof from completed linked child tasks, but task-level Git Story
+    still treated its old worktree as independently actionable.
+  - Scheduler/action-state logic: Start/release readiness counted the stale
+    parent worktree as blocking the selected release even though the effective
+    release status was `done`.
+  - Bad project data from earlier Guildhall bug: the stale shared-checkout
+    worktree contained a destructive checkpoint and no upstream; it was not a
+    legitimate branch to push as release work.
+  - UI communication/orientation: the false task Git Story blocker made the
+    release look less complete than the shared completion proof warranted.
+- Fix:
+  - Added a shared task Git Story inclusion helper. Completed tasks with
+    recorded completion proof no longer create task-level Git Story snapshots
+    merely because a stale `worktreePath` exists.
+  - Kept explicit Git Story follow-up authoritative: `gitStory` overrides,
+    skipped merges, conflicts, and `pending_pr` tasks still produce blockers
+    even when a task also has completion proof.
+- Contract Touch Decision:
+  - Work id: `codex:nh-stale-parent-git-story-followup-2026-07-06`.
+  - Touched contracts: task-level Git Story inclusion semantics;
+    `/api/project/release-readiness` Git Story blockers and blocking totals;
+    `/api/project` start-readiness state derived from release Git Story.
+  - Contracts considered but not touched: persisted task schema, release
+    schema, worktree schema, merge record schema, task completion proof schema,
+    Release UI props.
+  - Existing data impact: no migration. Existing stale parent `worktreePath`
+    data remains stored, but recorded completion proof prevents it from
+    surfacing as a passive release blocker unless explicit Git follow-up is
+    present.
+  - Required follow-up: Narrative Harness still has one real repository
+    publication blocker on `main`; `git push origin main` failed with
+    Bitbucket `Permission denied (publickey)`.
+  - Proof required: focused stale-parent regression, broader release/dashboard
+    tests, build, contract detector, installed-app API readback.
+  - Proof provided: focused stale-parent regression passed; broader focused
+    suite passed with `60` tests. `pnpm build`, `pnpm dev:install`, and
+    `guildhall start` passed; `/api/stale-server` returned `stale:false` for
+    PID `37037`.
+  - Installed-app readback:
+    `/api/project/release-readiness?projectId=narrative-harness` returned
+    `statusCounts.done:16`, `totals.gitStoryBlockingCount:1`, and exactly one
+    blocker: repo `main` has one local commit not pushed to `origin/main`.
+    `/api/project?projectId=narrative-harness` returned
+    `startReadiness.code:"repository_followup_required"` with `count:1`.
+    The same payload still includes the current-scope DeepInfra drafting model,
+    world-state continuity, and spatial/geographic continuity tasks under
+    `stage-1-fixture-and-evaluation-harness`.
+  - Browser readback: `/projects/narrative-harness/release` showed the
+    installed UI connected to Narrative Harness, selected
+    `Stage 1 Fixture And Evaluation Harness`, `16/16 done`, `1` repository
+    follow-up, `Project checkout: clean`, and the same `main has 1 local commit
+    not pushed to origin/main` blocker. The release summary intentionally does
+    not list every included task title, so the DeepInfra/reviewer-lane task
+    proof above comes from the project API payload.
+  - Apply/revert behavior: revert `taskNeedsTaskGitStory` /
+    `taskHasExplicitGitStoryFollowup` and the stale-parent regression to
+    restore previous behavior; no data rollback required.
+
 2026-07-04T19:59:23Z - Scoped release Git Story blockers to the selected
 release and hardened container repo discovery.
 
