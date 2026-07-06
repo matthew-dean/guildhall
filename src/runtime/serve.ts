@@ -2178,6 +2178,16 @@ function scopedWorkNeedsDesignSystem(
 
 function taskDoneButProofMissing(task: unknown): boolean {
   if (!task || typeof task !== 'object') return false
+  const acceptanceCriteria = Array.isArray((task as { acceptanceCriteria?: unknown }).acceptanceCriteria)
+    ? (task as { acceptanceCriteria: unknown[] }).acceptanceCriteria
+    : []
+  if (acceptanceCriteria.some(criterion => Boolean(
+    criterion &&
+    typeof criterion === 'object' &&
+    (criterion as { met?: unknown }).met === false,
+  ))) {
+    return true
+  }
   const proofPaths = Array.isArray((task as { proofPaths?: unknown }).proofPaths)
     ? (task as { proofPaths: unknown[] }).proofPaths
     : []
@@ -3452,6 +3462,14 @@ function compactTaskForProjectSummary(task: Record<string, unknown>): Record<str
   const summary: Record<string, unknown> = {}
   for (const key of summaryKeys) {
     if (key in task) summary[key] = task[key]
+  }
+  if (
+    task.gitStory &&
+    typeof task.gitStory === 'object' &&
+    !Array.isArray(task.gitStory) &&
+    !['unknown', 'not_git'].includes(String((task.gitStory as { state?: unknown }).state ?? ''))
+  ) {
+    summary.gitStory = task.gitStory
   }
   const runtime = compactTaskRuntimeForProjectSummary(task.runtime)
   if (runtime) summary.runtime = runtime

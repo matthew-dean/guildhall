@@ -915,6 +915,53 @@ describe('GET /api/project/task/:id', () => {
     expect(workBody.memoryHealth).toBeUndefined()
   })
 
+  it('does not call a consumed release complete when a done task still has unmet acceptance criteria', async () => {
+    const now = '2026-06-01T00:00:00.000Z'
+    await writeRawTaskQueue({
+      version: 1,
+      lastUpdated: now,
+      selectedReleaseId: 'headless-mvp',
+      releases: [{
+        id: 'headless-mvp',
+        label: 'Headless MVP',
+        status: 'active',
+        createdAt: now,
+      }],
+      tasks: [{
+        id: 'task-model-proof',
+        title: 'Prove the drafting model',
+        description: 'A test task',
+        domain: 'harness',
+        status: 'done',
+        priority: 'normal',
+        createdAt: now,
+        updatedAt: now,
+        releaseIds: ['headless-mvp'],
+        acceptanceCriteria: [{
+          id: 'AC-1',
+          description: 'Model proof records telemetry.',
+          verifiedBy: 'review',
+          met: false,
+        }],
+      }],
+    })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(projectUrl('/api/project')))
+    const body = (await res.json()) as Record<string, any>
+
+    expect(res.status, body.error).toBe(200)
+    expect(body.startReadiness).toMatchObject({
+      canStart: false,
+      code: 'proof_evidence_missing',
+      actionHref: '/work?task=task-model-proof',
+      focusTaskId: 'task-model-proof',
+      focusKind: 'proof',
+      count: 1,
+    })
+    expect(body.startReadiness?.message).toContain('Headless MVP is waiting on proof evidence for "Prove the drafting model".')
+  })
+
   it('derives terminal summaries from merge records on task detail and project rows', async () => {
     await seedTask('task-1', {
       status: 'done',

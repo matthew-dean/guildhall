@@ -151,6 +151,68 @@ help_summary: |
   - Apply/revert behavior: remove the `surface=work` branch and project-store
     surface hint to return Work to the monolithic project-detail payload.
 
+2026-07-06T17:20:00Z - Terminal release state now respects explicit unmet acceptance criteria.
+
+- Work id: `codex:terminal-release-proof-criteria-2026-07-06`.
+- User job: When Guildhall says a scope or release is complete, the product
+  must not be relying on status labels alone. If a done task still has
+  acceptance criteria explicitly marked unmet, Guildhall should tell the owner
+  proof is missing and point to the task instead of saying the scope is
+  complete.
+- Escaped live failure:
+  - Narrative Harness API inspection showed historical `done` task records
+    whose acceptance criteria still had `met:false`.
+  - The selected near-term proof scope currently has all included work marked
+    done, so this failure is a calibration warning: older or out-of-scope done
+    rows can still carry contradictory proof state, and a future selected
+    release could have been reported complete while its criteria said
+    otherwise.
+- Root-cause classification:
+  - Task hierarchy/dependency/proof modeling problem: terminal readiness
+    already checked proof paths, but did not treat explicit unmet acceptance
+    criteria as missing proof.
+  - Project structure/scope/release modeling problem: release completion could
+    be derived from terminal task status before validating the proof semantics
+    inside the selected execution boundary.
+  - Bad project data produced by an earlier Guildhall bug: legacy Narrative
+    Harness done rows still contain stale unmet criteria, which must remain
+    visible as suspect proof state instead of being silently normalized away.
+- Fix:
+  - Shared terminal proof detection now treats any done task with
+    `acceptanceCriteria[].met === false` as proof-missing.
+  - Project start readiness returns `proof_evidence_missing` for a consumed
+    selected release when a done task still has explicit unmet criteria,
+    pointing the owner to the task instead of reporting `all_terminal`.
+  - Full project summary rows keep actionable task git-story snapshots, while
+    still omitting useless `unknown`/`not_git` snapshots so compact project rows
+    do not regain noise.
+- Proof:
+  - Added a focused endpoint regression for a selected `Headless MVP` release
+    with a done task and unmet criteria; red run returned repository follow-up
+    instead of proof missing, green run returns `proof_evidence_missing` with
+    `/work?task=task-model-proof`.
+  - Focused release-readiness regression confirmed child-repo task git-story
+    agreement still appears on full project rows.
+  - Focused suite passed: `src/runtime/__tests__/serve-task-endpoints.test.ts`,
+    `src/runtime/__tests__/serve-release-readiness.test.ts`,
+    `src/web/lib/__tests__/project-store.test.ts`, and
+    `src/web/surfaces/__tests__/ProjectView.svelte.test.ts` (`197` tests).
+  - `git diff --check`, `node scripts/contract-touch-detector.mjs`, and
+    `node ./build.mjs` passed; installed app refreshed and
+    `/api/stale-server` returned `stale:false`.
+  - Live Narrative Harness API proof: selected `Near-term proof scope` still
+    reports `all_terminal` because its `14` included work items have no unmet
+    criteria, while the project API visibly exposes `4` historical done rows
+    with stale unmet criteria outside that selected scope:
+    `coherence-reviewer-mvp`, `decision-trace-pipeline`,
+    `author-voice-loop-mvp`, and `task-150`.
+- Residual risk:
+  - This blocks future false-complete selected releases, but does not yet
+    repair older Narrative Harness task records that are already done with
+    stale unmet criteria. A follow-up migration or re-intake pass should either
+    reconcile those criteria from recorded reviewer proof or reopen them as
+    suspect proof data.
+
 2026-07-06T15:45:00Z - Clipped imported task titles are repaired as data, not display copy.
 
 - Work id: `codex:repair-clipped-imported-task-title-data-2026-07-06`.
