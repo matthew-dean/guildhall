@@ -5503,6 +5503,7 @@ export class Orchestrator {
         if (afterStatus === 'done' && taskDoneButProofMissing({ ...taskAfter, status: 'done' })) {
           taskAfter.status = 'in_progress'
           ensureWorkerOwnership(taskAfter)
+          taskAfter.completedAt = undefined
           taskAfter.revisionCount += 1
           taskAfter.notes.push({
             agentId: 'proof-health-gates',
@@ -7957,6 +7958,7 @@ export class Orchestrator {
           now,
         })
         ensureWorkerOwnership(current)
+        current.completedAt = undefined
         current.revisionCount += 1
         current.notes.push({
           agentId: 'acceptance-command-gates',
@@ -7998,6 +8000,7 @@ export class Orchestrator {
             now,
           })
           ensureWorkerOwnership(current)
+          current.completedAt = undefined
           current.revisionCount += 1
           current.notes.push({
             agentId: 'acceptance-command-gates',
@@ -8269,6 +8272,7 @@ export class Orchestrator {
           now,
         })
         ensureWorkerOwnership(current)
+        current.completedAt = undefined
         current.revisionCount += 1
         current.notes.push({
           agentId: input.actor,
@@ -10647,6 +10651,14 @@ export class Orchestrator {
     return hasProofPacket && hasVerificationProof && hasDiffScope
   }
 
+  private proofRecoveryIsNewerThanLatestSelfCritique(task: Task): boolean {
+    const reopenedAt = task.proofRecovery?.reopenedAt ? Date.parse(task.proofRecovery.reopenedAt) : NaN
+    if (!Number.isFinite(reopenedAt)) return false
+    const selfCritique = this.latestWorkerSelfCritiqueNote(task)
+    const selfCritiqueAt = selfCritique?.timestamp ? Date.parse(selfCritique.timestamp) : NaN
+    return !Number.isFinite(selfCritiqueAt) || reopenedAt > selfCritiqueAt
+  }
+
   private hasNewerSubstantiveReviewFeedback(task: Task): boolean {
     const selfCritique = this.latestWorkerSelfCritiqueNote(task)
     if (!selfCritique?.timestamp) return false
@@ -10661,7 +10673,9 @@ export class Orchestrator {
         /recommended task-local revisions/i.test(content) ||
         /coordinator adjudicated:\s*worker to address/i.test(content) ||
         /latest substantive review feedback/i.test(content) ||
-        /review revision cap/i.test(content)
+        /review revision cap/i.test(content) ||
+        /lacks? (?:the )?proof evidence required by (?:its|the) proof path/i.test(content) ||
+        /missing (?:release )?proof evidence/i.test(content)
       )
     })
   }
@@ -10673,6 +10687,7 @@ export class Orchestrator {
   }): Promise<TickOutcome | null> {
     if (input.beforeStatus !== 'in_progress') return null
     if (input.task.assignedTo && input.task.assignedTo !== 'worker-agent') return null
+    if (this.proofRecoveryIsNewerThanLatestSelfCritique(input.task)) return null
     if (!this.hasReviewProofPacket(input.task)) return null
     if (this.hasNewerSubstantiveReviewFeedback(input.task)) return null
 
@@ -10691,6 +10706,7 @@ export class Orchestrator {
     const queuedTask = queue.tasks.find((candidate) => candidate.id === input.task.id)
     if (!queuedTask) return null
     if (queuedTask.status !== 'in_progress') return null
+    if (this.proofRecoveryIsNewerThanLatestSelfCritique(queuedTask)) return null
     if (!this.hasReviewProofPacket(queuedTask)) return null
     if (this.hasNewerSubstantiveReviewFeedback(queuedTask)) return null
 
@@ -11820,6 +11836,10 @@ export class Orchestrator {
       liveTask.updatedAt = this.now()
       queue.lastUpdated = this.now()
       await this.writeQueue(queue)
+      await upsertTaskRuntimeState(inferProjectRootFromMemoryDir(this.opts.config.memoryDir), liveTask.id, {
+        assignedTo: 'gate-checker-agent',
+        updatedAt: liveTask.updatedAt,
+      })
       task.assignedTo = 'gate-checker-agent'
       task.updatedAt = liveTask.updatedAt
     })

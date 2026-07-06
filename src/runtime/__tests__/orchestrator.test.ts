@@ -7389,6 +7389,140 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
     expect(queue.tasks[0]!.notes[0]?.content).not.toContain('\n...')
   })
 
+  it('normalizes gate-check ownership in runtime state as well as the queue', async () => {
+    const task = mkTask({
+      id: 'a',
+      status: 'gate_check',
+      assignedTo: 'reviewer-agent',
+    })
+    await writeQueue([task])
+    await upsertTaskRuntimeState(tmpDir, 'a', {
+      assignedTo: 'reviewer-agent',
+      updatedAt: '2026-07-04T10:07:20.557Z',
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet(),
+    })
+
+    await (orch as unknown as {
+      normalizeGateCheckOwnership(task: typeof task): Promise<void>
+    }).normalizeGateCheckOwnership(task)
+
+    const queue = await readQueue()
+    const runtime = await readTaskRuntimeStore(tmpDir)
+    expect(queue.tasks[0]?.assignedTo).toBe('gate-checker-agent')
+    expect(runtime.tasks.a?.assignedTo).toBe('gate-checker-agent')
+    expect(task.assignedTo).toBe('gate-checker-agent')
+  })
+
+  it('does not promote an old review proof packet after newer proof recovery reopened the task', async () => {
+    const task = mkTask({
+      id: 'a',
+      status: 'in_progress',
+      assignedTo: 'worker-agent',
+      worktreePath: path.join(tmpDir, 'task-a-worktree'),
+      proofRecovery: {
+        reopenedAt: '2026-07-06T21:52:58.418Z',
+        reason: 'Missing release proof evidence.',
+      },
+      notes: [{
+        agentId: 'worker-agent',
+        role: 'self-critique',
+        content: [
+          '**Acceptance criteria:**',
+          '- [ac-1]: Met',
+          '- Minimum-scope check: Met',
+          '## Review proof packet',
+          'Verification command passed.',
+          'Changed files: src/cli/generate.ts',
+        ].join('\n'),
+        timestamp: '2026-07-06T13:18:49.959Z',
+      }],
+    })
+    await writeQueue([task])
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet(),
+      gitDriver: new InMemoryGitDriver({ clean: false }),
+    })
+
+    const out = await (orch as unknown as {
+      maybePromoteExistingWorkerReviewProof(input: {
+        task: typeof task
+        beforeStatus: TaskStatus
+        activeWorktreePath: string
+      }): Promise<unknown>
+    }).maybePromoteExistingWorkerReviewProof({
+      task,
+      beforeStatus: 'in_progress',
+      activeWorktreePath: task.worktreePath!,
+    })
+
+    const queue = await readQueue()
+    expect(out).toBeNull()
+    expect(queue.tasks[0]?.status).toBe('in_progress')
+    expect(queue.tasks[0]?.assignedTo).toBe('worker-agent')
+  })
+
+  it('does not promote an existing review proof packet after newer proof-missing gate feedback', async () => {
+    const task = mkTask({
+      id: 'a',
+      status: 'in_progress',
+      assignedTo: 'worker-agent',
+      worktreePath: path.join(tmpDir, 'task-a-worktree'),
+      proofRecovery: {
+        reopenedAt: '2026-07-06T21:52:58.418Z',
+        reason: 'Missing release proof evidence.',
+      },
+      notes: [
+        {
+          agentId: 'worker-agent',
+          role: 'self-critique',
+          content: [
+            '**Acceptance criteria:**',
+            '- [ac-1]: Met',
+            '- Minimum-scope check: Met',
+            '## Review proof packet',
+            'Verification command passed.',
+            'Changed files: src/cli/generate.ts',
+          ].join('\n'),
+          timestamp: '2026-07-06T21:54:03.691Z',
+        },
+        {
+          agentId: 'recorded-hard-gates',
+          role: 'gate-checker',
+          content:
+            'Gate check could not complete from recorded evidence because the task still lacks the proof evidence required by its proof path. Keep the task open and attach the missing proof before marking it done.',
+          timestamp: '2026-07-06T22:04:26.096Z',
+        },
+      ],
+    })
+    await writeQueue([task])
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet(),
+      gitDriver: new InMemoryGitDriver({ clean: false }),
+    })
+
+    const out = await (orch as unknown as {
+      maybePromoteExistingWorkerReviewProof(input: {
+        task: typeof task
+        beforeStatus: TaskStatus
+        activeWorktreePath: string
+      }): Promise<unknown>
+    }).maybePromoteExistingWorkerReviewProof({
+      task,
+      beforeStatus: 'in_progress',
+      activeWorktreePath: task.worktreePath!,
+    })
+
+    const queue = await readQueue()
+    expect(out).toBeNull()
+    expect(queue.tasks[0]?.status).toBe('in_progress')
+    expect(queue.tasks[0]?.assignedTo).toBe('worker-agent')
+  })
+
   it('rejects simulated provider proof before review-only gate_check completion', async () => {
     const worktreePath = path.join(tmpDir, 'provider-proof-worktree')
     await fs.mkdir(path.join(worktreePath, 'scripts'), { recursive: true })

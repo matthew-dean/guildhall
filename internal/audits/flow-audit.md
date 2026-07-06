@@ -16556,6 +16556,16 @@ bootstrap-output truncation.
     counts reported `gateCheck:0` and `inProgress:0`. This needs a separate
     shared-state investigation; do not treat the NH MVP as complete from the
     proof gate alone.
+  - Follow-up implementation: gate-check ownership normalization now updates
+    system-local runtime state as well as the queue, because effective task
+    projection trusts runtime `assignedTo`. Proof-health reopen paths also
+    clear `completedAt` when a task is kept open for missing proof, so UI/API
+    surfaces do not show an active task with a terminal timestamp.
+  - Second follow-up implementation: `maybePromoteExistingWorkerReviewProof`
+    now refuses to reuse a worker self-critique/review proof packet when
+    `proofRecovery.reopenedAt` is newer than that self-critique. Missing-proof
+    recovery must return to worker-owned proof attachment instead of recycling
+    stale review handoff evidence.
 
 2026-07-06T18:18:00Z - Tightened selected-scope proof truth for Narrative
 Harness current release.
@@ -23944,6 +23954,69 @@ shared readiness state.
     `proof_reconciliation` row with `count:14` and `signals.length:14`, first
     signal `task:task-import-1g9oq7m`, last signal
     `task:task-prove-spatial-geographic-continuity-review-for-travel-terrain-walking-speed-map-consistency-weather-light-and-physical-plausibility`.
+
+2026-07-06T22:18:00Z - Stopped stale proof-packet recovery from recycling a
+Narrative Harness task after proof gates rejected it.
+
+- Work id: `codex:stale-proof-packet-recovery-2026-07-06`.
+- User job: when Guildhall says a task still lacks proof, the next run should
+  attach the missing proof or expose the real blocker. It must not keep moving
+  the same stale worker self-critique back to review and make the owner watch a
+  fake progress loop.
+- Root-cause classification:
+  - `task hierarchy/dependency/proof modeling problem`: the recovery path
+    treated any worker self-critique with a review proof packet as reusable,
+    even after newer hard-gate feedback said that packet did not satisfy the
+    proof path.
+  - `scheduler/action-state logic problem`: `gate_check` ownership was updated
+    in the queue but could be overridden by system-local runtime assignment,
+    so API/UI projection could show gate-check work as reviewer-owned.
+  - `UI communication/orientation problem`: reopened proof work could still
+    carry a terminal `completedAt`, creating an active task that looked partly
+    complete.
+  - `bad project data produced by an earlier Guildhall bug`: older Narrative
+    Harness notes contained repeated stale recovery/reviewer/gate loops before
+    this guard existed.
+- Fix:
+  - `normalizeGateCheckOwnership()` now updates system-local runtime state as
+    well as the task queue.
+  - Proof-health reopen paths clear `completedAt` when a task is kept open for
+    missing proof.
+  - `maybePromoteExistingWorkerReviewProof()` now refuses an existing review
+    proof packet when proof recovery reopened after the latest worker
+    self-critique, or when newer substantive feedback says proof evidence is
+    still missing.
+- Verification:
+  - Focused regressions passed:
+    `does not promote an existing review proof packet after newer proof-missing gate feedback`,
+    `does not promote an old review proof packet after newer proof recovery
+    reopened the task`, `normalizes gate-check ownership in runtime state as
+    well as the queue`, `does not complete approved gate-check work when the
+    proof path remains missing`, and effective-task legacy bootstrap truncation
+    repair.
+  - `node scripts/contract-touch-detector.mjs` passed.
+  - Direct install-grade build passed:
+    `node packages/ui/scripts/generate-styles.mjs &&
+    ./node_modules/.bin/tsc -p packages/ui/tsconfig.json && node ./build.mjs`.
+  - Installed-app proof: `node ./scripts/dev-install.mjs`; `guildhall stop`;
+    `guildhall start`; `/api/stale-server` returned `stale:false` for PID
+    `74643`.
+  - Live Narrative Harness proof:
+    `POST /api/project/start?projectId=narrative-harness` resumed the current
+    task
+    `task-generate-a-cli-first-story-synopsis-outline-character-voice-records-and-one-chapter-draft-from-the-selected-model`.
+    After `recorded-hard-gates` rejected the older review packet at
+    `2026-07-06T22:13:55.153Z`, Guildhall moved the task to
+    `status:"in_progress"`, `assignedTo:"worker-agent"` with no terminal
+    `completedAt`, and did not append another stale coordinator recovery note.
+    A fresh worker self-critique was written at `2026-07-06T22:15:00.078Z`,
+    then review/gate-check proceeded with `assignedTo:"gate-checker-agent"`.
+- Remaining exposed failure:
+  - The fresh worker self-critique still did not satisfy the proof path; the
+    next gate returned the task to `status:"in_progress"`,
+    `assignedTo:"worker-agent"` at revision `1` with another
+    `recorded-hard-gates` note. That is a separate proof-contract/data-model
+    problem, not the stale proof-packet recovery loop.
 
 2026-06-15T23:52:00Z - Completed the Project Orientation Spine cross-route
 implementation and installed-app audit.
