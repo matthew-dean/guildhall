@@ -14263,6 +14263,18 @@ describe('Orchestrator worker no-progress escalation', () => {
     ) as { intent: string; filesTouched: string[] }
     expect(checkpoint.intent).toContain('dirty worktree progress')
     expect(checkpoint.filesTouched).toContain('docs/coherence/dialogue-and-character-voice-reviewer.md')
+
+    const second = await orch.tick({ dispatchLimit: 1 })
+    expect(second.kind).toBe('processed')
+    const checkpointAfterSecond = JSON.parse(
+      await fs.readFile(taskHistoryPath('task-dirty-bookkeeping', 'checkpoint.json'), 'utf8'),
+    ) as { step: number; filesTouched: string[] }
+    expect(checkpointAfterSecond.step).toBe(1)
+    const task = await readEffectiveTaskFromQueue('task-dirty-bookkeeping')
+    expect(task?.notes.some(note =>
+      note.role === 'worker-progress-review' &&
+      /Worker made no visible progress pass 1/.test(note.content),
+    )).toBe(true)
   })
 
   it('persists no-progress counts across separate worker runs without likely targets', async () => {

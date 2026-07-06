@@ -58,6 +58,10 @@ task-worktree proof.
     worker created `docs/coherence/dialogue-and-character-voice-reviewer.md` in
     the task worktree, but Guildhall did not write the recovery checkpoint
     because task bookkeeping had changed `updatedAt`.
+  - Once checkpointing worked, repeated resumes exposed another state-model
+    flaw: Guildhall treated the same already-checkpointed dirty file as fresh
+    progress on every tick, so it could keep incrementing checkpoint steps while
+    the worker never added the missing proof artifacts or handed off to review.
 - Fix:
   - Review dispatch now reconciles acceptance criteria from the latest worker
     self-critique before reviewer work starts, and persists that reconciliation
@@ -93,6 +97,9 @@ task-worktree proof.
   - Dirty worker progress now writes a recovery checkpoint even when task
     bookkeeping touched `updatedAt`, so current work is visible and resumable
     instead of living only as an untracked worktree diff.
+  - If the dirty file set exactly matches the current checkpoint and the worker
+    adds no verification, note, verdict, or new handoff evidence, Guildhall now
+    treats that as no-progress instead of refreshing the same checkpoint again.
 - Narrative Harness proof:
   - DeepInfra drafting model work is done and records
     `mistralai/Mistral-Small-3.2-24B-Instruct-2506` on DeepInfra for Stage 1
@@ -122,6 +129,9 @@ task-worktree proof.
     no-progress.
   - Focused checkpoint regression covers dirty worker progress plus timestamp
     churn and asserts the recovery checkpoint names the touched reviewer file.
+    The same regression then reruns the unchanged dirty checkpoint and asserts
+    the checkpoint step does not advance; Guildhall records a worker-progress
+    no-progress note instead.
 - Contract Touch Decision:
   - Touched contracts: review dispatch preconditions, LLM-review verdict
     normalization, deterministic reviewer handoff semantics, recovered

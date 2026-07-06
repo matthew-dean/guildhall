@@ -1258,6 +1258,13 @@ function countTaskNotes(task: Task, pattern: RegExp): number {
   ).length
 }
 
+function sameStringSet(left: readonly string[], right: readonly string[]): boolean {
+  if (left.length !== right.length) return false
+  const normalizedLeft = [...left].map(value => value.trim()).sort()
+  const normalizedRight = [...right].map(value => value.trim()).sort()
+  return normalizedLeft.every((value, index) => value === normalizedRight[index])
+}
+
 function reviewVerdictLooksInfrastructureOnly(verdict: Pick<ReviewVerdict, 'verdict' | 'reasoning'>): boolean {
   if (verdict.verdict !== 'revise') return false
   const text = verdict.reasoning ?? ''
@@ -5511,6 +5518,14 @@ export class Orchestrator {
           successfulAgentMetadata,
           taskRepoRootAfter,
         )
+        const durableCheckpointForProgress =
+          checkpoint ?? await readCheckpoint(this.opts.config.memoryDir, task.id).catch(() => null)
+        const dirtyFilesMatchExistingCheckpoint =
+          beforeStatus === 'in_progress' &&
+          dirtyTaskFilesAfter.length > 0 &&
+          sameStringSet(dirtyTaskFilesAfter, durableCheckpointForProgress?.filesTouched ?? []) &&
+          !checkpointHasRecordedVerificationFailure(durableCheckpointForProgress?.resumeContext?.verification ?? []) &&
+          !this.hasDurableWorkerHandoffEvidence(successfulAgentMetadata, task.id)
         const corpusRefreshTouchedFiles = uniqueStrings([
           ...dirtyTaskFilesAfter,
           ...checkpointTouchedFiles,
@@ -5643,6 +5658,7 @@ export class Orchestrator {
           beforeStatus === 'in_progress' &&
           afterStatus === 'in_progress' &&
           !transitioned &&
+          !dirtyFilesMatchExistingCheckpoint &&
           (
             (hasDirtyWorktreeAfter && (!hasFailedCheckpointVerification || hasWorkerTurnEvidence)) ||
             hasDirtyLikelyTargetProgress ||
@@ -5676,8 +5692,8 @@ export class Orchestrator {
           afterStatus === 'in_progress' &&
           !transitioned &&
           (taskAfter.updatedAt === task.updatedAt || workerFalseCompletionNarration || noDurableWorkerProgressSignal) &&
-          (!hasDirtyWorktreeAfter || (hasFailedCheckpointVerification && !hasWorkerTurnEvidence)) &&
-          !hasDirtyLikelyTargetProgress &&
+          (!hasDirtyWorktreeAfter || dirtyFilesMatchExistingCheckpoint || (hasFailedCheckpointVerification && !hasWorkerTurnEvidence)) &&
+          (!hasDirtyLikelyTargetProgress || dirtyFilesMatchExistingCheckpoint) &&
           !hasCheckpointScopedVerifiedProgress
         if (repeatedWorkerNoProgress) {
           const durableNoProgressAttempts = countTaskNotes(
