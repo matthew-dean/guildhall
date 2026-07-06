@@ -440,7 +440,7 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
     })
   }
 
-  const proofMissing = proofMissingDoneTasks(tasks)
+  const proofMissing = proofMissingDoneTasks(executionTasks)
   if (proofMissing.length > 0) {
     const first = proofMissing[0]!
     const countLabel = proofMissing.length === 1

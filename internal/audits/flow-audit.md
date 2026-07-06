@@ -22841,6 +22841,64 @@ not raw task rows only.
   - Rollback/revert behavior: revert the runtime repair and, if needed, restore
     task criteria from local history backups; no reader compatibility change.
 
+2026-07-06T17:56:00Z - Scoped proof-reconciliation inbox alerts to the selected
+execution boundary.
+
+- Work id: `codex:proof-inbox-selected-scope-2026-07-06`.
+- User job: when the owner opens Narrative Harness, Needs You should describe
+  what blocks the currently selected scope/release. Stale proof cleanup from
+  deferred or unrelated scopes must not appear as if it blocks the selected
+  release.
+- Root-cause classification:
+  - Project structure/scope/release modeling problem: the project inbox had a
+    selected release scope but the proof-reconciliation item ignored it.
+  - UI communication/orientation problem: Needs You surfaced out-of-scope proof
+    cleanup while Release readiness correctly reported the selected
+    `near-term-proof-scope` ready.
+  - Bad project data produced by an earlier Guildhall bug: Narrative Harness
+    still has old done tasks outside the selected release with stale unmet
+    acceptance criteria, but those are not current-scope blockers.
+- Fix:
+  - `buildInbox()` now uses the already-derived `executionTasks` list for
+    proof reconciliation instead of scanning every task in the project.
+  - Projects without a selected release/scope still scan all tasks, because
+    `executionTasks` falls back to the full task list when no scope exists.
+- Contract Touch Decision:
+  - Work id: `codex:proof-inbox-selected-scope-2026-07-06`.
+  - Touched contracts: project inbox proof-reconciliation semantics; selected
+    release/current-scope ownership of owner-facing proof actions.
+  - Contracts considered but not touched: persisted task schema, task evidence
+    schema, release schema, release-readiness endpoint shape, orientation-spine
+    payload, delivery-spine payload.
+  - Existing data impact: no migration. Out-of-scope stale proof remains stored
+    and can be surfaced by a future cleanup view, but it no longer blocks the
+    selected-scope Needs You lane.
+  - Required follow-up: add a dedicated backlog/maintenance treatment for
+    global stale proof cleanup if Guildhall needs to surface it separately from
+    current-scope execution.
+  - Proof required: failing inbox regression, focused inbox/readiness tests,
+    build, contract lint, installed-app stale check, and live Narrative Harness
+    API agreement between inbox and release readiness.
+  - Proof provided: new inbox regression failed before the fix and passed after
+    the one-line scope change; focused runtime suites passed `194` tests;
+    `git diff --check` passed; `node scripts/contract-touch-detector.mjs`
+    passed; `CI=true node ./build.mjs` passed; `CI=true pnpm dev:install`
+    installed the current branch artifact; clean installed server returned
+    `/api/stale-server` with `stale:false`; live Narrative Harness
+    `/api/project?surface=work` returned inbox kinds `["lever_questions"]` and
+    no `proof_reconciliation`; live
+    `/api/project/release-readiness?projectId=narrative-harness` returned
+    selected release `near-term-proof-scope`, `ready:true`,
+    `proofEvidenceBlockingCount:0`, `proofMissingDoneTasks:[]`, and
+    `releaseBlockers:[]`.
+  - Browser/UI proof caveat: the in-app browser bridge connected but timed out
+    during the Overview navigation/read. The installed API proof verifies the
+    owner-facing data model; rendered UI proof remains required before claiming
+    the broader orientation loop complete.
+  - Apply/revert behavior: revert the `proofMissingDoneTasks(executionTasks)`
+    change in `src/runtime/inbox.ts` and the inbox regression to return to
+    global proof cleanup in Needs You. No data rollback required.
+
 2026-07-05T10:45:00Z - Aligned release proof/orientation communication with
 shared readiness state.
 

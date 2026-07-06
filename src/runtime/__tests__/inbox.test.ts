@@ -476,6 +476,49 @@ describe('buildInbox', () => {
     expect(items.some(i => i.kind === 'proof_reconciliation')).toBe(false)
   })
 
+  it('proof_reconciliation: ignores unmet proof outside the selected release scope', async () => {
+    await writeCompleteBootstrap()
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
+    await writeJson('.guildhall/TASKS.json', {
+      version: 1,
+      lastUpdated: '2026-07-06T00:00:00.000Z',
+      selectedReleaseId: 'current-scope',
+      releases: [{
+        id: 'current-scope',
+        label: 'Current scope',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-current'],
+        deferredNodeIds: ['work:task-later'],
+      }],
+      tasks: [
+        {
+          id: 'task-current',
+          title: 'Ship current proof',
+          status: 'done',
+          releaseIds: ['current-scope'],
+          acceptanceCriteria: [
+            { id: 'proof', description: 'Current proof is attached.', met: true },
+          ],
+        },
+        {
+          id: 'task-later',
+          title: 'Clean up later proof',
+          status: 'done',
+          releaseIds: ['later-scope'],
+          acceptanceCriteria: [
+            { id: 'proof', description: 'Later proof is attached.', met: false },
+          ],
+        },
+      ],
+    })
+
+    const items = buildInboxWithProviderSetup()
+
+    expect(items.some(i => i.kind === 'proof_reconciliation')).toBe(false)
+  })
+
   it('does not expose project check-ins or pressure-test questions through project inbox', async () => {
     await writeCompleteBootstrap()
     await writeJson('.guildhall/workspace-goals.json', {
