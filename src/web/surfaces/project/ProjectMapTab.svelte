@@ -112,8 +112,9 @@
   const scopeRows = $derived(spine?.scopeRows ?? [])
   const currentScopeRows = $derived(scopeRows.filter(row => row.scope !== 'deferred'))
   const laterScopeRows = $derived(scopeRows.filter(row => row.scope === 'deferred'))
-  const visibleScopeRows = $derived([...currentScopeRows.slice(0, 8), ...laterScopeRows.slice(0, 4)])
-  const hiddenScopeRowCount = $derived(Math.max(0, scopeRows.length - visibleScopeRows.length))
+  const visibleLaterScopeRows = $derived(laterScopeRows.slice(0, 4))
+  const visibleScopeRows = $derived([...currentScopeRows, ...visibleLaterScopeRows])
+  const hiddenLaterScopeRowCount = $derived(Math.max(0, laterScopeRows.length - visibleLaterScopeRows.length))
   const mapGaps = $derived.by(() => {
     return (spine?.gaps ?? []).slice(0, 5).map(gap => ({
       ...gap,
@@ -538,8 +539,8 @@
             </CardListItem>
           {/each}
         </CardList>
-        {#if hiddenScopeRowCount > 0}
-          <p class="overflow-summary">{countLabel(hiddenScopeRowCount, 'additional scoped row')} summarized in the counts above.</p>
+        {#if hiddenLaterScopeRowCount > 0}
+          <p class="overflow-summary">{countLabel(hiddenLaterScopeRowCount, 'additional later row')} summarized in the counts above.</p>
         {/if}
       </Card>
     {/if}

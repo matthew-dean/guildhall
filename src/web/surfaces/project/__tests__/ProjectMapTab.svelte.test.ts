@@ -272,6 +272,74 @@ describe('ProjectMapTab', () => {
     expect(screen.getByText('Stage 1: V1 Release Hardening contains 2 assigned work items and 80 later.')).toBeInTheDocument()
   })
 
+  it('shows every current scope row before summarizing later rows', () => {
+    const currentRows = Array.from({ length: 9 }, (_, index) => ({
+      taskId: `task-current-${index}`,
+      nodeId: `work:task-current-${index}`,
+      title: index === 8 ? 'Define spatial/geographic continuity review lane' : `Current proof lane ${index + 1}`,
+      scope: 'included',
+      eligibilityReason: 'included',
+      hierarchyRole: 'root',
+      status: 'done',
+      handoffState: 'proven',
+      blocksStart: false,
+      blocksRelease: false,
+      humanBlocking: false,
+      sourceRefs: ['task record'],
+    }))
+    const laterRows = Array.from({ length: 21 }, (_, index) => ({
+      taskId: `task-later-${index}`,
+      nodeId: `work:task-later-${index}`,
+      title: `Later lane ${index + 1}`,
+      scope: 'deferred',
+      eligibilityReason: 'deferred',
+      hierarchyRole: 'root',
+      status: 'shelved',
+      handoffState: 'deferred',
+      blocksStart: false,
+      blocksRelease: false,
+      humanBlocking: false,
+      sourceRefs: ['task record'],
+    }))
+
+    render(ProjectMapTab, {
+      detail: {
+        id: 'narrative-harness',
+        name: 'Narrative Harness',
+        tasks: [],
+        orientationSpine: {
+          charter: { goal: 'Build a fiction-first planning and review harness.', source: 'inferred' },
+          selectedRelease: {
+            id: 'stage-1',
+            label: 'Stage 1 Fixture And Evaluation Harness',
+            kind: 'release',
+            state: 'active',
+            source: 'release_plan',
+            nodeIds: currentRows.map(row => row.nodeId),
+            deferredNodeIds: laterRows.map(row => row.nodeId),
+          },
+          summary: {
+            selectedScopeLabel: 'Stage 1 Fixture And Evaluation Harness',
+            selectedReleaseLabel: 'Stage 1 Fixture And Evaluation Harness',
+            includedWorkCount: currentRows.length,
+            deferredWorkCount: laterRows.length,
+            progress: { total: currentRows.length + laterRows.length, proven: currentRows.length, deferred: laterRows.length },
+          },
+          roots: [],
+          nodes: {},
+          scopeRows: [...currentRows, ...laterRows],
+          gaps: [],
+          sourceHealth: { inferred: 0, gaps: 0 },
+        },
+      },
+      activeProjectId: 'narrative-harness',
+    })
+
+    expect(screen.getAllByText('9 current work items · 21 later work items').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getByText('Define spatial/geographic continuity review lane')).toBeInTheDocument()
+    expect(screen.getByText('17 additional later rows summarized in the counts above.')).toBeInTheDocument()
+  })
+
   it('scopes proof contracts to the selected release instead of borrowing later work', () => {
     render(ProjectMapTab, {
       detail: {

@@ -14411,6 +14411,46 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-07-06T07:20:00Z - Fixed Narrative Harness Map ledger hiding a current
+release item behind the Later summary.
+
+- Work id: `codex:nh-map-current-ledger-2026-07-06`.
+- User job: when Narrative Harness adds current MVP scope for DeepInfra model
+  selection and physical-world review lanes, the Project Map must show every
+  current work item in the scope ledger before summarizing later work, so the
+  owner can verify the release boundary without drilling into task detail.
+- Root-cause classification:
+  - UI communication/orientation problem: the owner-visible ledger was capped
+    with `currentScopeRows.slice(0, 8)`, so a 9-item current release hid one
+    current item while still saying `9 current work items`.
+  - Not a data model/schema problem for this symptom: `/api/project/spine`
+    already returned the three new current rows, including
+    `Define spatial/geographic continuity review lane`.
+- Fix:
+  - `ProjectMapTab` now renders all current scope rows and caps only later
+    rows.
+  - The overflow line now says `additional later rows`, so it cannot imply
+    hidden current MVP work.
+- Contract Touch Decision:
+  - Touched contracts: none. The change is presentation-only inside
+    `ProjectMapTab.svelte`.
+  - Contracts considered but not touched: project orientation spine API,
+    release readiness API, project scope projection.
+  - Required follow-up: none for schema/contract. Continue auditing whether
+    large current releases need a denser grouped display, but do not hide
+    current rows behind a generic summary.
+  - Proof required: component regression, contract detector, build, installed
+    app stale check, API/browser proof on Narrative Harness Map.
+  - Proof provided: component regression passed; contract detector passed;
+    UI/CLI build passed; installed app returned `stale:false`; browser proof
+    at `/projects/narrative-harness/map` showed `9 current work items · 21
+    later work items`, all three new current rows (`Select and prove DeepInfra
+    drafting model`, `Define world-state continuity review lane`, `Define
+    spatial/geographic continuity review lane`), and `17 additional later rows
+    summarized in the counts above.`
+  - Apply/revert behavior: revert the two derived row calculations and overflow
+    copy in `ProjectMapTab.svelte`, plus the regression test.
+
 2026-07-06T06:49:19Z - Separated repository follow-ups from scoped release
 completion.
 
