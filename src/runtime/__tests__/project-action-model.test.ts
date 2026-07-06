@@ -51,6 +51,32 @@ describe('buildProjectActionModel', () => {
       startEnabled: false,
     })
 
+    const repositoryFollowup = buildProjectActionModel({
+      startReadiness: {
+        canStart: false,
+        code: 'repository_followup_required',
+        message: 'Stage 1 has no runnable task work left, but repository follow-up is still needed: main has 1 local commit not pushed to origin/main.',
+        actionHref: '/release',
+        focusKind: 'repository_followup',
+        count: 1,
+      },
+      tasks: [],
+      thread: { turns: [], activeTurnId: null },
+      runStatus: 'stopped',
+    })
+    expect(repositoryFollowup.primaryAction).toMatchObject({
+      source: 'start_readiness',
+      label: 'Repository follow-up required',
+      detail: 'Stage 1 has no runnable task work left, but repository follow-up is still needed: main has 1 local commit not pushed to origin/main.',
+      buttonLabel: 'Open release',
+      href: '/release',
+      tone: 'warn',
+    })
+    expect(repositoryFollowup.runControl).toMatchObject({
+      label: 'Repo follow-up',
+      startEnabled: false,
+    })
+
     const briefCleanup = buildProjectActionModel({
       startReadiness: {
         canStart: false,

@@ -12,6 +12,55 @@ This is the active browser test plan for the Guildhall project surface. Keep it
 updated while auditing the active test project so another agent can resume
 without guessing.
 
+2026-07-06T10:47:00Z - Repository follow-up action uses explicit owner-facing copy.
+
+- Work id: `codex:repository-followup-action-copy-2026-07-06`.
+- User job: when a selected release has no runnable task work left but Git
+  follow-up is still required, the primary action should say what kind of work
+  is needed. The owner should not have to click a generic `Open item` button to
+  discover that this is release/repository follow-up.
+- Root-cause classification:
+  - Scheduler/action-state logic: `repository_followup_required` had a real
+    start-readiness code and correct `/release` target, but fell through the
+    shared action-label defaults.
+  - UI communication/orientation: top action and run-control copy were generic
+    even though the blocker was specifically a repository follow-up.
+- Fix:
+  - `buildProjectActionModel` now maps `repository_followup_required` to label
+    `Repository follow-up required`, button `Open release`, and run-control
+    label `Repo follow-up`.
+- Contract Touch Decision:
+  - Work id: `codex:repository-followup-action-copy-2026-07-06`.
+  - Touched contracts: shared project action model presentation for
+    `repository_followup_required`.
+  - Contracts considered but not touched: start-readiness payload schema,
+    release-readiness schema, Git Story summary schema, scheduler start
+    endpoint shape.
+  - Existing data impact: none. Derived presentation only.
+  - Required follow-up: installed-app proof must show Narrative Harness primary
+    action uses the explicit copy while the repo-follow-up blocker is present.
+  - Proof required: action-model regression, contract detector, build/install,
+    stale check, live API/browser proof.
+  - Proof provided: `project-action-model.test.ts` passed `21` tests. `git
+    diff --check` passed. Contract detector passed. `pnpm dev:install` rebuilt
+    and installed the app; `guildhall stop && guildhall start` restarted the
+    installed service; `/api/stale-server` returned `stale:false` with PID
+    `14621`. Live installed `/api/project?projectId=narrative-harness`
+    returned primary action `label:"Repository follow-up required"`,
+    `buttonLabel:"Open release"`, `href:"/release"`, and run-control label
+    `Repo follow-up`. Browser proof at `/projects/narrative-harness/overview`
+    showed `Repo follow-up`, `Repository follow-up required`, `Open release`,
+    `9 / 9 done`, and no visible `Open item` copy while the repository
+    follow-up blocker was still present. Codex then attempted to clear the live
+    Narrative Harness repository follow-up with `git push origin main`, but
+    Bitbucket rejected SSH auth with `Permission denied (publickey)`. Recheck
+    after the failed push showed Narrative Harness still `ahead 1`; live release
+    readiness remains `ready:false` with `9` done selected-scope tasks, no
+    task/proof/design blockers, and only `gitStoryBlockingCount:1`.
+  - Apply/revert behavior: remove the explicit
+    `repository_followup_required` action-label branches and regression to
+    restore generic fallback behavior; no data rollback is required.
+
 2026-07-06T10:44:00Z - Named releases no longer absorb unassigned backlog work.
 
 - Work id: `codex:named-release-unassigned-backlog-boundary-2026-07-06`.

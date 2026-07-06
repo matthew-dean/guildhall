@@ -199,6 +199,7 @@ function startReadinessButtonLabel(readiness: ProjectActionStartReadiness): stri
   if (readiness.code === 'import_drafts_waiting') return 'Review drafts'
   if (readiness.code === 'imported_scope_shaping') return 'Shape first task'
   if (readiness.code === 'proof_evidence_missing') return 'Attach proof'
+  if (readiness.code === 'repository_followup_required') return 'Open release'
   if (readiness.code === 'paused_live_work') return 'Open Work'
   if (readiness.code === 'no_unattended_progress') {
     if (readiness.focusKind === 'blocked_work') return 'Open Work'
@@ -226,6 +227,7 @@ function runControlLabel(readiness: ProjectActionStartReadiness | null | undefin
   if (readiness.code === 'all_terminal') return 'No runnable tasks'
   if (readiness.code === 'imported_scope_shaping') return 'Needs shaping'
   if (readiness.code === 'proof_evidence_missing') return 'Needs proof'
+  if (readiness.code === 'repository_followup_required') return 'Repo follow-up'
   if (readiness.code === 'paused_live_work') return 'Resume'
   if (readiness.code === 'no_unattended_progress' && readiness.focusKind === 'blocked_work') return 'Needs recovery'
   if (readiness.code === 'no_unattended_progress' && readiness.focusKind === 'brief_cleanup') return 'Review brief'
@@ -251,6 +253,7 @@ function startReadinessActionLabel(readiness: ProjectActionStartReadiness): stri
   if (readiness.code === 'import_drafts_waiting') return 'Review imported drafts'
   if (readiness.code === 'imported_scope_shaping') return 'Imported scope needs shaping'
   if (readiness.code === 'proof_evidence_missing') return readiness.focusTaskTitle?.trim() || 'Proof evidence missing'
+  if (readiness.code === 'repository_followup_required') return 'Repository follow-up required'
   if (readiness.code === 'paused_live_work') return readiness.focusTaskTitle?.trim() || 'Paused live work'
   if (isProviderReadinessCode(readiness.code)) return 'Provider unavailable'
   if (readiness.code === 'no_unattended_progress') {
