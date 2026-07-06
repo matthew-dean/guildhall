@@ -289,6 +289,17 @@
           return
         }
       }
+      if (task && isProofMissingTask(task)) {
+        const retryRes = await postTaskAction(taskId, 'retry-work', {
+          projectId: detail.id,
+          instruction: 'Recover the missing release proof for this completed work item. Do not treat the task as complete again until the expected proof evidence is recorded.',
+        })
+        if (!retryRes.ok) {
+          const body = await retryRes.json().catch(() => ({})) as { error?: string }
+          runWorkError = body.error ?? `Proof recovery failed (HTTP ${retryRes.status})`
+          return
+        }
+      }
       const res = await postTaskAction(taskId, 'start', { projectId: detail.id, mode: 'one_task', scope: 'work_item' })
       if (!res.ok) {
         const body = await res.json().catch(() => ({})) as { error?: string }
@@ -869,6 +880,7 @@
           onRunTask={runWorkItem}
           runBusyTaskId={runWorkBusyId}
           runActiveTaskId={effectiveRunActiveId}
+          proofMissingTaskIds={[...proofMissingTaskIds]}
           runError={runWorkError}
         />
       {/if}

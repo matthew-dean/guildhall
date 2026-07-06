@@ -8,6 +8,66 @@ help_summary: |
 
 # Web UI flow audit
 
+2026-07-06T21:08:54Z - Made proof-missing completed work executable again
+
+- Work id: `codex:proof-missing-done-retry-action-2026-07-06`.
+- User job: when Guildhall says a selected release/scope is blocked because
+  completed work still lacks proof evidence, the user should be able to see the
+  specific proof-blocked work item in Work and run proof recovery from that row.
+  The product must not strand the item as terminal while the release says it is
+  incomplete.
+- Root-cause classification:
+  - Task hierarchy/dependency/proof modeling problem: completed task state and
+    release proof-health could disagree without a task-level recovery action.
+  - Scheduler/action-state logic problem: `retry-work` rejected all `done`
+    tasks, including the narrow `done but proof missing` state produced by the
+    shared proof-health model.
+  - Bad project data produced by an earlier Guildhall bug: Narrative Harness'
+    DeepInfra proof path currently includes a simulator that can write
+    fake-looking provider evidence; Guildhall correctly still blocks release
+    readiness, but the product needed a route back to real proof work.
+- Change:
+  - `retry-work` now permits a terminal task only when
+    `taskDoneButProofMissing(task)` is true, records an explicit
+    `Reopen completed task for missing release proof` note, and keeps normal
+    completed/shelved/pending-PR work protected from retry.
+  - Work's inspector receives the shared `proofTaskIds` list, treats those rows
+    as actionable, labels the button `Run proof`, and posts `retry-work` before
+    the existing one-task start request.
+- Contract Touch Decision:
+  - Work id: `codex:proof-missing-done-retry-action-2026-07-06`.
+  - Touched contracts: task action semantics for
+    `/api/project/task/:id/retry-work`; Work surface action presentation for
+    shared `startReadiness.proofTaskIds`.
+  - Contracts considered but not touched: persisted task schema,
+    proof-health verdict schema, release-readiness response shape.
+  - Required follow-up: run installed-app proof on Narrative Harness Work so the
+    user can see `Run proof` on the two proof blockers, then use it to drive the
+    fake/simulated DeepInfra proof back into real executable work.
+  - Proof required: focused API regression for done/proof-missing retry, focused
+    Work UI regression for `Run proof` posting retry before start, build/install
+    proof before claiming installed app readiness.
+  - Proof provided so far: `CI=true pnpm vitest run
+    src/runtime/__tests__/serve-task-endpoints.test.ts --testNamePattern
+    "reopens completed work only when release proof is still missing"` passed;
+    `CI=true pnpm vitest run
+    src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts --testNamePattern
+    "proof-missing"` passed; `CI=true pnpm vitest run
+    src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts` passed;
+    `CI=true pnpm lint:contracts` passed; `CI=true pnpm build` passed;
+    installed app rebuilt with `CI=true pnpm dev:install`, restarted with
+    `/api/stale-server` returning `stale:false`; live browser at
+    `/projects/narrative-harness/work?task=task-generate-a-cli-first-story-synopsis-outline-character-voice-records-and-one-chapter-draft-from-the-selected-model`
+    showed `Needs proof`, `2 need proof`, `2 shown`, both proof-blocked rows,
+    and an enabled `Run proof` button in the selected-work inspector at
+    1280x720.
+  - Waivers: none.
+  - Owner-review items: no owner approval is modeled as automatic; this action
+    is Codex/Matthew intentionally reopening proof recovery during calibration.
+  - Apply/revert behavior: revert the `retry-work` terminal proof-recovery
+    branch plus Work inspector `proofTaskIds` action wiring to return to the old
+    stranded proof-blocker state.
+
 2026-07-06T21:00:46Z - Work keeps proof-blocked terminal tasks visible.
 
 - Work id: `codex:work-proof-blocker-filter-2026-07-06`.

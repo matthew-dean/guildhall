@@ -19,6 +19,7 @@
     onRunTask?: (taskId: string) => void | Promise<void>
     runBusyTaskId?: string | null
     runActiveTaskId?: string | null
+    proofMissingTaskIds?: readonly string[]
     runError?: string | null
   }
 
@@ -32,9 +33,11 @@
     onRunTask,
     runBusyTaskId = null,
     runActiveTaskId = null,
+    proofMissingTaskIds = [],
     runError = null,
   }: Props = $props()
 
+  const proofMissingSet = $derived(new Set(proofMissingTaskIds))
   const visibleTasks = $derived(tasks.filter(isVisibleLogicalTask))
   const hierarchy = $derived(buildWorkHierarchy(visibleTasks))
   const tasksById = $derived(new Map(visibleTasks.map(task => [task.id, task])))
@@ -105,6 +108,7 @@
   }
 
   function isActionableTask(task: Task): boolean {
+    if (proofMissingSet.has(task.id)) return true
     return isQueuedWorkTask(task) || task.status === 'blocked' || hasUnmetDependencies(task, tasks)
   }
 
@@ -184,6 +188,7 @@
 
   function runButtonLabel(task: Task, busy: boolean, active: boolean): string {
     if (active) return 'Running...'
+    if (proofMissingSet.has(task.id)) return busy ? 'Reopening...' : 'Run proof'
     if (task.status === 'import_draft') return busy ? 'Drafting...' : 'Draft task brief'
     if (taskShapingBlockers(task).length > 0) return busy ? 'Shaping...' : 'Continue shaping brief'
     return busy ? 'Starting...' : 'Start work'

@@ -10650,7 +10650,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
           : { version: parsed.version ?? 1, lastUpdated: parsed.lastUpdated ?? new Date().toISOString(), tasks: parsed.tasks ?? [] }
         let task = queue.tasks.find(t => (t as { id?: string }).id === id) as Record<string, unknown> | undefined
         if (!task) return c.json({ error: 'task not found' }, 404)
-        if (task.status === 'done' || task.status === 'shelved' || task.status === 'pending_pr') {
+        const isProofRecovery = task.status === 'done' && taskDoneButProofMissing(task)
+        if ((task.status === 'done' && !isProofRecovery) || task.status === 'shelved' || task.status === 'pending_pr') {
           return c.json({ error: `task is ${task.status}` }, 400)
         }
         const now = new Date().toISOString()
@@ -10697,9 +10698,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
         notes.push({
           agentId: 'system:human',
           role: 'human',
-          content: instruction
-            ? `Retry partial worker pass: ${instruction}`
-            : 'Retry partial worker pass from the current saved worktree state.',
+          content: isProofRecovery
+            ? instruction
+              ? `Reopen completed task for missing release proof: ${instruction}`
+              : 'Reopen completed task for missing release proof.'
+            : instruction
+              ? `Retry partial worker pass: ${instruction}`
+              : 'Retry partial worker pass from the current saved worktree state.',
           timestamp: now,
         })
         task.notes = notes

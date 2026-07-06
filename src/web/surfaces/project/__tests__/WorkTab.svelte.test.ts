@@ -425,6 +425,49 @@ describe('WorkTab', () => {
     expect(screen.getByRole('combobox', { name: /^show$/i })).toHaveValue('needs-proof')
     expect(await screen.findByText('1 shown · 2 total')).toBeTruthy()
     expect(screen.getByRole('button', { name: /inspect work generate a cli-first story synopsis/i })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /^run proof$/i })).toBeTruthy()
+  })
+
+  it('reopens proof-missing completed work before starting the selected item', async () => {
+    const fetchSpy = vi.mocked(fetch)
+    window.history.replaceState({}, '', '/projects/narrative-harness/work?task=proof-task')
+    path.value = '/projects/narrative-harness/work?task=proof-task'
+
+    render(WorkTab, {
+      props: {
+        detail: detail([
+          task({
+            id: 'proof-task',
+            title: 'Select and prove a DeepInfra drafting model',
+            status: 'done',
+            terminalSummary: { headline: 'Completed, but proof evidence is missing.' },
+          }),
+        ], {
+          id: 'narrative-harness',
+          name: 'Narrative Harness',
+          startReadiness: {
+            canStart: false,
+            code: 'proof_evidence_missing',
+            message: 'Stage 1 is waiting on proof evidence.',
+            actionHref: '/work?task=proof-task',
+            focusTaskId: 'proof-task',
+            focusKind: 'proof',
+            proofTaskIds: ['proof-task'],
+            count: 1,
+          },
+        }),
+      },
+    })
+
+    await userEvent.click(await screen.findByRole('button', { name: /^run proof$/i }))
+
+    await waitFor(() => {
+      const urls = fetchSpy.mock.calls.map(call => String(call[0]))
+      expect(urls.some(url => url.includes('/api/project/task/proof-task/retry-work'))).toBe(true)
+      expect(urls.some(url => url.includes('/api/project/task/proof-task/start'))).toBe(true)
+    })
+    const retryCall = fetchSpy.mock.calls.find(call => String(call[0]).includes('/api/project/task/proof-task/retry-work'))
+    expect(String(retryCall?.[1]?.body)).toContain('missing release proof')
   })
 
   it('labels dependency-waiting delivery work separately from blocked tasks', async () => {

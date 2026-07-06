@@ -2778,6 +2778,51 @@ describe('POST /api/project/task/:id/resume', () => {
     expect(effective.runtime?.openEscalationIds).toEqual([])
   })
 
+  it('reopens completed work only when release proof is still missing', async () => {
+    await seedTask('task-1', {
+      status: 'done',
+      notes: [],
+      proofPaths: [{
+        kind: 'review',
+        expectedEvidence: [
+          'DeepInfra drafting telemetry recorded refusal behavior, cost, latency, and voice preservation.',
+        ],
+      }],
+      gateResults: [{
+        gateId: 'npm-run-build',
+        passed: true,
+        output: 'build passed',
+        checkedAt: '2026-07-06T20:00:00.000Z',
+      }],
+      reviewVerdicts: [{
+        verdict: 'approve',
+        reasoning: 'All acceptance criteria are met.',
+        recordedAt: '2026-07-06T20:01:00.000Z',
+      }],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-1/retry-work'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          instruction: 'Run the real provider proof and attach the evidence.',
+        }),
+      }),
+    )
+    const body = (await res.json()) as Record<string, any>
+    expect(res.status, JSON.stringify(body)).toBe(200)
+    expect(body).toMatchObject({ ok: true, status: 'in_progress' })
+    const queue = await readTaskQueue()
+    expect(queue.tasks[0]).toMatchObject({
+      status: 'in_progress',
+      assignedTo: null,
+    })
+    const noteText = queue.tasks[0]?.notes.map((note: Record<string, unknown>) => String(note.content ?? '')).join('\n') ?? ''
+    expect(noteText).toContain('missing release proof')
+    expect(noteText).toContain('real provider proof')
+  })
+
   it('promotes an import draft into exploring when shaping starts', async () => {
     await fs.mkdir(path.join(tmpDir, 'docs/specs'), { recursive: true })
     await fs.writeFile(
