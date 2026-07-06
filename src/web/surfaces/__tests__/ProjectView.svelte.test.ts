@@ -842,6 +842,90 @@ describe('ProjectView', () => {
     expect(screen.queryByText('Stop requested after tick 4.')).toBeNull()
   })
 
+  it('does not let deferred blocked work override completed current-scope chrome', async () => {
+    const projectPayload = detail({
+      startReadiness: { canStart: true, message: 'Ready' },
+      actionModel: {
+        primaryAction: null,
+        secondaryActions: [],
+        runControl: {
+          label: 'No runnable tasks',
+          startEnabled: false,
+          disabledReason: 'Stage 1 is complete.',
+        },
+        ownerInput: { active: false },
+        setup: { state: 'ready', freshIntakeNeeded: false },
+      },
+      orientationSpine: {
+        summary: {
+          headline: 'Stage 1 is complete.',
+          purpose: 'Headless proof scope.',
+          selectedScopeLabel: 'Stage 1',
+          selectedReleaseLabel: 'Stage 1',
+          includedCount: 1,
+          includedWorkCount: 1,
+          deferredCount: 1,
+          deferredWorkCount: 1,
+          pinnedNow: [],
+          topBlocker: null,
+          nextAction: 'Review completed scope.',
+          progress: {
+            scopeId: 'stage-1',
+            total: 2,
+            briefed: 0,
+            specced: 1,
+            sliced: 0,
+            ready: 0,
+            active: 0,
+            proven: 1,
+            done: 1,
+            blocked: 0,
+            deferred: 1,
+          },
+        },
+        selectedRelease: { id: 'stage-1', label: 'Stage 1', kind: 'release', state: 'ready', source: 'release_plan', nodeIds: ['work:task-stage-1'], deferredNodeIds: [] },
+        selectedTaskScope: { id: 'stage-1', label: 'Stage 1', kind: 'release', source: 'release_plan', nodeIds: ['work:task-stage-1'], deferredNodeIds: ['work:task-later-blocked'] },
+        scope: { id: 'stage-1', label: 'Stage 1', kind: 'release', source: 'release_plan', nodeIds: ['work:task-stage-1'], deferredNodeIds: ['work:task-later-blocked'] },
+        scopeRows: [
+          { taskId: 'task-stage-1', nodeId: 'work:task-stage-1', title: 'Stage 1 proof', scope: 'included', eligibilityReason: 'included', hierarchyRole: 'root', status: 'done', handoffState: 'done', blocksStart: false, blocksRelease: false, humanBlocking: false, sourceRefs: ['task:task-stage-1'] },
+          { taskId: 'task-later-blocked', nodeId: 'work:task-later-blocked', title: 'Later blocked proof', scope: 'deferred', eligibilityReason: 'deferred', hierarchyRole: 'root', status: 'blocked', handoffState: 'deferred', blocksStart: false, blocksRelease: false, humanBlocking: false, sourceRefs: ['task:task-later-blocked'] },
+        ],
+        releases: [],
+        charter: { goal: 'Headless proof scope.', targetAudience: null, currentReleaseTarget: null, successDefinition: null, nonGoals: [], source: 'inferred' },
+        executionBoundary: { label: 'Headless proof', mode: 'headless', proofStyle: 'script_only', detail: 'Script proof.', source: { kind: 'inferred', refs: [], confidence: 'medium', freshness: 'fresh', inferred: true, refreshedAt: now } },
+        proofContracts: [],
+        roots: [],
+        nodes: {},
+        activePins: [],
+        gaps: [],
+        release: { state: 'ready', blockers: [] },
+        sourceHealth: { inferred: 0, conflicts: 0, gaps: 0 },
+        projectId: 'looma-knit',
+        updatedAt: now,
+      } as any,
+      tasks: [
+        task({ id: 'task-stage-1', title: 'Stage 1 proof', status: 'done' }),
+        task({
+          id: 'task-later-blocked',
+          title: 'Later blocked proof',
+          status: 'blocked',
+          blockReason: 'Deferred proof cleanup.',
+          escalations: [{ id: 'esc-later', summary: 'Deferred proof cleanup' }],
+        }),
+      ],
+      run: { status: 'stopped', mode: 'continuous' },
+      totals: { blockingCount: 1, tasks: 2, done: 1 },
+      statusCounts: { done: 1, blocked: 1 },
+    } as Partial<ProjectDetail>)
+    installFetchFakes(projectPayload)
+
+    await renderProjectView('map', null, 'looma-knit', projectPayload)
+
+    expect(screen.queryByText(/Blocked: 1 escalated/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Blocked\./i)).not.toBeInTheDocument()
+    expect(screen.getByText(/Run finished: 1 done\./i)).toBeInTheDocument()
+  })
+
   it('shows all-terminal supervisor stop detail in the project ticker footer', async () => {
     const projectPayload = detail({
       run: { status: 'stopped', mode: 'continuous' },

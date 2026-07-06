@@ -24362,3 +24362,59 @@ contract rows on Project Map.
     Narrative Harness task duplication/re-intake problem. Continue with schema
     and scope simplification before declaring the MVP/current scope fully
     trustworthy.
+
+2026-07-07T00:25:00Z - Kept completed selected releases ready and scoped shell
+chrome to current work.
+
+- Work id: `codex:nh-selected-release-ready-scoped-shell-chrome`.
+- User job: a project owner opening Narrative Harness should see the selected
+  Stage 1 scope as complete/ready, and deferred blocked work must not make the
+  top chrome claim the current scope needs proof or is blocked.
+- Root-cause classification:
+  - Project structure/scope/release modeling problem: the orientation read
+    model overloaded `active` to mean both selected and in-progress. A selected
+    release with all included work done still rendered as lifecycle `active`.
+  - Scheduler/action-state logic problem: ProjectView shell fallback counted
+    every raw task when building stopped-run attention, including deferred
+    tasks outside the selected scope.
+  - UI communication/orientation problem: Project Map could show the corrected
+    release map while the top chrome still claimed out-of-scope proof/blocker
+    attention.
+- Fix:
+  - `buildProjectOrientationSpine()` now preserves `ready` for the selected
+    release when the shared scope projection says the selected release is ready.
+    Selection remains represented by `selectedRelease`; lifecycle state no
+    longer has to lie as `active`.
+  - ProjectView shell fallback now counts only `orientationSpine.scopeRows`
+    with `scope: included` when a selected scope exists, so deferred blocked
+    work does not override completed current-scope chrome.
+- Contract Touch Decision:
+  - Touched contracts: `ProjectOrientationSpine.selectedRelease.state`,
+    `ProjectOrientationSpine.releases[].state`, ProjectView shell attention
+    rendering from `orientationSpine.scopeRows`.
+  - Contracts considered but not touched: persisted release/task schema,
+    `/api/project/start` scheduler dispatch contract, task status lifecycle,
+    release-readiness response shape.
+  - Existing data impact: no migration. Existing selected releases can now
+    render as `ready` when the projection proves included rows are done.
+    Deferred tasks remain in the project and in Later; they just stop driving
+    current-scope chrome.
+  - Required follow-up: move remaining shell stop-summary math out of
+    ProjectView into a shared scoped action/summary model so no page locally
+    reinterprets raw tasks.
+  - Proof required: spine regression for selected-ready lifecycle; ProjectView
+    regression for deferred blocked work; installed API proof for Narrative
+    Harness selected release; rendered browser proof that top chrome no longer
+    says `Needs proof` or `Blocked` for completed Stage 1.
+  - Proof provided: focused spine/release-readiness/ProjectView tests passed
+    `149` tests; contract detector passed; direct build and dev install passed;
+    `/api/stale-server` returned `stale:false` for PID `17761`. Installed API
+    proof showed selected Stage 1 state `ready`, release summary `ready`,
+    `startReadiness.code: all_terminal`, and 11 included current-scope work
+    items. Rendered browser proof for
+    `/projects/narrative-harness/map` at `1440x1000` showed the Stage 1
+    completion headline, did not show the old `Needs proof ... waiting on
+    proof evidence` top-chrome claim, and did not show `Blocked: 1 escalated`.
+  - Apply/revert behavior: reverting restores the contradiction where selected
+    completed releases render as active and deferred blockers can dominate top
+    chrome.

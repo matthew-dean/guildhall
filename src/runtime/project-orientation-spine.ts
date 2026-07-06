@@ -1837,6 +1837,7 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
   const selectedReleaseForReadModel = selectedRelease && projectionScope?.id === selectedRelease.id
     ? {
         ...selectedRelease,
+        state: releaseStateFromScopeProjection(selectedRelease, input.scopeProjection),
         nodeIds: [...projectionScope.nodeIds],
         deferredNodeIds: [...projectionScope.deferredNodeIds],
       }
@@ -1849,7 +1850,12 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
     }, tasks))
     .filter((release): release is OrientationRelease => Boolean(release))
     .map(release => projectionScope?.id === release.id
-      ? { ...release, nodeIds: [...projectionScope.nodeIds], deferredNodeIds: [...projectionScope.deferredNodeIds] }
+      ? {
+          ...release,
+          state: releaseStateFromScopeProjection(release, input.scopeProjection),
+          nodeIds: [...projectionScope.nodeIds],
+          deferredNodeIds: [...projectionScope.deferredNodeIds],
+        }
       : release)
     .map(release => normalizeReadModelReleaseState(release, selectedReleaseForReadModel?.id ?? null))
     .filter(release => releaseVisibleInReadModel(release, selectedReleaseForReadModel?.id ?? null, tasks))
@@ -1980,10 +1986,20 @@ function selectedReleaseIdForOrientation(
 
 function normalizeReadModelReleaseState(release: OrientationRelease, selectedReleaseId: string | null): OrientationRelease {
   if (release.id === selectedReleaseId) {
-    return release.state === 'shipped' ? release : { ...release, state: 'active' }
+    return release.state === 'shipped' || release.state === 'ready' ? release : { ...release, state: 'active' }
   }
   if (release.state === 'active') return { ...release, state: 'planned' }
   return release
+}
+
+function releaseStateFromScopeProjection(
+  release: OrientationRelease,
+  projection: ProjectScopeProjection | null | undefined,
+): OrientationReleaseState {
+  if (!projection || projection.selectedScope?.id !== release.id) return release.state
+  if (projection.release.state === 'ready') return 'ready'
+  if (release.state === 'ready') return 'active'
+  return release.state
 }
 
 function releaseVisibleInReadModel(

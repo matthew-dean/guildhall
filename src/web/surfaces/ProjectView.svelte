@@ -727,9 +727,16 @@
       : null,
   )
   const projectTicker = $derived(buildProjectTicker(detail, latestTickerEvent, new Date(tickerNow)))
+  const currentScopedTasks = $derived.by(() => {
+    const tasks = detail?.tasks ?? []
+    const includedRows = detail?.orientationSpine?.scopeRows?.filter(row => row.scope === 'included') ?? []
+    if (includedRows.length === 0) return tasks
+    const includedTaskIds = new Set(includedRows.map(row => row.taskId))
+    return tasks.filter(task => includedTaskIds.has(task.id))
+  })
   const currentStopSummary = $derived.by(() => {
     if (runStatus === 'running' || runStatus === 'stopping') return null
-    const tasks = detail?.tasks ?? []
+    const tasks = currentScopedTasks
     if (tasks.length === 0) return null
     const counts = {
       active: 0,
@@ -793,7 +800,7 @@
     return null
   })
   const hasCurrentQueueActivity = $derived.by(() => {
-    const tasks = detail?.tasks ?? []
+    const tasks = currentScopedTasks
     return tasks.some((task) => {
       const status = task.status ?? ''
       if (isClosedTaskStatus(status)) return false
