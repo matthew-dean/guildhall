@@ -27,6 +27,7 @@
   import { taskStagePresentation, type TaskPresentationTone } from '../../lib/task-presentation.js'
   import { buildWorkHierarchy, nestedWorkCountLabel, workKindLabel } from '../../lib/work-hierarchy.js'
   import { deliveryProgressBadge, type DeliveryProgressBadge } from '../../lib/work-progress-display.js'
+  import { orientationPathByWorkId } from '../../lib/orientation-paths.js'
   import { taskDisplayLabel, taskSourceQuestion } from '../../../shared/task-display-label.js'
   import type { ProjectDetail, Task } from '../../lib/types.js'
   import PlannerTab from './PlannerTab.svelte'
@@ -119,6 +120,7 @@
   const activeWorkView = $derived<WorkView>(routeWorkView)
   const hierarchy = $derived(buildWorkHierarchy(tasks))
   const deliveryQueue = $derived(detail.deliverySpine?.queue ?? null)
+  const orientationPaths = $derived(orientationPathByWorkId(detail.orientationSpine))
   const deliveryFirstRunnable = $derived(deliveryQueue?.firstRunnable ?? null)
   const projectRunning = $derived(detail.run?.status === 'running')
   const projectRunActive = $derived(detail.run?.status === 'running' || detail.run?.status === 'stopping')
@@ -519,37 +521,7 @@
   }
 
   function orientationPathForTask(task: Task): string {
-    const targetId = `work:${task.id}`
-    const direct = detail.orientationSpine?.nodes?.[targetId]
-    if (direct) {
-      const path = orientationPathFromNodeId(targetId)
-      if (path) return path
-    }
-    const path = findOrientationPath(detail.orientationSpine?.roots ?? [], targetId)
-    return path?.join(' / ') ?? ''
-  }
-
-  function orientationPathFromNodeId(nodeId: string): string {
-    const nodes = detail.orientationSpine?.nodes ?? {}
-    const titles: string[] = []
-    let current = nodes[nodeId]
-    const seen = new Set<string>()
-    while (current?.id && !seen.has(current.id)) {
-      seen.add(current.id)
-      titles.unshift(current.title ?? current.id)
-      current = current.parentId ? nodes[current.parentId] : undefined
-    }
-    return titles.join(' / ')
-  }
-
-  function findOrientationPath(nodes: NonNullable<ProjectDetail['orientationSpine']>['roots'], targetId: string, parents: string[] = []): string[] | null {
-    for (const node of nodes ?? []) {
-      const path = [...parents, node.title ?? node.id ?? 'Work']
-      if (node.id === targetId) return path
-      const childPath = findOrientationPath(node.children ?? [], targetId, path)
-      if (childPath) return childPath
-    }
-    return null
+    return orientationPaths.get(task.id) ?? ''
   }
 
   function hierarchyBreadcrumb(task: Task): string {

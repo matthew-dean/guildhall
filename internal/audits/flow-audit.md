@@ -22384,6 +22384,66 @@ blocking Narrative Harness current scope.
   - Proof provided: focused `vitest` suites passed for policy, orchestrator, serve-settings, engine run-query, and planning-doc detection; `node ./build.mjs` passed; installed app returned `/api/stale-server` `stale:false`; live Narrative Harness API no longer reports `workspace_import_refresh_needed`; NH `pnpm build`, `pnpm run generate:story`, `pnpm run prove:generation`, `pnpm run prove:world-state-continuity`, `pnpm run prove:spatial-geographic-continuity`, `pnpm run prove:dialogue-and-character-voice`, `pnpm run prove:reader-knowledge-and-revelation`, and `pnpm run prove:theme-and-meaning-review` passed.
   - Apply/revert behavior: revert the recovery policy allowlist, AC shorthand reconciliation, start-readiness stale-import guard, and planning-doc evidence/status classification to restore previous behavior; no persisted Guildhall data migration is required. NH package-manager migration can be reverted by restoring `package-lock.json`, removing `pnpm-lock.yaml`, and changing bootstrap/docs commands back to npm.
 
+2026-07-06T16:10:00Z - Repaired Looma + Knit Work route orientation and
+project-summary payload shape.
+
+- Work id: `codex:work-route-project-summary-compact-2026-07-06`.
+- User job: opening a task-specific Work URL should quickly show the selected
+  work item, the inspector, and the surrounding work list. Broad project
+  refreshes must not ship task drawer transcripts/specs/evidence to every
+  project tab, and Work rows must not recompute large orientation paths during
+  render.
+- Root-cause classification:
+  - `1 data model/schema problem`: `/api/project` returned full enriched task
+    drawer records instead of a compact project-summary task shape.
+  - `5 UI communication/orientation problem`: the Work route could not reliably
+    orient to the routed task because render work scaled with the full
+    orientation tree.
+  - `6 runtime/provider/infrastructure problem`: the inflated payload and
+    repeated client path scans made browser proof time out on a real Looma +
+    Knit project.
+- Fix:
+  - `/api/project` still computes internal readiness/orientation/action state
+    from full enriched tasks, but now returns compact task summary rows.
+    Drawer-only fields such as `spec`, `notes`, `evidence`, `requestIntake`,
+    `productBrief`, `reviewPlan`, `reviewAuditSummary`, and per-task
+    `gitStory` stay behind `/api/project/task/:id`.
+  - Project task rows preserve orientation/action fields that broad surfaces
+    need, including title, status, description, proof/acceptance fields,
+    open questions, summaries, hierarchy, dependencies, release membership,
+    compact escalations, and compact runtime open-escalation ids.
+  - WorkTab now builds orientation breadcrumbs once through
+    `orientationPathByWorkId()` instead of recursively scanning
+    `orientationSpine.roots` from each rendered row.
+- Contract Touch Decision:
+  - Work id: `codex:work-route-project-summary-compact-2026-07-06`.
+  - Touched contracts: `/api/project` task-row response shape; WorkTab
+    orientation breadcrumb rendering; project-summary vs task-detail ownership.
+  - Contracts considered but not touched: persisted task schema, task-detail
+    endpoint shape, delivery-spine endpoint shape, orientation-spine endpoint
+    shape, release-readiness payload, task migration schema.
+  - Existing data impact: no migration. Existing task records are not rewritten;
+    only the broad project response projects them into a smaller UI summary.
+  - Required follow-up: continue reducing broad project payload/computation if
+    Overview/Map/Release expose similar route-latency problems; `orientationSpine`
+    and `deliverySpine` remain the largest top-level project payloads.
+  - Proof required: focused API regression, WorkTab/helper regression, build,
+    contract lint, installed-app stale check, live API payload comparison, and
+    browser route/geometry proof against Looma + Knit.
+  - Proof provided: focused `serve-task-endpoints`, `orientation-paths`, and
+    `WorkTab.svelte` tests passed; `node ./build.mjs` passed before install;
+    installed app returned `/api/stale-server` `stale:false`; live Looma + Knit
+    `/api/project` dropped from about `3.57 MB` to about `1.38 MB` and no longer
+    leaked drawer-only task fields; browser proof opened
+    `/projects/looma-knit/work?task=task-import-2h8fxk`, showed the routed task
+    and `SELECTED WORK` inspector, had `pageOverflow:false` at `1280x720` and
+    `900x700`, and confined horizontal overflow to
+    `aria-label="Scrollable work list columns"`.
+  - Apply/revert behavior: revert `compactTaskForProjectSummary()` and the
+    `/api/project` response projection in `serve.ts`, plus
+    `orientationPathByWorkId()` and the WorkTab breadcrumb call site, to restore
+    previous behavior. No data rollback required.
+
 2026-07-05T10:45:00Z - Aligned release proof/orientation communication with
 shared readiness state.
 

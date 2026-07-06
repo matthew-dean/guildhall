@@ -655,8 +655,8 @@ describe('GET /api/project/task/:id', () => {
     expect(detailBody.task?.latestReviewerSummary).toBeUndefined()
 
     const projectRes = await app.fetch(new Request(projectUrl('/api/project')))
-    expect(projectRes.status).toBe(200)
     const projectBody = (await projectRes.json()) as Record<string, any>
+    expect(projectRes.status, projectBody.error).toBe(200)
     const task = projectBody.tasks?.find((entry: Record<string, any>) => entry.id === 'task-1')
     expect(task?.latestReviewerSummary).toBeUndefined()
   })
@@ -697,6 +697,113 @@ describe('GET /api/project/task/:id', () => {
     expect(task?.latestReviewerSummary).toContain('Aggregated revisions')
     expect(task?.latestSelfCritique).toContain('focused use-collections tests are green')
     expect(task?.latestCheckpoint?.intent).toBe('Verify focused unit tests')
+  })
+
+  it('keeps /api/project task rows compact while task detail remains full fidelity', async () => {
+    await seedRawTaskDefinition('task-1', {
+      status: 'blocked',
+      title: 'Compact project task',
+      description: 'Show this in project orientation.',
+      spec: '## Summary\n\nThis full worker handoff belongs in task detail.',
+      acceptanceCriteria: [{ description: 'The project row still shows proof needs.' }],
+      openQuestions: [
+        {
+          id: 'question-1',
+          askedBy: 'spec-agent',
+          askedAt: '2026-06-01T00:00:00.000Z',
+          kind: 'text',
+          prompt: 'Which proof path matters?',
+        },
+      ],
+      notes: [
+        {
+          role: 'worker',
+          agentId: 'worker-agent',
+          timestamp: '2026-06-01T00:01:00.000Z',
+          content: 'Verbose transcript note that should not ship in the project summary.',
+        },
+      ],
+      evidence: [
+        {
+          kind: 'command',
+          summary: 'Long command proof stored for detail views.',
+          output: 'x'.repeat(5000),
+        },
+      ],
+      requestIntake: {
+        source: 'workspace-import',
+        rawText: 'Large intake source text that belongs in detail.',
+      },
+      productBrief: {
+        successMetric: 'This whole brief belongs in detail.',
+        approvedAt: '2026-06-01T00:02:00.000Z',
+      },
+      reviewPlan: {
+        effort: 'release_critical',
+        reasons: ['Large reviewer plan belongs in detail.'],
+      },
+      reviewAuditSummary: {
+        reviewerRunCount: 3,
+        reviseCount: 1,
+      },
+      latestReviewerSummary: 'Short project-card review summary may remain.',
+      latestSelfCritique: 'Short self-critique summary may remain.',
+      gitStory: {
+        state: 'local_only',
+        samplePaths: ['src/large-file.ts'],
+        nextAction: 'Inspect repository state in detail.',
+      },
+      runtime: {
+        openEscalationIds: ['esc-1'],
+        transcript: 'Large runtime payload that belongs in detail.',
+      },
+      escalations: [
+        {
+          id: 'esc-1',
+          taskId: 'task-1',
+          agentId: 'worker-agent',
+          reason: 'human_judgment_required',
+          summary: 'Needs owner decision.',
+          raisedAt: '2026-06-01T00:03:00.000Z',
+        },
+      ],
+    })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const projectRes = await app.fetch(new Request(projectUrl('/api/project')))
+    const projectBody = (await projectRes.json()) as Record<string, any>
+    expect(projectRes.status, projectBody.error).toBe(200)
+    const projectTask = projectBody.tasks?.find((entry: Record<string, any>) => entry.id === 'task-1')
+    expect(projectTask).toMatchObject({
+      id: 'task-1',
+      title: 'Compact project task',
+      description: 'Show this in project orientation.',
+      status: 'blocked',
+      latestReviewerSummary: 'Short project-card review summary may remain.',
+      latestSelfCritique: 'Short self-critique summary may remain.',
+    })
+    expect(projectTask?.acceptanceCriteria?.[0]?.description).toBe('The project row still shows proof needs.')
+    expect(projectTask?.openQuestions?.[0]?.prompt).toBe('Which proof path matters?')
+    expect(projectTask?.escalations?.[0]?.id).toBe('esc-1')
+    expect(projectTask?.runtime).toEqual({ openEscalationIds: ['esc-1'] })
+    expect(projectTask?.spec).toBeUndefined()
+    expect(projectTask?.notes).toBeUndefined()
+    expect(projectTask?.evidence).toBeUndefined()
+    expect(projectTask?.requestIntake).toBeUndefined()
+    expect(projectTask?.productBrief).toBeUndefined()
+    expect(projectTask?.reviewPlan).toBeUndefined()
+    expect(projectTask?.reviewAuditSummary).toBeUndefined()
+    expect(projectTask?.gitStory).toBeUndefined()
+
+    const detailRes = await app.fetch(new Request(projectUrl('/api/project/task/task-1')))
+    expect(detailRes.status).toBe(200)
+    const detailBody = (await detailRes.json()) as Record<string, any>
+    expect(detailBody.task?.spec).toContain('full worker handoff')
+    expect(detailBody.task?.notes?.[0]?.content).toContain('Verbose transcript note')
+    expect(detailBody.task?.requestIntake?.rawText).toContain('Large intake')
+    expect(detailBody.task?.productBrief?.successMetric).toContain('whole brief')
+    expect(detailBody.task?.reviewPlan?.effort).toBe('release_critical')
   })
 
   it('derives terminal summaries from merge records on task detail and project rows', async () => {

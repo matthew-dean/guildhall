@@ -3353,6 +3353,85 @@ async function enrichTaskForServe(
   }
 }
 
+function compactTaskRuntimeForProjectSummary(runtime: unknown): Record<string, unknown> | undefined {
+  if (!runtime || typeof runtime !== 'object') return undefined
+  const source = runtime as Record<string, unknown>
+  const openEscalationIds = Array.isArray(source.openEscalationIds)
+    ? source.openEscalationIds.filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
+    : []
+  return openEscalationIds.length ? { openEscalationIds } : undefined
+}
+
+function compactTaskEscalationsForProjectSummary(escalations: unknown): Array<Record<string, unknown>> | undefined {
+  if (!Array.isArray(escalations)) return undefined
+  const compact = escalations
+    .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === 'object')
+    .map(entry => {
+      const summary: Record<string, unknown> = {}
+      for (const key of ['id', 'taskId', 'reason', 'summary', 'agentId', 'raisedAt', 'resolvedAt']) {
+        if (key in entry) summary[key] = entry[key]
+      }
+      return summary
+    })
+  return compact.length ? compact : undefined
+}
+
+function compactTaskForProjectSummary(task: Record<string, unknown>): Record<string, unknown> {
+  const summaryKeys = [
+    'id',
+    'title',
+    'description',
+    'domain',
+    'projectPath',
+    'status',
+    'priority',
+    'revisionCount',
+    'remediationAttempts',
+    'origination',
+    'createdAt',
+    'updatedAt',
+    'completedAt',
+    'assignedTo',
+    'liveAgent',
+    'activity',
+    'importedDraft',
+    'requestKind',
+    'requestStage',
+    'workKind',
+    'workVisibility',
+    'workUnitAnalysis',
+    'dependsOn',
+    'hierarchy',
+    'releaseIds',
+    'sourceRefs',
+    'references',
+    'acceptanceCriteria',
+    'definitionOfDone',
+    'proofPaths',
+    'openQuestions',
+    'blockReason',
+    'shelveReason',
+    'taskReadiness',
+    'structuralIntegrity',
+    'latestReviewerSummary',
+    'latestSelfCritique',
+    'latestCheckpoint',
+    'terminalSummary',
+    'sizePlan',
+    'checklist',
+    'workerHandoff',
+  ]
+  const summary: Record<string, unknown> = {}
+  for (const key of summaryKeys) {
+    if (key in task) summary[key] = task[key]
+  }
+  const runtime = compactTaskRuntimeForProjectSummary(task.runtime)
+  if (runtime) summary.runtime = runtime
+  const escalations = compactTaskEscalationsForProjectSummary(task.escalations)
+  if (escalations) summary.escalations = escalations
+  return summary
+}
+
 function buildReviewAuditSummary(reviewAudit: {
   reviewerRuns: Array<{
     recordedAt?: string
@@ -4364,7 +4443,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         name: project.config?.name ?? project.id,
         tags: project.config?.tags ?? [],
         config: project.config,
-        tasks,
+        tasks: tasks.map(compactTaskForProjectSummary),
         workProgress,
         inbox,
         run: run
