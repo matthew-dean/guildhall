@@ -121,6 +121,8 @@ export function deriveReleaseContainersFromTaskMembership(
   if (releaseIds.length === 0) return { releases: [] }
 
   const existingById = new Map((options.existingReleases ?? []).map(release => [release.id, release] as const))
+  const tasksById = new Map(tasks.map(task => [task.id, task] as const))
+  const childIdsByParent = buildChildMap(tasks)
   const releases = releaseIds.map((releaseId): ProjectRelease => {
     const existing = existingById.get(releaseId)
     const nodeIds = new Set(existing?.nodeIds ?? [])
@@ -142,6 +144,13 @@ export function deriveReleaseContainersFromTaskMembership(
         nodeIds.add(nodeId)
       }
     }
+    expandMaterializedReleaseChildren({
+      releaseId,
+      nodeIds,
+      deferredNodeIds,
+      tasksById,
+      childIdsByParent,
+    })
     const label = options.releaseLabels?.get(releaseId) ?? existing?.label ?? releaseLabelFromId(releaseId)
     return {
       ...(existing ?? {
@@ -166,6 +175,47 @@ export function deriveReleaseContainersFromTaskMembership(
     releases.find(release => tasks.some(task => releaseIncludesTask(release, task) && taskIsOpenCurrentScopeWork(task)))?.id ??
     releases[0]?.id
   return { releases, ...(selectedReleaseId ? { selectedReleaseId } : {}) }
+}
+
+function expandMaterializedReleaseChildren(input: {
+  releaseId: string
+  nodeIds: Set<string>
+  deferredNodeIds: Set<string>
+  tasksById: ReadonlyMap<string, Task>
+  childIdsByParent: ReadonlyMap<string, string[]>
+}): void {
+  const scopedParentIds = [...input.nodeIds, ...input.deferredNodeIds]
+    .map(nodeId => nodeId.replace(/^work:/, ''))
+    .filter(taskId => input.childIdsByParent.has(taskId))
+  for (const parentId of scopedParentIds) {
+    const parent = input.tasksById.get(parentId)
+    if (!parent) continue
+    const childIds = input.childIdsByParent.get(parentId) ?? []
+    const materializedChildren = childIds
+      .map(childId => input.tasksById.get(childId))
+      .filter((child): child is Task => Boolean(child))
+      .filter(child => !['archived', 'cancelled'].includes(String(child.status ?? '')))
+      .filter(child => isMaterializedExecutionChild(parent, child))
+      .filter(child => deriveTaskWorkVisibility(child, parent).countInProjectTotals)
+    if (materializedChildren.length === 0) continue
+
+    input.nodeIds.delete(taskScopeNodeId(parentId))
+    input.deferredNodeIds.delete(taskScopeNodeId(parentId))
+    for (const child of materializedChildren) {
+      const childNodeId = taskScopeNodeId(child.id)
+      if (child.status === 'shelved') {
+        input.nodeIds.delete(childNodeId)
+        input.deferredNodeIds.add(childNodeId)
+      } else {
+        input.deferredNodeIds.delete(childNodeId)
+        input.nodeIds.add(childNodeId)
+      }
+    }
+  }
+}
+
+function isMaterializedExecutionChild(parent: Task, child: Task): boolean {
+  return child.hierarchy?.relation === 'decomposes' || child.id.startsWith(`${parent.id}-split-`)
 }
 
 function uniqueReleaseIds(ids: readonly string[]): string[] {
@@ -301,6 +351,8 @@ function normalizeSelectedScope(scope: ProjectScope | null, tasks: readonly Task
   if (!scope) return null
   const nodeIds = new Set(scope.nodeIds)
   const deferredNodeIds = new Set(scope.deferredNodeIds)
+  const tasksById = new Map(tasks.map(task => [task.id, task] as const))
+  const childIdsByParent = buildChildMap(tasks)
   for (const task of tasks) {
     const nodeId = taskScopeNodeId(task.id)
     if (isProjectSetupTask(task.id)) {
@@ -321,6 +373,13 @@ function normalizeSelectedScope(scope: ProjectScope | null, tasks: readonly Task
     if ((task.releaseIds?.length ?? 0) > 0 || task.hierarchy?.parentId) continue
     if (!deferredNodeIds.has(nodeId)) nodeIds.add(nodeId)
   }
+  expandMaterializedReleaseChildren({
+    releaseId: scope.id,
+    nodeIds,
+    deferredNodeIds,
+    tasksById,
+    childIdsByParent,
+  })
   return {
     ...scope,
     nodeIds: [...nodeIds],

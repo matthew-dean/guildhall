@@ -12,6 +12,64 @@ This is the active browser test plan for the Guildhall project surface. Keep it
 updated while auditing the active test project so another agent can resume
 without guessing.
 
+2026-07-06T02:36:10Z - Release scope now consumes decomposed child work instead
+of containing parents.
+
+- Work id: `codex:release-scope-decomposed-child-units-2026-07-06`.
+- User job: when a current release contains a broad parent task that Guildhall
+  has split into executable child work, the release should run, count, and
+  communicate the child tasks. The containing parent should remain useful for
+  orientation but must not be treated as an additional runnable/releasable unit.
+- Root cause:
+  - Narrative Harness stored `task-150` as the current release item, then
+    decomposed it into three child tasks for DeepInfra model proof,
+    world-state continuity, and spatial/geographic continuity. The API could
+    show the child tasks as next work, but the release container still listed
+    `work:task-150`.
+  - This is a project-structure/read-model problem: release membership,
+    orientation scope, and readiness projection were not sharing a single rule
+    for "contains" parent versus "decomposes" child execution work.
+- Fix:
+  - Release container derivation now expands materialized execution children
+    when a release names a decomposed parent.
+  - Orientation/readiness scope normalization applies the same rule before
+    selected release, scope projection, and release-readiness surfaces read the
+    node list.
+  - The expansion is intentionally narrow: only `relation:"decomposes"` or
+    generated `parent-split-*` children replace the parent as execution units.
+    Ordinary project hierarchy remains structure, not release work.
+- Narrative Harness proof:
+  - Installed `/api/stale-server` returned `stale:false` for the rebuilt app.
+  - Installed `/api/project?projectId=narrative-harness` now reports the
+    selected release `nodeIds` as the nine existing current-scope work items
+    plus:
+    - `work:task-150-split-select-and-prove-deepinfra-drafting-model`
+    - `work:task-150-split-define-world-state-continuity-review-lane`
+    - `work:task-150-split-define-spatial-geographic-continuity-review-lane`
+  - The containing parent `work:task-150` is no longer in the release node
+    list. Release counts remain `12` execution units: the nine prior scoped
+    items plus the three child units.
+- Contract Touch Decision:
+  - Touched contracts: project-scope projection, release-container derivation,
+    orientation release/readiness node semantics.
+  - Contracts considered but not touched: persisted release schema, persisted
+    task schema, workspace-import draft schema, orchestrator picker state.
+  - Existing data impact: no migration. Existing releases that name a
+    decomposed parent are projected to visible child execution units at read
+    time.
+  - Required follow-up: continue Narrative Harness execution through the
+    world-state and spatial/geographic continuity tasks and verify Start/Resume
+    stops at the current release boundary.
+  - Proof required: projection regression, orientation regression,
+    release-readiness regression, contract detector, build/install, live NH API
+    proof.
+  - Proof provided: focused projection/orientation/release-readiness tests
+    passed; installed app reported `stale:false`; live NH API showed child
+    release node IDs replacing the containing parent.
+  - Apply/revert behavior: revert the read-model child-expansion helpers and
+    regressions to restore parent-node release semantics; no data rollback
+    required.
+
 2026-07-06T02:25:52Z - Reviewer verdict parsing now accepts positive
 body-level approvals.
 

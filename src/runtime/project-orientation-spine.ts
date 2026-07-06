@@ -683,6 +683,19 @@ function normalizeScope(input: BuildProjectOrientationSpineInput, tasks: Orienta
 
 function normalizeScopeTaskLists(scope: OrientationScope, tasks: OrientationTaskInput[]): OrientationScope {
   const taskById = new Map(tasks.map(task => [task.id, task]))
+  const childIdsByParent = new Map<string, Set<string>>()
+  const addChild = (parentId: string, childId: string) => {
+    const set = childIdsByParent.get(parentId) ?? new Set<string>()
+    set.add(childId)
+    childIdsByParent.set(parentId, set)
+  }
+  for (const task of tasks) {
+    for (const childId of task.hierarchy?.childIds ?? []) {
+      if (taskById.has(childId)) addChild(task.id, childId)
+    }
+    const parentId = task.hierarchy?.parentId?.trim()
+    if (parentId && taskById.has(parentId)) addChild(parentId, task.id)
+  }
   const keepMissingWorkNode = (nodeId: string): boolean => nodeId.startsWith('work:workspace-import:')
   const included = new Set(
     scope.nodeIds.filter((nodeId) => {
@@ -706,11 +719,40 @@ function normalizeScopeTaskLists(scope: OrientationScope, tasks: OrientationTask
       deferred.add(nodeId)
     }
   }
+  for (const nodeId of [...included, ...deferred]) {
+    if (!nodeId.startsWith('work:')) continue
+    const parentId = nodeId.slice('work:'.length)
+    const parent = taskById.get(parentId)
+    if (!parent) continue
+    const visibleChildren = [...(childIdsByParent.get(parentId) ?? [])]
+      .map(childId => taskById.get(childId))
+      .filter((child): child is OrientationTaskInput => Boolean(child))
+      .filter(child => child.status !== 'archived' && child.status !== 'cancelled')
+      .filter(child => isMaterializedExecutionChild(parent, child))
+      .filter(child => visibilityForTask(child, taskById).countInProjectTotals)
+    if (visibleChildren.length === 0) continue
+    included.delete(taskNodeId(parentId))
+    deferred.delete(taskNodeId(parentId))
+    for (const child of visibleChildren) {
+      const childNodeId = taskNodeId(child.id)
+      if (child.status === 'shelved') {
+        included.delete(childNodeId)
+        deferred.add(childNodeId)
+      } else {
+        deferred.delete(childNodeId)
+        included.add(childNodeId)
+      }
+    }
+  }
   return {
     ...scope,
     nodeIds: [...included],
     deferredNodeIds: [...deferred],
   }
+}
+
+function isMaterializedExecutionChild(parent: OrientationTaskInput, child: OrientationTaskInput): boolean {
+  return child.hierarchy?.relation === 'decomposes' || child.id.startsWith(`${parent.id}-split-`)
 }
 
 function taskTitle(task: OrientationTaskInput): string {

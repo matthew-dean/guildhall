@@ -96,6 +96,56 @@ describe('buildProjectScopeProjection', () => {
     ])
   })
 
+  it('projects decomposed release parents to materialized child execution units', () => {
+    const derived = deriveReleaseContainersFromTaskMembership([
+      task({
+        id: 'task-contracts',
+        title: 'Define harness contracts',
+        status: 'ready',
+        hierarchy: {
+          childIds: ['task-model', 'task-world', 'task-internal-proof'],
+          relation: 'contains',
+        },
+      }),
+      task({
+        id: 'task-model',
+        title: 'Select and prove DeepInfra drafting model',
+        status: 'done',
+        hierarchy: { parentId: 'task-contracts', childIds: [], order: 0, relation: 'decomposes' },
+      }),
+      task({
+        id: 'task-world',
+        title: 'Define world-state continuity review lane',
+        status: 'ready',
+        hierarchy: { parentId: 'task-contracts', childIds: [], order: 1, relation: 'decomposes' },
+      }),
+      task({
+        id: 'task-internal-proof',
+        title: 'Run proof step',
+        status: 'ready',
+        workVisibility: { kind: 'internal_step', countInProjectTotals: false },
+        hierarchy: { parentId: 'task-contracts', childIds: [], order: 2, relation: 'decomposes' },
+      }),
+    ], {
+      existingReleases: [{
+        id: 'stage-1',
+        label: 'Stage 1',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-contracts'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+    })
+
+    expect(derived.releases[0]).toMatchObject({
+      id: 'stage-1',
+      nodeIds: ['work:task-model', 'work:task-world'],
+      deferredNodeIds: [],
+    })
+  })
+
   it('treats materialized child work under an included parent as current paused work', () => {
     const projection = buildProjectScopeProjection(queue([
       task({
@@ -144,7 +194,7 @@ describe('buildProjectScopeProjection', () => {
       task({
         id: 'task-contracts',
         title: 'Define harness contracts',
-        hierarchy: { childIds: ['task-model', 'task-world'], order: 0 },
+        hierarchy: { childIds: ['task-model', 'task-world'], order: 0, relation: 'contains' },
         spec: 'Define the fixture contract.',
         acceptanceCriteria: [{ id: 'AC-1', description: 'Contract is defined.', verifiedBy: 'test', met: false }],
       }),
@@ -153,7 +203,7 @@ describe('buildProjectScopeProjection', () => {
         title: 'Select and prove DeepInfra drafting model',
         status: 'in_progress',
         assignedTo: 'worker-agent',
-        hierarchy: { parentId: 'task-contracts', childIds: [], order: 0 },
+        hierarchy: { parentId: 'task-contracts', childIds: [], order: 0, relation: 'decomposes' },
         spec: 'Select a DeepInfra model.',
         acceptanceCriteria: [{ id: 'AC-1', description: 'Model is selected.', verifiedBy: 'test', met: false }],
       }),
@@ -161,7 +211,7 @@ describe('buildProjectScopeProjection', () => {
         id: 'task-world',
         title: 'Define world-state continuity review lane',
         status: 'ready',
-        hierarchy: { parentId: 'task-contracts', childIds: [], order: 1 },
+        hierarchy: { parentId: 'task-contracts', childIds: [], order: 1, relation: 'decomposes' },
         spec: 'Define the world-state reviewer.',
         acceptanceCriteria: [{ id: 'AC-1', description: 'Reviewer lane is defined.', verifiedBy: 'test', met: false }],
       }),
@@ -171,6 +221,7 @@ describe('buildProjectScopeProjection', () => {
       hierarchyRole: 'parent',
       scope: 'included',
     })
+    expect(projection.selectedScope?.nodeIds).toEqual(['work:task-model', 'work:task-world'])
     expect(projection.rows.filter(row => row.scope === 'included')).toHaveLength(3)
     expect(projection.counts.included).toBe(2)
     expect(projection.counts.paused).toBe(1)
