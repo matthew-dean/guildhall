@@ -688,6 +688,52 @@ describe('project re-intake apply', () => {
     expect(JSON.stringify(task?.acceptanceCriteria ?? '')).not.toContain('usable in code: .')
   })
 
+  it('archives stale resolved contract recovery tasks instead of keeping them as current blockers', async () => {
+    const staleResolvedTitle = 'Recover source-backed contract surface for ~~Implement editor-writer feedback chain contract and weighted-feedback pipeline~~ **DONE** — contract surface recovered as src/harness/editor-writer-feedback-chain.ts'
+    const memoryDir = await makeState([
+      task({
+        id: 'task-resolved-recovery',
+        title: staleResolvedTitle,
+        description: 'Original imported title: ~~Implement editor-writer feedback chain contract and weighted-feedback pipeline~~ **DONE** — contract surface recovered as src/harness/editor-writer-feedback-chain.ts',
+        status: 'import_draft',
+        references: ['docs/harness/remaining-spec-decomposition-inventory.md'],
+        releaseIds: ['near-term-proof-scope'],
+        spec: '## Verification\n- Define contracts named in the cited docs: .',
+      }),
+    ])
+    const projectPath = path.dirname(memoryDir)
+    const draft = planProjectReintake({
+      now,
+      projectPath,
+      sources: [
+        { path: 'docs/harness/implementation-roadmap.md', content: narrativeNearTermProofRoadmap },
+      ],
+      tasks: [
+        task({
+          id: 'task-resolved-recovery',
+          title: staleResolvedTitle,
+          description: 'Original imported title: ~~Implement editor-writer feedback chain contract and weighted-feedback pipeline~~ **DONE** — contract surface recovered as src/harness/editor-writer-feedback-chain.ts',
+          status: 'import_draft',
+          references: ['docs/harness/remaining-spec-decomposition-inventory.md'],
+          releaseIds: ['near-term-proof-scope'],
+          spec: '## Verification\n- Define contracts named in the cited docs: .',
+        }),
+      ],
+    })
+    await writeProjectReintakeDraft(memoryDir, draft)
+
+    const result = await applyProjectReintakeDraft({ memoryDir, now })
+    expect(result.success).toBe(true)
+
+    const queue = await readQueue(memoryDir)
+    expect(queue.tasks.find(task => task.id === 'task-resolved-recovery')).toMatchObject({
+      status: 'archived',
+      archivedEvidence: expect.objectContaining({
+        source: 'project-reintake',
+      }),
+    })
+  })
+
   it('repairs stale imported task project paths back to the project root', async () => {
     const memoryDir = await makeState([
       task({

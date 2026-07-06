@@ -355,7 +355,7 @@ function extractRecommendedTaskSeeds(source: EvidenceSource): UnitSeed[] {
       .toLowerCase()
       .replace(/[`*_~]/g, '')
       .trim()
-    if (!normalizedTitle || /^\(?none\b/i.test(normalizedTitle)) {
+    if (!normalizedTitle || /^\(?none\b/i.test(normalizedTitle) || isResolvedRecommendedTaskTitle(currentRecommendedTitle)) {
       currentRecommendedTitle = ''
       return
     }
@@ -407,6 +407,13 @@ function extractRecommendedTaskSeeds(source: EvidenceSource): UnitSeed[] {
   flush()
 
   return seeds
+}
+
+function isResolvedRecommendedTaskTitle(value: string): boolean {
+  return (
+    /~~.+?~~/.test(value) &&
+    /\b(done|resolved|complete|completed|shipped|recovered)\b/i.test(value)
+  )
 }
 
 function detectCurrentMilestoneStage(sources: readonly EvidenceSource[]): string | null {

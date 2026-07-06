@@ -599,6 +599,13 @@ function repairStructurallyIncompleteImportedContractWork(
     .map(task => {
       const taskId = stringField(task, 'id') ?? ''
       const title = stringField(task, 'title') ?? 'Imported contract work'
+      if (isResolvedContractRecoveryArtifact(task)) {
+        return {
+          kind: 'archive' as const,
+          taskId,
+          reason: 'This imported recovery task is already marked resolved in the source evidence, so it should remain history instead of blocking the current scope.',
+        }
+      }
       return {
         kind: 'reframe' as const,
         taskId,
@@ -611,6 +618,15 @@ function repairStructurallyIncompleteImportedContractWork(
         reason: 'Imported contract/type work has a hollow proof target and must recover concrete source-backed contract names before execution.',
       }
     })
+}
+
+function isResolvedContractRecoveryArtifact(task: Record<string, unknown>): boolean {
+  const text = [
+    stringField(task, 'title'),
+    stringField(task, 'description'),
+    stringField(task, 'spec'),
+  ].filter(Boolean).join('\n')
+  return /~~.+?~~/.test(text) && /\b(done|resolved|complete|completed|shipped|recovered)\b/i.test(text)
 }
 
 function structurallyIncompleteImportRepairDraft(

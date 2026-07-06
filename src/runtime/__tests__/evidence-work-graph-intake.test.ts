@@ -438,6 +438,35 @@ describe('evidence-to-work-graph intake', () => {
     expect(plan.tasks.map(task => task.title)).not.toContain('*(none — umbrella doc, covered by child specs)*')
   })
 
+  it('does not recreate resolved inventory recommendations as current work', () => {
+    const plan = planEvidenceWorkGraph({
+      sources: [{
+        path: 'docs/harness/remaining-spec-decomposition-inventory.md',
+        content: [
+          '# Remaining Spec Decomposition Inventory',
+          '',
+          '### 2.3 `editor-writer-feedback-chain.md`',
+          '',
+          '- **Why not decomposed yet:** ~~Requires feedback-weight types first.~~ **RESOLVED** — Source-backed contract surface implemented at `src/harness/editor-writer-feedback-chain.ts`.',
+          '- **Recommended first task title:** ~~Implement editor-writer feedback chain contract and weighted-feedback pipeline~~ **DONE** — contract surface recovered as `src/harness/editor-writer-feedback-chain.ts`',
+          '- **Recommended domain:** harness',
+          '- **Stage alignment:** Stage 2 (Agent Coordination)',
+          '',
+          '### 2.7 `scene-and-chapter-intelligence.md`',
+          '',
+          '- **Recommended first task title:** Implement scene-and-chapter-intelligence reviewer lane',
+          '- **Recommended domain:** coherence',
+          '- **Stage alignment:** Stage 2 (Agent Coordination)',
+        ].join('\n'),
+      }],
+      existingTasks: [],
+    })
+
+    expect(plan.tasks.map(task => task.title)).toContain('Implement scene-and-chapter-intelligence reviewer lane')
+    expect(plan.tasks.map(task => task.title)).not.toContain('Implement editor-writer feedback chain contract and weighted-feedback pipeline')
+    expect(JSON.stringify(plan.tasks)).not.toContain('contract surface recovered')
+  })
+
   it('does not recreate ready source-backed tasks as missing evidence work', () => {
     const plan = planEvidenceWorkGraph({
       sources: [{ path: 'docs/harness/remaining-spec-decomposition-inventory.md', content: narrativeRemainingInventoryEvidence }],

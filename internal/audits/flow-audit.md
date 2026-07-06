@@ -21660,6 +21660,68 @@ unrelated import shaping blocks project Start.
     behavior where unrelated imported shaping blockers stop targeted shaping
     runs.
 
+2026-07-06T11:42:00Z - Stopped resolved recovery inventory rows from
+blocking Narrative Harness current scope.
+
+- Work id: `codex:resolved-recovery-imports-2026-07-06`.
+- User job: when Guildhall re-intakes Narrative Harness planning docs, rows
+  marked DONE or RESOLVED in the source evidence should orient the owner as
+  completed/historical proof. They must not be recreated as current-scope
+  shaping blockers or repaired into new work.
+- Escaped failure:
+  - Installed Narrative Harness Start was blocked by two imported tasks whose
+    titles came from strikethrough DONE rows in
+    `docs/harness/remaining-spec-decomposition-inventory.md`.
+  - Re-intake kept trying to "repair" those rows as hollow contract work even
+    though the source text said the contract surfaces were already recovered.
+- Root-cause classification:
+  - Bad project data from an earlier Guildhall bug: resolved planning rows had
+    already been persisted as active `import_draft` tasks.
+  - Scope/release modeling problem: current-release blockers did not separate
+    resolved historical evidence from remaining current work.
+  - Task hierarchy/proof modeling problem: source-backed completion evidence
+    was treated like an unsatisfied split/repair target.
+- Fix:
+  - The evidence work-graph intake now skips recommended-title rows that are
+    explicitly marked with strikethrough plus DONE/RESOLVED/completed/recovered
+    language, while still importing neighboring active recommendations.
+  - Project re-intake now archives existing stale resolved recovery artifacts
+    instead of reframing them into current blockers.
+  - Narrative Harness current MVP criteria remain explicit for the actual
+    current work: DeepInfra broad-genre drafting model selection, legal adult
+    fiction inside the product boundary, author-intent inputs, CLI-first
+    synopsis/outline/chapter drafting, world-state elapsed-time object/property
+    review, and spatial/geographic review.
+- Contract Touch Decision:
+  - Work id: `codex:resolved-recovery-imports-2026-07-06`.
+  - Touched contracts: evidence-to-work graph import semantics; project
+    re-intake repair/archive semantics for imported task records.
+  - Contracts considered but not touched: persisted task schema, release schema,
+    workspace-import draft schema, action-model payload shape, orientation-spine
+    payload shape.
+  - Existing data impact: no migration. Existing stale tasks that match the
+    resolved-recovery signature are archived during project re-intake with
+    `archivedEvidence.source = "project-reintake"`.
+  - Required follow-up: continue treating each escaped Narrative Harness
+    blocker as evidence about the shared data model before adding view-local
+    patches.
+  - Proof required: red/green regression for new extraction, red/green
+    regression for stale persisted task cleanup, related re-intake/intake tests,
+    installed-app stale-server proof, and live Narrative Harness API proof.
+  - Proof provided: `vitest` passed
+    `src/runtime/__tests__/evidence-work-graph-intake.test.ts`,
+    `src/runtime/__tests__/project-reintake-apply.test.ts`, and
+    `src/runtime/__tests__/project-reintake.test.ts` with `43` tests; installed
+    `/api/stale-server` returned `stale:false`; live Narrative Harness
+    re-intake archived the two resolved recovery tasks with
+    `archivedEvidence.source = "project-reintake"`; a steady-state re-intake
+    rerun no longer proposed the resolved rows for repair.
+  - Apply/revert behavior: revert the resolved-row detector in
+    `evidence-work-graph-intake.ts` and the archive branch in
+    `project-reintake.ts` to restore previous behavior; no data rollback is
+    required beyond manually reactivating archived tasks if that old behavior is
+    intentionally restored.
+
 2026-07-05T10:45:00Z - Aligned release proof/orientation communication with
 shared readiness state.
 
