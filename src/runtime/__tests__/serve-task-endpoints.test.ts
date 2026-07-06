@@ -697,6 +697,12 @@ describe('GET /api/project/task/:id', () => {
     expect(task?.latestReviewerSummary).toContain('Aggregated revisions')
     expect(task?.latestSelfCritique).toContain('focused use-collections tests are green')
     expect(task?.latestCheckpoint?.intent).toBe('Verify focused unit tests')
+    expect(task?.evidenceSummary?.counts?.notes).toBeGreaterThanOrEqual(2)
+    expect(task?.evidenceSummary?.counts?.reviewVerdicts).toBe(0)
+    expect(task?.evidenceSummary?.counts?.adjudications).toBe(0)
+    expect(task?.evidenceSummary?.counts?.gateResults).toBe(0)
+    expect(task?.evidenceSummary?.latest?.kind).toBe('note')
+    expect(task?.notes).toBeUndefined()
   })
 
   it('keeps /api/project task rows compact while task detail remains full fidelity', async () => {
@@ -889,6 +895,19 @@ describe('GET /api/project/task/:id', () => {
     })
     expect(workTask?.latestCheckpoint).toEqual({ nextPlannedAction: 'Rerun Storybook proof.' })
     expect(workTask?.definitionOfDone).toEqual({ evidenceRequired: ['Storybook proof screenshot.'] })
+    expect(workTask?.evidenceSummary).toMatchObject({
+      counts: {
+        notes: 1,
+        reviewVerdicts: 0,
+        adjudications: 0,
+        gateResults: 0,
+      },
+      latest: {
+        kind: 'note',
+        summary: expect.stringContaining('Self-critique'),
+      },
+    })
+    expect(workTask?.notes).toBeUndefined()
     expect(workBody.actionModel).toBeTruthy()
     expect(workBody.startReadiness).toBeTruthy()
     expect(workBody.orientationSpine).toBeTruthy()

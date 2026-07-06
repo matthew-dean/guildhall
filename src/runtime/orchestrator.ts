@@ -3769,6 +3769,11 @@ export class Orchestrator {
     }
 
     if (task.status === 'gate_check') {
+      const proofIntegrityOutcome = await this.runProviderProofIntegrityGateInline(task)
+      if (proofIntegrityOutcome) return proofIntegrityOutcome
+    }
+
+    if (task.status === 'gate_check') {
       const recordedHardGateOutcome = await this.completeGateCheckWithRecordedPassingHardGatesInline(task)
       if (recordedHardGateOutcome) return recordedHardGateOutcome
     }
@@ -8077,6 +8082,60 @@ export class Orchestrator {
         }
         return true
       },
+    })
+  }
+
+  private async runProviderProofIntegrityGateInline(task: Task): Promise<TickOutcome | null> {
+    if (task.status !== 'gate_check') return null
+    const issue = await simulatedProviderProofIssue(task, this.resolveEffectiveTaskProjectPath(task))
+    if (!issue) return null
+    const beforeStatus = task.status
+    return await this.withQueueWriteLock(async () => {
+      const queue = await this.readQueue()
+      const current = queue.tasks.find((candidate) => candidate.id === task.id)
+      if (!current || current.status !== 'gate_check') return null
+      const now = this.now()
+      current.gateResults.push({
+        gateId: 'proof.real-provider-evidence',
+        type: 'soft',
+        passed: false,
+        checkedAt: now,
+        output: issue.summary,
+      })
+      transitionTaskStatus({
+        task: current,
+        event: 'revise',
+        actor: 'proof-integrity-gates',
+        evidenceRefs: ['gate:proof.real-provider-evidence'],
+        now,
+      })
+      ensureWorkerOwnership(current)
+      current.revisionCount += 1
+      current.notes.push({
+        agentId: 'proof-integrity-gates',
+        role: 'gate-checker',
+        content: `${issue.summary}\nReplace simulated proof with real provider evidence, or explicitly change the task boundary so it no longer claims provider testing is complete.`,
+        timestamp: now,
+      })
+      queue.lastUpdated = now
+      await this.writeQueue(queue)
+      await this.logTickProgress({
+        task: current,
+        agent: 'proof-integrity-gates',
+        beforeStatus,
+        afterStatus: 'in_progress',
+        transitioned: true,
+        note: 'simulated provider proof rejected',
+      })
+      return {
+        kind: 'processed',
+        taskId: current.id,
+        agent: 'proof-integrity-gates',
+        beforeStatus,
+        afterStatus: 'in_progress',
+        transitioned: true,
+        revisionCount: current.revisionCount,
+      } as TickOutcome
     })
   }
 
@@ -12994,6 +13053,74 @@ function latestHardGateResults(task: Task): Array<NonNullable<Task['gateResults'
     latestById.set(gate.gateId, gate)
   }
   return [...latestById.values()]
+}
+
+async function simulatedProviderProofIssue(
+  task: Task,
+  fallbackProjectPath: string,
+): Promise<{ summary: string } | null> {
+  if (!requiresRealProviderProof(task)) return null
+  const root = typeof task.worktreePath === 'string' && task.worktreePath.trim().length > 0
+    ? task.worktreePath.trim()
+    : fallbackProjectPath
+  if (!root || !existsSync(root)) return null
+  const files = await listProviderProofScanFiles(root)
+  for (const file of files) {
+    const content = await fs.readFile(file, 'utf8').catch(() => '')
+    const match = simulatedProviderProofMarker(content)
+    if (!match) continue
+    return {
+      summary: `Provider proof integrity failed: ${path.relative(root, file)} contains simulated provider evidence (${match}).`,
+    }
+  }
+  return null
+}
+
+function requiresRealProviderProof(task: Task): boolean {
+  const text = [
+    task.title,
+    task.description,
+    task.spec,
+    ...task.acceptanceCriteria.map((criterion) => criterion.description),
+    JSON.stringify(task.proofPaths ?? []),
+  ].join('\n')
+  return /\b(?:DeepInfra|OpenAI-compatible|provider|model)\b/i.test(text) &&
+    /\b(?:test(?:ed|ing)?|prove|proof|telemetry|latency|cost|refusal|repetition|voice)\b/i.test(text)
+}
+
+function simulatedProviderProofMarker(content: string): string | null {
+  const patterns = [
+    /\bsimulat(?:e|ed|ion)\s+(?:api\s+call|provider|model|response|proof|test)/i,
+    /\b(?:assumed|hardcoded)\s+(?:for\s+)?simulation\b/i,
+    /\bmock(?:ed)?\s+(?:DeepInfra|provider|model|response)\b/i,
+    /\bfake\s+(?:DeepInfra|provider|model|response|telemetry)\b/i,
+  ]
+  for (const pattern of patterns) {
+    const match = pattern.exec(content)
+    if (match?.[0]) return match[0]
+  }
+  return null
+}
+
+async function listProviderProofScanFiles(root: string): Promise<string[]> {
+  const out: string[] = []
+  const queue = ['docs', 'fixtures', 'scripts', 'src', 'test', 'tests'].map((entry) => path.join(root, entry))
+  while (queue.length > 0 && out.length < 80) {
+    const current = queue.shift()!
+    const stat = await fs.stat(current).catch(() => null)
+    if (!stat) continue
+    if (stat.isDirectory()) {
+      const entries = await fs.readdir(current).catch(() => [])
+      for (const entry of entries) {
+        if (entry === 'node_modules' || entry === '.git') continue
+        queue.push(path.join(current, entry))
+      }
+      continue
+    }
+    if (!stat.isFile() || stat.size > 256_000) continue
+    if (/\.(?:mjs|js|ts|json|md|txt|yaml|yml)$/i.test(current)) out.push(current)
+  }
+  return out
 }
 
 function latestHardGateResultForId(

@@ -4938,14 +4938,14 @@ describe('Orchestrator.tick — routing', () => {
     expect(q.tasks[0]!.notes.some(note => note.content.includes('saved spec draft'))).toBe(false)
   })
 
-  it('reports no-coordinator when spec_review needs a missing domain coordinator', async () => {
+  it('holds spec_review work for owner approval before missing coordinator routing', async () => {
     await writeQueue([mkTask({ id: 'a', status: 'spec_review', domain: 'ghost', spec: VALID_SPEC })])
     const orch = new Orchestrator({ config: baseConfig(), agents: agentSet() })
     const out = await orch.tick()
-    expect(out.kind).toBe('no-coordinator')
-    if (out.kind === 'no-coordinator') {
-      expect(out.taskId).toBe('a')
-      expect(out.domain).toBe('ghost')
+    expect(out.kind).toBe('idle')
+    if (out.kind === 'idle') {
+      expect(out.summary?.reason).toBe('awaiting_human')
+      expect(out.summary?.message).toMatch(/awaiting approval/)
     }
   })
 
@@ -7359,6 +7359,80 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
     expect(queue.tasks[0]!.notes.at(-1)?.content).toContain('recorded approving review')
     const runtime = await readTaskRuntimeStore(tmpDir)
     expect(runtime.tasks.a?.assignedTo).toBeNull()
+  })
+
+  it('rejects simulated provider proof before review-only gate_check completion', async () => {
+    const worktreePath = path.join(tmpDir, 'provider-proof-worktree')
+    await fs.mkdir(path.join(worktreePath, 'scripts'), { recursive: true })
+    await fs.writeFile(
+      path.join(worktreePath, 'scripts', 'run-deepinfra-drafting-test.mjs'),
+      [
+        '// Simulate API call to DeepInfra model',
+        'const voicePreserved = true // Assumed for simulation',
+      ].join('\n'),
+      'utf8',
+    )
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        title: 'Select and prove a DeepInfra drafting model for broad-genre chapter writing.',
+        status: 'gate_check',
+        assignedTo: 'gate-checker-agent',
+        worktreePath,
+        acceptanceCriteria: [{
+          id: 'provider-proof',
+          description: 'The model is tested against chapter-drafting scenarios and records refusal, repetition, cost, latency, and voice preservation.',
+          verifiedBy: 'review',
+          met: false,
+        }],
+        proofPaths: [{
+          kind: 'review',
+          source: 'inferred',
+          expectedEvidence: [
+            'The proof records refusal behavior, repetition/runaway behavior, cost, latency, and whether the output preserves author voice and genre constraints.',
+          ],
+        }],
+        reviewVerdicts: [],
+        gateResults: [],
+      }),
+    ])
+    await appendTaskEvidence(tmpDir, 'a', {
+      id: 'a-review-approve',
+      kind: 'review_verdict',
+      recordedAt: '2026-07-04T10:07:21.557Z',
+      payload: {
+        verdict: 'approve',
+        reviewerPath: 'llm',
+        reason: 'Reviewer approved.',
+        reasoning: 'AC 1: Met.',
+        failingSignals: [],
+        recordedAt: '2026-07-04T10:07:21.557Z',
+      },
+    })
+    const gc = stubAgent('gate-checker-agent', async () => {
+      throw new Error('gate-checker should not run when proof integrity fails first')
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ gateChecker: gc }),
+    })
+
+    const out = await orch.tick()
+
+    expect(gc.calls).toHaveLength(0)
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.beforeStatus).toBe('gate_check')
+      expect(out.afterStatus).toBe('in_progress')
+      expect(out.agent).toBe('proof-integrity-gates')
+    }
+    const queue = await readQueue()
+    expect(queue.tasks[0]!.status).toBe('in_progress')
+    expect(queue.tasks[0]!.gateResults.at(-1)).toMatchObject({
+      gateId: 'proof.real-provider-evidence',
+      passed: false,
+    })
+    expect(queue.tasks[0]!.notes.at(-1)?.content).toContain('simulated provider evidence')
   })
 
   it('does not complete review-only gate_check while checkpoint verification still records a failure', async () => {

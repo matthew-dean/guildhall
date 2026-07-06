@@ -8,6 +8,163 @@ help_summary: |
 
 # Web UI flow audit
 
+2026-07-06T20:38:00Z - Project rows surface durable task evidence and provider proof cannot be simulated.
+
+- Work id: `codex:visible-task-evidence-and-provider-proof-integrity-2026-07-06`.
+- User job: when Guildhall drives Narrative Harness through the selected
+  current scope, the owner must be able to see why each task moved through
+  worker, review, adjudication, gate, and done states from Guildhall itself.
+  Guildhall must also reject fake provider proof when the task claims a real
+  model/provider test was completed.
+- Live findings:
+  - Narrative Harness `task-import-lu6waj` had rich task-local evidence:
+    owner approval, worker notes, reviewer revision verdicts, coordinator
+    adjudication, gate result, auto-commit, and merge record.
+  - The main `/api/project` task row did not expose any compact evidence
+    summary, so Overview/Work could show a status without explaining the
+    evidence trail unless the user opened dedicated task history/review
+    endpoints.
+  - After the installed-app fix, both full and work surfaces show compact
+    `evidenceSummary` for `task-import-lu6waj`: `20` notes, `14` review
+    verdicts, `1` adjudication, and `1` gate result. Raw notes/verdict arrays
+    remain omitted from the project row payload.
+  - Narrative Harness selected scope
+    `Stage 1: Headless Drafting And Evaluation MVP` now reports `11` selected
+    tasks, all `done`, and every row exposes compact evidence counts in the
+    live API.
+  - Release readiness is still not complete: the same live API reports `11`
+    proof-evidence blockers. The Narrative Harness git-story blocker was
+    cleared by pushing `main` to `origin/main`.
+  - Escaped proof-quality miss: the completed DeepInfra task landed a script
+    whose source said `Simulate API call to DeepInfra model` and wrote
+    `tested:true` provider evidence. That is not acceptable proof for a task
+    whose acceptance criteria require real model/provider testing.
+- Root-cause classification:
+  - Task hierarchy/dependency/proof modeling problem: task-local evidence was
+    durable but not projected into the shared project row model; simulated
+    provider proof could satisfy real-provider proof claims.
+  - Scheduler/action-state logic problem: `approved-review-gates` could close
+    a provider/model proof task from an approving review before deterministic
+    proof-integrity checks examined task artifacts.
+  - UI communication/orientation problem: the product could display done state
+    without the compact evidence counts needed to explain why it was done.
+  - Bad project data produced by an earlier Guildhall bug: the existing
+    Narrative Harness DeepInfra task commit contains simulated provider
+    evidence and must not be treated as the standard for future proof quality.
+- Fix:
+  - `/api/project` full and work task rows now enrich from `buildEffectiveTask`
+    so durable sidecar notes, reviews, adjudications, gates, runtime, and
+    workspace state are projected consistently.
+  - Project rows expose compact `evidenceSummary` counts plus latest evidence
+    label without dumping raw transcript/review arrays.
+  - `proof-integrity-gates` now runs at `gate_check` before recorded hard-gate
+    or approved-review completion. Provider/model proof tasks are bounced back
+    to `in_progress` when task-local artifacts contain simulated provider
+    proof markers such as simulated API/model/response/proof/test text.
+- Contract Touch Decision:
+  - Work id:
+    `codex:visible-task-evidence-and-provider-proof-integrity-2026-07-06`.
+  - Touched contracts: `/api/project` task row summary shape; work-surface task
+    summary shape; gate-check completion semantics for provider/model proof
+    tasks.
+  - Contracts considered but not touched: persisted task schema, task evidence
+    sidecar schema, release schema, workspace-import draft schema, task-history
+    endpoint shape.
+  - Existing data impact: no migration. Existing task-local evidence is read
+    into the project summary. Existing completed Narrative Harness provider
+    proof remains committed; the new gate prevents future simulated-provider
+    proof from being accepted when the task is still in `gate_check`.
+  - Required follow-up: decide whether to reopen/regenerate the existing
+    Narrative Harness DeepInfra provider proof task or accept it as a known
+    escaped calibration miss now guarded by deterministic policy; reconcile
+    the selected-scope proof blockers so terminal task status and
+    release-readiness proof semantics agree.
+  - Proof required: endpoint regression proving compact evidence appears on
+    project rows without raw notes; work-surface regression proving compact
+    evidence survives the lighter payload; orchestrator regression proving
+    simulated provider proof blocks review-only gate completion; focused
+    importer/scheduler regressions; installed-app stale check; live Narrative
+    Harness API proof.
+  - Proof provided: focused vitest command passed `13` tests across
+    `orchestrator`, `serve-task-endpoints`, `workspace-importer`, and
+    `bootstrap-runner`; installed app rebuilt/dev-installed/restarted with
+    `/api/stale-server` returning `stale:false`; live Narrative Harness API
+    returned the evidence counts above and selected Stage 1 all `done`; live
+    release-readiness still returned `ready:false` with `11` proof-evidence
+    blockers and `0` git-story blockers after the Narrative Harness push.
+  - Waivers: no schema migration decision is required because this adds derived
+    API summary fields and a deterministic gate; it does not change persisted
+    task/evidence shapes.
+  - Owner-review items: the owner should be told that Stage 1 reached terminal
+    state, but the DeepInfra provider proof was exposed as simulated and should
+    be regenerated if the project needs real provider confidence now.
+  - Apply/revert behavior: reverting restores raw-project-row blindness to
+    sidecar evidence and lets approving reviews close provider/model proof
+    tasks even when artifacts admit simulation.
+
+2026-07-06T19:44:30Z - Imported task specs prefer task proof criteria over stage-level roadmap goals.
+
+- Work id: `codex:imported-task-spec-task-boundary-2026-07-06`.
+- User job: When Guildhall asks the owner to approve an imported task spec, the
+  spec should describe that task's executable boundary. It must not copy the
+  whole release/stage goal or neighboring deliverables into the task's
+  product outcome, proposed design, or done definition.
+- Escaped live failure:
+  - After refreshing Narrative Harness workspace import, Guildhall correctly
+    created `task-import-lu6waj` for `Select and prove a DeepInfra drafting
+    model for broad-genre chapter writing.`
+  - The visible spec review carried DeepInfra-specific acceptance criteria,
+    but its product brief and completion boundary said the task outcome was
+    the whole Stage 1 goal: `build a no-UI or CLI-first proof...`.
+  - The proposed design also pulled neighboring Stage 1 deliverables such as
+    fixture contracts and packet traces, which would send a worker beyond the
+    selected task boundary if the owner approved it.
+- Root-cause classification:
+  - Task hierarchy/dependency/proof modeling problem: task-specific proof
+    criteria existed but lower-priority stage-level evidence was used as the
+    task success boundary.
+  - UI communication/orientation problem: the owner-facing spec review looked
+    approvable while communicating the wrong execution scope.
+  - Bad project data produced by an earlier Guildhall bug: the live Narrative
+    Harness task had already been generated with the polluted spec boundary.
+- Fix:
+  - `summarizeImportedSuccessMetric` now lets concrete acceptance criteria win
+    over roadmap goal statements for imported tasks, while preserving existing
+    contract/reviewer/workflow special cases.
+  - `importedTaskProposedDesignBullets` now falls back to acceptance criteria
+    for imported tasks only after richer reviewer and runner evidence
+    extraction has had a chance to provide task-specific design bullets.
+- Contract Touch Decision:
+  - Work id: `codex:imported-task-spec-task-boundary-2026-07-06`.
+  - Touched contracts: workspace-import generated task spec text,
+    workspace-import generated product brief text, owner spec-review content.
+  - Contracts considered but not touched: persisted task schema,
+    workspace-goals schema, release/scope membership schema, approval endpoint
+    request contract.
+  - Required follow-up: regenerate the live Narrative Harness import approval
+    with the fixed importer so the bad queued spec is replaced before owner
+    approval.
+  - Proof required: focused Narrative Harness importer regression proving the
+    DeepInfra task uses its model-selection criteria as the success/proposed
+    design boundary; nearby regression proving no-UI runner specs still include
+    packet/privacy/invalidation details.
+  - Proof provided: see verification below.
+  - Waivers: no schema migration decision is required because this changes
+    generated owner-review text from existing fields.
+  - Owner-review items: none; the generated spec was bad enough that it should
+    be regenerated before approval.
+  - Apply/revert behavior: reverting restores task specs that can use a whole
+    stage goal as the execution boundary.
+- Verification:
+  - Red test first:
+    `CI=true pnpm exec vitest run src/runtime/__tests__/workspace-importer.test.ts -t "Narrative Harness MVP drafting"`
+    failed because the generated DeepInfra task success metric contained the
+    whole Stage 1 no-UI proof goal instead of the DeepInfra model-selection
+    criteria.
+  - After the importer fix, that focused test passed.
+  - Nearby importer tests passed:
+    `CI=true pnpm exec vitest run src/runtime/__tests__/workspace-importer.test.ts -t "builds import specs|no-ui runner|reviewer-lane|current milestone starter"`.
+
 2026-07-06T19:36:30Z - Start prioritizes current-scope import shaping before completed-task proof cleanup.
 
 - Work id: `codex:current-scope-import-shaping-before-proof-cleanup-2026-07-06`.

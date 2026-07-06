@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, mkdirSync } from 'node:fs'
+import { chmodSync, mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { runBootstrap, readBootstrapStatus, computeLockfileHash } from '../bootstrap-runner.js'
@@ -45,10 +45,13 @@ describe('computeLockfileHash', () => {
 
 describe('runBootstrap', () => {
   let dir = ''
+  let originalPath = ''
   beforeEach(() => {
     dir = makeTmp()
+    originalPath = process.env.PATH ?? ''
   })
   afterEach(() => {
+    process.env.PATH = originalPath
     delete process.env.GUILDHALL_DATA_DIR
     rmSync(dir, { recursive: true, force: true })
   })
@@ -118,6 +121,37 @@ describe('runBootstrap', () => {
     })
     expect(res.success).toBe(true)
     expect(res.steps[0]?.result).toBe('pass')
+  })
+
+  it('does not block work when pnpm install only reports ignored build scripts', () => {
+    const fakePnpm = join(dir, 'pnpm')
+    writeFileSync(
+      fakePnpm,
+      [
+        '#!/bin/sh',
+        'echo "Packages: +316"',
+        'echo "[ERR_PNPM_IGNORED_BUILDS] Ignored build scripts: esbuild@0.24.2" 1>&2',
+        'exit 1',
+      ].join('\n'),
+    )
+    chmodSync(fakePnpm, 0o755)
+    process.env.PATH = `${dir}:${originalPath}`
+
+    const res = runBootstrap({
+      projectPath: dir,
+      memoryDir: join(dir, 'memory'),
+      commands: ['pnpm install'],
+      successGates: [],
+      timeoutMs: 5_000,
+    })
+
+    expect(res.success).toBe(true)
+    expect(res.steps[0]).toMatchObject({
+      command: 'pnpm install',
+      result: 'pass',
+      exitCode: 1,
+    })
+    expect(res.steps[0]?.output).toContain('ERR_PNPM_IGNORED_BUILDS')
   })
 
   it('persists status to user-local history with lockfileHash', () => {

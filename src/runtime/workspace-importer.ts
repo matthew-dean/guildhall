@@ -2,7 +2,7 @@ import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, wr
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { load as yamlLoad } from 'js-yaml'
-import { ProjectReleaseState, TaskQueue, buildDecompositionChildDrafts, type ProjectRelease, type Task, type TaskPriority } from '@guildhall/core'
+import { ProjectReleaseState, TaskQueue, TERMINAL_TASK_STATUSES, buildDecompositionChildDrafts, type ProjectRelease, type Task, type TaskPriority } from '@guildhall/core'
 import { getProjectSystemStatePathFromMemoryDir } from '@guildhall/sessions'
 import { appendExploringTranscript } from '@guildhall/tools'
 import { loadLeverSettings, defaultAgentSettingsPath } from '@guildhall/levers'
@@ -34,7 +34,7 @@ import {
   detectShadowedCurrentMilestoneDeliverableImports,
   detectShadowedStageAlignedRoadmapDeliverables,
 } from './current-milestone-shadowing.js'
-import { deriveReleaseContainersFromTaskMembership, releaseLabelFromId } from './project-scope-projection.js'
+import { deriveReleaseContainersFromTaskMembership, releaseLabelFromId, taskScopeNodeId } from './project-scope-projection.js'
 import { applyTaskShaping } from './task-decomposition.js'
 import { isMaterializableSplitAction, materializeSplitChildren } from '../tools/task-queue.js'
 import { effectiveTaskTitle } from '../shared/task-display-label.js'
@@ -2032,6 +2032,8 @@ function uniqueTaskId(existingIds: Set<string>, suggested: string): string {
 function normalizeImportedTaskDomain(
   domain: string,
   coordinatorProjectPaths?: Record<string, string>,
+  references: readonly string[] = [],
+  workspaceProjectPath = '',
 ): string {
   const trimmed = domain.trim()
   if (!trimmed || !coordinatorProjectPaths) return domain
@@ -2044,7 +2046,14 @@ function normalizeImportedTaskDomain(
       const normalizedKey = normalizeDomainRouteKey(key)
       return normalizedDomain === normalizedKey || normalizedDomain.startsWith(`${normalizedKey} `)
     })
-  return matchedKey ?? domain
+  if (matchedKey) return matchedKey
+
+  const referenceMatchedKey = Object.entries(coordinatorProjectPaths)
+    .sort((left, right) => right[1].length - left[1].length)
+    .find(([, coordinatorPath]) =>
+      references.some(reference => importReferenceBelongsToCoordinatorPath(reference, coordinatorPath, workspaceProjectPath)),
+    )?.[0]
+  return referenceMatchedKey ?? domain
 }
 
 function normalizeDomainRouteKey(value: string): string {
@@ -2054,6 +2063,20 @@ function normalizeDomainRouteKey(value: string): string {
     .replace(/[^a-z0-9]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
+}
+
+function importReferenceBelongsToCoordinatorPath(
+  reference: string,
+  coordinatorPath: string,
+  workspaceProjectPath: string,
+): boolean {
+  const normalizedCoordinatorPath = path.resolve(coordinatorPath).replaceAll('\\', '/')
+  const normalizedReference = (path.isAbsolute(reference)
+    ? path.resolve(reference)
+    : path.resolve(workspaceProjectPath || process.cwd(), reference)
+  ).replaceAll('\\', '/')
+  return normalizedReference === normalizedCoordinatorPath ||
+    normalizedReference.startsWith(`${normalizedCoordinatorPath}/`)
 }
 
 function importedTaskCanBeArchivedDuringScopeRefresh(status: Task['status']): boolean {
@@ -2395,10 +2418,21 @@ function ensureImportedReleaseContainers(
   const selectedRelease = queue.selectedReleaseId
     ? derived.releases.find(release => release.id === queue.selectedReleaseId)
     : undefined
-  const selectedHasCurrentWork = (selectedRelease?.nodeIds?.length ?? 0) > 0
+  const selectedHasCurrentWork = selectedRelease
+    ? releaseHasOpenCurrentWork(selectedRelease, queue.tasks)
+    : false
   if (!queue.selectedReleaseId || (!selectedHasCurrentWork && derived.selectedReleaseId)) {
     queue.selectedReleaseId = derived.selectedReleaseId ?? releaseIds[0]
   }
+}
+
+function releaseHasOpenCurrentWork(release: ProjectRelease, tasks: readonly Task[]): boolean {
+  const nodeIds = new Set(release.nodeIds ?? [])
+  return tasks.some(task => {
+    if (task.status === 'archived' || task.status === 'cancelled' || task.status === 'shelved') return false
+    if ((TERMINAL_TASK_STATUSES as readonly Task['status'][]).includes(task.status)) return false
+    return nodeIds.has(taskScopeNodeId(task.id)) || (task.releaseIds ?? []).includes(release.id)
+  })
 }
 
 function importedCurrentCompletionNeedsFreshProof(input: {
@@ -2549,6 +2583,10 @@ function importedTaskHasAlternativeStructuralEvidence(evidenceDetail: ImportedEv
 }
 
 function summarizeImportedSuccessMetric(task: MaterializedImportTask, evidenceDetail?: ImportedEvidenceDetail): string {
+  const acceptance = (task.acceptanceCriteria ?? [])
+    .map(criterion => criterion.description.trim())
+    .filter(description => !/\b(expected public contract|target-area conventions|accessibility, security, or reliability)\b/i.test(description))
+    .filter(Boolean)
   if (titleLooksContractShaped(task.title)) {
     return `${task.title} defines and proves the cited local contracts.`
   }
@@ -2558,16 +2596,17 @@ function summarizeImportedSuccessMetric(task: MaterializedImportTask, evidenceDe
   if (/\b(feedback chain|pipeline|orchestration|coordinator|involvement modes|packet)\b/i.test(task.title)) {
     return `${task.title} preserves the documented workflow, weighting, and fiction-first decision boundary.`
   }
+  if (acceptance.length > 0) {
+    const first = acceptance[0]!
+    const second = acceptance[1]
+    return second ? `${first} Also: ${second}` : first
+  }
   if (evidenceDetail?.goalStatements[0]) {
     return evidenceDetail.goalStatements[0]
   }
   if (evidenceDetail?.implementationBullets[0]) {
     return `${task.title} implements the documented boundary: ${evidenceDetail.implementationBullets[0].replace(/\.$/, '')}.`
   }
-  const acceptance = (task.acceptanceCriteria ?? [])
-    .map(criterion => criterion.description.trim())
-    .filter(description => !/\b(expected public contract|target-area conventions|accessibility, security, or reliability)\b/i.test(description))
-    .filter(Boolean)
   if (acceptance.length === 0) {
     return `${task.title} is delivered according to the cited project evidence and recorded proof.`
   }
@@ -3476,7 +3515,8 @@ function materializedProofPaths(
   evidenceDetail?: ImportedEvidenceDetail,
 ): Task['proofPaths'] {
   const current = task.proofPaths ? [...task.proofPaths] : []
-  if (!evidenceDetail || current.length === 0) return current
+  const fallback = importedAcceptanceProofPath(task, evidenceDetail)
+  if (!evidenceDetail) return current.length > 0 && !importedProofPathsLookGeneric(current) ? current : fallback
   const prototypeTaskKind = importedPrototypeTaskKind(task)
   if (prototypeTaskKind) {
     const command = firstImportedProofCommand(task)
@@ -3696,8 +3736,33 @@ function materializedProofPaths(
         },
       ]
     case 'general':
-      return current
+      return current.length > 0 && !importedProofPathsLookGeneric(current) ? current : fallback
   }
+}
+
+function importedAcceptanceProofPath(
+  task: MaterializedImportTask,
+  evidenceDetail?: ImportedEvidenceDetail,
+): Task['proofPaths'] {
+  const criteria = evidenceDetail ? materializedAcceptanceCriteria(task, evidenceDetail) : (task.acceptanceCriteria ?? [])
+  const expectedEvidence = criteria
+    .map(criterion => criterion.description.trim())
+    .filter(Boolean)
+  if (expectedEvidence.length === 0) return []
+  return [{
+    kind: 'review',
+    source: 'inferred',
+    expectedEvidence: expectedEvidence.slice(0, 6),
+  }]
+}
+
+function importedProofPathsLookGeneric(paths: Task['proofPaths']): boolean {
+  if (!paths || paths.length === 0) return false
+  const text = simpleImportedProofPaths(paths)
+    .flatMap(path => path.expectedEvidence ?? [])
+    .join('\n')
+  return /\brecords focused implementation, verification, or reviewer evidence\b/i.test(text) ||
+    /\bcites how .* shaped the completed work\b/i.test(text)
 }
 
 function splitMarkdownSections(content: string): Array<{ heading: string; body: string }> {
@@ -4187,6 +4252,12 @@ function importedTaskProposedDesignBullets(
       bullets.push(`Mark packet context stale when source edits require it: ${evidenceDetail.invalidationRules.join('; ')}.`)
     }
     if (bullets.length > 0) return bullets
+  }
+  if ((task.acceptanceCriteria?.length ?? 0) > 0) {
+    return task.acceptanceCriteria
+      .map(criterion => criterion.description.trim())
+      .filter(Boolean)
+      .slice(0, 6)
   }
   return evidenceDetail.implementationBullets.length > 0 ? evidenceDetail.implementationBullets : []
 }
@@ -5231,7 +5302,12 @@ export async function approveWorkspaceImport(
   }
 
   for (const { existing, imported } of refreshableTasks) {
-    const domain = normalizeImportedTaskDomain(imported.domain, input.coordinatorProjectPaths)
+    const domain = normalizeImportedTaskDomain(
+      imported.domain,
+      input.coordinatorProjectPaths,
+      imported.references,
+      input.projectPath,
+    )
     const taskProjectPath =
       input.coordinatorProjectPaths?.[domain] ??
       resolveTaskProjectPath({
@@ -5316,7 +5392,12 @@ export async function approveWorkspaceImport(
   let tasksAdded = 0
   for (const [index, t] of mergeableTasks.entries()) {
     const id = allocatedTaskIds[index] ?? t.id
-    const domain = normalizeImportedTaskDomain(t.domain, input.coordinatorProjectPaths)
+    const domain = normalizeImportedTaskDomain(
+      t.domain,
+      input.coordinatorProjectPaths,
+      t.references,
+      input.projectPath,
+    )
     const taskProjectPath =
       input.coordinatorProjectPaths?.[domain] ??
       resolveTaskProjectPath({

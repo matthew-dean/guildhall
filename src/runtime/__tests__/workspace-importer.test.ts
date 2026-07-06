@@ -1595,6 +1595,63 @@ tasks:
     ]))
   })
 
+  it('moves selection off a stale release when imported current work lands in another release', async () => {
+    await writeQueue({
+      version: 1,
+      lastUpdated: '2026-04-01T00:00:00Z',
+      selectedReleaseId: 'near-term-proof-scope',
+      releases: [{
+        id: 'near-term-proof-scope',
+        label: 'Near-term proof scope',
+        kind: 'current_work',
+        state: 'active',
+        source: 'inferred',
+        proofStyle: 'unspecified',
+        nodeIds: ['work:task-old-proof'],
+        deferredNodeIds: [],
+      }],
+      tasks: [TaskQueue.shape.tasks.element.parse({
+        id: 'task-old-proof',
+        title: 'Finished old proof',
+        description: 'Already complete.',
+        domain: 'harness',
+        projectPath: tmpDir,
+        status: 'done',
+        priority: 'normal',
+        releaseIds: ['near-term-proof-scope'],
+        origination: 'human',
+        createdAt: '2026-04-01T00:00:00Z',
+        updatedAt: '2026-04-01T00:00:00Z',
+      })],
+    })
+    await seedImporterWithSpec(`
+\`\`\`yaml
+releases:
+  - id: stage-1-headless-drafting-and-evaluation-mvp
+    label: "Stage 1: Headless Drafting And Evaluation MVP"
+    source: release_plan
+    state: active
+tasks:
+  - id: task-deepinfra-model
+    title: Select DeepInfra drafting model
+    description: Current MVP work.
+    domain: harness
+    priority: normal
+    releaseIds:
+      - stage-1-headless-drafting-and-evaluation-mvp
+\`\`\`
+`)
+
+    const approved = await approveWorkspaceImport({
+      memoryDir,
+      projectPath: tmpDir,
+    })
+    expect(approved, approved.success ? undefined : approved.error).toMatchObject({ success: true, tasksAdded: 1 })
+
+    const q = await readQueue()
+    expect(q.selectedReleaseId).toBe('stage-1-headless-drafting-and-evaluation-mvp')
+  })
+
   it('normalizes imported evidence paths after narrowing a task to a subproject', async () => {
     const knitPath = path.join(tmpDir, 'knit')
     await fs.mkdir(knitPath, { recursive: true })
@@ -3692,6 +3749,40 @@ tasks:
     )
   })
 
+  it('routes an imported task with an invalid domain by its source trail', async () => {
+    const productPath = path.join(tmpDir, 'docs', 'product')
+    await fs.mkdir(productPath, { recursive: true })
+    await fs.writeFile(
+      path.join(productPath, 'deepinfra-model-selection.md'),
+      '# DeepInfra model selection\n\nPick the drafting model for broad-genre writing.\n',
+      'utf-8',
+    )
+    await seedImporterWithSpec(`
+\`\`\`yaml
+tasks:
+  - id: task-deepinfra-model
+    title: Select DeepInfra drafting model
+    description: Pick the drafting model for broad-genre writing.
+    domain: core
+    references:
+      - docs/product/deepinfra-model-selection.md
+\`\`\`
+`)
+    const res = await approveWorkspaceImport({
+      memoryDir,
+      projectPath: tmpDir,
+      coordinatorProjectPaths: {
+        product: productPath,
+        harness: path.join(tmpDir, 'docs', 'harness'),
+      },
+    })
+    expect(res.success).toBe(true)
+    const q = await readQueue()
+    const task = q.tasks.find((t) => t.id === 'task-deepinfra-model')!
+    expect(task.domain).toBe('product')
+    expect(task.projectPath).toBe(productPath)
+  })
+
   it('materializes referenced evidence as a dependency-aware work graph that scheduling respects', async () => {
     await fs.mkdir(path.join(tmpDir, 'looma/docs'), { recursive: true })
     await fs.writeFile(
@@ -5258,6 +5349,33 @@ tasks:
       'spatial-finding-shape',
       'deterministic-proof',
     ])
+
+    await createWorkspaceImportTask({ memoryDir, projectPath: tmpDir, inventory })
+    await approveWorkspaceImport({
+      memoryDir,
+      projectPath: tmpDir,
+      draftOverride: materialized,
+      detectedDraftSnapshot: materialized,
+    })
+    const importedQueue = await readQueue()
+    const deepInfraTask = importedQueue.tasks.find(
+      task => task.title === 'Select and prove a DeepInfra drafting model for broad-genre chapter writing.',
+    )
+    expect(deepInfraTask?.productBrief?.successMetric).toContain('DeepInfra-hosted drafting model candidate')
+    expect(deepInfraTask?.productBrief?.successMetric).not.toContain('no-UI or CLI-first proof')
+    expect(deepInfraTask?.spec).toContain('## Proposed design\n1. The task records a DeepInfra-hosted drafting model candidate')
+    expect(deepInfraTask?.spec).not.toContain('typed fixture and expected-record contracts')
+    expect(deepInfraTask?.proofPaths).toEqual([
+      expect.objectContaining({
+        kind: 'review',
+        source: 'inferred',
+        expectedEvidence: expect.arrayContaining([
+          expect.stringContaining('DeepInfra-hosted drafting model candidate'),
+          expect.stringContaining('legal adult fiction'),
+        ]),
+      }),
+    ])
+    expect(deepInfraTask?.taskReadiness?.recommendation).toBe('ready')
   })
 
   it('does not resurrect stale imported queue work when materializing a parsed current slice', async () => {

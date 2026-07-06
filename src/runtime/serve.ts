@@ -3277,6 +3277,7 @@ async function enrichTaskForServe(
 
   return {
     ...normalized,
+    ...buildTaskEvidenceSummary(normalized),
     ...(reviewAudit?.plan ? { reviewPlan: reviewAudit.plan.payload } : {}),
     ...(reviewAudit ? { reviewAuditSummary: buildReviewAuditSummary(reviewAudit) } : {}),
     ...(latestReviewerSummary ? { latestReviewerSummary } : {}),
@@ -3302,7 +3303,8 @@ async function enrichTaskForWorkSurface(
   projectPath: string,
   task: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
-  const normalized = normalizeTaskForDrawer(task)
+  const effective = await buildEffectiveTask(projectPath, task as Task)
+  const normalized = normalizeTaskForDrawer(effective)
   if (importedContractWorkIsStructurallyIncomplete(normalized)) {
     normalized.taskReadiness = importedContractStructuralRepairReadiness(normalized)
     normalized.structuralIntegrity = {
@@ -3318,12 +3320,69 @@ async function enrichTaskForWorkSurface(
   if (checkpoint && nextPlannedAction) {
     return {
       ...normalized,
+      ...buildTaskEvidenceSummary(normalized),
       latestCheckpoint: {
         nextPlannedAction,
       },
     }
   }
-  return normalized
+  return {
+    ...normalized,
+    ...buildTaskEvidenceSummary(normalized),
+  }
+}
+
+function buildTaskEvidenceSummary(task: Record<string, unknown>): { evidenceSummary?: Record<string, unknown> } {
+  const notes = Array.isArray(task.notes) ? task.notes.filter(isRecord) : []
+  const reviewVerdicts = Array.isArray(task.reviewVerdicts) ? task.reviewVerdicts.filter(isRecord) : []
+  const adjudications = Array.isArray(task.adjudications) ? task.adjudications.filter(isRecord) : []
+  const gateResults = Array.isArray(task.gateResults) ? task.gateResults.filter(isRecord) : []
+  const latest = [...notes, ...reviewVerdicts, ...adjudications, ...gateResults]
+    .map((entry) => {
+      const at = firstString(entry.timestamp, entry.recordedAt, entry.decidedAt, entry.checkedAt)
+      const summary = firstString(entry.content, entry.reason, entry.summary, entry.message)
+      return at && summary ? { at, summary, kind: evidenceKindForSummary(entry, notes, reviewVerdicts, adjudications, gateResults) } : null
+    })
+    .filter((entry): entry is { at: string; summary: string; kind: string } => entry !== null)
+    .sort((left, right) => right.at.localeCompare(left.at))[0]
+  const total = notes.length + reviewVerdicts.length + adjudications.length + gateResults.length
+  if (total === 0) return {}
+  return {
+    evidenceSummary: {
+      counts: {
+        notes: notes.length,
+        reviewVerdicts: reviewVerdicts.length,
+        adjudications: adjudications.length,
+        gateResults: gateResults.length,
+      },
+      ...(latest ? { latest } : {}),
+    },
+  }
+}
+
+function evidenceKindForSummary(
+  entry: Record<string, unknown>,
+  notes: Record<string, unknown>[],
+  reviewVerdicts: Record<string, unknown>[],
+  adjudications: Record<string, unknown>[],
+  gateResults: Record<string, unknown>[],
+): string {
+  if (reviewVerdicts.includes(entry)) return 'review'
+  if (adjudications.includes(entry)) return 'adjudication'
+  if (gateResults.includes(entry)) return 'gate'
+  if (notes.includes(entry)) return 'note'
+  return 'evidence'
+}
+
+function firstString(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim().length > 0) return value.trim()
+  }
+  return null
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
 
 function compactTaskRuntimeForProjectSummary(runtime: unknown): Record<string, unknown> | undefined {
@@ -3393,6 +3452,7 @@ function compactTaskForProjectSummary(task: Record<string, unknown>): Record<str
     'sizePlan',
     'checklist',
     'workerHandoff',
+    'evidenceSummary',
   ]
   const summary: Record<string, unknown> = {}
   for (const key of summaryKeys) {
@@ -3445,6 +3505,7 @@ function compactTaskForWorkSurface(task: Record<string, unknown>): Record<string
     'checklist',
     'workerHandoff',
     'workUnitAnalysis',
+    'evidenceSummary',
   ]
   const summary: Record<string, unknown> = {}
   for (const key of summaryKeys) {

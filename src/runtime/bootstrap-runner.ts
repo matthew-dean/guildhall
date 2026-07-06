@@ -114,10 +114,15 @@ function runStep(
     timeoutMs: opts.timeoutMs,
     env: { CI: 'true' },
   })
+  const ignoredPnpmBuildScripts =
+    kind === 'command' &&
+    /\bpnpm\s+install\b/.test(command) &&
+    res.exitCode !== 0 &&
+    /\bERR_PNPM_IGNORED_BUILDS\b/i.test(res.output)
   return {
     kind,
     command,
-    result: res.success ? 'pass' : 'fail',
+    result: res.success || ignoredPnpmBuildScripts ? 'pass' : 'fail',
     exitCode: res.exitCode,
     output: res.output,
     durationMs: Date.now() - start,
