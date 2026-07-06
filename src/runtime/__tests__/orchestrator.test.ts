@@ -5742,6 +5742,7 @@ describe('Orchestrator.tick — feedback loop', () => {
     if (out.kind === 'processed') {
       expect(out.afterStatus).toBe('in_progress')
       expect(out.transitioned).toBe(false)
+      expect(out.note).toContain('self-critique without project-file changes')
     }
   })
 
@@ -14351,6 +14352,9 @@ describe('Orchestrator worker no-progress escalation', () => {
 
     const second = await orch.tick({ dispatchLimit: 1 })
     expect(second.kind).toBe('processed')
+    if (second.kind === 'processed') {
+      expect(second.note).toContain('Worker made no visible progress pass 1')
+    }
     const checkpointAfterSecond = JSON.parse(
       await fs.readFile(taskHistoryPath('task-dirty-bookkeeping', 'checkpoint.json'), 'utf8'),
     ) as { step: number; filesTouched: string[] }

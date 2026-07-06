@@ -5207,6 +5207,7 @@ export class Orchestrator {
         const taskAfter = queueAfter.tasks.find((t) => t.id === task.id) ?? task
         let afterStatus = taskAfter.status
         let transitioned = beforeStatus !== afterStatus
+        let processedOutcomeNote: string | undefined
         const openQuestionCountBefore = task.openQuestions?.length ?? 0
         const taskNoteCountBefore = task.notes?.length ?? 0
         const reviewerNoteCountBefore = countReviewerNotes(task)
@@ -5638,6 +5639,8 @@ export class Orchestrator {
             /self-critique without project-file changes/i.test(note.content),
           )
           if (!alreadyRejected) {
+            processedOutcomeNote =
+              'Worker wrote a self-critique without project-file changes; implementation retry required.'
             taskAfter.notes.push({
               agentId: 'coordinator',
               role: 'worker-progress-review',
@@ -5782,6 +5785,8 @@ export class Orchestrator {
                 escalation.escalationId ?? `auto-worker-stall-${task.id}`,
             }
           }
+          processedOutcomeNote =
+            `Worker made no visible progress pass ${attempts}; retrying until recoverable model-tool-use failure.`
           taskAfter.notes.push({
             agentId: 'coordinator',
             role: 'worker-progress-review',
@@ -6319,6 +6324,7 @@ export class Orchestrator {
         beforeStatus,
         afterStatus,
         transitioned,
+        ...(processedOutcomeNote ? { note: processedOutcomeNote } : {}),
         revisionCount,
         ...(taskHasUnansweredUserQuestion(taskAfter) || fallbackQuestionPosted ? { waitingOnUser: true } : {}),
       }

@@ -14424,14 +14424,22 @@ runtime recovery action.
     first retry after no visible progress, and model/provider recovery.
   - The processed tick outcome only exposed `transitioned: false`, so CLI
     output collapsed all of those distinct states into `(no change)`.
+  - A live Narrative Harness retry exposed the same flaw for durable
+    `worker-progress-review` notes: Guildhall wrote "Worker made no visible
+    progress pass N" while the CLI still printed `(no change)`.
 - Fix:
   - `processed` tick outcomes now carry an optional `note`.
   - CLI output renders that note for unchanged-status ticks and keeps
     `(no change)` only when there is no meaningful runtime note.
   - Worker timeout/recovery branches that already write runtime notes now
     return the same progress signal to callers.
+  - Shared worker-progress-review paths now pass their durable note summary
+    through the same processed outcome.
 - Verification:
   `NODE_ENV=test CI=true ./node_modules/.bin/vitest run src/runtime/__tests__/orchestrator.test.ts -t "resumed worker times out|timeout without likely target|provider-unavailable no-progress|preserves dirty worktree progress|preserves dirty worker progress" --reporter=dot`
+  passed `4` focused tests.
+  Follow-up focused verification for the `worker-progress-review` path:
+  `NODE_ENV=test CI=true ./node_modules/.bin/vitest run src/runtime/__tests__/orchestrator.test.ts -t "rejects worker self-critique without project-file changes before promoting to review|checkpoints dirty worker progress even when task bookkeeping changed|resumed worker times out|provider-unavailable no-progress|preserves dirty worktree progress" --reporter=dot`
   passed `4` focused tests.
 
 2026-07-06T01:59:00Z - Routed repeated dirty worker turn-budget failures to
