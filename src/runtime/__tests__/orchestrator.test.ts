@@ -5289,7 +5289,7 @@ describe('Orchestrator.tick — routing', () => {
       }
     }
 
-    expect(checkpoint.nextPlannedAction).toContain('recorded verification evidence')
+    expect(checkpoint.nextPlannedAction).toContain('recorded bootstrap verification failure')
     expect(checkpoint.nextPlannedAction).toContain('rerun the focused verification commands')
     expect(checkpoint.resumeContext?.safeNextMutationSurface?.[0]).toBe('packages/converter/src/typescriptToJsdoc.ts')
     expect(checkpoint.resumeContext?.safeNextMutationSurface?.[1]).toBe('packages/converter/test/ts-to-jsdoc.test.ts')
@@ -10996,7 +10996,7 @@ describe('Orchestrator.run — full loops', () => {
         workingHypothesis?: string
       }
     }
-    expect(checkpoint.nextPlannedAction).toContain('recorded verification evidence')
+    expect(checkpoint.nextPlannedAction).toContain('recorded bootstrap verification failure')
     expect(checkpoint.filesTouched).toContain('web/app/pages/settings.vue')
     expect(checkpoint.resumeContext?.verification).toEqual([
       expect.objectContaining({
@@ -14260,9 +14260,28 @@ describe('Orchestrator worker no-progress escalation', () => {
     expect(outcome.kind).toBe('processed')
     const checkpoint = JSON.parse(
       await fs.readFile(taskHistoryPath('task-dirty-bookkeeping', 'checkpoint.json'), 'utf8'),
-    ) as { intent: string; filesTouched: string[] }
+    ) as {
+      intent: string
+      filesTouched: string[]
+      resumeContext?: {
+        verification?: Array<{ command: string; passed: boolean; observedAt: string; summary?: string }>
+      }
+    }
     expect(checkpoint.intent).toContain('dirty worktree progress')
     expect(checkpoint.filesTouched).toContain('docs/coherence/dialogue-and-character-voice-reviewer.md')
+    checkpoint.resumeContext = {
+      verification: [{
+        command: 'npm run build',
+        passed: false,
+        observedAt: '2026-04-01T00:00:10Z',
+        summary: 'Docusaurus found broken links.',
+      }],
+    }
+    await fs.writeFile(
+      taskHistoryPath('task-dirty-bookkeeping', 'checkpoint.json'),
+      JSON.stringify(checkpoint, null, 2),
+      'utf8',
+    )
 
     const second = await orch.tick({ dispatchLimit: 1 })
     expect(second.kind).toBe('processed')

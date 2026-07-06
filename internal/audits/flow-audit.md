@@ -104,8 +104,13 @@ task-worktree proof.
     bookkeeping touched `updatedAt`, so current work is visible and resumable
     instead of living only as an untracked worktree diff.
   - If the dirty file set exactly matches the current checkpoint and the worker
-    adds no verification, note, verdict, or new handoff evidence, Guildhall now
-    treats that as no-progress instead of refreshing the same checkpoint again.
+    adds no note, verdict, status transition, or new file surface, Guildhall now
+    treats that as no-progress instead of refreshing the same checkpoint again,
+    even when the checkpoint carries a failed verification result.
+  - Bootstrap verification handoffs now suppress same-dispatch no-progress
+    notes. When Guildhall just wrote a bootstrap failure checkpoint, that
+    checkpoint is the visible recovery state for the tick; worker no-progress is
+    judged on the next dispatch.
   - Authoritative verification history now summarizes failed shell commands
     from actionable error lines instead of the first output line, so checkpoints
     and resume prompts preserve errors such as broken links, missing files, and
@@ -139,9 +144,12 @@ task-worktree proof.
     no-progress.
   - Focused checkpoint regression covers dirty worker progress plus timestamp
     churn and asserts the recovery checkpoint names the touched reviewer file.
-    The same regression then reruns the unchanged dirty checkpoint and asserts
-    the checkpoint step does not advance; Guildhall records a worker-progress
-    no-progress note instead.
+    The same regression then reruns the unchanged dirty checkpoint with failed
+    verification evidence and asserts the checkpoint step does not advance;
+    Guildhall records a worker-progress no-progress note instead.
+  - Bootstrap verification regression asserts the checkpoint keeps the
+    bootstrap-specific next action and does not get overwritten by a generic
+    worker no-progress note in the same dispatch.
   - Focused engine regression covers a Docusaurus broken-link failure and
     asserts `current_task_verification_history` contains the broken-link target,
     not just the npm script banner.

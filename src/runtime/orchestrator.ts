@@ -4096,6 +4096,7 @@ export class Orchestrator {
       workspaceBootstrap: this.opts.config.bootstrap ?? undefined,
       workspaceProjects: this.workspaceProjectsForTaskResolution(),
     })
+    let handedOffBootstrapVerificationThisDispatch = false
     if (
       wtBootstrap &&
       wtBootstrap.commands.length > 0 &&
@@ -4172,6 +4173,7 @@ export class Orchestrator {
               output: clippedOutput,
               observedAt: now,
             })
+            handedOffBootstrapVerificationThisDispatch = true
           } else {
             const now = this.now()
             if (queuedTask) {
@@ -5523,9 +5525,7 @@ export class Orchestrator {
         const dirtyFilesMatchExistingCheckpoint =
           beforeStatus === 'in_progress' &&
           dirtyTaskFilesAfter.length > 0 &&
-          sameStringSet(dirtyTaskFilesAfter, durableCheckpointForProgress?.filesTouched ?? []) &&
-          !checkpointHasRecordedVerificationFailure(durableCheckpointForProgress?.resumeContext?.verification ?? []) &&
-          !this.hasDurableWorkerHandoffEvidence(successfulAgentMetadata, task.id)
+          sameStringSet(dirtyTaskFilesAfter, durableCheckpointForProgress?.filesTouched ?? [])
         const corpusRefreshTouchedFiles = uniqueStrings([
           ...dirtyTaskFilesAfter,
           ...checkpointTouchedFiles,
@@ -5691,7 +5691,8 @@ export class Orchestrator {
           beforeStatus === 'in_progress' &&
           afterStatus === 'in_progress' &&
           !transitioned &&
-          (taskAfter.updatedAt === task.updatedAt || workerFalseCompletionNarration || noDurableWorkerProgressSignal) &&
+          !handedOffBootstrapVerificationThisDispatch &&
+          (workerFalseCompletionNarration || noDurableWorkerProgressSignal) &&
           (!hasDirtyWorktreeAfter || dirtyFilesMatchExistingCheckpoint || (hasFailedCheckpointVerification && !hasWorkerTurnEvidence)) &&
           (!hasDirtyLikelyTargetProgress || dirtyFilesMatchExistingCheckpoint) &&
           !hasCheckpointScopedVerifiedProgress
