@@ -2525,4 +2525,81 @@ describe('buildProjectOrientationSpine', () => {
     expect(spine.summary.headline).toBe('Stage 1 is stopping with work in progress.')
     expect(spine.summary.nextAction).toBe('Wait for Guildhall to finish stopping, then resume.')
   })
+
+  it('hides stale inferred closed scopes from the owner-facing release roadmap', () => {
+    const spine = buildProjectOrientationSpine({
+      projectId: 'narrative-harness',
+      selectedReleaseId: 'stage-1-headless-mvp',
+      releases: [
+        {
+          id: 'stage-1-headless-mvp',
+          label: 'Stage 1 Headless MVP',
+          kind: 'release',
+          state: 'active',
+          source: 'inferred',
+          nodeIds: ['work:author-intent'],
+          deferredNodeIds: [],
+        },
+        {
+          id: 'stage-1-old-proof-scope',
+          label: 'Stage 1 Old Proof Scope',
+          kind: 'release',
+          state: 'planned',
+          source: 'inferred',
+          nodeIds: ['work:old-world-proof'],
+          deferredNodeIds: [],
+        },
+        {
+          id: 'stage-0-spec-baseline',
+          label: 'Stage 0 Spec Baseline',
+          kind: 'release',
+          state: 'planned',
+          source: 'release_plan',
+          nodeIds: ['work:explicit-history'],
+          deferredNodeIds: [],
+        },
+        {
+          id: 'stage-4-authoring-shell',
+          label: 'Stage 4 Authoring Shell',
+          kind: 'release',
+          state: 'planned',
+          source: 'inferred',
+          nodeIds: [],
+          deferredNodeIds: ['work:future-ui'],
+        },
+      ],
+      tasks: [
+        {
+          id: 'author-intent',
+          title: 'Add author-intent inputs.',
+          status: 'done',
+          releaseIds: ['stage-1-headless-mvp'],
+        },
+        {
+          id: 'old-world-proof',
+          title: 'Define old world-state proof lane.',
+          status: 'done',
+          releaseIds: ['stage-1-old-proof-scope'],
+        },
+        {
+          id: 'explicit-history',
+          title: 'Record explicit spec baseline.',
+          status: 'done',
+          releaseIds: ['stage-0-spec-baseline'],
+        },
+        {
+          id: 'future-ui',
+          title: 'Build authoring shell.',
+          status: 'shelved',
+          releaseIds: ['stage-4-authoring-shell'],
+        },
+      ],
+    })
+
+    expect(spine.releases.map(release => release.id)).toEqual([
+      'stage-1-headless-mvp',
+      'stage-0-spec-baseline',
+      'stage-4-authoring-shell',
+    ])
+  })
 })

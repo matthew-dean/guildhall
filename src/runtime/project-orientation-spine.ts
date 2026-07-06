@@ -1851,6 +1851,7 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
       ? { ...release, nodeIds: [...projectionScope.nodeIds], deferredNodeIds: [...projectionScope.deferredNodeIds] }
       : release)
     .map(release => normalizeReadModelReleaseState(release, selectedReleaseForReadModel?.id ?? null))
+    .filter(release => releaseVisibleInReadModel(release, selectedReleaseForReadModel?.id ?? null, tasks))
   const rawScope = projectionScope ?? releaseToScope(selectedReleaseForReadModel) ?? draftAugmentation.scope ?? normalizeScope(input, tasks)
   const scope = rawScope ? normalizeScopeTaskLists(rawScope, tasks) : null
   const built = buildNodes(tasks, scope, now)
@@ -1982,6 +1983,26 @@ function normalizeReadModelReleaseState(release: OrientationRelease, selectedRel
   }
   if (release.state === 'active') return { ...release, state: 'planned' }
   return release
+}
+
+function releaseVisibleInReadModel(
+  release: OrientationRelease,
+  selectedReleaseId: string | null,
+  tasks: readonly OrientationTaskInput[],
+): boolean {
+  if (release.id === selectedReleaseId) return true
+  if (release.source !== 'inferred') return true
+  if (release.deferredNodeIds.length > 0) return true
+  const taskByNodeId = new Map(tasks.map(task => [taskNodeId(task.id), task]))
+  if (release.nodeIds.length === 0) return false
+  return !release.nodeIds.every(nodeId => {
+    const task = taskByNodeId.get(nodeId)
+    return task ? taskStatusIsTerminal(task.status) : false
+  })
+}
+
+function taskStatusIsTerminal(status: string | undefined): boolean {
+  return status === 'done' || status === 'archived' || status === 'cancelled' || status === 'shelved'
 }
 
 function mergeOrientationReleaseInputs(

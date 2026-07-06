@@ -24244,3 +24244,65 @@ implementation and installed-app audit.
   `pnpm exec playwright test tests/rendered-ui/project-flow.spec.ts -g "project orientation spine agrees"`.
 
 source: codex:project-orientation-spine-2026-06-15
+2026-07-06T23:05:00Z - Removed stale inferred closed scopes from the owner-facing
+Project Map roadmap.
+
+- Work id: `codex:nh-release-roadmap-stale-inferred-scope-filter`.
+- User job: a project owner opening Narrative Harness Map should see the real
+  current execution boundary and real later scopes, not old inferred duplicate
+  Stage 1 buckets that make the project look amorphous after the MVP/current
+  scope is already complete.
+- Root-cause classification:
+  - Project structure/scope/release modeling problem: inferred release
+    containers created from older task membership were still treated as
+    owner-facing future scopes after the selected Stage 1 scope superseded
+    them.
+  - UI communication/orientation problem: Project Map rendered those inferred
+    closed containers in the selectable release roadmap, so stale structure
+    looked like planned work.
+  - Bad project data produced by an earlier Guildhall bug: Narrative Harness
+    still contains older done-only task/release memberships for DeepInfra,
+    world-state, and spatial proof work that overlap with the corrected Stage 1
+    scope.
+- Fix:
+  - `buildProjectOrientationSpine()` now filters only the owner-facing read
+    model: non-selected, inferred release containers with no deferred boundary
+    and only terminal current work are not exported in `spine.releases`.
+  - Persisted tasks/releases and scheduler scope selection are unchanged.
+    Explicit release-plan history remains visible, and inferred future scopes
+    with deferred work remain visible.
+- Verification:
+  - `./node_modules/.bin/vitest run
+    src/runtime/__tests__/project-orientation-spine.test.ts --reporter=dot`
+    passed 51 tests.
+  - `./node_modules/.bin/vitest run
+    src/runtime/__tests__/project-scope-projection.test.ts
+    src/runtime/__tests__/serve-release-readiness.test.ts --reporter=dot`
+    passed 62 tests.
+  - `node scripts/contract-touch-detector.mjs` passed.
+  - Direct build passed after bypassing pnpm's non-TTY dependency-status
+    wrapper:
+    `node packages/ui/scripts/generate-styles.mjs &&
+    ./node_modules/.bin/tsc -p packages/ui/tsconfig.json && node ./build.mjs`.
+  - Installed-app proof: `node ./scripts/dev-install.mjs`; `guildhall stop`;
+    `guildhall start`; `/api/stale-server` returned `stale:false` for PID
+    `92455` from `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+  - Installed API proof: `/api/project/spine?projectId=narrative-harness`
+    returned headline `Stage 1 Headless Drafting And Evaluation MVP is
+    complete.` and roadmap releases
+    `stage-1-headless-drafting-and-evaluation-mvp`,
+    `stage-4-local-authoring-shell`, `stage-5-production-readiness`,
+    `stage-0-spec-baseline`, `stage-2-mastra-agent-prototype`, and
+    `stage-3-model-bakeoff-and-safety-policy`; it no longer returned
+    `near-term-proof-scope` or `stage-1-fixture-and-evaluation-harness`.
+  - Browser proof: the in-app browser bridge timed out twice during
+    reconnect/navigation, so local Playwright verified rendered
+    `http://localhost:7777/projects/narrative-harness/map` instead. The
+    rendered Release roadmap contained `Stage 1 Headless Drafting And
+    Evaluation MVP` and `Stage 4 Local Authoring Shell`, and did not contain
+    `Near Term Proof Scope` or `Stage 1 Fixture And Evaluation Harness`.
+- Required follow-up:
+  - Continue reducing the underlying stale Narrative Harness data/model
+    overlap. This slice prevents stale inferred closed scopes from confusing
+    the owner-facing roadmap; it does not yet prove a full re-intake or that all
+    duplicate task trees are eliminated.
