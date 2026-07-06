@@ -5730,6 +5730,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
     const ownerInputBlocker = startBlockerForOwnerInput(input.projectPath)
     if (ownerInputBlocker) return ownerInputBlocker
 
+    const orientationShapingBlocker = await startBlockerForOrientationScopeShaping(input.projectPath, input.requestedTaskId)
+    if (orientationShapingBlocker) return orientationShapingBlocker
+
     const terminal = await terminalStartState(input.projectPath, input.requestedTaskId)
     if (terminal?.selectedReleaseTerminal) {
       return startReadinessForTerminalState(terminal)
@@ -6969,6 +6972,53 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
     } catch {
       return null
+    }
+  }
+
+  async function startBlockerForOrientationScopeShaping(projectPath: string, requestedTaskId?: string): Promise<{
+    canStart: false
+    code: 'no_unattended_progress'
+    message: string
+    actionHref: string
+    focusTaskId?: string
+    focusTaskTitle?: string
+    focusKind: 'brief_cleanup'
+    count: number
+  } | null> {
+    if (requestedTaskId) return null
+    const tasksPath = projectTasksPath(projectPath)
+    if (!existsSync(tasksPath)) return null
+    const queue = await readTaskQueueFileNormalized(tasksPath)
+    const effectiveTasks = await Promise.all((queue.tasks as Task[]).map(task => buildEffectiveTask(projectPath, task)))
+    const { orientationSpine } = buildOrientationSpineWithScopedReleaseTruth({
+      projectId: basename(projectPath),
+      charter: inferProjectCharterFromExistingSources(projectPath),
+      selectedReleaseId: queue.selectedReleaseId,
+      releases: queue.releases,
+      tasks: effectiveTasks,
+      runStatus: 'stopped',
+      workspaceImportDraft: await workspaceImportDraftForOrientation(projectPath, null),
+      sourceRefs: projectOrientationSourceRefs(projectPath),
+    })
+    const rows = orientationSpine.scopeRows.filter(row =>
+      row.scope === 'included' &&
+      row.taskId.startsWith('workspace-import:') &&
+      (row.status === 'import_draft' || row.handoffState === 'not_shaped' || row.handoffState === 'brief_cleanup'),
+    )
+    if (rows.length === 0) return null
+    const first = rows[0]!
+    const title = first.title.trim() || 'the first current-scope draft'
+    return {
+      canStart: false,
+      code: 'no_unattended_progress',
+      message: rows.length === 1
+        ? `"${title}" needs a clearer brief before unattended work can run.`
+        : `${rows.length} current-scope items need clearer briefs before unattended work can run. Start with "${title}".`,
+      actionHref: '/workspace-import',
+      focusTaskId: first.taskId,
+      focusTaskTitle: title,
+      focusKind: 'brief_cleanup',
+      count: rows.length,
     }
   }
 

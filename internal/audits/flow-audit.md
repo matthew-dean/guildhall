@@ -8,6 +8,96 @@ help_summary: |
 
 # Web UI flow audit
 
+2026-07-06T19:36:30Z - Start prioritizes current-scope import shaping before completed-task proof cleanup.
+
+- Work id: `codex:current-scope-import-shaping-before-proof-cleanup-2026-07-06`.
+- User job: When the selected/current scope contains source-backed imported
+  work that is not shaped enough for unattended execution, Start/Resume should
+  point at that shaping/import review work first. A user should not be told a
+  completed task needs proof cleanup while the visible current scope still has
+  a not-yet-shaped deliverable blocking the release.
+- Escaped live failure:
+  - Narrative Harness Map/Release recovered
+    `Stage 1: Headless Drafting And Evaluation MVP` and showed included row
+    `workspace-import:detected-task-import-lu6waj` for `Select and prove a
+    DeepInfra drafting model...` as `import_draft` / `not_shaped`.
+  - The same API response still returned Start readiness
+    `proof_evidence_missing`, focused on completed Stage 1 tasks with stale
+    proof contracts.
+  - The product therefore communicated the right current-scope blocker in the
+    project spine while the primary Start/Resume action pointed somewhere
+    else.
+- Root-cause classification:
+  - Project structure/scope/release modeling problem: selected current scope
+    can include detected-only import work that is not yet present in the raw
+    task queue.
+  - Task hierarchy/dependency/proof modeling problem: stale proof contracts on
+    completed tasks were treated as the next release blocker even when a
+    current-scope imported deliverable still needed shaping.
+  - Scheduler/action-state logic problem: project Start checked terminal proof
+    cleanup before consulting the same orientation scope rows that Map/Release
+    used for current-scope shaping blockers.
+  - UI communication/orientation problem: Start and project orientation could
+    name different next blockers for the same selected scope.
+  - Bad project data produced by an earlier Guildhall bug: the completed Stage
+    1 task records still carry proof contracts that disagree with their
+    attached done/gate/review evidence.
+- Fix:
+  - `projectStartReadiness` now checks the shared orientation spine for
+    included detected-only `workspace-import:*` rows with `import_draft`,
+    `not_shaped`, or `brief_cleanup` state before terminal completed-task
+    proof cleanup.
+  - Focused task starts remain unchanged; the new blocker is only for
+    project-level Start/Resume so a selected task can still use its own
+    readiness path. Persisted import drafts remain owned by the existing
+    `imported_scope_shaping` readiness contract.
+- Contract Touch Decision:
+  - Work id:
+    `codex:current-scope-import-shaping-before-proof-cleanup-2026-07-06`.
+  - Touched contracts: project Start readiness payload and selected
+    current-scope execution boundary.
+  - Contracts considered but not touched: persisted task schema, persisted
+    workspace-goals schema, release readiness payload, proof contract schema,
+    focused task Start preflight.
+  - Required follow-up: stale completed-task proof cleanup still needs a
+    proper current-scope/global-maintenance distinction instead of living in
+    the release execution blocker path.
+  - Proof required: focused regression where fresh Stage 1 import truth adds a
+    detected current-scope task while the saved queue has completed tasks with
+    stale proof contracts; orientation spine regression to guard scope rows.
+  - Proof provided: see verification below.
+  - Waivers: no schema migration decision is required because this changes
+    derived readiness ordering only.
+  - Owner-review items: confirm whether stale completed-task proof cleanup
+    should become a separate visible maintenance lane after current-scope
+    shaping is cleared.
+  - Apply/revert behavior: reverting the readiness-order check restores the
+    split-brain where Start can prioritize stale proof cleanup over visible
+    current-scope import shaping.
+- Verification:
+  - Focused regression passed:
+    `CI=true pnpm exec vitest run src/runtime/__tests__/serve-settings.test.ts -t "detected current-scope import work"`.
+  - Orientation spine regression suite passed:
+    `CI=true pnpm exec vitest run src/runtime/__tests__/project-orientation-spine.test.ts`.
+  - Broader affected readiness tests passed:
+    `CI=true pnpm exec vitest run src/runtime/__tests__/serve-settings.test.ts -t "detected current-scope import work|keeps start readiness aligned|treats approved import drafts as shaping backlog|shaped import drafts"`.
+  - `git diff --check`, `CI=true pnpm build`, and
+    `CI=true pnpm lint:contracts` passed.
+  - Installed app proof after `CI=true pnpm dev:install` and
+    `guildhall stop && guildhall start`: `/api/stale-server` returned
+    `stale:false` for PID `99611` from
+    `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+  - Live Narrative Harness API proof from `localhost:7777`:
+    Overview, Map, and Work all reported selected scope
+    `Stage 1: Headless Drafting And Evaluation MVP` and Start readiness
+    `no_unattended_progress` focused on
+    `workspace-import:detected-task-import-lu6waj` /
+    `Select and prove a DeepInfra drafting model for broad-genre chapter
+    writing.`, with action `/workspace-import`.
+  - Browser caveat: the in-app Browser control timed out twice while loading
+    the route, so this slice has installed-app API proof but not a fresh
+    rendered DOM/screenshot proof.
+
 2026-07-06T19:25:15Z - Start readiness uses the same documented current scope as project orientation.
 
 - Work id: `codex:orientation-start-readiness-scope-agreement-2026-07-06`.

@@ -3579,6 +3579,111 @@ describe('Workspace Import review endpoints', () => {
     expect(body.startReadiness?.focusTaskId).toBe('stage-1-model-proof')
   })
 
+  it('points Start at detected current-scope import work before completed-task proof cleanup', async () => {
+    const now = '2026-07-06T19:35:00.000Z'
+    await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'harness', 'implementation-roadmap.md'),
+      [
+        '# Implementation Roadmap',
+        '',
+        '## Stage 1: Headless Drafting And Evaluation MVP',
+        '',
+        'Goal: prove the headless drafting loop before product UI work.',
+        '',
+        '## Current Next Milestone',
+        '',
+        'The next milestone is Stage 1: Headless Drafting And Evaluation MVP.',
+        '',
+        '1. Select and prove a DeepInfra drafting model for broad-genre chapter writing.',
+        '2. Add author-intent inputs for voice, genre, audience, theme, synopsis, outline, characters, character voices, world-state facts, and review plan.',
+      ].join('\n'),
+      'utf8',
+    )
+    await writeSystemTasks({
+      version: 1,
+      lastUpdated: now,
+      selectedReleaseId: 'near-term-proof-scope',
+      releases: [{
+        id: 'near-term-proof-scope',
+        label: 'Near-term proof scope',
+        kind: 'release',
+        state: 'active',
+        source: 'inferred',
+        nodeIds: ['work:author-intent'],
+        deferredNodeIds: [],
+      }],
+      tasks: [{
+        id: 'author-intent',
+        title: 'Add author-intent inputs for voice, genre, audience, theme, synopsis, outline, characters, character voices, world-state facts, and review plan.',
+        description: 'Current documented Stage 1 work.',
+        domain: 'harness',
+        status: 'done',
+        releaseIds: ['near-term-proof-scope'],
+        priority: 'normal',
+        acceptanceCriteria: [{ id: 'proof', description: 'Attach proof.', met: false }],
+        createdAt: now,
+        updatedAt: now,
+      }],
+    })
+    await writeSystemJson('workspace-goals.json', {
+      version: 3,
+      recordedAt: now,
+      goals: [],
+      releases: [{
+        id: 'stage-1-headless-drafting-and-evaluation-mvp',
+        label: 'Stage 1: Headless Drafting And Evaluation MVP',
+        source: 'release_plan',
+        state: 'active',
+      }],
+      tasks: [{
+        id: 'author-intent',
+        title: 'Add author-intent inputs for voice, genre, audience, theme, synopsis, outline, characters, character voices, world-state facts, and review plan.',
+        description: 'Current documented Stage 1 work.',
+        domain: 'harness',
+        priority: 'normal',
+        scope: 'current',
+        releaseIds: ['stage-1-headless-drafting-and-evaluation-mvp'],
+        references: ['docs/harness/implementation-roadmap.md'],
+      }],
+      milestones: [],
+      context: [],
+      approved: {
+        goalCount: 0,
+        taskCount: 1,
+        milestoneCount: 0,
+        currentTaskCount: 1,
+        laterTaskCount: 0,
+        taskIds: ['author-intent'],
+        currentTaskIds: ['author-intent'],
+        laterTaskIds: [],
+      },
+      detected: null,
+    })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(scoped('/api/project')))
+    const body = await res.json() as {
+      startReadiness?: { code?: string; message?: string; focusKind?: string; focusTaskTitle?: string }
+      orientationSpine?: {
+        summary?: { selectedScopeLabel?: string | null }
+        scopeRows?: Array<{ taskId?: string; title?: string; scope?: string; status?: string }>
+      }
+    }
+
+    expect(res.status).toBe(200)
+    expect(body.orientationSpine?.summary?.selectedScopeLabel).toContain('Stage 1')
+    expect(body.orientationSpine?.scopeRows?.some(row =>
+      row.scope === 'included' &&
+      row.status === 'import_draft' &&
+      row.title?.includes('Select and prove a DeepInfra drafting model'),
+    )).toBe(true)
+    expect(body.startReadiness?.code).toBe('no_unattended_progress')
+    expect(body.startReadiness?.focusKind).toBe('brief_cleanup')
+    expect(body.startReadiness?.message).toContain('Select and prove a DeepInfra drafting model')
+    expect(body.startReadiness?.message).not.toContain('waiting on proof evidence')
+  })
+
   it('draft endpoint prefers the approved workspace-goals state over a stale importer task spec', async () => {
     await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
     await fs.writeFile(
