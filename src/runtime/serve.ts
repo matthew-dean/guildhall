@@ -6018,6 +6018,23 @@ export function buildServeApp(opts: ServeOptions = {}): {
         : ''
       return status !== 'archived' && status !== 'cancelled'
     })
+    const liveNonImporterTaskById = new Map(
+      liveNonImporterTasks
+        .map(task => {
+          const id = typeof (task as { id?: unknown }).id === 'string'
+            ? (task as { id: string }).id.trim()
+            : ''
+          return id ? [id, task] as const : null
+        })
+        .filter((entry): entry is readonly [string, Record<string, unknown>] => entry !== null),
+    )
+    const approvedTaskEffectiveTitle = (task: { id?: unknown; title?: unknown }): string => {
+      const id = typeof task.id === 'string' ? task.id.trim() : ''
+      const liveTask = id ? liveNonImporterTaskById.get(id) : null
+      const liveTitle = typeof liveTask?.title === 'string' ? liveTask.title.trim() : ''
+      if (liveTitle) return liveTitle
+      return typeof task.title === 'string' ? task.title.trim() : ''
+    }
     const approvedCurrentTitles = parsed.tasks
       .filter(task => task.scope !== 'later')
       .map(task => task.title.trim())
@@ -6147,7 +6164,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     )
     const staleApprovedCurrent = parsed.tasks.filter(task => {
       if (task.scope === 'later') return false
-      const normalized = normalizeImportTitle(task.title)
+      const normalized = normalizeImportTitle(approvedTaskEffectiveTitle(task))
       return normalized.length > 0 && !detectedCurrentTitles.has(normalized)
     })
     const detectedTaskTitles = new Set(

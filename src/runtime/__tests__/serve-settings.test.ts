@@ -5883,6 +5883,112 @@ describe('Workspace Import review endpoints', () => {
     expect(body.startReadiness?.message).toContain('Implement fixture-and-expected-record schemas (from schema-contract-roadmap)')
   })
 
+  it('does not treat a repaired materialized import title as stale just because saved importer YAML is cropped', async () => {
+    await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
+    const fullTitle = 'Continue the fixture harness from the shaped current release into deterministic evaluator proof.'
+    const croppedTitle = 'Continue the fixture harness from the shaped current release into deterministic'
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'harness', 'implementation-roadmap.md'),
+      [
+        '# Implementation Roadmap',
+        '',
+        '## Stage 1: Fixture And Evaluation Harness',
+        '',
+        '## Current Next Milestone',
+        '',
+        'The next milestone is Stage 1: Fixture And Evaluation Harness.',
+        '',
+        `1. ${fullTitle}`,
+      ].join('\n'),
+      'utf8',
+    )
+    await writeSystemText(
+      'TASKS.json',
+      JSON.stringify(
+        {
+          version: 1,
+          lastUpdated: '2026-01-01T00:00:00.000Z',
+          tasks: [
+            {
+              id: 'task-workspace-import',
+              title: 'Review existing project work',
+              description: 'Reserved importer',
+              domain: '_workspace_import',
+              projectPath: tmpDir,
+              status: 'done',
+              priority: 'normal',
+              acceptanceCriteria: [],
+              dependsOn: [],
+              outOfScope: [],
+              spec: [
+                '```yaml',
+                'tasks:',
+                '  - id: imported-current',
+                `    title: ${croppedTitle}`,
+                '    description: The true current scope.',
+                '    domain: harness',
+                '    priority: high',
+                '```',
+              ].join('\n'),
+              createdAt: '2026-01-01T00:00:00.000Z',
+              updatedAt: '2026-01-01T00:00:00.000Z',
+            },
+            {
+              id: 'imported-current',
+              title: fullTitle,
+              description: 'Still valid after title repair.',
+              domain: 'harness',
+              projectPath: tmpDir,
+              status: 'ready',
+              priority: 'high',
+              spec: '## Summary\nBuild the evaluator proof.\n',
+              productBrief: {
+                userJob: 'Prove the evaluator harness.',
+                whyItMattersNow: 'This is current release work.',
+                successMetric: 'Proof command passes.',
+              },
+              acceptanceCriteria: [{
+                id: 'ac-1',
+                description: 'Proof command passes.',
+                verifiedBy: 'test',
+                met: false,
+              }],
+              dependsOn: [],
+              outOfScope: [],
+              notes: [{
+                agentId: 'workspace-importer',
+                role: 'importer',
+                content: 'Imported from implementation-roadmap.md.',
+                timestamp: '2026-01-01T00:00:00.000Z',
+              }],
+              gateResults: [],
+              reviewVerdicts: [],
+              adjudications: [],
+              escalations: [],
+              agentIssues: [],
+              revisionCount: 0,
+              remediationAttempts: 0,
+              createdAt: '2026-01-01T00:00:00.000Z',
+              updatedAt: '2026-01-01T00:00:00.000Z',
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+    )
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(scoped('/api/project')))
+    expect(res.status).toBe(200)
+    const body = await res.json() as {
+      startReadiness?: { canStart?: boolean; code?: string; message?: string; actionHref?: string }
+    }
+    expect(body.startReadiness?.code).not.toBe('workspace_import_refresh_needed')
+    expect(body.startReadiness?.message).not.toContain('live docs no longer do')
+    expect(body.startReadiness?.message).not.toContain(croppedTitle)
+  })
+
   it('blocks readiness when saved importer tasks only survive as brief input or structural context in the live docs', async () => {
     await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
     await fs.writeFile(

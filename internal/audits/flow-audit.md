@@ -14577,6 +14577,68 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-07-06T08:43:00Z - Start-readiness uses materialized import titles before
+calling saved importer YAML stale.
+
+- Work id: `codex:workspace-import-effective-title-start-readiness-2026-07-06`.
+- User job: Looma + Knit should not be blocked by `workspace_import_refresh_needed`
+  when workspace-import status says the approved and detected task counts
+  match and the materialized Work task has already recovered the full title.
+  Start-readiness must use the same owner-visible project truth as Work,
+  Overview, and Workspace Import instead of reintroducing cropped saved YAML.
+- Root-cause classification:
+  - data model/schema problem: the approved importer spec can retain an old
+    cropped `title` while the materialized task record has the corrected title.
+  - project structure/scope/release modeling problem: Start-readiness compared
+    stale approved YAML titles directly to live detector titles, while
+    workspace-import status and Work were already using the materialized queue.
+  - UI communication/orientation problem: the product told the owner to refresh
+    import because live docs "no longer" contained the item, even though the
+    same item was visible in Work with the full title.
+  - bad project data from an earlier Guildhall bug: Looma + Knit still has the
+    cropped title in `task-workspace-import.spec` for
+    `task-import-1v8sume`.
+- Fix:
+  - `startBlockerForWorkspaceImportCoverage` now builds an ID-indexed map of
+    live non-importer tasks and uses the materialized task title when checking
+    whether an approved current imported task is stale.
+  - The existing stale-import detector remains active when an approved current
+    task truly has no matching live detector title.
+- Contract Touch Decision:
+  - Touched contracts: `/api/project` `startReadiness` semantics for
+    `workspace_import_refresh_needed`.
+  - Contracts considered but not touched: workspace-import status response
+    shape, workspace-import approval payload, persisted task schema, persisted
+    importer spec schema, release-readiness response shape.
+  - Existing data impact: no migration. Existing materialized task records with
+    repaired titles now prevent false stale-import blockers; genuinely stale
+    approved current tasks still block.
+  - Required follow-up: continue reducing duplicated approved/detected/current
+    import math into a shared import-scope summary model so Start, Overview,
+    Workspace Import, and Map cannot diverge again.
+  - Proof required: focused failing regression for cropped saved YAML plus
+    repaired materialized task title; regression that true stale approved work
+    still blocks; contract detector; build/install; installed Looma + Knit API
+    proof.
+  - Proof provided: focused `serve-settings` tests passed for both false
+    positive and true stale cases; `git diff --check` passed;
+    `node scripts/contract-touch-detector.mjs` passed; `node ./build.mjs`
+    passed; installed app returned `stale:false`; live Looma + Knit
+    `/api/project` moved from `workspace_import_refresh_needed` to
+    `imported_scope_shaping` with `16` current-scope tasks needing shaping,
+    and no false stale-title message.
+  - Residual verification note: a broader pattern-filtered
+    `serve-settings.test.ts` run for `Workspace Import review endpoints|POST
+    /api/project/start` still shows three unrelated failures in existing
+    owner-input/hollow-handoff cases. The focused regressions for this fix pass
+    and the installed app proof confirms the Looma behavior changed as
+    intended.
+  - Apply/revert behavior: revert the materialized-title lookup in `serve.ts`
+    and the focused regression test to restore direct saved-YAML stale
+    comparison.
+
+source: codex:workspace-import-effective-title-start-readiness-2026-07-06
+
 2026-07-06T08:30:00Z - Treat source-trail lead-ins as invalid owner-input
 questions.
 
