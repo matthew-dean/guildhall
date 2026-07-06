@@ -3016,6 +3016,18 @@ function taskGitStoryRepoPath(
   return resolveEffectiveTaskProjectPath(task as Pick<Task, 'projectPath'>, projectPath)
 }
 
+function taskExistingWorktreePath(
+  task: Record<string, unknown>,
+  workspace?: { worktreePath?: string },
+): string | null {
+  const worktreePath = typeof workspace?.worktreePath === 'string' && workspace.worktreePath.trim()
+    ? workspace.worktreePath.trim()
+    : typeof task.worktreePath === 'string' && task.worktreePath.trim()
+      ? task.worktreePath.trim()
+      : ''
+  return worktreePath && existsSync(worktreePath) ? worktreePath : null
+}
+
 const TASK_FILE_PREVIEW_LIMIT_BYTES = 256 * 1024
 
 function isWithinPath(candidate: string, root: string): boolean {
@@ -3089,8 +3101,9 @@ async function gitStoryForTask(
     workspaceProjects: resolvedWorkspaceProjects,
     task,
   })
-  const repoRoot = childProject?.path ?? resolveEffectiveTaskProjectPath(task as Pick<Task, 'projectPath'>, projectPath)
-  const effectiveInspectedPath = childProject?.path ?? inspectedPath
+  const existingWorktreePath = taskExistingWorktreePath(task, workspace)
+  const repoRoot = existingWorktreePath ?? childProject?.path ?? resolveEffectiveTaskProjectPath(task as Pick<Task, 'projectPath'>, projectPath)
+  const effectiveInspectedPath = existingWorktreePath ?? childProject?.path ?? inspectedPath
   return inspectGitStory(driver, {
     repoRoot,
     ...(childProject?.id ? { repoId: childProject.id } : {}),
@@ -11437,18 +11450,20 @@ export function buildServeApp(opts: ServeOptions = {}): {
         : 0
     const dirtyCheckoutBlockingCount = dirtyCheckout.ownedCount > 0 || dirtyCheckout.error ? 1 : 0
     const repositoryFollowupCount = gitStory.blockers.length
-    const blockingCount =
-      humanBlockingCount
-      + unfinishedCount
-      + proofMissingDoneTasks.length
-      + designSystemBlockingCount
-      + dirtyCheckoutBlockingCount
-      + repositoryFollowupCount
+    const blockingKeys = new Set<string>()
+    for (const blocker of releaseBlockers) blockingKeys.add(`task:${blocker.id}`)
+    for (const task of proofMissingDoneTasks) blockingKeys.add(`task:${task.id}`)
+    for (const blocker of gitStory.blockers) {
+      blockingKeys.add(blocker.taskId ? `task:${blocker.taskId}` : `repo:${blocker.id}`)
+    }
+    if (designSystemBlockingCount > 0) blockingKeys.add('design-system')
+    if (dirtyCheckoutBlockingCount > 0) blockingKeys.add('dirty-checkout')
+    const blockingCount = blockingKeys.size
 
     return {
       release,
       scope: readinessScope,
-      ready: scopedTasks.length > 0 && blockingCount === 0,
+      ready: scopedTasks.length > 0 && blockingCount === 0 && unfinishedCount === 0,
       ...(scopedTasks.length === 0 ? { notReadyReason: 'No tasks in this scope yet.' } : {}),
       statusCounts,
       openEscalations,

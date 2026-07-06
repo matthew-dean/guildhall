@@ -1031,7 +1031,9 @@ describe('GET /api/project/release-readiness', () => {
     expect(body.unapprovedBriefs.map((b: any) => b.id)).toEqual(['task-1'])
     expect(body.unapprovedSpecs.map((b: any) => b.id)).toEqual(['task-2'])
     expect(body.totals.humanBlockingCount).toBe(2)
-    expect(body.totals.blockingCount).toBeGreaterThan(2)
+    expect(body.totals.blockingCount).toBe(2)
+    expect(body.totals.unfinishedCount).toBe(2)
+    expect(body.ready).toBe(false)
   })
 
   it('separates incomplete briefs from approval-ready briefs', async () => {
@@ -1512,10 +1514,13 @@ describe('GET /api/project/release-readiness', () => {
 
   it('inspects child repos for a non-git workspace envelope', async () => {
     const envelopePath = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-release-envelope-'))
+    const taskWorktreePath = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-release-envelope-task-worktree-'))
     try {
       const envelopeId = bootstrapWorkspace(envelopePath, { name: 'Release Envelope Fixture' }).id ?? path.basename(envelopePath)
       await initChildRepo(path.join(envelopePath, 'looma'))
       await initChildRepo(path.join(envelopePath, 'knit'))
+      await initChildRepo(taskWorktreePath)
+      await fs.writeFile(path.join(taskWorktreePath, 'task-only.txt'), 'task worktree change\n', 'utf8')
       await fs.writeFile(path.join(envelopePath, 'knit', '.gitignore'), 'node_modules\n', 'utf8')
       const queue: TaskQueue = {
         version: 1,
@@ -1539,6 +1544,15 @@ describe('GET /api/project/release-readiness', () => {
             }),
             projectPath: envelopePath,
           },
+          {
+            ...makeTask({
+              id: 'task-looma-worktree',
+              title: 'Looma task worktree',
+              status: 'ready',
+            }),
+            projectPath: path.join(envelopePath, 'looma'),
+            worktreePath: taskWorktreePath,
+          },
         ],
       }
       await writeProjectStateJsonAsync(envelopePath, 'TASKS.json', queue)
@@ -1559,6 +1573,12 @@ describe('GET /api/project/release-readiness', () => {
       const repoIds = body.gitStory.snapshots.map((snapshot: any) => snapshot.repoId)
       expect(new Set(repoIds)).toEqual(new Set(['knit', 'looma']))
       expect(repoIds.every((repoId: string | undefined) => repoId === 'knit' || repoId === 'looma')).toBe(true)
+      const taskSnapshot = body.gitStory.snapshots.find((snapshot: any) => snapshot.taskId === 'task-looma-worktree')
+      expect(taskSnapshot).toMatchObject({
+        taskId: 'task-looma-worktree',
+        inspectedPath: taskWorktreePath,
+        state: 'dirty_uncommitted',
+      })
 
       const projectRes = await app.fetch(new Request(`http://localhost/api/project?projectId=${encodeURIComponent(envelopeId)}`))
       const projectBody = await projectRes.json() as any
@@ -1576,8 +1596,13 @@ describe('GET /api/project/release-readiness', () => {
       expect(projectRepoIds.has('looma')).toBe(true)
       expect(projectBody.releaseReadiness.gitStory.snapshots.map((snapshot: any) => snapshot.state)).not.toContain('not_git')
       expect(projectBody.tasks.find((task: any) => task.id === 'task-workspace-import')?.gitStory).toBeUndefined()
+      expect(projectBody.tasks.find((task: any) => task.id === 'task-looma-worktree')?.gitStory).toMatchObject({
+        inspectedPath: taskWorktreePath,
+        state: 'dirty_uncommitted',
+      })
     } finally {
       await fs.rm(envelopePath, { recursive: true, force: true })
+      await fs.rm(taskWorktreePath, { recursive: true, force: true })
     }
   }, 20000)
 
@@ -1627,7 +1652,8 @@ describe('GET /api/project/release-readiness', () => {
     expect(body.shelvedUnclaimed).toEqual([])
     expect(body.blockedByAgent.map((b: any) => b.id)).toEqual(['task-1'])
     expect(body.totals.humanBlockingCount).toBe(1)
-    expect(body.totals.blockingCount).toBeGreaterThan(1)
+    expect(body.totals.blockingCount).toBe(1)
+    expect(body.totals.unfinishedCount).toBe(1)
   })
 
   it('reports the design-system approval state', async () => {

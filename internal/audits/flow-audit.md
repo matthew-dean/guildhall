@@ -1654,6 +1654,108 @@ child closure proof.
     `taskHasExplicitGitStoryFollowup` and the stale-parent regression to
     restore previous behavior; no data rollback required.
 
+2026-07-06T10:25:00Z - Kept task worktree Git Story ahead of child repo mapping.
+
+- Work id: `codex:looma-knit-task-worktree-git-story-precedence-2026-07-06`.
+- User job: when a workspace container has child repos and tasks have their own
+  worktrees, Guildhall should tell the owner the state of the task worktree,
+  not repeat the child repo's branch state on every task. Release readiness
+  should distinguish repo-level follow-up from task-specific follow-up so the
+  blocker count remains believable.
+- Root-cause classification:
+  - Task hierarchy/dependency/proof modeling: a task-specific worktree was
+    modeled as if it were only evidence of the child repo containing the task.
+  - Scheduler/action-state logic: release readiness counted the same child repo
+    branch state repeatedly as per-task blockers.
+  - UI communication/orientation: Looma + Knit surfaced inflated blocker
+    counts and repeated Git Story messages, making the project look more
+    blocked than the underlying state justified.
+- Fix:
+  - Task Git Story now gives an existing task workspace/worktree precedence
+    over child-repo mapping for the inspected path and repo root.
+  - Child repo labels are still attached when useful, so the user sees both the
+    owning repo and the task-specific worktree state.
+- Contract Touch Decision:
+  - Work id:
+    `codex:looma-knit-task-worktree-git-story-precedence-2026-07-06`.
+  - Touched contracts: task-level Git Story inspection semantics;
+    `/api/project/release-readiness` Git Story snapshots/blockers/totals;
+    `/api/project` enriched task `gitStory` payloads.
+  - Contracts considered but not touched: persisted task schema, workspace
+    store schema, release schema, child repo discovery config, Git Story policy
+    schema.
+  - Existing data impact: no migration. Existing `worktreePath` data now has
+    the precedence the data model already implied.
+  - Required follow-up: re-check Looma + Knit installed-app readiness after
+    rebuild/install to make sure repeated child-repo blockers collapse into
+    task-specific worktree states.
+  - Proof required: focused regression for child repo plus task worktree,
+    broader release/dashboard tests, build, contract detector, installed-app
+    API readback.
+  - Proof provided: focused child-repo/worktree regression passed; broader
+    focused suite passed with `60` tests. `pnpm build`, `pnpm dev:install`,
+    and `guildhall stop && guildhall start` passed; `/api/stale-server`
+    returned `stale:false`.
+  - Installed-app readback:
+    `/api/project?projectId=looma-knit` now reports task Git Story for
+    `task-import-1aessks`, `task-import-gs82f5`, and `task-import-kspe0i`
+    with `inspectedPath` set to their task worktrees under
+    `/Users/matthew/.guildhall/worktrees/looma-knit/...`, not the shared
+    Looma child repo path.
+  - Apply/revert behavior: revert `taskExistingWorktreePath` and the
+    `gitStoryForTask` inspected-path precedence change to restore previous
+    child-repo-first behavior; no data rollback required.
+
+2026-07-06T10:35:00Z - Made release blocking count a unique blocker count.
+
+- Work id: `codex:release-readiness-unique-blocker-count-2026-07-06`.
+- User job: when a user opens Release or Overview, the blocker count should
+  communicate how many distinct things are blocking the selected scope. It
+  should not add unfinished work, human blockers, Git Story blockers, dirty
+  checkout, and proof gaps together when several categories point to the same
+  task.
+- Root-cause classification:
+  - Data model/schema problem: the API exposed `blockingCount` as a category
+    sum, not as an owner-facing blocker cardinality.
+  - Scheduler/action-state logic: readiness was correctly false when unfinished
+    work remained, but the same value also inflated "waiting" counts.
+  - UI communication/orientation: Looma + Knit showed 49 scoped tasks but 127
+    blockers, making the product look incoherent.
+- Fix:
+  - `blockingCount` now counts unique blocker concepts: task blockers by task
+    id, repo blockers by repo id, plus design-system and dirty-checkout
+    concepts.
+  - `unfinishedCount` remains separate and still prevents readiness. A release
+    is ready only when there is at least one scoped task, no blockers, and no
+    unfinished scoped work.
+- Contract Touch Decision:
+  - Work id: `codex:release-readiness-unique-blocker-count-2026-07-06`.
+  - Touched contracts: `/api/project/release-readiness` totals semantics;
+    `/api/project` embedded release-readiness totals; Overview/Release
+    copy/count semantics that consume `blockingCount` and `unfinishedCount`.
+  - Contracts considered but not touched: persisted task schema, release
+    schema, task status enum, Git Story schema, orientation spine schema.
+  - Existing data impact: no migration. This changes derived read-model
+    semantics only.
+  - Required follow-up: verify installed Looma + Knit no longer reports a
+    blocker count larger than the actual blocker concepts, while still showing
+    unfinished work separately.
+  - Proof required: release-readiness tests for unique blockers, broader
+    release/dashboard tests, build, contract detector, installed-app API and
+    browser readback.
+  - Proof provided: focused suite passed with `60` tests. `pnpm build`,
+    `pnpm dev:install`, and `guildhall stop && guildhall start` passed;
+    `/api/stale-server` returned `stale:false`.
+  - Installed-app readback:
+    `/api/project/release-readiness?projectId=looma-knit` now returns
+    `tasks:49`, `unfinishedCount:49`, `humanBlockingCount:45`,
+    `gitStoryBlockingCount:32`, and unique `blockingCount:53` instead of the
+    old category-sum `127`. `/projects/looma-knit/release` shows `0/49 done`,
+    `49 included · 32 later`, `53 open release checks`, `49 unfinished tasks`,
+    and repository follow-up separately.
+  - Apply/revert behavior: revert the `blockingKeys` union and restore the old
+    category-sum calculation; no data rollback required.
+
 2026-07-04T19:59:23Z - Scoped release Git Story blockers to the selected
 release and hardened container repo discovery.
 
