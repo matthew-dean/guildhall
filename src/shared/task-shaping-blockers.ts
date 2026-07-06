@@ -31,6 +31,7 @@ interface TaskLike {
 }
 
 export function taskShapingBlockers(task: TaskLike): TaskShapingBlocker[] {
+  if (isTerminalTaskStatus(task.status)) return []
   const blockers: TaskShapingBlocker[] = []
   if (taskNeedsImportedBriefShaping(task)) {
     blockers.push({
@@ -48,10 +49,15 @@ export function taskShapingBlockers(task: TaskLike): TaskShapingBlocker[] {
 }
 
 export function taskNeedsImportedBriefShaping(task: TaskLike): boolean {
+  if (isTerminalTaskStatus(task.status)) return false
   if (task.status === 'import_draft') return true
   if (!hasWorkspaceImportProvenance(task)) return false
   if (task.status !== 'exploring') return false
   return !taskHasBriefShape(task) || !task.acceptanceCriteria?.length
+}
+
+function isTerminalTaskStatus(status: string | undefined): boolean {
+  return status === 'done' || status === 'shelved' || status === 'cancelled' || status === 'archived' || status === 'pending_pr'
 }
 
 function hasWorkspaceImportProvenance(task: TaskLike): boolean {
