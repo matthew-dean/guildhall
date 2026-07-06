@@ -3353,6 +3353,34 @@ async function enrichTaskForServe(
   }
 }
 
+async function enrichTaskForWorkSurface(
+  projectPath: string,
+  task: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const normalized = normalizeTaskForDrawer(task)
+  if (importedContractWorkIsStructurallyIncomplete(normalized)) {
+    normalized.taskReadiness = importedContractStructuralRepairReadiness(normalized)
+    normalized.structuralIntegrity = {
+      status: 'needs_repair',
+      reason: 'Imported contract/type work is missing concrete contract names.',
+      source: 'imported-work-integrity',
+    }
+  }
+  const taskId = typeof normalized.id === 'string' ? normalized.id : ''
+  const memoryDir = getProjectStateDir(projectPath)
+  const checkpoint = taskId ? await readCheckpoint(memoryDir, taskId).catch(() => null) : null
+  const nextPlannedAction = normalizedCheckpointNextPlannedAction(normalized, checkpoint)
+  if (checkpoint && nextPlannedAction) {
+    return {
+      ...normalized,
+      latestCheckpoint: {
+        nextPlannedAction,
+      },
+    }
+  }
+  return normalized
+}
+
 function compactTaskRuntimeForProjectSummary(runtime: unknown): Record<string, unknown> | undefined {
   if (!runtime || typeof runtime !== 'object') return undefined
   const source = runtime as Record<string, unknown>
@@ -3459,7 +3487,6 @@ function compactTaskForWorkSurface(task: Record<string, unknown>): Record<string
     'blockReason',
     'shelveReason',
     'latestReviewerSummary',
-    'latestSelfCritique',
     'terminalSummary',
     'sizePlan',
     'checklist',
@@ -4509,7 +4536,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const rawTasks = rawQueue.tasks
       const releaseReadiness = fullSurface ? await buildProjectReleaseReadinessPayload() : null
       const workProgress = deriveProjectWorkProgress(rawTasks as Array<Record<string, unknown>>)
-      const tasks = await Promise.all(rawTasks.map((task) => enrichTaskForServe(project.path, task)))
+      const tasks = await Promise.all(rawTasks.map((task) => fullSurface
+        ? enrichTaskForServe(project.path, task)
+        : enrichTaskForWorkSurface(project.path, task)))
       const deliveryModel = await readProjectDeliveryModel(project.path)
       const deliveryQueue = deriveQueueCandidates({
         model: deliveryModel,

@@ -38,6 +38,9 @@ help_summary: |
     compaction, Work still shipped every compact project task row with
     task-detail source refs, project paths, readiness diagnostics, historical
     runtime counters, and escalation payloads.
+  - Data model/schema problem: after JSON compaction, Work still paid the
+    compute cost for full task-detail enrichment across every task before
+    dropping evidence-derived summaries from the response.
   - Runtime/provider/infrastructure problem: the installed app repeatedly
     transferred and recomputed heavyweight sections on a polling loop.
 - Fix:
@@ -66,6 +69,11 @@ help_summary: |
     while omitting task-detail-only references, escalations, project paths,
     created/origination metadata, remediation counters, and full readiness
     diagnostics.
+  - The Work surface now uses lightweight Work task enrichment instead of full
+    drawer enrichment: raw task definition plus structural-repair overlay and
+    compact checkpoint next action. Evidence-derived reviewer/self-critique
+    summaries, review audits, workspace/git-story inspection, and full
+    effective-task projection remain task-detail responsibilities.
 - Contract Touch Decision:
   - Work id: `codex:work-surface-scoped-project-payload-2026-07-06`.
   - Touched contracts: `GET /api/project` optional `surface=work` response
@@ -116,11 +124,28 @@ help_summary: |
     page horizontal overflow, with the ready list showing `5 shown / 311 total`
     because the compact task rows now retain the minimal brief/spec signals
     used by worker-handoff classification.
-  - Residual risk: Work still takes several seconds on live Looma + Knit even
-    after the payload reduction, because the server still builds broad
-    effective task and project summary state before compacting the Work
-    response. The next split should avoid computing task-detail diagnostics for
-    Work in the first place instead of only dropping them from JSON.
+  - Proof provided so far for compute split: focused red/green endpoint
+    regression proved evidence-derived self-critique stays out of Work rows
+    while compact checkpoint summaries remain available; focused
+    endpoint/store/WorkTab/ProjectView suite passed `193` tests after the
+    lightweight Work task enrichment split; `git diff --check`,
+    `node scripts/contract-touch-detector.mjs`, and `node ./build.mjs` passed;
+    installed app refreshed with `/api/stale-server` reporting `stale:false`.
+  - Live API proof after the compute split: Looma + Knit full
+    `/api/project?projectId=looma-knit` measured about `1.38 MB` and `5.25s`;
+    scoped `/api/project?projectId=looma-knit&surface=work` measured about
+    `351 KB` and `1.10s`, with task rows about `175 KB`, `deliverySpine`
+    containing only `queue`, and the first task row no longer carrying
+    `references`, `projectPath`, `latestSelfCritique`, or
+    `latestReviewerSummary`. Narrative Harness scoped Work measured about
+    `527 KB` and `0.79s`, with the same detail-only task fields absent.
+  - Residual risk: Work is now much cheaper on the live API, but current
+    browser-control proof is incomplete. The in-app browser session timed out
+    on `/projects/looma-knit/work` even for simple tab/title/DOM reads after
+    navigation, so the next pass must determine whether that is browser bridge
+    instability, a still-heavy client render, or a Work-route responsiveness
+    bug. Do not count this slice as having fresh desktop/mobile DOM geometry
+    proof until that is resolved.
   - Waivers: default `/api/project` stays full for existing non-Work surfaces
     until each route has a tested scoped payload.
   - Apply/revert behavior: remove the `surface=work` branch and project-store

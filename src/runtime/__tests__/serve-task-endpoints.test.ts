@@ -831,6 +831,12 @@ describe('GET /api/project/task/:id', () => {
         filesTouched: ['packages/editor/src/menu.ts'],
         writtenAt: '2026-06-01T01:00:00.000Z',
       },
+      notes: [{
+        role: 'worker',
+        agentId: 'worker-agent',
+        timestamp: '2026-06-01T01:30:00.000Z',
+        content: '**Self-critique:** full detail belongs on the task drawer.',
+      }],
       definitionOfDone: {
         items: ['Long done item belongs on task detail.'],
         evidenceRequired: ['Storybook proof screenshot.'],
@@ -875,6 +881,7 @@ describe('GET /api/project/task/:id', () => {
     expect(workTask?.origination).toBeUndefined()
     expect(workTask?.remediationAttempts).toBeUndefined()
     expect(workTask?.escalations).toBeUndefined()
+    expect(workTask?.latestSelfCritique).toBeUndefined()
     expect(workTask?.taskReadiness).toEqual({
       recommendation: 'ready',
       summary: 'Task is ready for a focused worker pass.',
