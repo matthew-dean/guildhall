@@ -12,6 +12,83 @@ This is the active browser test plan for the Guildhall project surface. Keep it
 updated while auditing the active test project so another agent can resume
 without guessing.
 
+2026-07-06T09:58:00Z - Narrative Harness MVP task content and Git Story
+readiness agree.
+
+- Work id: `codex:nh-mvp-task-content-and-git-story-readiness-2026-07-06`.
+- User job: when the owner adds MVP requirements for a DeepInfra drafting model
+  and physical-world review lanes, Guildhall must carry them as explicit
+  current-scope tasks and must not claim the release is ready while repository
+  follow-up is still unresolved.
+- Live task-content proof:
+  - Installed `/api/project?projectId=narrative-harness` returns selected
+    scope `stage-1-fixture-and-evaluation-harness` with `16` current tasks.
+  - The selected scope includes `task-150-split-select-and-prove-deepinfra-drafting-model`
+    with acceptance criteria for selecting/proving a DeepInfra-accessible
+    drafting/writing model across genres, including adult genres.
+  - The selected scope includes
+    `task-150-split-define-world-state-continuity-review-lane` with acceptance
+    criteria for world-state/object-property continuity over elapsed time,
+    including wet hair drying after enough time in a given climate.
+  - The selected scope includes
+    `task-150-split-define-spatial-geographic-continuity-review-lane` with
+    acceptance criteria for scene geography, travel distance, and walking speed
+    for fantasy-scale travel.
+- Root-cause classification:
+  - Project structure/scope/release modeling: the task content is correctly
+    modeled as selected-release work, proving this is not only chat memory or
+    raw Codex repo knowledge.
+  - Scheduler/action-state logic: release readiness counted Git Story blockers
+    separately but did not include them in the canonical blocking total, so
+    `/api/project/release-readiness` could return `ready:true` while
+    `gitStory.ready:false`.
+  - UI communication/orientation: any page using the shared readiness payload
+    could tell the owner the MVP is complete while still showing repository
+    follow-up elsewhere.
+- Fix:
+  - Release readiness now includes selected-scope Git Story follow-up blockers
+    in `totals.blockingCount`, so the shared `ready` boolean cannot contradict
+    `gitStory.ready`.
+  - Added a regression for a done selected release with an unpushed current
+    repo commit; it must return `ready:false`, `gitStoryBlockingCount:1`, and
+    `blockingCount:1`.
+- Contract Touch Decision:
+  - Work id:
+    `codex:nh-mvp-task-content-and-git-story-readiness-2026-07-06`.
+  - Touched contracts: `/api/project/release-readiness` readiness semantics
+    and totals interpretation.
+  - Contracts considered but not touched: persisted task schema, release
+    schema, Git Story payload shape, project map UI contract, scheduler start
+    endpoint shape.
+  - Existing data impact: no migration. Existing Git Story blockers now affect
+    the same blocking total as other current-release blockers.
+  - Required follow-up: continue clearing the Narrative Harness repository
+    follow-up so the MVP can become honestly ready.
+  - Proof required: red/green release-readiness regression, affected runtime
+    suites, contract detector, build/install/stale proof, and live Narrative
+    Harness API proof showing the three MVP task requirements and corrected
+    readiness totals.
+  - Proof provided: focused regression first failed with
+    `gitStoryBlockingCount:1` but `blockingCount:0`, then passed after the
+    shared readiness fix. The same regression then failed again because
+    `/api/project` still reported `code:"all_terminal"`; terminal
+    start-readiness now uses effective task records and the same
+    orientation-normalized release truth for Git Story follow-up. Runtime
+    cluster passed `60` tests. `git diff --check`, contract detector, build,
+    dev install, restart, and stale check passed. Installed API proof returned
+    `stale:false`; `/api/project/release-readiness?projectId=narrative-harness`
+    returned `ready:false`, `statusCounts:{done:16}`,
+    `totals.blockingCount:2`, and `totals.gitStoryBlockingCount:2`.
+    `/api/project?projectId=narrative-harness` returned
+    `startReadiness.code:"repository_followup_required"`, `count:2`, and the
+    same `releaseReadiness` totals. The selected-scope task list includes the
+    DeepInfra drafting model task across adult genres, world-state wet-hair
+    climate/time continuity, and spatial/geographic travel/walking-speed
+    continuity tasks with those acceptance criteria.
+  - Apply/revert behavior: remove `repositoryFollowupCount` from the
+    release-readiness blocking total and remove the regression to restore the
+    previous contradiction; no data rollback is required.
+
 2026-07-06T09:45:00Z - Release readiness counts the same selected-scope work
 as the project spine.
 

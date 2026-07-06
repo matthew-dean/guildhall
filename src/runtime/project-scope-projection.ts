@@ -4,6 +4,7 @@ import { deriveTaskWorkVisibility } from './work-visibility.js'
 import { META_INTAKE_TASK_ID } from './meta-intake.js'
 import { WORKSPACE_IMPORT_TASK_ID } from './workspace-importer.js'
 import { specReviewRequiresOwnerApproval } from './spec-review-ownership.js'
+import { taskHasRecordedCompletionProof } from './task-completion-proof.js'
 
 export type ProjectScopeKind = 'release' | 'milestone' | 'proposed_feature_set'
 export type ProjectScopeSource = 'owner_approved' | 'spec' | 'release_plan' | 'inferred'
@@ -493,6 +494,7 @@ function handoffStateForTask(
 ): ProjectScopeHandoffState {
   if (input.scope === 'deferred') return 'deferred'
   if (task.status === 'shelved') return 'deferred'
+  if (taskHasRecordedCompletionProof(task)) return 'done'
   if (task.status === 'blocked') return 'blocked'
   if (task.status === 'done' || task.status === 'pending_pr') return 'done'
   if (task.status === 'in_progress') return 'paused'

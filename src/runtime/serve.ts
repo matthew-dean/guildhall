@@ -22,7 +22,7 @@ import {
   upsertTaskRuntimeState,
 } from '@guildhall/sessions'
 import { readTaskWorkspaceStore } from './task-state-store.js'
-import { taskHasRecordedCompletionProof } from './task-completion-proof.js'
+import { latestRecordedCompletionProofAt, taskHasRecordedCompletionProof } from './task-completion-proof.js'
 import {
   readWorkspaceConfig,
   writeWorkspaceConfig,
@@ -2251,6 +2251,17 @@ function summarizeScopedReleaseWork(
   scopedTasks: Task[]
   gitStoryTasks: Task[]
 } {
+  const effectiveReleaseStatus = (task: Task): string => taskHasRecordedCompletionProof(task)
+    ? 'done'
+    : String((task as { status?: string }).status ?? 'unknown')
+  const completionProofSupersedesEscalation = (
+    task: Task,
+    escalation: { raisedAt?: string },
+  ): boolean => {
+    const proofAt = latestRecordedCompletionProofAt(task)
+    if (!proofAt || !escalation.raisedAt) return false
+    return Date.parse(proofAt) > Date.parse(escalation.raisedAt)
+  }
   const tasksById = new Map(tasks.map(task => [task.id, task]))
   const scopeProjection = buildProjectScopeProjection(
     { version: 1, lastUpdated: new Date(0).toISOString(), tasks, releases: [] },
@@ -2296,13 +2307,13 @@ function summarizeScopedReleaseWork(
   }
   const blockerSubject = (title: string) => title.trim().replace(/[.?!:;,\s]+$/g, '')
   for (const t of scopedTasks) {
-    const status = String((t as { status?: string }).status ?? 'unknown')
+    const status = effectiveReleaseStatus(t)
     statusCounts[status] = (statusCounts[status] ?? 0) + 1
     if (!terminalStatuses.has(status)) unfinishedCount += 1
   }
 
   for (const t of executionScopedTasks) {
-    const status = String((t as { status?: string }).status ?? 'unknown')
+    const status = effectiveReleaseStatus(t)
     const id = String((t as { id?: string }).id ?? '')
     const title = String((t as { title?: string }).title ?? id)
     const brief = (t as { productBrief?: { approvedAt?: string } }).productBrief
@@ -2358,7 +2369,7 @@ function summarizeScopedReleaseWork(
       blockedByAgent.push({ id, title, ...(reason ? { reason } : {}) })
       addReleaseBlocker({ id, title, label: reason?.trim() || `${blockerSubject(title)} is blocked.` })
     }
-    for (const e of activeEscalations(t)) {
+    for (const e of activeEscalations(t).filter(e => !completionProofSupersedesEscalation(t, e))) {
       openEscalations.push({
         taskId: id,
         taskTitle: title,
@@ -5616,7 +5627,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
 	  async function terminalStartState(projectPath: string, requestedTaskId?: string): Promise<{
 	    canStart: false
-	    code: 'all_terminal' | 'proof_evidence_missing'
+	    code: 'all_terminal' | 'proof_evidence_missing' | 'repository_followup_required'
 	    message: string
       actionHref?: string
       focusTaskId?: string
@@ -5658,31 +5669,45 @@ export function buildServeApp(opts: ServeOptions = {}): {
 	      await hasRecoverableBlockedStartTask(projectPath, tasks, requestedTaskId)
 	    ) {
 	      return null
-	    }
+    }
 
     const typedTasks = tasks.filter((task): task is Task => Boolean(task && typeof task === 'object'))
+    const effectiveTasks = await Promise.all(typedTasks.map(task => buildEffectiveTask(projectPath, task)))
+    const rawReleases = !Array.isArray(raw) && raw && typeof raw === 'object' && Array.isArray((raw as { releases?: unknown }).releases)
+      ? (raw as { releases: TaskQueue['releases'] }).releases
+      : undefined
+    const rawSelectedReleaseId = !Array.isArray(raw) && raw && typeof raw === 'object' && typeof (raw as { selectedReleaseId?: unknown }).selectedReleaseId === 'string'
+      ? (raw as { selectedReleaseId: string }).selectedReleaseId
+      : undefined
     const selectedReleaseScope = !requestedTaskId
       ? selectedReleaseScopeFromQueueLike({
-        tasks: typedTasks,
-        releases: !Array.isArray(raw) && raw && typeof raw === 'object' && Array.isArray((raw as { releases?: unknown }).releases)
-          ? (raw as { releases: TaskQueue['releases'] }).releases
-          : undefined,
-        selectedReleaseId: !Array.isArray(raw) && raw && typeof raw === 'object' && typeof (raw as { selectedReleaseId?: unknown }).selectedReleaseId === 'string'
-          ? (raw as { selectedReleaseId: string }).selectedReleaseId
-          : undefined,
+        tasks: effectiveTasks,
+        releases: rawReleases,
+        selectedReleaseId: rawSelectedReleaseId,
       })
       : null
-	    const tasksById = new Map(typedTasks.map(task => [task.id, task] as const))
+	    const tasksById = new Map(effectiveTasks.map(task => [task.id, task] as const))
 	    const scopedTasks = selectedReleaseScope
-	      ? tasksEligibleForScopeExecution(typedTasks, selectedReleaseScope)
+	      ? tasksEligibleForScopeExecution(effectiveTasks, selectedReleaseScope)
 	        .filter(task => task.id !== META_INTAKE_TASK_ID && task.id !== WORKSPACE_IMPORT_TASK_ID)
 	        .filter(task => {
 	          const parentId = task.hierarchy?.parentId?.trim()
 	          const parent = parentId ? tasksById.get(parentId) ?? null : null
 	          return deriveTaskWorkVisibility(task, parent).countInProjectTotals
 	        })
-	      : typedTasks.filter(task => task.id !== META_INTAKE_TASK_ID && task.id !== WORKSPACE_IMPORT_TASK_ID)
+	      : effectiveTasks.filter(task => task.id !== META_INTAKE_TASK_ID && task.id !== WORKSPACE_IMPORT_TASK_ID)
 	    if (selectedReleaseScope && scopedTasks.length === 0) return null
+    const releaseTruth = selectedReleaseScope
+      ? buildOrientationSpineWithScopedReleaseTruth({
+        projectId: basename(projectPath),
+        charter: inferProjectCharterFromExistingSources(projectPath),
+        selectedReleaseId: rawSelectedReleaseId,
+        releases: rawReleases,
+        tasks: effectiveTasks,
+        runStatus: 'stopped',
+        sourceRefs: projectOrientationSourceRefs(projectPath),
+      }).releaseTruth
+      : null
 
     let done = 0
     let blocked = 0
@@ -5760,12 +5785,46 @@ export function buildServeApp(opts: ServeOptions = {}): {
         },
       }
     }
+    const gitStory = await buildProjectGitStorySummary(
+      projectPath,
+      (releaseTruth?.gitStoryTasks ?? scopedTasks) as Array<Record<string, unknown>>,
+    )
+    if (gitStory.blockers.length > 0) {
+      const scopeLabel = selectedReleaseScope?.label ?? 'Current task scope'
+      const first = gitStory.blockers[0]!
+      const message = gitStory.blockers.length === 1
+        ? `${scopeLabel} has no runnable task work left, but repository follow-up is still needed: ${first.reason}`
+        : `${scopeLabel} has no runnable task work left, but ${gitStory.blockers.length} repository follow-ups are still needed, starting with: ${first.reason}`
+      return {
+        canStart: false,
+        code: 'repository_followup_required',
+        message,
+        actionHref: '/release',
+        focusKind: 'repository_followup',
+        count: gitStory.blockers.length,
+        stopSummary: {
+          reason: 'all_terminal',
+          message: detailMessage,
+          counts: {
+            total: scopedTasks.length,
+            done,
+            blocked,
+            shelved,
+            pendingPr,
+            archived,
+            cancelled,
+            actionable,
+            terminal,
+          },
+        },
+      }
+    }
     let message = done === scopedTasks.length
       ? 'All tasks are already finished.'
       : detailMessage
 	    if (selectedReleaseScope) {
 	      const outsideActionableByStatus = new Map<string, number>()
-	      for (const task of typedTasks) {
+	      for (const task of effectiveTasks) {
 	        if (taskEligibleForSelectedScope(task, selectedReleaseScope, { tasksById }).eligible) continue
         const status = String(task.status ?? '')
         if (['done', 'blocked', 'shelved', 'pending_pr', 'archived', 'cancelled'].includes(status)) continue
@@ -11382,6 +11441,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       + proofMissingDoneTasks.length
       + designSystemBlockingCount
       + dirtyCheckoutBlockingCount
+      + repositoryFollowupCount
 
     return {
       release,

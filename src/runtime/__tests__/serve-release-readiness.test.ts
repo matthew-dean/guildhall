@@ -442,6 +442,51 @@ describe('GET /api/project/release-readiness', () => {
     expect(body.ready).toBe(true)
   })
 
+  it('does not call a selected release ready while current-scope git story follow-up remains', async () => {
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: 'headless-mvp',
+      releases: [{
+        id: 'headless-mvp',
+        label: 'Headless MVP',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-current'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [
+        makeTask({ id: 'task-current', title: 'Current proof lane', status: 'done', releaseIds: ['headless-mvp'] }),
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await approveDesignSystem(app)
+    await execFileP('git', ['commit', '--allow-empty', '-m', 'unpushed release proof'], { cwd: tmpDir })
+
+    const res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
+    const body = await res.json() as any
+
+    expect(body.statusCounts).toEqual({ done: 1 })
+    expect(body.gitStory.ready).toBe(false)
+    expect(body.gitStory.blockers).toHaveLength(1)
+    expect(body.totals.gitStoryBlockingCount).toBe(1)
+    expect(body.totals.blockingCount).toBe(1)
+    expect(body.ready).toBe(false)
+
+    const projectRes = await app.fetch(new Request(projectUrl('/api/project')))
+    const projectBody = await projectRes.json() as any
+    expect(projectBody.startReadiness).toMatchObject({
+      canStart: false,
+      code: 'repository_followup_required',
+      actionHref: '/release',
+      count: 1,
+    })
+    expect(projectBody.startReadiness.message).toContain('repository follow-up')
+    expect(projectBody.startReadiness.message).not.toContain('is complete')
+  })
+
   it('blocks release readiness on proof-missing completed work without counting reserved import scaffolding', async () => {
     const missingProofPath = {
       path: 'artifacts/fixture-run.md',
@@ -585,6 +630,131 @@ describe('GET /api/project/release-readiness', () => {
       proofEvidenceBlockingCount: 0,
     })
     expect(readiness.proofMissingDoneTasks).toEqual([])
+  })
+
+  it('does not let stale escalations block work that has later approved review proof', async () => {
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: 'headless-mvp',
+      releases: [{
+        id: 'headless-mvp',
+        label: 'Headless MVP',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-current'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [
+        makeTask({
+          id: 'task-current',
+          title: 'Recover completed context packet work',
+          status: 'blocked',
+          releaseIds: ['headless-mvp'],
+          blockReason: 'human_judgment_required: Spec author stopped after hitting its turn limit.',
+          escalations: [{
+            id: 'esc-task-current-1',
+            taskId: 'task-current',
+            agentId: 'spec-agent',
+            reason: 'human_judgment_required',
+            summary: 'Spec author stopped after hitting its turn limit.',
+            raisedAt: '2026-05-31T15:40:15.590Z',
+            details: 'Exceeded maximum turn limit.',
+          }],
+          notes: [{
+            agentId: 'worker-agent',
+            role: 'self-critique',
+            content: '**Self-critique:**\n\nAC 1: Met — `npm run build` passed.\n\nReview proof packet:\n- Verification commands passed: `npm run build`.',
+            timestamp: '2026-06-17T04:39:21.602Z',
+          }],
+          reviewVerdicts: [{
+            verdict: 'approve',
+            reviewerPath: 'llm',
+            reason: 'LLM reviewer approved',
+            reasoning: 'All acceptance criteria are met and the build passes.',
+            failingSignals: [],
+            recordedAt: '2026-06-17T04:44:42.271Z',
+          }],
+        } as Partial<Task>),
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await approveDesignSystem(app)
+    await commitAndPush('stale escalation release readiness')
+
+    const readinessRes = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
+    const readiness = await readinessRes.json() as any
+
+    expect(readiness.openEscalations).toEqual([])
+    expect(readiness.blockedByAgent).toEqual([])
+    expect(readiness.releaseBlockers).toEqual([])
+    expect(readiness.totals).toMatchObject({
+      tasks: 1,
+      done: 1,
+      humanBlockingCount: 0,
+      blockingCount: 0,
+    })
+    expect(readiness.ready).toBe(true)
+  })
+
+  it('does not let stale parent blockers override a later linked-child closure note', async () => {
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: 'headless-mvp',
+      releases: [{
+        id: 'headless-mvp',
+        label: 'Headless MVP',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-parent'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [
+        makeTask({
+          id: 'task-parent',
+          title: 'Expand backlog into full decomposition',
+          status: 'blocked',
+          releaseIds: ['headless-mvp'],
+          blockReason: 'human_judgment_required: Spec agent kept researching after Guildhall asked for durable progress.',
+          escalations: [{
+            id: 'esc-task-parent-1',
+            taskId: 'task-parent',
+            agentId: 'spec-agent',
+            reason: 'human_judgment_required',
+            summary: 'Spec agent kept researching after Guildhall asked for durable progress.',
+            raisedAt: '2026-05-31T15:39:34.666Z',
+          }],
+          notes: [{
+            agentId: 'coordinator',
+            role: 'system',
+            content: 'Closed containing work after linked child tasks completed: task-parent-split-audit, task-parent-split-implement, task-parent-split-verify.',
+            timestamp: '2026-06-17T07:59:35.680Z',
+          }],
+        } as Partial<Task>),
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await approveDesignSystem(app)
+    await commitAndPush('closed parent release readiness')
+
+    const readinessRes = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
+    const readiness = await readinessRes.json() as any
+
+    expect(readiness.openEscalations).toEqual([])
+    expect(readiness.blockedByAgent).toEqual([])
+    expect(readiness.releaseBlockers).toEqual([])
+    expect(readiness.totals).toMatchObject({
+      tasks: 1,
+      done: 1,
+      humanBlockingCount: 0,
+      blockingCount: 0,
+    })
+    expect(readiness.ready).toBe(true)
   })
 
   it('does not count importer-generated decomposition children as scoped release tasks', async () => {
