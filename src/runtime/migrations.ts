@@ -27,6 +27,7 @@ import { finalizeThinProjectStateManifest } from './thin-project-state-manifest.
 import { restoreEvacuatedTaskState } from './evacuated-task-state-restore.js'
 import { migrateWorkDecompositionState } from './work-decomposition-migration.js'
 import { deriveReleaseContainersFromTaskMembership } from './project-scope-projection.js'
+import { effectiveTaskTitle } from '../shared/task-display-label.js'
 import type { Task } from '@guildhall/core'
 
 export type MigrationScope = 'machine' | 'project' | 'workspace' | 'database'
@@ -160,6 +161,58 @@ function recoveredCurrentScopeTaskIds(tasks: Array<Record<string, unknown>>): Se
     if (isParent || isChild) ids.add(id)
   }
   return ids
+}
+
+async function repairClippedTaskTitles(
+  projectRoot: string,
+  apply: boolean,
+): Promise<{ needed: boolean; affectedPaths: string[]; changed: number }> {
+  const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+  let raw: string
+  try {
+    raw = await readManagedTextFile(tasksPath, 'utf8')
+  } catch (err) {
+    if ((err as { code?: string }).code === 'ENOENT') return { needed: false, affectedPaths: [], changed: 0 }
+    throw err
+  }
+  const parsed = JSON.parse(raw) as unknown
+  if (!isRecord(parsed) || !Array.isArray(parsed.tasks)) {
+    return { needed: false, affectedPaths: [], changed: 0 }
+  }
+  const tasks = parsed.tasks.filter(isRecord)
+  const repairs = tasks
+    .map(task => {
+      const title = typeof task.title === 'string' ? task.title : undefined
+      const description = typeof task.description === 'string' ? task.description : undefined
+      const recovered = effectiveTaskTitle({ title, description })
+      return recovered && recovered !== title ? { task, recovered } : null
+    })
+    .filter((repair): repair is { task: Record<string, unknown>; recovered: string } => repair !== null)
+  if (repairs.length === 0) return { needed: false, affectedPaths: [], changed: 0 }
+  if (apply) {
+    for (const repair of repairs) repairClippedTaskTitleStrings(repair.task, repair.recovered)
+    parsed.lastUpdated = new Date().toISOString()
+    await writeManagedTextFile(tasksPath, `${JSON.stringify(parsed, null, 2)}\n`, 'utf8')
+  }
+  return { needed: true, affectedPaths: ['system-local project-state/TASKS.json'], changed: repairs.length }
+}
+
+function repairClippedTaskTitleStrings(task: Record<string, unknown>, recoveredTitle: string): void {
+  const clippedTitle = typeof task.title === 'string' ? task.title : ''
+  if (!clippedTitle || clippedTitle === recoveredTitle) return
+  replaceClippedTaskTitleStrings(task, clippedTitle, recoveredTitle)
+}
+
+function replaceClippedTaskTitleStrings(value: unknown, clippedTitle: string, recoveredTitle: string): unknown {
+  if (typeof value === 'string') return value.split(clippedTitle).join(recoveredTitle)
+  if (Array.isArray(value)) {
+    for (let i = 0; i < value.length; i += 1) value[i] = replaceClippedTaskTitleStrings(value[i], clippedTitle, recoveredTitle)
+    return value
+  }
+  if (isRecord(value)) {
+    for (const [key, nested] of Object.entries(value)) value[key] = replaceClippedTaskTitleStrings(nested, clippedTitle, recoveredTitle)
+  }
+  return value
 }
 
 async function attachRecoveredCurrentScopeTasksToSelectedRelease(
@@ -685,6 +738,31 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
     },
   },
   {
+    id: '0.10.1/repair-clipped-task-titles',
+    title: 'Repair clipped task titles',
+    introducedIn: '0.10.1',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Repairs task titles that were accidentally saved as cropped display text when the source-backed description contains the full title.',
+    async detect(projectRoot) {
+      const result = await repairClippedTaskTitles(projectRoot, false)
+      return {
+        needed: result.needed,
+        affectedPaths: result.affectedPaths,
+      }
+    },
+    async apply(projectRoot) {
+      const result = await repairClippedTaskTitles(projectRoot, true)
+      return {
+        summary: result.changed > 0
+          ? `Repaired ${result.changed} clipped task title${result.changed === 1 ? '' : 's'}.`
+          : 'No clipped task titles needed repair.',
+        affectedPaths: result.affectedPaths,
+      }
+    },
+  },
+  {
     id: '0.10.1/attach-recovered-current-scope-work-to-selected-release',
     title: 'Attach recovered current-scope work to the selected release',
     introducedIn: '0.10.1',
@@ -793,6 +871,7 @@ const BUILT_IN_PROJECT_MIGRATION_IDEMPOTENCE_TESTS: Record<string, string> = {
   '0.10.0/project-state-storage-boundary': 'migrations.test.ts: storage-boundary migration is idempotent',
   '0.10.0/restore-evacuated-task-state': 'migrations.test.ts: restores stranded evacuated task state into the system-local queue and readable task files',
   '0.10.1/restore-evacuated-shaped-task-state': 'migrations.test.ts: restores richer evacuated task shape over hollow same-id imported drafts',
+  '0.10.1/repair-clipped-task-titles': 'migrations.test.ts: repairs clipped task titles even when evacuation repair already ran',
   '0.10.1/attach-recovered-current-scope-work-to-selected-release': 'migrations.test.ts: attaches recovered current-scope owner requirement work to the selected release',
 }
 

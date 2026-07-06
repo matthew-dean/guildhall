@@ -65,13 +65,27 @@ function recoverClippedTitle(title: string | undefined, description: string | un
   if (!titleLooksClipped) return null
   const descriptionBody = stripSourcePrefix(description)
   if (descriptionBody.length <= title.length) return null
-  if (!descriptionBody.toLowerCase().startsWith(compactTitle.toLowerCase())) return null
-  return descriptionBody
+  if (!matchableTitle(descriptionBody).startsWith(matchableTitle(compactTitle))) return null
+  return cleanRecoveredTitle(descriptionBody)
 }
 
 function stripSourcePrefix(description: string): string {
   return description
     .replace(/^(?:[A-Za-z]:)?[^:\n]{1,240}\.(?:md|mdx|txt|yaml|yml|json):\s*(?:[-*]\s*)?(?:\d+[.)]\s*)?/i, '')
+    .trim()
+}
+
+function matchableTitle(value: string): string {
+  return cleanRecoveredTitle(value)
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase()
+}
+
+function cleanRecoveredTitle(value: string): string {
+  return value
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\s+/g, ' ')
     .trim()
 }
 

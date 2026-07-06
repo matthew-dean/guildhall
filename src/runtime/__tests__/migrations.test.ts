@@ -717,6 +717,66 @@ describe('applyProjectMigrations', () => {
     ])
   })
 
+  it('repairs clipped task titles even when evacuation repair already ran', async () => {
+    const fullTitle = 'Keep ui-top-bar, ui-search-shell, and ui-search-result-row as recipe-level primitives rather than forcing them into lower-level generic atoms'
+    const markdownSourceTitle = 'Keep `ui-top-bar`, `ui-search-shell`, and `ui-search-result-row` as recipe-level primitives rather than forcing them into lower-level generic atoms'
+    const croppedTitle = 'Keep ui-top-bar, ui-search-shell, and ui-search-result-row as recipe-level primitives rather than forcing them into lowe'
+    const systemTasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    await fs.mkdir(path.dirname(systemTasksPath), { recursive: true })
+    await fs.writeFile(systemTasksPath, JSON.stringify({
+      version: 1,
+      tasks: [{
+        id: 'task-import-2h8fxk',
+        title: croppedTitle,
+        description: `looma/docs/component-roadmap.md: - ${markdownSourceTitle}`,
+        status: 'spec_review',
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          description: `When ${croppedTitle} is implemented, then the source-backed primitive boundary is preserved.`,
+        }],
+        productBrief: {
+          userJob: `I want ${croppedTitle} turned into concrete project work.`,
+        },
+        spec: `## Summary\nBuild ${croppedTitle} from the current project evidence.\n\n## Acceptance Criteria\n1. ${croppedTitle} is implemented.`,
+      }],
+    }, null, 2), 'utf8')
+    await writeProjectMigrationLedger(projectRoot, {
+      version: 1,
+      records: [{
+        id: '0.10.1/restore-evacuated-shaped-task-state',
+        introducedIn: '0.10.1',
+        scope: 'project',
+        safety: 'automatic',
+        status: 'applied',
+        appliedAt: '2026-07-05T00:00:00.000Z',
+        appliedByVersion: '0.10.1',
+        summary: 'Older evacuation repair already ran.',
+      }],
+    })
+
+    const before = await getProjectMigrationStatus({ projectRoot })
+    expect(before.blocked.some(item => item.id === '0.10.1/repair-clipped-task-titles')).toBe(true)
+
+    await applyProjectMigrations({
+      projectRoot,
+      only: ['0.10.1/repair-clipped-task-titles'],
+    })
+
+    const repaired = JSON.parse(await fs.readFile(systemTasksPath, 'utf8')) as {
+      tasks: Array<{ id: string; title: string }>
+    }
+    expect(repaired.tasks).toEqual([
+      expect.objectContaining({
+        id: 'task-import-2h8fxk',
+        title: fullTitle,
+      }),
+    ])
+    expect(JSON.stringify(repaired.tasks[0])).not.toContain(`${croppedTitle} is`)
+    expect(JSON.stringify(repaired.tasks[0])).not.toContain(`${croppedTitle} from`)
+    expect(JSON.stringify(repaired.tasks[0])).not.toContain(`${croppedTitle} turned`)
+    expect(JSON.stringify(repaired.tasks[0])).toContain(fullTitle)
+  })
+
   it('attaches recovered current-scope owner requirement work to the selected release', async () => {
     const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
     await fs.mkdir(path.dirname(tasksPath), { recursive: true })

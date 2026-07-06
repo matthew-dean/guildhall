@@ -8,6 +8,96 @@ help_summary: |
 
 # Web UI flow audit
 
+2026-07-06T15:45:00Z - Clipped imported task titles are repaired as data, not display copy.
+
+- Work id: `codex:repair-clipped-imported-task-title-data-2026-07-06`.
+- User job: Guildhall must never save visually cropped task titles as task
+  data. If older intake/shaping already copied a cropped title into the task
+  title, generated spec, product brief, acceptance criteria, or release
+  blocker text, Guildhall must repair the persisted model from source-backed
+  task evidence before asking the owner to trust the project map or release
+  readiness.
+- Escaped live failure:
+  - Looma + Knit release readiness exposed `task-import-2h8fxk` as
+    `Keep ui-top-bar, ui-search-shell, and ui-search-result-row as recipe-level
+    primitives rather than forcing them into lowe`.
+  - The same cropped text had been copied into generated task prose, while the
+    source-backed description still contained the full item:
+    `forcing them into lower-level generic atoms`.
+- Root-cause classification:
+  - Data model/schema problem: the task record allowed display-cropped text to
+    become authoritative task data and generated prose.
+  - UI communication/orientation problem: release readiness then repeated the
+    corrupted title as if it were real project truth.
+  - Bad project data produced by an earlier Guildhall bug: Looma + Knit had a
+    legacy imported task whose full source line survived only in description
+    and source trail.
+- Fix:
+  - Shared effective task-title recovery now matches source-prefixed
+    descriptions even when the source line uses Markdown inline code, while
+    returning a clean plain title.
+  - A required automatic project migration repairs legacy clipped task titles
+    and exact copied occurrences inside the same task record.
+- Contract Touch Decision:
+  - Work id: `codex:repair-clipped-imported-task-title-data-2026-07-06`.
+  - Touched contracts: effective task-title derivation and project migration
+    status/apply behavior.
+  - Contracts considered but not touched: public task API response shape,
+    release-readiness response shape, workspace-import draft schema, scheduler
+    task-status model.
+  - Required follow-up: continue tracing importer/shaping paths that create
+    generic or stale prose, but do not treat visual title truncation as valid
+    persisted data anywhere.
+  - Proof required: shared helper regression, migration regression, existing
+    workspace-import repair regression, build, live Looma + Knit migration
+    status/apply proof, API proof, installed-app stale proof.
+  - Proof provided so far: `task-display-label.test.ts` and
+    `migrations.test.ts` passed `23` tests; focused workspace-import cropped
+    title regression passed; `node ./build.mjs` passed; local Looma + Knit
+    migration status reported required
+    `0.10.1/repair-clipped-task-titles`; migration apply repaired
+    `task-import-2h8fxk`; raw `TASKS.json`, task API, and release-readiness
+    API no longer contain the stale `forcing them into lowe` title context;
+    `pnpm lint:contracts`, `git diff --check`, and `pnpm dev:install` passed;
+    after `guildhall stop` / `guildhall start`, `/api/stale-server` returned
+    `stale:false`; installed `guildhall migrate status looma-knit` shows the
+    repair migration applied with no required blocker; installed task API
+    reports `hasBadTitle:false`, `specHasBad:false`, and `briefHasBad:false`;
+    installed release-readiness API reports `bad:false`, `good:true`, and
+    `unapprovedSpecHit.title` as the full recovered title; browser proof on
+    `/projects/looma-knit/release` rendered the route with
+    `visibleBad:false` and no page-level horizontal overflow at `1280x720`.
+  - Waivers: no response schema change; this is a compatibility repair for
+    persisted legacy task data plus shared title recovery. Browser automation
+    timed out on `/projects/looma-knit/work?task=task-import-2h8fxk`; record
+    that as a separate Work-route flow-audit follow-up rather than using it as
+    proof for this migration.
+  - Apply/revert behavior: remove the migration and helper normalization to
+    return Looma + Knit to cropped-title exposure; restore the pre-migration
+    `TASKS.json` backup if a data rollback is needed.
+- Schema Migration Decision:
+  - Persisted schema touched: system-local project `TASKS.json` values only;
+    no schema fields added or removed.
+  - Scope: project migration for legacy task records with source-backed
+    descriptions that prove a clipped saved title.
+  - Change class: automatic required data repair.
+  - Existing data impact: matching task records have `title` and exact copied
+    title occurrences inside the task object rewritten from the recovered full
+    source title.
+  - Migration id: `0.10.1/repair-clipped-task-titles`.
+  - Safety: idempotent; once the title is full, detection returns no required
+    migration.
+  - Required before run: yes, because scheduler/release surfaces must not use
+    corrupted task identity.
+  - Compatibility reader: `effectiveTaskTitle` still recovers complete titles
+    for read paths and import refresh before persisted repair.
+  - Fixtures/tests: `migrations.test.ts` covers an already-evacuated project
+    with Markdown source evidence and generated task prose; shared
+    `task-display-label.test.ts` covers Markdown inline-code recovery.
+  - Owner-facing plan text: migration appears as `Repair clipped task titles`.
+  - Rollback/revert behavior: restore the prior `TASKS.json` backup or revert
+    this migration before it is applied.
+
 2026-07-06T14:38:00Z - Selected release scopes use durable task identity before import-preview titles.
 
 - Work id: `codex:selected-release-durable-import-identity-2026-07-06`.

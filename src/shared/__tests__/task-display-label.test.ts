@@ -31,4 +31,14 @@ describe('taskDisplayLabel', () => {
     expect(effectiveTaskTitle(task)).toBe('Continue the Knit-to-Looma promotion work from the now-complete first M6 queue into the next generic surfaces, while the primitive normalization wave continues in Knit.')
     expect(taskDisplayLabel(task)).toBe('Continue the Knit-to-Looma promotion work from the now-complete first M6 queue into the next generic surfaces, while the primitive normalization wave continues in Knit.')
   })
+
+  it('recovers imported titles when the source line uses markdown inline code', () => {
+    const task = {
+      id: 'task-import-2h8fxk',
+      title: 'Keep ui-top-bar, ui-search-shell, and ui-search-result-row as recipe-level primitives rather than forcing them into lowe',
+      description: 'looma/docs/component-roadmap.md: - Keep `ui-top-bar`, `ui-search-shell`, and `ui-search-result-row` as recipe-level primitives rather than forcing them into lower-level generic atoms',
+    }
+
+    expect(effectiveTaskTitle(task)).toBe('Keep ui-top-bar, ui-search-shell, and ui-search-result-row as recipe-level primitives rather than forcing them into lower-level generic atoms')
+  })
 })
