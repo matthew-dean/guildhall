@@ -37,4 +37,22 @@ describe('project store', () => {
     await expect(first).resolves.toMatchObject({ id: 'font-something' })
     await expect(second).resolves.toMatchObject({ id: 'font-something' })
   })
+
+  it('requests a Work-scoped project payload when the active surface is work', async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(json({
+      id: 'looma-knit',
+      name: 'Looma + Knit',
+      path: '/repo/looma-knit',
+      run: { status: 'stopped', mode: 'continuous' },
+      tasks: [],
+    })))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await project.refresh('looma-knit', 'work')
+
+    const requested = new URL(String(fetchMock.mock.calls[0]?.[0]), 'http://localhost')
+    expect(requested.pathname).toBe('/api/project')
+    expect(requested.searchParams.get('projectId')).toBe('looma-knit')
+    expect(requested.searchParams.get('surface')).toBe('work')
+  })
 })

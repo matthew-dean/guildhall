@@ -3432,6 +3432,54 @@ function compactTaskForProjectSummary(task: Record<string, unknown>): Record<str
   return summary
 }
 
+function compactDeliveryQueueForWorkSurface(queue: Record<string, unknown>): Record<string, unknown> {
+  const compactCandidate = (candidate: unknown): unknown => {
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return candidate
+    const raw = candidate as Record<string, unknown>
+    return {
+      ...raw,
+      task: compactTaskIdentity(raw.task),
+      executionBlockers: compactTaskRefList(raw.executionBlockers),
+      structuralBlockers: compactPrimitiveRefList(raw.structuralBlockers),
+    }
+  }
+  return {
+    runnable: Array.isArray(queue.runnable) ? queue.runnable.map(compactCandidate) : [],
+    blocked: Array.isArray(queue.blocked) ? queue.blocked.map(compactCandidate) : [],
+    ...(queue.firstRunnable ? { firstRunnable: compactCandidate(queue.firstRunnable) } : {}),
+  }
+}
+
+function compactTaskIdentity(task: unknown): Record<string, unknown> | undefined {
+  if (!task || typeof task !== 'object' || Array.isArray(task)) return undefined
+  const raw = task as Record<string, unknown>
+  const summary: Record<string, unknown> = {}
+  for (const key of ['id', 'title', 'description', 'status', 'domain', 'priority', 'workKind', 'releaseIds']) {
+    if (key in raw) summary[key] = raw[key]
+  }
+  return summary
+}
+
+function compactTaskRefList(items: unknown): Array<Record<string, unknown>> {
+  if (!Array.isArray(items)) return []
+  return items
+    .map(compactTaskIdentity)
+    .filter((item): item is Record<string, unknown> => Boolean(item))
+}
+
+function compactPrimitiveRefList(items: unknown): Array<Record<string, unknown>> {
+  if (!Array.isArray(items)) return []
+  return items
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item))
+    .map((item) => {
+      const summary: Record<string, unknown> = {}
+      for (const key of ['id', 'label', 'kind', 'status']) {
+        if (key in item) summary[key] = item[key]
+      }
+      return summary
+    })
+}
+
 function buildReviewAuditSummary(reviewAudit: {
   reviewerRuns: Array<{
     recordedAt?: string
@@ -4288,6 +4336,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
   app.get('/api/project', async c => {
     try {
+      const surface = c.req.query('surface') === 'work' ? 'work' : 'full'
+      const fullSurface = surface === 'full'
       if (project.initializationNeeded) {
         return c.json({
           initializationNeeded: true,
@@ -4305,21 +4355,23 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const tasksPath = projectTasksPath(project.path)
       const rawQueue = await readTaskQueueFileNormalized(tasksPath)
       const rawTasks = rawQueue.tasks
-      const releaseReadiness = await buildProjectReleaseReadinessPayload()
+      const releaseReadiness = fullSurface ? await buildProjectReleaseReadinessPayload() : null
       const workProgress = deriveProjectWorkProgress(rawTasks as Array<Record<string, unknown>>)
       const tasks = await Promise.all(rawTasks.map((task) => enrichTaskForServe(project.path, task)))
       const deliveryModel = await readProjectDeliveryModel(project.path)
-      const deliveryValidation = validateProjectDeliveryModel({
-        model: deliveryModel,
-        tasks: rawTasks as Task[],
-        projectRoot: project.path,
-      })
       const deliveryQueue = deriveQueueCandidates({
         model: deliveryModel,
         tasks: rawTasks as Task[],
       })
-      const deliveryPrimitives = listPrimitivesWithRelations(deliveryModel, rawTasks as Task[])
-      const gitStory = await buildProjectGitStorySummary(project.path, rawTasks as Array<Record<string, unknown>>)
+      const deliveryValidation = fullSurface
+        ? validateProjectDeliveryModel({
+            model: deliveryModel,
+            tasks: rawTasks as Task[],
+            projectRoot: project.path,
+          })
+        : null
+      const deliveryPrimitives = fullSurface ? listPrimitivesWithRelations(deliveryModel, rawTasks as Task[]) : null
+      const gitStory = fullSurface ? await buildProjectGitStorySummary(project.path, rawTasks as Array<Record<string, unknown>>) : null
       const resolvedConfig = resolveConfig({ workspacePath: project.path })
       const runtimeProvider = getRuntimeProviderConfig({
         projectPath: project.path,
@@ -4366,11 +4418,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
       })
       const [runtime, memoryHealth, availability] = await Promise.all([
         readProjectRuntimeState(project.path),
-        projectMemoryHealth(
-          project.path,
-          tasks
-            .filter((task): task is { id: string } => typeof task.id === 'string'),
-        ),
+        fullSurface
+          ? projectMemoryHealth(
+              project.path,
+              tasks
+                .filter((task): task is { id: string } => typeof task.id === 'string'),
+            )
+          : Promise.resolve(null),
         readProjectAvailability(project.path),
       ])
       const acceptedStructuralMap = readAcceptedStructuralMap(project.path)
@@ -4460,20 +4514,24 @@ export function buildServeApp(opts: ServeOptions = {}): {
         availability,
         providerStatus,
         runtime,
-        memoryHealth,
+        ...(memoryHealth ? { memoryHealth } : {}),
         ...(structuralMapReview ? { structuralMapReview } : {}),
         taskRoutingContexts,
-        gitStory,
-        releaseReadiness,
+        ...(gitStory ? { gitStory } : {}),
+        ...(releaseReadiness ? { releaseReadiness } : {}),
         startReadiness,
         actionModel,
         orientationSpine,
-        deliverySpine: {
-          model: deliveryModel,
-          validation: deliveryValidation,
-          primitives: deliveryPrimitives,
-          queue: deliveryQueue,
-        },
+        deliverySpine: fullSurface
+          ? {
+              model: deliveryModel,
+              validation: deliveryValidation,
+              primitives: deliveryPrimitives,
+              queue: deliveryQueue,
+            }
+          : {
+              queue: compactDeliveryQueueForWorkSurface(deliveryQueue as unknown as Record<string, unknown>),
+            },
         recentEvents: recent,
         ...(bootstrapStatus ? { bootstrapStatus } : {}),
       })

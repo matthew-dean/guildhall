@@ -8,6 +8,84 @@ help_summary: |
 
 # Web UI flow audit
 
+2026-07-06T16:30:00Z - Work refresh uses a scoped project-detail payload instead of the full project god object.
+
+- Work id: `codex:work-surface-scoped-project-payload-2026-07-06`.
+- User job: Opening the Work view should quickly show the current queue,
+  selected work, shared run/action state, and enough orientation to understand
+  where the work sits. It should not fetch release-readiness, repository-story,
+  memory-health, or full delivery-spine settings just because other project
+  views need them.
+- Escaped live failure:
+  - Looma + Knit `/api/project?projectId=looma-knit` still returned about
+    `1.4 MB` and took about `5.5s` after compact task rows.
+  - The Work route shared the same monolithic `/api/project` refresh as
+    Overview/Release/Map, then polled it every five seconds while the user was
+    just trying to inspect/run work.
+  - Separate endpoints already existed for orientation spine, delivery spine,
+    git story, activity, thread, inbox, and progress, which showed the product
+    model had route-specific truths but the base refresh contract ignored that.
+- Root-cause classification:
+  - Data model/schema problem: `ProjectDetail` had become a god payload with
+    unrelated sections coupled to every project tab.
+  - UI communication/orientation problem: Work readiness depended on a slow,
+    overloaded detail object, making the user wait for unrelated orientation
+    material before the queue could be understood.
+  - Runtime/provider/infrastructure problem: the installed app repeatedly
+    transferred and recomputed heavyweight sections on a polling loop.
+- Fix:
+  - `/api/project?surface=work` now returns shared shell/action state, compact
+    task rows, work progress, orientation spine, task routing contexts, and
+    delivery queue only.
+  - The Work surface skips release readiness, git story, memory health, and
+    full delivery model/primitives/validation instead of computing and dropping
+    them after the fact.
+  - The Work delivery queue now carries compact task identity and primitive
+    references instead of duplicating full task records inside `runnable`,
+    `blocked`, and `firstRunnable`.
+  - The shared project store accepts a narrow `work` surface hint and coalesces
+    in-flight refreshes by project plus surface. `ProjectView` passes that hint
+    only when the active tab is Work, including interval refreshes.
+- Contract Touch Decision:
+  - Work id: `codex:work-surface-scoped-project-payload-2026-07-06`.
+  - Touched contracts: `GET /api/project` optional `surface=work` response
+    shape, shared project-store refresh signature, Work route project-refresh
+    behavior.
+  - Contracts considered but not touched: full/default `/api/project` response
+    shape, `/api/project/delivery-spine`, `/api/project/spine`,
+    `/api/project/git-story`, `/api/project/activity`, persisted project/task
+    schemas, scheduler action model.
+  - Required follow-up: continue splitting Overview/Map/Release/Thread into
+    surface-owned payloads or cached shared summaries where current code still
+    forces unrelated data through the base project refresh.
+  - Proof required: endpoint regression showing `surface=work` keeps queue and
+    shared shell state while omitting unrelated heavyweight sections; project
+    store regression showing Work requests the scoped payload; focused endpoint
+    and store tests; build/contract detector; installed-app stale proof and
+    live Looma + Knit timing/shape proof.
+  - Proof provided so far: focused red/green endpoint regression passed for
+    `surface=work`, including compact delivery-queue task identity;
+    project-store regression passed; focused endpoint/store/WorkTab/ProjectView
+    suite passed `192` tests; `node scripts/contract-touch-detector.mjs`,
+    `git diff --check`, and `node ./build.mjs` passed; installed app refreshed
+    and `/api/stale-server` returned `stale:false`; live Looma + Knit default
+    `/api/project` measured about `1.42 MB` with release readiness, git story,
+    memory health, and full delivery spine, while
+    `/api/project?surface=work` measured about `1.11 MB`, omitted those
+    sections, exposed only `deliverySpine.queue`, and reduced delivery queue
+    JSON from about `244 KB` to about `18 KB`; browser proof on
+    `/projects/looma-knit/work` rendered the Work view with the delivery queue,
+    `33 ready to resume`, `4 waiting on dependencies`, and selected scope
+    summary visible.
+  - Residual risk: Work still receives the full orientation spine
+    (`~516 KB`), compact task list (`~336 KB`), and routing contexts
+    (`~90 KB`). Those should be the next payload/model split targets before
+    calling Work-route loading solved.
+  - Waivers: default `/api/project` stays full for existing non-Work surfaces
+    until each route has a tested scoped payload.
+  - Apply/revert behavior: remove the `surface=work` branch and project-store
+    surface hint to return Work to the monolithic project-detail payload.
+
 2026-07-06T15:45:00Z - Clipped imported task titles are repaired as data, not display copy.
 
 - Work id: `codex:repair-clipped-imported-task-title-data-2026-07-06`.

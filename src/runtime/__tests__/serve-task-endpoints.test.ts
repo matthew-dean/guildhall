@@ -806,6 +806,48 @@ describe('GET /api/project/task/:id', () => {
     expect(detailBody.task?.reviewPlan?.effort).toBe('release_critical')
   })
 
+  it('keeps the Work-surface project payload scoped to queue and shared shell state', async () => {
+    await seedTask('task-storybook', {
+      title: 'Prove the menu primitive',
+      status: 'ready',
+      workKind: 'verification',
+      spec: '## Full worker handoff\n\nThis belongs on the task detail endpoint.',
+      acceptanceCriteria: [{ description: 'Storybook proof exists.' }],
+      evidence: [{ kind: 'command', summary: 'Verbose proof', output: 'x'.repeat(1000) }],
+    })
+    await writeProjectDeliveryModel(tmpDir, {
+      version: 1,
+      updatedAt: '2026-06-05T12:00:00.000Z',
+      drivers: [{ id: 'knit', label: 'Knit', role: 'primary' }],
+      primitives: [{
+        id: 'menu-item',
+        label: 'Menu item',
+        kind: 'ui_primitive',
+        status: 'proposed',
+        provingTaskIds: ['task-storybook'],
+      }],
+    })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const workRes = await app.fetch(new Request(projectUrl('/api/project?surface=work')))
+    const workBody = (await workRes.json()) as Record<string, any>
+
+    expect(workRes.status, workBody.error).toBe(200)
+    expect(workBody.tasks?.some((task: Record<string, any>) => task.id === 'task-storybook')).toBe(true)
+    expect(workBody.actionModel).toBeTruthy()
+    expect(workBody.startReadiness).toBeTruthy()
+    expect(workBody.orientationSpine).toBeTruthy()
+    expect(workBody.deliverySpine?.queue?.firstRunnable?.task?.id).toBe('task-storybook')
+    expect(workBody.deliverySpine?.queue?.firstRunnable?.task?.title).toBe('Prove the menu primitive')
+    expect(workBody.deliverySpine?.queue?.firstRunnable?.task?.spec).toBeUndefined()
+    expect(workBody.deliverySpine?.queue?.firstRunnable?.task?.evidence).toBeUndefined()
+    expect(workBody.deliverySpine?.model).toBeUndefined()
+    expect(workBody.deliverySpine?.primitives).toBeUndefined()
+    expect(workBody.releaseReadiness).toBeUndefined()
+    expect(workBody.gitStory).toBeUndefined()
+    expect(workBody.memoryHealth).toBeUndefined()
+  })
+
   it('derives terminal summaries from merge records on task detail and project rows', async () => {
     await seedTask('task-1', {
       status: 'done',
