@@ -62,6 +62,12 @@ task-worktree proof.
     flaw: Guildhall treated the same already-checkpointed dirty file as fresh
     progress on every tick, so it could keep incrementing checkpoint steps while
     the worker never added the missing proof artifacts or handed off to review.
+  - The next proof failure exposed a verification-summary modeling gap:
+    authoritative `npm run build` failed because Docusaurus found a broken link
+    from the generated dialogue reviewer doc to a missing proof fixture, but
+    the checkpoint only preserved the first output line
+    (`> narrative-harness@0.1.0 build`) instead of the actionable broken-link
+    error.
 - Fix:
   - Review dispatch now reconciles acceptance criteria from the latest worker
     self-critique before reviewer work starts, and persists that reconciliation
@@ -100,6 +106,10 @@ task-worktree proof.
   - If the dirty file set exactly matches the current checkpoint and the worker
     adds no verification, note, verdict, or new handoff evidence, Guildhall now
     treats that as no-progress instead of refreshing the same checkpoint again.
+  - Authoritative verification history now summarizes failed shell commands
+    from actionable error lines instead of the first output line, so checkpoints
+    and resume prompts preserve errors such as broken links, missing files, and
+    assertion failures.
 - Narrative Harness proof:
   - DeepInfra drafting model work is done and records
     `mistralai/Mistral-Small-3.2-24B-Instruct-2506` on DeepInfra for Stage 1
@@ -132,6 +142,9 @@ task-worktree proof.
     The same regression then reruns the unchanged dirty checkpoint and asserts
     the checkpoint step does not advance; Guildhall records a worker-progress
     no-progress note instead.
+  - Focused engine regression covers a Docusaurus broken-link failure and
+    asserts `current_task_verification_history` contains the broken-link target,
+    not just the npm script banner.
 - Contract Touch Decision:
   - Touched contracts: review dispatch preconditions, LLM-review verdict
     normalization, deterministic reviewer handoff semantics, recovered

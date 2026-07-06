@@ -5854,6 +5854,61 @@ Uncertainties: none`,
 
   })
 
+  it('preserves actionable failure lines for authoritative verification history', async () => {
+    const registry = new ToolRegistry()
+    registry.register(
+      defineTool({
+        name: 'shell',
+        description: '',
+        inputSchema: z.object({ command: z.string() }),
+        isReadOnly: () => true,
+        execute: async () => ({
+          output: [
+            '> narrative-harness@0.1.0 build',
+            '> docusaurus build',
+            '',
+            '[ERROR] Error: Unable to build website for locale en.',
+            'Docusaurus found broken links!',
+            '- Broken link on source page path = /coherence/dialogue-and-character-voice-reviewer:',
+            '   -> linking to ../harness/dialogue-and-character-voice-proof.md',
+          ].join('\n'),
+          is_error: true,
+          metadata: { success: false, exitCode: 1, executedCommand: 'npm run build' },
+        }),
+      }),
+    )
+    const toolMetadata: Record<string, unknown> = {
+      current_task_id: 'task-dialogue-reviewer',
+      current_task_verification_commands: ['npm run build'],
+    }
+    const client = new ScriptedApiClient([
+      { message: assistantToolUse('shell', { command: 'npm run build' }, 'shell-build') },
+      { message: assistantText('done') },
+    ])
+
+    await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 3,
+          toolMetadata,
+        },
+        [{ role: 'user', content: [{ type: 'text', text: 'go' }] }],
+      ),
+    )
+
+    const history = toolMetadata['current_task_verification_history'] as Array<{ summary?: string }>
+    expect(history.at(-1)?.summary).toContain('Docusaurus found broken links')
+    expect(history.at(-1)?.summary).toContain('../harness/dialogue-and-character-voice-proof.md')
+    expect(history.at(-1)?.summary).not.toBe('> narrative-harness@0.1.0 build')
+  })
+
   it('refuses shell commands that parse Guildhall task state files', async () => {
     let shellCalls = 0
     const registry = new ToolRegistry()

@@ -529,6 +529,21 @@ type VerificationHistoryEntry = {
   summary?: string
 }
 
+function verificationOutputSummary(output: string, succeeded: boolean): string {
+  const lines = output
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+  if (lines.length === 0) return ''
+  if (succeeded) return lines[0]!.slice(0, 240)
+
+  const actionable = lines.filter((line) =>
+    /error|failed|failure|broken link|unable to build|cannot find|not found|syntaxerror|typeerror|referenceerror|assertionerror|->/i.test(line),
+  )
+  const selected = actionable.length > 0 ? actionable : lines
+  return selected.slice(0, 8).join('\n').slice(0, 1200)
+}
+
 function verificationHistory(
   toolMetadata: Record<string, unknown> | undefined | null,
 ): VerificationHistoryEntry[] {
@@ -580,13 +595,13 @@ function rememberVerificationResult(
     authoritative.some((candidate) => candidate === command)
   if (!shouldTrack) return
 
-  const outputFirstLine = params.shellOutput.trim().split('\n')[0]?.trim() ?? ''
+  const outputSummary = verificationOutputSummary(params.shellOutput, params.shellSucceeded)
   const bucket = verificationHistory(toolMetadata)
   const nextEntry: VerificationHistoryEntry = {
     command,
     passed: params.shellSucceeded,
     observedAt: new Date().toISOString(),
-    ...(outputFirstLine ? { summary: outputFirstLine.slice(0, 240) } : {}),
+    ...(outputSummary ? { summary: outputSummary } : {}),
   }
   const filtered = bucket.filter((entry) => entry.command !== command)
   filtered.push(nextEntry)
