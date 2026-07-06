@@ -5048,63 +5048,65 @@ export class Orchestrator {
           const summary = hasLikelyTargets
             ? 'Worker timed out after failing to mutate the likely target file.'
             : 'Worker timed out after producing no visible progress.'
-          if (!hasLikelyTargets) {
-            const classification: FailureClassification = {
-              class: 'provider_unavailable',
-              confidence: 'medium',
-              evidence: [{
-                kind: 'task',
-                summary: 'Worker timed out before producing visible progress.',
-                ref: message,
-              }],
-              scope: 'task',
-              safePlaybooks: ['retry_current_task_context'],
-              needsHuman: false,
-            }
-            const recoveryPlan = resolveRecoveryPlan({
-              taskId: task.id,
-              classification,
-              notes: task.notes,
+          const classification: FailureClassification = {
+            class: hasLikelyTargets ? 'model_tool_use_failure' : 'provider_unavailable',
+            confidence: 'medium',
+            evidence: [{
+              kind: 'task',
+              summary: hasLikelyTargets
+                ? 'Worker timed out before mutating the likely target file.'
+                : 'Worker timed out before producing visible progress.',
+              ref: message,
+            }],
+            scope: 'task',
+            safePlaybooks: ['retry_current_task_context'],
+            needsHuman: false,
+          }
+          const recoveryPlan = resolveRecoveryPlan({
+            taskId: task.id,
+            classification,
+            notes: task.notes,
+          })
+          const now = this.now()
+          const queue = await this.readQueue()
+          const liveTask = queue.tasks.find((candidate) => candidate.id === task.id)
+          if (liveTask && liveTask.status === 'in_progress') {
+            appendFailureClassificationNote(liveTask, classification, {
+              agentId: 'coordinator',
+              timestamp: now,
             })
-            const now = this.now()
-            const queue = await this.readQueue()
-            const liveTask = queue.tasks.find((candidate) => candidate.id === task.id)
-            if (liveTask && liveTask.status === 'in_progress') {
-              appendFailureClassificationNote(liveTask, classification, {
-                agentId: 'coordinator',
-                timestamp: now,
-              })
-              appendRecoveryPlaybookNote(liveTask, recoveryPlan, {
-                agentId: 'coordinator',
-                timestamp: now,
-                status: 'started',
-                summary:
-                  'Worker timed out without visible progress after a retry. Guildhall kept this in provider recovery instead of asking the owner to choose retry or provider switch.',
-              })
-              liveTask.assignedTo = 'worker-agent'
-              liveTask.updatedAt = now
-              queue.lastUpdated = now
-              await this.writeQueue(queue)
-              this.likelyTargetWorkerTimeoutRetries.delete(retryKey)
-              if (typeof agent.resetConversation === 'function') {
-                agent.resetConversation()
-              }
-              await this.emitBackendEvent({
-                type: 'line_complete',
-                task_id: task.id,
-                agent_name: agent.name,
-                message:
-                  'Worker timed out without visible progress after a retry. Guildhall kept the task in provider recovery instead of surfacing a human blocker.',
-              })
-              return {
-                kind: 'processed',
-                taskId: task.id,
-                agent: 'coordinator-provider-recovery',
-                beforeStatus,
-                afterStatus: 'in_progress',
-                transitioned: false,
-                revisionCount: liveTask.revisionCount,
-              }
+            appendRecoveryPlaybookNote(liveTask, recoveryPlan, {
+              agentId: 'coordinator',
+              timestamp: now,
+              status: 'started',
+              summary: hasLikelyTargets
+                ? 'Worker timed out before mutating the likely target file after a retry. Guildhall kept this as model/tool-use recovery instead of asking the owner to choose retry, provider switch, or task narrowing.'
+                : 'Worker timed out without visible progress after a retry. Guildhall kept this in provider recovery instead of asking the owner to choose retry or provider switch.',
+            })
+            liveTask.assignedTo = 'worker-agent'
+            liveTask.updatedAt = now
+            queue.lastUpdated = now
+            await this.writeQueue(queue)
+            this.likelyTargetWorkerTimeoutRetries.delete(retryKey)
+            if (typeof agent.resetConversation === 'function') {
+              agent.resetConversation()
+            }
+            await this.emitBackendEvent({
+              type: 'line_complete',
+              task_id: task.id,
+              agent_name: agent.name,
+              message: hasLikelyTargets
+                ? 'Worker timed out before mutating the likely target file after a retry. Guildhall kept the task in model/tool-use recovery instead of surfacing a human blocker.'
+                : 'Worker timed out without visible progress after a retry. Guildhall kept the task in provider recovery instead of surfacing a human blocker.',
+            })
+            return {
+              kind: 'processed',
+              taskId: task.id,
+              agent: hasLikelyTargets ? 'coordinator-worker-recovery' : 'coordinator-provider-recovery',
+              beforeStatus,
+              afterStatus: 'in_progress',
+              transitioned: false,
+              revisionCount: liveTask.revisionCount,
             }
           }
           const escalation = await raiseEscalation({

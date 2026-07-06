@@ -14694,17 +14694,24 @@ describe('Orchestrator worker no-progress escalation', () => {
       .toContain('will retry once')
 
     const second = await orch.tick({ dispatchLimit: 1 })
-    expect(second.kind).toBe('escalated')
-    if (second.kind === 'escalated') {
-      expect(second.reason).toContain('timed out after 10ms')
+    expect(second.kind).toBe('processed')
+    if (second.kind === 'processed') {
+      expect(second.agent).toBe('coordinator-worker-recovery')
+      expect(second.afterStatus).toBe('in_progress')
+      expect(second.transitioned).toBe(false)
     }
 
     const task = await readEffectiveTaskFromQueue('task-012')
-    expect(task?.status).toBe('blocked')
-    expect(task?.escalations.length).toBe(1)
-    expect(task?.escalations[0]?.summary).toContain('Worker timed out after failing to mutate')
+    expect(task?.status).toBe('in_progress')
+    expect(task?.assignedTo).toBe('worker-agent')
+    expect(task?.blockReason).toBeUndefined()
+    expect(task?.escalations.length).toBe(0)
     expect(task?.notes.find((note) => note.role === 'policy-classification')?.content)
-      .toContain('"class":"provider_unavailable"')
+      .toContain('"class":"model_tool_use_failure"')
+    expect(task?.notes.find((note) => note.role === 'policy-classification')?.content)
+      .toContain('"needsHuman":false')
+    expect(task?.notes.find((note) => note.role === 'recovery-playbook')?.content)
+      .toContain('"playbook":"retry_current_task_context"')
   })
 
   it('enforces the default worker turn budget even when hidden stream events reset inactivity', async () => {

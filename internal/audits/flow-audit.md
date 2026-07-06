@@ -120,6 +120,10 @@ task-worktree proof.
     review can move the task to gate check, but it cannot erase unresolved
     command-red evidence; Guildhall must record a later passing gate or run the
     gate lane.
+  - Repeated clean worker timeouts before mutating likely target files now stay
+    in Guildhall-owned model/tool-use recovery instead of raising
+    owner-facing `human_judgment_required`. The task remains `in_progress`,
+    assigned to the worker, with `needsHuman:false` and a retry playbook.
 - Narrative Harness proof:
   - DeepInfra drafting model work is done and records
     `mistralai/Mistral-Small-3.2-24B-Instruct-2506` on DeepInfra for Stage 1
@@ -162,13 +166,17 @@ task-worktree proof.
     acceptance criteria plus a stale failed checkpoint verification. Guildhall
     now dispatches the gate checker instead of completing through the
     `approved-review-gates` shortcut.
+  - Focused likely-target timeout regression now asserts the second clean
+    worker timeout records `model_tool_use_failure`, `needsHuman:false`, and
+    `retry_current_task_context` instead of blocking the task.
 - Contract Touch Decision:
   - Touched contracts: review dispatch preconditions, LLM-review verdict
     normalization, deterministic reviewer handoff semantics, recovered
     current-scope work-unit acceptance wording, project action-model task
     ranking, release-scope selected/deferred projection, selected-scope
     inference from task release membership, worker no-progress recovery
-    accounting, review-only gate completion preconditions.
+    accounting, review-only gate completion preconditions, worker timeout
+    recovery classification.
   - Contracts considered but not touched: persisted task schema, persisted
     review-verdict schema, release schema, gate-result schema, worker artifact
     schema, checkpoint schema.
