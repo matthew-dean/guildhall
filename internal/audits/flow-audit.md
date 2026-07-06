@@ -115,6 +115,11 @@ task-worktree proof.
     from actionable error lines instead of the first output line, so checkpoints
     and resume prompts preserve errors such as broken links, missing files, and
     assertion failures.
+  - Review-only gate completion now refuses to close a task while the durable
+    worker checkpoint still records failed command verification. An approving
+    review can move the task to gate check, but it cannot erase unresolved
+    command-red evidence; Guildhall must record a later passing gate or run the
+    gate lane.
 - Narrative Harness proof:
   - DeepInfra drafting model work is done and records
     `mistralai/Mistral-Small-3.2-24B-Instruct-2506` on DeepInfra for Stage 1
@@ -153,16 +158,20 @@ task-worktree proof.
   - Focused engine regression covers a Docusaurus broken-link failure and
     asserts `current_task_verification_history` contains the broken-link target,
     not just the npm script banner.
+  - Focused gate regression covers an approving review with only review-backed
+    acceptance criteria plus a stale failed checkpoint verification. Guildhall
+    now dispatches the gate checker instead of completing through the
+    `approved-review-gates` shortcut.
 - Contract Touch Decision:
   - Touched contracts: review dispatch preconditions, LLM-review verdict
     normalization, deterministic reviewer handoff semantics, recovered
     current-scope work-unit acceptance wording, project action-model task
     ranking, release-scope selected/deferred projection, selected-scope
     inference from task release membership, worker no-progress recovery
-    accounting.
+    accounting, review-only gate completion preconditions.
   - Contracts considered but not touched: persisted task schema, persisted
     review-verdict schema, release schema, gate-result schema, worker artifact
-    schema.
+    schema, checkpoint schema.
   - Existing data impact: no migration. Existing worker self-critiques and
     task-worktree diffs are read as stronger review evidence when they directly
     contradict a "no concrete proof" reviewer response.

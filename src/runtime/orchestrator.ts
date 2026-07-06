@@ -8016,6 +8016,8 @@ export class Orchestrator {
     if (task.status !== 'gate_check') return null
     const effectiveTask = await this.hydrateEffectiveTaskForDispatch(task)
     if (!canCompleteGateCheckFromApprovedReviewOnly(effectiveTask)) return null
+    const checkpoint = await readCheckpoint(this.opts.config.memoryDir, task.id).catch(() => null)
+    if (checkpointHasRecordedVerificationFailure(checkpoint?.resumeContext?.verification ?? [])) return null
 
     return await this.completeGateCheckFromRecordedEvidence(task, {
       actor: 'approved-review-gates',

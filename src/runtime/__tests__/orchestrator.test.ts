@@ -7336,6 +7336,71 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
     expect(runtime.tasks.a?.assignedTo).toBeNull()
   })
 
+  it('does not complete review-only gate_check while checkpoint verification still records a failure', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'gate_check',
+        assignedTo: 'gate-checker-agent',
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          description: 'Reviewer confirmed the proof doc.',
+          verifiedBy: 'review',
+          met: false,
+        }],
+        reviewVerdicts: [{
+          verdict: 'approve',
+          reviewerPath: 'llm',
+          reason: 'Reviewer approved.',
+          reasoning: 'AC 1: Met.',
+          failingSignals: [],
+          recordedAt: '2026-07-04T10:07:21.557Z',
+        }],
+        gateResults: [],
+      }),
+    ])
+    await writeCheckpoint({
+      tasksPath,
+      memoryDir,
+      taskId: 'a',
+      agentId: 'worker-agent',
+      intent: 'Repair proof docs',
+      nextPlannedAction:
+        'Resume from the recorded verification evidence, rerun the focused verification commands, and fix whatever still fails.',
+      filesTouched: ['docs/coherence/dialogue-and-character-voice-reviewer.md'],
+      resumeContext: {
+        verification: [{
+          command: 'pnpm run build',
+          passed: false,
+          observedAt: '2026-07-04T10:07:00.000Z',
+          summary: 'Docusaurus found broken links.',
+        }],
+      },
+    })
+    const gc = stubAgent('gate-checker-agent', undefined, '')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ gateChecker: gc }),
+    })
+
+    const out = await orch.tick()
+
+    expect(gc.calls).toHaveLength(1)
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.beforeStatus).toBe('gate_check')
+      expect(out.afterStatus).toBe('gate_check')
+      expect(out.agent).toBe('gate-checker-agent')
+      expect(out.transitioned).toBe(false)
+    }
+    const queue = await readQueue()
+    expect(queue.tasks[0]!.status).toBe('gate_check')
+    expect(queue.tasks[0]!.notes.some(note =>
+      note.agentId === 'approved-review-gates' &&
+      /recorded approving review/.test(note.content),
+    )).toBe(false)
+  })
+
   it('repairs completed task evidence display from recorded passing hard gates', async () => {
     await writeQueue([
       mkTask({
