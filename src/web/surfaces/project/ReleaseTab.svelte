@@ -787,7 +787,7 @@
 
   .release-spine {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(220px, max-content);
+    grid-template-columns: minmax(18rem, 1fr) minmax(16rem, 0.75fr);
     gap: var(--gh-space-4);
     align-items: start;
   }
@@ -820,6 +820,7 @@
 
   .release-spine-side {
     justify-items: start;
+    max-inline-size: 36rem;
   }
 
   .release-spine-side button {
@@ -913,6 +914,16 @@
     padding: 0;
     text-align: left;
     text-decoration: underline;
+  }
+
+  @container (max-width: 760px) {
+    .release-spine {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .release-spine-side {
+      max-inline-size: none;
+    }
   }
 
   .notice-link {

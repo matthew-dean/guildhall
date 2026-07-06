@@ -19,6 +19,8 @@ function hasShapingRequest(task: Task): boolean {
 }
 
 export function hasWorkspaceImportProvenance(task: Task): boolean {
+  if (task.requestIntake?.createdBy === 'workspace-importer') return true
+  if (task.requestIntake?.evidenceRefs?.some(ref => /^import:/.test(ref))) return true
   return noteArray(task).some((note) =>
     note?.role === 'importer' ||
     note?.agentId === 'workspace-importer' ||

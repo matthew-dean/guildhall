@@ -1464,6 +1464,7 @@ async function repairStoppedRunPhantomActiveTasks(projectPath: string): Promise<
   if (repaired > 0) {
     queue.lastUpdated = now
     writeManagedTextFileSync(tasksPath, JSON.stringify(queue, null, 2) + '\n')
+    invalidateTaskQueueReadCaches(tasksPath)
   }
   return repaired
 }
@@ -1610,6 +1611,7 @@ async function repairLegacyNoCheckpointProviderRecoveryPlans(projectPath: string
   if (repaired > 0) {
     queue.lastUpdated = now
     writeManagedTextFileSync(tasksPath, JSON.stringify(queue, null, 2) + '\n')
+    invalidateTaskQueueReadCaches(tasksPath)
   }
   return repaired
 }
@@ -1693,6 +1695,7 @@ async function repairImportedShapingExecutionState(projectPath: string): Promise
   if (repaired > 0) {
     queue.lastUpdated = now
     writeManagedTextFileSync(tasksPath, JSON.stringify(queue, null, 2) + '\n')
+    invalidateTaskQueueReadCaches(tasksPath)
   }
   return repaired
 }
@@ -1741,6 +1744,7 @@ async function repairSpecTimeoutBlockedTask(projectPath: string, requestedTaskId
   task.notes = notes
   queue.lastUpdated = now
   writeManagedTextFileSync(tasksPath, JSON.stringify(queue, null, 2) + '\n')
+  invalidateTaskQueueReadCaches(tasksPath)
   await upsertTaskRuntimeState(projectPath, requestedTaskId, {
     assignedTo: null,
     openEscalationIds: [],

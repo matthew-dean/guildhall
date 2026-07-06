@@ -11,6 +11,7 @@ import {
 import type { Task, TaskQueue } from '@guildhall/core'
 import { TaskQueue as TaskQueueSchema } from '@guildhall/core'
 import { writeProjectTaskQueue } from './project-state-boundary.js'
+import { normalizeLegacyTaskQueueShape } from './task-queue-compat.js'
 
 export interface StaleBlockerRepair {
   taskId: string
@@ -216,7 +217,8 @@ export function repairStaleBlockersForProject(projectPath: string): StaleBlocker
   const tasksPath = getProjectSystemStatePath(projectPath, 'TASKS.json')
   if (!existsSync(tasksPath)) return { changed: false, repairs: [] }
 
-  const queue = TaskQueueSchema.parse(JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')))
+  const rawQueue = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8'))
+  const queue = TaskQueueSchema.parse(normalizeLegacyTaskQueueShape(rawQueue))
   const result = repairStaleBlockersInQueue(queue)
   if (result.changed) {
     writeProjectTaskQueue(tasksPath, queue)
@@ -269,7 +271,8 @@ async function reconcileAlreadyRepairedRuntimeState(projectPath: string): Promis
   const tasksPath = getProjectSystemStatePath(projectPath, 'TASKS.json')
   if (!existsSync(tasksPath)) return
 
-  const queue = TaskQueueSchema.parse(JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')))
+  const rawQueue = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8'))
+  const queue = TaskQueueSchema.parse(normalizeLegacyTaskQueueShape(rawQueue))
   const runtimeStore = await readTaskRuntimeStore(projectPath)
 
   for (const task of queue.tasks) {

@@ -109,6 +109,12 @@
       ? 'Current release'
       : 'Current scope',
   )
+  const releaseWorkComplete = $derived.by(() => {
+    const totals = releaseReadiness?.totals
+    if (!totals) return Boolean(releaseReadiness?.ready)
+    const taskCount = totals.tasks ?? 0
+    return taskCount > 0 && (totals.done ?? 0) >= taskCount && (totals.unfinishedCount ?? 0) === 0 && (totals.humanBlockingCount ?? 0) === 0
+  })
   const releaseReadinessTone = $derived<Tone>(
     releaseReadiness?.ready
       ? 'ok'
@@ -129,6 +135,8 @@
     ].filter(Boolean)
     return pieces.length ? pieces.join(' · ') : 'No release blockers reported.'
   })
+  const releaseReadinessChipLabel = $derived(releaseReadiness?.ready ? 'Complete' : releaseWorkComplete ? 'Work complete' : 'Not complete')
+  const releaseReadinessChipTone = $derived<Tone>(releaseReadiness?.ready || releaseWorkComplete ? 'ok' : releaseReadinessTone === 'warn' ? 'warn' : 'neutral')
   const releaseGitBlockers = $derived((releaseReadiness?.gitStory?.blockers ?? []).slice(0, 2))
   const primaryProofPaths = $derived.by(() => {
     return tasks
@@ -1034,11 +1042,11 @@
           <CardList className="release-readiness-list">
             <CardListItem
               as="button"
-              tone={releaseReadinessTone === 'warn' ? 'warn' : releaseReadinessTone === 'ok' ? 'ok' : 'neutral'}
+              tone={releaseReadinessChipTone}
               railStrength="strong"
               onclick={() => go(currentProjectHref('/release', activeProjectId))}
             >
-              <Chip label={releaseReadiness?.ready ? 'Complete' : 'Not complete'} tone={releaseReadinessTone === 'warn' ? 'warn' : releaseReadinessTone === 'ok' ? 'ok' : 'neutral'} />
+              <Chip label={releaseReadinessChipLabel} tone={releaseReadinessChipTone} />
               <div>
                 <strong>{releaseReadinessLabel}</strong>
                 <p>{releaseReadinessProgress}</p>

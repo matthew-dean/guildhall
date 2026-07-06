@@ -28,6 +28,10 @@ interface TaskLike {
   productBrief?: TaskBriefLike | null
   acceptanceCriteria?: unknown[]
   taskReadiness?: TaskReadinessLike
+  requestIntake?: {
+    createdBy?: string
+    evidenceRefs?: unknown[]
+  }
 }
 
 export function taskShapingBlockers(task: TaskLike): TaskShapingBlocker[] {
@@ -61,6 +65,8 @@ function isTerminalTaskStatus(status: string | undefined): boolean {
 }
 
 function hasWorkspaceImportProvenance(task: TaskLike): boolean {
+  if (task.requestIntake?.createdBy === 'workspace-importer') return true
+  if (task.requestIntake?.evidenceRefs?.some(ref => typeof ref === 'string' && /^import:/.test(ref))) return true
   return (task.notes ?? []).some(note =>
     note?.role === 'importer' ||
     note?.agentId === 'workspace-importer' ||

@@ -200,6 +200,59 @@ describe('ProjectOverviewTab', () => {
     expect(screen.getByText(/Knit: main/)).toBeInTheDocument()
   })
 
+  it('separates completed release work from repository follow-up blockers', () => {
+    render(ProjectOverviewTab, {
+      detail: {
+        id: 'narrative-harness',
+        name: 'Narrative Harness',
+        path: '/Users/matthew/git/oss/narrative-harness',
+        tasks: [],
+        releaseReadiness: {
+          release: { id: 'near-term-proof-scope', label: 'Near-term proof scope', kind: 'scope', state: 'active', source: 'current_scope' },
+          scope: { id: 'near-term-proof-scope', label: 'Near-term proof scope', kind: 'scope', state: 'active', source: 'current_scope' },
+          ready: false,
+          notReadyReason: 'Repository follow-up required.',
+          totals: {
+            tasks: 14,
+            done: 14,
+            unfinishedCount: 0,
+            humanBlockingCount: 0,
+            gitStoryBlockingCount: 1,
+            dirtyCheckoutBlockingCount: 0,
+          },
+          gitStory: {
+            ready: false,
+            state: 'ahead_unpushed',
+            blockers: [{
+              id: 'repo:narrative-harness',
+              label: 'main',
+              state: 'ahead_unpushed',
+              reason: 'main has 6 local commits not pushed to origin/main.',
+              nextAction: 'Push the local commits or mark them intentionally local.',
+            }],
+            snapshots: [{ repoId: 'narrative-harness', repoLabel: 'Narrative Harness', state: 'ahead_unpushed' }],
+          },
+        },
+      },
+      inboxLoaded: true,
+      inboxItems: [],
+      projectTicker: {
+        label: 'Not running',
+        actorLabel: 'Guildhall',
+        message: 'Project is waiting.',
+        tone: 'idle',
+        pulse: false,
+      },
+      activeProjectId: 'narrative-harness',
+    })
+
+    expect(screen.getByText('Work complete')).toBeInTheDocument()
+    expect(screen.queryByText('Not complete')).not.toBeInTheDocument()
+    expect(screen.getByText('Near-term proof scope')).toBeInTheDocument()
+    expect(screen.getByText(/14 \/ 14 done/)).toBeInTheDocument()
+    expect(screen.getByText(/main has 6 local commits not pushed to origin\/main/)).toBeInTheDocument()
+  })
+
   it('labels proof waits as waiting instead of blocking when scoped blocked count is zero', () => {
     const { container } = render(ProjectOverviewTab, {
       detail: {
