@@ -365,14 +365,18 @@ export function buildWorkspaceImportReview(
       return a.label.localeCompare(b.label)
     })
 
-  const summary = {
-    currentMilestoneLabel,
-    releaseScopeLabel,
-    headline: currentMilestoneLabel
+  const headline = releaseScopeLabel
+    ? `${releaseScopeLabel} is the current documented scope.`
+    : currentMilestoneLabel
       ? `${currentMilestoneLabel} is the current scoped milestone.`
       : currentTaskCount > 0
         ? `Guildhall found ${currentTaskCount} current task${currentTaskCount === 1 ? '' : 's'} in the documented scope.`
-        : 'Guildhall did not find current implementation tasks in the documented scope.',
+        : 'Guildhall did not find current implementation tasks in the documented scope.'
+
+  const summary = {
+    currentMilestoneLabel,
+    releaseScopeLabel,
+    headline,
     currentScope: currentTaskCount > 0
       ? `The current docs name ${currentTaskCount} task${currentTaskCount === 1 ? '' : 's'} to work on now.`
       : briefInputCount > 0 || capabilityCount > 0

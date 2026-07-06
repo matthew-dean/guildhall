@@ -8,6 +8,47 @@ help_summary: |
 
 # Web UI flow audit
 
+2026-07-06T19:00:14Z - Workspace Import review headline follows the current work scope, not the first stage context.
+
+- Work id: `codex:workspace-import-current-scope-headline-2026-07-06`.
+- User job: When Guildhall imports a roadmap with multiple stages/releases,
+  the review summary should name the scope that actually owns the current work.
+  Context stages can remain visible, but they must not override the current
+  release/scope label.
+- Escaped live failure:
+  - Narrative Harness draft review reported
+    `currentMilestoneLabel:"Stage 0: Spec Baseline"` and
+    `releaseScopeLabel:"Stage 1: Headless Drafting And Evaluation MVP"`.
+  - The headline chose Stage 0, so the review claimed the spec baseline was
+    the current scoped milestone even though the current tasks are assigned to
+    Stage 1.
+- Root-cause classification:
+  - Project structure/scope/release modeling problem: context stage headings
+    and current task release containers were both present, but summary
+    precedence favored context over the actual current work boundary.
+  - UI communication/orientation problem: the first sentence of the owner
+    review contradicted the task/release structure Guildhall had already
+    recovered.
+- Fix:
+  - `buildWorkspaceImportReview` now uses the current release/scope label for
+    the review headline when one exists, while still carrying
+    `currentMilestoneLabel` as supporting context.
+- Verification:
+  - Red test first:
+    `CI=true pnpm exec vitest run src/runtime/__tests__/workspace-import-review.test.ts -t "groups sources"`
+    failed because the headline still contained `Stage 1: Current MVP`
+    instead of `V1 Release Hardening`.
+  - After the fix, `CI=true pnpm exec vitest run src/runtime/__tests__/workspace-import-review.test.ts`
+    passed.
+  - Real Narrative Harness proof after `CI=true pnpm build`:
+    `node dist/cli.js workspace-import draft narrative-harness --json`
+    now reports headline
+    `Stage 1: Headless Drafting And Evaluation MVP is the current documented scope.`
+  - Installed app proof after `CI=true pnpm dev:install` and
+    `guildhall stop && guildhall start`: `/api/stale-server` returned
+    `stale:false` for PID `65612` from
+    `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+
 2026-07-06T18:56:32Z - Workspace Import task review shows proof expectations before approval.
 
 - Work id: `codex:workspace-import-proof-expectations-visible-2026-07-06`.

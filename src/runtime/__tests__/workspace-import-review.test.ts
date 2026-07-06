@@ -129,7 +129,7 @@ describe('buildWorkspaceImportReview', () => {
       capabilityCount: 1,
       capabilityRecordCount: 1,
     })
-    expect(review.summary.headline).toContain('Stage 1: Current MVP')
+    expect(review.summary.headline).toContain('V1 Release Hardening')
     expect(review.summary.currentScope).toContain('2 tasks')
     expect(review.summary.deferredScope).toContain('1 later/deferred task')
     expect(review.summary.structuralScope).toContain('0 brief records')
