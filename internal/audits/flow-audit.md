@@ -15268,7 +15268,8 @@ prevents read-only retry loops after likely-target worker timeouts.
     mode it was meant to repair.
 - Fix:
   - `retry_current_task_context` now allows only `edit-file`,
-    `run-shell-command`, `write-checkpoint`, and `raise-escalation`.
+    `write-checkpoint`, and `raise-escalation`; `read-file` and shell are both
+    excluded because shell can be used as a read-only escape hatch.
   - `resume_from_checkpoint` and `rebootstrap_project` keep their existing
     read allowance because those playbooks are explicitly about a bounded
     checkpoint/bootstrap surface.
