@@ -161,7 +161,7 @@ describe('ProjectOverviewTab', () => {
                 label: 'Looma: codex/component-audit-roadmap',
                 state: 'pushed',
                 reason: 'codex/component-audit-roadmap is pushed.',
-                nextAction: 'Open a PR or mark this pushed branch as the intended closure.',
+                nextAction: 'Open a PR or mark this pushed branch as the intended repository state.',
               },
               {
                 id: 'repo:knit',
@@ -196,7 +196,6 @@ describe('ProjectOverviewTab', () => {
     expect(screen.getByText('Stage 1: V1 Release Hardening')).toBeInTheDocument()
     expect(screen.getByText(/0 \/ 9 done/)).toBeInTheDocument()
     expect(screen.getByText(/9 unfinished/)).toBeInTheDocument()
-    expect(screen.getByText(/2 git blockers/)).toBeInTheDocument()
     expect(screen.getByText(/Looma: codex\/component-audit-roadmap/)).toBeInTheDocument()
     expect(screen.getByText(/Knit: main/)).toBeInTheDocument()
   })

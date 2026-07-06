@@ -341,7 +341,7 @@ function gitStoryTitle(state: string, reason: string | undefined): string {
   if (text.includes('fatal: not a git repository') || text.includes('spawn git enoent')) {
     return 'Guildhall could not inspect the configured repository boundary with git.'
   }
-  return reason ?? 'Git story needs closure.'
+  return reason ?? 'Repository follow-up.'
 }
 
 export function summarizeProjectCard(
@@ -590,7 +590,7 @@ function gitStoryLabel(state: string): string {
     case 'deferred': return 'Deferred'
     case 'conflict': return 'Git conflict'
     case 'unknown': return 'Git unknown'
-    default: return 'Git story'
+    default: return 'Repository'
   }
 }
 

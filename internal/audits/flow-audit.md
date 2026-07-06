@@ -14411,6 +14411,80 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-07-06T06:49:19Z - Separated repository follow-ups from scoped release
+completion.
+
+- Work id: `codex:repository-followup-release-readiness-2026-07-06`.
+- User job: when Narrative Harness has consumed every task in the current
+  scoped release, Guildhall should say the scoped work is complete while still
+  making repository follow-up visible. An unpushed local commit is a repository
+  action, not evidence that the current release tasks are unfinished.
+- Root-cause classification:
+  - data-model/read-model problem: release readiness counted git-story blockers
+    inside the same `blockingCount` used for unfinished work, missing proof,
+    design-system blockers, dirty checkouts, and owner input.
+  - UI communication/orientation problem: Overview could say the scope was
+    complete at the top while the current release card said `Not complete`
+    because `1 git blocker` was folded into release progress.
+  - taxonomy problem: owner-facing `Git story needs closure` copy made a
+    normal repository follow-up feel like an arbitrary product phase.
+- Fix:
+  - `/api/project/release-readiness` now keeps repository follow-up count in
+    `totals.gitStoryBlockingCount` but does not fold it into
+    `totals.blockingCount` or `ready`.
+  - Overview, Release, Thread, Provenance, and summary-copy helpers now call
+    these items `Repository follow-up` / `Repository state`, keeping the action
+    visible without saying the release itself is incomplete.
+  - Overview release progress now reports task completion only; repository
+    follow-up appears in the signal/action area.
+- Contract Touch Decision:
+  - Work id: `codex:repository-followup-release-readiness-2026-07-06`.
+  - Touched contracts: `/api/project/release-readiness` readiness semantics,
+    Overview current-release summary semantics, Release verdict semantics,
+    Thread/Provenance repository-state labels, shared project-summary copy.
+  - Contracts considered but not touched: persisted task schema, persisted
+    release schema, git-story persisted state, selected task scope projection,
+    workspace import state. Existing git-story blockers remain in the payload
+    and remain actionable; only their effect on scoped-release readiness
+    changes.
+  - Required follow-up: installed-app API and browser proof against Narrative
+    Harness must show the current scoped release as complete with a separate
+    repository follow-up for the unpushed local commit.
+  - Proof required: focused release-readiness/API tests, Overview/Release
+    component tests, contract detector, diff check, build, installed-app API
+    proof, browser proof on Narrative Harness Overview/Release.
+  - Proof provided so far: focused tests for task shaping blockers, release
+    readiness, Overview, and Release passed `78` tests before this decision was
+    recorded.
+  - Completed proof: after `node ./build.mjs`, macOS package reinstall,
+    `guildhall stop; guildhall start`, and `/api/stale-server` reporting
+    `stale:false` for PID `97040`, installed
+    `/api/project/release-readiness?projectId=narrative-harness` returned
+    `ready:true`, `tasks:9`, `done:9`, `blockingCount:0`, and
+    `gitStoryBlockingCount:1`. Installed
+    `/api/project?projectId=narrative-harness` returned
+    `startReadiness.code:"all_terminal"` with `Stage 1 Fixture And Evaluation
+    Harness is complete.` and still exposed pending spec-fill items for
+    `Select and prove DeepInfra drafting model`, `Define world-state
+    continuity review lane`, and `Define spatial/geographic continuity review
+    lane`.
+  - Browser proof: installed Overview at desktop `1280x720` showed the Stage 1
+    complete headline, `9 / 9 done`, `Repository follow-up`, and the unpushed
+    `main` reason with no `Not complete`, `git blocker`, `Git stories`, or
+    `Git story needs closure` copy and no horizontal overflow. Installed
+    Release at desktop `1280x720` and mobile `390x720` showed `Ready`,
+    `9/9 tasks done`, `0 open release checks`, and the same repository
+    follow-up separately, again with no old git-story release-blocker language
+    and no horizontal overflow.
+  - Owner-review items: none. This matches the owner rule that a release can be
+    complete while repository integration still needs a visible follow-up.
+  - Apply/revert behavior: reverting the release-readiness count and UI copy
+    restores the previous behavior where repository follow-up makes the
+    selected release read as incomplete; no data rollback is required.
+- Schema Migration Decision: none. This is a read-model and presentation
+  semantics change only; no persisted project, task, release, or git-story
+  fields are added, removed, or rewritten.
+
 2026-07-06T05:01:46Z - Fixed worker recovery ticks that falsely reported
 `(no change)` while Guildhall had preserved real progress or recorded a
 runtime recovery action.

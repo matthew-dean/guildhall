@@ -11285,14 +11285,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
         ? 1
         : 0
     const dirtyCheckoutBlockingCount = dirtyCheckout.ownedCount > 0 || dirtyCheckout.error ? 1 : 0
-    const gitStoryBlockingCount = gitStory.blockers.length
+    const repositoryFollowupCount = gitStory.blockers.length
     const blockingCount =
       humanBlockingCount
       + unfinishedCount
       + proofMissingDoneTasks.length
       + designSystemBlockingCount
       + dirtyCheckoutBlockingCount
-      + gitStoryBlockingCount
 
     return {
       release,
@@ -11319,7 +11318,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         unfinishedCount,
         designSystemBlockingCount,
         dirtyCheckoutBlockingCount,
-        gitStoryBlockingCount,
+        gitStoryBlockingCount: repositoryFollowupCount,
         done: statusCounts['done'] ?? 0,
       },
     }

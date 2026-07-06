@@ -114,7 +114,6 @@
       ? 'ok'
       : (releaseReadiness?.totals?.blockingCount ?? 0) > 0
         || (releaseReadiness?.totals?.unfinishedCount ?? 0) > 0
-        || (releaseReadiness?.totals?.gitStoryBlockingCount ?? 0) > 0
           ? 'warn'
           : 'neutral',
   )
@@ -127,7 +126,6 @@
       `${done} / ${total} done`,
       totals.unfinishedCount ? `${totals.unfinishedCount} unfinished` : null,
       totals.humanBlockingCount ? `${totals.humanBlockingCount} ${totals.humanBlockingCount === 1 ? 'needs you' : 'need you'}` : null,
-      totals.gitStoryBlockingCount ? `${totals.gitStoryBlockingCount} git ${totals.gitStoryBlockingCount === 1 ? 'blocker' : 'blockers'}` : null,
     ].filter(Boolean)
     return pieces.length ? pieces.join(' · ') : 'No release blockers reported.'
   })
@@ -364,15 +362,15 @@
     const gitBlockers = detail.gitStory?.blockers ?? []
     if (gitBlockers.length > 0) {
       items.push({
-        label: 'Git story needs closure',
+        label: 'Repository follow-up',
         detail: friendlyBlockerText(gitBlockers[0]?.reason ?? gitBlockers[0]?.label ?? `${gitBlockers.length} git ${gitBlockers.length === 1 ? 'item' : 'items'} need attention.`),
         tone: 'warn',
         href: currentProjectHref('/release', activeProjectId),
       })
     } else if (detail.gitStory?.ready) {
       items.push({
-        label: 'Git story clear',
-        detail: 'No git closure blockers are currently reported.',
+        label: 'Repository clear',
+        detail: 'No repository follow-ups are currently reported.',
         tone: 'ok',
         href: currentProjectHref('/release', activeProjectId),
       })
@@ -851,7 +849,7 @@
     const inbox = inboxItems.find(item => item.taskId === task.id || item.title === task.title)
 
     if (/provider|oauth|api key|model|fallback|stripe|supabase auth/.test(haystack)) return 'Provider settings'
-    if (/git|branch|commit|push|dirty|merge/.test(haystack)) return 'Git story closure'
+    if (/git|branch|commit|push|dirty|merge/.test(haystack)) return 'Repository follow-up'
     if (/bootstrap|readiness|database|migration|db\b/.test(haystack)) return 'Project readiness / bootstrap'
     if ((task.dependsOn ?? []).length > 0 || referencesAnotherTask(task, haystack)) return 'Dependencies'
     if (inbox?.missingSteps?.length) return 'Missing prerequisite'
@@ -1058,8 +1056,8 @@
               >
                 <Icon name="git-branch" size={16} />
                 <div>
-                  <strong>{blocker.label ?? 'Git story needs closure'}</strong>
-                  <p>{friendlyBlockerText(blocker.reason ?? blocker.nextAction ?? 'Review the git story before this scope can close.')}</p>
+                  <strong>{blocker.label ?? 'Repository follow-up'}</strong>
+                  <p>{friendlyBlockerText(blocker.reason ?? blocker.nextAction ?? 'Review the repository follow-up for this scope.')}</p>
                 </div>
               </CardListItem>
             {/each}

@@ -2262,7 +2262,7 @@
       case 'deferred': return 'Deferred'
       case 'conflict': return 'Conflict'
       case 'unknown': return 'Unknown'
-      default: return 'Git story'
+      default: return 'Repository'
     }
   }
 
@@ -2282,7 +2282,7 @@
   }
 
   function gitStorySummary(story: GitStorySnapshot): string {
-    return story.reason ?? story.nextAction ?? 'Git story needs closure.'
+    return story.reason ?? story.nextAction ?? 'Repository follow-up needed.'
   }
 
   function metaIntakeChecklistComplete(turn: InFlightTurn): boolean {
@@ -3756,7 +3756,7 @@
                 {/if}
               {/snippet}
               {#if !isHistoricalTaskEvent(t) && gitStoryVisible(t) && 'gitStory' in t && t.gitStory}
-                <div class="git-story-callout" aria-label="Git story">
+                <div class="git-story-callout" aria-label="Repository state">
                   <div class="git-story-main">
                     <Chip label={gitStoryLabel(t.gitStory)} tone={gitStoryTone(t.gitStory)} />
                     <span>{gitStorySummary(t.gitStory)}</span>
@@ -5143,7 +5143,7 @@
                           {/if}
 
                           {#if gitStoryVisible(activeDockTurn) && activeDockTurn.gitStory}
-                            <div class="git-story-callout" aria-label="Git story">
+                            <div class="git-story-callout" aria-label="Repository state">
                               <div class="git-story-main">
                                 <Chip label={gitStoryLabel(activeDockTurn.gitStory)} tone={gitStoryTone(activeDockTurn.gitStory)} />
                                 <span>{gitStorySummary(activeDockTurn.gitStory)}</span>

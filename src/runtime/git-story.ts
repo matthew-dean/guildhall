@@ -99,7 +99,7 @@ export function gitStoryStateLabel(state: GitStoryClosureState): string {
 export function nextActionForGitStory(state: GitStoryClosureState): string {
   switch (state) {
     case 'clean':
-      return 'No git closure action needed.'
+      return 'No repository follow-up needed.'
     case 'dirty_uncommitted':
       return 'Review the diff, then commit or mark the work local-only/deferred.'
     case 'committed_local':
@@ -107,15 +107,15 @@ export function nextActionForGitStory(state: GitStoryClosureState): string {
     case 'no_upstream':
       return 'Set an upstream branch or open a PR for this branch.'
     case 'pushed':
-      return 'Open a PR or mark this pushed branch as the intended closure.'
+      return 'Open a PR or mark this pushed branch as the intended repository state.'
     case 'pr_open':
       return 'Review and merge the open PR when it is ready.'
     case 'merged':
-      return 'No git closure action needed.'
+      return 'No repository follow-up needed.'
     case 'local_only':
       return 'No release blocker; work is intentionally local.'
     case 'deferred':
-      return 'No immediate action; git closure was intentionally deferred.'
+      return 'No immediate action; repository follow-up was intentionally deferred.'
     case 'conflict':
       return 'Resolve the git conflict before calling this work closed.'
     case 'unknown':
@@ -150,7 +150,7 @@ export function reasonForGitStorySnapshot(input: {
     case 'local_only':
       return input.overrideReason ? `Marked local-only: ${input.overrideReason}` : 'Marked local-only.'
     case 'deferred':
-      return input.overrideReason ? `Deferred: ${input.overrideReason}` : 'Git closure deferred.'
+      return input.overrideReason ? `Deferred: ${input.overrideReason}` : 'Repository follow-up deferred.'
     case 'conflict':
       return 'A merge or landing conflict needs human attention.'
     case 'unknown':

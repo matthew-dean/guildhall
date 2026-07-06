@@ -272,7 +272,7 @@
       }
     }
     return {
-      label: repoAwareGitLabel(blocker, blocker.reason ?? blocker.label ?? blocker.state ?? 'Git story needs closure.'),
+      label: repoAwareGitLabel(blocker, blocker.reason ?? blocker.label ?? blocker.state ?? 'Repository follow-up.'),
       detail: blocker.nextAction ?? (blocker.label && blocker.reason ? blocker.reason : ''),
     }
   }
@@ -371,13 +371,6 @@
         reason: 'Could not inspect the project checkout.',
       }
     }
-    if (gitStoryBlockers.length > 0) {
-      return {
-        label: 'Blocked',
-        tone: 'warn' as const,
-        reason: `${gitStoryBlockers.length} git stor${gitStoryBlockers.length === 1 ? 'y needs' : 'ies need'} closure.`,
-      }
-    }
     if (designSystemBlockingCount > 0) {
       return {
         label: 'Blocked',
@@ -400,8 +393,8 @@
         ? {
           title: hasNamedRelease ? 'Release checks' : 'Scope checks',
           description: hasNamedRelease
-            ? 'Expand any row to inspect the tasks, approvals, or Git stories still keeping the current release from being ready.'
-            : 'Expand any row to inspect the tasks, approvals, or Git stories still keeping the current task scope from being ready.',
+            ? 'Expand any row to inspect the tasks, approvals, checkout state, and repository follow-ups for the current release.'
+            : 'Expand any row to inspect the tasks, approvals, checkout state, and repository follow-ups for the current task scope.',
         }
       : {
           title: readinessTitle,
@@ -451,7 +444,7 @@
   </NoticeBand>
 {:else if !data}
   <NoticeBand tone="neutral" role="status" label="Release" title="Loading release checks">
-    <p>Collecting task status, approvals, Git stories, and checkout state…</p>
+    <p>Collecting task status, approvals, repository follow-ups, and checkout state…</p>
   </NoticeBand>
 {:else}
   <div class="release-shell">
@@ -551,9 +544,9 @@
           {/if}
           {#if data.gitStory}
             <div class="summary-stat">
-              <span class="summary-label">Git story</span>
+              <span class="summary-label">Repository follow-up</span>
               <StatusPill
-                label={gitStoryBlockers.length > 0 ? `${gitStoryBlockers.length} unresolved` : 'closed'}
+                label={gitStoryBlockers.length > 0 ? `${gitStoryBlockers.length} open` : 'clear'}
                 tone={gitStoryBlockers.length > 0 ? 'warn' : 'ok'}
               />
             </div>
@@ -571,9 +564,9 @@
         {/if}
         {#if gitStoryBlockers.length > 0}
           <div class="git-story-detail">
-            <strong>Git story needs closure</strong>
+            <strong>Repository follow-up</strong>
             {#if gitStoryBlockers.length > visibleGitStoryBlockers.length}
-              <p class="muted">Showing {visibleGitStoryBlockers.length} of {gitStoryBlockers.length} git stories.</p>
+              <p class="muted">Showing {visibleGitStoryBlockers.length} of {gitStoryBlockers.length} repository follow-ups.</p>
             {/if}
             <ul>
               {#each visibleGitStoryBlockers as blocker, index (`${blocker.id ?? 'git'}:${index}`)}
@@ -649,9 +642,9 @@
             <details class="crit-det" open={false}>
               <summary class="crit-summary" aria-disabled={gitStoryBlockers.length === 0}>
                 <span class="crit-copy">
-                  <span class="crit-label">Git story</span>
+                  <span class="crit-label">Repository follow-up</span>
                   <span class="crit-detail">
-                    {gitStoryBlockers.length === 0 ? 'No unresolved git stories.' : `${gitStoryBlockers.length} unresolved git stor${gitStoryBlockers.length === 1 ? 'y' : 'ies'}.`}
+                    {gitStoryBlockers.length === 0 ? 'No repository follow-ups.' : `${gitStoryBlockers.length} repository follow-up${gitStoryBlockers.length === 1 ? '' : 's'}.`}
                   </span>
                 </span>
                 <StatusPill
@@ -661,7 +654,7 @@
               </summary>
               {#if gitStoryBlockers.length > 0}
                 {#if gitStoryBlockers.length > visibleGitStoryBlockers.length}
-                  <p class="muted">Showing {visibleGitStoryBlockers.length} of {gitStoryBlockers.length} git stories.</p>
+                  <p class="muted">Showing {visibleGitStoryBlockers.length} of {gitStoryBlockers.length} repository follow-ups.</p>
                 {/if}
                 <ul class="crit-items">
                   {#each visibleGitStoryBlockers as blocker, index (`${blocker.id ?? 'git'}:${index}`)}

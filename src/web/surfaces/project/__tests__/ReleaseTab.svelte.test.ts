@@ -387,7 +387,7 @@ describe('ReleaseTab', () => {
     expect(screen.queryByText('Project checkout clean.')).toBeNull()
   })
 
-  it('caps the visible Git Story blocker list and keeps the full count', async () => {
+  it('caps the visible repository follow-up list and keeps the full count', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () =>
@@ -409,13 +409,13 @@ describe('ReleaseTab', () => {
     render(ReleaseTab, { props: { subView: 'criteria' } })
 
     expect(await screen.findByText('Scope checks')).toBeTruthy()
-    expect(screen.getByText('9 unresolved git stories.')).toBeTruthy()
-    expect(screen.getByText('Showing 5 of 9 git stories.')).toBeTruthy()
+    expect(screen.getByText('9 repository follow-ups.')).toBeTruthy()
+    expect(screen.getByText('Showing 5 of 9 repository follow-ups.')).toBeTruthy()
     expect(screen.getByText('Repo 0 needs commit or push.')).toBeTruthy()
     expect(screen.queryByText('Repo 8 needs commit or push.')).toBeNull()
   })
 
-  it('frames git story blockers as owner decisions instead of raw branch plumbing', async () => {
+  it('frames repository follow-ups as owner decisions instead of raw branch plumbing', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () =>

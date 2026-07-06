@@ -102,7 +102,7 @@
   {/if}
 
   {#if task.gitStory && task.gitStory.state && task.gitStory.state !== 'clean'}
-    <Card title="Git story" tone={task.gitStory.state === 'conflict' || task.gitStory.state === 'unknown' ? 'danger' : task.gitStory.state === 'local_only' || task.gitStory.state === 'deferred' ? 'default' : 'warn'}>
+    <Card title="Repository state" tone={task.gitStory.state === 'conflict' || task.gitStory.state === 'unknown' ? 'danger' : task.gitStory.state === 'local_only' || task.gitStory.state === 'deferred' ? 'default' : 'warn'}>
       <Stack gap="3">
         <DefinitionList items={gitStoryLines} />
         {#if task.gitStory.samplePaths?.length}
