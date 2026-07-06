@@ -203,10 +203,15 @@ function mkTask(overrides: Partial<Task> = {}): Task {
 }
 
 async function writeQueue(tasks: Task[]): Promise<void> {
+  await writeQueueState({ tasks })
+}
+
+async function writeQueueState(input: Partial<TaskQueue> & { tasks: Task[] }): Promise<void> {
   const queue: TaskQueue = {
     version: 1,
     lastUpdated: '2026-04-01T00:00:00Z',
-    tasks,
+    ...input,
+    tasks: input.tasks,
   }
   await fs.mkdir(path.dirname(tasksPath), { recursive: true })
   const tmpPath = `${tasksPath}.tmp`
@@ -3306,7 +3311,19 @@ describe('Orchestrator.tick — routing', () => {
   })
 
   it('repairs standalone recovery specs with numbered owner requirements into concrete criteria', async () => {
-    await writeQueue([
+    await writeQueueState({
+      selectedReleaseId: 'stage-1-fixture-and-evaluation-harness',
+      releases: [{
+        id: 'stage-1-fixture-and-evaluation-harness',
+        label: 'Stage 1 Fixture And Evaluation Harness',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: [],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [
       mkTask({
         id: 'model-proof',
         status: 'spec_review',
@@ -3339,7 +3356,7 @@ describe('Orchestrator.tick — routing', () => {
           timestamp: '2026-07-05T18:15:02.867Z',
         }],
       }),
-    ])
+    ]})
     const coord = stubAgent('harness-coordinator', async () => {
       throw new Error('coordinator should not review generic numbered recovery specs before repair')
     })
@@ -3369,6 +3386,7 @@ describe('Orchestrator.tick — routing', () => {
       'Define world-state continuity review lane',
       'Define spatial/geographic continuity review lane',
     ])
+    expect(task.releaseIds).toEqual(['stage-1-fixture-and-evaluation-harness'])
     expect(criteria).not.toContain('repo-local proof demonstrates that exact child outcome')
     expect(criteria).not.toContain('satisfies the relevant parent acceptance criteria')
     expect(criteria).not.toContain(';.')

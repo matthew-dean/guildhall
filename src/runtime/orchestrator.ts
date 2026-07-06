@@ -474,6 +474,7 @@ export function repairWeakRecoverySpecReviewSeedInQueue(
   liveTask.productBrief = seed.productBrief
   if (seed.workUnitAnalysis) liveTask.workUnitAnalysis = seed.workUnitAnalysis
   if (seed.references) liveTask.references = seed.references
+  attachSelectedReleaseToCurrentRecoveryTask(liveTask, queue)
   liveTask.status = 'spec_review'
   liveTask.assignedTo = null
   liveTask.updatedAt = input.now
@@ -487,6 +488,14 @@ export function repairWeakRecoverySpecReviewSeedInQueue(
   })
   queue.lastUpdated = input.now
   return { taskId: liveTask.id }
+}
+
+function attachSelectedReleaseToCurrentRecoveryTask(task: Task, queue: TaskQueue): void {
+  if ((task.releaseIds?.length ?? 0) > 0) return
+  if (task.status === 'shelved' || task.status === 'archived' || task.status === 'cancelled') return
+  const selectedScope = selectedReleaseScopeForQueue(queue)
+  if (!selectedScope || selectedScope.kind !== 'release') return
+  task.releaseIds = [selectedScope.id]
 }
 
 function shouldSeedSourceBackedExploringSplit(task: Task, queue: TaskQueue): boolean {
@@ -11248,7 +11257,8 @@ export class Orchestrator {
     liveTask.productBrief = seed.productBrief
     if (seed.references) liveTask.references = seed.references
     if ((!liveTask.domain || liveTask.domain === 'core') && parentTask?.domain) liveTask.domain = parentTask.domain
-    if (liveTask.releaseIds.length === 0 && parentTask?.releaseIds?.length) liveTask.releaseIds = [...parentTask.releaseIds]
+    if ((liveTask.releaseIds?.length ?? 0) === 0 && parentTask?.releaseIds?.length) liveTask.releaseIds = [...parentTask.releaseIds]
+    attachSelectedReleaseToCurrentRecoveryTask(liveTask, queue)
     liveTask.status = 'spec_review'
     liveTask.assignedTo = null
     liveTask.updatedAt = now

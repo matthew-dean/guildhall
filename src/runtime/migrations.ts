@@ -8,7 +8,7 @@ import {
   readWorkspaceConfig,
   updateProjectConfig,
 } from '@guildhall/config'
-import { getProjectLocalHistoryDir, getProjectStateDir } from '@guildhall/sessions'
+import { getProjectLocalHistoryDir, getProjectStateDir, getProjectSystemStatePath } from '@guildhall/sessions'
 import { installAgentBridgeInstructions } from './agent-bridge-install.js'
 import { migrateLegacyMemoryToLocalHistory } from './memory-migration.js'
 import { compactProjectState } from './project-state-compaction.js'
@@ -26,6 +26,8 @@ import {
 import { finalizeThinProjectStateManifest } from './thin-project-state-manifest.js'
 import { restoreEvacuatedTaskState } from './evacuated-task-state-restore.js'
 import { migrateWorkDecompositionState } from './work-decomposition-migration.js'
+import { deriveReleaseContainersFromTaskMembership } from './project-scope-projection.js'
+import type { Task } from '@guildhall/core'
 
 export type MigrationScope = 'machine' | 'project' | 'workspace' | 'database'
 export type MigrationSafety = 'automatic' | 'prompt' | 'manual' | 'required'
@@ -109,6 +111,105 @@ async function projectStateEntries(projectRoot: string): Promise<string[]> {
   } catch {
     return []
   }
+}
+
+const RECOVERED_CURRENT_SCOPE_PARENT_TITLE = 'Define Narrative Harness MVP drafting model and physical-world review lanes'
+const RECOVERED_CURRENT_SCOPE_CHILD_TITLES = new Set([
+  'Select and prove DeepInfra drafting model',
+  'Define world-state continuity review lane',
+  'Define spatial/geographic continuity review lane',
+])
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0) : []
+}
+
+function taskTitle(task: Record<string, unknown>): string {
+  return typeof task.title === 'string' ? task.title.trim() : ''
+}
+
+function taskStatus(task: Record<string, unknown>): string {
+  return typeof task.status === 'string' ? task.status : ''
+}
+
+function taskParentId(task: Record<string, unknown>): string | undefined {
+  const hierarchy = task.hierarchy
+  return isRecord(hierarchy) && typeof hierarchy.parentId === 'string' ? hierarchy.parentId : undefined
+}
+
+function recoveredCurrentScopeTaskIds(tasks: Array<Record<string, unknown>>): Set<string> {
+  const parentIds = new Set(
+    tasks
+      .filter(task => taskTitle(task) === RECOVERED_CURRENT_SCOPE_PARENT_TITLE)
+      .map(task => typeof task.id === 'string' ? task.id : undefined)
+      .filter((id): id is string => Boolean(id)),
+  )
+  const ids = new Set<string>()
+  for (const task of tasks) {
+    const id = typeof task.id === 'string' ? task.id : undefined
+    if (!id) continue
+    const status = taskStatus(task)
+    if (status === 'shelved' || status === 'archived' || status === 'cancelled') continue
+    const title = taskTitle(task)
+    const isParent = parentIds.has(id)
+    const isChild = RECOVERED_CURRENT_SCOPE_CHILD_TITLES.has(title) && parentIds.has(taskParentId(task) ?? '')
+    if (isParent || isChild) ids.add(id)
+  }
+  return ids
+}
+
+async function attachRecoveredCurrentScopeTasksToSelectedRelease(
+  projectRoot: string,
+  apply: boolean,
+): Promise<{ needed: boolean; affectedPaths: string[]; changed: number }> {
+  const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+  let raw: string
+  try {
+    raw = await readManagedTextFile(tasksPath, 'utf8')
+  } catch (err) {
+    if ((err as { code?: string }).code === 'ENOENT') return { needed: false, affectedPaths: [], changed: 0 }
+    throw err
+  }
+  const parsed = JSON.parse(raw) as unknown
+  if (!isRecord(parsed) || !Array.isArray(parsed.tasks)) {
+    return { needed: false, affectedPaths: [], changed: 0 }
+  }
+  const tasks = parsed.tasks.filter(isRecord)
+  const derived = deriveReleaseContainersFromTaskMembership(tasks as unknown as Task[])
+  const selectedReleaseId = typeof parsed.selectedReleaseId === 'string'
+    ? parsed.selectedReleaseId.trim()
+    : derived.selectedReleaseId?.trim() ?? ''
+  if (!selectedReleaseId) return { needed: false, affectedPaths: [], changed: 0 }
+  const recoveredIds = recoveredCurrentScopeTaskIds(tasks)
+  if (recoveredIds.size === 0) return { needed: false, affectedPaths: [], changed: 0 }
+  const targets = tasks.filter(task =>
+    typeof task.id === 'string' &&
+    recoveredIds.has(task.id) &&
+    !stringArray(task.releaseIds).includes(selectedReleaseId),
+  )
+  if (targets.length === 0) return { needed: false, affectedPaths: [], changed: 0 }
+  if (apply) {
+    for (const task of targets) {
+      task.releaseIds = [...new Set([...stringArray(task.releaseIds), selectedReleaseId])]
+    }
+    parsed.selectedReleaseId = selectedReleaseId
+    const releases = Array.isArray(parsed.releases) ? parsed.releases.filter(isRecord) : derived.releases as unknown as Array<Record<string, unknown>>
+    parsed.releases = releases
+    const selectedRelease = releases.find(release => release.id === selectedReleaseId)
+    if (selectedRelease) {
+      selectedRelease.nodeIds = [...new Set([
+        ...stringArray(selectedRelease.nodeIds),
+        ...targets.map(task => `work:${String(task.id)}`),
+      ])]
+    }
+    parsed.lastUpdated = new Date().toISOString()
+    await writeManagedTextFile(tasksPath, JSON.stringify(parsed, null, 2), 'utf8')
+  }
+  return { needed: true, affectedPaths: ['system-local project-state/TASKS.json'], changed: targets.length }
 }
 
 async function detectProjectStateBoundaryCleanup(projectRoot: string): Promise<{
@@ -558,6 +659,57 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
     },
   },
   {
+    id: '0.10.1/restore-evacuated-shaped-task-state',
+    title: 'Restore shaped task details masked by imported drafts',
+    introducedIn: '0.10.1',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Restores spec, brief, and acceptance criteria from evacuated task records when a same-id system-local task is still a hollow imported draft.',
+    async detect(projectRoot) {
+      const result = await restoreEvacuatedTaskState(projectRoot, false)
+      return {
+        needed: result.needed,
+        affectedPaths: result.affectedPaths,
+      }
+    },
+    async apply(projectRoot) {
+      const result = await restoreEvacuatedTaskState(projectRoot, true)
+      const repaired = result.enriched + result.titleRepaired
+      return {
+        summary: repaired > 0
+          ? `Restored shaped details for ${result.enriched} imported draft task${result.enriched === 1 ? '' : 's'} and repaired ${result.titleRepaired} clipped task title${result.titleRepaired === 1 ? '' : 's'}.`
+          : 'No shaped imported draft details needed restoration.',
+        affectedPaths: result.affectedPaths,
+      }
+    },
+  },
+  {
+    id: '0.10.1/attach-recovered-current-scope-work-to-selected-release',
+    title: 'Attach recovered current-scope work to the selected release',
+    introducedIn: '0.10.1',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Repairs recovered owner-requirement task records that were materialized as current MVP work but saved without selected-release membership.',
+    async detect(projectRoot) {
+      const result = await attachRecoveredCurrentScopeTasksToSelectedRelease(projectRoot, false)
+      return {
+        needed: result.needed,
+        affectedPaths: result.affectedPaths,
+      }
+    },
+    async apply(projectRoot) {
+      const result = await attachRecoveredCurrentScopeTasksToSelectedRelease(projectRoot, true)
+      return {
+        summary: result.changed > 0
+          ? `Attached ${result.changed} recovered current-scope task${result.changed === 1 ? '' : 's'} to the selected release.`
+          : 'No recovered current-scope tasks needed release repair.',
+        affectedPaths: result.affectedPaths,
+      }
+    },
+  },
+  {
     id: '0.8.0/codex-agent-bridge',
     title: 'Install Codex Guildhall MCP bridge instructions',
     introducedIn: '0.8.0',
@@ -640,6 +792,8 @@ const BUILT_IN_PROJECT_MIGRATION_IDEMPOTENCE_TESTS: Record<string, string> = {
   '0.10.1/owner-input-source-trail-leadin-repair': 'migrations.test.ts: source-trail owner-input lead-in repair is idempotent',
   '0.10.0/project-state-storage-boundary': 'migrations.test.ts: storage-boundary migration is idempotent',
   '0.10.0/restore-evacuated-task-state': 'migrations.test.ts: restores stranded evacuated task state into the system-local queue and readable task files',
+  '0.10.1/restore-evacuated-shaped-task-state': 'migrations.test.ts: restores richer evacuated task shape over hollow same-id imported drafts',
+  '0.10.1/attach-recovered-current-scope-work-to-selected-release': 'migrations.test.ts: attaches recovered current-scope owner requirement work to the selected release',
 }
 
 const REPO_LOCAL_STATE_MIGRATIONS = new Set([

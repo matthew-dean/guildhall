@@ -593,6 +593,210 @@ describe('applyProjectMigrations', () => {
     ])
   })
 
+  it('restores richer evacuated task shape over hollow same-id imported drafts', async () => {
+    const systemTasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    const fullTitle = 'Block menu / block side menu supports generic Looma blocks and Knit-specific actions.'
+    const croppedTitle = 'Block menu / block side menu supports generic Looma blocks and Knit-specific'
+    await fs.mkdir(path.dirname(systemTasksPath), { recursive: true })
+    await fs.writeFile(systemTasksPath, JSON.stringify({
+      version: 1,
+      tasks: [
+        {
+          id: 'task-import-block-menu',
+          title: croppedTitle,
+          description: `docs/editor-roadmap.md: - ${fullTitle}`,
+          status: 'import_draft',
+          scope: 'current',
+          releaseIds: ['stage-1-finish-knit-primitive-replacement-wave'],
+          references: ['docs/editor-roadmap.md'],
+        },
+      ],
+    }, null, 2), 'utf8')
+    const evacuatedTasksPath = path.join(getProjectLocalHistoryDir(projectRoot), 'project-state-evacuation', 'TASKS.json')
+    await fs.mkdir(path.dirname(evacuatedTasksPath), { recursive: true })
+    await fs.writeFile(evacuatedTasksPath, JSON.stringify({
+      version: 1,
+      tasks: [
+        {
+          id: 'task-import-block-menu',
+          title: croppedTitle,
+          description: `docs/editor-roadmap.md: - ${fullTitle}`,
+          status: 'ready',
+          spec: '## Summary\nBuild the block menu and side menu primitives.',
+          productBrief: {
+            status: 'approved',
+            productOutcome: 'Knit can use a generic Looma block menu primitive.',
+            successMetric: 'Block menu primitive is specified and ready for implementation.',
+          },
+          acceptanceCriteria: [
+            { id: 'ac-1', description: 'Block menu primitive has a ready implementation spec.', verifiedBy: 'review', met: false },
+          ],
+        },
+      ],
+    }, null, 2), 'utf8')
+
+    const before = await getProjectMigrationStatus({ projectRoot })
+    expect(before.blocked.some(item => item.id === '0.10.1/restore-evacuated-shaped-task-state')).toBe(true)
+
+    await applyProjectMigrations({
+      projectRoot,
+      only: ['0.10.1/restore-evacuated-shaped-task-state'],
+    })
+
+    const restored = JSON.parse(await fs.readFile(systemTasksPath, 'utf8')) as {
+      tasks: Array<{
+        id: string
+        title: string
+        status: string
+        spec?: string
+        productBrief?: { productOutcome?: string }
+        acceptanceCriteria?: Array<{ id: string }>
+        releaseIds?: string[]
+        references?: string[]
+      }>
+    }
+    expect(restored.tasks).toHaveLength(1)
+    expect(restored.tasks[0]).toEqual(expect.objectContaining({
+      id: 'task-import-block-menu',
+      title: fullTitle,
+      status: 'ready',
+      spec: expect.stringContaining('Build the block menu'),
+      productBrief: expect.objectContaining({
+        productOutcome: 'Knit can use a generic Looma block menu primitive.',
+      }),
+      acceptanceCriteria: [expect.objectContaining({ id: 'ac-1' })],
+      releaseIds: ['stage-1-finish-knit-primitive-replacement-wave'],
+      references: ['docs/editor-roadmap.md'],
+    }))
+  })
+
+  it('repairs clipped shaped task titles left behind after evacuated state restoration', async () => {
+    const fullTitle = 'Continue the Knit-to-Looma promotion work into the next generic surfaces while primitive normalization continues.'
+    const croppedTitle = 'Continue the Knit-to-Looma promotion work into the next generic surfaces while'
+    const systemTasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    await fs.mkdir(path.dirname(systemTasksPath), { recursive: true })
+    await fs.writeFile(systemTasksPath, JSON.stringify({
+      version: 1,
+      tasks: [
+        {
+          id: 'task-import-next-wave',
+          title: croppedTitle,
+          description: `looma/PROJECT_STATE.md: 3. ${fullTitle}`,
+          status: 'spec_review',
+          spec: `## Summary\nBuild ${croppedTitle} from the current evidence.`,
+          productBrief: {
+            productOutcome: 'The next promotion wave is shaped.',
+          },
+          acceptanceCriteria: [
+            { id: 'ac-1', description: 'The wave has acceptance criteria.', verifiedBy: 'review', met: false },
+          ],
+        },
+      ],
+    }, null, 2), 'utf8')
+    const evacuatedTasksPath = path.join(getProjectLocalHistoryDir(projectRoot), 'project-state-evacuation', 'TASKS.json')
+    await fs.mkdir(path.dirname(evacuatedTasksPath), { recursive: true })
+    await fs.writeFile(evacuatedTasksPath, JSON.stringify({ version: 1, tasks: [] }, null, 2), 'utf8')
+
+    const before = await getProjectMigrationStatus({ projectRoot })
+    expect(before.blocked.some(item => item.id === '0.10.1/restore-evacuated-shaped-task-state')).toBe(true)
+
+    await applyProjectMigrations({
+      projectRoot,
+      only: ['0.10.1/restore-evacuated-shaped-task-state'],
+    })
+
+    const restored = JSON.parse(await fs.readFile(systemTasksPath, 'utf8')) as {
+      tasks: Array<{ id: string; title: string; status: string }>
+    }
+    expect(restored.tasks).toEqual([
+      expect.objectContaining({
+        id: 'task-import-next-wave',
+        title: fullTitle,
+        status: 'spec_review',
+      }),
+    ])
+  })
+
+  it('attaches recovered current-scope owner requirement work to the selected release', async () => {
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    await fs.mkdir(path.dirname(tasksPath), { recursive: true })
+    await fs.writeFile(tasksPath, JSON.stringify({
+      version: 1,
+      lastUpdated: '2026-07-06T09:00:00.000Z',
+      tasks: [
+        {
+          id: 'task-import-fixture',
+          title: 'Add the first tiny fiction fixture and human-authored expected records.',
+          status: 'done',
+          releaseIds: ['stage-1-fixture-and-evaluation-harness'],
+        },
+        {
+          id: 'task-150',
+          title: 'Define Narrative Harness MVP drafting model and physical-world review lanes',
+          status: 'done',
+          releaseIds: [],
+          hierarchy: {
+            childIds: [
+              'task-150-split-select-and-prove-deepinfra-drafting-model',
+              'task-150-split-define-world-state-continuity-review-lane',
+              'task-150-split-define-spatial-geographic-continuity-review-lane',
+            ],
+            relation: 'contains',
+          },
+        },
+        {
+          id: 'task-150-split-select-and-prove-deepinfra-drafting-model',
+          title: 'Select and prove DeepInfra drafting model',
+          status: 'done',
+          releaseIds: [],
+          hierarchy: { parentId: 'task-150', childIds: [], order: 0, relation: 'decomposes' },
+        },
+        {
+          id: 'task-150-split-define-world-state-continuity-review-lane',
+          title: 'Define world-state continuity review lane',
+          status: 'done',
+          releaseIds: [],
+          hierarchy: { parentId: 'task-150', childIds: [], order: 1, relation: 'decomposes' },
+        },
+        {
+          id: 'task-150-split-define-spatial-geographic-continuity-review-lane',
+          title: 'Define spatial/geographic continuity review lane',
+          status: 'done',
+          releaseIds: [],
+          hierarchy: { parentId: 'task-150', childIds: [], order: 2, relation: 'decomposes' },
+        },
+      ],
+    }, null, 2), 'utf8')
+
+    const before = await getProjectMigrationStatus({ projectRoot })
+    expect(before.blocked.some(item => item.id === '0.10.1/attach-recovered-current-scope-work-to-selected-release')).toBe(true)
+
+    await applyProjectMigrations({
+      projectRoot,
+      only: ['0.10.1/attach-recovered-current-scope-work-to-selected-release'],
+    })
+
+    const repaired = JSON.parse(await fs.readFile(tasksPath, 'utf8')) as {
+      tasks: Array<{ id: string; releaseIds?: string[] }>
+      selectedReleaseId?: string
+      releases: Array<{ id: string; nodeIds?: string[] }>
+    }
+    expect(repaired.selectedReleaseId).toBe('stage-1-fixture-and-evaluation-harness')
+    for (const task of repaired.tasks.filter(task => task.id.startsWith('task-150'))) {
+      expect(task.releaseIds).toEqual(['stage-1-fixture-and-evaluation-harness'])
+    }
+    expect(repaired.releases[0]?.nodeIds).toEqual([
+      'work:task-import-fixture',
+      'work:task-150',
+      'work:task-150-split-select-and-prove-deepinfra-drafting-model',
+      'work:task-150-split-define-world-state-continuity-review-lane',
+      'work:task-150-split-define-spatial-geographic-continuity-review-lane',
+    ])
+
+    const after = await getProjectMigrationStatus({ projectRoot })
+    expect(after.blocked.some(item => item.id === '0.10.1/attach-recovered-current-scope-work-to-selected-release')).toBe(false)
+  })
+
   it('rewrites stale thin repo state into only the current-shape manifest', async () => {
     await fs.writeFile(path.join(projectRoot, 'guildhall.yaml'), [
       'name: Migration Test',

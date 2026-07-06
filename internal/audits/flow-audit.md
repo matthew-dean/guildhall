@@ -14577,6 +14577,64 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-07-06T09:20:00Z - Attached recovered Narrative Harness MVP review work
+to the selected release.
+
+- Work id:
+  `codex:nh-recovered-current-scope-release-membership-2026-07-06`.
+- User job: when the owner adds current Narrative Harness MVP requirements,
+  Guildhall must show them as scoped release work, not as hidden Codex context
+  or orphaned completed tasks outside the release.
+- Required Narrative Harness MVP work captured:
+  - select and prove a DeepInfra-accessible drafting/writing model across
+    genres, including adult genres;
+  - define a world-state continuity reviewer that reasons about elapsed time,
+    object/property changes, climate effects, and examples like wet hair drying;
+  - define spatial/geographic continuity review for scene geography, travel
+    distance, and walking speed in fantasy-scale travel.
+- Root-cause classification:
+  - data model/read-model problem: recovered `task-150` and its three child
+    tasks existed in the task graph as `done`, but had empty `releaseIds`.
+    The Work/API surfaces could find the work, while the selected release
+    rollup excluded it.
+  - migration/modeling problem: the live Narrative Harness task state did not
+    persist `selectedReleaseId` or `releases`, so the repair had to derive the
+    selected release from existing task membership before it could attach the
+    recovered task family.
+- Contract Touch Decision:
+  - Touched contracts: project migration detection/application, recovered task
+    restoration, coordinator recovery release assignment for new current-scope
+    work.
+  - Contracts considered but not touched: task status model, approval/spec
+    gates, manual runtime-backed migration. The fix only attaches current-scope
+    recovered work to an already-derived selected release.
+  - Required follow-up: keep pushing on the remaining Stage 1 blockers and
+    proof gaps. This repair makes the scope honest; it does not declare the
+    release ready.
+  - Proof provided: focused migration regression passed; focused orchestrator
+    recovery regression passed; full `migrations.test.ts` passed `18` tests;
+    `project-scope-projection.test.ts` and `serve-release-readiness.test.ts`
+    passed `46` tests; `git diff --check`, `node
+    scripts/contract-touch-detector.mjs`, and `pnpm build` passed.
+  - Installed-app proof: after `pnpm dev:install`, `guildhall stop`,
+    `guildhall start`, `/api/stale-server` reported `stale:false` for PID
+    `8250`. Before migration, `/api/project?projectId=narrative-harness`
+    returned `required_migration_pending`, `includedWorkCount:13`, `done:6`,
+    and all four `task-150*` records had empty `releaseIds`. After applying
+    `0.10.1/attach-recovered-current-scope-work-to-selected-release`,
+    migration status reported `Blocked: 0`; `/api/project` returned
+    `includedWorkCount:16`, `done:9`, and all four `task-150*` records had
+    `releaseIds:["stage-1-fixture-and-evaluation-harness"]`.
+  - Release-readiness proof: `/api/project/release-readiness` now includes
+    `work:task-150-split-select-and-prove-deepinfra-drafting-model`,
+    `work:task-150-split-define-world-state-continuity-review-lane`, and
+    `work:task-150-split-define-spatial-geographic-continuity-review-lane` in
+    the selected Stage 1 node set, with `statusCounts.done:9` and
+    `totals.tasks:9`.
+  - Apply/revert behavior: reverting the migration/runtime assignment changes
+    restores the previous contradiction where recovered MVP review work can be
+    visible in tasks but absent from the selected release summary.
+
 2026-07-06T08:43:00Z - Start-readiness uses materialized import titles before
 calling saved importer YAML stale.
 

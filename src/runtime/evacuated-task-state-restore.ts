@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs'
 import path from 'node:path'
 
 import { getProjectLocalHistoryDir, getProjectSystemStatePath } from '@guildhall/sessions'
+import { effectiveTaskTitle } from '../shared/task-display-label.js'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -116,6 +117,8 @@ function queueLastUpdated(value: unknown): string | undefined {
 export interface RestoreEvacuatedTaskStateResult {
   needed: boolean
   restored: number
+  enriched: number
+  titleRepaired: number
   restoredTaskStateFiles: number
   systemTaskCount: number
   evacuatedTaskCount: number
@@ -161,6 +164,43 @@ async function collectMissingTaskStateFiles(projectRoot: string): Promise<Array<
   return missing
 }
 
+function hasTaskShape(task: unknown): boolean {
+  if (!isRecord(task)) return false
+  return typeof task.spec === 'string' && task.spec.trim().length > 0
+    || isRecord(task.productBrief)
+    || (Array.isArray(task.acceptanceCriteria) && task.acceptanceCriteria.length > 0)
+}
+
+function isHollowImportedDraft(task: unknown): boolean {
+  return isRecord(task)
+    && task.status === 'import_draft'
+    && !hasTaskShape(task)
+}
+
+function mergeTaskStringArray(existing: unknown, restored: unknown): string[] | undefined {
+  return mergeStringArray(existing, restored)
+}
+
+function enrichHollowTaskFromEvacuated(systemTask: unknown, evacuatedTask: unknown): unknown {
+  if (!isRecord(systemTask) || !isRecord(evacuatedTask)) return systemTask
+  const next: Record<string, unknown> = { ...systemTask, ...evacuatedTask }
+  const releaseIds = mergeTaskStringArray(systemTask.releaseIds, evacuatedTask.releaseIds)
+  const references = mergeTaskStringArray(systemTask.references, evacuatedTask.references)
+  if (releaseIds) next.releaseIds = releaseIds
+  if (references) next.references = references
+  repairEffectiveTaskTitle(next)
+  return next
+}
+
+function repairEffectiveTaskTitle(task: Record<string, unknown>): boolean {
+  const title = typeof task.title === 'string' ? task.title : undefined
+  const description = typeof task.description === 'string' ? task.description : undefined
+  const recoveredTitle = effectiveTaskTitle({ title, description })
+  if (!recoveredTitle || recoveredTitle === title) return false
+  task.title = recoveredTitle
+  return true
+}
+
 export async function restoreEvacuatedTaskState(projectRoot: string, apply: boolean): Promise<RestoreEvacuatedTaskStateResult> {
   const systemTasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
   const evacuatedTasksPath = path.join(getProjectLocalHistoryDir(projectRoot), 'project-state-evacuation', 'TASKS.json')
@@ -169,22 +209,56 @@ export async function restoreEvacuatedTaskState(projectRoot: string, apply: bool
   const evacuatedTasks = readTasks(evacuatedQueue)
   const systemTasks = readTasks(systemQueue)
   const systemIds = new Set(systemTasks.map(taskId).filter((id): id is string => id !== null))
+  const evacuatedById = new Map(evacuatedTasks.map(task => [taskId(task), task]).filter((entry): entry is [string, unknown] => entry[0] !== null))
   const missing = evacuatedTasks.filter((task) => {
     const id = taskId(task)
     return id !== null && !systemIds.has(id)
   })
+  const enrichmentIds = systemTasks
+    .filter(task => {
+      const id = taskId(task)
+      const evacuatedTask = id ? evacuatedById.get(id) : undefined
+      return id !== null && isHollowImportedDraft(task) && hasTaskShape(evacuatedTask)
+    })
+    .map(task => taskId(task))
+    .filter((id): id is string => id !== null)
+  const titleRepairIds = systemTasks
+    .filter(task => {
+      if (!isRecord(task)) return false
+      const id = taskId(task)
+      if (id !== null && enrichmentIds.includes(id)) return false
+      const title = typeof task.title === 'string' ? task.title : undefined
+      const description = typeof task.description === 'string' ? task.description : undefined
+      const recoveredTitle = effectiveTaskTitle({ title, description })
+      return !!recoveredTitle && recoveredTitle !== title
+    })
+    .map(task => taskId(task))
+    .filter((id): id is string => id !== null)
   const missingTaskStateFiles = await collectMissingTaskStateFiles(projectRoot)
   const releaseMetadataNeeded = needsReleaseMetadataRestore(systemQueue, evacuatedQueue)
-  const needed = missing.length > 0 || missingTaskStateFiles.length > 0 || releaseMetadataNeeded
+  const needed = missing.length > 0 || enrichmentIds.length > 0 || titleRepairIds.length > 0 || missingTaskStateFiles.length > 0 || releaseMetadataNeeded
   if (apply && needed) {
-    if (missing.length > 0 || releaseMetadataNeeded) {
+    if (missing.length > 0 || enrichmentIds.length > 0 || titleRepairIds.length > 0 || releaseMetadataNeeded) {
       await fs.mkdir(path.dirname(systemTasksPath), { recursive: true })
       const restoredAt = new Date().toISOString()
       const mergedReleases = mergeReleases(systemQueue, evacuatedQueue)
+      const enrichmentIdSet = new Set(enrichmentIds)
+      const titleRepairIdSet = new Set(titleRepairIds)
+      const mergedSystemTasks = systemTasks.map(task => {
+        const id = taskId(task)
+        if (!id) return task
+        if (enrichmentIdSet.has(id)) return enrichHollowTaskFromEvacuated(task, evacuatedById.get(id))
+        if (titleRepairIdSet.has(id) && isRecord(task)) {
+          const next = { ...task }
+          repairEffectiveTaskTitle(next)
+          return next
+        }
+        return task
+      })
       const next: Record<string, unknown> = isRecord(systemQueue) ? { ...systemQueue } : {}
       next.version = Math.max(queueVersion(evacuatedQueue), queueVersion(systemQueue))
       next.lastUpdated = restoredAt
-      next.tasks = [...missing, ...systemTasks]
+      next.tasks = [...missing, ...mergedSystemTasks]
       const restoredSelectedReleaseId = selectedReleaseId(evacuatedQueue)
       if (!selectedReleaseId(next) && restoredSelectedReleaseId) {
         next.selectedReleaseId = restoredSelectedReleaseId
@@ -197,6 +271,8 @@ export async function restoreEvacuatedTaskState(projectRoot: string, apply: bool
         restoredAt,
         source: evacuatedTasksPath,
         restoredTaskCount: missing.length,
+        enrichedTaskCount: enrichmentIds.length,
+        titleRepairedTaskCount: titleRepairIds.length,
         restoredReleaseCount: mergedReleases.length,
         restoredReleaseMetadata: releaseMetadataNeeded,
         priorSystemTaskCount: systemTasks.length,
@@ -220,6 +296,8 @@ export async function restoreEvacuatedTaskState(projectRoot: string, apply: bool
   return {
     needed,
     restored: apply && needed ? missing.length : 0,
+    enriched: apply && needed ? enrichmentIds.length : 0,
+    titleRepaired: apply && needed ? titleRepairIds.length : 0,
     restoredTaskStateFiles: apply && needed ? missingTaskStateFiles.length : 0,
     systemTaskCount: systemTasks.length,
     evacuatedTaskCount: evacuatedTasks.length,
