@@ -15337,6 +15337,47 @@ release readiness, git story, start readiness, and project map communication.
 
 source: codex:narrative-harness-mvp-release-truth-2026-07-06
 
+2026-07-06T15:30:00Z - Reduced Looma + Knit release blocker noise by
+deduping repeated active escalations in the shared release-readiness model.
+
+- Work id: `codex:looma-knit-escalation-dedupe-2026-07-06`.
+- User job: a project owner should not see one repeated retry failure as dozens
+  of independent release blockers. Release readiness should count and display
+  each distinct active escalation reason once per task, while preserving
+  separate decisions and separate tasks.
+- Root-cause triage:
+  - Data model/schema: historical retry escalations were append-only records,
+    so repeated identical active escalations survived as separate current
+    blockers.
+  - Task hierarchy/proof modeling: one stuck task generated many escalation
+    records for the same underlying decision.
+  - UI communication/orientation: release readiness amplified retry history
+    into an owner-facing blocker list, making the current state harder to
+    understand.
+  - Bad project data from earlier Guildhall behavior: Looma + Knit contained
+    repeated open escalation records for `Block menu / block side menu`.
+- Fix:
+  - `summarizeScopedReleaseWork` now dedupes active escalations by task id,
+    reason, and normalized summary before producing `openEscalations`.
+  - The dedupe is intentionally narrow: different tasks, reasons, or summaries
+    remain visible as separate decisions.
+- Live Looma + Knit proof from installed app:
+  - `/api/stale-server`: `stale:false` from the installed app bundle.
+  - `/api/project/release-readiness?projectId=looma-knit` returned
+    `openEscalationCount: 4` and no duplicate task/reason/summary groups.
+  - The remaining unique active escalations are the unresolved import failure,
+    missing source directories, the shaping timeout for `Block menu / block
+    side menu`, and the shaping timeout for `AlertDialog`.
+- Verification:
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/serve-release-readiness.test.ts src/runtime/__tests__/git-story.test.ts`
+    passed `57` tests.
+  - `node ./build.mjs` passed.
+  - `CI=true pnpm lint:contracts` passed.
+  - `CI=true pnpm dev:install`; `guildhall start`; installed-app API proof
+    listed above.
+
+source: codex:looma-knit-escalation-dedupe-2026-07-06
+
 2026-07-06T14:50:00Z - Fixed release readiness reconciliation for legacy
 skipped task merges and stale blocked status.
 

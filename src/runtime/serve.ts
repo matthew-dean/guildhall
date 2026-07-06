@@ -2303,6 +2303,7 @@ function summarizeScopedReleaseWork(
   const blockedByAgent: Array<{ id: string; title: string; reason?: string }> = []
   const proofMissingDoneTasks: Array<{ id: string; title: string }> = []
   const releaseBlockersById = new Map<string, { id: string; title: string; label: string }>()
+  const escalationKeys = new Set<string>()
   const terminalStatuses = new Set(['done', 'shelved', 'cancelled', 'archived', 'pending_pr'])
   let unfinishedCount = 0
 
@@ -2310,6 +2311,11 @@ function summarizeScopedReleaseWork(
     if (!releaseBlockersById.has(blocker.id)) releaseBlockersById.set(blocker.id, blocker)
   }
   const blockerSubject = (title: string) => title.trim().replace(/[.?!:;,\s]+$/g, '')
+  const escalationKey = (taskId: string, reason: string, summary: string) => [
+    taskId.trim(),
+    reason.trim().toLowerCase(),
+    summary.trim().replace(/\s+/g, ' ').toLowerCase(),
+  ].join('\0')
   for (const t of scopedTasks) {
     const status = effectiveReleaseStatus(t)
     statusCounts[status] = (statusCounts[status] ?? 0) + 1
@@ -2374,6 +2380,9 @@ function summarizeScopedReleaseWork(
       addReleaseBlocker({ id, title, label: reason?.trim() || `${blockerSubject(title)} is blocked.` })
     }
     for (const e of activeEscalations(t).filter(e => !completionProofSupersedesEscalation(t, e))) {
+      const key = escalationKey(id, e.reason, e.summary)
+      if (escalationKeys.has(key)) continue
+      escalationKeys.add(key)
       openEscalations.push({
         taskId: id,
         taskTitle: title,

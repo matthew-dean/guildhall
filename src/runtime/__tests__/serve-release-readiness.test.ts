@@ -1819,6 +1819,55 @@ describe('GET /api/project/release-readiness', () => {
     expect(body.totals.unfinishedCount).toBe(1)
   })
 
+  it('collapses repeated active escalations for the same task and reason in release readiness', async () => {
+    const now = new Date().toISOString()
+    await seed([
+      makeTask({
+        id: 'task-1',
+        title: 'Has repeated escalations',
+        status: 'blocked',
+        blockReason: 'escalation pending',
+        escalations: [
+          {
+            id: 'esc-1',
+            taskId: 'task-1',
+            agentId: 'agent:spec-agent',
+            reason: 'decision_required',
+            summary: 'Build failing due to unresolved import in packages/core/loader/index.js',
+            raisedAt: now,
+          },
+          {
+            id: 'esc-2',
+            taskId: 'task-1',
+            agentId: 'agent:spec-agent',
+            reason: 'decision_required',
+            summary: 'Build failing due to unresolved import in packages/core/loader/index.js',
+            raisedAt: now,
+          },
+          {
+            id: 'esc-3',
+            taskId: 'task-1',
+            agentId: 'agent:spec-agent',
+            reason: 'decision_required',
+            summary: 'A separate decision is needed.',
+            raisedAt: now,
+          },
+        ],
+      }),
+    ])
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
+    const body = await res.json() as any
+
+    expect(body.openEscalations).toHaveLength(2)
+    expect(body.openEscalations.map((item: any) => item.escalationId)).toEqual(['esc-1', 'esc-3'])
+    expect(body.openEscalations.map((item: any) => item.summary)).toEqual([
+      'Build failing due to unresolved import in packages/core/loader/index.js',
+      'A separate decision is needed.',
+    ])
+    expect(body.totals.humanBlockingCount).toBe(1)
+  })
+
   it('reports the design-system approval state', async () => {
     // Draft a DS via the endpoint, then check before/after approval.
     const { app } = buildServeApp({ projectPath: tmpDir })
