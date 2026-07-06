@@ -7361,6 +7361,34 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
     expect(runtime.tasks.a?.assignedTo).toBeNull()
   })
 
+  it('repairs synthetic bootstrap verification ellipses from older Guildhall task data', async () => {
+    const task = mkTask({
+      id: 'a',
+      status: 'in_progress',
+      notes: [{
+        agentId: 'coordinator',
+        role: 'bootstrap-verification',
+        content:
+          'worktree bootstrap failed on gate `pnpm build` (exit 1). The task worktree already has edits, so Guildhall is handing the failing verification back to the worker instead of blocking setup.\n' +
+          'Verification output:\nstack line\n...',
+        timestamp: '2026-07-04T10:07:20.557Z',
+      }],
+    })
+    const queue = { tasks: [task], lastUpdated: '2026-07-04T10:07:20.557Z' }
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet(),
+    })
+
+    const repair = (orch as unknown as {
+      repairSyntheticBootstrapOutputTruncationInQueue(queue: typeof queue): { changed: boolean }
+    }).repairSyntheticBootstrapOutputTruncationInQueue(queue)
+
+    expect(repair.changed).toBe(true)
+    expect(queue.tasks[0]!.notes[0]?.content).toContain('full output is unavailable')
+    expect(queue.tasks[0]!.notes[0]?.content).not.toContain('\n...')
+  })
+
   it('rejects simulated provider proof before review-only gate_check completion', async () => {
     const worktreePath = path.join(tmpDir, 'provider-proof-worktree')
     await fs.mkdir(path.join(worktreePath, 'scripts'), { recursive: true })
@@ -11173,13 +11201,15 @@ describe('Orchestrator.run — full loops', () => {
       }),
     ])
 
+    const longFailure = `settings.vue type error ${'x'.repeat(1900)} tail-token`
+    const failingGate = `node -e 'console.error(${JSON.stringify(longFailure)}); process.exit(1)'`
     const worker = stubAgent('worker-agent')
     const orch = new Orchestrator({
       config: baseConfig({
         projectPath: tmpDir,
         bootstrap: {
           commands: ['node -e "process.exit(0)"'],
-          successGates: ['node -e "console.error(\'settings.vue type error\'); process.exit(1)"'],
+          successGates: [failingGate],
           timeoutMs: 30_000,
           verifiedAt: '2026-05-03T00:00:00Z',
         },
@@ -11201,6 +11231,8 @@ describe('Orchestrator.run — full loops', () => {
     expect(task?.status).toBe('in_progress')
     expect(task?.blockReason ?? null).toBeNull()
     expect(task?.notes.at(-1)?.role).toBe('bootstrap-verification')
+    expect(task?.notes.at(-1)?.content).toContain('tail-token')
+    expect(task?.notes.at(-1)?.content).not.toContain('\n...')
 
     const checkpoint = JSON.parse(
       await fs.readFile(taskHistoryPath('a', 'checkpoint.json'), 'utf8'),
@@ -11217,11 +11249,13 @@ describe('Orchestrator.run — full loops', () => {
     expect(checkpoint.filesTouched).toContain('web/app/pages/settings.vue')
     expect(checkpoint.resumeContext?.verification).toEqual([
       expect.objectContaining({
-        command: 'node -e "console.error(\'settings.vue type error\'); process.exit(1)"',
+        command: failingGate,
         passed: false,
         summary: expect.stringContaining('settings.vue type error'),
       }),
     ])
+    expect(checkpoint.resumeContext?.verification?.[0]?.summary).toContain('tail-token')
+    expect(checkpoint.resumeContext?.verification?.[0]?.summary).not.toContain('\n...')
     expect(checkpoint.resumeContext?.safeNextMutationSurface).toContain('web/app/pages/settings.vue')
     expect(checkpoint.resumeContext?.workingHypothesis).toContain('last authoritative verification failed')
     expect(worker.calls[0]?.prompt).toContain('Latest authoritative verification')

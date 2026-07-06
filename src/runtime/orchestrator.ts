@@ -3420,6 +3420,26 @@ export class Orchestrator {
     )
   }
 
+  private repairSyntheticBootstrapOutputTruncationInQueue(queue: TaskQueue): { changed: boolean } {
+    let changed = false
+    const now = this.now()
+    for (const task of queue.tasks) {
+      for (const note of task.notes ?? []) {
+        if (note.agentId !== 'coordinator') continue
+        if (note.role !== 'bootstrap-verification') continue
+        if (!note.content.includes('Verification output:')) continue
+        if (!note.content.trimEnd().endsWith('...')) continue
+        note.content = note.content.replace(
+          /\n\.\.\.\s*$/,
+          '\n[older Guildhall build truncated this bootstrap verification output before storing it; full output is unavailable]',
+        )
+        task.updatedAt = now
+        changed = true
+      }
+    }
+    return { changed }
+  }
+
   /**
    * Single orchestrator step. Reads the queue, picks 1..N actionable tasks
    * per the `concurrent_task_dispatch` lever, and dispatches each through
@@ -3434,6 +3454,8 @@ export class Orchestrator {
     const resolvedCapacity = await this.resolveCapacity()
     queueBefore = await this.normalizeQueuedReviewOwnership(queueBefore, resolvedCapacity)
     queueBefore = await this.reopenRecoverableDirtyRepoTasks(queueBefore)
+    const syntheticBootstrapTruncationRepair = this.repairSyntheticBootstrapOutputTruncationInQueue(queueBefore)
+    if (syntheticBootstrapTruncationRepair.changed) await this.writeQueue(queueBefore)
     const completedEvidenceRepair = this.reconcileCompletedTaskEvidence(queueBefore)
     if (completedEvidenceRepair.changed) await this.writeQueue(queueBefore)
     const staleRepair = repairStaleBlockersInQueue(queueBefore, this.now())
@@ -4168,13 +4190,12 @@ export class Orchestrator {
           if (dirtyTaskWorktree || taskOwnsBootstrapRepair) {
             const now = this.now()
             const output = String(failed?.output ?? '').trim()
-            const clippedOutput = output.length > 1800 ? `${output.slice(0, 1800)}\n...` : output
             const handoffReason = dirtyTaskWorktree
               ? 'The task worktree already has edits, so Guildhall is handing the failing verification back to the worker instead of blocking setup.'
               : 'The task explicitly asks Guildhall to repair this bootstrap failure, so Guildhall is handing the failing setup proof to the worker instead of blocking before dispatch.'
             const content = [
               `${msg}. ${handoffReason}`,
-              clippedOutput ? `\nVerification output:\n${clippedOutput}` : '',
+              output ? `\nVerification output:\n${output}` : '',
             ].filter(Boolean).join('\n')
             if (queuedTask) {
               const alreadyLogged = queuedTask.notes.slice(-3).some((note) =>
@@ -4210,7 +4231,7 @@ export class Orchestrator {
               agentName: agent.name,
               activeWorktreePath,
               command: failed?.command ?? '',
-              output: clippedOutput,
+              output,
               observedAt: now,
             })
             handedOffBootstrapVerificationThisDispatch = true
@@ -12031,7 +12052,7 @@ export class Orchestrator {
       command,
       passed: false,
       observedAt: input.observedAt,
-      ...(input.output.trim() ? { summary: input.output.trim().slice(0, 1200) } : {}),
+      ...(input.output.trim() ? { summary: input.output.trim() } : {}),
     }]
     const safeNextMutationSurface = checkpointSafeNextMutationSurface(
       filesTouched,

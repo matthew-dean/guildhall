@@ -140,6 +140,30 @@ export function legacyEvidenceFromTask(task: LegacyTask): TaskEvidenceEvent[] {
   return events.sort((a, b) => a.recordedAt.localeCompare(b.recordedAt))
 }
 
+function repairSyntheticBootstrapOutputTruncation(value: unknown): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value
+  const payload = value as Record<string, unknown>
+  if (payload.agentId !== 'coordinator') return value
+  if (payload.role !== 'bootstrap-verification') return value
+  const content = typeof payload.content === 'string' ? payload.content : ''
+  if (!content.includes('Verification output:')) return value
+  if (!content.trimEnd().endsWith('...')) return value
+  return {
+    ...payload,
+    content: content.replace(
+      /\n\.\.\.\s*$/,
+      '\n[older Guildhall build truncated this bootstrap verification output before storing it; full output is unavailable]',
+    ),
+  }
+}
+
+function normalizeEvidenceProjection(events: TaskEvidenceEvent[]): TaskEvidenceEvent[] {
+  return events.map((event) => ({
+    ...event,
+    payload: repairSyntheticBootstrapOutputTruncation(event.payload) as TaskEvidenceEvent['payload'],
+  }))
+}
+
 export function stripLegacyRuntimeFields<T extends Record<string, unknown>>(task: T): Record<string, unknown> {
   const {
     assignedTo: _assignedTo,
@@ -173,7 +197,7 @@ export async function buildEffectiveTask(
   ])
   const runtime = runtimeStore.tasks[task.id] ?? legacyRuntimeFromTask(task)
   const workspace = workspaceStore.workspaces[task.id] ?? legacyWorkspaceFromTask(task)
-  const evidence = storedEvidence.length > 0 ? storedEvidence : legacyEvidenceFromTask(task)
+  const evidence = normalizeEvidenceProjection(storedEvidence.length > 0 ? storedEvidence : legacyEvidenceFromTask(task))
   const projected = legacyFieldsFromEvidence(evidence)
   const normalized = normalizeTerminalCompletionEvidence({
     ...task,

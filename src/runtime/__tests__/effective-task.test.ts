@@ -142,6 +142,31 @@ describe('effective task projection', () => {
     expect(effective.revisionCount).toBe(8)
   })
 
+  it('repairs older Guildhall bootstrap verification ellipses in effective evidence', async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-effective-task-'))
+    await appendTaskEvidence(projectRoot, 'task-auth-complete', {
+      id: 'note-bootstrap-truncated',
+      kind: 'note',
+      recordedAt: '2026-07-06T21:31:31.829Z',
+      payload: {
+        agentId: 'coordinator',
+        role: 'bootstrap-verification',
+        content:
+          'worktree bootstrap failed on gate `pnpm build` (exit 1). The task worktree already has edits, so Guildhall is handing the failing verification back to the worker instead of blocking setup.\n' +
+          'Verification output:\nstack line\n...',
+        timestamp: '2026-07-06T21:31:31.829Z',
+      },
+    })
+
+    const effective = await buildEffectiveTask(projectRoot, legacyTask())
+
+    expect(effective.notes).toHaveLength(1)
+    expect(effective.notes[0]?.content).toContain('full output is unavailable')
+    expect(effective.notes[0]?.content).not.toContain('\n...')
+    expect(String(effective.evidence[0]?.payload.content)).toContain('full output is unavailable')
+    expect(String(effective.evidence[0]?.payload.content)).not.toContain('\n...')
+  })
+
   it('recovers a clipped imported title before exposing the effective task', async () => {
     const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-effective-task-'))
 

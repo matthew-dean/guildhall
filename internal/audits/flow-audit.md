@@ -16493,6 +16493,70 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-07-06T22:00:00Z - Narrative Harness proof-recovery exposed persisted
+bootstrap-output truncation.
+
+- Work id: `codex:narrative-harness-proof-recovery-2026-07-06`.
+- Failure class:
+  - `3. task hierarchy/dependency/proof modeling problem`
+  - `4. scheduler/action-state logic problem`
+  - `7. bad project data produced by an earlier Guildhall bug`
+- User job: when Guildhall hands a task-local bootstrap/gate failure back to
+  the worker, the task note/evidence/checkpoint must preserve truthful failure
+  data. UI may visually crop text, but persisted semantic task data must not be
+  synthetically ellipsized.
+- Live failure:
+  - Installed Narrative Harness task
+    `task-generate-a-cli-first-story-synopsis-outline-character-voice-records-and-one-chapter-draft-from-the-selected-model`
+    stayed `in_progress`, but `content.no-truncated-data` correctly failed
+    because `task.notes[39].content` and `task.evidence[83].payload.content`
+    ended with `...`.
+  - The writer path was `src/runtime/orchestrator.ts` bootstrap-verification
+    handoff, which used `slice(0, 1800) + "\n..."` before persisting notes and
+    note evidence. The checkpoint verification summary also used
+    `slice(0, 1200)`.
+- Fix:
+  - Bootstrap verification handoff now stores the full failure output in the
+    persisted note/evidence and checkpoint verification summary instead of
+    manufacturing cropped semantic data.
+  - Normal orchestrator ticks now repair the specific bad data Guildhall
+    already produced for coordinator-owned `bootstrap-verification` notes that
+    ended with synthetic `...`, replacing the destroyed tail with an honest
+    marker that the older build discarded the full output.
+  - Added an orchestrator regression with a long bootstrap failure that asserts
+    the tail token survives in both the note and checkpoint, with no synthetic
+    `\n...`, plus a tick-level regression that old bootstrap truncation is
+    repaired before review/gate completion.
+  - Effective task projection now also repairs the same older
+    bootstrap-verification evidence when reading split task-state records, so
+    API/UI `notes` and `evidence` agree even though the append-only audit log
+    still contains the historical corrupted event.
+- Installed-app proof:
+  - Direct build and `node ./scripts/dev-install.mjs` succeeded.
+  - Explicit restart was required because `guildhall start` first reported an
+    already-running stale process; after `guildhall stop && guildhall start`,
+    `/api/stale-server` returned `stale:false` for PID `87842`.
+  - `/api/project/task/task-generate-a-cli-first-story-synopsis-outline-character-voice-records-and-one-chapter-draft-from-the-selected-model?projectId=narrative-harness`
+    returned `badNotes:[]` and `badEvidence:[]`; bootstrap notes now end with
+    the honest unavailable-output marker instead of `...`.
+  - A fresh gate pass recorded `content.no-truncated-data` as passed at
+    `2026-07-06T21:57:21.856Z`, followed by hard gate `pnpm-build` passed at
+    `2026-07-06T21:57:30.000Z`.
+  - `/api/project?projectId=narrative-harness` no longer lists the generation
+    task as proof-missing; the remaining proof-missing done task is
+    `task-import-lu6waj` (`Select and prove a DeepInfra drafting model for
+    broad-genre chapter writing.`).
+- New follow-up finding:
+  - Failure class:
+    - `2. project structure/scope/release modeling problem`
+    - `4. scheduler/action-state logic problem`
+    - `5. UI communication/orientation problem`
+  - The task detail endpoint still showed the generation task in `review`
+    assigned to `reviewer-agent` after proof-health reopened it, while project
+    counts reported `gateCheck:0` and `inProgress:0`. This needs a separate
+    shared-state investigation; do not treat the NH MVP as complete from the
+    proof gate alone.
+
 2026-07-06T18:18:00Z - Tightened selected-scope proof truth for Narrative
 Harness current release.
 
