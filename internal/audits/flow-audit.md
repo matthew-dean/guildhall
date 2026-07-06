@@ -12,6 +12,95 @@ This is the active browser test plan for the Guildhall project surface. Keep it
 updated while auditing the active test project so another agent can resume
 without guessing.
 
+2026-07-06T03:16:00Z - Review now reconciles stale no-proof revisions against
+task-worktree proof.
+
+- Work id: `codex:review-worker-proof-reconciliation-2026-07-06`.
+- User job: when a worker has already created the current-release proof
+  artifacts and recorded passing verification, Guildhall should not bounce the
+  same task back to the worker because a reviewer missed the task worktree diff.
+  Review, gate-check, Overview, and Start should agree that the task is ready
+  for hard verification instead of re-asking for work that already exists.
+- Root cause:
+  - Narrative Harness spatial/geographic continuity work created
+    `scripts/prove-spatial-geographic-continuity.mjs` and
+    `fixtures/spatial-geographic-continuity/impossible-walk.json`, and the
+    worker self-critique recorded `npm run prove:spatial-geographic-continuity`
+    plus `npm run build` passing.
+  - The reviewer then returned a fresh revision saying the task supplied only
+    documentation and no concrete runnable proof. This was not an NH artifact
+    failure; it was a Guildhall review-context/state-precedence failure.
+  - Acceptance criteria stayed stale even after the worker self-critique marked
+    the criterion met, so deterministic review and LLM review could both reason
+    from lagging task state instead of the durable proof packet.
+  - After the three decomposed proof children completed, the Overview primary
+    action resurrected the containing parent `task-150` as runnable ready work.
+    This was a structural read-model leak: reverse-linked `decomposes` children
+    were enough for execution state, but the action model was ranking raw
+    `ready` tasks without recognizing the parent as a container.
+- Fix:
+  - Review dispatch now reconciles acceptance criteria from the latest worker
+    self-critique before reviewer work starts, and persists that reconciliation
+    to shared task state.
+  - If a reviewer revision specifically claims there is no concrete/runnable
+    proof, Guildhall checks the latest worker proof packet and active worktree
+    status. When the proof packet names changed `scripts/`, `fixtures/`,
+    `src/`, `test/`, or `tests/` artifacts and records passing verification,
+    Guildhall treats that reviewer response as stale and advances to gate-check
+    instead of looping the worker.
+  - Current-scope recovered MVP work-unit wording now requires source-backed
+    current-scope work and proof. Explicit deferral is no longer accepted as
+    completion for work already selected into the current release/scope.
+  - The shared project action model now skips decomposed containing parents
+    when ranking primary task actions, including reverse-linked children where
+    the parent did not persist `hierarchy.childIds`.
+  - Release-scope projection now preserves explicit deferred membership when
+    unassigned work is inferred into a release, so deferred nodes do not leak
+    back into selected `nodeIds`.
+- Narrative Harness proof:
+  - DeepInfra drafting model work is done and records
+    `mistralai/Mistral-Small-3.2-24B-Instruct-2506` on DeepInfra for Stage 1
+    drafting, including legal consensual adult fiction boundaries and policy
+    exclusions.
+  - World-state continuity work is done and includes temporal/object-state
+    reasoning such as wet hair drying over elapsed time in a given climate.
+  - Spatial/geographic continuity is done. The task has executable
+    task-worktree proof for an impossible walking-speed/travel-distance case.
+    The proof command emitted `ok:true` and a `SpatialGeographicFinding` with
+    category `travel_time` and severity `break`.
+  - Installed live API showed the three `task-150-split-*` proof children as
+    `done`, with the spatial child approved by deterministic review
+    reconciliation after the stale "no concrete proof" review response.
+  - After rebuilding/installing the parent-container fix, live
+    `/api/project?projectId=narrative-harness` moved the primary action from
+    `task-150` to the next real current-scope task
+    `task-import-1u8es55`; `task-150` remains available as structural context
+    but is no longer offered as runnable work.
+- Contract Touch Decision:
+  - Touched contracts: review dispatch preconditions, LLM-review verdict
+    normalization, deterministic reviewer handoff semantics, recovered
+    current-scope work-unit acceptance wording, project action-model task
+    ranking, release-scope selected/deferred projection.
+  - Contracts considered but not touched: persisted task schema, persisted
+    review-verdict schema, release schema, gate-result schema, worker artifact
+    schema.
+  - Existing data impact: no migration. Existing worker self-critiques and
+    task-worktree diffs are read as stronger review evidence when they directly
+    contradict a "no concrete proof" reviewer response.
+  - Required follow-up: continue the remaining current-release tasks while
+    classifying every escaped stall as schema/model, project-structure,
+    scheduler/action-state, UI-communication, or runtime infrastructure.
+  - Proof required: stale no-proof reviewer regression, recurrent fanout
+    adjudication regression, action-model parent-container regression,
+    release-scope deferred-membership regression, contract detector,
+    build/install, stale-server check, and live NH transition proof.
+  - Proof provided so far: focused regressions passed; live NH proof command
+    passed in the task worktree; installed app transitioned spatial/geographic
+    review to `gate_check`, then `done`.
+  - Apply/revert behavior: revert the review reconciliation helpers, the LLM
+    stale-proof override, and the recovered work-unit wording change to restore
+    previous review precedence; no data rollback required.
+
 2026-07-06T02:36:10Z - Release scope now consumes decomposed child work instead
 of containing parents.
 

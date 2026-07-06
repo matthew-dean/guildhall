@@ -199,6 +199,49 @@ describe('buildProjectActionModel', () => {
     })
   })
 
+  it('does not surface a decomposed containing parent as the primary task action', () => {
+    const model = buildProjectActionModel({
+      startReadiness: { canStart: true },
+      tasks: [
+        {
+          id: 'task-150',
+          title: 'Define MVP drafting model and physical-world review lanes',
+          description: 'Containing parent for three execution children.',
+          status: 'ready',
+          updatedAt: '2026-07-06T03:00:00.000Z',
+        },
+        {
+          id: 'task-150-split-model',
+          title: 'Select and prove DeepInfra drafting model',
+          status: 'done',
+          hierarchy: { parentId: 'task-150', childIds: [], relation: 'decomposes' },
+          updatedAt: '2026-07-06T03:01:00.000Z',
+        },
+        {
+          id: 'task-150-split-world',
+          title: 'Define world-state continuity review lane',
+          status: 'done',
+          hierarchy: { parentId: 'task-150', childIds: [], relation: 'decomposes' },
+          updatedAt: '2026-07-06T03:02:00.000Z',
+        },
+        {
+          id: 'task-next',
+          title: 'Continue the remaining current-scope proof work',
+          status: 'ready',
+          updatedAt: '2026-07-06T03:03:00.000Z',
+        },
+      ],
+      thread: { turns: [], activeTurnId: null },
+      runStatus: 'stopped',
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      source: 'task',
+      taskId: 'task-next',
+      label: 'Continue the remaining current-scope proof work',
+    })
+  })
+
   it('keeps active brief cleanup ahead of project discovery reconciliation', () => {
     const model = buildProjectActionModel({
       startReadiness: { canStart: true },

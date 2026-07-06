@@ -1914,7 +1914,7 @@ function buildRecoverySpecSeedForTask(liveTask: Task, queue: TaskQueue, now: str
   const scopedContractTerms = scopedRecoveryContractTerms(taskTitle, contractTerms)
   const scopedContractAcceptance = scopedRecoveryContractAcceptance(taskTitle)
   const scopedParentAcceptance = childScopedRequirement
-    ? [`Given the current MVP scope, when ${taskTitle} is complete, then Guildhall records source-backed MVP work, proof, or explicit deferral for ${childScopedRequirement}.`]
+    ? [`Given the current MVP scope, when ${taskTitle} is complete, then Guildhall records source-backed current-scope MVP work and proof for ${childScopedRequirement}.`]
     : scopedRecoveryParentAcceptance(taskTitle, parentAcceptance)
   const decisionLines = answeredDecisions.length > 0
     ? answeredDecisions.map((decision) => `- ${decision}`).join('\n')
@@ -1931,7 +1931,7 @@ function buildRecoverySpecSeedForTask(liveTask: Task, queue: TaskQueue, now: str
     ? inheritedAcceptanceLines
     : sourceRequirements.length > 0
       ? sourceRequirements.map((requirement, index) =>
-          `${index + 1}. Given the current MVP scope, when ${taskTitle} is complete, then Guildhall records source-backed MVP work, proof, or explicit deferral for ${requirement}.`,
+          `${index + 1}. Given the current MVP scope, when ${taskTitle} is complete, then Guildhall records source-backed current-scope MVP work and proof for ${requirement}.`,
         )
       : [
         `1. Given the current project evidence, when ${taskTitle} is implemented, then the repo-local proof demonstrates that exact child outcome without adding unrelated later-stage work.`,
@@ -2048,7 +2048,7 @@ function recoveryWorkUnitAnalysisFromRequirements(input: {
     units: input.sourceRequirements.map((requirement, index) => ({
       id: `recovered-requirement-${index + 1}`,
       title: recoveryWorkUnitTitle(requirement, index),
-      deliverable: `Guildhall records source-backed MVP work, proof, or explicit deferral for ${requirement}.`,
+      deliverable: `Guildhall records source-backed current-scope MVP work and proof for ${requirement}.`,
       rationale: `Recovered from numbered owner requirement ${index + 1} for ${input.taskTitle}.`,
       dependsOn: [],
       ...(input.domain ? { suggestedDomain: input.domain } : {}),
@@ -3797,6 +3797,10 @@ export class Orchestrator {
     // load levers fall back to `llm_only` (safest default).
     const reviewerMode: ReviewerMode =
       beforeStatus === 'review' ? await this.resolveReviewerMode(task.domain) : 'llm_only'
+
+    if (beforeStatus === 'review') {
+      await this.reconcileReviewTaskFromWorkerProof(task)
+    }
 
     if (beforeStatus === 'review' && reviewerMode === 'deterministic_only') {
       return await this.applyReviewVerdictInline({
@@ -5743,19 +5747,49 @@ export class Orchestrator {
         }
 
       // FR-27 / AC-18: record LLM verdict when a review actually ran.
-      if (beforeStatus === 'review') {
-        const llmVerdict = recordLlmVerdict({
-          queue: queueAfter,
-          taskId: task.id,
-          beforeStatus,
+        if (beforeStatus === 'review') {
+          const llmVerdict = recordLlmVerdict({
+            queue: queueAfter,
+            taskId: task.id,
+            beforeStatus,
           afterStatus,
-          now: this.now(),
-        })
-        if (llmVerdict) {
-          if (llmVerdict.normalizedStatus !== afterStatus) {
-            afterStatus = llmVerdict.normalizedStatus
-            taskAfter.status = afterStatus
-          }
+            now: this.now(),
+          })
+          if (llmVerdict) {
+            const staleNoProofOverride =
+              llmVerdict.record.verdict === 'revise'
+                ? await this.reviewRevisionContradictedByWorkerProof(
+                    taskAfter,
+                    llmVerdict.record.reasoning,
+                  )
+                : null
+            if (staleNoProofOverride) {
+              llmVerdict.record.verdict = 'approve'
+              llmVerdict.record.reviewerPath = 'deterministic'
+              llmVerdict.record.reason =
+                'Reviewer revision contradicted by latest worker proof packet.'
+              llmVerdict.record.reasoning = [
+                'Guildhall overrode a stale review revision because the reviewer claimed no concrete proof artifact existed, while the latest worker proof packet names concrete task-worktree artifacts and passing verification.',
+                '',
+                staleNoProofOverride.summary,
+              ].join('\n')
+              llmVerdict.record.failingSignals = []
+              llmVerdict.normalizedStatus = 'gate_check'
+              taskAfter.notes.push({
+                agentId: 'coordinator',
+                role: 'review-reconciliation',
+                content: [
+                  'Guildhall reconciled a stale review response with the latest worker proof packet.',
+                  '',
+                  staleNoProofOverride.summary,
+                ].join('\n'),
+                timestamp: this.now(),
+              })
+            }
+            if (llmVerdict.normalizedStatus !== afterStatus) {
+              afterStatus = llmVerdict.normalizedStatus
+              taskAfter.status = afterStatus
+            }
           if (afterStatus === 'in_progress') {
             ensureWorkerOwnership(taskAfter)
           } else if (afterStatus === 'gate_check') {
@@ -8661,6 +8695,61 @@ export class Orchestrator {
       }
     }
 
+    const satisfiedProof = latestWorkerProofSatisfiesAdjudicatedScope(input.task, scopeInstructions)
+    if (satisfiedProof) {
+      const satisfiedVerdict: ReviewVerdict = {
+        verdict: 'approve',
+        reviewerPath: 'deterministic',
+        reason: 'Coordinator adjudication scope satisfied by latest worker proof.',
+        reasoning: [
+          'The latest worker self-critique after coordinator adjudication names the concrete requested proof artifact(s) and records passing verification.',
+          'Guildhall treated the repeated dissent as stale instead of sending the task back to the worker for work that already exists.',
+          '',
+          satisfiedProof.summary,
+        ].join('\n'),
+        failingSignals: [],
+        recordedAt: input.now,
+      }
+      input.task.reviewVerdicts.push(satisfiedVerdict)
+      input.task.notes.push({
+        agentId: coordinatorId,
+        role: 'coordinator',
+        content: [
+          '**Coordinator adjudication resolved:**',
+          '',
+          'The latest worker proof satisfies the scoped dissent. Advancing to gate check instead of repeating the same worker handoff.',
+          '',
+          satisfiedProof.summary,
+        ].join('\n'),
+        timestamp: input.now,
+      })
+      transitionTaskStatus({
+        task: input.task,
+        event: 'start_gate_check',
+        actor: coordinatorId,
+        evidenceRefs: dissenterSlugs.map((slug) => `reviewer-fanout:${slug}`),
+        now: input.now,
+      })
+      input.task.updatedAt = input.now
+      input.queue.lastUpdated = input.now
+      await this.writeQueue(input.queue)
+      await this.logTickProgress({
+        task: input.task,
+        agent: coordinatorId,
+        beforeStatus: input.beforeStatus,
+        afterStatus: 'gate_check',
+        transitioned: true,
+        note: 'coordinator adjudicated stale dissent → gate_check',
+      })
+      return {
+        kind: 'processed',
+        taskId: input.task.id,
+        agent: coordinatorId,
+        beforeStatus: input.beforeStatus,
+        afterStatus: 'gate_check',
+      } as TickOutcome
+    }
+
     const rationale = [
       `Reviewer fan-out round ${input.round} produced recurring dissent from`,
       `${dissenterSlugs.join(', ')}. Guildhall routed this repeated handoff`,
@@ -9978,6 +10067,85 @@ export class Orchestrator {
       path.join(taskDir, 'review-packet.md'),
       await this.renderReviewPacket(task),
     )
+  }
+
+  private async reconcileReviewTaskFromWorkerProof(task: Task): Promise<void> {
+    const before = JSON.stringify(task.acceptanceCriteria ?? [])
+    reconcileAcceptanceCriteriaFromLatestWorkerSelfCritique(task)
+    if (JSON.stringify(task.acceptanceCriteria ?? []) === before) return
+
+    await this.withQueueWriteLock(async () => {
+      const queue = await this.readQueue()
+      const liveTask = queue.tasks.find((candidate) => candidate.id === task.id)
+      if (!liveTask || liveTask.status !== 'review') return
+      const liveBefore = JSON.stringify(liveTask.acceptanceCriteria ?? [])
+      reconcileAcceptanceCriteriaFromLatestWorkerSelfCritique(liveTask)
+      if (JSON.stringify(liveTask.acceptanceCriteria ?? []) === liveBefore) return
+      liveTask.notes.push({
+        agentId: 'coordinator',
+        role: 'review-reconciliation',
+        content:
+          'Guildhall reconciled acceptance criteria from the latest worker self-critique before review so reviewer state matches the durable proof packet.',
+        timestamp: this.now(),
+      })
+      liveTask.updatedAt = this.now()
+      queue.lastUpdated = liveTask.updatedAt
+      await this.writeQueue(queue)
+      task.acceptanceCriteria = liveTask.acceptanceCriteria
+      task.updatedAt = liveTask.updatedAt
+    })
+  }
+
+  private async reviewRevisionContradictedByWorkerProof(
+    task: Task,
+    reasoning: string | undefined,
+  ): Promise<{ summary: string } | null> {
+    const text = reasoning?.trim() ?? ''
+    if (!/\b(?:only documentation|no concrete proof|no runnable|lacks? the required proof|without a runnable|not an actual executable proof)\b/i.test(text)) {
+      return null
+    }
+
+    const latestWorkerNote = this.latestWorkerSelfCritiqueNote(task)
+    const proofText = latestWorkerNote?.content?.trim() ?? ''
+    if (!proofText) return null
+    if (!/\b(pass|passed|green|succeed|succeeded|exit 0|ok:\s*true)\b/i.test(proofText)) return null
+
+    const rawRepoRoot = task.worktreePath?.trim() || task.projectPath?.trim()
+    const repoRoot = rawRepoRoot ? resolveRuntimePath(rawRepoRoot) : ''
+    if (!repoRoot) return null
+
+    let changedFiles: string[] = []
+    try {
+      const { stdout } = await execFileP('git', ['status', '--short', '--untracked-files=all'], {
+        cwd: repoRoot,
+        maxBuffer: 1024 * 1024,
+      })
+      changedFiles = stdout
+        .split('\n')
+        .map((line) => line.trimEnd())
+        .filter(Boolean)
+        .map((line) => line.slice(3).trim())
+        .filter((file) =>
+          file.length > 0 &&
+          !file.includes('/.guildhall/') &&
+          !isCommandShapedArtifactPath(file),
+        )
+    } catch {
+      return null
+    }
+
+    const proofArtifactFiles = changedFiles.filter((file) =>
+      /^(?:scripts|fixtures|src|test|tests)\//.test(file) &&
+      proofText.includes(file),
+    )
+    if (proofArtifactFiles.length === 0) return null
+
+    return {
+      summary: [
+        `Concrete proof artifact(s): ${proofArtifactFiles.join(', ')}`,
+        'Latest worker proof recorded passing verification.',
+      ].join('\n'),
+    }
   }
 
   private async renderReviewPacket(task: Task): Promise<string> {
@@ -12803,6 +12971,77 @@ function hasPriorAdjudicationForDissent(
     record.decidedBy === 'coordinator' &&
     sameDissenterSet(sortedDissenterSlugsFromRecord(record.dissenters), current),
   )
+}
+
+function latestWorkerProofSatisfiesAdjudicatedScope(
+  task: Task,
+  scopeInstructions: readonly string[],
+): { summary: string } | null {
+  const latestAdjudicationAt = latestCoordinatorAdjudicationTimestamp(task)
+  const latestSelfCritique = latestWorkerSelfCritiqueAfter(task, latestAdjudicationAt)
+  if (!latestSelfCritique) return null
+  const requestedPaths = concreteArtifactPathsFromInstructions(scopeInstructions)
+  if (requestedPaths.length === 0) return null
+  const content = latestSelfCritique.content
+  const missing = requestedPaths.filter(path => !content.includes(path))
+  if (missing.length > 0) return null
+  if (!/\b(?:passed|pass|exit 0|ok:\s*true)\b/i.test(content)) return null
+  return {
+    summary: [
+      `Satisfied requested artifact(s): ${requestedPaths.join(', ')}`,
+      'Latest worker proof recorded passing verification.',
+    ].join('\n'),
+  }
+}
+
+function latestCoordinatorAdjudicationTimestamp(task: Task): number {
+  let latest = 0
+  for (const note of task.notes) {
+    if (
+      note.role === 'coordinator' &&
+      /Coordinator adjudication/i.test(note.content)
+    ) {
+      const timestamp = Date.parse(note.timestamp)
+      if (Number.isFinite(timestamp) && timestamp > latest) latest = timestamp
+    }
+  }
+  return latest
+}
+
+function latestWorkerSelfCritiqueAfter(
+  task: Task,
+  afterTimestamp: number,
+): Pick<Task['notes'][number], 'content' | 'timestamp'> | null {
+  for (let i = task.notes.length - 1; i >= 0; i -= 1) {
+    const note = task.notes[i]
+    if (!note || !isWorkerSelfCritiqueNote(note)) continue
+    const timestamp = Date.parse(note.timestamp)
+    if (Number.isFinite(afterTimestamp) && timestamp <= afterTimestamp) continue
+    return { content: note.content, timestamp: note.timestamp }
+  }
+  return null
+}
+
+function concreteArtifactPathsFromInstructions(instructions: readonly string[]): string[] {
+  const paths = new Set<string>()
+  for (const instruction of instructions) {
+    const text = instruction.trim()
+    const backtickMatches = text.matchAll(/`([^`]+)`/g)
+    for (const match of backtickMatches) {
+      const value = match[1]?.trim()
+      if (value && looksLikeProjectArtifactPath(value)) paths.add(value)
+    }
+    const bareMatches = text.matchAll(/\b(?:docs|fixtures|scripts|src|test|tests)\/[A-Za-z0-9._/-]+\b/g)
+    for (const match of bareMatches) {
+      const value = match[0]?.trim()
+      if (value && looksLikeProjectArtifactPath(value)) paths.add(value)
+    }
+  }
+  return [...paths].sort()
+}
+
+function looksLikeProjectArtifactPath(value: string): boolean {
+  return /^(?:docs|fixtures|scripts|src|test|tests)\/[A-Za-z0-9._/-]+$/.test(value)
 }
 
 function sortedDissenterSlugsFromRecord(dissenters: readonly string[]): string[] {

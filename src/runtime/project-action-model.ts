@@ -41,6 +41,11 @@ export interface ProjectActionTask {
   spec?: string
   acceptanceCriteria?: unknown[]
   needsBriefCleanup?: boolean
+  hierarchy?: {
+    parentId?: string | null
+    childIds?: string[]
+    relation?: string
+  }
 }
 
 export interface ProjectActionThreadTurn {
@@ -381,11 +386,25 @@ function taskBlockedReason(task: ProjectActionTask): string | null {
   return reason.length > 0 ? reason : null
 }
 
+function hasExecutionChildren(task: ProjectActionTask, tasks: readonly ProjectActionTask[]): boolean {
+  const explicitChildren = task.hierarchy?.childIds ?? []
+  if (explicitChildren.length > 0) return true
+  return tasks.some(candidate =>
+    candidate.id !== task.id &&
+    candidate.hierarchy?.parentId === task.id &&
+    (
+      candidate.hierarchy?.relation === 'decomposes' ||
+      candidate.id.startsWith(`${task.id}-split-`)
+    ),
+  )
+}
+
 function bestTaskAction(tasks: ProjectActionTask[], running: boolean): ProjectAction | null {
   const priority = ['in_progress', 'review', 'gate_check', 'blocked', 'exploring', 'spec_review', 'ready', 'import_draft']
   const tasksById = new Map(tasks.map(task => [task.id, task]))
   const ranked = [...tasks]
     .filter(task => priority.includes(task.status ?? ''))
+    .filter(task => !hasExecutionChildren(task, tasks))
     .sort((left, right) => {
       if (running) {
         const assignmentDelta = Number(taskHasLiveAssignment(right)) - Number(taskHasLiveAssignment(left))

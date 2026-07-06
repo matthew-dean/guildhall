@@ -3479,19 +3479,19 @@ describe('Orchestrator.tick — routing', () => {
         acceptanceCriteria: [
           {
             id: 'model',
-            description: 'Given the current MVP scope, when Define Narrative Harness MVP drafting model and physical-world review lanes is complete, then Guildhall records source-backed MVP work, proof, or explicit deferral for selecting and proving a DeepInfra-accessible model that can do drafting/writing work across genres, including adult genres, rather than assuming the current default model is sufficient.',
+            description: 'Given the current MVP scope, when Define Narrative Harness MVP drafting model and physical-world review lanes is complete, then Guildhall records source-backed current-scope MVP work and proof for selecting and proving a DeepInfra-accessible model that can do drafting/writing work across genres, including adult genres, rather than assuming the current default model is sufficient.',
             verifiedBy: 'review',
             met: false,
           },
           {
             id: 'world',
-            description: 'Given the current MVP scope, when Define Narrative Harness MVP drafting model and physical-world review lanes is complete, then Guildhall records source-backed MVP work, proof, or explicit deferral for defining review lanes for world-state continuity over time, including object/property state transitions such as wet hair drying after enough time in a given climate.',
+            description: 'Given the current MVP scope, when Define Narrative Harness MVP drafting model and physical-world review lanes is complete, then Guildhall records source-backed current-scope MVP work and proof for defining review lanes for world-state continuity over time, including object/property state transitions such as wet hair drying after enough time in a given climate.',
             verifiedBy: 'review',
             met: false,
           },
           {
             id: 'space',
-            description: 'Given the current MVP scope, when Define Narrative Harness MVP drafting model and physical-world review lanes is complete, then Guildhall records source-backed MVP work, proof, or explicit deferral for defining spatial/geographic continuity reviews, including scene geography, travel distance, walking speed for fantasy epics, and other physical plausibility checks.',
+            description: 'Given the current MVP scope, when Define Narrative Harness MVP drafting model and physical-world review lanes is complete, then Guildhall records source-backed current-scope MVP work and proof for defining spatial/geographic continuity reviews, including scene geography, travel distance, walking speed for fantasy epics, and other physical plausibility checks.',
             verifiedBy: 'review',
             met: false,
           },
@@ -3513,9 +3513,9 @@ describe('Orchestrator.tick — routing', () => {
           'Select and prove DeepInfra drafting model from the current project evidence.',
           '',
           '## Acceptance Criteria',
-          '1. Given the current MVP scope, when Define Narrative Harness MVP drafting model and physical-world review lanes is complete, then Guildhall records source-backed MVP work, proof, or explicit deferral for selecting and proving a DeepInfra-accessible model that can do drafting/writing work across genres, including adult genres, rather than assuming the current default model is sufficient.',
-          '2. Given the current MVP scope, when Define Narrative Harness MVP drafting model and physical-world review lanes is complete, then Guildhall records source-backed MVP work, proof, or explicit deferral for defining review lanes for world-state continuity over time, including object/property state transitions such as wet hair drying after enough time in a given climate.',
-          '3. Given the current MVP scope, when Define Narrative Harness MVP drafting model and physical-world review lanes is complete, then Guildhall records source-backed MVP work, proof, or explicit deferral for defining spatial/geographic continuity reviews, including scene geography, travel distance, walking speed for fantasy epics, and other physical plausibility checks.',
+          '1. Given the current MVP scope, when Define Narrative Harness MVP drafting model and physical-world review lanes is complete, then Guildhall records source-backed current-scope MVP work and proof for selecting and proving a DeepInfra-accessible model that can do drafting/writing work across genres, including adult genres, rather than assuming the current default model is sufficient.',
+          '2. Given the current MVP scope, when Define Narrative Harness MVP drafting model and physical-world review lanes is complete, then Guildhall records source-backed current-scope MVP work and proof for defining review lanes for world-state continuity over time, including object/property state transitions such as wet hair drying after enough time in a given climate.',
+          '3. Given the current MVP scope, when Define Narrative Harness MVP drafting model and physical-world review lanes is complete, then Guildhall records source-backed current-scope MVP work and proof for defining spatial/geographic continuity reviews, including scene geography, travel distance, walking speed for fantasy epics, and other physical plausibility checks.',
         ].join('\n'),
         productBrief: {
           userJob: 'I want Select and prove DeepInfra drafting model implemented or proven from current evidence.',
@@ -15587,6 +15587,99 @@ describe('Orchestrator.tick \u2014 AC-18 reviewer_mode dispatch', () => {
       expect(t.reviewVerdicts[0]!.reasoning).toContain('**Verdict:** Approved')
     },
   )
+
+  it('llm_only: reconciles stale no-proof reviewer revisions against concrete worker proof artifacts', async () => {
+    await writeReviewerMode('llm_only')
+    const worktree = path.join(tmpDir, 'spatial-proof-worktree')
+    await fs.mkdir(path.join(worktree, 'scripts'), { recursive: true })
+    await fs.mkdir(path.join(worktree, 'fixtures/spatial-geographic-continuity'), { recursive: true })
+    execFileSync('git', ['init'], { cwd: worktree, stdio: 'ignore' })
+    await fs.writeFile(
+      path.join(worktree, 'scripts/prove-spatial-geographic-continuity.mjs'),
+      'console.log(JSON.stringify({ ok: true }))\n',
+      'utf-8',
+    )
+    await fs.writeFile(
+      path.join(worktree, 'fixtures/spatial-geographic-continuity/impossible-walk.json'),
+      '{"id":"spatial-impossible-walk-001"}\n',
+      'utf-8',
+    )
+
+    await writeQueue([
+      reviewReadyTask({
+        id: 'spatial-proof',
+        status: 'review',
+        assignedTo: 'reviewer-agent',
+        worktreePath: worktree,
+        acceptanceCriteria: [
+          {
+            id: 'ac-1',
+            description: 'Spatial continuity has executable proof.',
+            verifiedBy: 'review',
+            met: false,
+          },
+        ],
+        gateResults: [],
+        notes: [
+          {
+            agentId: 'worker-agent',
+            role: 'worker',
+            content: [
+              '**Self-critique:**',
+              '',
+              'For each acceptance criterion:',
+              '- ac-1: Met — `scripts/prove-spatial-geographic-continuity.mjs` reads `fixtures/spatial-geographic-continuity/impossible-walk.json` and emits the expected finding.',
+              '',
+              'Minimum-scope check:',
+              '- Files changed: scripts/prove-spatial-geographic-continuity.mjs, fixtures/spatial-geographic-continuity/impossible-walk.json.',
+              '- Smallest useful change?: yes.',
+              '',
+              'Review proof packet:',
+              '- Changed files / diff scope: scripts/prove-spatial-geographic-continuity.mjs, fixtures/spatial-geographic-continuity/impossible-walk.json.',
+              '- Verification commands passed: npm run prove:spatial-geographic-continuity emitted ok: true; npm run build passed.',
+            ].join('\n'),
+            timestamp: '2026-04-21T00:00:00Z',
+          },
+        ],
+      }),
+    ])
+
+    const reviewer = stubAgent('reviewer-agent', async () => {
+      await mutateTask('spatial-proof', {
+        status: 'in_progress',
+        notes: [
+          {
+            agentId: 'reviewer-agent',
+            role: 'reviewer',
+            content:
+              '**Review:** ac-1: Not met — the deliverable supplies only documentation and no concrete proof artifact or runnable test.',
+            timestamp: '2026-04-21T00:05:00Z',
+          },
+        ],
+      })
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ reviewer }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.afterStatus).toBe('gate_check')
+    }
+    const task = (await readQueue()).tasks.find(candidate => candidate.id === 'spatial-proof')!
+    expect(task.status).toBe('gate_check')
+    expect(task.assignedTo).toBe('gate-checker-agent')
+    expect(task.acceptanceCriteria[0]?.met).toBe(true)
+    expect(task.reviewVerdicts.at(-1)).toMatchObject({
+      verdict: 'approve',
+      reviewerPath: 'deterministic',
+      failingSignals: [],
+    })
+    expect(task.reviewVerdicts.at(-1)?.reasoning).toContain('scripts/prove-spatial-geographic-continuity.mjs')
+  })
 
   it('deterministic_only: skips the LLM reviewer entirely', async () => {
     await writeReviewerMode('deterministic_only')

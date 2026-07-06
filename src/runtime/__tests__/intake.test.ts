@@ -1034,7 +1034,7 @@ describe('approveSpec', () => {
         {
           id: 'recovered-requirement-1',
           title: 'Select and prove DeepInfra drafting model',
-          deliverable: 'Guildhall records source-backed MVP work, proof, or explicit deferral for DeepInfra drafting.',
+          deliverable: 'Guildhall records source-backed current-scope MVP work and proof for DeepInfra drafting.',
           rationale: 'Recovered from numbered owner requirement 1.',
           dependsOn: [],
           suggestedDomain: 'harness',
@@ -1042,7 +1042,7 @@ describe('approveSpec', () => {
         {
           id: 'recovered-requirement-2',
           title: 'Define world-state continuity review lane',
-          deliverable: 'Guildhall records source-backed MVP work, proof, or explicit deferral for world-state continuity.',
+          deliverable: 'Guildhall records source-backed current-scope MVP work and proof for world-state continuity.',
           rationale: 'Recovered from numbered owner requirement 2.',
           dependsOn: ['recovered-requirement-1'],
           suggestedDomain: 'harness',
@@ -1050,7 +1050,7 @@ describe('approveSpec', () => {
         {
           id: 'recovered-requirement-3',
           title: 'Define spatial/geographic continuity review lane',
-          deliverable: 'Guildhall records source-backed MVP work, proof, or explicit deferral for spatial/geographic continuity.',
+          deliverable: 'Guildhall records source-backed current-scope MVP work and proof for spatial/geographic continuity.',
           rationale: 'Recovered from numbered owner requirement 3.',
           dependsOn: ['recovered-requirement-1'],
           suggestedDomain: 'harness',

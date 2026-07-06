@@ -280,6 +280,7 @@ export function releaseToProjectScope(release: ProjectRelease, tasks: readonly T
     }
     const taskReleaseIds = task.releaseIds ?? []
     if (taskReleaseIds.length === 0 && task.hierarchy?.parentId) continue
+    if (taskReleaseIds.length === 0 && deferredNodeIds.has(nodeId)) continue
     if (taskReleaseIds.includes(release.id) || taskReleaseIds.length === 0) {
       nodeIds.add(nodeId)
     }
