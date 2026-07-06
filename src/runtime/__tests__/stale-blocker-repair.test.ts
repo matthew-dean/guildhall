@@ -1,10 +1,20 @@
 import { describe, expect, it } from 'vitest'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import type { Task, TaskQueue } from '@guildhall/core'
-import { getProjectSystemStatePath } from '@guildhall/sessions'
-import { repairStaleBlockersForProject, repairStaleBlockersInQueue } from '../stale-blocker-repair.js'
+import {
+  appendTaskEvidence,
+  getProjectSystemStatePath,
+  readTaskEvidence,
+  readTaskRuntimeStore,
+  upsertTaskRuntimeState,
+} from '@guildhall/sessions'
+import {
+  repairStaleBlockersForProject,
+  repairStaleBlockersForProjectWithRuntime,
+  repairStaleBlockersInQueue,
+} from '../stale-blocker-repair.js'
 
 function task(overrides: Partial<Task> = {}): Task {
   return {
@@ -142,6 +152,120 @@ describe('repairStaleBlockersInQueue', () => {
     expect(q.tasks[0]?.blockReason).toBeUndefined()
     expect(q.tasks[0]?.assignedTo).toBe('spec-agent')
     expect(q.tasks[0]?.notes.at(-1)?.role).toBe('state-repair')
+  })
+
+  it('hands stale dirty worker timeout blockers to review instead of owner input', () => {
+    const q = queue([
+      task({
+        id: 'task-dirty-worker-timeout',
+        blockReason: 'human_judgment_required: Worker repeatedly hit its turn budget after saving partial work.',
+        notes: [
+          {
+            agentId: 'coordinator',
+            role: 'policy-classification',
+            timestamp: '2026-05-23T00:00:00.000Z',
+            content: JSON.stringify({
+              class: 'model_tool_use_failure',
+              confidence: 'medium',
+              scope: 'task',
+              needsHuman: true,
+              humanQuestion: 'Should Guildhall retry from the partial diff, narrow the task, or switch provider?',
+              safePlaybooks: ['ask_concrete_human_question'],
+              evidence: [],
+              summary: 'The model failed to produce a usable tool call, so Guildhall should use a bounded repair prompt.',
+            }),
+          },
+        ],
+      }),
+    ])
+
+    const result = repairStaleBlockersInQueue(q, '2026-05-23T12:00:00.000Z')
+
+    expect(result.repairs).toEqual([
+      {
+        taskId: 'task-dirty-worker-timeout',
+        previousStatus: 'blocked',
+        nextStatus: 'review',
+        reason: 'model_tool_use_recovery_blocker',
+      },
+    ])
+    expect(q.tasks[0]?.status).toBe('review')
+    expect(q.tasks[0]?.blockReason).toBeUndefined()
+    expect(q.tasks[0]?.assignedTo).toBe('reviewer-agent')
+    expect(q.tasks[0]?.notes.at(-1)?.content)
+      .toContain('review the saved partial diff instead of asking the owner')
+  })
+
+  it('repairs compact dirty worker timeout blockers even when runtime notes were evacuated', () => {
+    const q = queue([
+      task({
+        id: 'task-compact-dirty-worker-timeout',
+        blockReason: 'human_judgment_required: Worker repeatedly hit its turn budget after saving partial work.',
+        notes: [],
+      }),
+    ])
+
+    const result = repairStaleBlockersInQueue(q, '2026-05-23T12:00:00.000Z')
+
+    expect(result.repairs[0]).toMatchObject({
+      taskId: 'task-compact-dirty-worker-timeout',
+      previousStatus: 'blocked',
+      nextStatus: 'review',
+      reason: 'model_tool_use_recovery_blocker',
+    })
+    expect(q.tasks[0]?.status).toBe('review')
+    expect(q.tasks[0]?.assignedTo).toBe('reviewer-agent')
+    expect(q.tasks[0]?.blockReason).toBeUndefined()
+  })
+
+  it('reconciles stale runtime and visible evidence when a repaired review task was already unblocked', async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'guildhall-stale-runtime-repair-'))
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    mkdirSync(dirname(tasksPath), { recursive: true })
+    writeFileSync(tasksPath, JSON.stringify(queue([
+      task({
+        id: 'task-dirty-worker-timeout',
+        status: 'review',
+        assignedTo: 'reviewer-agent',
+        blockReason: undefined,
+        notes: [],
+      }),
+    ]), null, 2))
+    await upsertTaskRuntimeState(projectRoot, 'task-dirty-worker-timeout', {
+      assignedTo: 'worker-agent',
+      openEscalationIds: [],
+      updatedAt: '2026-05-23T12:00:00.000Z',
+    })
+    await appendTaskEvidence(projectRoot, 'task-dirty-worker-timeout', {
+      id: 'stale-human-question',
+      kind: 'note',
+      recordedAt: '2026-05-23T12:00:00.000Z',
+      payload: {
+        agentId: 'coordinator',
+        role: 'policy-classification',
+        timestamp: '2026-05-23T12:00:00.000Z',
+        content: JSON.stringify({
+          class: 'model_tool_use_failure',
+          needsHuman: true,
+          humanQuestion: 'Should Guildhall retry from the partial diff, narrow the task, or switch provider?',
+          evidence: [{ summary: 'Worker repeatedly hit its turn budget after saving partial work.' }],
+        }),
+      },
+    })
+
+    const result = await repairStaleBlockersForProjectWithRuntime(projectRoot)
+    const runtime = await readTaskRuntimeStore(projectRoot)
+    const notes = await readTaskEvidence(projectRoot, 'task-dirty-worker-timeout', { kind: 'note' })
+
+    expect(result.changed).toBe(false)
+    expect(runtime.tasks['task-dirty-worker-timeout']?.assignedTo).toBe('reviewer-agent')
+    expect(notes.at(-1)?.payload).toMatchObject({
+      agentId: 'system',
+      role: 'state-repair',
+      content: expect.stringContaining('review the saved partial diff instead of asking the owner'),
+    })
+
+    rmSync(projectRoot, { recursive: true, force: true })
   })
 
   it('keeps repaired research-spike tasks in shaping even when stale spec text exists', () => {

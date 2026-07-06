@@ -4903,43 +4903,57 @@ export class Orchestrator {
           this.dirtyWorkerTimeoutRetries.set(retryKey, dirtyTimeoutRetries)
           if (dirtyTimeoutRetries > 2) {
             const summary = 'Worker repeatedly hit its turn budget after saving partial work.'
-            const escalation = await raiseEscalation({
-              tasksPath,
-              progressPath: this.progressPath(),
-              taskId: task.id,
-              agentId: agent.name,
-              reason: 'human_judgment_required',
-              summary,
-              details:
-                `${message}\n\n` +
-                'Guildhall preserved dirty worktree edits across multiple worker retries, but the worker kept exhausting its turn budget without handing off, blocking, or completing the task. Review the partial diff/checkpoint, then retry, narrow the task, or switch provider.',
-            })
-            if (escalation.success && escalation.escalationId) {
+            const classification: FailureClassification = {
+              class: 'model_tool_use_failure',
+              confidence: 'medium',
+              evidence: [{
+                kind: 'task',
+                summary,
+                ref: message,
+              }],
+              scope: 'task',
+              safePlaybooks: ['review_partial_diff'],
+              needsHuman: false,
+            }
+            const now = this.now()
+            const queue = await this.readQueue()
+            const liveTask = queue.tasks.find((candidate) => candidate.id === task.id)
+            if (liveTask && liveTask.status === 'in_progress') {
               this.dirtyWorkerTimeoutRetries.delete(retryKey)
-              await this.annotateWorkerBlockedClassification({
-                taskId: task.id,
+              liveTask.status = 'review'
+              liveTask.assignedTo = 'reviewer-agent'
+              liveTask.updatedAt = now
+              appendFailureClassificationNote(liveTask, classification, {
                 agentId: 'coordinator',
-                classification: {
-                  class: 'model_tool_use_failure',
-                  confidence: 'medium',
-                  evidence: [{
-                    kind: 'task',
-                    summary,
-                    ref: message,
-                  }],
-                  scope: 'task',
-                  safePlaybooks: ['ask_concrete_human_question'],
-                  needsHuman: true,
-                  humanQuestion:
-                    'The worker saved partial edits but repeatedly exhausted its turn budget before handoff. Should Guildhall retry from the partial diff, narrow the task, or switch provider?',
-                },
+                timestamp: now,
+              })
+              liveTask.notes = Array.isArray(liveTask.notes) ? liveTask.notes : []
+              liveTask.notes.push({
+                agentId: 'coordinator',
+                role: 'runtime',
+                content:
+                  `${summary} Guildhall is handing the saved partial diff to review instead of asking the owner to choose retry, narrowing, or provider switch.`,
+                timestamp: now,
+              })
+              queue.lastUpdated = now
+              await this.writeQueue(queue)
+              await this.emitBackendEvent({
+                type: 'task_transition',
+                task_id: task.id,
+                from_status: beforeStatus,
+                to_status: 'review',
+                agent_name: agent.name,
+                message:
+                  `${summary} Guildhall handed the partial diff to review instead of owner input.`,
               })
               return {
-                kind: 'escalated',
+                kind: 'processed',
                 taskId: task.id,
                 agent: agent.name,
-                reason: summary,
-                escalationId: escalation.escalationId,
+                beforeStatus,
+                afterStatus: 'review',
+                transitioned: true,
+                revisionCount: liveTask.revisionCount,
               }
             }
           }

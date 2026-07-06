@@ -3774,7 +3774,7 @@ describe('GET /api/project/activity', () => {
           domain: 'd',
           projectPath: tmpDir,
           status: 'blocked',
-          blockReason: 'human_judgment_required: Worker repeatedly hit its turn budget after saving partial work.',
+          blockReason: 'human_judgment_required: Confirm which provider policy applies before continuing.',
           priority: 'normal',
           revisionCount: 0,
           remediationAttempts: 0,

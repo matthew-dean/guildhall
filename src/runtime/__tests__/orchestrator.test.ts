@@ -14801,7 +14801,7 @@ describe('Orchestrator worker no-progress escalation', () => {
     expect(task?.notes.some((note) => note.role === 'policy-classification')).toBe(false)
   })
 
-  it('blocks after repeated dirty worktree worker turn-budget retries', async () => {
+  it('hands repeated dirty worktree worker turn-budget retries to review instead of owner input', async () => {
     const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'task-014')
     await fs.mkdir(worktreePath, { recursive: true })
     await writeQueue([
@@ -14840,19 +14840,24 @@ describe('Orchestrator worker no-progress escalation', () => {
 
     expect(first.kind).toBe('processed')
     expect(second.kind).toBe('processed')
-    expect(third.kind).toBe('escalated')
-    if (third.kind === 'escalated') {
-      expect(third.reason).toContain('repeatedly hit its turn budget')
+    expect(third.kind).toBe('processed')
+    if (third.kind === 'processed') {
+      expect(third.afterStatus).toBe('review')
+      expect(third.transitioned).toBe(true)
     }
     const task = await readEffectiveTaskFromQueue('task-014')
-    expect(task?.status).toBe('blocked')
-    expect(task?.escalations.at(-1)?.summary)
-      .toContain('repeatedly hit its turn budget')
+    expect(task?.status).toBe('review')
+    expect(task?.assignedTo).toBe('reviewer-agent')
+    expect(task?.escalations).toEqual([])
     expect(task?.notes.find((note) => note.role === 'policy-classification')?.content)
       .toContain('"class":"model_tool_use_failure"')
+    expect(task?.notes.find((note) => note.role === 'policy-classification')?.content)
+      .toContain('"needsHuman":false')
+    expect(task?.notes.at(-1)?.content)
+      .toContain('handing the saved partial diff to review instead of asking the owner')
   })
 
-  it('uses durable runtime notes when deciding repeated dirty worktree retries after restart', async () => {
+  it('uses durable runtime notes when handing repeated dirty worktree retries to review after restart', async () => {
     const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'task-015')
     await fs.mkdir(worktreePath, { recursive: true })
     await writeQueue([
@@ -14903,14 +14908,15 @@ describe('Orchestrator worker no-progress escalation', () => {
 
     const outcome = await orch.tick({ dispatchLimit: 1 })
 
-    expect(outcome.kind).toBe('escalated')
-    if (outcome.kind === 'escalated') {
-      expect(outcome.reason).toContain('repeatedly hit its turn budget')
+    expect(outcome.kind).toBe('processed')
+    if (outcome.kind === 'processed') {
+      expect(outcome.afterStatus).toBe('review')
+      expect(outcome.transitioned).toBe(true)
     }
     const task = await readEffectiveTaskFromQueue('task-015')
-    expect(task?.status).toBe('blocked')
-    expect(task?.escalations.at(-1)?.summary)
-      .toContain('repeatedly hit its turn budget')
+    expect(task?.status).toBe('review')
+    expect(task?.assignedTo).toBe('reviewer-agent')
+    expect(task?.escalations).toEqual([])
   })
 })
 

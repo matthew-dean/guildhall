@@ -1,6 +1,13 @@
 import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import { existsSync, readFileSync } from 'node:fs'
-import { atomicWriteText, getProjectSystemStatePath } from '@guildhall/sessions'
+import {
+  appendTaskEvidence,
+  atomicWriteText,
+  getProjectSystemStatePath,
+  readTaskEvidence,
+  readTaskRuntimeStore,
+  upsertTaskRuntimeState,
+} from '@guildhall/sessions'
 import type { Task, TaskQueue } from '@guildhall/core'
 import { TaskQueue as TaskQueueSchema } from '@guildhall/core'
 import { writeProjectTaskQueue } from './project-state-boundary.js'
@@ -31,6 +38,25 @@ const MUTATION_FORCED_ON_PLANNING =
 
 const MODEL_TOOL_USE_RECOVERY_BLOCKER =
   /\b(?:stopped after hitting (?:its|the) turn limit|turn budget|usable tool call|model failed|failed to produce)\b/i
+
+const DIRTY_WORKER_TIMEOUT_BLOCKER =
+  /\bworker repeatedly hit (?:its|the) turn budget after saving partial work\b/i
+
+const REVIEW_PARTIAL_DIFF_REPAIR_NOTE =
+  'Auto-repaired stale model/tool-use blocker. Guildhall will review the saved partial diff instead of asking the owner to choose retry, narrowing, or provider switch.'
+
+const GENERIC_STATE_REPAIR_NOTE =
+  'Auto-repaired stale internal/tooling blocker. Guildhall will continue from this task’s own scope and current evidence instead of preserving an old cross-task/path guardrail as a human blocker.'
+
+function expectedAssigneeForStatus(status: Task['status']): string | null {
+  if (status === 'review') return 'reviewer-agent'
+  if (status === 'exploring') return 'spec-agent'
+  return null
+}
+
+function stateRepairNoteContent(status: Task['status']): string {
+  return status === 'review' ? REVIEW_PARTIAL_DIFF_REPAIR_NOTE : GENERIC_STATE_REPAIR_NOTE
+}
 
 function taskHasUsableBlueprint(task: Task): boolean {
   return (
@@ -69,6 +95,7 @@ function isHighConfidenceInternalBlocker(task: Task): boolean {
   if (!text.trim()) return false
 
   if (INTERNAL_TOOLING_BLOCKER.test(text)) return true
+  if (DIRTY_WORKER_TIMEOUT_BLOCKER.test(text)) return true
   if (hasModelToolUseFailureClassification(task) && MODEL_TOOL_USE_RECOVERY_BLOCKER.test(text)) return true
 
   return (
@@ -107,11 +134,16 @@ function resolveStaleEscalations(task: Task, now: string): void {
   }
 }
 
-function nextStatusForRepairedTask(task: Task): Task['status'] {
+function nextStatusForRepairedTask(task: Task, opts: { dirtyWorkerTimeout?: boolean } = {}): Task['status'] {
+  if (opts.dirtyWorkerTimeout) return 'review'
   if (task.taskReadiness?.recommendation === 'needs_research_spike') return 'exploring'
   if (taskHasUsableBlueprint(task)) return 'spec_review'
   if (task.productBrief || task.status === 'exploring' || task.status === 'blocked') return 'exploring'
   return task.status
+}
+
+function isDirtyWorkerTimeoutBlocker(task: Task): boolean {
+  return DIRTY_WORKER_TIMEOUT_BLOCKER.test(blockerText(task))
 }
 
 export function repairStaleBlockersInQueue(
@@ -125,9 +157,10 @@ export function repairStaleBlockersInQueue(
     if (!researchSpikeApproval && !isHighConfidenceInternalBlocker(task)) continue
     const beforeUnresolved = unresolvedEscalationCount(task)
     const previousStatus = task.status
+    const dirtyWorkerTimeout = isDirtyWorkerTimeoutBlocker(task)
     const repairReason = researchSpikeApproval
       ? 'research_spike_not_approval'
-      : hasModelToolUseFailureClassification(task) && MODEL_TOOL_USE_RECOVERY_BLOCKER.test(blockerText(task))
+      : dirtyWorkerTimeout || (hasModelToolUseFailureClassification(task) && MODEL_TOOL_USE_RECOVERY_BLOCKER.test(blockerText(task)))
       ? 'model_tool_use_recovery_blocker'
       : 'stale_internal_tooling_blocker'
 
@@ -137,6 +170,7 @@ export function repairStaleBlockersInQueue(
       typeof task.blockReason === 'string' &&
       (
         INTERNAL_TOOLING_BLOCKER.test(task.blockReason) ||
+        DIRTY_WORKER_TIMEOUT_BLOCKER.test(task.blockReason) ||
         (
           hasModelToolUseFailureClassification(task) &&
           MODEL_TOOL_USE_RECOVERY_BLOCKER.test(task.blockReason)
@@ -153,17 +187,16 @@ export function repairStaleBlockersInQueue(
     if (task.blockReason && task.status === 'blocked') continue
 
     const nextStatus = task.status === 'blocked' || researchSpikeApproval
-      ? nextStatusForRepairedTask(task)
+      ? nextStatusForRepairedTask(task, { dirtyWorkerTimeout })
       : task.status
 
     if (task.status !== nextStatus) task.status = nextStatus
-    task.assignedTo = nextStatus === 'exploring' ? 'spec-agent' : null
+    task.assignedTo = expectedAssigneeForStatus(nextStatus)
     task.notes = Array.isArray(task.notes) ? task.notes : []
     task.notes.push({
       agentId: 'system',
       role: 'state-repair',
-      content:
-        'Auto-repaired stale internal/tooling blocker. Guildhall will continue from this task’s own scope and current evidence instead of preserving an old cross-task/path guardrail as a human blocker.',
+      content: stateRepairNoteContent(nextStatus),
       timestamp: now,
     })
     task.updatedAt = now
@@ -189,4 +222,65 @@ export function repairStaleBlockersForProject(projectPath: string): StaleBlocker
     writeProjectTaskQueue(tasksPath, queue)
   }
   return result
+}
+
+export async function repairStaleBlockersForProjectWithRuntime(projectPath: string): Promise<StaleBlockerRepairResult> {
+  const result = repairStaleBlockersForProject(projectPath)
+  const now = new Date().toISOString()
+  for (const repair of result.repairs) {
+    const assignedTo = expectedAssigneeForStatus(repair.nextStatus as Task['status'])
+    await upsertTaskRuntimeState(projectPath, repair.taskId, {
+      assignedTo,
+      openEscalationIds: [],
+    })
+    await appendStateRepairEvidence(projectPath, repair.taskId, repair.nextStatus as Task['status'], now)
+  }
+  await reconcileAlreadyRepairedRuntimeState(projectPath)
+  return result
+}
+
+async function appendStateRepairEvidence(
+  projectPath: string,
+  taskId: string,
+  status: Task['status'],
+  timestamp: string,
+): Promise<void> {
+  const content = stateRepairNoteContent(status)
+  const existing = await readTaskEvidence(projectPath, taskId, { kind: 'note' })
+  if (existing.some(event => {
+    const payload = event.payload as Record<string, unknown>
+    return payload['role'] === 'state-repair' && payload['content'] === content
+  })) return
+
+  await appendTaskEvidence(projectPath, taskId, {
+    id: `note-${taskId}-${timestamp.replace(/[^0-9A-Za-z]/g, '')}-state-repair`,
+    kind: 'note',
+    recordedAt: timestamp,
+    payload: {
+      agentId: 'system',
+      role: 'state-repair',
+      content,
+      timestamp,
+    },
+  })
+}
+
+async function reconcileAlreadyRepairedRuntimeState(projectPath: string): Promise<void> {
+  const tasksPath = getProjectSystemStatePath(projectPath, 'TASKS.json')
+  if (!existsSync(tasksPath)) return
+
+  const queue = TaskQueueSchema.parse(JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')))
+  const runtimeStore = await readTaskRuntimeStore(projectPath)
+
+  for (const task of queue.tasks) {
+    if (task.status !== 'review' && task.status !== 'exploring') continue
+    const expectedAssignee = expectedAssigneeForStatus(task.status)
+    const runtime = runtimeStore.tasks[task.id]
+    if (runtime?.assignedTo === expectedAssignee) continue
+    await upsertTaskRuntimeState(projectPath, task.id, {
+      assignedTo: expectedAssignee,
+      openEscalationIds: [],
+    })
+    await appendStateRepairEvidence(projectPath, task.id, task.status, new Date().toISOString())
+  }
 }

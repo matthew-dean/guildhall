@@ -14104,6 +14104,70 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-07-06T01:59:00Z - Routed repeated dirty worker turn-budget failures to
+review instead of owner input.
+
+- Work id: `codex:dirty-worker-timeout-review-handoff-2026-07-06`.
+- User job: when a worker saves partial task work but exhausts its turn budget,
+  the owner should not be asked to choose between retrying, narrowing, or
+  switching providers. Guildhall should preserve the diff and use its own
+  review lane to decide whether the partial work is acceptable, incomplete, or
+  needs revision.
+- Failure found:
+  - Narrative Harness task
+    `task-150-split-select-and-prove-deepinfra-drafting-model` saved a clean
+    model-selection artifact after provider/tool-control cleanup, but the
+    repeated dirty-work timeout policy still blocked the task with
+    `human_judgment_required`.
+- Root-cause classification:
+  - `4 scheduler/action-state logic problem`: dirty partial work had only a
+    retry counter and owner escalation path, not an automatic review handoff.
+  - `3 task hierarchy/dependency/proof modeling problem`: saved partial proof
+    was not treated as reviewable task evidence when the worker failed to write
+    a formal checkpoint.
+- Fix:
+  - Future repeated dirty worker turn-budget failures now transition the task
+    to `review`, assign `reviewer-agent`, and record a
+    `model_tool_use_failure` classification with `needsHuman:false`.
+  - Legacy stale blockers with the same dirty-worker-timeout shape repair to
+    `review` instead of generic shaping, and Project/Activity reads run that
+    repair before summarizing stopped projects.
+  - The repair now reconciles stale split task state: compact task state,
+    runtime assignee state, and visible task-evidence notes all get the same
+    repair answer, so Overview/Work/Activity do not show a stale worker or an
+    old owner-question note after the queue is already unblocked.
+- Installed-app proof:
+  - `node ./build.mjs`; `node scripts/dev-install.mjs`; `guildhall stop`;
+    `guildhall start`; `/api/stale-server` returned `stale:false` for PID
+    `46175` from `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+  - `/api/project?projectId=narrative-harness` showed
+    `task-150-split-select-and-prove-deepinfra-drafting-model` as
+    `status:"review"`, `assignedTo:"reviewer-agent"`, `blockReason:null`, and
+    a visible `state-repair` note: Guildhall will review the saved partial diff
+    instead of asking the owner to choose retry, narrowing, or provider switch.
+  - `/api/project/activity?projectId=narrative-harness` showed counts with
+    `review:1`, no blocked count, and the top action `Open Work` for
+    `Select and prove DeepInfra drafting model`.
+  - A bounded `guildhall run narrative-harness --max-ticks 1` consumed the
+    review lane and recorded a reviewer verdict instead of an owner blocker.
+    The reviewer correctly rejected the model-selection artifact because the
+    DeepInfra/model choice was not yet source-backed proof in Guildhall.
+- Remaining failure exposed:
+  - The next bounded worker tick left the task `in_progress` with no status
+    change and no new durable evidence. The remaining work is not an owner
+    decision; Guildhall needs a stronger proof-producing revision path for
+    current external model/provider facts before this Narrative Harness MVP
+    task can close.
+- Calibration:
+  - Added orchestrator coverage for both live repeated dirty timeout and
+    durable-notes-after-restart cases.
+  - Added stale-blocker repair coverage for old
+    `human_judgment_required: Worker repeatedly hit its turn budget after
+    saving partial work` task records.
+  - Added project-level repair coverage for the split-state bug where compact
+    task state is already `review`, but runtime still assigns the worker and
+    visible evidence still ends with an owner-question classification.
+
 2026-07-06T01:53:00Z - Reused the shared project action model in the activity
 endpoint so live/project chrome does not go blank when work is blocked.
 

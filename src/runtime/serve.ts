@@ -371,7 +371,7 @@ import {
 } from './git-story-policy.js'
 import { taskHasUnansweredVisibleQuestion } from './question-visibility.js'
 import { validateSpecCompletionBoundary } from './spec-quality.js'
-import { repairStaleBlockersForProject } from './stale-blocker-repair.js'
+import { repairStaleBlockersForProject, repairStaleBlockersForProjectWithRuntime } from './stale-blocker-repair.js'
 import {
   buildCoordinatorProjectPathMap,
   resolveTaskProjectPath,
@@ -4107,6 +4107,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
       const run = supervisor.get(project.id)
       if (run?.status !== 'running' && run?.status !== 'stopping') {
+        await repairStaleBlockersForProjectWithRuntime(project.path)
         await repairStoppedRunPhantomActiveTasks(project.path)
         await repairLegacyNoCheckpointProviderRecoveryPlans(project.path)
         await repairImportedShapingExecutionState(project.path)
@@ -8683,7 +8684,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
       const timing: Array<{ name: string; startedAt: number; endedAt?: number }> = [{ name: 'thread-core', startedAt: Date.now() }]
       try {
-        repairStaleBlockersForProject(project.path)
+        await repairStaleBlockersForProjectWithRuntime(project.path)
       } catch {
         /* never let stale-blocker repair break a thread read */
       }
@@ -10675,6 +10676,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const empty = { running: run?.status === 'running', counts: {}, inFlight: [] as unknown[] }
       if (!existsSync(tasksPath)) return c.json(empty)
       if (run?.status !== 'running' && run?.status !== 'stopping') {
+        repairStaleBlockersForProject(project.path)
         await repairStoppedRunPhantomActiveTasks(project.path)
         await repairLegacyNoCheckpointProviderRecoveryPlans(project.path)
         await repairImportedShapingExecutionState(project.path)
