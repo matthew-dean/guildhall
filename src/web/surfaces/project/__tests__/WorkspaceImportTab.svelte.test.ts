@@ -48,6 +48,11 @@ const detectedDraft = {
         releaseIds: ['v1-release-hardening'],
         source: 'docs/roadmap.md',
         references: ['docs/roadmap.md', 'web/app/components/editor/toolbar.ts'],
+        proofPaths: [{
+          kind: 'review',
+          expectedEvidence: ['Link editor controls record focused implementation or reviewer evidence.'],
+          source: 'inferred',
+        }],
         confidence: 'high',
       },
       {
@@ -616,6 +621,25 @@ describe('WorkspaceImportTab', () => {
 
     await screen.findByText('Review tasks from Editor notes')
     expect(screen.queryByRole('complementary', { name: /Knit: add link editor controls/i })).toBeNull()
+  })
+
+  it('shows proof expectations in the task details drawer before import approval', async () => {
+    installFetchFakes()
+
+    render(WorkspaceImportTab)
+    await screen.findByText(/Found planning notes/)
+
+    await userEvent.click(screen.getByRole('button', { name: /choose parts to review/i }))
+    await userEvent.click(screen.getAllByRole('button', { name: /^exclude$/i })[1]!)
+    await userEvent.click(screen.getByRole('button', { name: /review 1 selected part/i }))
+    await userEvent.click(screen.getByRole('button', { name: /review selected tasks/i }))
+    await screen.findByText('Review tasks from Roadmap')
+
+    await userEvent.click(screen.getByRole('button', { name: /Knit: add link editor controls/i }))
+
+    expect(await screen.findByRole('complementary', { name: /Knit: add link editor controls/i })).toBeTruthy()
+    expect(screen.getByText('Proof needed')).toBeTruthy()
+    expect(screen.getByText('Link editor controls record focused implementation or reviewer evidence.')).toBeTruthy()
   })
 
   it('surfaces draft, approve, dismiss, and rerun failures without changing context', async () => {

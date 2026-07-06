@@ -33,6 +33,12 @@
     releaseIds?: readonly string[]
     source: string
     references?: readonly string[]
+    proofPaths?: readonly {
+      kind?: string
+      command?: string
+      expectedEvidence?: readonly string[]
+      source?: string
+    }[]
     confidence: 'high' | 'medium' | 'low'
   }
   interface DetectedRelease {
@@ -581,6 +587,18 @@
 
   function tasksForFocusedSource(group: SourceGroup): DetectedTask[] {
     return tasksForGroup(group).slice(0, 8)
+  }
+
+  function proofExpectationsForTask(task: DetectedTask): string[] {
+    return [...new Set(
+      (task.proofPaths ?? [])
+        .flatMap(proofPath => [
+          ...(proofPath.command ? [`Run \`${proofPath.command}\`.`] : []),
+          ...(proofPath.expectedEvidence ?? []),
+        ])
+        .map(item => item.trim())
+        .filter(Boolean),
+    )]
   }
 
   function sourceMatches(value: string | undefined, group: SourceGroup): boolean {
@@ -1751,6 +1769,17 @@
               <ul class="detail-list">
                 {#each focusedTask.references.slice(0, 6) as ref}
                   <li>{displayPath(ref)}</li>
+                {/each}
+              </ul>
+            </div>
+          {/if}
+          {@const proofExpectations = proofExpectationsForTask(focusedTask)}
+          {#if proofExpectations.length}
+            <div class="detail-block">
+              <div class="detail-label">Proof needed</div>
+              <ul class="detail-list">
+                {#each proofExpectations.slice(0, 5) as expectation}
+                  <li>{expectation}</li>
                 {/each}
               </ul>
             </div>

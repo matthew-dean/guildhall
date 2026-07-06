@@ -8,6 +8,49 @@ help_summary: |
 
 # Web UI flow audit
 
+2026-07-06T18:56:32Z - Workspace Import task review shows proof expectations before approval.
+
+- Work id: `codex:workspace-import-proof-expectations-visible-2026-07-06`.
+- User job: Before approving imported work, the owner should be able to open a
+  draft task and see what evidence Guildhall will require to prove the work is
+  complete. The proof requirement must be visible in Guildhall itself, not only
+  in hidden API/debug state or after bad tasks have already been imported.
+- Escaped live failure:
+  - The workspace-import draft/review endpoint can materialize task
+    `proofPaths`, but the task details drawer only showed source, confidence,
+    release, and references.
+  - That meant an owner could approve imported tasks without seeing the proof
+    expectations that decide whether a scope/release is actually runnable or
+    complete.
+- Root-cause classification:
+  - UI communication/orientation problem: the review UI hid proof needs from
+    the exact pre-approval surface where the owner needs to understand them.
+  - Data model/schema problem: the `DetectedTask` UI contract omitted
+    `proofPaths`, so a modeled proof field was not part of the visible import
+    review shape.
+- Fix:
+  - `WorkspaceImportTab` now accepts `proofPaths` on detected tasks and renders
+    a `Proof needed` block in the existing task details drawer.
+  - The proof list is derived from command expectations and expected evidence
+    strings, de-duplicated, trimmed, and capped to the first five visible
+    expectations.
+- Verification:
+  - Red test first:
+    `CI=true pnpm exec vitest run src/web/surfaces/project/__tests__/WorkspaceImportTab.svelte.test.ts -t "shows proof expectations"`
+    failed because the drawer did not contain `Proof needed`.
+  - After the fix, the focused test passed.
+  - Affected tests passed:
+    `CI=true pnpm exec vitest run src/web/surfaces/project/__tests__/WorkspaceImportTab.svelte.test.ts src/runtime/__tests__/serve-settings.test.ts -t "shows proof expectations|materializes detector and approved import previews"`.
+  - `CI=true pnpm build` and `git diff --check` passed.
+  - Installed app proof after `CI=true pnpm dev:install` and
+    `guildhall stop && guildhall start`: `/api/stale-server` returned
+    `stale:false` for PID `14703` from
+    `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+  - Caveat: this does not repair existing Narrative Harness tasks with stale
+    proof blockers. It makes proof expectations visible during future corrected
+    import review/repopulation so the user can reject bad task models before
+    approval.
+
 2026-07-06T18:49:07Z - Generic imported proof paths describe completion evidence instead of proof-planning meta-work.
 
 - Work id: `codex:generic-proof-path-completion-evidence-2026-07-06`.
