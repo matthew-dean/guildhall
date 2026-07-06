@@ -22,7 +22,7 @@ import {
   upsertTaskRuntimeState,
 } from '@guildhall/sessions'
 import { readTaskWorkspaceStore } from './task-state-store.js'
-import { latestRecordedCompletionProofAt, taskHasRecordedCompletionProof } from './task-completion-proof.js'
+import { latestRecordedCompletionProofAt, recordedCompletionProofCanSettleTaskStatus, taskHasRecordedCompletionProof } from './task-completion-proof.js'
 import {
   readWorkspaceConfig,
   writeWorkspaceConfig,
@@ -2251,7 +2251,7 @@ function summarizeScopedReleaseWork(
   scopedTasks: Task[]
   gitStoryTasks: Task[]
 } {
-  const effectiveReleaseStatus = (task: Task): string => taskHasRecordedCompletionProof(task)
+  const effectiveReleaseStatus = (task: Task): string => recordedCompletionProofCanSettleTaskStatus(task)
     ? 'done'
     : String((task as { status?: string }).status ?? 'unknown')
   const completionProofSupersedesEscalation = (

@@ -21660,6 +21660,78 @@ unrelated import shaping blocks project Start.
     behavior where unrelated imported shaping blockers stop targeted shaping
     runs.
 
+2026-07-06T11:54:00Z - Tightened worker no-progress recovery and release
+readiness status truth during the Narrative Harness MVP run.
+
+- Work id: `codex:nh-worker-revision-readiness-truth-2026-07-06`.
+- User job: when Guildhall runs the selected Narrative Harness scope, a worker
+  that exhausts read-only/research budget should be pushed toward durable
+  implementation work or a concrete escalation, and release readiness should
+  continue to tell the truth when a task returns from review for revision.
+- Escaped failures:
+  - Worker budget guard told an implementation worker to use
+    `update-product-brief`/`post-user-question`, which are intake/spec-lane
+    actions, after repeated read-only exploration. The worker then kept
+    spending turns on read-only discovery instead of mutating files.
+  - Release readiness counted the DeepInfra drafting-model task as `done`
+    while the canonical task record was back in `in_progress`/`review` with
+    reviewer revision verdicts. The stale completion proof note from the prior
+    handoff was overriding the live task status.
+- Root-cause classification:
+  - Scheduler/action-state logic problem: the read-only budget refusal used the
+    wrong lane vocabulary for worker turns.
+  - Task hierarchy/dependency/proof modeling problem: recorded completion proof
+    was allowed to settle active revised work as done.
+  - UI communication/orientation problem: release readiness and task state could
+    disagree about whether the current scope had 10 done tasks or 9 done plus
+    one task in review.
+- Fix:
+  - `runQuery` now emits worker-specific research-budget refusal copy that
+    names `edit-file`, `write-file`, `write-checkpoint`, `update-task`, and
+    `raise-escalation` instead of intake-only tools.
+  - Added a shared completion-proof helper that allows recorded proof to settle
+    only done-like statuses. Active statuses such as `in_progress`, `review`,
+    and `ready` keep their live status even when they still carry old
+    self-critique, gate, or reviewer evidence.
+  - Release readiness and project scope projection now use the same constrained
+    proof-settlement rule.
+- Live Narrative Harness proof:
+  - Codex approved the five current-scope NH MVP specs through the product API
+    with an explicit owner-delegated approval note.
+  - Project Start launched the selected scope on the DeepInfra/OpenAI-compatible
+    provider using `deepseek-ai/DeepSeek-V4-Flash`.
+  - The worker created durable DeepInfra model-selection fixture files and ran
+    `npm run build`.
+  - Reviewer fanout correctly rejected the fixture-only proof because it did
+    not yet execute scenarios or record latency/refusal/repetition/cost/voice
+    telemetry. This is a successful proof that Guildhall is not letting a fake
+    MVP proof turn green.
+  - After the readiness fix was installed, live `/api/project` reported matching
+    task and release-readiness state: `9 done`, `1 review`, `4 ready`; the
+    DeepInfra task was not counted as done.
+- Contract Touch Decision:
+  - Work id: `codex:nh-worker-revision-readiness-truth-2026-07-06`.
+  - Touched contracts: engine no-progress/read-only refusal semantics;
+    completion-proof settlement semantics; release readiness status-count
+    semantics; project scope handoff-state semantics.
+  - Contracts considered but not touched: persisted task schema, release schema,
+    action-model payload shape, reviewer verdict schema, worker tool schemas.
+  - Existing data impact: no migration. Existing tasks with old proof notes now
+    keep their active status in release readiness unless their stored status is
+    already `done` or `pending_pr`.
+  - Required follow-up: keep driving the DeepInfra model-selection revision
+    until it records real scenario execution telemetry, then continue the next
+    four NH MVP tasks.
+  - Proof required: focused engine regression, focused release-readiness
+    regression, installed-app stale-server proof, live NH project API proof.
+  - Proof provided: focused `run-query` read-only/handoff tests passed; focused
+    `serve-release-readiness` tests passed; installed `/api/stale-server`
+    returned `stale:false`; live NH `/api/project` returned matching canonical
+    task counts and release readiness counts after restart.
+  - Apply/revert behavior: revert the worker refusal message in `run-query.ts`
+    and the constrained completion-proof helper/use sites to restore previous
+    behavior; no data rollback required.
+
 2026-07-06T11:42:00Z - Stopped resolved recovery inventory rows from
 blocking Narrative Harness current scope.
 

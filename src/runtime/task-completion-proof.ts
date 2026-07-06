@@ -74,6 +74,13 @@ export function taskHasRecordedCompletionProof(task: unknown): boolean {
   return recordedCompletionProofForTask(task).verified.length > 0
 }
 
+export function recordedCompletionProofCanSettleTaskStatus(task: unknown): boolean {
+  const record = recordValue(task)
+  if (!record || !taskHasRecordedCompletionProof(record)) return false
+  const status = stringValue(record.status)
+  return status === 'done' || status === 'pending_pr'
+}
+
 export function latestRecordedCompletionProofAt(task: unknown): string | null {
   return recordedCompletionProofForTask(task).latestAt
 }

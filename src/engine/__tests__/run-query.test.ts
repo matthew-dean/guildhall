@@ -704,6 +704,77 @@ Uncertainties: none`),
     expect(rejectedRead).toBeTruthy()
   })
 
+  it('uses implementation-tool wording when a worker exhausts read-only budget', async () => {
+    const registry = new ToolRegistry()
+    registry.register(
+      defineTool({
+        name: 'read-file',
+        description: 'reads a file',
+        inputSchema: z.object({ filePath: z.string() }),
+        isReadOnly: () => true,
+        execute: async (input) => ({ output: `read ${input.filePath}`, is_error: false }),
+      }),
+    )
+    registry.register(
+      defineTool({
+        name: 'write-file',
+        description: 'writes a file',
+        inputSchema: z.object({ filePath: z.string(), content: z.string() }),
+        execute: async () => ({ output: 'file written', is_error: false }),
+      }),
+    )
+    const client = new ScriptedApiClient([
+      { message: assistantToolUse('read-file', { filePath: 'a.ts' }, 'toolu_1') },
+      { message: assistantToolUse('read-file', { filePath: 'b.ts' }, 'toolu_2') },
+      { message: assistantToolUse('read-file', { filePath: 'c.ts' }, 'toolu_3') },
+      { message: assistantToolUse('write-file', { filePath: 'proof.ts', content: 'export {}' }, 'toolu_4') },
+      { message: assistantText('done') },
+    ])
+    const messages: ConversationMessage[] = [
+      { role: 'user', content: [{ type: 'text', text: 'go' }] },
+    ]
+
+    await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/tmp',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 8,
+          noProgressToolNames: ['write-file'],
+          noProgressTurnNudge:
+            'Stop researching and make the concrete implementation change now.',
+          noProgressTurnNudgeLimit: 1,
+          noProgressTurnThreshold: 2,
+          toolMetadata: {
+            current_agent_id: 'worker-agent',
+          },
+        },
+        messages,
+      ),
+    )
+
+    const rejectedRead = messages.find((message) =>
+      message.role === 'user' &&
+      Array.isArray(message.content) &&
+      message.content.some((part) =>
+        typeof part === 'object' &&
+        part !== null &&
+        'type' in part &&
+        part.type === 'tool_result' &&
+        String(part.content).includes('Research budget exhausted for this worker turn'),
+      ),
+    )
+    expect(rejectedRead).toBeTruthy()
+    const rejectedReadText = JSON.stringify(rejectedRead?.content ?? [])
+    expect(rejectedReadText).toContain('Use edit-file or write-file')
+    expect(rejectedReadText).not.toContain('update-product-brief')
+  })
+
   it('allows one read-only turn after a durable-progress nudge before refusing', async () => {
     const registry = new ToolRegistry()
     let readOnlyCalls = 0

@@ -946,6 +946,56 @@ describe('GET /api/project/release-readiness', () => {
     expect(body.releaseBlockers ?? []).toEqual([])
   })
 
+  it('does not let stale completion proof mark revised in-progress work as done', async () => {
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: 'headless-mvp',
+      releases: [{
+        id: 'headless-mvp',
+        label: 'Headless MVP',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-model'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [
+        makeTask({
+          id: 'task-model',
+          title: 'Select and prove DeepInfra drafting model',
+          status: 'in_progress',
+          assignedTo: 'worker-agent',
+          releaseIds: ['headless-mvp'],
+          acceptanceCriteria: [{ id: 'AC-1', description: 'Model proof records telemetry.', verifiedBy: 'review', met: false }],
+          gateResults: [{
+            gateId: 'build',
+            status: 'passed',
+            command: 'npm run build',
+            checkedAt: '2026-07-06T11:46:02.000Z',
+          }],
+          reviewVerdicts: [{
+            verdict: 'revise',
+            reviewerPath: 'llm',
+            reason: 'Proof lacks telemetry.',
+            recordedAt: '2026-07-06T11:48:30.000Z',
+          }],
+        }),
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await approveDesignSystem(app)
+    await commitAndPush('revised work stays unfinished')
+
+    const body = await (await app.fetch(new Request(projectUrl('/api/project/release-readiness')))).json() as any
+
+    expect(body.statusCounts).toEqual({ in_progress: 1 })
+    expect(body.totals.done).toBe(0)
+    expect(body.totals.unfinishedCount).toBe(1)
+    expect(body.ready).toBe(false)
+  })
+
   it('does not treat ready spec-shaped work as incomplete brief cleanup', async () => {
     await seedQueue({
       version: 1,

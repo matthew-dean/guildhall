@@ -412,6 +412,15 @@ function currentAgentId(
   return String(toolMetadata?.['current_agent_id'] ?? '').trim()
 }
 
+function readOnlyBudgetRefusalMessage(
+  toolMetadata: Record<string, unknown> | undefined,
+): string {
+  if (currentAgentId(toolMetadata) === 'worker-agent') {
+    return 'Research budget exhausted for this worker turn. Do not call more read-only tools now. Use edit-file or write-file for the next concrete implementation change, write-checkpoint or update-task if implementation progress is already complete, or raise-escalation if the task is genuinely blocked.'
+  }
+  return 'Research budget exhausted for this intake turn. Do not call more read-only tools now. Use update-product-brief, post-user-question, update-task, or raise-escalation instead.'
+}
+
 function strictLikelyTargetMutationGuardsEnabled(
   toolMetadata: Record<string, unknown> | undefined,
 ): boolean {
@@ -1864,7 +1873,7 @@ export async function* runQuery(
             `The latest checkpoint already names your next step: ${checkpointNextAction}. If you use shell here, it must be one of the authoritative verification commands (${authoritativeVerificationCommands.join(', ')}). Otherwise mutate a checkpoint-scoped file or raise-escalation.`)
         : shouldRefuseAfterInspectingLikelyTarget
           ? `You have already inspected an authoritative likely target file at ${inspectedLikelyTarget}. Do not do more read-only exploration now. ${likelyTargetMutationDirective({ likelyTargetFiles, inspectedLikelyTarget })} Or raise-escalation if you still cannot proceed.`
-          : 'Research budget exhausted for this intake turn. Do not call more read-only tools now. Use update-product-brief, post-user-question, update-task, or raise-escalation instead.'
+          : readOnlyBudgetRefusalMessage(context.toolMetadata)
       const toolResults: ToolResultBlock[] = toolCalls.map((tc) => ({
         type: 'tool_result',
         tool_use_id: tc.id,
