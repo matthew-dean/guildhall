@@ -15378,6 +15378,79 @@ deduping repeated active escalations in the shared release-readiness model.
 
 source: codex:looma-knit-escalation-dedupe-2026-07-06
 
+2026-07-06T15:42:00Z - Added a default Release blocker stack so Looma + Knit
+communicates why the current scope is blocked without requiring a hidden subview.
+
+- Work id: `codex:release-blocker-stack-2026-07-06`.
+- User job: a project owner opening Release should immediately see the ranked
+  blocker categories behind the verdict, not just total counts and one top
+  blocker. The page should name shaping, escalations, checkout, repository
+  follow-up, approvals, proof, and agent-blocked work when those categories are
+  active.
+- Root-cause triage:
+  - UI communication/orientation: Release default view exposed counts and some
+    repository details but did not summarize the full blocker stack.
+  - Scheduler/action-state logic: start readiness could correctly point at
+    shaping while the release page still made other active blockers harder to
+    discover.
+  - Data model/schema: the fix reuses the existing shared release-readiness
+    payload instead of creating a new local readiness calculation.
+- Contract Touch Decision:
+  - Work id: `codex:release-blocker-stack-2026-07-06`.
+  - Touched contracts: `src/web/surfaces/project/ReleaseTab.svelte` UI
+    component contract and its component tests.
+  - Contracts considered but not touched: release-readiness API schema, task
+    schema, release/scope schema, action model, and project orientation spine.
+    The blocker stack is presentation-only and derives from existing payload
+    fields.
+  - Required follow-up: none for persisted data; future release-summary work
+    should keep this stack derived from shared readiness fields.
+  - Proof required: component test for default Release blocker-stack
+    visibility; runtime release-readiness regression suite; build; contract
+    lint; installed-app browser proof against Looma + Knit.
+  - Proof provided so far: `ReleaseTab.svelte.test.ts` passed and
+    `serve-release-readiness.test.ts` plus `git-story.test.ts` passed. The
+    component test also covers a stale cropped saved title in readiness data so
+    the default blocker stack summarizes approval state instead of echoing bad
+    project data.
+  - Waivers: none.
+  - Owner-review items: confirm whether the category ordering feels like the
+    right owner-facing blocker priority after live Looma + Knit review.
+  - Apply/revert behavior: revert the `blockerStack` derived rows and markup in
+    `ReleaseTab.svelte` plus the component test to return the default Release
+    view to counts-only presentation; no migration or data rollback required.
+
+source: codex:release-blocker-stack-2026-07-06
+
+2026-07-06T15:57:00Z - Live Looma + Knit Release verification exposed a
+separate saved-data repair gap while proving the blocker stack.
+
+- Work id: `codex:release-blocker-stack-live-proof-2026-07-06`.
+  - Browser/API evidence:
+  - `/api/stale-server` returned `stale:false` after installing and restarting
+    the current branch app.
+  - Desktop browser proof for `/projects/looma-knit/release` at 1280x720 found
+    `What blocks this`, `Needs shaping`, `Open escalations`, `Project checkout`,
+    `Approval waiting`, and `Repository follow-up` visible with no horizontal
+    overflow. The blocker stack did not contain `decision_required`,
+    `human_judgment_required`, or the cropped `forcing them into lowe` title.
+  - Mobile browser proof at 390x844 found the same blocker stack visible with
+    no horizontal overflow and no machine enum/cropped-title leakage.
+- Root-cause triage:
+  - Bad project data produced by an earlier Guildhall bug: Looma + Knit still
+    has a saved imported spec title ending in `into lowe`, while the source doc
+    and existing importer regression fixture know the full `lower-level generic
+    atoms` title.
+  - UI communication/orientation: the blocker stack should not amplify corrupt
+    saved titles or machine enum reasons while summarizing the release state.
+  - Data model/schema: no new schema is needed for this UI fix; the stale title
+    should be repaired by the importer refresh/reconciliation path, not by
+    local Release view title surgery.
+- Follow-up: run the Looma + Knit import/reconciliation flow after this commit
+  and verify the live project data no longer contains cropped titles.
+
+source: codex:release-blocker-stack-live-proof-2026-07-06
+
 2026-07-06T14:50:00Z - Fixed release readiness reconciliation for legacy
 skipped task merges and stale blocked status.
 

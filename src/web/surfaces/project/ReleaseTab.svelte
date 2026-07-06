@@ -144,7 +144,15 @@
   }
 
   function extraOf(it: ReleaseItem): string {
-    return it.reason ?? it.detail ?? it.summary ?? it.label ?? ''
+    return readableDetail(it.reason ?? it.detail ?? it.summary ?? it.label ?? '')
+  }
+
+  function escalationDetailOf(it: ReleaseItem): string {
+    return readableDetail(it.summary ?? it.detail ?? it.label ?? titleOf(it) ?? it.reason ?? '')
+  }
+
+  function readableDetail(value: string): string {
+    return value.replace(/^[a-z][a-z0-9_]+:\s*/i, '').trim()
   }
 
   function openTask(id: string) {
@@ -424,6 +432,57 @@
       ? `${openCheckCount} open ${openCheckNoun}${openCheckCount === 1 ? '' : 's'}`
       : `0 open ${openCheckNoun}s`,
   )
+  const blockerStack = $derived.by(() => {
+    if (!data) return []
+    const rows: Array<{ key: string; label: string; count: number; detail: string }> = []
+    const add = (key: string, label: string, count: number, detail: string) => {
+      if (count > 0) rows.push({ key, label, count, detail })
+    }
+    add(
+      'shaping',
+      'Needs shaping',
+      data.incompleteBriefs?.length ?? 0,
+      extraOf(data.incompleteBriefs?.[0] ?? {}) || titleOf(data.incompleteBriefs?.[0] ?? {}) || 'Imported work needs source-backed briefs before unattended execution.',
+    )
+    add(
+      'escalations',
+      'Open escalations',
+      data.openEscalations.length,
+      escalationDetailOf(data.openEscalations[0] ?? {}) || 'A task is waiting on a recovery decision.',
+    )
+    const approvalCount = data.unapprovedBriefs.length + data.unapprovedSpecs.length
+    add(
+      'approval',
+      'Approval waiting',
+      approvalCount,
+      `${approvalCount} ${approvalCount === 1 ? 'brief or spec is' : 'briefs or specs are'} waiting for review.`,
+    )
+    add(
+      'proof',
+      'Proof missing',
+      data.proofMissingDoneTasks?.length ?? 0,
+      titleOf(data.proofMissingDoneTasks?.[0] ?? {}) || 'Completed work still needs proof evidence.',
+    )
+    add(
+      'blocked',
+      'Agent-blocked tasks',
+      data.blockedByAgent.length,
+      extraOf(data.blockedByAgent[0] ?? {}) || titleOf(data.blockedByAgent[0] ?? {}) || 'A task is blocked in automation.',
+    )
+    add(
+      'checkout',
+      'Project checkout',
+      dirtyCheckoutError ? 1 : dirtyCheckoutCount,
+      dirtyCheckoutError ? checkoutInspectionError : `${dirtyCheckoutCount} project-local Guildhall ${dirtyCheckoutCount === 1 ? 'file needs' : 'files need'} cleanup.`,
+    )
+    add(
+      'repository',
+      'Repository follow-up',
+      gitStoryBlockers.length,
+      gitStoryBlockers[0] ? gitBlockerCopy(gitStoryBlockers[0]).label : 'Branches or checkouts need landing decisions.',
+    )
+    return rows
+  })
   const taskDoneLabel = $derived(data?.totals.tasks === 0 ? 'No tracked work yet' : `${data?.totals.done ?? 0}/${data?.totals.tasks ?? 0} done`)
   const spineReleaseBlocker = $derived(spine?.release?.blockers?.[0] ?? null)
   const spineBlockerNode = $derived(spineReleaseBlocker?.owningNodeId ? spine?.nodes?.[spineReleaseBlocker.owningNodeId] ?? null : null)
@@ -561,6 +620,22 @@
             </div>
           {/if}
         </div>
+        {#if blockerStack.length > 0}
+          <div class="blocker-stack" aria-label="Current blocker stack">
+            <strong>What blocks this</strong>
+            <ul>
+              {#each blockerStack as row (row.key)}
+                <li>
+                  <span>
+                    <b>{row.label}</b>
+                    <small>{row.detail}</small>
+                  </span>
+                  <StatusPill label={`${row.count} open`} tone="warn" />
+                </li>
+              {/each}
+            </ul>
+          </div>
+        {/if}
         {#if data.dirtyCheckout && dirtyCheckoutCount > 0}
           <p class="dirty-detail">
             {dirtyCheckoutCount} project-local Guildhall {dirtyCheckoutCount === 1 ? 'file needs' : 'files need'} cleanup before {data.release?.label ? 'the current release' : 'current work'} can be ready.
@@ -759,6 +834,39 @@
     color: var(--text-muted);
     font-size: var(--gh-type-size-body);
     line-height: var(--gh-type-line-height-body);
+  }
+
+  .blocker-stack {
+    display: grid;
+    gap: var(--gh-space-2);
+    margin-top: var(--gh-space-3);
+  }
+
+  .blocker-stack ul {
+    display: grid;
+    gap: var(--gh-space-2);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .blocker-stack li {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: var(--gh-space-3);
+    align-items: start;
+    padding-top: var(--gh-space-2);
+    border-top: 1px solid var(--gh-color-border-subtle);
+  }
+
+  .blocker-stack span {
+    min-width: 0;
+    display: grid;
+    gap: var(--gh-space-1);
+  }
+
+  .blocker-stack small {
+    color: var(--text-muted);
   }
 
   .git-story-detail {

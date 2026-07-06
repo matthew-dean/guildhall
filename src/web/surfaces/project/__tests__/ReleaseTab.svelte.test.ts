@@ -169,6 +169,71 @@ describe('ReleaseTab', () => {
     })
   })
 
+  it('shows a ranked blocker stack on the default release summary', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        json({
+          ...readyPayload,
+          incompleteBriefs: [{
+            id: 'task-shape',
+            title: 'Shape imported task',
+            reason: 'Needs source-backed brief.',
+          }],
+          openEscalations: [{
+            id: 'task-blocked',
+            title: 'Choose project scope',
+            reason: 'Waiting on user decision',
+            summary: 'Build failing until the project scope is chosen.',
+          }],
+          unapprovedSpecs: [{
+            id: 'task-approval',
+            title: 'Keep ui-top-bar, ui-search-shell, and ui-search-result-row as recipe-level primitives rather than forcing them into lowe',
+          }],
+          blockedByAgent: [{
+            id: 'task-agent-blocked',
+            title: 'Fix task-local bootstrap',
+            reason: 'human_judgment_required: pnpm lint failed.',
+          }],
+          dirtyCheckout: { ownedCount: 1, files: ['.guildhall/project-state/TASKS.json'] },
+          gitStory: {
+            blockers: [{
+              id: 'git-1',
+              state: 'dirty_uncommitted',
+              reason: 'Dirty checkout.',
+              nextAction: 'Review the diff, then commit it.',
+            }],
+          },
+          statusCounts: { import_draft: 1, blocked: 2, ready: 1 },
+          totals: {
+            blockingCount: 5,
+            humanBlockingCount: 3,
+            dirtyCheckoutBlockingCount: 1,
+            gitStoryBlockingCount: 1,
+            unfinishedCount: 4,
+            tasks: 4,
+            done: 0,
+          },
+        }),
+      ),
+    )
+
+    render(ReleaseTab)
+
+    expect(await screen.findByText('What blocks this')).toBeTruthy()
+    expect(screen.getByText('Needs shaping')).toBeTruthy()
+    expect(screen.getByText('Needs source-backed brief.')).toBeTruthy()
+    expect(screen.getByText('Open escalations')).toBeTruthy()
+    expect(screen.getByText('Build failing until the project scope is chosen.')).toBeTruthy()
+    expect(screen.getByText('1 brief or spec is waiting for review.')).toBeTruthy()
+    expect(screen.queryByText('Keep ui-top-bar, ui-search-shell, and ui-search-result-row as recipe-level primitives rather than forcing them into lowe')).toBeNull()
+    expect(screen.getByText('Agent-blocked tasks')).toBeTruthy()
+    expect(screen.getByText('pnpm lint failed.')).toBeTruthy()
+    expect(screen.queryByText(/human_judgment_required/)).toBeNull()
+    expect(screen.getAllByText('Project checkout').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getAllByText('Repository follow-up').length).toBeGreaterThanOrEqual(1)
+  })
+
   it('renders incomplete task briefs as a separate owner action', async () => {
     vi.stubGlobal(
       'fetch',
@@ -438,7 +503,7 @@ describe('ReleaseTab', () => {
 
     expect(await screen.findByText('Current task scope')).toBeTruthy()
     expect(screen.getByText('Could not inspect checkout')).toBeTruthy()
-    expect(screen.getByText(/Guildhall could not inspect the configured repository boundary with git/)).toBeTruthy()
+    expect(screen.getAllByText(/Guildhall could not inspect the configured repository boundary with git/).length).toBeGreaterThanOrEqual(1)
     expect(screen.queryByText(/fatal: not a git repository/)).toBeNull()
     expect(screen.queryByText('Project checkout clean.')).toBeNull()
   })
