@@ -41,7 +41,7 @@
   type SortKey = 'title' | 'status' | 'area' | 'priority' | 'updated' | 'revisions'
   type SortDir = 'asc' | 'desc'
   type WorkView = 'list' | 'board'
-  type WorkFilter = 'queued' | 'planning' | 'open' | 'all' | 'blocked' | 'needs-you'
+  type WorkFilter = 'queued' | 'planning' | 'open' | 'all' | 'blocked' | 'needs-proof' | 'needs-you'
 
   const STATUS_SORT_ORDER: Record<string, number> = {
     proposed: 0,
@@ -113,6 +113,7 @@
     { value: 'open', label: 'Open' },
     { value: 'all', label: 'All' },
     { value: 'blocked', label: 'Blocked' },
+    { value: 'needs-proof', label: 'Needs proof' },
     { value: 'needs-you', label: 'Needs you' },
   ]
 
@@ -125,6 +126,15 @@
   const projectRunning = $derived(detail.run?.status === 'running')
   const projectRunActive = $derived(detail.run?.status === 'running' || detail.run?.status === 'stopping')
   const deliveryReadyCount = $derived(deliveryQueue?.runnable?.length ?? 0)
+  const proofMissingTaskIds = $derived.by(() => {
+    const ids = detail.startReadiness?.proofTaskIds ?? []
+    if (ids.length > 0) return new Set(ids.filter(Boolean))
+    if (detail.startReadiness?.code === 'proof_evidence_missing' && detail.startReadiness.focusTaskId) {
+      return new Set([detail.startReadiness.focusTaskId])
+    }
+    return new Set<string>()
+  })
+  const proofMissingCount = $derived(proofMissingTaskIds.size || (detail.startReadiness?.code === 'proof_evidence_missing' ? detail.startReadiness.count ?? 0 : 0))
   const deliveryPrimitiveBlockers = $derived.by(() => {
     return deliveryQueue?.blocked
       ?.flatMap(candidate => candidate.structuralBlockers ?? [])
@@ -144,6 +154,7 @@
       detail: primaryAction?.detail ?? detail.orientationSpine?.summary?.nextAction ?? 'Open the current scoped work to continue shaping it.',
       current: counts.visibleActive,
       blocked: counts.visibleBlocked,
+      proofMissing: proofMissingCount,
       deferred: counts.visibleShelved,
     }
   })
@@ -319,6 +330,7 @@
   }
 
   function workFilterForTask(task: Task): WorkFilter {
+    if (isProofMissingTask(task)) return 'needs-proof'
     if (task.status === 'blocked') return 'blocked'
     if (hasOpenQuestion(task)) return 'needs-you'
     if (isQueuedWorkTask(task)) return 'queued'
@@ -391,6 +403,7 @@
     if (workFilter === 'queued') return 'No work is ready to run yet.'
     if (workFilter === 'planning') return 'No planning work.'
     if (workFilter === 'blocked') return 'No blocked work.'
+    if (workFilter === 'needs-proof') return 'No proof gaps.'
     if (workFilter === 'needs-you') return 'Nothing needs you.'
     return 'No matching work.'
   }
@@ -399,6 +412,7 @@
     if (workFilter === 'queued') return 'Planning and review work is still waiting. Use Planning to inspect intake and spec work.'
     if (workFilter === 'planning') return 'Planning, intake, and spec items will appear here while they are being shaped.'
     if (workFilter === 'blocked') return 'Blocked work will appear here once a task cannot continue.'
+    if (workFilter === 'needs-proof') return 'Completed work with missing release proof will appear here.'
     if (workFilter === 'needs-you') return 'Questions and owner-held work will appear here when input is needed.'
     return 'Adjust the filter to inspect a different slice of the project.'
   }
@@ -416,6 +430,7 @@
     if (workFilter === 'planning') return isPlanningTask(task)
     if (workFilter === 'open') return !['done', 'pending_pr', 'shelved'].includes(task.status ?? '')
     if (workFilter === 'blocked') return task.status === 'blocked'
+    if (workFilter === 'needs-proof') return isProofMissingTask(task)
     if (workFilter === 'needs-you') return hasOpenQuestion(task)
     return false
   }
@@ -424,7 +439,12 @@
     if (tasks.some(isQueuedWorkTask)) return 'queued'
     if (tasks.some(isPlanningTask)) return 'planning'
     if (tasks.some(task => task.status === 'blocked')) return 'blocked'
+    if (tasks.some(isProofMissingTask)) return 'needs-proof'
     return 'queued'
+  }
+
+  function isProofMissingTask(task: Task): boolean {
+    return proofMissingTaskIds.has(task.id)
   }
 
   function workAreaForTask(task: Task) {
@@ -672,8 +692,15 @@
           </div>
           <div class="queue-chips">
             {#if scopeQueueFallback}
-              <Chip label={countLabel(scopeQueueFallback.current, 'current task')} tone="accent" />
-              <Chip label={`${scopeQueueFallback.blocked} blocked`} tone={scopeQueueFallback.blocked ? 'warn' : 'neutral'} />
+              {#if scopeQueueFallback.current > 0 || scopeQueueFallback.proofMissing === 0}
+                <Chip label={countLabel(scopeQueueFallback.current, 'current task')} tone="accent" />
+              {/if}
+              {#if scopeQueueFallback.blocked > 0 || scopeQueueFallback.proofMissing === 0}
+                <Chip label={`${scopeQueueFallback.blocked} blocked`} tone={scopeQueueFallback.blocked ? 'warn' : 'neutral'} />
+              {/if}
+              {#if scopeQueueFallback.proofMissing > 0}
+                <Chip label={countLabel(scopeQueueFallback.proofMissing, 'need proof', 'need proof')} tone="warn" />
+              {/if}
               <Chip label={countLabel(scopeQueueFallback.deferred, 'deferred', 'deferred')} tone="neutral" />
             {:else}
               <Chip label={projectRunning ? `${deliveryReadyCount} runnable` : `${deliveryReadyCount} ready to resume`} tone={deliveryFirstRunnable ? 'ok' : 'neutral'} />

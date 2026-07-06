@@ -578,6 +578,7 @@ interface ServiceProjectSummary {
     focusTaskId?: string
     focusTaskTitle?: string
     focusKind?: string
+    proofTaskIds?: string[]
     count?: number
   } | null
   migrationSummary?: {
@@ -5937,6 +5938,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     focusTaskId?: string
     focusTaskTitle?: string
     focusKind?: string
+    proofTaskIds?: string[]
     count?: number
   }> {
     const activeRun = supervisor.get(projectId)
@@ -5952,6 +5954,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     focusTaskId?: string
     focusTaskTitle?: string
     focusKind?: string
+    proofTaskIds?: string[]
     count?: number
   } {
     return {
@@ -5962,6 +5965,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       ...(terminal.focusTaskId ? { focusTaskId: terminal.focusTaskId } : {}),
       ...(terminal.focusTaskTitle ? { focusTaskTitle: terminal.focusTaskTitle } : {}),
       ...(terminal.focusKind ? { focusKind: terminal.focusKind } : {}),
+      ...(terminal.proofTaskIds?.length ? { proofTaskIds: terminal.proofTaskIds } : {}),
       ...(terminal.count ? { count: terminal.count } : {}),
     }
   }
@@ -6088,6 +6092,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       focusTaskId?: string
       focusTaskTitle?: string
       focusKind?: string
+      proofTaskIds?: string[]
       count?: number
       selectedReleaseTerminal?: boolean
     stopSummary: {
@@ -6225,6 +6230,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         focusTaskId: first.id,
         focusTaskTitle: first.title,
         focusKind: 'proof',
+        proofTaskIds: proofMissingDoneTasks.map(task => task.id),
         count: proofMissingDoneTasks.length,
         ...(selectedReleaseScope ? { selectedReleaseTerminal: true } : {}),
         stopSummary: {

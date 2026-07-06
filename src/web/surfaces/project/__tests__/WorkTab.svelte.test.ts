@@ -351,6 +351,82 @@ describe('WorkTab', () => {
     expect(queue).not.toHaveTextContent('No runnable task')
   })
 
+  it('keeps proof-missing completed work visible from the focused Work route', async () => {
+    window.history.replaceState({}, '', '/projects/narrative-harness/work?task=proof-task')
+    path.value = '/projects/narrative-harness/work?task=proof-task'
+
+    render(WorkTab, {
+      props: {
+        detail: detail([
+          task({
+            id: 'proof-task',
+            title: 'Generate a CLI-first story synopsis and chapter draft',
+            status: 'done',
+            terminalSummary: { headline: 'Completed, but proof evidence is missing.' },
+          }),
+          task({
+            id: 'later-task',
+            title: 'Later polish task',
+            status: 'shelved',
+          }),
+        ], {
+          id: 'narrative-harness',
+          name: 'Narrative Harness',
+          startReadiness: {
+            canStart: false,
+            code: 'proof_evidence_missing',
+            message: 'Stage 1 is waiting on proof evidence for "Generate a CLI-first story synopsis and chapter draft".',
+            actionHref: '/work?task=proof-task',
+            focusTaskId: 'proof-task',
+            focusKind: 'proof',
+            proofTaskIds: ['proof-task'],
+            count: 1,
+          },
+          workProgress: {
+            counts: {
+              visibleTotal: 2,
+              visibleActive: 0,
+              visibleBlocked: 0,
+              visibleDone: 1,
+              visibleShelved: 1,
+              deliveryTotal: 2,
+              deliveryRequired: 2,
+              deliveryDone: 1,
+              deliveryBlocked: 0,
+            },
+            byTaskId: {},
+          },
+          orientationSpine: {
+            scope: { label: 'Stage 1' },
+            summary: {
+              selectedScopeLabel: 'Stage 1',
+              nextAction: 'Attach proof for the completed scoped work.',
+              includedWorkCount: 1,
+              deferredWorkCount: 1,
+            },
+            roots: [],
+            nodes: {},
+          },
+          deliverySpine: {
+            queue: {
+              runnable: [],
+              firstRunnable: null,
+              blocked: [],
+            },
+          },
+        }),
+      },
+    })
+
+    const queue = await screen.findByRole('region', { name: 'Delivery queue' })
+    expect(queue).toHaveTextContent('1 need proof')
+    expect(queue).not.toHaveTextContent('0 current tasks')
+    expect(queue).not.toHaveTextContent('0 blocked')
+    expect(screen.getByRole('combobox', { name: /^show$/i })).toHaveValue('needs-proof')
+    expect(await screen.findByText('1 shown · 2 total')).toBeTruthy()
+    expect(screen.getByRole('button', { name: /inspect work generate a cli-first story synopsis/i })).toBeTruthy()
+  })
+
   it('labels dependency-waiting delivery work separately from blocked tasks', async () => {
     render(WorkTab, {
       props: {

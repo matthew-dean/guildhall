@@ -1553,6 +1553,7 @@ describe('POST /api/project/start', () => {
         focusTaskId?: string
         focusTaskTitle?: string
         focusKind?: string
+        proofTaskIds?: string[]
       }
       orientationSpine?: {
         summary?: {
@@ -1576,6 +1577,7 @@ describe('POST /api/project/start', () => {
       focusTaskId: 'current-done',
       focusTaskTitle: 'Run fixture evaluator proof',
       focusKind: 'proof',
+      proofTaskIds: ['current-done'],
     })
     expect(projectBody.startReadiness?.message).toContain('Headless MVP')
     expect(projectBody.startReadiness?.message).toContain('waiting on proof evidence')

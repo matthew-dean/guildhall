@@ -1289,6 +1289,7 @@ export interface StartReadiness {
   focusTaskId?: string
   focusTaskTitle?: string
   focusKind?: string
+  proofTaskIds?: string[]
   count?: number
 }
 

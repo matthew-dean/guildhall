@@ -8,6 +8,70 @@ help_summary: |
 
 # Web UI flow audit
 
+2026-07-06T21:00:46Z - Work keeps proof-blocked terminal tasks visible.
+
+- Work id: `codex:work-proof-blocker-filter-2026-07-06`.
+- User job: when Overview or Start says the current scope needs proof, opening
+  Work must land on the exact proof-blocked rows and explain why the selected
+  scope cannot continue. The owner should not see a proof blocker banner above
+  an empty current-work count and a broad unrelated list.
+- Live findings:
+  - Narrative Harness Start/readiness pointed to
+    `/work?task=task-generate-a-cli-first-story-synopsis-outline-character-voice-records-and-one-chapter-draft-from-the-selected-model`
+    with `focusKind:proof`.
+  - Work selected the routed task id, then classified the completed task as
+    `open`; the `open` filter excludes `done`, so the proof blocker could
+    disappear from its own destination.
+  - The delivery queue fallback showed `0 current tasks`, `0 blocked`, and
+    `12 deferred` even though the selected scope was blocked by `2` missing
+    proof items.
+- Root-cause classification:
+  - UI communication/orientation problem: Work used status filters that hid
+    terminal-but-proof-blocking rows.
+  - Scheduler/action-state logic problem: shared Start readiness knew the
+    focused proof task, but did not expose the full proof-blocked task id list
+    to Work.
+  - Task hierarchy/dependency/proof modeling problem: `done` plus missing
+    release proof is a terminal task state and an active release blocker; Work
+    had no filter for that mixed state.
+- Fix:
+  - `startReadiness` now carries `proofTaskIds` for proof-missing terminal
+    tasks in the selected scope.
+  - Work adds a `Needs proof` filter, uses the shared proof id list for route
+    selection/default filtering, and shows proof blockers without broadening
+    to the whole 159-item work list.
+  - The delivery queue fallback shows `2 need proof` and suppresses `0 current`
+    / `0 blocked` chips when proof is the active scoped blocker.
+- Contract Touch Decision:
+  - Work id: `codex:work-proof-blocker-filter-2026-07-06`.
+  - Touched contracts: `/api/project.startReadiness` adds optional
+    `proofTaskIds`; Work route/filter semantics for proof-blocked completed
+    tasks.
+  - Contracts considered but not touched: persisted task schema, proof-path
+    schema, release-readiness endpoint, task history endpoints, Work list row
+    task payload shape.
+  - Existing data impact: no migration. Existing Narrative Harness
+    proof-blocked tasks become visible through shared readiness ids.
+  - Required follow-up: attach or regenerate real proof for the two remaining
+    Narrative Harness blockers; consider whether `Needs proof` should become
+    a first-class cross-surface work state instead of only a Work filter.
+  - Proof required: API regression proving `proofTaskIds` propagate from
+    terminal start state; Work UI regression proving a proof-blocked completed
+    task remains visible from a focused route; installed-app stale check; live
+    browser proof on Narrative Harness Work.
+  - Proof provided: focused `serve-settings` and `WorkTab` vitest tests
+    passed; installed app rebuilt/dev-installed/restarted with
+    `/api/stale-server` returning `stale:false`; live browser at
+    `/projects/narrative-harness/work?task=...selected-model` showed
+    `Needs proof`, `2 need proof`, `12 deferred`, `2 shown`, both proof
+    blocker rows, and no `0 current tasks` or `0 blocked` chips after reload.
+  - Waivers: no schema migration decision is required because this only adds
+    an optional derived API field and Work presentation state.
+  - Owner-review items: none for this slice; it makes the current blocker more
+    visible without approving or completing proof.
+  - Apply/revert behavior: reverting makes proof-blocked terminal work easy to
+    hide again when Work is opened from Start/Overview.
+
 2026-07-06T20:48:24Z - Imported review hints reconcile without faking model proof.
 
 - Work id: `codex:review-hint-proof-readiness-reconciliation-2026-07-06`.
