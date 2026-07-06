@@ -153,6 +153,7 @@
     bootstrap_missing: 'wrench',
     setup_pending: 'wrench',
     workspace_import_pending: 'package',
+    proof_reconciliation: 'alert-triangle',
     import_draft_queue: 'list-todo',
     contract_result_review: 'file-check',
     lever_questions: 'sliders',
@@ -165,6 +166,7 @@
     bootstrap_missing: 'Configure',
     setup_pending: 'Open setup',
     workspace_import_pending: 'Review import',
+    proof_reconciliation: 'Review proof',
     import_draft_queue: 'Draft task brief',
     contract_result_review: 'Review result',
     lever_questions: 'Review',
@@ -194,6 +196,9 @@
     if (item.kind === 'contract_result_review') {
       const buckets = item.reviewBuckets?.length ? item.reviewBuckets.join(', ') : 'review'
       return `${item.changeCount ?? 0} change${item.changeCount === 1 ? '' : 's'} in ${buckets}.`
+    }
+    if (item.kind === 'proof_reconciliation') {
+      return `${item.count ?? 1} completed task${item.count === 1 ? '' : 's'} need evidence reconciliation.`
     }
     return null
   }

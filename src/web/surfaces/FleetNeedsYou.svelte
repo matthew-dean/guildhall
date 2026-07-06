@@ -40,6 +40,7 @@
       case 'required_migration': return 'Migrate'
       case 'project_understanding': return 'Reconcile'
       case 'workspace_import_pending': return 'Review import'
+      case 'proof_reconciliation': return 'Review proof'
       case 'import_draft_queue': return 'Review draft'
       case 'contract_result_review': return 'Review result'
       case 'bootstrap_missing': return 'Configure'

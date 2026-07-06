@@ -28,6 +28,7 @@ import {
   deriveReleaseContainersFromTaskMembership,
   type ProjectScope,
 } from './project-scope-projection.js'
+import { proofMissingDoneTasks } from './proof-health.js'
 import {
   buildSnapshot,
   buildTaskSnapshot,
@@ -48,6 +49,7 @@ export type InboxItem =
   | { kind: 'bootstrap_missing'; severity: 'high'; title: string; detail: string; actionHref?: string }
   | { kind: 'setup_pending'; severity: 'medium'; stepId: string; title: string; detail: string; actionHref: string }
   | { kind: 'workspace_import_pending'; severity: 'medium'; title: string; detail: string; signals: string[]; actionHref: string; dismissEndpoint: string }
+  | { kind: 'proof_reconciliation'; severity: 'medium'; taskId: string; title: string; detail: string; actionHref: string; count: number; signals: string[]; dismissEndpoint: string }
   | { kind: 'import_draft_queue'; severity: 'medium'; taskId: string; title: string; detail: string; actionHref: string }
   | { kind: 'contract_result_review'; severity: 'medium'; resultId: string; contractId: string; title: string; detail: string; actionHref: string; changeCount: number; reviewBuckets: string[]; warningCount: number; source: { system: 'delivery-spine'; id: string } }
   | { kind: 'lever_questions'; severity: 'low'; title: string; detail: string; defaultCount: number; actionHref: string }
@@ -80,6 +82,7 @@ export const ATTENTION_OWNED_INBOX_KINDS = [
   'bootstrap_missing',
   'setup_pending',
   'workspace_import_pending',
+  'proof_reconciliation',
   'import_draft_queue',
   'contract_result_review',
   'lever_questions',
@@ -105,10 +108,11 @@ const KIND_ORDER: Record<InboxItem['kind'], number> = {
   bootstrap_missing: 2,
   setup_pending: 3,
   workspace_import_pending: 4,
-  import_draft_queue: 5,
-  contract_result_review: 6,
-  lever_questions: 7,
-  spec_fill_pending: 8,
+  proof_reconciliation: 5,
+  import_draft_queue: 6,
+  contract_result_review: 7,
+  lever_questions: 8,
+  spec_fill_pending: 9,
 }
 
 const SEVERITY_ORDER: Record<InboxSeverity, number> = {
@@ -433,6 +437,25 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
       signals,
       actionHref: '/workspace-import',
       dismissEndpoint: '/api/project/workspace-import/dismiss',
+    })
+  }
+
+  const proofMissing = proofMissingDoneTasks(tasks)
+  if (proofMissing.length > 0) {
+    const first = proofMissing[0]!
+    const countLabel = proofMissing.length === 1
+      ? '1 completed task still has unmet proof'
+      : `${proofMissing.length} completed tasks still have unmet proof`
+    items.push({
+      kind: 'proof_reconciliation',
+      severity: 'medium',
+      taskId: first.id,
+      title: 'Review stale proof records',
+      detail: `${countLabel}. Start with "${first.title}" and reconcile the task evidence or reopen the work.`,
+      actionHref: '/task/' + encodeURIComponent(first.id) + '?tab=spec',
+      count: proofMissing.length,
+      signals: proofMissing.slice(0, 8).map(task => `task:${task.id}`),
+      dismissEndpoint: '/api/project/attention/dismiss?id=proof-reconciliation%3Adone-with-unmet-proof',
     })
   }
 

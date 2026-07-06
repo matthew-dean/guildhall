@@ -213,6 +213,116 @@ help_summary: |
     reconcile those criteria from recorded reviewer proof or reopen them as
     suspect proof data.
 
+2026-07-06T18:35:00Z - Stale done-with-unmet-proof records are owner-visible in Needs You.
+
+- Work id: `codex:proof-reconciliation-attention-2026-07-06`.
+- User job: A project owner should not need Codex API inspection to learn that
+  historical completed work has contradictory proof state. When a done task
+  still carries explicit unmet acceptance criteria, Guildhall should keep the
+  selected current scope honest while also surfacing the stale proof records as
+  durable owner-visible attention.
+- Escaped live failure:
+  - After the terminal-readiness fix, Narrative Harness selected
+    `Near-term proof scope` correctly remained `all_terminal` because the
+    current scope has no unmet criteria.
+  - The product still gave the owner no direct Needs You item for the `4`
+    historical done rows with stale unmet criteria outside that selected scope:
+    `coherence-reviewer-mvp`, `decision-trace-pipeline`,
+    `author-voice-loop-mvp`, and `task-150`.
+- Root-cause classification:
+  - Task hierarchy/dependency/proof modeling problem: proof-health existed in
+    release readiness, but was not a reusable runtime read model for other
+    owner-facing surfaces.
+  - UI communication/orientation problem: Needs You did not surface stale
+    historical proof contradictions, so the product hid a real trust problem
+    that Codex could only see through API inspection.
+  - Bad project data produced by an earlier Guildhall bug: older Narrative
+    Harness done rows still contain contradictory `met:false` criteria and
+    must be reconciled or reopened rather than silently normalized.
+- Fix:
+  - Extracted the done-but-proof-missing rule into shared
+    `src/runtime/proof-health.ts` and kept release readiness/start readiness on
+    that same rule.
+  - Added a first-class `proof_reconciliation` inbox/attention kind with a
+    stable attention id, action label, fleet/overview/inbox/do-this-next
+    handling, and task deep link to the first suspect completed task.
+  - The advisory is non-blocking for the already-consumed selected scope, but
+    visible as an open Project alert: `Review stale proof records`.
+- Contract Touch Decision:
+  - Work id: `codex:proof-reconciliation-attention-2026-07-06`.
+  - Touched contracts: coordinator inbox item taxonomy; attention record
+    identity semantics; shared proof-health read model.
+  - Contracts considered but not touched: persisted task queue schema, release
+    container schema, workspace-import draft schema, project orientation spine
+    API shape, release-readiness response shape.
+  - Required follow-up: decide whether proof reconciliation needs an explicit
+    repair/apply flow, or whether corrected re-intake should reopen/rewrite the
+    four stale Narrative Harness records from source-backed proof.
+  - Proof required: focused inbox/readiness tests, build, contract detector,
+    installed-app stale-server proof, live Narrative Harness inbox API proof,
+    visible browser proof on `/overview/inbox`.
+  - Proof provided: focused tests passed; build passed; installed API returned
+    `stale:false`; Narrative Harness `/api/project/inbox` returned
+    `proof-reconciliation:done-with-unmet-proof` with `count: 4` and the four
+    task signals; browser proof at desktop `1280x900` showed Project alerts
+    containing `Review stale proof records`, the 4-task detail, and no
+    horizontal overflow.
+  - Apply/revert behavior: remove the `proof_reconciliation` inbox kind,
+    attention id, UI labels, and `proof-health.ts` extraction, then restore the
+    local `taskDoneButProofMissing` helper in `serve.ts`.
+- Schema Migration Decision:
+  - Persisted schema touched: project-local `attention.json` records may now
+    store a new `kind: "proof_reconciliation"` item with `count` and `signals`.
+  - Scope: additive read-model/attention record only; no existing task,
+    release, workspace-import, or project settings rows are rewritten.
+  - Change class: backward-compatible additive enum value.
+  - Existing data impact: old attention records remain readable. New runtimes
+    may create the proof-reconciliation record; older runtimes would treat the
+    unknown kind as ordinary JSON but may not display it.
+  - Migration id: none. Runtime reconciliation creates and resolves the item
+    from current task state.
+  - Safety: the record is advisory/non-blocking and can be dismissed or
+    resolved by the existing attention lifecycle.
+  - Required before run: no.
+  - Compatibility reader: existing attention history tolerates extra record
+    fields; UI shared `InboxItem` type now includes `proof_reconciliation`.
+  - Fixtures/tests: `src/runtime/__tests__/inbox.test.ts` now covers a done
+    task with `acceptanceCriteria.met === false` producing the advisory.
+  - Owner-facing plan text: `Review stale proof records`; detail says to
+    reconcile evidence or reopen the work.
+  - Rollback/revert behavior: deleting the generated attention record is safe;
+    it will not affect task data or release scope data.
+- Verification:
+  - `CI=true pnpm vitest run src/runtime/__tests__/inbox.test.ts src/runtime/__tests__/serve-release-readiness.test.ts src/runtime/__tests__/serve-task-endpoints.test.ts`
+    passed `179` tests.
+  - `CI=true node ./build.mjs` passed.
+  - `CI=true pnpm dev:install`; `guildhall stop`; `guildhall start`;
+    `/api/stale-server` returned `stale:false` for PID `6008`.
+  - Live API proof:
+    `/api/project/inbox?projectId=narrative-harness` returned `items[0]` with
+    `kind: "proof_reconciliation"`, `title: "Review stale proof records"`,
+    detail `4 completed tasks still have unmet proof...`, action
+    `/task/coherence-reviewer-mvp?tab=spec`, and task signals for the four
+    suspect records.
+  - Live API proof:
+    `/api/project?projectId=narrative-harness` returned
+    `startReadiness.code: "all_terminal"` and message
+    `Near-term proof scope is complete.`, proving the advisory does not
+    corrupt selected-scope completion.
+  - Browser proof:
+    `/projects/narrative-harness/overview/inbox` at desktop `1280x900` visibly
+    showed `Project alerts`, `Review stale proof records`, `4 completed tasks
+    still have unmet proof...`, and `REVIEW PROOF`, with
+    `overflowX:false`.
+- Residual risk:
+  - Narrow/mobile browser geometry proof was attempted but the in-app browser
+    automation timed out during viewport resizing. The viewport was reset
+    afterward. Treat responsive proof for this exact alert as incomplete until
+    the browser bridge or a rendered regression covers it.
+  - This slice surfaces stale proof contradictions; it does not yet reconcile
+    the four Narrative Harness records or prove the corrected importer can
+    repopulate a true NH headless MVP from docs.
+
 2026-07-06T15:45:00Z - Clipped imported task titles are repaired as data, not display copy.
 
 - Work id: `codex:repair-clipped-imported-task-title-data-2026-07-06`.

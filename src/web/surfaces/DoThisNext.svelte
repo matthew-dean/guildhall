@@ -147,6 +147,13 @@
           button: 'Review update',
           href: item.actionHref ?? '/workspace-import?mode=reconcile',
         }
+      case 'proof_reconciliation':
+        return {
+          verb: item.title,
+          why: item.detail ?? 'Completed work has proof records that need reconciliation.',
+          button: 'Review proof',
+          href: item.actionHref ?? '/overview/inbox',
+        }
       case 'import_draft_queue':
         return {
           verb: 'Shape the imported drafts',

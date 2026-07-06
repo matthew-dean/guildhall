@@ -6,6 +6,7 @@ export type InboxItemKind =
   | 'bootstrap_missing'
   | 'setup_pending'
   | 'workspace_import_pending'
+  | 'proof_reconciliation'
   | 'import_draft_queue'
   | 'contract_result_review'
   | 'lever_questions'
@@ -29,6 +30,7 @@ export interface InboxItem {
   migrationId?: string
   resultId?: string
   contractId?: string
+  count?: number
   changeCount?: number
   reviewBuckets?: string[]
   warningCount?: number

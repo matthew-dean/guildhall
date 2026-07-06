@@ -146,6 +146,7 @@ describe('buildInbox', () => {
       'bootstrap_missing',
       'setup_pending',
       'workspace_import_pending',
+      'proof_reconciliation',
       'import_draft_queue',
       'contract_result_review',
       'lever_questions',
@@ -408,6 +409,40 @@ describe('buildInbox', () => {
     expect(hit.title).toBe('Existing repo detected')
     expect(hit.detail).toMatch(/anchors found/i)
     expect(hit.detail).not.toMatch(/\d+ signals?/i)
+  })
+
+  it('proof_reconciliation: emitted when completed work still has unmet acceptance criteria', async () => {
+    await writeCompleteBootstrap()
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
+    await writeJson('.guildhall/TASKS.json', {
+      version: 1,
+      lastUpdated: '2026-07-06T00:00:00.000Z',
+      tasks: [
+        {
+          id: 'task-stale-proof',
+          title: 'Draft chapter in author voice',
+          status: 'done',
+          acceptanceCriteria: [
+            { id: 'voice', description: 'Author voice proof is attached.', met: false },
+            { id: 'outline', description: 'Outline was generated.', met: true },
+          ],
+        },
+      ],
+    })
+
+    const items = buildInboxWithProviderSetup()
+    const hit = items.find(i => i.kind === 'proof_reconciliation')
+    if (!hit || hit.kind !== 'proof_reconciliation') throw new Error('unreachable')
+
+    expect(hit).toMatchObject({
+      severity: 'medium',
+      taskId: 'task-stale-proof',
+      title: 'Review stale proof records',
+      actionHref: '/task/task-stale-proof?tab=spec',
+      count: 1,
+    })
+    expect(hit.detail).toContain('Draft chapter in author voice')
+    expect(hit.detail).toContain('reconcile the task evidence or reopen the work')
   })
 
   it('does not expose project check-ins or pressure-test questions through project inbox', async () => {

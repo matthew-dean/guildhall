@@ -344,6 +344,7 @@ function inboxButtonLabel(item: ProjectActionInboxItem): string {
   switch (item.kind) {
     case 'project_understanding': return 'Review update'
     case 'workspace_import_pending': return 'Review import'
+    case 'proof_reconciliation': return 'Review proof'
     case 'bootstrap_missing': return 'Open readiness checks'
     case 'setup_pending': return 'Open setup'
     case 'import_draft_queue': return item.taskId === 'task-workspace-import' ? 'Open import review' : 'Draft task brief'
@@ -357,6 +358,8 @@ function inboxButtonLabel(item: ProjectActionInboxItem): string {
 function inboxAction(item: ProjectActionInboxItem): ProjectAction {
   const label = item.kind === 'import_draft_queue'
     ? 'Shape the imported drafts'
+    : item.kind === 'proof_reconciliation'
+      ? 'Review proof records'
     : item.kind === 'bootstrap_missing'
       ? 'Verify your bootstrap commands'
       : item.title ?? 'Open project item'

@@ -624,6 +624,7 @@
     switch (item.kind) {
       case 'project_understanding': return 'Review update'
       case 'workspace_import_pending': return 'Review import'
+      case 'proof_reconciliation': return 'Review proof'
       case 'required_migration': return 'Migrate'
       default: return 'Open'
     }

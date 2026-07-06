@@ -81,6 +81,7 @@ export function attentionIdForInboxItem(item: InboxItem): string {
   if (item.kind === 'required_migration') return `migration:${item.migrationId}`
   if (item.kind === 'project_understanding') return 'project-understanding:intake-reconcile'
   if (item.kind === 'workspace_import_pending') return 'workspace-import:review'
+  if (item.kind === 'proof_reconciliation') return 'proof-reconciliation:done-with-unmet-proof'
   if (item.kind === 'bootstrap_missing') return 'bootstrap:readiness'
   const taskId = 'taskId' in item ? item.taskId : undefined
   if (taskId) return `${item.kind}:${taskId}`
