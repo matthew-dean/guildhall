@@ -14577,6 +14577,114 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-07-06T08:30:00Z - Treat source-trail lead-ins as invalid owner-input
+questions.
+
+- Work id: `codex:owner-input-source-trail-leadin-repair-2026-07-06`.
+- User job: Looma + Knit should not be blocked by a Thread owner-input card
+  whose "question" is only `From what I've seen:` followed by evidence bullets.
+  Owner input must be a real answerable decision; otherwise Guildhall should
+  cancel or repair the stale blocker and continue surfacing the next real
+  blocker.
+- Root-cause classification:
+  - data model/schema problem: older owner-input records could persist a prompt
+    that was not a question, while still modeling it as
+    `waiting_for_owner`.
+  - scheduler/action-state logic problem: project Start correctly obeyed the
+    `waiting_for_owner` record, so a malformed record disabled Start.
+  - UI communication/orientation problem: the primary action said `Answer in
+    Thread`, but Thread could only show an evidence lead-in, not an answerable
+    owner decision.
+  - bad project data from an earlier Guildhall bug: Looma + Knit stored this
+    malformed Templates request before the stricter owner-question checks.
+  - data model/schema problem: the original repair scanner read from the
+    legacy project-state root, while owner-input records are written through
+    the system-local project-state root after the storage-boundary migration.
+    That let modern owner-input records block Start while the repair migration
+    detected nothing.
+- Fix:
+  - `owner-question-normalizer` now rejects the source-trail lead-in
+    `From what I've seen:` when it has no embedded question.
+  - Owner-input state repair now scans the same system-local state root used by
+    the owner-input store.
+  - A new required project migration,
+    `0.10.1/owner-input-source-trail-leadin-repair`, catches already-migrated
+    projects whose earlier `0.10.0/owner-input-state-repair` ledger entry would
+    otherwise suppress a second repair pass.
+- Contract Touch Decision:
+  - Touched contracts: owner-input question validity semantics, owner-input
+    state repair behavior, bounded-chat cancellation behavior for invalid
+    owner-input records.
+  - Contracts considered but not touched: persisted owner-input schema,
+    bounded-chat schema, project action model schema, inbox schema, thread
+    projection schema. No fields are added or removed; only invalid legacy
+    records are repaired through a versioned compatibility migration.
+  - Required follow-up: installed-app migration proof on Looma + Knit must show
+    the bad Templates owner-input record cancelled and the project Start/action
+    model moving to the next real blocker instead of the stale Thread question.
+  - Proof required: focused owner-question normalizer test, owner-input repair
+    test, project action-model guard, contract detector, build/install,
+    migration apply on Looma + Knit, installed API proof.
+  - Proof provided so far: focused tests passed for
+    `owner-question-normalizer`, `owner-input-state-repair`, and a migration
+    regression where the old owner-input repair is already applied but the new
+    source-trail lead-in repair is still required. Installed-app proof on
+    Looma + Knit showed `/api/project/migrations` reporting
+    `0.10.1/owner-input-source-trail-leadin-repair` as a required blocked
+    migration, `/api/project/migrations/apply` applying it with summary
+    `Repaired 1 source-trail owner-input lead-in that could not be answered by
+    the owner.`, and `/api/project` moving `actionModel.ownerInput.active` to
+    `false`.
+  - Apply/revert behavior: revert the normalizer predicate and regression tests
+    to allow the old malformed prompt to persist again. Already-cancelled
+    legacy owner-input records would remain cancelled unless restored from
+    backup, matching existing migration behavior.
+- Schema Migration Decision:
+  - Persisted schema touched: no schema shape change; existing owner-input and
+    bounded-chat records may be updated by the new
+    `0.10.1/owner-input-source-trail-leadin-repair` project migration.
+  - Scope: project-local state for projects with malformed waiting owner-input
+    records.
+  - Change class: compatibility repair / invalid legacy data cleanup.
+  - Existing data impact: invalid `waiting_for_owner` records whose prompt is
+    only a source-trail lead-in are cancelled, their bounded-chat session is
+    cancelled, and a repair note is appended to the source task when present.
+  - Migration id: `0.10.1/owner-input-source-trail-leadin-repair`.
+  - Safety: required project migration with existing prompt/review flow.
+  - Compatibility reader: unchanged; repaired records remain valid
+    `OwnerInputRequest` and bounded-chat records.
+  - Fixtures/tests: `owner-input-state-repair.test.ts` covers the Looma
+    Templates-shaped legacy record; `owner-question-normalizer.test.ts` covers
+    new creation rejection; `migrations.test.ts` covers the already-applied
+    old-migration ledger case.
+  - Owner-facing plan text: migration summary says repaired owner-input records
+    should not block unattended work.
+  - Rollback/revert behavior: restore affected project-state files from backup
+    or VCS snapshot if a cancelled request must be resurrected.
+- Installed-app verification:
+  - `curl http://localhost:7777/api/stale-server` returned `stale:false` with
+    matching boot/current build mtimes for the installed `0.10.1` app.
+  - Looma + Knit migration status before apply: `blocked:
+    ["0.10.1/owner-input-source-trail-leadin-repair"]`.
+  - Looma + Knit migration apply result: `applied:
+    ["0.10.1/owner-input-source-trail-leadin-repair"]`; migration status after
+    apply had no required blockers.
+  - Repaired persisted record:
+    `owner-input/oir-5de532fc6de7e242.json` now has `status:"cancelled"` and
+    a receipt command id
+    `0.10.1/owner-input-source-trail-leadin-repair:oir-5de532fc6de7e242`.
+  - Repaired bounded-chat session:
+    `bc-looma-knit-task_shaping-770c974165-2026-06-13T21-01-48-040Z` now has
+    `status:"cancelled"` and closure summary `Cancelled owner question: The
+    owner-input prompt is agent narration or evidence summary, not an
+    answerable owner question.`
+  - Looma + Knit `/api/project` no longer blocks Start on `Clarify Templates`;
+    `actionModel.ownerInput.active:false`, and the next visible blocker is the
+    real workspace-import refresh mismatch.
+  - Narrative Harness installed-app proof still shows the Stage 1 release ready
+    with `statusCounts: { done: 9 }` and includes the DeepInfra drafting model,
+    world-state continuity, and spatial/geographic continuity MVP tasks.
+
 2026-07-06T08:20:00Z - Re-selected the Narrative Harness Stage 1 MVP scope
 after verifying requested drafting/reviewer tasks.
 

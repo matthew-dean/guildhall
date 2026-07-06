@@ -12,4 +12,15 @@ describe('normalizeStructuredOwnerQuestion', () => {
       ],
     })).toBeNull()
   })
+
+  it('rejects source-trail lead-ins that never ask an owner question', () => {
+    expect(normalizeStructuredOwnerQuestion({
+      kind: 'choice',
+      prompt: "From what I've seen:",
+      choices: [
+        '`features.md` line 59: `- [ ] Templates` - unchecked, under "Organization & Structure"',
+        'The roadmap does not list Templates as a priority parity gap',
+      ],
+    })).toBeNull()
+  })
 })

@@ -448,6 +448,37 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
     },
   },
   {
+    id: '0.10.1/owner-input-source-trail-leadin-repair',
+    title: 'Repair source-trail owner-input lead-ins',
+    introducedIn: '0.10.1',
+    scope: 'project',
+    safety: 'prompt',
+    requirement: 'required',
+    summary: 'Repairs persisted owner-input records whose prompt is only a source-trail lead-in instead of an answerable owner question.',
+    async detect(projectRoot) {
+      const result = await repairOwnerInputState({
+        projectRoot,
+        apply: false,
+        repairId: '0.10.1/owner-input-source-trail-leadin-repair',
+      })
+      return {
+        needed: result.cancelledInvalid.length > 0,
+        affectedPaths: result.affectedPaths,
+      }
+    },
+    async apply(projectRoot) {
+      const result = await repairOwnerInputState({
+        projectRoot,
+        apply: true,
+        repairId: '0.10.1/owner-input-source-trail-leadin-repair',
+      })
+      return {
+        summary: `Repaired ${result.cancelledInvalid.length} source-trail owner-input lead-in${result.cancelledInvalid.length === 1 ? '' : 's'} that could not be answered by the owner.`,
+        affectedPaths: result.affectedPaths,
+      }
+    },
+  },
+  {
     id: '0.10.0/merge-policy-to-landing-strategy',
     title: 'Convert merge policy to landing strategy',
     introducedIn: '0.10.0',
@@ -606,6 +637,7 @@ const BUILT_IN_PROJECT_MIGRATION_IDEMPOTENCE_TESTS: Record<string, string> = {
   '0.10.0/task-hierarchy-links': 'migrations.test.ts: task-hierarchy migration is idempotent',
   '0.10.0/merge-policy-to-landing-strategy': 'migrations.test.ts: landing-strategy migration is idempotent',
   '0.10.0/owner-input-state-repair': 'migrations.test.ts: owner-input state repair is idempotent',
+  '0.10.1/owner-input-source-trail-leadin-repair': 'migrations.test.ts: source-trail owner-input lead-in repair is idempotent',
   '0.10.0/project-state-storage-boundary': 'migrations.test.ts: storage-boundary migration is idempotent',
   '0.10.0/restore-evacuated-task-state': 'migrations.test.ts: restores stranded evacuated task state into the system-local queue and readable task files',
 }

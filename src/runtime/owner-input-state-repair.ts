@@ -3,7 +3,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import {
   atomicWriteText,
-  getProjectStateDir,
+  getProjectSystemStateDir,
   getProjectSystemStatePath,
   getProjectSystemStatePathFromMemoryDir,
 } from '@guildhall/sessions'
@@ -15,6 +15,7 @@ export interface OwnerInputStateRepairInput {
   projectRoot: string
   apply: boolean
   now?: string
+  repairId?: string
 }
 
 export interface OwnerInputStateRepairResult {
@@ -45,14 +46,15 @@ interface RepairDecision {
 }
 
 const REPAIR_ID = '0.10.0/owner-input-state-repair'
-const REPAIR_AGENT_ID = `migration:${REPAIR_ID}`
 const TASKS_RELATIVE_PATH = 'TASKS.json'
 
 export async function repairOwnerInputState(
   input: OwnerInputStateRepairInput,
 ): Promise<OwnerInputStateRepairResult> {
   const now = input.now ?? new Date().toISOString()
-  const memoryDir = getProjectStateDir(input.projectRoot)
+  const repairId = input.repairId ?? REPAIR_ID
+  const repairAgentId = `migration:${repairId}`
+  const memoryDir = getProjectSystemStateDir(input.projectRoot)
   const requests = await readOwnerInputRequests(memoryDir)
   const decisions = planRepairs(requests)
 
@@ -71,8 +73,8 @@ export async function repairOwnerInputState(
   const queueFile = getProjectSystemStatePath(input.projectRoot, TASKS_RELATIVE_PATH)
   const queue = await readQueue(queueFile)
   for (const decision of decisions) {
-    await closeOwnerInput(memoryDir, decision, now)
-    appendRepairNote(queue, decision, now)
+    await closeOwnerInput(memoryDir, decision, now, repairId, repairAgentId)
+    appendRepairNote(queue, decision, now, repairId, repairAgentId)
   }
   atomicWriteText(queueFile, `${JSON.stringify({ ...queue, lastUpdated: now }, null, 2)}\n`)
 
@@ -160,7 +162,13 @@ function duplicateSignature(request: OwnerInputRequestRecord): string | null {
   return `${request.source.taskId}:${choices}`
 }
 
-async function closeOwnerInput(memoryDir: string, decision: RepairDecision, now: string): Promise<void> {
+async function closeOwnerInput(
+  memoryDir: string,
+  decision: RepairDecision,
+  now: string,
+  repairId: string,
+  repairAgentId: string,
+): Promise<void> {
   const nextRequest = OwnerInputRequest.parse({
     ...decision.request,
     status: 'cancelled',
@@ -170,12 +178,12 @@ async function closeOwnerInput(memoryDir: string, decision: RepairDecision, now:
       {
         machineId: 'owner-input',
         machineVersion: 1,
-        commandId: `${REPAIR_ID}:${decision.request.id}`,
+        commandId: `${repairId}:${decision.request.id}`,
         entityId: decision.request.id,
         from: decision.request.status,
         event: decision.action,
         to: 'cancelled',
-        actor: REPAIR_AGENT_ID,
+        actor: repairAgentId,
         evidenceRefs: [`bounded-chat:${decision.request.boundedChatSessionId}`],
         createdAt: now,
       },
@@ -198,9 +206,9 @@ async function closeOwnerInput(memoryDir: string, decision: RepairDecision, now:
       sessionId: session.id,
       currentStatus: session.status,
       event: 'cancel',
-      commandId: `${REPAIR_ID}:${decision.request.id}:cancel-session`,
+      commandId: `${repairId}:${decision.request.id}:cancel-session`,
       priorReceipts: Array.isArray(session.transitionReceipts) ? session.transitionReceipts as never : [],
-      actor: REPAIR_AGENT_ID,
+      actor: repairAgentId,
       evidenceRefs: [`owner-input:${decision.request.id}`],
       now,
       context: { activeSubObjectiveId: session.activeSubObjectiveId },
@@ -272,22 +280,28 @@ async function readQueue(file: string): Promise<QueueShape> {
   return { tasks: [] }
 }
 
-function appendRepairNote(queue: QueueShape, decision: RepairDecision, now: string): void {
+function appendRepairNote(
+  queue: QueueShape,
+  decision: RepairDecision,
+  now: string,
+  repairId: string,
+  repairAgentId: string,
+): void {
   if (decision.request.source.kind !== 'task') return
   const taskId = decision.request.source.taskId
   const task = queue.tasks.find(item => item.id === taskId)
   if (!task) return
   const notes = Array.isArray(task.notes) ? [...task.notes] : []
   const content = decision.assumption
-    ? `Repaired stale owner-input state during ${REPAIR_ID}.\n\nCancelled question: ${decision.request.prompt}\nAssumption: ${decision.assumption}\nReason: ${decision.reason}`
-    : `Repaired stale owner-input state during ${REPAIR_ID}.\n\nCancelled question: ${decision.request.prompt}\nReason: ${decision.reason}`
+    ? `Repaired stale owner-input state during ${repairId}.\n\nCancelled question: ${decision.request.prompt}\nAssumption: ${decision.assumption}\nReason: ${decision.reason}`
+    : `Repaired stale owner-input state during ${repairId}.\n\nCancelled question: ${decision.request.prompt}\nReason: ${decision.reason}`
   if (!notes.some(note =>
     note && typeof note === 'object' &&
-    (note as { agentId?: unknown }).agentId === REPAIR_AGENT_ID &&
+    (note as { agentId?: unknown }).agentId === repairAgentId &&
     typeof (note as { content?: unknown }).content === 'string' &&
     (note as { content: string }).content.includes(decision.request.id))) {
     notes.push({
-      agentId: REPAIR_AGENT_ID,
+      agentId: repairAgentId,
       role: 'state-repair',
       content: `${content}\nOwner-input request: ${decision.request.id}`,
       timestamp: now,

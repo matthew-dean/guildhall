@@ -101,6 +101,62 @@ describe('repairOwnerInputState', () => {
     expect(JSON.stringify(queue.tasks[0]?.notes)).toContain('Use `.cursor/plan.md`')
     expect(JSON.stringify(queue.tasks[0]?.notes)).toContain('atomic-commit containment')
   })
+
+  it('cancels source-trail lead-ins that do not ask an answerable owner question', async () => {
+    const root = await projectWithTasks([task('task-templates', 'Templates')])
+    const created = await createOwnerInputRequest({
+      projectRoot: root,
+      projectId: 'looma-knit',
+      commandId: 'test:templates-evidence-list',
+      now,
+      actor: 'spec-agent',
+      source: { kind: 'task', taskId: 'task-templates', questionId: 'q-templates' },
+      target: { kind: 'thread' },
+      question: {
+        kind: 'choice',
+        prompt: 'Should Templates stay in the current release scope?',
+        choices: [
+          'Keep Templates in the current release',
+          'Defer Templates',
+        ],
+      },
+      objective: {
+        kind: 'task_shaping',
+        label: 'Clarify Templates',
+        successCriteria: ['Owner answers the linked bounded-chat session.'],
+      },
+    })
+    await rewriteOwnerInputPrompt(root, created.request.id, {
+      prompt: "From what I've seen:",
+      choices: [
+        '`features.md` line 59: `- [ ] Templates` - unchecked, under "Organization & Structure"',
+        'The roadmap does not list Templates as a priority parity gap',
+        'The ADR mentions "Templates" as atomic design layout shells',
+      ],
+    })
+
+    const result = await repairOwnerInputState({ projectRoot: root, apply: true, now })
+
+    expect(result.cancelledInvalid).toEqual([created.request.id])
+    expect(await listOwnerInputRequests(root)).toEqual([
+      expect.objectContaining({
+        id: created.request.id,
+        status: 'cancelled',
+        receipts: [expect.objectContaining({ event: 'cancel_invalid', to: 'cancelled' })],
+      }),
+    ])
+    expect(listBoundedChatSessions(getProjectSystemStateDir(root))).toEqual([
+      expect.objectContaining({
+        id: created.session.id,
+        status: 'cancelled',
+        closure: expect.objectContaining({
+          summary: expect.stringContaining('not an answerable owner question'),
+        }),
+      }),
+    ])
+    const queue = await readQueue(root)
+    expect(JSON.stringify(queue.tasks[0]?.notes)).toContain('agent narration or evidence summary')
+  })
 })
 
 async function createPlanningNoteQuestion(root: string, questionId: string) {

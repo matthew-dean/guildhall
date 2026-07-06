@@ -52,6 +52,7 @@ function isPureAgentNarration(value: string): boolean {
   const normalized = normalizeWhitespace(value).toLowerCase()
   return (
     /^i have enough\b/.test(normalized) ||
+    /^from what i(?:'|’)ve seen\s*:?\s*$/.test(normalized) ||
     /^let me (?:write|draft|piece|synthesize|summarize|recap)\b/.test(normalized) ||
     /^here'?s what i (?:found|know|learned|asked)\b/.test(normalized) ||
     /^what i (?:found|know|learned)\b/.test(normalized) ||

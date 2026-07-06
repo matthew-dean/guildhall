@@ -11,6 +11,7 @@ import {
   readProjectMigrationLedger,
   writeProjectMigrationLedger,
 } from '../migrations.js'
+import { createOwnerInputRequest } from '../owner-input-store.js'
 
 let tmp: string
 let projectRoot: string
@@ -187,6 +188,83 @@ describe('applyProjectMigrations', () => {
     expect(result.applied.some(item => item.id === '0.8.0/project-state-layout')).toBe(true)
     const ledger = await readProjectMigrationLedger(projectRoot)
     expect(ledger.records.some(record => record.id === '0.8.0/project-state-layout')).toBe(true)
+  })
+
+  it('repairs source-trail owner-input lead-ins even when the original owner-input repair already ran', async () => {
+    const now = '2026-07-06T08:30:00.000Z'
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    await fs.mkdir(path.dirname(tasksPath), { recursive: true })
+    await fs.writeFile(tasksPath, JSON.stringify({
+      version: 1,
+      lastUpdated: now,
+      tasks: [{
+        id: 'task-templates',
+        title: 'Templates',
+        description: 'Legacy imported task.',
+        domain: 'product',
+        projectPath: projectRoot,
+        status: 'ready',
+        priority: 'normal',
+        notes: [],
+      }],
+    }, null, 2), 'utf8')
+    const created = await createOwnerInputRequest({
+      projectRoot,
+      projectId: 'migration-test',
+      commandId: 'test:source-trail-leadin',
+      now,
+      actor: 'test',
+      source: { kind: 'task', taskId: 'task-templates', questionId: 'q-templates' },
+      target: { kind: 'thread' },
+      question: {
+        prompt: 'Should Templates stay in the current release scope?',
+        choices: ['Keep Templates in the current release', 'Defer Templates'],
+      },
+      objective: {
+        kind: 'task_shaping',
+        label: 'Clarify Templates',
+        successCriteria: ['Owner answers the linked bounded-chat session.'],
+      },
+    })
+    await rewriteOwnerInputPrompt(projectRoot, created.request.id, {
+      prompt: "From what I've seen:",
+      choices: [
+        '`features.md` line 59: `- [ ] Templates` - unchecked, under "Organization & Structure"',
+        'The roadmap does not list Templates as a priority parity gap',
+      ],
+    })
+    await writeProjectMigrationLedger(projectRoot, {
+      version: 1,
+      records: [{
+        id: '0.10.0/owner-input-state-repair',
+        introducedIn: '0.10.0',
+        scope: 'project',
+        safety: 'prompt',
+        status: 'applied',
+        appliedAt: now,
+        appliedByVersion: '0.10.0',
+        summary: 'Original owner-input repair already ran.',
+      }],
+    })
+
+    const before = await getProjectMigrationStatus({
+      projectRoot,
+      only: ['0.10.1/owner-input-source-trail-leadin-repair'],
+    })
+    expect(before.blocked.map(item => item.id)).toEqual(['0.10.1/owner-input-source-trail-leadin-repair'])
+
+    const result = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.10.1/owner-input-source-trail-leadin-repair'],
+    })
+
+    expect(result.applied.map(item => item.id)).toEqual(['0.10.1/owner-input-source-trail-leadin-repair'])
+    const request = JSON.parse(await fs.readFile(
+      getProjectSystemStatePath(projectRoot, path.join('owner-input', `${created.request.id}.json`)),
+      'utf8',
+    ))
+    expect(request.status).toBe('cancelled')
+    expect(JSON.stringify(request.receipts)).toContain('0.10.1/owner-input-source-trail-leadin-repair')
   })
 
   it('normalizes verification child tasks into explicit delivery-step metadata', async () => {
@@ -619,3 +697,23 @@ describe('applyProjectMigrations', () => {
     })
   })
 })
+
+async function rewriteOwnerInputPrompt(
+  root: string,
+  requestId: string,
+  patch: { prompt: string; choices?: string[] },
+): Promise<void> {
+  const requestFile = getProjectSystemStatePath(root, path.join('owner-input', `${requestId}.json`))
+  const request = JSON.parse(await fs.readFile(requestFile, 'utf8'))
+  request.prompt = patch.prompt
+  if (patch.choices === undefined) delete request.choices
+  else request.choices = patch.choices
+  await fs.writeFile(requestFile, `${JSON.stringify(request, null, 2)}\n`, 'utf8')
+
+  const sessionFile = getProjectSystemStatePath(root, path.join('bounded-chat', `${request.boundedChatSessionId}.json`))
+  const session = JSON.parse(await fs.readFile(sessionFile, 'utf8'))
+  session.subObjectives[0].prompt = patch.prompt
+  if (patch.choices === undefined) delete session.subObjectives[0].choices
+  else session.subObjectives[0].choices = patch.choices
+  await fs.writeFile(sessionFile, `${JSON.stringify(session, null, 2)}\n`, 'utf8')
+}
