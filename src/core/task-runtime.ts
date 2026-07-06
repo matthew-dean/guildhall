@@ -8,6 +8,10 @@ export const TaskRuntimeState = z.object({
     startedAt: z.string(),
     baseRevisionCount: z.number().int().nonnegative(),
   }).optional(),
+  proofRecovery: z.object({
+    reopenedAt: z.string(),
+    reason: z.string().optional(),
+  }).optional(),
   remediationAttempts: z.number().int().nonnegative().optional(),
   handoffStep: z.number().int().nonnegative().optional(),
   openEscalationIds: z.array(z.string()).optional(),

@@ -100,6 +100,7 @@ import { buildPromptCacheKey } from './prompt-cache.js'
 import { resolveModelApiPolicy, type ModelApiRole } from './model-api-policy.js'
 import { repairStaleBlockersInQueue } from './stale-blocker-repair.js'
 import { buildEffectiveTask } from './effective-task.js'
+import { taskDoneButProofMissing } from './proof-health.js'
 import { writeProjectTaskQueue } from './project-state-boundary.js'
 import {
   effectiveBootstrapGateCommands,
@@ -9820,10 +9821,23 @@ export class Orchestrator {
     let changed = false
     const worktreeMode = await this.resolveWorktreeModeSafe()
     const landingStrategy = await this.resolveLandingStrategySafe()
+    const projectRoot = inferProjectRootFromMemoryDir(this.opts.config.memoryDir)
+    const runtimeStore = await readTaskRuntimeStore(projectRoot).catch(() => null)
     for (const task of queue.tasks) {
       const completedButActive =
         task.status !== 'done' &&
         task.doneSummaryBundle?.status === 'done'
+      const proofRecovery = runtimeStore?.tasks[task.id]?.proofRecovery
+      const reopenedAt = proofRecovery?.reopenedAt ? Date.parse(proofRecovery.reopenedAt) : NaN
+      const doneSummaryCompletedAt = task.doneSummaryBundle?.completedAt
+        ? Date.parse(task.doneSummaryBundle.completedAt)
+        : NaN
+      const activeProofRecovery =
+        completedButActive &&
+        Number.isFinite(reopenedAt) &&
+        (!Number.isFinite(doneSummaryCompletedAt) || doneSummaryCompletedAt <= reopenedAt) &&
+        taskDoneButProofMissing({ ...task, status: 'done' })
+      if (activeProofRecovery) continue
       if (completedButActive) {
         const now = this.now()
         task.status = 'done'

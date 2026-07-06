@@ -37,6 +37,7 @@ export function legacyRuntimeFromTask(task: LegacyTask): TaskRuntimeState | unde
     typeof task.revisionCount === 'number' ||
     typeof task.remediationAttempts === 'number' ||
     task.retryWindow !== undefined ||
+    task.proofRecovery !== undefined ||
     typeof task.handoffStep === 'number' ||
     (task.escalations ?? []).some((escalation) => !escalation.resolvedAt) ||
     (task.agentIssues ?? []).some((issue) => !issue.resolvedAt)
@@ -46,6 +47,7 @@ export function legacyRuntimeFromTask(task: LegacyTask): TaskRuntimeState | unde
     ...(Object.prototype.hasOwnProperty.call(task, 'assignedTo') ? { assignedTo: task.assignedTo } : {}),
     ...(typeof task.revisionCount === 'number' ? { revisionCount: task.revisionCount } : {}),
     ...(task.retryWindow ? { retryWindow: task.retryWindow } : {}),
+    ...(task.proofRecovery ? { proofRecovery: task.proofRecovery as TaskRuntimeState['proofRecovery'] } : {}),
     ...(typeof task.remediationAttempts === 'number' ? { remediationAttempts: task.remediationAttempts } : {}),
     ...(typeof task.handoffStep === 'number' ? { handoffStep: task.handoffStep } : {}),
     openEscalationIds: (task.escalations ?? [])
@@ -173,7 +175,11 @@ export async function buildEffectiveTask(
   const workspace = workspaceStore.workspaces[task.id] ?? legacyWorkspaceFromTask(task)
   const evidence = storedEvidence.length > 0 ? storedEvidence : legacyEvidenceFromTask(task)
   const projected = legacyFieldsFromEvidence(evidence)
-  const normalized = normalizeTerminalCompletionEvidence({ ...task, ...projected })
+  const normalized = normalizeTerminalCompletionEvidence({
+    ...task,
+    ...projected,
+    ...(runtime?.proofRecovery ? { proofRecovery: runtime.proofRecovery } : {}),
+  })
   return {
     ...task,
     title: effectiveTaskTitle(task) ?? task.title,
@@ -206,11 +212,18 @@ function normalizeTerminalCompletionEvidence(task: Record<string, unknown>): Rec
     : null
   const hasDurableDoneEvidence = doneSummary?.status === 'done' || mergeRecord?.result === 'merged'
   if (!completedAt || !hasDurableDoneEvidence) return {}
+  const proofRecovery = task.proofRecovery && typeof task.proofRecovery === 'object' && !Array.isArray(task.proofRecovery)
+    ? task.proofRecovery as Record<string, unknown>
+    : null
+  const reopenedAt = typeof proofRecovery?.reopenedAt === 'string' && proofRecovery.reopenedAt.trim().length > 0
+    ? Date.parse(proofRecovery.reopenedAt)
+    : NaN
   const durableCompletedAt = typeof doneSummary?.completedAt === 'string'
     ? doneSummary.completedAt
     : typeof mergeRecord?.mergedAt === 'string'
       ? mergeRecord.mergedAt
       : completedAt
+  if (Number.isFinite(reopenedAt) && Date.parse(durableCompletedAt) <= reopenedAt) return {}
 
   return {
     status: 'done',

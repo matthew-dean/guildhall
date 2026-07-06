@@ -31,19 +31,57 @@ help_summary: |
     `taskDoneButProofMissing(task)` is true, records an explicit
     `Reopen completed task for missing release proof` note, and keeps normal
     completed/shelved/pending-PR work protected from retry.
+  - Live API proof exposed a second synchronization failure: after
+    `retry-work` returned `in_progress`, effective task reads snapped back to
+    `done` because old durable completion evidence still won projection. The
+    fix now records proof recovery in task runtime state and makes effective
+    task projection ignore old terminal evidence until newer completion proof
+    exists. A second regression covers the live mismatch where raw task status
+    was already `in_progress` from an earlier retry, but effective projection
+    still snapped to `done` from older completion evidence.
+  - Installed-app proof then exposed the companion scheduler failure: a focused
+    `start` correctly launched the selected proof-recovery task, but the
+    orchestrator's landing reconciliation immediately moved it back to `done`
+    from stale `doneSummaryBundle` evidence. The reconciliation guard now
+    leaves proof-recovery work active when its proof contract is still unmet and
+    the durable done evidence is older than the recovery marker.
   - Work's inspector receives the shared `proofTaskIds` list, treats those rows
     as actionable, labels the button `Run proof`, and posts `retry-work` before
     the existing one-task start request.
+- Schema Migration Decision:
+  - Persisted schema touched: task runtime state.
+  - Scope: optional `proofRecovery: { reopenedAt, reason? }` marker for
+    terminal work reopened solely because release proof is missing.
+  - Change class: additive optional runtime-state field.
+  - Existing data impact: none; absent marker preserves existing projection.
+  - Migration id: none required because readers tolerate absence and writers add
+    the field only during proof recovery.
+  - Safety: marker is in runtime state, not task definitions, so project task
+    definitions do not accumulate more evidence/runtime fields.
+  - Required before run: only for proof-recovery retries of completed tasks.
+  - Compatibility reader: `buildEffectiveTask` consults runtime
+    `proofRecovery.reopenedAt` and ignores older completion evidence; newer
+    completion evidence can terminalize the task normally.
+  - Fixtures/tests: focused retry-work API regression checks the runtime marker
+    and effective status remain `in_progress`; companion regression checks the
+    stale raw/effective mismatch observed on the live Narrative Harness task;
+    orchestrator regression checks stale done-summary reconciliation does not
+    land proof-recovery work while proof is still missing.
+  - Owner-facing plan text: Work labels the action `Run proof`.
+  - Rollback/revert behavior: remove the runtime field and effective-task guard
+    to restore old durable-completion projection.
 - Contract Touch Decision:
   - Work id: `codex:proof-missing-done-retry-action-2026-07-06`.
   - Touched contracts: task action semantics for
-    `/api/project/task/:id/retry-work`; Work surface action presentation for
-    shared `startReadiness.proofTaskIds`.
+    `/api/project/task/:id/retry-work`; task runtime state; effective-task
+    terminal projection; Work surface action presentation for shared
+    `startReadiness.proofTaskIds`.
   - Contracts considered but not touched: persisted task schema,
     proof-health verdict schema, release-readiness response shape.
-  - Required follow-up: run installed-app proof on Narrative Harness Work so the
-    user can see `Run proof` on the two proof blockers, then use it to drive the
-    fake/simulated DeepInfra proof back into real executable work.
+  - Required follow-up: rerun installed-app proof on Narrative Harness Work so
+    the user can see `Run proof` on the two proof blockers, then use it to drive
+    the fake/simulated DeepInfra proof back into real executable work without
+    stale landing reconciliation swallowing the recovery run.
   - Proof required: focused API regression for done/proof-missing retry, focused
     Work UI regression for `Run proof` posting retry before start, build/install
     proof before claiming installed app readiness.
@@ -60,7 +98,22 @@ help_summary: |
     `/projects/narrative-harness/work?task=task-generate-a-cli-first-story-synopsis-outline-character-voice-records-and-one-chapter-draft-from-the-selected-model`
     showed `Needs proof`, `2 need proof`, `2 shown`, both proof-blocked rows,
     and an enabled `Run proof` button in the selected-work inspector at
-    1280x720.
+    1280x720. Subsequent installed API proof showed `retry-work` wrote
+    `runtime.proofRecovery` and kept the task `in_progress`; focused `start`
+    returned `running` for that work item, then exposed the stale
+    landing-reconciliation failure. Added and passed focused orchestrator
+    regression
+    `does not land proof-recovery work from stale done-summary evidence while
+    proof is still missing`, plus focused retry-work and Work UI regressions.
+    Rebuilt the installed app via direct UI/root build plus
+    `node ./scripts/dev-install.mjs`, restarted Guildhall, and confirmed
+    `/api/stale-server` returned `stale:false`. Live Narrative Harness proof
+    after the reconciliation guard: `retry-work` returned `in_progress`,
+    focused `start` returned `running` for the selected work item, and after the
+    coordinator tick `/api/project/task/:id` still reported `status:
+    in_progress`, `assignedTo: worker-agent`, and `runtime.proofRecovery`.
+    `/api/project` reported `startReadiness.canStart: true` and release
+    proof-missing dropped to the remaining DeepInfra model proof task only.
   - Waivers: none.
   - Owner-review items: no owner approval is modeled as automatic; this action
     is Codex/Matthew intentionally reopening proof recovery during calibration.

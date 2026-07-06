@@ -10650,15 +10650,17 @@ export function buildServeApp(opts: ServeOptions = {}): {
           : { version: parsed.version ?? 1, lastUpdated: parsed.lastUpdated ?? new Date().toISOString(), tasks: parsed.tasks ?? [] }
         let task = queue.tasks.find(t => (t as { id?: string }).id === id) as Record<string, unknown> | undefined
         if (!task) return c.json({ error: 'task not found' }, 404)
-        const isProofRecovery = task.status === 'done' && taskDoneButProofMissing(task)
+        const effectiveTask = await buildEffectiveTask(project.path, task as Task) as unknown as Task & {
+          runtime?: { openEscalationIds?: string[] }
+        }
+        const isProofRecovery =
+          (task.status === 'done' && taskDoneButProofMissing(task)) ||
+          taskDoneButProofMissing(effectiveTask)
         if ((task.status === 'done' && !isProofRecovery) || task.status === 'shelved' || task.status === 'pending_pr') {
           return c.json({ error: `task is ${task.status}` }, 400)
         }
         const now = new Date().toISOString()
         const instruction = body.instruction?.trim()
-        const effectiveTask = await buildEffectiveTask(project.path, task as Task) as unknown as Task & {
-          runtime?: { openEscalationIds?: string[] }
-        }
         const openEscalations = activeEscalations(effectiveTask)
         const hasRuntimeEscalationIds =
           Array.isArray(effectiveTask.runtime?.openEscalationIds) &&
@@ -10714,15 +10716,23 @@ export function buildServeApp(opts: ServeOptions = {}): {
         delete task.openEscalations
         task.updatedAt = now
         queue.lastUpdated = now
-        if (shouldClearRuntimeEscalations) {
+        if (shouldClearRuntimeEscalations || isProofRecovery) {
           await upsertTaskRuntimeState(project.path, id, {
             assignedTo: null,
-            openEscalationIds: [],
+            ...(shouldClearRuntimeEscalations ? { openEscalationIds: [] } : {}),
+            ...(isProofRecovery
+              ? {
+                  proofRecovery: {
+                    reopenedAt: now,
+                    reason: instruction || 'Missing release proof evidence.',
+                  },
+                }
+              : {}),
             updatedAt: now,
           })
         }
         writeManagedTextFileSync(tasksPath, JSON.stringify(queue, null, 2) + '\n')
-        if (instruction) {
+        if (instruction && !isProofRecovery) {
           await resumeExploring({
             memoryDir,
             taskId: id,

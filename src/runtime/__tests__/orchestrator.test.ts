@@ -12374,6 +12374,78 @@ describe('Orchestrator.run — full loops', () => {
     })
   })
 
+  it('does not land proof-recovery work from stale done-summary evidence while proof is still missing', async () => {
+    const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'test-ws', 'task-proof-recovery')
+    await writeQueue([
+      mkTask({
+        id: 'task-proof-recovery',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        worktreePath,
+        branchName: 'guildhall/task-proof-recovery',
+        baseBranch: 'main',
+        proofPaths: [{
+          kind: 'review',
+          expectedEvidence: [
+            'DeepInfra drafting telemetry recorded refusal behavior, cost, latency, and voice preservation.',
+          ],
+        }],
+        doneSummaryBundle: {
+          taskId: 'task-proof-recovery',
+          status: 'done',
+          completedAt: '2026-04-01T00:20:00.000Z',
+          summary: {
+            journey: 'Worker finished and reviewer approved.',
+            decision: 'Task finished as done.',
+            evidence: 'npm-run-build passed.',
+            learningCandidates: [],
+            openResidue: 'No open residue recorded.',
+          },
+          retention: {
+            transcriptPrimaryArtifact: false,
+            compactedFullTranscript: false,
+            fullEvidenceAvailable: true,
+          },
+          evidenceRefs: [],
+          createdAt: '2026-04-01T00:20:00.000Z',
+          createdBy: 'orchestrator',
+        },
+        mergeRecord: {
+          fromBranch: 'guildhall/task-proof-recovery',
+          toBranch: 'main',
+          strategy: 'cherry_pick_local',
+          result: 'skipped',
+          mergedAt: '2026-04-01T00:21:00.000Z',
+          detail: 'previous cherry-pick failed before proof recovery',
+        },
+      }),
+    ])
+    await upsertTaskRuntimeState(tmpDir, 'task-proof-recovery', {
+      assignedTo: 'worker-agent',
+      proofRecovery: {
+        reopenedAt: '2026-04-01T00:30:00.000Z',
+        reason: 'Run the real provider proof and attach the evidence.',
+      },
+      updatedAt: '2026-04-01T00:30:00.000Z',
+    })
+
+    const gitDriver = new InMemoryGitDriver({ clean: true })
+    const worker = stubAgent('worker-agent')
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+      gitDriver,
+    })
+
+    await orch.tick()
+
+    expect(gitDriver.state.cherryPicks).toEqual([])
+    const q = await readQueue()
+    expect(q.tasks[0]?.status).toBe('in_progress')
+    expect(q.tasks[0]?.mergeRecord).toMatchObject({ result: 'skipped' })
+    expect(worker.calls).toHaveLength(1)
+  })
+
   it('marks pending PR tasks done and removes the worktree once the PR is merged', async () => {
     const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'test-ws', 'task-pr')
     await writeQueue([

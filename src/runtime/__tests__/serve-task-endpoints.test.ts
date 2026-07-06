@@ -2821,6 +2821,60 @@ describe('POST /api/project/task/:id/resume', () => {
     const noteText = queue.tasks[0]?.notes.map((note: Record<string, unknown>) => String(note.content ?? '')).join('\n') ?? ''
     expect(noteText).toContain('missing release proof')
     expect(noteText).toContain('real provider proof')
+    const effective = await readEffectiveTask('task-1')
+    expect(effective.status).toBe('in_progress')
+    expect(effective.runtime?.proofRecovery?.reason).toBe('Run the real provider proof and attach the evidence.')
+  })
+
+  it('recognizes proof recovery when stale completion evidence overrides a raw retry', async () => {
+    await seedTask('task-1', {
+      status: 'in_progress',
+      assignedTo: 'worker-agent',
+      completedAt: '2026-07-06T20:00:00.000Z',
+      notes: [],
+      proofPaths: [{
+        kind: 'review',
+        expectedEvidence: [
+          'DeepInfra drafting telemetry recorded refusal behavior, cost, latency, and voice preservation.',
+        ],
+      }],
+      doneSummaryBundle: {
+        status: 'done',
+        completedAt: '2026-07-06T20:00:00.000Z',
+        summary: {
+          evidence: 'npm-run-build passed.',
+        },
+      },
+      gateResults: [{
+        gateId: 'npm-run-build',
+        passed: true,
+        output: 'build passed',
+        checkedAt: '2026-07-06T20:00:00.000Z',
+      }],
+      reviewVerdicts: [{
+        verdict: 'approve',
+        reasoning: 'All acceptance criteria are met.',
+        recordedAt: '2026-07-06T20:01:00.000Z',
+      }],
+    })
+    expect((await readEffectiveTask('task-1')).status).toBe('done')
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-1/retry-work'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          instruction: 'Run the real provider proof and attach the evidence.',
+        }),
+      }),
+    )
+    const body = (await res.json()) as Record<string, any>
+    expect(res.status, JSON.stringify(body)).toBe(200)
+    expect(body).toMatchObject({ ok: true, status: 'in_progress' })
+    const effective = await readEffectiveTask('task-1')
+    expect(effective.status).toBe('in_progress')
+    expect(effective.runtime?.proofRecovery?.reason).toBe('Run the real provider proof and attach the evidence.')
   })
 
   it('promotes an import draft into exploring when shaping starts', async () => {
