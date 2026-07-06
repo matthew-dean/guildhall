@@ -14577,6 +14577,57 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-07-06T08:20:00Z - Re-selected the Narrative Harness Stage 1 MVP scope
+after verifying requested drafting/reviewer tasks.
+
+- Work id: `codex:nh-mvp-deepinfra-reviewer-scope-2026-07-06`.
+- User job: while driving Narrative Harness toward MVP completion, Guildhall
+  must show that the current MVP/release scope includes explicit work for a
+  DeepInfra-accessible drafting model across genres including legal adult
+  fiction, a world-state continuity reviewer that reasons about object/property
+  state over time, and spatial/geographic continuity review for travel,
+  scene geography, and fantasy walking speed.
+- Root-cause classification:
+  - project structure/scope/release problem: the live selected release had
+    drifted back to `near-term-proof-scope`, which was complete but excluded
+    the three MVP proof lanes.
+  - UI communication/orientation problem: with that selected scope, Overview,
+    Map, Release, and Start could truthfully say the selected scope was
+    complete while failing the owner job of showing the Narrative Harness MVP
+    proof boundary.
+  - Not a task-intake absence for this check: the task records already carried
+    the requested details in acceptance criteria; the failure was selected
+    release state.
+- Action:
+  - Re-selected `stage-1-fixture-and-evaluation-harness` through the
+    installed app release-selection API.
+- Proof:
+  - Installed `/api/project/spine?projectId=narrative-harness` selected
+    `Stage 1 Fixture And Evaluation Harness` with `9` included work items and
+    included all three rows:
+    `Select and prove DeepInfra drafting model`,
+    `Define world-state continuity review lane`, and
+    `Define spatial/geographic continuity review lane`.
+  - Installed `/api/project?projectId=narrative-harness` returned those three
+    tasks as `done`; their acceptance criteria explicitly name DeepInfra
+    drafting/writing across genres including adult genres, wet-hair/climate
+    object-state continuity, and spatial/geographic continuity including
+    fantasy walking speed.
+  - Installed `/api/project/release-readiness?projectId=narrative-harness`
+    returned `ready:true`, `tasks:9`, `done:9`, `blockingCount:0`, and no
+    release blockers for the selected Stage 1 scope.
+- Contract Touch Decision:
+  - Touched contracts: none. This pass changed installed selected-project
+    state through an existing API and recorded the calibration evidence.
+  - Contracts considered but not touched: persisted task schema, persisted
+    release schema, project-scope projection, release readiness payload.
+  - Required follow-up: investigate whether Guildhall needs a clearer
+    owner-facing explanation when the selected release is changed away from a
+    scope previously treated as the MVP boundary.
+  - Apply/revert behavior: selecting a different release through the same API
+    changes the current release boundary; no code rollback is involved.
+- Schema Migration Decision: none. No persisted schema changed.
+
 2026-07-06T07:20:00Z - Fixed Narrative Harness Map ledger hiding a current
 release item behind the Later summary.
 
