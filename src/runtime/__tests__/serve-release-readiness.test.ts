@@ -688,6 +688,89 @@ describe('GET /api/project/release-readiness', () => {
     expect(readiness.proofMissingDoneTasks).toEqual([])
   })
 
+  it('accepts review-backed imported proof hints when later completion evidence exists', async () => {
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: 'headless-mvp',
+      releases: [{
+        id: 'headless-mvp',
+        label: 'Headless MVP',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-current'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [
+        makeTask({
+          id: 'task-current',
+          title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+          status: 'done',
+          releaseIds: ['headless-mvp'],
+          completedAt: '2026-07-04T08:50:00.000Z',
+          proofPaths: [{
+            kind: 'review',
+            source: 'inferred',
+            expectedEvidence: [
+              'fixture directory shape for at least one small story fixture',
+            ],
+          }],
+          doneSummaryBundle: {
+            taskId: 'task-current',
+            status: 'done',
+            completedAt: '2026-07-04T08:50:00.000Z',
+            summary: {
+              journey: 'Worker completed the imported proof.',
+              decision: 'Task finished as done.',
+              evidence: 'npm-run-build passed.',
+              learningCandidates: [],
+              openResidue: 'No open residue recorded.',
+            },
+            retention: {
+              transcriptPrimaryArtifact: false,
+              compactedFullTranscript: false,
+              fullEvidenceAvailable: true,
+            },
+            evidenceRefs: [],
+            createdAt: '2026-07-04T08:50:00.000Z',
+            createdBy: 'orchestrator',
+          },
+          gateResults: [{
+            gateId: 'npm-run-build',
+            type: 'hard',
+            passed: true,
+            output: 'build passed',
+            checkedAt: '2026-07-04T08:50:00.000Z',
+          }],
+          reviewVerdicts: [{
+            verdict: 'approve',
+            reviewerPath: 'llm',
+            reason: 'LLM reviewer approved',
+            reasoning: 'The imported fixture/schema proof is complete. Proof path: yes.',
+            failingSignals: [],
+            recordedAt: '2026-07-04T08:50:00.000Z',
+          }],
+        } as Partial<Task>),
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await approveDesignSystem(app)
+    await commitAndPush('review-backed imported proof release readiness')
+
+    const readinessRes = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
+    const readiness = await readinessRes.json() as any
+
+    expect(readiness.ready).toBe(true)
+    expect(readiness.totals).toMatchObject({
+      tasks: 1,
+      done: 1,
+      proofEvidenceBlockingCount: 0,
+    })
+    expect(readiness.proofMissingDoneTasks).toEqual([])
+  })
+
   it('requires recorded proof before treating a completed selected-release task as release-ready', async () => {
     await seedQueue({
       version: 1,

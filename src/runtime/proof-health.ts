@@ -182,6 +182,20 @@ function expectedEvidenceStringsSatisfied(expectedEvidence: unknown[], task: unk
   return expectedStrings.every(expected => evidenceText.includes(expected))
 }
 
+function requiresProviderProofText(value: string): boolean {
+  return /\b(?:DeepInfra|OpenAI-compatible|provider|model|telemetry|latency|cost|refusal|repetition|voice)\b/i.test(value)
+}
+
+function reviewProofCanSettleStringEvidenceHint(proofPath: Record<string, unknown>, task: unknown): boolean {
+  if (proofPath.kind !== 'review') return false
+  const expectedEvidence = Array.isArray(proofPath.expectedEvidence) ? proofPath.expectedEvidence : []
+  const expectedStrings = expectedEvidence.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+  if (expectedStrings.length === 0) return false
+  if (expectedStrings.some(requiresProviderProofText)) return false
+  if (!latestApprovingReviewReasoning(task)) return false
+  return taskHasRecordedCompletionProof(task)
+}
+
 function proofPathMissingEvidence(proofPath: unknown, task: unknown): boolean {
   if (typeof proofPath === 'string' && proofPath.trim().length > 0) {
     return !taskHasRecordedCompletionProof(task)
@@ -207,7 +221,12 @@ function proofPathMissingEvidence(proofPath: unknown, task: unknown): boolean {
     return requiredEvidenceIds.some(id => !passedEvidence.has(id))
   }
   const expectedEvidenceStringCount = expectedEvidence.filter(item => typeof item === 'string' && item.trim().length > 0).length
-  if (expectedEvidenceStringCount > 0) return !expectedEvidenceStringsSatisfied(expectedEvidence, task)
+  if (expectedEvidenceStringCount > 0) {
+    return !(
+      expectedEvidenceStringsSatisfied(expectedEvidence, task) ||
+      reviewProofCanSettleStringEvidenceHint(record, task)
+    )
+  }
   if (record.status === 'verified') return false
   return verificationRecords.every(item => !Boolean(item && typeof item === 'object' && (item as { status?: unknown }).status === 'passed'))
 }

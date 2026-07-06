@@ -8,6 +8,83 @@ help_summary: |
 
 # Web UI flow audit
 
+2026-07-06T20:48:24Z - Imported review hints reconcile without faking model proof.
+
+- Work id: `codex:review-hint-proof-readiness-reconciliation-2026-07-06`.
+- User job: when a selected-scope task is `done`, Guildhall must distinguish
+  stale imported proof wording from real missing evidence. It should not make
+  the owner chase old roadmap hint strings after later completion evidence and
+  review exist, but it also must not declare Narrative Harness complete while
+  model/provider and chapter-drafting proof is still only asserted.
+- Live findings:
+  - Before this slice, Narrative Harness selected scope
+    `Stage 1: Headless Drafting And Evaluation MVP` had `11` selected tasks,
+    all `done`, but `/api/project/release-readiness` reported
+    `proofEvidenceBlockingCount:11`.
+  - The first blocked completed task had durable completion evidence,
+    successful gates, and approving review text, but its imported
+    `expectedEvidence` was treated as a literal string that had to appear
+    verbatim in the evidence trail.
+  - After the installed-app fix, `/api/stale-server` returned `stale:false`
+    and live Narrative Harness release readiness reports `11` selected tasks,
+    `11` done, `proofEvidenceBlockingCount:2`, and `gitStoryBlockingCount:0`.
+  - The two remaining blockers are intentionally still blocked:
+    `Generate a CLI-first story synopsis, outline, character/voice records,
+    and one chapter draft from the selected model.` and `Select and prove a
+    DeepInfra drafting model for broad-genre chapter writing.` Their proof
+    strings require real model, drafting, voice, latency/cost/refusal, and
+    provider evidence, not generic build/review ceremony.
+- Root-cause classification:
+  - Task hierarchy/dependency/proof modeling problem: imported review
+    `expectedEvidence` strings mixed two different meanings: old orientation
+    hints and strict semantic proof requirements.
+  - Scheduler/action-state logic problem: release readiness had no middle
+    state for "completion proof exists and review accepted the task, but the
+    imported evidence wording was not a strict provider/model proof contract."
+  - UI communication/orientation problem: the owner saw a selected scope with
+    every row terminal, but the readiness summary still showed broad proof
+    blockers without separating stale imported hints from true missing proof.
+  - Bad project data produced by an earlier Guildhall bug: earlier import
+    passes created over-literal proof hints that survived into completed tasks.
+- Fix:
+  - Shared proof readiness now lets a completed task settle non-provider
+    imported review evidence hints when it has recorded completion proof and
+    an approving reviewer reasoning trail.
+  - Provider/model/story-drafting proof language remains strict. It still
+    requires proof text to match the expected evidence, so real Narrative
+    Harness model and chapter-generation work cannot be cleared by generic
+    build output or an approving review alone.
+- Contract Touch Decision:
+  - Work id:
+    `codex:review-hint-proof-readiness-reconciliation-2026-07-06`.
+  - Touched contracts: shared release-readiness proof-health semantics for
+    completed selected-scope tasks.
+  - Contracts considered but not touched: persisted task schema, proof-path
+    schema, release/scope schema, `/api/project` task row shape, task history
+    endpoints, workspace-import draft schema.
+  - Existing data impact: no migration. Existing completed tasks are read with
+    more accurate proof-health semantics. Real provider/model evidence remains
+    blocking when the recorded proof trail does not contain it.
+  - Required follow-up: drive or regenerate the two remaining Narrative
+    Harness Stage 1 proof tasks so Guildhall records real chapter-drafting and
+    DeepInfra model evidence instead of relying on completed status.
+  - Proof required: regression proving review-backed imported hints can be
+    reconciled; regression proving generic build proof still cannot clear
+    semantic/provider proof; installed-app stale check; live Narrative Harness
+    readiness proof.
+  - Proof provided: focused release-readiness vitest passed `4` targeted tests;
+    installed app `/api/stale-server` returned `stale:false`; live Narrative
+    Harness release-readiness returned `ready:false`, `tasks:11`, `done:11`,
+    `proofEvidenceBlockingCount:2`, and the two remaining blocked task ids
+    named above.
+  - Waivers: no schema migration decision is required because this is a
+    derived proof-health interpretation change, not persisted data shape.
+  - Owner-review items: the owner should see that terminal task count is not
+    the same as release readiness when semantic proof is still missing.
+  - Apply/revert behavior: reverting restores the over-literal proof matching
+    that made stale imported review strings block every completed Stage 1
+    task.
+
 2026-07-06T20:38:00Z - Project rows surface durable task evidence and provider proof cannot be simulated.
 
 - Work id: `codex:visible-task-evidence-and-provider-proof-integrity-2026-07-06`.
