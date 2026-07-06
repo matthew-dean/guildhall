@@ -14214,6 +14214,100 @@ describe('Orchestrator — FR-32 remediation wiring', () => {
 })
 
 describe('Orchestrator worker no-progress escalation', () => {
+  it('checkpoints dirty worker progress even when task bookkeeping changed', async () => {
+    const worktreePath = tmpDir
+    await fs.mkdir(path.join(worktreePath, 'docs', 'coherence'), { recursive: true })
+    await fs.writeFile(
+      path.join(worktreePath, 'docs', 'coherence', 'dialogue-and-character-voice-reviewer.md'),
+      '# Dialogue and Character Voice Reviewer\n',
+      'utf8',
+    )
+    await writeQueue([
+      mkTask({
+        id: 'task-dirty-bookkeeping',
+        title: 'Implement dialogue reviewer lane',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        projectPath: tmpDir,
+        worktreePath,
+        spec: 'Implement the reviewer lane and record proof.',
+      }),
+    ])
+
+    const worker = stubAgent('worker-agent', async () => {
+      const queue = await readQueue()
+      const task = queue.tasks.find(candidate => candidate.id === 'task-dirty-bookkeeping')
+      if (task) {
+        task.updatedAt = '2026-04-01T00:00:09Z'
+        await writeQueue(queue.tasks)
+      }
+    }, '')
+    const gitDriver = new InMemoryGitDriver({ clean: false })
+    gitDriver.setStatusSummary(worktreePath, {
+      clean: false,
+      changedCount: 0,
+      untrackedCount: 1,
+      samplePaths: ['docs/coherence/dialogue-and-character-voice-reviewer.md'],
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+      gitDriver,
+    })
+
+    const outcome = await orch.tick({ dispatchLimit: 1 })
+
+    expect(outcome.kind).toBe('processed')
+    const checkpoint = JSON.parse(
+      await fs.readFile(taskHistoryPath('task-dirty-bookkeeping', 'checkpoint.json'), 'utf8'),
+    ) as { intent: string; filesTouched: string[] }
+    expect(checkpoint.intent).toContain('dirty worktree progress')
+    expect(checkpoint.filesTouched).toContain('docs/coherence/dialogue-and-character-voice-reviewer.md')
+  })
+
+  it('persists no-progress counts across separate worker runs without likely targets', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'task-no-targets',
+        title: 'Implement reviewer lane',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        projectPath: tmpDir,
+        spec: 'Implement the reviewer lane and record proof.',
+      }),
+    ])
+
+    let finalOutcome: Awaited<ReturnType<Orchestrator['tick']>> | null = null
+    for (let pass = 1; pass <= 6; pass += 1) {
+      const worker = stubAgent('worker-agent', async () => {
+        const queue = await readQueue()
+        const task = queue.tasks.find(candidate => candidate.id === 'task-no-targets')
+        if (task) {
+          task.updatedAt = `2026-04-01T00:00:0${pass}Z`
+          await writeQueue(queue.tasks)
+        }
+      }, '')
+      const orch = new Orchestrator({
+        config: baseConfig(),
+        agents: agentSet({ worker }),
+        gitDriver: new InMemoryGitDriver({ clean: true }),
+      })
+      const outcome = await orch.tick({ dispatchLimit: 1 })
+      finalOutcome = outcome
+      if (outcome.kind === 'escalated') break
+    }
+
+    expect(finalOutcome?.kind).toBe('escalated')
+    if (finalOutcome?.kind === 'escalated') expect(finalOutcome.reason).toContain('Worker made no visible progress')
+    const task = await readEffectiveTaskFromQueue('task-no-targets')
+    expect(task?.status).toBe('blocked')
+    expect(task?.escalations[0]?.summary).toContain('Worker made no visible progress after 5 passes')
+    expect(task?.notes.filter(note =>
+      note.role === 'worker-progress-review' &&
+      /Worker made no visible progress pass \d+/.test(note.content),
+    ).length).toBeGreaterThanOrEqual(4)
+  })
+
   it('gives the worker five no-op passes before escalating likely-target no-progress', async () => {
     const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'task-011')
     await fs.mkdir(path.join(worktreePath, 'web', 'tests', 'unit', 'composables'), { recursive: true })

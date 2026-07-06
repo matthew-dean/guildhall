@@ -75,6 +75,21 @@ describe('pickNextTask bounded scope eligibility', () => {
     expect(pickNextTask(q)?.id).toBe('later')
   })
 
+  it('infers the selected release from task releaseIds when release records are not persisted', () => {
+    const q = queue([
+      { id: 'later', title: 'Later release feature', priority: 'critical', status: 'shelved', releaseIds: ['later-release'] },
+      { id: 'included', title: 'Near-term proof task', priority: 'normal', releaseIds: ['near-term-proof-scope'] },
+    ])
+    const scope = selectedReleaseScopeForQueue(q)
+
+    expect(scope).toMatchObject({
+      id: 'near-term-proof-scope',
+      label: 'Near Term Proof Scope',
+      nodeIds: ['work:included'],
+    })
+    expect(pickNextTask(q, undefined, undefined, undefined, undefined, { scope })?.id).toBe('included')
+  })
+
   it('bounds unattended Start to the selected release when releases are defined', () => {
     const q = queueWithRelease([
       { id: 'later', title: 'Later release feature', priority: 'critical' },

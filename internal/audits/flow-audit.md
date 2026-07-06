@@ -38,6 +38,26 @@ task-worktree proof.
     This was a structural read-model leak: reverse-linked `decomposes` children
     were enough for execution state, but the action model was ranking raw
     `ready` tasks without recognizing the parent as a container.
+  - The next live run exposed a second scope-source mismatch: Overview/API
+    inferred `near-term-proof-scope` from task `releaseIds` and offered
+    `Resume`, but the CLI picker had no persisted release container and fell
+    back to stale `workspace-goals.approved` membership. Result: the UI claimed
+    work was runnable while `guildhall run` stopped with `0 active, 7 fresh`.
+  - After the release-scope picker was corrected, the next live worker pass
+    exposed a no-progress accounting gap: repeated one-tick CLI runs returned
+    `in_progress -> in_progress via worker-agent (no change)`, but the
+    coordinator's no-progress count lived only in process memory and was gated
+    around likely-target files. Separate `guildhall run --max-ticks 1`
+    invocations could therefore loop without a durable owner-visible note,
+    recovery, or escalation.
+  - Live proof also showed that reclaim/bookkeeping paths may update a task's
+    `updatedAt` without adding any note, verification, file diff, or status
+    transition. Treating `updatedAt` churn as progress let the same no-op worker
+    pass escape the detector.
+  - The same timestamp guard hid real worker progress: the Narrative Harness
+    worker created `docs/coherence/dialogue-and-character-voice-reviewer.md` in
+    the task worktree, but Guildhall did not write the recovery checkpoint
+    because task bookkeeping had changed `updatedAt`.
 - Fix:
   - Review dispatch now reconciles acceptance criteria from the latest worker
     self-critique before reviewer work starts, and persists that reconciliation
@@ -57,6 +77,22 @@ task-worktree proof.
   - Release-scope projection now preserves explicit deferred membership when
     unassigned work is inferred into a release, so deferred nodes do not leak
     back into selected `nodeIds`.
+  - Selected-scope derivation now infers release containers from task
+    `releaseIds` when no release records are persisted, and preserves the
+    derived selected release id so the CLI picker and API read the same current
+    release boundary.
+  - Worker no-progress is now recorded as durable task notes and counted from
+    task history rather than only from in-memory coordinator state, including
+    tasks where Guildhall cannot identify likely target files yet. That turns
+    repeated no-op runs into visible recoverable model/tool-use state instead
+    of a silent loop.
+  - The detector now keys on durable worker evidence instead of timestamp churn:
+    a pass with no transition, no dirty or verified target work, no learned
+    verification commands, no new note, and no verdict is no-progress even if
+    bookkeeping changed `updatedAt`.
+  - Dirty worker progress now writes a recovery checkpoint even when task
+    bookkeeping touched `updatedAt`, so current work is visible and resumable
+    instead of living only as an untracked worktree diff.
 - Narrative Harness proof:
   - DeepInfra drafting model work is done and records
     `mistralai/Mistral-Small-3.2-24B-Instruct-2506` on DeepInfra for Stage 1
@@ -76,11 +112,23 @@ task-worktree proof.
     `task-150` to the next real current-scope task
     `task-import-1u8es55`; `task-150` remains available as structural context
     but is no longer offered as runnable work.
+  - Before the inferred-release picker fix, `guildhall run narrative-harness`
+    contradicted the API by stopping with `0 active, 7 fresh`. Focused picker
+    regression now covers no persisted release records plus task `releaseIds`.
+  - Focused no-progress regression covers separate orchestrator instances
+    retrying the same worker task without likely targets until the durable
+    threshold escalates instead of resetting each process. The regression also
+    simulates timestamp-only task churn to prevent `updatedAt` from masking
+    no-progress.
+  - Focused checkpoint regression covers dirty worker progress plus timestamp
+    churn and asserts the recovery checkpoint names the touched reviewer file.
 - Contract Touch Decision:
   - Touched contracts: review dispatch preconditions, LLM-review verdict
     normalization, deterministic reviewer handoff semantics, recovered
     current-scope work-unit acceptance wording, project action-model task
-    ranking, release-scope selected/deferred projection.
+    ranking, release-scope selected/deferred projection, selected-scope
+    inference from task release membership, worker no-progress recovery
+    accounting.
   - Contracts considered but not touched: persisted task schema, persisted
     review-verdict schema, release schema, gate-result schema, worker artifact
     schema.

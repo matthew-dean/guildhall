@@ -1251,6 +1251,13 @@ function countRuntimeNotes(task: Task, pattern: RegExp): number {
   ).length
 }
 
+function countTaskNotes(task: Task, pattern: RegExp): number {
+  return (task.notes ?? []).filter(note =>
+    typeof note.content === 'string' &&
+    pattern.test(note.content),
+  ).length
+}
+
 function reviewVerdictLooksInfrastructureOnly(verdict: Pick<ReviewVerdict, 'verdict' | 'reasoning'>): boolean {
   if (verdict.verdict !== 'revise') return false
   const text = verdict.reasoning ?? ''
@@ -5184,6 +5191,7 @@ export class Orchestrator {
         let afterStatus = taskAfter.status
         let transitioned = beforeStatus !== afterStatus
         const openQuestionCountBefore = task.openQuestions?.length ?? 0
+        const taskNoteCountBefore = task.notes?.length ?? 0
         const reviewerNoteCountBefore = countReviewerNotes(task)
         const reviewVerdictCountBefore = task.reviewVerdicts.length
         const metadataVerifiedWork = Array.isArray(successfulAgentMetadata?.['recent_verified_work'])
@@ -5635,7 +5643,6 @@ export class Orchestrator {
           beforeStatus === 'in_progress' &&
           afterStatus === 'in_progress' &&
           !transitioned &&
-          taskAfter.updatedAt === task.updatedAt &&
           (
             (hasDirtyWorktreeAfter && (!hasFailedCheckpointVerification || hasWorkerTurnEvidence)) ||
             hasDirtyLikelyTargetProgress ||
@@ -5659,18 +5666,26 @@ export class Orchestrator {
             await this.writeQueue(queueAfter)
           }
         }
+        const noDurableWorkerProgressSignal =
+          !learnedVerificationCommands &&
+          taskAfter.notes.length === taskNoteCountBefore &&
+          taskAfter.reviewVerdicts.length === reviewVerdictCountBefore
         const repeatedWorkerNoProgress =
           agent.name === 'worker-agent' &&
           beforeStatus === 'in_progress' &&
           afterStatus === 'in_progress' &&
           !transitioned &&
-          (taskAfter.updatedAt === task.updatedAt || workerFalseCompletionNarration) &&
+          (taskAfter.updatedAt === task.updatedAt || workerFalseCompletionNarration || noDurableWorkerProgressSignal) &&
           (!hasDirtyWorktreeAfter || (hasFailedCheckpointVerification && !hasWorkerTurnEvidence)) &&
           !hasDirtyLikelyTargetProgress &&
-          !hasCheckpointScopedVerifiedProgress &&
-          (likelyWorkerTargets.length > 0 || workerFalseCompletionNarration)
+          !hasCheckpointScopedVerifiedProgress
         if (repeatedWorkerNoProgress) {
-          const attempts = this.bumpWorkerNoProgress(task.id)
+          const durableNoProgressAttempts = countTaskNotes(
+            taskAfter,
+            /Worker made no visible progress pass \d+/i,
+          )
+          const attempts = Math.max(this.workerNoProgressCounts.get(task.id) ?? 0, durableNoProgressAttempts) + 1
+          this.workerNoProgressCounts.set(task.id, attempts)
           if (attempts >= WORKER_NO_PROGRESS_ESCALATION_AFTER) {
             if (
               (checkpointNoProgressStatusSeen || hasFailedCheckpointVerification) &&
@@ -5742,6 +5757,16 @@ export class Orchestrator {
                 escalation.escalationId ?? `auto-worker-stall-${task.id}`,
             }
           }
+          taskAfter.notes.push({
+            agentId: 'coordinator',
+            role: 'worker-progress-review',
+            content:
+              `Worker made no visible progress pass ${attempts}. Guildhall will retry until the no-progress threshold, then stop this task with a recoverable model-tool-use failure instead of silently looping.`,
+            timestamp: this.now(),
+          })
+          taskAfter.updatedAt = this.now()
+          queueAfter.lastUpdated = taskAfter.updatedAt
+          await this.writeQueue(queueAfter)
         } else {
           this.clearWorkerNoProgress(task.id)
         }

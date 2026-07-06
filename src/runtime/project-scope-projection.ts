@@ -247,10 +247,14 @@ function releaseIncludesTask(release: ProjectRelease, task: Task): boolean {
 export function selectedProjectScopeForQueue(
   queue: Pick<TaskQueue, 'tasks' | 'releases' | 'selectedReleaseId'>,
 ): ProjectScope | null {
-  const releases = queue.releases ?? []
+  const derived = (queue.releases ?? []).length > 0
+    ? null
+    : deriveReleaseContainersFromTaskMembership(queue.tasks)
+  const releases = derived?.releases ?? queue.releases ?? []
   if (releases.length === 0) return null
+  const selectedReleaseId = queue.selectedReleaseId ?? derived?.selectedReleaseId
   const release =
-    releases.find(candidate => candidate.id === queue.selectedReleaseId) ??
+    releases.find(candidate => candidate.id === selectedReleaseId) ??
     releases.find(candidate => candidate.state === 'active') ??
     releases.find(candidate => candidate.state === 'planned') ??
     releases[0]
