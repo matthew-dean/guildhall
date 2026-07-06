@@ -12,6 +12,82 @@ This is the active browser test plan for the Guildhall project surface. Keep it
 updated while auditing the active test project so another agent can resume
 without guessing.
 
+2026-07-06T10:44:00Z - Named releases no longer absorb unassigned backlog work.
+
+- Work id: `codex:named-release-unassigned-backlog-boundary-2026-07-06`.
+- User job: when Narrative Harness has a selected current release, Guildhall
+  must show and execute only work assigned to that release. Unassigned root
+  backlog or starter tasks may still be visible elsewhere in the project, but
+  they must not silently become selected-release work, release blockers, or
+  confusing map rows.
+- Escaped live failure:
+  - Installed `/api/project?projectId=narrative-harness` reported selected
+    release `stage-1-fixture-and-evaluation-harness` with `includedWorkCount:16`
+    and `16` done, but the same payload exposed legacy root tasks such as
+    `coherence-reviewer-mvp`, `decision-trace-pipeline`,
+    `author-voice-loop-mvp`, `context-packet-compaction-core`,
+    `hosting-policy-boundary-checks`, `expansion-task-full-decomposition`, and
+    `task-009` as ready/blocked/spec-review/exploring records.
+  - Raw persisted release state did not include those legacy root tasks. They
+    leaked into the read model because selected release normalization added
+    every unassigned open root task to any selected scope.
+- Root-cause classification:
+  - Project structure/scope/release modeling: the selected release model mixed
+    explicit release membership with broad current-scope fallback membership.
+  - Scheduler/action-state logic: Start/Release could treat the selected
+    release as consumed while the wider project still had unassigned runnable
+    tasks, making the boundary ambiguous.
+  - UI communication/orientation: Project Map/Overview could show unrelated
+    starter/backlog tasks as if they belonged to the current release.
+  - Bad project data produced by an earlier Guildhall bug: Narrative Harness
+    carries older root task rows that should be visible as project/backlog
+    context, not automatically promoted into every selected release.
+- Fix:
+  - `normalizeSelectedScope` now keeps the broad "include unassigned current
+    root work" behavior only for non-release current scopes. Named releases
+    include explicit release members, explicit release `nodeIds`, and
+    materialized scoped children, but do not inherit unrelated root backlog.
+  - Existing approved workspace-import release membership still works because
+    draft/imported rows with `releaseIds` are explicit release members.
+- Contract Touch Decision:
+  - Work id: `codex:named-release-unassigned-backlog-boundary-2026-07-06`.
+  - Touched contracts: selected-scope normalization; `/api/project` embedded
+    orientation spine selected release `nodeIds`; `/api/project/release-readiness`
+    selected scope, status counts, blockers, and readiness totals.
+  - Contracts considered but not touched: persisted task schema, persisted
+    release schema, workspace-goals schema, release-selection writer,
+    scheduler run request shape.
+  - Existing data impact: no migration. Existing unassigned open root tasks are
+    no longer derived into named selected releases. They remain present in the
+    project task list and can still be assigned to a release or included by an
+    unreleased/current scope.
+  - Required follow-up: installed-app proof must show Narrative Harness
+    selected release node IDs and release-readiness totals no longer include
+    unassigned legacy starter tasks.
+  - Proof required: red/green projection and release-readiness regressions,
+    adjacent dashboard/readiness suites, contract detector, build/install,
+    stale check, and live Narrative Harness API/browser proof.
+  - Proof provided: `project-scope-projection`, `serve-release-readiness`, and
+    focused `serve-dashboard` tests passed `52` tests with `9` skipped. `git
+    diff --check` passed. Contract detector passed. `pnpm dev:install` rebuilt
+    and installed the app; `guildhall stop && guildhall start` restarted the
+    installed service; `/api/stale-server` returned `stale:false` with PID
+    `48917`. Live installed
+    `/api/project/release-readiness?projectId=narrative-harness` returned
+    selected scope `stage-1-fixture-and-evaluation-harness` with `9` node IDs,
+    `statusCounts:{done:9}`, `totals.tasks:9`, `unfinishedCount:0`, no
+    release blockers, and only `gitStoryBlockingCount:1` for the unpushed local
+    commit. Live installed `/api/project?projectId=narrative-harness` returned
+    the same selected release node IDs and `includedWorkCount:9` while the
+    legacy root rows remain task records with no release membership. Browser
+    proof at `/projects/narrative-harness/overview` showed `9 Current scope`,
+    `28 Deferred`, `Stage 1 Fixture And Evaluation Harness`, `9 / 9 done`,
+    `9 work items in view · 0 missing verification · 0 blocked · 9 verified ·
+    28 deferred`, and the same repository follow-up blocker.
+  - Apply/revert behavior: remove the `scope.kind === 'release'` guard in
+    `normalizeSelectedScope` and restore the old projection test expectations
+    to return to broad release absorption; no data rollback is required.
+
 2026-07-06T09:58:00Z - Narrative Harness MVP task content and Git Story
 readiness agree.
 

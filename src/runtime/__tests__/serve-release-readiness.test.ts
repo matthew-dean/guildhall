@@ -1377,6 +1377,63 @@ describe('GET /api/project/release-readiness', () => {
     expect(body.ready).toBe(false)
   })
 
+  it('does not absorb unassigned open root backlog into a selected named release', async () => {
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: 'stage-1',
+      releases: [{
+        id: 'stage-1',
+        label: 'Stage 1',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-done'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [
+        makeTask({
+          id: 'task-done',
+          title: 'Completed release task',
+          status: 'done',
+          releaseIds: ['stage-1'],
+        }),
+        makeTask({
+          id: 'unassigned-ready',
+          title: 'Unassigned ready backlog',
+          status: 'ready',
+          releaseIds: [],
+          spec: 'This belongs to backlog, not the selected release.',
+          acceptanceCriteria: [{ id: 'AC-1', description: 'Backlog remains unassigned.', verifiedBy: 'review', met: false }],
+        }),
+        makeTask({
+          id: 'unassigned-blocked',
+          title: 'Unassigned blocked backlog',
+          status: 'blocked',
+          releaseIds: [],
+          blockReason: 'This blocker should not hold the selected release.',
+        }),
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await approveDesignSystem(app)
+    await commitAndPush('selected release ignores unassigned backlog')
+
+    const projectRes = await app.fetch(new Request(projectUrl('/api/project')))
+    const readinessRes = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
+    const projectBody = await projectRes.json() as any
+    const readinessBody = await readinessRes.json() as any
+
+    expect(projectBody.orientationSpine.selectedRelease.nodeIds).toEqual(['work:task-done'])
+    expect(projectBody.orientationSpine.summary.includedWorkCount).toBe(1)
+    expect(readinessBody.scope.nodeIds).toEqual(['work:task-done'])
+    expect(readinessBody.totals.tasks).toBe(1)
+    expect(readinessBody.statusCounts).toEqual({ done: 1 })
+    expect(readinessBody.releaseBlockers).toEqual([])
+    expect(readinessBody.totals.unfinishedCount).toBe(0)
+  })
+
   it('keeps external setup blockers owner-facing in release readiness', async () => {
     await seed([
       makeTask({

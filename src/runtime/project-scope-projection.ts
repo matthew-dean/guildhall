@@ -400,6 +400,7 @@ function normalizeSelectedScope(scope: ProjectScope | null, tasks: readonly Task
       nodeIds.add(nodeId)
       continue
     }
+    if (scope.kind === 'release') continue
     if ((task.releaseIds?.length ?? 0) > 0 || task.hierarchy?.parentId || !taskIsOpenCurrentScopeWork(task)) continue
     if (!deferredNodeIds.has(nodeId)) nodeIds.add(nodeId)
   }

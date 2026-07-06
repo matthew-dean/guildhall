@@ -463,7 +463,7 @@ describe('buildProjectScopeProjection', () => {
     })
   })
 
-  it('keeps unassigned current work in the selected release until it is explicitly deferred', () => {
+  it('does not absorb unassigned current work into a selected named release', () => {
     const projection = buildProjectScopeProjection(queue([
       task({
         id: 'task-contracts',
@@ -491,13 +491,12 @@ describe('buildProjectScopeProjection', () => {
     ]))
 
     expect(projection.selectedScope).toMatchObject({
-      nodeIds: ['work:task-contracts', 'work:task-model-proof'],
+      nodeIds: ['work:task-contracts'],
       deferredNodeIds: ['work:task-later'],
     })
     expect(projection.rows.find(row => row.taskId === 'task-model-proof')).toMatchObject({
-      scope: 'included',
-      eligibilityReason: 'included',
-      handoffState: 'not_shaped',
+      scope: 'deferred',
+      eligibilityReason: 'deferred',
     })
     expect(projection.rows.find(row => row.taskId === 'task-future-release')).toMatchObject({
       scope: 'deferred',
@@ -509,7 +508,7 @@ describe('buildProjectScopeProjection', () => {
     })
   })
 
-  it('normalizes supplied selected scopes with unassigned current work', () => {
+  it('normalizes supplied current scopes with unassigned current work', () => {
     const projection = buildProjectScopeProjection({
       version: 1,
       lastUpdated: now,
@@ -537,7 +536,7 @@ describe('buildProjectScopeProjection', () => {
       selectedScope: {
         id: 'near-term-proof-scope',
         label: 'Near Term Proof Scope',
-        kind: 'release',
+        kind: 'proposed_feature_set',
         source: 'inferred',
         nodeIds: ['work:task-current', 'work:task-workspace-import'],
         deferredNodeIds: [],
