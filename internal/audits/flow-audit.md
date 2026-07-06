@@ -114,6 +114,27 @@ help_summary: |
     in_progress`, `assignedTo: worker-agent`, and `runtime.proofRecovery`.
     `/api/project` reported `startReadiness.canStart: true` and release
     proof-missing dropped to the remaining DeepInfra model proof task only.
+  - Continuing the live run exposed a third proof-state failure: the task moved
+    through review/gate_check back to `done`, but release readiness still listed
+    it as proof-missing. Root cause classification: task
+    hierarchy/dependency/proof modeling and scheduler/action-state logic.
+    Guildhall allowed reviewer/gate completion and stale done-summary landing to
+    mark proof-recovery work done without satisfying the shared proof-health
+    contract. The fix tightens the invariant: stale done-summary evidence never
+    lands an active proof-recovery task, acceptance-command completion refuses
+    done when `taskDoneButProofMissing` would still be true, recorded-evidence
+    completion refuses done under the same condition, and the serialized
+    post-agent boundary reopens any gate-checker mutation that leaves a task
+    done while required proof is still missing.
+  - Installed-app proof after that invariant: rebuilt and installed the app,
+    restarted Guildhall with `/api/stale-server` returning `stale:false`,
+    reopened the Narrative Harness generation proof task, and started it as
+    focused one-task work. The task advanced to review, then gate check, then
+    returned to `in_progress` instead of `done`; `/api/project` continued to
+    show only one completed proof blocker (`task-import-lu6waj`) while the
+    generation proof task remained active. The next surfaced blocker is a
+    separate data-quality failure: `content.no-truncated-data` now rejects old
+    bootstrap note/evidence text that contains ellipsized semantic payload.
   - Waivers: none.
   - Owner-review items: no owner approval is modeled as automatic; this action
     is Codex/Matthew intentionally reopening proof recovery during calibration.

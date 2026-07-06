@@ -12446,6 +12446,54 @@ describe('Orchestrator.run — full loops', () => {
     expect(worker.calls).toHaveLength(1)
   })
 
+  it('does not complete approved gate-check work when the proof path remains missing', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'task-proof-path',
+        status: 'gate_check',
+        assignedTo: 'gate-checker-agent',
+        acceptanceCriteria: [{
+          id: 'ac-proof',
+          description: 'Attach proof evidence',
+          verifiedBy: 'review',
+          met: false,
+        }],
+        proofPaths: [{
+          kind: 'review',
+          expectedEvidence: [
+            'DeepInfra drafting telemetry recorded refusal behavior, cost, latency, and voice preservation.',
+          ],
+        }],
+        reviewVerdicts: [{
+          verdict: 'approve',
+          reviewerPath: 'llm',
+          reason: 'Reviewer approved.',
+          reasoning: 'The implementation appears complete.',
+          failingSignals: [],
+          recordedAt: '2026-04-01T00:30:00.000Z',
+        }],
+      }),
+    ])
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet(),
+      gitDriver: new InMemoryGitDriver({ clean: true }),
+    })
+
+    const out = await orch.tick()
+
+    expect(out).toMatchObject({
+      kind: 'processed',
+      taskId: 'task-proof-path',
+      afterStatus: 'in_progress',
+    })
+    const q = await readQueue()
+    expect(q.tasks[0]?.status).toBe('in_progress')
+    expect(q.tasks[0]?.assignedTo).toBe('worker-agent')
+    expect(q.tasks[0]?.notes.at(-1)?.content).toContain('still lacks the proof evidence')
+  })
+
   it('marks pending PR tasks done and removes the worktree once the PR is merged', async () => {
     const worktreePath = path.join(tmpDir, '.guildhall', 'worktrees', 'test-ws', 'task-pr')
     await writeQueue([

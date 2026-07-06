@@ -5479,6 +5479,24 @@ export class Orchestrator {
           }
         }
 
+        if (afterStatus === 'done' && taskDoneButProofMissing({ ...taskAfter, status: 'done' })) {
+          taskAfter.status = 'in_progress'
+          ensureWorkerOwnership(taskAfter)
+          taskAfter.revisionCount += 1
+          taskAfter.notes.push({
+            agentId: 'proof-health-gates',
+            role: 'gate-checker',
+            content:
+              'Guildhall reopened this task because it was marked done while its proof path still lacks required evidence. Attach the missing proof before marking it done.',
+            timestamp: this.now(),
+          })
+          taskAfter.updatedAt = this.now()
+          queueAfter.lastUpdated = taskAfter.updatedAt
+          await this.writeQueue(queueAfter)
+          afterStatus = 'in_progress'
+          transitioned = true
+        }
+
         if (
           afterStatus === 'review' &&
           !hasPendingHandoffStep(taskAfter) &&
@@ -7950,6 +7968,42 @@ export class Orchestrator {
       }
 
       if (current.acceptanceCriteria.length > 0 && current.acceptanceCriteria.every((criterion) => criterion.met)) {
+        if (taskDoneButProofMissing({ ...current, status: 'done' })) {
+          transitionTaskStatus({
+            task: current,
+            event: 'revise',
+            actor: 'acceptance-command-gates',
+            evidenceRefs: ['task:proof:missing'],
+            now,
+          })
+          ensureWorkerOwnership(current)
+          current.revisionCount += 1
+          current.notes.push({
+            agentId: 'acceptance-command-gates',
+            role: 'gate-checker',
+            content:
+              'Acceptance command gates passed, but the task still lacks the proof evidence required by its proof path. Keep the task open and attach the missing proof before marking it done.',
+            timestamp: now,
+          })
+          await this.writeQueue(queue)
+          await this.logTickProgress({
+            task: current,
+            agent: 'acceptance-command-gates',
+            beforeStatus,
+            afterStatus: 'in_progress',
+            transitioned: true,
+            note: 'acceptance command gates passed but proof path remains unmet → in_progress',
+          })
+          return {
+            kind: 'processed',
+            taskId: current.id,
+            agent: 'acceptance-command-gates',
+            beforeStatus,
+            afterStatus: 'in_progress',
+            transitioned: true,
+            revisionCount: current.revisionCount,
+          } as TickOutcome
+        }
         transitionTaskStatus({
           task: current,
           event: 'complete',
@@ -8185,6 +8239,48 @@ export class Orchestrator {
       if (!input.applyCriteria(current, currentEffectiveTask)) return null
 
       const now = this.now()
+      if (taskDoneButProofMissing({ ...current, status: 'done' })) {
+        transitionTaskStatus({
+          task: current,
+          event: 'revise',
+          actor: input.actor,
+          evidenceRefs: ['task:proof:missing'],
+          now,
+        })
+        ensureWorkerOwnership(current)
+        current.revisionCount += 1
+        current.notes.push({
+          agentId: input.actor,
+          role: 'gate-checker',
+          content:
+            'Gate check could not complete from recorded evidence because the task still lacks the proof evidence required by its proof path. Keep the task open and attach the missing proof before marking it done.',
+          timestamp: now,
+        })
+        current.updatedAt = now
+        queue.lastUpdated = now
+        await this.writeQueue(queue)
+        await upsertTaskRuntimeState(inferProjectRootFromMemoryDir(this.opts.config.memoryDir), current.id, {
+          assignedTo: 'worker-agent',
+          updatedAt: now,
+        })
+        await this.logTickProgress({
+          task: current,
+          agent: input.actor,
+          beforeStatus,
+          afterStatus: 'in_progress',
+          transitioned: true,
+          note: `${input.logNote} lacked required proof evidence → in_progress`,
+        })
+        return {
+          kind: 'processed',
+          taskId: current.id,
+          agent: input.actor,
+          beforeStatus,
+          afterStatus: 'in_progress',
+          transitioned: true,
+          revisionCount: current.revisionCount,
+        } as TickOutcome
+      }
       transitionTaskStatus({
         task: current,
         event: 'complete',
@@ -9835,8 +9931,7 @@ export class Orchestrator {
       const activeProofRecovery =
         completedButActive &&
         Number.isFinite(reopenedAt) &&
-        (!Number.isFinite(doneSummaryCompletedAt) || doneSummaryCompletedAt <= reopenedAt) &&
-        taskDoneButProofMissing({ ...task, status: 'done' })
+        (!Number.isFinite(doneSummaryCompletedAt) || doneSummaryCompletedAt <= reopenedAt)
       if (activeProofRecovery) continue
       if (completedButActive) {
         const now = this.now()
