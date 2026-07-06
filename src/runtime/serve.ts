@@ -3432,6 +3432,94 @@ function compactTaskForProjectSummary(task: Record<string, unknown>): Record<str
   return summary
 }
 
+function compactTaskForWorkSurface(task: Record<string, unknown>): Record<string, unknown> {
+  const summaryKeys = [
+    'id',
+    'title',
+    'description',
+    'domain',
+    'status',
+    'priority',
+    'revisionCount',
+    'updatedAt',
+    'completedAt',
+    'assignedTo',
+    'liveAgent',
+    'activity',
+    'importedDraft',
+    'requestKind',
+    'requestStage',
+    'workKind',
+    'workVisibility',
+    'dependsOn',
+    'hierarchy',
+    'releaseIds',
+    'acceptanceCriteria',
+    'openQuestions',
+    'blockReason',
+    'shelveReason',
+    'latestReviewerSummary',
+    'latestSelfCritique',
+    'terminalSummary',
+    'sizePlan',
+    'checklist',
+    'workerHandoff',
+    'workUnitAnalysis',
+  ]
+  const summary: Record<string, unknown> = {}
+  for (const key of summaryKeys) {
+    if (key in task) summary[key] = task[key]
+  }
+  const productBrief = compactTaskProductBriefForWorkSurface(task.productBrief)
+  if (productBrief) summary.productBrief = productBrief
+  if (typeof task.spec === 'string' && task.spec.trim().length > 0) summary.spec = 'present'
+  const taskReadiness = compactTaskReadinessForWorkSurface(task.taskReadiness)
+  if (taskReadiness) summary.taskReadiness = taskReadiness
+  const latestCheckpoint = compactLatestCheckpointForWorkSurface(task.latestCheckpoint)
+  if (latestCheckpoint) summary.latestCheckpoint = latestCheckpoint
+  const definitionOfDone = compactDefinitionOfDoneForWorkSurface(task.definitionOfDone)
+  if (definitionOfDone) summary.definitionOfDone = definitionOfDone
+  return summary
+}
+
+function compactTaskProductBriefForWorkSurface(brief: unknown): Record<string, unknown> | undefined {
+  if (!brief || typeof brief !== 'object' || Array.isArray(brief)) return undefined
+  const raw = brief as Record<string, unknown>
+  const summary: Record<string, unknown> = {}
+  for (const key of ['userJob', 'whyItMattersNow', 'successMetric', 'nonGoals', 'antiPatterns', 'approvedAt']) {
+    if (key in raw) summary[key] = raw[key]
+  }
+  return Object.keys(summary).length > 0 ? summary : undefined
+}
+
+function compactTaskReadinessForWorkSurface(readiness: unknown): Record<string, unknown> | undefined {
+  if (!readiness || typeof readiness !== 'object' || Array.isArray(readiness)) return undefined
+  const raw = readiness as Record<string, unknown>
+  const summary: Record<string, unknown> = {}
+  for (const key of ['recommendation', 'summary']) {
+    if (key in raw) summary[key] = raw[key]
+  }
+  return Object.keys(summary).length > 0 ? summary : undefined
+}
+
+function compactLatestCheckpointForWorkSurface(checkpoint: unknown): Record<string, unknown> | undefined {
+  if (!checkpoint || typeof checkpoint !== 'object' || Array.isArray(checkpoint)) return undefined
+  const raw = checkpoint as Record<string, unknown>
+  const nextPlannedAction = raw.nextPlannedAction
+  return typeof nextPlannedAction === 'string' && nextPlannedAction.trim().length > 0
+    ? { nextPlannedAction }
+    : undefined
+}
+
+function compactDefinitionOfDoneForWorkSurface(definition: unknown): Record<string, unknown> | undefined {
+  if (!definition || typeof definition !== 'object' || Array.isArray(definition)) return undefined
+  const raw = definition as Record<string, unknown>
+  const evidenceRequired = Array.isArray(raw.evidenceRequired)
+    ? raw.evidenceRequired.filter((item): item is string => typeof item === 'string' && item.trim().length > 0).slice(0, 1)
+    : []
+  return evidenceRequired.length ? { evidenceRequired } : undefined
+}
+
 function compactDeliveryQueueForWorkSurface(queue: Record<string, unknown>): Record<string, unknown> {
   const compactCandidate = (candidate: unknown): unknown => {
     if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return candidate
@@ -4561,7 +4649,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         name: project.config?.name ?? project.id,
         tags: project.config?.tags ?? [],
         config: project.config,
-        tasks: tasks.map(compactTaskForProjectSummary),
+        tasks: tasks.map(fullSurface ? compactTaskForProjectSummary : compactTaskForWorkSurface),
         workProgress,
         inbox,
         run: run

@@ -813,7 +813,41 @@ describe('GET /api/project/task/:id', () => {
       workKind: 'verification',
       spec: '## Full worker handoff\n\nThis belongs on the task detail endpoint.',
       acceptanceCriteria: [{ description: 'Storybook proof exists.' }],
-      evidence: [{ kind: 'command', summary: 'Verbose proof', output: 'x'.repeat(1000) }],
+      references: ['docs/storybook.md', 'docs/menu.md'],
+      projectPath: '/tmp/storybook-project',
+      createdAt: '2026-06-01T00:00:00.000Z',
+      origination: 'human',
+      remediationAttempts: 2,
+      taskReadiness: {
+        recommendation: 'ready',
+        summary: 'Task is ready for a focused worker pass.',
+        dimensions: [{ id: 'context_load', evidence: ['full diagnostic detail belongs elsewhere'] }],
+      },
+      latestCheckpoint: {
+        step: 3,
+        agentId: 'worker-agent',
+        intent: 'Long checkpoint intent belongs on task detail.',
+        nextPlannedAction: 'Rerun Storybook proof.',
+        filesTouched: ['packages/editor/src/menu.ts'],
+        writtenAt: '2026-06-01T01:00:00.000Z',
+      },
+      definitionOfDone: {
+        items: ['Long done item belongs on task detail.'],
+        evidenceRequired: ['Storybook proof screenshot.'],
+      },
+      escalations: [{
+        id: 'esc-storybook',
+        taskId: 'task-storybook',
+        reason: 'decision_required',
+        summary: 'Verbose escalation belongs on task detail.',
+        raisedAt: '2026-06-01T02:00:00.000Z',
+      }],
+      evidence: [{
+        kind: 'command',
+        summary: 'Verbose proof',
+        output: 'x'.repeat(1000),
+        recordedAt: '2026-06-01T02:00:00.000Z',
+      }],
     })
     await writeProjectDeliveryModel(tmpDir, {
       version: 1,
@@ -834,6 +868,19 @@ describe('GET /api/project/task/:id', () => {
 
     expect(workRes.status, workBody.error).toBe(200)
     expect(workBody.tasks?.some((task: Record<string, any>) => task.id === 'task-storybook')).toBe(true)
+    const workTask = workBody.tasks?.find((task: Record<string, any>) => task.id === 'task-storybook')
+    expect(workTask?.references).toBeUndefined()
+    expect(workTask?.projectPath).toBeUndefined()
+    expect(workTask?.createdAt).toBeUndefined()
+    expect(workTask?.origination).toBeUndefined()
+    expect(workTask?.remediationAttempts).toBeUndefined()
+    expect(workTask?.escalations).toBeUndefined()
+    expect(workTask?.taskReadiness).toEqual({
+      recommendation: 'ready',
+      summary: 'Task is ready for a focused worker pass.',
+    })
+    expect(workTask?.latestCheckpoint).toEqual({ nextPlannedAction: 'Rerun Storybook proof.' })
+    expect(workTask?.definitionOfDone).toEqual({ evidenceRequired: ['Storybook proof screenshot.'] })
     expect(workBody.actionModel).toBeTruthy()
     expect(workBody.startReadiness).toBeTruthy()
     expect(workBody.orientationSpine).toBeTruthy()

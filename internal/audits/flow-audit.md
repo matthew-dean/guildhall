@@ -34,6 +34,10 @@ help_summary: |
   - UI communication/orientation problem: mobile proof exposed a stale
     desktop grid-column variable in the Work list, so the route could load but
     still clip the visible work row inside the project shell.
+  - Data model/schema problem: even after orientation/routing/delivery
+    compaction, Work still shipped every compact project task row with
+    task-detail source refs, project paths, readiness diagnostics, historical
+    runtime counters, and escalation payloads.
   - Runtime/provider/infrastructure problem: the installed app repeatedly
     transferred and recomputed heavyweight sections on a polling loop.
 - Fix:
@@ -57,6 +61,11 @@ help_summary: |
   - The mobile Work list now resets the shared work-list column variable to one
     column below the existing breakpoint, so the row layout does not retain the
     desktop six-column track width after the list collapses.
+  - The Work surface now uses a Work-specific task compactor that keeps visible
+    list/board/inspector fields and compact readiness/checkpoint/proof signals
+    while omitting task-detail-only references, escalations, project paths,
+    created/origination metadata, remediation counters, and full readiness
+    diagnostics.
 - Contract Touch Decision:
   - Work id: `codex:work-surface-scoped-project-payload-2026-07-06`.
   - Touched contracts: `GET /api/project` optional `surface=work` response
@@ -96,11 +105,22 @@ help_summary: |
     collapsed from the escaped `764px` width to `340px` in a `390px` viewport;
     focused WorkTab regression proved the mobile breakpoint carries a
     one-column work-list variable instead of keeping the desktop six-column
-    track width.
-  - Residual risk: Work still receives the compact task list (`~336 KB`) on
-    initial load. That is now the remaining known large section and should be
-    the next payload/model split target before calling Work-route loading
-    solved.
+    track width; focused red/green endpoint regression proved Work task rows
+    omit heavy task-detail fields while preserving readiness, checkpoint, and
+    proof summaries; focused endpoint/store/WorkTab/ProjectView suite passed
+    `193` tests after the Work task compactor; installed-app API proof measured
+    `/api/project?surface=work` at about `356 KB`, with task rows reduced from
+    about `336 KB` to about `178 KB`, and confirmed Work task rows no longer
+    include `references`, `escalations`, or `projectPath`; installed browser
+    proof still rendered desktop and mobile Work with no clipped content or
+    page horizontal overflow, with the ready list showing `5 shown / 311 total`
+    because the compact task rows now retain the minimal brief/spec signals
+    used by worker-handoff classification.
+  - Residual risk: Work still takes several seconds on live Looma + Knit even
+    after the payload reduction, because the server still builds broad
+    effective task and project summary state before compacting the Work
+    response. The next split should avoid computing task-detail diagnostics for
+    Work in the first place instead of only dropping them from JSON.
   - Waivers: default `/api/project` stays full for existing non-Work surfaces
     until each route has a tested scoped payload.
   - Apply/revert behavior: remove the `surface=work` branch and project-store
