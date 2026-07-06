@@ -7,6 +7,12 @@ export interface ProofMissingDoneTask {
   unmetCriteriaCount: number
 }
 
+export interface AcceptanceCriteriaReconciliation {
+  changed: boolean
+  reconciledCount: number
+  reason: string
+}
+
 function nonEmptyStringArray(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
@@ -34,6 +40,66 @@ function unmetAcceptanceCriteriaCount(task: unknown): number {
   )).length
 }
 
+function latestApprovingReviewReasoning(task: unknown): string | null {
+  if (!task || typeof task !== 'object') return null
+  const reviewVerdicts = Array.isArray((task as { reviewVerdicts?: unknown }).reviewVerdicts)
+    ? (task as { reviewVerdicts: unknown[] }).reviewVerdicts
+    : []
+  for (let index = reviewVerdicts.length - 1; index >= 0; index -= 1) {
+    const verdict = reviewVerdicts[index]
+    if (!verdict || typeof verdict !== 'object') continue
+    const record = verdict as Record<string, unknown>
+    if (record.verdict === 'revise' || record.decision === 'revise') return null
+    if (record.verdict !== 'approve' && record.verdict !== 'approved' && record.decision !== 'approve' && record.decision !== 'approved') continue
+    return [
+      typeof record.reason === 'string' ? record.reason : '',
+      typeof record.reasoning === 'string' ? record.reasoning : '',
+      typeof record.summary === 'string' ? record.summary : '',
+    ].filter(Boolean).join('\n')
+  }
+  return null
+}
+
+export function completionProofCanSettleUnmetAcceptanceCriteria(task: unknown): boolean {
+  if (!task || typeof task !== 'object') return false
+  if (String((task as { status?: unknown }).status ?? '') !== 'done') return false
+  if (unmetAcceptanceCriteriaCount(task) === 0) return false
+  const reviewText = latestApprovingReviewReasoning(task)
+  if (!reviewText) return false
+  return (
+    /\bacceptance-criteria-met\s*:\s*yes\b/i.test(reviewText) ||
+    /\ball acceptance criteria (?:are |were )?(?:met|satisfied)\b/i.test(reviewText) ||
+    /\bacceptance criteria are satisfied\b/i.test(reviewText)
+  )
+}
+
+export function reconcileAcceptanceCriteriaFromCompletionProof(task: Task, now: string): AcceptanceCriteriaReconciliation {
+  if (!completionProofCanSettleUnmetAcceptanceCriteria(task)) {
+    return { changed: false, reconciledCount: 0, reason: '' }
+  }
+  let reconciledCount = 0
+  for (const criterion of task.acceptanceCriteria ?? []) {
+    if (criterion.met === false) {
+      criterion.met = true
+      reconciledCount += 1
+    }
+  }
+  if (reconciledCount === 0) return { changed: false, reconciledCount: 0, reason: '' }
+  task.notes.push({
+    agentId: 'coordinator',
+    role: 'evidence-repair',
+    content:
+      'Guildhall reconciled stale acceptance-criteria flags from later recorded completion proof so the task status, review verdict, and checklist agree.',
+    timestamp: now,
+  })
+  task.updatedAt = now
+  return {
+    changed: true,
+    reconciledCount,
+    reason: 'approved review recorded all acceptance criteria as met',
+  }
+}
+
 function proofPathMissingEvidence(proofPath: unknown): boolean {
   if (!proofPath || typeof proofPath !== 'object') return true
   const record = proofPath as Record<string, unknown>
@@ -58,7 +124,9 @@ function proofPathMissingEvidence(proofPath: unknown): boolean {
 
 export function taskDoneButProofMissing(task: unknown): boolean {
   if (!task || typeof task !== 'object') return false
-  if (unmetAcceptanceCriteriaCount(task) > 0) return true
+  if (unmetAcceptanceCriteriaCount(task) > 0) {
+    return !completionProofCanSettleUnmetAcceptanceCriteria(task)
+  }
   const proofPaths = Array.isArray((task as { proofPaths?: unknown }).proofPaths)
     ? (task as { proofPaths: unknown[] }).proofPaths
     : []

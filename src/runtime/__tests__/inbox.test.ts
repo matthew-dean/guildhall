@@ -445,6 +445,37 @@ describe('buildInbox', () => {
     expect(hit.detail).toContain('reconcile the task evidence or reopen the work')
   })
 
+  it('proof_reconciliation: ignores stale unmet criteria already settled by approving review proof', async () => {
+    await writeCompleteBootstrap()
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
+    await writeJson('.guildhall/TASKS.json', {
+      version: 1,
+      lastUpdated: '2026-07-06T00:00:00.000Z',
+      tasks: [
+        {
+          id: 'task-stale-proof',
+          title: 'Draft chapter in author voice',
+          status: 'done',
+          acceptanceCriteria: [
+            { id: 'voice', description: 'Author voice proof is attached.', met: false },
+          ],
+          reviewVerdicts: [{
+            verdict: 'approve',
+            reviewerPath: 'llm',
+            reason: 'Reviewer approved.',
+            reasoning: 'code-review:acceptance-criteria-met: yes — all acceptance criteria are satisfied.',
+            failingSignals: [],
+            recordedAt: '2026-07-04T10:07:21.557Z',
+          }],
+        },
+      ],
+    })
+
+    const items = buildInboxWithProviderSetup()
+
+    expect(items.some(i => i.kind === 'proof_reconciliation')).toBe(false)
+  })
+
   it('does not expose project check-ins or pressure-test questions through project inbox', async () => {
     await writeCompleteBootstrap()
     await writeJson('.guildhall/workspace-goals.json', {

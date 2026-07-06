@@ -22759,6 +22759,88 @@ project-summary payload shape.
     `orientationPathByWorkId()` and the WorkTab breadcrumb call site, to restore
     previous behavior. No data rollback required.
 
+2026-07-06T17:45:00Z - Reconciled proof-health from effective task evidence,
+not raw task rows only.
+
+- Work id: `codex:proof-health-effective-evidence-2026-07-06`.
+- User job: when Guildhall says completed work needs the owner to reconcile
+  stale proof, the alert must be based on the effective task truth the product
+  shows, including sidecar review evidence. It must not ask the owner to repair
+  raw task-definition flags that later durable review proof already settled.
+- Root-cause classification:
+  - Data model/schema problem: `acceptanceCriteria[].met` persisted on the
+    task definition can drift from later sidecar review evidence.
+  - Task hierarchy/dependency/proof modeling problem: proof-health repair read
+    only raw `TASKS.json` rows even though effective task truth is assembled
+    from definition plus task evidence sidecars.
+  - UI communication/orientation problem: Needs You surfaced a false owner
+    action for tasks whose later review proof already said all acceptance
+    criteria were satisfied.
+  - Bad project data produced by an earlier Guildhall bug: Narrative Harness
+    had done tasks with stale false criteria after review/gate completion.
+- Fix:
+  - `proof-health` now treats a latest approving review that explicitly says
+    `acceptance-criteria-met: yes` or all acceptance criteria are satisfied as
+    capable of settling stale unmet criteria on done tasks.
+  - `stale-blocker-repair` now has an async project repair that hydrates each
+    task through `buildEffectiveTask()`, applies that sidecar proof to the
+    mutable task definition, and writes only the corrected acceptance criteria
+    back through the project-state boundary.
+  - `buildProjectInboxSnapshot()` now runs the effective-evidence repair before
+    building owner attention items, so all surfaces that consume the shared
+    inbox see the same repaired proof state.
+- Contract Touch Decision:
+  - Work id: `codex:proof-health-effective-evidence-2026-07-06`.
+  - Touched contracts: project inbox proof-reconciliation semantics; task
+    proof-health interpretation; existing task definition field
+    `acceptanceCriteria[].met` when durable effective evidence settles stale
+    false values.
+  - Contracts considered but not touched: task schema shape, task evidence
+    schema, release schema, orientation-spine payload, delivery-spine payload,
+    task-detail endpoint shape, runtime-state schema.
+  - Required follow-up: continue treating any mismatch between raw task rows and
+    effective task evidence as a model-boundary failure first; do not add
+    view-local proof suppression.
+  - Proof required: focused runtime regressions including sidecar review
+    evidence, build, contract lint, installed-app stale check, live Narrative
+    Harness API proof, and browser/UI proof if the browser bridge is available.
+  - Proof provided: focused runtime/API suites passed `193` tests; `git diff
+    --check` passed; `node scripts/contract-touch-detector.mjs` passed;
+    `CI=true node ./build.mjs` passed; `CI=true pnpm dev:install` installed the
+    current branch artifact; clean installed-server API returned
+    `/api/stale-server` with `stale:false`; live Narrative Harness
+    `/api/project?projectId=narrative-harness&surface=work` dropped the proof
+    alert from `4` tasks to `2`; raw
+    `coherence-reviewer-mvp` acceptance criteria dropped from `12` unmet to
+    `0` unmet; remaining proof alert tasks are legitimate (`author-voice-loop`
+    latest sidecar review is `revise`; `task-150` has no review-verdict
+    sidecar and no recorded gate proof).
+  - Browser/UI proof caveat: the in-app browser bridge timed out twice during
+    this slice, including on reconnect. The live installed API proof is
+    authoritative for the shared model repair, but rendered UI proof remains a
+    follow-up before claiming the whole Narrative Harness orientation loop is
+    complete.
+  - Apply/revert behavior: revert the proof-health reconciliation helper,
+    `repairCompletionProofCriteriaForProjectWithEvidence()`, and the
+    `buildProjectInboxSnapshot()` await to restore raw-row-only proof alerts.
+    No schema rollback is required; already-reconciled stale criteria are
+    ordinary existing task fields.
+- Schema Migration Decision:
+  - Persisted schema touched: existing `TASKS.json` task
+    `acceptanceCriteria[].met` values only.
+  - Scope: compatibility repair of stale values; no field or file shape change.
+  - Change class: runtime reconciliation from durable sidecar evidence.
+  - Existing data impact: tasks with done status, stale false criteria, and a
+    latest approving review that explicitly states acceptance criteria are met
+    are rewritten to `met:true`; tasks without explicit all-clear proof remain
+    unchanged.
+  - Migration id: none; this is an on-read shared repair invoked from the inbox
+    snapshot builder.
+  - Safety: repair only narrows false owner-action alerts when later durable
+    proof is explicit; a latest `revise` verdict prevents reconciliation.
+  - Rollback/revert behavior: revert the runtime repair and, if needed, restore
+    task criteria from local history backups; no reader compatibility change.
+
 2026-07-05T10:45:00Z - Aligned release proof/orientation communication with
 shared readiness state.
 

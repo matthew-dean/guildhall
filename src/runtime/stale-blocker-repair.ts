@@ -10,7 +10,9 @@ import {
 } from '@guildhall/sessions'
 import type { Task, TaskQueue } from '@guildhall/core'
 import { TaskQueue as TaskQueueSchema } from '@guildhall/core'
+import { buildEffectiveTask } from './effective-task.js'
 import { writeProjectTaskQueue } from './project-state-boundary.js'
+import { reconcileAcceptanceCriteriaFromCompletionProof } from './proof-health.js'
 import { normalizeLegacyTaskQueueShape } from './task-queue-compat.js'
 
 export interface StaleBlockerRepair {
@@ -23,6 +25,17 @@ export interface StaleBlockerRepair {
 export interface StaleBlockerRepairResult {
   changed: boolean
   repairs: StaleBlockerRepair[]
+}
+
+export interface CompletionProofCriteriaRepair {
+  taskId: string
+  reconciledCount: number
+  reason: string
+}
+
+export interface CompletionProofCriteriaRepairResult {
+  changed: boolean
+  repairs: CompletionProofCriteriaRepair[]
 }
 
 const INTERNAL_TOOLING_BLOCKER =
@@ -224,6 +237,70 @@ export function repairStaleBlockersForProject(projectPath: string): StaleBlocker
     writeProjectTaskQueue(tasksPath, queue)
   }
   return result
+}
+
+export function repairCompletionProofCriteriaInQueue(queue: TaskQueue, now = new Date().toISOString()): CompletionProofCriteriaRepairResult {
+  const repairs: CompletionProofCriteriaRepair[] = []
+  for (const task of queue.tasks) {
+    const result = reconcileAcceptanceCriteriaFromCompletionProof(task, now)
+    if (!result.changed) continue
+    repairs.push({
+      taskId: task.id,
+      reconciledCount: result.reconciledCount,
+      reason: result.reason,
+    })
+  }
+  if (repairs.length > 0) queue.lastUpdated = now
+  return { changed: repairs.length > 0, repairs }
+}
+
+export function repairCompletionProofCriteriaForProject(projectPath: string): CompletionProofCriteriaRepairResult {
+  const tasksPath = getProjectSystemStatePath(projectPath, 'TASKS.json')
+  if (!existsSync(tasksPath)) return { changed: false, repairs: [] }
+
+  const rawQueue = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8'))
+  const queue = TaskQueueSchema.parse(normalizeLegacyTaskQueueShape(rawQueue))
+  const result = repairCompletionProofCriteriaInQueue(queue)
+  if (result.changed) {
+    writeProjectTaskQueue(tasksPath, queue)
+  }
+  return result
+}
+
+export async function repairCompletionProofCriteriaForProjectWithEvidence(projectPath: string): Promise<CompletionProofCriteriaRepairResult> {
+  const tasksPath = getProjectSystemStatePath(projectPath, 'TASKS.json')
+  if (!existsSync(tasksPath)) return { changed: false, repairs: [] }
+
+  const now = new Date().toISOString()
+  const rawQueue = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8'))
+  const queue = TaskQueueSchema.parse(normalizeLegacyTaskQueueShape(rawQueue))
+  const repairs: CompletionProofCriteriaRepair[] = []
+
+  for (const task of queue.tasks) {
+    const effectiveTask = await buildEffectiveTask(projectPath, task)
+    const candidate = {
+      ...task,
+      ...(Array.isArray(effectiveTask.reviewVerdicts) ? { reviewVerdicts: effectiveTask.reviewVerdicts } : {}),
+      ...(Array.isArray(effectiveTask.notes) ? { notes: effectiveTask.notes } : {}),
+      ...(Array.isArray(effectiveTask.gateResults) ? { gateResults: effectiveTask.gateResults } : {}),
+      ...(effectiveTask.doneSummaryBundle ? { doneSummaryBundle: effectiveTask.doneSummaryBundle } : {}),
+    } as Task
+    const result = reconcileAcceptanceCriteriaFromCompletionProof(candidate, now)
+    if (!result.changed) continue
+    task.acceptanceCriteria = candidate.acceptanceCriteria
+    task.updatedAt = now
+    repairs.push({
+      taskId: task.id,
+      reconciledCount: result.reconciledCount,
+      reason: result.reason,
+    })
+  }
+
+  if (repairs.length > 0) {
+    queue.lastUpdated = now
+    writeProjectTaskQueue(tasksPath, queue)
+  }
+  return { changed: repairs.length > 0, repairs }
 }
 
 export async function repairStaleBlockersForProjectWithRuntime(projectPath: string): Promise<StaleBlockerRepairResult> {

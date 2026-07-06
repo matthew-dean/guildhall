@@ -373,7 +373,7 @@ import {
 } from './git-story-policy.js'
 import { taskHasUnansweredVisibleQuestion } from './question-visibility.js'
 import { validateSpecCompletionBoundary } from './spec-quality.js'
-import { repairStaleBlockersForProject, repairStaleBlockersForProjectWithRuntime } from './stale-blocker-repair.js'
+import { repairCompletionProofCriteriaForProjectWithEvidence, repairStaleBlockersForProject, repairStaleBlockersForProjectWithRuntime } from './stale-blocker-repair.js'
 import {
   buildCoordinatorProjectPathMap,
   resolveTaskProjectPath,
@@ -1829,6 +1829,11 @@ async function buildProjectInboxSnapshot(input: {
     repairStaleBlockersForProject(input.projectPath)
   } catch {
     /* never let stale-blocker repair break an inbox read */
+  }
+  try {
+    await repairCompletionProofCriteriaForProjectWithEvidence(input.projectPath)
+  } catch {
+    /* never let proof-criteria repair break an inbox read */
   }
   const runtimeBlocker = projectRuntimeCompatibilityBlocker({ projectRoot: input.projectPath })
   if (runtimeBlocker) {

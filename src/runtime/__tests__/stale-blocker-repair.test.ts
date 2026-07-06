@@ -11,6 +11,9 @@ import {
   upsertTaskRuntimeState,
 } from '@guildhall/sessions'
 import {
+  repairCompletionProofCriteriaInQueue,
+  repairCompletionProofCriteriaForProject,
+  repairCompletionProofCriteriaForProjectWithEvidence,
   repairStaleBlockersForProject,
   repairStaleBlockersForProjectWithRuntime,
   repairStaleBlockersInQueue,
@@ -388,6 +391,67 @@ describe('repairStaleBlockersInQueue', () => {
   })
 })
 
+describe('repairCompletionProofCriteriaInQueue', () => {
+  it('reconciles done acceptance criteria when later approving review says all criteria are met', () => {
+    const q = queue([
+      task({
+        id: 'task-proof',
+        status: 'done',
+        acceptanceCriteria: [
+          { id: 'ac1', description: 'Fixture writes an artifact.', verifiedBy: 'automated', command: 'pnpm review', met: false },
+          { id: 'ac2', description: 'Reviewer taxonomy is reused.', verifiedBy: 'review', met: false },
+        ],
+        reviewVerdicts: [{
+          verdict: 'approve',
+          reviewerPath: 'llm',
+          reason: 'Reviewer approved.',
+          reasoning: 'code-review:acceptance-criteria-met: yes — all acceptance criteria are satisfied.',
+          failingSignals: [],
+          recordedAt: '2026-07-04T10:07:21.557Z',
+        }],
+      }),
+    ])
+
+    const result = repairCompletionProofCriteriaInQueue(q, '2026-07-06T18:50:00.000Z')
+
+    expect(result).toEqual({
+      changed: true,
+      repairs: [{
+        taskId: 'task-proof',
+        reconciledCount: 2,
+        reason: 'approved review recorded all acceptance criteria as met',
+      }],
+    })
+    expect(q.tasks[0]?.acceptanceCriteria.every(criterion => criterion.met)).toBe(true)
+    expect(q.tasks[0]?.notes.at(-1)?.role).toBe('evidence-repair')
+  })
+
+  it('does not reconcile done acceptance criteria without explicit all-clear review proof', () => {
+    const q = queue([
+      task({
+        id: 'task-proof',
+        status: 'done',
+        acceptanceCriteria: [
+          { id: 'ac1', description: 'Fixture writes an artifact.', verifiedBy: 'automated', command: 'pnpm review', met: false },
+        ],
+        reviewVerdicts: [{
+          verdict: 'approve',
+          reviewerPath: 'llm',
+          reason: 'Reviewer approved.',
+          reasoning: 'Reviewed the implementation.',
+          failingSignals: [],
+          recordedAt: '2026-07-04T10:07:21.557Z',
+        }],
+      }),
+    ])
+
+    const result = repairCompletionProofCriteriaInQueue(q, '2026-07-06T18:50:00.000Z')
+
+    expect(result.changed).toBe(false)
+    expect(q.tasks[0]?.acceptanceCriteria[0]?.met).toBe(false)
+  })
+})
+
 describe('repairStaleBlockersForProject', () => {
   it('repairs system-local task state without creating project-local Guildhall state', () => {
     const previousConfigDir = process.env.GUILDHALL_CONFIG_DIR
@@ -422,6 +486,93 @@ describe('repairStaleBlockersForProject', () => {
       expect(raw.tasks[0]).not.toHaveProperty('notes')
       expect(raw.tasks[0]).not.toHaveProperty('escalations')
       expect(raw.tasks[0]).not.toHaveProperty('openEscalations')
+    } finally {
+      if (previousConfigDir === undefined) delete process.env.GUILDHALL_CONFIG_DIR
+      else process.env.GUILDHALL_CONFIG_DIR = previousConfigDir
+      rmSync(projectRoot, { recursive: true, force: true })
+      rmSync(systemDir, { recursive: true, force: true })
+    }
+  })
+
+  it('persists completed proof-criteria reconciliation in system-local task state', () => {
+    const previousConfigDir = process.env.GUILDHALL_CONFIG_DIR
+    const systemDir = mkdtempSync(join(tmpdir(), 'guildhall-proof-system-'))
+    const projectRoot = mkdtempSync(join(tmpdir(), 'guildhall-proof-project-'))
+    process.env.GUILDHALL_CONFIG_DIR = systemDir
+    try {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      mkdirSync(dirname(tasksPath), { recursive: true })
+      writeFileSync(tasksPath, `${JSON.stringify(queue([
+        task({
+          id: 'task-proof',
+          status: 'done',
+          acceptanceCriteria: [
+            { id: 'ac1', description: 'Fixture writes an artifact.', verifiedBy: 'automated', command: 'pnpm review', met: false },
+          ],
+          reviewVerdicts: [{
+            verdict: 'approve',
+            reviewerPath: 'llm',
+            reason: 'Reviewer approved.',
+            reasoning: 'code-review:acceptance-criteria-met: yes — all acceptance criteria are satisfied.',
+            failingSignals: [],
+            recordedAt: '2026-07-04T10:07:21.557Z',
+          }],
+        }),
+      ]), null, 2)}\n`, 'utf8')
+
+      const result = repairCompletionProofCriteriaForProject(projectRoot)
+
+      expect(result.changed).toBe(true)
+      const raw = JSON.parse(readFileSync(tasksPath, 'utf8')) as TaskQueue
+      expect(raw.tasks[0]?.acceptanceCriteria[0]?.met).toBe(true)
+      expect(raw.tasks[0]).not.toHaveProperty('notes')
+    } finally {
+      if (previousConfigDir === undefined) delete process.env.GUILDHALL_CONFIG_DIR
+      else process.env.GUILDHALL_CONFIG_DIR = previousConfigDir
+      rmSync(projectRoot, { recursive: true, force: true })
+      rmSync(systemDir, { recursive: true, force: true })
+    }
+  })
+
+  it('persists completed proof-criteria reconciliation from sidecar review evidence', async () => {
+    const previousConfigDir = process.env.GUILDHALL_CONFIG_DIR
+    const systemDir = mkdtempSync(join(tmpdir(), 'guildhall-proof-sidecar-system-'))
+    const projectRoot = mkdtempSync(join(tmpdir(), 'guildhall-proof-sidecar-project-'))
+    process.env.GUILDHALL_CONFIG_DIR = systemDir
+    try {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      mkdirSync(dirname(tasksPath), { recursive: true })
+      writeFileSync(tasksPath, `${JSON.stringify(queue([
+        task({
+          id: 'task-proof',
+          status: 'done',
+          acceptanceCriteria: [
+            { id: 'ac1', description: 'Fixture writes an artifact.', verifiedBy: 'automated', command: 'pnpm review', met: false },
+          ],
+          reviewVerdicts: [],
+        }),
+      ]), null, 2)}\n`, 'utf8')
+      await appendTaskEvidence(projectRoot, 'task-proof', {
+        id: 'review-task-proof-sidecar',
+        kind: 'review_verdict',
+        recordedAt: '2026-07-04T10:07:21.557Z',
+        payload: {
+          verdict: 'approve',
+          reviewerPath: 'llm',
+          reason: 'Reviewer approved.',
+          reasoning: 'code-review:acceptance-criteria-met: yes — all acceptance criteria are satisfied.',
+          failingSignals: [],
+          recordedAt: '2026-07-04T10:07:21.557Z',
+        },
+      })
+
+      const result = await repairCompletionProofCriteriaForProjectWithEvidence(projectRoot)
+
+      expect(result.changed).toBe(true)
+      const raw = JSON.parse(readFileSync(tasksPath, 'utf8')) as TaskQueue
+      expect(raw.tasks[0]?.acceptanceCriteria[0]?.met).toBe(true)
+      expect(raw.tasks[0]).not.toHaveProperty('reviewVerdicts')
+      expect(await readTaskEvidence(projectRoot, 'task-proof', { kind: 'review_verdict' })).toHaveLength(1)
     } finally {
       if (previousConfigDir === undefined) delete process.env.GUILDHALL_CONFIG_DIR
       else process.env.GUILDHALL_CONFIG_DIR = previousConfigDir
