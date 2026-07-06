@@ -1603,6 +1603,7 @@ function proofContractsForNodes(
   return flattenNodes(roots)
     .filter(node =>
       (node.kind === 'work' || node.kind === 'feature' || node.kind === 'slice') &&
+      node.visibility.countInProjectTotals !== false &&
       node.maturity !== 'deferred' &&
       (node.refs.taskIds?.length ?? 0) > 0,
     )

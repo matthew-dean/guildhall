@@ -24306,3 +24306,59 @@ Project Map roadmap.
     overlap. This slice prevents stale inferred closed scopes from confusing
     the owner-facing roadmap; it does not yet prove a full re-intake or that all
     duplicate task trees are eliminated.
+
+2026-07-06T23:27:00Z - Hid internal split steps from owner-facing Proof
+contract rows on Project Map.
+
+- Work id: `codex:nh-proof-contract-visible-work-filter`.
+- User job: a project owner opening Narrative Harness Map should see the
+  visible proof contract for each owner-level work item, not internal child
+  steps that were created to make a task runnable.
+- Root-cause classification:
+  - Task hierarchy/dependency/proof modeling problem: internal split steps are
+    valid execution structure but are not owner-facing proof contracts.
+  - UI communication/orientation problem: Project Map was using the flattened
+    spine nodes without respecting visibility, so hidden implementation steps
+    looked like top-level proof obligations.
+  - Bad project data produced by an earlier Guildhall bug: Narrative Harness
+    still contains older internal split-step records under the corrected Stage
+    1 scope, so the read model must honor visibility until stale data is
+    retired through re-intake or migration.
+- Fix:
+  - `buildProjectOrientationSpine()` now excludes nodes whose visibility does
+    not count in project totals from exported `proofContracts`.
+  - Internal steps remain in the spine tree for execution/trace context; they
+    are just not promoted into the owner-facing Proof contract section.
+- Verification:
+  - `./node_modules/.bin/vitest run
+    src/runtime/__tests__/project-orientation-spine.test.ts --reporter=dot`
+    passed 51 tests.
+  - `./node_modules/.bin/vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts --reporter=dot`
+    passed 45 tests.
+  - `node scripts/contract-touch-detector.mjs` passed.
+  - Direct build passed:
+    `node packages/ui/scripts/generate-styles.mjs &&
+    ../../node_modules/.bin/tsc -p packages/ui/tsconfig.json &&
+    node ./build.mjs`.
+  - Installed-app proof: `node ./scripts/dev-install.mjs`; `guildhall stop`;
+    `guildhall start`; `/api/stale-server` returned `stale:false` for PID
+    `40540` from `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+  - Installed API proof: `/api/project/spine?projectId=narrative-harness`
+    returned 11 proof contracts. Visible owner-level proof rows included
+    `Define fixture, expected-record, prototype-run, and evaluation schemas.`,
+    `Implement a no-UI runner that builds a packet from fixture records.`,
+    world-state continuity review, spatial/geographic continuity review, and
+    DeepInfra model proof. The response did not include internal child-step
+    labels `Shape fixture and expected-record ground truth`,
+    `Capture prototype run and evaluation records`, or `Load fixture inputs`.
+  - Browser proof: the in-app browser bridge timed out during readback, so
+    local Playwright verified rendered
+    `http://localhost:7777/projects/narrative-harness/map` at `1440x1100`.
+    The rendered page contained owner-level proof rows and did not contain the
+    internal child-step labels above.
+- Required follow-up:
+  - This fixes the owner-facing proof contract projection, not the deeper
+    Narrative Harness task duplication/re-intake problem. Continue with schema
+    and scope simplification before declaring the MVP/current scope fully
+    trustworthy.

@@ -1121,6 +1121,7 @@ describe('buildProjectOrientationSpine', () => {
 
     expect(spine.nodes['work:feature-a']?.visibility).toEqual({ kind: 'primary', countInProjectTotals: true })
     expect(spine.nodes['work:feature-a-proof']?.visibility).toEqual({ kind: 'internal_step', countInProjectTotals: false })
+    expect(spine.proofContracts.map(contract => contract.title)).toEqual(['Feature A'])
   })
 
   it('does not turn completed scoped work back into proof-needed gaps', () => {
