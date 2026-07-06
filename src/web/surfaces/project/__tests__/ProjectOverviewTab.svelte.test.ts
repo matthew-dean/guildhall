@@ -250,7 +250,63 @@ describe('ProjectOverviewTab', () => {
     expect(screen.queryByText('Not complete')).not.toBeInTheDocument()
     expect(screen.getByText('Near-term proof scope')).toBeInTheDocument()
     expect(screen.getByText(/14 \/ 14 done/)).toBeInTheDocument()
-    expect(screen.getByText(/main has 6 local commits not pushed to origin\/main/)).toBeInTheDocument()
+    expect(screen.getAllByText(/main has 6 local commits not pushed to origin\/main/).length).toBeGreaterThan(0)
+  })
+
+  it('keeps Overview signals scoped to release git state when project-wide git work is unrelated', () => {
+    render(ProjectOverviewTab, {
+      detail: {
+        id: 'narrative-harness',
+        name: 'Narrative Harness',
+        path: '/Users/matthew/git/oss/narrative-harness',
+        tasks: [],
+        gitStory: {
+          ready: false,
+          state: 'no_upstream',
+          blockers: [{
+            id: 'task:later-work',
+            label: 'Later work',
+            state: 'no_upstream',
+            reason: 'guildhall/task-later-work has no upstream branch.',
+            nextAction: 'Set an upstream branch or open a PR for this branch.',
+          }],
+          snapshots: [],
+        },
+        releaseReadiness: {
+          release: { id: 'stage-1', label: 'Stage 1', kind: 'release', state: 'active', source: 'release_plan' },
+          scope: { id: 'stage-1', label: 'Stage 1', kind: 'release', state: 'active', source: 'release_plan' },
+          ready: true,
+          totals: {
+            tasks: 11,
+            done: 11,
+            unfinishedCount: 0,
+            humanBlockingCount: 0,
+            gitStoryBlockingCount: 0,
+            dirtyCheckoutBlockingCount: 0,
+          },
+          gitStory: {
+            ready: true,
+            state: 'clean',
+            blockers: [],
+            snapshots: [{ repoId: 'narrative-harness', repoLabel: 'Narrative Harness', state: 'clean' }],
+          },
+        },
+      },
+      inboxLoaded: true,
+      inboxItems: [],
+      projectTicker: {
+        label: 'Run finished',
+        actorLabel: 'Guildhall',
+        message: 'No actionable tasks remain.',
+        tone: 'idle',
+        pulse: false,
+      },
+      activeProjectId: 'narrative-harness',
+    })
+
+    expect(screen.getByText('Complete')).toBeInTheDocument()
+    expect(screen.getByText('Repository clear')).toBeInTheDocument()
+    expect(screen.queryByText((content) => content.includes('guildhall/task-later-work has no upstream branch'))).not.toBeInTheDocument()
   })
 
   it('labels proof waits as waiting instead of blocking when scoped blocked count is zero', () => {

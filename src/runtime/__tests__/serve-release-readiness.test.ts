@@ -1022,6 +1022,114 @@ describe('GET /api/project/release-readiness', () => {
     })
   })
 
+  it('accepts semantically matching review proof for inferred Narrative Harness proof paths', async () => {
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: 'headless-mvp',
+      releases: [{
+        id: 'headless-mvp',
+        label: 'Headless MVP',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-current'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [
+        makeTask({
+          id: 'task-current',
+          title: 'Generate a CLI-first story synopsis, outline, character/voice records, and one chapter draft from the selected model',
+          status: 'done',
+          releaseIds: ['headless-mvp'],
+          acceptanceCriteria: [
+            {
+              id: 'synopsis-to-outline-chain',
+              description: 'The task can generate or load a synopsis, outline, character/voice records, and world-state facts before drafting.',
+              verifiedBy: 'review',
+              met: true,
+            },
+            {
+              id: 'chapter-draft-command',
+              description: 'A pnpm script or CLI command drafts one chapter from the selected model using the bounded context packet and review plan.',
+              verifiedBy: 'review',
+              met: true,
+            },
+            {
+              id: 'author-voice-preservation',
+              description: 'The draft proof records whether the chapter follows the requested author voice, genre, audience, and character voices.',
+              verifiedBy: 'review',
+              met: true,
+            },
+          ],
+          proofPaths: [{
+            kind: 'review',
+            source: 'inferred',
+            expectedEvidence: [
+              'The task can generate or load a synopsis, outline, character/voice records, and world-state facts before drafting.',
+              'A pnpm script or CLI command drafts one chapter from the selected model using the bounded context packet and review plan.',
+              'The draft proof records whether the chapter follows the requested author voice, genre, audience, and character voices.',
+            ],
+          }],
+          doneSummaryBundle: {
+            taskId: 'task-current',
+            status: 'done',
+            completedAt: '2026-07-04T08:50:00.000Z',
+            summary: {
+              journey: 'Worker completed the chapter generation proof.',
+              decision: 'Task finished as done.',
+              evidence: 'pnpm build passed and tests/generate.test.mjs passed.',
+              learningCandidates: [],
+              openResidue: 'No open residue recorded.',
+            },
+            retention: {
+              transcriptPrimaryArtifact: false,
+              compactedFullTranscript: false,
+              fullEvidenceAvailable: true,
+            },
+            evidenceRefs: [],
+            createdAt: '2026-07-04T08:50:00.000Z',
+            createdBy: 'orchestrator',
+          },
+          gateResults: [{
+            gateId: 'pnpm-build',
+            type: 'hard',
+            passed: true,
+            output: 'pnpm build passed',
+            checkedAt: '2026-07-04T08:50:00.000Z',
+          }],
+          reviewVerdicts: [{
+            verdict: 'approve',
+            reviewerPath: 'llm',
+            reason: 'LLM reviewer approved',
+            reasoning: [
+              'The CLI tool generates a valid story output JSON containing synopsis, outline, character/voice records, world-state facts, and a chapter draft.',
+              'The generate:story pnpm script invokes src/cli/generate.ts and drafts one chapter from the selected model using the bounded context packet and review plan.',
+              'Regression test tests/generate.test.mjs verifies that the generated chapter follows the requested author voice, genre, audience, and character voices.',
+            ].join('\n'),
+            failingSignals: [],
+            recordedAt: '2026-07-04T08:50:00.000Z',
+          }],
+        } as Partial<Task>),
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await approveDesignSystem(app)
+    await commitAndPush('semantic review proof release readiness')
+
+    const readinessRes = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
+    const readiness = await readinessRes.json() as any
+
+    expect(readiness.ready).toBe(true)
+    expect(readiness.totals).toMatchObject({
+      tasks: 1,
+      done: 1,
+      proofEvidenceBlockingCount: 0,
+    })
+    expect(readiness.proofMissingDoneTasks).toEqual([])
+  })
+
   it('does not let stale escalations block work that has later approved review proof', async () => {
     await seedQueue({
       version: 1,

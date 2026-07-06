@@ -59,6 +59,7 @@ export interface BuildInboxOptions {
   projectPath: string
   projectStateDir?: string
   snapshotOptions?: Omit<BuildSnapshotOptions, 'projectPath'>
+  taskStateOverride?: unknown
 }
 
 /**
@@ -389,7 +390,7 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
   }
 
   const tasksPath = projectStatePathWithRoot(projectPath, 'TASKS.json', projectStateDir)
-  const rawTaskState = readJsonSafe(tasksPath)
+  const rawTaskState = opts.taskStateOverride ?? readJsonSafe(tasksPath)
   const tasks = tasksArray(rawTaskState)
   const executionTasks = scopeTasks(tasks, selectedInboxScope(rawTaskState, tasks))
   const workspaceImportTask = tasks.find(t => t?.id === 'task-workspace-import')

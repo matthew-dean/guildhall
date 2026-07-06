@@ -1836,6 +1836,17 @@ async function buildProjectInboxSnapshot(input: {
   } catch {
     /* never let proof-criteria repair break an inbox read */
   }
+  let inboxTaskStateOverride: TaskQueue | null = null
+  try {
+    const rawQueue = await readTaskQueueFileNormalized(projectTasksPath(input.projectPath))
+    const effectiveTasks = await Promise.all(rawQueue.tasks.map(task => buildEffectiveTask(input.projectPath, task as Task)))
+    inboxTaskStateOverride = {
+      ...rawQueue,
+      tasks: effectiveTasks as Task[],
+    }
+  } catch {
+    /* fall back to raw inbox state rather than breaking the endpoint */
+  }
   const runtimeBlocker = projectRuntimeCompatibilityBlocker({ projectRoot: input.projectPath })
   if (runtimeBlocker) {
     return {
@@ -1859,7 +1870,10 @@ async function buildProjectInboxSnapshot(input: {
   const computedItems = [
     ...await buildProjectMigrationAdvisories(input.projectPath),
     ...buildProjectUnderstandingAdvisories(input.projectPath),
-    ...buildInbox({ projectPath: input.projectPath }),
+    ...buildInbox({
+      projectPath: input.projectPath,
+      ...(inboxTaskStateOverride ? { taskStateOverride: inboxTaskStateOverride } : {}),
+    }),
   ].filter(isAttentionOwnedInboxItem)
   const attention = reconcileAttentionRecords({
     projectPath: input.projectPath,

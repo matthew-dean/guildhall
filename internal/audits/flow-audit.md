@@ -24018,6 +24018,98 @@ Narrative Harness task after proof gates rejected it.
     `recorded-hard-gates` note. That is a separate proof-contract/data-model
     problem, not the stale proof-packet recovery loop.
 
+2026-07-06T22:34:00Z - Completed Narrative Harness Stage 1 by aligning
+semantic proof, inbox, and Overview signals to the selected scope.
+
+- Work id: `codex:narrative-harness-stage-1-proof-communication-2026-07-06`.
+- User job: when Narrative Harness Stage 1 is complete, Guildhall should say so
+  consistently: release readiness, Overview, Needs You, Signals, and repository
+  follow-up should all agree about the selected scope instead of mixing
+  project-wide residue into the current release.
+- Root-cause classification:
+  - `data model/schema problem`: inferred review proof paths used acceptance
+    criteria sentences as expected evidence, but proof matching required exact
+    sentence repetition instead of matching the meaningful terms in recorded
+    proof/review evidence.
+  - `project structure/scope/release modeling problem`: Overview Signals used
+    project-wide Git Story blockers even when the selected release Git Story
+    was clean.
+  - `task hierarchy/dependency/proof modeling problem`: proof gates rejected a
+    fresh worker/reviewer proof packet that covered the criteria without
+    parroting the generated expected-evidence strings.
+  - `UI communication/orientation problem`: Overview could show
+    `Stage 1: Headless Drafting And Evaluation MVP is complete.` while Signals
+    still showed stale proof and unrelated repository follow-up cards.
+  - `bad project data produced by an earlier Guildhall bug`: raw task records
+    still carried stale proof flags that the effective task projection had
+    already reconciled.
+- Fix:
+  - `proof-health` now keeps exact matching, keeps blocking generic build proof
+    for DeepInfra/provider telemetry claims, and adds a small semantic token
+    matcher so inferred review proof paths pass when recorded evidence covers
+    the meaningful terms.
+  - `/api/project/inbox` now builds inbox items from the effective task queue
+    projection while preserving raw release metadata, so Needs You and Overview
+    do not resurrect stale raw task proof gaps.
+  - Overview Signals now uses the selected release/current-scope Git Story when
+    release readiness is present, instead of surfacing unrelated project-wide
+    worktree blockers on the first screen.
+- Contract Touch Decision:
+  - Work id: `codex:narrative-harness-stage-1-proof-communication-2026-07-06`.
+  - Touched contracts: review proof-path matching semantics; project inbox
+    task-state source; Overview Signals repository-follow-up scope.
+  - Contracts considered but not touched: persisted task schema, release
+    schema, Git Story payload schema, proof path persisted schema, project map
+    schema, workspace-import schema.
+  - Required follow-up: continue using NH and Looma + Knit to prove the same
+    effective-state/source-of-truth rules on Map, Work, Release, and future
+    intake regeneration; do not mark the overall structural-trust goal complete
+    from this slice alone.
+  - Proof required: focused negative/positive semantic proof tests, inbox
+    effective-state regression, Overview scoped-git regression, contract
+    detector, build/install proof, API proof, browser proof.
+  - Proof provided: tests and installed/browser evidence listed below.
+  - Apply/revert behavior: revert the semantic matcher changes in
+    `proof-health`, the `taskStateOverride` inbox path, the serve-layer
+    effective queue handoff, and the Overview Signals source change; no data
+    rollback is required.
+- Verification:
+  - Focused tests passed for semantic NH review proof, generic DeepInfra build
+    proof staying blocked, inbox proof-reconciliation using effective task
+    state, and Overview Signals scoping repository follow-up to release Git
+    state.
+  - `node scripts/contract-touch-detector.mjs` was run and required this
+    contract decision before completion.
+  - Direct build passed:
+    `node packages/ui/scripts/generate-styles.mjs &&
+    ./node_modules/.bin/tsc -p packages/ui/tsconfig.json && node ./build.mjs`.
+  - Installed app proof: `node ./scripts/dev-install.mjs`; `guildhall stop`;
+    `guildhall start`; `/api/stale-server` returned `stale:false` for PID
+    `77062`.
+  - Live task proof: after restart, `POST
+    /api/project/start?projectId=narrative-harness` advanced
+    `task-generate-a-cli-first-story-synopsis-outline-character-voice-records-and-one-chapter-draft-from-the-selected-model`
+    to `status:"done"`, `assignedTo:null`, `completedAt:
+    "2026-07-06T22:22:49.365Z"`, with `recorded-hard-gates` note
+    `Guildhall completed this gate check from recorded passing hard gates:
+    pnpm-build.`
+  - Repository follow-up proof: Narrative Harness `main` was clean and pushed
+    to `origin/main`; release readiness then returned `ready:true`,
+    `blockingCount:0`, `proofEvidenceBlockingCount:0`,
+    `gitStoryBlockingCount:0`, `done:11`, and `proofMissingDoneTasks:[]`.
+  - API communication proof: `/api/project/inbox?projectId=narrative-harness`
+    returned only the low-priority `lever_questions` item; no
+    `proof_reconciliation` or scoped repository follow-up remained.
+  - Browser proof at `/projects/narrative-harness/overview`: visible text
+    showed `Stage 1: Headless Drafting And Evaluation MVP is complete.`,
+    `11 / 11 done`, `11 work items in view · 0 missing verification · 0
+    blocked · 11 verified · 32 deferred`, `The selected scope is complete.`,
+    and no `Review stale proof records` text. A remaining follow-up before the
+    final UI fix was project-wide Git Story leakage and is covered by the
+    Overview scoped-git regression; the final browser reconnect timed out after
+    reinstall, so final no-repository-leak proof is covered by installed API
+    output plus the component regression.
+
 2026-06-15T23:52:00Z - Completed the Project Orientation Spine cross-route
 implementation and installed-app audit.
 

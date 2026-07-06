@@ -564,6 +564,78 @@ describe('buildInbox', () => {
     expect(items.some(i => i.kind === 'proof_reconciliation')).toBe(false)
   })
 
+  it('proof_reconciliation: uses effective task state override instead of stale raw task proof', async () => {
+    await writeCompleteBootstrap()
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
+    const staleQueue = {
+      version: 1,
+      lastUpdated: '2026-07-06T00:00:00.000Z',
+      selectedReleaseId: 'current-scope',
+      releases: [{
+        id: 'current-scope',
+        label: 'Current scope',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-current'],
+        deferredNodeIds: [],
+      }],
+      tasks: [{
+        id: 'task-current',
+        title: 'Draft chapter in author voice',
+        status: 'done',
+        releaseIds: ['current-scope'],
+        acceptanceCriteria: [
+          { id: 'voice', description: 'Author voice proof is attached.', met: false },
+        ],
+      }],
+    }
+    await writeJson('.guildhall/TASKS.json', staleQueue)
+
+    const rawItems = buildInboxWithProviderSetup()
+    expect(rawItems.some(i => i.kind === 'proof_reconciliation')).toBe(true)
+
+    const effectiveItems = buildInbox({
+      projectPath: tmpDir,
+      projectStateDir,
+      taskStateOverride: {
+        ...staleQueue,
+        tasks: [{
+          ...staleQueue.tasks[0],
+          acceptanceCriteria: [
+            { id: 'voice', description: 'Author voice proof is attached.', met: true },
+          ],
+          doneSummaryBundle: {
+            taskId: 'task-current',
+            status: 'done',
+            completedAt: '2026-07-06T00:00:00.000Z',
+            summary: {
+              journey: 'Worker completed the proof.',
+              decision: 'Task finished as done.',
+              evidence: 'Author voice proof is attached.',
+              learningCandidates: [],
+              openResidue: 'No open residue recorded.',
+            },
+            retention: {
+              transcriptPrimaryArtifact: false,
+              compactedFullTranscript: false,
+              fullEvidenceAvailable: true,
+            },
+            evidenceRefs: [],
+            createdAt: '2026-07-06T00:00:00.000Z',
+            createdBy: 'test',
+          },
+        }],
+      },
+      snapshotOptions: {
+        readProviders: () => ({ providers: { 'openai-api': { apiKey: 'sk-test' } } }),
+        detectOauthProviders: () => ({ claude: false, codex: false }),
+      },
+    })
+
+    expect(effectiveItems.some(i => i.kind === 'proof_reconciliation')).toBe(false)
+  })
+
   it('does not expose project check-ins or pressure-test questions through project inbox', async () => {
     await writeCompleteBootstrap()
     await writeJson('.guildhall/workspace-goals.json', {

@@ -367,7 +367,8 @@
       })
     }
 
-    const gitBlockers = detail.gitStory?.blockers ?? []
+    const scopedGitStory = releaseReadiness?.gitStory ?? detail.gitStory
+    const gitBlockers = releaseReadiness ? releaseGitBlockers : (detail.gitStory?.blockers ?? [])
     if (gitBlockers.length > 0) {
       items.push({
         label: 'Repository follow-up',
@@ -375,7 +376,7 @@
         tone: 'warn',
         href: currentProjectHref('/release', activeProjectId),
       })
-    } else if (detail.gitStory?.ready) {
+    } else if (scopedGitStory?.ready) {
       items.push({
         label: 'Repository clear',
         detail: 'No repository follow-ups are currently reported.',

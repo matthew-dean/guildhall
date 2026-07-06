@@ -111,6 +111,78 @@ function normalizedText(value: unknown): string {
   return typeof value === 'string' ? value.trim().replace(/\s+/g, ' ') : ''
 }
 
+const evidenceStopWords = new Set([
+  'about',
+  'after',
+  'before',
+  'bounded',
+  'checking',
+  'concrete',
+  'could',
+  'draft',
+  'during',
+  'evidence',
+  'exists',
+  'first',
+  'from',
+  'have',
+  'into',
+  'local',
+  'needed',
+  'path',
+  'proof',
+  'real',
+  'records',
+  'required',
+  'review',
+  'should',
+  'task',
+  'that',
+  'this',
+  'using',
+  'whether',
+  'with',
+])
+
+function evidenceTokens(value: string): string[] {
+  return normalizedText(value)
+    .toLowerCase()
+    .split(/[^a-z0-9]+/i)
+    .map(token => token.trim())
+    .filter(token => token.length >= 4 && !evidenceStopWords.has(token))
+}
+
+function tokenStem(token: string): string {
+  if (token.length > 6 && token.endsWith('ing')) return token.slice(0, -3)
+  if (token.length > 5 && token.endsWith('ed')) return token.slice(0, -2)
+  if (token.length > 5 && token.endsWith('es')) return token.slice(0, -2)
+  if (token.length > 4 && token.endsWith('s')) return token.slice(0, -1)
+  return token
+}
+
+function tokenCovered(expected: string, evidence: readonly string[]): boolean {
+  const expectedStem = tokenStem(expected)
+  return evidence.some(candidate => {
+    const candidateStem = tokenStem(candidate)
+    return candidate === expected ||
+      candidateStem === expectedStem ||
+      (expected.length >= 5 && candidate.startsWith(expected)) ||
+      (candidate.length >= 5 && expected.startsWith(candidate))
+  })
+}
+
+function expectedEvidenceSemanticallySatisfied(expected: string, evidenceText: string): boolean {
+  const expectedTokens = Array.from(new Set(evidenceTokens(expected)))
+  if (expectedTokens.length === 0) return false
+  const completionTokens = Array.from(new Set(evidenceTokens(evidenceText)))
+  if (completionTokens.length === 0) return false
+  const covered = expectedTokens.filter(token => tokenCovered(token, completionTokens)).length
+  const required = expectedTokens.length <= 4
+    ? expectedTokens.length
+    : Math.max(3, Math.ceil(expectedTokens.length * 0.55))
+  return covered >= required
+}
+
 function passedGateResultsForTask(task: unknown): Array<Record<string, unknown>> {
   const gateResults = Array.isArray((task as { gateResults?: unknown } | null)?.gateResults)
     ? (task as { gateResults: unknown[] }).gateResults
@@ -179,7 +251,10 @@ function expectedEvidenceStringsSatisfied(expectedEvidence: unknown[], task: unk
   if (expectedStrings.length === 0) return true
   const evidenceText = completionEvidenceTextForTask(task)
   if (!evidenceText) return false
-  return expectedStrings.every(expected => evidenceText.includes(expected))
+  return expectedStrings.every(expected =>
+    evidenceText.includes(expected) ||
+    expectedEvidenceSemanticallySatisfied(expected, evidenceText),
+  )
 }
 
 function requiresProviderProofText(value: string): boolean {
