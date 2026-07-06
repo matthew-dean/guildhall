@@ -15671,6 +15671,53 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-07-06T18:18:00Z - Tightened selected-scope proof truth for Narrative
+Harness current release.
+
+- Work id: `codex:nh-proof-relevance-2026-07-06`.
+- User job: a project owner should not see a selected/current release reported
+  as complete merely because task checkboxes and generic completion summaries
+  say done. If command-backed proof is required, Guildhall must show missing
+  proof until the matching command/gate evidence exists, and every surface must
+  agree.
+- Root cause classification:
+  - `task hierarchy/dependency/proof modeling problem`: done tasks with
+    acceptance criteria could be treated as complete from generic recorded
+    completion proof even when the task proof path required a specific command.
+  - `UI communication/orientation problem`: the orientation spine progress
+    counted those tasks as proven while release readiness and Inbox needed to
+    block on proof.
+  - `bad project data produced by an earlier Guildhall bug`: Narrative Harness
+    had completed rows whose done summaries cited unrelated hygiene proof such
+    as `content.no-truncated-data` instead of the task's command-backed proof.
+- Fix:
+  - `taskDoneButProofMissing()` now requires completed tasks with explicit
+    acceptance criteria to have recorded proof, and command proof paths require
+    a passed gate result that actually references the command.
+  - `project-orientation-spine` now reuses the shared proof-health verdict so
+    `progress.proven` cannot drift from release readiness.
+- Installed-app proof:
+  - `pnpm build`; `pnpm dev:install`; `guildhall stop && guildhall start`.
+  - `/api/stale-server` returned `stale:false` for PID `87167`.
+  - `/api/project?projectId=narrative-harness&surface=work` returned
+    `startReadiness.code:"proof_evidence_missing"`, run control label
+    `Needs proof`, `startEnabled:false`, headline `Near-term proof scope is
+    waiting on proof.`, `progress.done:14`, `progress.proven:12`, and
+    `progress.deferred:29`.
+  - `/api/project/release-readiness?projectId=narrative-harness` returned
+    `ready:false`, `proofEvidenceBlockingCount:2`, and proof-missing tasks:
+    `task-import-1c4eedx` plus
+    `task-generate-a-cli-first-story-synopsis-outline-character-voice-records-and-one-chapter-draft-from-the-selected-model`.
+  - `/api/project/inbox?projectId=narrative-harness` returned a
+    `proof_reconciliation` item pointing at `task-import-1c4eedx`.
+- Verification:
+  - `CI=true pnpm exec vitest run src/runtime/__tests__/serve-release-readiness.test.ts`
+    passed `41` tests.
+  - `CI=true pnpm exec vitest run src/runtime/__tests__/project-orientation-spine.test.ts -t "proof|proven|completed scoped work|planned proof"`
+    passed `10` focused tests.
+
+source: codex:nh-proof-relevance-2026-07-06
+
 2026-07-06T15:18:00Z - Reconciled Narrative Harness MVP completion across
 release readiness, git story, start readiness, and project map communication.
 

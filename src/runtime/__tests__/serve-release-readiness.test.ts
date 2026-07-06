@@ -688,6 +688,162 @@ describe('GET /api/project/release-readiness', () => {
     expect(readiness.proofMissingDoneTasks).toEqual([])
   })
 
+  it('requires recorded proof before treating a completed selected-release task as release-ready', async () => {
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: 'headless-mvp',
+      releases: [{
+        id: 'headless-mvp',
+        label: 'Headless MVP',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-current'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [
+        makeTask({
+          id: 'task-current',
+          title: 'Generate the first chapter draft',
+          status: 'done',
+          releaseIds: ['headless-mvp'],
+          acceptanceCriteria: [{
+            id: 'chapter-draft-command',
+            description: 'A pnpm command drafts one chapter from the selected model.',
+            verifiedBy: 'automated',
+            met: true,
+          }],
+          gateResults: [],
+          reviewVerdicts: [],
+          notes: [],
+        } as Partial<Task>),
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await approveDesignSystem(app)
+    await commitAndPush('missing recorded proof release readiness')
+
+    const readinessRes = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
+    const readiness = await readinessRes.json() as any
+
+    expect(readiness.ready).toBe(false)
+    expect(readiness.totals).toMatchObject({
+      tasks: 1,
+      done: 1,
+      proofEvidenceBlockingCount: 1,
+    })
+    expect(readiness.proofMissingDoneTasks).toEqual([{ id: 'task-current', title: 'Generate the first chapter draft' }])
+
+    const projectRes = await app.fetch(new Request(projectUrl('/api/project')))
+    const project = await projectRes.json() as any
+    expect(project.startReadiness).toMatchObject({
+      canStart: false,
+      code: 'proof_evidence_missing',
+      focusTaskId: 'task-current',
+    })
+    expect(project.actionModel?.runControl).toMatchObject({
+      label: 'Needs proof',
+      startEnabled: false,
+    })
+  })
+
+  it('does not accept unrelated completion proof for a command-backed completed task', async () => {
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: 'headless-mvp',
+      releases: [{
+        id: 'headless-mvp',
+        label: 'Headless MVP',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-current'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [
+        makeTask({
+          id: 'task-current',
+          title: 'Generate the first chapter draft',
+          status: 'done',
+          releaseIds: ['headless-mvp'],
+          acceptanceCriteria: [{
+            id: 'chapter-draft-command',
+            description: 'A pnpm command drafts one chapter from the selected model.',
+            verifiedBy: 'automated',
+            command: 'pnpm test -- generate-first-chapter',
+            met: true,
+          }],
+          proofPaths: [{
+            kind: 'command',
+            command: 'pnpm test -- generate-first-chapter',
+            expectedEvidence: ['Chapter draft fixture is generated.'],
+            source: 'inferred',
+          }],
+          doneSummaryBundle: {
+            taskId: 'task-current',
+            status: 'done',
+            completedAt: '2026-07-04T08:50:00.000Z',
+            summary: {
+              journey: 'Worker touched the task.',
+              decision: 'Task finished as done.',
+              evidence: 'content.no-truncated-data passed.',
+              learningCandidates: [],
+              openResidue: 'No open residue recorded.',
+            },
+            retention: {
+              transcriptPrimaryArtifact: false,
+              compactedFullTranscript: false,
+              fullEvidenceAvailable: true,
+            },
+            evidenceRefs: [],
+            createdAt: '2026-07-04T08:50:00.000Z',
+            createdBy: 'orchestrator',
+          },
+          gateResults: [{
+            gateId: 'content.no-truncated-data',
+            type: 'soft',
+            passed: true,
+            output: 'no truncated semantic data detected',
+            checkedAt: '2026-07-04T08:50:00.000Z',
+          }],
+          reviewVerdicts: [{
+            verdict: 'approve',
+            reviewerPath: 'llm',
+            reason: 'LLM reviewer approved',
+            reasoning: 'All acceptance criteria are met.',
+            failingSignals: [],
+            recordedAt: '2026-07-04T08:50:00.000Z',
+          }],
+        } as Partial<Task>),
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await approveDesignSystem(app)
+    await commitAndPush('unrelated recorded proof release readiness')
+
+    const readinessRes = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
+    const readiness = await readinessRes.json() as any
+
+    expect(readiness.ready).toBe(false)
+    expect(readiness.totals).toMatchObject({
+      tasks: 1,
+      done: 1,
+      proofEvidenceBlockingCount: 1,
+    })
+    expect(readiness.proofMissingDoneTasks).toEqual([{ id: 'task-current', title: 'Generate the first chapter draft' }])
+
+    const projectRes = await app.fetch(new Request(projectUrl('/api/project')))
+    const project = await projectRes.json() as any
+    expect(project.orientationSpine?.summary?.progress).toMatchObject({
+      done: 1,
+      proven: 0,
+    })
+  })
+
   it('does not let stale escalations block work that has later approved review proof', async () => {
     await seedQueue({
       version: 1,

@@ -40,6 +40,13 @@ function unmetAcceptanceCriteriaCount(task: unknown): number {
   )).length
 }
 
+function hasAcceptanceCriteria(task: unknown): boolean {
+  const acceptanceCriteria = Array.isArray((task as { acceptanceCriteria?: unknown } | null)?.acceptanceCriteria)
+    ? (task as { acceptanceCriteria: unknown[] }).acceptanceCriteria
+    : []
+  return acceptanceCriteria.length > 0
+}
+
 function latestApprovingReviewReasoning(task: unknown): string | null {
   if (!task || typeof task !== 'object') return null
   const reviewVerdicts = Array.isArray((task as { reviewVerdicts?: unknown }).reviewVerdicts)
@@ -100,9 +107,43 @@ export function reconcileAcceptanceCriteriaFromCompletionProof(task: Task, now: 
   }
 }
 
-function proofPathMissingEvidence(proofPath: unknown): boolean {
+function normalizedText(value: unknown): string {
+  return typeof value === 'string' ? value.trim().replace(/\s+/g, ' ') : ''
+}
+
+function passedGateResultsForTask(task: unknown): Array<Record<string, unknown>> {
+  const gateResults = Array.isArray((task as { gateResults?: unknown } | null)?.gateResults)
+    ? (task as { gateResults: unknown[] }).gateResults
+    : []
+  return gateResults.filter((gate): gate is Record<string, unknown> =>
+    Boolean(
+      gate &&
+      typeof gate === 'object' &&
+      ((gate as { passed?: unknown }).passed === true || (gate as { status?: unknown }).status === 'passed'),
+    ),
+  )
+}
+
+function commandProofSatisfiedByTask(proofPath: Record<string, unknown>, task: unknown): boolean {
+  const command = normalizedText(proofPath.command)
+  if (!command) return false
+  return passedGateResultsForTask(task).some((gate) => {
+    const candidates = [
+      normalizedText(gate.command),
+      normalizedText(gate.gateId),
+      normalizedText(gate.name),
+      normalizedText(gate.output),
+    ].filter(Boolean)
+    return candidates.some(candidate => candidate === command || candidate.includes(command))
+  })
+}
+
+function proofPathMissingEvidence(proofPath: unknown, task: unknown): boolean {
   if (!proofPath || typeof proofPath !== 'object') return true
   const record = proofPath as Record<string, unknown>
+  if (record.kind === 'command' && normalizedText(record.command)) {
+    return !commandProofSatisfiedByTask(record, task)
+  }
   const expectedEvidence = Array.isArray(record.expectedEvidence) ? record.expectedEvidence : []
   const verificationRecords = Array.isArray(record.verificationRecords) ? record.verificationRecords : []
   const passedEvidence = new Set(
@@ -143,9 +184,20 @@ export function taskDoneButProofMissing(task: unknown): boolean {
   const handoffMissing = nonEmptyStringArray(handoffObject?.notVerified).length > 0 ||
     nonEmptyStringArray(handoffObject?.remainingRisks).length > 0
 
+  const commandProofMissing = proofPaths.some(proofPath =>
+    Boolean(
+      proofPath &&
+      typeof proofPath === 'object' &&
+      (proofPath as { kind?: unknown }).kind === 'command' &&
+      normalizedText((proofPath as { command?: unknown }).command) &&
+      proofPathMissingEvidence(proofPath, task),
+    ),
+  )
+  if (commandProofMissing) return true
   if (taskHasRecordedCompletionProof(task)) return false
+  if (hasAcceptanceCriteria(task) && !handoffVerified) return true
   if (proofPaths.length === 0) return handoffMissing && !handoffVerified
-  return proofPaths.some(proofPathMissingEvidence)
+  return proofPaths.some(proofPath => proofPathMissingEvidence(proofPath, task))
 }
 
 export function proofMissingDoneTasks(tasks: readonly Task[]): ProofMissingDoneTask[] {

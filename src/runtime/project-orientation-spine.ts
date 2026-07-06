@@ -6,6 +6,7 @@ import {
   type ProjectScope,
   type ProjectScopeProjection,
 } from './project-scope-projection.js'
+import { taskDoneButProofMissing } from './proof-health.js'
 import { recordedCompletionProofForTask } from './task-completion-proof.js'
 import { deriveTaskWorkVisibility } from './work-visibility.js'
 
@@ -793,6 +794,13 @@ function proofForTask(task: OrientationTaskInput): OrientationProofSummary {
   const verified = [...recorded.verified, ...(handoff?.verified ?? [])]
   const missing = [...(handoff?.notVerified ?? []), ...(handoff?.remainingRisks ?? [])].filter(Boolean)
   const plannedProof = Array.isArray(task.proofPaths) ? task.proofPaths.length : 0
+  if (task.status === 'done' && taskDoneButProofMissing(task as unknown)) {
+    return {
+      state: 'needed',
+      verified,
+      missing: missing.length > 0 ? missing : ['Required proof evidence has not been attached yet.'],
+    }
+  }
   if (plannedProof === 0 && verified.length === 0 && missing.length === 0) {
     return { state: 'needed', verified, missing: ['Verification evidence has not been attached yet.'] }
   }
