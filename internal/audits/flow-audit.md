@@ -16493,6 +16493,73 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-07-06T22:53:27Z - Fixed two cross-surface orientation/readiness drift
+bugs found while using Narrative Harness and Looma+Knit as calibration
+projects.
+
+- Work id: `codex:narrative-harness-looma-knit-state-agreement-2026-07-06`.
+- Root-cause classification:
+  - `task hierarchy/dependency/proof modeling problem`: `/api/project/spine`
+    built the project map from raw `TASKS.json`, while release readiness used
+    effective task state with external task evidence. Narrative Harness could
+    therefore show Stage 1 complete in readiness while Project Map still showed
+    proof-needed gaps for the same completed tasks.
+  - `project structure/scope/release modeling problem`: Looma+Knit Start
+    readiness counted raw/imported scope rows and hidden child rows as
+    current-scope shaping work, while release readiness and Project Map counted
+    the selected visible release scope. Overview said `12 current-scope tasks`
+    while the selected release had `8` blocking tasks.
+  - `UI communication/orientation problem`: the contradiction appeared in the
+    first Overview action, so the user could not trust the 100-foot view even
+    when the deeper release model was closer to truth.
+- Fix:
+  - `/api/project/spine` and release selection now build the spine from
+    `buildEffectiveTask(...)` projections, so stored task evidence, gate
+    results, review verdicts, and normalized terminal completion state are
+    included before the map decides proof state.
+  - import-draft Start readiness now uses the same orientation-selected scope
+    as the spine/release read model, then applies the same
+    `deriveTaskWorkVisibility(...).countInProjectTotals` filter before counting
+    shaping blockers.
+- Narrative Harness installed-app proof after reinstall:
+  - `/api/project/release-readiness?projectId=narrative-harness`: `ready:true`,
+    `tasks:11`, `done:11`, `blockingCount:0`,
+    `proofEvidenceBlockingCount:0`, no release blockers, no git blockers.
+  - `/api/project/spine?projectId=narrative-harness`: headline
+    `Stage 1 Headless Drafting And Evaluation MVP is complete.`, release
+    `state:ready`, `blockers:[]`, `proofGaps:[]`, `sourceHealth.gaps:0`,
+    and the DeepInfra, author-intent, synopsis/chapter, world-state, and
+    spatial/geographic proof tasks are included/proven in the selected scope.
+  - `/api/project?projectId=narrative-harness&surface=map`: start readiness
+    `all_terminal`, release readiness `ready:true`, orientation spine
+    `gaps:[]`, and selected release progress `11 done / 11 proven / 32
+    deferred`.
+- Looma+Knit installed-app proof after reinstall:
+  - Filesystem reality: `/Users/matthew/git/oss/looma-knit` is not a git repo,
+    while `looma/.git` and `knit/.git` exist. Release readiness inspected child
+    repos instead of failing the root with a generic not-a-repo claim.
+  - `/api/project?projectId=looma-knit&surface=overview`: Start/action model
+    now says `7 current-scope tasks still need source-backed shaping... Start
+    with "Unit tests: use-collections, use-presence, subdomain utils"`.
+  - `/api/project/release-readiness?projectId=looma-knit`: selected scope
+    `Stage 1 V1 Release Hardening`, `tasks:8`, `unfinishedCount:8`,
+    `incompleteBriefBlockingCount:7`, `humanBlockingCount:8`,
+    `dirtyCheckoutBlockingCount:1`, `gitStoryBlockingCount:2`.
+  - Interpretation: Overview's `7` shaping blockers plus the release model's
+    one waiting-review blocker now explain the `8` selected-release blockers
+    instead of showing `12` unrelated current-scope tasks.
+- Verification:
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/serve-release-readiness.test.ts src/runtime/__tests__/project-orientation-spine.test.ts --reporter=dot`
+    passed `95` tests.
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/serve-settings.test.ts src/runtime/__tests__/serve-release-readiness.test.ts --reporter=dot -t "keeps shaped import drafts|builds the project spine from effective task proof state"`
+    passed `2` focused regressions.
+  - Direct build/install proof: `node packages/ui/scripts/generate-styles.mjs`,
+    `./node_modules/.bin/tsc -p packages/ui/tsconfig.json`,
+    `node ./build.mjs`, `node ./scripts/dev-install.mjs`, `guildhall stop`,
+    `guildhall start`.
+  - `/api/stale-server` returned `stale:false` for PID `7845` from
+    `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+
 2026-07-06T22:00:00Z - Narrative Harness proof-recovery exposed persisted
 bootstrap-output truncation.
 

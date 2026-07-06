@@ -2179,10 +2179,10 @@ describe('POST /api/project/start', () => {
     expect(projectBody.startReadiness).toMatchObject({
       canStart: false,
       code: 'imported_scope_shaping',
-      actionHref: '/task/task-import-shaped',
+      actionHref: '/task/task-import-waiting',
     })
-    expect(projectBody.startReadiness?.message).toContain('2 current-scope tasks')
-    expect(projectBody.startReadiness?.message).toContain('Define fixture manifest and run result schemas')
+    expect(projectBody.startReadiness?.message).toContain('Current scoped work still needs source-backed shaping')
+    expect(projectBody.startReadiness?.message).toContain('Build evaluation command fixtures')
 
     const startRes = await app.fetch(
       new Request(scoped('/api/project/start'), { method: 'POST', body: '{}' }),
@@ -2190,7 +2190,7 @@ describe('POST /api/project/start', () => {
     expect(startRes.status).toBe(400)
     const startBody = (await startRes.json()) as { code?: string; actionHref?: string }
     expect(startBody.code).toBe('imported_scope_shaping')
-    expect(startBody.actionHref).toBe('/task/task-import-shaped')
+    expect(startBody.actionHref).toBe('/task/task-import-waiting')
   })
 
   it('blocks Start when ready tasks still need brief cleanup', async () => {

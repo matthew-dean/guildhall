@@ -6,7 +6,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { bootstrapWorkspace, slugify } from '@guildhall/config'
 import type { Task, TaskQueue } from '@guildhall/core'
-import { projectStatePath, writeProjectStateJsonAsync, writeProjectStateTextAsync } from '@guildhall/sessions'
+import { appendTaskEvidence, projectStatePath, writeProjectStateJsonAsync, writeProjectStateTextAsync } from '@guildhall/sessions'
 import { buildServeApp } from '../serve.js'
 
 // Integration tests for GET /api/project/release-readiness — the dashboard's
@@ -1864,6 +1864,67 @@ describe('GET /api/project/release-readiness', () => {
     })
     expect(readinessBody.totals.humanBlockingCount).toBe(2)
     expect(readinessBody.totals.unfinishedCount).toBe(3)
+  })
+
+  it('builds the project spine from effective task proof state, not stale raw task records', async () => {
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: 'headless-mvp',
+      releases: [{
+        id: 'headless-mvp',
+        label: 'Headless MVP',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-runner'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [
+        makeTask({
+          id: 'task-runner',
+          title: 'Implement no-UI runner.',
+          status: 'done',
+          releaseIds: ['headless-mvp'],
+          proofPaths: [{ expectedEvidence: ['runner-smoke'] }],
+          gateResults: [],
+          reviewVerdicts: [],
+        }),
+      ],
+    })
+    await appendTaskEvidence(tmpDir, 'task-runner', {
+      id: 'gate-task-runner-smoke',
+      kind: 'gate_result',
+      recordedAt: '2026-07-06T12:00:00.000Z',
+      payload: {
+        gateId: 'runner-smoke',
+        status: 'pass',
+        checkedAt: '2026-07-06T12:00:00.000Z',
+      },
+    })
+    await appendTaskEvidence(tmpDir, 'task-runner', {
+      id: 'review-task-runner-smoke',
+      kind: 'review_verdict',
+      recordedAt: '2026-07-06T12:01:00.000Z',
+      payload: {
+        reviewerPath: 'deterministic',
+        verdict: 'approve',
+        recordedAt: '2026-07-06T12:01:00.000Z',
+      },
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await approveDesignSystem(app)
+    await commitAndPush('runner proof landed')
+
+    const readiness = await (await app.fetch(new Request(projectUrl('/api/project/release-readiness')))).json() as any
+    const spineBody = await (await app.fetch(new Request(projectUrl('/api/project/spine')))).json() as any
+
+    expect(readiness.ready).toBe(true)
+    expect(readiness.totals.proofEvidenceBlockingCount).toBe(0)
+    expect(spineBody.spine.gaps.map((gap: any) => gap.kind)).not.toContain('proof_needed')
+    expect(spineBody.spine.release.blockers).toEqual([])
+    expect(spineBody.spine.nodes['work:task-runner']?.maturity).toBe('proven')
   })
 
   it('keeps imported source-recovery work visible as incomplete brief cleanup', async () => {

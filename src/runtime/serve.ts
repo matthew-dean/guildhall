@@ -4772,13 +4772,14 @@ export function buildServeApp(opts: ServeOptions = {}): {
         })
       }
       const rawQueue = await readTaskQueueFileNormalized(projectTasksPath(project.path))
+      const tasks = await Promise.all(rawQueue.tasks.map(task => buildEffectiveTask(project.path, task as Task)))
       const startReadiness = await projectStartReadinessForProject(project.path)
       const { orientationSpine: spine } = buildOrientationSpineWithScopedReleaseTruth({
         projectId: project.id,
         charter: inferProjectCharterFromExistingSources(project.path, project.config),
         selectedReleaseId: rawQueue.selectedReleaseId,
         releases: rawQueue.releases,
-        tasks: rawQueue.tasks as Task[],
+        tasks: tasks as unknown as Task[],
         runStatus: supervisor.get(project.id)?.status ?? 'stopped',
         startReadiness,
         workspaceImportDraft: await workspaceImportDraftForOrientation(project.path, startReadiness),
@@ -4822,12 +4823,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (!releaseId) return c.json({ error: 'releaseId is required.' }, 400)
       const startReadiness = await projectStartReadinessForProject(project.path)
       const queueBeforeSelection = await readTaskQueueFileNormalized(projectTasksPath(project.path))
+      const tasksBeforeSelection = await Promise.all(queueBeforeSelection.tasks.map(task => buildEffectiveTask(project.path, task as Task)))
       const { orientationSpine: selectableSpine } = buildOrientationSpineWithScopedReleaseTruth({
         projectId: project.id,
         charter: inferProjectCharterFromExistingSources(project.path, project.config),
         selectedReleaseId: queueBeforeSelection.selectedReleaseId,
         releases: queueBeforeSelection.releases,
-        tasks: queueBeforeSelection.tasks as Task[],
+        tasks: tasksBeforeSelection as unknown as Task[],
         runStatus: supervisor.get(project.id)?.status ?? 'stopped',
         startReadiness,
         workspaceImportDraft: await workspaceImportDraftForOrientation(project.path, startReadiness),
@@ -4835,12 +4837,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
       })
       const result = await writeSelectedReleaseId(projectTasksPath(project.path), releaseId, selectableSpine.releases as ProjectRelease[])
       const rawQueue = await readTaskQueueFileNormalized(projectTasksPath(project.path))
+      const tasks = await Promise.all(rawQueue.tasks.map(task => buildEffectiveTask(project.path, task as Task)))
       const { orientationSpine: spine } = buildOrientationSpineWithScopedReleaseTruth({
         projectId: project.id,
         charter: inferProjectCharterFromExistingSources(project.path, project.config),
         selectedReleaseId: rawQueue.selectedReleaseId,
         releases: rawQueue.releases,
-        tasks: rawQueue.tasks as Task[],
+        tasks: tasks as unknown as Task[],
         runStatus: supervisor.get(project.id)?.status ?? 'stopped',
         startReadiness,
         workspaceImportDraft: await workspaceImportDraftForOrientation(project.path, startReadiness),
@@ -6416,17 +6419,36 @@ export function buildServeApp(opts: ServeOptions = {}): {
     const tasksPath = projectTasksPath(projectPath)
     if (!existsSync(tasksPath)) return null
     const queue = await readTaskQueueFileNormalized(tasksPath)
-    const typedQueue = {
-      tasks: queue.tasks as Task[],
+    const effectiveTasks = await Promise.all((queue.tasks as Task[]).map(task => buildEffectiveTask(projectPath, task)))
+    const { orientationSpine } = buildOrientationSpineWithScopedReleaseTruth({
+      projectId: basename(projectPath),
+      charter: inferProjectCharterFromExistingSources(projectPath),
+      selectedReleaseId: queue.selectedReleaseId,
       releases: queue.releases,
-      ...(queue.selectedReleaseId ? { selectedReleaseId: queue.selectedReleaseId } : {}),
-    }
-    const selectedReleaseScope = selectedReleaseScopeFromQueueLike(typedQueue)
-    const tasks = tasksEligibleForScopeExecution(typedQueue.tasks, selectedReleaseScope)
+      tasks: effectiveTasks,
+      runStatus: 'stopped',
+      workspaceImportDraft: await workspaceImportDraftForOrientation(projectPath, null),
+      sourceRefs: projectOrientationSourceRefs(projectPath),
+    })
+    const selectedReleaseScope =
+      (orientationSpine.selectedTaskScope as OrientationScope | null | undefined) ??
+      (orientationSpine.scope as OrientationScope | null | undefined) ??
+      selectedReleaseScopeFromQueueLike({
+        tasks: effectiveTasks,
+        releases: queue.releases,
+        ...(queue.selectedReleaseId ? { selectedReleaseId: queue.selectedReleaseId } : {}),
+      })
+    const tasksById = new Map(effectiveTasks.map(task => [task.id, task] as const))
+    const tasks = tasksEligibleForScopeExecution(effectiveTasks, selectedReleaseScope)
+      .filter(task => {
+        const parentId = task.hierarchy?.parentId?.trim()
+        const parent = parentId ? tasksById.get(parentId) ?? null : null
+        return deriveTaskWorkVisibility(task, parent).countInProjectTotals
+      })
     const importedShapingTasks = tasks.filter(task => taskShapingBlockers(task).length > 0)
     if (importedShapingTasks.length === 0) return null
-    if (requestedTaskId && typedQueue.tasks.some(task => task.id === requestedTaskId)) return null
-    const importerTask = typedQueue.tasks.find(task =>
+    if (requestedTaskId && effectiveTasks.some(task => task.id === requestedTaskId)) return null
+    const importerTask = effectiveTasks.find(task =>
       task &&
       typeof task === 'object' &&
       (task as { id?: unknown }).id === WORKSPACE_IMPORT_TASK_ID,
