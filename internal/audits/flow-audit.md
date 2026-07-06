@@ -31,6 +31,9 @@ help_summary: |
   - UI communication/orientation problem: Work readiness depended on a slow,
     overloaded detail object, making the user wait for unrelated orientation
     material before the queue could be understood.
+  - UI communication/orientation problem: mobile proof exposed a stale
+    desktop grid-column variable in the Work list, so the route could load but
+    still clip the visible work row inside the project shell.
   - Runtime/provider/infrastructure problem: the installed app repeatedly
     transferred and recomputed heavyweight sections on a polling loop.
 - Fix:
@@ -43,9 +46,17 @@ help_summary: |
   - The Work delivery queue now carries compact task identity and primitive
     references instead of duplicating full task records inside `runnable`,
     `blocked`, and `firstRunnable`.
+  - The Work orientation spine now carries selected scope/release labels,
+    summary, and a compact node parent index for breadcrumbs, not the full
+    Project Map root tree, proof contracts, source refs, gaps, or scope rows.
+  - The Work task-routing map now carries only the route area refs Work uses
+    for part filters, not full diagnostic reasons and check lists.
   - The shared project store accepts a narrow `work` surface hint and coalesces
     in-flight refreshes by project plus surface. `ProjectView` passes that hint
     only when the active tab is Work, including interval refreshes.
+  - The mobile Work list now resets the shared work-list column variable to one
+    column below the existing breakpoint, so the row layout does not retain the
+    desktop six-column track width after the list collapses.
 - Contract Touch Decision:
   - Work id: `codex:work-surface-scoped-project-payload-2026-07-06`.
   - Touched contracts: `GET /api/project` optional `surface=work` response
@@ -62,25 +73,34 @@ help_summary: |
     shared shell state while omitting unrelated heavyweight sections; project
     store regression showing Work requests the scoped payload; focused endpoint
     and store tests; build/contract detector; installed-app stale proof and
-    live Looma + Knit timing/shape proof.
+    live Looma + Knit timing/shape proof; desktop and mobile browser geometry
+    proof.
   - Proof provided so far: focused red/green endpoint regression passed for
-    `surface=work`, including compact delivery-queue task identity;
+    `surface=work`, including compact delivery-queue task identity, compact
+    orientation nodes, empty Work roots, and compact task-routing contexts;
     project-store regression passed; focused endpoint/store/WorkTab/ProjectView
-    suite passed `192` tests; `node scripts/contract-touch-detector.mjs`,
+    suite passed `193` tests; `node scripts/contract-touch-detector.mjs`,
     `git diff --check`, and `node ./build.mjs` passed; installed app refreshed
     and `/api/stale-server` returned `stale:false`; live Looma + Knit default
     `/api/project` measured about `1.42 MB` with release readiness, git story,
-    memory health, and full delivery spine, while
-    `/api/project?surface=work` measured about `1.11 MB`, omitted those
-    sections, exposed only `deliverySpine.queue`, and reduced delivery queue
-    JSON from about `244 KB` to about `18 KB`; browser proof on
+    memory health, full delivery spine, full orientation roots, and full
+    routing diagnostics, while `/api/project?surface=work` measured about
+    `513 KB`, omitted those sections, exposed only `deliverySpine.queue`,
+    reduced orientation spine JSON from about `560 KB` to about `23 KB`,
+    reduced task-routing JSON from about `91 KB` to about `26 KB`, and reduced
+    delivery queue JSON from about `244 KB` to about `18 KB`; browser proof on
     `/projects/looma-knit/work` rendered the Work view with the delivery queue,
     `33 ready to resume`, `4 waiting on dependencies`, and selected scope
-    summary visible.
-  - Residual risk: Work still receives the full orientation spine
-    (`~516 KB`), compact task list (`~336 KB`), and routing contexts
-    (`~90 KB`). Those should be the next payload/model split targets before
-    calling Work-route loading solved.
+    summary visible; installed-app desktop and mobile geometry proof reported
+    no clipped content or page horizontal overflow, and the mobile work row
+    collapsed from the escaped `764px` width to `340px` in a `390px` viewport;
+    focused WorkTab regression proved the mobile breakpoint carries a
+    one-column work-list variable instead of keeping the desktop six-column
+    track width.
+  - Residual risk: Work still receives the compact task list (`~336 KB`) on
+    initial load. That is now the remaining known large section and should be
+    the next payload/model split target before calling Work-route loading
+    solved.
   - Waivers: default `/api/project` stays full for existing non-Work surfaces
     until each route has a tested scoped payload.
   - Apply/revert behavior: remove the `surface=work` branch and project-store

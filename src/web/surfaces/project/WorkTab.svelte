@@ -1189,6 +1189,7 @@
       padding-block-end: 0;
     }
     :global(.work-list-stack) {
+      --work-list-columns: minmax(0, 1fr);
       inline-size: 100%;
     }
     :global(.work-list-row) {

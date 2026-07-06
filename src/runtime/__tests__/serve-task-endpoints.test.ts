@@ -837,6 +837,19 @@ describe('GET /api/project/task/:id', () => {
     expect(workBody.actionModel).toBeTruthy()
     expect(workBody.startReadiness).toBeTruthy()
     expect(workBody.orientationSpine).toBeTruthy()
+    expect(workBody.orientationSpine?.summary?.selectedScopeLabel).toBeTruthy()
+    expect(workBody.orientationSpine?.roots).toEqual([])
+    const orientationNode = workBody.orientationSpine?.nodes?.['work:task-storybook']
+    expect(orientationNode).toMatchObject({
+      id: 'work:task-storybook',
+      title: 'Prove the menu primitive',
+    })
+    expect(orientationNode?.children).toBeUndefined()
+    expect(orientationNode?.refs).toBeUndefined()
+    expect(orientationNode?.proof).toBeUndefined()
+    expect(workBody.taskRoutingContexts?.['task-storybook']?.status).toBeTruthy()
+    expect(workBody.taskRoutingContexts?.['task-storybook']?.reasons).toBeUndefined()
+    expect(workBody.taskRoutingContexts?.['task-storybook']?.checks).toBeUndefined()
     expect(workBody.deliverySpine?.queue?.firstRunnable?.task?.id).toBe('task-storybook')
     expect(workBody.deliverySpine?.queue?.firstRunnable?.task?.title).toBe('Prove the menu primitive')
     expect(workBody.deliverySpine?.queue?.firstRunnable?.task?.spec).toBeUndefined()

@@ -1452,6 +1452,8 @@ describe('WorkTab', () => {
     expect(scrollBlock).toContain('overflow-x: auto')
     expect(stackBlock).toContain('minmax(280px, 1fr)')
     expect(stackBlock).toContain('inline-size: max(100%, 860px)')
+    expect(source).toContain('@media (max-width: 860px)')
+    expect(source).toContain('--work-list-columns: minmax(0, 1fr)')
   })
 
   it('routes imported-draft review and view-mode controls through project-scoped links', async () => {

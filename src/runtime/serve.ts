@@ -3450,6 +3450,70 @@ function compactDeliveryQueueForWorkSurface(queue: Record<string, unknown>): Rec
   }
 }
 
+function compactOrientationSpineForWorkSurface(spine: Record<string, unknown>): Record<string, unknown> {
+  return {
+    projectId: spine.projectId,
+    updatedAt: spine.updatedAt,
+    selectedRelease: compactOrientationScope(spine.selectedRelease),
+    selectedTaskScope: compactOrientationScope(spine.selectedTaskScope),
+    scope: compactOrientationScope(spine.scope),
+    summary: spine.summary,
+    roots: [],
+    nodes: compactOrientationNodes(spine.nodes),
+  }
+}
+
+function compactOrientationScope(scope: unknown): unknown {
+  if (!scope || typeof scope !== 'object' || Array.isArray(scope)) return scope
+  const raw = scope as Record<string, unknown>
+  const summary: Record<string, unknown> = {}
+  for (const key of ['id', 'label', 'kind', 'state', 'nodeIds', 'deferredNodeIds', 'proofStyle']) {
+    if (key in raw) summary[key] = raw[key]
+  }
+  return summary
+}
+
+function compactOrientationNodes(nodes: unknown): Record<string, Record<string, unknown>> {
+  if (!nodes || typeof nodes !== 'object' || Array.isArray(nodes)) return {}
+  const result: Record<string, Record<string, unknown>> = {}
+  for (const [nodeId, node] of Object.entries(nodes as Record<string, unknown>)) {
+    if (!node || typeof node !== 'object' || Array.isArray(node)) continue
+    const raw = node as Record<string, unknown>
+    const summary: Record<string, unknown> = {}
+    for (const key of ['id', 'parentId', 'title']) {
+      if (key in raw) summary[key] = raw[key]
+    }
+    if (!('id' in summary)) summary.id = nodeId
+    result[nodeId] = summary
+  }
+  return result
+}
+
+function compactTaskRoutingContextsForWorkSurface(contexts: Record<string, unknown>): Record<string, unknown> {
+  const compact: Record<string, unknown> = {}
+  for (const [taskId, context] of Object.entries(contexts)) {
+    if (!context || typeof context !== 'object' || Array.isArray(context)) continue
+    const raw = context as Record<string, unknown>
+    compact[taskId] = {
+      taskId: raw.taskId,
+      status: raw.status,
+      likelyArea: compactStructuralContextRef(raw.likelyArea),
+      primaryDomain: compactStructuralContextRef(raw.primaryDomain),
+    }
+  }
+  return compact
+}
+
+function compactStructuralContextRef(ref: unknown): unknown {
+  if (!ref || typeof ref !== 'object' || Array.isArray(ref)) return undefined
+  const raw = ref as Record<string, unknown>
+  const summary: Record<string, unknown> = {}
+  for (const key of ['id', 'label', 'path']) {
+    if (key in raw) summary[key] = raw[key]
+  }
+  return Object.keys(summary).length > 0 ? summary : undefined
+}
+
 function compactTaskIdentity(task: unknown): Record<string, unknown> | undefined {
   if (!task || typeof task !== 'object' || Array.isArray(task)) return undefined
   const raw = task as Record<string, unknown>
@@ -4516,12 +4580,16 @@ export function buildServeApp(opts: ServeOptions = {}): {
         runtime,
         ...(memoryHealth ? { memoryHealth } : {}),
         ...(structuralMapReview ? { structuralMapReview } : {}),
-        taskRoutingContexts,
+        taskRoutingContexts: fullSurface
+          ? taskRoutingContexts
+          : compactTaskRoutingContextsForWorkSurface(taskRoutingContexts as Record<string, unknown>),
         ...(gitStory ? { gitStory } : {}),
         ...(releaseReadiness ? { releaseReadiness } : {}),
         startReadiness,
         actionModel,
-        orientationSpine,
+        orientationSpine: fullSurface
+          ? orientationSpine
+          : compactOrientationSpineForWorkSurface(orientationSpine as unknown as Record<string, unknown>),
         deliverySpine: fullSurface
           ? {
               model: deliveryModel,
