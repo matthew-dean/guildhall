@@ -382,6 +382,11 @@ function groupingChildrenAreTaskCandidates(title: string): boolean {
   )
 }
 
+function isEvidenceStatusBullet(title: string): boolean {
+  const normalized = cleanHeading(title).toLowerCase().replace(/\s+/g, ' ').trim()
+  return /^(implementation|fixture|verification|status|files created|acceptance criteria|review lanes?)\b/.test(normalized)
+}
+
 function headingSignalKind(
   fileBase: string,
   rel: string,
@@ -862,6 +867,7 @@ export const planningDocsSource: TaskSource = {
         if (bullet && currentSection && (OPEN_HEADING_RE.test(currentSection) || STAGE_HEADING_RE.test(currentSection))) {
           const indent = bullet[1]!.replace(/\t/g, '  ').length
           const title = cleanHeading(bullet[2]!)
+          const evidenceStatusBullet = isEvidenceStatusBullet(title)
           const stageScopedSignal = currentLabel === 'deliverables'
             ? stageDeliverableSignal(currentSection, currentMilestoneStage)
             : currentLabel === 'scope'
@@ -879,7 +885,26 @@ export const planningDocsSource: TaskSource = {
           const parent = bulletStack[bulletStack.length - 1]
           const grouping = title.endsWith(':')
           const groupingChildrenAreTasks = grouping && groupingChildrenAreTaskCandidates(title)
-          if (grouping && !groupingChildrenAreTasks) {
+          if (evidenceStatusBullet) {
+            const scopeHint = scopeHintInsideExplicitRelease(
+              currentReleaseId,
+              scopeHintForOpenWork(currentSection, title),
+            )
+            const releaseId = currentReleaseIdForScope(currentReleaseId, scopeHint)
+            const releaseLabel = releaseId ? currentReleaseLabel : null
+            signals.push({
+              source: 'planning-docs',
+              kind: 'context',
+              title: title.replace(/:$/, ''),
+              evidence: `${rel}: ${line.trim()}`.slice(0, 240),
+              references: [abs],
+              ...(scopeHint ? { scopeHint } : {}),
+              ...(releaseId ? { releaseId } : {}),
+              ...(releaseLabel ? { releaseLabel } : {}),
+              ...(domainHint ? { domainHint } : {}),
+              confidence: 'medium',
+            })
+          } else if (grouping && !groupingChildrenAreTasks) {
             const scopeHint = scopeHintInsideExplicitRelease(
               currentReleaseId,
               scopeHintForOpenWork(currentSection, title),

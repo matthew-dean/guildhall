@@ -1170,6 +1170,72 @@ The next milestone is Stage 1: Fixture And Evaluation Harness.
     ]))
   })
 
+  it('keeps proof and status bullets as context instead of current milestone work', async () => {
+    mkdirSync(join(dir, 'docs', 'harness'), { recursive: true })
+    writeFileSync(
+      join(dir, 'docs', 'harness', 'implementation-roadmap.md'),
+      `# Implementation Roadmap
+
+## Current Next Milestone
+
+The next milestone is Stage 1: Headless Drafting And Evaluation MVP.
+
+1. Generate a CLI-first story synopsis, outline, character and voice records, and one chapter draft from the selected model.
+- Implementation: src/cli/generate.ts (CLI tool for story generation)
+- Fixture: fixtures/story-output.json (expected output)
+- Verification: scripts/prove-generation.mjs (proof script)
+- STATUS: COMPLETE - CLI tool implemented with synopsis, outline, character and voice records, world-state, chapter draft, and review findings
+- Files created:
+  - src/cli/generate.ts
+- Acceptance criteria:
+  - AC1: met
+- Review lanes: author_voice, character_voice, world_state, spatial_geographic
+`,
+    )
+
+    const sigs = await planningDocsSource.detect({
+      projectPath: dir,
+      exec: fakeExec(() => ({
+        stdout: ['docs/harness/implementation-roadmap.md'].join('\n'),
+        code: 0,
+      })),
+    })
+
+    expect(sigs.filter((signal) => signal.kind === 'open_work').map((signal) => signal.title)).toEqual([
+      'Generate a CLI-first story synopsis, outline, character and voice records, and one chapter draft from the selected model.',
+    ])
+    expect(sigs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'context',
+        title: 'Implementation: src/cli/generate.ts (CLI tool for story generation)',
+      }),
+      expect.objectContaining({
+        kind: 'context',
+        title: 'Fixture: fixtures/story-output.json (expected output)',
+      }),
+      expect.objectContaining({
+        kind: 'context',
+        title: 'Verification: scripts/prove-generation.mjs (proof script)',
+      }),
+      expect.objectContaining({
+        kind: 'context',
+        title: expect.stringContaining('STATUS: COMPLETE'),
+      }),
+      expect.objectContaining({
+        kind: 'context',
+        title: 'Files created',
+      }),
+      expect.objectContaining({
+        kind: 'context',
+        title: 'Acceptance criteria',
+      }),
+      expect.objectContaining({
+        kind: 'context',
+        title: expect.stringContaining('Review lanes'),
+      }),
+    ]))
+  })
+
   it('keeps full wrapped stage goals and every stage heading from one roadmap file', async () => {
     mkdirSync(join(dir, 'docs', 'harness'), { recursive: true })
     writeFileSync(

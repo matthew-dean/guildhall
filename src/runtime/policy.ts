@@ -128,7 +128,7 @@ export function recoveryAllowedToolsForPlaybook(playbook: RecoveryPlaybookId): s
     case 'rebootstrap_project':
       return ['read-file', 'edit-file', 'run-shell-command', 'write-checkpoint', 'raise-escalation']
     case 'retry_current_task_context':
-      return ['read-file', 'edit-file', 'write-checkpoint', 'raise-escalation']
+      return ['list-files', 'read-file', 'edit-file', 'write-file', 'run-shell-command', 'write-checkpoint', 'log-progress', 'update-task', 'raise-escalation']
     case 'route_to_review':
     case 'route_to_gate_check':
       return ['write-checkpoint', 'raise-escalation']

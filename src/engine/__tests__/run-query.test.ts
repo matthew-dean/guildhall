@@ -4120,14 +4120,14 @@ Uncertainties: none`,
 
   it('refuses tools outside an active recovery playbook allowlist', async () => {
     const registry = new ToolRegistry()
-    let shellCalls = 0
+    let grepCalls = 0
     registry.register(
       defineTool({
-        name: 'shell',
+        name: 'grep',
         description: '',
-        inputSchema: z.object({ command: z.string() }),
+        inputSchema: z.object({ pattern: z.string(), root: z.string() }),
         execute: async () => {
-          shellCalls += 1
+          grepCalls += 1
           return { output: 'should not run', is_error: false }
         },
       }),
@@ -4141,7 +4141,7 @@ Uncertainties: none`,
       }),
     )
     const client = new ScriptedApiClient([
-      { message: assistantToolUse('shell', { command: 'git show HEAD:src/author-intent-inputs.ts' }, 'toolu_1') },
+      { message: assistantToolUse('grep', { pattern: 'author intent', root: '.' }, 'toolu_1') },
       {
         message: assistantToolUse(
           'raise-escalation',
@@ -4175,19 +4175,19 @@ Uncertainties: none`,
             current_agent_id: 'worker-agent',
             current_task_id: 'task-1',
             current_task_recovery_playbook: 'retry_current_task_context',
-            current_task_recovery_allowed_tools: ['read-file', 'edit-file', 'write-checkpoint', 'raise-escalation'],
+            current_task_recovery_allowed_tools: ['list-files', 'read-file', 'edit-file', 'write-file', 'run-shell-command', 'write-checkpoint', 'log-progress', 'update-task', 'raise-escalation'],
           },
         },
         messages,
       ),
     )
 
-    expect(shellCalls).toBe(0)
+    expect(grepCalls).toBe(0)
     expect(events.some(e =>
       e.type === 'tool_execution_completed' &&
-      e.tool_name === 'shell' &&
+      e.tool_name === 'grep' &&
       e.is_error === true &&
-      e.output.includes('does not allow shell'),
+      e.output.includes('does not allow grep'),
     )).toBe(true)
     expect(events.some(e =>
       e.type === 'tool_execution_completed' &&

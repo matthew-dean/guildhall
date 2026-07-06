@@ -15198,6 +15198,97 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-07-06T13:27:00Z - Narrative Harness recovery wording and allowed progress tools.
+
+- Work id: `codex:narrative-harness-mvp-recovery-2026-07-06`.
+- User job: while driving the Narrative Harness MVP, Guildhall must keep model
+  recovery and owner approval separate. A worker timeout, failed proof command,
+  or partial implementation should not be presented as Matthew needing to decide
+  unless the task genuinely needs owner judgment.
+- Live symptom:
+  - The current Narrative Harness release contains explicit DeepInfra drafting,
+    world-state continuity, and spatial/geographic review tasks with acceptance
+    criteria for broad genre/adult-fiction boundary proof, wet-hair/object
+    elapsed-time state transitions, and travel/geography/walking-speed checks.
+  - The CLI chapter-generation task reached `done` after recovery was allowed
+    to read/write/run verification/update the task and reconcile `AC1` shorthand
+    against semantic acceptance-criteria ids.
+  - The world-state task created
+    `scripts/prove-world-state-continuity.mjs`, ran `npm run build`
+    successfully, then failed `node scripts/prove-world-state-continuity.mjs`
+    because the generated `.mjs` script used `require.main`.
+  - Guildhall correctly kept this as runtime/model recovery, but one runtime
+    note still said it would retry before "asking for owner intervention" even
+    though the classification path was `needsHuman:false` and then hands the
+    saved partial diff to review.
+  - After restart, `POST /api/project/start` refused to resume the in-progress
+    world-state task because `workspace_import_refresh_needed` was evaluated
+    before checking whether current-scope materialized work was already
+    runnable.
+- Fix:
+  - `retry_current_task_context` now allows the same progress/audit tool the
+    engine already tells agents to use: `log-progress`.
+  - Dirty-work timeout copy now says the next step is handing the saved partial
+    diff to review, not asking the owner for intervention.
+  - Start readiness now skips the workspace-import coverage blocker when the
+    selected scope already contains runnable materialized work (`ready`,
+    `in_progress`, `review`, or `gate_check`). Import drift still blocks empty
+    or all-terminal completion states.
+  - No persisted task schema change. The issue was a runtime/action-state copy
+    mismatch and an under-modeled recovery tool allowlist.
+- Data-model pressure:
+  - Static recovery allowlists are still too coarse. The observed phases are
+    orient, mutate, verify, and handoff; the current implementation now covers
+    the immediate MVP lane, but a phase-aware recovery contract would prevent
+    future mismatches between tool prompts, allowed tools, and state notes.
+  - `startReadiness` is also warning that generated implementation files are
+    being detected as "current tasks outside approved current scope"; that is
+    likely workspace-import/source-classification schema pressure, not a
+    Narrative Harness task problem.
+- Verification:
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/policy.test.ts -t 'retry_current_task_context|keeps every recovery playbook bounded'`
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/orchestrator.test.ts -t 'loads active recovery tool metadata|AC1 self-critique shorthand|positional AC shorthand onto semantic criteria ids'`
+  - `./node_modules/.bin/vitest run src/engine/__tests__/run-query.test.ts -t 'refuses tools outside an active recovery playbook allowlist'`
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/orchestrator.test.ts -t 'preserves dirty worktree progress|hands repeated dirty worktree worker turn-budget retries|uses durable runtime notes when handing repeated dirty worktree retries|provider recovery instead of owner escalation'`
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/serve-settings.test.ts -t 'under-scoped|materialized current-scope work|saved import spec covers only part'`
+  - `node ./build.mjs`; `node scripts/dev-install.mjs`; `guildhall stop`;
+    `guildhall start`; `/api/stale-server` returned `stale:false` before the
+    final wording reinstall.
+
+source: codex:narrative-harness-mvp-recovery-2026-07-06
+
+## 2026-07-06 - Narrative Harness recovery mutation policy
+
+- Live Narrative Harness proof exposed a recovery-policy contradiction on the
+  CLI-first drafting task: `retry_current_task_context` allowed `read-file` and
+  `edit-file` but not `write-file`, while the worker prompt and file tools
+  correctly instruct new-file implementation to use `write-file`.
+- User-visible failure: the task accumulated owner-facing escalations claiming
+  file creation was forbidden and the owner had to lift constraints, even
+  though this was Guildhall's own recoverable implementation lane.
+- Fix: `retry_current_task_context` now allows the bounded non-shell tool set
+  needed to recover implementation from the current task context:
+  `list-files`, `read-file`, `edit-file`, `write-file`, `run-shell-command`,
+  `write-checkpoint`, `update-task`, and `raise-escalation`.
+- Follow-up architecture pressure: this is a static allowlist standing in for
+  recovery phase state. The repeated misses here indicate Guildhall should
+  model recovery as phases (`orient`, `mutate`, `verify`, `handoff`) so shell is
+  naturally available during verification without being the first escape hatch
+  before mutation.
+- Live review then exposed an acceptance-criteria reconciliation gap: Narrative
+  Harness used semantic AC ids (`synopsis-to-outline-chain`,
+  `chapter-draft-command`, `author-voice-preservation`), while the worker
+  self-critique naturally reported `AC1` / `AC2` / `AC3`. Guildhall now falls
+  back from unmatched positional AC shorthand to criteria order instead of
+  leaving proven criteria false.
+- Verification:
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/policy.test.ts -t 'retry_current_task_context|keeps every recovery playbook bounded'`
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/orchestrator.test.ts -t 'loads active recovery tool metadata'`
+  - `./node_modules/.bin/vitest run src/engine/__tests__/run-query.test.ts -t 'refuses tools outside an active recovery playbook allowlist'`
+  - `./node_modules/.bin/vitest run src/runtime/__tests__/orchestrator.test.ts -t 'AC1 self-critique shorthand|positional AC shorthand onto semantic criteria ids'`
+
+source: codex:narrative-harness-recovery-write-file-2026-07-06
+
 2026-07-06T12:12:00Z - Narrative Harness MVP continuous-run audit exposed
 role-scoped worker session bleed between tasks.
 
@@ -21881,6 +21972,33 @@ blocking Narrative Harness current scope.
     `project-reintake.ts` to restore previous behavior; no data rollback is
     required beyond manually reactivating archived tasks if that old behavior is
     intentionally restored.
+
+2026-07-06T14:02:00Z - Narrative Harness MVP completion surfaced import and proof-contract drift.
+
+- Work id: `codex:narrative-harness-mvp-drive-to-completion-2026-07-06`.
+- User job: Guildhall should drive the Narrative Harness near-term scope to a real terminal state, while showing the owner the truth about what is complete, what is deferred, and which repo/proof follow-ups still block the current scope. It should not convert proof/status notes into new work, and it should not claim MVP completion when package-manager or artifact-path proof is stale.
+- Fix:
+  - Expanded current-task recovery policy so bounded recovery can read/list/write/edit files, run shell proof commands, write checkpoints, log progress, update task state, and raise escalation through the same playbook allowlist.
+  - Reconciled reviewer self-critiques that refer to semantic acceptance criteria by positional shorthand such as `AC1`, so already-satisfied split work does not churn because the reviewer used a compact label.
+  - Changed repeated dirty-work/runtime retry copy from owner-intervention language to saved-partial-diff/runtime-recovery language, preserving the separation between Codex acting for the owner and Guildhall automating its own worker recovery.
+  - Let materialized current-scope work continue when workspace-import coverage is stale, instead of blocking Start before already-approved runnable/review work can finish.
+  - Classified implementation/status/proof bullets such as `Implementation:`, `Fixture:`, `Verification:`, `STATUS:`, `Files created:`, `Acceptance criteria:`, and `Review lanes:` as context, not current milestone work. This removed the false Narrative Harness blocker where completed proof metadata became seven new current tasks.
+- Narrative Harness proof surfaced:
+  - Guildhall live API reported `Near-term proof scope` with `14` included/current work items and `14` done/proven after the detector fix; `workspace_import_refresh_needed` no longer blocked Start.
+  - Remaining live blocker moved to repository follow-up, which was accurate: the Narrative Harness repo had local MVP commits and package-manager changes not pushed.
+  - Driving the project exposed a real NH proof gap: PNPM was a Stage 1 success gate in the roadmap but was still deferred in the model registry and repo bootstrap. NH was migrated to PNPM, the generation output path was fixed to write the canonical `fixtures/story-output.json`, and the generation proof now checks the regenerated artifact instead of stale output.
+- Data/model pressure:
+  - Workspace-import still infers too much from prose shape. Evidence/status notes need first-class source classification rather than being distinguished only by bullet text patterns.
+  - Runtime recovery policy is still too phase-string-heavy. Future work should model recovery capabilities as typed playbook permissions tied to task state and evidence needs.
+  - Package-manager/build proof belongs in shared project health state so release completion cannot ignore a repo-level success gate that the roadmap already declares part of current scope.
+- Contract Touch Decision:
+  - Work id: `codex:narrative-harness-mvp-drive-to-completion-2026-07-06`.
+  - Touched contracts: current-task recovery playbook tool policy; reviewer AC reconciliation semantics; start-readiness precedence; workspace-import planning-doc signal classification.
+  - Contracts considered but not touched: persisted task schema, release schema, repository follow-up schema, review-plan schema, project config schema.
+  - Required follow-up: promote evidence/status source typing into the import model; add project-health/package-manager proof to shared readiness; continue reducing view-local completion math.
+  - Proof required: focused runtime/import tests, Guildhall build, installed-app stale-server proof, live Narrative Harness API proof, NH package-manager/build/proof scripts.
+  - Proof provided: focused `vitest` suites passed for policy, orchestrator, serve-settings, engine run-query, and planning-doc detection; `node ./build.mjs` passed; installed app returned `/api/stale-server` `stale:false`; live Narrative Harness API no longer reports `workspace_import_refresh_needed`; NH `pnpm build`, `pnpm run generate:story`, `pnpm run prove:generation`, `pnpm run prove:world-state-continuity`, `pnpm run prove:spatial-geographic-continuity`, `pnpm run prove:dialogue-and-character-voice`, `pnpm run prove:reader-knowledge-and-revelation`, and `pnpm run prove:theme-and-meaning-review` passed.
+  - Apply/revert behavior: revert the recovery policy allowlist, AC shorthand reconciliation, start-readiness stale-import guard, and planning-doc evidence/status classification to restore previous behavior; no persisted Guildhall data migration is required. NH package-manager migration can be reverted by restoring `package-lock.json`, removing `pnpm-lock.yaml`, and changing bootstrap/docs commands back to npm.
 
 2026-07-05T10:45:00Z - Aligned release proof/orientation communication with
 shared readiness state.

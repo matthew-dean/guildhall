@@ -5032,7 +5032,7 @@ export class Orchestrator {
           const runtimeNote =
             dirtyTimeoutRetries === 1
               ? 'The worker hit its turn budget after making worktree edits, so Guildhall is preserving that partial implementation for the next pass.'
-              : 'The worker hit its turn budget again with dirty work preserved. Guildhall will retry once more before asking for owner intervention.'
+              : 'The worker hit its turn budget again with dirty work preserved. Guildhall will retry once more before handing the saved partial diff to review.'
           await this.appendRuntimeTaskNote({
             taskId: task.id,
             agentId: agent.name,
@@ -5075,8 +5075,8 @@ export class Orchestrator {
           this.likelyTargetWorkerTimeoutRetries.set(retryKey, likelyTargetTimeoutRetries)
           if (likelyTargetTimeoutRetries <= 1) {
             const runtimeNote = hasLikelyTargets
-              ? 'The worker timed out before mutating a likely target file. Guildhall will retry once with the same task context and require a concrete file-tool mutation or focused verification before asking for owner intervention.'
-              : 'The worker timed out before producing visible progress. Guildhall will retry once with the same task context and require a concrete file-tool mutation, focused verification, checkpoint, or explicit escalation before asking for owner intervention.'
+              ? 'The worker timed out before mutating a likely target file. Guildhall will retry once with the same task context and require a concrete file-tool mutation or focused verification before routing runtime recovery.'
+              : 'The worker timed out before producing visible progress. Guildhall will retry once with the same task context and require a concrete file-tool mutation, focused verification, checkpoint, or explicit escalation before routing runtime recovery.'
             await this.appendRuntimeTaskNote({
               taskId: task.id,
               agentId: agent.name,
@@ -13302,7 +13302,15 @@ function reconcileAcceptanceCriteriaFromLatestWorkerSelfCritique(task: Task): vo
       const criterion =
         criteriaById.get(explicitIdMatch[1]!.toLowerCase()) ??
         criteriaById.get(normalizeAcceptanceCriterionId(explicitIdMatch[1]!))
-      if (criterion) criterion.met = met
+      if (criterion) {
+        criterion.met = met
+        continue
+      }
+      const positionalMatch = /^AC[-_ ]*0*([0-9]+)$/i.exec(explicitIdMatch[1]!.trim())
+      const positionalCriterion = positionalMatch
+        ? task.acceptanceCriteria[Number(positionalMatch[1]) - 1]
+        : undefined
+      if (positionalCriterion) positionalCriterion.met = met
       continue
     }
 

@@ -5395,7 +5395,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
     const ownerInputBlocker = startBlockerForOwnerInput(input.projectPath)
     if (ownerInputBlocker) return ownerInputBlocker
 
-    const workspaceImportCoverageBlocker = await startBlockerForWorkspaceImportCoverage(input.projectPath)
+    const hasMaterializedStartWork = await hasMaterializedScopedStartWork(input.projectPath, input.requestedTaskId)
+    const workspaceImportCoverageBlocker = hasMaterializedStartWork
+      ? null
+      : await startBlockerForWorkspaceImportCoverage(input.projectPath)
     if (workspaceImportCoverageBlocker) return workspaceImportCoverageBlocker
 
 	    const importDraftBlocker = await startBlockerForImportDrafts(input.projectPath, input.requestedTaskId)
@@ -5545,6 +5548,27 @@ export function buildServeApp(opts: ServeOptions = {}): {
     const activeRun = supervisor.get(projectId)
     if (activeRun?.status === 'running' || activeRun?.status === 'stopping') return { canStart: true }
     return await startStatusForPausedLiveWork(projectPath, requestedTaskId) ?? { canStart: true }
+  }
+
+  async function hasMaterializedScopedStartWork(projectPath: string, requestedTaskId?: string): Promise<boolean> {
+    const tasksPath = projectTasksPath(projectPath)
+    if (!existsSync(tasksPath)) return false
+    const queue = await readTaskQueueFileNormalized(tasksPath)
+    const typedQueue = {
+      tasks: queue.tasks as Task[],
+      releases: queue.releases,
+      ...(queue.selectedReleaseId ? { selectedReleaseId: queue.selectedReleaseId } : {}),
+    }
+    const selectedReleaseScope = selectedReleaseScopeFromQueueLike(typedQueue)
+    const scopedTasks = tasksEligibleForScopeExecution(typedQueue.tasks, selectedReleaseScope)
+    return scopedTasks.some(task => {
+      if (!task || typeof task !== 'object') return false
+      if (requestedTaskId && task.id !== requestedTaskId) return false
+      const status = String(task.status ?? '')
+      if (status === 'ready' && !isReadyForWorkerHandoffRecord(task)) return false
+      if (!['ready', 'in_progress', 'review', 'gate_check'].includes(status)) return false
+      return deriveWorkExecutionState(typedQueue.tasks, task.id).summaryState !== 'blocked'
+    })
   }
 
   async function startStatusForPausedLiveWork(projectPath: string, requestedTaskId?: string): Promise<{

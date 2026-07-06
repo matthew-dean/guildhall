@@ -11667,9 +11667,14 @@ describe('Orchestrator.run — full loops', () => {
 
     expect(seenMetadata.at(-1)?.current_task_recovery_playbook).toBe('retry_current_task_context')
     expect(seenMetadata.at(-1)?.current_task_recovery_allowed_tools).toEqual([
+      'list-files',
       'read-file',
       'edit-file',
+      'write-file',
+      'run-shell-command',
       'write-checkpoint',
+      'log-progress',
+      'update-task',
       'raise-escalation',
     ])
   })
@@ -15272,12 +15277,12 @@ describe('Orchestrator worker no-progress escalation', () => {
             timestamp: '2026-05-03T00:00:00.000Z',
           },
           {
-            agentId: 'worker-agent',
-            role: 'runtime',
-            content:
-              'The worker hit its turn budget again with dirty work preserved. Guildhall will retry once more before asking for owner intervention.',
-            timestamp: '2026-05-03T00:01:00.000Z',
-          },
+              agentId: 'worker-agent',
+              role: 'runtime',
+              content:
+                'The worker hit its turn budget again with dirty work preserved. Guildhall will retry once more before handing the saved partial diff to review.',
+              timestamp: '2026-05-03T00:01:00.000Z',
+            },
         ],
       }),
     ])
@@ -15901,6 +15906,68 @@ describe('Orchestrator.tick \u2014 AC-18 reviewer_mode dispatch', () => {
       expect(task.acceptanceCriteria.every((criterion) => criterion.met)).toBe(true)
       expect(task.reviewVerdicts.at(-1)?.verdict).toBe('approve')
       expect(task.reviewVerdicts.at(-1)?.llmError).toContain('total turn budget')
+    },
+  )
+
+  it(
+    'llm_with_deterministic_fallback: reconciles positional AC shorthand onto semantic criteria ids',
+    async () => {
+      await writeReviewerMode('llm_with_deterministic_fallback')
+      await writeQueue([
+        reviewReadyTask({
+          acceptanceCriteria: [
+            { id: 'synopsis-to-outline-chain', description: 'Generate/load synopsis, outline, voices, and facts.', verifiedBy: 'review', met: false },
+            { id: 'chapter-draft-command', description: 'A pnpm script or CLI drafts one chapter.', verifiedBy: 'review', met: false },
+            { id: 'author-voice-preservation', description: 'Proof records author voice and genre fit.', verifiedBy: 'review', met: false },
+          ] as any,
+          gateResults: [],
+          notes: [
+            {
+              agentId: 'worker-agent',
+              role: 'self-critique',
+              content: [
+                '**Self-critique:**',
+                '- AC1: Met — generated synopsis, outline, character voice records, world facts, and chapter draft.',
+                '- AC2: Met — `npm run build` and `node scripts/prove-generation.mjs` passed.',
+                '- AC3: Met — proof records requested author voice, genre, audience, and character voices.',
+                '',
+                'Minimum-scope check:',
+                '- Files changed: src/cli/generate.ts, scripts/prove-generation.mjs, fixtures/story-output.json.',
+                '',
+                'Review proof packet:',
+                '- Changed files / diff scope: src/cli/generate.ts, scripts/prove-generation.mjs, fixtures/story-output.json.',
+                '- Verification commands passed: npm run build; node scripts/prove-generation.mjs.',
+              ].join('\n'),
+              timestamp: '2026-04-21T00:00:00Z',
+            },
+          ],
+        }),
+      ])
+
+      const timedOutReviewer: StubAgent = {
+        name: 'reviewer-agent',
+        calls: [],
+        async generate(prompt: string) {
+          this.calls.push({ prompt })
+          throw new Error('reviewer-agent exceeded 120000ms total turn budget')
+        },
+      }
+
+      const orch = new Orchestrator({
+        config: baseConfig(),
+        agents: agentSet({ reviewer: timedOutReviewer }),
+      })
+      const out = await orch.tick()
+
+      expect(out.kind).toBe('processed')
+      if (out.kind === 'processed') {
+        expect(out.afterStatus).toBe('gate_check')
+        expect(out.agent).toBe('reviewer-deterministic-fallback')
+      }
+
+      const task = (await readQueue()).tasks[0]!
+      expect(task.acceptanceCriteria.every((criterion) => criterion.met)).toBe(true)
+      expect(task.reviewVerdicts.at(-1)?.verdict).toBe('approve')
     },
   )
 
