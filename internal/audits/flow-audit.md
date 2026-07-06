@@ -15267,9 +15267,9 @@ prevents read-only retry loops after likely-target worker timeouts.
     the right playbook but its allowed tool surface contradicted the failure
     mode it was meant to repair.
 - Fix:
-  - `retry_current_task_context` now allows only `edit-file`,
-    `write-checkpoint`, and `raise-escalation`; `read-file` and shell are both
-    excluded because shell can be used as a read-only escape hatch.
+  - `retry_current_task_context` allows `read-file`, `edit-file`,
+    `write-checkpoint`, and `raise-escalation`; shell is excluded because it
+    can be used as a read-only escape hatch.
   - The active recovery playbook allowlist is now loaded into worker tool
     metadata and enforced by the engine before tool execution, so the allowlist
     is a runtime contract instead of prompt-only guidance.

@@ -4261,7 +4261,7 @@ describe('GET /api/project/activity', () => {
                 status: 'started',
                 playbook: 'retry_current_task_context',
                 reason: 'Retry from the current task brief/spec because no durable checkpoint exists yet.',
-                allowedTools: ['edit-file', 'write-checkpoint', 'raise-escalation'],
+                allowedTools: ['read-file', 'edit-file', 'write-checkpoint', 'raise-escalation'],
                 allowedPaths: [],
                 maxTurns: 1,
                 successSignals: ['visible_progress_or_checkpoint_written'],
