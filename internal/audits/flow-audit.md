@@ -8,6 +8,60 @@ help_summary: |
 
 # Web UI flow audit
 
+2026-07-06T18:49:07Z - Generic imported proof paths describe completion evidence instead of proof-planning meta-work.
+
+- Work id: `codex:generic-proof-path-completion-evidence-2026-07-06`.
+- User job: When Guildhall imports planning/decomposition docs into tasks, the
+  generated proof path should tell the worker/reviewer what completed evidence
+  must exist. It must not require process phrases like "has a bounded proof
+  plan" or source-shape filler like "reuses doc X" as if those phrases prove
+  implemented software.
+- Escaped live failure:
+  - Narrative Harness completed task `task-import-1g9oq7m` still has a review
+    proof path expecting strings such as `Implement author-involvement-modes
+    contract and involvement-dial types has a bounded proof plan for harness.`
+  - That phrase came from the generic evidence work-graph fallback, not from
+    real implementation evidence. The task detail has richer self-critique and
+    review evidence about `src/harness/author-involvement-modes.ts`, but the
+    proof path itself asks for the wrong kind of evidence.
+- Root-cause classification:
+  - Task hierarchy/dependency/proof modeling problem: generic proof paths
+    modeled planning intent as proof evidence.
+  - Bad project data produced by an earlier Guildhall bug: already-imported
+    NH tasks retain the stale generated phrases until re-intake, repair, or
+    repopulation.
+  - Data model/schema problem: the broad read-only workspace-import draft
+    envelope currently exposes scope/release/source fields but not proof paths,
+    so proof-path quality is not yet visible in that owner-facing draft shape.
+- Fix:
+  - The generic work-graph proof fallback now generates review evidence like
+    `records focused implementation, verification, or reviewer evidence` and
+    `cites how/source material shaped the completed work`.
+  - Added a regression fixture using the Narrative Harness remaining-spec
+    decomposition inventory so future generated proof expectations cannot
+    contain `proof plan` or `reuses` filler.
+- Verification:
+  - Red test first: `CI=true pnpm exec vitest run src/runtime/__tests__/evidence-work-graph-intake.test.ts -t "generates proof evidence expectations"`
+    failed on the old `has a bounded proof plan` / `reuses 2.2 ...` output.
+  - After the fix, the focused regression passed.
+  - Full affected suite passed: `CI=true pnpm exec vitest run src/runtime/__tests__/evidence-work-graph-intake.test.ts`
+    (`18` tests).
+  - `CI=true pnpm build` and `git diff --check` passed.
+  - Installed app proof after `CI=true pnpm dev:install` and
+    `guildhall stop && guildhall start`: `/api/stale-server` returned
+    `stale:false` for PID `98932` from
+    `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+  - Read-only Narrative Harness draft proof:
+    `guildhall workspace-import draft narrative-harness --json` produced `34`
+    draft tasks and did not contain `proof plan` or ` reuses ` in the task
+    JSON. Caveat: that broad draft shape does not currently expose `proofPaths`,
+    so the unit regression remains the authoritative proof for generated
+    proof-path fields until the draft UI/API surfaces proof expectations.
+  - Existing NH release-readiness remains honestly blocked:
+    `/api/project/release-readiness?projectId=narrative-harness` returned
+    `ready:false`, `proofEvidenceBlockingCount:14`, and first proof blocker
+    `task-import-1g9oq7m`.
+
 2026-07-06T18:41:31Z - Work route task focus is shared project state, not a local UI repair.
 
 - Work id: `codex:work-route-task-focus-2026-07-06`.

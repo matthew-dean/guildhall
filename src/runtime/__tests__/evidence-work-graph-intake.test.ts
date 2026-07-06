@@ -492,6 +492,21 @@ describe('evidence-to-work-graph intake', () => {
     expect(plan.tasks.map(task => task.title)).toContain('Implement scene-and-chapter-intelligence reviewer lane')
   })
 
+  it('generates proof evidence expectations about completed work, not proof-planning meta-work', () => {
+    const plan = planEvidenceWorkGraph({
+      sources: [{ path: 'docs/harness/remaining-spec-decomposition-inventory.md', content: narrativeRemainingInventoryEvidence }],
+      existingTasks: [],
+    })
+
+    const evidenceText = plan.tasks
+      .flatMap(task => task.proofPaths.flatMap(path => path.expectedEvidence ?? []))
+      .join('\n')
+
+    expect(evidenceText).not.toMatch(/\bproof plan\b/i)
+    expect(evidenceText).not.toMatch(/\breuses\b/i)
+    expect(evidenceText).toContain('records focused implementation, verification, or reviewer evidence')
+  })
+
   it('keeps later-stage inventory recommendations inside the same MVP task graph when a roadmap names the active milestone stage', () => {
     const plan = planEvidenceWorkGraph({
       sources: [

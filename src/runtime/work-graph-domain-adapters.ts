@@ -148,8 +148,10 @@ export const genericWorkGraphDomainAdapter: WorkGraphDomainAdapter = {
       {
         kind: 'review',
         expectedEvidence: [
-          `${unit.name} has a bounded proof plan for ${unit.targetArea}.`,
-          `${unit.name} reuses ${unit.sharedFoundations.join(', ') || 'named foundations'}.`,
+          `${unit.name} records focused implementation, verification, or reviewer evidence for ${unit.targetArea}.`,
+          unit.sharedFoundations.length > 0
+            ? `${unit.name} cites how ${unit.sharedFoundations.join(', ')} shaped the completed work.`
+            : `${unit.name} cites the source material that shaped the completed work.`,
         ],
         source: 'inferred',
       },
