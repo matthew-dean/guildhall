@@ -869,10 +869,11 @@ describe('GET /api/project/task/:id', () => {
     })
 
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const workRes = await app.fetch(new Request(projectUrl('/api/project?surface=work')))
+    const workRes = await app.fetch(new Request(projectUrl('/api/project?surface=work&task=task-storybook')))
     const workBody = (await workRes.json()) as Record<string, any>
 
     expect(workRes.status, workBody.error).toBe(200)
+    expect(workBody.selectedTaskId).toBe('task-storybook')
     expect(workBody.tasks?.some((task: Record<string, any>) => task.id === 'task-storybook')).toBe(true)
     const workTask = workBody.tasks?.find((task: Record<string, any>) => task.id === 'task-storybook')
     expect(workTask?.references).toBeUndefined()

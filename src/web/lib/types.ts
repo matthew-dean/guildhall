@@ -1450,6 +1450,7 @@ export interface ProjectDetail {
     coordinators?: CoordinatorConfig[]
     [k: string]: unknown
   }
+  selectedTaskId?: string | null
   tasks?: Task[]
   workProgress?: ServiceProjectSummary['workProgress']
   inbox?: ProjectInbox

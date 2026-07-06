@@ -16,17 +16,20 @@ class ProjectStore {
   #inFlight: Promise<ProjectDetail | null> | null = null
   #inFlightKey: string | null = null
 
-  async refresh(projectId?: string | null, surface?: 'work' | null): Promise<ProjectDetail | null> {
+  async refresh(projectId?: string | null, surface?: 'work' | null, selectedTaskId?: string | null): Promise<ProjectDetail | null> {
     const normalizedProjectId = projectId?.trim() || null
     const normalizedSurface = surface === 'work' ? 'work' : null
-    const requestKey = `${normalizedProjectId ?? ''}:${normalizedSurface ?? ''}`
+    const normalizedSelectedTaskId = normalizedSurface === 'work' ? selectedTaskId?.trim() || null : null
+    const requestKey = `${normalizedProjectId ?? ''}:${normalizedSurface ?? ''}:${normalizedSelectedTaskId ?? ''}`
     if (this.#inFlight && this.#inFlightKey === requestKey) return this.#inFlight
     this.#inFlightKey = requestKey
     const requestSeq = ++this.#requestSeq
     this.loading = true
     this.#inFlight = (async () => {
       try {
-        const endpoint = normalizedSurface ? `/api/project?surface=${normalizedSurface}` : '/api/project'
+        const endpoint = normalizedSurface
+          ? `/api/project?surface=${normalizedSurface}${normalizedSelectedTaskId ? `&task=${encodeURIComponent(normalizedSelectedTaskId)}` : ''}`
+          : '/api/project'
         const r = await projectFetch(endpoint, { cache: 'no-store' }, normalizedProjectId)
         const j = (await r.json()) as ProjectDetail
         if (requestSeq < this.#appliedSeq) return this.detail

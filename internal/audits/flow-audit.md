@@ -8,6 +8,58 @@ help_summary: |
 
 # Web UI flow audit
 
+2026-07-06T18:41:31Z - Work route task focus is shared project state, not a local UI repair.
+
+- Work id: `codex:work-route-task-focus-2026-07-06`.
+- User job: When Guildhall says a project needs proof for a specific work
+  item and links to `/work?task=...`, the Work route should open with that
+  item as the shared focus. The API, project store, visible row selection, and
+  inspector should agree about which task is being inspected.
+- Escaped live failure:
+  - Narrative Harness `/api/project?projectId=narrative-harness&surface=work&task=task-import-1g9oq7m`
+    returned compact Work state but no explicit selected task id.
+  - The action model and readiness state linked to `/work?task=...`, while the
+    shared project-detail payload could not prove the focused work item. The
+    Work tab had local URL parsing as a repair, which made browser behavior
+    possible but left shared state and tests unable to verify the action.
+- Root-cause classification:
+  - Scheduler/action-state logic problem: the next-action href carried task
+    focus, but the project refresh contract dropped it before shared state.
+  - UI communication/orientation problem: the user-facing action could route to
+    Work without the shared payload identifying the item the user was supposed
+    to inspect.
+  - Data model/schema problem: task focus needed to be an explicit
+    `ProjectDetail.selectedTaskId`, not an ad-hoc key inside the per-task
+    routing-context map.
+- Fix:
+  - `/api/project` now reads `task`/`work` for Work-surface requests, validates
+    the id against loaded tasks, and returns `selectedTaskId`.
+  - `ProjectStore.refresh()` accepts the focused task id, includes it in the
+    `/api/project?surface=work&task=...` request, and includes it in the
+    in-flight coalescing key.
+  - `ProjectView` derives the focused work item from the current route and
+    passes it through both immediate and polling refreshes.
+- Verification:
+  - `CI=true pnpm exec vitest run src/runtime/__tests__/serve-task-endpoints.test.ts -t "keeps the Work-surface project payload"` passed.
+  - `CI=true pnpm exec vitest run src/web/lib/__tests__/project-store.test.ts -t "passes the route-focused work item"` passed.
+  - Full affected suites passed: `CI=true pnpm exec vitest run src/runtime/__tests__/serve-task-endpoints.test.ts`
+    (`105` tests) and `CI=true pnpm exec vitest run src/web/lib/__tests__/project-store.test.ts`
+    (`3` tests).
+  - Installed app proof after `CI=true pnpm build`, `CI=true pnpm dev:install`,
+    and `guildhall stop && guildhall start`: `/api/stale-server` returned
+    `stale:false` for PID `25183` from
+    `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+  - Live Narrative Harness proof:
+    `/api/project?projectId=narrative-harness&surface=work&task=task-import-1g9oq7m`
+    returned `selectedTaskId:"task-import-1g9oq7m"`,
+    `startReadiness.code:"proof_evidence_missing"`,
+    `startReadiness.actionHref:"/work?task=task-import-1g9oq7m"`, and
+    `taskPresent:true`.
+  - Live invalid-focus proof:
+    `/api/project?projectId=narrative-harness&surface=work&task=missing-task`
+    returned `selectedTaskId:null` while still returning the compact work task
+    list.
+
 2026-07-06T16:30:00Z - Work refresh uses a scoped project-detail payload instead of the full project god object.
 
 - Work id: `codex:work-surface-scoped-project-payload-2026-07-06`.

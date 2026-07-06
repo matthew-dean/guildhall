@@ -135,6 +135,12 @@
   const projectDetailSurface = $derived<'work' | null>(
     currentView === 'work' ? 'work' : null,
   )
+  const routeFocusedTaskId = $derived.by(() => {
+    path.value
+    if (currentView !== 'work' || typeof window === 'undefined') return null
+    const params = new URL(window.location.href).searchParams
+    return params.get('task') ?? params.get('work') ?? null
+  })
   const RAIL_PREVIEW_OPEN_DELAY_MS = 150
   let railPreviewTimer = $state<ReturnType<typeof setTimeout> | null>(null)
   const projectDisplayPath = $derived(formatUserPath(project.detail?.path))
@@ -223,13 +229,13 @@
 
   $effect(() => {
     path.value
-    void project.refresh(routeProjectId, projectDetailSurface)
+    void project.refresh(routeProjectId, projectDetailSurface, routeFocusedTaskId)
   })
 
   $effect(() => {
     if (refreshHandle) clearInterval(refreshHandle)
     refreshHandle = setInterval(() => {
-      void project.refresh(activeProjectId, projectDetailSurface)
+      void project.refresh(activeProjectId, projectDetailSurface, routeFocusedTaskId)
     }, 5000)
     return () => {
       if (refreshHandle) {

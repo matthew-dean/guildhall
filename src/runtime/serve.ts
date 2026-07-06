@@ -4470,6 +4470,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     try {
       const surface = c.req.query('surface') === 'work' ? 'work' : 'full'
       const fullSurface = surface === 'full'
+      const requestedTaskId = (c.req.query('task') ?? c.req.query('work') ?? '').trim()
       if (project.initializationNeeded) {
         return c.json({
           initializationNeeded: true,
@@ -4492,6 +4493,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const tasks = await Promise.all(rawTasks.map((task) => fullSurface
         ? enrichTaskForServe(project.path, task)
         : enrichTaskForWorkSurface(project.path, task)))
+      const selectedTaskId = requestedTaskId && tasks.some(task => task.id === requestedTaskId)
+        ? requestedTaskId
+        : null
       const deliveryModel = await readProjectDeliveryModel(project.path)
       const deliveryQueue = deriveQueueCandidates({
         model: deliveryModel,
@@ -4631,6 +4635,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         name: project.config?.name ?? project.id,
         tags: project.config?.tags ?? [],
         config: project.config,
+        selectedTaskId,
         tasks: tasks.map(fullSurface ? compactTaskForProjectSummary : compactTaskForWorkSurface),
         workProgress,
         inbox,

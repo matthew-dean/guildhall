@@ -55,4 +55,24 @@ describe('project store', () => {
     expect(requested.searchParams.get('projectId')).toBe('looma-knit')
     expect(requested.searchParams.get('surface')).toBe('work')
   })
+
+  it('passes the route-focused work item through Work-scoped project refreshes', async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(json({
+      id: 'looma-knit',
+      name: 'Looma + Knit',
+      path: '/repo/looma-knit',
+      selectedTaskId: 'task-storybook',
+      run: { status: 'stopped', mode: 'continuous' },
+      tasks: [],
+    })))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await project.refresh('looma-knit', 'work', 'task-storybook')
+
+    const requested = new URL(String(fetchMock.mock.calls[0]?.[0]), 'http://localhost')
+    expect(requested.pathname).toBe('/api/project')
+    expect(requested.searchParams.get('projectId')).toBe('looma-knit')
+    expect(requested.searchParams.get('surface')).toBe('work')
+    expect(requested.searchParams.get('task')).toBe('task-storybook')
+  })
 })
