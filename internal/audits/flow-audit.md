@@ -12,6 +12,70 @@ This is the active browser test plan for the Guildhall project surface. Keep it
 updated while auditing the active test project so another agent can resume
 without guessing.
 
+2026-07-06T02:25:52Z - Reviewer verdict parsing now accepts positive
+body-level approvals.
+
+- Work id: `codex:reviewer-body-verdict-parser-2026-07-06`.
+- User job: when Guildhall sends completed worker output to review, the review
+  result should drive the task to `gate_check` only when the reviewer actually
+  approved the work, and should not contradict the visible reviewer reasoning.
+  A project owner should be able to trust the task state without reading raw
+  notes to discover that the parser disagreed with the reviewer.
+- Root cause:
+  - The reviewer stored a `revise` verdict for
+    `task-150-split-select-and-prove-deepinfra-drafting-model` even though the
+    review body said `ac-1: Met`, `Request fit: yes`, and the code-review
+    rubric lines were all positive.
+  - The verdict parser overfit to one structured rubric shape and treated a
+    docs/registry review that omitted `no-regressions` as incomplete. This is a
+    shared summary/action-state bug: stored reviewer truth, task status, and UI
+    progress could diverge from the actual review text.
+- Fix:
+  - `recordLlmVerdict()` now combines structured verdict lines, required-rubric
+    negatives, body-level approval evidence, and transition fallback instead of
+    requiring every historical rubric key for every task type.
+  - Explicit `Needs revision` verdicts and negative body phrases still win, so
+    approval is not inferred from a merely polite or partially positive review.
+- Narrative Harness proof:
+  - The DeepInfra drafting model selection task completed after the fix:
+    `review -> gate_check` by `reviewer-agent`, then `gate_check -> done` by
+    `approved-review-gates`.
+  - Installed API proof showed task
+    `task-150-split-select-and-prove-deepinfra-drafting-model` as `done`, with
+    `blockReason:null`, `completedAt:2026-07-06T02:24:16.043Z`, and the next
+    Narrative Harness action as
+    `Define spatial/geographic continuity review lane`.
+  - The task added the Stage 1 model registry/proof artifacts selecting
+    `mistralai/Mistral-Small-3.2-24B-Instruct-2506` on DeepInfra for the first
+    Narrative Harness drafting lane, with explicit boundaries for legal
+    consensual adult fiction and policy exclusions.
+- Remaining product gap:
+  - There is still no clean owner-facing action to submit an already-written
+    proof artifact back into review. This pass used delegated task-state and
+    evidence repair to return the task to review, which is acceptable for this
+    calibration run but should become an explicit Guildhall action.
+- Contract Touch Decision:
+  - Touched contracts: reviewer-dispatch verdict derivation and review-driven
+    task transition semantics.
+  - Contracts considered but not touched: persisted task schema, release schema,
+    project action model, worker artifact schema, model registry artifact
+    schema.
+  - Existing data impact: no migration. New review verdicts are parsed more
+    accurately; older contradictory verdict records remain as historical
+    evidence.
+  - Required follow-up: keep driving the Narrative Harness MVP queue through the
+    spatial/geographic continuity and world-state reviewer tasks, and classify
+    any new stall as a Guildhall model/schema, scheduler, UI communication, or
+    runtime failure before adding local patches.
+  - Proof required: focused reviewer-dispatch regression, contract detector,
+    installed-app stale check, and live Narrative Harness task transition proof.
+  - Proof provided: `reviewer-dispatch` regression passed; contract detector
+    passed; installed app reported `stale:false`; live Narrative Harness API
+    showed the DeepInfra task transition to `done` and next action advancing to
+    spatial/geographic continuity review work.
+  - Apply/revert behavior: revert the body-level verdict parser and regression
+    tests to restore prior stricter behavior; no data rollback required.
+
 2026-07-05T14:20:00Z - Promoted `blockReason` into shared execution truth.
 
 - Work id: `codex:block-reason-execution-state-normalization-2026-07-05`.

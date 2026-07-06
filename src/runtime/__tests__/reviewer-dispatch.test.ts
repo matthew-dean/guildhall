@@ -404,6 +404,69 @@ describe('recordLlmVerdict', () => {
     expect(result?.record.verdict).toBe('approve')
     expect(result?.normalizedStatus).toBe('gate_check')
   })
+
+  it('infers approval from met review body plus present yes rubric lines when docs work has no regression line', () => {
+    const q = baseQueue()
+    q.tasks[0]!.notes.push({
+      agentId: 'reviewer-agent',
+      role: 'reviewer',
+      content: [
+        '**Review:**',
+        'ac-1: Met — the model selection is recorded in `docs/product/model-registry.json` and the proof artifact documents the chosen model, source-backed facts, and deferrals.',
+        '',
+        '**Request fit:** yes — the implementation fulfills the blueprint request.',
+        '',
+        '**Rubric**',
+        'code-review:acceptance-criteria-met: yes — ac-1 is satisfied by the recorded model selection and proof.',
+        'code-review:no-scope-creep: yes — changes are limited to documentation and registry entries.',
+        'code-review:conventions-followed: yes — registry entry and markdown follow existing conventions.',
+      ].join('\n'),
+      timestamp: 't1',
+    })
+
+    const result = recordLlmVerdict({
+      queue: q,
+      taskId: 'task-001',
+      beforeStatus: 'review',
+      afterStatus: 'in_progress',
+      now: 'now',
+    })
+
+    expect(result?.record.verdict).toBe('approve')
+    expect(result?.normalizedStatus).toBe('gate_check')
+  })
+
+  it('does not infer approval when the review body contains a revision phrase', () => {
+    const q = baseQueue()
+    q.tasks[0]!.notes.push({
+      agentId: 'reviewer-agent',
+      role: 'reviewer',
+      content: [
+        '**Review:**',
+        'ac-1: Met — most of the work is present.',
+        '',
+        '**Request fit:** yes — the implementation is close.',
+        '',
+        '**Verdict:** Needs revision',
+        '',
+        '**Rubric**',
+        'code-review:acceptance-criteria-met: yes — mostly satisfied.',
+        'code-review:no-scope-creep: yes — changes are limited.',
+      ].join('\n'),
+      timestamp: 't1',
+    })
+
+    const result = recordLlmVerdict({
+      queue: q,
+      taskId: 'task-001',
+      beforeStatus: 'review',
+      afterStatus: 'in_progress',
+      now: 'now',
+    })
+
+    expect(result?.record.verdict).toBe('revise')
+    expect(result?.normalizedStatus).toBe('in_progress')
+  })
 })
 
 // ---------------------------------------------------------------------------

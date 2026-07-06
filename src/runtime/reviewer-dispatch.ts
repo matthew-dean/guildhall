@@ -325,7 +325,7 @@ export function extractLlmReviewerReasoning(task: Task): string | undefined {
 function extractStructuredLlmVerdict(reasoning: string | undefined): ReviewVerdict['verdict'] | undefined {
   const text = reasoning?.trim()
   if (!text) return undefined
-  const match = /\*\*Verdict:\*\*\s*(Approved|Approve|Revised?|Revision requested)\b/i.exec(text)
+  const match = /\*\*Verdict:\*\*\s*(Approved|Approve|Revised?|Revision requested|Needs revision)\b/i.exec(text)
   if (!match?.[1]) return undefined
   return /^approve?d?$/i.test(match[1]) ? 'approve' : 'revise'
 }
@@ -345,8 +345,22 @@ function extractRubricImpliedLlmVerdict(reasoning: string | undefined): ReviewVe
     const match = pattern.exec(text)
     if (match?.[1]) values.set(key, match[1].toLowerCase())
   }
+  if ([...values.values()].some(value => value === 'no')) return 'revise'
   if (values.size !== required.length) return undefined
   return required.every(key => values.get(key) === 'yes') ? 'approve' : 'revise'
+}
+
+function extractReviewBodyImpliedLlmVerdict(reasoning: string | undefined): ReviewVerdict['verdict'] | undefined {
+  const text = reasoning?.trim()
+  if (!text) return undefined
+  if (/\b(?:not met|request fit:\s*no|needs revision|requested revision|must revise|fails? acceptance)\b/i.test(text)) {
+    return 'revise'
+  }
+  const hasMetAcceptance = /(?:^|\n)\s*(?:ac-\d+|acceptance criterion(?: \d+)?)\s*:\s*met\b/i.test(text)
+  const hasRequestFit = /\*\*Request fit:\*\*\s*yes\b|\bRequest fit:\s*yes\b/i.test(text)
+  const yesRubricCount = (text.match(/\b(?:code-review:)?(?:acceptance-criteria-met|no-scope-creep|conventions-followed|no-regressions|documented|user-job-served|success-metric-measurable|anti-patterns-avoided|rollout-ready)\s*:\s*yes\b/gi) ?? []).length
+  if (hasMetAcceptance && hasRequestFit && yesRubricCount >= 2) return 'approve'
+  return undefined
 }
 
 /**
@@ -380,8 +394,9 @@ export function recordLlmVerdict(input: {
   const reasoning = input.reasoning ?? extractLlmReviewerReasoning(task)
   const structuredVerdict = extractStructuredLlmVerdict(reasoning)
   const rubricVerdict = structuredVerdict ? undefined : extractRubricImpliedLlmVerdict(reasoning)
+  const bodyVerdict = structuredVerdict || rubricVerdict ? undefined : extractReviewBodyImpliedLlmVerdict(reasoning)
   const verdict: ReviewVerdict['verdict'] =
-    structuredVerdict ?? rubricVerdict ?? (input.afterStatus === 'gate_check' ? 'approve' : 'revise')
+    structuredVerdict ?? rubricVerdict ?? bodyVerdict ?? (input.afterStatus === 'gate_check' ? 'approve' : 'revise')
   const normalizedStatus: TaskStatus = verdict === 'approve' ? 'gate_check' : 'in_progress'
   const reason =
     verdict === 'approve'
