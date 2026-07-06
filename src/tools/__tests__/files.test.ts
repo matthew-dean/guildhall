@@ -126,6 +126,34 @@ describe('editFile', () => {
     expect(result.success).toBe(true)
     expect(await fs.readFile(file, 'utf-8')).toBe('line one\nline two\nline three\n')
   })
+
+  it('rejects edits that would introduce leaked model tool-control markup', async () => {
+    await fs.writeFile(file, 'clean document\n', 'utf-8')
+
+    const result = await editFile({
+      filePath: file,
+      oldString: 'clean document',
+      newString: 'clean document\n\n<｜DSML｜tool_calls>',
+    })
+
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('model/tool-control markup')
+    expect(await fs.readFile(file, 'utf-8')).toBe('clean document\n')
+  })
+
+  it('rejects edits that would leave inline hidden-reasoning close tags in artifact prose', async () => {
+    await fs.writeFile(file, 'clean document\n', 'utf-8')
+
+    const result = await editFile({
+      filePath: file,
+      oldString: 'clean document',
+      newString: 'clean document</think>Good. Now I have a complete document.',
+    })
+
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('model/tool-control markup')
+    expect(await fs.readFile(file, 'utf-8')).toBe('clean document\n')
+  })
 })
 
 describe('editFileTool.execute', () => {
@@ -372,6 +400,30 @@ describe('writeFile', () => {
     })
     expect(result.success).toBe(false)
     expect(result.error).toBeDefined()
+  })
+
+  it('rejects leaked model tool-control markup before writing artifact content', async () => {
+    const target = path.join(dir, 'docs', 'product', 'model-selection.md')
+    const result = await writeFile({
+      filePath: target,
+      content:
+        '# Model Selection\n\nUseful content.\n\n</think>\n<｜DSML｜tool_calls>\n<｜DSML｜invoke name="edit-file">',
+    })
+
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('model/tool-control markup')
+    await expect(fs.stat(target)).rejects.toThrow()
+  })
+
+  it('allows inline marker strings used as ordinary code or test data', async () => {
+    const target = path.join(dir, 'src', 'strip-think.test.ts')
+    const result = await writeFile({
+      filePath: target,
+      content: "expect(stripThinkBlocks('ok<think>partial')).toEqual(['ok', '<think>partial'])\n",
+    })
+
+    expect(result.success).toBe(true)
+    expect(await fs.readFile(target, 'utf-8')).toContain('ok<think>partial')
   })
 })
 

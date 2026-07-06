@@ -14104,6 +14104,51 @@ slice.
 
 source: codex:project-orientation-spine-2026-06-15
 
+2026-07-06T01:40:00Z - Guarded file writes against leaked model/tool-control
+markup after Narrative Harness task 150 preserved malformed artifact output.
+
+- Work id: `codex:narrative-harness-tool-control-artifact-guard-2026-07-06`.
+- User job: a project owner should be able to trust that dirty task work
+  preserved by Guildhall is actual project artifact content, not provider
+  control syntax or hidden reasoning leaked into a file.
+- Failure found:
+  - Running one bounded Narrative Harness tick on
+    `task-150-split-select-and-prove-deepinfra-drafting-model` expanded
+    `docs/product/deepinfra-drafting-model-selection.md` but left standalone
+    `</think>` and `<｜DSML｜...>` protocol text in the Markdown artifact.
+  - Guildhall correctly preserved dirty worktree progress, but the file-tool
+    boundary still allowed malformed provider/tool markup to be persisted as a
+    successful artifact mutation.
+- Root-cause classification:
+  - `6 runtime/provider/infrastructure problem`: the DeepInfra-compatible
+    worker emitted tool protocol text into artifact content.
+  - `3 task hierarchy/dependency/proof modeling problem`: malformed artifact
+    content was still preserved as task proof/progress rather than rejected at
+    the mutation boundary.
+  - `4 scheduler/action-state logic problem`: the task remained in progress
+    with dirty work preserved, but no hard mutation guard forced the next turn
+    to repair the malformed file content.
+- Fix:
+  - `writeFile` and `editFile` now reject line-start model/tool-control markup
+    before writing bytes to disk.
+  - The guard is intentionally narrow: standalone/line-start DSML protocol tags
+    and standalone think tags are blocked, while inline marker strings remain
+    valid for provider/parser tests.
+- Calibration:
+  - Added file-tool tests proving leaked DSML/think artifacts are rejected
+    before write/edit, and inline marker strings remain allowed as ordinary
+    test data.
+- Live proof:
+  - After reinstalling the current branch and confirming `/api/stale-server`
+    reported `stale:false`, rerunning one bounded Narrative Harness tick on
+    `task-150-split-select-and-prove-deepinfra-drafting-model` repaired the
+    dirty artifact so `docs/product/deepinfra-drafting-model-selection.md`
+    no longer contains `DSML` or `think` control tags.
+  - The same run exposed the next shared-state issue: `/api/project` now
+    surfaces the blocked task through `actionModel.primaryAction`, but
+    `/api/project/activity` still returns only legacy running/count fields and
+    does not include the shared top action/start state.
+
 2026-07-06T01:05:00Z - Repaired stale no-output recovery so dirty task
 worktree progress is not mislabeled as provider no-progress.
 
