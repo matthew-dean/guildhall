@@ -225,9 +225,12 @@ import {
   appendRecoveryPlaybookNote,
   buildAgentDecisionPacket,
   classifyAgentFailure,
+  RECOVERY_PLAYBOOK_IDS,
   renderAgentDecisionPacket,
+  recoveryAllowedToolsForPlaybook,
   resolveRecoveryPlan,
   type FailureClassification,
+  type RecoveryPlaybookId,
 } from './policy.js'
 import {
   selectApplicableGuilds,
@@ -1266,14 +1269,14 @@ function activeRecoveryPlaybookMetadata(task: Task): { playbook: string; allowed
     try {
       const parsed = JSON.parse(note.content) as Record<string, unknown>
       if (parsed['status'] !== 'started') continue
-      const allowedTools = Array.isArray(parsed['allowedTools'])
-        ? parsed['allowedTools'].filter((value): value is string =>
-            typeof value === 'string' && value.trim().length > 0,
-          )
-        : []
+      const playbook = typeof parsed['playbook'] === 'string' &&
+        (RECOVERY_PLAYBOOK_IDS as readonly string[]).includes(parsed['playbook'])
+        ? parsed['playbook'] as RecoveryPlaybookId
+        : null
+      if (!playbook) continue
       return {
-        playbook: typeof parsed['playbook'] === 'string' ? parsed['playbook'] : 'recovery',
-        allowedTools,
+        playbook,
+        allowedTools: recoveryAllowedToolsForPlaybook(playbook),
       }
     } catch {
       continue

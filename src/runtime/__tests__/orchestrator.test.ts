@@ -11618,6 +11618,62 @@ describe('Orchestrator.run — full loops', () => {
     expect(seen[1]).toMatchObject({ resetCount: 1, priorMessages: 0 })
   })
 
+  it('loads active recovery tool metadata from current policy instead of stale note payloads', async () => {
+    await writeQueue([
+      mkTask({
+        id: 'task-recovery',
+        title: 'Retry current task',
+        status: 'in_progress',
+        assignedTo: 'worker-agent',
+        domain: 'looma',
+        spec: VALID_SPEC,
+        notes: [{
+          agentId: 'coordinator',
+          role: 'recovery-playbook',
+          timestamp: '2026-07-06T12:29:59.160Z',
+          content: JSON.stringify({
+            status: 'started',
+            playbook: 'retry_current_task_context',
+            allowedTools: ['edit-file', 'write-checkpoint', 'raise-escalation'],
+          }),
+        }],
+      }),
+    ])
+
+    const seenMetadata: Record<string, unknown>[] = []
+    const worker = {
+      name: 'worker-agent',
+      metadata: {} as Record<string, unknown>,
+      loadToolMetadata(metadata: Record<string, unknown>) {
+        this.metadata = { ...this.metadata, ...metadata }
+        seenMetadata.push({ ...this.metadata })
+      },
+      getToolMetadata() {
+        return this.metadata
+      },
+      resetConversation() {},
+      async generate() {
+        await mutateTask('task-recovery', { status: 'done' })
+        return { text: 'done' }
+      },
+    } satisfies OrchestratorAgent & { metadata: Record<string, unknown> }
+
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ worker }),
+    })
+
+    await orch.tick({ dispatchLimit: 1 })
+
+    expect(seenMetadata.at(-1)?.current_task_recovery_playbook).toBe('retry_current_task_context')
+    expect(seenMetadata.at(-1)?.current_task_recovery_allowed_tools).toEqual([
+      'read-file',
+      'edit-file',
+      'write-checkpoint',
+      'raise-escalation',
+    ])
+  })
+
   it('scoped one-task runs finish selected parent child work before stopping', async () => {
     await writeQueue([
       mkTask({

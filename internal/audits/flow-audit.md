@@ -15273,6 +15273,8 @@ prevents read-only retry loops after likely-target worker timeouts.
   - The active recovery playbook allowlist is now loaded into worker tool
     metadata and enforced by the engine before tool execution, so the allowlist
     is a runtime contract instead of prompt-only guidance.
+  - Worker dispatch derives executable allowed tools from the current policy by
+    playbook id instead of replaying stale serialized note payloads.
   - `resume_from_checkpoint` and `rebootstrap_project` keep their existing
     read allowance because those playbooks are explicitly about a bounded
     checkpoint/bootstrap surface.
