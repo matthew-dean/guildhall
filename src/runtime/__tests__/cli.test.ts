@@ -337,8 +337,11 @@ describe('Guildhall CLI surface', () => {
       '',
       '## Current focus',
       '',
-      '- Build a read-only draft command.',
+      '- Define fixture, expected-record, prototype-run, and evaluation schemas.',
       '- Add a regression fixture for historical Guildhall planning docs.',
+      '',
+      'Contracts: PrototypeRun, RunEvaluation, SchemaFieldUsage, PacketQualityScore.',
+      'Verification: the fixture directory shape includes at least one small story fixture and expected records.',
       '',
       '## Later',
       '',
@@ -365,6 +368,39 @@ describe('Guildhall CLI surface', () => {
     expect(report.draft.tasks.map(task => task.scope)).toContain('later')
     expect(report.warnings.some(warning => warning.code === 'read_only_report')).toBe(true)
     expect(report.warnings.some(warning => warning.code === 'generic_task_title')).toBe(false)
+  })
+
+  it('includes materialized proof expectations in full-project workspace-import draft reports', async () => {
+    const project = tmpHome()
+    mkdirSync(join(project, 'docs', 'harness'), { recursive: true })
+    writeFileSync(join(project, 'docs', 'harness', 'implementation-roadmap.md'), [
+      '# Implementation Roadmap',
+      '',
+      '## Stage 1: Headless Drafting And Evaluation MVP',
+      '',
+      'Deliverables:',
+      '',
+      '- Define fixture, expected-record, prototype-run, and evaluation schemas.',
+      '',
+      'Contracts: PrototypeRun, RunEvaluation, SchemaFieldUsage, PacketQualityScore.',
+      'Verification: the fixture directory shape includes at least one small story fixture and expected records.',
+      '',
+      '## Current Next Milestone',
+      '',
+      'The next milestone is Stage 1: Headless Drafting And Evaluation MVP.',
+      '',
+      '1. Define fixture, expected-record, prototype-run, and evaluation schemas.',
+    ].join('\n'))
+
+    const before = existsSync(join(project, '.guildhall'))
+    const report = await buildWorkspaceImportDraftReport({ projectPath: project })
+
+    expect(before).toBe(false)
+    expect(existsSync(join(project, '.guildhall'))).toBe(false)
+    expect(report.draft.tasks.some(task => (task.proofPaths?.length ?? 0) > 0)).toBe(true)
+    expect(report.draft.tasks.find(task =>
+      task.title === 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+    )?.proofPaths?.[0]?.expectedEvidence?.length).toBeGreaterThan(0)
   })
 
   it('exposes external-agent memory bridge import, review, and reject through explicit JSON CLI flows', async () => {

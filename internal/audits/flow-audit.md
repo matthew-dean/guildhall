@@ -8,6 +8,46 @@ help_summary: |
 
 # Web UI flow audit
 
+2026-07-06T19:06:35Z - CLI workspace-import draft uses the same materialized task graph as the app draft.
+
+- Work id: `codex:cli-workspace-import-materialized-proof-2026-07-06`.
+- User job: The owner or an agent should be able to inspect a read-only
+  `guildhall workspace-import draft --json` report and see the same kind of
+  task/proof structure Guildhall will show in the app before approval.
+- Escaped live failure:
+  - `guildhall workspace-import draft narrative-harness --json` reported `34`
+    raw hypothesis tasks and `0` tasks with `proofPaths`.
+  - The installed app draft API reported the materialized detected task graph
+    with `23` tasks and `2` tasks with `proofPaths`.
+  - That meant CLI calibration could falsely conclude proof expectations were
+    missing even when the app-side materialized draft had recovered them.
+- Root-cause classification:
+  - Data model/schema problem: CLI draft reports returned the pre-materialized
+    hypothesis draft, while the app draft endpoint returned materialized tasks.
+  - Task hierarchy/dependency/proof modeling problem: proof expectations lived
+    behind the materialization step, so the raw CLI shape dropped them.
+  - UI communication/orientation problem: two owner-facing inspection surfaces
+    disagreed about task count and proof visibility for the same project.
+- Fix:
+  - `buildWorkspaceImportDraftReport` now calls
+    `materializeWorkspaceImportDraft` before building the review summary or
+    returning JSON, while keeping the command read-only.
+- Verification:
+  - Red test first:
+    `CI=true pnpm exec vitest run src/runtime/__tests__/cli.test.ts -t "read-only workspace-import draft report"`
+    failed because no report task had `proofPaths`.
+  - After moving the proof assertion to a full-project fixture and wiring the
+    materializer, `CI=true pnpm exec vitest run src/runtime/__tests__/cli.test.ts -t "workspace-import draft report"`
+    passed.
+  - Real Narrative Harness proof after `CI=true pnpm build`:
+    `node dist/cli.js workspace-import draft narrative-harness --json`
+    reported `23` tasks, `2` tasks with `proofPaths`, and headline
+    `Stage 1: Headless Drafting And Evaluation MVP is the current documented scope.`
+  - Installed app proof after `CI=true pnpm dev:install` and
+    `guildhall stop && guildhall start`: `/api/stale-server` returned
+    `stale:false` for PID `49401` from
+    `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+
 2026-07-06T19:00:14Z - Workspace Import review headline follows the current work scope, not the first stage context.
 
 - Work id: `codex:workspace-import-current-scope-headline-2026-07-06`.

@@ -53,6 +53,7 @@ import { getProjectStateDir } from '@guildhall/sessions'
 import type { ConsumerReturnPacket, DeliveryReceipt } from './project-graph.js'
 import { detectWorkspaceSignals, formWorkspaceHypothesis, type WorkspaceImportDraft, type WorkspaceSignal } from './workspace-import/index.js'
 import { buildWorkspaceImportReview, type WorkspaceImportReview } from './workspace-import/review.js'
+import { materializeWorkspaceImportDraft } from './workspace-importer.js'
 
 function openBrowser(url: string): void {
   const cmd = platform() === 'darwin' ? `open "${url}"`
@@ -1324,7 +1325,11 @@ export async function buildWorkspaceImportDraftReport(input: {
       inventory = await detectWorkspaceSignals({ projectPath })
     }
 
-    const draft = formWorkspaceHypothesis(inventory)
+    const draft = await materializeWorkspaceImportDraft({
+      memoryDir: getProjectStateDir(projectPath),
+      projectPath,
+      draft: formWorkspaceHypothesis(inventory),
+    })
     const review = buildWorkspaceImportReview(draft, [], projectPath)
     return {
       projectPath,
