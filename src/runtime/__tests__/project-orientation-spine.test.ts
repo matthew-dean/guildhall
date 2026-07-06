@@ -1137,6 +1137,39 @@ describe('buildProjectOrientationSpine', () => {
     expect(spine.summary.nextAction).toBe('Refresh the workspace import.')
   })
 
+  it('keeps workspace-import refresh as the top blocker when ordinary task blockers also exist', () => {
+    const spine = buildProjectOrientationSpine({
+      projectId: 'looma-knit',
+      now: '2026-07-06T10:30:00.000Z',
+      scope: {
+        id: 'stage-1-finish-knit-primitive-replacement-wave',
+        label: 'Stage 1 Finish Knit Primitive Replacement Wave',
+        kind: 'release',
+        source: 'inferred',
+        nodeIds: ['work:block-menu', 'work:link-editing'],
+        deferredNodeIds: [],
+      },
+      tasks: [
+        { id: 'block-menu', title: 'Block menu / block side menu', status: 'blocked', blockReason: 'Needs proof.' },
+        { id: 'link-editing', title: 'Link editing UI', status: 'ready' },
+      ],
+      startReadiness: {
+        canStart: false,
+        code: 'workspace_import_refresh_needed',
+        message: 'Saved import is under-scoped for the current project docs.',
+        actionHref: '/workspace-import',
+      },
+      releaseReadiness: {
+        verdict: 'blocked',
+        blockers: [{ id: 'block-menu', label: 'Block menu / block side menu: blocked.' }],
+      },
+    })
+
+    expect(spine.summary.headline).toBe('Stage 1 Finish Knit Primitive Replacement Wave needs import refresh.')
+    expect(spine.summary.topBlocker).toBe('Workspace import is under-scoped.')
+    expect(spine.summary.nextAction).toBe('Refresh the workspace import.')
+  })
+
   it('extracts a headless script-only execution boundary and proof contracts for scoped work', () => {
     const spine = buildProjectOrientationSpine({
       projectId: 'narrative-harness',

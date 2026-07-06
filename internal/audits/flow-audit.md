@@ -1756,6 +1756,70 @@ child closure proof.
   - Apply/revert behavior: revert the `blockingKeys` union and restore the old
     category-sum calculation; no data rollback required.
 
+2026-07-06T10:45:00Z - Aligned orientation top blocker with blocking start readiness.
+
+- Work id: `codex:orientation-start-readiness-precedence-2026-07-06`.
+- User job: when Start is disabled because the current scope is not trustworthy
+  enough to run, Overview/Release/Map should all point to that scope-shaping
+  integrity problem. The project should not say "Do this next: shape/refresh
+  scope" while the orientation spine says the top blocker is an ordinary task
+  row.
+- Root-cause classification:
+  - Scheduler/action-state logic: `startReadiness` correctly blocked execution,
+    but orientation summary precedence discarded that blocker when release task
+    blockers also existed.
+  - UI communication/orientation: Looma + Knit showed competing truths: the
+    action model said workspace-import refresh, while the spine top blocker
+    said `Block menu / block side menu`.
+  - Project structure/scope/release modeling: under-scoped import and imported
+    scope shaping are scope integrity failures, so they must dominate ordinary
+    task execution blockers until the selected scope is trustworthy.
+- Fix:
+  - `buildSummary()` now keeps a non-null start-readiness blocker as the
+    orientation top blocker even when release blockers exist.
+  - The completed-scope edge case stays intact: if the selected included work is
+    already done, workspace-import refresh can remain follow-up work and proof
+    blockers can still dominate.
+- Contract Touch Decision:
+  - Work id: `codex:orientation-start-readiness-precedence-2026-07-06`.
+  - Touched contracts: orientation spine summary semantics; `/api/project/spine`
+    summary fields; `/api/project` embedded `orientationSpine.summary` fields;
+    owner-visible Overview/Release/Map top-blocker copy derived from the shared
+    spine.
+  - Contracts considered but not touched: task schema, release schema,
+    workspace-import approval schema, action-model schema, start-readiness
+    schema.
+  - Existing data impact: no migration. This changes derived read-model
+    precedence only.
+  - Required follow-up: installed-app proof for Looma + Knit must show
+    `startReadiness` and `orientationSpine.summary` agreeing on the same
+    blocking scope-integrity problem, instead of competing with an ordinary
+    task blocker.
+  - Proof required: focused orientation regression, existing completed-scope
+    proof-blocker regression, service tests for under-scoped workspace imports,
+    build, contract detector, installed-app API/browser readback.
+  - Proof provided: `project-orientation-spine.test.ts` passed `48` tests;
+    focused `serve-settings`, `serve-dashboard`, and `serve-release-readiness`
+    tests passed. `pnpm dev:install` rebuilt and installed the app; `guildhall
+    stop && guildhall start` restarted the installed service; `/api/stale-server`
+    returned `stale:false` with PID `44327`. Live installed
+    `/api/project?projectId=looma-knit` returned
+    `startReadiness.code:"imported_scope_shaping"`, primary action
+    `code:"imported_scope_shaping"`, `orientationSpine.summary.headline:"Stage
+    1 Finish Knit Primitive Replacement Wave is being shaped."`,
+    `orientationSpine.summary.topBlocker` matching the `12 current-scope tasks
+    still need source-backed shaping...` start-readiness message, and
+    `orientationSpine.summary.nextAction:"Shape the first current-scope task."`
+    Browser proof at `/projects/looma-knit/overview` showed the top disabled
+    action as `Needs shaping`, the alert link as `Shape first task`, the
+    orientation card as `Imported scope needs shaping`, and the At a glance
+    blocker as the same source-backed shaping message, with no ordinary
+    `Block menu / block side menu: blocked.` top-blocker text visible in the
+    page snapshot.
+  - Apply/revert behavior: revert the `includedWorkDone` precedence check and
+    the new regression to restore prior ordinary-task-blocker precedence; no
+    data rollback required.
+
 2026-07-04T19:59:23Z - Scoped release Git Story blockers to the selected
 release and hardened container repo discovery.
 

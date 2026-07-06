@@ -1717,11 +1717,13 @@ function buildSummary(input: {
         startReadiness: input.startReadiness,
       })
     : null
+  const includedWorkCount = Math.max(0, input.progress.total - input.progress.deferred)
+  const includedWorkDone = includedWorkCount > 0 && input.progress.done >= includedWorkCount
   const readinessSummary = input.startReadiness?.canStart === false &&
     input.blockers.length > 0 &&
     (
       rawReadinessSummary?.topBlocker === null ||
-      input.startReadiness.code === 'workspace_import_refresh_needed'
+      (input.startReadiness.code === 'workspace_import_refresh_needed' && includedWorkDone)
     )
     ? null
     : rawReadinessSummary
@@ -1732,7 +1734,7 @@ function buildSummary(input: {
     input.progress.blocked > 0 ||
     input.progress.sliced > 0 ||
     input.progress.total > input.progress.done + input.progress.deferred
-  const hasScopedWork = input.progress.total > input.progress.deferred
+  const hasScopedWork = includedWorkCount > 0
   const runStatus = input.runStatus ?? null
   const hasActiveWork = input.progress.active > 0
   const runIsRunning = runStatus === null || runStatus === 'running'
@@ -1763,8 +1765,8 @@ function buildSummary(input: {
     purpose,
     selectedReleaseLabel: releaseLabel,
     selectedScopeLabel: workLabel,
-    includedCount: input.progress.total - input.progress.deferred,
-    includedWorkCount: input.progress.total - input.progress.deferred,
+    includedCount: includedWorkCount,
+    includedWorkCount,
     deferredCount: input.progress.deferred,
     deferredWorkCount: input.progress.deferred,
     pinnedNow: input.pins.map(pin => pin.label),
