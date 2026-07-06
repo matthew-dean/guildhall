@@ -8,9 +8,120 @@ help_summary: |
 
 # Web UI flow audit
 
+2026-07-06T11:00:00Z - Narrative Harness MVP scope includes drafting model and continuity review proof.
+
+- Work id: `codex:narrative-harness-headless-mvp-scope-2026-07-06`.
+- User job: the Narrative Harness MVP must not appear as a thin schema/import
+  harness when the actual product proof requires shaping author intent,
+  selecting a viable drafting model, drafting chapter prose, and reviewing
+  world/spatial continuity. Guildhall should show that scope directly as
+  current release work.
+- Escaped live risk:
+  - The Narrative Harness roadmap kept model bakeoff in a later stage, which
+    let Guildhall present Stage 1 as fixture/evaluation infrastructure without
+    the DeepInfra drafting-model decision or the story-review lanes needed to
+    prove the MVP can write and critique fiction.
+  - Reviewer docs for world-state and spatial/geographic continuity existed,
+    but the current release did not force Guildhall to surface those proof
+    tasks as MVP work.
+- Root-cause classification:
+  - Project structure/data modeling: the selected release boundary was too
+    narrow for the real MVP capability chain.
+  - UI communication/orientation: the project map could honestly show a scoped
+    release while still hiding the authoring/review capabilities the owner
+    expects from the MVP.
+  - Data sync: open source-backed tasks could keep stale generic acceptance
+    criteria after the source docs gained sharper proof requirements.
+- Fix:
+  - Narrative Harness Stage 1 is now `Headless Drafting And Evaluation MVP`.
+    Current starter tasks include DeepInfra drafting-model proof, author-intent
+    input records, CLI-first synopsis/outline/chapter drafting, world-state
+    continuity review, and spatial/geographic continuity review.
+  - Project re-intake now gives those MVP tasks concrete acceptance criteria
+    instead of generic imported-task criteria.
+  - Project re-intake now refreshes open source-shaped prototype tasks when
+    the current classifier can derive better proof criteria from the source
+    docs, while preserving completed/in-progress task evidence.
+- Contract Touch Decision:
+  - Work id: `codex:narrative-harness-headless-mvp-scope-2026-07-06`.
+  - Touched contracts: project re-intake task-shaping logic and the
+    Narrative Harness roadmap source truth used by workspace/re-intake.
+  - Contracts considered but not touched: persisted TASKS schema,
+    orientation-spine schema, workspace-import draft schema, release-readiness
+    schema.
+  - Existing data impact: re-intake can refresh Narrative Harness open
+    source-backed MVP tasks from generic imported criteria to source-shaped
+    criteria without rewriting completed work.
+  - Required follow-up: continue clearing the remaining source-backed shaping
+    blockers before Start can run unattended for the selected scope.
+  - Proof provided so far: `project-reintake-apply.test.ts` and
+    `project-reintake.test.ts` passed `25` tests; after the refresh-pass fix,
+    `project-reintake-apply.test.ts`, `project-reintake.test.ts`,
+    `workspace-importer.test.ts`, and `project-action-model.test.ts` passed
+    `128` tests. Installed app proof: `/api/stale-server` returned
+    `stale:false`; live Narrative Harness re-intake returned
+    `refresh-source-shaped-prototype-tasks` with `5` changes and apply
+    returned `success:true`, `appliedGroups:3`; `/api/project?projectId=narrative-harness`
+    reports selected scope `Near-term proof scope`, `includedWorkCount:16`,
+    `deferredWorkCount:22`, and the five MVP tasks now carry criteria
+    `deepinfra-model-candidate` / `broad-genre-drafting-proof` /
+    `drafting-failure-telemetry`, `author-intent-records` /
+    `intent-to-packet-proof` / `content-boundary-input`,
+    `synopsis-to-outline-chain` / `chapter-draft-command` /
+    `author-voice-preservation`, `elapsed-time-state-transitions` /
+    `world-state-finding-shape` / `world-rule-exceptions`, and
+    `travel-plausibility-proof` / `genre-aware-geography` /
+    `spatial-finding-shape`.
+  - Apply/revert behavior: restore the prior Narrative Harness roadmap text
+    and remove the new re-intake prototype kinds/criteria; rerun re-intake to
+    return to fixture-only Stage 1 scope.
+
 This is the active browser test plan for the Guildhall project surface. Keep it
 updated while auditing the active test project so another agent can resume
 without guessing.
+
+2026-07-06T10:51:00Z - Workspace-import refresh action uses explicit copy.
+
+- Work id: `codex:workspace-import-refresh-action-copy-2026-07-06`.
+- User job: when Guildhall blocks Start because the saved workspace import is
+  under-scoped or structurally stale, the primary action must name the import
+  refresh action. The owner should not see a generic `Open item` button for a
+  project-level scope integrity problem.
+- Escaped live failure:
+  - Installed Looma + Knit `/api/project?projectId=looma-knit` returned
+    `startReadiness.code:"workspace_import_refresh_needed"` and
+    `actionHref:"/workspace-import"`, while the shared action model rendered
+    the full blocker message as the action label and `buttonLabel:"Open item"`.
+  - The orientation summary correctly said `Workspace import is under-scoped.`
+    and `Refresh the workspace import.`, so the top action was less clear than
+    the summary underneath it.
+- Root-cause classification:
+  - Scheduler/action-state logic: `workspace_import_refresh_needed` had a real
+    readiness code and target but fell through shared action-label defaults.
+  - UI communication/orientation: top action copy forced the owner to decode a
+    long blocker sentence instead of presenting the next action directly.
+- Fix:
+  - `buildProjectActionModel` now maps `workspace_import_refresh_needed` to
+    label `Workspace import needs refresh`, button `Refresh import`, and
+    run-control label `Refresh import`.
+- Contract Touch Decision:
+  - Work id: `codex:workspace-import-refresh-action-copy-2026-07-06`.
+  - Touched contracts: shared project action model presentation for
+    `workspace_import_refresh_needed`.
+  - Contracts considered but not touched: start-readiness payload schema,
+    workspace-import draft/schema, release-readiness schema, scheduler start
+    endpoint shape.
+  - Existing data impact: none. Derived presentation only.
+  - Required follow-up: installed-app proof must show Looma + Knit primary
+    action uses the explicit import-refresh copy while the blocker is present.
+  - Proof required: action-model regression, contract detector, build/install,
+    stale check, live API/browser proof.
+  - Proof provided so far: `project-action-model.test.ts` passed `21` tests;
+    `git diff --check` passed; contract detector passed. Installed proof
+    follows after rebuild/install.
+  - Apply/revert behavior: remove the explicit
+    `workspace_import_refresh_needed` action-label branches and regression to
+    restore generic fallback behavior; no data rollback is required.
 
 2026-07-06T10:47:00Z - Repository follow-up action uses explicit owner-facing copy.
 

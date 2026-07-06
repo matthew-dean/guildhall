@@ -51,6 +51,30 @@ describe('buildProjectActionModel', () => {
       startEnabled: false,
     })
 
+    const workspaceImportRefresh = buildProjectActionModel({
+      startReadiness: {
+        canStart: false,
+        code: 'workspace_import_refresh_needed',
+        message: "Guildhall's saved import is under-scoped for the current project docs. Refresh the import before treating this project as complete.",
+        actionHref: '/workspace-import',
+      },
+      tasks: [],
+      thread: { turns: [], activeTurnId: null },
+      runStatus: 'stopped',
+    })
+    expect(workspaceImportRefresh.primaryAction).toMatchObject({
+      source: 'start_readiness',
+      label: 'Workspace import needs refresh',
+      detail: "Guildhall's saved import is under-scoped for the current project docs. Refresh the import before treating this project as complete.",
+      buttonLabel: 'Refresh import',
+      href: '/workspace-import',
+      tone: 'warn',
+    })
+    expect(workspaceImportRefresh.runControl).toMatchObject({
+      label: 'Refresh import',
+      startEnabled: false,
+    })
+
     const repositoryFollowup = buildProjectActionModel({
       startReadiness: {
         canStart: false,

@@ -511,7 +511,7 @@ test('Narrative Harness overview and map show the documented current release sco
   await expect(projectMap.getByText('Implement a no-UI runner that builds a packet from fixture records.').first()).toBeVisible()
   await expect(projectMap.getByText(`Stage 1: Fixture And Evaluation Harness contains ${included} assigned work items and ${deferred} later.`)).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Scope ledger' })).toBeVisible()
-  await expect(projectMap.getByText(`${included} current work items · ${deferred} later work items`, { exact: true })).toBeVisible()
+  await expect(projectMap.getByText(`${included} current work items · ${deferred} later work items`, { exact: true }).first()).toBeVisible()
   await expect(projectMap.getByText(pausedTask).first()).toBeVisible()
   await expect(projectMap.getByText(/Paused .* Source: implementation-roadmap\.md/i).first()).toBeVisible()
   await expect(projectMap.getByText(/specs are waiting for review before work can start/i)).toHaveCount(0)

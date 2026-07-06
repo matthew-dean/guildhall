@@ -1131,7 +1131,7 @@ tasks:
         id: 'nh-headless-mvp',
         label: 'NH Headless MVP',
         state: 'active',
-        source: 'release_plan',
+        source: 'inferred',
       }),
     ]))
   })
@@ -5177,6 +5177,87 @@ tasks:
     expect(materialized.tasks.find(task =>
       task.title === 'Implement fixture-and-expected-record schemas (from schema-contract-roadmap)',
     )).toBeUndefined()
+  })
+
+  it('materializes Narrative Harness MVP drafting and continuity tasks with specific proof criteria', async () => {
+    await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'harness', 'implementation-roadmap.md'),
+      [
+        '# Implementation Roadmap',
+        '',
+        '## Stage 1: Headless Drafting And Evaluation MVP',
+        '',
+        'Goal: build a no-UI or CLI-first proof that Narrative Harness can shape fiction intent, choose a viable drafting model, generate a bounded draft, and review the draft through story-memory and continuity lenses before any product UI is designed.',
+        '',
+        'Deliverables:',
+        '',
+        '- DeepInfra drafting-model selection and bakeoff proof for broad fiction genres, including legal adult fiction inside the product content boundary',
+        '- author voice, genre, audience, theme, synopsis, outline, character, character voice, world-state, and review-plan input records',
+        '- chapter-drafting proof from synopsis, outline, author voice, character voices, world-state facts, and review plan',
+        '- world-state reviewer proof for object/property state changes over elapsed time',
+        '- spatial/geographic reviewer proof for place, distance, travel time, terrain, walking speed, weather, light, and map consistency',
+        '',
+        '## Stage 2: Mastra Agent Prototype',
+        '',
+        'Deliverables:',
+        '',
+        '- specialist editor agent calls for the first review lanes',
+        '',
+        '## Current Next Milestone',
+        '',
+        'The next milestone is Stage 1: Headless Drafting And Evaluation MVP.',
+        '',
+        '1. Select and prove a DeepInfra drafting model for broad-genre chapter writing.',
+        '2. Add author-intent inputs for voice, genre, audience, theme, synopsis, outline, characters, character voices, world-state facts, and review plan.',
+        '3. Generate a CLI-first story synopsis, outline, character/voice records, and one chapter draft from the selected model.',
+        '4. Prove world-state continuity review over elapsed-time object and property changes.',
+        '5. Prove spatial/geographic continuity review for travel, terrain, walking speed, map consistency, weather, light, and physical plausibility.',
+      ].join('\n'),
+      'utf-8',
+    )
+
+    const inventory = await detectWorkspaceSignals({ projectPath: tmpDir })
+    const draft = formWorkspaceHypothesis(inventory)
+    const materialized = await materializeWorkspaceImportDraft({
+      memoryDir,
+      projectPath: tmpDir,
+      draft,
+    })
+
+    const criteriaFor = (title: string) =>
+      materialized.tasks.find(task => task.title === title)?.acceptanceCriteria?.map(criterion => criterion.id)
+
+    expect(criteriaFor('Select and prove a DeepInfra drafting model for broad-genre chapter writing.')).toEqual([
+      'deepinfra-model-candidate',
+      'broad-genre-drafting-proof',
+      'drafting-failure-telemetry',
+      'deterministic-proof',
+    ])
+    expect(criteriaFor('Add author-intent inputs for voice, genre, audience, theme, synopsis, outline, characters, character voices, world-state facts, and review plan.')).toEqual([
+      'author-intent-records',
+      'intent-to-packet-proof',
+      'content-boundary-input',
+      'deterministic-proof',
+    ])
+    expect(criteriaFor('Generate a CLI-first story synopsis, outline, character/voice records, and one chapter draft from the selected model.')).toEqual([
+      'synopsis-to-outline-chain',
+      'chapter-draft-command',
+      'author-voice-preservation',
+      'deterministic-proof',
+    ])
+    expect(criteriaFor('Prove world-state continuity review over elapsed-time object and property changes.')).toEqual([
+      'elapsed-time-state-transitions',
+      'world-state-finding-shape',
+      'world-rule-exceptions',
+      'deterministic-proof',
+    ])
+    expect(criteriaFor('Prove spatial/geographic continuity review for travel, terrain, walking speed, map consistency, weather, light, and physical plausibility.')).toEqual([
+      'travel-plausibility-proof',
+      'genre-aware-geography',
+      'spatial-finding-shape',
+      'deterministic-proof',
+    ])
   })
 
   it('does not resurrect stale imported queue work when materializing a parsed current slice', async () => {

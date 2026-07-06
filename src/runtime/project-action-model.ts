@@ -198,6 +198,7 @@ function startReadinessButtonLabel(readiness: ProjectActionStartReadiness): stri
   }
   if (readiness.code === 'import_drafts_waiting') return 'Review drafts'
   if (readiness.code === 'imported_scope_shaping') return 'Shape first task'
+  if (readiness.code === 'workspace_import_refresh_needed') return 'Refresh import'
   if (readiness.code === 'proof_evidence_missing') return 'Attach proof'
   if (readiness.code === 'repository_followup_required') return 'Open release'
   if (readiness.code === 'paused_live_work') return 'Open Work'
@@ -226,6 +227,7 @@ function runControlLabel(readiness: ProjectActionStartReadiness | null | undefin
   if (isProviderReadinessCode(readiness.code)) return 'Needs provider'
   if (readiness.code === 'all_terminal') return 'No runnable tasks'
   if (readiness.code === 'imported_scope_shaping') return 'Needs shaping'
+  if (readiness.code === 'workspace_import_refresh_needed') return 'Refresh import'
   if (readiness.code === 'proof_evidence_missing') return 'Needs proof'
   if (readiness.code === 'repository_followup_required') return 'Repo follow-up'
   if (readiness.code === 'paused_live_work') return 'Resume'
@@ -252,6 +254,7 @@ function startReadinessActionLabel(readiness: ProjectActionStartReadiness): stri
   if (readiness.code === 'required_migration_pending') return 'Required migration'
   if (readiness.code === 'import_drafts_waiting') return 'Review imported drafts'
   if (readiness.code === 'imported_scope_shaping') return 'Imported scope needs shaping'
+  if (readiness.code === 'workspace_import_refresh_needed') return 'Workspace import needs refresh'
   if (readiness.code === 'proof_evidence_missing') return readiness.focusTaskTitle?.trim() || 'Proof evidence missing'
   if (readiness.code === 'repository_followup_required') return 'Repository follow-up required'
   if (readiness.code === 'paused_live_work') return readiness.focusTaskTitle?.trim() || 'Paused live work'

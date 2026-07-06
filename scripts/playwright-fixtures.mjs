@@ -24,6 +24,23 @@ function projectLocalHistoryDir(projectPath) {
   return join(guildhallHome, 'data', 'projects', `${basename(resolved) || 'root'}-${digest}`)
 }
 
+function normalizeFixtureTask(task) {
+  return {
+    ...task,
+    createdAt: typeof task.createdAt === 'string' ? task.createdAt : now,
+    updatedAt: typeof task.updatedAt === 'string' ? task.updatedAt : now,
+  }
+}
+
+function normalizeTaskQueueTimestamps(queue) {
+  if (Array.isArray(queue)) return queue.map(normalizeFixtureTask)
+  return {
+    ...queue,
+    lastUpdated: typeof queue.lastUpdated === 'string' ? queue.lastUpdated : now,
+    tasks: Array.isArray(queue.tasks) ? queue.tasks.map(normalizeFixtureTask) : [],
+  }
+}
+
 async function markFixtureProjectStateMigrated(localHistoryDir) {
   await mkdir(join(localHistoryDir, 'migrations'), { recursive: true })
   await writeFile(
@@ -149,20 +166,20 @@ async function writeProject({
         }
       : {}),
   }))
-  const persistedTasks = taskQueue ?? tasks
+  const persistedTasks = normalizeTaskQueueTimestamps(taskQueue ?? tasks)
   await writeFile(join(memoryDir, 'TASKS.json'), JSON.stringify(persistedTasks, null, 2), 'utf8')
   if (taskQueue && taskQueueMigrated) {
     const localHistoryDir = projectLocalHistoryDir(projectPath)
     const managedStateDir = join(localHistoryDir, 'project-state')
     await mkdir(managedStateDir, { recursive: true })
-    await writeFile(join(managedStateDir, 'TASKS.json'), JSON.stringify(taskQueue, null, 2), 'utf8')
+    await writeFile(join(managedStateDir, 'TASKS.json'), JSON.stringify(persistedTasks, null, 2), 'utf8')
     await markFixtureProjectStateMigrated(localHistoryDir)
   }
   if (id === 'capability-boundary') {
     const localHistoryDir = projectLocalHistoryDir(projectPath)
     const managedStateDir = join(localHistoryDir, 'project-state')
     await mkdir(managedStateDir, { recursive: true })
-    await writeFile(join(managedStateDir, 'TASKS.json'), JSON.stringify({ version: 1, lastUpdated: now, tasks }, null, 2), 'utf8')
+    await writeFile(join(managedStateDir, 'TASKS.json'), JSON.stringify(normalizeTaskQueueTimestamps({ version: 1, lastUpdated: now, tasks }), null, 2), 'utf8')
     await writeFile(join(managedStateDir, 'project-brief.md'), `${name} fixture covers owner approval for runtime capability requests.\n`, 'utf8')
     await writeFile(join(managedStateDir, 'workspace-goals.json'), JSON.stringify({ goals: [] }, null, 2), 'utf8')
     await writeFile(

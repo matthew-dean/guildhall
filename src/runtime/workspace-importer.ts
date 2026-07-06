@@ -2640,13 +2640,18 @@ function importedTaskLooksContractDriven(task: MaterializedImportTask): boolean 
 
 function importedPrototypeTaskKind(
   task: MaterializedImportTask,
-): 'fixture' | 'runner' | 'evaluation' | 'debug_report' | 'schema_prune' | null {
+): 'fixture' | 'runner' | 'evaluation' | 'debug_report' | 'schema_prune' | 'drafting_model' | 'author_intent' | 'chapter_draft' | 'world_state_review' | 'spatial_review' | null {
   const title = task.title.trim()
   if (/^add the first tiny fiction fixture and human-authored expected records\.?$/i.test(title)) return 'fixture'
   if (/\bno-ui runner\b/i.test(title) || /\bbuilds a packet from fixture records\b/i.test(title)) return 'runner'
   if (/\bdeterministic evaluation output\b/i.test(title)) return 'evaluation'
   if (/\bdebug report\b/i.test(title)) return 'debug_report'
   if (/\bnarrow the mvp story-memory schema\b/i.test(title)) return 'schema_prune'
+  if (/\bdeepinfra\b/i.test(title) && /\bdrafting model\b/i.test(title)) return 'drafting_model'
+  if (/\bauthor-intent\b/i.test(title) && /\b(inputs?|voice|genre|audience|theme|review plan)\b/i.test(title)) return 'author_intent'
+  if (/\bcli-first story synopsis\b/i.test(title) || /\bone chapter draft\b/i.test(title)) return 'chapter_draft'
+  if (/\bworld-state\b/i.test(title) && /\bcontinuity review\b/i.test(title)) return 'world_state_review'
+  if (/\bspatial\/geographic\b/i.test(title) && /\bcontinuity review\b/i.test(title)) return 'spatial_review'
   return null
 }
 
@@ -2875,6 +2880,161 @@ function derivePrototypeTaskAcceptanceCriteria(
           met: false,
         },
         deterministicImportedCriterion(task, proofCommand, 'Schema narrowing has deterministic proof tied to the first bounded run.'),
+      ]
+    case 'drafting_model':
+      return [
+        {
+          id: 'deepinfra-model-candidate',
+          description: 'The task records a DeepInfra-hosted drafting model candidate with model id, context window, license, privacy/retention notes, content-policy boundary, cost, and fallback risk.',
+          scenario: 'Review the selected drafting model record.',
+          expectation: 'The model choice is source-backed and fit for Narrative Harness drafting work, not a guessed default.',
+          verifiedBy: 'review',
+          source: 'inferred',
+          met: false,
+        },
+        {
+          id: 'broad-genre-drafting-proof',
+          description: 'The model is tested against chapter-drafting scenarios across the intended fiction range, including legal adult fiction inside the Narrative Harness content boundary.',
+          scenario: 'Run or review the drafting bakeoff fixture set.',
+          expectation: 'The model can draft across the intended genre range without genre-level refusal for legal adult fiction.',
+          verifiedBy: 'review',
+          source: 'inferred',
+          met: false,
+        },
+        {
+          id: 'drafting-failure-telemetry',
+          description: 'The proof records refusal behavior, repetition/runaway behavior, cost, latency, and whether the output preserves author voice and genre constraints.',
+          scenario: 'Inspect the model proof output.',
+          expectation: 'The model selection records concrete operating risks before the MVP treats it as usable.',
+          verifiedBy: 'review',
+          source: 'inferred',
+          met: false,
+        },
+        deterministicImportedCriterion(task, proofCommand, 'DeepInfra drafting-model selection has bounded local proof.'),
+      ]
+    case 'author_intent':
+      return [
+        {
+          id: 'author-intent-records',
+          description: 'Records exist for voice, genre, audience, theme, synopsis, outline, characters, character voices, world-state facts, and review plan.',
+          scenario: 'Load the first author-intent fixture.',
+          expectation: 'The fixture captures the inputs needed to draft and review fiction without asking the author to reconstruct context manually.',
+          verifiedBy: 'review',
+          source: 'inferred',
+          met: false,
+        },
+        {
+          id: 'intent-to-packet-proof',
+          description: 'The no-UI packet builder can feed author-intent records into drafting and review without relying on a completed product UI.',
+          scenario: 'Build one drafting/review packet from author-intent records.',
+          expectation: 'Intent records become bounded packet inputs instead of loose prose notes.',
+          verifiedBy: 'review',
+          source: 'inferred',
+          met: false,
+        },
+        {
+          id: 'content-boundary-input',
+          description: 'The author-intent input captures heat level/content boundary so adult fiction support stays inside the product policy.',
+          scenario: 'Review a fixture that includes adult-fiction boundary settings.',
+          expectation: 'The packet carries enough policy context to support legal adult fiction while rejecting disallowed material.',
+          verifiedBy: 'review',
+          source: 'inferred',
+          met: false,
+        },
+        deterministicImportedCriterion(task, proofCommand, 'Author-intent inputs have bounded local proof.'),
+      ]
+    case 'chapter_draft':
+      return [
+        {
+          id: 'synopsis-to-outline-chain',
+          description: 'The task can generate or load a synopsis, outline, character/voice records, and world-state facts before drafting.',
+          scenario: 'Run the first synopsis-to-outline-to-records fixture.',
+          expectation: 'Chapter drafting starts from structured story context, not a one-shot prompt blob.',
+          verifiedBy: 'review',
+          source: 'inferred',
+          met: false,
+        },
+        {
+          id: 'chapter-draft-command',
+          description: 'A pnpm script or CLI command drafts one chapter from the selected model using the bounded context packet and review plan.',
+          scenario: 'Execute the chapter-draft proof command.',
+          expectation: 'The MVP can produce a reviewable chapter draft without a completed product UI.',
+          verifiedBy: 'review',
+          source: 'inferred',
+          met: false,
+        },
+        {
+          id: 'author-voice-preservation',
+          description: 'The draft proof records whether the chapter follows the requested author voice, genre, audience, and character voices.',
+          scenario: 'Inspect reviewer output for the generated chapter.',
+          expectation: 'The draft is evaluated for voice and genre fit instead of only checking that text exists.',
+          verifiedBy: 'review',
+          source: 'inferred',
+          met: false,
+        },
+        deterministicImportedCriterion(task, proofCommand, 'Chapter drafting has bounded local proof.'),
+      ]
+    case 'world_state_review':
+      return [
+        {
+          id: 'elapsed-time-state-transitions',
+          description: 'The reviewer checks object and property changes over elapsed time, such as wet hair drying by climate, food spoiling, wounds healing, fires cooling, or objects being moved/used/consumed.',
+          scenario: 'Run a fixture with a deliberate elapsed-time state contradiction.',
+          expectation: 'The reviewer flags the contradiction using time, environment, and object/property evidence.',
+          verifiedBy: 'review',
+          source: 'inferred',
+          met: false,
+        },
+        {
+          id: 'world-state-finding-shape',
+          description: 'Reviewer output names the entity, prior state, later state, elapsed time, environment, expected transition, contradiction, and source passages.',
+          scenario: 'Inspect one world-state finding.',
+          expectation: 'The finding explains the state transition rather than only saying continuity is broken.',
+          verifiedBy: 'review',
+          source: 'inferred',
+          met: false,
+        },
+        {
+          id: 'world-rule-exceptions',
+          description: 'The proof preserves explicit magic, technology, or storyworld rules as exceptions instead of treating every non-real-world transition as an error.',
+          scenario: 'Run a control fixture with a stated storyworld exception.',
+          expectation: 'The reviewer keeps valid exceptions out of the finding list.',
+          verifiedBy: 'review',
+          source: 'inferred',
+          met: false,
+        },
+        deterministicImportedCriterion(task, proofCommand, 'World-state review has bounded local proof.'),
+      ]
+    case 'spatial_review':
+      return [
+        {
+          id: 'travel-plausibility-proof',
+          description: 'The reviewer checks distance, travel time, terrain, travel mode, walking speed, weather, light, and map consistency for a deliberately inconsistent fixture.',
+          scenario: 'Run a fixture with impossible ordinary travel.',
+          expectation: 'The reviewer flags unsupported movement or geography using concrete travel/plausibility evidence.',
+          verifiedBy: 'review',
+          source: 'inferred',
+          met: false,
+        },
+        {
+          id: 'genre-aware-geography',
+          description: 'The reviewer distinguishes ordinary walking-speed impossibilities from explicit fantasy/speculative exceptions such as magic, mounts, portals, or non-human physiology.',
+          scenario: 'Run an impossible-travel fixture plus a stated-exception control.',
+          expectation: 'The lane catches the impossible ordinary journey and preserves the documented fantasy exception.',
+          verifiedBy: 'review',
+          source: 'inferred',
+          met: false,
+        },
+        {
+          id: 'spatial-finding-shape',
+          description: 'Reviewer output names the passage, location, claimed movement/geography, expected plausible behavior, difference, severity, and evidence.',
+          scenario: 'Inspect one spatial/geographic finding.',
+          expectation: 'The finding is specific enough for a writer to fix the scene or add an intentional exception.',
+          verifiedBy: 'review',
+          source: 'inferred',
+          met: false,
+        },
+        deterministicImportedCriterion(task, proofCommand, 'Spatial/geographic review has bounded local proof.'),
       ]
   }
 }
@@ -4257,6 +4417,101 @@ function derivePrototypeTaskWorkUnits(
           suggestedDomain: task.domain,
           dependsOn: [`unit-${task.id}-prune`],
         }] : []),
+      ]
+    case 'drafting_model':
+      return [
+        {
+          id: `unit-${task.id}-model-record`,
+          title: 'Record the DeepInfra drafting model candidate',
+          deliverable: 'The model record names provider, model id, context window, license, retention/privacy posture, cost, adult-fiction policy boundary, and fallback risk.',
+          rationale: 'The MVP cannot prove drafting if model choice is implicit or guessed.',
+          suggestedDomain: task.domain,
+          dependsOn: baseDependsOn,
+        },
+        {
+          id: `unit-${task.id}-bakeoff`,
+          title: 'Prove broad-genre chapter drafting behavior',
+          deliverable: 'The bakeoff records voice preservation, legal adult-fiction behavior, refusal/repetition risk, cost, and latency.',
+          rationale: 'A writing MVP needs evidence that the selected model can actually draft in the intended fiction range.',
+          suggestedDomain: task.domain,
+          dependsOn: [`unit-${task.id}-model-record`],
+        },
+      ]
+    case 'author_intent':
+      return [
+        {
+          id: `unit-${task.id}-intent-records`,
+          title: 'Define author-intent records',
+          deliverable: 'Voice, genre, audience, theme, synopsis, outline, character voices, world-state facts, and review plan become packet-ready records.',
+          rationale: 'The author should not have to reconstruct story intent manually for each run.',
+          suggestedDomain: task.domain,
+          dependsOn: baseDependsOn,
+        },
+        {
+          id: `unit-${task.id}-policy-boundary`,
+          title: 'Carry content boundary into packets',
+          deliverable: 'Heat level and content-policy boundary travel with the author-intent packet inputs.',
+          rationale: 'Adult-fiction support needs explicit policy context, not blanket refusal or invisible permissiveness.',
+          suggestedDomain: task.domain,
+          dependsOn: [`unit-${task.id}-intent-records`],
+        },
+      ]
+    case 'chapter_draft':
+      return [
+        {
+          id: `unit-${task.id}-story-chain`,
+          title: 'Build the synopsis-to-outline-to-records chain',
+          deliverable: 'Synopsis, outline, character/voice records, and world-state facts are generated or loaded before drafting.',
+          rationale: 'Chapter drafting should come from structured story context instead of a single prompt blob.',
+          suggestedDomain: task.domain,
+          dependsOn: baseDependsOn,
+        },
+        {
+          id: `unit-${task.id}-chapter-proof`,
+          title: 'Draft one chapter from a bounded packet',
+          deliverable: 'A pnpm script or CLI command drafts one chapter and records author-voice and genre-fit review evidence.',
+          rationale: 'The headless MVP needs a real writing proof, not only reviewer infrastructure.',
+          suggestedDomain: task.domain,
+          dependsOn: [`unit-${task.id}-story-chain`],
+        },
+      ]
+    case 'world_state_review':
+      return [
+        {
+          id: `unit-${task.id}-state-transition-fixture`,
+          title: 'Create elapsed-time state-transition fixtures',
+          deliverable: 'Fixtures cover wet/dry, hot/cold, fresh/spoiled, healing, cooling, moved, used, or consumed state changes.',
+          rationale: 'World-state review must reason about time and environment, not only named facts.',
+          suggestedDomain: task.domain,
+          dependsOn: baseDependsOn,
+        },
+        {
+          id: `unit-${task.id}-finding-proof`,
+          title: 'Prove world-state findings explain state changes',
+          deliverable: 'Findings name entity, prior/later state, elapsed time, environment, expected transition, contradiction, and passages.',
+          rationale: 'The writer needs an actionable state-change explanation, not a generic continuity warning.',
+          suggestedDomain: task.domain,
+          dependsOn: [`unit-${task.id}-state-transition-fixture`],
+        },
+      ]
+    case 'spatial_review':
+      return [
+        {
+          id: `unit-${task.id}-travel-fixture`,
+          title: 'Create travel and geography plausibility fixtures',
+          deliverable: 'Fixtures cover distance, travel time, terrain, travel mode, walking speed, weather, light, and map consistency.',
+          rationale: 'Spatial review has to prove physical-world reasoning over concrete journeys and scene geography.',
+          suggestedDomain: task.domain,
+          dependsOn: baseDependsOn,
+        },
+        {
+          id: `unit-${task.id}-exception-proof`,
+          title: 'Prove genre-aware geography findings',
+          deliverable: 'The reviewer flags impossible ordinary movement while preserving explicit magic, mounts, portals, and non-human physiology exceptions.',
+          rationale: 'Fantasy and speculative fiction need plausibility review that respects the storyworld’s own rules.',
+          suggestedDomain: task.domain,
+          dependsOn: [`unit-${task.id}-travel-fixture`],
+        },
       ]
   }
 }

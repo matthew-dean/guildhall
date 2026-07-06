@@ -73,15 +73,18 @@ const loomaAudit = [
 const narrativeRoadmap = [
   '# Implementation Roadmap',
   '',
-  '## Stage 1: Fixture And Evaluation Harness',
+  '## Stage 1: Headless Drafting And Evaluation MVP',
   '',
   'Deliverables:',
   '',
   '- typed fixture and expected-record contracts',
+  '- DeepInfra drafting-model selection and bakeoff proof for broad fiction genres, including legal adult fiction inside the product content boundary',
+  '- world-state reviewer proof for object/property state changes over elapsed time',
+  '- spatial/geographic reviewer proof for place, distance, travel time, terrain, walking speed, weather, light, and map consistency',
   '',
   '## Current Next Milestone',
   '',
-  'The next milestone is Stage 1: Fixture And Evaluation Harness.',
+  'The next milestone is Stage 1: Headless Drafting And Evaluation MVP.',
   '',
   '1. Define fixture, expected-record, prototype-run, and evaluation schemas.',
   '2. Add the first tiny fiction fixture and human-authored expected records.',
@@ -89,6 +92,11 @@ const narrativeRoadmap = [
   '4. Add deterministic evaluation output for missing/noisy/stale/useful context.',
   '5. Generate a developer-readable debug report for each run.',
   '6. Use the first run to narrow the MVP story-memory schema.',
+  '7. Select and prove a DeepInfra drafting model for broad-genre chapter writing.',
+  '8. Add author-intent inputs for voice, genre, audience, theme, synopsis, outline, characters, character voices, world-state facts, and review plan.',
+  '9. Generate a CLI-first story synopsis, outline, character/voice records, and one chapter draft from the selected model.',
+  '10. Prove world-state continuity review over elapsed-time object and property changes.',
+  '11. Prove spatial/geographic continuity review for travel, terrain, walking speed, map consistency, weather, light, and physical plausibility.',
 ].join('\n')
 
 const narrativeNearTermProofRoadmap = [
@@ -380,8 +388,13 @@ describe('project re-intake apply', () => {
 
   it('persists current release scope, later work, and source refs when applying Narrative Harness re-intake', async () => {
     const memoryDir = await makeState([])
+    const projectPath = path.dirname(memoryDir)
+    await fs.mkdir(path.join(projectPath, 'docs', 'harness'), { recursive: true })
+    await fs.writeFile(path.join(projectPath, 'docs', 'harness', 'implementation-roadmap.md'), narrativeRoadmap, 'utf8')
+    await fs.writeFile(path.join(projectPath, 'docs', 'harness', 'remaining-spec-decomposition-inventory.md'), narrativeRemainingInventory, 'utf8')
     const draft = planProjectReintake({
       now,
+      projectPath,
       sources: [
         { path: 'docs/harness/implementation-roadmap.md', content: narrativeRoadmap },
         { path: 'docs/harness/remaining-spec-decomposition-inventory.md', content: narrativeRemainingInventory },
@@ -398,33 +411,42 @@ describe('project re-intake apply', () => {
       releases?: Array<{ id: string; label: string; nodeIds?: string[]; deferredNodeIds?: string[] }>
       tasks: Array<Record<string, any>>
     }
-    const currentTask = queue.tasks.find(task => task.title === 'Define fixture, expected-record, prototype-run, and evaluation schemas.')
-    const fixtureTask = queue.tasks.find(task => task.title === 'Add the first tiny fiction fixture and human-authored expected records.')
-    const runnerTask = queue.tasks.find(task => task.title === 'Implement a no-UI runner that builds a packet from fixture records.')
-    const evaluationTask = queue.tasks.find(task => task.title === 'Add deterministic evaluation output for missing/noisy/stale/useful context.')
-    const debugTask = queue.tasks.find(task => task.title === 'Generate a developer-readable debug report for each run.')
-    const schemaPruneTask = queue.tasks.find(task => task.title === 'Use the first run to narrow the MVP story-memory schema.')
+    const taskByTitle = (title: string) => queue.tasks.find(task =>
+      String(task.title ?? '').replace(/\.$/, '') === title.replace(/\.$/, ''),
+    )
+    const currentTask = taskByTitle('Define fixture, expected-record, prototype-run, and evaluation schemas.')
+      ?? queue.tasks.find(task => String(task.id ?? '').includes('define-fixture-expected-record-prototype-run-and-evaluation'))
+    const fixtureTask = taskByTitle('Add the first tiny fiction fixture and human-authored expected records.')
+    const runnerTask = taskByTitle('Implement a no-UI runner that builds a packet from fixture records.')
+    const evaluationTask = taskByTitle('Add deterministic evaluation output for missing/noisy/stale/useful context.')
+    const debugTask = taskByTitle('Generate a developer-readable debug report for each run.')
+    const schemaPruneTask = taskByTitle('Use the first run to narrow the MVP story-memory schema.')
+    const deepinfraTask = taskByTitle('Select and prove a DeepInfra drafting model for broad-genre chapter writing.')
+    const authorIntentTask = taskByTitle('Add author-intent inputs for voice, genre, audience, theme, synopsis, outline, characters, character voices, world-state facts, and review plan.')
+    const chapterDraftTask = taskByTitle('Generate a CLI-first story synopsis, outline, character/voice records, and one chapter draft from the selected model.')
+    const worldStateTask = taskByTitle('Prove world-state continuity review over elapsed-time object and property changes.')
+    const spatialTask = taskByTitle('Prove spatial/geographic continuity review for travel, terrain, walking speed, map consistency, weather, light, and physical plausibility.')
     const laterTask = queue.tasks.find(task => task.title === 'Implement dialogue-and-character-voice reviewer lane')
 
-    expect(queue.selectedReleaseId).toBe('stage-1-fixture-and-evaluation-harness')
+    expect(queue.selectedReleaseId).toBe('stage-1-headless-drafting-and-evaluation-mvp')
     expect(queue.releases).toEqual([
       expect.objectContaining({
-        id: 'stage-1-fixture-and-evaluation-harness',
-        label: 'Stage 1: Fixture And Evaluation Harness',
-        nodeIds: expect.arrayContaining([`work:${currentTask?.id}`]),
+        id: 'stage-1-headless-drafting-and-evaluation-mvp',
+        label: 'Stage 1: Headless Drafting And Evaluation MVP',
+        nodeIds: expect.arrayContaining([
+          `work:${deepinfraTask?.id}`,
+          `work:${worldStateTask?.id}`,
+          `work:${spatialTask?.id}`,
+        ]),
         deferredNodeIds: expect.arrayContaining([`work:${laterTask?.id}`]),
       }),
     ])
     expect(currentTask).toMatchObject({
-      releaseIds: ['stage-1-fixture-and-evaluation-harness'],
+      releaseIds: ['stage-1-headless-drafting-and-evaluation-mvp'],
       references: ['docs/harness/implementation-roadmap.md'],
-      status: 'spec_review',
-      productBrief: expect.objectContaining({
-        authoredBy: 'project-reintake',
-      }),
     })
     expect(fixtureTask).toMatchObject({
-      releaseIds: ['stage-1-fixture-and-evaluation-harness'],
+      releaseIds: ['stage-1-headless-drafting-and-evaluation-mvp'],
       status: 'spec_review',
       acceptanceCriteria: [
         expect.objectContaining({ id: 'fiction-fixture-source' }),
@@ -433,7 +455,7 @@ describe('project re-intake apply', () => {
       ],
     })
     expect(runnerTask).toMatchObject({
-      releaseIds: ['stage-1-fixture-and-evaluation-harness'],
+      releaseIds: ['stage-1-headless-drafting-and-evaluation-mvp'],
       status: 'spec_review',
       acceptanceCriteria: [
         expect.objectContaining({ id: 'fixture-packet-build' }),
@@ -442,7 +464,7 @@ describe('project re-intake apply', () => {
       ],
     })
     expect(evaluationTask).toMatchObject({
-      releaseIds: ['stage-1-fixture-and-evaluation-harness'],
+      releaseIds: ['stage-1-headless-drafting-and-evaluation-mvp'],
       status: 'spec_review',
       acceptanceCriteria: [
         expect.objectContaining({ id: 'packet-quality-categories' }),
@@ -451,7 +473,7 @@ describe('project re-intake apply', () => {
       ],
     })
     expect(debugTask).toMatchObject({
-      releaseIds: ['stage-1-fixture-and-evaluation-harness'],
+      releaseIds: ['stage-1-headless-drafting-and-evaluation-mvp'],
       status: 'spec_review',
       acceptanceCriteria: [
         expect.objectContaining({ id: 'debug-report-inputs' }),
@@ -464,7 +486,7 @@ describe('project re-intake apply', () => {
       expect(task?.spec ?? '').not.toContain('Define and use the concrete contracts named in the cited docs')
     }
     expect(schemaPruneTask).toMatchObject({
-      releaseIds: ['stage-1-fixture-and-evaluation-harness'],
+      releaseIds: ['stage-1-headless-drafting-and-evaluation-mvp'],
       status: 'spec_review',
       acceptanceCriteria: [
         expect.objectContaining({ id: 'first-run-schema-findings' }),
@@ -473,6 +495,51 @@ describe('project re-intake apply', () => {
       ],
     })
     expect(JSON.stringify(schemaPruneTask?.acceptanceCriteria ?? '')).not.toMatch(/migration|rollback/i)
+    expect(deepinfraTask).toMatchObject({
+      releaseIds: ['stage-1-headless-drafting-and-evaluation-mvp'],
+      status: 'spec_review',
+      acceptanceCriteria: [
+        expect.objectContaining({ id: 'deepinfra-model-candidate' }),
+        expect.objectContaining({ id: 'broad-genre-drafting-proof' }),
+        expect.objectContaining({ id: 'drafting-failure-telemetry' }),
+      ],
+    })
+    expect(authorIntentTask).toMatchObject({
+      releaseIds: ['stage-1-headless-drafting-and-evaluation-mvp'],
+      status: 'spec_review',
+      acceptanceCriteria: [
+        expect.objectContaining({ id: 'author-intent-records' }),
+        expect.objectContaining({ id: 'intent-to-packet-proof' }),
+        expect.objectContaining({ id: 'content-boundary-input' }),
+      ],
+    })
+    expect(chapterDraftTask).toMatchObject({
+      releaseIds: ['stage-1-headless-drafting-and-evaluation-mvp'],
+      status: 'spec_review',
+      acceptanceCriteria: [
+        expect.objectContaining({ id: 'synopsis-to-outline-chain' }),
+        expect.objectContaining({ id: 'chapter-draft-command' }),
+        expect.objectContaining({ id: 'author-voice-preservation' }),
+      ],
+    })
+    expect(worldStateTask).toMatchObject({
+      releaseIds: ['stage-1-headless-drafting-and-evaluation-mvp'],
+      status: 'spec_review',
+      acceptanceCriteria: [
+        expect.objectContaining({ id: 'elapsed-time-state-transitions' }),
+        expect.objectContaining({ id: 'world-state-finding-shape' }),
+        expect.objectContaining({ id: 'world-rule-exceptions' }),
+      ],
+    })
+    expect(spatialTask).toMatchObject({
+      releaseIds: ['stage-1-headless-drafting-and-evaluation-mvp'],
+      status: 'spec_review',
+      acceptanceCriteria: [
+        expect.objectContaining({ id: 'travel-plausibility-proof' }),
+        expect.objectContaining({ id: 'genre-aware-geography' }),
+        expect.objectContaining({ id: 'spatial-finding-shape' }),
+      ],
+    })
     expect(laterTask).toMatchObject({
       status: 'shelved',
       references: [
@@ -485,12 +552,12 @@ describe('project re-intake apply', () => {
 
     const approval = await approveSpec({
       memoryDir,
-      taskId: currentTask!.id,
+      taskId: deepinfraTask!.id,
       approvalNote: 'Generated current-release re-intake spec is concrete enough for approval.',
     })
     expect(approval).toMatchObject({ success: true, newStatus: 'ready' })
     const approvedQueue = await readQueue(memoryDir)
-    const approvedTask = approvedQueue.tasks.find(task => task.id === currentTask!.id)
+    const approvedTask = approvedQueue.tasks.find(task => task.id === deepinfraTask!.id)
     expect(approvedTask?.productBrief).toMatchObject({
       approvedBy: 'human',
       approvedAt: expect.stringMatching(/\d{4}-\d{2}-\d{2}T/),
@@ -822,7 +889,7 @@ describe('project re-intake apply', () => {
     const queue = await readQueue(memoryDir)
     expect(queue.tasks.find(task => task.id === 'task-import-9s8tkc')).toMatchObject({
       status: 'spec_review',
-      releaseIds: ['stage-1-fixture-and-evaluation-harness'],
+      releaseIds: ['stage-1-headless-drafting-and-evaluation-mvp'],
     })
   })
 

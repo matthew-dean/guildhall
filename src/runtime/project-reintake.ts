@@ -209,6 +209,23 @@ export function planProjectReintake(input: ProjectReintakeInput): ProjectReintak
     for (const change of structuralRepairChanges) usedTaskIds.add(change.taskId)
   }
 
+  const sourceShapedPrototypeRefreshChanges = refreshSourceShapedPrototypeTasks(
+    input.tasks,
+    usedTaskIds,
+    selectedRelease,
+    input.projectPath,
+    now,
+  )
+  if (sourceShapedPrototypeRefreshChanges.length > 0) {
+    groups.push({
+      id: 'refresh-source-shaped-prototype-tasks',
+      title: 'Refresh source-shaped prototype tasks',
+      rationale: 'Open prototype tasks should carry the current proof criteria from their source docs instead of keeping stale generic import criteria.',
+      changes: sourceShapedPrototypeRefreshChanges,
+    })
+    for (const change of sourceShapedPrototypeRefreshChanges) usedTaskIds.add(change.taskId)
+  }
+
   const progressChanges = preserveProgressChanges(input.tasks, usedTaskIds)
   if (progressChanges.length > 0) {
     groups.push({
@@ -667,7 +684,11 @@ function evidenceTaskToDraft(
   const importedBlueprint = projectPath
     ? buildImportedBlueprintSeed(evidenceTaskToMaterializedImportTask(task, references), references, projectPath, now)
     : null
-  const acceptanceCriteria = (importedBlueprint?.acceptanceCriteria ?? reintakeAcceptanceCriteria(task, contractNames)).map(criterion => ({
+  const sourceShapedCriteria = reintakeAcceptanceCriteria(task, contractNames)
+  const acceptanceCriteriaSource = reintakePrototypeTaskKind(task.title)
+    ? sourceShapedCriteria
+    : importedBlueprint?.acceptanceCriteria ?? sourceShapedCriteria
+  const acceptanceCriteria = acceptanceCriteriaSource.map(criterion => ({
     id: criterion.id,
     description: criterion.description,
     verifiedBy: criterion.verifiedBy ?? (criterion.id.includes('automated') || criterion.id.includes('regression') ? 'automated' : 'review'),
@@ -859,6 +880,101 @@ function reintakeAcceptanceCriteria(
       },
     ]
   }
+  if (prototypeKind === 'drafting_model') {
+    return [
+      {
+        id: 'deepinfra-model-candidate',
+        description: `${task.title} records a DeepInfra-hosted drafting model candidate with model id, context window, license, privacy/retention notes, content-policy boundary, cost, and fallback risk.`,
+        verifiedBy: 'review',
+      },
+      {
+        id: 'broad-genre-drafting-proof',
+        description: 'The model is tested against chapter-drafting scenarios across the intended fiction range, including legal adult fiction inside the Narrative Harness content boundary.',
+        verifiedBy: 'review',
+      },
+      {
+        id: 'drafting-failure-telemetry',
+        description: 'The proof records refusal behavior, repetition/runaway behavior, cost, latency, and whether the output preserves author voice and genre constraints.',
+        verifiedBy: 'review',
+      },
+    ]
+  }
+  if (prototypeKind === 'author_intent') {
+    return [
+      {
+        id: 'author-intent-records',
+        description: `${task.title} defines records for voice, genre, audience, theme, synopsis, outline, characters, character voices, world-state facts, and review plan.`,
+        verifiedBy: 'review',
+      },
+      {
+        id: 'intent-to-packet-proof',
+        description: 'The no-UI packet builder can feed those records into drafting and review without relying on a completed product UI.',
+        verifiedBy: 'review',
+      },
+      {
+        id: 'content-boundary-input',
+        description: 'The author-intent input captures heat level/content boundary so adult fiction support stays inside the product policy.',
+        verifiedBy: 'review',
+      },
+    ]
+  }
+  if (prototypeKind === 'chapter_draft') {
+    return [
+      {
+        id: 'synopsis-to-outline-chain',
+        description: `${task.title} can generate or load a synopsis, outline, character/voice records, and world-state facts before drafting.`,
+        verifiedBy: 'review',
+      },
+      {
+        id: 'chapter-draft-command',
+        description: 'A pnpm script or CLI command drafts one chapter from the selected model using the bounded context packet and review plan.',
+        verifiedBy: 'review',
+      },
+      {
+        id: 'author-voice-preservation',
+        description: 'The draft proof records whether the chapter follows the requested author voice, genre, audience, and character voices.',
+        verifiedBy: 'review',
+      },
+    ]
+  }
+  if (prototypeKind === 'world_state_review') {
+    return [
+      {
+        id: 'elapsed-time-state-transitions',
+        description: `${task.title} checks object and property changes over elapsed time, such as wet hair drying by climate, food spoiling, wounds healing, fires cooling, or objects being moved/used/consumed.`,
+        verifiedBy: 'review',
+      },
+      {
+        id: 'world-state-finding-shape',
+        description: 'Reviewer output names the entity, prior state, later state, elapsed time, environment, expected transition, contradiction, and source passages.',
+        verifiedBy: 'review',
+      },
+      {
+        id: 'world-rule-exceptions',
+        description: 'The proof preserves explicit magic, technology, or storyworld rules as exceptions instead of treating every non-real-world transition as an error.',
+        verifiedBy: 'review',
+      },
+    ]
+  }
+  if (prototypeKind === 'spatial_review') {
+    return [
+      {
+        id: 'travel-plausibility-proof',
+        description: `${task.title} checks distance, travel time, terrain, travel mode, walking speed, weather, light, and map consistency for a deliberately inconsistent fixture.`,
+        verifiedBy: 'review',
+      },
+      {
+        id: 'genre-aware-geography',
+        description: 'The reviewer distinguishes ordinary walking-speed impossibilities from explicit fantasy/speculative exceptions such as magic, mounts, portals, or non-human physiology.',
+        verifiedBy: 'review',
+      },
+      {
+        id: 'spatial-finding-shape',
+        description: 'Reviewer output names the passage, location, claimed movement/geography, expected plausible behavior, difference, severity, and evidence.',
+        verifiedBy: 'review',
+      },
+    ]
+  }
   if (contractNames.length > 0 && /\b(schema|schemas|contract|contracts)\b/i.test(task.title)) {
     const fixtureContracts = contractNames.filter(name => /fixture|expected|signal/i.test(name))
     const runContracts = contractNames.filter(name => /prototype|run|evaluation|score|disagreement/i.test(name))
@@ -892,12 +1008,19 @@ function reintakeAcceptanceCriteria(
   return task.acceptanceCriteria
 }
 
-function reintakePrototypeTaskKind(title: string): 'fixture' | 'runner' | 'evaluation' | 'debug_report' | 'schema_prune' | null {
+function reintakePrototypeTaskKind(
+  title: string,
+): 'fixture' | 'runner' | 'evaluation' | 'debug_report' | 'schema_prune' | 'drafting_model' | 'author_intent' | 'chapter_draft' | 'world_state_review' | 'spatial_review' | null {
   if (/^add the first tiny fiction fixture and human-authored expected records\.?$/i.test(title)) return 'fixture'
   if (/\bno-ui runner\b/i.test(title) || /\bbuilds a packet from fixture records\b/i.test(title)) return 'runner'
   if (/\bdeterministic evaluation output\b/i.test(title)) return 'evaluation'
   if (/\bdebug report\b/i.test(title)) return 'debug_report'
   if (/\bnarrow the mvp story-memory schema\b/i.test(title)) return 'schema_prune'
+  if (/\bdeepinfra\b/i.test(title) && /\bdrafting model\b/i.test(title)) return 'drafting_model'
+  if (/\bauthor-intent\b/i.test(title) && /\b(inputs?|voice|genre|audience|theme|review plan)\b/i.test(title)) return 'author_intent'
+  if (/\bcli-first story synopsis\b/i.test(title) || /\bone chapter draft\b/i.test(title)) return 'chapter_draft'
+  if (/\bworld-state\b/i.test(title) && /\bcontinuity review\b/i.test(title)) return 'world_state_review'
+  if (/\bspatial\/geographic\b/i.test(title) && /\bcontinuity review\b/i.test(title)) return 'spatial_review'
   return null
 }
 
@@ -1273,6 +1396,86 @@ function preserveProgressChanges(tasks: Array<Record<string, unknown>>, usedTask
       taskId,
       reason: 'This task is completed and remains progress evidence.',
     }))
+}
+
+function refreshSourceShapedPrototypeTasks(
+  tasks: Array<Record<string, unknown>>,
+  usedTaskIds: Set<string>,
+  selectedRelease: SelectedRelease | null,
+  projectPath: string | undefined,
+  now: string,
+): ReintakeChange[] {
+  const changes: ReintakeChange[] = []
+  for (const task of tasks) {
+    const id = stringField(task, 'id')
+    const title = stringField(task, 'title')
+    if (!id || !title || usedTaskIds.has(id)) continue
+    if (!isOpenPreImplementationTask(task)) continue
+    if (!reintakePrototypeTaskKind(title)) continue
+
+    const refreshedCriteria = reintakeAcceptanceCriteria({
+      id,
+      title,
+      description: stringField(task, 'description') ?? title,
+      targetArea: stringField(task, 'domain') ?? 'harness',
+      priority: stringField(task, 'priority') ?? 'normal',
+      dependsOn: arrayStringField(task.dependsOn),
+      acceptanceCriteria: [],
+      sourceRefs: [],
+      proofPaths: [],
+    } as EvidenceTask, [])
+    const existingCriteria = Array.isArray(task.acceptanceCriteria) ? task.acceptanceCriteria as Task['acceptanceCriteria'] : []
+    if (sameCriteriaIds(existingCriteria, refreshedCriteria)) continue
+
+    const releaseIds = selectedRelease
+      ? [selectedRelease.id]
+      : arrayStringField(task.releaseIds)
+    changes.push({
+      kind: 'reframe',
+      taskId: id,
+      before: {
+        id,
+        title,
+        status: stringField(task, 'status') ?? 'spec_review',
+      },
+      after: {
+        id,
+        title,
+        description: stringField(task, 'description') ?? title,
+        domain: stringField(task, 'domain') ?? 'harness',
+        projectPath: stringField(task, 'projectPath') ?? projectPath,
+        status: (stringField(task, 'status') as ReintakeTaskDraft['status']) ?? 'spec_review',
+        priority: taskPriorityFromString(stringField(task, 'priority')),
+        dependsOn: arrayStringField(task.dependsOn),
+        acceptanceCriteria: refreshedCriteria,
+        references: arrayStringField(task.references),
+        releaseIds,
+        stageAlignment: selectedRelease?.label ?? stringField(task, 'stageAlignment'),
+        spec: stringField(task, 'spec'),
+        productBrief: task.productBrief as Task['productBrief'],
+        proofPaths: task.proofPaths as Task['proofPaths'],
+        workUnitAnalysis: task.workUnitAnalysis as Task['workUnitAnalysis'],
+        taskReadiness: task.taskReadiness as Task['taskReadiness'],
+        taskKind: task.taskKind as Task['taskKind'],
+        definitionOfDone: task.definitionOfDone as Task['definitionOfDone'],
+        blockerPlans: task.blockerPlans as Task['blockerPlans'],
+        contextBudget: task.contextBudget as Task['contextBudget'],
+      },
+      reason: 'Current source evidence now gives this open task more specific proof criteria.',
+    })
+  }
+  return changes
+}
+
+function sameCriteriaIds(left: Task['acceptanceCriteria'], right: Task['acceptanceCriteria']): boolean {
+  const leftIds = left.map(criterion => criterion.id).join('\n')
+  const rightIds = right.map(criterion => criterion.id).join('\n')
+  return leftIds === rightIds
+}
+
+function taskPriorityFromString(value: string | undefined): ReintakeTaskDraft['priority'] {
+  if (value === 'critical' || value === 'high' || value === 'normal' || value === 'low') return value
+  return 'normal'
 }
 
 function archiveUnsupportedBlockedTasks(tasks: Array<Record<string, unknown>>, usedTaskIds: Set<string>): ReintakeChange[] {
