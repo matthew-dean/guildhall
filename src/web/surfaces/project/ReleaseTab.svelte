@@ -18,6 +18,7 @@
     taskId?: string
     title?: string
     taskTitle?: string
+    label?: string
     reason?: string
     detail?: string
     summary?: string
@@ -48,6 +49,7 @@
     shelvedUnclaimed: ReleaseItem[]
     blockedByAgent: ReleaseItem[]
     proofMissingDoneTasks?: ReleaseItem[]
+    releaseBlockers?: ReleaseItem[]
     designSystem: {
       drafted: boolean
       approved: boolean
@@ -93,8 +95,9 @@
 
   interface Props {
     subView?: string | null
+    activeProjectId?: string | null
   }
-  let { subView = null }: Props = $props()
+  let { subView = null, activeProjectId = null }: Props = $props()
   const section = $derived(subView ?? 'verdict')
 
   let data = $state<ReleasePayload | null>(null)
@@ -103,7 +106,7 @@
   let initNeeded = $state(false)
 
   $effect(() => {
-    projectFetch('/api/project/release-readiness')
+    projectFetch('/api/project/release-readiness', undefined, activeProjectId)
       .then(r => r.json())
       .then(j => {
         if (j?.initializationNeeded) {
@@ -122,7 +125,7 @@
   })
 
   $effect(() => {
-    projectFetch('/api/project/spine', { cache: 'no-store' })
+    projectFetch('/api/project/spine', { cache: 'no-store' }, activeProjectId)
       .then(r => r.json())
       .then(j => {
         spine = (j?.spine ?? null) as ProjectOrientationSpine | null
@@ -141,11 +144,11 @@
   }
 
   function extraOf(it: ReleaseItem): string {
-    return it.reason ?? it.detail ?? it.summary ?? ''
+    return it.reason ?? it.detail ?? it.summary ?? it.label ?? ''
   }
 
   function openTask(id: string) {
-    if (id) nav(currentTaskHref(id))
+    if (id) nav(currentTaskHref(id, activeProjectId))
   }
 
   interface Criterion {
@@ -158,6 +161,12 @@
   const criteria = $derived<Criterion[]>(
     data
       ? [
+          {
+            key: 'release-blockers',
+            label: hasNamedRelease ? 'Release blockers' : 'Scope blockers',
+            items: data.releaseBlockers ?? [],
+            clearLabel: `No open ${blockerNoun}s.`,
+          },
           {
             key: 'escalations',
             label: 'Open escalations',

@@ -225,6 +225,62 @@ describe('ReleaseTab', () => {
     })
   })
 
+  it('uses the explicit active project id when embedded in ProjectView', async () => {
+    window.history.replaceState({}, '', '/projects')
+    path.value = '/projects'
+    const fetchMock = vi.fn(async () => json(readyPayload))
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(ReleaseTab, { props: { activeProjectId: 'looma-knit' } })
+
+    await screen.findByText('Current task scope')
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith('/api/project/release-readiness?projectId=looma-knit')
+      expect(fetchMock).toHaveBeenCalledWith('/api/project/spine?projectId=looma-knit', { cache: 'no-store' })
+    })
+  })
+
+  it('shows projection release blockers as concrete criteria rows', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        json({
+          ...readyPayload,
+          ready: false,
+          release: { id: 'primitive-wave', label: 'Primitive wave' },
+          releaseBlockers: [
+            {
+              id: 'task-link',
+              title: 'Link editing UI',
+              label: 'Link editing UI: needs a clearer brief before unattended work can run.',
+            },
+            {
+              id: 'task-menu',
+              title: 'Block menu / block side menu',
+              label: 'Block menu / block side menu: needs a clearer brief before unattended work can run.',
+            },
+          ],
+          totals: {
+            blockingCount: 2,
+            humanBlockingCount: 2,
+            unfinishedCount: 2,
+            tasks: 2,
+            done: 0,
+          },
+        }),
+      ),
+    )
+
+    render(ReleaseTab, { props: { subView: 'criteria' } })
+
+    expect(await screen.findByText('Release checks')).toBeTruthy()
+    expect(screen.getByText('Release blockers')).toBeTruthy()
+    expect(screen.getByText('2 tasks still open.')).toBeTruthy()
+    expect(screen.getByText('Link editing UI')).toBeTruthy()
+    expect(screen.getByText('Link editing UI: needs a clearer brief before unattended work can run.')).toBeTruthy()
+    expect(screen.getByText('Block menu / block side menu')).toBeTruthy()
+  })
+
   it('names design-system readiness as the hard release blocker', async () => {
     vi.stubGlobal(
       'fetch',

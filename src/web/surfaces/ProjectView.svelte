@@ -1682,7 +1682,7 @@
               </div>
             {:then module}
               {@const ReleaseTab = module.default}
-              <ReleaseTab subView={currentSub} />
+              <ReleaseTab subView={currentSub} activeProjectId={activeProjectId} />
             {/await}
         {:else if currentView === 'settings'}
           {#await loadSettingsTab()}

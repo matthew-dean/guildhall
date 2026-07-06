@@ -12,6 +12,71 @@ This is the active browser test plan for the Guildhall project surface. Keep it
 updated while auditing the active test project so another agent can resume
 without guessing.
 
+2026-07-06T07:40:00Z - Release readiness exposes concrete scope blockers on
+the real project route.
+
+- Work id: `codex:looma-release-blocker-explanations-2026-07-06`.
+- User job: when a project has a current release or bounded task scope that is
+  not runnable, Guildhall should name the concrete rows blocking it. The
+  Release page must load inside `/projects/:projectId/release`, agree with the
+  API counts, and let the owner inspect the actual task rows instead of seeing
+  a spinner, anonymous blocker totals, or route-scoping errors.
+- Root-cause classification:
+  - UI communication/orientation: Looma + Knit showed large blocker counts but
+    did not expose the concrete blocker rows in the Release criteria surface.
+  - Shared summary/API model omission: the scope projection already computed
+    `releaseBlockers`, but `/api/project/release-readiness` dropped that list
+    from its payload, so consumers could only see aggregate counts.
+  - Project route/action-state plumbing: `ReleaseTab` relied on route-derived
+    project context. Embedded under `ProjectView`, the installed app called
+    `/api/project/release-readiness` and `/api/project/spine` without a
+    `projectId`, so the real `/projects/looma-knit/release` page stayed on
+    "Loading release checks" while the scoped API worked.
+  - Not a persisted data-model failure for this slice: the authoritative scope
+    projection already had the blocker rows. The bug was losing and misrouting
+    that state before it reached the owner-facing view.
+- Fix:
+  - `/api/project/release-readiness` now returns the shared projection
+    `releaseBlockers` list alongside the existing counts.
+  - `ReleaseTab` accepts the active project id from `ProjectView`, uses it for
+    release readiness, spine fetches, and task links, and renders projection
+    blockers as the first criteria row.
+  - Regression coverage proves both pieces: unshaped current execution rows
+    are returned as concrete blocker rows, and the embedded Release tab uses
+    explicit project-scoped API URLs.
+- Contract Touch Decision:
+  - Work id: `codex:looma-release-blocker-explanations-2026-07-06`.
+  - Touched contracts: additive `/api/project/release-readiness`
+    `releaseBlockers` response field; Release UI project-scoping prop.
+  - Contracts considered but not touched: persisted task schema, release/scope
+    schema, project orientation spine payload, scheduler start-readiness
+    contract, workspace-import schema.
+  - Existing data impact: no migration and no stored task rewrites. Existing
+    projection blocker rows are now exposed in the readiness API.
+  - Required follow-up: keep comparing Looma + Knit and Narrative Harness
+    Release/Map/Overview surfaces for contradictory blocker math; if the same
+    blocker has to be recomputed in multiple UI files, move it back into the
+    shared readiness model.
+  - Proof required: focused runtime/component regressions, contract detector,
+    build/install/stale proof, and browser proof on the installed
+    `/projects/looma-knit/release` route.
+  - Proof provided: focused runtime and component regressions passed;
+    `node scripts/contract-touch-detector.mjs`, `git diff --check`, and
+    `node ./build.mjs` passed; installed app returned `stale:false` for PID
+    `95225`; `/api/project/release-readiness?projectId=looma-knit` returned
+    `44` concrete `releaseBlockers` including `Block menu / block side menu`,
+    `Link editing UI`, and `Mentions`; installed browser proof for
+    `/projects/looma-knit/release` showed `Release readiness`, the selected
+    release, `1/49 done`, `93 open release checks`, and no stuck loading state;
+    installed browser proof for `/projects/looma-knit/release/criteria` showed
+    `Release checks`, `Release blockers`, `44 tasks still open.`, repository
+    follow-up, and task-state tally, and expanding Release blockers exposed
+    named rows plus the "needs a clearer brief before unattended work can run"
+    reason.
+  - Apply/revert behavior: remove the readiness payload field and Release tab
+    prop/use sites to restore the previous aggregate-only behavior; no data
+    rollback required.
+
 2026-07-06T03:16:00Z - Review now reconciles stale no-proof revisions against
 task-worktree proof.
 

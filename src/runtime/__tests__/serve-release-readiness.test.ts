@@ -951,6 +951,65 @@ describe('GET /api/project/release-readiness', () => {
     expect(body.ready).toBe(false)
   })
 
+  it('returns projection release blockers for every unshaped current execution row', async () => {
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: 'primitive-wave',
+      releases: [{
+        id: 'primitive-wave',
+        label: 'Primitive wave',
+        kind: 'release',
+        state: 'active',
+        source: 'inferred',
+        nodeIds: [
+          'work:task-imported',
+          'work:task-ready-unshaped',
+          'work:task-exploring-unshaped',
+        ],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [
+        makeTask({
+          id: 'task-imported',
+          title: 'Block menu / block side menu',
+          status: 'import_draft',
+        }),
+        makeTask({
+          id: 'task-ready-unshaped',
+          title: 'Link editing UI',
+          status: 'ready',
+          acceptanceCriteria: [],
+        }),
+        makeTask({
+          id: 'task-exploring-unshaped',
+          title: 'Audit the remaining replacement scope',
+          status: 'exploring',
+          acceptanceCriteria: [],
+        }),
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await approveDesignSystem(app)
+    await commitAndPush('projection blockers visible')
+
+    const res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
+    const body = await res.json() as any
+
+    expect(body.totals.humanBlockingCount).toBe(3)
+    expect(body.releaseBlockers.map((blocker: any) => blocker.id)).toEqual([
+      'task-imported',
+      'task-ready-unshaped',
+      'task-exploring-unshaped',
+    ])
+    expect(body.releaseBlockers.map((blocker: any) => blocker.label)).toEqual([
+      'Block menu / block side menu: needs a clearer brief before unattended work can run.',
+      'Link editing UI: needs a clearer brief before unattended work can run.',
+      'Audit the remaining replacement scope: needs a clearer brief before unattended work can run.',
+    ])
+  })
+
   it('keeps imported source-recovery work visible as incomplete brief cleanup', async () => {
     await seedQueue({
       version: 1,
