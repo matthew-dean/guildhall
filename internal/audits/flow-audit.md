@@ -15270,6 +15270,9 @@ prevents read-only retry loops after likely-target worker timeouts.
   - `retry_current_task_context` now allows only `edit-file`,
     `write-checkpoint`, and `raise-escalation`; `read-file` and shell are both
     excluded because shell can be used as a read-only escape hatch.
+  - The active recovery playbook allowlist is now loaded into worker tool
+    metadata and enforced by the engine before tool execution, so the allowlist
+    is a runtime contract instead of prompt-only guidance.
   - `resume_from_checkpoint` and `rebootstrap_project` keep their existing
     read allowance because those playbooks are explicitly about a bounded
     checkpoint/bootstrap surface.

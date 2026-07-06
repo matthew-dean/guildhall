@@ -412,6 +412,46 @@ function currentAgentId(
   return String(toolMetadata?.['current_agent_id'] ?? '').trim()
 }
 
+function canonicalRecoveryToolName(toolName: string): string {
+  return toolName === 'run-shell-command' ? 'shell' : toolName
+}
+
+function currentRecoveryAllowedTools(
+  toolMetadata: Record<string, unknown> | undefined,
+): Set<string> {
+  const raw = toolMetadata?.['current_task_recovery_allowed_tools']
+  if (!Array.isArray(raw)) return new Set()
+  return new Set(
+    raw
+      .filter((value): value is string => typeof value === 'string')
+      .map(value => canonicalRecoveryToolName(value.trim()))
+      .filter(Boolean),
+  )
+}
+
+function disallowedRecoveryToolCalls(
+  toolMetadata: Record<string, unknown> | undefined,
+  toolCalls: readonly ToolUseBlock[],
+): ToolUseBlock[] {
+  const allowedTools = currentRecoveryAllowedTools(toolMetadata)
+  if (allowedTools.size === 0) return []
+  return toolCalls.filter((toolCall) => !allowedTools.has(canonicalRecoveryToolName(toolCall.name)))
+}
+
+function recoveryToolRefusalMessage(
+  toolMetadata: Record<string, unknown> | undefined,
+  toolCalls: readonly ToolUseBlock[],
+): string {
+  const playbook = String(toolMetadata?.['current_task_recovery_playbook'] ?? 'recovery').trim() || 'recovery'
+  const allowedTools = [...currentRecoveryAllowedTools(toolMetadata)].sort()
+  const attemptedTools = [...new Set(toolCalls.map(toolCall => canonicalRecoveryToolName(toolCall.name)))].sort()
+  return [
+    `The active ${playbook} recovery playbook does not allow ${attemptedTools.join(', ')}.`,
+    `Allowed tools for this recovery pass: ${allowedTools.join(', ')}.`,
+    'Do not route around the recovery contract with read-only or shell commands. Use one allowed tool now, or raise-escalation if the recovery playbook is no longer valid.',
+  ].join(' ')
+}
+
 function readOnlyBudgetRefusalMessage(
   toolMetadata: Record<string, unknown> | undefined,
 ): string {
@@ -1338,6 +1378,7 @@ export async function* runQuery(
   let noProgressToolTurns = 0
   let noProgressReadOnlyGraceTurns = 0
   let repeatedReadOnlyRefusals = 0
+  let repeatedRecoveryToolRefusals = 0
   let repeatedSelfReportedFileMutationFailures = 0
   const initialCheckpointNextAction = latestCheckpointNextAction(context.toolMetadata)
   const initialAuthoritativeVerificationCommands = context.toolMetadata
@@ -1600,6 +1641,54 @@ export async function* runQuery(
       return
     }
     sawToolCall = true
+    const disallowedRecoveryTools = disallowedRecoveryToolCalls(context.toolMetadata, toolCalls)
+    if (disallowedRecoveryTools.length > 0) {
+      repeatedRecoveryToolRefusals += 1
+      const refusalMessage = recoveryToolRefusalMessage(context.toolMetadata, disallowedRecoveryTools)
+      const toolResults: ToolResultBlock[] = toolCalls.map((tc) => ({
+        type: 'tool_result',
+        tool_use_id: tc.id,
+        content: refusalMessage,
+        is_error: true,
+      }))
+      for (let i = 0; i < toolCalls.length; i++) {
+        const tc = toolCalls[i]!
+        const result = toolResults[i]!
+        yield {
+          event: { type: 'tool_execution_started', tool_name: tc.name, tool_input: tc.input },
+          usage: null,
+        }
+        yield {
+          event: {
+            type: 'tool_execution_completed',
+            tool_name: tc.name,
+            output: result.content,
+            is_error: true,
+          },
+          usage: null,
+        }
+      }
+      messages.push({ role: 'user', content: toolResults })
+      yield {
+        event: {
+          type: 'status',
+          message: 'Assistant tried to use a tool outside the active recovery playbook; refusing the tool call and requiring an allowed recovery action.',
+        },
+        usage: null,
+      }
+      if (repeatedRecoveryToolRefusals >= 2) {
+        yield {
+          event: {
+            type: 'status',
+            message: 'Assistant kept trying tools outside the active recovery playbook; ending the turn so the coordinator can treat this as recovery no-progress.',
+          },
+          usage: null,
+        }
+        return
+      }
+      continue
+    }
+    repeatedRecoveryToolRefusals = 0
     const selfReportedFileMutationFailure = fileMutationFailureSelfReport(assistantText)
     const hasFileMutationToolCall = toolCalls.some((tc) => isFileMutationToolName(tc.name))
     if (selfReportedFileMutationFailure && hasFileMutationToolCall) {

@@ -4118,6 +4118,84 @@ Uncertainties: none`,
     )).toBe(true)
   })
 
+  it('refuses tools outside an active recovery playbook allowlist', async () => {
+    const registry = new ToolRegistry()
+    let shellCalls = 0
+    registry.register(
+      defineTool({
+        name: 'shell',
+        description: '',
+        inputSchema: z.object({ command: z.string() }),
+        execute: async () => {
+          shellCalls += 1
+          return { output: 'should not run', is_error: false }
+        },
+      }),
+    )
+    registry.register(
+      defineTool({
+        name: 'raise-escalation',
+        description: '',
+        inputSchema: z.object({ taskId: z.string(), agentId: z.string(), reason: z.string(), summary: z.string() }),
+        execute: async () => ({ output: 'escalated', is_error: false }),
+      }),
+    )
+    const client = new ScriptedApiClient([
+      { message: assistantToolUse('shell', { command: 'git show HEAD:src/author-intent-inputs.ts' }, 'toolu_1') },
+      {
+        message: assistantToolUse(
+          'raise-escalation',
+          {
+            taskId: 'task-1',
+            agentId: 'worker-agent',
+            reason: 'scope_boundary',
+            summary: 'Recovery playbook cannot proceed without prerequisite files.',
+          },
+          'toolu_2',
+        ),
+      },
+      { message: assistantText('done') },
+    ])
+    const messages: ConversationMessage[] = [
+      { role: 'user', content: [{ type: 'text', text: 'recover' }] },
+    ]
+
+    const events = await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 4,
+          toolMetadata: {
+            current_agent_id: 'worker-agent',
+            current_task_id: 'task-1',
+            current_task_recovery_playbook: 'retry_current_task_context',
+            current_task_recovery_allowed_tools: ['edit-file', 'write-checkpoint', 'raise-escalation'],
+          },
+        },
+        messages,
+      ),
+    )
+
+    expect(shellCalls).toBe(0)
+    expect(events.some(e =>
+      e.type === 'tool_execution_completed' &&
+      e.tool_name === 'shell' &&
+      e.is_error === true &&
+      e.output.includes('does not allow shell'),
+    )).toBe(true)
+    expect(events.some(e =>
+      e.type === 'tool_execution_completed' &&
+      e.tool_name === 'raise-escalation' &&
+      e.is_error === false,
+    )).toBe(true)
+  })
+
   it('uses worker-specific no-progress status messaging after repeated non-durable tool turns', async () => {
     const registry = new ToolRegistry()
     registry.register(

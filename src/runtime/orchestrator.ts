@@ -1260,6 +1260,28 @@ function countRuntimeNotes(task: Task, pattern: RegExp): number {
   ).length
 }
 
+function activeRecoveryPlaybookMetadata(task: Task): { playbook: string; allowedTools: string[] } {
+  for (const note of [...(task.notes ?? [])].reverse()) {
+    if (note.role !== 'recovery-playbook') continue
+    try {
+      const parsed = JSON.parse(note.content) as Record<string, unknown>
+      if (parsed['status'] !== 'started') continue
+      const allowedTools = Array.isArray(parsed['allowedTools'])
+        ? parsed['allowedTools'].filter((value): value is string =>
+            typeof value === 'string' && value.trim().length > 0,
+          )
+        : []
+      return {
+        playbook: typeof parsed['playbook'] === 'string' ? parsed['playbook'] : 'recovery',
+        allowedTools,
+      }
+    } catch {
+      continue
+    }
+  }
+  return { playbook: '', allowedTools: [] }
+}
+
 function countTaskNotes(task: Task, pattern: RegExp): number {
   return (task.notes ?? []).filter(note =>
     typeof note.content === 'string' &&
@@ -4407,6 +4429,7 @@ export class Orchestrator {
     if (typeof agent.loadToolMetadata === 'function') {
       const likelyTargetFiles = resolveLikelyTaskFiles(task)
       const scopeDecisionTexts = resolvedScopeDecisionTexts(task)
+      const activeRecoveryPlan = activeRecoveryPlaybookMetadata(task)
       agent.loadToolMetadata({
         current_task_id: task.id,
         current_task_title: task.title,
@@ -4434,6 +4457,12 @@ export class Orchestrator {
           : {}),
         ...(scopeDecisionTexts.length > 0
           ? { current_task_resolved_scope_decisions: scopeDecisionTexts }
+          : {}),
+        ...(activeRecoveryPlan.allowedTools.length > 0
+          ? {
+              current_task_recovery_playbook: activeRecoveryPlan.playbook,
+              current_task_recovery_allowed_tools: activeRecoveryPlan.allowedTools,
+            }
           : {}),
         ...(checkpointNextAction
           ? { current_task_checkpoint_next_action: checkpointNextAction }
