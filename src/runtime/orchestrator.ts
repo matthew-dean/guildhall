@@ -8814,6 +8814,9 @@ export class Orchestrator {
         agent: coordinatorId,
         beforeStatus: input.beforeStatus,
         afterStatus: 'gate_check',
+        transitioned: true,
+        note: 'coordinator adjudicated stale dissent → gate_check',
+        revisionCount: input.task.revisionCount,
       } as TickOutcome
     }
 
@@ -8935,6 +8938,9 @@ export class Orchestrator {
       agent: coordinatorId,
       beforeStatus: input.beforeStatus,
       afterStatus: 'in_progress',
+      transitioned: true,
+      note: `coordinator adjudicated (dissenters: ${dissenterSlugs.join(', ')}) → scoped rework`,
+      revisionCount: input.task.revisionCount,
     } as TickOutcome
   }
 

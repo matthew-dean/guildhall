@@ -14430,6 +14430,9 @@ runtime recovery action.
   - The same live run exposed an incomplete `reviewer-fanout` processed
     outcome: Guildhall printed `review -> gate_check` with `(no change)`
     because the returned outcome omitted `transitioned`.
+  - A later Narrative Harness review loop exposed the same incomplete-outcome
+    bug in coordinator adjudication: `review -> in_progress` printed with
+    `(no change)` because the adjudication return omitted `transitioned`.
 - Fix:
   - `processed` tick outcomes now carry an optional `note`.
   - CLI output renders that note for unchanged-status ticks and keeps
@@ -14440,6 +14443,8 @@ runtime recovery action.
     through the same processed outcome.
   - Reviewer fan-out approve/revise outcomes now return complete processed
     outcomes with `transitioned`, `revisionCount`, and a note.
+  - Coordinator adjudication approve/rework outcomes now return complete
+    processed outcomes with `transitioned`, `revisionCount`, and a note.
 - Verification:
   `NODE_ENV=test CI=true ./node_modules/.bin/vitest run src/runtime/__tests__/orchestrator.test.ts -t "resumed worker times out|timeout without likely target|provider-unavailable no-progress|preserves dirty worktree progress|preserves dirty worker progress" --reporter=dot`
   passed `4` focused tests.

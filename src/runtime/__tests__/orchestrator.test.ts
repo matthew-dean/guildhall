@@ -10050,6 +10050,59 @@ describe('Orchestrator.run — full loops', () => {
     )).toBe(false)
   })
 
+  it('returns a complete processed outcome for coordinator adjudication handoff', async () => {
+    const task = mkTask({
+      id: 'scene-lane',
+      status: 'review',
+      assignedTo: 'reviewer-agent',
+      domain: 'coherence-lenses',
+      spec: VALID_SPEC,
+    })
+    const queue: TaskQueue = {
+      tasks: [task],
+      lastUpdated: '2026-07-06T00:00:00.000Z',
+    }
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet(),
+      gitDriver: new InMemoryGitDriver({ clean: true }),
+    })
+
+    const out = await (orch as any).routeToCoordinatorAdjudication({
+      queue,
+      task,
+      aggregate: {
+        verdict: 'revise',
+        combinedFeedback: 'Add a working reviewer function.',
+        dissenting: [{
+          guildSlug: 'copywriter',
+          guildName: 'The Copywriter',
+          verdict: 'revise',
+          reasoning: 'The lane only defines types.',
+          revisionItems: ['Add a working reviewer function.'],
+          rawOutput: '**Verdict:** revise',
+        }],
+        approving: [],
+        needsAdjudication: true,
+        adjudicationTrigger: 'policy_conflict',
+      },
+      verdicts: [],
+      round: 1,
+      now: '2026-07-06T00:00:00.000Z',
+      beforeStatus: 'review',
+    })
+
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') {
+      expect(out.agent).toBe('coordinator-default')
+      expect(out.beforeStatus).toBe('review')
+      expect(out.afterStatus).toBe('in_progress')
+      expect(out.transitioned).toBe(true)
+      expect(out.revisionCount).toBe(1)
+      expect(out.note).toContain('coordinator adjudicated')
+    }
+  })
+
   it('uses handoff-specific immediate resume instructions instead of file-open instructions when a review handoff checkpoint exists', async () => {
     await writeQueue([
       mkTask({
