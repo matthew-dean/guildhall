@@ -23002,6 +23002,63 @@ shared readiness state.
     `designSystemBlockingCount` guard, to restore previous local calculations;
     no data rollback required.
 
+2026-07-06T18:26:55Z - Tightened semantic proof matching for completed selected-scope work.
+
+- Work id: `codex:narrative-harness-semantic-proof-health-2026-07-06`.
+- User job: a project owner should not see a Narrative Harness scope marked
+  complete just because a generic build or review approval exists; proof has to
+  match the claim the task/release says was proven.
+- Root-cause classification:
+  - `task hierarchy/dependency/proof modeling problem`: review proof paths with
+    string `expectedEvidence` were treated as satisfied by any recorded
+    completion bundle, so semantic claims like model telemetry, drafting, or
+    continuity review could be settled by unrelated build evidence.
+  - `UI communication/orientation problem`: the release/readiness and project
+    map could present done/proven counts that hid the mismatch between the
+    stated proof need and the recorded proof text.
+  - `bad project data produced by an earlier Guildhall bug`: Narrative Harness
+    contains completed tasks whose self-critique/review evidence accepted
+    generic build or fixture existence as proof for richer fiction-system
+    claims.
+- Fix:
+  - `taskDoneButProofMissing()` now checks non-command proof paths before
+    accepting generic recorded completion proof.
+  - String `expectedEvidence` values are treated as concrete evidence claims:
+    completion evidence must include the expected text, or the task remains a
+    proof gap.
+  - Legacy string proof paths remain proof hints that durable recorded
+    completion evidence can satisfy.
+- Verification so far:
+  - Red regression: `does not accept generic build proof for a semantic
+    review-backed completed task` failed because readiness was `true`.
+  - Green verification:
+    `CI=true pnpm exec vitest run src/runtime/__tests__/serve-release-readiness.test.ts`
+    passed `42` tests.
+  - Green verification:
+    `CI=true pnpm exec vitest run src/runtime/__tests__/project-orientation-spine.test.ts`
+    passed `49` tests.
+  - Green verification:
+    `CI=true pnpm exec vitest run src/runtime/__tests__/inbox.test.ts`
+    passed `38` tests.
+- Installed-app proof:
+  - `CI=true pnpm build`; `CI=true pnpm dev:install`; `guildhall stop &&
+    guildhall start`.
+  - `/api/stale-server` returned `stale:false` for PID `87216` from
+    `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+  - `/api/project/release-readiness?projectId=narrative-harness` returned
+    `ready:false`, `tasks:14`, `done:14`, `proofEvidenceBlockingCount:14`,
+    and `proofMissingDoneTasks.length:14`.
+  - `/api/project?projectId=narrative-harness&surface=overview` returned
+    `startReadiness.code:"proof_evidence_missing"`, run control
+    `label:"Needs proof"`, `startEnabled:false`, headline `Near-term proof
+    scope is waiting on proof.`, progress `done:14`, `proven:0`,
+    `deferred:29`, and next action `Attach proof for the completed scoped
+    work.`
+  - `/api/project/inbox?projectId=narrative-harness` returned a
+    `proof_reconciliation` row with `count:14` and `signals.length:14`, first
+    signal `task:task-import-1g9oq7m`, last signal
+    `task:task-prove-spatial-geographic-continuity-review-for-travel-terrain-walking-speed-map-consistency-weather-light-and-physical-plausibility`.
+
 2026-06-15T23:52:00Z - Completed the Project Orientation Spine cross-route
 implementation and installed-app audit.
 

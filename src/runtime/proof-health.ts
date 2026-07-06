@@ -1,5 +1,5 @@
 import type { Task } from '@guildhall/core'
-import { taskHasRecordedCompletionProof } from './task-completion-proof.js'
+import { recordedCompletionProofForTask, taskHasRecordedCompletionProof } from './task-completion-proof.js'
 
 export interface ProofMissingDoneTask {
   id: string
@@ -138,7 +138,54 @@ function commandProofSatisfiedByTask(proofPath: Record<string, unknown>, task: u
   })
 }
 
+function recordValue(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null
+}
+
+function completionEvidenceTextForTask(task: unknown): string {
+  const record = recordValue(task)
+  if (!record) return ''
+  const chunks: string[] = [...recordedCompletionProofForTask(task).verified]
+  const doneSummary = recordValue(record.doneSummaryBundle)
+  const doneSummarySummary = recordValue(doneSummary?.summary)
+  for (const value of Object.values(doneSummarySummary ?? {})) {
+    if (typeof value === 'string') chunks.push(value)
+  }
+  for (const gate of Array.isArray(record.gateResults) ? record.gateResults : []) {
+    const gateRecord = recordValue(gate)
+    if (!gateRecord) continue
+    for (const key of ['command', 'gateId', 'name', 'output']) {
+      const value = gateRecord[key]
+      if (typeof value === 'string') chunks.push(value)
+    }
+  }
+  for (const verdict of Array.isArray(record.reviewVerdicts) ? record.reviewVerdicts : []) {
+    const verdictRecord = recordValue(verdict)
+    if (!verdictRecord) continue
+    for (const key of ['reason', 'reasoning', 'summary']) {
+      const value = verdictRecord[key]
+      if (typeof value === 'string') chunks.push(value)
+    }
+  }
+  return normalizedText(chunks.join('\n')).toLowerCase()
+}
+
+function expectedEvidenceStringsSatisfied(expectedEvidence: unknown[], task: unknown): boolean {
+  const expectedStrings = expectedEvidence
+    .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    .map(item => normalizedText(item).toLowerCase())
+  if (expectedStrings.length === 0) return true
+  const evidenceText = completionEvidenceTextForTask(task)
+  if (!evidenceText) return false
+  return expectedStrings.every(expected => evidenceText.includes(expected))
+}
+
 function proofPathMissingEvidence(proofPath: unknown, task: unknown): boolean {
+  if (typeof proofPath === 'string' && proofPath.trim().length > 0) {
+    return !taskHasRecordedCompletionProof(task)
+  }
   if (!proofPath || typeof proofPath !== 'object') return true
   const record = proofPath as Record<string, unknown>
   if (record.kind === 'command' && normalizedText(record.command)) {
@@ -159,6 +206,8 @@ function proofPathMissingEvidence(proofPath: unknown, task: unknown): boolean {
   if (requiredEvidenceIds.length > 0) {
     return requiredEvidenceIds.some(id => !passedEvidence.has(id))
   }
+  const expectedEvidenceStringCount = expectedEvidence.filter(item => typeof item === 'string' && item.trim().length > 0).length
+  if (expectedEvidenceStringCount > 0) return !expectedEvidenceStringsSatisfied(expectedEvidence, task)
   if (record.status === 'verified') return false
   return verificationRecords.every(item => !Boolean(item && typeof item === 'object' && (item as { status?: unknown }).status === 'passed'))
 }
@@ -194,10 +243,15 @@ export function taskDoneButProofMissing(task: unknown): boolean {
     ),
   )
   if (commandProofMissing) return true
+  if (proofPaths.length === 0) {
+    if (taskHasRecordedCompletionProof(task)) return false
+    if (hasAcceptanceCriteria(task) && !handoffVerified) return true
+    return handoffMissing && !handoffVerified
+  }
+  const proofPathMissing = proofPaths.some(proofPath => proofPathMissingEvidence(proofPath, task))
+  if (proofPathMissing) return true
   if (taskHasRecordedCompletionProof(task)) return false
-  if (hasAcceptanceCriteria(task) && !handoffVerified) return true
-  if (proofPaths.length === 0) return handoffMissing && !handoffVerified
-  return proofPaths.some(proofPath => proofPathMissingEvidence(proofPath, task))
+  return false
 }
 
 export function proofMissingDoneTasks(tasks: readonly Task[]): ProofMissingDoneTask[] {

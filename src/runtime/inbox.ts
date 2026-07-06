@@ -454,7 +454,7 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
       detail: `${countLabel}. Start with "${first.title}" and reconcile the task evidence or reopen the work.`,
       actionHref: '/task/' + encodeURIComponent(first.id) + '?tab=spec',
       count: proofMissing.length,
-      signals: proofMissing.slice(0, 8).map(task => `task:${task.id}`),
+      signals: proofMissing.map(task => `task:${task.id}`),
       dismissEndpoint: '/api/project/attention/dismiss?id=proof-reconciliation%3Adone-with-unmet-proof',
     })
   }

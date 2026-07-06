@@ -445,6 +445,31 @@ describe('buildInbox', () => {
     expect(hit.detail).toContain('reconcile the task evidence or reopen the work')
   })
 
+  it('proof_reconciliation: includes every proof-missing task signal', async () => {
+    await writeCompleteBootstrap()
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
+    await writeJson('.guildhall/TASKS.json', {
+      version: 1,
+      lastUpdated: '2026-07-06T00:00:00.000Z',
+      tasks: Array.from({ length: 10 }, (_, index) => ({
+        id: `task-proof-${index + 1}`,
+        title: `Proof task ${index + 1}`,
+        status: 'done',
+        acceptanceCriteria: [
+          { id: 'proof', description: 'Proof is attached.', met: false },
+        ],
+      })),
+    })
+
+    const items = buildInboxWithProviderSetup()
+    const hit = items.find(i => i.kind === 'proof_reconciliation')
+    if (!hit || hit.kind !== 'proof_reconciliation') throw new Error('unreachable')
+
+    expect(hit.count).toBe(10)
+    expect(hit.signals).toHaveLength(10)
+    expect(hit.signals).toEqual(Array.from({ length: 10 }, (_, index) => `task:task-proof-${index + 1}`))
+  })
+
   it('proof_reconciliation: ignores stale unmet criteria already settled by approving review proof', async () => {
     await writeCompleteBootstrap()
     await writeJson('.guildhall/workspace-goals.json', { goals: [] })
@@ -501,6 +526,26 @@ describe('buildInbox', () => {
           acceptanceCriteria: [
             { id: 'proof', description: 'Current proof is attached.', met: true },
           ],
+          doneSummaryBundle: {
+            taskId: 'task-current',
+            status: 'done',
+            completedAt: '2026-07-06T00:00:00.000Z',
+            summary: {
+              journey: 'Current proof shipped.',
+              decision: 'Task finished as done.',
+              evidence: 'current proof attached.',
+              learningCandidates: [],
+              openResidue: 'No open residue recorded.',
+            },
+            retention: {
+              transcriptPrimaryArtifact: false,
+              compactedFullTranscript: false,
+              fullEvidenceAvailable: true,
+            },
+            evidenceRefs: [],
+            createdAt: '2026-07-06T00:00:00.000Z',
+            createdBy: 'test',
+          },
         },
         {
           id: 'task-later',

@@ -1550,7 +1550,7 @@ describe('buildProjectOrientationSpine', () => {
           title: 'Implement no-UI runner.',
           status: 'done',
           spec: 'Done.',
-          proofPaths: [{ expectedEvidence: ['runner smoke test'] }],
+          proofPaths: [{ expectedEvidence: ['runner-smoke'] }],
           gateResults: [{ gateId: 'runner-smoke', status: 'pass' }],
           reviewVerdicts: [{ reviewerPath: 'deterministic', verdict: 'approve' }],
         },
