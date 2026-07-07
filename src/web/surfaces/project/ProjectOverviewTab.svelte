@@ -134,7 +134,7 @@
     const pieces = [
       `${done} / ${total} done`,
       totals.unfinishedCount ? `${totals.unfinishedCount} unfinished` : null,
-      totals.humanBlockingCount ? `${totals.humanBlockingCount} ${totals.humanBlockingCount === 1 ? 'needs you' : 'need you'}` : null,
+      totals.humanBlockingCount ? releaseHumanBlockingPhrase(totals.humanBlockingCount, releaseReadiness?.releaseBlockers ?? []) : null,
     ].filter(Boolean)
     return pieces.length ? pieces.join(' · ') : 'No release blockers reported.'
   })
@@ -154,6 +154,26 @@
   })
   const currentScopeTasks = $derived(currentScopeTaskIds.size > 0 ? tasks.filter(task => currentScopeTaskIds.has(task.id)) : tasks)
   const tasksById = $derived(new Map(tasks.map(task => [task.id, task])))
+  const releaseBlockerRows = $derived.by(() => {
+    const rows: Array<{ id: string; title: string; reason: string; category: string; href: string }> = []
+    const seen = new Set<string>()
+    for (const blocker of releaseReadiness?.releaseBlockers ?? []) {
+      const id = blocker.id?.trim() || blocker.title?.trim() || blocker.label?.trim()
+      if (!id || seen.has(id)) continue
+      const task = blocker.id ? tasksById.get(blocker.id) : null
+      const title = task ? taskLabel(task) : blocker.title ?? blocker.label ?? id
+      rows.push({
+        id,
+        title,
+        reason: friendlyBlockerText(blocker.label ?? blocker.title ?? 'This work blocks the current scope.'),
+        category: task ? inferBlockerCategory(task) : 'Scope blocker',
+        href: task ? currentTaskHref(task.id, activeProjectId) : currentProjectHref('/release', activeProjectId),
+      })
+      seen.add(id)
+      if (rows.length >= 3) break
+    }
+    return rows
+  })
   const primaryProofPaths = $derived.by(() => {
     const proofTasks = currentScopeTaskIds.size > 0 ? currentScopeTasks : tasks.filter(task => task.status !== 'shelved')
     return proofTasks
@@ -255,6 +275,12 @@
 
   function orientationActionButtonLabel(href: string | undefined): string {
     return href?.includes('/map') ? 'Open map' : 'Open Work'
+  }
+
+  function releaseHumanBlockingPhrase(count: number, blockers: NonNullable<ProjectDetail['releaseReadiness']>['releaseBlockers']): string {
+    const needsShaping = blockers?.some(blocker => /brief|source-backed|shaping|clearer/i.test(`${blocker.label ?? ''} ${blocker.title ?? ''}`)) ?? false
+    if (needsShaping) return `${count} ${count === 1 ? 'needs shaping' : 'need shaping'}`
+    return `${count} ${count === 1 ? 'needs you' : 'need you'}`
   }
 
   const orientationMapStatus = $derived.by(() => {
@@ -922,6 +948,7 @@
 
     const inbox = inboxItems.find(item => item.taskId === task.id || item.title === task.title)
 
+    if (task.status === 'import_draft' || /brief|source-backed|shaping|clearer/.test(haystack)) return 'Needs shaping'
     if (/provider|oauth|api key|model|fallback|stripe|supabase auth/.test(haystack)) return 'Provider settings'
     if (/git|branch|commit|push|dirty|merge/.test(haystack)) return 'Repository follow-up'
     if (/bootstrap|readiness|database|migration|db\b/.test(haystack)) return 'Project readiness / bootstrap'
@@ -1126,6 +1153,19 @@
               </div>
               <span class="preview-action">Open release</span>
             </CardListItem>
+            {#each releaseBlockerRows as row (row.id)}
+              <CardListItem
+                as="button"
+                tone="warn"
+                onclick={() => go(row.href)}
+              >
+                <Chip label={row.category} tone={row.category === 'Needs triage' ? 'danger' : 'warn'} />
+                <div>
+                  <strong>{row.title}</strong>
+                  <p>{row.reason}</p>
+                </div>
+              </CardListItem>
+            {/each}
             {#each releaseGitBlockers as blocker (blocker.id ?? blocker.label)}
               <CardListItem
                 as="button"

@@ -471,6 +471,7 @@ describe('ProjectOverviewTab', () => {
     })
 
     expect(screen.getAllByText('Unit tests: use-collections, use-presence, subdomain utils').length).toBeGreaterThan(0)
+    expect(screen.getAllByRole('button', { name: /Needs shaping Unit tests: use-collections, use-presence, subdomain utils.*clearer brief/i }).length).toBeGreaterThan(0)
     expect(screen.queryByRole('button', { name: /Floating toolbar/i })).not.toBeInTheDocument()
     expect(screen.queryByText('Old unrelated blocked work.')).not.toBeInTheDocument()
   })

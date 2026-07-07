@@ -26194,3 +26194,64 @@ selected-scope readiness ordering.
     completion proof and augmented scope membership internally but fail to
     project that truth into the product API that users and UI surfaces depend
     on.
+
+2026-07-07T06:44:58Z - Overview current-release cards show concrete scoped blockers instead of hiding the why below the fold.
+
+- User job: when a project Overview says the selected current release/scope is
+  not complete, the same first-screen release/scope card should name concrete
+  scoped blockers and route to the relevant task. The owner should not need to
+  scroll to a separate `Blocked work` section or open Release just to learn why
+  the current scope cannot run.
+- Failure classification:
+  - UI communication/orientation problem: `/api/project.releaseReadiness`
+    already carried structured `releaseBlockers`, but Overview only summarized
+    counts in the release card and surfaced git follow-ups there. The exact
+    current-scope work that needed shaping was less prominent and could feel
+    disconnected from the release verdict.
+  - Task hierarchy/dependency/proof modeling problem, adjacent: imported
+    current-scope brief blockers were categorized as generic `Needs triage`
+    even when the shared readiness reason was specifically source-backed
+    shaping.
+- Fix:
+  - `ProjectOverviewTab` now derives a compact `releaseBlockerRows` list from
+    shared `releaseReadiness.releaseBlockers`, de-duplicates it, resolves known
+    task ids through the existing task index, and renders the first concrete
+    scoped blockers inside the existing current release/scope `CardList`.
+  - The same existing blocker-category function now labels imported draft /
+    source-backed brief blockers as `Needs shaping` instead of `Needs triage`.
+  - No new visual primitive was added; the card uses the existing `Card`,
+    `CardList`, `CardListItem`, `Chip`, and task-routing helpers.
+- Contract Touch Decision:
+  - Work id: overview-current-release-blocker-preview.
+  - Touched contracts: none. This consumes existing
+    `/api/project.releaseReadiness.releaseBlockers` and task rows.
+  - Contracts considered but not touched: release-readiness API shape,
+    persisted task schema, release schema, orientation-spine schema, and
+    Start/Resume action semantics.
+  - Required follow-up: continue testing whether the entire Overview first
+    viewport is still too vertically busy; this slice proves the release card
+    no longer hides the scoped blocker reason behind git follow-ups or a lower
+    `Blocked work` section.
+  - Proof required: focused Overview regression plus installed-app route proof.
+  - Proof provided: `./node_modules/.bin/vitest run
+    src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts`
+    passed (`31` tests). `node ./build.mjs && node
+    ./scripts/dev-install.mjs && guildhall stop && guildhall start && curl -s
+    http://localhost:7777/api/stale-server` installed the current branch and
+    returned `stale:false` for PID `15513`.
+  - Installed desktop proof at
+    `/projects/looma-knit/overview` (`1280x900`): the current release card
+    rendered `Stage 1: V1 Release Hardening`, `0 / 5 done`, `5 unfinished`,
+    `5 need shaping`, and concrete `Needs shaping` rows for `Unit tests:
+    use-collections, use-presence, subdomain utils`, `E2E tests: login →
+    create page → edit → search flow`, and `TypeScript: generate proper types
+    from Supabase (pnpm db:types)` before repository follow-ups. Browser proof
+    reported `firstBlockerButtonIndex:1`, `firstGitButtonIndex:4`,
+    `overflowX:false`, `clipped:[]`, and no page errors.
+  - Installed mobile proof at
+    `/projects/looma-knit/overview` (`390x820`): the current release card kept
+    the same `5 need shaping` summary and first concrete scoped blocker before
+    git follow-ups, with `overflowX:false`, `clipped:[]`, and no page errors.
+- Schema Migration Decision: no persisted schema field was added, removed, or
+  retyped; no migration id, compatibility reader, or rollback migration is
+  required.
