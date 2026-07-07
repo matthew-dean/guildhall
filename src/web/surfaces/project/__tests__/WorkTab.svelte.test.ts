@@ -587,7 +587,7 @@ describe('WorkTab', () => {
     expect(queue).toHaveTextContent('Proof: 11 proven items · 0 missing proof')
     expect(queue).not.toHaveTextContent('0 current tasks')
     expect(screen.getByRole('combobox', { name: /^show$/i })).toHaveValue('scope')
-    expect(await screen.findByText('2 current-scope items · 2 total')).toBeTruthy()
+    expect(await screen.findByText('1 current item · 1 deferred item · 2 total')).toBeTruthy()
     expect(screen.queryByText('No work is ready to run yet.')).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: /inspect work generate a cli-first story synopsis/i })).toBeTruthy()
     expect(screen.getByRole('button', { name: /inspect work later reviewer lane/i })).toBeTruthy()

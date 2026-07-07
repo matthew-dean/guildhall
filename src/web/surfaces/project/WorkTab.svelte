@@ -180,6 +180,12 @@
       .filter((id): id is string => Boolean(id))
     return new Set(ids)
   })
+  const scopeByTaskId = $derived.by(() => {
+    const entries = (detail.orientationSpine?.scopeRows ?? [])
+      .filter((row): row is typeof row & { taskId: string } => Boolean(row.taskId))
+      .map(row => [row.taskId, row.scope] as const)
+    return new Map(entries)
+  })
   const proofMissingCount = $derived(proofMissingTaskIds.size || (detail.startReadiness?.code === 'proof_evidence_missing' ? detail.startReadiness.count ?? 0 : 0))
   const deliveryPrimitiveBlockers = $derived.by(() => {
     return deliveryQueue?.blocked
@@ -266,11 +272,24 @@
       done: all.filter(task => ['done', 'pending_pr'].includes(task.status ?? '')).length,
     }
   })
-  const workListCountLabel = $derived(
-    workFilter === 'scope'
-      ? `${visibleTasks.length} current-scope ${visibleTasks.length === 1 ? 'item' : 'items'} · ${taskCounts.total} total`
-      : `${visibleTasks.length} shown · ${taskCounts.total} total`,
-  )
+  const scopeVisibleCounts = $derived.by(() => {
+    return visibleTasks.reduce(
+      (counts, task) => {
+        if (scopeByTaskId.get(task.id) === 'deferred') counts.deferred += 1
+        else counts.current += 1
+        return counts
+      },
+      { current: 0, deferred: 0 },
+    )
+  })
+  const workListCountLabel = $derived.by(() => {
+    if (workFilter !== 'scope') return `${visibleTasks.length} shown · ${taskCounts.total} total`
+    const pieces = [
+      countLabel(scopeVisibleCounts.current, 'current item'),
+      countLabel(scopeVisibleCounts.deferred, 'deferred item'),
+    ]
+    return `${pieces.join(' · ')} · ${taskCounts.total} total`
+  })
 
   function countLabel(count: number, singular: string, plural = `${singular}s`): string {
     return `${count} ${count === 1 ? singular : plural}`

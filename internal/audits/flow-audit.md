@@ -25300,3 +25300,54 @@ selected-scope readiness ordering.
     viewports).
   - Apply/revert behavior: reverting restores the failure where complete scopes
     open Work on the empty runnable-work filter.
+
+## 2026-07-06 — Work selected-scope counts preserve Now/Later split
+
+- Work id: `codex:work-scope-count-now-later-split-2026-07-06`.
+- User job: when Work opens the selected current scope, the count line should
+  tell the owner how much visible work is current vs deferred. It must not say
+  every scoped row is "current" just because both Now and Later rows are shown
+  for inspection.
+- Root-cause classification:
+  - UI communication/orientation problem: Work rendered `42 current-scope items`
+    for Narrative Harness even though the selected scope was split into `11`
+    current items and `31` deferred items.
+  - Project structure/scope/release modeling problem: the selected-scope filter
+    intentionally includes current and deferred rows, but the count label
+    flattened those scope memberships into one ambiguous bucket.
+- Fix:
+  - Work now derives the selected-scope count label from
+    `orientationSpine.scopeRows` membership for each visible task.
+  - The count line now preserves the owner-facing boundary as `current item(s)`
+    and `deferred item(s)` instead of `current-scope item(s)`.
+- Contract Touch Decision:
+  - Touched contracts: Work list selected-scope count presentation.
+  - Contracts considered but not touched: persisted task schema, orientation
+    spine builder, selected-scope/release projection, scheduler/start contract,
+    Overview scope counts, Project Map scope counts, delivery spine schema, and
+    raw task persistence.
+  - Existing data impact: no migration. Existing scope rows now drive clearer
+    Work count copy.
+  - Required follow-up: keep count wording tied to actual scope membership
+    wherever a surface shows current and deferred work together.
+  - Proof required: failing Work regression for mixed current/deferred selected
+    scope rows, focused Work/Overview/Map/API regression set, UI typecheck,
+    installed-app stale-server proof, and rendered Narrative Harness Work proof.
+  - Proof provided: the Work regression first failed on the old
+    `2 current-scope items · 2 total` label; after the fix it passed with
+    `1 current item · 1 deferred item · 2 total`. The focused
+    Work/Overview/Map/API regression set passed with `182` tests,
+    `tsc -p packages/ui/tsconfig.json` and `git diff --check` passed, and after
+    `node ./build.mjs`, `node ./scripts/dev-install.mjs`, and service restart,
+    `/api/stale-server` returned `stale:false` for PID `63961`. Live API proof
+    for Narrative Harness showed `11` included/current rows and `31` deferred
+    rows in the selected scope. Rendered Narrative Harness Work proof at
+    `1280x720` and `390x844` showed `Show = Current scope`, `11 current items
+    · 31 deferred items · 159 total`, no old `42 current-scope items` label, no
+    empty queued-state copy, and no horizontal overflow (`scrollWidth` equaled
+    `clientWidth` at both viewports). Screenshots:
+    `artifacts/flow-audit/nh-work-scope-count-split-desktop-2026-07-06.png` and
+    `artifacts/flow-audit/nh-work-scope-count-split-mobile-2026-07-06.png`.
+  - Apply/revert behavior: reverting restores the misleading count line where
+    deferred rows shown in the selected scope are counted as current-scope
+    items.
