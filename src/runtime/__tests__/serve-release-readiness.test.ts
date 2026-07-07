@@ -630,9 +630,9 @@ describe('GET /api/project/release-readiness', () => {
       tasks: [
         makeTask({
           id: 'task-blocked-proof',
-          title: 'Select and prove a DeepInfra drafting model for legal adult fiction',
+          title: 'Select and prove a DeepInfra drafting model for broad-genre and legal adult fiction chapter writing',
           status: 'blocked',
-          releaseIds: ['headless-mvp'],
+          releaseIds: ['near-term-proof-scope', 'headless-mvp'],
           blockReason: 'max_revisions_exceeded: Worker hit its turn budget while creating proof.',
           proofPaths: [proofPath],
           doneSummaryBundle: {
@@ -683,7 +683,7 @@ describe('GET /api/project/release-readiness', () => {
           id: 'task-duplicate-proof',
           title: 'Select and prove a DeepInfra drafting model for broad-genre chapter writing',
           status: 'done',
-          releaseIds: ['headless-mvp'],
+          releaseIds: [],
           proofPaths: [proofPath],
         } as Partial<Task>),
       ],
@@ -706,10 +706,8 @@ describe('GET /api/project/release-readiness', () => {
     const readinessRes = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
     const readiness = await readinessRes.json() as any
     expect(readiness.openEscalations.map((item: any) => item.taskId)).toEqual(['task-blocked-proof'])
-    expect(readiness.proofMissingDoneTasks).toEqual([{
-      id: 'task-duplicate-proof',
-      title: 'Select and prove a DeepInfra drafting model for broad-genre chapter writing',
-    }])
+    expect(readiness.proofMissingDoneTasks).toEqual([])
+    expect(readiness.releaseBlockers.map((blocker: any) => blocker.id)).toContain('task-blocked-proof')
   })
 
   it('accepts recorded completion proof even when imported proof paths lack inline verification records', async () => {

@@ -24,6 +24,7 @@ import {
 import { readTaskWorkspaceStore } from './task-state-store.js'
 import { latestRecordedCompletionProofAt, recordedCompletionProofCanSettleTaskStatus, recordedCompletionProofForTask, taskHasRecordedCompletionProof } from './task-completion-proof.js'
 import { taskDoneButProofMissing } from './proof-health.js'
+import { taskTitleOverlap } from './task-title-overlap.js'
 import {
   readWorkspaceConfig,
   writeWorkspaceConfig,
@@ -2316,6 +2317,14 @@ function summarizeScopedReleaseWork(
     reason.trim().toLowerCase(),
     summary.trim().replace(/\s+/g, ' ').toLowerCase(),
   ].join('\0')
+  const blockedScopedTasks = executionScopedTasks.filter(task =>
+    String(task.status ?? '') === 'blocked' || activeEscalations(task).length > 0,
+  )
+  const proofMissingTaskIsDuplicateOfBlockedWork = (task: Task): boolean => blockedScopedTasks.some(blocked => {
+    if (blocked.id === task.id) return false
+    if (taskTitleOverlap(blocked.title, task.title) < 0.8) return false
+    return String(blocked.title ?? '').length >= String(task.title ?? '').length
+  })
   for (const t of scopedTasks) {
     const status = effectiveReleaseStatus(t)
     statusCounts[status] = (statusCounts[status] ?? 0) + 1
@@ -2345,8 +2354,10 @@ function summarizeScopedReleaseWork(
       continue
     }
     if (status === 'done' && taskDoneButProofMissing(t)) {
-      proofMissingDoneTasks.push({ id, title })
-      addReleaseBlocker({ id, title, label: `${blockerSubject(title)} needs proof evidence before the release is complete.` })
+      if (!proofMissingTaskIsDuplicateOfBlockedWork(t)) {
+        proofMissingDoneTasks.push({ id, title })
+        addReleaseBlocker({ id, title, label: `${blockerSubject(title)} needs proof evidence before the release is complete.` })
+      }
     }
     if (
       brief &&

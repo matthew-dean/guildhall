@@ -9,6 +9,7 @@ import {
 } from './project-scope-projection.js'
 import { taskDoneButProofMissing } from './proof-health.js'
 import { recordedCompletionProofForTask } from './task-completion-proof.js'
+import { taskTitleOverlap } from './task-title-overlap.js'
 import { deriveTaskWorkVisibility } from './work-visibility.js'
 
 export type OrientationScopeKind =
@@ -805,7 +806,10 @@ function hasBrief(task: OrientationTaskInput): boolean {
   return Boolean(task.productBrief?.approvedAt)
 }
 
-function proofForTask(task: OrientationTaskInput): OrientationProofSummary {
+function proofForTask(
+  task: OrientationTaskInput,
+  options: { suppressMissingProof?: boolean } = {},
+): OrientationProofSummary {
   const recorded = recordedCompletionProofForTask(task)
   const handoff = task.completionHandoff && typeof task.completionHandoff === 'object'
     ? task.completionHandoff as {
@@ -817,6 +821,13 @@ function proofForTask(task: OrientationTaskInput): OrientationProofSummary {
   const verified = [...recorded.verified, ...(handoff?.verified ?? [])]
   const missing = [...(handoff?.notVerified ?? []), ...(handoff?.remainingRisks ?? [])].filter(Boolean)
   const plannedProof = Array.isArray(task.proofPaths) ? task.proofPaths.length : 0
+  if (options.suppressMissingProof && task.status === 'done') {
+    return {
+      state: verified.length > 0 ? 'proven' : 'none',
+      verified,
+      missing: [],
+    }
+  }
   if (task.status === 'done' && taskDoneButProofMissing(task as unknown)) {
     return {
       state: 'needed',
@@ -847,6 +858,31 @@ function hasExplicitProofExpectation(task: OrientationTaskInput): boolean {
   )
 }
 
+function taskIsBlocked(task: OrientationTaskInput): boolean {
+  return task.status === 'blocked'
+}
+
+function duplicateProofMissingTaskIds(
+  tasks: OrientationTaskInput[],
+  scope: OrientationScope | null,
+  tasksById: ReadonlyMap<string, OrientationTaskInput>,
+): Set<string> {
+  const scopedTasks = tasks.filter(task => taskEligibleForSelectedScope(task, scope, { tasksById }).eligible)
+  const blockedScopedTasks = scopedTasks.filter(task => taskIsBlocked(task))
+  const result = new Set<string>()
+  for (const task of scopedTasks) {
+    if (task.status !== 'done') continue
+    if (!taskDoneButProofMissing(task as unknown)) continue
+    const duplicateOwner = blockedScopedTasks.find(blocked => {
+      if (blocked.id === task.id) return false
+      if (taskTitleOverlap(blocked.title, task.title) < 0.8) return false
+      return taskTitle(blocked).length >= taskTitle(task).length
+    })
+    if (duplicateOwner) result.add(task.id)
+  }
+  return result
+}
+
 function taskHasChildren(task: OrientationTaskInput, childIdsByParent: Map<string, string[]>): boolean {
   return (task.hierarchy?.childIds?.length ?? 0) > 0 || (childIdsByParent.get(task.id)?.length ?? 0) > 0
 }
@@ -866,6 +902,7 @@ function unfinishedChildRollupMaturity(
   childIdsByParent: Map<string, string[]>,
   scope: OrientationScope | null,
   tasksById: ReadonlyMap<string, OrientationTaskInput>,
+  suppressedProofTaskIds: ReadonlySet<string>,
 ): OrientationMaturity | null {
   const children = childTasksFor(task, childIdsByParent, tasksById)
     .filter(child => child.status !== 'archived' && child.status !== 'cancelled')
@@ -875,7 +912,7 @@ function unfinishedChildRollupMaturity(
   const unfinished = children.filter((child) => {
     if (child.status === 'shelved') return false
     if (child.status !== 'done') return true
-    const proof = proofForTask(child)
+    const proof = proofForTask(child, { suppressMissingProof: suppressedProofTaskIds.has(child.id) })
     return hasExplicitProofExpectation(child) && (proof.state === 'needed' || proof.state === 'partial')
   })
   if (unfinished.length === 0) return null
@@ -884,7 +921,7 @@ function unfinishedChildRollupMaturity(
   if (unfinished.some(child => child.status === 'review' || child.status === 'gate_check')) return 'review'
   if (unfinished.some((child) => {
     if (child.status !== 'done') return false
-    const proof = proofForTask(child)
+    const proof = proofForTask(child, { suppressMissingProof: suppressedProofTaskIds.has(child.id) })
     return hasExplicitProofExpectation(child) && (proof.state === 'needed' || proof.state === 'partial')
   })) return 'proof_needed'
   return 'sliced'
@@ -895,17 +932,18 @@ function maturityForTask(
   childIdsByParent: Map<string, string[]>,
   scope: OrientationScope | null,
   tasksById: ReadonlyMap<string, OrientationTaskInput>,
+  suppressedProofTaskIds: ReadonlySet<string>,
 ): OrientationMaturity {
   if (!taskEligibleForSelectedScope(task, scope, { tasksById }).eligible) return 'deferred'
   if (task.status === 'shelved') return 'deferred'
   if (task.status === 'blocked') return 'blocked'
   if (task.status === 'in_progress') return 'active'
   if (task.status === 'review' || task.status === 'gate_check') return 'review'
-  const childRollup = unfinishedChildRollupMaturity(task, childIdsByParent, scope, tasksById)
+  const childRollup = unfinishedChildRollupMaturity(task, childIdsByParent, scope, tasksById, suppressedProofTaskIds)
   if (childRollup === 'active' || childRollup === 'review' || childRollup === 'blocked') return childRollup
   if (task.status === 'done') {
     if (childRollup) return childRollup
-    const proof = proofForTask(task)
+    const proof = proofForTask(task, { suppressMissingProof: suppressedProofTaskIds.has(task.id) })
     if (proof.state === 'proven') return 'proven'
     if (hasExplicitProofExpectation(task) && (proof.state === 'needed' || proof.state === 'partial')) return 'proof_needed'
     return 'done'
@@ -914,7 +952,7 @@ function maturityForTask(
   if (task.status === 'ready' && !childBearing && (task.workKind === 'app_spec' || task.workKind === 'feature_spec')) {
     return 'needs_breakdown'
   }
-  const proof = proofForTask(task)
+  const proof = proofForTask(task, { suppressMissingProof: suppressedProofTaskIds.has(task.id) })
   if (task.status === 'ready' && proof.state === 'needed') return 'proof_needed'
   if (proof.state === 'partial') return 'proof_needed'
   if (task.status === 'ready') return childBearing ? 'sliced' : 'ready'
@@ -944,11 +982,12 @@ function progressForSelectedScope(
 ): OrientationProgress {
   const tasksById = new Map(tasks.map(task => [task.id, task]))
   const childIdsByParent = buildChildMap(tasks)
+  const suppressedProofTaskIds = duplicateProofMissingTaskIds(tasks, scope, tasksById)
   return tasks.reduce((progress, task) => {
     if (isProjectSetupTask(task.id) || task.status === 'archived' || task.status === 'cancelled') return progress
     if (!visibilityForTask(task, tasksById).countInProjectTotals) return progress
     if (!taskCountsTowardScopeProgress(task, scope)) return progress
-    const maturity = maturityForTask(task, childIdsByParent, scope, tasksById)
+    const maturity = maturityForTask(task, childIdsByParent, scope, tasksById, suppressedProofTaskIds)
     return addProgress(progress, progressForTask(task, maturity, scope?.id ?? null))
   }, emptyProgress(scope?.id ?? null))
 }
@@ -1049,13 +1088,14 @@ function buildNodes(
 ): { roots: OrientationNode[]; byId: Map<string, OrientationNode>; gaps: OrientationGap[] } {
   const tasksById = new Map(tasks.map(task => [task.id, task]))
   const childIdsByParent = buildChildMap(tasks)
+  const suppressedProofTaskIds = duplicateProofMissingTaskIds(tasks, scope, tasksById)
   const byId = new Map<string, OrientationNode>()
   const gaps: OrientationGap[] = []
 
   const build = (task: OrientationTaskInput): OrientationNode => {
     const existing = byId.get(taskNodeId(task.id))
     if (existing) return existing
-    const maturity = maturityForTask(task, childIdsByParent, scope, tasksById)
+    const maturity = maturityForTask(task, childIdsByParent, scope, tasksById, suppressedProofTaskIds)
     const visibility = visibilityForTask(task, tasksById)
     const children = (childIdsByParent.get(task.id) ?? [])
       .map(childId => tasksById.get(childId))
@@ -1071,7 +1111,7 @@ function buildNodes(
     const ownProgress = visibility.countInProjectTotals && taskCountsTowardScopeProgress(task, scope)
       ? progressForTask(task, maturity, scope?.id ?? null)
       : emptyProgress(scope?.id ?? null)
-    const proof = proofForTask(task)
+    const proof = proofForTask(task, { suppressMissingProof: suppressedProofTaskIds.has(task.id) })
     const node: OrientationNode = {
       id: taskNodeId(task.id),
       parentId: parentIdFor(task, tasksById) ? taskNodeId(parentIdFor(task, tasksById)!) : null,
@@ -1447,35 +1487,6 @@ function normalizeText(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
 }
 
-const DUPLICATE_SCOPE_STOPWORDS = new Set([
-  'a',
-  'an',
-  'and',
-  'for',
-  'of',
-  'the',
-  'to',
-])
-
-function titleTokens(value: string): Set<string> {
-  return new Set(normalizeText(value)
-    .split(/\s+/)
-    .filter(token => token.length > 2)
-    .filter(token => !DUPLICATE_SCOPE_STOPWORDS.has(token)))
-}
-
-function coreTitleOverlap(left: string, right: string): number {
-  const leftTokens = titleTokens(left)
-  const rightTokens = titleTokens(right)
-  const smaller = Math.min(leftTokens.size, rightTokens.size)
-  if (smaller < 5) return 0
-  let overlap = 0
-  for (const token of leftTokens) {
-    if (rightTokens.has(token)) overlap += 1
-  }
-  return overlap / smaller
-}
-
 function materiallyDifferentScope(
   left: OrientationTaskInput,
   right: OrientationTaskInput,
@@ -1506,7 +1517,7 @@ function duplicateScopeConflictGaps(
       const left = candidates[i]!
       const right = candidates[j]!
       if (left.domain && right.domain && left.domain !== right.domain) continue
-      if (coreTitleOverlap(taskTitle(left), taskTitle(right)) < 0.8) continue
+      if (taskTitleOverlap(taskTitle(left), taskTitle(right)) < 0.8) continue
       if (!materiallyDifferentScope(left, right, scope, tasksById)) continue
       const key = [left.id, right.id].sort().join('\n')
       if (seenPairs.has(key)) continue
@@ -1838,6 +1849,7 @@ function proofContractsForNodes(
       (node.kind === 'work' || node.kind === 'feature' || node.kind === 'slice') &&
       node.visibility.countInProjectTotals !== false &&
       node.maturity !== 'deferred' &&
+      node.proof.state !== 'none' &&
       (node.refs.taskIds?.length ?? 0) > 0,
     )
     .map(node => {

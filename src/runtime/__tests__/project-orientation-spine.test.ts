@@ -965,6 +965,95 @@ describe('buildProjectOrientationSpine', () => {
     expect(spine.summary.nextAction).toBe('Review source conflicts before treating the scope as settled.')
   })
 
+  it('does not surface a stale duplicate done row as separate proof work when richer blocked scoped work owns the capability', () => {
+    const tasks = [
+      {
+        id: 'task-select-and-prove-deepinfra',
+        title: 'Select and prove a DeepInfra drafting model for broad-genre and legal adult fiction chapter writing.',
+        description: 'Recovered owner requirement with the adult-fiction drafting boundary.',
+        domain: 'harness',
+        projectPath: '/tmp/narrative-harness',
+        status: 'blocked',
+        priority: 'high',
+        releaseIds: ['near-term-proof-scope', 'stage-1-headless-mvp'],
+        references: ['/tmp/narrative-harness/docs/product/deepinfra-drafting-model-selection.md'],
+      },
+      {
+        id: 'task-import-lu6waj',
+        title: 'Select and prove a DeepInfra drafting model for broad-genre chapter writing.',
+        description: 'Older imported roadmap row that lacks the adult-fiction requirement.',
+        domain: 'harness',
+        projectPath: '/tmp/narrative-harness/docs/harness',
+        status: 'done',
+        priority: 'normal',
+        references: ['/tmp/narrative-harness/docs/harness/implementation-roadmap.md'],
+        proofPaths: [{
+          kind: 'command',
+          command: 'pnpm nh:model-proof',
+          status: 'blocked',
+        }],
+      },
+    ] as any[]
+
+    const release = {
+      id: 'stage-1-headless-mvp',
+      label: 'Stage 1 Headless MVP',
+      kind: 'release' as const,
+      state: 'active' as const,
+      source: 'release_plan' as const,
+      nodeIds: [
+        'work:task-select-and-prove-deepinfra',
+        'work:task-import-lu6waj',
+      ],
+      deferredNodeIds: [],
+      proofStyle: 'script_only' as const,
+    }
+    const scopeProjection = buildProjectScopeProjection({
+      version: 1,
+      lastUpdated: '2026-07-07T09:10:00.000Z',
+      selectedReleaseId: release.id,
+      releases: [release],
+      tasks,
+    })
+
+    const spine = buildProjectOrientationSpine({
+      projectId: 'narrative-harness',
+      now: '2026-07-07T09:10:00.000Z',
+      selectedReleaseId: release.id,
+      releases: [release],
+      tasks,
+      scopeProjection,
+      startReadiness: {
+        canStart: false,
+        code: 'no_unattended_progress',
+        message: '"Select and prove a DeepInfra drafting model for broad-genre and legal adult fiction chapter writing." is blocked before unattended work can run.',
+      } as any,
+      releaseReadiness: {
+        blockers: [{
+          id: 'task-select-and-prove-deepinfra',
+          label: 'Select and prove a DeepInfra drafting model for broad-genre and legal adult fiction chapter writing.',
+        }],
+      },
+    })
+
+    expect(spine.gaps).toContainEqual(expect.objectContaining({
+      kind: 'source_conflict',
+      label: expect.stringContaining('legal adult fiction'),
+    }))
+    expect(spine.gaps).not.toContainEqual(expect.objectContaining({
+      kind: 'proof_needed',
+      refs: ['task:task-import-lu6waj'],
+    }))
+    expect(spine.activePins.map(pin => pin.label)).not.toContain('Select and prove a DeepInfra drafting model for broad-genre chapter writing.')
+    expect(spine.proofContracts.find(contract => contract.nodeId === 'work:task-import-lu6waj')).toBeUndefined()
+    expect(spine.summary.progress).toMatchObject({
+      blocked: 1,
+      done: 1,
+      total: 2,
+    })
+    expect(spine.summary.topBlocker).toContain('legal adult fiction')
+  })
+
   it('does not count workspace-import preview nodes once the imported task is materialized', () => {
     const spine = buildProjectOrientationSpine({
       projectId: 'looma-knit',

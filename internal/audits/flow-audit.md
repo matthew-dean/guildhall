@@ -26723,3 +26723,82 @@ selected-scope readiness ordering.
     duplicate completed proof row again.
 - Schema Migration Decision: no persisted schema field was added, removed, or
   retyped. This adds a derived field to the shared scope projection only.
+
+## 2026-07-07T08:53:15Z - Duplicate proof rows must not become independent release blockers
+
+- User job:
+  - When Guildhall has recovered a richer blocked task and a thinner imported
+    duplicate for the same capability, the release should be blocked by the
+    richer task and its reason. The thinner duplicate should remain visible as
+    a source/provenance conflict, not as a second independent proof todo.
+- Finding:
+  - Root cause classification:
+    - Project structure/scope/release modeling problem: a task included by
+      release node membership but missing its own `releaseIds` could be counted
+      as separate release work even when it overlapped a richer current-scope
+      task.
+    - Task hierarchy/dependency/proof modeling problem: proof-missing completed
+      rows did not check whether a blocked scoped task already owned the same
+      capability.
+    - Bad project data produced by an earlier Guildhall bug: the Narrative
+      Harness DeepInfra rows still lack durable source refs on the raw task
+      records, so derived state has to avoid amplifying the old duplicate.
+- Fix:
+  - Release readiness now suppresses proof-missing completed rows when they are
+    thinner high-overlap duplicates of an in-scope blocked/escalated task.
+  - The title-overlap helper is shared with the orientation spine so source
+    conflict detection and release-readiness duplicate suppression use the same
+    token rules.
+  - Orientation proof, maturity, pins, gaps, and proof contracts now use the
+    same duplicate-proof suppression before the Overview or Map can promote a
+    stale thinner duplicate into current focus.
+- Proof provided so far:
+  - `CI=true ./node_modules/.bin/vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts -t "prioritizes
+    blocked release work"` passed.
+  - `CI=true ./node_modules/.bin/vitest run
+    src/runtime/__tests__/project-scope-projection.test.ts
+    src/runtime/__tests__/project-orientation-spine.test.ts
+    src/runtime/__tests__/serve-release-readiness.test.ts -t
+    "duplicate|blocked|proof|done|release|scope|source conflict|start
+    readiness"` passed (`106` tests, `21` skipped).
+  - `CI=true pnpm lint:contracts` passed; the advisory detector found decision
+    evidence.
+  - `node ./build.mjs` passed.
+  - Installed proof after `CI=true pnpm dev:install && guildhall stop;
+    guildhall start`: `/api/stale-server` reported `stale:false` for PID
+    `16626`.
+  - Installed API proof:
+    `/api/project/spine?projectId=narrative-harness` reports one gap, a
+    `source_conflict`, and no `proof_needed` gap or proof pin for
+    `task-import-lu6waj`. Its summary reports `12 work items`, `11 done`, `1
+    blocked`, `30 deferred`, and top blocker
+    `task-select-and-prove-a-deep-infra-drafting-model-for-broad-genre-chapter-writing`.
+  - Installed release-readiness proof:
+    `/api/project/release-readiness?projectId=narrative-harness` reports
+    `proofMissingDoneTasks: []`, `proofEvidenceBlockingCount: 0`,
+    `unfinishedCount: 1`, `blockingCount: 1`, and `done: 11`.
+  - Installed browser proof:
+    `/projects/narrative-harness/overview` visibly reports `0 missing
+    verification`, `0 missing proof`, and the richer legal-adult DeepInfra task
+    as the start blocker. It no longer shows `Current focus: Select and prove a
+    DeepInfra drafting model for broad-genre chapter writing` or a proof-needed
+    gap for the stale duplicate. Desktop geometry at `1280x720` had
+    `horizontalOverflow:false` and no clipped checked sections/buttons.
+- Contract Touch Decision:
+  - Work id: release-readiness-duplicate-proof-row-suppression.
+  - Touched contracts: release-readiness `proofMissingDoneTasks`,
+    `releaseBlockers`, blocker totals, orientation proof/gap/pin/proof-contract
+    projection, and orientation/release duplicate title matching.
+  - Contracts considered but not touched: persisted task schema, persisted
+    release schema, source-ref schema, proof-path schema, task merge/reconcile
+    mutation semantics.
+  - Required follow-up: installed-app proof must confirm Narrative Harness no
+    longer counts `task-import-lu6waj` as a proof blocker while the richer
+    DeepInfra task remains blocked and source-conflict refs remain visible.
+  - Apply/revert behavior: reverting can make a duplicate imported proof row
+    create an extra release blocker even when a richer blocked task already
+    owns that capability.
+- Schema Migration Decision: no persisted schema field was added, removed, or
+  retyped. This changes only derived release readiness and shared title-overlap
+  calculation.
