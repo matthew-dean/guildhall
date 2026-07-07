@@ -272,6 +272,9 @@ describe('drawer task detail tabs', () => {
     expect(screen.getByText('Automated Required')).toBeInTheDocument()
     expect(screen.getByText('Manual Required')).toBeInTheDocument()
     expect(screen.getByText('Provider Optional')).toBeInTheDocument()
+    expect(screen.getByText('Focused editor tests pass.')).toBeInTheDocument()
+    expect(screen.getByText('Editor route was inspected.')).toBeInTheDocument()
+    expect(screen.getByText('Preview deployment is green.')).toBeInTheDocument()
     expect(screen.getByText('Completion handoff')).toBeInTheDocument()
     expect(screen.getByText('Runtime evidence')).toBeInTheDocument()
     expect(screen.getByText('Remaining uncertainty')).toBeInTheDocument()
@@ -313,6 +316,60 @@ describe('drawer task detail tabs', () => {
     expect(screen.getByText('Delivery completed')).toBeInTheDocument()
     expect(screen.getByText('1 of 2 required delivery steps complete.')).toBeInTheDocument()
     expect(screen.getByText('Runtime proof for link editor controls')).toBeInTheDocument()
+  })
+
+  it('renders repeated historical gate ids without crashing the journey', () => {
+    render(JourneyTab, {
+      task: task({
+        gateResults: [
+          {
+            gateId: 'content.no-truncated-data',
+            type: 'soft',
+            passed: false,
+            checkedAt: '2026-07-06T21:42:10.507Z',
+            output: 'found truncated semantic task data',
+          },
+          {
+            gateId: 'content.no-truncated-data',
+            type: 'soft',
+            passed: true,
+            checkedAt: '2026-07-06T22:22:47.362Z',
+            output: 'no ellipsized semantic task data detected',
+          },
+        ],
+        completionProof: {
+          state: 'verified',
+          expectedCount: 1,
+          verifiedCount: 1,
+          verified: ['Reviewer proof: tests/generate.test.mjs passed.'],
+        },
+      }),
+    })
+
+    expect(screen.getByText('Task journey')).toBeInTheDocument()
+    expect(screen.getByText('Completion proof')).toBeInTheDocument()
+    expect(screen.getAllByText('content.no-truncated-data')).toHaveLength(2)
+  })
+
+  it('renders legacy string expected evidence as readable proof expectations', () => {
+    render(JourneyTab, {
+      task: task({
+        proofPaths: [
+          {
+            id: 'chapter-proof',
+            title: 'Chapter proof',
+            status: 'verified',
+            expectedEvidence: [
+              'Chapter draft fixture is generated.',
+            ] as never,
+          },
+        ],
+      }),
+    })
+
+    expect(screen.getByText('Expected proof')).toBeInTheDocument()
+    expect(screen.getByText('Chapter draft fixture is generated.')).toBeInTheDocument()
+    expect(screen.queryByText('Unknown Required')).not.toBeInTheDocument()
   })
 
   it('hides stale handoff packets after a recovery spec seed moves a task back to spec review', () => {

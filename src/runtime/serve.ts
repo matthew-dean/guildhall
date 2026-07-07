@@ -3352,7 +3352,12 @@ async function enrichTaskForServe(
       : {}),
   }
   const completionProof = compactTaskCompletionProof(enriched)
-  return completionProof ? { ...enriched, completionProof } : enriched
+  const proofPaths = compactProofPathsForServe(enriched.proofPaths)
+  return {
+    ...enriched,
+    ...(Array.isArray(proofPaths) ? { proofPaths } : {}),
+    ...(completionProof ? { completionProof } : {}),
+  }
 }
 
 async function enrichTaskForWorkSurface(
@@ -3479,6 +3484,87 @@ function compactTaskCompletionProof(task: Record<string, unknown>): Record<strin
   }
 }
 
+function compactProofPathId(value: string, fallback: string): string {
+  const id = slugify(value).slice(0, 48)
+  return id || fallback
+}
+
+function compactExpectedEvidenceForServe(item: unknown, index: number, proofPathId: string): Record<string, unknown> | null {
+  if (typeof item === 'string') {
+    const description = item.trim()
+    if (!description) return null
+    return {
+      id: `${proofPathId}-evidence-${index}`,
+      kind: 'artifact',
+      description,
+      required: true,
+    }
+  }
+  if (!item || typeof item !== 'object' || Array.isArray(item)) return null
+  const record = item as Record<string, unknown>
+  const description =
+    typeof record.description === 'string' && record.description.trim()
+      ? record.description.trim()
+      : typeof record.summary === 'string' && record.summary.trim()
+        ? record.summary.trim()
+        : typeof record.title === 'string' && record.title.trim()
+          ? record.title.trim()
+          : ''
+  return {
+    ...record,
+    id:
+      typeof record.id === 'string' && record.id.trim()
+        ? record.id.trim()
+        : `${proofPathId}-evidence-${index}`,
+    kind:
+      typeof record.kind === 'string' && record.kind.trim()
+        ? record.kind.trim()
+        : 'artifact',
+    ...(description ? { description } : {}),
+    required: record.required === false ? false : true,
+  }
+}
+
+function compactProofPathsForServe(value: unknown): unknown {
+  if (!Array.isArray(value)) return value
+  return value.flatMap((proofPath, index) => {
+    if (typeof proofPath === 'string') {
+      const title = proofPath.trim()
+      if (!title) return []
+      const id = compactProofPathId(title, `proof-path-${index}`)
+      return [{
+        id,
+        scope: { type: 'task', id },
+        title,
+        summary: `Legacy proof path: ${title}`,
+        source: 'documented',
+        status: 'planned',
+        expectedEvidence: [],
+      }]
+    }
+    if (!proofPath || typeof proofPath !== 'object' || Array.isArray(proofPath)) return []
+    const record = proofPath as Record<string, unknown>
+    const title = typeof record.title === 'string' && record.title.trim()
+      ? record.title.trim()
+      : typeof record.kind === 'string' && record.kind.trim()
+        ? `${record.kind.trim().replace(/[_-]/g, ' ')} proof path`
+        : `Proof path ${index + 1}`
+    const id = typeof record.id === 'string' && record.id.trim()
+      ? record.id.trim()
+      : compactProofPathId(title, `proof-path-${index}`)
+    return [{
+      ...record,
+      id,
+      title,
+      expectedEvidence: Array.isArray(record.expectedEvidence)
+        ? record.expectedEvidence
+          .map((evidence, evidenceIndex) => compactExpectedEvidenceForServe(evidence, evidenceIndex, id))
+          .filter((evidence): evidence is Record<string, unknown> => Boolean(evidence))
+        : [],
+    }]
+  })
+}
+
 function compactTaskForProjectSummary(task: Record<string, unknown>): Record<string, unknown> {
   const summaryKeys = [
     'id',
@@ -3541,7 +3627,10 @@ function compactTaskForProjectSummary(task: Record<string, unknown>): Record<str
   if (runtime) summary.runtime = runtime
   const escalations = compactTaskEscalationsForProjectSummary(task.escalations)
   if (escalations) summary.escalations = escalations
-  const completionProof = compactTaskCompletionProof(task)
+  if (Array.isArray(summary.proofPaths)) summary.proofPaths = compactProofPathsForServe(summary.proofPaths)
+  const completionProof = task.completionProof && typeof task.completionProof === 'object' && !Array.isArray(task.completionProof)
+    ? task.completionProof as Record<string, unknown>
+    : compactTaskCompletionProof(task)
   if (completionProof) summary.completionProof = completionProof
   return summary
 }
@@ -3593,7 +3682,10 @@ function compactTaskForWorkSurface(task: Record<string, unknown>): Record<string
   if (latestCheckpoint) summary.latestCheckpoint = latestCheckpoint
   const definitionOfDone = compactDefinitionOfDoneForWorkSurface(task.definitionOfDone)
   if (definitionOfDone) summary.definitionOfDone = definitionOfDone
-  const completionProof = compactTaskCompletionProof(task)
+  if (Array.isArray(summary.proofPaths)) summary.proofPaths = compactProofPathsForServe(summary.proofPaths)
+  const completionProof = task.completionProof && typeof task.completionProof === 'object' && !Array.isArray(task.completionProof)
+    ? task.completionProof as Record<string, unknown>
+    : compactTaskCompletionProof(task)
   if (completionProof) summary.completionProof = completionProof
   return summary
 }

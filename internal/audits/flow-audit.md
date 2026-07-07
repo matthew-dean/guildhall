@@ -26077,11 +26077,20 @@ selected-scope readiness ordering.
   - UI communication/orientation problem: `/api/project` could present a
     complete release headline while every compact task row appeared to have no
     completion proof attached.
+  - UI communication/orientation problem: the Journey tab used gate ids as
+    unique render keys even though real task history can contain repeated gate
+    runs with the same `gateId`, causing Svelte to throw and leaving the drawer
+    stuck on `Loading...`.
   - Project structure/scope/release modeling problem: release-readiness counts
     used the augmented orientation scope, while the visible `scope` payload
     preferred the narrower raw selected release object.
   - Data model/schema problem: no persisted data shape changed, but two read
     models were projecting different slices of the same source truth.
+  - Data model/schema problem: legacy imported proof paths can carry
+    `expectedEvidence` as strings, while the product UI expects structured
+    evidence records with kind, required flag, and description. The raw shape
+    rendered as `Unknown Required` instead of communicating the actual proof
+    expectation.
 - Fix:
   - Added a shared compact `completionProof` projection for project and work
     task summaries. It reuses recorded completion proof and proof-missing
@@ -26096,6 +26105,12 @@ selected-scope readiness ordering.
     task payload, and direct task deep links initialize from the actual browser
     URL so `?tab=journey` opens the proof view instead of silently returning to
     Overview.
+  - Task proof paths are normalized at the serve read-model boundary so legacy
+    string evidence becomes structured expected-evidence records before product
+    surfaces render it. Journey also renders the evidence descriptions as list
+    rows instead of category-only chips.
+  - Journey gate keys now include run identity, not just `gateId`, so repeated
+    historical gate records can render without crashing the drawer.
 - Contract Touch Decision:
   - Touched contracts: `/api/project` task summary read model, `/api/project`
     work-surface task summary read model, and `/api/project/release-readiness`
@@ -26115,9 +26130,11 @@ selected-scope readiness ordering.
     projected into `/api/project`, regression that truncation-only evidence
     still blocks proof readiness and projects as missing proof, regression that
     release-readiness visible scope matches project-spine selected-scope counts,
-    task detail/work-surface projection regressions, Journey-tab proof display
-    regression, task-drawer deep-link regression, contract advisory,
-    build/install/stale-server proof, and live Narrative Harness API proof.
+    task detail/work-surface projection regressions, legacy string
+    expected-evidence projection regression, Journey-tab proof display
+    regression, duplicate gate-id Journey regression, task-drawer deep-link
+    regression, contract advisory, build/install/stale-server proof, and live
+    Narrative Harness API/browser proof.
   - Proof provided: `./node_modules/.bin/vitest run
     src/runtime/__tests__/serve-release-readiness.test.ts
     src/runtime/__tests__/serve-task-endpoints.test.ts
@@ -26130,10 +26147,17 @@ selected-scope readiness ordering.
     `?tab=journey` task URL opened the drawer on Overview instead of Journey.
     The TaskDrawer and router focused suites then passed (`56` tests) after
     the URL initialization hardening.
+    A follow-up focused run,
+    `./node_modules/.bin/vitest run
+    src/runtime/__tests__/serve-task-endpoints.test.ts
+    src/web/surfaces/drawer/__tests__/drawer-tabs.svelte.test.ts`, passed
+    (`125` tests) after adding regressions for string expected-evidence
+    normalization and repeated gate ids in Journey.
   - Installed proof: `node ./build.mjs && node ./scripts/dev-install.mjs &&
     guildhall stop && guildhall start && curl -s
     http://localhost:7777/api/stale-server` installed the current branch and
-    returned `stale:false` for PID `21347`.
+    returned `stale:false` for PID `21347`. A later install after the Journey
+    proof-path fixes returned `stale:false` for PID `67376`.
   - Live Narrative Harness API proof:
     `/api/project?projectId=narrative-harness` returned
     `startReadiness.code:"all_terminal"` with message
@@ -26151,14 +26175,21 @@ selected-scope readiness ordering.
     selected-model?projectId=narrative-harness` returned `status:"done"` and
     `completionProof.state:"verified"` with `expectedCount:1`,
     `verifiedCount:65`, and reviewer proof naming `fixtures/story-output.json`
-    plus passing `tests/generate.test.mjs`.
-  - Browser proof status: installed in-app browser proof initially caught the
-    `?tab=journey` drawer opening on Overview and drove the deep-link fix.
-    After the final install, the in-app browser bridge became unreliable: it
-    could list the open tab at the correct Journey URL, but timed out on
-    selected-tab reads, reloads, and read-only DOM evaluation. Local API and
-    deterministic UI tests therefore prove this slice; a follow-up live browser
-    pass should be repeated once the bridge is responsive.
+    plus passing `tests/generate.test.mjs`. After proof-path normalization, the
+    same endpoint projected four structured `expectedEvidence` records with
+    `kind:"artifact"`, `required:true`, and readable descriptions such as
+    `The task can generate or load a synopsis, outline, character/voice records,
+    and world-state facts before drafting.`
+  - Browser proof: a real headless browser against the installed app at
+    `/projects/narrative-harness/task/task-generate-a-cli-first-story-synopsis-
+    outline-character-voice-records-and-one-chapter-draft-from-the-selected-
+    model?tab=journey` first reproduced the escaped misses: Journey selected
+    but the drawer stuck on `Loading...` with duplicate-key page errors. After
+    the fix, the same route rendered `selectedTab:"Journey"`,
+    `Completion proof`, `65 verified`, `1 expected`, the reviewer proof naming
+    `tests/generate.test.mjs`, and the expected-evidence description text;
+    it also reported `hasUnknownRequired:false`, `hasLoading:false`,
+    `overflowX:false`, and no page errors.
   - Apply/revert behavior: reverting restores a state where Guildhall can know
     completion proof and augmented scope membership internally but fail to
     project that truth into the product API that users and UI surfaces depend

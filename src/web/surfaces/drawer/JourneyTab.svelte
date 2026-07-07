@@ -175,8 +175,19 @@
     return 'neutral'
   }
 
-  function evidenceChipLabel(evidence: ExpectedEvidence): string {
+  function evidenceChipLabel(evidence: ExpectedEvidence | string): string {
+    if (typeof evidence === 'string') return 'Expected proof'
     return `${friendlyToken(evidence.kind)} ${evidence.required === false ? 'Optional' : 'Required'}`
+  }
+
+  function evidenceDescription(evidence: ExpectedEvidence | string): string {
+    if (typeof evidence === 'string') return evidence
+    return evidence.description ?? evidence.sourceRef ?? 'Evidence expectation recorded.'
+  }
+
+  function evidenceKey(evidence: ExpectedEvidence | string, index: number): string {
+    if (typeof evidence === 'string') return `evidence-string-${index}-${evidence.slice(0, 32)}`
+    return `evidence-${evidence.id ?? index}`
   }
 
   function verificationTone(record: { status?: string }): 'ok' | 'danger' | 'warn' | 'neutral' {
@@ -352,7 +363,7 @@
           {:else}
             <p>{passedGateCount} check{passedGateCount === 1 ? '' : 's'} passed{#if failedGateCount > 0}; {failedGateCount} failed{/if}.</p>
             <div class="chips">
-              {#each gates.slice(0, 5) as gate, i (`gate-${gate.gateId ?? i}`)}
+              {#each gates.slice(0, 5) as gate, i (`gate-${gate.gateId ?? 'unknown'}-${gate.checkedAt ?? 'undated'}-${i}`)}
                 <Chip label={gate.gateId ?? 'gate'} tone={gate.passed ? 'ok' : 'danger'} />
               {/each}
             </div>
@@ -418,11 +429,17 @@
                       </ul>
                     {/if}
                     {#if proofPath.expectedEvidence?.length}
-                      <div class="chips">
-                        {#each proofPath.expectedEvidence as evidence, evidenceIndex (`evidence-${evidence.id ?? evidenceIndex}`)}
-                          <Chip label={evidenceChipLabel(evidence)} tone={evidence.required === false ? 'neutral' : 'accent'} />
+                      <ul class="proof-list">
+                        {#each proofPath.expectedEvidence as evidence, evidenceIndex (evidenceKey(evidence, evidenceIndex))}
+                          <li>
+                            <Chip
+                              label={evidenceChipLabel(evidence)}
+                              tone={typeof evidence === 'object' && evidence.required === false ? 'neutral' : 'accent'}
+                            />
+                            <span>{evidenceDescription(evidence)}</span>
+                          </li>
                         {/each}
-                      </div>
+                      </ul>
                     {/if}
                     {#if proofPath.verificationRecords?.length}
                       <ul class="proof-list">

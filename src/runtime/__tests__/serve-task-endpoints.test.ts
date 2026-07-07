@@ -1066,6 +1066,56 @@ describe('GET /api/project/task/:id', () => {
     })
   })
 
+  it('normalizes legacy string proof evidence for task detail and project rows', async () => {
+    await seedTask('task-1', {
+      status: 'done',
+      proofPaths: [{
+        kind: 'review',
+        expectedEvidence: [
+          'Chapter draft fixture is generated.',
+          {
+            kind: 'automated',
+            description: 'Focused generation test passes.',
+            required: false,
+          },
+        ],
+      }],
+    })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const detailRes = await app.fetch(new Request(projectUrl('/api/project/task/task-1')))
+    expect(detailRes.status).toBe(200)
+    const detailBody = (await detailRes.json()) as Record<string, any>
+    expect(detailBody.task?.proofPaths?.[0]).toMatchObject({
+      id: 'review-proof-path',
+      title: 'review proof path',
+      expectedEvidence: [
+        {
+          id: 'review-proof-path-evidence-0',
+          kind: 'artifact',
+          description: 'Chapter draft fixture is generated.',
+          required: true,
+        },
+        {
+          id: 'review-proof-path-evidence-1',
+          kind: 'automated',
+          description: 'Focused generation test passes.',
+          required: false,
+        },
+      ],
+    })
+
+    const projectRes = await app.fetch(new Request(projectUrl('/api/project')))
+    expect(projectRes.status).toBe(200)
+    const projectBody = (await projectRes.json()) as Record<string, any>
+    const task = projectBody.tasks?.find((entry: Record<string, any>) => entry.id === 'task-1')
+    expect(task?.proofPaths?.[0]?.expectedEvidence?.[0]).toMatchObject({
+      kind: 'artifact',
+      description: 'Chapter draft fixture is generated.',
+      required: true,
+    })
+  })
+
   it('explains skipped automatic merges truthfully for done tasks', async () => {
     await seedTask('task-1', {
       status: 'done',
