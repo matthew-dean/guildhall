@@ -25718,3 +25718,81 @@ selected-scope readiness ordering.
     selected-scope all-terminal readiness can hide a richer overlapping owner
     requirement and make Guildhall look more complete than its source trail
     supports.
+
+## 2026-07-06 — Start readiness blocks source-conflicted terminal scopes
+
+- Work id: `codex:source-conflict-start-readiness-2026-07-06`.
+- User job: pressing Start/Resume must not run, close, or describe a selected
+  scope as complete when the orientation spine has a source conflict for that
+  scope. The user should see the conflict as the next action, understand why it
+  blocks execution, and have a direct path to the Project Map.
+- Root-cause classification:
+  - Project structure/scope/release modeling problem: Narrative Harness had
+    overlapping DeepInfra model-selection work split across current and later
+    scope membership.
+  - Task hierarchy/dependency/proof modeling problem: terminal/proven task
+    state masked that the richer source obligation still contradicted the
+    selected scope.
+  - Scheduler/action-state logic problem: `terminalStartState` computed the
+    scoped orientation spine but ignored `source_conflict` gaps, allowing
+    all-terminal or repository follow-up readiness to outrank source truth.
+  - UI communication/orientation problem: action labels and the project ticker
+    needed an explicit shared readiness code so stale stopped-run events and
+    generic blocked labels could not flatten the conflict.
+  - Bad project data produced by an earlier Guildhall bug: the duplicate
+    Narrative Harness DeepInfra tasks remain calibration data for importer and
+    model repair rather than data to hand-wave away.
+- Fix:
+  - `terminalStartState` now returns `scope_source_conflict` before git/repo
+    follow-up or `all_terminal` when the scoped orientation spine contains a
+    source conflict.
+  - The shared project action model maps that readiness to `Source conflict
+    requires review`, `Open map`, and `Review conflict`.
+  - The project ticker maps the same readiness code to a warning review state
+    before stale stopped-run events can claim the run is merely finished.
+- Contract Touch Decision:
+  - Touched contracts: start readiness code/action projection, project action
+    model labels, run-control label, and project activity ticker priority.
+  - Contracts considered but not touched: persisted task schema,
+    release/scope membership mutation, workspace-import schema,
+    proof-health calculation, orientation-spine source-conflict detection, and
+    release selection.
+  - Existing data impact: no migration. Existing source-conflicted terminal
+    scopes become non-runnable until the conflict is reviewed or reconciled.
+  - Required follow-up: repair duplicated scope membership through importer and
+    model reconciliation, then prove the corrected Narrative Harness MVP scope
+    can run to completion from visible release/current-scope truth.
+  - Proof required: focused runtime regression showing a terminal selected
+    scope with duplicate source work blocks as `scope_source_conflict`, action
+    model regression for the shared labels, ticker regression proving stale
+    stopped events cannot override the conflict, installed-app stale-server
+    proof, live API proof, POST Start boundary proof, and browser proof on the
+    Narrative Harness Map.
+  - Proof provided: the focused runtime regression first failed because the
+    selected scope returned repository follow-up readiness instead of
+    `scope_source_conflict`. After the fix,
+    `./node_modules/.bin/vitest run src/runtime/__tests__/serve-settings.test.ts --testNamePattern "duplicate scoped work creates a source conflict"`
+    passed, `./node_modules/.bin/vitest run src/runtime/__tests__/project-action-model.test.ts`
+    passed (`21` tests),
+    `./node_modules/.bin/vitest run src/web/lib/__tests__/project-activity.test.ts`
+    passed (`21` tests), and
+    `./node_modules/.bin/vitest run src/runtime/__tests__/project-orientation-spine.test.ts`
+    passed (`58` tests). `node ./build.mjs` and
+    `node ./scripts/dev-install.mjs` passed; after service restart,
+    `/api/stale-server` returned `stale:false`. Live
+    `/api/project?projectId=narrative-harness` returned
+    `startReadiness.code:"scope_source_conflict"`,
+    `actionModel.primaryAction.buttonLabel:"Open map"`, and
+    `runControl.label:"Review conflict"`. Live `POST /api/project/start`
+    returned `400` with `code:"scope_source_conflict"` and `actionHref:"/map"`.
+    Browser proof on `/projects/narrative-harness/map` showed `Review
+    conflict`, `Open map`, the `legal adult fiction chapter writing` conflict,
+    no stale `Stage 1: Headless Drafting And Evaluation MVP is complete.`
+    message, and no horizontal overflow at `1280px`.
+  - Known caveat: the full `src/runtime/__tests__/serve-settings.test.ts` file
+    still has unrelated fixture-sensitive failures around git/upstream
+    follow-up and owner-input timing; the targeted regression for this boundary
+    is green, but the broad integration fixture needs a separate cleanup slice.
+  - Apply/revert behavior: reverting restores the dangerous state where a
+    selected scope can be all-terminal or require repository follow-up while
+    the same shared orientation spine says source truth is conflicted.

@@ -168,6 +168,41 @@ describe('buildProjectTicker', () => {
     })
   })
 
+  it('surfaces source-conflict readiness before stale run events', () => {
+    const detail: ProjectDetail = {
+      startReadiness: {
+        canStart: false,
+        code: 'scope_source_conflict',
+        message: 'Stage 1 has source conflicts to review before it can be treated as complete.',
+        actionHref: '/map',
+        focusKind: 'source_conflict',
+      },
+      run: {
+        status: 'stopped',
+        stopSummary: {
+          stopReason: 'all_terminal',
+          stopMessage: 'No actionable tasks remain.',
+        },
+      },
+      tasks: [{ id: 'task-1', status: 'done', title: 'Done task' }],
+    }
+
+    expect(buildProjectTicker(detail, {
+      at: now.toISOString(),
+      event: {
+        type: 'supervisor_stopped',
+        reason: 'all_terminal',
+        message: 'No actionable tasks remain: 1 done.',
+      },
+    }, now)).toMatchObject({
+      tone: 'warn',
+      actorLabel: 'Review',
+      label: 'Review',
+      message: 'Stage 1 has source conflicts to review before it can be treated as complete.',
+      detail: 'Open the Project Map to resolve the conflicting source trail.',
+    })
+  })
+
   it('surfaces active worker progress from recent events', () => {
     const detail: ProjectDetail = {
       run: { status: 'running' },

@@ -101,6 +101,31 @@ describe('buildProjectActionModel', () => {
       startEnabled: false,
     })
 
+    const sourceConflict = buildProjectActionModel({
+      startReadiness: {
+        canStart: false,
+        code: 'scope_source_conflict',
+        message: 'Stage 1 has source conflicts to review before it can be treated as complete.',
+        actionHref: '/map',
+        focusKind: 'source_conflict',
+      },
+      tasks: [],
+      thread: { turns: [], activeTurnId: null },
+      runStatus: 'stopped',
+    })
+    expect(sourceConflict.primaryAction).toMatchObject({
+      source: 'start_readiness',
+      label: 'Source conflict requires review',
+      detail: 'Stage 1 has source conflicts to review before it can be treated as complete.',
+      buttonLabel: 'Open map',
+      href: '/map',
+      tone: 'warn',
+    })
+    expect(sourceConflict.runControl).toMatchObject({
+      label: 'Review conflict',
+      startEnabled: false,
+    })
+
     const briefCleanup = buildProjectActionModel({
       startReadiness: {
         canStart: false,

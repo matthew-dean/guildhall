@@ -306,6 +306,17 @@ function readinessTicker(detail: ProjectDetail | null | undefined): ProjectActiv
       timeLabel: null,
     }
   }
+  if (readiness.code === 'scope_source_conflict') {
+    return {
+      tone: 'warn',
+      pulse: false,
+      actorLabel: 'Review',
+      label: 'Review',
+      message: readiness.message || 'Current scope has source conflicts to review.',
+      detail: 'Open the Project Map to resolve the conflicting source trail.',
+      timeLabel: null,
+    }
+  }
   if (readiness.code === 'no_unattended_progress') {
     if (readiness.focusKind === 'spec_review' && readiness.focusTaskTitle) {
       return {

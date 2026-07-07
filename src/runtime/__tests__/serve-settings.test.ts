@@ -3448,8 +3448,9 @@ describe('Workspace Import review endpoints', () => {
       },
       detected: null,
     })
-
     const { app } = buildServeApp({ projectPath: tmpDir })
+    await execFileP('git', ['add', '.'], { cwd: tmpDir })
+    await execFileP('git', ['commit', '-m', 'seed duplicate scope conflict'], { cwd: tmpDir })
     const res = await app.fetch(new Request(scoped('/api/project')))
 
     expect(res.status).toBe(200)
@@ -3579,6 +3580,140 @@ describe('Workspace Import review endpoints', () => {
     expect(comparable(body.startReadiness?.message ?? '')).toContain(comparable(selectedScopeLabel))
     expect(body.startReadiness?.message).not.toContain('Near-term proof scope')
     expect(body.startReadiness?.focusTaskId).toBe('stage-1-model-proof')
+  })
+
+  it('blocks selected-scope completion when duplicate scoped work creates a source conflict', async () => {
+    const now = '2026-07-06T19:25:00.000Z'
+    await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
+    await fs.mkdir(path.join(tmpDir, 'docs', 'product'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'harness', 'implementation-roadmap.md'),
+      [
+        '# Implementation Roadmap',
+        '',
+        '## Stage 1: Headless Drafting And Evaluation MVP',
+        '',
+        'Goal: prove the headless drafting loop before product UI work.',
+        '',
+        '## Current Next Milestone',
+        '',
+        'The next milestone is Stage 1: Headless Drafting And Evaluation MVP.',
+        '',
+        '1. Select and prove a DeepInfra drafting model for broad-genre chapter writing.',
+      ].join('\n'),
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'product', 'deepinfra-drafting-model-selection.md'),
+      [
+        '# DeepInfra Drafting Model Selection',
+        '',
+        'Select and prove a DeepInfra drafting model for broad-genre and legal adult fiction chapter writing.',
+      ].join('\n'),
+      'utf8',
+    )
+    const completionHandoff = {
+      verified: ['Command proof passed.'],
+      evidenceRefs: ['proof:synthetic'],
+    }
+    await writeSystemTasks({
+      version: 1,
+      lastUpdated: now,
+      selectedReleaseId: 'stage-1-headless-drafting-and-evaluation-mvp',
+      releases: [{
+        id: 'stage-1-headless-drafting-and-evaluation-mvp',
+        label: 'Stage 1: Headless Drafting And Evaluation MVP',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:stage-1-model-proof'],
+        deferredNodeIds: ['work:near-term-adult-model-proof'],
+      }],
+      tasks: [
+        {
+          id: 'stage-1-model-proof',
+          title: 'Select and prove a DeepInfra drafting model for broad-genre chapter writing.',
+          description: 'Current documented Stage 1 work.',
+          domain: 'harness',
+          status: 'done',
+          releaseIds: ['stage-1-headless-drafting-and-evaluation-mvp'],
+          priority: 'normal',
+          acceptanceCriteria: [{ id: 'proof', description: 'Attach proof.', met: true }],
+          completionHandoff,
+          gitStory: { override: 'local_only', reason: 'Synthetic calibration fixture.' },
+          references: ['docs/harness/implementation-roadmap.md'],
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          id: 'near-term-adult-model-proof',
+          title: 'Select and prove a DeepInfra drafting model for broad-genre and legal adult fiction chapter writing.',
+          description: 'Richer owner requirement captured outside the selected scope.',
+          domain: 'harness',
+          status: 'done',
+          releaseIds: ['near-term-proof-scope'],
+          priority: 'normal',
+          acceptanceCriteria: [{ id: 'proof', description: 'Attach proof.', met: true }],
+          completionHandoff,
+          gitStory: { override: 'local_only', reason: 'Synthetic calibration fixture.' },
+          references: ['docs/product/deepinfra-drafting-model-selection.md'],
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+    })
+    await writeSystemJson('workspace-goals.json', {
+      version: 3,
+      recordedAt: now,
+      goals: [],
+      releases: [{
+        id: 'stage-1-headless-drafting-and-evaluation-mvp',
+        label: 'Stage 1: Headless Drafting And Evaluation MVP',
+        source: 'release_plan',
+        state: 'active',
+      }],
+      tasks: [{
+        id: 'stage-1-model-proof',
+        title: 'Select and prove a DeepInfra drafting model for broad-genre chapter writing.',
+        description: 'Current documented Stage 1 work.',
+        domain: 'harness',
+        priority: 'normal',
+        scope: 'current',
+        releaseIds: ['stage-1-headless-drafting-and-evaluation-mvp'],
+        references: ['docs/harness/implementation-roadmap.md'],
+      }],
+      milestones: [],
+      context: [],
+      approved: {
+        goalCount: 0,
+        taskCount: 1,
+        milestoneCount: 0,
+        currentTaskCount: 1,
+        laterTaskCount: 0,
+        taskIds: ['stage-1-model-proof'],
+        currentTaskIds: ['stage-1-model-proof'],
+        laterTaskIds: [],
+      },
+      detected: null,
+    })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(scoped('/api/project')))
+    const body = await res.json() as {
+      startReadiness?: { code?: string; message?: string; actionHref?: string; focusKind?: string }
+      orientationSpine?: { sourceHealth?: { gaps?: number }; summary?: { topBlocker?: string | null } }
+    }
+
+    expect(res.status).toBe(200)
+    expect(body.orientationSpine?.sourceHealth?.gaps).toBeGreaterThan(0)
+    expect(body.startReadiness).toMatchObject({
+      canStart: false,
+      code: 'scope_source_conflict',
+      actionHref: '/map',
+      focusKind: 'source_conflict',
+    })
+    expect(body.startReadiness?.message).toContain('legal adult fiction')
+    expect(body.startReadiness?.message).not.toContain('is complete')
   })
 
   it('points Start at detected current-scope import work before completed-task proof cleanup', async () => {

@@ -6162,7 +6162,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
 	  async function terminalStartState(projectPath: string, requestedTaskId?: string): Promise<{
 	    canStart: false
-	    code: 'all_terminal' | 'proof_evidence_missing' | 'repository_followup_required'
+	    code: 'all_terminal' | 'proof_evidence_missing' | 'repository_followup_required' | 'scope_source_conflict'
 	    message: string
       actionHref?: string
       focusTaskId?: string
@@ -6308,6 +6308,33 @@ export function buildServeApp(opts: ServeOptions = {}): {
         focusKind: 'proof',
         proofTaskIds: proofMissingDoneTasks.map(task => task.id),
         count: proofMissingDoneTasks.length,
+        ...(selectedReleaseScope ? { selectedReleaseTerminal: true } : {}),
+        stopSummary: {
+          reason: 'all_terminal',
+          message: detailMessage,
+          counts: {
+            total: scopedTasks.length,
+            done,
+            blocked,
+            shelved,
+            pendingPr,
+            archived,
+            cancelled,
+            actionable,
+            terminal,
+          },
+        },
+      }
+    }
+    const sourceConflict = scopedOrientation?.orientationSpine.gaps.find(gap => gap.kind === 'source_conflict')
+    if (sourceConflict) {
+      const scopeLabel = selectedReleaseScope?.label ?? 'Current task scope'
+      return {
+        canStart: false,
+        code: 'scope_source_conflict',
+        message: `${scopeLabel} has source conflicts to review before it can be treated as complete: ${sourceConflict.label}`,
+        actionHref: '/map',
+        focusKind: 'source_conflict',
         ...(selectedReleaseScope ? { selectedReleaseTerminal: true } : {}),
         stopSummary: {
           reason: 'all_terminal',
