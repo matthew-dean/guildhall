@@ -28337,3 +28337,94 @@ selected-scope readiness ordering.
     data.
 - Schema Migration Decision: no persisted schema field was added, removed, or
   retyped. This is a runtime/API read-surface split only.
+
+## 2026-07-07T13:32:57Z - Completed spine previews must read as completed scope
+
+- User job:
+  - When Overview is waiting for the fuller project payload, the owner should
+    still immediately understand whether the selected scope/release is done.
+    A source preview must not show `Do this next` when the spine already says
+    the current scoped work is complete.
+- Finding:
+  - Root cause classification:
+    - UI communication/orientation problem: the full Narrative Harness Overview
+      eventually showed the correct closed-scope story, but the first preview
+      rendered `Do this next` / `Review completed scope.` for several seconds.
+      That made the page feel like there was actionable work even though the
+      current scoped release was complete.
+    - Data/read-model problem: the fast spine preview carried
+      `release.state: ready`, scoped done/proven counts, and the completion
+      headline, but it did not include `startReadiness`. Overview treated only
+      `startReadiness.code === all_terminal` as the completed-scope signal.
+    - Project structure/scope/release modeling problem: scope completion is a
+      release/scope fact, not only a run-control fact. Preview and full-detail
+      surfaces need to agree on that fact before Guildhall can orient the user
+      instantly.
+- Fix:
+  - Overview now derives a completed scoped-preview state from the orientation
+    spine when `startReadiness` is not present: selected release state is
+    `ready`, scoped included work is non-empty, scoped done/proven count covers
+    included work, there are no scoped blockers, and there is no top blocker.
+  - The existing primary Overview card, chip, work-mix empty label, and run
+    panel reuse that shared completed-scope presentation instead of inventing a
+    preview-only card or bespoke copy.
+  - `/api/project?surface=overview` now keeps compact raw task transport for
+    Overview while sharing one effective-task projection between release
+    readiness and orientation. This avoids the bad intermediate regression
+    where a faster raw-task Overview said the release was ready but the spine
+    headline said it was waiting on proof.
+- Proof provided:
+  - Red/green regression:
+    `CI=true ./node_modules/.bin/vitest run
+    src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts
+    --testNamePattern "completed spine previews"` first failed because the
+    preview showed `Do this next`, then passed after the shared
+    completed-preview state was added.
+  - Focused component tests:
+    `CI=true ./node_modules/.bin/vitest run
+    src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts
+    src/web/surfaces/project/__tests__/ProjectMapTab.svelte.test.ts` passed
+    with 41 tests.
+  - Build proof:
+    `node ./build.mjs` passed.
+  - Live API proof before browser reinstall:
+    `/api/project?projectId=narrative-harness&surface=overview` returned in
+    4.65s with `releaseReadiness.ready:true`, `tasks:11`, `done:11`,
+    `blockingCount:0`, source health `58 documented`, `66 inferred`, `1 gaps`,
+    and headline `Stage 1 Headless Drafting And Evaluation MVP is complete.`
+    `/api/project/spine?projectId=narrative-harness` returned the same
+    completion headline and `release.state: ready`, proving the preview had
+    enough information to avoid the false next-action read.
+  - Live browser proof before this code change:
+    `/projects/narrative-harness/overview` initially rendered the spine-preview
+    state as `Do this next` / `Review completed scope.` and only later settled
+    into `Scope status`, `Closed scope`, `Current release`, `Complete`, and
+    `11 / 11 done`. This entry treats the preview mismatch as the failing
+    behavior being fixed.
+  - Installed/live proof:
+    `CI=true corepack pnpm dev:install`, `guildhall stop`, and
+    `guildhall start` installed and restarted the current branch artifact.
+    `/api/stale-server` returned `stale:false` for PID `25294`.
+    Browser proof against `/projects/narrative-harness/overview` showed the
+    preview state as `Scope status`, `CLOSED SCOPE`, `Stage 1 Headless Drafting
+    And Evaluation MVP is complete.`, `Open Work`, `11 Current scope`, `31
+    Deferred`, `58 documented capabilities`, `66 inferred nodes`, `1 gaps`, and
+    no `Do this next`.
+  - Settled browser proof:
+    After the full Overview payload arrived, the page still showed `Scope
+    status`, `CLOSED SCOPE`, and the completion headline, then added `Current
+    release`, `COMPLETE`, `11 / 11 done`, `No runnable work`, no blocked work,
+    no `Start`, and no `Resume`.
+- Contract Touch Decision:
+  - Work id: `overview-completed-spine-preview`.
+  - Touched contracts: Project Overview's owner-visible completed-scope
+    presentation and `/api/project` overview-surface read behavior.
+  - Contracts considered but not touched: persisted task schema, persisted
+    release schema, orientation-spine persisted shape, project action model,
+    Map view contract, and Release view contract.
+  - Required follow-up: install/restart and capture live browser proof that the
+    preview and full Overview agree on completed-scope state.
+  - Apply/revert behavior: reverting makes the first Overview render depend on
+    full-detail `startReadiness` before it can present a completed scope.
+- Schema Migration Decision: no persisted schema field was added, removed, or
+  retyped. This is a UI/read-model interpretation fix only.

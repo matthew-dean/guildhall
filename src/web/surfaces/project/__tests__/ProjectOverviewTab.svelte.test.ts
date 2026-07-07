@@ -192,6 +192,57 @@ describe('ProjectOverviewTab', () => {
     expect(window.location.pathname).toBe('/projects/narrative-harness/map')
   })
 
+  it('uses completed spine previews as scope status instead of a next-action prompt', () => {
+    render(ProjectOverviewTab, {
+      detail: {
+        id: 'narrative-harness',
+        name: 'Narrative Harness',
+        path: '/Users/matthew/git/oss/narrative-harness',
+        tasks: [],
+        orientationSpine: {
+          scope: { label: 'Stage 1 Headless Drafting And Evaluation MVP' },
+          release: { state: 'ready', blockers: [] },
+          summary: {
+            headline: 'Stage 1 Headless Drafting And Evaluation MVP is complete.',
+            purpose: 'Build the first headless Narrative Harness proofs.',
+            selectedScopeLabel: 'Stage 1 Headless Drafting And Evaluation MVP',
+            includedWorkCount: 11,
+            deferredWorkCount: 31,
+            progress: {
+              scopedNodeCount: 11,
+              speccedCount: 8,
+              provenCount: 11,
+              doneCount: 11,
+              blockedCount: 0,
+              deferredCount: 31,
+            },
+            topBlocker: null,
+            nextAction: 'Review completed scope.',
+          },
+          gaps: [],
+          roots: [],
+          nodes: {},
+          sourceHealth: { status: 'ok', gaps: 0 },
+        },
+      },
+      inboxLoaded: true,
+      inboxItems: [],
+      projectTicker: {
+        label: 'Not running',
+        actorLabel: 'Guildhall',
+        message: 'Project is complete.',
+        tone: 'idle',
+        pulse: false,
+      },
+      activeProjectId: 'narrative-harness',
+    })
+
+    expect(screen.getByRole('heading', { name: 'Scope status' })).toBeInTheDocument()
+    expect(screen.getAllByText('Stage 1 Headless Drafting And Evaluation MVP is complete.').length).toBeGreaterThan(0)
+    expect(screen.getByText('Closed scope')).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Do this next' })).not.toBeInTheDocument()
+  })
+
   it('shows current release readiness from child repo git state', () => {
     render(ProjectOverviewTab, {
       detail: {

@@ -4990,13 +4990,27 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const tasksPath = projectTasksPath(project.path)
       const rawQueue = await readTaskQueueFileNormalized(tasksPath)
       const rawTasks = rawQueue.tasks
-      const releaseReadiness = fullSurface || overviewSurface ? await buildProjectReleaseReadinessPayload() : null
+      const overviewEffectiveTasksPromise = overviewSurface
+        ? Promise.all(rawTasks.map((task) => buildEffectiveTask(project.path, task as Task)))
+        : null
+      const releaseReadiness = fullSurface || overviewSurface
+        ? await buildProjectReleaseReadinessPayload(overviewSurface
+          ? {
+              rawQueue,
+              tasks: await overviewEffectiveTasksPromise as Task[],
+            }
+          : {})
+        : null
       const workProgress = deriveProjectWorkProgress(rawTasks as Array<Record<string, unknown>>)
-      const tasks = await Promise.all(rawTasks.map((task) => fullSurface
-        ? enrichTaskForServe(project.path, task)
-        : enrichTaskForWorkSurface(project.path, task)))
+      const tasks = overviewSurface
+        ? rawTasks
+        : await Promise.all(rawTasks.map((task) => fullSurface
+          ? enrichTaskForServe(project.path, task)
+          : enrichTaskForWorkSurface(project.path, task)))
       const orientationTasks = fullSurface
         ? await Promise.all(rawTasks.map(task => buildEffectiveTask(project.path, task as Task)))
+        : overviewSurface
+          ? await overviewEffectiveTasksPromise as Task[]
         : tasks as unknown as Task[]
       const selectedTaskId = requestedTaskId && tasks.some(task => task.id === requestedTaskId)
         ? requestedTaskId
@@ -12601,7 +12615,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
   })
 
-  async function buildProjectReleaseReadinessPayload(): Promise<Record<string, unknown>> {
+  async function buildProjectReleaseReadinessPayload(input: {
+    rawQueue?: { tasks: Array<Record<string, unknown>>; releases: ProjectRelease[]; selectedReleaseId?: string }
+    tasks?: Task[]
+  } = {}): Promise<Record<string, unknown>> {
     const fallbackRelease = {
       id: 'current-work',
       kind: 'current_work',
@@ -12613,14 +12630,14 @@ export function buildServeApp(opts: ServeOptions = {}): {
     if (project.initializationNeeded) return { initializationNeeded: true, release: null, scope: fallbackRelease }
     const memoryDir = getProjectStateDir(project.path)
     const tasksPath = projectTasksPath(project.path)
-    const rawQueue: { tasks: Array<Record<string, unknown>>; releases: ProjectRelease[]; selectedReleaseId?: string } = existsSync(tasksPath)
+    const rawQueue: { tasks: Array<Record<string, unknown>>; releases: ProjectRelease[]; selectedReleaseId?: string } = input.rawQueue ?? (existsSync(tasksPath)
       ? await readTaskQueueFileNormalized(tasksPath).catch((err) => {
         const detail = err instanceof Error ? err.message : String(err)
         throw new Error(`Could not read the saved task state file at TASKS.json. ${detail}`)
       })
-      : { tasks: [], releases: [] }
+      : { tasks: [], releases: [] })
     const rawTasks = rawQueue.tasks
-    const tasks = await Promise.all(rawTasks.map((task) => buildEffectiveTask(project.path, task as Task)))
+    const tasks = input.tasks ?? await Promise.all(rawTasks.map((task) => buildEffectiveTask(project.path, task as Task)))
     const releaseStartReadiness = await projectStartReadinessForProject(project.path)
     const { orientationSpine: readinessSpine, releaseTruth } = buildOrientationSpineWithScopedReleaseTruth({
       projectId: project.id,

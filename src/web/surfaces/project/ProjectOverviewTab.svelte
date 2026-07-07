@@ -217,6 +217,21 @@
     orientationSpine?.summary?.deferredCount ??
     0,
   )
+  const orientationCompletedScopedPreview = $derived.by(() => {
+    if (detail.startReadiness) return false
+    const progress = orientationSpine?.summary?.progress
+    const done = progress?.doneCount ?? progress?.done ?? 0
+    const proven = progress?.provenCount ?? progress?.proven ?? 0
+    const blocked = progress?.blockedCount ?? progress?.blocked ?? 0
+    return (
+      orientationSpine?.release?.state === 'ready' &&
+      orientationIncludedCount > 0 &&
+      Math.max(done, proven) >= orientationIncludedCount &&
+      blocked === 0 &&
+      !orientationTopBlocker
+    )
+  })
+  const scopedWorkComplete = $derived(allTerminalStart || orientationCompletedScopedPreview)
   const orientationProofGapCount = $derived(orientationSpine?.gaps?.filter(gap => gap.kind === 'proof_needed').length ?? 0)
   const orientationScopeSourceSummary = $derived.by(() => {
     const rows = orientationSpine?.scopeRows ?? []
@@ -390,17 +405,17 @@
   const runPanelTitle = $derived(
     running
       ? 'Moving now'
-      : requiredMigrationBlocked || (startBlocked && !allTerminalStart)
+      : requiredMigrationBlocked || (startBlocked && !scopedWorkComplete)
         ? 'Execution blocked'
-        : allTerminalStart
+        : scopedWorkComplete
           ? 'No runnable work'
           : 'Ready to resume',
   )
-  const nextActionCardTitle = $derived(allTerminalStart ? 'Scope status' : 'Do this next')
+  const nextActionCardTitle = $derived(scopedWorkComplete ? 'Scope status' : 'Do this next')
   const emptyWorkMixLabel = $derived(
     requiredMigrationBlocked
       ? 'Run the required migration before creating or running work.'
-      : allTerminalStart
+      : scopedWorkComplete
         ? 'The selected scope has no runnable work left.'
         : startBlocked
         ? 'Resolve the project blocker before adding more work.'
@@ -565,9 +580,9 @@
 
   const nextAction = $derived.by(() => {
     const shared = detail.actionModel?.primaryAction
-    if (detail.startReadiness?.canStart === false && detail.startReadiness.code === 'all_terminal') {
+    if (scopedWorkComplete) {
       return {
-        label: detail.startReadiness.message ?? startReadinessLabel(detail.startReadiness.code),
+        label: detail.startReadiness?.message ?? orientationSpine?.summary?.headline ?? 'Selected scope is complete.',
         detail: 'All scoped work is terminal. Open Work to inspect completed and deferred items.',
         button: 'Open Work',
         href: currentProjectHref('/work', activeProjectId),
@@ -681,7 +696,7 @@
     }
   })
   const nextActionChipLabel = $derived(
-    allTerminalStart
+    scopedWorkComplete
       ? 'Closed scope'
       : nextAction.tone === 'running'
         ? 'Live'
