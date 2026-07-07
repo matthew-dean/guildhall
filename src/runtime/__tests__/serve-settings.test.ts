@@ -4920,6 +4920,106 @@ describe('Workspace Import review endpoints', () => {
     expect(body.startReadiness?.message ?? '').not.toContain('under-scoped')
   })
 
+  it('prioritizes shaping selected-release import drafts over global import refresh drift', async () => {
+    await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'docs', 'harness', 'implementation-roadmap.md'),
+      [
+        '# Implementation Roadmap',
+        '',
+        '## Stage 1: Fixture And Evaluation Harness',
+        '',
+        '## Current Next Milestone',
+        '',
+        'The next milestone is Stage 1: Fixture And Evaluation Harness.',
+        '',
+        '1. Define fixture, expected-record, prototype-run, and evaluation schemas.',
+        '2. Add the first tiny fiction fixture and human-authored expected records.',
+      ].join('\n'),
+      'utf8',
+    )
+    await fs.writeFile(path.join(tmpDir, 'package.json'), JSON.stringify({ name: 'selected-release-import-draft' }), 'utf8')
+    await writeSystemText(
+      'TASKS.json',
+      JSON.stringify(
+        {
+          version: 1,
+          lastUpdated: '2026-01-01T00:00:00.000Z',
+          selectedReleaseId: 'stage-1-fixture-and-evaluation-harness',
+          releases: [
+            {
+              id: 'stage-1-fixture-and-evaluation-harness',
+              label: 'Stage 1: Fixture And Evaluation Harness',
+              kind: 'release',
+              state: 'active',
+              source: 'release_plan',
+              nodeIds: ['work:imported-one'],
+              deferredNodeIds: [],
+            },
+          ],
+          tasks: [
+            {
+              id: 'task-workspace-import',
+              title: 'Review existing project work',
+              description: 'Reserved importer',
+              domain: '_workspace_import',
+              projectPath: tmpDir,
+              status: 'done',
+              priority: 'normal',
+              acceptanceCriteria: [],
+              dependsOn: [],
+              outOfScope: [],
+              spec: [
+                '```yaml',
+                'tasks:',
+                '  - id: imported-one',
+                '    title: Define fixture, expected-record, prototype-run, and evaluation schemas.',
+                '    description: Keep only the first detected task.',
+                '    domain: harness',
+                '    priority: high',
+                '```',
+              ].join('\n'),
+              createdAt: '2026-01-01T00:00:00.000Z',
+              updatedAt: '2026-01-01T00:00:00.000Z',
+            },
+            {
+              id: 'imported-one',
+              title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+              description: 'Selected-release import draft should be shaped before global import drift blocks Start.',
+              domain: 'harness',
+              projectPath: tmpDir,
+              status: 'import_draft',
+              priority: 'high',
+              releaseIds: ['stage-1-fixture-and-evaluation-harness'],
+              acceptanceCriteria: [{ id: 'ac-1', description: 'Schema proof exists.', verifiedBy: 'review', met: false }],
+              dependsOn: [],
+              outOfScope: [],
+              spec: 'Imported draft awaiting source-backed shaping.',
+              createdAt: '2026-01-01T00:00:00.000Z',
+              updatedAt: '2026-01-01T00:00:00.000Z',
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+    )
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(scoped('/api/project')))
+    expect(res.status).toBe(200)
+    const body = await res.json() as {
+      startReadiness?: { canStart?: boolean; code?: string; message?: string; actionHref?: string }
+    }
+    expect(body.startReadiness).toMatchObject({
+      canStart: false,
+      code: 'imported_scope_shaping',
+      actionHref: '/task/imported-one',
+    })
+    expect(body.startReadiness?.message ?? '').toContain('source-backed shaping')
+    expect(body.startReadiness?.message ?? '').not.toContain('under-scoped')
+  })
+
   it('blocks readiness when spec-backed capability docs still have no linked imported work', async () => {
     await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
     await fs.mkdir(path.join(tmpDir, 'docs', 'specs'), { recursive: true })

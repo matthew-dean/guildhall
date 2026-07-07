@@ -65,6 +65,32 @@ const narrativeRoadmap = [
   '2. Add the first tiny fiction fixture and human-authored expected records.',
 ].join('\n')
 
+const knitSelectedReleaseSource = [
+  '# Knit Release Plan',
+  '',
+  '## Stage 1: V1 Release Hardening',
+  '',
+  'Goal: make the current V1 feature set releasable.',
+  '',
+  '## Current Next Milestone',
+  '',
+  'The next milestone is Stage 1: V1 Release Hardening.',
+].join('\n')
+
+const knitReleasePlanWithoutCurrentMarker = [
+  '# Knit Release Plan',
+  '',
+  'This is the current staged execution plan for Knit.',
+  '',
+  '## Stage 1: V1 Release Hardening',
+  '',
+  'Goal: make the current V1 feature set releasable.',
+  '',
+  '## Stage 2: Looma Primitive Convergence',
+  '',
+  'Goal: finish the practical replacement wave.',
+].join('\n')
+
 describe('project re-intake planner', () => {
   it('treats stale task state as evidence instead of gospel by proposing a reframe', () => {
     const draft = planProjectReintake({
@@ -146,6 +172,144 @@ describe('project re-intake planner', () => {
         id: 'task-import-9s8tkc',
         title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
         status: 'import_draft',
+      },
+    })
+  })
+
+  it('does not assign differently named same-number stages to the selected release', () => {
+    const draft = planProjectReintake({
+      now,
+      sources: [
+        {
+          path: 'knit/docs/release-plan.md',
+          content: [
+            knitSelectedReleaseSource,
+            '',
+            '### V1 gate',
+            '',
+            '- **Stage alignment:** Stage 1: V1 Release Hardening',
+            '- **Recommended domain:** knit',
+            '- **Recommended first task title:** Run the V1 release hardening gate',
+          ].join('\n'),
+        },
+        {
+          path: 'looma/docs/milestones.md',
+          content: [
+            '# Milestone Plan',
+            '',
+            '### Primitive replacement wave',
+            '',
+            '- **Stage alignment:** Stage 1: Finish Knit Primitive Replacement Wave',
+            '- **Recommended domain:** looma',
+            '- **Recommended first task title:** Continue the Knit primitive replacement wave',
+          ].join('\n'),
+        },
+      ],
+      tasks: [],
+    })
+
+    expect(draft.selectedReleaseId).toBe('stage-1-v1-release-hardening')
+    const selected = draft.groups.flatMap(group => group.changes).find(change =>
+      change.kind === 'create' && change.task.title === 'Run the V1 release hardening gate',
+    )
+    expect(selected).toMatchObject({
+      kind: 'create',
+      task: {
+        releaseIds: ['stage-1-v1-release-hardening'],
+      },
+    })
+    const created = draft.groups.flatMap(group => group.changes).find(change =>
+      change.kind === 'create' && change.task.title === 'Continue the Knit primitive replacement wave',
+    )
+    expect(created).toMatchObject({
+      kind: 'create',
+      task: {
+        releaseIds: ['stage-1-finish-knit-primitive-replacement-wave'],
+        stageAlignment: 'stage 1: finish knit primitive replacement wave',
+      },
+    })
+  })
+
+  it('keeps selected-release import drafts out of stale weak-spec archival', () => {
+    const draft = planProjectReintake({
+      now,
+      sources: [{ path: 'knit/docs/release-plan.md', content: knitSelectedReleaseSource }],
+      tasks: [
+        task({
+          id: 'task-import-unit-tests',
+          title: 'Unit tests: use-collections, use-presence, subdomain utils',
+          status: 'import_draft',
+          releaseIds: ['stage-1-v1-release-hardening'],
+          spec: '## Summary\nImported draft awaiting shaping.',
+        }),
+      ],
+    })
+
+    const archive = draft.groups.flatMap(group => group.changes).find(change =>
+      change.kind === 'archive' && change.taskId === 'task-import-unit-tests',
+    )
+    expect(archive).toBeUndefined()
+  })
+
+  it('uses the first documented release-plan stage as the selected boundary when no current marker exists', () => {
+    const draft = planProjectReintake({
+      now,
+      sources: [{ path: 'knit/docs/release-plan.md', content: knitReleasePlanWithoutCurrentMarker }],
+      tasks: [
+        task({
+          id: 'task-import-unit-tests',
+          title: 'Unit tests: use-collections, use-presence, subdomain utils',
+          status: 'archived',
+          releaseIds: ['stage-1-v1-release-hardening'],
+          archivedEvidence: {
+            source: 'project-reintake',
+            reason: 'Pre-implementation task is unsupported by current evidence and still uses a weak legacy spec shape.',
+          },
+          spec: '## Summary\nImported draft awaiting shaping.',
+        }),
+      ],
+    })
+
+    expect(draft.selectedReleaseId).toBe('stage-1-v1-release-hardening')
+    const restore = draft.groups.flatMap(group => group.changes).find(change =>
+      change.kind === 'reframe' && change.taskId === 'task-import-unit-tests',
+    )
+    expect(restore).toMatchObject({
+      kind: 'reframe',
+      taskId: 'task-import-unit-tests',
+      after: {
+        status: 'import_draft',
+        releaseIds: ['stage-1-v1-release-hardening'],
+      },
+    })
+  })
+
+  it('repairs imported tasks that were assigned to both selected and later release boundaries', () => {
+    const draft = planProjectReintake({
+      now,
+      sources: [{ path: 'knit/docs/release-plan.md', content: knitSelectedReleaseSource }],
+      tasks: [
+        task({
+          id: 'task-import-looma-wave',
+          title: 'Finish the Knit primitive replacement wave',
+          status: 'import_draft',
+          releaseIds: [
+            'stage-1-v1-release-hardening',
+            'stage-1-finish-knit-primitive-replacement-wave',
+          ],
+          spec: '## Summary\nImported draft awaiting shaping.',
+        }),
+      ],
+    })
+
+    const reframe = draft.groups.flatMap(group => group.changes).find(change =>
+      change.kind === 'reframe' && change.taskId === 'task-import-looma-wave',
+    )
+    expect(reframe).toMatchObject({
+      kind: 'reframe',
+      taskId: 'task-import-looma-wave',
+      after: {
+        releaseIds: ['stage-1-finish-knit-primitive-replacement-wave'],
       },
     })
   })

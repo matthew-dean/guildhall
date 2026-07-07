@@ -24488,3 +24488,86 @@ shaping in Start readiness.
     risk, not as a product-state success.
   - Apply/revert behavior: reverting restores the false ordering where
     selected-scope owner review can be hidden behind imported-scope shaping.
+
+2026-07-07T00:09:57Z - Repaired re-intake release-boundary recovery and
+selected-scope readiness ordering.
+
+- Work id: `codex:reintake-selected-release-boundary-repair`.
+- User job: when a real project has a documented selected release/scope,
+  Guildhall must recover that boundary from docs, keep same-number releases in
+  different child projects separate, restore selected-scope imported drafts if
+  an earlier cleanup archived them, and make Start point at shaping the current
+  release instead of unrelated global import drift.
+- Root-cause classification:
+  - Project structure/scope/release modeling problem: re-intake only selected a
+    release from a `Current Next Milestone` marker, so an ordinary
+    `release-plan.md` with Stage headings was not available as the selected
+    execution boundary.
+  - Data model/schema problem: live Looma + Knit state had release membership
+    on tasks but no durable top-level selected release catalog after previous
+    cleanup, so selected-scope recovery depended on source detection being
+    strong enough to rebuild the release.
+  - Bad project data produced by an earlier Guildhall bug: the previous
+    re-intake run archived five Knit V1 hardening tasks as weak legacy specs
+    even though they were the selected release's source-backed import drafts.
+  - Scheduler/action-state logic problem: `projectStartReadiness()` treated a
+    selected release full of `import_draft` tasks as if it had no materialized
+    scoped work, letting global workspace-import refresh drift block before
+    selected-scope shaping.
+  - UI communication/orientation problem: the product could show the selected
+    release while Start talked about a different global detector concern.
+- Fix:
+  - Re-intake source collection now includes explicit release plans and Stage
+    headings, not only bullet/task keywords.
+  - `detectSelectedRelease()` now falls back to the first documented stage in a
+    `release-plan.md` when there is no narrower current-milestone marker.
+  - Evidence tasks keep release membership aligned to their own
+    `Stage alignment`; same-number stages with different labels no longer
+    silently join the selected release.
+  - Re-intake restores selected-release imported drafts archived by its own
+    stale weak-spec cleanup and avoids archiving selected-release drafts in
+    that cleanup pass.
+  - Start readiness now treats nonterminal selected-scope tasks, including
+    `import_draft`, as materialized scoped work for purposes of suppressing
+    global import-refresh blockers. Virtual workspace-import rows also yield
+    to real selected-scope tasks that need shaping.
+- Contract Touch Decision:
+  - Touched contracts: `/api/project.startReadiness` blocker ordering for
+    selected-scope import drafts, project re-intake selected release detection,
+    re-intake release assignment/restoration behavior, and re-intake source
+    collection.
+  - Contracts considered but not touched: persisted task/release schema,
+    workspace-import apply schema, `/api/project/start` dispatch contract,
+    release-readiness response shape, and orientation spine response shape.
+  - Existing data impact: no migration. A re-intake rerun can now produce a
+    repair draft that restores selected-release imported tasks archived by an
+    earlier cleanup bug and re-materializes the selected release catalog from
+    source docs.
+  - Required follow-up: model selected/current release ownership durably enough
+    that source recovery is not the only way to repair a damaged queue; keep
+    reducing duplicate readiness gates so virtual workspace-import rows cannot
+    compete with real selected-scope tasks.
+  - Proof required: focused re-intake tests for same-number release separation,
+    selected-release stale-archive protection/restoration, release-plan fallback
+    detection, focused readiness tests for selected-release import drafts vs
+    global import drift, installed build proof, stale-server proof, and live
+    Looma + Knit API proof.
+  - Proof provided: `project-reintake.test.ts` passed `16` tests; focused
+    project scope/orientation tests passed `5` tests; focused
+    `serve-settings.test.ts` readiness tests passed `3` tests; direct
+    build/dev-install/restart succeeded; `/api/stale-server` returned
+    `stale:false` for PID `87617`. Live re-intake for Looma + Knit included
+    `knit/docs/release-plan.md`, selected
+    `stage-1-v1-release-hardening`, proposed
+    `restore-selected-release-imports` for five V1 hardening tasks, and had no
+    stale preimplementation archive group. Applying the draft restored the five
+    V1 tasks. Installed `/api/project?projectId=looma-knit` then reported
+    `startReadiness.code: imported_scope_shaping`, message
+    `5 current-scope tasks still need source-backed shaping...`, action
+    `/task/task-import-kj0cyz`, selected release
+    `Stage 1: V1 Release Hardening`, five included V1 import drafts, and the
+    Looma primitive-wave tasks outside the selected release.
+  - Apply/revert behavior: reverting restores the failure where a selected
+    release can disappear from re-intake, selected-release import drafts can be
+    archived as stale weak specs, and Start can ask for a global import refresh
+    instead of shaping the current selected scope.

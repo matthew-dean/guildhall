@@ -226,6 +226,38 @@ export function planProjectReintake(input: ProjectReintakeInput): ProjectReintak
     for (const change of sourceShapedPrototypeRefreshChanges) usedTaskIds.add(change.taskId)
   }
 
+  const conflictingReleaseMembershipChanges = repairConflictingSelectedReleaseMemberships(
+    input.tasks,
+    usedTaskIds,
+    selectedRelease,
+    now,
+  )
+  if (conflictingReleaseMembershipChanges.length > 0) {
+    groups.push({
+      id: 'repair-conflicting-release-membership',
+      title: 'Repair conflicting release membership',
+      rationale: 'One imported task should not silently belong to two differently named release boundaries.',
+      changes: conflictingReleaseMembershipChanges,
+    })
+    for (const change of conflictingReleaseMembershipChanges) usedTaskIds.add(change.taskId)
+  }
+
+  const restoreSelectedReleaseArchiveChanges = restoreSelectedReleaseImportsArchivedByReintake(
+    input.tasks,
+    usedTaskIds,
+    selectedRelease,
+    input.projectPath,
+  )
+  if (restoreSelectedReleaseArchiveChanges.length > 0) {
+    groups.push({
+      id: 'restore-selected-release-imports',
+      title: 'Restore selected release imports',
+      rationale: 'Source-backed selected-release drafts should stay in the current scope for shaping instead of being archived as stale weak specs.',
+      changes: restoreSelectedReleaseArchiveChanges,
+    })
+    for (const change of restoreSelectedReleaseArchiveChanges) usedTaskIds.add(change.taskId)
+  }
+
   const progressChanges = preserveProgressChanges(input.tasks, usedTaskIds)
   if (progressChanges.length > 0) {
     groups.push({
@@ -246,7 +278,7 @@ export function planProjectReintake(input: ProjectReintakeInput): ProjectReintak
     })
   }
 
-  const staleWeakSpecChanges = archiveUnsupportedWeakPreImplementationTasks(input.tasks, usedTaskIds)
+  const staleWeakSpecChanges = archiveUnsupportedWeakPreImplementationTasks(input.tasks, usedTaskIds, selectedRelease)
   if (staleWeakSpecChanges.length > 0) {
     groups.push({
       id: 'archive-stale-preimplementation',
@@ -692,6 +724,7 @@ function evidenceTaskToDraft(
   now: string,
 ): ReintakeTaskDraft {
   const later = selectedRelease ? taskIsAfterSelectedRelease(task, selectedRelease) : false
+  const releaseIds = releaseIdsForEvidenceTask(task, selectedRelease)
   const references = evidenceReferencesForTask(task, sources)
   const contractNames = unique(references
     .map(reference => sources.find(source => source.path === reference)?.content)
@@ -722,7 +755,7 @@ function evidenceTaskToDraft(
     dependsOn: task.dependsOn,
     acceptanceCriteria,
     references,
-    ...(later || !selectedRelease ? {} : { releaseIds: [selectedRelease.id] }),
+    ...(releaseIds?.length ? { releaseIds } : {}),
     ...(task.stageAlignment ? { stageAlignment: task.stageAlignment } : {}),
     spec: importedBlueprint?.spec ?? evidenceTaskSpec({ task, references, acceptanceCriteria, sources, contractNames }),
     ...(reviewableBlueprint ? { productBrief: reintakeOwnedProductBrief(importedBlueprint?.productBrief) ?? reintakeProductBrief(task, contractNames) } : {}),
@@ -734,6 +767,10 @@ function evidenceTaskToDraft(
     ...(importedBlueprint?.blockerPlans ? { blockerPlans: importedBlueprint.blockerPlans } : {}),
     ...(importedBlueprint?.contextBudget ? { contextBudget: importedBlueprint.contextBudget } : {}),
   }
+}
+
+function releaseIdsForEvidenceTask(task: Pick<EvidenceTask, 'stageAlignment'>, selectedRelease: SelectedRelease | null): string[] | undefined {
+  return releaseIdsForStageAlignment(task.stageAlignment, selectedRelease)
 }
 
 function reintakeOwnedProductBrief(productBrief: Task['productBrief'] | undefined): Task['productBrief'] | undefined {
@@ -1250,7 +1287,24 @@ function detectSelectedRelease(sources: ProjectReintakeSource[]): SelectedReleas
       source: 'release_plan',
     }
   }
+  for (const source of sources) {
+    const firstStage = firstReleasePlanStage(source)
+    if (firstStage) return firstStage
+  }
   return null
+}
+
+function firstReleasePlanStage(source: ProjectReintakeSource): SelectedRelease | null {
+  if (!/(^|\/)release-plan\.md$/i.test(source.path.replaceAll('\\', '/'))) return null
+  const match = /^##\s+(Stage\s+(\d+)\s*:\s*.+?)\s*$/im.exec(source.content)
+  if (!match?.[1] || !match[2]) return null
+  const label = match[1].trim()
+  return {
+    id: slugify(label),
+    label,
+    stageNumber: Number(match[2]),
+    source: 'release_plan',
+  }
 }
 
 function detectNearTermProofScope(content: string, currentStageNumber: number): SelectedRelease | null {
@@ -1443,9 +1497,8 @@ function refreshSourceShapedPrototypeTasks(
     const existingCriteria = Array.isArray(task.acceptanceCriteria) ? task.acceptanceCriteria as Task['acceptanceCriteria'] : []
     if (sameCriteriaIds(existingCriteria, refreshedCriteria)) continue
 
-    const releaseIds = selectedRelease
-      ? [selectedRelease.id]
-      : arrayStringField(task.releaseIds)
+    const releaseIds = releaseIdsForStageAlignment(stringField(task, 'stageAlignment'), selectedRelease)
+      ?? arrayStringField(task.releaseIds)
     changes.push({
       kind: 'reframe',
       taskId: id,
@@ -1483,6 +1536,128 @@ function refreshSourceShapedPrototypeTasks(
   return changes
 }
 
+function releaseIdsForStageAlignment(stageAlignment: string | undefined, selectedRelease: SelectedRelease | null): string[] | undefined {
+  if (!selectedRelease) return undefined
+  if (!stageAlignment?.trim()) return [selectedRelease.id]
+  const alignedReleaseId = slugify(stageAlignment)
+  if (alignedReleaseId === selectedRelease.id || normalize(stageAlignment) === normalize(selectedRelease.label)) {
+    return [selectedRelease.id]
+  }
+  return [alignedReleaseId]
+}
+
+function repairConflictingSelectedReleaseMemberships(
+  tasks: Array<Record<string, unknown>>,
+  usedTaskIds: Set<string>,
+  selectedRelease: SelectedRelease | null,
+  now: string,
+): ReintakeChange[] {
+  if (!selectedRelease) return []
+  return tasks
+    .filter(task => {
+      const id = stringField(task, 'id')
+      if (!id || usedTaskIds.has(id)) return false
+      if (!isOpenPreImplementationTask(task)) return false
+      const releaseIds = arrayStringField(task.releaseIds)
+      return releaseIds.includes(selectedRelease.id) && releaseIds.some(releaseId => releaseId !== selectedRelease.id)
+    })
+    .map(task => {
+      const id = stringField(task, 'id') ?? ''
+      const title = stringField(task, 'title') ?? id
+      const releaseIds = arrayStringField(task.releaseIds).filter(releaseId => releaseId !== selectedRelease.id)
+      return {
+        kind: 'reframe' as const,
+        taskId: id,
+        before: {
+          id,
+          title,
+          status: stringField(task, 'status') ?? 'unknown',
+        },
+        after: reintakeDraftFromExistingTask(task, {
+          projectPath: stringField(task, 'projectPath'),
+          releaseIds,
+          status: reintakeDraftStatus(stringField(task, 'status')),
+        }),
+        reason: `Task was assigned to both ${selectedRelease.label} and ${releaseIds.join(', ')}; keep it out of the selected release until an explicit dependency or release boundary says otherwise.`,
+      }
+    })
+}
+
+function restoreSelectedReleaseImportsArchivedByReintake(
+  tasks: Array<Record<string, unknown>>,
+  usedTaskIds: Set<string>,
+  selectedRelease: SelectedRelease | null,
+  projectPath: string | undefined,
+): ReintakeChange[] {
+  if (!selectedRelease) return []
+  return tasks
+    .filter(task => {
+      const id = stringField(task, 'id')
+      if (!id || usedTaskIds.has(id)) return false
+      if (stringField(task, 'status') !== 'archived') return false
+      const releaseIds = arrayStringField(task.releaseIds)
+      if (releaseIds.length !== 1 || releaseIds[0] !== selectedRelease.id) return false
+      const archivedEvidence = task.archivedEvidence && typeof task.archivedEvidence === 'object' && !Array.isArray(task.archivedEvidence)
+        ? task.archivedEvidence as Record<string, unknown>
+        : null
+      return archivedEvidence?.source === 'project-reintake' &&
+        /weak legacy spec|pre-implementation/i.test(stringField(archivedEvidence, 'reason') ?? '')
+    })
+    .map(task => {
+      const id = stringField(task, 'id') ?? ''
+      const title = stringField(task, 'title') ?? id
+      return {
+        kind: 'reframe' as const,
+        taskId: id,
+        before: {
+          id,
+          title,
+          status: 'archived',
+        },
+        after: reintakeDraftFromExistingTask(task, {
+          projectPath,
+          releaseIds: [selectedRelease.id],
+          status: 'import_draft',
+        }),
+        reason: `Restore source-backed selected-release work that was archived by stale-spec cleanup; ${selectedRelease.label} still owns the shaping decision.`,
+      }
+    })
+}
+
+function reintakeDraftStatus(value: string | undefined): ReintakeTaskDraft['status'] | undefined {
+  return value === 'import_draft' || value === 'spec_review' || value === 'shelved'
+    ? value
+    : undefined
+}
+
+function reintakeDraftFromExistingTask(
+  task: Record<string, unknown>,
+  overrides: {
+    projectPath?: string
+    releaseIds?: string[]
+    status?: ReintakeTaskDraft['status']
+  } = {},
+): ReintakeTaskDraft {
+  const title = stringField(task, 'title') ?? stringField(task, 'id') ?? 'Imported work'
+  return {
+    id: stringField(task, 'id') ?? slugify(title),
+    title,
+    description: stringField(task, 'description') ?? title,
+    domain: stringField(task, 'domain') ?? 'planning',
+    ...(overrides.projectPath ?? stringField(task, 'projectPath') ? { projectPath: overrides.projectPath ?? stringField(task, 'projectPath') } : {}),
+    status: overrides.status ?? reintakeDraftStatus(stringField(task, 'status')) ?? 'import_draft',
+    priority: priorityField(task.priority),
+    dependsOn: arrayStringField(task.dependsOn),
+    acceptanceCriteria: Array.isArray(task.acceptanceCriteria) ? task.acceptanceCriteria as Task['acceptanceCriteria'] : [],
+    references: arrayStringField(task.references),
+    ...(overrides.releaseIds?.length ? { releaseIds: overrides.releaseIds } : {}),
+    ...(stringField(task, 'stageAlignment') ? { stageAlignment: stringField(task, 'stageAlignment') } : {}),
+    ...(stringField(task, 'spec') ? { spec: stringField(task, 'spec') } : {}),
+    ...(task.productBrief ? { productBrief: task.productBrief as Task['productBrief'] } : {}),
+    ...(task.proofPaths ? { proofPaths: task.proofPaths as Task['proofPaths'] } : {}),
+  }
+}
+
 function sameCriteriaIds(left: Task['acceptanceCriteria'], right: Task['acceptanceCriteria']): boolean {
   const leftIds = left.map(criterion => criterion.id).join('\n')
   const rightIds = right.map(criterion => criterion.id).join('\n')
@@ -1513,12 +1688,14 @@ function archiveUnsupportedBlockedTasks(tasks: Array<Record<string, unknown>>, u
 function archiveUnsupportedWeakPreImplementationTasks(
   tasks: Array<Record<string, unknown>>,
   usedTaskIds: Set<string>,
+  selectedRelease: SelectedRelease | null,
 ): ReintakeChange[] {
   return tasks
     .filter(task => {
       const id = stringField(task, 'id')
       if (!id || usedTaskIds.has(id)) return false
       if (!isOpenPreImplementationTask(task)) return false
+      if (selectedRelease && arrayStringField(task.releaseIds).includes(selectedRelease.id)) return false
       return hasWeakLegacySpecShape(task)
     })
     .map(task => ({

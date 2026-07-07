@@ -839,7 +839,7 @@ async function collectProjectReintakeSources(projectPath: string): Promise<Array
       } catch {
         continue
       }
-      if (!/Deliverable|Foundation|Consumer|should say|missing|Needed contracts|Recommended first task title|Stage alignment|Current Next Milestone/i.test(content)) continue
+      if (!/Deliverable|Foundation|Consumer|should say|missing|Needed contracts|Recommended first task title|Stage alignment|Current Next Milestone|\bRelease Plan\b|^##\s+Stage\s+\d+/im.test(content)) continue
       sources.push({ path: relative(projectPath, absolute) || entry.name, content })
     }
   }
@@ -5809,9 +5809,6 @@ export function buildServeApp(opts: ServeOptions = {}): {
     const ownerInputBlocker = startBlockerForOwnerInput(input.projectPath)
     if (ownerInputBlocker) return ownerInputBlocker
 
-    const orientationShapingBlocker = await startBlockerForOrientationScopeShaping(input.projectPath, input.requestedTaskId)
-    if (orientationShapingBlocker) return orientationShapingBlocker
-
     const terminal = await terminalStartState(input.projectPath, input.requestedTaskId)
     if (terminal?.selectedReleaseTerminal) {
       return startReadinessForTerminalState(terminal)
@@ -5822,6 +5819,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
       ? null
       : await startBlockerForWorkspaceImportCoverage(input.projectPath)
     if (workspaceImportCoverageBlocker) return workspaceImportCoverageBlocker
+
+    const orientationShapingBlocker = await startBlockerForOrientationScopeShaping(input.projectPath, input.requestedTaskId)
+    if (orientationShapingBlocker) return orientationShapingBlocker
 
     if (input.allowTaskReadinessBlocker !== false) {
       const selectedReleaseSpecReviewBlocker = await startBlockerForSelectedReleaseReview(input.projectPath, input.resolvedConfig, {
@@ -6005,6 +6005,15 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
     const selectedReleaseScope = selectedReleaseScopeFromQueueLike(typedQueue)
     const scopedTasks = tasksEligibleForScopeExecution(typedQueue.tasks, selectedReleaseScope)
+    if (selectedReleaseScope) {
+      return scopedTasks.some(task => {
+        if (!task || typeof task !== 'object') return false
+        if (requestedTaskId && task.id !== requestedTaskId) return false
+        const status = String(task.status ?? '')
+        if (['archived', 'cancelled', 'done', 'shelved'].includes(status)) return false
+        return true
+      })
+    }
     return scopedTasks.some(task => {
       if (!task || typeof task !== 'object') return false
       if (requestedTaskId && task.id !== requestedTaskId) return false
@@ -7100,6 +7109,18 @@ export function buildServeApp(opts: ServeOptions = {}): {
     if (!existsSync(tasksPath)) return null
     const queue = await readTaskQueueFileNormalized(tasksPath)
     const effectiveTasks = await Promise.all((queue.tasks as Task[]).map(task => buildEffectiveTask(projectPath, task)))
+    const selectedReleaseScope = selectedReleaseScopeFromQueueLike({
+      tasks: effectiveTasks,
+      releases: queue.releases,
+      ...(queue.selectedReleaseId ? { selectedReleaseId: queue.selectedReleaseId } : {}),
+    })
+    if (
+      selectedReleaseScope &&
+      tasksEligibleForScopeExecution(effectiveTasks, selectedReleaseScope)
+        .some(task => taskShapingBlockers(task).length > 0)
+    ) {
+      return null
+    }
     const { orientationSpine } = buildOrientationSpineWithScopedReleaseTruth({
       projectId: basename(projectPath),
       charter: inferProjectCharterFromExistingSources(projectPath),
