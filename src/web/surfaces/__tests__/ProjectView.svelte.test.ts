@@ -1034,6 +1034,9 @@ describe('ProjectView', () => {
     expect(screen.getAllByText('Stage 1').length).toBeGreaterThan(0)
     expect(screen.getByText('1 Current scope')).toBeInTheDocument()
     expect(screen.getByText('1 Deferred')).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Ready to resume' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Blocked work' })).not.toBeInTheDocument()
+    expect(screen.queryByText('Health unknown')).not.toBeInTheDocument()
     expect(screen.queryByText('Loading project...')).toBeNull()
 
     cleanup()

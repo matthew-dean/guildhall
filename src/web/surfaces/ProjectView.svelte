@@ -1637,6 +1637,7 @@
                   projectTicker={buildProjectTicker(orientationPreviewDetail, latestTickerEvent, new Date(tickerNow))}
                   {activeProjectId}
                   onMigrate={openMigrationModal}
+                  orientationOnly
                 />
               {/await}
             {:else if currentView === 'map' && orientationPreviewDetail}

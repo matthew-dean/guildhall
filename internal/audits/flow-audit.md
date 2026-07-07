@@ -25466,3 +25466,60 @@ selected-scope readiness ordering.
   - Apply/revert behavior: reverting restores the failure where cold Overview
     and Map routes can show only a loading message until full project detail
     resolves.
+
+## 2026-07-06 — Overview spine preview does not invent run/action health
+
+- Work id: `codex:overview-spine-preview-action-claims-2026-07-06`.
+- User job: a user who opens Overview should be able to trust the first visible
+  project state. Fast orientation is good, but the preview must not claim the
+  project is ready to resume, unblocked, or healthy when full project detail has
+  not loaded yet.
+- Root-cause classification:
+  - Scheduler/action-state logic problem: the fast-spine preview built a
+    minimal project detail with orientation data but no `startReadiness`,
+    action model, tasks, runtime, or health data. Overview's local action
+    panels treated those missing fields as ready/empty defaults.
+  - UI communication/orientation problem: Narrative Harness and Looma + Knit
+    both displayed true scope orientation and a contradictory `Ready to resume`
+    panel in the same Overview first load.
+- Fix:
+  - ProjectOverviewTab now accepts `orientationOnly` for spine-preview renders.
+  - ProjectView passes `orientationOnly` only for the cold Overview route backed
+    by `/api/project/spine` while broad `/api/project` is still loading.
+  - In orientation-only mode the Overview keeps the hero and orientation
+    sections, but suppresses full-detail-only run, blocked-work, next-run,
+    health, verification, and recent-change panels.
+- Contract Touch Decision:
+  - Touched contracts: ProjectView's cold Overview preview rendering contract
+    and ProjectOverviewTab's rendering contract for orientation-only input.
+  - Contracts considered but not touched: orientation spine schema,
+    release-readiness API, action model schema, start-readiness builder,
+    scheduler/start contract, Work task detail payload, persisted task state,
+    and Project Map.
+  - Existing data impact: no migration. Existing spine responses still render
+    quickly, but no longer cause local action panels to infer false defaults.
+  - Required follow-up: keep preview/detail boundaries explicit whenever a
+    surface renders from partial data; missing action data must not be treated
+    as positive action state.
+  - Proof required: failing ProjectView regression showing `Ready to resume`,
+    `Blocked work`, and `Health unknown` during spine-preview Overview; focused
+    ProjectView and Overview component suites; UI typecheck; installed-app
+    proof on Narrative Harness and Looma + Knit Overview.
+  - Proof provided: the regression first failed because the preview rendered
+    `Ready to resume`. After the fix the focused regression passed, and the
+    combined ProjectView/ProjectOverviewTab suites passed with `85` tests.
+    `pnpm typecheck:ui`, `node ./build.mjs`, and `git diff --check` passed.
+    After `node ./scripts/dev-install.mjs` and service restart,
+    `/api/stale-server` returned `stale:false` for PID `34070`. Rendered
+    installed-app proof showed Narrative Harness Overview visible in `2118ms`
+    with `11 Current scope`, `31 Deferred`, no `Ready to resume`, no `Blocked
+    work`, no `Health unknown`, no `Loading project...`, and no horizontal
+    overflow. Looma + Knit Overview was visible in `2825ms` with `5 Current
+    scope`, `30 Deferred`, `5 imported drafts need task briefs`, no `Ready to
+    resume`, no `Blocked work`, no `Health unknown`, no `Loading project...`,
+    and no horizontal overflow. Screenshots:
+    `artifacts/flow-audit/narrative-harness-overview-orientation-only-preview-desktop-2026-07-06.png`
+    and
+    `artifacts/flow-audit/looma-knit-overview-orientation-only-preview-desktop-2026-07-06.png`.
+  - Apply/revert behavior: reverting restores the contradiction where a cold
+    Overview can show fast orientation plus fabricated action/health defaults.

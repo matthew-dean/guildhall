@@ -38,6 +38,7 @@
     projectTicker: ProjectActivityLine
     activeProjectId?: string | null
     onMigrate?: () => void | Promise<void>
+    orientationOnly?: boolean
   }
 
   let {
@@ -48,6 +49,7 @@
     projectTicker,
     activeProjectId = null,
     onMigrate,
+    orientationOnly = false,
   }: Props = $props()
 
   type Tone = 'neutral' | 'ok' | 'warn' | 'danger' | 'accent' | 'running'
@@ -653,7 +655,7 @@
           ? 'Needs attention'
           : 'Ready',
   )
-  const showHeroStatus = $derived(nextAction.tone !== 'warn' && nextAction.tone !== 'danger')
+  const showHeroStatus = $derived(!orientationOnly && nextAction.tone !== 'warn' && nextAction.tone !== 'danger')
 
   function inboxActionLabel(item: InboxItem): string {
     switch (item.kind) {
@@ -1178,99 +1180,100 @@
 
   </section>
 
-  <section class="overview-work-section">
-    <Card title={runPanelTitle} titleTag="h2" padding="compact" density="dense" className="overview-card">
-      {#if movingTasks.length === 0}
-        <p class="muted">{running ? 'The run is active, but no task is currently active.' : 'No task is moving right now.'}</p>
-      {:else}
-        <div class="motion-list">
-          {#each movingTasks as task (task.id)}
-            <OverviewTaskRow
-              title={taskLabel(task)}
-              detail={friendlyDomain(task.domain) || statusDetail(task)}
-              chipLabel={overviewTaskStatusLabel(task)}
-              chipTone={toneForTask(task) === 'danger' ? 'danger' : toneForTask(task) === 'warn' ? 'warn' : toneForTask(task) === 'running' ? 'ok' : 'neutral'}
-              onclick={() => go(currentTaskHref(task.id, activeProjectId))}
-            />
-          {/each}
-        </div>
-      {/if}
-    </Card>
-  </section>
-
-  <section class="overview-grid overview-planning-grid">
-    <Card title="Blocked work" titleTag="h2" padding="compact" density="dense" className="overview-card">
-      {#if blockedRows.length === 0}
-        <p class="muted">No blocked tasks are visible right now.</p>
-      {:else}
-        <div class="blocked-work-list">
-          {#each blockedRows as row (row.task.id)}
-            <OverviewTaskRow
-              title={taskLabel(row.task)}
-              detail={row.reason}
-              chipLabel={row.category}
-              chipTone={row.category === 'Needs triage' ? 'danger' : 'warn'}
-              onclick={() => go(row.href)}
-            />
-          {/each}
-        </div>
-      {/if}
-    </Card>
-
-    <Card title="Next run" titleTag="h2" padding="compact" density="dense" className="overview-card">
-      {#if runBlocker}
-        <UtilityPanel
-          as="button"
-          interactive
-          className="run-blocker"
-          tone="warn"
-          onclick={() => {
-            if (detail.startReadiness?.code === 'required_migration_pending') {
-              void onMigrate?.()
-              return
-            }
-            go(runBlocker.href)
-          }}
-        >
-          <Chip label="Blocked" tone="warn" />
-          <div>
-            <strong>{runBlocker.label}</strong>
-            <span>{runBlocker.detail}</span>
+  {#if !orientationOnly}
+    <section class="overview-work-section">
+      <Card title={runPanelTitle} titleTag="h2" padding="compact" density="dense" className="overview-card">
+        {#if movingTasks.length === 0}
+          <p class="muted">{running ? 'The run is active, but no task is currently active.' : 'No task is moving right now.'}</p>
+        {:else}
+          <div class="motion-list">
+            {#each movingTasks as task (task.id)}
+              <OverviewTaskRow
+                title={taskLabel(task)}
+                detail={friendlyDomain(task.domain) || statusDetail(task)}
+                chipLabel={overviewTaskStatusLabel(task)}
+                chipTone={toneForTask(task) === 'danger' ? 'danger' : toneForTask(task) === 'warn' ? 'warn' : toneForTask(task) === 'running' ? 'ok' : 'neutral'}
+                onclick={() => go(currentTaskHref(task.id, activeProjectId))}
+              />
+            {/each}
           </div>
-        </UtilityPanel>
-      {/if}
-      {#if runPlanRows.length === 0}
-        <p class="muted">
-          {#if requiredMigrationBlocked}
-            The next run is blocked until the required migration is applied.
-          {:else if allTerminalStart}
-            The selected scope is complete. Choose another release or open Work to inspect completed and deferred items.
-          {:else if startBlocked}
-            The next run is blocked until the project blocker is resolved.
-          {:else}
-            Nothing is queued for the next run yet.
-          {/if}
-        </p>
-      {:else}
-        <div class="run-plan-list" aria-label="Likely next run order">
-          {#each runPlanRows as row, index (`${row.task?.id ?? 'fallback'}:${index}`)}
-            <UtilityPanel as="button" interactive className="run-plan-row" tone={row.tone === 'warn' ? 'warn' : row.tone === 'running' ? 'ok' : row.tone === 'accent' ? 'accent' : 'neutral'} onclick={() => go(row.href)}>
-              <span class="run-index">{index + 1}</span>
-              <div>
-                <strong>{row.label}</strong>
-                <span>{row.detail}</span>
-              </div>
-              <Chip label={row.tone === 'running' ? 'Live' : row.tone === 'warn' ? 'Needs review' : row.tone === 'accent' ? 'Likely next' : 'Later'} tone={row.tone === 'running' ? 'ok' : row.tone === 'warn' ? 'warn' : row.tone === 'accent' ? 'accent' : 'neutral'} />
-            </UtilityPanel>
-          {/each}
-        </div>
-      {/if}
-    </Card>
-  </section>
+        {/if}
+      </Card>
+    </section>
 
-  <section>
-    <Card title="Signals" titleTag="h2" padding="compact" density="dense" className="overview-card overview-signals-card">
-      <div class="signals-grid">
+    <section class="overview-grid overview-planning-grid">
+      <Card title="Blocked work" titleTag="h2" padding="compact" density="dense" className="overview-card">
+        {#if blockedRows.length === 0}
+          <p class="muted">No blocked tasks are visible right now.</p>
+        {:else}
+          <div class="blocked-work-list">
+            {#each blockedRows as row (row.task.id)}
+              <OverviewTaskRow
+                title={taskLabel(row.task)}
+                detail={row.reason}
+                chipLabel={row.category}
+                chipTone={row.category === 'Needs triage' ? 'danger' : 'warn'}
+                onclick={() => go(row.href)}
+              />
+            {/each}
+          </div>
+        {/if}
+      </Card>
+
+      <Card title="Next run" titleTag="h2" padding="compact" density="dense" className="overview-card">
+        {#if runBlocker}
+          <UtilityPanel
+            as="button"
+            interactive
+            className="run-blocker"
+            tone="warn"
+            onclick={() => {
+              if (detail.startReadiness?.code === 'required_migration_pending') {
+                void onMigrate?.()
+                return
+              }
+              go(runBlocker.href)
+            }}
+          >
+            <Chip label="Blocked" tone="warn" />
+            <div>
+              <strong>{runBlocker.label}</strong>
+              <span>{runBlocker.detail}</span>
+            </div>
+          </UtilityPanel>
+        {/if}
+        {#if runPlanRows.length === 0}
+          <p class="muted">
+            {#if requiredMigrationBlocked}
+              The next run is blocked until the required migration is applied.
+            {:else if allTerminalStart}
+              The selected scope is complete. Choose another release or open Work to inspect completed and deferred items.
+            {:else if startBlocked}
+              The next run is blocked until the project blocker is resolved.
+            {:else}
+              Nothing is queued for the next run yet.
+            {/if}
+          </p>
+        {:else}
+          <div class="run-plan-list" aria-label="Likely next run order">
+            {#each runPlanRows as row, index (`${row.task?.id ?? 'fallback'}:${index}`)}
+              <UtilityPanel as="button" interactive className="run-plan-row" tone={row.tone === 'warn' ? 'warn' : row.tone === 'running' ? 'ok' : row.tone === 'accent' ? 'accent' : 'neutral'} onclick={() => go(row.href)}>
+                <span class="run-index">{index + 1}</span>
+                <div>
+                  <strong>{row.label}</strong>
+                  <span>{row.detail}</span>
+                </div>
+                <Chip label={row.tone === 'running' ? 'Live' : row.tone === 'warn' ? 'Needs review' : row.tone === 'accent' ? 'Likely next' : 'Later'} tone={row.tone === 'running' ? 'ok' : row.tone === 'warn' ? 'warn' : row.tone === 'accent' ? 'accent' : 'neutral'} />
+              </UtilityPanel>
+            {/each}
+          </div>
+        {/if}
+      </Card>
+    </section>
+
+    <section>
+      <Card title="Signals" titleTag="h2" padding="compact" density="dense" className="overview-card overview-signals-card">
+        <div class="signals-grid">
         {#if inboxError}
           <UtilityPanel className="signal-row" tone="warn">
             <Icon name="alert-triangle" size={16} />
@@ -1351,9 +1354,10 @@
             <span>{recentEvents[0]?.label ?? 'No meaningful recent activity yet.'}</span>
           </div>
         </UtilityPanel>
-      </div>
-    </Card>
-  </section>
+        </div>
+      </Card>
+    </section>
+  {/if}
 </div>
 
 <style>
