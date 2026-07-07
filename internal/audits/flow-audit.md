@@ -28127,3 +28127,67 @@ selected-scope readiness ordering.
     making owner-visible project state untrustworthy again.
 - Schema Migration Decision: no persisted schema field was added, removed, or
   retyped. This changes derived Thread orientation payload assembly only.
+
+## 2026-07-07T12:47:09Z - Optional Thread check-ins must not look like current execution
+
+- User job:
+  - When the selected release/current scope is blocked by a repository
+    follow-up, Thread may still offer optional project check-in context, but it
+    must not visually present that optional check-in as the thing happening
+    `now`.
+- Finding:
+  - Root cause classification:
+    - UI communication/orientation problem: active skippable setup turns fell
+      through to the generic active status chip, so Thread displayed project
+      check-in as `now` even when the shared project action model said the real
+      top action was `Repo follow-up`.
+    - Scheduler/action-state logic problem: the active Thread turn represents a
+      conversation affordance, not runnable release execution, but the visual
+      status treatment did not distinguish those modes.
+    - Project structure/scope/release modeling problem: optional project
+      context gathering can coexist with a blocked release boundary, but it
+      should not compete with the selected-scope blocker cue.
+- Fix:
+  - Active skippable setup turns now render with an `optional` status chip
+    instead of `now`.
+  - Skippable setup cards use neutral tone instead of warning tone, so optional
+    project context does not look like urgent owner-blocking execution.
+  - Duplicate title-level optional chips are suppressed when the card status
+    area already carries the optional state.
+- Proof provided:
+  - Red/green component regression:
+    `CI=true ./node_modules/.bin/vitest run
+    src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts -t "labels
+    active skippable project check-in as optional instead of now"` passed after
+    confirming optional chips exist, no `now` chip remains, and the setup card
+    is not warning-toned.
+  - Broader Thread surface regression:
+    `CI=true ./node_modules/.bin/vitest run
+    src/web/surfaces/project/__tests__/ThreadTab.svelte.test.ts` passed (`109`
+    tests).
+  - Build/contracts:
+    `node ./build.mjs`, `CI=true corepack pnpm lint:contracts`, and `git diff
+    --check` passed.
+  - Installed/live proof:
+    `CI=true corepack pnpm dev:install`, `guildhall stop`, and
+    `guildhall start` installed and restarted the current branch artifact.
+    `/api/stale-server` returned `stale:false` for PID `28552`.
+    Browser proof against `/projects/narrative-harness/thread` shows the
+    `Repo follow-up` action and repository follow-up detail remain visible, the
+    project check-in card renders `OPTIONAL`, no standalone `NOW` chip remains,
+    and the check-in card is not warning-toned.
+- Contract Touch Decision:
+  - Work id: `thread-optional-checkin-not-now`.
+  - Touched contracts: Thread status-chip semantics and Thread card tone for
+    skippable setup turns.
+  - Contracts considered but not touched: Thread API turn schema,
+    `activeTurnId` selection semantics, setup/project-check-in persistence,
+    release-readiness response shape, and project action model.
+  - Required follow-up: verify installed Thread UI after rebuild so the live
+    Narrative Harness page shows optional check-in without competing with the
+    repo follow-up action.
+  - Apply/revert behavior: reverting can make optional project context appear
+    as the current next action again, weakening the owner-facing release blocker
+    cue.
+- Schema Migration Decision: no persisted schema field was added, removed, or
+  retyped. This changes Thread presentation semantics only.

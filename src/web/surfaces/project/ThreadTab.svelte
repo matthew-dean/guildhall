@@ -1036,6 +1036,7 @@
     if (needsRecovery(t)) return 'warn'
     const owner = ownershipLabel(t)
     if (owner === 'Needs you' || owner === 'Needs brief') return 'warn'
+    if (t.kind === 'setup_step' && t.skippable) return 'neutral'
     if (
       owner === 'Queued' ||
       owner === 'Working'
@@ -1061,6 +1062,7 @@
       if (t.taskStatus === 'in_progress') return runStatus === 'running' ? 'next' : 'paused'
       return canStartTaskTurn(t) ? 'queued' : 'paused'
     }
+    if (t.kind === 'setup_step' && t.skippable) return 'optional'
     if (t.kind === 'spec_review' && t.status === 'active') return 'awaiting approval'
     return t.status === 'active' ? 'now' : 'next'
   }
@@ -3819,7 +3821,7 @@
                 {:else if t.kind === 'setup_step'}
                   <div class="setup-title">
                     <h3 class="prompt"><Markdown source={setupStepTitle(t)} inline /></h3>
-                    {#if t.skippable}
+                    {#if t.skippable && !showStatusChip(t)}
                       <Chip label="optional" tone="neutral" />
                     {/if}
                   </div>

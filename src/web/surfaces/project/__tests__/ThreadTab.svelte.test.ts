@@ -1925,6 +1925,34 @@ describe('ThreadTab', () => {
     expect(path.value).toBe('/projects/looma-knit/thread')
   })
 
+  it('labels active skippable project check-in as optional instead of now', async () => {
+    installFetchFakes(
+      [
+        setupTurn({
+          id: 'setup:project-check-in',
+          stepId: 'projectCheckIn',
+          title: 'Run project check-in',
+          why: 'The first project questions have not been generated yet.',
+          status: 'active',
+          skippable: true,
+          affordance: 'inline-button',
+          actionLabel: 'Start project check-in',
+          submitEndpoint: '/api/project/project-check-in',
+        }),
+      ],
+      'setup:project-check-in',
+    )
+
+    markProjectPaused()
+    render(ThreadTab)
+
+    await screen.findByRole('button', { name: /Run project check-in/i })
+    const detail = selectedThread()
+    expect(detail.getAllByText('optional').length).toBeGreaterThan(0)
+    expect(detail.queryByText('now')).toBeNull()
+    expect(document.querySelector('[data-turn-id="setup:project-check-in"] .tone-warn')).toBeNull()
+  })
+
   it('explains bootstrap failures with the first useful command output line', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
