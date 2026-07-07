@@ -34,7 +34,7 @@
   import { isOperationalReceiptQuestion } from '@guildhall/shared'
   import type { InboxItem } from '../lib/inbox-item-key.js'
   import type { AlertBandTone } from '../../../packages/ui/src/components/types.js'
-  import type { AgentQuestion, EventEnvelope, ProjectMigrationStatus, ProjectMigrationStatusItem, ProjectView, ProviderStatus, Task } from '../lib/types.js'
+  import type { AgentQuestion, EventEnvelope, ProjectDetail, ProjectMigrationStatus, ProjectMigrationStatusItem, ProjectOrientationSpine, ProjectView, ProviderStatus, Task } from '../lib/types.js'
 
   type MigrationApplyStage = 'idle' | 'applying' | 'refreshing-project' | 'refreshing-inbox' | 'checking-status' | 'complete'
   type MigrationApplyResult = {
@@ -120,6 +120,9 @@
   let inboxLoadQueued = false
   let latestTickerEvent = $state<EventEnvelope | null>(null)
   let tickerNow = $state(Date.now())
+  let orientationPreview = $state<ProjectOrientationSpine | null>(null)
+  let orientationPreviewKey = $state<string | null>(null)
+  let orientationPreviewSeq = 0
   const detail = $derived.by(() => {
     const current = project.detail
     if (!current) return null
@@ -128,6 +131,17 @@
   })
   const projectDisplayName = $derived(
     detail?.name?.trim() || humanizeProjectName(detail?.id ?? activeProjectId ?? 'Project'),
+  )
+  const orientationPreviewDetail = $derived<ProjectDetail | null>(
+    !detail && orientationPreview
+      ? {
+          id: activeProjectId ?? orientationPreview.projectId ?? undefined,
+          name: humanizeProjectName(activeProjectId ?? orientationPreview.projectId ?? 'Project'),
+          path: '',
+          tasks: [],
+          orientationSpine: orientationPreview,
+        }
+      : null,
   )
   const pageMode = $derived<'document' | 'surface-fill'>(
     currentView === 'thread' ? 'surface-fill' : 'document',
@@ -230,6 +244,29 @@
   $effect(() => {
     path.value
     void project.refresh(routeProjectId, projectDetailSurface, routeFocusedTaskId)
+  })
+
+  $effect(() => {
+    const needsPreview = currentView === 'overview' || currentView === 'map'
+    const key = `${activeProjectId ?? ''}:${currentView}`
+    if (!needsPreview || detail) {
+      orientationPreview = null
+      orientationPreviewKey = null
+      return
+    }
+    if (orientationPreviewKey === key && orientationPreview) return
+    orientationPreviewKey = key
+    const seq = ++orientationPreviewSeq
+    projectFetch('/api/project/spine', { cache: 'no-store' }, activeProjectId)
+      .then(response => response.json())
+      .then(payload => {
+        if (seq !== orientationPreviewSeq) return
+        orientationPreview = (payload?.spine ?? null) as ProjectOrientationSpine | null
+      })
+      .catch(() => {
+        if (seq !== orientationPreviewSeq) return
+        orientationPreview = null
+      })
   })
 
   $effect(() => {
@@ -419,7 +456,10 @@
   ])
   const settingsPath = $derived(currentProjectHref('/settings', activeProjectId))
   const canRenderWithoutProjectDetail = $derived(
-    currentView === 'thread' || currentView === 'inbox' || currentView === 'release',
+    currentView === 'thread' ||
+    currentView === 'inbox' ||
+    currentView === 'release' ||
+    ((currentView === 'overview' || currentView === 'map') && Boolean(orientationPreviewDetail)),
   )
   const showingCompactThreadDetail = $derived(
     railForcedCollapsed && currentView === 'thread' && navContextMode === 'detail',
@@ -1581,6 +1621,36 @@
               {:then module}
                 {@const ReleaseTab = module.default}
                 <ReleaseTab subView={currentSub} activeProjectId={activeProjectId} />
+              {/await}
+            {:else if currentView === 'overview' && orientationPreviewDetail}
+              {#await loadProjectOverviewTab()}
+                <div class="page-centered page-centered-inline">
+                  <p class="muted">Loading project...</p>
+                </div>
+              {:then module}
+                {@const ProjectOverviewTab = module.default}
+                <ProjectOverviewTab
+                  detail={orientationPreviewDetail}
+                  {inboxItems}
+                  {inboxLoaded}
+                  {inboxError}
+                  projectTicker={buildProjectTicker(orientationPreviewDetail, latestTickerEvent, new Date(tickerNow))}
+                  {activeProjectId}
+                  onMigrate={openMigrationModal}
+                />
+              {/await}
+            {:else if currentView === 'map' && orientationPreviewDetail}
+              {#await loadProjectMapTab()}
+                <div class="page-centered page-centered-inline">
+                  <p class="muted">Loading project...</p>
+                </div>
+              {:then module}
+                {@const ProjectMapTab = module.default}
+                <ProjectMapTab
+                  detail={orientationPreviewDetail}
+                  activeProjectId={activeProjectId}
+                  onReleaseSelected={() => project.refresh(activeProjectId)}
+                />
               {/await}
             {:else}
               <div class="page-centered page-centered-inline">

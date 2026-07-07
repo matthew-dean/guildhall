@@ -25403,3 +25403,66 @@ selected-scope readiness ordering.
     `artifacts/flow-audit/nh-release-cold-route-mobile-2026-07-06.png`.
   - Apply/revert behavior: reverting restores the failure where a cold direct
     Release route can remain blank/loading instead of showing release readiness.
+
+## 2026-07-06 — Overview and Map render orientation from the fast spine while detail loads
+
+- Work id: `codex:orientation-cold-route-spine-preview-2026-07-06`.
+- User job: a user who opens Overview or Project Map should see the current
+  scope/release orientation quickly. The 100-foot and 1,000-foot views must not
+  remain blank behind `Loading project...` when the narrower orientation spine
+  endpoint already has the project truth.
+- Root-cause classification:
+  - UI communication/orientation problem: Overview and Map are the primary
+    orientation surfaces, but their route gate waited for the heavyweight
+    `/api/project` payload before showing any recovered structure.
+  - Scheduler/action-state logic problem: the shell treated orientation views
+    as if they needed full task/action detail, even though the shared
+    `/api/project/spine` projection is authoritative enough for a read-only
+    orientation preview.
+- Fix:
+  - ProjectView now fetches `/api/project/spine` for cold Overview and Map
+    routes while full project detail is still loading.
+  - ProjectView builds a minimal read-only project detail around that spine and
+    mounts the existing Overview and Project Map components. Work still waits
+    for full detail because it needs task rows and actions.
+- Contract Touch Decision:
+  - Touched contracts: ProjectView shell/body render gate for project-scoped
+    Overview and Map routes, and the client-side use of the existing
+    orientation-spine API response.
+  - Contracts considered but not touched: orientation spine schema,
+    release-readiness API, selected release/current scope projection, Work task
+    detail payload, scheduler/start contract, persisted task state, and release
+    selection mutation.
+  - Existing data impact: no migration. Existing spine responses can now render
+    before broad project detail finishes loading.
+  - Required follow-up: keep orientation views backed by narrow authoritative
+    projections where possible, and keep action-heavy views backed by full
+    detail.
+  - Proof required: failing ProjectView regression where `/api/project` remains
+    pending but `/api/project/spine` is available, full ProjectView suite, UI
+    typecheck, installed-app stale-server proof, and rendered Narrative Harness
+    Overview/Map proof.
+  - Proof provided: the new ProjectView regression first failed on the outer
+    `Loading project...` gate. After the fix it passed by rendering Overview
+    and Map scope/release orientation from the spine while the broad project
+    payload was still pending. The full ProjectView component suite passed with
+    `55` tests. `pnpm typecheck:ui`, `node ./build.mjs`, and
+    `git diff --check` passed. After `node ./scripts/dev-install.mjs` and
+    service restart, `/api/stale-server` returned `stale:false` for PID
+    `86538`. Rendered Narrative Harness proof showed Overview visible in
+    `1820ms` desktop and `1931ms` mobile, Map visible in `2451ms` desktop and
+    `2935ms` mobile, no remaining `Loading project...`, and no horizontal
+    overflow (`scrollWidth` equaled `clientWidth` at both viewports). Overview
+    showed `11 Current scope`, `31 Deferred`, `Stage 1 Headless Drafting And
+    Evaluation MVP`, `11 work items in view`, `0 missing verification`, `0
+    blocked`, `11 verified`, `31 deferred`, and source/proof summaries. Map
+    showed `Release scope`, `11 assigned work items`, `31 later work items`,
+    `58 documented capabilities`, `Proof mode`, `Scope ledger`, `11 current
+    work items · 31 later work items`, and Source trail. Screenshots:
+    `artifacts/flow-audit/nh-overview-spine-preview-desktop-2026-07-06.png`,
+    `artifacts/flow-audit/nh-overview-spine-preview-mobile-2026-07-06.png`,
+    `artifacts/flow-audit/nh-map-spine-preview-desktop-2026-07-06.png`, and
+    `artifacts/flow-audit/nh-map-spine-preview-mobile-2026-07-06.png`.
+  - Apply/revert behavior: reverting restores the failure where cold Overview
+    and Map routes can show only a loading message until full project detail
+    resolves.

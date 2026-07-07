@@ -170,6 +170,7 @@ function installFetchFakes(projectPayload: ProjectDetail = detail()) {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input), 'http://localhost')
     if (url.pathname === '/api/project') return json(projectPayload)
+    if (url.pathname === '/api/project/spine') return json({ spine: projectPayload.orientationSpine ?? null })
     if (url.pathname === '/api/project/inbox') {
       return json({
         blockers: { bootstrap: false, workspaceImport: false },
@@ -294,6 +295,20 @@ function installFetchFakes(projectPayload: ProjectDetail = detail()) {
   })
   vi.stubGlobal('fetch', fetchMock)
   return fetchMock
+}
+
+function installFetchFakesWithPendingProject(projectPayload: ProjectDetail = detail()) {
+  const pendingProject = deferredResponse()
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input), 'http://localhost')
+    if (url.pathname === '/api/project') return pendingProject.promise
+    if (url.pathname === '/api/project/spine') return json({ spine: projectPayload.orientationSpine ?? null })
+    if (url.pathname === '/api/project/inbox') return json({ blockers: { bootstrap: false, workspaceImport: false }, items: [] })
+    if (url.pathname === '/api/project/events') return json({ events: [] })
+    return json({})
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  return { fetchMock, pendingProject }
 }
 
 async function renderProjectView(
@@ -963,6 +978,76 @@ describe('ProjectView', () => {
     expect(screen.queryByText(/Blocked: 1 escalated/i)).not.toBeInTheDocument()
     expect(screen.queryByText(/Blocked\./i)).not.toBeInTheDocument()
     expect(screen.getByText(/Run finished: 1 done\./i)).toBeInTheDocument()
+  })
+
+  it('renders overview and map orientation from the fast spine while project detail is still loading', async () => {
+    const projectPayload = detail({
+      startReadiness: { canStart: false, code: 'all_terminal', message: 'Stage 1 is complete.' },
+      orientationSpine: {
+        summary: {
+          headline: 'Stage 1 is complete.',
+          purpose: 'Headless proof scope.',
+          selectedScopeLabel: 'Stage 1',
+          selectedReleaseLabel: 'Stage 1',
+          includedCount: 1,
+          includedWorkCount: 1,
+          deferredCount: 1,
+          deferredWorkCount: 1,
+          pinnedNow: [],
+          topBlocker: null,
+          nextAction: 'Review completed scope.',
+          progress: {
+            scopeId: 'stage-1',
+            total: 2,
+            done: 1,
+            proven: 1,
+            blocked: 0,
+            deferred: 1,
+          },
+        },
+        selectedRelease: { id: 'stage-1', label: 'Stage 1', kind: 'release', state: 'ready', source: 'release_plan', nodeIds: ['work:task-stage-1'], deferredNodeIds: ['work:task-later'] },
+        selectedTaskScope: { id: 'stage-1', label: 'Stage 1', kind: 'release', source: 'release_plan', nodeIds: ['work:task-stage-1'], deferredNodeIds: ['work:task-later'] },
+        scope: { id: 'stage-1', label: 'Stage 1', kind: 'release', source: 'release_plan', nodeIds: ['work:task-stage-1'], deferredNodeIds: ['work:task-later'] },
+        scopeRows: [
+          { taskId: 'task-stage-1', nodeId: 'work:task-stage-1', title: 'Stage 1 proof', scope: 'included', status: 'done', handoffState: 'done', sourceRefs: ['task:task-stage-1'] },
+          { taskId: 'task-later', nodeId: 'work:task-later', title: 'Later feature', scope: 'deferred', status: 'ready', handoffState: 'deferred', sourceRefs: ['task:task-later'] },
+        ],
+        releases: [{ id: 'stage-1', label: 'Stage 1', kind: 'release', state: 'ready', source: 'release_plan', nodeIds: ['work:task-stage-1'], deferredNodeIds: ['work:task-later'] }],
+        charter: { goal: 'Headless proof scope.', targetAudience: null, currentReleaseTarget: null, successDefinition: null, nonGoals: [], source: 'inferred' },
+        executionBoundary: { label: 'Headless proof', mode: 'headless', proofStyle: 'script_only', detail: 'Script proof.', source: { kind: 'inferred', refs: [], confidence: 'medium', freshness: 'fresh', inferred: true, refreshedAt: now } },
+        proofContracts: [],
+        roots: [],
+        nodes: {},
+        activePins: [],
+        gaps: [],
+        release: { state: 'ready', blockers: [] },
+        sourceHealth: { inferred: 1, gaps: 0 },
+      },
+    } as Partial<ProjectDetail>)
+    installFetchFakesWithPendingProject(projectPayload)
+    project.detail = null
+    project.error = null
+
+    render(ProjectView, { initialView: 'overview', initialSub: null, projectId: 'looma-knit' })
+
+    await waitFor(() => expect(screen.getByRole('region', { name: 'Project overview' })).toBeInTheDocument())
+    expect(screen.getAllByText('Stage 1').length).toBeGreaterThan(0)
+    expect(screen.getByText('1 Current scope')).toBeInTheDocument()
+    expect(screen.getByText('1 Deferred')).toBeInTheDocument()
+    expect(screen.queryByText('Loading project...')).toBeNull()
+
+    cleanup()
+    installFetchFakesWithPendingProject(projectPayload)
+    project.detail = null
+    project.error = null
+
+    render(ProjectView, { initialView: 'map', initialSub: null, projectId: 'looma-knit' })
+
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Project map' })).toBeInTheDocument())
+    expect(screen.getByRole('heading', { name: 'Release scope' })).toBeInTheDocument()
+    expect(screen.getAllByText('Stage 1').length).toBeGreaterThan(0)
+    expect(screen.getByText('1 assigned work item')).toBeInTheDocument()
+    expect(screen.queryByText('Loading project...')).toBeNull()
   })
 
   it('shows all-terminal supervisor stop detail in the project ticker footer', async () => {
