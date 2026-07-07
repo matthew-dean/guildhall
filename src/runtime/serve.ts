@@ -196,10 +196,11 @@ import {
   buildProjectOrientationSpine,
   taskEligibleForSelectedScope,
   type BuildProjectOrientationSpineInput,
+  type OrientationRelease,
   type OrientationScope,
   type ProjectOrientationCharter,
 } from './project-orientation-spine.js'
-import { buildProjectScopeProjection, deriveReleaseContainersFromTaskMembership, executionScopeRows, releaseLabelFromId, taskScopeNodeId, type ProjectScope } from './project-scope-projection.js'
+import { buildProjectScopeProjection, deriveReleaseContainersFromTaskMembership, executionScopeRows, releaseLabelFromId, selectedProjectScopeForQueue, taskScopeNodeId, type ProjectScope, type ProjectScopeProjection } from './project-scope-projection.js'
 import type { SurfaceReviewPacket } from './contract-surfaces.js'
 import {
   acceptProjectDependencyDelivery,
@@ -4157,6 +4158,73 @@ function buildOverviewOrientationPreviewSpine(input: {
       gaps: scope ? 0 : 1,
     },
     sourceTrail: [],
+  }
+}
+
+function releaseReadinessReleaseFromScope(input: {
+  rawQueue: { releases: ProjectRelease[] }
+  scope: ProjectScope | null
+  releaseState: 'ready' | 'blocked' | 'active' | 'shaping' | 'unknown'
+}): OrientationRelease | null {
+  const scope = input.scope
+  if (!scope) return null
+  const existing = input.rawQueue.releases.find(release => release.id === scope.id) ?? null
+  if (!existing && scope.kind !== 'release' && scope.kind !== 'milestone') return null
+  return {
+    id: existing?.id ?? scope.id,
+    label: existing?.label ?? scope.label,
+    kind: existing?.kind === 'milestone' ? 'milestone' : existing?.kind === 'marker' ? 'marker' : 'release',
+    state: input.releaseState === 'ready'
+      ? 'ready'
+      : input.releaseState === 'blocked'
+        ? 'blocked'
+        : existing?.state ?? 'active',
+    source: existing?.source ?? scope.source,
+    description: existing?.description ?? null,
+    nodeIds: scope.nodeIds,
+    deferredNodeIds: scope.deferredNodeIds,
+    proofStyle: existing?.proofStyle ?? 'unspecified',
+  }
+}
+
+function releaseReadinessScopeFromProjection(
+  projection: ProjectScopeProjection,
+  fallbackScope: ProjectScope | null,
+): ProjectScope | null {
+  const baseScope = projection.selectedScope ?? fallbackScope
+  if (!baseScope) return null
+  const rows = executionScopeRows(projection.rows)
+  const includedNodeIds = rows
+    .filter(row => row.scope === 'included')
+    .map(row => taskScopeNodeId(row.taskId))
+  const deferredNodeIds = rows
+    .filter(row => row.scope === 'deferred')
+    .map(row => taskScopeNodeId(row.taskId))
+  return {
+    ...baseScope,
+    nodeIds: includedNodeIds.length > 0 ? includedNodeIds : baseScope.nodeIds,
+    deferredNodeIds,
+  }
+}
+
+function fallbackCurrentWorkScope(tasks: readonly Task[]): ProjectScope | null {
+  const visibleTasks = tasks.filter(task =>
+    task.id !== META_INTAKE_TASK_ID &&
+    task.id !== WORKSPACE_IMPORT_TASK_ID &&
+    !['archived', 'cancelled'].includes(String(task.status ?? '')),
+  )
+  if (visibleTasks.length === 0) return null
+  return {
+    id: 'current-work',
+    label: 'Current task scope',
+    kind: 'proposed_feature_set',
+    source: 'inferred',
+    nodeIds: visibleTasks
+      .filter(task => task.status !== 'shelved')
+      .map(task => taskScopeNodeId(task.id)),
+    deferredNodeIds: visibleTasks
+      .filter(task => task.status === 'shelved')
+      .map(task => taskScopeNodeId(task.id)),
   }
 }
 
@@ -12885,19 +12953,33 @@ export function buildServeApp(opts: ServeOptions = {}): {
     const rawTasks = rawQueue.tasks
     const tasks = input.tasks ?? await Promise.all(rawTasks.map((task) => buildEffectiveTask(project.path, task as Task)))
     const releaseStartReadiness = input.startReadiness ?? await projectStartReadinessForProject(project.path)
-    const { orientationSpine: readinessSpine, releaseTruth } = buildOrientationSpineWithScopedReleaseTruth({
-      projectId: project.id,
-      charter: inferProjectCharterFromExistingSources(project.path, project.config),
-      selectedReleaseId: rawQueue.selectedReleaseId,
-      releases: rawQueue.releases,
+    const now = new Date().toISOString()
+    const augmentedTasks = augmentTasksWithWorkspaceImportDraft({
       tasks: tasks as unknown as Task[],
-      runStatus: supervisor.get(project.id)?.status ?? 'stopped',
-      startReadiness: releaseStartReadiness,
       workspaceImportDraft: await workspaceImportDraftForOrientation(project.path, releaseStartReadiness),
-      sourceRefs: projectOrientationSourceRefs(project.path),
+      now,
+    }).tasks as unknown as Task[]
+    const selectedScope =
+      selectedProjectScopeForQueue({
+        tasks: augmentedTasks,
+        releases: rawQueue.releases,
+        ...(rawQueue.selectedReleaseId ? { selectedReleaseId: rawQueue.selectedReleaseId } : {}),
+      }) ??
+      fallbackCurrentWorkScope(augmentedTasks)
+    const scopeProjection = buildProjectScopeProjection({
+      version: 1,
+      lastUpdated: now,
+      tasks: augmentedTasks,
+      releases: rawQueue.releases,
+      ...(rawQueue.selectedReleaseId ? { selectedReleaseId: rawQueue.selectedReleaseId } : {}),
+    }, { selectedScope })
+    const readinessScope = releaseReadinessScopeFromProjection(scopeProjection, selectedScope) ?? fallbackRelease
+    const releaseTruth = summarizeScopedReleaseWork(augmentedTasks, readinessScope === fallbackRelease ? null : readinessScope)
+    const release = releaseReadinessReleaseFromScope({
+      rawQueue,
+      scope: readinessScope === fallbackRelease ? null : readinessScope,
+      releaseState: scopeProjection.release.state,
     })
-    const release = readinessSpine.selectedRelease
-    const readinessScope = readinessSpine.scope ?? release ?? fallbackRelease
     const activePressureTest = listPressureTestIntakes(memoryDir)
       .find(intake => intake.status === 'active' && intake.pendingQuestion)
     if (activePressureTest?.pendingQuestion) {
@@ -12964,7 +13046,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     } = releaseTruth
     const dirtyCheckout = await guildhallOwnedDirtyCheckout(project.path)
     const gitStory = await buildProjectGitStorySummary(project.path, gitStoryTasks)
-    const readinessProofStyle = readinessSpine.executionBoundary.proofStyle === 'script_only'
+    const readinessProofStyle = release?.proofStyle === 'script_only' || !scopedWorkNeedsDesignSystem(scopedTasks, release)
       ? 'script_only'
       : release?.proofStyle
     const designSystemBlockingCount =

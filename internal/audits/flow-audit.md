@@ -28887,3 +28887,96 @@ selected-scope readiness ordering.
     derivation in Overview detail and increases latency/state-drift risk.
 - Schema Migration Decision: no persisted schema field was added, removed, or
   retyped. This is an in-request derived-state reuse change only.
+
+## 2026-07-07T15:40:00Z - Release readiness must not derive the full project map
+
+- User job:
+  - Release readiness should answer whether the selected current scope/release
+    is complete, blocked, or still unfinished. It should not build the full
+    1,000-foot project map just to recover selected scope, release label, and
+    blocker state.
+- Finding:
+  - Root cause classification:
+    - Data model/schema problem: `buildProjectReleaseReadinessPayload` depended
+      on `buildOrientationSpineWithScopedReleaseTruth`, which builds full
+      orientation spines for Project Map and then extracts a small subset.
+    - Project structure/scope/release modeling problem: release readiness needed
+      an execution-scope read model, but it was coupled to the structural map
+      read model.
+    - Task hierarchy/dependency/proof modeling problem: replacing that path
+      initially exposed two scope-boundary risks that tests caught: generated
+      decomposition children leaked into public scope node IDs, and no-release
+      fallback scope included shelved work. The fix derives the public readiness
+      scope from execution rows instead of raw release node lists.
+    - Runtime/provider/infrastructure problem: standalone release-readiness was
+      a measured cost center for Overview, so removing map-grade derivation is
+      part of making the first-stop project page fast enough to orient the
+      owner.
+- Fix:
+  - Release readiness now builds selected-scope truth from
+    `buildProjectScopeProjection` plus a small release/scope read model.
+  - Public readiness `scope.nodeIds` is derived from execution rows, preserving
+    owner-visible work boundaries while keeping hidden/generated splits out of
+    the public scope when they are not counted execution units.
+  - No-release projects get an inferred `Current task scope` over non-shelved
+    active work so deferred shelves do not block closure.
+  - Script-only/headless readiness still works without full orientation by
+    using release proof style plus scoped task text when deciding whether a
+    design-system guardrail is required.
+- Proof provided:
+  - Focused failure/recovery:
+    The first projection-only rewrite failed two existing regression tests:
+    `does not count importer-generated decomposition children as scoped release
+    tasks` and `does not let deferred fallback-scope shelves block current work
+    closure`. After deriving public readiness scope from execution rows and
+    adding a no-release current-work fallback, those tests passed.
+  - Focused suite:
+    `CI=true ./node_modules/.bin/vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts
+    src/web/surfaces/__tests__/ProjectView.svelte.test.ts
+    src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts
+    src/web/surfaces/project/__tests__/ProjectMapTab.svelte.test.ts` passed
+    with 153 tests.
+  - Build and contract checks:
+    `git diff --check`, `node ./build.mjs`, and
+    `CI=true corepack pnpm lint:contracts` passed.
+  - Installed API proof:
+    After `CI=true corepack pnpm dev:install`, `guildhall stop`, and
+    `guildhall start`, `/api/stale-server` returned `stale:false` for PID
+    `81226`. Narrative Harness release-readiness returned three samples at
+    about `1396ms`, `1379ms`, and `1350ms`, selected scope
+    `Stage 1 Headless Drafting And Evaluation MVP`, `scopeNodes:11`,
+    `tasks:11`, `ready:true`, and `blockers:0`. Looma + Knit
+    release-readiness returned `1295ms`, `1258ms`, and `1259ms`, selected
+    scope `Stage 1: V1 Release Hardening`, `scopeNodes:5`, `tasks:5`,
+    `ready:false`, and `blockers:8`. Settled Overview remained
+    `orientationNodes:0` and sampled around `2.0-2.2s`.
+  - Browser proof:
+    - Desktop `1280x720`: Narrative Harness Overview showed `Scope status`,
+      `Stage 1 Headless Drafting And Evaluation MVP is complete.`, `11 Current
+      scope`, `31 Deferred`, `Current release`, `Project map`, no `333` backlog
+      leak, and no detected clipped content. Looma + Knit Overview showed `Do
+      this next`, `5 imported drafts need task briefs`, `5 Current scope`, `30
+      Deferred`, `5 blocked`, `Project map`, no `333` backlog leak, and no
+      detected clipped content.
+  - Remaining failing proof:
+    - Release-readiness is now free of full Project Map derivation, but the
+      endpoint still sits around 1.25-1.4s on real calibration projects. The
+      next cost center is likely repository/git inspection and dirty-checkout
+      checks, which are still required for release truth but should be cached,
+      parallelized, or split into a named repository-follow-up submodel.
+- Contract Touch Decision:
+  - Work id: `release-readiness-scope-projection`.
+  - Touched contracts: internal release-readiness derivation contract and public
+    release-readiness scope node semantics.
+  - Contracts considered but not touched: persisted task schema, persisted
+    release schema, full Project Map spine contract, Overview projection-spine
+    contract, Work surface, Thread surface, and git-story response payload.
+  - Required follow-up: profile repository/git-story and dirty-checkout
+    inspection inside release readiness, then extract or cache that as a
+    repository-follow-up model shared by Overview, Release, and Start.
+  - Apply/revert behavior: reverting re-couples release readiness to map-grade
+    orientation spine derivation and risks reintroducing scope drift between
+    readiness and Overview.
+- Schema Migration Decision: no persisted schema field was added, removed, or
+  retyped. This is a shared derived-state/read-model correction only.
