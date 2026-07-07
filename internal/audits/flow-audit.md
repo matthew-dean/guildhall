@@ -8,6 +8,99 @@ help_summary: |
 
 # Web UI flow audit
 
+2026-07-07T07:55:11Z - Provider/model proof cannot be satisfied by review prose alone.
+
+- Work id: `codex:provider-proof-review-prose-false-green-2026-07-07`.
+- User job: when Narrative Harness says the current Stage 1 headless scope is
+  complete, the owner must be able to trust that every required proof has real
+  evidence. A reviewer or coordinator may describe proof, but Guildhall must not
+  treat that prose as the proof for provider/model or command-backed work.
+- Live findings:
+  - Narrative Harness briefly reported `Stage 1 Headless Drafting And
+    Evaluation MVP is complete` even though the DeepInfra drafting-model task's
+    visible evidence still had only reviewer/coordinator prose plus
+    `content.no-truncated-data`.
+  - The task history itself preserved reviewer objections that the DeepInfra
+    task needed executed scenario proof with telemetry, latency, cost, refusal,
+    repetition, and voice/genre preservation. A later deterministic approval and
+    soft truncation gate then let the selected scope go green.
+  - Tightening proof health exposed a second state-agreement bug:
+    `/api/project` initially reported `proven:0`, while `/api/project/spine`
+    reported `proven:10` for the same Stage 1 scope. The full project endpoint
+    was building the orientation spine from serve-enriched presentation tasks
+    instead of the same effective task projection used by the fast spine
+    endpoint.
+- Root-cause classification:
+  - Task hierarchy/dependency/proof modeling problem: inferred review proof
+    could satisfy command/provider/model proof paths without non-review evidence.
+  - Scheduler/action-state logic problem: completed tasks with missing semantic
+    proof could be treated as terminal-ready when a later approval existed.
+  - UI communication/orientation problem: the top project state could say
+    complete instead of naming the exact proof blocker.
+  - Data model/schema problem: presentation-enriched task shape was reused as
+    canonical orientation input, creating cross-endpoint proof/progress drift.
+  - Bad project data produced by an earlier Guildhall bug: the Narrative
+    Harness DeepInfra task already contained contradictory historical evidence
+    from earlier review/adjudication passes.
+- Change:
+  - Shared proof health now requires non-review command-backed evidence whenever
+    inferred expected evidence names command/script/provider/model proof terms
+    such as DeepInfra, telemetry, latency, cost, refusal, repetition, voice,
+    pnpm/npm/node/script/command/API.
+  - Soft `content.no-truncated-data` gates no longer satisfy those proof paths.
+  - Review prose may still corroborate a real proof path when a hard gate or
+    done summary names the command/test evidence, preserving the existing
+    Narrative Harness generation case with `pnpm-build` and
+    `tests/generate.test.mjs`.
+  - `/api/project` now builds its orientation spine from effective tasks, while
+    keeping enriched tasks only for rendering, so `/api/project`,
+    `/api/project/spine`, and `/api/project/release-readiness` agree on proof
+    progress.
+- Contract Touch Decision:
+  - Work id: `codex:provider-proof-review-prose-false-green-2026-07-07`.
+  - Touched contracts: shared proof-health semantics, release-readiness proof
+    blocker semantics, and project orientation-spine input semantics.
+  - Contracts considered but not touched: persisted task schema, persisted proof
+    path schema, workspace-import draft schema, Work UI action wiring, release
+    schema, task-history/evidence endpoint shapes.
+  - Required follow-up: run/attach the real DeepInfra drafting-model proof for
+    Narrative Harness, then verify Stage 1 can go complete from command-backed
+    evidence instead of review prose.
+  - Proof required: focused regression for provider/model review prose false
+    green; full release-readiness suite; proof/task endpoint smoke around
+    completion proof; contract detector; build; installed-app stale proof; live
+    Narrative Harness API and browser proof that the project visibly waits on
+    the DeepInfra proof blocker.
+  - Proof provided: `CI=true ./node_modules/.bin/vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts` passed `48` tests;
+    `CI=true ./node_modules/.bin/vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts
+    src/runtime/__tests__/serve-task-endpoints.test.ts -t
+    "proof|release-readiness|completionProof|orientation"` passed `51` tests;
+    `CI=true pnpm lint:contracts` passed before install/build tooling pruned
+    dev dependencies; `node ./build.mjs` passed; installed app was rebuilt,
+    dev-installed, restarted, and `/api/stale-server` returned `stale:false`.
+    Live `/api/project?projectId=narrative-harness`,
+    `/api/project/spine?projectId=narrative-harness`, and
+    `/api/project/release-readiness?projectId=narrative-harness` all reported
+    Stage 1 waiting on proof, `proven:10`, `done:11`, `deferred:30`, one proof
+    blocker, and the blocker task
+    `task-select-and-prove-a-deep-infra-drafting-model-for-broad-genre-chapter-writing`.
+    Browser proof on
+    `http://localhost:7777/projects/narrative-harness/map` showed `Needs
+    proof`, the DeepInfra blocker, the Stage 1 headless scope, headless proof
+    mode, and no visible complete claim.
+  - Waivers: `CI=true pnpm install` returns nonzero after restoring dev
+    dependencies because repo policy ignores dependency build scripts; build and
+    tests still ran from the restored dependency tree.
+  - Owner-review items: no owner approval is implied. Codex is acting as the
+    owner only for this calibration run; the product now keeps the scope blocked
+    until real proof evidence is attached.
+  - Apply/revert behavior: reverting the proof-health change lets provider/model
+    proof go green from reviewer prose and soft truncation gates; reverting the
+    project endpoint change lets `/api/project` and `/api/project/spine`
+    disagree about proof progress again.
+
 2026-07-07T01:26:03Z - Release buckets no longer absorb current-scope preview work.
 
 - Work id: `codex:release-scope-preview-membership-separation-2026-07-07`.

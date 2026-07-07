@@ -1232,6 +1232,97 @@ describe('GET /api/project/release-readiness', () => {
     expect(task.completionProof.verified.join('\n')).toContain('tests/generate.test.mjs')
   })
 
+  it('does not accept review prose alone for provider/model proof paths', async () => {
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: 'headless-mvp',
+      releases: [{
+        id: 'headless-mvp',
+        label: 'Headless MVP',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-current'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [
+        makeTask({
+          id: 'task-current',
+          title: 'Select and prove a DeepInfra drafting model for broad-genre chapter writing',
+          status: 'done',
+          releaseIds: ['headless-mvp'],
+          acceptanceCriteria: [{
+            id: 'provider-proof',
+            description: 'The proof records DeepInfra model telemetry, latency, cost, refusal, repetition, and voice preservation from an executed scenario run.',
+            verifiedBy: 'review',
+            met: true,
+          }],
+          proofPaths: [{
+            kind: 'review',
+            source: 'inferred',
+            expectedEvidence: [
+              'The proof records DeepInfra model telemetry, latency, cost, refusal, repetition, and voice preservation from an executed scenario run.',
+            ],
+          }],
+          doneSummaryBundle: {
+            taskId: 'task-current',
+            status: 'done',
+            completedAt: '2026-07-04T08:50:00.000Z',
+            summary: {
+              journey: 'Reviewer prose claimed the DeepInfra proof exists.',
+              decision: 'Task finished as done.',
+              evidence: 'content.no-truncated-data passed.',
+              learningCandidates: [],
+              openResidue: 'No open residue recorded.',
+            },
+            retention: {
+              transcriptPrimaryArtifact: false,
+              compactedFullTranscript: false,
+              fullEvidenceAvailable: true,
+            },
+            evidenceRefs: [],
+            createdAt: '2026-07-04T08:50:00.000Z',
+            createdBy: 'orchestrator',
+          },
+          gateResults: [{
+            gateId: 'content.no-truncated-data',
+            type: 'soft',
+            passed: true,
+            output: 'no truncated semantic data detected',
+            checkedAt: '2026-07-04T08:50:00.000Z',
+          }],
+          reviewVerdicts: [{
+            verdict: 'approve',
+            reviewerPath: 'deterministic',
+            reason: 'Coordinator adjudication scope satisfied by latest worker proof.',
+            reasoning: 'The proof records DeepInfra model telemetry, latency, cost, refusal, repetition, and voice preservation from an executed scenario run.',
+            failingSignals: [],
+            recordedAt: '2026-07-04T08:50:00.000Z',
+          }],
+        } as Partial<Task>),
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await approveDesignSystem(app)
+    await commitAndPush('provider review prose without command proof')
+
+    const readinessRes = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
+    const readiness = await readinessRes.json() as any
+
+    expect(readiness.ready).toBe(false)
+    expect(readiness.totals).toMatchObject({
+      tasks: 1,
+      done: 1,
+      proofEvidenceBlockingCount: 1,
+    })
+    expect(readiness.proofMissingDoneTasks).toEqual([{
+      id: 'task-current',
+      title: 'Select and prove a DeepInfra drafting model for broad-genre chapter writing',
+    }])
+  })
+
   it('does not accept truncation-only evidence for inferred Narrative Harness review proof', async () => {
     await seedQueue({
       version: 1,

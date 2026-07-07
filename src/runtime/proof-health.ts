@@ -248,11 +248,47 @@ function completionEvidenceTextForTask(task: unknown): string {
   return normalizedText(chunks.join('\n')).toLowerCase()
 }
 
+function taskHasNonReviewCommandBackedProof(task: unknown): boolean {
+  const record = recordValue(task)
+  if (!record) return false
+  const doneSummary = recordValue(record.doneSummaryBundle)
+  const doneSummarySummary = recordValue(doneSummary?.summary)
+  const doneSummaryEvidence = typeof doneSummarySummary?.evidence === 'string'
+    ? doneSummarySummary.evidence
+    : ''
+  if (
+    doneSummary?.status === 'done' &&
+    /\b(?:pnpm|npm|node|test|script|command|api|deepinfra|model|telemetry|latency|cost|refusal|repetition)\b/i.test(doneSummaryEvidence) &&
+    !/\bcontent\.no-truncated-data\b/i.test(doneSummaryEvidence)
+  ) {
+    return true
+  }
+  return passedGateResultsForTask(task).some((gate) => {
+    const type = normalizedText(gate.type).toLowerCase()
+    const text = [
+      normalizedText(gate.command),
+      normalizedText(gate.gateId),
+      normalizedText(gate.name),
+      normalizedText(gate.output),
+    ].filter(Boolean).join(' ')
+    if (!text || /\bcontent\.no-truncated-data\b/i.test(text)) return false
+    if (type === 'soft') return false
+    return /\b(?:pnpm|npm|node|test|script|command|api|deepinfra|model|telemetry|latency|cost|refusal|repetition|build)\b/i.test(text)
+  })
+}
+
+function requiresCommandBackedProofText(value: string): boolean {
+  return /\b(?:DeepInfra|OpenAI-compatible|provider|model|telemetry|latency|cost|refusal|repetition|voice|pnpm|npm|node|script|command|api)\b/i.test(value)
+}
+
 function expectedEvidenceStringsSatisfied(expectedEvidence: unknown[], task: unknown): boolean {
   const expectedStrings = expectedEvidence
     .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
     .map(item => normalizedText(item).toLowerCase())
   if (expectedStrings.length === 0) return true
+  if (expectedStrings.some(requiresCommandBackedProofText) && !taskHasNonReviewCommandBackedProof(task)) {
+    return false
+  }
   const evidenceText = completionEvidenceTextForTask(task)
   if (!evidenceText) return false
   return expectedStrings.every(expected =>

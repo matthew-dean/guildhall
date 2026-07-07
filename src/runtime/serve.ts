@@ -4764,6 +4764,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const tasks = await Promise.all(rawTasks.map((task) => fullSurface
         ? enrichTaskForServe(project.path, task)
         : enrichTaskForWorkSurface(project.path, task)))
+      const orientationTasks = fullSurface
+        ? await Promise.all(rawTasks.map(task => buildEffectiveTask(project.path, task as Task)))
+        : tasks as unknown as Task[]
       const selectedTaskId = requestedTaskId && tasks.some(task => task.id === requestedTaskId)
         ? requestedTaskId
         : null
@@ -4871,17 +4874,17 @@ export function buildServeApp(opts: ServeOptions = {}): {
         charter: inferProjectCharterFromExistingSources(project.path, project.config),
         selectedReleaseId: rawQueue.selectedReleaseId,
         releases: rawQueue.releases,
-        tasks: tasks as unknown as Task[],
+        tasks: orientationTasks as unknown as Task[],
         runStatus: run?.status ?? 'stopped',
         startReadiness,
         workspaceImportDraft: orientationWorkspaceImportDraft,
         sourceRefs: projectOrientationSourceRefs(project.path),
       })
       const actionScope = orientationSpine.selectedTaskScope ?? orientationSpine.scope ?? null
-      const actionTasksById = new Map((tasks as unknown as Task[]).map(candidate => [candidate.id, candidate]))
+      const actionTasksById = new Map((orientationTasks as unknown as Task[]).map(candidate => [candidate.id, candidate]))
       const scopedActionTaskIds = actionScope
         ? new Set(
-            (tasks as unknown as Task[])
+            (orientationTasks as unknown as Task[])
               .filter(task => taskEligibleForSelectedScope(task, actionScope, {
                 tasksById: actionTasksById,
               }).eligible)
