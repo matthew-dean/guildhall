@@ -742,6 +742,7 @@ function normalizeScopeTaskLists(scope: OrientationScope, tasks: OrientationTask
     const parentId = nodeId.slice('work:'.length)
     const parent = taskById.get(parentId)
     if (!parent) continue
+    const parentWasDeferred = deferred.has(taskNodeId(parentId)) && !included.has(taskNodeId(parentId))
     const visibleChildren = [...(childIdsByParent.get(parentId) ?? [])]
       .map(childId => taskById.get(childId))
       .filter((child): child is OrientationTaskInput => Boolean(child))
@@ -753,7 +754,7 @@ function normalizeScopeTaskLists(scope: OrientationScope, tasks: OrientationTask
     deferred.delete(taskNodeId(parentId))
     for (const child of visibleChildren) {
       const childNodeId = taskNodeId(child.id)
-      if (child.status === 'shelved') {
+      if (parentWasDeferred || child.status === 'shelved' || deferred.has(childNodeId)) {
         included.delete(childNodeId)
         deferred.add(childNodeId)
       } else {
@@ -986,7 +987,8 @@ function mergeScopeRowsIntoScope(scope: OrientationScope, rows: OrientationScope
       deferredNodeIds.delete(row.nodeId)
       nodeIds.add(row.nodeId)
     } else {
-      if (!nodeIds.has(row.nodeId)) deferredNodeIds.add(row.nodeId)
+      nodeIds.delete(row.nodeId)
+      deferredNodeIds.add(row.nodeId)
     }
   }
   return {

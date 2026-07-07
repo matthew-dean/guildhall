@@ -24829,3 +24829,89 @@ selected-scope readiness ordering.
   - Apply/revert behavior: reverting restores the failure where the product can
     claim a deferred count that does not match the selected scope node list, or
     let workspace-import preview work leak into a projected execution boundary.
+
+## 2026-07-06 — Deferred split parents do not block completed release scope
+
+- Work id: `codex:deferred-split-parent-scope-agreement-2026-07-06`.
+- User job: after Narrative Harness finishes its selected current release, the
+  product must not tell the user that the release is both complete and blocked
+  on proof for a deferred split parent. The 1,000-foot Map, 100-foot Overview,
+  Start/Resume state, and release readiness must agree on current work, later
+  work, proof state, and whether another run is possible.
+- Root-cause classification:
+  - Task hierarchy/dependency/proof modeling problem: deferred split parents
+    were kept in scope rows while their materialized children could be expanded
+    back into selected-scope included membership. That made container work and
+    child work disagree about whether they were current or later.
+  - Project structure/scope/release modeling problem: selected scope membership
+    and executable scope rows used different parent/child rules for deferred
+    work, so Narrative Harness could report `11` current rows and `32` later
+    rows while the selected scope named `14` current nodes and `28` deferred
+    nodes.
+  - Scheduler/action-state logic problem: `Start` used the distorted selected
+    scope to conclude that task `task-150` still needed proof even though
+    release readiness correctly reported the selected release as ready with
+    `11 / 11` done and no proof blockers.
+  - UI communication/orientation problem: Overview and Map could not honestly
+    communicate completion while the top action still pointed at a stale proof
+    blocker.
+- Fix:
+  - Scope row execution now removes split parent rows whenever visible child
+    rows exist, not only when those children are included/current.
+  - Scope normalization now preserves deferred parent/child membership during
+    child expansion instead of promoting non-shelved children back into
+    included/current work.
+  - Orientation-spine regression now covers a stale selected scope where a
+    deferred split parent and child row must remain deferred and must not
+    inflate the executable ledger.
+- Contract Touch Decision:
+  - Touched contracts: project scope projection executable-row contract,
+    orientation spine selected-scope normalization, summary/progress counts,
+    and Start/Resume terminal-state agreement through the shared selected scope.
+  - Contracts considered but not touched: persisted task schema, persisted
+    release schema, release readiness response shape, proof-path persistence,
+    scheduler run execution, Overview component logic, Project Map component
+    logic, and workspace-import draft schema.
+  - Existing data impact: no migration. Persisted Narrative Harness task data
+    is unchanged; the runtime read model no longer treats deferred split
+    containers as executable/current work.
+  - Required follow-up: continue reducing duplicated terminal/proof/readiness
+    logic so release readiness and start readiness cannot drift when a project
+    has nested tasks, hidden steps, or deferred child work.
+  - Proof required: focused projection/orientation tests, installed-app proof,
+    stale-server proof, live Narrative Harness API proof, and rendered browser
+    proof for Overview and Map at desktop and mobile/narrow geometry.
+  - Proof provided: before the fix, live
+    `/api/project?projectId=narrative-harness` reported `releaseReadiness.ready:
+    true` and `proofMissingDoneTasks: []`, but `startReadiness.code:
+    proof_evidence_missing` for `task-150`; selected scope had `14` included
+    nodes and `28` deferred nodes while scope rows reported `11` included and
+    `32` deferred. After the fix and installed restart, `/api/stale-server`
+    returned `stale:false` for PID `84964`; live
+    `/api/project?projectId=narrative-harness` reported selected release `11`
+    nodes and `0` deferred, selected scope `11` nodes and `31` deferred,
+    scope rows `11` included and `31` deferred, empty `extraIncluded`,
+    `missingIncluded`, `extraDeferred`, and `missingDeferred`, summary
+    `Stage 1 Headless Drafting And Evaluation MVP is complete`, progress total
+    `42`, `11` done, `31` deferred, `topBlocker: null`, `startReadiness.code:
+    all_terminal`, `releaseReadiness.ready: true`, and
+    `proofMissingDoneTasks: []`.
+  - Browser proof provided: Overview at `1280x720` showed the selected scope as
+    complete, Work mix `11 Current scope` and `31 Deferred`, Current release
+    `11 / 11 done`, At a glance `11 work items in view · 0 missing verification
+    · 0 blocked · 11 verified · 31 deferred`, and Next run explaining the
+    selected scope is complete; it did not show the stale proof blocker. Map at
+    `1280x720` showed release scope `11 assigned work items`, `31 later work
+    items`, `0 gaps`, Scope ledger `11 current work items · 31 later work
+    items`, source-backed NOW/LATER rows, and no page-level horizontal overflow
+    (`scrollWidth: 1280`, `clientWidth: 1280`, no offenders). Map at `390x844`
+    also showed complete/`11`/`31`, no stale proof blocker, no horizontal
+    overflow (`scrollWidth: 390`, `clientWidth: 390`, no offenders).
+    `project-orientation-spine.test.ts` and `project-scope-projection.test.ts`
+    passed with `ProjectOverviewTab.svelte.test.ts` for `102` tests total;
+    `tsc -p packages/ui/tsconfig.json` passed; `CI=true pnpm lint:contracts`
+    passed and found contract decision evidence.
+  - Apply/revert behavior: reverting restores the failure where deferred split
+    parents can inflate later counts, child splits can be promoted back into
+    current scope, and Start can block a complete selected release on proof for
+    deferred/container work.

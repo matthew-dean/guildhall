@@ -2260,6 +2260,16 @@ describe('buildProjectOrientationSpine', () => {
         domain: 'knit',
         status: 'blocked',
         releaseIds: [],
+        hierarchy: { childIds: ['task-demoted-child'] },
+      },
+      {
+        id: 'task-demoted-child',
+        title: 'Deferred child split',
+        description: 'A child split that raw release expansion included but projection marks deferred.',
+        domain: 'knit',
+        status: 'done',
+        releaseIds: [],
+        hierarchy: { parentId: 'task-old-blocker', relation: 'decomposes' },
       },
     ] as any[]
     const releases = [{
@@ -2268,17 +2278,88 @@ describe('buildProjectOrientationSpine', () => {
       kind: 'release',
       state: 'active',
       source: 'release_plan',
-      nodeIds: ['work:task-current'],
+      nodeIds: ['work:task-current', 'work:task-demoted-child'],
       deferredNodeIds: [],
       proofStyle: 'unspecified',
     }] as any[]
-    const scopeProjection = buildProjectScopeProjection({
-      version: 1,
-      lastUpdated: '2026-07-07T01:35:00.000Z',
-      selectedReleaseId: 'stage-1-v1-release-hardening',
-      releases,
-      tasks,
-    })
+    const scopeProjection = {
+      selectedScope: {
+        id: 'stage-1-v1-release-hardening',
+        label: 'Stage 1: V1 Release Hardening',
+        kind: 'release',
+        source: 'release_plan',
+        nodeIds: ['work:task-current', 'work:task-demoted-child'],
+        deferredNodeIds: ['work:task-old-blocker'],
+      },
+      rows: [
+        {
+          taskId: 'task-current',
+          title: 'Materialized release task',
+          scope: 'included',
+          eligibilityReason: 'included',
+          hierarchyRole: 'root',
+          status: 'import_draft',
+          handoffState: 'not_shaped',
+          blocksStart: true,
+          blocksRelease: true,
+          humanBlocking: true,
+          sourceRefs: [],
+        },
+        {
+          taskId: 'task-old-blocker',
+          title: 'Floating toolbar',
+          scope: 'deferred',
+          eligibilityReason: 'deferred',
+          hierarchyRole: 'parent',
+          status: 'blocked',
+          handoffState: 'deferred',
+          blocksStart: false,
+          blocksRelease: false,
+          humanBlocking: false,
+          sourceRefs: [],
+        },
+        {
+          taskId: 'task-demoted-child',
+          title: 'Deferred child split',
+          parentTaskId: 'task-old-blocker',
+          scope: 'deferred',
+          eligibilityReason: 'deferred',
+          hierarchyRole: 'child',
+          status: 'done',
+          handoffState: 'deferred',
+          blocksStart: false,
+          blocksRelease: false,
+          humanBlocking: false,
+          sourceRefs: [],
+        },
+      ],
+      counts: {
+        included: 1,
+        deferred: 1,
+        ready: 0,
+        paused: 0,
+        active: 0,
+        done: 0,
+        ownerBlocked: 1,
+        proofBlocked: 0,
+        humanBlocking: 1,
+      },
+      start: {
+        canStart: false,
+        code: 'imported_scope_shaping',
+        label: 'Review',
+        focusTaskId: 'task-current',
+        focusTaskTitle: 'Materialized release task',
+        focusKind: 'brief_cleanup',
+        count: 1,
+        message: 'Current work needs shaping.',
+        actionHref: '/task/task-current',
+      },
+      release: {
+        state: 'shaping',
+        blockers: [],
+      },
+    } as any
     const spine = buildProjectOrientationSpine({
       projectId: 'looma-knit',
       now: '2026-07-07T01:35:00.000Z',
@@ -2288,8 +2369,9 @@ describe('buildProjectOrientationSpine', () => {
       scopeProjection,
     })
 
-    expect(spine.scopeRows.filter(row => row.scope === 'deferred').map(row => row.nodeId)).toEqual(['work:task-old-blocker'])
-    expect(spine.scope?.deferredNodeIds).toEqual(['work:task-old-blocker'])
+    expect(spine.scopeRows.filter(row => row.scope === 'deferred').map(row => row.nodeId)).toEqual(['work:task-demoted-child'])
+    expect(spine.scope?.nodeIds).toEqual(['work:task-current'])
+    expect(spine.scope?.deferredNodeIds).toEqual(['work:task-demoted-child'])
     expect(spine.summary.deferredWorkCount).toBe(1)
     expect(spine.summary.progress.deferred).toBe(1)
   })

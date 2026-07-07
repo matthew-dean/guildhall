@@ -576,7 +576,7 @@ function summarizeRows(rows: readonly ProjectScopeRow[]): ProjectScopeProjection
 export function executionScopeRows(rows: readonly ProjectScopeRow[]): ProjectScopeRow[] {
   const visibleChildParentIds = new Set(
     rows
-      .filter(row => row.parentTaskId && row.scope === 'included')
+      .filter(row => row.parentTaskId)
       .map(row => row.parentTaskId!),
   )
   return rows.filter(row => row.hierarchyRole !== 'parent' || !visibleChildParentIds.has(row.taskId))
