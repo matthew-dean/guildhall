@@ -29077,3 +29077,77 @@ selected-scope readiness ordering.
     repository-follow-up caching.
 - Schema Migration Decision: no persisted schema field was added, removed, or
   retyped. This is a shared derived-state/read-model extraction only.
+
+## 2026-07-07T14:55:00Z - Installed-app proof command must be noninteractive-safe
+
+- User job:
+  - Agents should be able to run the documented installed-app proof lane
+    (`pnpm dev:install`, `guildhall stop`, `guildhall start`,
+    `/api/stale-server`) without an unrelated package-manager preflight
+    mutating the workspace or failing before Guildhall's installer script runs.
+  - This matters for the calibration goal because browser/API proof must come
+    from the fresh installed app, not from a stale app or a manual bypass.
+- Root cause classification:
+  - Runtime/provider/infrastructure problem: pnpm 11 defaults
+    `verify-deps-before-run` to `install`. When its workspace-state check
+    thought this repo's `node_modules` was out of sync, `pnpm dev:install`
+    auto-ran `pnpm install --production` before executing Guildhall's script.
+    In a non-TTY shell that production install tried to purge modules and
+    failed with `ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY`.
+  - Bad project data produced by an earlier Guildhall bug: the previous failed
+    install path left this checkout in a production-only dependency state once,
+    which then exposed the pre-script mutation behavior and temporarily removed
+    `tsc` from `node_modules/.bin`.
+  - UI communication/orientation problem: when the install proof lane is
+    brittle, agents can accidentally verify an old app build and report
+    product state that is not what the owner is actually seeing.
+- Investigation:
+  - `pnpm dev:install` reproduced the failure before printing the package
+    script body.
+  - Reading pnpm's `runDepsStatusCheck` implementation showed the failing
+    command is synthesized from `verifyDepsBeforeRun: install`, which calls
+    `runPnpmCli(["install", "--production"])` before the requested script.
+  - `pnpm_config_verify_deps_before_run=false pnpm dev:install` bypassed that
+    pre-script mutation and proved Guildhall's `scripts/dev-install.mjs` path
+    itself works.
+  - `.npmrc` did not surface either `verify-deps-before-run=false` or
+    `verifyDepsBeforeRun=false` through `pnpm config get`; `pnpm-workspace.yaml`
+    did surface `verifyDepsBeforeRun:false`.
+- Fix:
+  - Added `verifyDepsBeforeRun: false` to `pnpm-workspace.yaml`.
+  - This keeps `pnpm dev:install` from auto-repairing/mutating dependencies
+    before Guildhall's installer script runs. If dependencies are genuinely
+    missing, the script now fails at the actual missing tool boundary instead
+    of silently converting the workspace to production-only dependencies.
+- Proof provided:
+  - `pnpm config get verifyDepsBeforeRun` returned `false`.
+  - Exact command `pnpm dev:install` passed with no environment override and
+    printed `$ node ./scripts/dev-install.mjs` immediately, then installed the
+    current branch artifact.
+  - After `guildhall stop && guildhall start`, `/api/stale-server` returned
+    `stale:false`, PID `26866`,
+    `bootBuildMtimeMs:1783435694368`, and
+    `currentBuildMtimeMs:1783435694368`.
+  - Installed calibration API proof stayed correct:
+    - Narrative Harness release-readiness returned `ready:true`, selected
+      `Stage 1 Headless Drafting And Evaluation MVP`, `tasks:11`, `done:11`,
+      `blockingCount:0`, `dirtyCheckoutBlockingCount:0`, and
+      `gitStoryBlockingCount:0`.
+    - Looma + Knit release-readiness returned `ready:false`, selected
+      `Stage 1: V1 Release Hardening`, `tasks:5`, `blockingCount:8`,
+      `dirtyCheckoutBlockingCount:1`, and `gitStoryBlockingCount:2`.
+- Contract Touch Decision:
+  - Work id: `dev-install-noninteractive-proof-lane`.
+  - Touched contracts: package-manager workspace behavior for script execution.
+  - Contracts considered but not touched: installer script contract, macOS
+    package layout, installed app runtime contract, persisted project/task
+    schemas, release-readiness API payload.
+  - Required follow-up: none for the immediate proof lane. If this repo later
+    needs automatic dependency repair before scripts, it should be added as an
+    explicit script or documented command, not as a pre-script mutation hidden
+    behind `pnpm run`.
+  - Apply/revert behavior: reverting restores pnpm's default pre-script
+    dependency mutation and can reintroduce noninteractive `pnpm dev:install`
+    failures or production-only workspace installs.
+- Schema Migration Decision: no persisted Guildhall schema field was added,
+  removed, or retyped. This is package-manager configuration only.
