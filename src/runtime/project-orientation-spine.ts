@@ -1505,10 +1505,16 @@ function duplicateScopeConflictGaps(
       seenPairs.add(key)
       const richer = taskTitle(left).length >= taskTitle(right).length ? left : right
       const other = richer === left ? right : left
+      const refs = [
+        `task:${richer.id}`,
+        `task:${other.id}`,
+        ...sourceRefsForTask(richer),
+        ...sourceRefsForTask(other),
+      ]
       gaps.push({
         kind: 'source_conflict',
         label: `Possible duplicate work is split across scopes: "${taskTitle(richer)}" overlaps "${taskTitle(other)}".`,
-        refs: [...new Set([...sourceRefsForTask(richer), ...sourceRefsForTask(other)])],
+        refs: [...new Set(refs)],
         severity: 'warn',
       })
     }

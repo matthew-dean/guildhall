@@ -25796,3 +25796,64 @@ selected-scope readiness ordering.
   - Apply/revert behavior: reverting restores the dangerous state where a
     selected scope can be all-terminal or require repository follow-up while
     the same shared orientation spine says source truth is conflicted.
+
+## 2026-07-06 — Source conflicts carry actionable task refs
+
+- Work id: `codex:actionable-source-conflict-refs-2026-07-06`.
+- User job: when the Project Map says current scope has a source conflict, the
+  user must be able to open the involved work from the map instead of manually
+  inferring which tasks the source documents refer to.
+- Root-cause classification:
+  - Data model/schema problem: `OrientationGap.refs` had to serve both
+    provenance and action routing, but duplicate-scope conflicts only kept
+    document refs when document refs existed.
+  - Project structure/scope/release modeling problem: the conflict was about
+    two differently scoped work records, yet the gap payload did not identify
+    those records.
+  - UI communication/orientation problem: Project Map already made gap rows
+    interactive when a `task:` ref was present, but real source-conflict rows
+    could render as passive explanations.
+  - Bad project data produced by an earlier Guildhall bug: the Narrative
+    Harness DeepInfra duplicate remains intentionally visible until importer
+    reconciliation fixes the underlying duplicate.
+- Fix:
+  - Duplicate-scope source-conflict gaps now retain `task:<id>` refs for both
+    involved tasks and keep the existing source-document refs for provenance.
+  - Project Map regression coverage now proves source-conflict gaps with task
+    refs are clickable and route through the existing task navigation path.
+- Contract Touch Decision:
+  - Touched contracts: orientation-spine gap refs for
+    `source_conflict`, Project Map gap interaction expectations, and the
+    owner-visible behavior of `Gaps to resolve`.
+  - Contracts considered but not touched: persisted task schema,
+    release/scope membership mutation, workspace-import schema, Start
+    readiness code, and Project Map layout primitives.
+  - Existing data impact: no migration. Existing duplicate source conflicts
+    gain actionable task refs at read-model build time.
+  - Required follow-up: add a reconciliation action that can merge/promote or
+    defer the conflicting work through the existing import/reintake model,
+    rather than leaving the owner to fix task membership manually.
+  - Proof required: failing orientation regression for task refs on
+    duplicate-scope conflicts, failing/updated Project Map regression for an
+    interactive source-conflict gap, full affected runtime/UI suites, contract
+    advisory, installed-app proof, live API proof, and browser click proof.
+  - Proof provided: the orientation regression first failed because the
+    `source_conflict` refs contained only import docs. After the fix,
+    `./node_modules/.bin/vitest run src/runtime/__tests__/project-orientation-spine.test.ts`
+    passed (`58` tests) and
+    `./node_modules/.bin/vitest run src/web/surfaces/project/__tests__/ProjectMapTab.svelte.test.ts`
+    passed (`7` tests). The combined affected-suite run passed (`65` tests),
+    `git diff --check` passed, and `CI=true pnpm lint:contracts` passed after
+    this decision evidence was recorded. `node ./build.mjs` and
+    `node ./scripts/dev-install.mjs` passed; after service restart,
+    `/api/stale-server` returned `stale:false` for PID `88564`. Live
+    `/api/project?projectId=narrative-harness` showed the source conflict with
+    `task:task-select-and-prove-a-deep-infra-drafting-model-for-broad-genre-chapter-writing`,
+    `task:task-import-lu6waj`, and source-document refs. Browser proof on
+    `/projects/narrative-harness/map` found a clickable `Source Conflict` gap,
+    clicked it, and landed on
+    `/projects/narrative-harness/task/task-select-and-prove-a-deep-infra-drafting-model-for-broad-genre-chapter-writing`
+    with no horizontal overflow at `1280px`.
+  - Apply/revert behavior: reverting restores passive source-conflict gaps
+    where Guildhall can name a contradiction but cannot route the owner to the
+    work records that need reconciliation.

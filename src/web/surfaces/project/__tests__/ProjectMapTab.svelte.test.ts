@@ -144,10 +144,10 @@ describe('ProjectMapTab', () => {
             },
           ],
           gaps: [{
-            kind: 'proof_needed',
-            label: 'Proof needed: Coherence reviewer MVP.',
+            kind: 'source_conflict',
+            label: 'Possible duplicate work is split across scopes: Coherence reviewer MVP overlaps Coherence reviewer CLI proof.',
             severity: 'warn',
-            refs: ['task:task-a'],
+            refs: ['import:docs/harness/implementation-roadmap.md', 'task:task-a'],
           }],
           sourceHealth: { inferred: 1, gaps: 1 },
         },
@@ -173,6 +173,11 @@ describe('ProjectMapTab', () => {
     expect(screen.getByText('1 current work item · 1 later work item')).toBeInTheDocument()
     expect(screen.getByText('Paused · directly assigned · Source: implementation-roadmap.md')).toBeInTheDocument()
     expect(screen.getByText('Deferred · later scope · Source: architecture-notes.md')).toBeInTheDocument()
+    const sourceConflictGap = screen.getByRole('button', {
+      name: /Possible duplicate work is split across scopes: Coherence reviewer MVP overlaps Coherence reviewer CLI proof/i,
+    })
+    await fireEvent.click(sourceConflictGap)
+    expect(path.value).toBe('/projects/narrative-harness/task/task-a')
     expect(screen.getByRole('heading', { name: 'Proof contract' })).toBeInTheDocument()
     expect(screen.getByText('Script or command proof for Coherence reviewer MVP.')).toBeInTheDocument()
     expect(screen.getByText('2 source documents')).toBeInTheDocument()
@@ -187,10 +192,6 @@ describe('ProjectMapTab', () => {
     expect(container.querySelector('.source-row')).toBeNull()
 
     await fireEvent.click(screen.getByRole('button', { name: 'Coherence reviewer MVP Active' }))
-    expect(path.value).toBe('/projects/narrative-harness/task/task-a')
-
-    path.value = '/'
-    await fireEvent.click(screen.getByRole('button', { name: 'Proof Needed Proof needed: Coherence reviewer MVP. Open the linked work item to resolve this gap.' }))
     expect(path.value).toBe('/projects/narrative-harness/task/task-a')
   })
 

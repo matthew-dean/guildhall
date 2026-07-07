@@ -954,6 +954,8 @@ describe('buildProjectOrientationSpine', () => {
       severity: 'warn',
       label: expect.stringContaining('legal adult fiction'),
       refs: expect.arrayContaining([
+        'task:task-model-current',
+        'task:task-model-owner',
         'import:/tmp/narrative-harness/docs/harness/implementation-roadmap.md',
         'import:/tmp/narrative-harness/docs/product/deepinfra-drafting-model-selection.md',
       ]),
