@@ -26657,3 +26657,69 @@ selected-scope readiness ordering.
     blocked proof-recovery tasks appear effectively done again.
 - Schema Migration Decision: no persisted schema field was added, removed, or
   retyped. This changes shared projections over existing task/proof state.
+
+## 2026-07-07T08:35:08Z - Start readiness must prioritize blocked scoped work over duplicate proof rows
+
+- User job:
+  - When the current scope/release has both a blocked proof-recovery task and a
+    duplicate completed row missing the same proof, Guildhall should tell the
+    user the scope is blocked, name the blocked task, and explain why it blocks
+    Start/Resume. It should not send the user to attach proof to the duplicate
+    row first.
+- Finding:
+  - Root cause classification:
+    - Project structure/scope/release modeling problem: selected-release
+      terminal handling treated blocked rows as terminal bookkeeping before the
+      scope projection could explain them as live scoped blockers.
+    - Task hierarchy/dependency/proof modeling problem: the shared scope row
+      marked blocked work but discarded the block reason, so downstream
+      surfaces could not explain why the task blocked execution.
+    - Scheduler/action-state logic problem: Start readiness could fall through
+      to proof-missing completed work even when an in-scope blocked task was the
+      real thing preventing unattended progress.
+- Fix:
+  - Project-scope rows now carry `blockerSummary` from `blockReason` or the
+    latest open escalation, and blocked included rows produce a
+    `blocked_work` Start focus before proof-missing duplicate rows.
+  - Selected-release terminal proof cleanup now yields to the shared
+    task-readiness projection when any scoped task is blocked.
+- Proof provided so far:
+  - `CI=true ./node_modules/.bin/vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts -t "prioritizes
+    blocked release work"` passed.
+  - `CI=true ./node_modules/.bin/vitest run
+    src/runtime/__tests__/project-scope-projection.test.ts
+    src/runtime/__tests__/serve-release-readiness.test.ts -t
+    "blocked|proof|done|release|scope|start readiness"` passed (`63` tests,
+    `4` skipped).
+  - `CI=true pnpm lint:contracts` passed, `CI=true pnpm install || true`
+    restored dev dependencies afterward, and `node ./build.mjs` passed.
+  - `CI=true pnpm dev:install` installed the current branch artifact, followed
+    by `guildhall stop` and `guildhall start`; `/api/stale-server` returned
+    `stale:false` for PID `74619`.
+  - Installed API proof:
+    `/api/project?projectId=narrative-harness&surface=map` reports
+    `startReadiness.code:"no_unattended_progress"`,
+    `focusKind:"blocked_work"`, and
+    `focusTaskId:"task-select-and-prove-a-deep-infra-drafting-model-for-broad-genre-chapter-writing"`
+    with the max-revisions escalation reason. The duplicate imported row
+    remains only in `proofMissingDoneTasks`.
+  - Installed browser proof:
+    `/projects/narrative-harness/overview` visibly shows `Needs recovery`,
+    `Open Work` linking to the blocked DeepInfra task, `Current release` as
+    `11 / 12 done · 1 unfinished · 1 needs you`, `Blocked work`, `Next run`,
+    and the max-revisions escalation reason.
+- Contract Touch Decision:
+  - Work id: start-readiness-blocked-proof-recovery-priority.
+  - Touched contracts: project-scope projection rows, Start/Resume readiness
+    focus ordering, release blocker labels, selected-release terminal handling.
+  - Contracts considered but not touched: persisted task schema, release schema,
+    proof-path schema, task retry mutation semantics, duplicate task merge
+    semantics.
+  - Required follow-up: continue with duplicate-task/source-provenance cleanup
+    so the older imported DeepInfra proof row is reconciled instead of merely
+    deprioritized.
+  - Apply/revert behavior: reverting can hide blocked scoped work behind a
+    duplicate completed proof row again.
+- Schema Migration Decision: no persisted schema field was added, removed, or
+  retyped. This adds a derived field to the shared scope projection only.

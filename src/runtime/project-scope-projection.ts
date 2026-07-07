@@ -43,6 +43,7 @@ export interface ProjectScopeRow {
   blocksStart: boolean
   blocksRelease: boolean
   humanBlocking: boolean
+  blockerSummary?: string
   sourceRefs: string[]
 }
 
@@ -66,7 +67,7 @@ export interface ProjectScopeProjection {
     label: 'Start' | 'Resume' | 'Review' | 'Configure'
     focusTaskId?: string
     focusTaskTitle?: string
-    focusKind?: 'paused_work' | 'ready_work' | 'spec_review' | 'brief_cleanup' | 'provider' | 'terminal'
+    focusKind?: 'paused_work' | 'ready_work' | 'spec_review' | 'brief_cleanup' | 'blocked_work' | 'provider' | 'terminal'
     count?: number
     message: string
     actionHref: string
@@ -456,6 +457,7 @@ function buildScopeRow(
     blocksStart: scope === 'included' && humanBlocking,
     blocksRelease: scope === 'included' && (humanBlocking || handoffState === 'blocked'),
     humanBlocking,
+    ...(handoffState === 'blocked' ? { blockerSummary: blockerSummaryForTask(task) } : {}),
     sourceRefs: sourceRefsForTask(task),
   }
 }
@@ -529,6 +531,16 @@ function humanBlockingFor(task: Task, handoffState: ProjectScopeHandoffState, sc
   if (scope === 'deferred') return false
   if (handoffState === 'brief_cleanup' || handoffState === 'not_shaped' || handoffState === 'blocked') return true
   return handoffState === 'spec_review' && specReviewRequiresOwnerApproval(task)
+}
+
+function blockerSummaryForTask(task: Task): string {
+  const blockReason = task.blockReason?.trim()
+  if (blockReason) return blockReason
+  const openEscalation = (task.escalations ?? [])
+    .filter(escalation => !escalation.resolvedAt)
+    .slice()
+    .sort((left, right) => (right.raisedAt ?? '').localeCompare(left.raisedAt ?? ''))[0]
+  return openEscalation?.summary?.trim() || 'Blocked before unattended work can run.'
 }
 
 function isProjectSetupTask(taskId: string): boolean {
@@ -626,6 +638,24 @@ function summarizeStart(rows: readonly ProjectScopeRow[], selectedScope: Project
       actionHref: `/work?task=${encodeURIComponent(specWork.taskId)}`,
     }
   }
+  const blocked = included.find(row => row.handoffState === 'blocked')
+  if (blocked) {
+    const count = included.filter(row => row.handoffState === 'blocked').length
+    const reason = blocked.blockerSummary?.trim()
+    return {
+      canStart: false,
+      code: 'no_unattended_progress',
+      label: 'Review',
+      focusTaskId: blocked.taskId,
+      focusTaskTitle: blocked.title,
+      focusKind: 'blocked_work',
+      count,
+      message: count === 1
+        ? `"${blocked.title}" is blocked before unattended work can run${reason ? `: ${reason}` : '.'}`
+        : `${count} work items are blocked before unattended work can run. Start with "${blocked.title}".`,
+      actionHref: `/work?task=${encodeURIComponent(blocked.taskId)}`,
+    }
+  }
   const briefCleanup = included.find(row => row.handoffState === 'brief_cleanup' || row.handoffState === 'not_shaped')
   if (briefCleanup) {
     const count = included.filter(row => row.handoffState === 'brief_cleanup' || row.handoffState === 'not_shaped').length
@@ -696,6 +726,6 @@ function blockerLabelFor(row: ProjectScopeRow): string {
     return `${title}: needs a clearer brief before unattended work can run.`
   }
   if (row.handoffState === 'spec_review') return `${title}: waiting for review before work can start.`
-  if (row.handoffState === 'blocked') return `${title}: blocked.`
+  if (row.handoffState === 'blocked') return `${title}: ${row.blockerSummary ?? 'blocked.'}`
   return `${title}: needs attention.`
 }

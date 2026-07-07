@@ -6578,6 +6578,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     if (actionable > 0) return null
 
     const detailMessage = `No actionable tasks remain: ${done} done, ${blocked} blocked, ${shelved} shelved, ${pendingPr} pending PR, ${archived} archived, ${cancelled} cancelled.`
+    if (selectedReleaseScope && blocked > 0) return null
     if (proofMissingDoneTasks.length > 0) {
       const first = proofMissingDoneTasks[0]!
       const scopeLabel = selectedReleaseScope?.label ?? 'Current task scope'

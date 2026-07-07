@@ -241,6 +241,7 @@ describe('buildProjectScopeProjection', () => {
       scope: 'included',
       eligibilityReason: 'included',
       handoffState: 'blocked',
+      blockerSummary: 'Needs recovery.',
       blocksRelease: true,
     })
     expect(projection.rows.find(row => row.taskId === 'spec-review-task')).toMatchObject({
@@ -252,9 +253,10 @@ describe('buildProjectScopeProjection', () => {
     expect(projection.start).toMatchObject({
       canStart: false,
       code: 'no_unattended_progress',
-      focusTaskId: 'spec-review-task',
-      focusKind: 'spec_review',
+      focusTaskId: 'blocked-task',
+      focusKind: 'blocked_work',
     })
+    expect(projection.start.message).toContain('Needs recovery.')
     expect(projection.release).toMatchObject({
       state: 'blocked',
       blockers: [

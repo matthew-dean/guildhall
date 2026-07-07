@@ -606,6 +606,112 @@ describe('GET /api/project/release-readiness', () => {
     })
   })
 
+  it('prioritizes blocked release work over duplicate completed proof rows in start readiness', async () => {
+    const proofPath = {
+      kind: 'review',
+      expectedEvidence: [
+        'DeepInfra drafting telemetry recorded refusal behavior, cost, latency, and voice preservation.',
+      ],
+    }
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: 'headless-mvp',
+      releases: [{
+        id: 'headless-mvp',
+        label: 'Headless MVP',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-blocked-proof', 'work:task-duplicate-proof'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [
+        makeTask({
+          id: 'task-blocked-proof',
+          title: 'Select and prove a DeepInfra drafting model for legal adult fiction',
+          status: 'blocked',
+          releaseIds: ['headless-mvp'],
+          blockReason: 'max_revisions_exceeded: Worker hit its turn budget while creating proof.',
+          proofPaths: [proofPath],
+          doneSummaryBundle: {
+            taskId: 'task-blocked-proof',
+            status: 'done',
+            completedAt: '2026-07-06T20:00:00.000Z',
+            summary: {
+              journey: 'Worker attempted to prove provider drafting.',
+              decision: 'Task did not finish; proof recovery is blocked.',
+              evidence: 'content.no-truncated-data passed.',
+              learningCandidates: [],
+              openResidue: 'Worker hit its turn budget while creating proof.',
+            },
+            retention: {
+              transcriptPrimaryArtifact: false,
+              compactedFullTranscript: false,
+              fullEvidenceAvailable: true,
+            },
+            evidenceRefs: [],
+            createdAt: '2026-07-06T20:00:00.000Z',
+            createdBy: 'orchestrator',
+          },
+          gateResults: [{
+            gateId: 'content.no-truncated-data',
+            type: 'hard',
+            passed: true,
+            output: 'no truncated content',
+            checkedAt: '2026-07-06T20:00:00.000Z',
+          }],
+          reviewVerdicts: [{
+            verdict: 'approve',
+            reviewerPath: 'llm',
+            reason: 'LLM reviewer approved',
+            reasoning: 'All acceptance criteria are met.',
+            failingSignals: [],
+            recordedAt: '2026-07-06T20:00:00.000Z',
+          }],
+          escalations: [{
+            id: 'esc-1',
+            taskId: 'task-blocked-proof',
+            agentId: 'coordinator',
+            reason: 'max_revisions_exceeded',
+            summary: 'Worker hit its turn budget while creating proof.',
+            raisedAt: '2026-07-06T20:10:00.000Z',
+          }],
+        } as Partial<Task>),
+        makeTask({
+          id: 'task-duplicate-proof',
+          title: 'Select and prove a DeepInfra drafting model for broad-genre chapter writing',
+          status: 'done',
+          releaseIds: ['headless-mvp'],
+          proofPaths: [proofPath],
+        } as Partial<Task>),
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await approveDesignSystem(app)
+    await commitAndPush('blocked proof recovery start readiness')
+
+    const projectRes = await app.fetch(new Request(projectUrl('/api/project')))
+    expect(projectRes.status).toBe(200)
+    const project = await projectRes.json() as any
+    expect(project.startReadiness).toMatchObject({
+      canStart: false,
+      code: 'no_unattended_progress',
+      focusTaskId: 'task-blocked-proof',
+      focusKind: 'blocked_work',
+    })
+    expect(project.startReadiness?.message).toContain('Worker hit its turn budget')
+
+    const readinessRes = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
+    const readiness = await readinessRes.json() as any
+    expect(readiness.openEscalations.map((item: any) => item.taskId)).toEqual(['task-blocked-proof'])
+    expect(readiness.proofMissingDoneTasks).toEqual([{
+      id: 'task-duplicate-proof',
+      title: 'Select and prove a DeepInfra drafting model for broad-genre chapter writing',
+    }])
+  })
+
   it('accepts recorded completion proof even when imported proof paths lack inline verification records', async () => {
     const importedProofPath = {
       kind: 'review',
