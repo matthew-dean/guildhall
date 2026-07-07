@@ -6771,7 +6771,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
         },
       }
     }
-    const sourceConflict = scopedOrientation?.orientationSpine.gaps.find(gap => gap.kind === 'source_conflict')
+    const sourceConflict = scopedOrientation?.orientationSpine.gaps.find(gap =>
+      gap.kind === 'source_conflict' && gap.severity === 'blocker',
+    )
     if (sourceConflict) {
       const scopeLabel = selectedReleaseScope?.label ?? 'Current task scope'
       return {

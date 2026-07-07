@@ -498,8 +498,16 @@ export function augmentTasksWithWorkspaceImportDraft(input: {
 
   for (const draftTask of draft.tasks) {
     const existing = idToTask.get(draftTask.id) ?? titleToTask.get(normalizeText(draftTask.title))
+    const scopedReplacement = scopedReleaseReplacementForDraftTask(draftTask, existing, augmented)
     const taskId = existing?.id ?? draftSyntheticTaskId(draftTask.id)
     const importedRefs = draftTask.refs?.map(stripImportPrefix).filter(Boolean) ?? []
+
+    if (scopedReplacement) {
+      if ((!scopedReplacement.references || scopedReplacement.references.length === 0) && importedRefs.length > 0) {
+        scopedReplacement.references = importedRefs
+      }
+      continue
+    }
 
     if (existing && (!existing.references || existing.references.length === 0) && importedRefs.length > 0) {
       existing.references = importedRefs
@@ -616,6 +624,25 @@ function slugifyReleaseId(label: string): string {
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
   return slug || 'current-release'
+}
+
+function scopedReleaseReplacementForDraftTask(
+  draftTask: OrientationWorkspaceImportDraftTask,
+  existing: OrientationTaskInput | undefined,
+  tasks: OrientationTaskInput[],
+): OrientationTaskInput | null {
+  if (!existing || !draftTask.releaseIds?.length) return null
+  const draftReleaseIds = new Set(draftTask.releaseIds)
+  if ((existing.releaseIds ?? []).some(releaseId => draftReleaseIds.has(releaseId))) return null
+  const draftTitle = draftTask.title.trim()
+  if (!draftTitle) return null
+  return tasks.find((candidate) => {
+    if (candidate.id === existing.id) return false
+    if (candidate.status === 'archived' || candidate.status === 'cancelled' || candidate.status === 'shelved') return false
+    if (!(candidate.releaseIds ?? []).some(releaseId => draftReleaseIds.has(releaseId))) return false
+    if (taskTitleOverlap(taskTitle(candidate), draftTitle) < 0.8) return false
+    return taskTitle(candidate).length >= taskTitle(existing).length
+  }) ?? null
 }
 
 function releaseToScope(release: OrientationRelease | null): OrientationScope | null {
@@ -2068,7 +2095,7 @@ function summaryWithSourceConflicts(
   gaps: readonly OrientationGap[],
 ): ProjectOrientationSummary {
   if (summary.topBlocker) return summary
-  const conflict = gaps.find(gap => gap.kind === 'source_conflict')
+  const conflict = gaps.find(gap => gap.kind === 'source_conflict' && gap.severity === 'blocker')
   if (!conflict) return summary
   const label = summary.selectedScopeLabel ?? summary.selectedReleaseLabel ?? 'Current scope'
   return {

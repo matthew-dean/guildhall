@@ -961,8 +961,8 @@ describe('buildProjectOrientationSpine', () => {
       ]),
     }))
     expect(spine.sourceHealth.gaps).toBeGreaterThan(0)
-    expect(spine.summary.headline).toBe('Stage 1 Headless MVP has source conflicts to review.')
-    expect(spine.summary.nextAction).toBe('Review source conflicts before treating the scope as settled.')
+    expect(spine.summary.headline).toBe('Stage 1 Headless MVP is complete.')
+    expect(spine.summary.nextAction).toBe('Review current work.')
   })
 
   it('does not surface a stale duplicate done row as separate proof work when richer blocked scoped work owns the capability', () => {

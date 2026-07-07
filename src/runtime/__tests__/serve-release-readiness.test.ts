@@ -2556,6 +2556,114 @@ describe('GET /api/project/release-readiness', () => {
     expect(readinessBody.totals.unfinishedCount).toBe(3)
   })
 
+  it('does not widen the selected release with an unscoped import duplicate of scoped work', async () => {
+    const proofPath = {
+      kind: 'review' as const,
+      source: 'inferred' as const,
+      expectedEvidence: [
+        'DeepInfra proof records refusal behavior, repetition, cost, latency, and voice preservation.',
+      ],
+    }
+    await writeProjectStateJsonAsync(tmpDir, 'workspace-goals.json', {
+      version: 3,
+      recordedAt: new Date().toISOString(),
+      goals: [],
+      releases: [{
+        id: 'stage-1-headless-drafting-and-evaluation-mvp',
+        label: 'Stage 1 Headless Drafting And Evaluation MVP',
+        source: 'release_plan',
+        state: 'active',
+      }],
+      tasks: [
+        {
+          id: 'task-stale',
+          title: 'Select and prove a DeepInfra drafting model for broad-genre chapter writing.',
+          description: 'Older approved import row.',
+          domain: 'harness',
+          priority: 'normal',
+          scope: 'current',
+          releaseIds: ['stage-1-headless-drafting-and-evaluation-mvp'],
+          references: [],
+        },
+      ],
+      milestones: [],
+      context: [],
+      approved: {
+        goalCount: 0,
+        taskCount: 1,
+        milestoneCount: 0,
+        currentTaskCount: 1,
+        laterTaskCount: 0,
+        taskIds: ['task-stale'],
+        currentTaskIds: ['task-stale'],
+        laterTaskIds: [],
+      },
+      detected: null,
+    })
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: 'stage-1-headless-drafting-and-evaluation-mvp',
+      releases: [{
+        id: 'stage-1-headless-drafting-and-evaluation-mvp',
+        label: 'Stage 1 Headless Drafting And Evaluation MVP',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-current'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [
+        makeTask({
+          id: 'task-current',
+          title: 'Select and prove a DeepInfra drafting model for broad-genre and legal adult fiction chapter writing.',
+          status: 'done',
+          releaseIds: ['stage-1-headless-drafting-and-evaluation-mvp'],
+          proofPaths: [proofPath],
+          gateResults: [{
+            gateId: 'deepinfra-model-proof',
+            type: 'hard',
+            passed: true,
+            output: 'DeepInfra proof records refusal behavior, repetition, cost, latency, and voice preservation.',
+            checkedAt: '2026-07-07T11:05:00.000Z',
+          }],
+          reviewVerdicts: [{
+            verdict: 'approve',
+            reviewerPath: 'llm',
+            reason: 'LLM reviewer approved.',
+            reasoning: 'All acceptance criteria are met.',
+            failingSignals: [],
+            recordedAt: '2026-07-07T11:04:00.000Z',
+          }],
+        }),
+        makeTask({
+          id: 'task-stale',
+          title: 'Select and prove a DeepInfra drafting model for broad-genre chapter writing.',
+          status: 'done',
+          releaseIds: [],
+          proofPaths: [proofPath],
+        }),
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await approveDesignSystem(app)
+    await commitAndPush('scoped duplicate release proof')
+
+    const projectRes = await app.fetch(new Request(projectUrl('/api/project')))
+    const projectBody = await projectRes.json() as any
+    const readinessRes = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
+    const readinessBody = await readinessRes.json() as any
+
+    expect(projectBody.orientationSpine.scope.nodeIds).toContain('work:task-current')
+    expect(projectBody.orientationSpine.scope.nodeIds).not.toContain('work:task-stale')
+    expect(projectBody.startReadiness?.proofTaskIds ?? []).not.toContain('task-stale')
+    expect(projectBody.startReadiness?.code).not.toBe('proof_evidence_missing')
+    expect(projectBody.startReadiness?.code).not.toBe('scope_source_conflict')
+    expect(readinessBody.scope.nodeIds).toEqual(['work:task-current'])
+    expect(readinessBody.proofMissingDoneTasks).toEqual([])
+  })
+
   it('builds the project spine from effective task proof state, not stale raw task records', async () => {
     await seedQueue({
       version: 1,

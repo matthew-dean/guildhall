@@ -27401,3 +27401,81 @@ selected-scope readiness ordering.
 - Schema Migration Decision: no persisted schema field was added, removed, or
   retyped. This is a shared tool-validation rule over existing provider and
   escalation models.
+
+## 2026-07-07T11:12:46Z - Selected release scope must not widen around stale import duplicates
+
+- User job:
+  - When a project has a selected current release/scope, Start/Resume and the
+    1,000-foot map must use that execution boundary. Older duplicate import
+    rows may be shown as data-quality context, but they must not silently become
+    blockers for the active release when a richer scoped task already represents
+    the same work.
+- Finding:
+  - Root cause classification:
+    - Project structure/scope/release modeling problem: Narrative Harness had a
+      scoped DeepInfra model-proof task in `stage-1-headless-drafting-and-
+      evaluation-mvp`, plus an older unscoped near-duplicate from prior import
+      state. The orientation scope widened the active release with the stale
+      duplicate.
+    - Task hierarchy/dependency/proof modeling problem: the stale duplicate had
+      missing proof, so the active release appeared blocked even though the
+      richer scoped task carried the current proof lane.
+    - UI communication/orientation problem: Overview/Map/Start would tell the
+      user the active release was waiting on the older duplicate, making the
+      current scope look amorphous and contradictory.
+    - Bad project data produced by an earlier Guildhall bug: the duplicate task
+      itself is legacy imported state, but Guildhall must model around that
+      honestly instead of letting old rows redefine the current boundary.
+- Fix:
+  - Workspace-import orientation augmentation now detects when an approved
+    import row maps to an existing stale task but a richer task already owns the
+    same release and has an overlapping title.
+  - In that case the import row can enrich the scoped replacement with source
+    refs, but it does not add the stale duplicate to the selected release
+    execution boundary.
+  - Warning-level duplicate source conflicts remain visible in the Project Map
+    source-health gaps, but no longer become Start/release blockers or overwrite
+    the selected release headline. Only blocker-severity source conflicts stop
+    closure.
+- Proof provided:
+  - Red/green regression:
+    `CI=true ./node_modules/.bin/vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts -t "unscoped import
+    duplicate"` first failed because `orientationSpine.scope.nodeIds` included
+    `work:task-stale`, then passed after the shared orientation projection fix.
+  - Broader release/orientation regression:
+    `CI=true ./node_modules/.bin/vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts` passed (`54`
+    tests).
+  - `CI=true ./node_modules/.bin/vitest run
+    src/runtime/__tests__/project-orientation-spine.test.ts` passed (`60`
+    tests).
+  - Installed-app proof:
+    `CI=true corepack pnpm dev:install && guildhall stop && guildhall start`
+    refreshed the local app, and `/api/stale-server` returned `stale:false`
+    with PID `30679`.
+  - Live Narrative Harness proof after install:
+    `/api/project?projectId=narrative-harness` reports the active scope includes
+    `work:task-select-and-prove-a-deep-infra-drafting-model-for-broad-genre-
+    chapter-writing`, does not include `work:task-import-lu6waj`, and has no
+    proof-missing blocker for the stale duplicate. The duplicate source conflict
+    remains visible as a `warn` gap only. Start readiness now reports the next
+    real blocker as repository follow-up: `main has 3 local commits not pushed
+    to origin/main`.
+- Contract Touch Decision:
+  - Work id: `selected-release-duplicate-import-boundary`.
+  - Touched contracts: project orientation spine selected-scope projection,
+    workspace-import approved/current row interpretation, and Start/readiness
+    release-boundary semantics, including warning-vs-blocker source-conflict
+    severity handling.
+  - Contracts considered but not touched: persisted task schema, persisted
+    release schema, workspace-goals schema, proof-path schema, and task runtime
+    schema.
+  - Required follow-up: install/restart and verify the live Narrative Harness
+    `/api/project` and release-readiness payload no longer include the stale
+    DeepInfra duplicate inside the active release scope or Start proof blockers.
+  - Apply/revert behavior: reverting allows older imported duplicates to widen
+    a selected release and block Start with stale proof requirements.
+- Schema Migration Decision: no persisted schema field was added, removed, or
+  retyped. This is a projection/interpretation fix over existing task,
+  release, and workspace-goals records.
