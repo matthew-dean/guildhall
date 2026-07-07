@@ -26981,3 +26981,75 @@ selected-scope readiness ordering.
     after proof-recovery work has landed.
 - Schema Migration Decision: no persisted schema field was added, removed, or
   retyped. This is a shared derived-state/copy normalization change.
+
+## 2026-07-07T10:16:00Z - Proof recovery evidence must collapse stale escalation rows
+
+- User job:
+  - When the Narrative Harness current release is blocked on the DeepInfra
+    proof, Guildhall must show one clear live blocker. The user should see
+    that the proof command exists and that `DEEPINFRA_API_TOKEN` is missing,
+    not a second stale `max_revisions_exceeded` escalation beside the current
+    provider blocker.
+- Finding:
+  - Root cause classification:
+    - Task hierarchy/dependency/proof modeling problem: the task had a real
+      proof-recovery state and a new failed proof gate, but release readiness
+      still treated the old reviewer-loop escalation as live work.
+    - UI communication/orientation problem: `blockedByAgent` and
+      `releaseBlockers` named the provider token while `openEscalations`
+      still named max revisions, making the release page disagree with itself.
+    - Bad project data produced by an earlier Guildhall bug: older review
+      cycles left `acceptanceCriteria.met:true`, a completion record, and an
+      unresolved max-revisions escalation on a task that now needs live
+      provider proof.
+    - Runtime/provider/infrastructure problem: `corepack pnpm
+      prove:deepinfra-drafting-model` fails until `DEEPINFRA_API_TOKEN` is
+      configured.
+- Fix:
+  - Recorded the live proof attempt as durable task evidence:
+    `gate_result` `prove-deepinfra-drafting-model.live-provider`,
+    `passed:false`, `failureClass:"provider_missing"`, and
+    `missingCredential:"DEEPINFRA_API_TOKEN"`, plus a progress note explaining
+    the command and blocker.
+  - Updated runtime proof recovery for the task to the exact owner-facing
+    provider-missing reason.
+  - Added shared release-readiness filtering so an active proof-recovery
+    reason supersedes a stale `max_revisions_exceeded` escalation for the same
+    task. The historical escalation stays in evidence; it no longer counts as
+    a separate live owner blocker.
+- Proof provided:
+  - `corepack pnpm prove:deepinfra-drafting-model` in Narrative Harness failed
+    with `DEEPINFRA_API_TOKEN is required to run the live drafting model
+    proof.`
+  - `/api/project?projectId=narrative-harness&surface=overview` reported
+    `startReadiness.code:"no_unattended_progress"` with the exact
+    `provider_missing: DEEPINFRA_API_TOKEN...` reason.
+  - Before this fix, `/api/project/release-readiness?projectId=narrative-harness`
+    still returned `openEscalations[0].reason:"max_revisions_exceeded"` while
+    `blockedByAgent[0].reason` named the provider token.
+  - Focused regression:
+    `CI=true ./node_modules/.bin/vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts -t
+    "reconciles a blocked proof-recovery branch|keeps blocked proof recovery"`
+    passed (`2` tests, `51` skipped).
+  - Installed-app proof after `CI=true corepack pnpm dev:install &&
+    guildhall stop && guildhall start`: `/api/stale-server` reported
+    `stale:false` for PID `96043`; release readiness now returns
+    `openEscalations:[]`, one `blockedByAgent` item with the
+    `provider_missing: DEEPINFRA_API_TOKEN...` reason, and the same single
+    release blocker. The task drawer API exposes the failed hard gate and
+    proof-attempt note with the exact command.
+- Contract Touch Decision:
+  - Work id: `proof-recovery-stale-escalation-collapse`.
+  - Touched contracts: release-readiness aggregation of live owner blockers and
+    release blockers.
+  - Contracts considered but not touched: persisted escalation schema, task
+    evidence schema, runtime proof-recovery schema, release schema, and task
+    acceptance-criteria schema.
+  - Required follow-up: model acceptance criteria and proof gates so stale
+    `met:true` criteria cannot keep contradicting current proof recovery.
+  - Apply/revert behavior: reverting reintroduces duplicate live blockers for
+    proof-recovery tasks, making release readiness say both provider-missing
+    and max-revisions for the same task.
+- Schema Migration Decision: no persisted schema field was added, removed, or
+  retyped. This is evidence recording plus shared derived-state filtering.

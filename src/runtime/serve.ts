@@ -2268,6 +2268,16 @@ function summarizeScopedReleaseWork(
     if (!proofAt || !escalation.raisedAt) return false
     return Date.parse(proofAt) > Date.parse(escalation.raisedAt)
   }
+  const proofRecoverySupersedesEscalation = (
+    task: Task,
+    escalation: { reason?: string },
+  ): boolean => {
+    if (escalation.reason !== 'max_revisions_exceeded') return false
+    const blockReason = String((task as { blockReason?: string }).blockReason ?? '')
+    if (!/max_revisions_exceeded:/i.test(blockReason)) return false
+    const currentReason = taskBlockerSummary(task)
+    return Boolean(currentReason) && !/max_revisions_exceeded:/i.test(currentReason)
+  }
   const tasksById = new Map(tasks.map(task => [task.id, task]))
   const scopeProjection = buildProjectScopeProjection(
     { version: 1, lastUpdated: new Date(0).toISOString(), tasks, releases: [] },
@@ -2391,7 +2401,10 @@ function summarizeScopedReleaseWork(
       blockedByAgent.push({ id, title, ...(reason ? { reason } : {}) })
       addReleaseBlocker({ id, title, label: reason?.trim() || `${blockerSubject(title)} is blocked.` })
     }
-    for (const e of activeEscalations(t).filter(e => !completionProofSupersedesEscalation(t, e))) {
+    for (const e of activeEscalations(t).filter(e =>
+      !completionProofSupersedesEscalation(t, e) &&
+      !proofRecoverySupersedesEscalation(t, e)
+    )) {
       const key = escalationKey(id, e.reason, e.summary)
       if (escalationKeys.has(key)) continue
       escalationKeys.add(key)

@@ -751,6 +751,19 @@ describe('GET /api/project/release-readiness', () => {
       focusKind: 'blocked_work',
       count: 1,
     })
+    expect(body.openEscalations).toEqual([])
+    expect(body.blockedByAgent).toEqual([
+      expect.objectContaining({
+        id: 'task-current',
+        reason: 'provider_missing: DEEPINFRA_API_TOKEN is required.',
+      }),
+    ])
+    expect(body.releaseBlockers).toEqual([
+      expect.objectContaining({
+        id: 'task-current',
+        label: 'Current proof recovery lane: provider_missing: DEEPINFRA_API_TOKEN is required.',
+      }),
+    ])
 
     await execFileP('git', ['worktree', 'remove', '--force', taskWorktreePath], { cwd: tmpDir })
   })
