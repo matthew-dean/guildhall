@@ -403,6 +403,14 @@
     return friendlyStatus(reason ?? 'mapped')
   }
 
+  function scopeBoundaryLabel(row: { scope?: string }): string {
+    return row.scope === 'deferred' ? 'Later' : 'Current'
+  }
+
+  function scopeBoundaryTone(row: { scope?: string }): Tone {
+    return row.scope === 'deferred' ? 'neutral' : 'accent'
+  }
+
   function scopeRowTone(row: { scope?: string; handoffState?: string; humanBlocking?: boolean; blocksRelease?: boolean }): Tone {
     if (row.scope === 'deferred') return 'neutral'
     if (row.humanBlocking || row.blocksRelease || row.handoffState === 'blocked' || row.handoffState === 'brief_cleanup') return 'warn'
@@ -582,7 +590,7 @@
               className="scope-ledger-row"
               tone={scopeRowTone(row)}
               dense
-              ariaLabel={scopeRowHref(row) ? `${row.title ?? 'Untitled work'} ${row.scope === 'deferred' ? 'Later' : 'Now'} ${friendlyStatus(row.handoffState ?? row.status ?? 'mapped')}` : undefined}
+              ariaLabel={scopeRowHref(row) ? `${row.title ?? 'Untitled work'} ${scopeBoundaryLabel(row)} ${friendlyStatus(row.handoffState ?? row.status ?? 'mapped')}` : undefined}
               onclick={() => {
                 const href = scopeRowHref(row)
                 if (href) go(href)
@@ -590,7 +598,7 @@
             >
               <div>
                 <div class="scope-ledger-title">
-                  <Chip label={row.scope === 'deferred' ? 'Later' : 'Now'} tone={row.scope === 'deferred' ? 'neutral' : 'accent'} />
+                  <Chip label={scopeBoundaryLabel(row)} tone={scopeBoundaryTone(row)} />
                   <strong>{row.title ?? 'Untitled work'}</strong>
                 </div>
                 <p>{friendlyStatus(row.handoffState ?? row.status ?? 'mapped')} · {scopeReasonLabel(row.eligibilityReason)} · {scopeRowSourceSummary(row)}</p>

@@ -28191,3 +28191,71 @@ selected-scope readiness ordering.
     cue.
 - Schema Migration Decision: no persisted schema field was added, removed, or
   retyped. This changes Thread presentation semantics only.
+
+## 2026-07-07T12:58:40Z - Completed current-scope rows must not read as Now
+
+- User job:
+  - After Narrative Harness current release work is complete, the Project Map
+    should still show which rows belong to the selected/current scope, but it
+    must not label completed rows as `Now` and imply they are actively
+    happening.
+- Finding:
+  - Root cause classification:
+    - Runtime/provider/infrastructure problem: Narrative Harness had one real
+      repository follow-up blocker because `main` was clean but three commits
+      ahead of `origin/main`.
+    - UI communication/orientation problem: once the repository follow-up was
+      resolved and the selected release became ready, Project Map still labeled
+      every current-scope ledger row as `Now`, even though those rows were
+      `Done`.
+    - Project structure/scope/release modeling problem: scope membership and
+      current action were collapsed into one word. A row can be in the current
+      selected release without being active work.
+- Fix:
+  - Acting as owner for this calibration run, Codex pushed Narrative Harness
+    `main` from `79396f6` to `8ad4e9f`, clearing the repository follow-up
+    blocker.
+  - Project Map scope ledger boundary chips now render `Current` for selected
+    scope rows and `Later` for deferred rows. Row status remains a separate
+    chip such as `Done`, `Paused`, or `Blocked`.
+- Proof provided:
+  - Narrative Harness git proof:
+    `/Users/matthew/git/oss/narrative-harness` was clean and ahead of
+    `origin/main` by three Guildhall-generated commits before push; `git push
+    origin main` succeeded.
+  - Live API proof:
+    `/api/project/release-readiness?projectId=narrative-harness` now reports
+    `ready:true`, `tasks:11`, `done:11`, `blockingCount:0`,
+    `unfinishedCount:0`, `gitStoryBlockingCount:0`, and no `releaseBlockers`.
+    `/api/project`, `/api/project/spine`, and `/api/project/thread` also report
+    no release blockers. Start readiness is `all_terminal` with message
+    `Stage 1 Headless Drafting And Evaluation MVP is complete.`
+  - Red/green component regression:
+    `CI=true ./node_modules/.bin/vitest run
+    src/web/surfaces/project/__tests__/ProjectMapTab.svelte.test.ts` passed and
+    asserts the scope ledger says `Current`, not `Now`.
+  - Build/contracts:
+    `node ./build.mjs`, `CI=true corepack pnpm lint:contracts`, and `git diff
+    --check` passed.
+  - Installed/live proof:
+    `CI=true corepack pnpm dev:install`, `guildhall stop`, and
+    `guildhall start` installed and restarted the current branch artifact.
+    `/api/stale-server` returned `stale:false` for PID `31335`.
+    Browser proof against `/projects/narrative-harness/map` shows 11 `CURRENT`
+    scope-ledger rows, 11 `DONE` status chips, zero standalone `NOW` rows, the
+    selected `Stage 1 Headless Drafting And Evaluation MVP` release name, and
+    no repository follow-up copy.
+- Contract Touch Decision:
+  - Work id: `project-map-current-not-now`.
+  - Touched contracts: Project Map scope-ledger presentation semantics and
+    owner-visible release completion evidence for Narrative Harness.
+  - Contracts considered but not touched: persisted task schema, persisted
+    release schema, release-readiness response shape, project action model, and
+    scope projection model.
+  - Required follow-up: install/restart the app and verify the live Project Map
+    shows `Current`/`Later`, release completion counts, and no repository
+    follow-up blocker.
+  - Apply/revert behavior: reverting can make completed selected-release rows
+    look like current execution again, weakening the 1,000-foot orientation.
+- Schema Migration Decision: no persisted schema field was added, removed, or
+  retyped. This changes Project Map presentation semantics only.

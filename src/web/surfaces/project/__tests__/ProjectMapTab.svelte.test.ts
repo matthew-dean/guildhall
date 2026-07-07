@@ -182,6 +182,8 @@ describe('ProjectMapTab', () => {
     expect(screen.getAllByText('Headless proof').length).toBeGreaterThanOrEqual(1)
     expect(screen.getByRole('heading', { name: 'Scope ledger' })).toBeInTheDocument()
     expect(screen.getByText('1 current work item · 1 later work item')).toBeInTheDocument()
+    expect(screen.getByText('Current')).toBeInTheDocument()
+    expect(screen.queryByText('Now')).not.toBeInTheDocument()
     expect(screen.getByText('Paused · directly assigned · Source: implementation-roadmap.md')).toBeInTheDocument()
     expect(screen.getByText('Deferred · later scope · Source: architecture-notes.md')).toBeInTheDocument()
     const sourceConflictGap = screen.getByRole('button', {
