@@ -199,7 +199,7 @@ import {
   type OrientationScope,
   type ProjectOrientationCharter,
 } from './project-orientation-spine.js'
-import { buildProjectScopeProjection, deriveReleaseContainersFromTaskMembership, releaseLabelFromId, taskScopeNodeId, type ProjectScope } from './project-scope-projection.js'
+import { buildProjectScopeProjection, deriveReleaseContainersFromTaskMembership, executionScopeRows, releaseLabelFromId, taskScopeNodeId, type ProjectScope } from './project-scope-projection.js'
 import type { SurfaceReviewPacket } from './contract-surfaces.js'
 import {
   acceptProjectDependencyDelivery,
@@ -3989,6 +3989,177 @@ function compactOrientationSpineForWorkSurface(spine: Record<string, unknown>): 
   }
 }
 
+function buildOverviewOrientationPreviewSpine(input: {
+  projectId: string
+  rawQueue: { tasks: Array<Record<string, unknown>>; releases: ProjectRelease[]; selectedReleaseId?: string }
+  charter: Partial<ProjectOrientationCharter> | null
+  now?: string
+}): Record<string, unknown> {
+  const now = input.now ?? new Date().toISOString()
+  const queue = {
+    version: 1,
+    lastUpdated: now,
+    tasks: input.rawQueue.tasks as unknown as Task[],
+    releases: input.rawQueue.releases,
+    ...(input.rawQueue.selectedReleaseId ? { selectedReleaseId: input.rawQueue.selectedReleaseId } : {}),
+  }
+  const projection = buildProjectScopeProjection(queue)
+  const scope = projection.selectedScope
+  const scopeRows = executionScopeRows(projection.rows)
+  const selectedRelease = scope
+    ? input.rawQueue.releases.find(release => release.id === scope.id) ?? null
+    : null
+  const release = selectedRelease
+    ? {
+        id: selectedRelease.id,
+        label: selectedRelease.label,
+        kind: selectedRelease.kind === 'milestone' ? 'milestone' : selectedRelease.kind === 'marker' ? 'marker' : 'release',
+        state: projection.release.state === 'ready' ? 'ready' : projection.release.state === 'blocked' ? 'blocked' : selectedRelease.state ?? 'active',
+        source: selectedRelease.source ?? 'inferred',
+        description: selectedRelease.description ?? null,
+        nodeIds: scope?.nodeIds ?? selectedRelease.nodeIds ?? [],
+        deferredNodeIds: scope?.deferredNodeIds ?? selectedRelease.deferredNodeIds ?? [],
+        proofStyle: selectedRelease.proofStyle ?? 'unspecified',
+      }
+    : null
+  const scopeReadModel = scope
+    ? {
+        id: scope.id,
+        label: scope.label,
+        kind: scope.kind,
+        source: scope.source,
+        nodeIds: scope.nodeIds,
+        deferredNodeIds: scope.deferredNodeIds,
+      }
+    : null
+  const progress = {
+    scopeId: scope?.id ?? null,
+    total: projection.counts.included + projection.counts.deferred,
+    briefed: 0,
+    specced: scopeRows.filter(row => row.scope === 'included' && (row.status === 'spec_review' || row.status === 'ready')).length,
+    sliced: 0,
+    ready: projection.counts.ready,
+    active: projection.counts.active,
+    proven: projection.counts.done,
+    done: projection.counts.done,
+    blocked: projection.counts.ownerBlocked,
+    deferred: projection.counts.deferred,
+  }
+  const scopeLabel = scope?.label ?? release?.label ?? 'Current task scope'
+  const firstBlocker = projection.release.blockers[0]
+  const topBlocker = firstBlocker?.label ?? (
+    projection.start.canStart || projection.start.code === 'all_terminal'
+      ? null
+      : projection.start.message
+  )
+  const headline = projection.release.state === 'ready'
+    ? `${scopeLabel} is complete.`
+    : projection.release.state === 'blocked'
+      ? `${scopeLabel} needs attention.`
+      : projection.release.state === 'shaping'
+        ? `${scopeLabel} is being shaped.`
+        : projection.start.canStart
+          ? `${scopeLabel} is ready to continue.`
+          : `${scopeLabel} is being mapped.`
+  const sourceRefs = new Set(scopeRows.flatMap(row => row.sourceRefs ?? []))
+  const documented = [...sourceRefs].filter(ref => !ref.startsWith('task:')).length
+
+  return {
+    projectId: input.projectId,
+    updatedAt: now,
+    selectedRelease: release,
+    releases: release ? [release] : [],
+    selectedTaskScope: scopeReadModel,
+    scope: scopeReadModel,
+    charter: {
+      goal: input.charter?.goal ?? null,
+      targetAudience: input.charter?.targetAudience ?? null,
+      currentReleaseTarget: input.charter?.currentReleaseTarget ?? null,
+      successDefinition: input.charter?.successDefinition ?? null,
+      nonGoals: input.charter?.nonGoals ?? [],
+      source: input.charter?.source ?? 'inferred',
+    },
+    executionBoundary: {
+      label: 'Current scope',
+      mode: 'unspecified',
+      proofStyle: release?.proofStyle ?? 'unspecified',
+      detail: 'Open the map for full execution-boundary detail.',
+      source: {
+        kind: 'inferred',
+        refs: [],
+        confidence: 'medium',
+        freshness: 'fresh',
+        inferred: true,
+        refreshedAt: now,
+      },
+    },
+    proofContracts: [],
+    summary: {
+      headline,
+      purpose: input.charter?.goal ?? 'Project shape is being inferred.',
+      selectedReleaseLabel: release?.label ?? null,
+      selectedScopeLabel: scope?.label ?? release?.label ?? null,
+      includedCount: projection.counts.included,
+      includedWorkCount: projection.counts.included,
+      deferredCount: projection.counts.deferred,
+      deferredWorkCount: projection.counts.deferred,
+      pinnedNow: projection.start.focusTaskTitle ? [projection.start.focusTaskTitle] : [],
+      topBlocker,
+      nextAction: projection.release.state === 'ready'
+        ? 'Review completed scope.'
+        : projection.start.message,
+      progress,
+    },
+    roots: [],
+    nodes: {},
+    activePins: projection.start.focusTaskId
+      ? [{
+          id: `scope-preview:${projection.start.focusTaskId}`,
+          nodeId: taskScopeNodeId(projection.start.focusTaskId),
+          label: projection.start.focusTaskTitle ?? projection.start.focusTaskId,
+          kind: projection.start.focusKind === 'spec_review' ? 'review' : projection.start.canStart ? 'active_work' : 'owner_input',
+          href: projection.start.actionHref,
+        }]
+      : [],
+    scopeRows: scopeRows.map(row => ({
+      taskId: row.taskId,
+      nodeId: taskScopeNodeId(row.taskId),
+      title: row.title,
+      scope: row.scope,
+      eligibilityReason: row.eligibilityReason,
+      hierarchyRole: row.hierarchyRole,
+      status: row.status,
+      handoffState: row.handoffState,
+      blocksStart: row.blocksStart,
+      blocksRelease: row.blocksRelease,
+      humanBlocking: row.humanBlocking,
+      sourceRefs: row.sourceRefs,
+    })),
+    gaps: scope ? [] : [{
+      kind: 'unplaced_task',
+      label: 'No current scope has been selected yet.',
+      refs: [`project:${input.projectId}`],
+      severity: 'warn',
+    }],
+    release: {
+      state: projection.release.state,
+      blockers: projection.release.blockers.map(blocker => ({
+        id: blocker.id,
+        label: blocker.label,
+        ...(blocker.owningTaskId ? { owningNodeId: taskScopeNodeId(blocker.owningTaskId) } : {}),
+      })),
+    },
+    sourceHealth: {
+      inferred: projection.rows.length,
+      documented,
+      deferred: projection.counts.deferred,
+      conflicts: 0,
+      gaps: scope ? 0 : 1,
+    },
+    sourceTrail: [],
+  }
+}
+
 function taskIdFromOrientationNodeId(value: unknown): string | null {
   if (typeof value !== 'string') return null
   return value.startsWith('work:') ? value.slice('work:'.length) : value
@@ -5273,6 +5444,15 @@ export function buildServeApp(opts: ServeOptions = {}): {
         })
       }
       const rawQueue = await readTaskQueueFileNormalized(projectTasksPath(project.path))
+      if (overviewSurface) {
+        return c.json({
+          spine: buildOverviewOrientationPreviewSpine({
+            projectId: project.id,
+            rawQueue,
+            charter: inferProjectCharterFromExistingSources(project.path, project.config),
+          }),
+        })
+      }
       const tasks = await Promise.all(rawQueue.tasks.map(task => buildEffectiveTask(project.path, task as Task)))
       const startReadiness = await projectStartReadinessForProject(project.path)
       const releaseReadiness = await buildProjectReleaseReadinessPayload()

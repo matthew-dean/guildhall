@@ -2840,7 +2840,7 @@ describe('GET /api/project/release-readiness', () => {
     expect(fullBody.spine.roots.length).toBeGreaterThan(0)
     expect(fullBody.spine.nodes['work:task-runner']).toMatchObject({ title: 'Implement no-UI runner.' })
     expect(previewBody.spine.roots).toEqual([])
-    expect(previewBody.spine.nodes['work:task-runner']).toMatchObject({ title: 'Implement no-UI runner.' })
+    expect(previewBody.spine.nodes).toEqual({})
     expect(previewBody.spine.summary.includedWorkCount).toBe(1)
     expect(previewBody.spine.selectedRelease.nodeIds).toEqual(['work:task-runner'])
     expect(previewBody.spine.release).toEqual(fullBody.spine.release)

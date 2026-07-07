@@ -28616,3 +28616,100 @@ selected-scope readiness ordering.
     spine as its loading preview again.
 - Schema Migration Decision: no persisted schema field was added, removed, or
   retyped. This is an API/UI read-contract split only.
+
+## 2026-07-07T14:36:00Z - Overview spine previews must use the scope projection read model
+
+- User job:
+  - When a user opens Overview, Guildhall should paint the selected
+    scope/release summary almost immediately: what is current, what is later,
+    whether the selected scope is done or blocked, and where to go next. Project
+    Map should own the full 1,000-foot graph derivation.
+- Finding:
+  - Root cause classification:
+    - Data model/schema problem: the compact Overview spine still ran the
+      map-grade orientation/readiness pipeline before dropping graph fields,
+      so the transport was smaller but the read model stayed expensive.
+    - Project structure/scope/release modeling problem: the cheap selected
+      scope projection already knew current-vs-deferred membership, handoff
+      state, and scoped blockers, but `/api/project/spine?surface=overview`
+      ignored that projection and rebuilt the full map answer.
+    - UI communication/orientation problem: first-screen orientation stayed
+      slow even though the UI only needed the 100-foot scope summary.
+    - Runtime/provider/infrastructure problem: installed API timing proved the
+      previous compact endpoint still took multiple seconds on real calibration
+      projects.
+  - Additional calibration note:
+    - Looma + Knit exposed an important read-contract distinction: the cheap
+      Overview preview reports scoped task blockers, while the full
+      map/release-readiness path can add repository and design-system follow-up
+      blockers. That is not a reason to make the preview slow again; it is a
+      reason the next shared read model must name the difference between
+      scope-projection state and full readiness state instead of stuffing both
+      into a vague `release` bucket.
+- Fix:
+  - `/api/project/spine?surface=overview` now builds its preview from
+    `buildProjectScopeProjection` and returns no full roots or nodes.
+  - The preview keeps the owner-facing scope summary: selected scope/release,
+    included and deferred work counts, scoped progress, scoped blocker summary,
+    source health, scope rows, and active pin.
+  - Full `/api/project/spine` remains the Project Map contract and still derives
+    the full graph, proof contracts, source trail, and release-readiness
+    blockers.
+- Proof provided:
+  - Red/green regression:
+    `CI=true ./node_modules/.bin/vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts -t "compact project
+    spine"` first failed because the Overview preview still returned compact
+    node data; after the fix it passed with `roots: []` and `nodes: {}`.
+  - Focused suite:
+    `CI=true ./node_modules/.bin/vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts
+    src/web/surfaces/__tests__/ProjectView.svelte.test.ts
+    src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts
+    src/web/surfaces/project/__tests__/ProjectMapTab.svelte.test.ts` passed
+    with 153 tests.
+  - Build and contract checks:
+    `git diff --check`, `node ./build.mjs`, and
+    `CI=true corepack pnpm lint:contracts` passed.
+  - Installed API proof:
+    `/api/stale-server` returned `stale:false` for PID `15393`. Narrative
+    Harness Overview spine preview returned in about `7ms`, `31 KB`, `roots:0`,
+    `nodes:0`, selected scope `Stage 1 Headless Drafting And Evaluation MVP`,
+    `included:11`, `deferred:31`, `releaseState:"ready"`, and `blockers:0`.
+    The full Narrative Harness map spine still returned the full graph in about
+    `2797ms`, `519 KB`, `roots:11`, and `nodes:117`. Looma + Knit Overview
+    spine preview returned in about `6ms`, `23 KB`, `roots:0`, `nodes:0`,
+    selected scope `Stage 1: V1 Release Hardening`, `included:5`,
+    `deferred:30`, `releaseState:"blocked"`, and `blockers:5`. The full Looma
+    + Knit map spine still returned the full graph in about `2458ms`, `511 KB`,
+    `roots:15`, and `nodes:115`.
+  - Browser proof:
+    - Desktop `1280x720`: Narrative Harness Overview showed `Scope status`,
+      `Stage 1 Headless Drafting And Evaluation MVP is complete.`, `11 Current
+      scope`, `31 Deferred`, `Work mix`, `Project map`, `Open Work`, `Open map`,
+      no `333` backlog leak, and no detected clipped content. Looma + Knit
+      Overview showed `Do this next`, `5 imported drafts need task briefs`,
+      `5 Current scope`, `30 Deferred`, `5 blocked`, `Work mix`, `Project map`,
+      no `333` backlog leak, and no detected clipped content.
+    - Mobile-width `390x844`: the same Narrative Harness and Looma + Knit
+      orientation markers remained visible with no detected clipped content.
+  - Remaining failing proof:
+    - `/api/project?surface=overview` still runs the heavier full-detail path
+      after the preview, so the settled Overview payload can still take seconds
+      on real calibration projects. The next structural step should make full
+      Overview reuse or split shared readiness/orientation summaries instead of
+      rebuilding map-grade state for cards that only need summary truth.
+- Contract Touch Decision:
+  - Work id: `overview-scope-projection-preview`.
+  - Touched contracts: `/api/project/spine?surface=overview` semantics and
+    ProjectView's initial Overview orientation read path.
+  - Contracts considered but not touched: persisted task schema, persisted
+    release schema, full Project Map spine contract, release-readiness payload,
+    `/api/project?surface=overview`, Work surface payload, and Thread payload.
+  - Required follow-up: design the shared summary/readiness model that cleanly
+    distinguishes scoped-task blockers from full release/repository readiness
+    blockers, then move the remaining full Overview cards onto that read model.
+  - Apply/revert behavior: reverting makes the Overview preview pay the
+    map-grade derivation cost again before showing first-screen orientation.
+- Schema Migration Decision: no persisted schema field was added, removed, or
+  retyped. This is a read-model and API-surface split only.
