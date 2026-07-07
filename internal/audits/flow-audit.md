@@ -28259,3 +28259,81 @@ selected-scope readiness ordering.
     look like current execution again, weakening the 1,000-foot orientation.
 - Schema Migration Decision: no persisted schema field was added, removed, or
   retyped. This changes Project Map presentation semantics only.
+
+## 2026-07-07T13:12:59Z - Overview must not wait on the full project map payload
+
+- User job:
+  - When Narrative Harness is complete, Overview should quickly tell the owner
+    the current scope is closed, the selected release is complete, and no
+    Start/Resume action is available. The user should not wait on the whole
+    1,000-foot map before seeing the 100-foot state.
+- Finding:
+  - Root cause classification:
+    - UI communication/orientation problem: the visible Overview eventually
+      communicates the correct completion state, but a slow initial project
+      detail response can leave the page at `Loading project...` long enough
+      that the orientation is not practically instant.
+    - Project structure/scope/release modeling problem: Overview was loaded
+      through the same full project detail surface used by deeper inspection
+      views, so first-screen release/state communication was coupled to heavier
+      project-map and task-tree data.
+    - Data model/schema problem: the current read model still derives and ships
+      large task and orientation payloads before compacting them for some
+      surfaces. This fix trims the Overview transport contract, but the
+      remaining proof shows Guildhall still needs a cheaper persisted or cached
+      orientation summary read model.
+- Fix:
+  - `/api/project` now accepts `surface=overview`, returning compact task and
+    orientation-spine payloads while preserving `releaseReadiness`,
+    `startReadiness`, `actionModel`, inbox, and other state Overview renders.
+  - ProjectView now requests `surface=overview` for the Overview route, leaving
+    Map and deeper inspection routes on the full payload.
+  - Compact orientation-spine responses preserve aggregate source-health counts
+    for documented and deferred capabilities so Overview does not fabricate
+    zeroes after dropping the full node tree.
+- Proof provided:
+  - Focused component tests:
+    `CI=true ./node_modules/.bin/vitest run
+    src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts
+    src/web/surfaces/project/__tests__/ProjectMapTab.svelte.test.ts` passed
+    with 40 tests.
+  - Build/install proof:
+    `node ./build.mjs` passed. `CI=true corepack pnpm dev:install`,
+    `guildhall stop`, and `guildhall start` installed and restarted the current
+    branch artifact. `/api/stale-server` returned `stale:false` for PID
+    `56785`.
+  - Live API proof:
+    After install, `/api/project?projectId=narrative-harness&surface=overview`
+    returned 663,588 bytes in 5.6s instead of the full detail payload's
+    1,719,314 bytes in 6.3s, while preserving `releaseReadiness.ready:true`,
+    `tasks:11`, `done:11`, and summary headline `Stage 1 Headless Drafting And
+    Evaluation MVP is complete.`
+  - Live browser proof:
+    `/projects/narrative-harness/overview` shows `Stage 1 Headless Drafting
+    And Evaluation MVP is complete.`, `CLOSED SCOPE`, `11 Current scope`,
+    `31 Deferred`, `COMPLETE`, `11 / 11 done`, `Open Work`, `58 documented
+    capabilities`, `66 inferred nodes`, `1 gaps`, and no `Resume` or `Start`
+    action. It does not show false compact-surface zeroes such as `0 documented
+    capabilities`.
+  - Remaining failing proof:
+    The compact surface still took about 5.6 seconds from curl in the installed
+    app, and the browser saw completed-state text at about 20.1 seconds in the
+    final run. This is not good enough for the final orientation goal. Endpoint
+    timing shows `/api/project/spine` alone took about 4.6 seconds, so the next
+    structural fix should make the first-screen orientation summary cheap to
+    read instead of deriving the full map before compaction.
+- Contract Touch Decision:
+  - Work id: `overview-compact-project-surface`.
+  - Touched contracts: `/api/project` query semantics now include the
+    `overview` surface; ProjectView's route-to-project-surface selection.
+  - Contracts considered but not touched: persisted project/task/release
+    schemas, Map payload contract, Release payload contract, action model, and
+    orientation-spine schema.
+  - Required follow-up: introduce or reuse a cheap owner-facing orientation
+    summary/read model so Overview can render the state without waiting for the
+    full spine/node derivation.
+  - Apply/revert behavior: reverting makes Overview request the full project
+    detail payload again, coupling first-screen orientation to heavy map/task
+    data.
+- Schema Migration Decision: no persisted schema field was added, removed, or
+  retyped. This is a runtime/API read-surface split only.

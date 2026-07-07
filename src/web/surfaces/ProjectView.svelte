@@ -147,8 +147,8 @@
   const pageMode = $derived<'document' | 'surface-fill'>(
     currentView === 'thread' ? 'surface-fill' : 'document',
   )
-  const projectDetailSurface = $derived<'work' | null>(
-    currentView === 'work' ? 'work' : null,
+  const projectDetailSurface = $derived<'overview' | 'work' | null>(
+    currentView === 'overview' ? 'overview' : currentView === 'work' ? 'work' : null,
   )
   const routeFocusedTaskId = $derived.by(() => {
     path.value

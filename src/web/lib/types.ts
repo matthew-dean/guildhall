@@ -886,6 +886,8 @@ export interface ProjectOrientationSpine {
   sourceHealth?: {
     status?: string
     inferred?: number
+    documented?: number
+    deferred?: number
     gaps?: number
     conflicts?: number | Array<{ label?: string; detail?: string; refs?: string[] }>
   }

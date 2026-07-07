@@ -288,7 +288,7 @@
     const roots = orientationSpine.roots?.length ?? 0
     const inferred = orientationSpine.sourceHealth?.inferred ?? 0
     const gaps = orientationSpine.sourceHealth?.gaps ?? orientationSpine.gaps?.length ?? 0
-    const documented = (orientationSpine.roots ?? []).reduce((sum, root) =>
+    const documented = orientationSpine.sourceHealth?.documented ?? (orientationSpine.roots ?? []).reduce((sum, root) =>
       sum + (root.children ?? []).filter(child => child.visibility?.kind === 'supporting').length,
     0)
     const releasePiece = releaseRoadmap.length > 0
@@ -309,7 +309,7 @@
   const orientationMapPreviewDetail = $derived.by(() => {
     if (!orientationSpine) return 'Open the map when this project has imported work or confirmed planning docs.'
     const progress = orientationSpine.summary?.progress
-    const laterDocumented = (orientationSpine.roots ?? []).reduce((sum, root) =>
+    const laterDocumented = orientationSpine.sourceHealth?.deferred ?? (orientationSpine.roots ?? []).reduce((sum, root) =>
       sum + (root.children ?? []).filter(child => child.visibility?.kind === 'supporting' && child.maturity === 'deferred').length,
     0)
     const pieces = [

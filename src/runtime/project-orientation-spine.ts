@@ -204,6 +204,8 @@ export interface OrientationReleaseSummary {
 
 export interface OrientationSourceHealth {
   inferred: number
+  documented?: number
+  deferred?: number
   conflicts: number
   gaps: number
 }

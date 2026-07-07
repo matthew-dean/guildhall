@@ -3948,6 +3948,31 @@ function compactDeliveryQueueForWorkSurface(queue: Record<string, unknown>): Rec
 }
 
 function compactOrientationSpineForWorkSurface(spine: Record<string, unknown>): Record<string, unknown> {
+  const roots = Array.isArray(spine.roots) ? spine.roots : []
+  const documented = roots.reduce((sum, root) => {
+    if (!root || typeof root !== 'object' || Array.isArray(root)) return sum
+    const children = Array.isArray((root as Record<string, unknown>).children)
+      ? (root as Record<string, unknown>).children as unknown[]
+      : []
+    return sum + children.filter(child => {
+      if (!child || typeof child !== 'object' || Array.isArray(child)) return false
+      return ((child as Record<string, unknown>).visibility as { kind?: unknown } | undefined)?.kind === 'supporting'
+    }).length
+  }, 0)
+  const deferred = roots.reduce((sum, root) => {
+    if (!root || typeof root !== 'object' || Array.isArray(root)) return sum
+    const children = Array.isArray((root as Record<string, unknown>).children)
+      ? (root as Record<string, unknown>).children as unknown[]
+      : []
+    return sum + children.filter(child => {
+      if (!child || typeof child !== 'object' || Array.isArray(child)) return false
+      const record = child as Record<string, unknown>
+      return (record.visibility as { kind?: unknown } | undefined)?.kind === 'supporting' && record.maturity === 'deferred'
+    }).length
+  }, 0)
+  const sourceHealth = spine.sourceHealth && typeof spine.sourceHealth === 'object' && !Array.isArray(spine.sourceHealth)
+    ? { ...spine.sourceHealth as Record<string, unknown>, documented, deferred }
+    : { documented, deferred }
   return {
     projectId: spine.projectId,
     updatedAt: spine.updatedAt,
@@ -3957,6 +3982,7 @@ function compactOrientationSpineForWorkSurface(spine: Record<string, unknown>): 
     summary: spine.summary,
     scopeRows: compactOrientationScopeRows(spine.scopeRows),
     proofContracts: compactOrientationProofContracts(spine.proofContracts),
+    sourceHealth,
     roots: [],
     nodes: compactOrientationNodes(spine.nodes),
   }
@@ -4940,8 +4966,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
   app.get('/api/project', async c => {
     try {
-      const surface = c.req.query('surface') === 'work' ? 'work' : 'full'
+      const requestedSurface = c.req.query('surface')
+      const surface = requestedSurface === 'overview' || requestedSurface === 'work'
+        ? requestedSurface
+        : 'full'
       const fullSurface = surface === 'full'
+      const overviewSurface = surface === 'overview'
       const requestedTaskId = (c.req.query('task') ?? c.req.query('work') ?? '').trim()
       if (project.initializationNeeded) {
         return c.json({
@@ -4960,7 +4990,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const tasksPath = projectTasksPath(project.path)
       const rawQueue = await readTaskQueueFileNormalized(tasksPath)
       const rawTasks = rawQueue.tasks
-      const releaseReadiness = fullSurface ? await buildProjectReleaseReadinessPayload() : null
+      const releaseReadiness = fullSurface || overviewSurface ? await buildProjectReleaseReadinessPayload() : null
       const workProgress = deriveProjectWorkProgress(rawTasks as Array<Record<string, unknown>>)
       const tasks = await Promise.all(rawTasks.map((task) => fullSurface
         ? enrichTaskForServe(project.path, task)
