@@ -138,8 +138,22 @@
   const releaseReadinessChipLabel = $derived(releaseReadiness?.ready ? 'Complete' : releaseWorkComplete ? 'Work complete' : 'Not complete')
   const releaseReadinessChipTone = $derived<Tone>(releaseReadiness?.ready || releaseWorkComplete ? 'ok' : releaseReadinessTone === 'warn' ? 'warn' : 'neutral')
   const releaseGitBlockers = $derived((releaseReadiness?.gitStory?.blockers ?? []).slice(0, 2))
+  const currentScopeTaskIds = $derived.by(() => {
+    const nodeIds = [
+      ...(releaseReadiness?.scope?.nodeIds ?? []),
+      ...(releaseReadiness?.release?.nodeIds ?? []),
+      ...(orientationSpine?.scope?.nodeIds ?? []),
+      ...(orientationSpine?.selectedRelease?.nodeIds ?? []),
+    ]
+    return new Set(nodeIds
+      .map(nodeId => nodeId.startsWith('work:') ? nodeId.slice(5) : nodeId)
+      .filter(Boolean))
+  })
   const primaryProofPaths = $derived.by(() => {
-    return tasks
+    const proofTasks = currentScopeTaskIds.size > 0
+      ? tasks.filter(task => currentScopeTaskIds.has(task.id))
+      : tasks.filter(task => task.status !== 'shelved')
+    return proofTasks
       .flatMap(task => (task.proofPaths ?? []).map(proofPath => ({ task, proofPath })))
       .sort((left, right) => proofRank(left.proofPath.status) - proofRank(right.proofPath.status))
       .slice(0, 3)
@@ -908,6 +922,10 @@
     nav(projectActionHref(href, activeProjectId), { backgroundPath: path.value })
   }
 
+  function proofPathTitle(task: Task, proofPath: NonNullable<Task['proofPaths']>[number]): string {
+    return proofPath.title ?? taskLabel(task)
+  }
+
   function proofRank(status: string | undefined): number {
     switch (status) {
       case 'blocked': return 0
@@ -1280,7 +1298,7 @@
             {#if primaryProofPaths.length === 0}
               <span>No verification checks linked yet.</span>
             {:else}
-              <span>{primaryProofPaths[0].proofPath.title ?? 'Verification check'}</span>
+              <span>{proofPathTitle(primaryProofPaths[0].task, primaryProofPaths[0].proofPath)}</span>
               <span>{friendlyStatus(primaryProofPaths[0].proofPath.status)}</span>
             {/if}
           </div>

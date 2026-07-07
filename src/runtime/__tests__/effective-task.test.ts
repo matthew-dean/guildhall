@@ -210,4 +210,63 @@ describe('effective task projection', () => {
     expect(effective.assignedTo).toBeNull()
     expect(effective.completedAt).toBe('2026-07-04T09:16:20.780Z')
   })
+
+  it('projects statusless proof paths on completed tasks as verified when evidence satisfies them', async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-effective-task-'))
+
+    const effective = await buildEffectiveTask(projectRoot, legacyTask({
+      status: 'done',
+      acceptanceCriteria: [{ id: 'ac-1', description: 'Chapter draft exists.', verifiedBy: 'review', met: true }],
+      proofPaths: [{
+        title: 'Chapter draft proof',
+        expectedEvidence: ['chapter draft exists'],
+      }],
+      doneSummaryBundle: {
+        taskId: 'task-auth-complete',
+        status: 'done',
+        completedAt: '2026-07-04T09:16:20.780Z',
+        summary: {
+          journey: 'worker completed the task',
+          decision: 'Task finished as done.',
+          evidence: 'Chapter draft exists and was reviewed.',
+          learningCandidates: [],
+          openResidue: 'No open residue recorded.',
+        },
+      },
+    } as Partial<Task>))
+
+    expect(effective.proofPaths?.[0]).toMatchObject({
+      title: 'Chapter draft proof',
+      status: 'verified',
+    })
+  })
+
+  it('projects statusless proof paths on completed tasks as blocked when evidence is still missing', async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-effective-task-'))
+
+    const effective = await buildEffectiveTask(projectRoot, legacyTask({
+      status: 'done',
+      proofPaths: [{
+        title: 'Provider proof',
+        expectedEvidence: ['deepinfra latency and model choice recorded'],
+      }],
+      doneSummaryBundle: {
+        taskId: 'task-auth-complete',
+        status: 'done',
+        completedAt: '2026-07-04T09:16:20.780Z',
+        summary: {
+          journey: 'worker completed the task',
+          decision: 'Task finished as done.',
+          evidence: 'Chapter draft exists.',
+          learningCandidates: [],
+          openResidue: 'No open residue recorded.',
+        },
+      },
+    } as Partial<Task>))
+
+    expect(effective.proofPaths?.[0]).toMatchObject({
+      title: 'Provider proof',
+      status: 'blocked',
+    })
+  })
 })

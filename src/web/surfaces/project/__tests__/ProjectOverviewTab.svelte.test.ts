@@ -309,6 +309,50 @@ describe('ProjectOverviewTab', () => {
     expect(screen.queryByText((content) => content.includes('guildhall/task-later-work has no upstream branch'))).not.toBeInTheDocument()
   })
 
+  it('keeps the verification signal focused on the selected release scope', () => {
+    render(ProjectOverviewTab, {
+      detail: {
+        id: 'narrative-harness',
+        name: 'Narrative Harness',
+        path: '/Users/matthew/git/oss/narrative-harness',
+        tasks: [
+          {
+            id: 'task-current-proof',
+            title: 'Current release proof',
+            status: 'done',
+            proofPaths: [{ status: 'verified', kind: 'review' }],
+          },
+          {
+            id: 'task-later-proof',
+            title: 'Later proof',
+            status: 'shelved',
+            proofPaths: [{ title: 'Later blocked proof', status: 'blocked', kind: 'review' }],
+          },
+        ],
+        releaseReadiness: {
+          release: { id: 'stage-1', label: 'Stage 1', kind: 'release', state: 'ready', source: 'release_plan', nodeIds: ['work:task-current-proof'] },
+          scope: { id: 'stage-1', label: 'Stage 1', kind: 'release', state: 'ready', source: 'release_plan', nodeIds: ['work:task-current-proof'] },
+          ready: true,
+          totals: { tasks: 1, done: 1, unfinishedCount: 0, humanBlockingCount: 0 },
+          proofMissingDoneTasks: [],
+        },
+      },
+      inboxLoaded: true,
+      inboxItems: [],
+      projectTicker: {
+        label: 'Not running',
+        actorLabel: 'Guildhall',
+        message: 'Stage 1 is complete.',
+        tone: 'idle',
+        pulse: false,
+      },
+      activeProjectId: 'narrative-harness',
+    })
+
+    expect(screen.getByRole('button', { name: /Verification Current release proof Verified/i })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Later blocked proof/i })).not.toBeInTheDocument()
+  })
+
   it('labels proof waits as waiting instead of blocking when scoped blocked count is zero', () => {
     const { container } = render(ProjectOverviewTab, {
       detail: {

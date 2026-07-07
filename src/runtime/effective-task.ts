@@ -16,6 +16,7 @@ import {
   readTaskWorkspaceStore,
 } from './task-state-store.js'
 import { effectiveTaskTitle } from '../shared/task-display-label.js'
+import { taskDoneButProofMissing } from './proof-health.js'
 
 type LegacyTask = Task & Record<string, unknown>
 
@@ -204,6 +205,11 @@ export async function buildEffectiveTask(
     ...projected,
     ...(runtime?.proofRecovery ? { proofRecovery: runtime.proofRecovery } : {}),
   })
+  const proofPathStatusProjection = normalizeProofPathStatuses({
+    ...task,
+    ...projected,
+    ...normalized,
+  })
   return {
     ...task,
     title: effectiveTaskTitle(task) ?? task.title,
@@ -219,8 +225,25 @@ export async function buildEffectiveTask(
     ...(runtime ? { runtime } : {}),
     ...(workspace ? { workspace } : {}),
     ...normalized,
+    ...proofPathStatusProjection,
     evidence,
   }
+}
+
+function normalizeProofPathStatuses(task: Record<string, unknown>): Record<string, unknown> {
+  if (task.status !== 'done') return {}
+  const proofPaths = Array.isArray(task.proofPaths) ? task.proofPaths : []
+  if (proofPaths.length === 0) return {}
+  const derivedStatus = taskDoneButProofMissing(task) ? 'blocked' : 'verified'
+  let changed = false
+  const normalizedProofPaths = proofPaths.map((proofPath) => {
+    if (!proofPath || typeof proofPath !== 'object' || Array.isArray(proofPath)) return proofPath
+    const existingStatus = (proofPath as { status?: unknown }).status
+    if (typeof existingStatus === 'string' && existingStatus.trim().length > 0) return proofPath
+    changed = true
+    return { ...proofPath, status: derivedStatus }
+  })
+  return changed ? { proofPaths: normalizedProofPaths } : {}
 }
 
 function normalizeTerminalCompletionEvidence(task: Record<string, unknown>): Record<string, unknown> {

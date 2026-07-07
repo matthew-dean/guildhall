@@ -24571,3 +24571,66 @@ selected-scope readiness ordering.
     release can disappear from re-intake, selected-release import drafts can be
     archived as stale weak specs, and Start can ask for a global import refresh
     instead of shaping the current selected scope.
+
+## 2026-07-06 — Narrative Harness overview proof-state agreement
+
+- Work id: `codex:overview-current-scope-proof-state`.
+- User job: when a selected release/current scope is complete, Overview must
+  not show contradictory verification state. The user should be able to read
+  the page and understand that the selected Narrative Harness MVP scope is
+  complete, what belongs to that scope, what is deferred, and whether proof is
+  missing without inspecting the repo or CLI output.
+- Root-cause classification:
+  - Task hierarchy/dependency/proof modeling problem: completed tasks could
+    expose statusless proof paths even when shared proof-health logic already
+    knew whether proof was satisfied.
+  - UI communication/orientation problem: Overview selected proof signals from
+    all visible tasks, so blocked/deferred proof could outrank verified proof
+    for the selected current release; untitled proof paths also rendered as the
+    generic label `Verification check`.
+- Fix:
+  - Effective task projection now fills missing proof-path status for completed
+    tasks using shared proof-health logic: statusless satisfied proof becomes
+    `verified`; statusless missing proof becomes `blocked`.
+  - Overview proof signals now prefer tasks in the selected release/current
+    scope when release/scope node ids are available, falling back to
+    non-shelved tasks only when no scope boundary is known.
+  - Overview labels untitled proof paths with the task title so the signal says
+    what was verified instead of showing generic placeholder copy.
+- Contract Touch Decision:
+  - Touched contracts: effective task API projection for `proofPaths.status`
+    when a completed task is read, and Overview's proof-signal selection from
+    selected release/scope membership.
+  - Contracts considered but not touched: persisted task schema, proof-path
+    persisted schema, release-readiness response shape, orientation-spine
+    response shape, Journey task drawer rendering, and work-progress contracts.
+  - Existing data impact: no migration. Persisted task files are unchanged;
+    the installed API projection now communicates derived proof status for
+    statusless completed proof paths.
+  - Required follow-up: continue reducing duplicated proof/progress summaries
+    across release readiness, orientation spine, work progress, and Overview so
+    counts cannot drift again.
+  - Proof required: focused effective-task tests for verified/missing
+    statusless proof paths, focused Overview test for selected-scope proof
+    signal precedence, installed build proof, stale-server proof, live
+    Narrative Harness API proof, and browser-rendered proof.
+  - Proof provided: `effective-task.test.ts` passed `9` tests;
+    `ProjectOverviewTab.svelte.test.ts` passed `29` tests; `tsc -p
+    packages/ui/tsconfig.json` passed; `node ./build.mjs && node
+    ./scripts/dev-install.mjs && guildhall stop && guildhall start` succeeded;
+    `/api/stale-server` returned `stale:false` for PID `13830`. Live
+    `/api/project?projectId=narrative-harness` reported
+    `startReadiness.code: all_terminal`, selected release
+    `Stage 1 Headless Drafting And Evaluation MVP`, release readiness
+    `ready:true`, totals `11` tasks, `11` done, `0` unfinished, `0` blocking,
+    and `proofMissingDoneTasks: []`. Browser proof at
+    `artifacts/flow-audit/nh-overview-current-scope-proof-signal-2026-07-06.png`
+    showed Scope status complete, Work mix `11 Current scope` and `32
+    Deferred`, Current release `11 / 11 done`, At a glance `11 work items in
+    view · 0 missing verification · 0 blocked · 11 verified · 32 deferred`,
+    and Signals verification
+    `Define fixture, expected-record, prototype-run, and evaluation schemas.`
+    marked `Verified` with no blocked or unknown verification signal.
+  - Apply/revert behavior: reverting restores the failure where a completed
+    selected scope can show unknown or unrelated blocked proof in Overview even
+    while release readiness says the selected release is complete.
