@@ -398,6 +398,7 @@ export interface ProjectReleaseReadiness {
   notReadyReason?: string
   statusCounts?: Record<string, number>
   proofMissingDoneTasks?: Array<{ id?: string; title?: string }>
+  releaseBlockers?: Array<{ id?: string; title?: string; label?: string }>
   gitStory?: GitStorySummary
   totals?: {
     tasks?: number

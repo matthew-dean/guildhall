@@ -149,10 +149,10 @@
       .map(nodeId => nodeId.startsWith('work:') ? nodeId.slice(5) : nodeId)
       .filter(Boolean))
   })
+  const currentScopeTasks = $derived(currentScopeTaskIds.size > 0 ? tasks.filter(task => currentScopeTaskIds.has(task.id)) : tasks)
+  const tasksById = $derived(new Map(tasks.map(task => [task.id, task])))
   const primaryProofPaths = $derived.by(() => {
-    const proofTasks = currentScopeTaskIds.size > 0
-      ? tasks.filter(task => currentScopeTaskIds.has(task.id))
-      : tasks.filter(task => task.status !== 'shelved')
+    const proofTasks = currentScopeTaskIds.size > 0 ? currentScopeTasks : tasks.filter(task => task.status !== 'shelved')
     return proofTasks
       .flatMap(task => (task.proofPaths ?? []).map(proofPath => ({ task, proofPath })))
       .sort((left, right) => proofRank(left.proofPath.status) - proofRank(right.proofPath.status))
@@ -314,7 +314,7 @@
 
   const activeTask = $derived.by(() => {
     const priority = ['in_progress', 'review', 'gate_check', 'blocked', 'spec_review', 'ready', 'exploring', 'import_draft']
-    return [...tasks]
+    return [...currentScopeTasks]
       .filter(task => priority.includes(task.status ?? ''))
       .sort((left, right) => {
         const a = priority.indexOf(left.status ?? '')
@@ -326,7 +326,7 @@
 
   const movingTasks = $derived.by(() => {
     const wanted = new Set(['in_progress', 'review', 'gate_check', 'ready', 'spec_review', 'exploring'])
-    return [...tasks]
+    return [...currentScopeTasks]
       .filter(task => wanted.has(task.status ?? ''))
       .sort((left, right) => (right.updatedAt ?? '').localeCompare(left.updatedAt ?? ''))
       .slice(0, 4)
@@ -661,7 +661,22 @@
   })
 
   const blockedRows = $derived.by(() => {
-    return tasks
+    const rows: BlockedRow[] = []
+    const seen = new Set<string>()
+    for (const blocker of releaseReadiness?.releaseBlockers ?? []) {
+      const id = blocker.id?.trim()
+      if (!id || seen.has(id)) continue
+      const task = tasksById.get(id)
+      if (!task) continue
+      rows.push({
+        task,
+        reason: friendlyBlockerText(blocker.label ?? blocker.title ?? blocker.id ?? 'This work is blocking the current scope.'),
+        category: inferBlockerCategory(task),
+        href: currentTaskHref(task.id, activeProjectId),
+      })
+      seen.add(id)
+    }
+    const scopedBlockedRows = currentScopeTasks
       .filter(task => task.status === 'blocked' || activeEscalations(task).length > 0 || (Boolean(task.blockReason) && !isRunnableStatus(task.status)))
       .sort((left, right) => (right.updatedAt ?? '').localeCompare(left.updatedAt ?? ''))
       .map(task => ({
@@ -670,7 +685,12 @@
         category: inferBlockerCategory(task),
         href: currentTaskHref(task.id, activeProjectId),
       }))
-      .slice(0, 4)
+    for (const row of scopedBlockedRows) {
+      if (seen.has(row.task.id)) continue
+      rows.push(row)
+      seen.add(row.task.id)
+    }
+    return rows.slice(0, 4)
   })
 
   function isRunnableStatus(status: string | undefined): boolean {
@@ -812,7 +832,7 @@
 
   function sortedTasks(statuses: string[]): Task[] {
     const wanted = new Set(statuses)
-    return [...tasks]
+    return [...currentScopeTasks]
       .filter(task => wanted.has(task.status ?? ''))
       .sort((left, right) => {
         const statusDelta = statuses.indexOf(left.status ?? '') - statuses.indexOf(right.status ?? '')

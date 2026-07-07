@@ -8,6 +8,73 @@ help_summary: |
 
 # Web UI flow audit
 
+2026-07-07T01:10:09Z - Overview blocker rows honor the selected current scope.
+
+- Work id: `codex:overview-current-scope-blocker-focus-2026-07-07`.
+- User job: when Overview says a project is blocked by the selected current
+  release/scope, the visible blocker list and likely next-run order must explain
+  that same selected scope. The owner should not see release counts for one
+  scope beside blocked rows from unrelated backlog work.
+- Live findings:
+  - Looma + Knit `/api/project/release-readiness` selected
+    `Stage 1: V1 Release Hardening` with `5` current-scope task ids and `5`
+    release blockers.
+  - Overview's top action, work mix, current release, and At a glance sections
+    correctly showed `5` current-scope tasks, `30` deferred, and `5` blockers.
+  - The same page's `Blocked work` and `Next run` rows were still derived from
+    the full task list, so unrelated old backlog tasks such as `Floating
+    toolbar` could appear as the visible blocker/next work for the current
+    release.
+- Root-cause classification:
+  - UI communication/orientation problem: the page mixed selected-scope summary
+    state with global task-row derivations, so the product could communicate two
+    different answers about what was blocking the project right now.
+  - Project structure/scope/release modeling problem: selected-scope membership
+    existed in the shared release-readiness model, but Overview did not reuse it
+    consistently for every work/action row.
+- Change:
+  - Added the typed `releaseBlockers` field to the web release-readiness shape
+    already emitted by the API.
+  - Derived one `currentScopeTasks` list from selected release/scope node ids
+    and reused it for active work, moving work, proof paths, blocked rows, and
+    likely next-run rows.
+  - Prioritized shared `releaseReadiness.releaseBlockers` in the Overview
+    `Blocked work` section before falling back to scoped task-local blocker
+    state.
+- Contract Touch Decision:
+  - Work id: `codex:overview-current-scope-blocker-focus-2026-07-07`.
+  - Touched contracts: web `ProjectReleaseReadiness` type and Overview selected
+    release/current-scope row projection.
+  - Contracts considered but not touched: persisted task schema, persisted
+    release/scope schema, release-readiness API builder, action model,
+    orientation summary model, scheduler/start semantics.
+  - Required follow-up: inspect why Looma + Knit still has multiple inferred
+    release/scope containers with overlapping Stage 1 language; this slice only
+    makes Overview obey the currently selected boundary.
+  - Proof required: focused Overview regression for selected-scope blocker
+    rows, full Overview component suite, UI typecheck, installed-app build and
+    stale-server proof, browser proof on the real Looma + Knit Overview route.
+  - Proof provided: `./node_modules/.bin/vitest run
+    src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts
+    --reporter=dot` passed with `30` tests; `./node_modules/.bin/tsc -p
+    packages/ui/tsconfig.json` passed; `node ./build.mjs && node
+    ./scripts/dev-install.mjs && guildhall stop && guildhall start && curl -s
+    http://localhost:7777/api/stale-server` completed with `stale:false`.
+    Browser proof on
+    `http://localhost:7777/projects/looma-knit/overview` showed `Stage 1: V1
+    Release Hardening`, `5 work items in view`, `30 deferred`, and scoped
+    `Blocked work` / `Next run` sections containing `Unit tests:
+    use-collections, use-presence, subdomain utils` while excluding `Floating
+    toolbar`. Screenshot saved at
+    `artifacts/flow-audit/looma-knit-overview-current-scope-blockers-2026-07-06.png`.
+  - Waivers: none.
+  - Owner-review items: none for this slice; no owner approval is implied or
+    automated. Guildhall is only showing the selected current-scope blocker
+    truth more consistently.
+  - Apply/revert behavior: reverting this change makes Overview vulnerable to
+    mixing current-release summary state with unrelated global backlog blocker
+    rows again.
+
 2026-07-06T21:08:54Z - Made proof-missing completed work executable again
 
 - Work id: `codex:proof-missing-done-retry-action-2026-07-06`.

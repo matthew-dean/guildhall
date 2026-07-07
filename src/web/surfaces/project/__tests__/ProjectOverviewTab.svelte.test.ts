@@ -353,6 +353,69 @@ describe('ProjectOverviewTab', () => {
     expect(screen.queryByRole('button', { name: /Later blocked proof/i })).not.toBeInTheDocument()
   })
 
+  it('keeps blocked work and next-run rows focused on selected release blockers', () => {
+    render(ProjectOverviewTab, {
+      detail: {
+        id: 'looma-knit',
+        name: 'Looma + Knit',
+        path: '/Users/matthew/git/oss/looma-knit',
+        startReadiness: {
+          canStart: false,
+          code: 'imported_scope_shaping',
+          message: '5 current-scope tasks still need source-backed shaping before Guildhall can build unattended.',
+          actionHref: '/task/task-current-import',
+        },
+        actionModel: {
+          primaryAction: {
+            label: 'Imported scope needs shaping',
+            detail: '5 current-scope tasks still need source-backed shaping before Guildhall can build unattended.',
+            buttonLabel: 'Shape first task',
+            href: '/task/task-current-import',
+            tone: 'warn',
+          },
+        },
+        tasks: [
+          {
+            id: 'task-current-import',
+            title: 'Unit tests: use-collections, use-presence, subdomain utils',
+            status: 'import_draft',
+          },
+          {
+            id: 'task-old-blocker',
+            title: 'Floating toolbar',
+            status: 'blocked',
+            blockReason: 'Old unrelated blocked work.',
+          },
+        ],
+        releaseReadiness: {
+          release: { id: 'stage-1', label: 'Stage 1: V1 Release Hardening', kind: 'release', state: 'active', source: 'release_plan', nodeIds: ['work:task-current-import'] },
+          scope: { id: 'stage-1', label: 'Stage 1: V1 Release Hardening', kind: 'release', state: 'active', source: 'release_plan', nodeIds: ['work:task-current-import'] },
+          ready: false,
+          totals: { tasks: 1, done: 0, unfinishedCount: 1, humanBlockingCount: 1, blockingCount: 1 },
+          releaseBlockers: [{
+            id: 'task-current-import',
+            title: 'Unit tests: use-collections, use-presence, subdomain utils',
+            label: 'Unit tests: use-collections, use-presence, subdomain utils needs a clearer brief before unattended work can run.',
+          }],
+        },
+      },
+      inboxLoaded: true,
+      inboxItems: [],
+      projectTicker: {
+        label: 'Not running',
+        actorLabel: 'Guildhall',
+        message: 'Current scope needs shaping.',
+        tone: 'idle',
+        pulse: false,
+      },
+      activeProjectId: 'looma-knit',
+    })
+
+    expect(screen.getAllByText('Unit tests: use-collections, use-presence, subdomain utils').length).toBeGreaterThan(0)
+    expect(screen.queryByRole('button', { name: /Floating toolbar/i })).not.toBeInTheDocument()
+    expect(screen.queryByText('Old unrelated blocked work.')).not.toBeInTheDocument()
+  })
+
   it('labels proof waits as waiting instead of blocking when scoped blocked count is zero', () => {
     const { container } = render(ProjectOverviewTab, {
       detail: {
