@@ -26061,3 +26061,105 @@ selected-scope readiness ordering.
     leaves the owner without a modeled repair action, so selected-scope Start
     can remain blocked by duplicate imported work until hidden project data is
     edited manually.
+
+## 2026-07-07 — Completion proof and readiness scope stay visible in project APIs
+
+- Work id: `codex:completion-proof-projection-2026-07-07`.
+- User job: when Guildhall says a selected scope or release is complete, the
+  product API must also show the compact proof behind each completed task and
+  the visible readiness scope must match the task counts Guildhall uses to judge
+  that scope. A user should not need local-history access or Codex-only
+  inference to understand why "complete" is trustworthy.
+- Root-cause classification:
+  - Task hierarchy/dependency/proof modeling problem: completion evidence lived
+    on effective task state and local history, but the compact task projection
+    stripped the recorded proof summary before it reached the product surface.
+  - UI communication/orientation problem: `/api/project` could present a
+    complete release headline while every compact task row appeared to have no
+    completion proof attached.
+  - Project structure/scope/release modeling problem: release-readiness counts
+    used the augmented orientation scope, while the visible `scope` payload
+    preferred the narrower raw selected release object.
+  - Data model/schema problem: no persisted data shape changed, but two read
+    models were projecting different slices of the same source truth.
+- Fix:
+  - Added a shared compact `completionProof` projection for project and work
+    task summaries. It reuses recorded completion proof and proof-missing
+    detection instead of introducing a separate proof model.
+  - `completionProof.state` is `verified`, `planned`, or `missing`; missing
+    proof stays explicit even when low-value soft evidence such as
+    `content.no-truncated-data` exists.
+  - Release readiness now exposes `readinessSpine.scope` as the visible
+    execution/readiness boundary, while keeping `release` as named-release
+    metadata.
+  - The task drawer Journey tab now renders compact completion proof from the
+    task payload, and direct task deep links initialize from the actual browser
+    URL so `?tab=journey` opens the proof view instead of silently returning to
+    Overview.
+- Contract Touch Decision:
+  - Touched contracts: `/api/project` task summary read model, `/api/project`
+    work-surface task summary read model, and `/api/project/release-readiness`
+    visible `scope` semantics.
+  - Contracts considered but not touched: persisted task queue schema, release
+    schema, proof path schema, local-history evidence records, Start/Resume
+    mutation semantics, and orientation-spine persisted inputs.
+  - Existing data impact: no data migration. Existing task proof and release
+    membership are reprojected more honestly.
+  - Schema Migration Decision: no persisted schema field was added, removed, or
+    retyped; no migration id or compatibility reader is required.
+  - Required follow-up: installed-app proof against Narrative Harness must show
+    selected Stage 1 tasks carrying `completionProof` in `/api/project`, and
+    the Map/Overview work should continue toward richer owner-facing display of
+    source docs and proof without relying on hidden CLI inspection.
+  - Proof required: regression that semantic Narrative Harness review proof is
+    projected into `/api/project`, regression that truncation-only evidence
+    still blocks proof readiness and projects as missing proof, regression that
+    release-readiness visible scope matches project-spine selected-scope counts,
+    task detail/work-surface projection regressions, Journey-tab proof display
+    regression, task-drawer deep-link regression, contract advisory,
+    build/install/stale-server proof, and live Narrative Harness API proof.
+  - Proof provided: `./node_modules/.bin/vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts
+    src/runtime/__tests__/serve-task-endpoints.test.ts
+    src/web/surfaces/drawer/__tests__/drawer-tabs.svelte.test.ts
+    src/web/surfaces/__tests__/TaskDrawer.svelte.test.ts
+    src/web/__tests__/App.svelte.test.ts
+    src/web/lib/__tests__/router.test.ts` passed (`229` tests). Earlier focused
+    runs failed on missing `completionProof`, stale visible release-readiness
+    scope node counts, and a real installed-app miss where the direct
+    `?tab=journey` task URL opened the drawer on Overview instead of Journey.
+    The TaskDrawer and router focused suites then passed (`56` tests) after
+    the URL initialization hardening.
+  - Installed proof: `node ./build.mjs && node ./scripts/dev-install.mjs &&
+    guildhall stop && guildhall start && curl -s
+    http://localhost:7777/api/stale-server` installed the current branch and
+    returned `stale:false` for PID `21347`.
+  - Live Narrative Harness API proof:
+    `/api/project?projectId=narrative-harness` returned
+    `startReadiness.code:"all_terminal"` with message
+    `Stage 1 Headless Drafting And Evaluation MVP is complete.`,
+    `orientationSpine.scope.id:"stage-1-headless-drafting-and-evaluation-mvp"`,
+    `orientationSpine.scope.nodeIds` length `11`,
+    `orientationSpine.scope.deferredNodeIds` length `30`,
+    `sourceHealth.inferred:67`, `sourceHealth.conflicts:0`,
+    `sourceHealth.gaps:0`, and readiness totals of `11` tasks, `11` done,
+    `0` blockers, and `0` unfinished work. The release-readiness endpoint
+    returned the same `11` scoped tasks, `30` deferred nodes, `ready:true`, and
+    no blocking counts.
+  - Live task proof: `/api/project/task/task-generate-a-cli-first-story-
+    synopsis-outline-character-voice-records-and-one-chapter-draft-from-the-
+    selected-model?projectId=narrative-harness` returned `status:"done"` and
+    `completionProof.state:"verified"` with `expectedCount:1`,
+    `verifiedCount:65`, and reviewer proof naming `fixtures/story-output.json`
+    plus passing `tests/generate.test.mjs`.
+  - Browser proof status: installed in-app browser proof initially caught the
+    `?tab=journey` drawer opening on Overview and drove the deep-link fix.
+    After the final install, the in-app browser bridge became unreliable: it
+    could list the open tab at the correct Journey URL, but timed out on
+    selected-tab reads, reloads, and read-only DOM evaluation. Local API and
+    deterministic UI tests therefore prove this slice; a follow-up live browser
+    pass should be repeated once the bridge is responsive.
+  - Apply/revert behavior: reverting restores a state where Guildhall can know
+    completion proof and augmented scope membership internally but fail to
+    project that truth into the product API that users and UI surfaces depend
+    on.

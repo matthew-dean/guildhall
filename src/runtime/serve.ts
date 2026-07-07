@@ -22,7 +22,7 @@ import {
   upsertTaskRuntimeState,
 } from '@guildhall/sessions'
 import { readTaskWorkspaceStore } from './task-state-store.js'
-import { latestRecordedCompletionProofAt, recordedCompletionProofCanSettleTaskStatus, taskHasRecordedCompletionProof } from './task-completion-proof.js'
+import { latestRecordedCompletionProofAt, recordedCompletionProofCanSettleTaskStatus, recordedCompletionProofForTask, taskHasRecordedCompletionProof } from './task-completion-proof.js'
 import { taskDoneButProofMissing } from './proof-health.js'
 import {
   readWorkspaceConfig,
@@ -3329,7 +3329,7 @@ async function enrichTaskForServe(
       }).readTaskReviewAudit(taskId).catch(() => null)
     : null
 
-  return {
+  const enriched = {
     ...normalized,
     ...buildTaskEvidenceSummary(normalized),
     ...(reviewAudit?.plan ? { reviewPlan: reviewAudit.plan.payload } : {}),
@@ -3351,6 +3351,8 @@ async function enrichTaskForServe(
         }
       : {}),
   }
+  const completionProof = compactTaskCompletionProof(enriched)
+  return completionProof ? { ...enriched, completionProof } : enriched
 }
 
 async function enrichTaskForWorkSurface(
@@ -3462,6 +3464,21 @@ function compactTaskEscalationsForProjectSummary(escalations: unknown): Array<Re
   return compact.length ? compact : undefined
 }
 
+function compactTaskCompletionProof(task: Record<string, unknown>): Record<string, unknown> | undefined {
+  const recorded = recordedCompletionProofForTask(task)
+  const proofPaths = Array.isArray(task.proofPaths) ? task.proofPaths : []
+  const proofMissing = String(task.status ?? '') === 'done' && taskDoneButProofMissing(task)
+  if (recorded.verified.length === 0 && proofPaths.length === 0 && !proofMissing) return undefined
+  return {
+    state: proofMissing ? 'missing' : recorded.verified.length > 0 ? 'verified' : 'planned',
+    expectedCount: proofPaths.length,
+    verifiedCount: recorded.verified.length,
+    verified: recorded.verified.slice(0, 4),
+    ...(recorded.latestAt ? { latestAt: recorded.latestAt } : {}),
+    ...(proofMissing ? { missing: ['Required proof evidence has not been attached yet.'] } : {}),
+  }
+}
+
 function compactTaskForProjectSummary(task: Record<string, unknown>): Record<string, unknown> {
   const summaryKeys = [
     'id',
@@ -3524,6 +3541,8 @@ function compactTaskForProjectSummary(task: Record<string, unknown>): Record<str
   if (runtime) summary.runtime = runtime
   const escalations = compactTaskEscalationsForProjectSummary(task.escalations)
   if (escalations) summary.escalations = escalations
+  const completionProof = compactTaskCompletionProof(task)
+  if (completionProof) summary.completionProof = completionProof
   return summary
 }
 
@@ -3574,6 +3593,8 @@ function compactTaskForWorkSurface(task: Record<string, unknown>): Record<string
   if (latestCheckpoint) summary.latestCheckpoint = latestCheckpoint
   const definitionOfDone = compactDefinitionOfDoneForWorkSurface(task.definitionOfDone)
   if (definitionOfDone) summary.definitionOfDone = definitionOfDone
+  const completionProof = compactTaskCompletionProof(task)
+  if (completionProof) summary.completionProof = completionProof
   return summary
 }
 
@@ -12185,7 +12206,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       sourceRefs: projectOrientationSourceRefs(project.path),
     })
     const release = readinessSpine.selectedRelease
-    const readinessScope = release ?? readinessSpine.scope ?? fallbackRelease
+    const readinessScope = readinessSpine.scope ?? release ?? fallbackRelease
     const activePressureTest = listPressureTestIntakes(memoryDir)
       .find(intake => intake.status === 'active' && intake.pendingQuestion)
     if (activePressureTest?.pendingQuestion) {

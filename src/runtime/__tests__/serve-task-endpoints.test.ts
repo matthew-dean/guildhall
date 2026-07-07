@@ -1002,6 +1002,34 @@ describe('GET /api/project/task/:id', () => {
     await seedTask('task-1', {
       status: 'done',
       completedAt: '2026-05-08T18:48:00.000Z',
+      proofPaths: [{ kind: 'command', command: 'pnpm test' }],
+      doneSummaryBundle: {
+        taskId: 'task-1',
+        status: 'done',
+        completedAt: '2026-05-08T18:48:00.000Z',
+        summary: {
+          journey: 'Worker completed the task.',
+          decision: 'Task finished as done.',
+          evidence: 'pnpm test passed.',
+          learningCandidates: [],
+          openResidue: 'No residue.',
+        },
+        retention: {
+          transcriptPrimaryArtifact: false,
+          compactedFullTranscript: false,
+          fullEvidenceAvailable: true,
+        },
+        evidenceRefs: [],
+        createdAt: '2026-05-08T18:48:00.000Z',
+        createdBy: 'orchestrator',
+      },
+      gateResults: [{
+        gateId: 'pnpm test',
+        type: 'hard',
+        passed: true,
+        output: 'tests passed',
+        checkedAt: '2026-05-08T18:48:00.000Z',
+      }],
       mergeRecord: {
         fromBranch: 'guildhall/task-1',
         toBranch: 'main',
@@ -1017,12 +1045,25 @@ describe('GET /api/project/task/:id', () => {
     expect(detailRes.status).toBe(200)
     const detailBody = (await detailRes.json()) as Record<string, any>
     expect(detailBody.task?.terminalSummary?.headline).toBe('Merged locally into main.')
+    expect(detailBody.task?.completionProof).toMatchObject({
+      state: 'verified',
+      expectedCount: 1,
+      verifiedCount: expect.any(Number),
+      latestAt: '2026-05-08T18:48:00.000Z',
+    })
+    expect(detailBody.task?.completionProof?.verified.join('\n')).toContain('pnpm test')
 
     const projectRes = await app.fetch(new Request(projectUrl('/api/project')))
     expect(projectRes.status).toBe(200)
     const projectBody = (await projectRes.json()) as Record<string, any>
     const task = projectBody.tasks?.find((entry: Record<string, any>) => entry.id === 'task-1')
     expect(task?.terminalSummary?.headline).toBe('Merged locally into main.')
+    expect(task?.completionProof).toMatchObject({
+      state: 'verified',
+      expectedCount: 1,
+      verifiedCount: expect.any(Number),
+      latestAt: '2026-05-08T18:48:00.000Z',
+    })
   })
 
   it('explains skipped automatic merges truthfully for done tasks', async () => {

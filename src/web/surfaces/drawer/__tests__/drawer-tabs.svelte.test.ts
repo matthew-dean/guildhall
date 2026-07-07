@@ -245,9 +245,25 @@ describe('drawer task detail tabs', () => {
           providerProof: [],
           residualRisk: 'Browser inspection is still required before release.',
         },
+        completionProof: {
+          state: 'verified',
+          expectedCount: 1,
+          verifiedCount: 2,
+          verified: [
+            'Reviewer proof: tests/generate.test.mjs passed.',
+            'Gate passed: pnpm-build',
+          ],
+          latestAt: now,
+        },
       }),
     })
 
+    expect(screen.getByText('Completion proof')).toBeInTheDocument()
+    expect(screen.getAllByText('Verified').length).toBeGreaterThan(0)
+    expect(screen.getByText('2 verified')).toBeInTheDocument()
+    expect(screen.getByText('1 expected')).toBeInTheDocument()
+    expect(screen.getByText('Reviewer proof: tests/generate.test.mjs passed.')).toBeInTheDocument()
+    expect(screen.getByText('Gate passed: pnpm-build')).toBeInTheDocument()
     expect(screen.getByText('Proof path')).toBeInTheDocument()
     expect(screen.getByText('Verify link editor controls')).toBeInTheDocument()
     expect(screen.getByText('Run focused tests')).toBeInTheDocument()

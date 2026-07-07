@@ -91,6 +91,7 @@ function drawerPayload(overrides: Partial<DrawerPayload> = {}): DrawerPayload {
 function installBrowserFakes() {
   window.history.replaceState({}, '', '/projects/looma-knit/task/task-link-editor')
   path.value = '/projects/looma-knit/task/task-link-editor'
+  path.href = '/projects/looma-knit/task/task-link-editor'
   project.detail = projectDetail()
   project.error = null
   vi.stubGlobal('confirm', vi.fn(() => true))
@@ -99,6 +100,7 @@ function installBrowserFakes() {
 function openDrawerOn(tab: 'overview' | 'current' | 'spec') {
   window.history.replaceState({}, '', `/projects/looma-knit/task/task-link-editor?tab=${tab}`)
   path.value = `/projects/looma-knit/task/task-link-editor?tab=${tab}`
+  path.href = `/projects/looma-knit/task/task-link-editor?tab=${tab}`
 }
 
 describe('TaskDrawer', () => {
@@ -1271,6 +1273,95 @@ describe('TaskDrawer', () => {
 
     await screen.findByText('Which controls belong in the link editor?')
     expect(screen.getByRole('tab', { name: 'Action' }).getAttribute('aria-selected')).toBe('true')
+  })
+
+  it('opens the Journey tab when a proof link deep-links to the task journey', async () => {
+    window.history.replaceState({}, '', '/projects/looma-knit/task/task-link-editor?tab=journey')
+    path.value = '/projects/looma-knit/task/task-link-editor'
+    const payload = drawerPayload({
+      task: {
+        ...drawerPayload().task,
+        status: 'done',
+        doneSummaryBundle: {
+          completedAt: '2026-06-16T12:30:00.000Z',
+          summary: 'Worker implemented toolbar controls, then UX and typecheck reviewed it.',
+          highlights: ['Implemented toolbar controls'],
+          proof: ['tests/link-editor.test.ts passed'],
+          nextSteps: [],
+          risks: [],
+        },
+        completionProof: {
+          state: 'verified',
+          expectedCount: 1,
+          verifiedCount: 1,
+          verified: ['Reviewer proof: tests/link-editor.test.ts passed.'],
+        },
+      },
+    })
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(projectDetail())
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByText('Completion proof')
+    expect(screen.getByRole('tab', { name: 'Journey' }).getAttribute('aria-selected')).toBe('true')
+    expect(screen.getByText('Reviewer proof: tests/link-editor.test.ts passed.')).toBeInTheDocument()
+  })
+
+  it('reuses the open drawer but still honors a later Journey tab deep link', async () => {
+    window.history.replaceState({}, '', '/projects/looma-knit/task/task-link-editor')
+    path.value = '/projects/looma-knit/task/task-link-editor'
+    const payload = drawerPayload({
+      task: {
+        ...drawerPayload().task,
+        status: 'done',
+        doneSummaryBundle: {
+          completedAt: '2026-06-16T12:30:00.000Z',
+          summary: 'Worker implemented toolbar controls, then UX and typecheck reviewed it.',
+          highlights: ['Implemented toolbar controls'],
+          proof: ['tests/link-editor.test.ts passed'],
+          nextSteps: [],
+          risks: [],
+        },
+        completionProof: {
+          state: 'verified',
+          expectedCount: 1,
+          verifiedCount: 1,
+          verified: ['Reviewer proof: tests/link-editor.test.ts passed.'],
+        },
+      },
+    })
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(projectDetail())
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByRole('tab', { name: 'Overview', selected: true })
+    window.history.pushState({}, '', '/projects/looma-knit/task/task-link-editor?tab=journey')
+    path.value = '/projects/looma-knit/task/task-link-editor?tab=journey'
+    path.href = '/projects/looma-knit/task/task-link-editor?tab=journey'
+
+    await screen.findByText('Completion proof')
+    expect(screen.getByRole('tab', { name: 'Journey' }).getAttribute('aria-selected')).toBe('true')
+    expect(screen.getByText('Reviewer proof: tests/link-editor.test.ts passed.')).toBeInTheDocument()
   })
 
   it('treats tab=action as the Action tab deep link', async () => {

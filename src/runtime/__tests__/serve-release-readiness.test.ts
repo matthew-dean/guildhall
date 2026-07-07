@@ -686,6 +686,17 @@ describe('GET /api/project/release-readiness', () => {
       proofEvidenceBlockingCount: 0,
     })
     expect(readiness.proofMissingDoneTasks).toEqual([])
+
+    const projectRes = await app.fetch(new Request(projectUrl('/api/project')))
+    const project = await projectRes.json() as any
+    const task = project.tasks.find((candidate: any) => candidate.id === 'task-current')
+    expect(task?.completionProof).toMatchObject({
+      state: 'verified',
+      expectedCount: 1,
+      verifiedCount: expect.any(Number),
+      latestAt: '2026-07-04T08:50:00.000Z',
+    })
+    expect(task.completionProof.verified.join('\n')).toContain('npm-run-build')
   })
 
   it('does not accept imported proof-path status without recorded task evidence', async () => {
@@ -741,6 +752,16 @@ describe('GET /api/project/release-readiness', () => {
 
     const projectRes = await app.fetch(new Request(projectUrl('/api/project')))
     const project = await projectRes.json() as any
+    expect(project.startReadiness).toMatchObject({
+      canStart: false,
+      code: 'proof_evidence_missing',
+      actionHref: '/work?task=task-current',
+      focusTaskId: 'task-current',
+      focusKind: 'proof',
+      proofTaskIds: ['task-current'],
+    })
+    expect(project.startReadiness?.message).toContain('Headless MVP')
+    expect(project.startReadiness?.message).toContain('waiting on proof evidence')
     expect(project.orientationSpine?.summary?.progress).toMatchObject({
       done: 1,
       proven: 0,
@@ -828,6 +849,17 @@ describe('GET /api/project/release-readiness', () => {
       proofEvidenceBlockingCount: 0,
     })
     expect(readiness.proofMissingDoneTasks).toEqual([])
+
+    const projectRes = await app.fetch(new Request(projectUrl('/api/project')))
+    const project = await projectRes.json() as any
+    const task = project.tasks.find((candidate: any) => candidate.id === 'task-current')
+    expect(task?.completionProof).toMatchObject({
+      state: 'verified',
+      expectedCount: 1,
+      verifiedCount: expect.any(Number),
+      latestAt: '2026-07-04T08:50:00.000Z',
+    })
+    expect(task.completionProof.verified.join('\n')).toContain('npm-run-build')
   })
 
   it('requires recorded proof before treating a completed selected-release task as release-ready', async () => {
@@ -1187,6 +1219,129 @@ describe('GET /api/project/release-readiness', () => {
       proofEvidenceBlockingCount: 0,
     })
     expect(readiness.proofMissingDoneTasks).toEqual([])
+
+    const projectRes = await app.fetch(new Request(projectUrl('/api/project')))
+    const project = await projectRes.json() as any
+    const task = project.tasks.find((candidate: any) => candidate.id === 'task-current')
+    expect(task?.completionProof).toMatchObject({
+      state: 'verified',
+      expectedCount: 1,
+      verifiedCount: expect.any(Number),
+      latestAt: '2026-07-04T08:50:00.000Z',
+    })
+    expect(task.completionProof.verified.join('\n')).toContain('tests/generate.test.mjs')
+  })
+
+  it('does not accept truncation-only evidence for inferred Narrative Harness review proof', async () => {
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: 'headless-mvp',
+      releases: [{
+        id: 'headless-mvp',
+        label: 'Headless MVP',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-current'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [
+        makeTask({
+          id: 'task-current',
+          title: 'Generate a CLI-first story synopsis, outline, character/voice records, and one chapter draft from the selected model',
+          status: 'done',
+          releaseIds: ['headless-mvp'],
+          acceptanceCriteria: [{
+            id: 'chapter-draft-command',
+            description: 'A pnpm script or CLI command drafts one chapter from the selected model using the bounded context packet and review plan.',
+            verifiedBy: 'review',
+            met: true,
+          }],
+          proofPaths: [{
+            kind: 'review',
+            source: 'inferred',
+            expectedEvidence: [
+              'A pnpm script or CLI command drafts one chapter from the selected model using the bounded context packet and review plan.',
+            ],
+          }],
+          doneSummaryBundle: {
+            taskId: 'task-current',
+            status: 'done',
+            completedAt: '2026-07-04T08:50:00.000Z',
+            summary: {
+              journey: 'Worker timed out before mutating a likely target file.',
+              decision: 'Task finished as done.',
+              evidence: 'content.no-truncated-data passed.',
+              learningCandidates: [],
+              openResidue: 'No open residue recorded.',
+            },
+            retention: {
+              transcriptPrimaryArtifact: false,
+              compactedFullTranscript: false,
+              fullEvidenceAvailable: true,
+            },
+            evidenceRefs: [],
+            createdAt: '2026-07-04T08:50:00.000Z',
+            createdBy: 'orchestrator',
+          },
+          gateResults: [{
+            gateId: 'content.no-truncated-data',
+            type: 'soft',
+            passed: true,
+            output: 'no truncated semantic data detected',
+            checkedAt: '2026-07-04T08:50:00.000Z',
+          }],
+          reviewVerdicts: [{
+            verdict: 'approve',
+            reviewerPath: 'llm',
+            reason: 'LLM reviewer approved',
+            reasoning: 'The output is not truncated.',
+            failingSignals: [],
+            recordedAt: '2026-07-04T08:50:00.000Z',
+          }],
+        } as Partial<Task>),
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await approveDesignSystem(app)
+    await commitAndPush('truncation-only review proof release readiness')
+
+    const readinessRes = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
+    const readiness = await readinessRes.json() as any
+    expect(readiness.ready).toBe(false)
+    expect(readiness.totals).toMatchObject({
+      tasks: 1,
+      done: 1,
+      proofEvidenceBlockingCount: 1,
+    })
+    expect(readiness.proofMissingDoneTasks).toEqual([{
+      id: 'task-current',
+      title: 'Generate a CLI-first story synopsis, outline, character/voice records, and one chapter draft from the selected model',
+    }])
+
+    const projectRes = await app.fetch(new Request(projectUrl('/api/project')))
+    const project = await projectRes.json() as any
+    expect(project.startReadiness).toMatchObject({
+      canStart: false,
+      code: 'proof_evidence_missing',
+      actionHref: '/work?task=task-current',
+      focusTaskId: 'task-current',
+      focusKind: 'proof',
+      proofTaskIds: ['task-current'],
+    })
+    const task = project.tasks.find((candidate: any) => candidate.id === 'task-current')
+    expect(task?.completionProof).toMatchObject({
+      state: 'missing',
+      expectedCount: 1,
+      verifiedCount: expect.any(Number),
+      missing: ['Required proof evidence has not been attached yet.'],
+    })
+    expect(project.orientationSpine?.summary).toMatchObject({
+      headline: 'Headless MVP is waiting on proof.',
+      nextAction: 'Attach proof for the completed scoped work.',
+    })
   })
 
   it('does not let stale escalations block work that has later approved review proof', async () => {

@@ -55,10 +55,11 @@
   interface Props {
     taskId: string
     projectId?: string | null
+    routeHref?: string
     onClose: () => void
   }
 
-  let { taskId, projectId = null, onClose }: Props = $props()
+  let { taskId, projectId = null, routeHref = '', onClose }: Props = $props()
 
   let payload = $state<DrawerPayload | null>(null)
   let error = $state<string | null>(null)
@@ -67,8 +68,14 @@
   let runError = $state<string | null>(null)
   let devServers = $state<RuntimeDevServer[]>([])
   let devServerBusyId = $state<string | null>(null)
-  let activeTab = $state<DrawerTab>('overview')
+  function currentBrowserHref(): string {
+    if (typeof window === 'undefined') return ''
+    return `${window.location.pathname}${window.location.search}${window.location.hash}`
+  }
+
+  let activeTab = $state<DrawerTab>(requestedInitialTab(currentBrowserHref()) ?? 'overview')
   let initializedTabForTaskId = $state<string | null>(null)
+  let initializedTabForHref = $state<string | null>(null)
   let pollHandle: ReturnType<typeof setInterval> | null = null
 
   // Modal state
@@ -159,9 +166,13 @@
     }
   }
 
-  function requestedInitialTab(): DrawerTab | null {
-    if (typeof window === 'undefined') return null
-    const raw = new URLSearchParams(window.location.search).get('tab')
+  function requestedInitialTab(href: string): DrawerTab | null {
+    const queryStart = href.indexOf('?')
+    const hashStart = href.indexOf('#', queryStart)
+    const search = queryStart >= 0
+      ? href.slice(queryStart + 1, hashStart < 0 ? undefined : hashStart)
+      : (typeof window === 'undefined' ? '' : window.location.search.replace(/^\?/, ''))
+    const raw = new URLSearchParams(search).get('tab')
     if (raw === 'action') return 'current'
     if (
       raw === 'current' ||
@@ -720,13 +731,19 @@
   })
 
   $effect(() => {
+    const href = routeHref || navPath.href || currentBrowserHref()
     if (!payload) return
-    if (initializedTabForTaskId === taskId) return
-    const requested = requestedInitialTab()
-    activeTab = requested && (requested !== 'current' || hasCurrentTurns)
-      ? requested
-      : 'overview'
+    const taskChanged = initializedTabForTaskId !== taskId
+    const hrefChanged = initializedTabForHref !== href
+    const requested = requestedInitialTab(href)
+    if (!taskChanged && (!hrefChanged || !requested)) return
+    if (requested && (requested !== 'current' || hasCurrentTurns)) {
+      activeTab = requested
+    } else if (taskChanged) {
+      activeTab = 'overview'
+    }
     initializedTabForTaskId = taskId
+    initializedTabForHref = href
   })
 
   $effect(() => {

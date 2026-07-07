@@ -43,6 +43,7 @@
   const requestIntake = $derived(task.requestIntake ?? null)
   const doneSummary = $derived(task.doneSummaryBundle ?? null)
   const proofPaths = $derived(task.proofPaths ?? [])
+  const completionProof = $derived(task.completionProof ?? null)
   const completionHandoff = $derived(task.completionHandoff ?? null)
   const verdicts = $derived(task.reviewVerdicts ?? [])
   const gates = $derived(task.gateResults ?? [])
@@ -182,6 +183,12 @@
     if (record.status === 'passed') return 'ok'
     if (record.status === 'failed') return 'danger'
     if (record.status === 'blocked') return 'warn'
+    return 'neutral'
+  }
+
+  function completionProofTone(state: string | undefined): 'ok' | 'warn' | 'neutral' {
+    if (state === 'verified') return 'ok'
+    if (state === 'missing') return 'warn'
     return 'neutral'
   }
 
@@ -349,6 +356,36 @@
                 <Chip label={gate.gateId ?? 'gate'} tone={gate.passed ? 'ok' : 'danger'} />
               {/each}
             </div>
+          {/if}
+          {#if completionProof}
+            <section class="detail">
+              <h4>Completion proof</h4>
+              <div class="chips">
+                <Chip label={friendlyToken(completionProof.state)} tone={completionProofTone(completionProof.state)} />
+                <Chip label={`${completionProof.verifiedCount ?? 0} verified`} tone={(completionProof.verifiedCount ?? 0) > 0 ? 'ok' : 'neutral'} />
+                <Chip label={`${completionProof.expectedCount ?? 0} expected`} tone="neutral" />
+              </div>
+              {#if completionProof.verified?.length}
+                <ul class="proof-list">
+                  {#each completionProof.verified as proof, i (`completion-proof-${i}`)}
+                    <li>
+                      <Chip label="Proof" tone="ok" />
+                      <span>{proof}</span>
+                    </li>
+                  {/each}
+                </ul>
+              {/if}
+              {#if completionProof.missing?.length}
+                <ul class="proof-list">
+                  {#each completionProof.missing as missing, i (`missing-proof-${i}`)}
+                    <li>
+                      <Chip label="Missing" tone="warn" />
+                      <span>{missing}</span>
+                    </li>
+                  {/each}
+                </ul>
+              {/if}
+            </section>
           {/if}
           {#if proofPaths.length > 0}
             <section class="detail">

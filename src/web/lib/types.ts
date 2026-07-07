@@ -452,6 +452,14 @@ export interface Task {
   requestIntake?: RequestIntake
   doneSummaryBundle?: DoneTaskSummaryBundle
   proofPaths?: ProofPath[]
+  completionProof?: {
+    state?: 'verified' | 'planned' | 'missing' | string
+    expectedCount?: number
+    verifiedCount?: number
+    verified?: string[]
+    missing?: string[]
+    latestAt?: string
+  }
   completionHandoff?: CompletionHandoff
   latestCheckpoint?: {
     step?: number
