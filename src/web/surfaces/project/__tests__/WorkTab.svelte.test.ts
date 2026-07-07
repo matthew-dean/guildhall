@@ -549,6 +549,13 @@ describe('WorkTab', () => {
                   'task:current-done',
                 ],
               },
+              {
+                taskId: 'later-shelved',
+                nodeId: 'work:later-shelved',
+                title: 'Later reviewer lane',
+                scope: 'deferred',
+                sourceRefs: ['task:later-shelved'],
+              },
             ],
             proofContracts: Array.from({ length: 11 }, (_, index) => ({
               nodeId: `work:proof-${index + 1}`,
@@ -579,8 +586,11 @@ describe('WorkTab', () => {
     expect(queue).toHaveTextContent('Sources: implementation-roadmap.md, architecture-notes.md, deepinfra-drafting-model-selection.md')
     expect(queue).toHaveTextContent('Proof: 11 proven items · 0 missing proof')
     expect(queue).not.toHaveTextContent('0 current tasks')
-    expect(await screen.findByText('0 shown · 2 total')).toBeTruthy()
-    expect(screen.getByText('No work is ready to run yet.')).toBeTruthy()
+    expect(screen.getByRole('combobox', { name: /^show$/i })).toHaveValue('scope')
+    expect(await screen.findByText('2 current-scope items · 2 total')).toBeTruthy()
+    expect(screen.queryByText('No work is ready to run yet.')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /inspect work generate a cli-first story synopsis/i })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /inspect work later reviewer lane/i })).toBeTruthy()
   })
 
   it('reopens proof-missing completed work before starting the selected item', async () => {

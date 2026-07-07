@@ -42,7 +42,7 @@
   type SortKey = 'title' | 'status' | 'area' | 'priority' | 'updated' | 'revisions'
   type SortDir = 'asc' | 'desc'
   type WorkView = 'list' | 'board'
-  type WorkFilter = 'queued' | 'planning' | 'open' | 'all' | 'blocked' | 'needs-proof' | 'needs-you'
+  type WorkFilter = 'queued' | 'scope' | 'planning' | 'open' | 'all' | 'blocked' | 'needs-proof' | 'needs-you'
 
   const STATUS_SORT_ORDER: Record<string, number> = {
     proposed: 0,
@@ -110,6 +110,7 @@
 
   const workFilterOptions = [
     { value: 'queued', label: 'Ready to run' },
+    { value: 'scope', label: 'Current scope' },
     { value: 'planning', label: 'Planning' },
     { value: 'open', label: 'Open' },
     { value: 'all', label: 'All' },
@@ -172,6 +173,12 @@
       return new Set([detail.startReadiness.focusTaskId])
     }
     return new Set<string>()
+  })
+  const scopeTaskIds = $derived.by(() => {
+    const ids = (detail.orientationSpine?.scopeRows ?? [])
+      .map(row => row.taskId)
+      .filter((id): id is string => Boolean(id))
+    return new Set(ids)
   })
   const proofMissingCount = $derived(proofMissingTaskIds.size || (detail.startReadiness?.code === 'proof_evidence_missing' ? detail.startReadiness.count ?? 0 : 0))
   const deliveryPrimitiveBlockers = $derived.by(() => {
@@ -259,6 +266,11 @@
       done: all.filter(task => ['done', 'pending_pr'].includes(task.status ?? '')).length,
     }
   })
+  const workListCountLabel = $derived(
+    workFilter === 'scope'
+      ? `${visibleTasks.length} current-scope ${visibleTasks.length === 1 ? 'item' : 'items'} · ${taskCounts.total} total`
+      : `${visibleTasks.length} shown · ${taskCounts.total} total`,
+  )
 
   function countLabel(count: number, singular: string, plural = `${singular}s`): string {
     return `${count} ${count === 1 ? singular : plural}`
@@ -465,6 +477,7 @@
 
   function emptyFilterTitle(): string {
     if (workFilter === 'queued') return 'No work is ready to run yet.'
+    if (workFilter === 'scope') return 'No current-scope work is visible yet.'
     if (workFilter === 'planning') return 'No planning work.'
     if (workFilter === 'blocked') return 'No blocked work.'
     if (workFilter === 'needs-proof') return 'No proof gaps.'
@@ -474,6 +487,7 @@
 
   function emptyFilterDetail(): string {
     if (workFilter === 'queued') return 'Planning and review work is still waiting. Use Planning to inspect intake and spec work.'
+    if (workFilter === 'scope') return 'Current and deferred scope rows will appear here once Guildhall maps them to work records.'
     if (workFilter === 'planning') return 'Planning, intake, and spec items will appear here while they are being shaped.'
     if (workFilter === 'blocked') return 'Blocked work will appear here once a task cannot continue.'
     if (workFilter === 'needs-proof') return 'Completed work with missing release proof will appear here.'
@@ -490,6 +504,7 @@
   function matchesWorkFilter(task: Task): boolean {
     if (partFilter !== 'all' && workAreaForTask(task).id !== partFilter) return false
     if (workFilter === 'all') return true
+    if (workFilter === 'scope') return scopeTaskIds.has(task.id)
     if (workFilter === 'queued') return isQueuedWorkTask(task)
     if (workFilter === 'planning') return isPlanningTask(task)
     if (workFilter === 'open') return !['done', 'pending_pr', 'shelved'].includes(task.status ?? '')
@@ -504,6 +519,8 @@
     if (tasks.some(isPlanningTask)) return 'planning'
     if (tasks.some(task => task.status === 'blocked')) return 'blocked'
     if (tasks.some(isProofMissingTask)) return 'needs-proof'
+    if (scopeTaskIds.size > 0) return 'scope'
+    if (tasks.length > 0) return 'all'
     return 'queued'
   }
 
@@ -787,7 +804,7 @@
       <Card title="Work list" titleTag="h2">
 
         <div class="work-list-overview">
-          <div class="work-list-count">{visibleTasks.length} shown · {taskCounts.total} total</div>
+          <div class="work-list-count">{workListCountLabel}</div>
           <div class="work-summary">
             {#if taskCounts.agentActive > 0}
               <Chip label={countLabel(taskCounts.agentActive, 'Working', 'Working')} tone="running" />

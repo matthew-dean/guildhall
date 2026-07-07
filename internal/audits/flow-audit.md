@@ -25244,3 +25244,59 @@ selected-scope readiness ordering.
   - Apply/revert behavior: reverting restores the contradiction where the map
     can show proof contracts with missing evidence while the top proof stat
     reads clean.
+
+## 2026-07-06 — Work defaults completed scopes to inspectable items
+
+- Work id: `codex:work-completed-scope-default-filter-2026-07-06`.
+- User job: when Overview says a selected scope is complete and tells the user
+  to open Work to inspect completed and deferred items, Work should open on a
+  filter that actually shows those items. It must not default to an empty
+  "Ready to run" slice when no runnable work exists.
+- Root-cause classification:
+  - UI communication/orientation problem: Narrative Harness Overview said the
+    Stage 1 scope was complete and pointed to Work for inspection, but Work
+    defaulted to the `queued` filter and showed "No work is ready to run yet."
+  - Scheduler/action-state logic problem: the Work default-filter heuristic
+    treated "no queued/planning/blocked/proof work" as "show queued" instead of
+    recognizing the all-terminal inspection state.
+  - Project structure/scope/release modeling problem: the existing `all` filter
+    was too broad for this job because it showed every project task, not the
+    selected scope's current/deferred work.
+- Fix:
+  - Work now has a `Current scope` filter backed by
+    `orientationSpine.scopeRows`.
+  - `defaultWorkFilterForTasks()` now falls back to `Current scope` when no
+    queued, planning, blocked, or proof-missing work is present and the
+    orientation spine has selected-scope task ids.
+- Contract Touch Decision:
+  - Touched contracts: Work list filter options and default-filter behavior for
+    terminal selected scopes.
+  - Contracts considered but not touched: persisted task schema, orientation
+    spine builder, delivery spine schema, start/readiness response, action
+    model, Overview copy, Project Map, scheduler/start contract, and raw task
+    persistence.
+  - Existing data impact: no migration. Existing terminal scoped tasks are now
+    visible by default in Work without showing unrelated project-wide task
+    records.
+  - Required follow-up: keep Work default filters aligned with the selected
+    scope's action state so "open Work" never lands the owner in an empty slice
+    when a better evidence-backed slice exists.
+  - Proof required: failing Work regression for completed selected-scope
+    default filter, full Work/Overview/Map/API regression set, UI typecheck,
+    installed-app stale-server proof, and rendered Narrative Harness Work
+    proof.
+  - Proof provided: the updated Work regression first failed because the
+    `Show` combobox value was `queued`; after the fix it passed with `Show =
+    scope`, `2 current-scope items · 2 total`, completed/deferred rows visible,
+    and no empty queued-state copy. The focused Work/Overview/Map/API
+    regression set passed with `182` tests, `tsc -p packages/ui/tsconfig.json`
+    and `git diff --check` passed, and after `node ./build.mjs`,
+    `node ./scripts/dev-install.mjs`, and service restart,
+    `/api/stale-server` returned `stale:false` for PID `25738`. Rendered
+    Narrative Harness Work proof at `1280x720` and `390x844` showed
+    `Show = Current scope`, `42 current-scope items · 159 total`, the complete
+    Stage 1 scope summary, source/proof lines, no empty queued-state copy, and
+    no horizontal overflow (`scrollWidth` equaled `clientWidth` at both
+    viewports).
+  - Apply/revert behavior: reverting restores the failure where complete scopes
+    open Work on the empty runnable-work filter.
