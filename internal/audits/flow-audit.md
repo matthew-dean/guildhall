@@ -27689,3 +27689,73 @@ selected-scope readiness ordering.
 - Schema Migration Decision: no persisted schema field was added, removed, or
   retyped. This is a shared read-model projection over existing start
   readiness, scope projection, and release data.
+
+## 2026-07-07T11:47:09Z - Release readiness must show every blocker it counts
+
+- User job:
+  - A project owner looking at release or current-scope readiness must be able
+    to reconcile the blocking total with the visible blocker list without
+    hidden CLI context or Codex-only inference.
+- Finding:
+  - Root cause classification:
+    - Data model/schema problem: `/api/project/release-readiness` counted
+      design-system and dirty-checkout blocker keys but did not project those
+      keys into the `releaseBlockers` list returned to product surfaces.
+    - Project structure/scope/release modeling problem: non-task closure checks
+      are release/scope blockers even when they are not owned by a task row, so
+      they need first-class read-model rows.
+    - UI communication/orientation problem: Looma + Knit reported
+      `totals.blockingCount:8` while exposing only seven blocker rows, leaving
+      the UI unable to explain one counted blocker.
+- Fix:
+  - `buildProjectReleaseReadinessPayload` now appends explicit
+    `design-system` and `dirty-checkout` blocker rows whenever those blockers
+    contribute to the blocking key set.
+  - The fix stays in the shared readiness payload; product views can render the
+    same blocker list instead of reinterpreting totals locally.
+- Proof provided:
+  - Red/green regressions:
+    `CI=true ./node_modules/.bin/vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts -t "mixed release
+    includes UI work"` first failed because `releaseBlockers` was empty while
+    `designSystemBlockingCount` was one, then passed after the shared payload
+    returned the `design-system` row.
+    `CI=true ./node_modules/.bin/vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts -t "Guildhall-owned
+    project files are dirty"` first failed because `releaseBlockers` was empty
+    while `dirtyCheckoutBlockingCount` was one, then passed after the shared
+    payload returned the `dirty-checkout` row.
+  - Broader regression:
+    `CI=true ./node_modules/.bin/vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts` passed (`54`
+    tests).
+  - Build/contracts:
+    `node ./build.mjs`, `CI=true corepack pnpm lint:contracts`, and `git diff
+    --check` passed.
+  - Installed/live proof:
+    `CI=true corepack pnpm dev:install && guildhall stop && guildhall start`
+    installed the current branch artifact, and `/api/stale-server` returned
+    `stale:false` for PID `49882`.
+  - Looma + Knit live readiness:
+    `/api/project/release-readiness?projectId=looma-knit` reports
+    `ready:false`, selected release `stage-1-v1-release-hardening` as
+    `state:"blocked"`, `totals.blockingCount:8`, and
+    `releaseBlockers.length:8`. The rows now include five task-shaping
+    blockers, two repository follow-up blockers, and one `dirty-checkout`
+    blocker for `knit/.gitignore`.
+- Contract Touch Decision:
+  - Work id: `release-readiness-visible-non-task-blockers`.
+  - Touched contracts: `/api/project/release-readiness` response semantics for
+    `releaseBlockers`, specifically that counted non-task release/scope
+    blockers are visible as rows.
+  - Contracts considered but not touched: persisted release schema, task
+    schema, project spine schema, git story schema, dirty-checkout schema, and
+    design-system status schema.
+  - Required follow-up: continue auditing whether each blocker label is
+    owner-understandable and action-specific, especially project-local dirty
+    checkout rows.
+  - Apply/revert behavior: reverting can make readiness totals count blockers
+    the product cannot show, recreating hidden release blockers.
+- Schema Migration Decision: no persisted schema field was added, removed, or
+  retyped. This is a shared read-model projection over existing readiness,
+  design-system, checkout, task, and repository state.

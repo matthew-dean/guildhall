@@ -12661,6 +12661,22 @@ export function buildServeApp(opts: ServeOptions = {}): {
       title: `Repository follow-up: ${blocker.label}`,
       label: blocker.reason,
     }))
+    const designSystemBlockers = designSystemBlockingCount > 0
+      ? [{
+          id: 'design-system',
+          title: 'Design system',
+          label: designSystem.reason ?? 'Design-system guardrail is not approved.',
+        }]
+      : []
+    const dirtyCheckoutBlockers = dirtyCheckoutBlockingCount > 0
+      ? [{
+          id: 'dirty-checkout',
+          title: 'Project checkout',
+          label: dirtyCheckout.error
+            ? `Could not inspect project checkout: ${dirtyCheckout.error}`
+            : `${dirtyCheckout.ownedCount} project-local Guildhall ${dirtyCheckout.ownedCount === 1 ? 'file needs' : 'files need'} cleanup or landing.`,
+        }]
+      : []
     const blockingKeys = new Set<string>()
     for (const blocker of releaseBlockers) blockingKeys.add(`task:${blocker.id}`)
     for (const task of proofMissingDoneTasks) blockingKeys.add(`task:${task.id}`)
@@ -12692,7 +12708,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
       shelvedUnclaimed,
       blockedByAgent,
       proofMissingDoneTasks,
-      releaseBlockers: [...releaseBlockers, ...repositoryFollowupBlockers],
+      releaseBlockers: [
+        ...releaseBlockers,
+        ...repositoryFollowupBlockers,
+        ...designSystemBlockers,
+        ...dirtyCheckoutBlockers,
+      ],
       designSystem,
       dirtyCheckout,
       gitStory,

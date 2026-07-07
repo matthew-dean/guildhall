@@ -351,6 +351,13 @@ describe('GET /api/project/release-readiness', () => {
 
     expect(body.totals.designSystemBlockingCount).toBe(1)
     expect(body.ready).toBe(false)
+    expect(body.releaseBlockers).toEqual([
+      expect.objectContaining({
+        id: 'design-system',
+        title: 'Design system',
+        label: expect.stringContaining('No design-system guardrail is captured yet.'),
+      }),
+    ])
   })
 
   it('counts only the selected scope when later or stale tasks remain elsewhere in the queue', async () => {
@@ -2967,6 +2974,13 @@ describe('GET /api/project/release-readiness', () => {
     expect(body.dirtyCheckout.ownedCount).toBe(1)
     expect(body.dirtyCheckout.files).toEqual(['.guildhall/release-note.md'])
     expect(body.totals.dirtyCheckoutBlockingCount).toBe(1)
+    expect(body.releaseBlockers).toEqual([
+      expect.objectContaining({
+        id: 'dirty-checkout',
+        title: 'Project checkout',
+        label: '1 project-local Guildhall file needs cleanup or landing.',
+      }),
+    ])
   })
 
   it('does not block current work closure on exploring scratch files', async () => {
