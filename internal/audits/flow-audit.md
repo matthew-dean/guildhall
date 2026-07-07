@@ -25588,3 +25588,58 @@ selected-scope readiness ordering.
   - Apply/revert behavior: reverting restores the model/UI split where proof
     contracts can lead with generic process labels and proof-path metadata can
     be mistaken for actual evidence.
+
+## 2026-07-06 — Project Map proof rows show source refs
+
+- Work id: `codex:map-proof-source-refs-2026-07-06`.
+- User job: a user reading the 1,000-foot Project Map should be able to see
+  not only the proof claim for scoped work, but also the source docs behind the
+  claim without repo access, CLI output, or Codex-only inference.
+- Root-cause classification:
+  - UI communication/orientation problem: Project Map proof rows rendered the
+    proof contract title, state, and first proof/missing line, but hid the
+    already-modeled `refs` that explain where the claim came from.
+  - Task hierarchy/dependency/proof modeling problem: proof/source provenance
+    existed in the shared orientation spine, but the primary 1,000-foot surface
+    did not display it, so the model could not prove its own claims to the
+    owner.
+- Fix:
+  - Project Map proof rows now reuse the existing `sourceRefsSummary` helper to
+    show a compact `Source: ...` line under each proof contract.
+  - The rendering stays inside existing `CardListItem`/`Chip` treatment and
+    adds only caption styling for the source line.
+- Contract Touch Decision:
+  - Touched contracts: Project Map presentation of orientation-spine proof
+    contract refs.
+  - Contracts considered but not touched: orientation-spine API shape,
+    persisted task schema, workspace-import schema, proof-health calculation,
+    release-readiness calculation, scheduler/start contract, and release/scope
+    selection.
+  - Existing data impact: no migration. Existing proof-contract refs become
+    owner-visible wherever Project Map proof rows render.
+  - Required follow-up: continue making source trails inspectable and
+    answerable rather than passive, especially for open questions and
+    unresolved proof needs.
+  - Proof required: red/green Project Map regression for proof source refs,
+    full Project Map component suite, installed-app stale-server proof, desktop
+    and mobile browser proof on Narrative Harness Map, and live API proof that
+    Narrative Harness and Looma + Knit both carry proof-contract refs in the
+    shared orientation spine.
+  - Proof provided: the focused regression first failed because
+    `Source: world-and-object-continuity.md` was absent. After the fix,
+    `./node_modules/.bin/vitest run src/web/surfaces/project/__tests__/ProjectMapTab.svelte.test.ts`
+    passed (`7` tests). `node ./build.mjs` passed. After
+    `node ./scripts/dev-install.mjs` and service restart, `/api/stale-server`
+    returned `stale:false` for PID `35870`. Browser proof on
+    `/projects/narrative-harness/map` showed `6` proof rows, visible `Source:`
+    lines such as `implementation-roadmap.md, schema-contract-roadmap.md`,
+    and no horizontal overflow at `1280px` or `390px` widths. Live
+    Narrative Harness API proof showed the selected scope
+    `Stage 1 Headless Drafting And Evaluation MVP`, `42` total work items,
+    `11` proven, and proof-contract refs to source docs. Live Looma + Knit API
+    proof showed selected scope `Stage 1: V1 Release Hardening`, `35` total
+    work items, `5` blocked, `30` deferred, and needed proof contracts with
+    refs to `PROJECT_STATE.md` and `knit/docs/release-plan.md`.
+  - Apply/revert behavior: reverting restores the owner-facing gap where the
+    1,000-foot Project Map can claim proof status without showing the source
+    trail that justifies or limits that claim.

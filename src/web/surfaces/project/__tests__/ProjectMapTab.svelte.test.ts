@@ -459,6 +459,58 @@ describe('ProjectMapTab', () => {
     expect(screen.queryByText('Verification evidence for later work.')).not.toBeInTheDocument()
   })
 
+  it('shows source refs on proof contract rows', () => {
+    render(ProjectMapTab, {
+      detail: {
+        id: 'narrative-harness',
+        name: 'Narrative Harness',
+        tasks: [],
+        orientationSpine: {
+          charter: {
+            goal: 'Build a fiction-first planning and review harness.',
+            source: 'inferred',
+          },
+          selectedRelease: {
+            id: 'headless-mvp',
+            label: 'Headless MVP',
+            kind: 'release',
+            state: 'active',
+            source: 'release_plan',
+            nodeIds: ['work:world-state-review'],
+          },
+          summary: {
+            selectedScopeLabel: 'Headless MVP',
+            selectedReleaseLabel: 'Headless MVP',
+            includedWorkCount: 1,
+            deferredWorkCount: 0,
+            progress: { total: 1, proven: 1 },
+          },
+          roots: [],
+          nodes: {},
+          proofContracts: [{
+            nodeId: 'work:world-state-review',
+            title: 'World-state review proof',
+            state: 'proven',
+            required: ['Verification evidence for world-state review.'],
+            missing: [],
+            verified: ['Reviewer proof: wet hair drying proof script passed.'],
+            refs: [
+              'task:world-state-review',
+              'import:/Users/matthew/git/oss/narrative-harness/docs/specs/world-and-object-continuity.md',
+            ],
+          }],
+          gaps: [],
+          sourceHealth: { inferred: 1, gaps: 0 },
+        },
+      },
+      activeProjectId: 'narrative-harness',
+    })
+
+    expect(screen.getByText('World-state review proof')).toBeInTheDocument()
+    expect(screen.getByText('Reviewer proof: wet hair drying proof script passed.')).toBeInTheDocument()
+    expect(screen.getByText('Source: world-and-object-continuity.md')).toBeInTheDocument()
+  })
+
   it('counts missing proof from scoped proof contracts even when map gaps are clean', () => {
     render(ProjectMapTab, {
       detail: {

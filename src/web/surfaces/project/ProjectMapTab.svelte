@@ -286,6 +286,11 @@
     return taskId ? currentTaskHref(taskId, activeProjectId) : null
   }
 
+  function contractSourceSummary(contract: { refs?: string[] }): string | null {
+    const summary = sourceRefsSummary(contract.refs ?? [], 2)
+    return summary ? `Source: ${summary}` : null
+  }
+
   function proofContractTone(state: unknown): Tone {
     if (state === 'proven') return 'ok'
     if (state === 'partial' || state === 'needed') return 'warn'
@@ -707,6 +712,9 @@
                     <Chip label={friendlyStatus(contract.state ?? 'unknown')} tone={proofContractTone(contract.state)} />
                     <strong>{contract.title ?? 'Untitled work'}</strong>
                     <p>{contract.missing?.[0] ?? contract.verified?.[0] ?? contract.required?.[0] ?? 'Proof target is not described yet.'}</p>
+                    {#if contractSourceSummary(contract)}
+                      <small>{contractSourceSummary(contract)}</small>
+                    {/if}
                   </div>
                 </CardListItem>
               {/each}
@@ -1029,6 +1037,13 @@
     color: var(--text-muted);
     font-size: var(--gh-type-size-meta);
     line-height: var(--gh-type-line-height-body);
+    overflow-wrap: anywhere;
+  }
+
+  :global(.proof-contract-row small) {
+    color: var(--text-muted);
+    font-size: var(--gh-type-size-caption);
+    line-height: var(--gh-type-line-height-tight);
     overflow-wrap: anywhere;
   }
 
