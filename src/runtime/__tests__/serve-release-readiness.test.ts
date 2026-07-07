@@ -503,6 +503,18 @@ describe('GET /api/project/release-readiness', () => {
     })
     expect(projectBody.startReadiness.message).toContain('repository follow-up')
     expect(projectBody.startReadiness.message).not.toContain('is complete')
+
+    const [spineRes, threadRes] = await Promise.all([
+      app.fetch(new Request(projectUrl('/api/project/spine'))),
+      app.fetch(new Request(projectUrl('/api/project/thread'))),
+    ])
+    const spineBody = await spineRes.json() as any
+    const threadBody = await threadRes.json() as any
+    const releaseBlockerIds = body.releaseBlockers.map((blocker: any) => blocker.id)
+
+    expect(projectBody.orientationSpine.release.blockers.map((blocker: any) => blocker.id)).toEqual(releaseBlockerIds)
+    expect(spineBody.spine.release.blockers.map((blocker: any) => blocker.id)).toEqual(releaseBlockerIds)
+    expect(threadBody.orientationSpine.release.blockers.map((blocker: any) => blocker.id)).toEqual(releaseBlockerIds)
   })
 
   it('does not let recorded proof and an old merge record hide dirty proof-recovery worktree changes', async () => {

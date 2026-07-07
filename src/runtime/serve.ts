@@ -10069,6 +10069,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const releaseQueue = await readTaskQueueFileNormalized(projectTasksPath(project.path)).catch(
         (): { tasks: Array<Record<string, unknown>>; releases: ProjectRelease[]; selectedReleaseId?: string } => ({ tasks: [], releases: [] }),
       )
+      const orientationTasks = await Promise.all(releaseQueue.tasks.map(task => buildEffectiveTask(project.path, task as Task)))
+      const releaseReadiness = await buildProjectReleaseReadinessPayload()
       const thread = buildThread({
         projectPath: project.path,
         snapshot: state.snapshot,
@@ -10085,9 +10087,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
         charter: inferProjectCharterFromExistingSources(project.path, project.config),
         selectedReleaseId: releaseQueue.selectedReleaseId,
         releases: releaseQueue.releases,
-        tasks: state.tasks as Task[],
+        tasks: orientationTasks as unknown as Task[],
         runStatus: supervisor.get(project.id)?.status ?? 'stopped',
         startReadiness: threadStartReadiness,
+        releaseReadiness: orientationReleaseReadinessFromPayload(releaseReadiness),
         workspaceImportDraft: await workspaceImportDraftForOrientation(project.path, threadStartReadiness),
         sourceRefs: projectOrientationSourceRefs(project.path),
       })

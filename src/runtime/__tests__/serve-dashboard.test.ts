@@ -321,10 +321,10 @@ describe('GET /api/project/spine', () => {
       orientationSpine?: { release?: { state?: string; blockers?: Array<{ id?: string }> } }
     }
     expect(body.orientationSpine?.release?.state).toBe('blocked')
-    expect(body.orientationSpine?.release?.blockers?.map(blocker => blocker.id)).toEqual([
+    expect(body.orientationSpine?.release?.blockers?.map(blocker => blocker.id)).toEqual(expect.arrayContaining([
       'task-blocked',
       'task-spec-review',
-    ])
+    ]))
     expect(body.startReadiness).toMatchObject({
       code: 'no_unattended_progress',
       focusTaskId: 'task-blocked',

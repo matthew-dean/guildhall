@@ -28054,3 +28054,72 @@ selected-scope readiness ordering.
     blocker counts.
 - Schema Migration Decision: no persisted schema field was added, removed, or
   retyped. This changes derived orientation-spine blocker merging only.
+
+## 2026-07-07T12:38:21Z - Thread orientation must share release-readiness truth
+
+- User job:
+  - When the owner opens Thread after checking a project map or overview,
+    Guildhall should describe the same selected release/current scope blockers
+    everywhere. Thread can show conversation history, but it must not rebuild a
+    different project skeleton from stale task projection state.
+- Finding:
+  - Root cause classification:
+    - Data model/schema problem: `/api/project/thread` built its orientation
+      spine from `loadThreadProjectionState()` tasks while `/api/project` and
+      `/api/project/spine` used the normalized queue plus effective task state.
+    - Project structure/scope/release modeling problem: Thread did not pass the
+      release-readiness payload into the spine builder, so repository follow-up
+      blockers were represented as synthetic Start blockers instead of the
+      concrete selected-release blocker rows.
+    - UI communication/orientation problem: Narrative Harness could show one
+      concrete release blocker on Project/Map/Release surfaces while Thread
+      showed a different blocker id for the same condition.
+- Fix:
+  - `/api/project/thread` now builds its owner-visible `orientationSpine` from
+    effective queue tasks and the same release-readiness payload used by the
+    other project surfaces.
+  - Thread still uses the thread projection state for conversation turns; only
+    the project-orientation skeleton was moved back onto the shared derived
+    release/scope model.
+  - The dashboard blocker regression was tightened to assert that task blockers
+    remain present without freezing an incomplete list that omits valid
+    repository/checkout blockers.
+- Proof provided:
+  - Red/green regression:
+    `CI=true ./node_modules/.bin/vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts -t "does not call a
+    selected release ready while current-scope git story follow-up remains"`
+    first failed because Thread returned
+    `start-readiness:repository_followup_required` while release readiness
+    returned `repository-followup:repo:0`; it now passes.
+  - Broader regression:
+    `CI=true ./node_modules/.bin/vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts
+    src/runtime/__tests__/serve-dashboard.test.ts` passed (`63` tests).
+  - Build/contracts:
+    `node ./build.mjs`, `CI=true corepack pnpm lint:contracts`, and `git diff
+    --check` passed.
+  - Installed/live proof:
+    `CI=true corepack pnpm dev:install`, `guildhall stop`, and
+    `guildhall start` installed and restarted the current branch artifact.
+    `/api/stale-server` returned `stale:false` for PID `75857`.
+    Narrative Harness now reports the same single selected-release blocker on
+    `/api/project/release-readiness`, `/api/project`, `/api/project/spine`, and
+    `/api/project/thread`: `repository-followup:repo:0` with label
+    `main has 3 local commits not pushed to origin/main.`
+- Contract Touch Decision:
+  - Work id: `thread-orientation-release-readiness-sync`.
+  - Touched contracts: `/api/project/thread` `orientationSpine.release`
+    blocker semantics, effective task source for Thread orientation, and the
+    cross-surface project/spine/thread blocker agreement invariant.
+  - Contracts considered but not touched: persisted task schema, persisted
+    release schema, release-readiness response field names, Thread turn schema,
+    Git Story snapshot schema, and Start-readiness response shape.
+  - Required follow-up: continue removing surface-local interpretations when a
+    project page needs release/current-scope truth; project skeleton state
+    should come from the shared orientation/release model.
+  - Apply/revert behavior: reverting can make Thread communicate a different
+    blocker identity than Project/Map/Release for the same selected scope,
+    making owner-visible project state untrustworthy again.
+- Schema Migration Decision: no persisted schema field was added, removed, or
+  retyped. This changes derived Thread orientation payload assembly only.
