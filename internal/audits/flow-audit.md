@@ -25146,3 +25146,51 @@ selected-scope readiness ordering.
   - Apply/revert behavior: reverting restores the failure where Overview can
     claim the selected scope is complete but hides the source/proof basis for
     that claim.
+
+## 2026-07-06 — Work keeps source and proof context for runnable scoped work
+
+- Work id: `codex:work-runnable-scope-proof-source-context-2026-07-06`.
+- User job: when Work shows a runnable current-scope item, it must still
+  explain the scope source trail and proof debt behind that queue. A user
+  should not lose provenance just because Guildhall found something ready to
+  resume.
+- Root-cause classification:
+  - UI communication/orientation problem: Looma + Knit Work showed the current
+    shaping blocker and runnable queue but hid the `Sources:` and `Proof:`
+    context that Overview and Map exposed for the same selected scope.
+  - Shared state ownership problem: Work already computed selected-scope
+    source/proof summaries from the orientation spine, but rendered them only
+    through the no-runnable `scopeQueueFallback` branch.
+- Fix:
+  - Work now renders selected-scope `Sources:` and `Proof:` lines whenever the
+    orientation spine provides them, including when the delivery queue has a
+    first runnable item.
+- Contract Touch Decision:
+  - Touched contracts: Work delivery queue presentation of selected-scope
+    source and proof summaries.
+  - Contracts considered but not touched: persisted task schema, proof-path
+    schema, orientation spine builder, Work compact orientation payload,
+    delivery spine schema, scheduler/start contract, Overview, Map, release
+    readiness response, and raw task persistence.
+  - Existing data impact: no migration. Existing selected-scope source/proof
+    data now remains visible in Work for runnable queues.
+  - Required follow-up: keep reducing branch-specific Work summaries so
+    runnable, blocked, proof-missing, and completed states all render the same
+    selected-scope truth instead of conditional fragments.
+  - Proof required: failing Work regression for runnable scope source/proof
+    context, full Work regression suite, UI typecheck, installed-app
+    stale-server proof, and rendered Looma + Knit Work proof.
+  - Proof provided: the new Work regression first failed because the runnable
+    queue omitted `Sources:` and `Proof:`. After removing the fallback-only
+    guard, it passed and showed `Sources: PROJECT_STATE.md, release-plan.md`
+    plus `Proof: 0 proven items · 5 missing proof` beside the runnable item.
+    The focused Work/Overview/Map/API regression set passed with `181` tests,
+    `tsc -p packages/ui/tsconfig.json` and `git diff --check` passed, and after
+    `node ./build.mjs`, `node ./scripts/dev-install.mjs`, and service restart,
+    `/api/stale-server` returned `stale:false` for PID `80404`. Rendered Looma
+    + Knit Work proof at `1280x720` and `390x844` showed the shaping blocker,
+    `Sources: PROJECT_STATE.md, release-plan.md`, `Proof: 0 proven items · 5
+    missing proof`, `1 READY TO RESUME`, and no horizontal overflow
+    (`scrollWidth` equaled `clientWidth` at both viewports).
+  - Apply/revert behavior: reverting restores the failure where Work hides the
+    selected-scope source/proof basis whenever a first runnable item exists.

@@ -351,6 +351,82 @@ describe('WorkTab', () => {
     expect(queue).not.toHaveTextContent('No runnable task')
   })
 
+  it('keeps selected-scope source and proof context visible when work is runnable', async () => {
+    render(WorkTab, {
+      props: {
+        detail: detail([
+          task({
+            id: 'task-runner',
+            title: 'Unit tests: use-collections, use-presence, subdomain utils',
+            status: 'ready',
+            domain: 'knit',
+          }),
+        ], {
+          orientationSpine: {
+            scope: { label: 'Stage 1: V1 Release Hardening' },
+            summary: {
+              headline: 'Stage 1: V1 Release Hardening is being shaped.',
+              selectedScopeLabel: 'Stage 1: V1 Release Hardening',
+              includedWorkCount: 5,
+              deferredWorkCount: 30,
+              progress: { blocked: 5 },
+            },
+            scopeRows: [
+              {
+                taskId: 'task-runner',
+                nodeId: 'work:task-runner',
+                title: 'Unit tests: use-collections, use-presence, subdomain utils',
+                scope: 'included',
+                sourceRefs: [
+                  '/Users/matthew/git/oss/looma-knit/docs/PROJECT_STATE.md',
+                  '/Users/matthew/git/oss/looma-knit/docs/release-plan.md',
+                ],
+              },
+            ],
+            proofContracts: Array.from({ length: 5 }, (_, index) => ({
+              nodeId: `work:proof-${index + 1}`,
+              title: `Proof ${index + 1}`,
+              state: 'missing',
+              missing: [`proof-${index + 1}`],
+            })),
+            roots: [],
+            nodes: {},
+          },
+          deliverySpine: {
+            queue: {
+              runnable: [
+                {
+                  task: task({
+                    id: 'task-runner',
+                    title: 'Unit tests: use-collections, use-presence, subdomain utils',
+                    status: 'ready',
+                  }),
+                  why: 'Ready when resumed.',
+                  structuralBlockers: [],
+                },
+              ],
+              firstRunnable: {
+                task: task({
+                  id: 'task-runner',
+                  title: 'Unit tests: use-collections, use-presence, subdomain utils',
+                  status: 'ready',
+                }),
+                why: 'Ready when resumed.',
+                structuralBlockers: [],
+              },
+              blocked: [],
+            },
+          },
+        }),
+      },
+    })
+
+    const queue = await screen.findByRole('region', { name: 'Delivery queue' })
+    expect(queue).toHaveTextContent('Unit tests: use-collections, use-presence, subdomain utils')
+    expect(queue).toHaveTextContent('Sources: PROJECT_STATE.md, release-plan.md')
+    expect(queue).toHaveTextContent('Proof: 0 proven items · 5 missing proof')
+  })
+
   it('keeps proof-missing completed work visible from the focused Work route', async () => {
     window.history.replaceState({}, '', '/projects/narrative-harness/work?task=proof-task')
     path.value = '/projects/narrative-harness/work?task=proof-task'

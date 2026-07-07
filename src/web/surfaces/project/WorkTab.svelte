@@ -754,10 +754,10 @@
               <span>{scopeQueueFallback.detail}</span>
             {/if}
           </div>
-          {#if scopeQueueFallback && scopeSourceSummary}
+          {#if scopeSourceSummary}
             <p class="queue-sources">Sources: {scopeSourceSummary}</p>
           {/if}
-          {#if scopeQueueFallback && scopeProofSummary}
+          {#if scopeProofSummary}
             <p class="queue-sources">Proof: {scopeProofSummary}</p>
           {/if}
           <div class="queue-chips">
