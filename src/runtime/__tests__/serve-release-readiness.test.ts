@@ -2634,6 +2634,8 @@ describe('GET /api/project/release-readiness', () => {
 
     expect(body.orientationSpine.summary.includedWorkCount).toBe(1)
     expect(body.orientationSpine.summary.deferredWorkCount).toBe(1)
+    expect(body.orientationSpine.roots).toEqual([])
+    expect(body.orientationSpine.nodes).toEqual({})
     expect(body.tasks.map((task: any) => task.id)).toEqual(['task-current'])
   })
 

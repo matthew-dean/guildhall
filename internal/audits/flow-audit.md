@@ -28713,3 +28713,96 @@ selected-scope readiness ordering.
     map-grade derivation cost again before showing first-screen orientation.
 - Schema Migration Decision: no persisted schema field was added, removed, or
   retyped. This is a read-model and API-surface split only.
+
+## 2026-07-07T15:03:00Z - Settled Overview detail must not smuggle map-grade orientation nodes
+
+- User job:
+  - After the first fast Overview preview is replaced by settled project
+    detail, the page should keep the same lean 100-foot orientation contract:
+    current scope, later work, completion/blocker state, release readiness, and
+    the next action. It should not quietly reintroduce Project Map's full node
+    graph into the Overview payload.
+- Finding:
+  - Root cause classification:
+    - Data model/schema problem: `/api/project?surface=overview` used the full
+      orientation-spine builder and then compacted the result, so settled
+      Overview became a second consumer of the map-grade spine contract.
+    - Project structure/scope/release modeling problem: the Overview surface
+      needed scoped work membership and release-readiness summary, not the full
+      structural graph. Those are different read contracts and should stay
+      named and bounded.
+    - UI communication/orientation problem: first-screen state and settled
+      state were backed by different orientation models, which made future
+      state drift more likely.
+    - Runtime/provider/infrastructure problem: installed timings showed the
+      settled Overview endpoint still spending seconds on graph derivation work
+      that the surface did not need.
+- Fix:
+  - `/api/project?surface=overview` now uses the same
+    scope-projection-backed preview spine as `/api/project/spine?surface=overview`.
+  - Release readiness remains a separate field on the Overview detail payload,
+    so repository/design-system/release blockers can still be shown without
+    making the orientation summary pretend to be the full Project Map graph.
+  - Full `/api/project` and full `/api/project/spine` continue to derive the
+    map-grade orientation spine for Project Map and other full-detail surfaces.
+- Proof provided:
+  - Red/green regression:
+    `CI=true ./node_modules/.bin/vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts -t "keeps overview
+    task rows scoped"` first failed because
+    `/api/project?surface=overview` returned compact orientation nodes, then
+    passed with `orientationSpine.roots: []` and `orientationSpine.nodes: {}`.
+  - Focused suite:
+    `CI=true ./node_modules/.bin/vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts
+    src/web/surfaces/__tests__/ProjectView.svelte.test.ts
+    src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts
+    src/web/surfaces/project/__tests__/ProjectMapTab.svelte.test.ts` passed
+    with 153 tests.
+  - Build and contract checks:
+    `git diff --check`, `node ./build.mjs`, and
+    `CI=true corepack pnpm lint:contracts` passed.
+  - Installed API proof:
+    After `CI=true corepack pnpm dev:install`, `guildhall stop`, and
+    `guildhall start`, `/api/stale-server` returned `stale:false` for PID
+    `17263`. Narrative Harness settled Overview detail returned in about
+    `3205ms`, `243 KB`, `orientationRoots:0`, `orientationNodes:0`, selected
+    scope `Stage 1 Headless Drafting And Evaluation MVP`, `included:11`,
+    `deferred:31`, `releaseReady:true`, and `releaseBlockers:0`. Looma + Knit
+    settled Overview detail returned in about `3125ms`, `130 KB`,
+    `orientationRoots:0`, `orientationNodes:0`, selected scope
+    `Stage 1: V1 Release Hardening`, `included:5`, `deferred:30`,
+    `releaseReady:false`, and `releaseBlockers:8`.
+  - Browser proof:
+    - Desktop `1280x720`: Narrative Harness Overview showed `Scope status`,
+      `Stage 1 Headless Drafting And Evaluation MVP is complete.`, `11 Current
+      scope`, `31 Deferred`, `Work mix`, `Current release`, `Project map`, no
+      `333` backlog leak, and no detected clipped content. Looma + Knit
+      Overview showed `Do this next`, `5 imported drafts need task briefs`,
+      `5 Current scope`, `30 Deferred`, `5 blocked`, `Work mix`, `Project map`,
+      no `333` backlog leak, and no detected clipped content.
+    - Mobile-width `390x844`: the same current/deferred markers remained
+      visible for Narrative Harness and Looma + Knit with no detected clipped
+      content.
+  - Remaining failing proof:
+    - Settled Overview no longer pays for map-grade orientation nodes, but the
+      endpoint still takes about 3.1-3.2 seconds on the calibration projects.
+      The remaining delay is outside the orientation graph payload and should
+      be traced next through release readiness, repair passes, inbox/thread
+      state, and delivery queue derivation.
+- Contract Touch Decision:
+  - Work id: `overview-detail-projection-spine`.
+  - Touched contracts: `/api/project?surface=overview` orientation-spine
+    semantics and Overview's settled-detail read model.
+  - Contracts considered but not touched: persisted task schema, persisted
+    release schema, full `/api/project` orientation contract,
+    `/api/project/spine` Project Map contract, release-readiness payload,
+    Work surface payload, Thread payload, and Project Map UI behavior.
+  - Required follow-up: profile the remaining 3-second settled Overview detail
+    work and extract a shared summary/readiness path for release readiness,
+    action state, inbox/thread state, and delivery queue fields.
+  - Apply/revert behavior: reverting makes settled Overview rebuild and ship
+    compact Project Map nodes again, reintroducing read-model drift and extra
+    payload.
+- Schema Migration Decision: no persisted schema field was added, removed, or
+  retyped. This is an API read-model correction only.

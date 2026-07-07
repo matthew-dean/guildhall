@@ -5327,19 +5327,24 @@ export function buildServeApp(opts: ServeOptions = {}): {
         runStatus: run?.status ?? 'stopped',
         recentEvents: recent,
       })
-      const orientationWorkspaceImportDraft = await workspaceImportDraftForOrientation(project.path, startReadiness)
-      const { orientationSpine } = buildOrientationSpineWithScopedReleaseTruth({
-        projectId: project.id,
-        charter: inferProjectCharterFromExistingSources(project.path, project.config),
-        selectedReleaseId: rawQueue.selectedReleaseId,
-        releases: rawQueue.releases,
-        tasks: orientationTasks as unknown as Task[],
-        runStatus: run?.status ?? 'stopped',
-        startReadiness,
-        releaseReadiness: orientationReleaseReadinessFromPayload(releaseReadiness),
-        workspaceImportDraft: orientationWorkspaceImportDraft,
-        sourceRefs: projectOrientationSourceRefs(project.path),
-      })
+      const orientationSpine = overviewSurface
+        ? buildOverviewOrientationPreviewSpine({
+            projectId: project.id,
+            rawQueue,
+            charter: inferProjectCharterFromExistingSources(project.path, project.config),
+          })
+        : buildOrientationSpineWithScopedReleaseTruth({
+            projectId: project.id,
+            charter: inferProjectCharterFromExistingSources(project.path, project.config),
+            selectedReleaseId: rawQueue.selectedReleaseId,
+            releases: rawQueue.releases,
+            tasks: orientationTasks as unknown as Task[],
+            runStatus: run?.status ?? 'stopped',
+            startReadiness,
+            releaseReadiness: orientationReleaseReadinessFromPayload(releaseReadiness),
+            workspaceImportDraft: await workspaceImportDraftForOrientation(project.path, startReadiness),
+            sourceRefs: projectOrientationSourceRefs(project.path),
+          }).orientationSpine
       const actionScope = orientationSpine.selectedTaskScope ?? orientationSpine.scope ?? null
       const actionTasksById = new Map((orientationTasks as unknown as Task[]).map(candidate => [candidate.id, candidate]))
       const scopedActionTaskIds = actionScope
@@ -5409,7 +5414,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         actionModel,
         orientationSpine: fullSurface
           ? orientationSpine
-          : compactOrientationSpineForWorkSurface(orientationSpine as unknown as Record<string, unknown>),
+          : orientationSpine,
         deliverySpine: fullSurface
           ? {
               model: deliveryModel,
