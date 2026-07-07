@@ -70,8 +70,8 @@ export function classifyGitStoryState(input: GitStoryClassificationInput): GitSt
   if (input.mergeRecordResult === 'conflict') return 'conflict'
   if (input.mergeRecordResult === 'skipped') return 'unknown'
   if (input.mergeRecordResult === 'pending_pr') return 'pr_open'
-  if (input.mergeRecordResult === 'merged' || input.mergeRecordResult === 'pushed' || input.mergeRecordResult === 'reconciled') return 'merged'
   if (input.changedCount > 0 || input.untrackedCount > 0) return 'dirty_uncommitted'
+  if (input.mergeRecordResult === 'merged' || input.mergeRecordResult === 'pushed' || input.mergeRecordResult === 'reconciled') return 'merged'
   if (!input.hasUpstream) return 'no_upstream'
   if (input.ahead > 0) return 'committed_local'
   if (input.prState && input.prState.toUpperCase() === 'OPEN') return 'pr_open'
@@ -136,7 +136,7 @@ export function reasonForGitStorySnapshot(input: {
 }): string {
   switch (input.state) {
     case 'dirty_uncommitted':
-      return `${input.changedCount + input.untrackedCount} changed file${input.changedCount + input.untrackedCount === 1 ? '' : 's'} are not committed.`
+      return `${input.changedCount + input.untrackedCount} changed file${input.changedCount + input.untrackedCount === 1 ? '' : 's'} ${input.changedCount + input.untrackedCount === 1 ? 'is' : 'are'} not committed.`
     case 'committed_local':
       return `${input.branch ?? 'Branch'} has ${input.ahead} local commit${input.ahead === 1 ? '' : 's'} not pushed to ${input.upstream ?? 'upstream'}.`
     case 'no_upstream':

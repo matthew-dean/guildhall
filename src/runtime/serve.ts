@@ -2439,7 +2439,7 @@ function summarizeScopedReleaseWork(
     humanBlockingCount: Math.max(projectionReleaseBlockers.length, humanBlockingKeys.size),
     unfinishedCount,
     scopedTasks,
-    gitStoryTasks: executionScopedTasks,
+    gitStoryTasks: scopedTasks,
   }
 }
 
@@ -3003,7 +3003,14 @@ function taskNeedsTaskGitStory(
   childProject?: unknown,
 ): boolean {
   const hasExplicitFollowup = taskHasExplicitGitStoryFollowup(task)
-  if (taskHasRecordedCompletionProof(task as Task) && !hasExplicitFollowup) return false
+  const runtime = task.runtime && typeof task.runtime === 'object' && !Array.isArray(task.runtime)
+    ? task.runtime as Record<string, unknown>
+    : null
+  const hasActiveProofRecovery = Boolean(
+    (task.proofRecovery && typeof task.proofRecovery === 'object' && !Array.isArray(task.proofRecovery)) ||
+    (runtime?.proofRecovery && typeof runtime.proofRecovery === 'object' && !Array.isArray(runtime.proofRecovery)),
+  )
+  if (taskHasRecordedCompletionProof(task as Task) && !hasExplicitFollowup && !hasActiveProofRecovery) return false
   return Boolean(childProject) ||
     typeof workspace?.worktreePath === 'string' ||
     typeof task.worktreePath === 'string' ||
@@ -7759,7 +7766,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     resolvedConfig: ReturnType<typeof resolveConfig>,
   ): Promise<{
     canStart: false
-    code: 'no_unattended_progress'
+    code: 'no_unattended_progress' | 'repository_followup_required'
     message: string
     actionHref: string
     focusTaskId?: string
@@ -7783,6 +7790,16 @@ export function buildServeApp(opts: ServeOptions = {}): {
       ...(rawQueue.selectedReleaseId ? { selectedReleaseId: rawQueue.selectedReleaseId } : {}),
     })
     const scopedTasks = tasksEligibleForScopeExecution(tasks as Task[], selectedReleaseScope)
+    const { releaseTruth } = buildOrientationSpineWithScopedReleaseTruth({
+      projectId: resolvedConfig.id ?? basename(projectPath),
+      charter: inferProjectCharterFromExistingSources(projectPath, resolvedConfig),
+      selectedReleaseId: rawQueue.selectedReleaseId,
+      releases: rawQueue.releases,
+      tasks: tasks as Task[],
+      workspaceImportDraft: await workspaceImportDraftForOrientation(projectPath, null),
+      sourceRefs: projectOrientationSourceRefs(projectPath),
+    })
+    const gitStory = await buildProjectGitStorySummary(projectPath, releaseTruth.gitStoryTasks)
     const firstBlocked = scopedTasks.find(task => {
       const status = String(task.status ?? '')
       return status === 'blocked' || deriveWorkExecutionState(tasks as Task[], task.id).summaryState === 'blocked'
@@ -7791,6 +7808,21 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const focusTitle = typeof firstBlocked.title === 'string' && firstBlocked.title.trim()
         ? firstBlocked.title.trim()
         : firstBlocked.id
+      const matchingRepositoryBlocker = gitStory.blockers.find(blocker =>
+        blocker.taskId === firstBlocked.id && blocker.state !== 'no_upstream',
+      )
+      if (matchingRepositoryBlocker) {
+        return {
+          canStart: false,
+          code: 'repository_followup_required',
+          message: `"${focusTitle}" cannot resume until repository follow-up is finished: ${matchingRepositoryBlocker.reason}`,
+          actionHref: '/release',
+          focusTaskId: firstBlocked.id,
+          focusTaskTitle: focusTitle,
+          focusKind: 'repository_followup',
+          count: 1,
+        }
+      }
       const blockReason = typeof firstBlocked.blockReason === 'string' ? firstBlocked.blockReason.trim() : ''
       const blockedCount = scopedTasks.filter(task =>
         String(task.status ?? '') === 'blocked' ||
@@ -7830,15 +7862,6 @@ export function buildServeApp(opts: ServeOptions = {}): {
         count: specsWaiting.length,
       }
     }
-    const { releaseTruth } = buildOrientationSpineWithScopedReleaseTruth({
-      projectId: resolvedConfig.id ?? basename(projectPath),
-      charter: inferProjectCharterFromExistingSources(projectPath, resolvedConfig),
-      selectedReleaseId: rawQueue.selectedReleaseId,
-      releases: rawQueue.releases,
-      tasks: tasks as Task[],
-      workspaceImportDraft: await workspaceImportDraftForOrientation(projectPath, null),
-      sourceRefs: projectOrientationSourceRefs(projectPath),
-    })
     const startBlockingReleaseBlockers = releaseTruth.releaseBlockers.filter(blocker =>
       !/proof evidence|verification evidence|brief|shaping|clearer brief/i.test(blocker.label),
     )

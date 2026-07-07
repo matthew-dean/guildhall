@@ -86,6 +86,16 @@ describe('classifyGitStoryState', () => {
     })).toBe('merged')
   })
 
+  it('does not let a stale merge record hide fresh worktree changes', () => {
+    expect(classifyGitStoryState({
+      changedCount: 1,
+      untrackedCount: 4,
+      ahead: 0,
+      hasUpstream: true,
+      mergeRecordResult: 'merged',
+    })).toBe('dirty_uncommitted')
+  })
+
   it('reports merged when a skipped merge record is reconciled from git history', () => {
     expect(classifyGitStoryState({
       changedCount: 0,

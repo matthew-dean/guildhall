@@ -26802,3 +26802,86 @@ selected-scope readiness ordering.
 - Schema Migration Decision: no persisted schema field was added, removed, or
   retyped. This changes only derived release readiness and shared title-overlap
   calculation.
+
+## 2026-07-07T09:33:43Z - Proof recovery worktrees must override stale merged state
+
+- User job:
+  - When Guildhall reopens a completed/merged task for proof recovery, the
+    Overview, release readiness, and task surfaces must show the concrete
+    repository follow-up that is still required. A stale merge record must not
+    make the selected scope look merged while the task worktree contains fresh
+    uncommitted proof work.
+- Finding:
+  - Root cause classification:
+    - Data model/schema problem: persisted completion, proof, merge, and proof
+      recovery state can coexist, so derived state must choose the freshest
+      worktree truth instead of blindly trusting the old merge record.
+    - Task hierarchy/dependency/proof modeling problem: active proof recovery
+      means the task still owns proof work even if it has recorded completion
+      evidence from an earlier attempt.
+    - Scheduler/action-state logic problem: start readiness could lead with a
+      stale `max_revisions_exceeded` blocker while release readiness knew the
+      same task had dirty repository follow-up.
+    - UI communication/orientation problem: the owner-facing first action hid
+      the concrete files that need review/commit, leaving the user with an
+      abstract escalation instead of actionable project truth.
+    - Bad project data produced by an earlier Guildhall bug: Narrative Harness
+      retained old completion and merge evidence after proof recovery reopened
+      the DeepInfra model-proof task.
+- Fix:
+  - Git-story classification now treats dirty/untracked task worktree changes
+    as newer than `merged`, `pushed`, or `reconciled` merge records.
+  - Active `proofRecovery` keeps task git-story inspection enabled even when a
+    task has recorded completion proof.
+  - Release readiness inspects the scoped task set for git-story follow-up so a
+    materialized proof-recovery child or selected blocked task cannot be hidden
+    behind a stale parent/merge story.
+  - Selected-release start readiness now prefers repository follow-up when the
+    blocked selected-scope task itself has a git-story blocker, so the top
+    action points to the concrete repo truth.
+- Proof provided so far:
+  - `CI=true ./node_modules/.bin/vitest run
+    src/runtime/__tests__/git-story.test.ts
+    src/runtime/__tests__/serve-release-readiness.test.ts -t "stale merge
+    record|old merge record hide dirty|repository follow-up"` passed (`2`
+    tests, `68` skipped).
+  - `CI=true ./node_modules/.bin/vitest run
+    src/runtime/__tests__/git-story.test.ts
+    src/runtime/__tests__/serve-release-readiness.test.ts -t "git
+    story|repository|release|proof|blocked|dirty|merge record|start
+    readiness"` passed (`56` tests, `14` skipped).
+  - Installed API proof before the start-readiness refinement showed
+    `/api/project/release-readiness?projectId=narrative-harness` reporting the
+    DeepInfra task as `dirty_uncommitted` with `5 changed files are not
+    committed`, `mergeRecordResult:"merged"`, and sample paths including
+    `package.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml`, `scripts/lib/`,
+    and `scripts/prove-deepinfra-drafting-model.mjs`.
+  - Final installed proof after `CI=true pnpm dev:install && guildhall stop &&
+    guildhall start`: `/api/stale-server` reported `stale:false` for PID
+    `66844`.
+  - Final installed Overview proof:
+    `/api/project?projectId=narrative-harness&surface=overview` reports
+    `startReadiness.code:"repository_followup_required"`, primary action
+    `Repository follow-up required`, run control `Repo follow-up` disabled, and
+    the same DeepInfra task git story as `dirty_uncommitted` with `5 changed
+    files are not committed`, `mergeRecordResult:"merged"`, and the sample
+    proof-recovery paths.
+- Contract Touch Decision:
+  - Work id: `proof-recovery-git-story-dirty-worktree`.
+  - Touched contracts: git-story classification precedence; task git-story
+    inclusion for active proof recovery; release-readiness `gitStoryTasks`
+    projection; selected-release start-readiness blocker selection; release
+    readiness git-story blocker totals.
+  - Contracts considered but not touched: persisted task schema, persisted
+    `proofRecovery` shape, merge-record schema, task evidence schema, git
+    driver status schema, release schema, and source-ref schema.
+  - Required follow-up: run the full build/install/live API proof after this
+    audit update, then finish or land the Narrative Harness DeepInfra proof
+    script/results so Guildhall can unblock the current scope from real
+    provider evidence.
+  - Apply/revert behavior: reverting can make a selected release claim merged
+    or lead with abstract escalation while active proof-recovery worktree
+    changes are still uncommitted.
+- Schema Migration Decision: no persisted schema field was added, removed, or
+  retyped. This changes derived state precedence and shared readiness
+  selection only.
