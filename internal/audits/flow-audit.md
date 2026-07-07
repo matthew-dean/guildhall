@@ -24767,3 +24767,65 @@ selected-scope readiness ordering.
   - Apply/revert behavior: reverting restores the failure where a completed
     selected scope can show unknown or unrelated blocked proof in Overview even
     while release readiness says the selected release is complete.
+
+## 2026-07-06 — Selected scope and projection-row agreement
+
+- Work id: `codex:selected-scope-node-row-agreement-2026-07-06`.
+- User job: the 1,000-foot and 100-foot project views must not say one scoped
+  work count while naming a different set of work. When Looma + Knit is focused
+  on `Stage 1: V1 Release Hardening`, the user should be able to trust that the
+  selected release, selected scope, summary counts, progress counts, and
+  deferred rows all describe the same execution boundary without inspecting raw
+  project files.
+- Root-cause classification:
+  - Project structure/scope/release modeling problem: selected scope node ids
+    were normalized from release/draft membership, while `scopeRows` and summary
+    progress came from `ProjectScopeProjection`, so the read model could report
+    `30` deferred rows while the selected scope named fewer deferred nodes.
+  - UI communication/orientation problem: Map and Overview consumers depend on
+    the orientation spine to explain current vs later work; mismatched node
+    membership made the product structurally unable to give a trustworthy
+    1,000-foot view.
+  - Bad project data produced by an earlier Guildhall bug: workspace-import
+    preview nodes could still leak into selected scope deferred membership even
+    after real projection rows existed.
+- Fix:
+  - `buildProjectOrientationSpine` now derives projection rows once and merges
+    those included/deferred rows into the selected scope read model before nodes
+    are built.
+  - Workspace-import draft deferred ids are only merged into selected scope when
+    there is no projection-row truth yet, preserving pre-approval draft
+    orientation without polluting materialized/projected execution scope.
+  - Selected release membership remains untouched; release buckets still do not
+    absorb preview or unrelated deferred work.
+- Contract Touch Decision:
+  - Touched contracts: orientation spine selected-scope read model,
+    `scopeRows`, and summary/progress agreement for selected scope membership.
+  - Contracts considered but not touched: persisted task schema, persisted
+    release schema, workspace-import draft schema, release readiness response,
+    scheduler/start contract, Overview component logic, and Project Map
+    component logic.
+  - Existing data impact: no migration. Persisted Looma + Knit state is
+    unchanged; the runtime read model now projects the same selected-scope truth
+    to every consumer.
+  - Required follow-up: continue collapsing duplicate scope/release derivation
+    so Project Map, Overview, Work, Start/Resume, and release readiness cannot
+    drift apart as Narrative Harness is re-intaken and executed.
+  - Proof required: focused regression for selected-scope deferred rows,
+    regression that draft-only workspace-import preview nodes cannot inflate a
+    projected selected scope, full orientation-spine suite, installed-app proof,
+    stale-server proof, and live Looma + Knit API proof.
+  - Proof provided: before the fix, installed
+    `/api/project?projectId=looma-knit` reported summary/scopeRows `30`
+    deferred but selected scope deferred membership `26`. After the fix and
+    installed restart, `/api/stale-server` returned `stale:false` for PID
+    `37003`; live `/api/project?projectId=looma-knit` reported selected release
+    `5` node ids and `0` deferred ids, selected scope `5` node ids and `30`
+    deferred ids, scope rows `5` included and `30` deferred, summary
+    `includedWorkCount: 5`, `deferredWorkCount: 30`, progress total `35`, and
+    empty `extraInScope`, `missingInScope`, `duplicateDeferred`, and
+    `previewNodesInSelectedRelease` lists. `project-orientation-spine.test.ts`
+    passed `55` tests.
+  - Apply/revert behavior: reverting restores the failure where the product can
+    claim a deferred count that does not match the selected scope node list, or
+    let workspace-import preview work leak into a projected execution boundary.

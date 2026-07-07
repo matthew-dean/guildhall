@@ -977,6 +977,25 @@ function scopeRowsFromProjection(projection: ProjectScopeProjection | null | und
   }))
 }
 
+function mergeScopeRowsIntoScope(scope: OrientationScope, rows: OrientationScopeRow[]): OrientationScope {
+  if (rows.length === 0) return scope
+  const nodeIds = new Set(scope.nodeIds ?? [])
+  const deferredNodeIds = new Set(scope.deferredNodeIds ?? [])
+  for (const row of rows) {
+    if (row.scope === 'included') {
+      deferredNodeIds.delete(row.nodeId)
+      nodeIds.add(row.nodeId)
+    } else {
+      if (!nodeIds.has(row.nodeId)) deferredNodeIds.add(row.nodeId)
+    }
+  }
+  return {
+    ...scope,
+    nodeIds: [...nodeIds],
+    deferredNodeIds: [...deferredNodeIds],
+  }
+}
+
 function emptyRefs(taskId: string): OrientationRefs {
   return {
     taskIds: [taskId],
@@ -1852,8 +1871,10 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
       : release)
     .map(release => normalizeReadModelReleaseState(release, selectedReleaseForReadModel?.id ?? null))
     .filter(release => releaseVisibleInReadModel(release, selectedReleaseForReadModel?.id ?? null, tasks))
-  const rawScope = projectionScope ?? releaseToScope(selectedReleaseForReadModel) ?? draftAugmentation.scope ?? normalizeScope(input, tasks)
-  const scopeWithDraftDeferred = rawScope && draftAugmentation.scope
+  const projectionScopeRows = scopeRowsFromProjection(input.scopeProjection)
+  const rawScopeBase = projectionScope ?? releaseToScope(selectedReleaseForReadModel) ?? draftAugmentation.scope ?? normalizeScope(input, tasks)
+  const rawScope = rawScopeBase ? mergeScopeRowsIntoScope(rawScopeBase, projectionScopeRows) : null
+  const scopeWithDraftDeferred = rawScope && draftAugmentation.scope && projectionScopeRows.length === 0
     ? {
         ...rawScope,
         deferredNodeIds: [...new Set([
@@ -1955,7 +1976,7 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
     roots,
     nodes: Object.fromEntries(byId.entries()),
     activePins: pins,
-    scopeRows: scopeRowsFromProjection(input.scopeProjection),
+    scopeRows: projectionScopeRows,
     gaps,
     release: {
       state: releaseState,

@@ -2226,13 +2226,72 @@ describe('buildProjectOrientationSpine', () => {
             scope: 'current',
             releaseIds: ['stage-1-v1-release-hardening'],
           },
+          {
+            id: 'draft-only-later',
+            title: 'Draft-only later work should not inflate the projected scope.',
+            description: 'Still only a workspace-import preview.',
+            domain: 'knit',
+            scope: 'later',
+          },
         ],
       },
     })
 
     expect(spine.selectedRelease?.nodeIds).toEqual(['work:task-current'])
     expect(spine.scope?.nodeIds).toEqual(['work:task-current'])
+    expect(spine.scope?.deferredNodeIds).toEqual([])
     expect(spine.releases.find(release => release.id === 'stage-1-v1-release-hardening')?.nodeIds).toEqual(['work:task-current'])
+  })
+
+  it('keeps selected scope node ids aligned with deferred projection rows', () => {
+    const tasks = [
+      {
+        id: 'task-current',
+        title: 'Materialized release task',
+        description: 'Current Stage 1 work.',
+        domain: 'knit',
+        status: 'import_draft',
+        releaseIds: ['stage-1-v1-release-hardening'],
+      },
+      {
+        id: 'task-old-blocker',
+        title: 'Floating toolbar',
+        description: 'Deferred backlog work that is not in the selected release.',
+        domain: 'knit',
+        status: 'blocked',
+        releaseIds: [],
+      },
+    ] as any[]
+    const releases = [{
+      id: 'stage-1-v1-release-hardening',
+      label: 'Stage 1: V1 Release Hardening',
+      kind: 'release',
+      state: 'active',
+      source: 'release_plan',
+      nodeIds: ['work:task-current'],
+      deferredNodeIds: [],
+      proofStyle: 'unspecified',
+    }] as any[]
+    const scopeProjection = buildProjectScopeProjection({
+      version: 1,
+      lastUpdated: '2026-07-07T01:35:00.000Z',
+      selectedReleaseId: 'stage-1-v1-release-hardening',
+      releases,
+      tasks,
+    })
+    const spine = buildProjectOrientationSpine({
+      projectId: 'looma-knit',
+      now: '2026-07-07T01:35:00.000Z',
+      selectedReleaseId: 'stage-1-v1-release-hardening',
+      releases,
+      tasks,
+      scopeProjection,
+    })
+
+    expect(spine.scopeRows.filter(row => row.scope === 'deferred').map(row => row.nodeId)).toEqual(['work:task-old-blocker'])
+    expect(spine.scope?.deferredNodeIds).toEqual(['work:task-old-blocker'])
+    expect(spine.summary.deferredWorkCount).toBe(1)
+    expect(spine.summary.progress.deferred).toBe(1)
   })
 
   it('merges saved release labels with detected orientation buckets for the same release id', () => {
