@@ -682,4 +682,28 @@ describe('buildProjectScopeProjection', () => {
       focusTaskId: 'task-contracts',
     })
   })
+
+  it('shows active proof-recovery reason instead of stale max-revision blocker text', () => {
+    const projection = buildProjectScopeProjection(queue([
+      task({
+        id: 'task-contracts',
+        title: 'Recover provider proof',
+        status: 'blocked',
+        blockReason: 'max_revisions_exceeded: reviewer loop hit its old cap.',
+        proofRecovery: {
+          reopenedAt: now,
+          reason:
+            'Codex is acting as the owner for this calibration run. Reopen this completed task only to recover the missing release proof. Run or create the smallest command-backed proof for DeepInfra drafting-model selection, including real provider/model/API evidence when credentials are available, and do not mark the task complete until that proof is attached.',
+        },
+      }),
+    ]))
+
+    expect(projection.rows.find(row => row.taskId === 'task-contracts')).toMatchObject({
+      handoffState: 'blocked',
+      blockerSummary: 'Provider credentials are required before Guildhall can run the live proof.',
+    })
+    expect(projection.start.message).toContain('Provider credentials are required before Guildhall can run the live proof.')
+    expect(projection.start.message).not.toContain('max_revisions_exceeded')
+    expect(projection.start.message).not.toContain('Codex is acting')
+  })
 })

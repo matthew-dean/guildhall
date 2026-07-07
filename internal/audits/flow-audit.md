@@ -26901,3 +26901,83 @@ selected-scope readiness ordering.
 - Schema Migration Decision: no persisted schema field was added, removed, or
   retyped. This changes derived state precedence and shared readiness
   selection only.
+
+## 2026-07-07T10:09:00Z - Proof recovery blocker copy must prefer current recovery truth
+
+- User job:
+  - After Codex lands proof-recovery work for Narrative Harness, Guildhall must
+    tell the user the current blocker from the visible product state. A stale
+    reviewer-loop `max_revisions_exceeded` reason must not remain the top
+    action once active proof recovery and git-story reconciliation say the
+    task is now waiting on live proof/provider credentials.
+- Finding:
+  - Root cause classification:
+    - Data model/schema problem: old `blockReason`, runtime `proofRecovery`,
+      fallback runtime escalation ids, and git-story reconciliation can all be
+      present at once; derived owner-facing state was still reading the oldest
+      text field directly.
+    - Task hierarchy/dependency/proof modeling problem: proof recovery is a
+      current proof state, not a continuation of the previous review loop.
+    - Scheduler/action-state logic problem: selected-release start readiness
+      used raw `blockReason` after repository follow-up was reconciled, so the
+      primary action could regress from concrete repo truth to stale escalation
+      text.
+    - UI communication/orientation problem: the first action was technically
+      blocked but explained the wrong cause, and the raw recovery note included
+      internal calibration language rather than owner-facing blocker copy.
+    - Runtime/provider/infrastructure problem: Narrative Harness push remains
+      blocked by Bitbucket SSH public-key access, and the live DeepInfra proof
+      cannot run until provider credentials are available.
+    - Bad project data produced by an earlier Guildhall bug: the DeepInfra task
+      retained `max_revisions_exceeded` after proof recovery reopened it.
+- Fix:
+  - Added shared `taskBlockerSummary()` derived state for owner-facing blocker
+    text. It keeps ordinary blockers unchanged, but when stale
+    `max_revisions_exceeded` coexists with active proof recovery, it prefers
+    the proof-recovery reason.
+  - The summary also compresses internal calibration/credential recovery notes
+    into plain product copy: `Provider credentials are required before
+    Guildhall can run the live proof.`
+  - Project-scope projection, release readiness, selected-release start
+    readiness, and run-control blocker messaging now reuse that helper instead
+    of reading raw `task.blockReason`.
+- Proof provided:
+  - `CI=true ./node_modules/.bin/vitest run
+    src/runtime/__tests__/project-scope-projection.test.ts
+    src/runtime/__tests__/serve-release-readiness.test.ts -t
+    "proof-recovery|provider_missing|max-revision|landed proof|stale max"`
+    passed (`4` tests, `67` skipped).
+  - `node ./build.mjs` passed.
+  - `CI=true corepack pnpm lint:contracts` passed; no persisted
+    contract/schema field was changed.
+  - Installed-app proof required using `corepack pnpm` after the Codex runtime
+    `pnpm` 11.7.0 pruned dev dependencies during `dev:install`. After
+    `CI=true corepack pnpm install` and `CI=true corepack pnpm dev:install &&
+    guildhall stop && guildhall start`, `/api/stale-server` reported
+    `stale:false` for PID `58927`.
+  - Live Narrative Harness Overview API proof:
+    `/api/project?projectId=narrative-harness&surface=overview` reports
+    `startReadiness.code:"no_unattended_progress"` with message
+    `Provider credentials are required before Guildhall can run the live
+    proof.`, primary action `Open Work`, release blocker reason with the same
+    owner-facing text, task git story `state:"merged"`,
+    `mergeRecordResult:"reconciled"`, and release git story still honestly
+    reporting project `main` as `committed_local` because Bitbucket push failed
+    with SSH public-key access.
+- Contract Touch Decision:
+  - Work id: `proof-recovery-current-blocker-summary`.
+  - Touched contracts: owner-facing blocker summary derivation for project
+    scope rows, release-readiness blockers, selected-release start readiness,
+    and run-control disabled reasons.
+  - Contracts considered but not touched: persisted task `blockReason`,
+    runtime `proofRecovery`, escalation schema, task evidence schema, release
+    schema, and git-story schema.
+  - Required follow-up: record the actual live proof attempt into Guildhall
+    task evidence so the product can say the exact provider/token blocker
+    from durable proof evidence instead of only normalizing the active recovery
+    instruction.
+  - Apply/revert behavior: reverting can make Overview and release readiness
+    lead with stale `max_revisions_exceeded` or internal calibration notes even
+    after proof-recovery work has landed.
+- Schema Migration Decision: no persisted schema field was added, removed, or
+  retyped. This is a shared derived-state/copy normalization change.

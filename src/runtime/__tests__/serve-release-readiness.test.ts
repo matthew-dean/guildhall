@@ -704,10 +704,10 @@ describe('GET /api/project/release-readiness', () => {
           status: 'blocked',
           releaseIds: ['headless-mvp'],
           worktreePath: taskWorktreePath,
-          blockReason: 'provider_missing: DEEPINFRA_API_TOKEN is required.',
+          blockReason: 'max_revisions_exceeded: reviewer loop hit its old cap before proof recovery reopened.',
           proofRecovery: {
             reopenedAt: '2026-07-07T09:50:00.000Z',
-            reason: 'Run the real provider proof and attach the evidence.',
+            reason: 'provider_missing: DEEPINFRA_API_TOKEN is required.',
           },
           mergeRecord: {
             result: 'merged',

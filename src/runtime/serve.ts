@@ -24,6 +24,7 @@ import {
 import { readTaskWorkspaceStore } from './task-state-store.js'
 import { latestRecordedCompletionProofAt, recordedCompletionProofCanSettleTaskStatus, recordedCompletionProofForTask, taskHasRecordedCompletionProof } from './task-completion-proof.js'
 import { taskDoneButProofMissing } from './proof-health.js'
+import { taskBlockerSummary } from './task-blocker-summary.js'
 import { taskTitleOverlap } from './task-title-overlap.js'
 import {
   readWorkspaceConfig,
@@ -2386,7 +2387,7 @@ function summarizeScopedReleaseWork(
       shelvedUnclaimed.push({ id, title, ...(reason?.detail ? { detail: reason.detail } : {}) })
     }
     if (status === 'blocked') {
-      const reason = (t as { blockReason?: string }).blockReason
+      const reason = taskBlockerSummary(t)
       blockedByAgent.push({ id, title, ...(reason ? { reason } : {}) })
       addReleaseBlocker({ id, title, label: reason?.trim() || `${blockerSubject(title)} is blocked.` })
     }
@@ -7576,7 +7577,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const focusTitle = typeof activeBlocked.title === 'string' && activeBlocked.title.trim()
         ? activeBlocked.title.trim()
         : activeBlocked.id
-      const blockReason = typeof activeBlocked.blockReason === 'string' ? activeBlocked.blockReason.trim() : ''
+      const blockReason = taskBlockerSummary(activeBlocked)
       return {
         canStart: false,
         code: 'no_unattended_progress',
@@ -7661,7 +7662,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           firstBlockedExecutionTaskTitle = typeof task.title === 'string' && task.title.trim()
             ? task.title.trim()
             : task.id
-          const blockReason = typeof task.blockReason === 'string' ? task.blockReason.trim() : ''
+          const blockReason = taskBlockerSummary(task)
           firstBlockedExecutionReason = blockReason.length > 0 ? blockReason : null
         }
         continue
@@ -7820,7 +7821,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           count: 1,
         }
       }
-      const blockReason = typeof firstBlocked.blockReason === 'string' ? firstBlocked.blockReason.trim() : ''
+      const blockReason = taskBlockerSummary(firstBlocked)
       const blockedCount = scopedTasks.filter(task =>
         String(task.status ?? '') === 'blocked' ||
         deriveWorkExecutionState(tasks as Task[], task.id).summaryState === 'blocked'

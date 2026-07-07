@@ -6,6 +6,7 @@ import { WORKSPACE_IMPORT_TASK_ID } from './workspace-importer.js'
 import { specReviewRequiresOwnerApproval } from './spec-review-ownership.js'
 import { recordedCompletionProofCanSettleTaskStatus } from './task-completion-proof.js'
 import { taskDoneButProofMissing } from './proof-health.js'
+import { taskBlockerSummary } from './task-blocker-summary.js'
 
 export type ProjectScopeKind = 'release' | 'milestone' | 'proposed_feature_set'
 export type ProjectScopeSource = 'owner_approved' | 'spec' | 'release_plan' | 'inferred'
@@ -534,7 +535,7 @@ function humanBlockingFor(task: Task, handoffState: ProjectScopeHandoffState, sc
 }
 
 function blockerSummaryForTask(task: Task): string {
-  const blockReason = task.blockReason?.trim()
+  const blockReason = taskBlockerSummary(task)
   if (blockReason) return blockReason
   const openEscalation = (task.escalations ?? [])
     .filter(escalation => !escalation.resolvedAt)
