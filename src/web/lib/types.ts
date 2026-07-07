@@ -868,6 +868,12 @@ export interface ProjectOrientationSpine {
     gaps?: number
     conflicts?: number | Array<{ label?: string; detail?: string; refs?: string[] }>
   }
+  sourceTrail?: Array<{
+    label?: string
+    value?: string
+    detail?: string
+    tone?: 'ok' | 'warn' | 'neutral' | 'accent' | string
+  }>
 }
 
 export interface ContractSurfaceReviewPacket {

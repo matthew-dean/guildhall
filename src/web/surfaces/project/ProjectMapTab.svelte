@@ -133,6 +133,14 @@
   })
   const sourceRows = $derived.by(() => {
     if (!spine) return []
+    if ((spine.sourceTrail?.length ?? 0) > 0) {
+      return spine.sourceTrail!.map(row => ({
+        label: row.label ?? 'Source',
+        value: row.value ?? 'Missing',
+        detail: row.detail ?? 'No source detail is available yet.',
+        tone: normalizeSourceTrailTone(row.tone),
+      }))
+    }
     const taskRefs = new Set<string>()
     const artifactRefs = new Set<string>()
     const importRefs = new Set<string>()
@@ -185,6 +193,10 @@
       },
     ]
   })
+
+  function normalizeSourceTrailTone(tone: unknown): Tone {
+    return tone === 'ok' || tone === 'warn' || tone === 'neutral' || tone === 'accent' ? tone : 'neutral'
+  }
 
   function go(href: string): void {
     nav(projectActionHref(href, activeProjectId), { backgroundPath: path.value })

@@ -1372,6 +1372,24 @@ describe('buildProjectOrientationSpine', () => {
       title: 'Build first coherence reviewer MVP',
       required: ['Script or command proof for Build first coherence reviewer MVP.'],
     })
+    expect(spine.sourceTrail).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        label: 'Charter',
+        value: 'Owner Approved',
+        tone: 'ok',
+      }),
+      expect.objectContaining({
+        label: 'Source docs',
+        value: '1 source document',
+        detail: 'project-brief.md',
+        tone: 'ok',
+      }),
+      expect.objectContaining({
+        label: 'Proof mode',
+        value: 'Headless proof',
+        tone: 'accent',
+      }),
+    ]))
   })
 
   it('does not treat planned proof paths as already proven evidence', () => {

@@ -112,6 +112,7 @@ describe('GET /api/project/spine', () => {
         description: 'Prevent repeated scene shapes and voice flattening.',
         status: 'ready',
         workKind: 'feature_spec',
+        references: ['docs/harness/implementation-roadmap.md'],
         spec: 'Define repeated-scene and voice-flattening safeguards.',
         productBrief: { approvedAt: '2026-06-10T00:00:00.000Z' } as Task['productBrief'],
       }),
@@ -128,6 +129,7 @@ describe('GET /api/project/spine', () => {
         summary?: { headline?: string; selectedScopeLabel?: string | null }
         roots?: Array<{ id?: string; title?: string; maturity?: string }>
         gaps?: Array<{ kind?: string }>
+        sourceTrail?: Array<{ label?: string; value?: string; detail?: string; tone?: string }>
       }
     }
     expect(body.spine?.projectId).toBe(projectId)
@@ -139,6 +141,14 @@ describe('GET /api/project/spine', () => {
       maturity: 'needs_breakdown',
     })
     expect(body.spine?.gaps?.map(gap => gap.kind)).toContain('missing_charter')
+    expect(body.spine?.sourceTrail).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        label: 'Source docs',
+        value: '1 source document',
+        detail: 'implementation-roadmap.md',
+        tone: 'ok',
+      }),
+    ]))
   })
 
   it('includes the orientation spine in the main project detail payload', async () => {

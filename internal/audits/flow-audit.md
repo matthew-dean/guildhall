@@ -26255,3 +26255,92 @@ selected-scope readiness ordering.
 - Schema Migration Decision: no persisted schema field was added, removed, or
   retyped; no migration id, compatibility reader, or rollback migration is
   required.
+
+2026-07-07T07:06:00Z - Project Map source trail comes from the shared orientation spine, and selected-release Start blockers agree with release blocker order.
+
+- User job: on Project Map, the owner should be able to see where Guildhall's
+  orientation claims came from without relying on Map-only reconstruction or
+  hidden CLI inspection. When a selected release/scope is blocked, Start,
+  Overview/Map summary, and release blockers should point at the same first
+  blocker instead of one surface saying `review needed` while another says
+  `blocked work`.
+- Failure classification:
+  - Data model/schema problem: the orientation-spine read model exposed source
+    health counts but not the source-trail rows the UI needs to prove charter,
+    scope, source-doc, work-record, and proof-mode provenance.
+  - Scheduler/action-state logic problem: project Start had a selected-release
+    `specsOnly` pass that could outrank the selected release's own blocker
+    order, so a blocked scoped task could be hidden behind a spec-review
+    message.
+  - UI communication/orientation problem: Project Map had to rebuild source
+    rows locally, so it could diverge from `/api/project/spine`.
+- Fix:
+  - `ProjectOrientationSpine` now includes `sourceTrail` rows built in the
+    shared runtime projection from task/node sources, execution-boundary refs,
+    selected release/scope source, and source document refs.
+  - `ProjectMapTab` prefers `spine.sourceTrail` and only keeps its local source
+    row reconstruction as a compatibility fallback for older payloads.
+  - Selected-release start blockers now run through one selected-release
+    blocker path before import/shaping blockers. That path recognizes explicit
+    releases, selected release ids, and inferred `releaseIds`; it prioritizes
+    scoped blocked work before scoped spec-review gates, then falls back to the
+    broader release blocker projection.
+- Contract Touch Decision:
+  - Work id: orientation-spine-source-trail-and-release-start-order.
+  - Touched contracts: `/api/project/spine` orientation-spine response shape,
+    `/api/project.orientationSpine`, and project Start readiness blocker
+    ordering for selected or inferred release boundaries.
+  - Contracts considered but not touched: persisted task queue schema,
+    persisted release schema, workspace-import draft schema, proof evidence
+    schema, and Start/Resume mutation semantics.
+  - Required follow-up: continue collapsing selected-release blocker selection
+    into the shared release/scope projection so the runtime does not need
+    separate proof/spec/blocked scans over scoped tasks.
+  - Proof required: runtime spine source-trail regression, API source-trail
+    regression, Project Map shared-source rendering regression, selected-release
+    blocker ordering regression, build, contract advisory, installed-app stale
+    proof, and live Narrative Harness plus Looma + Knit source-trail API/UI
+    proof.
+  - Proof provided so far: `./node_modules/.bin/vitest run
+    src/runtime/__tests__/project-orientation-spine.test.ts
+    src/runtime/__tests__/serve-dashboard.test.ts
+    src/web/surfaces/project/__tests__/ProjectMapTab.svelte.test.ts` passed
+    (`77` tests). Focused selected-release readiness proof,
+    `./node_modules/.bin/vitest run src/runtime/__tests__/serve-dashboard.test.ts
+    src/runtime/__tests__/serve-settings.test.ts --testNamePattern
+    "selected-release spec review|selected release is waiting|selected release
+    complete|drafted spec_review"`, passed (`4` tests).
+    `CI=true pnpm lint:contracts` passed with the contract advisory reporting
+    that touched contract paths have decision evidence. `node ./build.mjs`
+    passed. `node ./scripts/dev-install.mjs && guildhall stop && guildhall
+    start && curl -s http://localhost:7777/api/stale-server` installed the
+    current branch and returned `stale:false` for PID `66748`.
+  - Live API proof:
+    `/api/project/spine?projectId=narrative-harness` returned source-trail rows
+    with `Charter: Owner Approved`, `Scope: Inferred`, `50 source documents`,
+    `10 task records`, `Proof mode: Headless proof`, selected scope/release
+    `Stage 1 Headless Drafting And Evaluation MVP`, and source health
+    `inferred:67`, `conflicts:0`, `gaps:0`.
+    `/api/project/spine?projectId=looma-knit` returned `Charter: Owner
+    Approved`, `Scope: Release Plan`, `49 source documents`, `5 task records`,
+    `Proof mode: UI-visible proof`, selected scope/release `Stage 1: V1 Release
+    Hardening`, and source health `inferred:76`, `conflicts:0`, `gaps:0`.
+    `/api/project?projectId=looma-knit` returned
+    `startReadiness.code:"imported_scope_shaping"` with
+    `actionHref:"/task/task-import-kj0cyz"` and the first
+    `orientationSpine.release.blockers[0].id:"task-import-kj0cyz"`, proving
+    Start and release blocker order agree while preserving the dedicated import
+    shaping state.
+  - Browser proof: CLI Playwright against the installed app rendered
+    `/projects/narrative-harness/map` and `/projects/looma-knit/map` at
+    `1280x900`; both pages showed `Source trail`, source document counts, scope
+    assignment/later counts, and proof mode text from the shared source-trail
+    projection with `overflowX:false`. At `390x820`, both pages still showed
+    source docs and proof mode with `overflowX:false` and no sampled clipped
+    elements.
+  - Apply/revert behavior: reverting restores Map-only source-trail
+    reconstruction and the separate selected-release spec-review pass that can
+    make Start disagree with the release blocker order.
+- Schema Migration Decision: no persisted schema field was added, removed, or
+  retyped; no migration id, compatibility reader, or rollback migration is
+  required.

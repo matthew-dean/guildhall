@@ -207,6 +207,13 @@ export interface OrientationSourceHealth {
   gaps: number
 }
 
+export interface OrientationSourceTrailRow {
+  label: string
+  value: string
+  detail: string
+  tone: 'ok' | 'warn' | 'neutral' | 'accent'
+}
+
 export interface OrientationScopeRow {
   taskId: string
   nodeId: string
@@ -244,6 +251,7 @@ export interface ProjectOrientationSpine {
   gaps: OrientationGap[]
   release: OrientationReleaseSummary
   sourceHealth: OrientationSourceHealth
+  sourceTrail: OrientationSourceTrailRow[]
 }
 
 export interface OrientationTaskInput {
@@ -1530,6 +1538,128 @@ function sourceRefsForTask(task: OrientationTaskInput): string[] {
   return refs.length > 0 ? refs : [`task:${task.id}`]
 }
 
+function isSourceDocumentRef(ref: string): boolean {
+  if (ref.startsWith('task:') || ref.startsWith('artifact:')) return false
+  if (ref.startsWith('import:')) return true
+  return /[/\\]/.test(ref) || /\.(md|mdx|txt|json|ya?ml)$/i.test(ref)
+}
+
+function sourceRefLabel(ref: string): string {
+  const value = ref.startsWith('import:') ? ref.slice('import:'.length) : ref
+  const parts = value.split(/[/\\]/).filter(Boolean)
+  return parts.at(-1) ?? value
+}
+
+function countLabel(value: number, singular: string, plural = `${singular}s`): string {
+  return `${value} ${value === 1 ? singular : plural}`
+}
+
+function sourceIsInferred(source: unknown): boolean {
+  if (!source) return true
+  if (typeof source === 'string') return source === 'inferred' || source === 'missing'
+  if (typeof source === 'object' && 'inferred' in source) return Boolean((source as { inferred?: unknown }).inferred)
+  return false
+}
+
+function sourceLabelFor(source: unknown): string {
+  if (!source) return 'Missing'
+  if (typeof source === 'string') return source.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+  const typed = source as { kind?: string; confidence?: string; inferred?: boolean }
+  const kind = typed.kind
+    ? typed.kind.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+    : typed.inferred ? 'Inferred' : 'Recorded'
+  return typed.confidence ? `${kind} · ${typed.confidence.replace(/_/g, ' ')} confidence` : kind
+}
+
+function collectSourceNodes(roots: OrientationNode[], nodesById: Map<string, OrientationNode>): OrientationNode[] {
+  const nodes: OrientationNode[] = []
+  const seen = new Set<string>()
+  const add = (node: OrientationNode | undefined) => {
+    if (!node || seen.has(node.id)) return
+    seen.add(node.id)
+    nodes.push(node)
+    node.children.forEach(add)
+  }
+  for (const node of nodesById.values()) add(node)
+  roots.forEach(add)
+  return nodes
+}
+
+function buildSourceTrail(input: {
+  charter: ProjectOrientationCharter
+  executionBoundary: OrientationExecutionBoundary
+  scope: OrientationScope | null
+  selectedRelease: OrientationRelease | null
+  summary: ProjectOrientationSummary
+  roots: OrientationNode[]
+  nodesById: Map<string, OrientationNode>
+  taskCount: number
+}): OrientationSourceTrailRow[] {
+  const taskRefs = new Set<string>()
+  const artifactRefs = new Set<string>()
+  const sourceDocRefs = new Set<string>()
+  for (const node of collectSourceNodes(input.roots, input.nodesById)) {
+    for (const ref of node.source.refs ?? []) {
+      if (ref.startsWith('task:')) taskRefs.add(ref)
+      if (ref.startsWith('artifact:')) artifactRefs.add(ref)
+      if (isSourceDocumentRef(ref)) sourceDocRefs.add(ref)
+    }
+    for (const artifactId of node.refs.artifactIds) artifactRefs.add(`artifact:${artifactId}`)
+  }
+  for (const ref of [
+    ...(input.executionBoundary.source.refs ?? []),
+    ...sourceRefsFromReleaseSource(input.selectedRelease?.source),
+  ]) {
+    if (ref.startsWith('task:')) taskRefs.add(ref)
+    if (ref.startsWith('artifact:')) artifactRefs.add(ref)
+    if (isSourceDocumentRef(ref)) sourceDocRefs.add(ref)
+  }
+  const sourceDocNames = [...sourceDocRefs].map(sourceRefLabel).filter(Boolean)
+  const scopeLabel = input.summary.selectedScopeLabel ?? input.scope?.label ?? input.summary.selectedReleaseLabel ?? input.selectedRelease?.label ?? 'Current scope'
+  return [
+    {
+      label: 'Charter',
+      value: sourceLabelFor(input.charter.source),
+      detail: sourceIsInferred(input.charter.source)
+        ? 'Purpose and audience are inferred from durable project state and should be confirmed when they matter.'
+        : 'Purpose and audience were supplied or approved directly.',
+      tone: sourceIsInferred(input.charter.source) ? 'warn' : 'ok',
+    },
+    {
+      label: 'Scope',
+      value: sourceLabelFor(input.selectedRelease?.source ?? input.scope?.source),
+      detail: `${scopeLabel} contains ${input.summary.includedWorkCount} assigned work items and ${input.summary.deferredWorkCount} later.`,
+      tone: sourceIsInferred(input.selectedRelease?.source ?? input.scope?.source) ? 'warn' : 'ok',
+    },
+    {
+      label: 'Source docs',
+      value: countLabel(sourceDocRefs.size, 'source document'),
+      detail: sourceDocNames.length > 0
+        ? sourceDocNames.slice(0, 4).join(', ')
+        : 'No source documents are attached to mapped claims yet.',
+      tone: sourceDocRefs.size > 0 ? 'ok' : 'warn',
+    },
+    {
+      label: 'Work records',
+      value: `${taskRefs.size || input.taskCount} task records`,
+      detail: artifactRefs.size > 0
+        ? `${artifactRefs.size} artifact references are attached to mapped work.`
+        : 'Document-level artifact references are not attached to every lane yet.',
+      tone: artifactRefs.size > 0 ? 'ok' : 'warn',
+    },
+    {
+      label: 'Proof mode',
+      value: input.executionBoundary.label,
+      detail: input.executionBoundary.detail,
+      tone: input.executionBoundary.mode === 'headless' || input.executionBoundary.mode === 'mixed' ? 'accent' : input.executionBoundary.mode === 'unspecified' ? 'warn' : 'neutral',
+    },
+  ]
+}
+
+function sourceRefsFromReleaseSource(source: OrientationRelease['source'] | OrientationSource | undefined): string[] {
+  return source && typeof source === 'object' ? source.refs ?? [] : []
+}
+
 function sharedTokenCount(left: string, right: string): number {
   const leftTokens = new Set(normalizeText(left).split(/\s+/).filter(token => token.length > 2))
   const rightTokens = normalizeText(right).split(/\s+/).filter(token => token.length > 2)
@@ -2074,6 +2204,16 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
     startReadiness: input.startReadiness,
     runStatus: input.runStatus,
   }), gaps)
+  const sourceTrail = buildSourceTrail({
+    charter,
+    executionBoundary,
+    scope,
+    selectedRelease: selectedReleaseForReadModel,
+    summary,
+    roots,
+    nodesById: byId,
+    taskCount: tasks.length,
+  })
   return {
     projectId: input.projectId,
     updatedAt: now,
@@ -2095,6 +2235,7 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
       blockers,
     },
     sourceHealth: sourceHealth(roots, gaps),
+    sourceTrail,
   }
 }
 

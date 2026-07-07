@@ -271,6 +271,68 @@ describe('ProjectMapTab', () => {
     expect(refresh).toHaveBeenCalledTimes(1)
   })
 
+  it('renders source trail facts from the shared orientation spine read model', () => {
+    render(ProjectMapTab, {
+      detail: {
+        id: 'narrative-harness',
+        name: 'Narrative Harness',
+        tasks: [],
+        orientationSpine: {
+          charter: {
+            goal: 'Build a fiction-first planning and review harness.',
+            targetAudience: null,
+            source: 'inferred',
+          },
+          executionBoundary: {
+            label: 'Headless proof',
+            mode: 'headless',
+            proofStyle: 'script_only',
+            detail: 'Script proof.',
+            source: { kind: 'inferred', refs: [], confidence: 'medium', inferred: true },
+          },
+          summary: {
+            selectedScopeLabel: 'Stage 1',
+            includedWorkCount: 1,
+            deferredWorkCount: 2,
+            progress: { total: 3 },
+          },
+          roots: [{
+            id: 'work:task-a',
+            title: 'Runtime fallback source row',
+            source: { kind: 'task', refs: ['import:docs/old-local-source.md'] },
+            refs: { taskIds: ['task-a'] },
+          }],
+          nodes: {},
+          proofContracts: [],
+          scopeRows: [],
+          gaps: [],
+          sourceHealth: { inferred: 0, gaps: 0 },
+          sourceTrail: [
+            {
+              label: 'Source docs',
+              value: '2 source documents',
+              detail: 'implementation-roadmap.md, architecture-notes.md',
+              tone: 'ok',
+            },
+            {
+              label: 'Scope',
+              value: 'Release Plan',
+              detail: 'Stage 1 contains 1 assigned work item and 2 later.',
+              tone: 'ok',
+            },
+          ],
+        },
+      },
+      activeProjectId: 'narrative-harness',
+    })
+
+    expect(screen.getByRole('heading', { name: 'Source trail' })).toBeInTheDocument()
+    expect(screen.getByText('2 source documents')).toBeInTheDocument()
+    expect(screen.getByText('implementation-roadmap.md, architecture-notes.md')).toBeInTheDocument()
+    expect(screen.getByText('Stage 1 contains 1 assigned work item and 2 later.')).toBeInTheDocument()
+    expect(screen.queryByText('old-local-source.md')).not.toBeInTheDocument()
+  })
+
   it('bounds the default map to the selected release instead of rendering every imported root', () => {
     const noisyRoots = Array.from({ length: 80 }, (_, index) => ({
       id: `work:later-${index}`,
