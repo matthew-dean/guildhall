@@ -448,6 +448,45 @@ describe('ProjectView', () => {
     expect(screen.queryByRole('button', { name: /notifications need you/i })).not.toBeInTheDocument()
   })
 
+  it('loads project detail before rendering a cold direct Release route', async () => {
+    await renderProjectViewWithoutInitialDetail('release')
+
+    expect(await screen.findByText('Current counts')).toBeInTheDocument()
+    expect(screen.queryByText('Loading project...')).not.toBeInTheDocument()
+  })
+
+  it('renders Release readiness when the broad project payload is still loading', async () => {
+    const pendingProject = deferredResponse()
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'http://localhost')
+      if (url.pathname === '/api/project') return pendingProject.promise
+      if (url.pathname === '/api/project/inbox') return json({ blockers: { bootstrap: false, workspaceImport: false }, items: [] })
+      if (url.pathname === '/api/project/release-readiness') {
+        return json({
+          openEscalations: [],
+          unapprovedBriefs: [],
+          unapprovedSpecs: [],
+          shelvedUnclaimed: [],
+          blockedByAgent: [],
+          designSystem: { drafted: true, approved: true, revision: 1 },
+          statusCounts: { done: 3 },
+          totals: { blockingCount: 0, tasks: 3, done: 3 },
+        })
+      }
+      if (url.pathname === '/api/project/spine') return json({ spine: null })
+      return json({})
+    }))
+    project.detail = null
+    project.error = null
+
+    render(ProjectView, { initialView: 'release', initialSub: null, projectId: 'looma-knit' })
+
+    expect(await screen.findByText('Current counts')).toBeInTheDocument()
+    expect(screen.getByText('Tasks done')).toBeInTheDocument()
+    expect(screen.getByText('3/3')).toBeInTheDocument()
+    pendingProject.resolve(json(detail()))
+  })
+
   it('does not foreground resolved git runtime errors in Overview', async () => {
     const projectPayload = detail({
       recentEvents: [

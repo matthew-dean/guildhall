@@ -25351,3 +25351,55 @@ selected-scope readiness ordering.
   - Apply/revert behavior: reverting restores the misleading count line where
     deferred rows shown in the selected scope are counted as current-scope
     items.
+
+## 2026-07-06 — Release route renders from release readiness while project detail loads
+
+- Work id: `codex:release-cold-route-readiness-render-2026-07-06`.
+- User job: a user who opens a direct project Release URL should immediately
+  see the selected release/scope readiness view. The page must not stay on
+  `Loading project...` just because the broader project detail payload is slow,
+  missed, or still in flight.
+- Root-cause classification:
+  - UI communication/orientation problem: the Release route is one of the
+    primary places a user verifies current scope/release completion, but a cold
+    direct route could show only `Loading project...`.
+  - Scheduler/action-state logic problem: the shell gate treated Release as if
+    it needed the broad `/api/project` payload before rendering, even though
+    Release already has its own project-scoped `/api/project/release-readiness`
+    and `/api/project/spine` evidence surfaces.
+- Fix:
+  - ProjectView now allows `release` to render while broad project detail is
+    still loading, matching Thread and Needs-you.
+  - The inner no-detail branch now mounts `ReleaseTab`, which fetches release
+    readiness with the explicit active project id.
+- Contract Touch Decision:
+  - Touched contracts: ProjectView shell/body render gate for project-scoped
+    Release routes.
+  - Contracts considered but not touched: Release readiness API shape,
+    orientation spine schema, selected release/current scope projection,
+    scheduler/start contract, Project Map, Overview, Work, and persisted task
+    state.
+  - Existing data impact: no migration. Existing release-readiness responses can
+    now render even before broad project detail finishes loading.
+  - Required follow-up: keep direct project routes from depending on broad
+    project detail when they already have a narrower authoritative endpoint.
+  - Proof required: failing ProjectView regression where `/api/project` remains
+    pending but `/api/project/release-readiness` is available, ProjectView and
+    ReleaseTab unit suites, UI typecheck, installed-app stale-server proof, and
+    rendered Narrative Harness Release proof.
+  - Proof provided: the new ProjectView regression first failed on the outer
+    `Loading project...` gate. After the fix it passed by rendering `Current
+    counts`, `Tasks done`, and `3/3` from release readiness while the broad
+    project payload was still pending. The ProjectView/ReleaseTab slice passed
+    with `77` tests, `tsc -p packages/ui/tsconfig.json` and `git diff --check`
+    passed, and after `node ./build.mjs`, `node ./scripts/dev-install.mjs`,
+    and service restart, `/api/stale-server` returned `stale:false` for PID
+    `32325`. Rendered Narrative Harness Release proof at `1280x900` and
+    `390x844` showed no `Loading project...`, `Release readiness`, `11 included
+    · 31 later`, `11/11 tasks done · no open release blockers.`, `Current
+    counts`, `Tasks done`, `11/11`, and no horizontal overflow (`scrollWidth`
+    equaled `clientWidth` at both viewports). Screenshots:
+    `artifacts/flow-audit/nh-release-cold-route-desktop-2026-07-06.png` and
+    `artifacts/flow-audit/nh-release-cold-route-mobile-2026-07-06.png`.
+  - Apply/revert behavior: reverting restores the failure where a cold direct
+    Release route can remain blank/loading instead of showing release readiness.

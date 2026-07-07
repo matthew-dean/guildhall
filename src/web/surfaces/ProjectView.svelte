@@ -419,7 +419,7 @@
   ])
   const settingsPath = $derived(currentProjectHref('/settings', activeProjectId))
   const canRenderWithoutProjectDetail = $derived(
-    currentView === 'thread' || currentView === 'inbox',
+    currentView === 'thread' || currentView === 'inbox' || currentView === 'release',
   )
   const showingCompactThreadDetail = $derived(
     railForcedCollapsed && currentView === 'thread' && navContextMode === 'detail',
@@ -1572,6 +1572,15 @@
               {:then module}
                 {@const NeedsYouTab = module.default}
                 <NeedsYouTab items={inboxItems} history={inboxHistory} loaded={inboxLoaded} error={inboxError} refresh={loadInbox} />
+              {/await}
+            {:else if currentView === 'release'}
+              {#await loadReleaseTab()}
+                <div class="page-centered page-centered-inline">
+                  <p class="muted">Loading project...</p>
+                </div>
+              {:then module}
+                {@const ReleaseTab = module.default}
+                <ReleaseTab subView={currentSub} activeProjectId={activeProjectId} />
               {/await}
             {:else}
               <div class="page-centered page-centered-inline">
