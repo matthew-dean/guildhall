@@ -3042,7 +3042,7 @@ function taskForGitStory(
   }
 }
 
-async function reconciledSkippedMergeResult(
+async function reconciledTaskHeadMergeResult(
   driver: NodeGitDriver,
   input: {
     task: Record<string, unknown>
@@ -3050,13 +3050,10 @@ async function reconciledSkippedMergeResult(
     targetRepoRoot: string
   },
 ): Promise<string | undefined> {
-  const mergeRecord =
-    input.task.mergeRecord && typeof input.task.mergeRecord === 'object' && !Array.isArray(input.task.mergeRecord)
-      ? input.task.mergeRecord as { result?: string }
-      : undefined
-  if (mergeRecord?.result !== 'skipped' || !input.worktreePath) return undefined
-  if (input.task.status !== 'done' && input.task.status !== 'pending_pr') return undefined
+  if (!input.worktreePath) return undefined
   try {
+    const status = await driver.statusSummary(input.worktreePath)
+    if (status.changedCount > 0 || status.untrackedCount > 0) return undefined
     const taskHead = await driver.headSha(input.worktreePath)
     if (await driver.isAncestor(input.targetRepoRoot, taskHead, 'HEAD')) return 'reconciled'
     const targetStatus = await driver.statusSummary(input.targetRepoRoot)
@@ -3172,7 +3169,7 @@ async function gitStoryForTask(
   const repoRoot = existingWorktreePath ?? childProject?.path ?? resolveEffectiveTaskProjectPath(task as Pick<Task, 'projectPath'>, projectPath)
   const effectiveInspectedPath = existingWorktreePath ?? childProject?.path ?? inspectedPath
   const targetRepoRoot = childProject?.path ?? resolveEffectiveTaskProjectPath(task as Pick<Task, 'projectPath'>, projectPath)
-  const mergeRecordResultOverride = await reconciledSkippedMergeResult(driver, {
+  const mergeRecordResultOverride = await reconciledTaskHeadMergeResult(driver, {
     task,
     worktreePath: existingWorktreePath,
     targetRepoRoot,

@@ -26835,6 +26835,10 @@ selected-scope readiness ordering.
     or `committed_local`) as newer than ordinary old `merged`/`pushed` records;
     only `reconciled` is allowed to prove the task branch is already contained
     in project history.
+  - Task-head reconciliation now works for any clean task worktree whose HEAD
+    is already contained in project history or upstream, not only legacy
+    `skipped` merge records on done tasks. Dirty worktrees are intentionally
+    not reconciled because uncommitted proof-recovery files have not landed.
   - Active `proofRecovery` keeps task git-story inspection enabled even when a
     task has recorded completion proof.
   - Release readiness inspects the scoped task set for git-story follow-up so a
@@ -26853,7 +26857,7 @@ selected-scope readiness ordering.
     src/runtime/__tests__/git-story.test.ts
     src/runtime/__tests__/serve-release-readiness.test.ts -t "git
     story|repository|release|proof|blocked|dirty|merge record|start
-    readiness|upstream"` passed (`60` tests, `12` skipped).
+    readiness|upstream|reconciles"` passed (`61` tests, `12` skipped).
   - Installed API proof before the start-readiness refinement showed
     `/api/project/release-readiness?projectId=narrative-harness` reporting the
     DeepInfra task as `dirty_uncommitted` with `5 changed files are not
@@ -26882,7 +26886,8 @@ selected-scope readiness ordering.
   - Touched contracts: git-story classification precedence; task git-story
     inclusion for active proof recovery; release-readiness `gitStoryTasks`
     projection; selected-release start-readiness blocker selection including
-    `no_upstream` task blockers; release readiness git-story blocker totals.
+    `no_upstream` task blockers; task-head reconciliation semantics; release
+    readiness git-story blocker totals.
   - Contracts considered but not touched: persisted task schema, persisted
     `proofRecovery` shape, merge-record schema, task evidence schema, git
     driver status schema, release schema, and source-ref schema.

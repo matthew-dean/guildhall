@@ -675,6 +675,86 @@ describe('GET /api/project/release-readiness', () => {
     await execFileP('git', ['worktree', 'remove', '--force', taskWorktreePath], { cwd: tmpDir })
   })
 
+  it('reconciles a blocked proof-recovery branch after its local commit lands in project history', async () => {
+    const taskWorktreePath = path.join(tmpDir, '..', `${path.basename(tmpDir)}-landed-proof-worktree`)
+    await execFileP('git', ['worktree', 'add', '-b', 'guildhall/task-landed-proof', taskWorktreePath], { cwd: tmpDir })
+    await fs.writeFile(path.join(taskWorktreePath, 'PROOF.md'), 'proof harness committed but provider proof still needs a credential\n', 'utf8')
+    await execFileP('git', ['add', 'PROOF.md'], { cwd: taskWorktreePath })
+    await execFileP('git', ['commit', '-m', 'add proof harness'], { cwd: taskWorktreePath })
+    await execFileP('git', ['merge', '--no-ff', 'guildhall/task-landed-proof', '-m', 'land proof harness'], { cwd: tmpDir })
+
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: 'headless-mvp',
+      releases: [{
+        id: 'headless-mvp',
+        label: 'Headless MVP',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-current'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [
+        makeTask({
+          id: 'task-current',
+          title: 'Current proof recovery lane',
+          status: 'blocked',
+          releaseIds: ['headless-mvp'],
+          worktreePath: taskWorktreePath,
+          blockReason: 'provider_missing: DEEPINFRA_API_TOKEN is required.',
+          proofRecovery: {
+            reopenedAt: '2026-07-07T09:50:00.000Z',
+            reason: 'Run the real provider proof and attach the evidence.',
+          },
+          mergeRecord: {
+            result: 'merged',
+            fromBranch: 'guildhall/task-landed-proof',
+            toBranch: 'main',
+            strategy: 'ff_only_local',
+            mergedAt: '2026-07-06T20:01:00.000Z',
+          },
+        } as Partial<Task>),
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await approveDesignSystem(app)
+
+    const res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
+    const body = await res.json() as any
+
+    expect(body.gitStory.blockers).toEqual([
+      expect.objectContaining({
+        id: 'repo:0',
+        state: 'committed_local',
+        reason: 'main has 2 local commits not pushed to origin/main.',
+      }),
+    ])
+    expect(body.gitStory.snapshots.find((snapshot: any) => snapshot.taskId === 'task-current')).toMatchObject({
+      state: 'merged',
+      mergeRecordResult: 'reconciled',
+      branch: 'guildhall/task-landed-proof',
+      reason: 'Task worktree HEAD is already contained in the project repository history.',
+    })
+
+    const projectRes = await app.fetch(new Request(projectUrl('/api/project?surface=overview')))
+    const projectBody = await projectRes.json() as any
+    expect(projectBody.startReadiness).toMatchObject({
+      canStart: false,
+      code: 'no_unattended_progress',
+      message: '"Current proof recovery lane" is blocked before unattended work can run: provider_missing: DEEPINFRA_API_TOKEN is required.',
+      actionHref: '/work?task=task-current',
+      focusTaskId: 'task-current',
+      focusTaskTitle: 'Current proof recovery lane',
+      focusKind: 'blocked_work',
+      count: 1,
+    })
+
+    await execFileP('git', ['worktree', 'remove', '--force', taskWorktreePath], { cwd: tmpDir })
+  })
+
   it('reconciles skipped task merge records when the task worktree commit is already in project history', async () => {
     const taskWorktreePath = path.join(tmpDir, '..', `${path.basename(tmpDir)}-skipped-merge-worktree`)
     await execFileP('git', ['worktree', 'add', '-b', 'guildhall/task-skipped-merge', taskWorktreePath], { cwd: tmpDir })
