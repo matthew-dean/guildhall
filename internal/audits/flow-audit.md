@@ -27759,3 +27759,81 @@ selected-scope readiness ordering.
 - Schema Migration Decision: no persisted schema field was added, removed, or
   retyped. This is a shared read-model projection over existing readiness,
   design-system, checkout, task, and repository state.
+
+## 2026-07-07T11:51:56Z - Dirty checkout blockers must use honest ownership language
+
+- User job:
+  - When current scope is blocked by checkout residue, the owner should see a
+    label that matches the actual files being counted. A dirty repo
+    `.gitignore` managed by Guildhall policy should not be described as a
+    project-local `.guildhall/` state file.
+- Finding:
+  - Root cause classification:
+    - Data model/schema problem: the dirty-checkout summary field is named
+      `ownedCount`, but the files include both `.guildhall` project state and
+      Guildhall-managed repo policy files such as `.gitignore`.
+    - UI communication/orientation problem: the API and Release tab described
+      all dirty-checkout files as `project-local Guildhall` or
+      `Guildhall-owned project` files, which is misleading for Looma + Knit's
+      live `knit/.gitignore` blocker.
+    - Project structure/scope/release modeling problem: child-repo checkout
+      residue is a current-scope closure blocker even when the dirty file lives
+      in a child repo policy file rather than a task artifact.
+- Fix:
+  - The release-readiness API now labels the dirty-checkout blocker as
+    `Guildhall-managed checkout` files.
+  - The Release tab uses the same wording for the verdict reason, checkout
+    summary pill, blocker stack, and detail row.
+  - The Release tab now shares a small local singular/plural helper so the
+    singular rendered route says `file needs cleanup`, not `file need
+    cleanup`.
+- Proof provided:
+  - Red/green regressions:
+    `CI=true ./node_modules/.bin/vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts -t "Guildhall-owned
+    project files are dirty"` first failed on the old API label and now passes.
+    `CI=true ./node_modules/.bin/vitest run
+    src/web/surfaces/project/__tests__/ReleaseTab.svelte.test.ts -t "dirty
+    checkout residue"` first failed on the old Release tab labels and now
+    passes.
+  - Rendered route proof:
+    `CI=true ./node_modules/.bin/playwright test
+    tests/rendered-ui/project-flow.spec.ts --grep "dirty service release"`
+    first exposed the singular grammar issue and then passed after the
+    singular/plural helper fix.
+  - Broader regression:
+    `CI=true ./node_modules/.bin/vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts
+    src/web/surfaces/project/__tests__/ReleaseTab.svelte.test.ts` passed (`77`
+    tests).
+  - Build:
+    `node ./build.mjs` and `git diff --check` passed before this audit entry.
+  - Installed/live proof:
+    `CI=true corepack pnpm dev:install && guildhall stop && guildhall start`
+    installed the current branch artifact, and `/api/stale-server` returned
+    `stale:false` for PID `28547`.
+    `/api/project/release-readiness?projectId=looma-knit` reports
+    `totals.blockingCount:8`, `releaseBlockers.length:8`,
+    `dirtyCheckout.files:["knit/.gitignore"]`, and the `dirty-checkout` row
+    label `1 Guildhall-managed checkout file needs cleanup or landing.`
+    A Playwright smoke against the installed
+    `/projects/looma-knit/release` page found the `Release readiness` heading,
+    found `Guildhall-managed checkout file needs cleanup`, and confirmed the
+    old `project-local Guildhall file needs cleanup` phrase is absent.
+- Contract Touch Decision:
+  - Work id: `dirty-checkout-managed-checkout-copy`.
+  - Touched contracts: `/api/project/release-readiness` dirty-checkout blocker
+    label, Release tab readiness verdict copy, Release tab checkout summary
+    copy, and rendered route proof for dirty checkout blockers.
+  - Contracts considered but not touched: persisted dirty-checkout schema,
+    task schema, release schema, git story schema, project spine schema, and
+    project-local state cleanup migration contract.
+  - Required follow-up: consider moving dirty-checkout owner-facing copy into a
+    shared presentation helper so the API and Release tab do not keep parallel
+    strings.
+  - Apply/revert behavior: reverting can make Guildhall describe child-repo
+    `.gitignore` policy residue as if it were only project-local Guildhall
+    state, weakening user trust in blocker labels.
+- Schema Migration Decision: no persisted schema field was added, removed, or
+  retyped. This changes owner-facing copy over the existing dirty-checkout
+  read model only.

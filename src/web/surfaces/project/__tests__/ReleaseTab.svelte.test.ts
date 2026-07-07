@@ -478,9 +478,9 @@ describe('ReleaseTab', () => {
 
     expect(await screen.findByText('Current task scope')).toBeTruthy()
     expect(screen.getAllByText('Blocked')).toHaveLength(2)
-    expect(screen.getByText('3 Guildhall-owned project files still need cleanup or landing.')).toBeTruthy()
-    expect(screen.getByText('3 Guildhall files dirty')).toBeTruthy()
-    expect(screen.getByText(/3 project-local Guildhall files need cleanup before current work can be ready/)).toBeTruthy()
+    expect(screen.getByText('3 Guildhall-managed checkout files still need cleanup or landing.')).toBeTruthy()
+    expect(screen.getByText('3 managed files dirty')).toBeTruthy()
+    expect(screen.getByText(/3 Guildhall-managed checkout files need cleanup before current work can be ready/)).toBeTruthy()
     expect(screen.queryByText(/memory\/TASKS.json/)).toBeNull()
   })
 

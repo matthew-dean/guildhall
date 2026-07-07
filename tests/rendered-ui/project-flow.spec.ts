@@ -141,7 +141,7 @@ const projectSurfaceRoutes = [
     path: '/projects/dirty-service/release',
     assertions: async (page) => {
       await expect(page.getByRole('heading', { name: /^(Release|Scope) readiness$/ })).toBeVisible()
-      await expect(page.getByText(/project-local Guildhall .*file[s]? need[s]? cleanup/)).toBeVisible()
+      await expect(page.getByText(/Guildhall-managed checkout .*file[s]? need[s]? cleanup/).first()).toBeVisible()
       await expect(page.getByTitle('Dirty Service')).toBeVisible()
     },
   },

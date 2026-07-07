@@ -2978,7 +2978,7 @@ describe('GET /api/project/release-readiness', () => {
       expect.objectContaining({
         id: 'dirty-checkout',
         title: 'Project checkout',
-        label: '1 project-local Guildhall file needs cleanup or landing.',
+        label: '1 Guildhall-managed checkout file needs cleanup or landing.',
       }),
     ])
   })

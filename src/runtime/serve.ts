@@ -12674,7 +12674,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           title: 'Project checkout',
           label: dirtyCheckout.error
             ? `Could not inspect project checkout: ${dirtyCheckout.error}`
-            : `${dirtyCheckout.ownedCount} project-local Guildhall ${dirtyCheckout.ownedCount === 1 ? 'file needs' : 'files need'} cleanup or landing.`,
+            : `${dirtyCheckout.ownedCount} Guildhall-managed checkout ${dirtyCheckout.ownedCount === 1 ? 'file needs' : 'files need'} cleanup or landing.`,
         }]
       : []
     const blockingKeys = new Set<string>()

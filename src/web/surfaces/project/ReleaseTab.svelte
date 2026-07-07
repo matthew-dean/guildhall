@@ -250,6 +250,10 @@
         : dirtyCheckoutError
       : '',
   )
+  const managedCheckoutFilesLabel = (count: number): string =>
+    `${count} Guildhall-managed checkout ${count === 1 ? 'file' : 'files'}`
+  const managedCheckoutNeedsVerb = (count: number): string =>
+    count === 1 ? 'needs' : 'need'
   function normalizedGitStoryState(state: string | undefined): string {
     return String(state ?? '').trim().toLowerCase()
   }
@@ -378,7 +382,7 @@
       return {
         label: 'Blocked',
         tone: 'warn' as const,
-        reason: `${dirtyCheckoutCount} Guildhall-owned project file${dirtyCheckoutCount === 1 ? '' : 's'} still need cleanup or landing.`,
+        reason: `${managedCheckoutFilesLabel(dirtyCheckoutCount)} still ${managedCheckoutNeedsVerb(dirtyCheckoutCount)} cleanup or landing.`,
       }
     }
     if (dirtyCheckoutError) {
@@ -473,7 +477,7 @@
       'checkout',
       'Project checkout',
       dirtyCheckoutError ? 1 : dirtyCheckoutCount,
-      dirtyCheckoutError ? checkoutInspectionError : `${dirtyCheckoutCount} project-local Guildhall ${dirtyCheckoutCount === 1 ? 'file needs' : 'files need'} cleanup.`,
+      dirtyCheckoutError ? checkoutInspectionError : `${managedCheckoutFilesLabel(dirtyCheckoutCount)} ${managedCheckoutNeedsVerb(dirtyCheckoutCount)} cleanup.`,
     )
     add(
       'repository',
@@ -605,7 +609,7 @@
             <div class="summary-stat">
               <span class="summary-label">Project checkout</span>
           <StatusPill
-                label={dirtyCheckoutError ? 'inspection failed' : dirtyCheckoutCount > 0 ? `${dirtyCheckoutCount} Guildhall files dirty` : 'clean'}
+                label={dirtyCheckoutError ? 'inspection failed' : dirtyCheckoutCount > 0 ? `${dirtyCheckoutCount} managed ${dirtyCheckoutCount === 1 ? 'file' : 'files'} dirty` : 'clean'}
                 tone={dirtyCheckoutError || dirtyCheckoutCount > 0 ? 'warn' : 'ok'}
               />
             </div>
@@ -638,7 +642,7 @@
         {/if}
         {#if data.dirtyCheckout && dirtyCheckoutCount > 0}
           <p class="dirty-detail">
-            {dirtyCheckoutCount} project-local Guildhall {dirtyCheckoutCount === 1 ? 'file needs' : 'files need'} cleanup before {data.release?.label ? 'the current release' : 'current work'} can be ready.
+            {managedCheckoutFilesLabel(dirtyCheckoutCount)} {managedCheckoutNeedsVerb(dirtyCheckoutCount)} cleanup before {data.release?.label ? 'the current release' : 'current work'} can be ready.
             Open diagnostics if you need the exact file list.
           </p>
         {:else if dirtyCheckoutError}
