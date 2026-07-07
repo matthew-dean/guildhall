@@ -12656,6 +12656,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
         : 0
     const dirtyCheckoutBlockingCount = dirtyCheckout.ownedCount > 0 || dirtyCheckout.error ? 1 : 0
     const repositoryFollowupCount = gitStory.blockers.length
+    const repositoryFollowupBlockers = gitStory.blockers.map(blocker => ({
+      id: `repository-followup:${blocker.id}`,
+      title: `Repository follow-up: ${blocker.label}`,
+      label: blocker.reason,
+    }))
     const blockingKeys = new Set<string>()
     for (const blocker of releaseBlockers) blockingKeys.add(`task:${blocker.id}`)
     for (const task of proofMissingDoneTasks) blockingKeys.add(`task:${task.id}`)
@@ -12679,7 +12684,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       shelvedUnclaimed,
       blockedByAgent,
       proofMissingDoneTasks,
-      releaseBlockers,
+      releaseBlockers: [...releaseBlockers, ...repositoryFollowupBlockers],
       designSystem,
       dirtyCheckout,
       gitStory,

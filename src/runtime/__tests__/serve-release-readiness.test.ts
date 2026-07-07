@@ -473,6 +473,13 @@ describe('GET /api/project/release-readiness', () => {
     expect(body.gitStory.blockers).toHaveLength(1)
     expect(body.totals.gitStoryBlockingCount).toBe(1)
     expect(body.totals.blockingCount).toBe(1)
+    expect(body.releaseBlockers).toEqual([
+      expect.objectContaining({
+        id: 'repository-followup:repo:0',
+        title: 'Repository follow-up: main',
+        label: expect.stringContaining('not pushed'),
+      }),
+    ])
     expect(body.ready).toBe(false)
 
     const projectRes = await app.fetch(new Request(projectUrl('/api/project')))
@@ -762,6 +769,11 @@ describe('GET /api/project/release-readiness', () => {
       expect.objectContaining({
         id: 'task-current',
         label: 'Current proof recovery lane: provider_missing: DEEPINFRA_API_TOKEN is required.',
+      }),
+      expect.objectContaining({
+        id: 'repository-followup:repo:0',
+        title: 'Repository follow-up: main',
+        label: 'main has 2 local commits not pushed to origin/main.',
       }),
     ])
 

@@ -27479,3 +27479,72 @@ selected-scope readiness ordering.
 - Schema Migration Decision: no persisted schema field was added, removed, or
   retyped. This is a projection/interpretation fix over existing task,
   release, and workspace-goals records.
+
+## 2026-07-07T11:23:24Z - Release readiness must list repository follow-up blockers
+
+- User job:
+  - When Guildhall says a selected release/current scope is blocked by
+    repository follow-up, the Release view must show the blocker itself, not
+    only increment an invisible count.
+- Finding:
+  - Root cause classification:
+    - UI communication/orientation problem: live Narrative Harness readiness
+      reported `blockingCount: 3` and `gitStoryBlockingCount: 3`, but
+      `releaseBlockers` was empty, leaving the UI without the rows needed to
+      explain why release completion was blocked.
+    - Project structure/scope/release modeling problem: repository follow-up is
+      part of release closure state, but the shared release-readiness response
+      only projected task blockers into `releaseBlockers`.
+    - Scheduler/action-state logic problem: Start correctly focused
+      `repository_followup_required`, while Release readiness exposed only the
+      aggregate count. Surfaces could therefore disagree about whether the
+      blocker was inspectable.
+    - Runtime/provider/infrastructure problem: the remaining Narrative Harness
+      blocker is real external SSH access to Bitbucket, not more runnable
+      Guildhall task work.
+- Fix:
+  - The release-readiness response now appends repository follow-up blockers
+    from `gitStory.blockers` to the same `releaseBlockers` list the UI already
+    renders for task blockers.
+  - Task blockers still remain task blockers; repository rows use stable
+    `repository-followup:<gitStoryBlockerId>` ids, a `Repository follow-up:
+    <gitStoryLabel>` title, and the existing git-story reason as their label.
+- Proof provided:
+  - Red/green regression:
+    `CI=true ./node_modules/.bin/vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts -t "git story
+    follow-up remains"` first failed because `releaseBlockers` was empty while
+    `gitStoryBlockingCount` was `1`, then passed after repository blockers were
+    projected.
+  - Broader regression:
+    `CI=true ./node_modules/.bin/vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts` passed (`54`
+    tests).
+  - Installed/live proof:
+    `CI=true corepack pnpm dev:install && guildhall stop && guildhall start`
+    installed the current branch artifact, and `/api/stale-server` returned
+    `stale:false` for PID `45604`.
+  - Narrative Harness live readiness:
+    `/api/project?projectId=narrative-harness` reports `startReadiness.code:
+    repository_followup_required`, `count: 3`, and action `/release`.
+    `/api/project/release-readiness?projectId=narrative-harness` reports
+    `ready:false`, `totals.gitStoryBlockingCount: 3`, and three
+    `releaseBlockers` rows:
+    `repository-followup:repo:0` (`Repository follow-up: main`),
+    `repository-followup:task:task-select-and-prove-a-deep-infra-drafting-model-for-broad-genre-chapter-writing`,
+    and
+    `repository-followup:task:task-generate-a-cli-first-story-synopsis-outline-character-voice-records-and-one-chapter-draft-from-the-selected-model`.
+- Contract Touch Decision:
+  - Work id: `release-readiness-repository-blocker-list`.
+  - Touched contracts: `/api/project/release-readiness` response semantics for
+    `releaseBlockers`, release blocker display ownership, and repository
+    follow-up closure semantics.
+  - Contracts considered but not touched: persisted task schema, git story
+    schema, task runtime schema, release schema, and project orientation spine
+    schema.
+  - Required follow-up: none for this slice; install/restart and live Narrative
+    Harness release-readiness proof are recorded above.
+  - Apply/revert behavior: reverting leaves `blockingCount`/Start readiness
+    correct but prevents the Release view from explaining repository blockers.
+- Schema Migration Decision: no persisted schema field was added, removed, or
+  retyped. This is an API projection fix over existing git-story blockers.
