@@ -779,7 +779,7 @@ describe('buildProjectOrientationSpine', () => {
       scopeProjection,
     })
 
-    expect(spine.selectedRelease?.nodeIds).toEqual(['work:task-current', 'work:task-model-proof'])
+    expect(spine.selectedRelease?.nodeIds).toEqual(['work:task-current'])
     expect(spine.scope?.nodeIds).toEqual(['work:task-current', 'work:task-model-proof'])
     expect(spine.summary.includedWorkCount).toBe(2)
     expect(spine.scopeRows.find(row => row.taskId === 'task-model-proof')).toMatchObject({
@@ -1015,8 +1015,9 @@ describe('buildProjectOrientationSpine', () => {
       label: 'Headless MVP',
       source: 'release_plan',
       nodeIds: ['work:workspace-import:task-context-packet'],
-      deferredNodeIds: ['work:workspace-import:task-authoring-ui'],
+      deferredNodeIds: [],
     })
+    expect(spine.scope?.deferredNodeIds).toEqual(['work:workspace-import:task-authoring-ui'])
     expect(spine.summary.selectedReleaseLabel).toBe('Headless MVP')
     expect(spine.summary.selectedScopeLabel).toBe('Headless MVP')
     expect(spine.summary.includedWorkCount).toBe(1)
@@ -1795,7 +1796,7 @@ describe('buildProjectOrientationSpine', () => {
 
     expect(spine.scope).toMatchObject({
       nodeIds: ['work:workspace-import:task-current'],
-      deferredNodeIds: [],
+      deferredNodeIds: ['work:workspace-import:task-later', 'capability:capability-core-loop'],
     })
     expect(spine.releases).toEqual([
       expect.objectContaining({
@@ -1812,7 +1813,7 @@ describe('buildProjectOrientationSpine', () => {
       }),
     ])
     expect(spine.summary.includedWorkCount).toBe(1)
-    expect(spine.summary.deferredWorkCount).toBe(0)
+    expect(spine.summary.deferredWorkCount).toBe(1)
     expect(spine.nodes['work:workspace-import:task-current']?.source).toMatchObject({
       kind: 'inferred',
       refs: ['import:docs/harness/implementation-roadmap.md'],
@@ -2081,6 +2082,157 @@ describe('buildProjectOrientationSpine', () => {
         deferredNodeIds: ['work:saved-stage-two'],
       }),
     ])
+  })
+
+  it('does not copy unassigned later imports into every release bucket', () => {
+    const spine = buildProjectOrientationSpine({
+      projectId: 'looma-knit',
+      now: '2026-07-07T01:20:00.000Z',
+      workspaceImportDraft: {
+        source: {
+          kind: 'inferred',
+          refs: ['workspace-import:draft'],
+          confidence: 'medium',
+          freshness: 'fresh',
+          inferred: true,
+          refreshedAt: '2026-07-07T01:20:00.000Z',
+        },
+        releases: [
+          {
+            id: 'stage-1-v1-release-hardening',
+            label: 'Stage 1: V1 Release Hardening',
+            source: 'release_plan',
+            state: 'active',
+          },
+          {
+            id: 'stage-2-editor-integration',
+            label: 'Stage 2: Editor Integration',
+            source: 'release_plan',
+            state: 'planned',
+          },
+        ],
+        tasks: [
+          {
+            id: 'task-current-proof',
+            title: 'Prove the V1 release hardening path.',
+            description: 'Current work for Stage 1.',
+            domain: 'knit',
+            scope: 'current',
+            releaseIds: ['stage-1-v1-release-hardening'],
+          },
+          {
+            id: 'task-unassigned-later',
+            title: 'Investigate a later editor polish idea.',
+            description: 'A deferred import that has not been assigned to a specific release.',
+            domain: 'knit',
+            scope: 'later',
+          },
+          {
+            id: 'task-stage-two-later',
+            title: 'Build the Stage 2 editor integration slice.',
+            description: 'Deferred work explicitly assigned to Stage 2.',
+            domain: 'knit',
+            scope: 'later',
+            releaseIds: ['stage-2-editor-integration'],
+          },
+        ],
+      },
+    })
+
+    const stageOne = spine.releases.find(release => release.id === 'stage-1-v1-release-hardening')
+    const stageTwo = spine.releases.find(release => release.id === 'stage-2-editor-integration')
+    expect(spine.scope?.deferredNodeIds).toContain('work:workspace-import:task-unassigned-later')
+    expect(stageOne?.deferredNodeIds).not.toContain('work:workspace-import:task-unassigned-later')
+    expect(stageTwo?.deferredNodeIds).not.toContain('work:workspace-import:task-unassigned-later')
+    expect(stageTwo?.deferredNodeIds).toContain('work:workspace-import:task-stage-two-later')
+  })
+
+  it('does not let workspace-import preview nodes inflate a persisted release', () => {
+    const scopeProjection = buildProjectScopeProjection({
+      version: 1,
+      lastUpdated: '2026-07-07T01:25:00.000Z',
+      selectedReleaseId: 'stage-1-v1-release-hardening',
+      releases: [{
+        id: 'stage-1-v1-release-hardening',
+        label: 'Stage 1: V1 Release Hardening',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-current'],
+        deferredNodeIds: [],
+        proofStyle: 'unspecified',
+      }],
+      tasks: [{
+        id: 'task-current',
+        title: 'Materialized release task',
+        description: 'Already approved imported work.',
+        domain: 'knit',
+        status: 'import_draft',
+        releaseIds: ['stage-1-v1-release-hardening'],
+      }],
+    })
+    const spine = buildProjectOrientationSpine({
+      projectId: 'looma-knit',
+      now: '2026-07-07T01:25:00.000Z',
+      selectedReleaseId: 'stage-1-v1-release-hardening',
+      releases: [{
+        id: 'stage-1-v1-release-hardening',
+        label: 'Stage 1: V1 Release Hardening',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-current'],
+        deferredNodeIds: [],
+        proofStyle: 'unspecified',
+      }],
+      tasks: [{
+        id: 'task-current',
+        title: 'Materialized release task',
+        description: 'Already approved imported work.',
+        domain: 'knit',
+        status: 'import_draft',
+        releaseIds: ['stage-1-v1-release-hardening'],
+      }],
+      scopeProjection,
+      workspaceImportDraft: {
+        source: {
+          kind: 'inferred',
+          refs: ['workspace-import:draft'],
+          confidence: 'medium',
+          freshness: 'fresh',
+          inferred: true,
+          refreshedAt: '2026-07-07T01:25:00.000Z',
+        },
+        releases: [{
+          id: 'stage-1-v1-release-hardening',
+          label: 'Stage 1: V1 Release Hardening',
+          source: 'release_plan',
+          state: 'active',
+        }],
+        tasks: [
+          {
+            id: 'task-current',
+            title: 'Materialized release task',
+            description: 'Already approved imported work.',
+            domain: 'knit',
+            scope: 'current',
+            releaseIds: ['stage-1-v1-release-hardening'],
+          },
+          {
+            id: 'draft-only-current',
+            title: 'Draft-only current work should not inflate the persisted release.',
+            description: 'Still only a workspace-import preview.',
+            domain: 'knit',
+            scope: 'current',
+            releaseIds: ['stage-1-v1-release-hardening'],
+          },
+        ],
+      },
+    })
+
+    expect(spine.selectedRelease?.nodeIds).toEqual(['work:task-current'])
+    expect(spine.scope?.nodeIds).toEqual(['work:task-current'])
+    expect(spine.releases.find(release => release.id === 'stage-1-v1-release-hardening')?.nodeIds).toEqual(['work:task-current'])
   })
 
   it('merges saved release labels with detected orientation buckets for the same release id', () => {

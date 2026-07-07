@@ -8,6 +8,72 @@ help_summary: |
 
 # Web UI flow audit
 
+2026-07-07T01:26:03Z - Release buckets no longer absorb current-scope preview work.
+
+- Work id: `codex:release-scope-preview-membership-separation-2026-07-07`.
+- User job: the Project Map and Overview must let the owner distinguish a real
+  release/milestone from the selected execution scope. A release bucket should
+  show work actually assigned to that release; the current scope may also show
+  unassigned current/later work that Guildhall is considering or has deferred.
+- Live findings:
+  - Looma + Knit's selected release and selected scope were both labeled
+    `Stage 1: V1 Release Hardening`, but the read model let workspace-import
+    preview nodes and global later work blur into release membership.
+  - Before the fix, release-roadmap deferred work could repeat the same node ids
+    across several planned releases. After removing that copy, the selected
+    release still inflated to `9` nodes because draft-only
+    `work:workspace-import:*` preview nodes were merged into an existing
+    persisted release.
+- Root-cause classification:
+  - Project structure/scope/release modeling problem: release membership and
+    selected execution scope were treated as interchangeable in the orientation
+    read model.
+  - Data model/schema problem: workspace-import preview membership was merged
+    into persisted release membership instead of remaining a draft/scope-only
+    signal.
+  - UI communication/orientation problem: the product could visually imply that
+    future or preview work belonged to the current release, making the roadmap
+    feel arbitrary and overfit to whatever the importer last saw.
+- Change:
+  - Later imported tasks without explicit release ids stay deferred in the
+    selected scope, but are no longer copied into every imported release bucket.
+  - Scope projection may refine the selected execution boundary and release
+    readiness state, but it no longer overwrites a release's own node/deferred
+    membership.
+  - When a persisted release already has materialized membership, workspace
+    import draft preview nodes for the same release may not inflate that
+    persisted release's node list.
+- Contract Touch Decision:
+  - Work id: `codex:release-scope-preview-membership-separation-2026-07-07`.
+  - Touched contracts: orientation spine release/scope read-model semantics and
+    workspace-import draft augmentation merge behavior.
+  - Contracts considered but not touched: persisted task queue schema,
+    persisted release schema, release-readiness API builder, scheduler selected
+    scope semantics, Project Map UI.
+  - Required follow-up: decide whether inferred planned release containers with
+    overlapping labels such as `Stage 1 Finish Knit Primitive Replacement Wave`
+    should be deduped, nested under source documents, or demoted out of the
+    release roadmap until source-backed enough to act as owner-facing releases.
+  - Proof required: orientation-spine regressions for unassigned later imports,
+    selected-scope vs release membership, and persisted release immunity to
+    draft preview nodes; full orientation-spine suite; installed-app stale proof;
+    real Looma + Knit API proof.
+  - Proof provided: `./node_modules/.bin/vitest run
+    src/runtime/__tests__/project-orientation-spine.test.ts --reporter=dot`
+    passed with `54` tests; installed app rebuilt/dev-installed/restarted with
+    `/api/stale-server` returning `stale:false`. Live
+    `http://localhost:7777/api/project?projectId=looma-knit` reported
+    selected release `stage-1-v1-release-hardening` with `5` node ids, `0`
+    deferred ids, and no `work:workspace-import:*` preview nodes; selected scope
+    still reported `5` current nodes and `25` deferred node ids while the
+    summary reported `5` current work items and `30` deferred work items;
+    duplicate deferred membership across release buckets was `[]`.
+  - Waivers: none.
+  - Owner-review items: no owner approval is implied or automated. This only
+    makes the read model stop presenting draft preview work as release truth.
+  - Apply/revert behavior: reverting this change lets release roadmap rows
+    absorb global later work and preview-only workspace-import nodes again.
+
 2026-07-07T01:10:09Z - Overview blocker rows honor the selected current scope.
 
 - Work id: `codex:overview-current-scope-blocker-focus-2026-07-07`.

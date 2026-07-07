@@ -528,10 +528,7 @@ export function augmentTasksWithWorkspaceImportDraft(input: {
       : existing?.releaseIds ?? []
     if (draftTask.scope === 'later') {
       deferredNodeIds.push(nodeId)
-      const owningReleaseIds = taskReleaseIds.length
-        ? taskReleaseIds
-        : (draft.releases ?? []).map(release => release.id)
-      for (const releaseId of owningReleaseIds) {
+      for (const releaseId of taskReleaseIds) {
         const bucket = releaseDeferredNodeIds.get(releaseId) ?? new Set<string>()
         bucket.add(nodeId)
         releaseDeferredNodeIds.set(releaseId, bucket)
@@ -1838,8 +1835,6 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
     ? {
         ...selectedRelease,
         state: releaseStateFromScopeProjection(selectedRelease, input.scopeProjection),
-        nodeIds: [...projectionScope.nodeIds],
-        deferredNodeIds: [...projectionScope.deferredNodeIds],
       }
     : selectedRelease
   const normalizedReleases = releases
@@ -1853,14 +1848,21 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
       ? {
           ...release,
           state: releaseStateFromScopeProjection(release, input.scopeProjection),
-          nodeIds: [...projectionScope.nodeIds],
-          deferredNodeIds: [...projectionScope.deferredNodeIds],
         }
       : release)
     .map(release => normalizeReadModelReleaseState(release, selectedReleaseForReadModel?.id ?? null))
     .filter(release => releaseVisibleInReadModel(release, selectedReleaseForReadModel?.id ?? null, tasks))
   const rawScope = projectionScope ?? releaseToScope(selectedReleaseForReadModel) ?? draftAugmentation.scope ?? normalizeScope(input, tasks)
-  const scope = rawScope ? normalizeScopeTaskLists(rawScope, tasks) : null
+  const scopeWithDraftDeferred = rawScope && draftAugmentation.scope
+    ? {
+        ...rawScope,
+        deferredNodeIds: [...new Set([
+          ...(rawScope.deferredNodeIds ?? []),
+          ...draftAugmentation.scope.deferredNodeIds.filter(nodeId => !(rawScope.nodeIds ?? []).includes(nodeId)),
+        ])],
+      }
+    : rawScope
+  const scope = scopeWithDraftDeferred ? normalizeScopeTaskLists(scopeWithDraftDeferred, tasks) : null
   const built = buildNodes(tasks, scope, now)
   const roots = mergeWorkspaceImportContexts({
     roots: built.roots,
@@ -2022,6 +2024,15 @@ function taskStatusIsTerminal(status: string | undefined): boolean {
   return status === 'done' || status === 'archived' || status === 'cancelled' || status === 'shelved'
 }
 
+function nodeIdIsWorkspaceImportPreview(nodeId: string): boolean {
+  return nodeId.startsWith('work:workspace-import:')
+}
+
+function releaseHasMaterializedMembership(release: Partial<OrientationRelease>): boolean {
+  return [...(release.nodeIds ?? []), ...(release.deferredNodeIds ?? [])]
+    .some(nodeId => !nodeIdIsWorkspaceImportPreview(nodeId))
+}
+
 function mergeOrientationReleaseInputs(
   primary: BuildProjectOrientationSpineInput['releases'],
   secondary: Array<Partial<OrientationRelease>>,
@@ -2037,11 +2048,16 @@ function mergeOrientationReleaseInputs(
       merged.push(release)
       continue
     }
+    const keepExistingMembership = releaseHasMaterializedMembership(existing)
     const combined: Partial<OrientationRelease> = {
       ...release,
       ...existing,
-      nodeIds: [...new Set([...(existing.nodeIds ?? []), ...(release.nodeIds ?? [])])],
-      deferredNodeIds: [...new Set([...(existing.deferredNodeIds ?? []), ...(release.deferredNodeIds ?? [])])],
+      nodeIds: keepExistingMembership
+        ? [...(existing.nodeIds ?? [])]
+        : [...new Set([...(existing.nodeIds ?? []), ...(release.nodeIds ?? [])])],
+      deferredNodeIds: keepExistingMembership
+        ? [...(existing.deferredNodeIds ?? [])]
+        : [...new Set([...(existing.deferredNodeIds ?? []), ...(release.deferredNodeIds ?? [])])],
       description: existing.description ?? release.description ?? null,
       proofStyle: existing.proofStyle ?? release.proofStyle,
     }
