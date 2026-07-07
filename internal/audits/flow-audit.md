@@ -26831,6 +26831,10 @@ selected-scope readiness ordering.
 - Fix:
   - Git-story classification now treats dirty/untracked task worktree changes
     as newer than `merged`, `pushed`, or `reconciled` merge records.
+  - Git-story classification also treats clean local branch state (`no_upstream`
+    or `committed_local`) as newer than ordinary old `merged`/`pushed` records;
+    only `reconciled` is allowed to prove the task branch is already contained
+    in project history.
   - Active `proofRecovery` keeps task git-story inspection enabled even when a
     task has recorded completion proof.
   - Release readiness inspects the scoped task set for git-story follow-up so a
@@ -26843,13 +26847,13 @@ selected-scope readiness ordering.
   - `CI=true ./node_modules/.bin/vitest run
     src/runtime/__tests__/git-story.test.ts
     src/runtime/__tests__/serve-release-readiness.test.ts -t "stale merge
-    record|old merge record hide dirty|repository follow-up"` passed (`2`
-    tests, `68` skipped).
+    record|old merge record hide|old merge record hide a clean proof"` passed
+    (`4` tests, `68` skipped).
   - `CI=true ./node_modules/.bin/vitest run
     src/runtime/__tests__/git-story.test.ts
     src/runtime/__tests__/serve-release-readiness.test.ts -t "git
     story|repository|release|proof|blocked|dirty|merge record|start
-    readiness"` passed (`56` tests, `14` skipped).
+    readiness|upstream"` passed (`60` tests, `12` skipped).
   - Installed API proof before the start-readiness refinement showed
     `/api/project/release-readiness?projectId=narrative-harness` reporting the
     DeepInfra task as `dirty_uncommitted` with `5 changed files are not
@@ -26866,12 +26870,19 @@ selected-scope readiness ordering.
     the same DeepInfra task git story as `dirty_uncommitted` with `5 changed
     files are not committed`, `mergeRecordResult:"merged"`, and the sample
     proof-recovery paths.
+  - After Codex committed the corrected Narrative Harness proof harness locally
+    and Bitbucket push failed with `Permission denied (publickey)`, final
+    installed proof after reinstall/restart reported `/api/stale-server`
+    `stale:false` for PID `23657`; the same Overview endpoint reported
+    `startReadiness.code:"repository_followup_required"`, release blocker
+    `state:"no_upstream"`, task git story `state:"no_upstream"`, and
+    `mergeRecordResult:"merged"` for the DeepInfra proof-recovery task.
 - Contract Touch Decision:
   - Work id: `proof-recovery-git-story-dirty-worktree`.
   - Touched contracts: git-story classification precedence; task git-story
     inclusion for active proof recovery; release-readiness `gitStoryTasks`
-    projection; selected-release start-readiness blocker selection; release
-    readiness git-story blocker totals.
+    projection; selected-release start-readiness blocker selection including
+    `no_upstream` task blockers; release readiness git-story blocker totals.
   - Contracts considered but not touched: persisted task schema, persisted
     `proofRecovery` shape, merge-record schema, task evidence schema, git
     driver status schema, release schema, and source-ref schema.

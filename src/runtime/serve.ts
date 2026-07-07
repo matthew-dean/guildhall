@@ -7809,7 +7809,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         ? firstBlocked.title.trim()
         : firstBlocked.id
       const matchingRepositoryBlocker = gitStory.blockers.find(blocker =>
-        blocker.taskId === firstBlocked.id && blocker.state !== 'no_upstream',
+        blocker.taskId === firstBlocked.id,
       )
       if (matchingRepositoryBlocker) {
         return {

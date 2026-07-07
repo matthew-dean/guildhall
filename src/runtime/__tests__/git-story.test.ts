@@ -96,6 +96,24 @@ describe('classifyGitStoryState', () => {
     })).toBe('dirty_uncommitted')
   })
 
+  it('does not let a stale merge record hide unpublished branch state', () => {
+    expect(classifyGitStoryState({
+      changedCount: 0,
+      untrackedCount: 0,
+      ahead: 0,
+      hasUpstream: false,
+      mergeRecordResult: 'merged',
+    })).toBe('no_upstream')
+
+    expect(classifyGitStoryState({
+      changedCount: 0,
+      untrackedCount: 0,
+      ahead: 1,
+      hasUpstream: true,
+      mergeRecordResult: 'merged',
+    })).toBe('committed_local')
+  })
+
   it('reports merged when a skipped merge record is reconciled from git history', () => {
     expect(classifyGitStoryState({
       changedCount: 0,
