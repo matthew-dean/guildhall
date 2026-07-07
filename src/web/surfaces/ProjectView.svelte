@@ -258,7 +258,7 @@
     if (orientationPreviewKey === key && orientationPreview) return
     orientationPreviewKey = key
     const seq = ++orientationPreviewSeq
-    projectFetch('/api/project/spine', { cache: 'no-store' }, activeProjectId)
+    projectFetch(currentView === 'overview' ? '/api/project/spine?surface=overview' : '/api/project/spine', { cache: 'no-store' }, activeProjectId)
       .then(response => response.json())
       .then(payload => {
         if (seq !== orientationPreviewSeq) return

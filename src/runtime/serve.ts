@@ -3983,6 +3983,7 @@ function compactOrientationSpineForWorkSurface(spine: Record<string, unknown>): 
     scopeRows: compactOrientationScopeRows(spine.scopeRows),
     proofContracts: compactOrientationProofContracts(spine.proofContracts),
     sourceHealth,
+    release: spine.release,
     roots: [],
     nodes: compactOrientationNodes(spine.nodes),
   }
@@ -5258,13 +5259,16 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
   app.get('/api/project/spine', async c => {
     try {
+      const surface = c.req.query('surface')
+      const overviewSurface = surface === 'overview'
       if (project.initializationNeeded) {
+        const spine = buildOrientationSpineWithScopedReleaseTruth({
+          projectId: project.id,
+          charter: null,
+          tasks: [],
+        }).orientationSpine
         return c.json({
-          spine: buildOrientationSpineWithScopedReleaseTruth({
-            projectId: project.id,
-            charter: null,
-            tasks: [],
-          }).orientationSpine,
+          spine: overviewSurface ? compactOrientationSpineForWorkSurface(spine as unknown as Record<string, unknown>) : spine,
           initializationNeeded: true,
         })
       }
@@ -5284,7 +5288,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
         workspaceImportDraft: await workspaceImportDraftForOrientation(project.path, startReadiness),
         sourceRefs: projectOrientationSourceRefs(project.path),
       })
-      return c.json({ spine })
+      return c.json({
+        spine: overviewSurface ? compactOrientationSpineForWorkSurface(spine as unknown as Record<string, unknown>) : spine,
+      })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }

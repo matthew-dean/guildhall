@@ -2806,6 +2806,46 @@ describe('GET /api/project/release-readiness', () => {
     expect(spineBody.spine.nodes['work:task-runner']?.maturity).toBe('proven')
   })
 
+  it('returns a compact project spine for overview previews without changing the full map spine', async () => {
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: 'headless-mvp',
+      releases: [{
+        id: 'headless-mvp',
+        label: 'Headless MVP',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-runner'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [
+        makeTask({
+          id: 'task-runner',
+          title: 'Implement no-UI runner.',
+          status: 'ready',
+          releaseIds: ['headless-mvp'],
+        }),
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const fullBody = await (await app.fetch(new Request(projectUrl('/api/project/spine')))).json() as any
+    const previewUrl = new URL(projectUrl('/api/project/spine'))
+    previewUrl.searchParams.set('surface', 'overview')
+    const previewBody = await (await app.fetch(new Request(previewUrl))).json() as any
+
+    expect(fullBody.spine.roots.length).toBeGreaterThan(0)
+    expect(fullBody.spine.nodes['work:task-runner']).toMatchObject({ title: 'Implement no-UI runner.' })
+    expect(previewBody.spine.roots).toEqual([])
+    expect(previewBody.spine.nodes['work:task-runner']).toMatchObject({ title: 'Implement no-UI runner.' })
+    expect(previewBody.spine.summary.includedWorkCount).toBe(1)
+    expect(previewBody.spine.selectedRelease.nodeIds).toEqual(['work:task-runner'])
+    expect(previewBody.spine.release).toEqual(fullBody.spine.release)
+  })
+
   it('keeps imported source-recovery work visible as incomplete brief cleanup', async () => {
     await seedQueue({
       version: 1,

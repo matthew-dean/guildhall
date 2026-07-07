@@ -28526,3 +28526,93 @@ selected-scope readiness ordering.
     task rows again, reintroducing Now/Later confusion and payload bloat.
 - Schema Migration Decision: no persisted schema field was added, removed, or
   retyped. This is an API read-contract narrowing for the Overview surface.
+
+## 2026-07-07T13:51:00Z - Overview previews must not fetch the full project map spine
+
+- User job:
+  - When a user opens Overview with project detail still loading, Guildhall
+    should show the 100-foot orientation preview from compact scope/release
+    truth. It should not fetch and parse the full 1,000-foot map graph just to
+    paint the first screen.
+- Finding:
+  - Root cause classification:
+    - Data model/schema problem: `/api/project/spine` had only one read shape,
+      so even a compact Overview preview received the same roots graph used by
+      Project Map.
+    - Project structure/scope/release modeling problem: the system treated
+      "selected scope summary" and "full structural map" as the same transport
+      contract.
+    - UI communication/orientation problem: first-screen orientation stayed
+      coupled to a large map payload, making the owner wait longer for a small
+      summary and making future Overview regressions easier.
+- Fix:
+  - `/api/project/spine?surface=overview` now returns the existing compact
+    orientation-spine read shape: selected release/scope, summary, scope rows,
+    proof contracts, compact nodes, source health, and no full roots graph.
+  - ProjectView requests `surface=overview` only for Overview previews. Project
+    Map continues to request `/api/project/spine` and keeps the full graph.
+  - The deeper duplication remains intentionally visible: release readiness
+    still needs scoped orientation truth before the final spine can include
+    readiness blockers. A one-pass orientation/readiness read model should be
+    designed separately instead of faking reuse and risking missing blockers.
+- Proof provided:
+  - Red/green API regression:
+    `CI=true ./node_modules/.bin/vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts -t "compact project
+    spine"` first failed because `surface=overview` returned full `roots`,
+    then passed after the compact-spine contract landed.
+  - Red/green UI regression:
+    `CI=true ./node_modules/.bin/vitest run
+    src/web/surfaces/__tests__/ProjectView.svelte.test.ts -t "renders overview
+    and map orientation"` first failed because Overview requested
+    `/api/project/spine?projectId=looma-knit`; after the fix it requests
+    `/api/project/spine?surface=overview&projectId=looma-knit`, while Map still
+    requests the full spine endpoint.
+  - Focused regression suite:
+    `CI=true ./node_modules/.bin/vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts
+    src/web/surfaces/__tests__/ProjectView.svelte.test.ts
+    src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts
+    src/web/surfaces/project/__tests__/ProjectMapTab.svelte.test.ts` passed
+    with 153 tests; `git diff --check`, `node ./build.mjs`, and
+    `CI=true corepack pnpm lint:contracts` passed.
+  - Installed API proof:
+    After `CI=true corepack pnpm dev:install`, `guildhall stop`, and
+    `guildhall start`, `/api/stale-server` returned `stale:false` for PID
+    `22762`. Narrative Harness compact spine
+    `/api/project/spine?projectId=narrative-harness&surface=overview` returned
+    `roots:0`, `nodes:117`, `included:11`, `deferred:31`,
+    `releaseState:"ready"`, `blockers:0`, and about `62 KB`, while the full
+    map spine returned `roots:11` and about `519 KB`. Looma + Knit compact
+    spine returned `roots:0`, `nodes:106`, `included:5`, `deferred:30`,
+    `releaseState:"blocked"`, `blockers:8`, and about `44 KB`, while the full
+    map spine returned `roots:15` and about `469 KB`.
+  - Browser proof:
+    Narrative Harness Overview settled to `Scope status`, `CLOSED SCOPE`,
+    `Stage 1 Headless Drafting And Evaluation MVP is complete.`, `11 Current
+    scope`, `31 Deferred`, `COMPLETE`, `11 / 11 done`, and no `168` backlog
+    leak. Looma + Knit Overview settled to `Do this next`, `5 imported drafts
+    need task briefs`, `5 Current scope`, `30 Deferred`, `5 blocked`, and no
+    `333` backlog leak.
+  - Remaining failing proof:
+    Compact spine payload size is now appropriate for Overview previews, but
+    live endpoint timing still measured about 2.5-2.9 seconds because release
+    readiness and orientation still perform heavyweight scoped derivation. The
+    next structural fix should introduce a cheaper shared orientation/readiness
+    summary instead of rebuilding the map-grade spine path for first-screen
+    state.
+- Contract Touch Decision:
+  - Work id: `overview-compact-spine-preview`.
+  - Touched contracts: `/api/project/spine` query-surface read contract and
+    ProjectView's preview-spine route selection.
+  - Contracts considered but not touched: persisted task schema, persisted
+    release schema, orientation-spine persisted shape, Project Map full-spine
+    contract, `/api/project?surface=overview` task-row contract, and release
+    readiness payload semantics.
+  - Required follow-up: installed API/browser proof on Narrative Harness and
+    Looma + Knit; continue the larger read-model work so release readiness and
+    orientation summary can be derived once for first-screen surfaces.
+  - Apply/revert behavior: reverting makes Overview fetch the full Project Map
+    spine as its loading preview again.
+- Schema Migration Decision: no persisted schema field was added, removed, or
+  retyped. This is an API/UI read-contract split only.

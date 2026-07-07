@@ -1071,13 +1071,14 @@ describe('ProjectView', () => {
         sourceHealth: { inferred: 1, gaps: 0 },
       },
     } as Partial<ProjectDetail>)
-    installFetchFakesWithPendingProject(projectPayload)
+    const overviewFetch = installFetchFakesWithPendingProject(projectPayload).fetchMock
     project.detail = null
     project.error = null
 
     render(ProjectView, { initialView: 'overview', initialSub: null, projectId: 'looma-knit' })
 
     await waitFor(() => expect(screen.getByRole('region', { name: 'Project overview' })).toBeInTheDocument())
+    expect(overviewFetch).toHaveBeenCalledWith('/api/project/spine?surface=overview&projectId=looma-knit', { cache: 'no-store' })
     expect(screen.getAllByText('Stage 1').length).toBeGreaterThan(0)
     expect(screen.getByText('1 Current scope')).toBeInTheDocument()
     expect(screen.getByText('1 Deferred')).toBeInTheDocument()
@@ -1087,13 +1088,14 @@ describe('ProjectView', () => {
     expect(screen.queryByText('Loading project...')).toBeNull()
 
     cleanup()
-    installFetchFakesWithPendingProject(projectPayload)
+    const mapFetch = installFetchFakesWithPendingProject(projectPayload).fetchMock
     project.detail = null
     project.error = null
 
     render(ProjectView, { initialView: 'map', initialSub: null, projectId: 'looma-knit' })
 
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Project map' })).toBeInTheDocument())
+    expect(mapFetch).toHaveBeenCalledWith('/api/project/spine?projectId=looma-knit', { cache: 'no-store' })
     expect(screen.getByRole('heading', { name: 'Release scope' })).toBeInTheDocument()
     expect(screen.getAllByText('Stage 1').length).toBeGreaterThan(0)
     expect(screen.getByText('1 assigned work item')).toBeInTheDocument()
