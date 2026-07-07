@@ -103,6 +103,7 @@ import { OrchestratorSupervisor } from './serve-supervisor.js'
 import { repairWeakRecoverySpecReviewSeedInQueue } from './orchestrator.js'
 import { resolveFanoutCapacity } from './fanout-dispatcher.js'
 import { detectShadowedCurrentMilestoneDeliverableImports as detectShadowedCurrentMilestoneDeliverables } from './current-milestone-shadowing.js'
+import { applySourceConflictReconciliation } from './source-conflict-reconciliation.js'
 import {
   normalizePreferredProvider,
   selectApiClient,
@@ -1148,6 +1149,44 @@ async function writeTasksFilePreservingQueue(
       }
   await writeManagedTextFileSync(tasksPath, JSON.stringify(rewritten, null, 2) + '\n')
   normalizedTasksCache.set(tasksPath, { raw: rewritten, tasks: tasks.map(task => ({ ...task })) })
+}
+
+async function writeTaskQueueFilePreservingQueue(
+  tasksPath: string,
+  queue: {
+    tasks: Array<Record<string, unknown>>
+    releases?: ProjectRelease[]
+    selectedReleaseId?: string
+  },
+): Promise<void> {
+  let parsed:
+    | { tasks?: Array<Record<string, unknown>>; releases?: ProjectRelease[]; selectedReleaseId?: string; version?: unknown; lastUpdated?: unknown }
+    | Array<Record<string, unknown>>
+    | null = null
+  if (existsSync(tasksPath)) {
+    try {
+      parsed = JSON.parse(await readManagedTextFile(tasksPath, 'utf8')) as typeof parsed
+    } catch {
+      parsed = null
+    }
+  }
+  const rewritten = Array.isArray(parsed)
+    ? {
+        version: 1,
+        tasks: queue.tasks,
+        releases: queue.releases ?? [],
+        ...(queue.selectedReleaseId ? { selectedReleaseId: queue.selectedReleaseId } : {}),
+        lastUpdated: new Date().toISOString(),
+      }
+    : {
+        ...(parsed && typeof parsed === 'object' ? parsed : { version: 1 }),
+        tasks: queue.tasks,
+        releases: queue.releases ?? [],
+        ...(queue.selectedReleaseId ? { selectedReleaseId: queue.selectedReleaseId } : {}),
+        lastUpdated: new Date().toISOString(),
+      }
+  await writeManagedTextFileSync(tasksPath, JSON.stringify(rewritten, null, 2) + '\n')
+  invalidateTaskQueueReadCaches(tasksPath)
 }
 
 async function writeSelectedReleaseId(
@@ -4896,6 +4935,83 @@ export function buildServeApp(opts: ServeOptions = {}): {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       return c.json({ error: message }, /not found|no release|no task queue/i.test(message) ? 404 : 500)
+    }
+  })
+
+  app.post('/api/project/source-conflicts/reconcile', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      const body = await c.req.json().catch(() => ({})) as {
+        keepTaskId?: unknown
+        archiveTaskId?: unknown
+        selectedReleaseId?: unknown
+      }
+      const keepTaskId = typeof body.keepTaskId === 'string' ? body.keepTaskId.trim() : ''
+      const archiveTaskId = typeof body.archiveTaskId === 'string' ? body.archiveTaskId.trim() : ''
+      const selectedReleaseId = typeof body.selectedReleaseId === 'string' ? body.selectedReleaseId.trim() : undefined
+      if (!keepTaskId) return c.json({ error: 'keepTaskId is required.' }, 400)
+      if (!archiveTaskId) return c.json({ error: 'archiveTaskId is required.' }, 400)
+      const tasksPath = projectTasksPath(project.path)
+      const queue = await readTaskQueueFileNormalized(tasksPath)
+      const tasks = await Promise.all(queue.tasks.map(task => buildEffectiveTask(project.path, task as Task)))
+      const startReadinessBefore = await projectStartReadinessForProject(project.path)
+      const { orientationSpine } = buildOrientationSpineWithScopedReleaseTruth({
+        projectId: project.id,
+        charter: inferProjectCharterFromExistingSources(project.path, project.config),
+        selectedReleaseId: selectedReleaseId ?? queue.selectedReleaseId,
+        releases: queue.releases,
+        tasks: tasks as unknown as Task[],
+        runStatus: supervisor.get(project.id)?.status ?? 'stopped',
+        startReadiness: startReadinessBefore,
+        workspaceImportDraft: await workspaceImportDraftForOrientation(project.path, startReadinessBefore),
+        sourceRefs: projectOrientationSourceRefs(project.path),
+      })
+      const sourceConflictMatches = orientationSpine.gaps.some(gap => {
+        if (gap.kind !== 'source_conflict') return false
+        const refs = new Set(gap.refs ?? [])
+        return refs.has(`task:${keepTaskId}`) && refs.has(`task:${archiveTaskId}`)
+      })
+      if (!sourceConflictMatches) {
+        return c.json({ error: 'Choose tasks from the current source conflict before reconciling.' }, 400)
+      }
+      const now = new Date().toISOString()
+      const reconciled = applySourceConflictReconciliation({
+        queue: {
+          tasks: queue.tasks as Task[],
+          releases: queue.releases,
+          selectedReleaseId: queue.selectedReleaseId,
+        },
+        selectedReleaseId,
+        keepTaskId,
+        archiveTaskId,
+        now,
+        actor: 'human',
+      })
+      await writeTaskQueueFilePreservingQueue(tasksPath, {
+        tasks: reconciled.tasks as unknown as Array<Record<string, unknown>>,
+        releases: reconciled.releases,
+        selectedReleaseId: reconciled.selectedReleaseId,
+      })
+      const nextQueue = await readTaskQueueFileNormalized(tasksPath)
+      const startReadiness = await projectStartReadinessForProject(project.path)
+      return c.json({
+        ok: true,
+        selectedReleaseId: nextQueue.selectedReleaseId,
+        keepTask: {
+          id: reconciled.keepTask.id,
+          title: reconciled.keepTask.title,
+          releaseIds: reconciled.keepTask.releaseIds ?? [],
+        },
+        archivedTask: {
+          id: reconciled.archivedTask.id,
+          title: reconciled.archivedTask.title,
+          status: reconciled.archivedTask.status,
+        },
+        startReadiness,
+      })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      return c.json({ error: message }, /not found|required|different tasks/i.test(message) ? 400 : 500)
     }
   })
 

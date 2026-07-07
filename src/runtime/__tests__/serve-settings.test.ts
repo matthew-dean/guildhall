@@ -3714,6 +3714,50 @@ describe('Workspace Import review endpoints', () => {
     })
     expect(body.startReadiness?.message).toContain('legal adult fiction')
     expect(body.startReadiness?.message).not.toContain('is complete')
+
+    const reconcile = await app.fetch(new Request(scoped('/api/project/source-conflicts/reconcile'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        keepTaskId: 'near-term-adult-model-proof',
+        archiveTaskId: 'stage-1-model-proof',
+        selectedReleaseId: 'stage-1-headless-drafting-and-evaluation-mvp',
+      }),
+    }))
+    const reconcileBody = await reconcile.json() as {
+      keepTask?: { releaseIds?: string[] }
+      archivedTask?: { status?: string }
+    }
+    expect(reconcile.status).toBe(200)
+    expect(reconcileBody.keepTask?.releaseIds).toContain('stage-1-headless-drafting-and-evaluation-mvp')
+    expect(reconcileBody.archivedTask?.status).toBe('archived')
+
+    const repairedQueue = await readProjectStateJsonAsync<{
+      tasks: Array<{ id: string; status?: string; releaseIds?: string[] }>
+      releases: Array<{ id: string; nodeIds?: string[]; deferredNodeIds?: string[] }>
+    }>(tmpDir, 'TASKS.json')
+    expect(repairedQueue.tasks.find(task => task.id === 'stage-1-model-proof')).toMatchObject({
+      status: 'archived',
+      releaseIds: [],
+    })
+    expect(repairedQueue.tasks.find(task => task.id === 'near-term-adult-model-proof')?.releaseIds).toContain('stage-1-headless-drafting-and-evaluation-mvp')
+    expect(repairedQueue.releases.find(release => release.id === 'stage-1-headless-drafting-and-evaluation-mvp')).toMatchObject({
+      nodeIds: ['work:near-term-adult-model-proof'],
+      deferredNodeIds: [],
+    })
+
+    const unsafeReconcile = await app.fetch(new Request(scoped('/api/project/source-conflicts/reconcile'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        keepTaskId: 'stage-1-model-proof',
+        archiveTaskId: 'near-term-adult-model-proof',
+        selectedReleaseId: 'stage-1-headless-drafting-and-evaluation-mvp',
+      }),
+    }))
+    const unsafeBody = await unsafeReconcile.json() as { error?: string }
+    expect(unsafeReconcile.status).toBe(400)
+    expect(unsafeBody.error).toContain('current source conflict')
   })
 
   it('points Start at detected current-scope import work before completed-task proof cleanup', async () => {

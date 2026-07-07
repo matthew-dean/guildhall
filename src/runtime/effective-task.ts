@@ -247,7 +247,7 @@ function normalizeProofPathStatuses(task: Record<string, unknown>): Record<strin
 }
 
 function normalizeTerminalCompletionEvidence(task: Record<string, unknown>): Record<string, unknown> {
-  if (task.status === 'done' || task.status === 'shelved') return {}
+  if (task.status === 'done' || task.status === 'shelved' || task.status === 'archived' || task.status === 'cancelled') return {}
   const completedAt = typeof task.completedAt === 'string' && task.completedAt.trim().length > 0
     ? task.completedAt.trim()
     : null

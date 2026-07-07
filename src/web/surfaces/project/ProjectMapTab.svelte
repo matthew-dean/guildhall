@@ -22,6 +22,8 @@
   let showInternalSteps = $state(false)
   let selectingReleaseId = $state<string | null>(null)
   let releaseSelectionError = $state<string | null>(null)
+  let reconcilingSourceConflict = $state<string | null>(null)
+  let sourceConflictError = $state<string | null>(null)
 
   type Tone = 'neutral' | 'ok' | 'warn' | 'danger' | 'accent'
   const MAX_SKELETON_ROOTS = 12
@@ -114,6 +116,7 @@
   const selectedScopeSource = $derived(selectedRelease?.source ?? selectedTaskScope?.source)
   const workContainerTitle = $derived(selectedRelease ? 'Release scope' : 'Task scope')
   const scopeRows = $derived(spine?.scopeRows ?? [])
+  const tasksById = $derived(new Map((detail.tasks ?? []).map(task => [task.id, task])))
   const currentScopeRows = $derived(scopeRows.filter(row => row.scope !== 'deferred'))
   const laterScopeRows = $derived(scopeRows.filter(row => row.scope === 'deferred'))
   const visibleLaterScopeRows = $derived(laterScopeRows.slice(0, 4))
@@ -399,6 +402,46 @@
     const taskId = taskRef?.slice('task:'.length)
       ?? (gap.nodeId?.startsWith('work:') ? gap.nodeId.slice('work:'.length) : null)
     return taskId ? currentTaskHref(taskId, activeProjectId) : null
+  }
+
+  function sourceConflictTaskIds(gap: { kind?: string; refs?: string[] }): string[] {
+    if (gap.kind !== 'source_conflict') return []
+    return [...new Set((gap.refs ?? [])
+      .filter(ref => ref.startsWith('task:'))
+      .map(ref => ref.slice('task:'.length))
+      .filter(taskId => tasksById.has(taskId)))]
+  }
+
+  function sourceConflictActionLabel(taskId: string): string {
+    const title = tasksById.get(taskId)?.title ?? taskId
+    return `Keep "${title}"`
+  }
+
+  async function reconcileSourceConflict(gap: { label?: string; refs?: string[] }, keepTaskId: string): Promise<void> {
+    const taskIds = sourceConflictTaskIds({ kind: 'source_conflict', refs: gap.refs })
+    const archiveTaskId = taskIds.find(taskId => taskId !== keepTaskId)
+    if (!archiveTaskId) return
+    const actionKey = `${keepTaskId}:${archiveTaskId}`
+    reconcilingSourceConflict = actionKey
+    sourceConflictError = null
+    try {
+      const response = await projectFetch('/api/project/source-conflicts/reconcile', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          keepTaskId,
+          archiveTaskId,
+          ...(selectedReleaseId ? { selectedReleaseId } : {}),
+        }),
+      }, activeProjectId)
+      const payload = await response.json().catch(() => ({})) as { error?: string }
+      if (!response.ok) throw new Error(payload.error ?? `HTTP ${response.status}`)
+      await onReleaseSelected?.()
+    } catch (err) {
+      sourceConflictError = err instanceof Error ? err.message : String(err)
+    } finally {
+      reconcilingSourceConflict = null
+    }
   }
 
   function sourceIsInferred(source: unknown): boolean {
@@ -726,23 +769,42 @@
           {#if mapGaps.length === 0}
             <p class="muted">No map gaps are currently reported.</p>
           {:else}
+            {#if sourceConflictError}
+              <p class="form-error" role="alert">{sourceConflictError}</p>
+            {/if}
             <CardList>
               {#each mapGaps as gap (`${gap.kind}:${gap.label}`)}
+                {@const conflictTaskIds = sourceConflictTaskIds(gap)}
                 <CardListItem
-                  as={gap.href ? 'button' : 'div'}
-                  interactive={Boolean(gap.href)}
+                  as={conflictTaskIds.length >= 2 ? 'div' : gap.href ? 'button' : 'div'}
+                  interactive={conflictTaskIds.length >= 2 ? false : Boolean(gap.href)}
                   className="gap-row"
                   tone={gap.tone}
                   dense
                   onclick={() => {
-                    if (gap.href) go(gap.href)
+                    if (conflictTaskIds.length < 2 && gap.href) go(gap.href)
                   }}
                 >
                   <Icon name="alert-triangle" size={16} />
                   <div>
                     <Chip label={gap.kindLabel} tone={gap.tone} />
                     <strong>{gap.title}</strong>
-                    {#if gap.detail}
+                    {#if conflictTaskIds.length >= 2}
+                      <p>Choose which task is the source of truth for the current scope. Guildhall will archive the duplicate and preserve an audit note.</p>
+                      <div class="gap-actions">
+                        {#each conflictTaskIds as taskId (taskId)}
+                          {@const archiveTaskId = conflictTaskIds.find(candidate => candidate !== taskId)}
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            disabled={Boolean(reconcilingSourceConflict)}
+                            onclick={() => void reconcileSourceConflict(gap, taskId)}
+                          >
+                            {reconcilingSourceConflict === `${taskId}:${archiveTaskId}` ? 'Reconciling' : sourceConflictActionLabel(taskId)}
+                          </Button>
+                        {/each}
+                      </div>
+                    {:else if gap.detail}
                       <p>{gap.detail}</p>
                     {:else if gap.href}
                       <p>Open the linked work item to resolve this gap.</p>
@@ -1098,6 +1160,13 @@
     min-width: 0;
   }
 
+  .gap-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--s-2);
+    margin-top: var(--s-2);
+  }
+
   .map-actions {
     display: flex;
     flex-wrap: wrap;
@@ -1142,6 +1211,7 @@
       grid-template-columns: 1fr;
     }
 
+    .gap-actions :global(.btn),
     .map-actions :global(.btn) {
       width: 100%;
     }

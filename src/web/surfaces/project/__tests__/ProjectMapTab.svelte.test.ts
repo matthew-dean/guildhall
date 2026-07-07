@@ -195,6 +195,82 @@ describe('ProjectMapTab', () => {
     expect(path.value).toBe('/projects/narrative-harness/task/task-a')
   })
 
+  it('offers explicit source-conflict reconciliation choices', async () => {
+    const fetchCalls: Array<{ url: string; body: unknown }> = []
+    const refresh = vi.fn()
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      fetchCalls.push({
+        url: String(input),
+        body: typeof init?.body === 'string' ? JSON.parse(init.body) : null,
+      })
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    }))
+
+    render(ProjectMapTab, {
+      detail: {
+        id: 'narrative-harness',
+        name: 'Narrative Harness',
+        tasks: [
+          {
+            id: 'task-rich',
+            title: 'Select and prove a DeepInfra drafting model for broad-genre and legal adult fiction chapter writing.',
+          },
+          {
+            id: 'task-narrow',
+            title: 'Select and prove a DeepInfra drafting model for broad-genre chapter writing.',
+          },
+        ],
+        orientationSpine: {
+          selectedRelease: {
+            id: 'stage-1',
+            label: 'Stage 1',
+            kind: 'release',
+            state: 'active',
+            source: 'release_plan',
+            nodeIds: ['work:task-narrow'],
+          },
+          summary: {
+            selectedScopeLabel: 'Stage 1',
+            selectedReleaseLabel: 'Stage 1',
+            includedWorkCount: 1,
+            deferredWorkCount: 1,
+            progress: { total: 2 },
+          },
+          roots: [],
+          nodes: {},
+          gaps: [{
+            kind: 'source_conflict',
+            label: 'Possible duplicate work is split across scopes.',
+            severity: 'warn',
+            refs: ['task:task-rich', 'task:task-narrow'],
+          }],
+          sourceHealth: { inferred: 0, gaps: 1 },
+        },
+      },
+      activeProjectId: 'narrative-harness',
+      onReleaseSelected: refresh,
+    })
+
+    expect(screen.getByText('Choose which task is the source of truth for the current scope. Guildhall will archive the duplicate and preserve an audit note.')).toBeInTheDocument()
+    await fireEvent.click(screen.getByRole('button', {
+      name: 'Keep "Select and prove a DeepInfra drafting model for broad-genre and legal adult fiction chapter writing."',
+    }))
+
+    expect(fetchCalls).toEqual([{
+      url: '/api/project/source-conflicts/reconcile?projectId=narrative-harness',
+      body: {
+        keepTaskId: 'task-rich',
+        archiveTaskId: 'task-narrow',
+        selectedReleaseId: 'stage-1',
+        projectId: 'narrative-harness',
+      },
+    }])
+    expect(refresh).toHaveBeenCalledTimes(1)
+  })
+
   it('bounds the default map to the selected release instead of rendering every imported root', () => {
     const noisyRoots = Array.from({ length: 80 }, (_, index) => ({
       id: `work:later-${index}`,

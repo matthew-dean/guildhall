@@ -25937,3 +25937,127 @@ selected-scope readiness ordering.
   - Apply/revert behavior: reverting restores a state where Guildhall can block
     Start on source conflicts but still summarizes the current scope as generic
     attention work, forcing the owner to infer the real repair path.
+
+## 2026-07-06 — Source conflicts can be explicitly reconciled
+
+- Work id: `codex:source-conflict-reconciliation-action-2026-07-06`.
+- User job: when Guildhall detects that the selected current scope is blocked
+  by duplicate source-backed tasks split across scope/release boundaries, the
+  Project Map should let the owner choose the source-of-truth task, preserve an
+  audit trail, archive the duplicate, and update the selected scope so Start no
+  longer depends on contradictory task membership.
+- Root-cause classification:
+  - Data model/schema problem: the stored task queue allowed two completed work
+    records for the same modeled obligation without a persisted reconciliation
+    operation to mark one as superseded.
+  - Data model/schema problem: effective task projection let old durable
+    completion evidence resurrect an explicitly archived task as `done`,
+    keeping the read model out of sync with the raw task queue.
+  - Project structure/scope/release modeling problem: the stronger Narrative
+    Harness DeepInfra model-selection task lived outside the selected Stage 1
+    release while the narrower duplicate lived inside it.
+  - Task hierarchy/dependency/proof modeling problem: both tasks carried
+    terminal proof-like status, so completion alone could not identify which
+    task satisfied the release obligation.
+  - Scheduler/action-state logic problem: Start correctly blocked on
+    `scope_source_conflict`, but the product had no modeled next action that
+    could repair the blocking condition.
+  - UI communication/orientation problem: the Map previously exposed the
+    conflict as a read-only gap or task link rather than a direct choice about
+    current-scope truth.
+  - Bad project data produced by an earlier Guildhall bug: the duplicate
+    Narrative Harness task pair remains live calibration data from earlier
+    intake/import behavior that over-split source-backed obligations.
+- Fix:
+  - Added a shared `applySourceConflictReconciliation` runtime helper that
+    keeps the selected canonical task in the selected scope, archives the
+    duplicate task as superseded, removes duplicate/deferred release node
+    membership, and writes audit notes on both tasks.
+  - Added `POST /api/project/source-conflicts/reconcile` so the Project Map can
+    perform the explicit owner/Codex-as-owner reconciliation through the server
+    instead of requiring hidden file edits.
+  - The reconciliation endpoint validates that the requested task pair belongs
+    to a current `source_conflict` gap before it mutates task state; direct POSTs
+    cannot archive arbitrary tasks after the conflict is gone.
+  - Updated Project Map gaps with two task refs to render explicit `Keep ...`
+    choices using existing `CardListItem`, `Button`, and `Chip` primitives, then
+    refresh the project state after reconciliation.
+  - Fixed effective-task projection so archived and cancelled task state remains
+    authoritative over older completion evidence.
+- Contract Touch Decision:
+  - Touched contracts: task queue mutation semantics for source-conflict
+    repair, release `nodeIds`/`deferredNodeIds` membership, Project Map gap
+    actions, and the new source-conflict reconciliation API endpoint.
+  - Contracts considered but not touched: task schema shape, release schema
+    shape, workspace-import schema, source-conflict detection heuristics,
+    orientation-spine gap schema, Start endpoint behavior, and autonomous
+    scheduler approval behavior.
+  - Existing data impact: no automatic migration. Existing data changes only
+    after an explicit reconciliation request; the duplicate task is archived,
+    the kept task gains the selected release id, and both records keep audit
+    notes.
+  - Schema Migration Decision: no persisted schema field was added, removed, or
+    retyped. This is a modeled write operation over existing task/release
+    fields, so no migration id or compatibility reader is required.
+  - Required follow-up: continue from the now-unblocked Narrative Harness
+    current scope and audit whether "Stage 1 complete" is genuinely true against
+    the user's intended headless MVP, not merely true against the current saved
+    task model.
+  - Proof required: model helper regression, server mutation regression, Project
+    Map action regression, effective-task archive-precedence regression,
+    affected runtime/UI suites, contract advisory, build/install/stale-server
+    proof, live API proof before and after applying the reconciliation, and
+    browser proof that the Map shows the explicit choices without clipping.
+  - Proof provided: the effective-task regression first failed because archived
+    tasks with older `doneSummaryBundle` evidence projected back to `done`, and
+    the server trust-boundary regression first failed because a second direct
+    POST could still archive arbitrary tasks after the conflict had been
+    resolved.
+    After the fix,
+    `./node_modules/.bin/vitest run src/runtime/__tests__/effective-task.test.ts src/runtime/__tests__/source-conflict-reconciliation.test.ts src/runtime/__tests__/serve-settings.test.ts src/web/surfaces/project/__tests__/ProjectMapTab.svelte.test.ts --testNamePattern "does not resurrect archived|source-conflict reconciliation|keeps the selected canonical|duplicate scoped work creates a source conflict"`
+    passed (`4` focused tests; `137` skipped). The focused serve regression
+    also passed after adding the endpoint guard. `git diff --check` passed.
+    `CI=true pnpm lint:contracts` passed after this decision evidence was
+    recorded; `CI=true pnpm install` restored dev dependencies but exited
+    nonzero because PNPM ignored dependency build scripts, while
+    `./node_modules/.bin/vitest --version` confirmed the restored toolchain was
+    runnable. Running the full affected-file command without a focused pattern
+    passed the source-conflict helper and Project Map suites but exposed `13`
+    broader `serve-settings` readiness failures around all-terminal/repository
+    follow-up and owner-input precedence; the source-conflict serve regression
+    itself passed. `node ./build.mjs` passed. `node ./scripts/dev-install.mjs
+    && guildhall stop && guildhall start && curl -s
+    http://localhost:7777/api/stale-server` installed the artifact and returned
+    `stale:false` for PID `59831`.
+  - Live proof provided before reconciliation:
+    `/api/project?projectId=narrative-harness` returned
+    `startReadiness.code:"scope_source_conflict"`, a source-conflict gap with
+    both DeepInfra task refs, the narrower `task-import-lu6waj` in the selected
+    Stage 1 release, and the richer adult-fiction task outside that release.
+    Browser proof on `/projects/narrative-harness/map` at `1280x720` showed the
+    two explicit `Keep ...` choices and `overflowX:false`.
+  - Live proof provided after reconciliation and archive-precedence repair:
+    `POST /api/project/source-conflicts/reconcile?projectId=narrative-harness`
+    kept
+    `task-select-and-prove-a-deep-infra-drafting-model-for-broad-genre-chapter-writing`,
+    archived `task-import-lu6waj`, and added the kept task to
+    `stage-1-headless-drafting-and-evaluation-mvp`. A fresh
+    `/api/project?projectId=narrative-harness` then returned
+    `startReadiness.code:"all_terminal"`,
+    `message:"Stage 1 Headless Drafting And Evaluation MVP is complete."`,
+    `sourceHealth.conflicts:0`, `sourceHealth.gaps:0`, no source-conflict gaps,
+    the kept adult-fiction task in the selected release, and the narrow task as
+    `status:"archived"` with no `releaseIds`. Browser proof on the Map showed
+    no source-truth choice copy, no `Source Conflict` mentions, no `Keep ...`
+    buttons, and `overflowX:false`. After installing the endpoint guard,
+    `/api/stale-server` returned `stale:false` for PID `80082`; a deliberately
+    invalid second reconciliation POST returned `400` with
+    `Choose tasks from the current source conflict before reconciling.`, and a
+    fresh project read still showed Stage 1 as `all_terminal` with
+    `sourceHealth.conflicts:0`, `sourceHealth.gaps:0`, the adult-fiction task
+    kept in the selected release, and the narrow task still archived with no
+    release ids.
+  - Apply/revert behavior: reverting restores read-only source-conflict gaps and
+    leaves the owner without a modeled repair action, so selected-scope Start
+    can remain blocked by duplicate imported work until hidden project data is
+    edited manually.

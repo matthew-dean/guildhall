@@ -211,6 +211,31 @@ describe('effective task projection', () => {
     expect(effective.completedAt).toBe('2026-07-04T09:16:20.780Z')
   })
 
+  it('does not resurrect archived tasks from older durable completion evidence', async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-effective-task-'))
+
+    const effective = await buildEffectiveTask(projectRoot, legacyTask({
+      status: 'archived',
+      releaseIds: [],
+      completedAt: '2026-07-04T09:16:20.780Z',
+      doneSummaryBundle: {
+        taskId: 'task-auth-complete',
+        status: 'done',
+        completedAt: '2026-07-04T09:16:20.780Z',
+        summary: {
+          journey: 'worker completed the task',
+          decision: 'Task finished as done.',
+          evidence: 'npm build passed.',
+          learningCandidates: [],
+          openResidue: 'No open residue recorded.',
+        },
+      },
+    } as Partial<Task>))
+
+    expect(effective.status).toBe('archived')
+    expect(effective.releaseIds).toEqual([])
+  })
+
   it('projects statusless proof paths on completed tasks as verified when evidence satisfies them', async () => {
     const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-effective-task-'))
 
