@@ -27611,3 +27611,81 @@ selected-scope readiness ordering.
 - Schema Migration Decision: no persisted schema field was added, removed, or
   retyped. This is an endpoint read-model projection over existing release,
   task, and git-story state.
+
+## 2026-07-07T11:40:52Z - Project spine release state must agree with Start and Release readiness
+
+- User job:
+  - The Project Map/spine must not say a selected release is ready while Start
+    and Release readiness say repository follow-up blocks closure.
+- Finding:
+  - Root cause classification:
+    - Data model/schema problem: the project spine carried task-scope release
+      state as `ready` even when Start added a later repository-follow-up
+      closure blocker. The read model had no place for that blocker except the
+      summary text.
+    - Project structure/scope/release modeling problem: repository follow-up is
+      a scope/release closure blocker, not a task blocker, so attaching it only
+      to Release readiness left Project Map with stale release state.
+    - Task hierarchy/dependency/proof modeling problem: the generic release
+      blocker anchoring logic fuzzy-matched the synthetic repository-follow-up
+      blocker to an arbitrary work node, implying a repo push blocker belonged
+      to a specific task.
+    - UI communication/orientation problem: live Narrative Harness
+      `/api/project/spine` reported `summary.topBlocker` for repository
+      follow-up, but `release.state:"ready"`, `release.blockers:[]`, and
+      `selectedRelease.state:"ready"`.
+- Fix:
+  - The spine now bridges Start-level closure blockers into
+    `spine.release.blockers` when there is no task-level release blocker
+    already explaining the stop.
+  - Only closure-blocking Start codes are bridged:
+    `proof_evidence_missing`, `repository_followup_required`, and
+    `scope_source_conflict`; terminal/completed and import-refresh follow-up
+    states remain non-blocking for release closure.
+  - Synthetic `start-readiness:*` blockers are kept release/scope-level and are
+    not fuzzy-attached to arbitrary task nodes.
+  - The selected release read model and roadmap entry are marked `blocked`
+    when the spine release summary is blocked; persisted release records are
+    not rewritten.
+- Proof provided:
+  - Red/green regression:
+    `CI=true ./node_modules/.bin/vitest run
+    src/runtime/__tests__/project-orientation-spine.test.ts -t "repository
+    follow-up blockers"` first failed with `spine.release.state:"ready"` and
+    later failed again when the synthetic blocker was incorrectly assigned an
+    `owningNodeId`; it now passes.
+  - Broader regression:
+    `CI=true ./node_modules/.bin/vitest run
+    src/runtime/__tests__/project-orientation-spine.test.ts
+    src/runtime/__tests__/serve-release-readiness.test.ts` passed (`115`
+    tests).
+  - Build/contracts:
+    `node ./build.mjs`, `CI=true corepack pnpm lint:contracts`, and `git diff
+    --check` passed.
+  - Installed/live proof:
+    `CI=true corepack pnpm dev:install && guildhall stop && guildhall start`
+    installed the current branch artifact, and `/api/stale-server` returned
+    `stale:false` for PID `98483`.
+  - Narrative Harness live spine/readiness agreement:
+    `/api/project/spine?projectId=narrative-harness` reports
+    `spine.release.state:"blocked"`, a single
+    `start-readiness:repository_followup_required` release blocker with no
+    `owningNodeId`, `selectedRelease.state:"blocked"`, and the first roadmap
+    release as `blocked`. `/api/project/release-readiness?projectId=narrative-
+    harness` agrees with `ready:false` and `release.state:"blocked"`.
+- Contract Touch Decision:
+  - Work id: `project-spine-start-readiness-release-blockers`.
+  - Touched contracts: project orientation spine release summary semantics,
+    `OrientationReleaseState` read-model enum, release blocker anchoring, and
+    Project Map selected-release state projection.
+  - Contracts considered but not touched: persisted release schema, task
+    schema, git story schema, release-readiness API schema, and workspace
+    import schema.
+  - Required follow-up: none for this slice; installed Narrative Harness proof
+    is recorded above.
+  - Apply/revert behavior: reverting can make Project Map show a ready release
+    while Start/Release readiness correctly report repository follow-up
+    blockers, and can falsely attach scope-level blockers to task rows.
+- Schema Migration Decision: no persisted schema field was added, removed, or
+  retyped. This is a shared read-model projection over existing start
+  readiness, scope projection, and release data.

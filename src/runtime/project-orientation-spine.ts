@@ -21,7 +21,7 @@ export type OrientationScopeKind =
   | 'feature'
 
 export type OrientationReleaseKind = 'release' | 'milestone' | 'marker' | 'current_work'
-export type OrientationReleaseState = 'planned' | 'active' | 'ready' | 'shipped' | 'deferred'
+export type OrientationReleaseState = 'planned' | 'active' | 'ready' | 'blocked' | 'shipped' | 'deferred'
 export type OrientationReleaseSource = 'owner_approved' | 'spec' | 'release_plan' | 'inferred'
 export type OrientationReleaseProofStyle = 'script_only' | 'manual' | 'mixed' | 'unspecified'
 
@@ -1747,6 +1747,7 @@ function releaseBlockerOwnerNode(
   label: string,
   nodes: OrientationNode[],
 ): OrientationNode | null {
+  if (blockerId?.startsWith('start-readiness:')) return null
   if (blockerId) {
     const direct = nodes.find(node => node.refs.taskIds.includes(blockerId) || node.id === `work:${blockerId}`)
     if (direct) return direct
@@ -2106,6 +2107,25 @@ function summaryWithSourceConflicts(
   }
 }
 
+function startReadinessReleaseBlocker(
+  startReadiness: BuildProjectOrientationSpineInput['startReadiness'],
+): OrientationBlocker | null {
+  if (!startReadiness || startReadiness.canStart) return null
+  const blockerCodes = new Set([
+    'proof_evidence_missing',
+    'repository_followup_required',
+    'scope_source_conflict',
+  ])
+  if (!blockerCodes.has(startReadiness.code ?? '')) return null
+  const label = typeof startReadiness.message === 'string' && startReadiness.message.trim()
+    ? startReadiness.message.trim()
+    : 'Current work is blocked before Guildhall can start.'
+  return {
+    id: `start-readiness:${startReadiness.code ?? 'blocked'}`,
+    label,
+  }
+}
+
 export function buildProjectOrientationSpine(input: BuildProjectOrientationSpineInput): ProjectOrientationSpine {
   const now = input.now ?? new Date().toISOString()
   const baseTasks = (input.tasks ?? []).filter(task =>
@@ -2177,9 +2197,16 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
         label: blocker.label,
       }))
     : []
-  const releaseBlockerInput = [
+  const explicitReleaseBlockers = [
     ...projectionBlockers,
     ...(input.startReadiness?.canStart !== true ? input.releaseReadiness?.blockers ?? [] : []),
+  ]
+  const fallbackStartBlocker = explicitReleaseBlockers.length === 0
+    ? startReadinessReleaseBlocker(input.startReadiness)
+    : null
+  const releaseBlockerInput = [
+    ...explicitReleaseBlockers,
+    ...(fallbackStartBlocker ? [fallbackStartBlocker] : []),
   ]
   const { blockers, gaps: blockerGaps } = attachReleaseBlockers(releaseBlockerInput, byId)
   const executionBoundary = buildExecutionBoundary({
@@ -2226,16 +2253,26 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
     ? progressFromScopeProjection(input.scopeProjection, scope?.id ?? null, fallbackProgress)
     : fallbackProgress
   const releaseState: OrientationReleaseSummary['state'] = input.scopeProjection
-    ? input.scopeProjection.release.state
+    ? blockers.length > 0
+      ? 'blocked'
+      : input.scopeProjection.release.state
     : blockers.length > 0
       ? 'blocked'
       : scope
         ? 'shaping'
         : 'unknown'
+  const effectiveSelectedRelease = selectedReleaseForReadModel && releaseState === 'blocked'
+    ? { ...selectedReleaseForReadModel, state: 'blocked' as const }
+    : selectedReleaseForReadModel
+  const effectiveReleases = normalizedReleases.map(release =>
+    effectiveSelectedRelease && release.id === effectiveSelectedRelease.id
+      ? { ...release, state: effectiveSelectedRelease.state }
+      : release,
+  )
   const summary = summaryWithSourceConflicts(buildSummary({
     projectId: input.projectId,
     charter,
-    selectedRelease: selectedReleaseForReadModel,
+    selectedRelease: effectiveSelectedRelease,
     scope,
     progress,
     pins,
@@ -2256,8 +2293,8 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
   return {
     projectId: input.projectId,
     updatedAt: now,
-    selectedRelease: selectedReleaseForReadModel,
-    releases: normalizedReleases,
+    selectedRelease: effectiveSelectedRelease,
+    releases: effectiveReleases,
     selectedTaskScope: scope,
     scope,
     charter,

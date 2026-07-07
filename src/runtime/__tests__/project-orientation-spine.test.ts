@@ -2320,6 +2320,81 @@ describe('buildProjectOrientationSpine', () => {
     expect(spine.summary.headline).toBe('Stage 1 Headless MVP is complete.')
   })
 
+  it('carries repository follow-up blockers into the project spine release state', () => {
+    const tasks = [
+      {
+        id: 'task-stage-one',
+        title: 'Prove headless stage one',
+        domain: 'harness',
+        status: 'done',
+        priority: 'normal',
+        releaseIds: ['stage-1-headless-mvp'],
+        completionHandoff: {
+          summary: 'Stage one is proven.',
+          whatChanged: ['Added CLI proof.'],
+          whatCanBeDoneNow: ['Review completed scope.'],
+          howToProveIt: ['pnpm test passed.'],
+          verified: ['pnpm test passed.'],
+          notVerified: [],
+          remainingRisks: [],
+        },
+      },
+    ] as any[]
+    const releases = [{
+      id: 'stage-1-headless-mvp',
+      label: 'Stage 1 Headless MVP',
+      kind: 'release',
+      state: 'active',
+      source: 'release_plan',
+      nodeIds: ['work:task-stage-one'],
+      deferredNodeIds: [],
+      proofStyle: 'script_only',
+    }] as any[]
+    const scopeProjection = buildProjectScopeProjection({
+      version: 1,
+      lastUpdated: '2026-07-07T11:36:00.000Z',
+      selectedReleaseId: 'stage-1-headless-mvp',
+      releases,
+      tasks,
+    })
+    const message = 'Stage 1 Headless MVP has no runnable task work left, but 1 repository follow-up is still needed, starting with: main has 1 local commit not pushed to origin/main.'
+
+    const spine = buildProjectOrientationSpine({
+      projectId: 'narrative-harness',
+      now: '2026-07-07T11:36:00.000Z',
+      selectedReleaseId: 'stage-1-headless-mvp',
+      releases,
+      tasks,
+      scopeProjection,
+      startReadiness: {
+        canStart: false,
+        code: 'repository_followup_required',
+        message,
+        actionHref: '/release',
+      },
+    })
+
+    expect(scopeProjection.release.state).toBe('ready')
+    expect(spine.summary.topBlocker).toBe(message)
+    expect(spine.release).toMatchObject({
+      state: 'blocked',
+      blockers: [
+        {
+          id: 'start-readiness:repository_followup_required',
+          label: message,
+        },
+      ],
+    })
+    expect(spine.release.blockers[0]).not.toHaveProperty('owningNodeId')
+    expect(spine.selectedRelease).toMatchObject({
+      id: 'stage-1-headless-mvp',
+      state: 'blocked',
+    })
+    expect(spine.releases.map(release => [release.id, release.state])).toEqual([
+      ['stage-1-headless-mvp', 'blocked'],
+    ])
+  })
+
   it('preserves detected release buckets for later tasks that already exist in saved task state', () => {
     const spine = buildProjectOrientationSpine({
       projectId: 'narrative-harness',
