@@ -12670,11 +12670,19 @@ export function buildServeApp(opts: ServeOptions = {}): {
     if (designSystemBlockingCount > 0) blockingKeys.add('design-system')
     if (dirtyCheckoutBlockingCount > 0) blockingKeys.add('dirty-checkout')
     const blockingCount = blockingKeys.size
+    const ready = scopedTasks.length > 0 && blockingCount === 0 && unfinishedCount === 0
+    const effectiveRelease = release
+      ? {
+          ...release,
+          state: ready ? 'ready' : blockingCount > 0 ? 'blocked' : 'active',
+        }
+      : release
+    const effectiveScope = readinessScope === release && effectiveRelease ? effectiveRelease : readinessScope
 
     return {
-      release,
-      scope: readinessScope,
-      ready: scopedTasks.length > 0 && blockingCount === 0 && unfinishedCount === 0,
+      release: effectiveRelease,
+      scope: effectiveScope,
+      ready,
       ...(scopedTasks.length === 0 ? { notReadyReason: 'No tasks in this scope yet.' } : {}),
       statusCounts,
       openEscalations,

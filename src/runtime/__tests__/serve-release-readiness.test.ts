@@ -362,7 +362,7 @@ describe('GET /api/project/release-readiness', () => {
         id: 'headless-mvp',
         label: 'Headless MVP',
         kind: 'release',
-        state: 'active',
+        state: 'ready',
         source: 'release_plan',
         nodeIds: ['work:task-current'],
         deferredNodeIds: [],
@@ -473,6 +473,10 @@ describe('GET /api/project/release-readiness', () => {
     expect(body.gitStory.blockers).toHaveLength(1)
     expect(body.totals.gitStoryBlockingCount).toBe(1)
     expect(body.totals.blockingCount).toBe(1)
+    expect(body.release).toMatchObject({
+      id: 'headless-mvp',
+      state: 'blocked',
+    })
     expect(body.releaseBlockers).toEqual([
       expect.objectContaining({
         id: 'repository-followup:repo:0',

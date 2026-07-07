@@ -27548,3 +27548,66 @@ selected-scope readiness ordering.
     correct but prevents the Release view from explaining repository blockers.
 - Schema Migration Decision: no persisted schema field was added, removed, or
   retyped. This is an API projection fix over existing git-story blockers.
+
+## 2026-07-07T11:32:52Z - Release readiness must not echo stale ready state
+
+- User job:
+  - When Guildhall says a current release is blocked, every owner-facing field
+    in the release-readiness payload must agree. The response must not say
+    `ready:false` while the release object still says `state:"ready"`.
+- Finding:
+  - Root cause classification:
+    - Data model/schema problem: persisted/planned release state and effective
+      closure state were both exposed as `release.state` in the readiness
+      response without distinguishing source state from current verdict.
+    - Project structure/scope/release modeling problem: repository follow-up is
+      layered after the orientation spine builds the selected release state, so
+      a release could look complete in the spine while release closure remained
+      blocked.
+    - UI communication/orientation problem: the Release surface primarily uses
+      `ready`, but API consumers and future UI treatments could see a stale
+      `state:"ready"` next to blocker rows.
+- Fix:
+  - `/api/project/release-readiness` now returns an effective release copy for
+    this endpoint: `state:"ready"` only when closure checks pass, `state:
+    "blocked"` when any release blocker exists, and `state:"active"` when work
+    remains without blockers.
+  - Persisted release records are not rewritten; this is a read-model
+    projection for owner-facing readiness truth.
+- Proof provided:
+  - Red/green regression:
+    `CI=true ./node_modules/.bin/vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts -t "git story
+    follow-up remains"` first failed with `release.state:"ready"` while
+    `ready:false`, then passed after the readiness response projected effective
+    state.
+  - Broader regression:
+    `CI=true ./node_modules/.bin/vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts` passed (`54`
+    tests).
+  - Build/contracts:
+    `node ./build.mjs`, `CI=true corepack pnpm lint:contracts`, and `git diff
+    --check` passed.
+  - Installed/live proof:
+    `CI=true corepack pnpm dev:install && guildhall stop && guildhall start`
+    installed the current branch artifact, and `/api/stale-server` returned
+    `stale:false` for PID `94342`.
+  - Narrative Harness live readiness:
+    `/api/project/release-readiness?projectId=narrative-harness` reports
+    `ready:false`, `release.state:"blocked"`, `totals.blockingCount:3`, and
+    three repository follow-up blockers for the unpushed local commits.
+- Contract Touch Decision:
+  - Work id: `release-readiness-effective-release-state`.
+  - Touched contracts: `/api/project/release-readiness` response semantics for
+    `release.state` as the effective owner-facing readiness state.
+  - Contracts considered but not touched: persisted release schema, project
+    orientation spine schema, task schema, git story schema, and release
+    closure blocker schema.
+  - Required follow-up: none for this slice; live Narrative Harness proof is
+    recorded above.
+  - Apply/revert behavior: reverting can reintroduce contradictory readiness
+    responses where the release object says ready while release blockers remain
+    open.
+- Schema Migration Decision: no persisted schema field was added, removed, or
+  retyped. This is an endpoint read-model projection over existing release,
+  task, and git-story state.
