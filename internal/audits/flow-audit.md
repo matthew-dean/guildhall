@@ -27104,3 +27104,60 @@ selected-scope readiness ordering.
 - Schema Migration Decision: no persisted schema field was added, removed, or
   retyped. `persistedBlockReason` is a read-model/debug field on the task
   detail API projection only.
+
+## 2026-07-07T10:24:00Z - Acceptance criteria must not claim met after newer failed proof
+
+- User job:
+  - When a task is blocked by a newer hard proof failure, Guildhall must not
+    tell the user that the task's acceptance criteria are still met. The
+    product can preserve the old persisted claim for audit, but the current
+    read model must show that the criteria need proof again.
+- Finding:
+  - Root cause classification:
+    - Data model/schema problem: acceptance criteria persisted `met:true`
+      independently from task evidence and runtime proof-recovery state.
+    - Task hierarchy/dependency/proof modeling problem: a newer hard proof
+      gate failed, but the criteria read model did not reconcile that with
+      earlier review/completion evidence.
+    - UI communication/orientation problem: task detail could say completion
+      proof is missing while criteria still looked satisfied to API consumers.
+    - Bad project data produced by an earlier Guildhall bug: the DeepInfra
+      task retained completion-era `met:true` criteria after the live provider
+      proof was reopened and failed on missing credentials.
+- Fix:
+  - `normalizeTaskForDrawer()` now projects acceptance criteria through the
+    current proof state. When active proof recovery or a latest failed hard
+    gate contradicts `met:true`, the served criterion becomes `met:false`,
+    keeps `persistedMet:true`, and records `verificationState:"stale"` plus
+    the proof blocker/gate id.
+  - Added `acceptanceCriteriaProofState` to compact task summaries so other
+    surfaces can show the same current proof state without re-deriving it.
+- Proof provided:
+  - Focused regression:
+    `CI=true ./node_modules/.bin/vitest run
+    src/runtime/__tests__/serve-task-endpoints.test.ts -t "current
+    proof-recovery blocker"` passed (`1` test, `108` skipped).
+  - `node ./build.mjs` passed.
+  - `CI=true corepack pnpm lint:contracts` passed.
+  - Installed-app proof after `CI=true corepack pnpm dev:install &&
+    guildhall stop && guildhall start`: `/api/stale-server` reported
+    `stale:false` for PID `25413`; the Narrative Harness DeepInfra task API
+    now returns `acceptanceCriteriaProofState.state:"blocked"`,
+    `staleMetCount:3`, and all three criteria as `met:false`,
+    `persistedMet:true`, `verificationState:"stale"` with
+    `staleGateId:"prove-deepinfra-drafting-model.live-provider"`.
+- Contract Touch Decision:
+  - Work id: `task-detail-acceptance-proof-state`.
+  - Touched contracts: `/api/project/task/:id` task-detail projection and
+    compact task summary projection.
+  - Contracts considered but not touched: persisted acceptance-criteria schema,
+    task evidence schema, runtime proof-recovery schema, and gate-result
+    schema.
+  - Required follow-up: move from projection repair to an explicit proof-state
+    model that links criteria, proof paths, gates, and source evidence without
+    relying on `met` as a durable truth flag.
+  - Apply/revert behavior: reverting can make blocked proof-recovery tasks
+    claim all acceptance criteria are met while a newer hard gate is failed.
+- Schema Migration Decision: no persisted schema field was added, removed, or
+  retyped. `acceptanceCriteriaProofState`, `persistedMet`,
+  `verificationState`, and stale-proof metadata are read-model fields only.

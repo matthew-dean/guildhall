@@ -2865,6 +2865,7 @@ function normalizeTaskForDrawer(task: Record<string, unknown>): Record<string, u
       persistedBlockReason: rawBlockReason,
     }
   }
+  normalized = normalizeAcceptanceCriteriaForCurrentProof(normalized)
   const canonicalDescriptions = new Set(
     Array.isArray(normalized.acceptanceCriteria)
       ? normalized.acceptanceCriteria
@@ -2880,6 +2881,83 @@ function normalizeTaskForDrawer(task: Record<string, unknown>): Record<string, u
   const notes = (normalized.notes as Array<Record<string, unknown>>)
     .filter((note) => noteMatchesCanonicalAcceptance(note, canonicalDescriptions))
   return notes.length === normalized.notes.length ? normalized : { ...normalized, notes }
+}
+
+function normalizeAcceptanceCriteriaForCurrentProof(task: Record<string, unknown>): Record<string, unknown> {
+  const criteria = Array.isArray(task.acceptanceCriteria)
+    ? task.acceptanceCriteria.filter((criterion): criterion is Record<string, unknown> =>
+        Boolean(criterion) && typeof criterion === 'object' && !Array.isArray(criterion),
+      )
+    : []
+  if (criteria.length === 0) return task
+
+  const failedHardGate = latestFailedHardGate(task)
+  const proofReason = activeProofRecoveryReason(task) || failedHardGateReason(failedHardGate)
+  if (!proofReason) return task
+  const gateCheckedAt = typeof failedHardGate?.checkedAt === 'string' ? failedHardGate.checkedAt : undefined
+  const staleMetCriteria = criteria.filter(criterion => criterion.met === true)
+  if (staleMetCriteria.length === 0) {
+    return {
+      ...task,
+      acceptanceCriteriaProofState: {
+        state: 'blocked',
+        reason: proofReason,
+        ...(failedHardGate?.gateId ? { gateId: failedHardGate.gateId } : {}),
+        ...(gateCheckedAt ? { checkedAt: gateCheckedAt } : {}),
+      },
+    }
+  }
+
+  return {
+    ...task,
+    acceptanceCriteria: criteria.map(criterion => criterion.met === true
+      ? {
+          ...criterion,
+          met: false,
+          persistedMet: true,
+          verificationState: 'stale',
+          staleReason: proofReason,
+          ...(failedHardGate?.gateId ? { staleGateId: failedHardGate.gateId } : {}),
+        }
+      : criterion),
+    acceptanceCriteriaProofState: {
+      state: 'blocked',
+      reason: proofReason,
+      staleMetCount: staleMetCriteria.length,
+      ...(failedHardGate?.gateId ? { gateId: failedHardGate.gateId } : {}),
+      ...(gateCheckedAt ? { checkedAt: gateCheckedAt } : {}),
+    },
+  }
+}
+
+function activeProofRecoveryReason(task: Record<string, unknown>): string {
+  const runtime = task.runtime && typeof task.runtime === 'object' && !Array.isArray(task.runtime)
+    ? task.runtime as Record<string, unknown>
+    : null
+  const proofRecovery =
+    task.proofRecovery && typeof task.proofRecovery === 'object' && !Array.isArray(task.proofRecovery)
+      ? task.proofRecovery as Record<string, unknown>
+      : runtime?.proofRecovery && typeof runtime.proofRecovery === 'object' && !Array.isArray(runtime.proofRecovery)
+        ? runtime.proofRecovery as Record<string, unknown>
+        : null
+  return typeof proofRecovery?.reason === 'string' ? proofRecovery.reason.trim() : ''
+}
+
+function latestFailedHardGate(task: Record<string, unknown>): Record<string, unknown> | null {
+  const gates = Array.isArray(task.gateResults) ? task.gateResults.filter(isRecord) : []
+  for (let index = gates.length - 1; index >= 0; index -= 1) {
+    const gate = gates[index]
+    if (gate.type === 'hard' && gate.passed === false) return gate
+  }
+  return null
+}
+
+function failedHardGateReason(gate: Record<string, unknown> | null): string {
+  if (!gate) return ''
+  const output = typeof gate.output === 'string' ? gate.output.trim() : ''
+  if (output) return output
+  const gateId = typeof gate.gateId === 'string' ? gate.gateId.trim() : ''
+  return gateId ? `${gateId} failed.` : 'A required hard gate failed.'
 }
 
 function latestTaskNoteContent(
@@ -3655,10 +3733,12 @@ function compactTaskForProjectSummary(task: Record<string, unknown>): Record<str
     'sourceRefs',
     'references',
     'acceptanceCriteria',
+    'acceptanceCriteriaProofState',
     'definitionOfDone',
     'proofPaths',
     'openQuestions',
     'blockReason',
+    'persistedBlockReason',
     'shelveReason',
     'taskReadiness',
     'structuralIntegrity',
@@ -3718,8 +3798,10 @@ function compactTaskForWorkSurface(task: Record<string, unknown>): Record<string
     'hierarchy',
     'releaseIds',
     'acceptanceCriteria',
+    'acceptanceCriteriaProofState',
     'openQuestions',
     'blockReason',
+    'persistedBlockReason',
     'shelveReason',
     'latestReviewerSummary',
     'terminalSummary',

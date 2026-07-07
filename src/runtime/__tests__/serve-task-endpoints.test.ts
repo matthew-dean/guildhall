@@ -592,6 +592,19 @@ describe('GET /api/project/task/:id', () => {
         reopenedAt: '2026-07-07T09:50:00.000Z',
         reason: 'provider_missing: DEEPINFRA_API_TOKEN is required.',
       },
+      acceptanceCriteria: [{
+        id: 'provider-proof',
+        description: 'Live provider proof records telemetry.',
+        verifiedBy: 'review',
+        met: true,
+      }],
+      gateResults: [{
+        gateId: 'prove-provider.live',
+        type: 'hard',
+        passed: false,
+        output: 'DEEPINFRA_API_TOKEN is required.',
+        checkedAt: '2026-07-07T10:00:00.000Z',
+      }],
       escalations: [{
         id: 'esc-task-1',
         taskId: 'task-1',
@@ -610,6 +623,22 @@ describe('GET /api/project/task/:id', () => {
     expect(body.task?.blockReason).toBe('provider_missing: DEEPINFRA_API_TOKEN is required.')
     expect(body.task?.persistedBlockReason).toBe('max_revisions_exceeded: reviewer loop hit its old cap before proof recovery reopened.')
     expect(body.task?.runtime?.proofRecovery?.reason).toBe('provider_missing: DEEPINFRA_API_TOKEN is required.')
+    expect(body.task?.acceptanceCriteria).toEqual([
+      expect.objectContaining({
+        id: 'provider-proof',
+        met: false,
+        persistedMet: true,
+        verificationState: 'stale',
+        staleReason: 'provider_missing: DEEPINFRA_API_TOKEN is required.',
+        staleGateId: 'prove-provider.live',
+      }),
+    ])
+    expect(body.task?.acceptanceCriteriaProofState).toMatchObject({
+      state: 'blocked',
+      reason: 'provider_missing: DEEPINFRA_API_TOKEN is required.',
+      staleMetCount: 1,
+      gateId: 'prove-provider.live',
+    })
   })
 
   it('surfaces derived reviewer, self-critique, and checkpoint summaries', async () => {
