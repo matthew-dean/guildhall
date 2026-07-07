@@ -25096,3 +25096,53 @@ selected-scope readiness ordering.
     overflow (`scrollWidth: 390`, `clientWidth: 390`).
   - Apply/revert behavior: reverting restores the failure where Work can claim
     the selected scope is complete while hiding the selected-scope proof ledger.
+
+## 2026-07-06 — Overview scope summary includes source and proof truth
+
+- Work id: `codex:overview-scope-proof-source-summary-2026-07-06`.
+- User job: when Overview is the 100-foot project surface, it must communicate
+  why the selected Narrative Harness scope is trustworthy, not merely that the
+  count math says all work is terminal. A user should see the current scope,
+  completion state, source trail, and proof state without opening Map, Work,
+  raw API output, or repo files.
+- Root-cause classification:
+  - UI communication/orientation problem: Overview could show completion,
+    current/deferred counts, and missing-verification counts while omitting the
+    source documents and proof-contract ledger behind those claims.
+  - Shared state ownership problem: the orientation spine already carried
+    `scopeRows.sourceRefs` and `proofContracts`, but the Overview scope summary
+    only rendered progress counts and locally selected focus/blocker snippets.
+- Fix:
+  - The Overview selected-scope secondary detail now summarizes proof contracts
+    as proven and missing proof counts.
+  - The same Overview detail line now summarizes source refs from included
+    scope rows using the shared `sourceRefsSummary()` helper already used by
+    Map/Work.
+- Contract Touch Decision:
+  - Touched contracts: Overview selected-scope presentation and shared
+    source-ref summary consumption.
+  - Contracts considered but not touched: persisted task schema, persisted
+    release schema, proof-path schema, orientation spine builder, Work compact
+    orientation payload, Project Map source trail, release readiness response,
+    scheduler/start contract, task detail endpoint, and raw task persistence.
+  - Existing data impact: no migration. Existing orientation-spine
+    source/proof data now renders in Overview; task records are not rewritten.
+  - Required follow-up: continue collapsing source/proof truth so task detail,
+    Work, Map, Overview, release readiness, and Start/Resume derive from the
+    same selected-scope ledger instead of each surface deciding how much of the
+    orientation spine to expose.
+  - Proof required: Overview regression for proof/source copy, UI typecheck,
+    installed-app stale-server proof, and rendered desktop/mobile Overview
+    proof.
+  - Proof provided: `ProjectOverviewTab` regression passes with the selected
+    scope showing `Proof: 11 proven items · 0 missing proof` and source labels
+    from two Narrative Harness planning docs. After the installed app reported
+    `/api/stale-server` `stale:false` for PID `69911`, rendered Overview proof
+    at `1280x720` and `390x844` showed the complete Stage 1 headline, `11
+    Current scope`, `31 Deferred`, `0 missing verification`, `Proof: 11 proven
+    items · 0 missing proof`, `Sources: implementation-roadmap.md,
+    remaining-spec-decomposition-inventory.md +17 more`, and no horizontal
+    overflow (`scrollWidth` equaled `clientWidth` at both viewports).
+  - Apply/revert behavior: reverting restores the failure where Overview can
+    claim the selected scope is complete but hides the source/proof basis for
+    that claim.

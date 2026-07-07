@@ -22,6 +22,7 @@
   import { nav, path } from '../../lib/nav.svelte.js'
   import { currentProjectHref, currentTaskHref, projectActionHref } from '../../lib/project-routes.js'
   import { inboxItemKey, type InboxItem } from '../../lib/inbox-item-key.js'
+  import { sourceRefsSummary } from '../../lib/source-refs.js'
   import type { EventEnvelope, ProjectDetail, ProjectMemoryHealth, Task } from '../../lib/types.js'
   import { hasCurrentGitUnavailableStory, type ProjectActivityLine } from '../../lib/project-activity.js'
   import { isGitUnavailableMessage } from '../../lib/runtime-message.js'
@@ -192,6 +193,23 @@
     0,
   )
   const orientationProofGapCount = $derived(orientationSpine?.gaps?.filter(gap => gap.kind === 'proof_needed').length ?? 0)
+  const orientationScopeSourceSummary = $derived.by(() => {
+    const rows = orientationSpine?.scopeRows ?? []
+    const refs = rows
+      .filter(row => row.scope !== 'deferred')
+      .flatMap(row => row.sourceRefs ?? [])
+    return sourceRefsSummary(refs, 2)
+  })
+  const orientationScopeProofSummary = $derived.by(() => {
+    const contracts = orientationSpine?.proofContracts ?? []
+    if (contracts.length === 0) return null
+    const proven = contracts.filter(contract => contract.state === 'proven').length
+    const missing = contracts.reduce((sum, contract) => sum + (contract.missing?.length ?? 0), 0)
+    if (proven === 0 && missing === 0) return null
+    return missing > 0
+      ? `${countLabel(proven, 'proven item')} · ${countLabel(missing, 'missing proof', 'missing proof')}`
+      : `${countLabel(proven, 'proven item')} · 0 missing proof`
+  })
   const orientationBlockedCount = $derived.by(() => {
     const progress = orientationSpine?.summary?.progress
     return progress?.blockedCount ?? progress?.blocked ?? 0
@@ -216,6 +234,8 @@
     if (!orientationSpine) return null
     const blockerPrefix = orientationBlockedCount > 0 ? 'Blocking' : 'Waiting on'
     const pieces = [
+      orientationScopeProofSummary ? `Proof: ${orientationScopeProofSummary}` : null,
+      orientationScopeSourceSummary ? `Sources: ${orientationScopeSourceSummary}` : null,
       orientationPins[0]?.label ? `Current focus: ${orientationPins[0].label}` : null,
       orientationTopBlocker?.label ? `${blockerPrefix}: ${orientationTopBlocker.label}` : orientationGap?.label ? `Needs attention: ${orientationGap.label}` : null,
     ]

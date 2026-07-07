@@ -526,6 +526,24 @@ describe('ProjectOverviewTab', () => {
             nextAction: null,
           },
           gaps: [],
+          scopeRows: [
+            {
+              taskId: 'done-1',
+              nodeId: 'work:done-1',
+              title: 'Done one',
+              scope: 'included',
+              sourceRefs: [
+                '/Users/matthew/git/oss/narrative-harness/docs/harness/implementation-roadmap.md',
+                '/Users/matthew/git/oss/narrative-harness/docs/product/deepinfra-drafting-model-selection.md',
+              ],
+            },
+          ],
+          proofContracts: Array.from({ length: 11 }, (_, index) => ({
+            nodeId: `work:proof-${index + 1}`,
+            title: `Proof ${index + 1}`,
+            state: 'proven',
+            missing: [],
+          })),
           roots: [],
           nodes: {},
           sourceHealth: { status: 'ok', gaps: 0, inferred: 0 },
@@ -552,6 +570,8 @@ describe('ProjectOverviewTab', () => {
     expect(screen.queryByRole('heading', { name: 'Ready to resume' })).not.toBeInTheDocument()
     expect(screen.getByText(/3 deferred/)).toBeInTheDocument()
     expect(screen.getByText(/0 missing verification/)).toBeInTheDocument()
+    expect(screen.getByText(/Proof: 11 proven items · 0 missing proof/)).toBeInTheDocument()
+    expect(screen.getByText(/Sources: implementation-roadmap.md, deepinfra-drafting-model-selection.md/)).toBeInTheDocument()
     expect(screen.getByText('The selected scope is complete. Choose another release or open Work to inspect completed and deferred items.')).toBeInTheDocument()
     expect(screen.queryByText('The next run is blocked until the project blocker is resolved.')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Blocked/ })).not.toBeInTheDocument()
