@@ -24971,3 +24971,70 @@ selected-scope readiness ordering.
     selected release can make the Work banner show `0 current tasks` even
     though the selected scope contains completed current work and deferred
     later work.
+
+## 2026-07-06 — Work view preserves selected-scope source trail
+
+- Work id: `codex:work-scope-source-trail-2026-07-06`.
+- User job: from Work, the user must be able to understand not only that the
+  selected Narrative Harness scope is complete, but which source documents back
+  the current scope. The Work view can stay compact, but it must not require a
+  hidden API call or repo access to know whether the visible scope is
+  source-backed.
+- Root-cause classification:
+  - UI communication/orientation problem: Work could show a completed scope and
+    correct counts without showing the docs behind that claim.
+  - Shared state ownership problem: the full orientation spine had source refs
+    on `scopeRows`, but `compactOrientationSpineForWorkSurface` stripped
+    `scopeRows` out of the Work payload. Work could not render the existing
+    source trail even though the shared model had it.
+  - Data/model synchronization problem: raw task records still do not always
+    carry source refs, so the selected-scope ledger is currently the reliable
+    owner-facing source trail for scoped work.
+- Fix:
+  - The Work-surface orientation compactor now keeps lightweight `scopeRows`
+    with task id, node id, title, status/blocking fields, scope, handoff state,
+    and `sourceRefs`, while still dropping the full root tree.
+  - Source-ref labeling is shared in `src/web/lib/source-refs.ts` so Map and
+    Work do not invent separate source-summary formats.
+  - The Work delivery/scope banner now adds one muted `Sources:` line when
+    source-backed selected-scope rows exist.
+- Contract Touch Decision:
+  - Touched contracts: compact Work-surface orientation spine payload,
+    selected-scope source-trail presentation, and source-ref label formatting.
+  - Contracts considered but not touched: persisted task schema, persisted
+    release schema, orientation spine builder, project scope projection,
+    release readiness response, scheduler/start contract, task detail endpoint,
+    Project Map source-trail layout, and raw task persistence.
+  - Existing data impact: no migration. Existing selected-scope source refs now
+    flow into the compact Work payload; raw task records are not rewritten.
+  - Required follow-up: continue reducing the gap between raw task records and
+    derived selected-scope truth, especially for proof/source fields, so task
+    detail, Work, Map, and release readiness all expose the same provenance
+    without duplicating persistence.
+  - Proof required: failing Work-surface API regression, Work UI regression,
+    Map regression after extracting shared source-ref helpers, UI typecheck,
+    installed-app stale-server proof, live Work API proof, and rendered
+    desktop/mobile Work proof.
+  - Proof provided: the API regression first failed because
+    `orientationSpine.scopeRows` was `undefined` for
+    `/api/project?surface=work`; after the fix it passed. `serve-task-endpoints`,
+    `WorkTab`, and `ProjectMapTab` tests passed with `150` tests total, and
+    `tsc -p packages/ui/tsconfig.json` plus `git diff --check` passed. After
+    `node ./build.mjs`, `node ./scripts/dev-install.mjs`, and service restart,
+    `/api/stale-server` returned `stale:false` for PID `48780`. Live
+    `/api/project?projectId=narrative-harness&surface=work` reported the
+    completed Stage 1 scope with `11` included, `31` deferred, and included
+    scope rows carrying source refs including
+    `deepinfra-drafting-model-selection.md`,
+    `world-and-object-continuity.md`, and
+    `spatial-geographic-continuity-reviewer.md`. Rendered Work proof at
+    `1280x720` showed the complete Stage 1 headline, `Review completed scope.`,
+    `Sources: implementation-roadmap.md,
+    remaining-spec-decomposition-inventory.md, schema-contract-roadmap.md +16
+    more`, `11 CURRENT TASKS`, `0 BLOCKED`, `31 DEFERRED`, and no horizontal
+    overflow (`scrollWidth: 1280`, `clientWidth: 1280`). Rendered Work proof at
+    `390x844` showed the same source/count story and no horizontal overflow
+    (`scrollWidth: 390`, `clientWidth: 390`).
+  - Apply/revert behavior: reverting restores the failure where Work can show
+    correct selected-scope counts but cannot surface the source documents behind
+    those claims.

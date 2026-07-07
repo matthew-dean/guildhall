@@ -9,6 +9,7 @@
   import { friendlyStatus } from '../../lib/display.js'
   import { nav, path } from '../../lib/nav.svelte.js'
   import { currentProjectHref, currentTaskHref, projectActionHref, projectFetch } from '../../lib/project-routes.js'
+  import { isSourceDocumentRef, sourceRefLabel, sourceRefsSummary } from '../../lib/source-refs.js'
   import type { ProjectDetail, ProjectOrientationNode, ProjectOrientationSpine } from '../../lib/types.js'
 
   interface Props {
@@ -359,18 +360,6 @@
     return labels.length > 0 ? `Source: ${labels.slice(0, 2).join(', ')}` : null
   }
 
-  function sourceRefLabel(ref: string): string {
-    const value = ref.startsWith('import:') ? ref.slice('import:'.length) : ref
-    const parts = value.split('/').filter(Boolean)
-    return parts.at(-1) ?? value
-  }
-
-  function isSourceDocumentRef(ref: string): boolean {
-    if (ref.startsWith('task:') || ref.startsWith('artifact:')) return false
-    if (ref.startsWith('import:')) return true
-    return /[/\\]/.test(ref) || /\.(md|mdx|txt|json|ya?ml)$/i.test(ref)
-  }
-
   function scopeReasonLabel(reason: string | undefined): string {
     if (reason === 'included') return 'directly assigned'
     if (reason === 'included_ancestor') return 'inside selected work'
@@ -389,11 +378,8 @@
   }
 
   function scopeRowSourceSummary(row: { sourceRefs?: string[] }): string {
-    const labels = (row.sourceRefs ?? [])
-      .filter(isSourceDocumentRef)
-      .map(sourceRefLabel)
-      .filter(Boolean)
-    return labels.length > 0 ? `Source: ${labels.slice(0, 2).join(', ')}` : 'Source: task record'
+    const summary = sourceRefsSummary(row.sourceRefs ?? [], 2)
+    return summary ? `Source: ${summary}` : 'Source: task record'
   }
 
   function scopeRowHref(row: { taskId?: string }): string | null {

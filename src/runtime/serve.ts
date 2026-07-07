@@ -3602,9 +3602,36 @@ function compactOrientationSpineForWorkSurface(spine: Record<string, unknown>): 
     selectedTaskScope: compactOrientationScope(spine.selectedTaskScope),
     scope: compactOrientationScope(spine.scope),
     summary: spine.summary,
+    scopeRows: compactOrientationScopeRows(spine.scopeRows),
     roots: [],
     nodes: compactOrientationNodes(spine.nodes),
   }
+}
+
+function compactOrientationScopeRows(rows: unknown): Array<Record<string, unknown>> {
+  if (!Array.isArray(rows)) return []
+  return rows
+    .filter((row): row is Record<string, unknown> => Boolean(row) && typeof row === 'object' && !Array.isArray(row))
+    .map(row => {
+      const summary: Record<string, unknown> = {}
+      for (const key of [
+        'taskId',
+        'nodeId',
+        'title',
+        'scope',
+        'eligibilityReason',
+        'hierarchyRole',
+        'status',
+        'handoffState',
+        'blocksStart',
+        'blocksRelease',
+        'humanBlocking',
+        'sourceRefs',
+      ]) {
+        if (key in row) summary[key] = row[key]
+      }
+      return summary
+    })
 }
 
 function compactOrientationScope(scope: unknown): unknown {

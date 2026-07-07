@@ -20,6 +20,7 @@
   import { nav, path } from '../../lib/nav.svelte.js'
   import { project } from '../../lib/project.svelte.js'
   import { currentProjectHref, currentTaskHref, projectFetch } from '../../lib/project-routes.js'
+  import { sourceRefsSummary } from '../../lib/source-refs.js'
   import { buildWorkSurface } from '../../lib/project-data.js'
   import { friendlyRuntimeMessage } from '../../lib/runtime-message.js'
   import { hasUnmetDependencies, unmetDependencyIds } from '../../lib/task-dependencies.js'
@@ -126,6 +127,13 @@
   const projectRunning = $derived(detail.run?.status === 'running')
   const projectRunActive = $derived(detail.run?.status === 'running' || detail.run?.status === 'stopping')
   const deliveryReadyCount = $derived(deliveryQueue?.runnable?.length ?? 0)
+  const scopeSourceSummary = $derived.by(() => {
+    const rows = detail.orientationSpine?.scopeRows ?? []
+    const refs = rows
+      .filter(row => row.scope !== 'deferred')
+      .flatMap(row => row.sourceRefs ?? [])
+    return sourceRefsSummary(refs)
+  })
   const orientationScopeCounts = $derived.by(() => {
     const spine = detail.orientationSpine
     const summary = spine?.summary
@@ -736,6 +744,9 @@
               <span>{scopeQueueFallback.detail}</span>
             {/if}
           </div>
+          {#if scopeQueueFallback && scopeSourceSummary}
+            <p class="queue-sources">Sources: {scopeSourceSummary}</p>
+          {/if}
           <div class="queue-chips">
             {#if scopeQueueFallback}
               {#if scopeQueueFallback.current > 0 || scopeQueueFallback.proofMissing === 0}
@@ -1024,6 +1035,11 @@
     font-weight: var(--gh-type-weight-strong);
     letter-spacing: 0.05em;
     text-transform: uppercase;
+  }
+  .queue-sources {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: var(--gh-type-size-meta);
   }
   .queue-chips {
     display: flex;

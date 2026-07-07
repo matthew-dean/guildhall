@@ -460,7 +460,20 @@ describe('WorkTab', () => {
               deferredWorkCount: 31,
               progress: { blocked: 0 },
             },
-            scopeRows: [],
+            scopeRows: [
+              {
+                taskId: 'current-done',
+                nodeId: 'work:current-done',
+                title: 'Generate a CLI-first story synopsis and chapter draft',
+                scope: 'included',
+                sourceRefs: [
+                  '/Users/matthew/git/oss/narrative-harness/docs/harness/implementation-roadmap.md',
+                  '/Users/matthew/git/oss/narrative-harness/docs/harness/architecture-notes.md',
+                  '/Users/matthew/git/oss/narrative-harness/docs/product/deepinfra-drafting-model-selection.md',
+                  'task:current-done',
+                ],
+              },
+            ],
             roots: [],
             nodes: {},
           },
@@ -481,6 +494,7 @@ describe('WorkTab', () => {
     expect(queue).toHaveTextContent('11 current tasks')
     expect(queue).toHaveTextContent('0 blocked')
     expect(queue).toHaveTextContent('31 deferred')
+    expect(queue).toHaveTextContent('Sources: implementation-roadmap.md, architecture-notes.md, deepinfra-drafting-model-selection.md')
     expect(queue).not.toHaveTextContent('0 current tasks')
     expect(await screen.findByText('0 shown · 2 total')).toBeTruthy()
     expect(screen.getByText('No work is ready to run yet.')).toBeTruthy()

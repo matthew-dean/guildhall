@@ -819,6 +819,7 @@ describe('GET /api/project/task/:id', () => {
       workKind: 'verification',
       spec: '## Full worker handoff\n\nThis belongs on the task detail endpoint.',
       acceptanceCriteria: [{ description: 'Storybook proof exists.' }],
+      sourceRefs: ['docs/storybook.md', 'docs/menu.md'],
       references: ['docs/storybook.md', 'docs/menu.md'],
       projectPath: '/tmp/storybook-project',
       createdAt: '2026-06-01T00:00:00.000Z',
@@ -913,6 +914,14 @@ describe('GET /api/project/task/:id', () => {
     expect(workBody.orientationSpine).toBeTruthy()
     expect(workBody.orientationSpine?.summary?.selectedScopeLabel).toBeTruthy()
     expect(workBody.orientationSpine?.roots).toEqual([])
+    expect(workBody.orientationSpine?.scopeRows).toEqual([
+      expect.objectContaining({
+        taskId: 'task-storybook',
+        nodeId: 'work:task-storybook',
+        title: 'Prove the menu primitive',
+        sourceRefs: ['docs/storybook.md', 'docs/menu.md'],
+      }),
+    ])
     const orientationNode = workBody.orientationSpine?.nodes?.['work:task-storybook']
     expect(orientationNode).toMatchObject({
       id: 'work:task-storybook',
