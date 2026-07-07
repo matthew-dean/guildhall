@@ -307,12 +307,35 @@ const NON_BLOCKING_STATES = new Set<GitStoryClosureState>([
   'deferred',
 ])
 
+function gitStoryBlockerKey(snapshot: GitStorySnapshot): string {
+  return [
+    snapshot.state,
+    snapshot.repoId ?? '',
+    snapshot.repoRoot,
+    snapshot.inspectedPath,
+    snapshot.branch ?? '',
+    snapshot.reason,
+    snapshot.nextAction,
+  ].join('|')
+}
+
+function dedupeBlockingSnapshots(snapshots: GitStorySnapshot[]): GitStorySnapshot[] {
+  const byKey = new Map<string, GitStorySnapshot>()
+  for (const snapshot of snapshots) {
+    const key = gitStoryBlockerKey(snapshot)
+    const existing = byKey.get(key)
+    if (!existing || (existing.taskId && !snapshot.taskId)) byKey.set(key, snapshot)
+  }
+  return [...byKey.values()]
+}
+
 export function summarizeGitStories(snapshots: GitStorySnapshot[]): GitStorySummary {
   const state = snapshots
     .map((snapshot) => snapshot.state)
     .sort((a, b) => STATE_SEVERITY[b] - STATE_SEVERITY[a])[0] ?? 'clean'
-  const blockers = snapshots
+  const blockers = dedupeBlockingSnapshots(snapshots
     .filter((snapshot) => !NON_BLOCKING_STATES.has(snapshot.state))
+  )
     .map((snapshot, index) => ({
       id: snapshot.taskId ? `task:${snapshot.taskId}` : `repo:${index}`,
       label: [

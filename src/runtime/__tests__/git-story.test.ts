@@ -215,6 +215,47 @@ describe('inspectGitStory', () => {
 })
 
 describe('summarizeGitStories', () => {
+  it('dedupes task echoes of the same repository follow-up', () => {
+    const rootSnapshot = {
+      state: 'committed_local' as const,
+      repoRoot: '/workspace/story',
+      inspectedPath: '/workspace/story',
+      branch: 'main',
+      ahead: 3,
+      behind: 0,
+      changedCount: 0,
+      untrackedCount: 0,
+      samplePaths: [],
+      localCommits: ['a', 'b', 'c'],
+      reason: 'main has 3 local commits not pushed to origin/main.',
+      nextAction: 'Push the branch or open a PR according to this project policy.',
+      inspectedAt: '2026-07-07T11:55:00.000Z',
+    }
+    const summary = summarizeGitStories([
+      rootSnapshot,
+      {
+        ...rootSnapshot,
+        taskId: 'task-model',
+        taskTitle: 'Select drafting model',
+      },
+      {
+        ...rootSnapshot,
+        taskId: 'task-draft',
+        taskTitle: 'Generate chapter draft',
+      },
+    ])
+
+    expect(summary.snapshots).toHaveLength(3)
+    expect(summary.blockers).toEqual([
+      expect.objectContaining({
+        id: 'repo:0',
+        label: 'main',
+        state: 'committed_local',
+        reason: 'main has 3 local commits not pushed to origin/main.',
+      }),
+    ])
+  })
+
   it('keeps workspace child repo identity on blockers', () => {
     const summary = summarizeGitStories([
       {

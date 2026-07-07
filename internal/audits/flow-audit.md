@@ -27837,3 +27837,76 @@ selected-scope readiness ordering.
 - Schema Migration Decision: no persisted schema field was added, removed, or
   retyped. This changes owner-facing copy over the existing dirty-checkout
   read model only.
+
+## 2026-07-07T12:02:27Z - Git Story repository follow-ups must not be counted once per task echo
+
+- User job:
+  - When a release has no runnable task work left and is blocked only by
+    repository follow-up, the owner should see the actual number of repository
+    conditions to resolve. If several task snapshots point at the same branch
+    condition, Guildhall should not inflate one push/PR decision into several
+    blockers.
+- Finding:
+  - Root cause classification:
+    - Data model/schema problem: `summarizeGitStories` converted every blocking
+      snapshot into a blocker row, even when root and task snapshots described
+      the same repository path, branch, state, reason, and next action.
+    - Scheduler/action-state logic problem: Start/release readiness used the
+      inflated Git Story blocker count, so Narrative Harness appeared to need
+      three repository follow-ups even though all three rows said the same
+      `main has 3 local commits not pushed to origin/main` action.
+    - UI communication/orientation problem: the Release page could dedupe some
+      visible rows locally, but shared API totals and release blockers still
+      overcounted the same underlying repository condition.
+- Fix:
+  - Git Story now dedupes blocking snapshots by repository condition before
+    constructing blocker rows, while preserving all snapshots for diagnostics.
+  - When a root/repo snapshot and task snapshots share the same condition, the
+    repo-level row is preferred so the owner sees the push/PR action as a
+    repository follow-up, not as several task-specific blockers.
+- Proof provided:
+  - Red/green regression:
+    `CI=true ./node_modules/.bin/vitest run
+    src/runtime/__tests__/git-story.test.ts -t "dedupes task echoes"` first
+    failed with three blockers for one repository condition and now passes.
+  - Broader regression:
+    `CI=true ./node_modules/.bin/vitest run
+    src/runtime/__tests__/git-story.test.ts
+    src/runtime/__tests__/serve-release-readiness.test.ts` passed (`75`
+    tests).
+  - Build/contracts:
+    `node ./build.mjs`, `CI=true corepack pnpm lint:contracts`, and `git diff
+    --check` passed.
+  - Installed/live proof:
+    `CI=true corepack pnpm dev:install && guildhall stop && guildhall start`
+    installed the current branch artifact, and `/api/stale-server` returned
+    `stale:false` for PID `93004`.
+    `/api/project/release-readiness?projectId=narrative-harness` reports
+    `totals.tasks:11`, `totals.done:11`, `totals.blockingCount:1`,
+    `totals.gitStoryBlockingCount:1`, `releaseBlockers.length:1`,
+    `gitStory.blockers.length:1`, and still preserves three
+    `committed_local` diagnostic snapshots.
+    `/api/project/spine?projectId=narrative-harness` reports the selected
+    release as `blocked` with the singular message `repository follow-up is
+    still needed`.
+    A Playwright smoke against the installed
+    `/projects/narrative-harness/release` page found the Release readiness
+    heading and the `main has 3 local commits not pushed to origin/main.`
+    blocker, and confirmed the old `3 repository follow-ups` copy is absent.
+- Contract Touch Decision:
+  - Work id: `git-story-dedupe-repository-condition-blockers`.
+  - Touched contracts: Git Story summary blocker identity, release-readiness
+    repository-follow-up counts, Start/readiness repository follow-up count
+    semantics, and Project Map release-blocker text that consumes Start
+    readiness.
+  - Contracts considered but not touched: persisted task schema, persisted
+    release schema, Git Story snapshot schema, project spine schema,
+    dirty-checkout schema, and release-readiness response field names.
+  - Required follow-up: consider removing local Release tab Git Story dedupe
+    once all consumers trust the shared runtime blocker list.
+  - Apply/revert behavior: reverting can make one repository push/PR decision
+    appear as multiple release blockers whenever task snapshots echo the same
+    root repository state.
+- Schema Migration Decision: no persisted schema field was added, removed, or
+  retyped. This changes the derived Git Story blocker list over existing
+  snapshot data only.
