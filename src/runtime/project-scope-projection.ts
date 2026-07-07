@@ -145,7 +145,7 @@ export function deriveReleaseContainersFromTaskMembership(
       if (task.status === 'shelved') {
         nodeIds.delete(nodeId)
         deferredNodeIds.add(nodeId)
-      } else if (assigned || listed) {
+      } else if (assigned || nodeIds.has(nodeId)) {
         nodeIds.add(nodeId)
       }
     }

@@ -197,7 +197,7 @@ import {
   type OrientationScope,
   type ProjectOrientationCharter,
 } from './project-orientation-spine.js'
-import { buildProjectScopeProjection, deriveReleaseContainersFromTaskMembership, releaseLabelFromId, type ProjectScope } from './project-scope-projection.js'
+import { buildProjectScopeProjection, deriveReleaseContainersFromTaskMembership, releaseLabelFromId, taskScopeNodeId, type ProjectScope } from './project-scope-projection.js'
 import type { SurfaceReviewPacket } from './contract-surfaces.js'
 import {
   acceptProjectDependencyDelivery,
@@ -6083,14 +6083,27 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
     const terminal = await terminalStartState(input.projectPath, input.requestedTaskId)
     if (terminal?.selectedReleaseTerminal) {
+      if (terminal.code === 'proof_evidence_missing') {
+        const orientationShapingBlocker = await startBlockerForOrientationScopeShaping(input.projectPath, input.requestedTaskId)
+        if (orientationShapingBlocker) return orientationShapingBlocker
+        const importDraftBlocker = await startBlockerForImportDrafts(input.projectPath, input.requestedTaskId)
+        if (importDraftBlocker) return importDraftBlocker
+      }
+      if (terminal.code === 'all_terminal' && input.allowTaskReadinessBlocker !== false) {
+        const selectedReleaseReviewBlocker = await startBlockerForSelectedReleaseReview(input.projectPath, input.resolvedConfig)
+        if (selectedReleaseReviewBlocker) return selectedReleaseReviewBlocker
+      }
       return startReadinessForTerminalState(terminal)
     }
-
     const hasMaterializedStartWork = await hasMaterializedScopedStartWork(input.projectPath, input.requestedTaskId)
     const workspaceImportCoverageBlocker = hasMaterializedStartWork
       ? null
       : await startBlockerForWorkspaceImportCoverage(input.projectPath)
     if (workspaceImportCoverageBlocker) return workspaceImportCoverageBlocker
+
+    if (terminal && terminal.code !== 'proof_evidence_missing') {
+      return startReadinessForTerminalState(terminal)
+    }
 
     const orientationShapingBlocker = await startBlockerForOrientationScopeShaping(input.projectPath, input.requestedTaskId)
     if (input.allowTaskReadinessBlocker !== false) {
@@ -6103,7 +6116,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     const importDraftBlocker = await startBlockerForImportDrafts(input.projectPath, input.requestedTaskId)
     if (importDraftBlocker) return importDraftBlocker
 
-    if (terminal) {
+    if (terminal && terminal.code !== 'proof_evidence_missing') {
       return startReadinessForTerminalState(terminal)
     }
 
@@ -6111,6 +6124,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
 	      const taskReadinessBlocker = await startBlockerForTaskReadiness(input.projectPath)
 	      if (taskReadinessBlocker) return taskReadinessBlocker
 	    }
+
+    if (terminal) {
+      return startReadinessForTerminalState(terminal)
+    }
 
     try {
       const settings = await loadLeverSettings({
@@ -6432,12 +6449,19 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
     const typedTasks = tasks.filter((task): task is Task => Boolean(task && typeof task === 'object'))
     const effectiveTasks = await Promise.all(typedTasks.map(task => buildEffectiveTask(projectPath, task)))
-    const rawReleases = !Array.isArray(raw) && raw && typeof raw === 'object' && Array.isArray((raw as { releases?: unknown }).releases)
-      ? (raw as { releases: TaskQueue['releases'] }).releases
-      : undefined
-    const rawSelectedReleaseId = !Array.isArray(raw) && raw && typeof raw === 'object' && typeof (raw as { selectedReleaseId?: unknown }).selectedReleaseId === 'string'
-      ? (raw as { selectedReleaseId: string }).selectedReleaseId
-      : undefined
+    const normalizedQueue = !requestedTaskId
+      ? await readTaskQueueFileNormalized(tasksPath).catch(() => null)
+      : null
+    const rawReleases = normalizedQueue?.releases ?? (
+      !Array.isArray(raw) && raw && typeof raw === 'object' && Array.isArray((raw as { releases?: unknown }).releases)
+        ? (raw as { releases: TaskQueue['releases'] }).releases
+        : undefined
+    )
+    const rawSelectedReleaseId = normalizedQueue?.selectedReleaseId ?? (
+      !Array.isArray(raw) && raw && typeof raw === 'object' && typeof (raw as { selectedReleaseId?: unknown }).selectedReleaseId === 'string'
+        ? (raw as { selectedReleaseId: string }).selectedReleaseId
+        : undefined
+    )
     const scopedOrientation = !requestedTaskId
       ? buildOrientationSpineWithScopedReleaseTruth({
         projectId: basename(projectPath),
@@ -6450,16 +6474,30 @@ export function buildServeApp(opts: ServeOptions = {}): {
         sourceRefs: projectOrientationSourceRefs(projectPath),
       })
       : null
-    const selectedReleaseScope = !requestedTaskId
-      ? (scopedOrientation?.orientationSpine.scope as ProjectScope | null | undefined) ?? selectedReleaseScopeFromQueueLike({
+    const orientationScope = scopedOrientation?.orientationSpine.scope as ProjectScope | null | undefined
+    const queueSelectedReleaseScope = !requestedTaskId
+      ? selectedReleaseScopeFromQueueLike({
         tasks: effectiveTasks,
         releases: rawReleases,
         selectedReleaseId: rawSelectedReleaseId,
       })
       : null
+    const materializedTaskNodeIds = new Set(
+      effectiveTasks
+        .filter(task => task.id !== META_INTAKE_TASK_ID && task.id !== WORKSPACE_IMPORT_TASK_ID)
+        .map(task => taskScopeNodeId(task.id)),
+    )
+    const orientationScopeMatchesMaterializedWork = Boolean(
+      orientationScope &&
+      orientationScope.id !== 'current-work' &&
+      orientationScope.nodeIds.some(nodeId => materializedTaskNodeIds.has(nodeId)),
+    )
+    const selectedReleaseScope = !requestedTaskId
+      ? (orientationScopeMatchesMaterializedWork ? orientationScope ?? null : null) ?? queueSelectedReleaseScope
+      : null
 	    const tasksById = new Map(effectiveTasks.map(task => [task.id, task] as const))
-	    const scopedTasks = selectedReleaseScope
-	      ? tasksEligibleForScopeExecution(effectiveTasks, selectedReleaseScope)
+    const scopedTasks = selectedReleaseScope
+      ? tasksEligibleForScopeExecution(effectiveTasks, selectedReleaseScope)
 	        .filter(task => task.id !== META_INTAKE_TASK_ID && task.id !== WORKSPACE_IMPORT_TASK_ID)
 	        .filter(task => {
 	          const parentId = task.hierarchy?.parentId?.trim()
@@ -6579,19 +6617,22 @@ export function buildServeApp(opts: ServeOptions = {}): {
       projectPath,
       (releaseTruth?.gitStoryTasks ?? scopedTasks) as Array<Record<string, unknown>>,
     )
-    if (gitStory.blockers.length > 0) {
+    const startBlockingGitStoryBlockers = queueSelectedReleaseScope && (selectedReleaseScope?.kind === 'release' || selectedReleaseScope?.kind === 'milestone')
+      ? gitStory.blockers.filter(blocker => blocker.state !== 'no_upstream')
+      : []
+    if (startBlockingGitStoryBlockers.length > 0) {
       const scopeLabel = selectedReleaseScope?.label ?? 'Current task scope'
-      const first = gitStory.blockers[0]!
-      const message = gitStory.blockers.length === 1
+      const first = startBlockingGitStoryBlockers[0]!
+      const message = startBlockingGitStoryBlockers.length === 1
         ? `${scopeLabel} has no runnable task work left, but repository follow-up is still needed: ${first.reason}`
-        : `${scopeLabel} has no runnable task work left, but ${gitStory.blockers.length} repository follow-ups are still needed, starting with: ${first.reason}`
+        : `${scopeLabel} has no runnable task work left, but ${startBlockingGitStoryBlockers.length} repository follow-ups are still needed, starting with: ${first.reason}`
       return {
         canStart: false,
         code: 'repository_followup_required',
         message,
         actionHref: '/release',
         focusKind: 'repository_followup',
-        count: gitStory.blockers.length,
+        count: startBlockingGitStoryBlockers.length,
         ...(selectedReleaseScope ? { selectedReleaseTerminal: true } : {}),
         stopSummary: {
           reason: 'all_terminal',
@@ -6613,7 +6654,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     let message = done === scopedTasks.length
       ? 'All tasks are already finished.'
       : detailMessage
-	    if (selectedReleaseScope) {
+	    if (selectedReleaseScope && selectedReleaseScope.id !== 'current-work') {
 	      const outsideActionableByStatus = new Map<string, number>()
 	      for (const task of effectiveTasks) {
 	        if (taskEligibleForSelectedScope(task, selectedReleaseScope, { tasksById }).eligible) continue

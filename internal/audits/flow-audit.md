@@ -26344,3 +26344,95 @@ selected-scope readiness ordering.
 - Schema Migration Decision: no persisted schema field was added, removed, or
   retyped; no migration id, compatibility reader, or rollback migration is
   required.
+
+## 2026-07-07 — Start Readiness Uses Real Scope Boundaries Before Cleanup Noise
+
+- User job:
+  - A project owner opening Overview, Work, or a fleet card should see whether
+    the selected release/current execution boundary is actually consumed, what
+    still blocks that boundary, and whether Guildhall is waiting on owner input
+    or source-backed shaping. Start must not run later work, hide hidden child
+    split blockers, or replace current-scope shaping with stale proof/repo
+    cleanup.
+- Failure classification:
+  - Data model/schema problem: legacy compact escalation records with only
+    `id`/`summary` could fail strict task parsing, causing `/api/project` to
+    return an error body before owner-input Start blockers could render.
+  - Project structure/scope/release modeling problem: deferred release nodes
+    were being copied back into included `nodeIds`, so Later work appeared
+    runnable inside the selected release. Terminal readiness also let
+    explanatory orientation `current-work` rows redefine Start execution.
+  - Task hierarchy/dependency/proof modeling problem: hidden generated child
+    splits under a selected release parent could be hidden from totals and then
+    lost behind an all-terminal parent.
+  - Scheduler/action-state logic problem: terminal proof cleanup, repository
+    follow-up, workspace-import coverage, selected-release review, and task
+    readiness were ordered inconsistently, so Start could report the wrong
+    next blocker.
+  - Bad project data produced by an earlier Guildhall bug: older queues may
+    contain compact escalation residue; the compatibility reader now repairs
+    the missing required fields on read.
+- Fix:
+  - `normalizeLegacyTaskQueueShape` backfills required escalation fields
+    (`taskId`, `agentId`, `reason`, `raisedAt`, fallback `id`/`summary`) so old
+    compact escalation records remain readable by the strict task schema.
+  - `deriveReleaseContainersFromTaskMembership` preserves explicit deferred
+    release nodes as deferred instead of re-adding them to included work just
+    because they are listed in the release.
+  - Terminal Start readiness now reads the normalized queue release projection,
+    only lets materialized non-`current-work` orientation scopes refine that
+    boundary, and keeps repo follow-up blocking limited to queue-backed release
+    scopes.
+  - Start readiness ordering now lets workspace-import coverage block terminal
+    all-done, lets selected-release review/hidden child work block selected
+    release terminal states, and lets current-scope shaping outrank stale
+    proof cleanup while still reporting proof cleanup when it is the true next
+    blocker.
+- Contract Touch Decision:
+  - Work id: start-readiness-scope-boundary-and-legacy-escalation-compat.
+  - Touched contracts: `/api/project.startReadiness`, `/api/service.projects[].startReadiness`,
+    `/api/project/start` all-terminal/no-op behavior, task queue compatibility
+    reads for legacy escalation records, and release-scope projection semantics.
+  - Contracts considered but not touched: persisted task queue schema,
+    persisted release schema, workspace-goals schema, workspace-import draft
+    schema, proof evidence schema, owner-input request schema, and Start/Resume
+    mutation semantics.
+  - Required follow-up: continue collapsing Start readiness, release readiness,
+    and orientation summary into fewer shared projection helpers so queue-backed
+    execution boundaries and explanatory orientation rows cannot diverge again.
+  - Proof required: legacy escalation compatibility regression; full
+    `serve-settings` regression; selected release/deferred release tests;
+    release-readiness git follow-up guard; contract advisory; build and
+    installed-app stale proof before claiming this path is shipped in the
+    running app.
+  - Proof provided so far: `./node_modules/.bin/vitest run
+    src/runtime/__tests__/task-queue-compat.test.ts` passed (`2` tests).
+    `./node_modules/.bin/vitest run src/runtime/__tests__/serve-settings.test.ts`
+    passed (`122` tests). Focused release/git guard covering unpushed release
+    proof and out-of-scope git stories passed in
+    `src/runtime/__tests__/serve-release-readiness.test.ts` alongside focused
+    project-scope projection coverage (`7` selected tests).
+    `./node_modules/.bin/vitest run
+    src/runtime/__tests__/task-queue-compat.test.ts
+    src/runtime/__tests__/project-scope-projection.test.ts
+    src/runtime/__tests__/serve-release-readiness.test.ts` passed (`66` tests).
+    `CI=true pnpm lint:contracts` passed with decision evidence. `node
+    ./build.mjs` passed. `node ./scripts/dev-install.mjs && guildhall stop &&
+    guildhall start && curl -s http://localhost:7777/api/stale-server`
+    installed the current branch and returned `stale:false` for PID `75477`.
+  - Live API proof: installed `/api/project?projectId=narrative-harness`
+    returned `startReadiness.code:"all_terminal"`, message `Stage 1 Headless
+    Drafting And Evaluation MVP is complete.`, selected scope `Stage 1 Headless
+    Drafting And Evaluation MVP`, run control `No runnable tasks`, and no
+    primary action. Installed `/api/project?projectId=looma-knit` returned
+    `startReadiness.code:"imported_scope_shaping"`, selected scope `Stage 1: V1
+    Release Hardening`, run control `Needs shaping`, and primary action
+    `Imported scope needs shaping`, proving the same Start/readiness model can
+    distinguish a consumed release from a still-shaping current scope.
+  - Apply/revert behavior: reverting restores the old behavior where malformed
+    compact escalation data can blank `/api/project`, deferred release nodes can
+    be treated as included runnable work, and Start can choose stale proof,
+    repo, or generic shaping blockers ahead of the current execution boundary.
+- Schema Migration Decision: no persisted schema field was added, removed, or
+  retyped. This is a compatibility-reader repair for legacy data, not a stored
+  schema migration; no migration id or rollback migration is required.

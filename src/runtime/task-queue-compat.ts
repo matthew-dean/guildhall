@@ -1,4 +1,5 @@
 import {
+  EscalationReason,
   ProductBrief as ProductBriefSchema,
   TaskKind as TaskKindSchema,
   TaskReadinessAssessment as TaskReadinessAssessmentSchema,
@@ -244,6 +245,34 @@ function normalizeProductBrief(task: RecordLike, value: unknown, now: string): u
   }
 }
 
+function normalizeEscalations(task: RecordLike, value: unknown, now: string): unknown {
+  if (!Array.isArray(value)) return value
+  const taskId = typeof task.id === 'string' && task.id.trim() ? task.id.trim() : 'unknown-task'
+  return value.map((escalation, index) => {
+    if (!isRecord(escalation)) return escalation
+    const reason = EscalationReason.safeParse(escalation.reason)
+    return {
+      ...escalation,
+      id: typeof escalation.id === 'string' && escalation.id.trim()
+        ? escalation.id.trim()
+        : `esc-${taskId}-${index + 1}`,
+      taskId: typeof escalation.taskId === 'string' && escalation.taskId.trim()
+        ? escalation.taskId.trim()
+        : taskId,
+      agentId: typeof escalation.agentId === 'string' && escalation.agentId.trim()
+        ? escalation.agentId.trim()
+        : 'legacy-task-queue-compat',
+      reason: reason.success ? reason.data : 'human_judgment_required',
+      summary: typeof escalation.summary === 'string' && escalation.summary.trim()
+        ? escalation.summary.trim()
+        : 'Legacy task escalation needs review.',
+      raisedAt: typeof escalation.raisedAt === 'string' && escalation.raisedAt.trim()
+        ? escalation.raisedAt.trim()
+        : now,
+    }
+  })
+}
+
 export function normalizeLegacyTaskQueueShape(parsed: unknown, now = new Date().toISOString()): unknown {
   const normalizeTask = (task: unknown): unknown => {
     if (!isRecord(task)) return task
@@ -259,6 +288,9 @@ export function normalizeLegacyTaskQueueShape(parsed: unknown, now = new Date().
     }
     if (isRecord(task.productBrief)) {
       next.productBrief = normalizeProductBrief(task, task.productBrief, now)
+    }
+    if (Array.isArray(task.escalations)) {
+      next.escalations = normalizeEscalations(task, task.escalations, now)
     }
     return {
       ...next,
