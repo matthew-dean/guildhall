@@ -2591,6 +2591,52 @@ describe('GET /api/project/release-readiness', () => {
     expect(readinessBody.totals.unfinishedCount).toBe(3)
   })
 
+  it('keeps overview task rows scoped to the selected release instead of shipping deferred backlog rows', async () => {
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: 'stage-1',
+      releases: [{
+        id: 'stage-1',
+        label: 'Stage 1',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-current'],
+        deferredNodeIds: ['work:task-later'],
+        proofStyle: 'script_only',
+      }],
+      tasks: [
+        makeTask({
+          id: 'task-current',
+          title: 'Current release task',
+          status: 'ready',
+          releaseIds: ['stage-1'],
+          spec: 'Current release work.',
+          acceptanceCriteria: [{ id: 'AC-current', description: 'Current task is shaped.', verifiedBy: 'review' }],
+        }),
+        makeTask({
+          id: 'task-later',
+          title: 'Later release task',
+          status: 'ready',
+          releaseIds: [],
+          spec: 'Later release work.',
+          acceptanceCriteria: [{ id: 'AC-later', description: 'Later task is shaped.', verifiedBy: 'review' }],
+        }),
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await approveDesignSystem(app)
+    await commitAndPush('overview scoped rows')
+
+    const res = await app.fetch(new Request(projectUrl('/api/project?surface=overview')))
+    const body = await res.json() as any
+
+    expect(body.orientationSpine.summary.includedWorkCount).toBe(1)
+    expect(body.orientationSpine.summary.deferredWorkCount).toBe(1)
+    expect(body.tasks.map((task: any) => task.id)).toEqual(['task-current'])
+  })
+
   it('does not widen the selected release with an unscoped import duplicate of scoped work', async () => {
     const proofPath = {
       kind: 'review' as const,

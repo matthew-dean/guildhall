@@ -3988,6 +3988,48 @@ function compactOrientationSpineForWorkSurface(spine: Record<string, unknown>): 
   }
 }
 
+function taskIdFromOrientationNodeId(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  return value.startsWith('work:') ? value.slice('work:'.length) : value
+}
+
+function overviewTaskIdsForSurface(input: {
+  orientationSpine: Record<string, unknown>
+  releaseReadiness: Record<string, unknown> | null
+  actionModel: ProjectActionModel
+  selectedTaskId: string | null
+}): Set<string> {
+  const ids = new Set<string>()
+  const addTaskId = (value: unknown) => {
+    if (typeof value === 'string' && value.trim()) ids.add(value.trim())
+  }
+  const addScope = (scope: unknown) => {
+    if (!scope || typeof scope !== 'object') return
+    const nodeIds = (scope as { nodeIds?: unknown }).nodeIds
+    if (!Array.isArray(nodeIds)) return
+    for (const nodeId of nodeIds) addTaskId(taskIdFromOrientationNodeId(nodeId))
+  }
+  addScope(input.orientationSpine.selectedTaskScope)
+  addScope(input.orientationSpine.selectedRelease)
+  addScope(input.orientationSpine.scope)
+  const releaseBlockers = input.releaseReadiness?.releaseBlockers
+  if (Array.isArray(releaseBlockers)) {
+    for (const blocker of releaseBlockers) {
+      if (blocker && typeof blocker === 'object') addTaskId((blocker as { id?: unknown }).id)
+    }
+  }
+  const gitBlockers = (input.releaseReadiness?.gitStory as { blockers?: unknown } | undefined)?.blockers
+  if (Array.isArray(gitBlockers)) {
+    for (const blocker of gitBlockers) {
+      if (blocker && typeof blocker === 'object') addTaskId((blocker as { taskId?: unknown }).taskId)
+    }
+  }
+  addTaskId(input.actionModel.primaryAction?.taskId)
+  for (const action of input.actionModel.secondaryActions) addTaskId(action.taskId)
+  addTaskId(input.selectedTaskId)
+  return ids
+}
+
 function compactOrientationScopeRows(rows: unknown): Array<Record<string, unknown>> {
   if (!Array.isArray(rows)) return []
   return rows
@@ -5148,6 +5190,17 @@ export function buildServeApp(opts: ServeOptions = {}): {
         runStatus: run?.status ?? 'stopped',
         availability,
       })
+      const overviewTaskIds = overviewSurface
+        ? overviewTaskIdsForSurface({
+            orientationSpine: orientationSpine as unknown as Record<string, unknown>,
+            releaseReadiness,
+            actionModel,
+            selectedTaskId,
+          })
+        : null
+      const responseTasks = overviewTaskIds && overviewTaskIds.size > 0
+        ? tasks.filter(task => typeof task.id === 'string' && overviewTaskIds.has(task.id))
+        : tasks
       return c.json({
         initializationNeeded: false,
         id: project.id,
@@ -5156,7 +5209,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         tags: project.config?.tags ?? [],
         config: project.config,
         selectedTaskId,
-        tasks: tasks.map(fullSurface ? compactTaskForProjectSummary : compactTaskForWorkSurface),
+        tasks: responseTasks.map(fullSurface ? compactTaskForProjectSummary : compactTaskForWorkSurface),
         workProgress,
         inbox,
         run: run

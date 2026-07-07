@@ -28428,3 +28428,101 @@ selected-scope readiness ordering.
     full-detail `startReadiness` before it can present a completed scope.
 - Schema Migration Decision: no persisted schema field was added, removed, or
   retyped. This is a UI/read-model interpretation fix only.
+
+## 2026-07-07T13:40:54Z - Overview task rows must be scoped, not the whole backlog
+
+- User job:
+  - Overview should show the selected scope/release and immediate actionable
+    rows. It should not ship and reinterpret every deferred task as renderable
+    Overview task data when the orientation spine already carries Now/Later
+    counts and source truth.
+- Finding:
+  - Root cause classification:
+    - Data model/schema problem: `/api/project?surface=overview` had a compact
+      transport shape, but still returned every raw task row. The UI could then
+      accidentally reason from the full backlog even when the release/scope
+      model had already selected a smaller current boundary.
+    - Project structure/scope/release modeling problem: selected-release rows
+      and deferred backlog rows were mixed at the task-list transport level.
+      That made Later work look like part of the active Overview surface
+      instead of being represented through the scoped orientation model.
+    - UI communication/orientation problem: a 100-foot Overview should not make
+      the owner mentally separate hundreds of task records when only the
+      current scope and active blockers are relevant.
+- Fix:
+  - Overview task rows are now selected from the already-computed
+    orientation/release/action state: selected scope/release node ids,
+    release blockers, scoped git task blockers, primary/secondary action task
+    ids, and the selected task id.
+  - If a project has no scoped/actionable ids, Overview falls back to the old
+    task list so unstructured projects do not disappear.
+  - Aggregate current/deferred truth remains in the orientation spine; deferred
+    work is still visible as counts and map/source truth, not as task rows for
+    the Overview cards.
+- Proof provided:
+  - Red/green API regression:
+    `CI=true ./node_modules/.bin/vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts --testNamePattern
+    "overview task rows scoped"` first failed because Overview returned
+    `task-current` and `task-later`; after the fix it returned only
+    `task-current` while preserving `includedWorkCount:1` and
+    `deferredWorkCount:1`.
+  - Focused regression suite:
+    `CI=true ./node_modules/.bin/vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts
+    src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts
+    src/web/surfaces/project/__tests__/ProjectMapTab.svelte.test.ts` passed
+    with 96 tests.
+  - Build proof:
+    `node ./build.mjs` and `git diff --check` passed.
+  - Live evidence before this fix:
+    Installed `/api/project?projectId=narrative-harness&surface=overview`
+    returned 168 task rows even though the selected current release contains
+    11 scoped work items and 31 deferred rows. Installed
+    `/api/project?projectId=looma-knit&surface=overview` returned 333 task rows
+    even though the selected `Stage 1: V1 Release Hardening` release contains
+    5 current work items.
+  - Installed/live proof:
+    `CI=true corepack pnpm dev:install`, `guildhall stop`, and
+    `guildhall start` installed and restarted the current branch artifact.
+    `/api/stale-server` returned `stale:false` for PID `91738`.
+    Installed `/api/project?projectId=narrative-harness&surface=overview`
+    returned 11 task rows instead of the previous 168 while preserving
+    `includedWorkCount:11`, `deferredWorkCount:31`, `releaseReadiness.ready:true`,
+    and the completion headline. The response size dropped from about 571 KB to
+    about 274 KB.
+  - Looma + Knit live proof:
+    Installed `/api/project?projectId=looma-knit&surface=overview` returned 5
+    task rows instead of the previous 333 while preserving
+    `includedWorkCount:5`, `deferredWorkCount:30`, `releaseReadiness.ready:false`,
+    and `Imported scope needs shaping`. The response size dropped from about
+    319 KB to about 152 KB.
+  - Browser proof:
+    Narrative Harness Overview showed `Scope status`, `CLOSED SCOPE`, `11
+    Current scope`, `31 Deferred`, `11 work items in view`, `31 deferred`, no
+    `168` or `333` backlog-count leak, and no `Do this next` prompt. Looma +
+    Knit Overview showed `Do this next`, `Imported scope needs shaping`, `5
+    Current scope`, `30 Deferred`, `Current release`, `NOT COMPLETE`, `0 / 5
+    done`, and the five current-scope shaping blockers, with no full-backlog
+    count leak.
+  - Remaining failing proof:
+    The installed Overview endpoints still took about 6.3s for Narrative
+    Harness and 5.9s for Looma + Knit. This fix narrows the read contract and
+    payload, but Guildhall still needs a cheaper orientation/readiness summary
+    model that avoids re-deriving the spine and readiness path for first-screen
+    orientation.
+- Contract Touch Decision:
+  - Work id: `overview-scoped-task-rows`.
+  - Touched contracts: `/api/project?surface=overview` task-row semantics and
+    Project Overview's read contract for task rows versus aggregate scope
+    truth.
+  - Contracts considered but not touched: persisted task schema, persisted
+    release schema, orientation-spine schema, Work surface payload, Map surface
+    payload, and Release readiness payload.
+  - Required follow-up: installed API/browser proof on Narrative Harness and
+    Looma + Knit, plus continued investigation of the remaining endpoint time
+    spent deriving spine/readiness.
+  - Apply/revert behavior: reverting makes Overview receive the full backlog as
+    task rows again, reintroducing Now/Later confusion and payload bloat.
+- Schema Migration Decision: no persisted schema field was added, removed, or
+  retyped. This is an API read-contract narrowing for the Overview surface.
