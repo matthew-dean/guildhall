@@ -134,6 +134,16 @@
       .flatMap(row => row.sourceRefs ?? [])
     return sourceRefsSummary(refs)
   })
+  const scopeProofSummary = $derived.by(() => {
+    const contracts = detail.orientationSpine?.proofContracts ?? []
+    if (contracts.length === 0) return null
+    const proven = contracts.filter(contract => contract.state === 'proven').length
+    const missing = contracts.reduce((sum, contract) => sum + (contract.missing?.length ?? 0), 0)
+    if (proven === 0 && missing === 0) return null
+    return missing > 0
+      ? `${countLabel(proven, 'proven item')} · ${countLabel(missing, 'missing proof', 'missing proof')}`
+      : `${countLabel(proven, 'proven item')} · 0 missing proof`
+  })
   const orientationScopeCounts = $derived.by(() => {
     const spine = detail.orientationSpine
     const summary = spine?.summary
@@ -746,6 +756,9 @@
           </div>
           {#if scopeQueueFallback && scopeSourceSummary}
             <p class="queue-sources">Sources: {scopeSourceSummary}</p>
+          {/if}
+          {#if scopeQueueFallback && scopeProofSummary}
+            <p class="queue-sources">Proof: {scopeProofSummary}</p>
           {/if}
           <div class="queue-chips">
             {#if scopeQueueFallback}

@@ -474,6 +474,12 @@ describe('WorkTab', () => {
                 ],
               },
             ],
+            proofContracts: Array.from({ length: 11 }, (_, index) => ({
+              nodeId: `work:proof-${index + 1}`,
+              title: `Proof ${index + 1}`,
+              state: 'proven',
+              missing: [],
+            })),
             roots: [],
             nodes: {},
           },
@@ -495,6 +501,7 @@ describe('WorkTab', () => {
     expect(queue).toHaveTextContent('0 blocked')
     expect(queue).toHaveTextContent('31 deferred')
     expect(queue).toHaveTextContent('Sources: implementation-roadmap.md, architecture-notes.md, deepinfra-drafting-model-selection.md')
+    expect(queue).toHaveTextContent('Proof: 11 proven items · 0 missing proof')
     expect(queue).not.toHaveTextContent('0 current tasks')
     expect(await screen.findByText('0 shown · 2 total')).toBeTruthy()
     expect(screen.getByText('No work is ready to run yet.')).toBeTruthy()

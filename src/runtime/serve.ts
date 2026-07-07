@@ -3603,6 +3603,7 @@ function compactOrientationSpineForWorkSurface(spine: Record<string, unknown>): 
     scope: compactOrientationScope(spine.scope),
     summary: spine.summary,
     scopeRows: compactOrientationScopeRows(spine.scopeRows),
+    proofContracts: compactOrientationProofContracts(spine.proofContracts),
     roots: [],
     nodes: compactOrientationNodes(spine.nodes),
   }
@@ -3630,6 +3631,21 @@ function compactOrientationScopeRows(rows: unknown): Array<Record<string, unknow
       ]) {
         if (key in row) summary[key] = row[key]
       }
+      return summary
+    })
+}
+
+function compactOrientationProofContracts(contracts: unknown): Array<Record<string, unknown>> {
+  if (!Array.isArray(contracts)) return []
+  return contracts
+    .filter((contract): contract is Record<string, unknown> => Boolean(contract) && typeof contract === 'object' && !Array.isArray(contract))
+    .map(contract => {
+      const summary: Record<string, unknown> = {}
+      for (const key of ['nodeId', 'title', 'state', 'missing', 'refs']) {
+        if (key in contract) summary[key] = contract[key]
+      }
+      if (Array.isArray(contract.required)) summary.required = contract.required.slice(0, 2)
+      if (Array.isArray(contract.verified)) summary.verified = contract.verified.slice(0, 3)
       return summary
     })
 }

@@ -922,6 +922,13 @@ describe('GET /api/project/task/:id', () => {
         sourceRefs: ['docs/storybook.md', 'docs/menu.md'],
       }),
     ])
+    expect(workBody.orientationSpine?.proofContracts).toEqual([
+      expect.objectContaining({
+        nodeId: 'work:task-storybook',
+        title: 'Prove the menu primitive',
+        state: 'needed',
+      }),
+    ])
     const orientationNode = workBody.orientationSpine?.nodes?.['work:task-storybook']
     expect(orientationNode).toMatchObject({
       id: 'work:task-storybook',

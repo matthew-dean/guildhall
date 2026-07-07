@@ -25038,3 +25038,61 @@ selected-scope readiness ordering.
   - Apply/revert behavior: reverting restores the failure where Work can show
     correct selected-scope counts but cannot surface the source documents behind
     those claims.
+
+## 2026-07-06 — Work view preserves selected-scope proof contracts
+
+- Work id: `codex:work-scope-proof-contracts-2026-07-06`.
+- User job: when Work says the selected Narrative Harness scope is complete,
+  it must also show the proof state behind that claim. A user should not need
+  Map, raw API output, or repo access to know whether the current scope is
+  actually proven or merely done.
+- Root-cause classification:
+  - UI communication/orientation problem: Work could show completion, counts,
+    and source documents without showing whether the selected scope had proof
+    contracts or missing proof.
+  - Shared state ownership problem: the full orientation spine already carried
+    `proofContracts`, but `compactOrientationSpineForWorkSurface` stripped them
+    from the Work payload.
+  - Task hierarchy/dependency/proof modeling problem: the selected-scope proof
+    ledger is currently the reliable owner-facing proof summary for scoped
+    work; dropping it makes Work depend on weaker raw task snippets.
+- Fix:
+  - The Work-surface orientation compactor now preserves lightweight
+    `proofContracts` with node id, title, state, missing refs, refs, and capped
+    required/verified examples.
+  - The Work delivery/scope banner now adds one muted `Proof:` line summarizing
+    proven and missing proof counts from the selected-scope proof contracts.
+- Contract Touch Decision:
+  - Touched contracts: compact Work-surface orientation spine payload and
+    selected-scope proof summary presentation.
+  - Contracts considered but not touched: persisted task schema, persisted
+    proof-path schema, orientation spine builder, release readiness response,
+    scheduler/start contract, task detail endpoint, Project Map proof-contract
+    section, and raw task persistence.
+  - Existing data impact: no migration. Existing proof contracts now flow into
+    the compact Work payload; verbose proof arrays are capped for the Work
+    surface.
+  - Required follow-up: continue collapsing proof/source truth so completed task
+    rows, task detail, Work, Map, and release readiness expose the same proof
+    state without relying on stale checkpoint snippets.
+  - Proof required: failing Work-surface API regression for proof contracts,
+    Work UI regression for the proof summary line, UI typecheck, installed-app
+    stale-server proof, live Work API proof, and rendered desktop/mobile Work
+    proof.
+  - Proof provided: the API regression first failed because
+    `orientationSpine.proofContracts` was `undefined` for
+    `/api/project?surface=work`; after the fix it passed. `serve-task-endpoints`,
+    `WorkTab`, and `ProjectMapTab` tests passed with `150` tests total, and
+    `tsc -p packages/ui/tsconfig.json` plus `git diff --check` passed. After
+    `node ./build.mjs`, `node ./scripts/dev-install.mjs`, and service restart,
+    `/api/stale-server` returned `stale:false` for PID `96645`. Live
+    `/api/project?projectId=narrative-harness&surface=work` reported `11`
+    proof contracts, `11` proven, and `0` missing, with capped verified proof
+    examples. Rendered Work proof at `1280x720` showed the complete Stage 1
+    headline, `Sources: ...`, `Proof: 11 proven items · 0 missing proof`, `11
+    CURRENT TASKS`, `0 BLOCKED`, `31 DEFERRED`, and no horizontal overflow
+    (`scrollWidth: 1280`, `clientWidth: 1280`). Rendered Work proof at
+    `390x844` showed the same proof/source/count story and no horizontal
+    overflow (`scrollWidth: 390`, `clientWidth: 390`).
+  - Apply/revert behavior: reverting restores the failure where Work can claim
+    the selected scope is complete while hiding the selected-scope proof ledger.
