@@ -81,7 +81,10 @@
   const documentedCurrentCount = $derived.by(() =>
     documentedCapabilityCount - documentedLaterCount,
   )
-  const proofGapCount = $derived(spine?.gaps?.filter(gap => gap.kind === 'proof_needed').length ?? 0)
+  const proofMissingCount = $derived.by(() => {
+    const missingFromContracts = (spine?.proofContracts ?? []).reduce((sum, contract) => sum + (contract.missing?.length ?? 0), 0)
+    return missingFromContracts || spine?.gaps?.filter(gap => gap.kind === 'proof_needed').length || 0
+  })
   const sourceGapCount = $derived(spine?.sourceHealth?.gaps ?? spine?.gaps?.length ?? 0)
   const sourceInferredCount = $derived(spine?.sourceHealth?.inferred ?? 0)
   const executionBoundary = $derived(spine?.executionBoundary ?? null)
@@ -461,9 +464,9 @@
         <strong>{deferredWorkCount}</strong>
         <span>Later</span>
       </UtilityPanel>
-      <UtilityPanel className="stat" tone={proofGapCount ? 'warn' : 'ok'}>
-        <strong>{proofGapCount}</strong>
-        <span>Proof gaps</span>
+      <UtilityPanel className="stat" tone={proofMissingCount ? 'warn' : 'ok'}>
+        <strong>{proofMissingCount}</strong>
+        <span>Missing proof</span>
       </UtilityPanel>
       <UtilityPanel className="stat" tone="ok">
         <strong>{progress?.proven ?? 0}</strong>

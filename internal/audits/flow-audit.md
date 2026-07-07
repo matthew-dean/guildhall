@@ -25194,3 +25194,53 @@ selected-scope readiness ordering.
     (`scrollWidth` equaled `clientWidth` at both viewports).
   - Apply/revert behavior: reverting restores the failure where Work hides the
     selected-scope source/proof basis whenever a first runnable item exists.
+
+## 2026-07-06 — Project Map proof stat reads the proof ledger
+
+- Work id: `codex:project-map-proof-ledger-count-2026-07-06`.
+- User job: on the 1,000-foot Project Map, a user should be able to trust the
+  top proof stat. If the selected scope has missing proof contracts, the map
+  must not show `0 Proof gaps` simply because no separate map-gap records were
+  produced.
+- Root-cause classification:
+  - UI communication/orientation problem: Looma + Knit Map exposed proof
+    contracts and source-backed shaping blockers, but the top stat still read
+    `0 Proof gaps`, making the 1,000-foot summary contradict the proof ledger.
+  - Task hierarchy/dependency/proof modeling problem: proof contracts and map
+    gaps are related but not interchangeable. Missing proof can live in the
+    selected-scope proof ledger without also being represented as a
+    `proof_needed` map gap.
+- Fix:
+  - The Project Map proof stat now counts missing items from
+    `orientationSpine.proofContracts` first, falling back to `proof_needed`
+    gaps only when no proof-contract missing count exists.
+  - The stat label changed from `Proof gaps` to `Missing proof`, matching the
+    evidence source it actually summarizes.
+- Contract Touch Decision:
+  - Touched contracts: Project Map presentation of selected-scope proof
+    summary.
+  - Contracts considered but not touched: persisted proof-path schema,
+    orientation spine builder, proof contract schema, map gap schema,
+    release readiness response, Work proof summary, Overview proof summary,
+    scheduler/start contract, and raw task persistence.
+  - Existing data impact: no migration. Existing proof-contract data now drives
+    the top Map proof stat.
+  - Required follow-up: keep separating proof debt from map/source gaps in
+    owner-facing copy so "no map gaps" does not read as "no proof missing."
+  - Proof required: Project Map regression where proof contracts are missing
+    but `gaps` is empty, full Map regression suite, UI typecheck, installed-app
+    stale-server proof, and rendered Looma + Knit Map proof.
+  - Proof provided: the new Project Map regression passed and showed `5`
+    `Missing proof` while preserving `No map gaps are currently reported.`
+    The focused Map/Overview/Work/API regression set passed with `182` tests,
+    `tsc -p packages/ui/tsconfig.json` and `git diff --check` passed, and after
+    `node ./build.mjs`, `node ./scripts/dev-install.mjs`, and service restart,
+    `/api/stale-server` returned `stale:false` for PID `26920`. Rendered Looma
+    + Knit Map proof at `1280x720` and `390x844` showed `Missing proof`, did
+    not show the old `Proof gaps` label, preserved `No map gaps are currently
+    reported.`, and had no horizontal overflow (`scrollWidth` equaled
+    `clientWidth` at both viewports). Direct stat-block proof showed `5 Missing
+    proof`.
+  - Apply/revert behavior: reverting restores the contradiction where the map
+    can show proof contracts with missing evidence while the top proof stat
+    reads clean.

@@ -459,6 +459,56 @@ describe('ProjectMapTab', () => {
     expect(screen.queryByText('Verification evidence for later work.')).not.toBeInTheDocument()
   })
 
+  it('counts missing proof from scoped proof contracts even when map gaps are clean', () => {
+    render(ProjectMapTab, {
+      detail: {
+        id: 'looma-knit',
+        name: 'Looma + Knit',
+        tasks: [],
+        orientationSpine: {
+          charter: {
+            goal: 'Keep Looma generic while Knit drives primitive priority.',
+            source: 'inferred',
+          },
+          selectedRelease: {
+            id: 'stage-1',
+            label: 'Stage 1: V1 Release Hardening',
+            kind: 'release',
+            state: 'active',
+            source: 'release_plan',
+            nodeIds: ['work:current-proof'],
+          },
+          summary: {
+            selectedScopeLabel: 'Stage 1: V1 Release Hardening',
+            selectedReleaseLabel: 'Stage 1: V1 Release Hardening',
+            includedWorkCount: 1,
+            deferredWorkCount: 0,
+            progress: { total: 1 },
+          },
+          roots: [],
+          nodes: {},
+          proofContracts: Array.from({ length: 5 }, (_, index) => ({
+            nodeId: 'work:current-proof',
+            title: `Current proof ${index + 1}`,
+            state: 'needed',
+            required: [`Proof ${index + 1}`],
+            missing: [`Proof ${index + 1}`],
+            verified: [],
+            refs: ['task:current-proof'],
+          })),
+          gaps: [],
+          sourceHealth: { inferred: 0, gaps: 0 },
+        },
+      },
+      activeProjectId: 'looma-knit',
+    })
+
+    expect(screen.getByText('5')).toBeInTheDocument()
+    expect(screen.getByText('Missing proof')).toBeInTheDocument()
+    expect(screen.queryByText('Proof gaps')).not.toBeInTheDocument()
+    expect(screen.getByText('No map gaps are currently reported.')).toBeInTheDocument()
+  })
+
   it('lets the user select a different release boundary from the map', async () => {
     const refresh = vi.fn()
     const fetchCalls: Array<{ url: string; body: unknown }> = []
