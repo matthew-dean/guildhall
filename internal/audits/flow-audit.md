@@ -28107,6 +28107,10 @@ selected-scope readiness ordering.
     `/api/project/release-readiness`, `/api/project`, `/api/project/spine`, and
     `/api/project/thread`: `repository-followup:repo:0` with label
     `main has 3 local commits not pushed to origin/main.`
+    Browser proof against `/projects/narrative-harness/thread` shows Thread
+    rendering that repository follow-up once in the top project action and not
+    rendering the stale synthetic blocker id
+    `start-readiness:repository_followup_required`.
 - Contract Touch Decision:
   - Work id: `thread-orientation-release-readiness-sync`.
   - Touched contracts: `/api/project/thread` `orientationSpine.release`
