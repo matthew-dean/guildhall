@@ -114,6 +114,19 @@
   const specApprovalNeedsBrief = $derived(specApprovalPending && specApprovalNeedsStructuredBrief(task))
   const needsAcceptance = $derived(exploring && briefApproved && acceptance.length === 0)
 
+  function acceptanceStatusLabel(criterion: Record<string, unknown>): string {
+    if (criterion.verificationState === 'stale') return 'Needs proof'
+    if (criterion.met === true) return 'Met'
+    if (criterion.met === false) return 'Not met'
+    return 'Unverified'
+  }
+
+  function acceptanceStatusTone(criterion: Record<string, unknown>): 'ok' | 'warn' | 'neutral' {
+    if (criterion.verificationState === 'stale') return 'warn'
+    if (criterion.met === true) return 'ok'
+    return 'neutral'
+  }
+
   // Agent-suggested tasks the user hasn't said "yes" to yet get the
   // simple-question surface. Everything else (brief, spec, acceptance,
   // approval cards) is hidden until they accept.
@@ -438,9 +451,24 @@
   <div data-spec-section="section-acceptance">
   {#if acceptance.length > 0}
     <Card title="Acceptance criteria">
-      <ul class="bullet">
+      {#if task.acceptanceCriteriaProofState?.state === 'blocked' && task.acceptanceCriteriaProofState?.reason}
+        <p class="hint acceptance-proof-note">{task.acceptanceCriteriaProofState.reason}</p>
+      {/if}
+      <ul class="bullet acceptance-list">
         {#each acceptance as a}
-          <li><Markdown source={escapeAngleBracketPlaceholders(a.description ?? a.text ?? JSON.stringify(a))} inline /></li>
+          <li>
+            <div class="acceptance-row">
+              <span class="acceptance-text">
+                <Markdown source={escapeAngleBracketPlaceholders(a.description ?? a.text ?? JSON.stringify(a))} inline />
+              </span>
+              <Chip
+                label={acceptanceStatusLabel(a)}
+                tone={acceptanceStatusTone(a)}
+                size="compact"
+                title={typeof a.staleReason === 'string' ? a.staleReason : acceptanceStatusLabel(a)}
+              />
+            </div>
+          </li>
         {/each}
       </ul>
     </Card>
@@ -527,6 +555,22 @@
   }
   .bullet li {
     margin: var(--s-1) 0;
+  }
+  .acceptance-proof-note {
+    margin-bottom: var(--s-2);
+  }
+  .acceptance-list {
+    display: grid;
+    gap: var(--s-2);
+  }
+  .acceptance-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--s-2);
+  }
+  .acceptance-text {
+    min-width: 0;
   }
   .lede {
     color: var(--text-muted);

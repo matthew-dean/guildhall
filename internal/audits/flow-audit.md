@@ -27161,3 +27161,99 @@ selected-scope readiness ordering.
 - Schema Migration Decision: no persisted schema field was added, removed, or
   retyped. `acceptanceCriteriaProofState`, `persistedMet`,
   `verificationState`, and stale-proof metadata are read-model fields only.
+
+## 2026-07-07T10:31:34Z - Drawer must show stale acceptance proof state
+
+- User job:
+  - When a task's proof has been reopened and blocked, the drawer must not make
+    the user infer that from hidden API state. The Spec tab must show which
+    acceptance criteria need proof and why.
+- Finding:
+  - Root cause classification:
+    - UI communication/orientation problem: the drawer rendered acceptance
+      criteria as plain bullets, so the corrected `acceptanceCriteriaProofState`
+      read model was invisible.
+    - Task hierarchy/dependency/proof modeling problem: proof state was
+      available from the task read model but not attached to the acceptance row
+      presentation.
+- Fix:
+  - `SpecTab.svelte` now renders the shared read-model proof blocker above the
+    criteria list and shows a compact existing `Chip` status per criterion
+    (`Needs proof`, `Met`, `Not met`, or `Unverified`).
+  - `Task` now includes the existing served `acceptanceCriteriaProofState`
+    read-model field so the drawer does not re-derive proof status locally.
+  - `normalizeTaskForDrawer()` now suppresses stale max-revisions escalation
+    IDs from `runtime.openEscalationIds` when proof recovery is the current
+    blocker. The escalation record remains available to History, but WhyStuck
+    and active-work summaries stop treating it as current owner action.
+  - Project-summary runtime compaction now preserves explicit empty
+    `openEscalationIds` arrays so views can distinguish "known no active
+    escalation" from "old task has raw escalation records."
+  - `buildTerminalSummary()` now only emits terminal copy for terminal statuses,
+    so a clean or merged task worktree cannot make blocked proof-recovery work
+    appear finished.
+  - `ProjectView.svelte` now reuses `activeEscalations(task)` for idle summary
+    and queue-activity checks instead of treating every unresolved raw
+    escalation as active.
+- Proof provided:
+  - Red/green regression:
+    `CI=true ./node_modules/.bin/vitest run
+    src/web/surfaces/__tests__/TaskDrawer.svelte.test.ts -t "shows stale
+    acceptance proof state"` first failed because the provider-missing reason
+    was not visible, then passed after the UI rendered the proof state.
+  - Runtime projection regression:
+    `CI=true ./node_modules/.bin/vitest run
+    src/runtime/__tests__/serve-task-endpoints.test.ts -t "current
+    proof-recovery blocker"` passed and proves stale max-revisions escalation
+    IDs are removed from `runtime.openEscalationIds`, project-summary rows
+    preserve the empty active-escalation set, and blocked proof-recovery tasks
+    do not receive terminal "merged" summaries.
+  - Full runtime endpoint regression:
+    `CI=true ./node_modules/.bin/vitest run
+    src/runtime/__tests__/serve-task-endpoints.test.ts` passed (`109` tests).
+  - Full drawer regression:
+    `CI=true ./node_modules/.bin/vitest run
+    src/web/surfaces/__tests__/TaskDrawer.svelte.test.ts` passed (`52` tests).
+  - Focused ProjectView/TaskDrawer UI regressions:
+    `CI=true ./node_modules/.bin/vitest run
+    src/web/surfaces/__tests__/TaskDrawer.svelte.test.ts
+    src/web/surfaces/__tests__/ProjectView.svelte.test.ts -t "stale
+    acceptance proof state|does not treat open escalation records on terminal
+    shelved work as live blockers|blocked work with only suppressed promise
+    questions"` passed (`3` tests, `105` skipped).
+  - `node ./build.mjs` passed.
+  - `CI=true corepack pnpm lint:contracts` passed.
+- Contract Touch Decision:
+  - Work id: `task-drawer-acceptance-proof-state`.
+  - Touched contracts: task drawer UI component contract, project view active
+    escalation summary, task-detail runtime projection, and task read-model
+    TypeScript shape.
+  - Contracts considered but not touched: persisted task schema, persisted
+    acceptance criteria schema, runtime proof-recovery schema, and public docs.
+  - Required follow-up: promote criteria/proof linkage into an explicit
+    proof-state model instead of continuing to project stale `met` fields in
+    the drawer API.
+  - Proof required: focused drawer regression, full drawer regression, build,
+    contract lint, and installed-app proof on the Narrative Harness task.
+  - Proof provided so far: focused drawer regression, runtime projection
+    regression, full runtime endpoint regression, full drawer regression,
+    focused ProjectView regression, build, contract lint, and installed-app
+    proof.
+  - Installed-app proof: after `CI=true corepack pnpm dev:install &&
+    guildhall stop && guildhall start`, `/api/stale-server` reported
+    `stale:false` for PID `77546`. The Narrative Harness DeepInfra task API
+    reports the provider-missing blocker, `runtime.openEscalationIds: []`, no
+    `terminalSummary`, and `acceptanceCriteriaProofState.state:"blocked"`.
+    Browser proof on
+    `/projects/narrative-harness/task/task-select-and-prove-a-deep-infra-drafting-model-for-broad-genre-chapter-writing?tab=spec`
+    showed the current provider blocker, did not show the old max-revisions
+    headline/chip, did not show the false "Merged locally into main" terminal
+    card, did not show the "Blocked: 1 escalated" chrome, and the Spec tab DOM
+    contained the Acceptance criteria section with each criterion marked
+    `Needs proof`.
+  - Apply/revert behavior: reverting makes the API report stale proof state
+    while the drawer returns to plain bullets that hide why a task remains
+    blocked.
+- Schema Migration Decision: no persisted schema field was added, removed, or
+  retyped. The UI reads the task-detail `acceptanceCriteriaProofState` field
+  already served by the runtime projection.

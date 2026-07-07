@@ -2865,6 +2865,7 @@ function normalizeTaskForDrawer(task: Record<string, unknown>): Record<string, u
       persistedBlockReason: rawBlockReason,
     }
   }
+  normalized = normalizeRuntimeOpenEscalationsForCurrentBlocker(normalized, rawBlockReason, visibleBlockReason)
   normalized = normalizeAcceptanceCriteriaForCurrentProof(normalized)
   const canonicalDescriptions = new Set(
     Array.isArray(normalized.acceptanceCriteria)
@@ -2881,6 +2882,40 @@ function normalizeTaskForDrawer(task: Record<string, unknown>): Record<string, u
   const notes = (normalized.notes as Array<Record<string, unknown>>)
     .filter((note) => noteMatchesCanonicalAcceptance(note, canonicalDescriptions))
   return notes.length === normalized.notes.length ? normalized : { ...normalized, notes }
+}
+
+function normalizeRuntimeOpenEscalationsForCurrentBlocker(
+  task: Record<string, unknown>,
+  rawBlockReason: string,
+  visibleBlockReason: string,
+): Record<string, unknown> {
+  if (!/max_revisions_exceeded:/i.test(rawBlockReason)) return task
+  if (!visibleBlockReason || /max_revisions_exceeded:/i.test(visibleBlockReason)) return task
+  const runtime = task.runtime && typeof task.runtime === 'object' && !Array.isArray(task.runtime)
+    ? task.runtime as Record<string, unknown>
+    : null
+  if (!runtime || !Array.isArray(runtime.openEscalationIds)) return task
+  const staleIds = new Set(
+    Array.isArray(task.escalations)
+      ? task.escalations
+          .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === 'object')
+          .filter(entry => String(entry.reason ?? '') === 'max_revisions_exceeded')
+          .map(entry => String(entry.id ?? '').trim())
+          .filter(Boolean)
+      : [],
+  )
+  if (staleIds.size === 0) return task
+  const openEscalationIds = runtime.openEscalationIds.filter((id) =>
+    typeof id === 'string' && id.trim().length > 0 && !staleIds.has(id),
+  )
+  if (openEscalationIds.length === runtime.openEscalationIds.length) return task
+  return {
+    ...task,
+    runtime: {
+      ...runtime,
+      openEscalationIds,
+    },
+  }
 }
 
 function normalizeAcceptanceCriteriaForCurrentProof(task: Record<string, unknown>): Record<string, unknown> {
@@ -3018,6 +3053,7 @@ function buildTerminalSummary(
   task: Record<string, unknown>,
 ): { headline: string; detail?: string } | undefined {
   const status = typeof task.status === 'string' ? task.status : ''
+  if (status !== 'done' && status !== 'pending_pr') return undefined
   const mergeRecord =
     task.mergeRecord && typeof task.mergeRecord === 'object'
       ? (task.mergeRecord as Record<string, unknown>)
@@ -3570,11 +3606,12 @@ function compactTaskRuntimeForProjectSummary(runtime: unknown): Record<string, u
   const openEscalationIds = Array.isArray(source.openEscalationIds)
     ? source.openEscalationIds.filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
     : []
+  const hasOpenEscalationIds = Array.isArray(source.openEscalationIds)
   const proofRecovery = source.proofRecovery && typeof source.proofRecovery === 'object' && !Array.isArray(source.proofRecovery)
     ? source.proofRecovery as Record<string, unknown>
     : null
   const summary: Record<string, unknown> = {}
-  if (openEscalationIds.length) summary.openEscalationIds = openEscalationIds
+  if (hasOpenEscalationIds) summary.openEscalationIds = openEscalationIds
   if (proofRecovery) {
     summary.proofRecovery = {
       ...(typeof proofRecovery.reopenedAt === 'string' ? { reopenedAt: proofRecovery.reopenedAt } : {}),

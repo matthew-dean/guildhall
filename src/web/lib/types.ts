@@ -440,6 +440,13 @@ export interface Task {
   structuredSpec?: StructuredSpec
   contractSurfaceReviewPackets?: ContractSurfaceReviewPacket[]
   acceptanceCriteria?: AcceptanceCriterion[]
+  acceptanceCriteriaProofState?: {
+    state?: 'blocked' | 'clear' | string
+    reason?: string
+    staleMetCount?: number
+    gateId?: string
+    checkedAt?: string
+  }
   gateResults?: GateResult[]
   reviewVerdicts?: ReviewVerdict[]
   reviewPlan?: ReviewPlan

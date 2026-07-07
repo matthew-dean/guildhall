@@ -605,6 +605,17 @@ describe('GET /api/project/task/:id', () => {
         output: 'DEEPINFRA_API_TOKEN is required.',
         checkedAt: '2026-07-07T10:00:00.000Z',
       }],
+      mergeRecord: {
+        fromBranch: 'guildhall/task-1',
+        toBranch: 'main',
+        strategy: 'cherry_pick_local',
+        result: 'merged',
+        commitSha: 'abc123',
+        mergedAt: '2026-07-07T09:59:00.000Z',
+      },
+      runtime: {
+        openEscalationIds: ['esc-task-1'],
+      },
       escalations: [{
         id: 'esc-task-1',
         taskId: 'task-1',
@@ -623,6 +634,8 @@ describe('GET /api/project/task/:id', () => {
     expect(body.task?.blockReason).toBe('provider_missing: DEEPINFRA_API_TOKEN is required.')
     expect(body.task?.persistedBlockReason).toBe('max_revisions_exceeded: reviewer loop hit its old cap before proof recovery reopened.')
     expect(body.task?.runtime?.proofRecovery?.reason).toBe('provider_missing: DEEPINFRA_API_TOKEN is required.')
+    expect(body.task?.runtime?.openEscalationIds).toEqual([])
+    expect(body.task?.terminalSummary).toBeUndefined()
     expect(body.task?.acceptanceCriteria).toEqual([
       expect.objectContaining({
         id: 'provider-proof',
@@ -639,6 +652,12 @@ describe('GET /api/project/task/:id', () => {
       staleMetCount: 1,
       gateId: 'prove-provider.live',
     })
+
+    const projectRes = await app.fetch(new Request(projectUrl('/api/project')))
+    expect(projectRes.status).toBe(200)
+    const projectBody = (await projectRes.json()) as Record<string, any>
+    const projectTask = projectBody.tasks?.find((entry: Record<string, any>) => entry.id === 'task-1')
+    expect(projectTask?.runtime?.openEscalationIds).toEqual([])
   })
 
   it('surfaces derived reviewer, self-critique, and checkpoint summaries', async () => {

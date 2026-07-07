@@ -1818,6 +1818,51 @@ describe('TaskDrawer', () => {
     })
   })
 
+  it('shows stale acceptance proof state on the Spec tab', async () => {
+    openDrawerOn('spec')
+    const payload = drawerPayload({
+      threadTurns: [],
+      task: {
+        ...drawerPayload().task,
+        acceptanceCriteria: [
+          {
+            id: 'provider-proof',
+            description: 'Live provider proof records drafting telemetry.',
+            met: false,
+            persistedMet: true,
+            verificationState: 'stale',
+            staleReason: 'provider_missing: DEEPINFRA_API_TOKEN is required.',
+            staleGateId: 'prove-deepinfra-drafting-model.live-provider',
+          },
+        ],
+        acceptanceCriteriaProofState: {
+          state: 'blocked',
+          reason: 'provider_missing: DEEPINFRA_API_TOKEN is required.',
+          staleMetCount: 1,
+          gateId: 'prove-deepinfra-drafting-model.live-provider',
+        },
+      },
+    })
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(payload)
+      if (url.startsWith('/api/project')) return json(projectDetail())
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByText('Acceptance criteria')
+    expect(screen.getByText('Live provider proof records drafting telemetry.')).toBeInTheDocument()
+    expect(screen.getByText('provider_missing: DEEPINFRA_API_TOKEN is required.')).toBeInTheDocument()
+    expect(screen.getByText('Needs proof')).toBeInTheDocument()
+  })
+
   it('does not offer unqualified spec approval when the structured brief is incomplete', async () => {
     openDrawerOn('spec')
     const payload = drawerPayload()

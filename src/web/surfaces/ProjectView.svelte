@@ -31,6 +31,7 @@
   import { formatUserPath } from '../lib/display-path.js'
   import { humanizeProjectName } from '../lib/project-name.js'
   import { isWorkerRunnableStatus } from '../lib/task-state.js'
+  import { activeEscalations } from '../lib/escalation.js'
   import { isOperationalReceiptQuestion } from '@guildhall/shared'
   import type { InboxItem } from '../lib/inbox-item-key.js'
   import type { AlertBandTone } from '../../../packages/ui/src/components/types.js'
@@ -816,7 +817,7 @@
       const status = task.status ?? ''
       const closed = isClosedTaskStatus(status)
       if (hasVisibleUnansweredQuestion(task)) counts.waitingOnUser += 1
-      if (!closed && (task.escalations ?? []).some(escalation => !escalation.resolvedAt)) counts.escalated += 1
+      if (!closed && activeEscalations(task).length > 0) counts.escalated += 1
       if (!closed && status === 'spec_review') counts.awaitingApproval += 1
       if (!closed && status === 'import_draft') counts.draftReview += 1
       if (status === 'blocked') counts.blocked += 1
@@ -867,7 +868,7 @@
       const status = task.status ?? ''
       if (isClosedTaskStatus(status)) return false
       const hasUnansweredQuestion = hasVisibleUnansweredQuestion(task)
-      const hasOpenEscalation = (task.escalations ?? []).some((escalation) => !escalation.resolvedAt)
+      const hasOpenEscalation = activeEscalations(task).length > 0
       return (
         hasUnansweredQuestion ||
         hasOpenEscalation ||
