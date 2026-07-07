@@ -26529,3 +26529,72 @@ selected-scope readiness ordering.
 - Schema Migration Decision: no persisted schema field was added, removed, or
   retyped. This is a compatibility-reader repair for legacy data, not a stored
   schema migration; no migration id or rollback migration is required.
+
+## 2026-07-07T08:06:34Z - Proof recovery must not display stale proof as verified
+
+- User job:
+  - When a completed task is reopened because release proof is missing, the
+    Work surface and task drawer should show that proof is still missing while
+    recovery is in progress. Stale done-summary/review evidence must not make
+    the reopened task look verified again.
+- Finding:
+  - Root cause classification:
+    - Task hierarchy/dependency/proof modeling problem: `completionProof`
+      projected old recorded evidence as verified for an `in_progress` task
+      even after `retry-work` wrote proof-recovery runtime state.
+    - UI communication/orientation problem: the Work surface compact row did
+      not include the shared proof-recovery runtime summary, so the visible row
+      could not explain why proof was being rerun.
+  - Narrative Harness exposed this on the DeepInfra drafting-model proof task:
+    Guildhall correctly reopened the task and started a one-task run, but the
+    API still showed `completionProof.state:"verified"` from stale
+    `content.no-truncated-data` evidence.
+- Fix:
+  - `compactTaskCompletionProof` now treats active proof recovery as missing
+    proof until new evidence settles it.
+  - Work-surface task summaries now reuse the existing compact runtime summary,
+    including `proofRecovery`, instead of dropping that shared state.
+- Proof provided so far:
+  - `CI=true ./node_modules/.bin/vitest run
+    src/runtime/__tests__/serve-task-endpoints.test.ts -t "reopens completed
+    work only when release proof is still missing|recognizes proof recovery"`
+    passed (`2` selected tests).
+  - `CI=true ./node_modules/.bin/vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts
+    src/runtime/__tests__/serve-task-endpoints.test.ts -t
+    "proof|release-readiness|completionProof|orientation|retry-work"` passed
+    (`51` selected tests).
+  - `CI=true pnpm lint:contracts` passed with this decision evidence.
+    `node ./build.mjs` passed after restoring dev dependencies pruned by the
+    contract script. `CI=true pnpm dev:install && guildhall stop && guildhall
+    start` installed and restarted the app; `/api/stale-server` returned
+    `stale:false` for PID `37339`.
+  - Installed API proof:
+    `/api/project?projectId=narrative-harness&surface=work&task=task-import-lu6waj`
+    returned `startReadiness.code:"proof_evidence_missing"`,
+    `focusTaskId:"task-import-lu6waj"`, and task
+    `completionProof.state:"missing"` with `missing:["Required proof evidence
+    has not been attached yet."]`.
+  - Browser proof:
+    `/projects/narrative-harness/work?task=task-import-lu6waj` visibly showed
+    the top action as `Needs proof`, the delivery queue summary as `1 missing
+    proof`, the inspector action as `Run proof`, and the live ticker as
+    `Completed work is missing proof`.
+- Contract Touch Decision:
+  - Work id: proof-recovery-visible-missing-proof.
+  - Touched contracts: `/api/project.tasks[].completionProof`,
+    `/api/project.task.completionProof`, and compact Work-surface task runtime
+    summary.
+  - Contracts considered but not touched: persisted task runtime schema,
+    persisted task queue schema, proof-path schema, Start/Resume mutation
+    semantics, release-readiness totals.
+  - Required follow-up: the same live route exposed the next calibration issue:
+    the work row still carries terminal `Done` copy while its delivery step is
+    blocked by proof, so the proof-recovery/status rollup model needs another
+    pass after this committed fix.
+  - Apply/revert behavior: reverting restores the stale verified proof badge
+    during proof recovery and hides the runtime proof-recovery reason from the
+    Work surface row.
+- Schema Migration Decision: no persisted schema field was added, removed, or
+  retyped. This only projects existing `runtime.proofRecovery` state through
+  shared API summaries; no migration id is required.

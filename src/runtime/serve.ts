@@ -3452,7 +3452,18 @@ function compactTaskRuntimeForProjectSummary(runtime: unknown): Record<string, u
   const openEscalationIds = Array.isArray(source.openEscalationIds)
     ? source.openEscalationIds.filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
     : []
-  return openEscalationIds.length ? { openEscalationIds } : undefined
+  const proofRecovery = source.proofRecovery && typeof source.proofRecovery === 'object' && !Array.isArray(source.proofRecovery)
+    ? source.proofRecovery as Record<string, unknown>
+    : null
+  const summary: Record<string, unknown> = {}
+  if (openEscalationIds.length) summary.openEscalationIds = openEscalationIds
+  if (proofRecovery) {
+    summary.proofRecovery = {
+      ...(typeof proofRecovery.reopenedAt === 'string' ? { reopenedAt: proofRecovery.reopenedAt } : {}),
+      ...(typeof proofRecovery.reason === 'string' ? { reason: proofRecovery.reason } : {}),
+    }
+  }
+  return Object.keys(summary).length ? summary : undefined
 }
 
 function compactTaskEscalationsForProjectSummary(escalations: unknown): Array<Record<string, unknown>> | undefined {
@@ -3472,15 +3483,24 @@ function compactTaskEscalationsForProjectSummary(escalations: unknown): Array<Re
 function compactTaskCompletionProof(task: Record<string, unknown>): Record<string, unknown> | undefined {
   const recorded = recordedCompletionProofForTask(task)
   const proofPaths = Array.isArray(task.proofPaths) ? task.proofPaths : []
+  const runtime = task.runtime && typeof task.runtime === 'object' && !Array.isArray(task.runtime)
+    ? task.runtime as Record<string, unknown>
+    : null
+  const activeProofRecovery =
+    String(task.status ?? '') !== 'done' &&
+    Boolean(
+      (task.proofRecovery && typeof task.proofRecovery === 'object' && !Array.isArray(task.proofRecovery)) ||
+      (runtime?.proofRecovery && typeof runtime.proofRecovery === 'object' && !Array.isArray(runtime.proofRecovery)),
+    )
   const proofMissing = String(task.status ?? '') === 'done' && taskDoneButProofMissing(task)
-  if (recorded.verified.length === 0 && proofPaths.length === 0 && !proofMissing) return undefined
+  if (recorded.verified.length === 0 && proofPaths.length === 0 && !proofMissing && !activeProofRecovery) return undefined
   return {
-    state: proofMissing ? 'missing' : recorded.verified.length > 0 ? 'verified' : 'planned',
+    state: proofMissing || activeProofRecovery ? 'missing' : recorded.verified.length > 0 ? 'verified' : 'planned',
     expectedCount: proofPaths.length,
     verifiedCount: recorded.verified.length,
     verified: recorded.verified.slice(0, 4),
     ...(recorded.latestAt ? { latestAt: recorded.latestAt } : {}),
-    ...(proofMissing ? { missing: ['Required proof evidence has not been attached yet.'] } : {}),
+    ...(proofMissing || activeProofRecovery ? { missing: ['Required proof evidence has not been attached yet.'] } : {}),
   }
 }
 
@@ -3682,6 +3702,8 @@ function compactTaskForWorkSurface(task: Record<string, unknown>): Record<string
   if (latestCheckpoint) summary.latestCheckpoint = latestCheckpoint
   const definitionOfDone = compactDefinitionOfDoneForWorkSurface(task.definitionOfDone)
   if (definitionOfDone) summary.definitionOfDone = definitionOfDone
+  const runtime = compactTaskRuntimeForProjectSummary(task.runtime)
+  if (runtime) summary.runtime = runtime
   if (Array.isArray(summary.proofPaths)) summary.proofPaths = compactProofPathsForServe(summary.proofPaths)
   const completionProof = task.completionProof && typeof task.completionProof === 'object' && !Array.isArray(task.completionProof)
     ? task.completionProof as Record<string, unknown>

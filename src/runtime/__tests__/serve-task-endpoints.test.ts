@@ -2931,6 +2931,29 @@ describe('POST /api/project/task/:id/resume', () => {
     const effective = await readEffectiveTask('task-1')
     expect(effective.status).toBe('in_progress')
     expect(effective.runtime?.proofRecovery?.reason).toBe('Run the real provider proof and attach the evidence.')
+
+    const detailRes = await app.fetch(new Request(projectUrl('/api/project/task/task-1')))
+    expect(detailRes.status).toBe(200)
+    const detailBody = (await detailRes.json()) as Record<string, any>
+    expect(detailBody.task?.completionProof).toMatchObject({
+      state: 'missing',
+      expectedCount: 1,
+      verifiedCount: expect.any(Number),
+      missing: ['Required proof evidence has not been attached yet.'],
+    })
+
+    const projectRes = await app.fetch(new Request(projectUrl('/api/project?surface=work&task=task-1')))
+    expect(projectRes.status).toBe(200)
+    const projectBody = (await projectRes.json()) as Record<string, any>
+    const task = projectBody.tasks?.find((entry: Record<string, any>) => entry.id === 'task-1')
+    expect(task?.status).toBe('in_progress')
+    expect(task?.completionProof).toMatchObject({
+      state: 'missing',
+      expectedCount: 1,
+      verifiedCount: expect.any(Number),
+      missing: ['Required proof evidence has not been attached yet.'],
+    })
+    expect(task?.runtime?.proofRecovery?.reason).toBe('Run the real provider proof and attach the evidence.')
   })
 
   it('recognizes proof recovery when stale completion evidence overrides a raw retry', async () => {
