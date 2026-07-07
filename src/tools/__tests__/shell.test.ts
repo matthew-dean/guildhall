@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { runShell, runShellSync, shellTool } from '../shell.js'
+import { setProvider } from '../../config/global-providers.js'
 
 // ---------------------------------------------------------------------------
 // Shell tool tests (AC-06 — gate runner pass/fail logic)
@@ -879,5 +880,39 @@ describe('runShell — async tool path', () => {
     })
     expect(result.success).toBe(true)
     expect(result.output).toBe('set')
+  })
+
+  it('makes configured OpenAI-compatible DeepInfra credentials available to proof commands', async () => {
+    const previousHome = process.env.GUILDHALL_CONFIG_DIR
+    const previousOpenAiKey = process.env.OPENAI_API_KEY
+    const previousOpenAiBaseUrl = process.env.OPENAI_BASE_URL
+    const previousDeepinfraToken = process.env.DEEPINFRA_API_TOKEN
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'guildhall-shell-providers-'))
+    process.env.GUILDHALL_CONFIG_DIR = home
+    delete process.env.OPENAI_API_KEY
+    delete process.env.OPENAI_BASE_URL
+    delete process.env.DEEPINFRA_API_TOKEN
+    try {
+      setProvider('openai-api', {
+        apiKey: 'fake-deepinfra-key',
+        baseUrl: 'https://api.deepinfra.com/v1/openai',
+      })
+      const result = await runShell({
+        command: "node -e \"process.stdout.write([process.env.OPENAI_API_KEY, process.env.OPENAI_BASE_URL, process.env.DEEPINFRA_API_TOKEN].join('|'))\"",
+        cwd: '/tmp',
+        timeoutMs: 5000,
+      })
+      expect(result.success).toBe(true)
+      expect(result.output).toBe('fake-deepinfra-key|https://api.deepinfra.com/v1/openai|fake-deepinfra-key')
+    } finally {
+      if (previousHome === undefined) delete process.env.GUILDHALL_CONFIG_DIR
+      else process.env.GUILDHALL_CONFIG_DIR = previousHome
+      if (previousOpenAiKey === undefined) delete process.env.OPENAI_API_KEY
+      else process.env.OPENAI_API_KEY = previousOpenAiKey
+      if (previousOpenAiBaseUrl === undefined) delete process.env.OPENAI_BASE_URL
+      else process.env.OPENAI_BASE_URL = previousOpenAiBaseUrl
+      if (previousDeepinfraToken === undefined) delete process.env.DEEPINFRA_API_TOKEN
+      else process.env.DEEPINFRA_API_TOKEN = previousDeepinfraToken
+    }
   })
 })

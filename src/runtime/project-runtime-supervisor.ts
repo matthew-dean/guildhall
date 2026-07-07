@@ -20,6 +20,7 @@ import type {
   RuntimeBackendCommandEvent,
   RuntimeBackendCommandRequest,
 } from './project-runtime-backend.js'
+import { providerCommandEnv } from '../config/global-providers.js'
 
 export type RuntimeStartReason = RuntimeKeepAliveReason | 'ui-open'
 
@@ -136,6 +137,10 @@ export class ProjectRuntimeSupervisor {
     try {
       const backendRequest: RuntimeBackendCommandRequest = {
         ...request,
+        env: {
+          ...providerCommandEnv(),
+          ...request.env,
+        },
         runtimeUser: 'guildhall',
       }
       const run = this.#backend.runCommand(

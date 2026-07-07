@@ -27223,6 +27223,22 @@ selected-scope readiness ordering.
     questions"` passed (`3` tests, `105` skipped).
   - `node ./build.mjs` passed.
   - `CI=true corepack pnpm lint:contracts` passed.
+  - Installed-app proof: after `CI=true corepack pnpm dev:install &&
+    guildhall stop && guildhall start`, `/api/stale-server` reported
+    `stale:false` for PID `36651`, and `/api/providers` reported
+    `openai-api` detected with base URL
+    `https://api.deepinfra.com/v1/openai`.
+  - Product-flow proof: the Narrative Harness DeepInfra proof task accepted
+    the real Work-tab flow (`retry-work` then focused `start`) and started a
+    one-task run on the `openai-api` provider. The task moved from blocked to
+    `in_progress` with proof recovery reopened at
+    `2026-07-07T10:55:15.630Z`.
+  - Next failure exposed by live calibration: the worker later escalated
+    `human_judgment_required` with summary `Provider API token required to
+    complete proof execution`, even though `/api/providers` shows the
+    DeepInfra-compatible provider is configured. That is a separate
+    worker/scheduler proof-classification failure, not a reason to revert this
+    provider-env projection fix.
 - Contract Touch Decision:
   - Work id: `task-drawer-acceptance-proof-state`.
   - Touched contracts: task drawer UI component contract, project view active
@@ -27257,3 +27273,70 @@ selected-scope readiness ordering.
 - Schema Migration Decision: no persisted schema field was added, removed, or
   retyped. The UI reads the task-detail `acceptanceCriteriaProofState` field
   already served by the runtime projection.
+
+## 2026-07-07T10:52:00Z - Configured providers must reach proof commands
+
+- User job:
+  - When Guildhall says an OpenAI-compatible DeepInfra provider is configured,
+    proof commands that need that provider must receive the credential through
+    command execution. Runtime evidence must still avoid persisting the secret.
+- Finding:
+  - Root cause classification:
+    - Runtime/provider/infrastructure problem: `/api/providers` could report
+      the machine-scoped OpenAI-compatible DeepInfra credential, while shell
+      proof commands and project-runtime commands did not receive
+      `OPENAI_API_KEY`, `OPENAI_BASE_URL`, or the project-expected
+      `DEEPINFRA_API_TOKEN` alias.
+    - Data model/schema problem: provider configuration was correctly modeled
+      as machine-scoped state, but command execution had no shared projection
+      from that model into the runtime environment.
+    - Task hierarchy/dependency/proof modeling problem: Narrative Harness proof
+      work was blocked as credential-missing even though the configured
+      provider state was available to Guildhall.
+    - UI communication/orientation problem: the product could simultaneously
+      communicate "provider configured" and "provider credential missing"
+      because the execution path did not honor the provider read model.
+- Fix:
+  - Added `providerCommandEnv()` beside the global provider resolver so command
+    execution has one shared provider-env projection.
+  - `runShellSync()` and `runShell()` now merge provider-derived env into
+    spawned shell commands, with explicit command env overrides still winning.
+  - `ProjectRuntimeSupervisor.runCommand()` now sends provider-derived env to
+    the runtime backend while preserving the original parsed request for saved
+    command evidence, so secrets are not recorded in runtime command evidence.
+- Proof provided:
+  - Red/green shell regression:
+    `CI=true ./node_modules/.bin/vitest run
+    src/tools/__tests__/shell.test.ts -t "DeepInfra credentials"` first failed
+    with empty provider env output (`||`), then passed after the shared helper
+    was wired into shell execution.
+  - Red/green runtime regression:
+    `CI=true ./node_modules/.bin/vitest run
+    src/runtime/__tests__/project-runtime-command.test.ts -t "provider
+    credentials"` first failed because the backend request env was `{}`, then
+    passed and also proves persisted command evidence keeps `request.env:{}`.
+  - Broader regression:
+    `CI=true ./node_modules/.bin/vitest run
+    src/tools/__tests__/shell.test.ts
+    src/runtime/__tests__/project-runtime-command.test.ts
+    src/config/__tests__/global-providers.test.ts
+    src/runtime/__tests__/serve-providers.test.ts` passed (`126` tests).
+  - `node ./build.mjs` passed.
+  - `CI=true corepack pnpm lint:contracts` passed.
+- Contract Touch Decision:
+  - Work id: `provider-command-env-projection`.
+  - Touched contracts: shell command execution env contract and project-runtime
+    backend command request contract.
+  - Contracts considered but not touched: persisted provider schema, persisted
+    runtime command evidence schema, provider API response schema, task schema,
+    and proof-recovery schema.
+  - Required follow-up: rerun the Narrative Harness DeepInfra proof after the
+    installed app is refreshed so the current proof blocker can clear or expose
+    the next real blocker.
+  - Apply/revert behavior: reverting can return Guildhall to the contradictory
+    state where provider setup is visible but proof execution still reports a
+    missing DeepInfra token.
+- Schema Migration Decision: no persisted schema field was added, removed, or
+  retyped. The change derives process env at execution time from existing
+  machine-scoped provider configuration and preserves the original command
+  request in evidence.

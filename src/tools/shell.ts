@@ -24,6 +24,7 @@ import {
   parseAuthoritativeCommands,
   reconcileShellCommandWithAuthority,
 } from '@guildhall/core'
+import { providerCommandEnv } from '../config/global-providers.js'
 
 const OUTPUT_TRUNCATE_LIMIT = 12_000
 
@@ -43,6 +44,14 @@ export interface ShellResult {
   interactiveRequired?: boolean
   /** True when the child was killed by the timeout watchdog. */
   timedOut?: boolean
+}
+
+function shellProcessEnv(env: Record<string, string> | undefined): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    ...providerCommandEnv(),
+    ...(env ?? {}),
+  }
 }
 
 function resolveShellCwd(inputCwd: string | undefined, fallbackCwd: string | undefined): string {
@@ -445,7 +454,7 @@ export function runShellSync(input: ShellInput): ShellResult {
       timeout: timeoutMs,
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: env ? { ...process.env, ...env } : process.env,
+      env: shellProcessEnv(env),
     })
     return { success: true, output: formatOutput(output), exitCode: 0 }
   } catch (err: unknown) {
@@ -494,7 +503,7 @@ export async function runShell(input: ShellInput): Promise<ShellResult> {
     const child = spawn('sh', ['-c', command], {
       cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: env ? { ...process.env, ...env } : process.env,
+      env: shellProcessEnv(env),
       detached: process.platform !== 'win32',
     })
 
