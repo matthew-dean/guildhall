@@ -27340,3 +27340,64 @@ selected-scope readiness ordering.
   retyped. The change derives process env at execution time from existing
   machine-scoped provider configuration and preserves the original command
   request in evidence.
+
+## 2026-07-07T10:59:30Z - Provider-token escalations must respect configured providers
+
+- User job:
+  - When a proof task needs a provider token and Guildhall already has that
+    provider configured, agents must run the proof through Guildhall execution
+    instead of asking the owner to set the token manually.
+- Finding:
+  - Root cause classification:
+    - Scheduler/action-state logic problem: after the DeepInfra proof task was
+      reopened through the real Work-tab flow, the worker raised a
+      `human_judgment_required` escalation for `DEEPINFRA_API_TOKEN` even
+      though the configured provider state could supply that token.
+    - Runtime/provider/infrastructure problem: the provider env projection was
+      now fixed, but the escalation guard still treated provider-token wording
+      as owner setup without checking configured provider state.
+    - Task hierarchy/dependency/proof modeling problem: the missing-proof lane
+      was correctly reopened, but it converted a runnable proof requirement
+      into an owner checklist instead of forcing command-backed proof.
+    - UI communication/orientation problem: the product would tell the owner to
+      configure a token while Providers already showed the DeepInfra-compatible
+      provider as configured.
+- Fix:
+  - `raiseEscalation()` now rejects provider-token owner escalations when
+    `providerCommandEnv()` can already supply the mentioned provider env var.
+  - The rejection tells the agent to run the focused proof command through
+    Guildhall shell/runtime execution and record the real proof result or
+    command failure.
+- Proof provided:
+  - Red/green regression:
+    `CI=true ./node_modules/.bin/vitest run
+    src/tools/__tests__/escalation.test.ts -t "configured provider
+    credential"` first failed because the bad owner escalation succeeded, then
+    passed after the shared escalation guard checked configured provider env.
+  - Full escalation regression:
+    `CI=true ./node_modules/.bin/vitest run
+    src/tools/__tests__/escalation.test.ts` passed (`33` tests).
+  - Provider/shell/runtime regression:
+    `CI=true ./node_modules/.bin/vitest run
+    src/tools/__tests__/shell.test.ts
+    src/runtime/__tests__/project-runtime-command.test.ts
+    src/config/__tests__/global-providers.test.ts
+    src/runtime/__tests__/serve-providers.test.ts` passed (`126` tests).
+  - `node ./build.mjs` passed.
+  - `CI=true corepack pnpm lint:contracts` passed.
+- Contract Touch Decision:
+  - Work id: `provider-token-escalation-guard`.
+  - Touched contracts: `raise-escalation` tool acceptance contract and
+    owner-blocker semantics for provider credential setup.
+  - Contracts considered but not touched: persisted escalation schema,
+    provider schema, task schema, runtime command evidence schema, and proof
+    recovery schema.
+  - Required follow-up: refresh the installed app, resolve the stale live
+    provider-token escalation, and rerun the Narrative Harness proof task to
+    prove agents now continue to command-backed proof instead of asking the
+    owner for configured credentials.
+  - Apply/revert behavior: reverting allows agents to create false owner
+    blockers for provider credentials that Guildhall can already supply.
+- Schema Migration Decision: no persisted schema field was added, removed, or
+  retyped. This is a shared tool-validation rule over existing provider and
+  escalation models.

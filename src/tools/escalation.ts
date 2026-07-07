@@ -14,6 +14,7 @@ import { logProgress } from './memory-tools.js'
 import { atomicWriteText, appendTaskEvidence, inferProjectRootFromMemoryDir, readTaskEvidence, upsertTaskRuntimeState } from '@guildhall/sessions'
 import { buildEffectiveTask } from '@guildhall/runtime/effective-task'
 import { writeProjectTaskQueue } from '@guildhall/runtime/project-state-boundary'
+import { providerCommandEnv } from '../config/global-providers.js'
 
 // ---------------------------------------------------------------------------
 // FR-10 Escalation protocol
@@ -139,6 +140,26 @@ function looksLikeWorkerImplementationRecovery(input: RaiseEscalationInput): boo
   return brittleEditFailure && (localImplementationEvidence || asksForOwnerToResolveImplementation)
 }
 
+function configuredProviderEnvBlocksCredentialEscalation(input: RaiseEscalationInput): boolean {
+  const text = `${input.reason}\n${input.summary}\n${input.details ?? ''}\n${JSON.stringify(input.externalChecklist ?? [])}`
+  const mentionsProviderToken =
+    /\bDEEPINFRA_API_TOKEN\b/.test(text) ||
+    /\bOPENAI_API_KEY\b/.test(text) ||
+    /\bOPENAI_BASE_URL\b/.test(text)
+  if (!mentionsProviderToken) return false
+  let env: Record<string, string>
+  try {
+    env = providerCommandEnv()
+  } catch {
+    return false
+  }
+  return Boolean(
+    (/\bDEEPINFRA_API_TOKEN\b/.test(text) && env.DEEPINFRA_API_TOKEN) ||
+    (/\bOPENAI_API_KEY\b/.test(text) && env.OPENAI_API_KEY) ||
+    (/\bOPENAI_BASE_URL\b/.test(text) && env.OPENAI_BASE_URL),
+  )
+}
+
 export async function raiseEscalation(
   input: RaiseEscalationInput,
 ): Promise<RaiseEscalationResult> {
@@ -173,6 +194,14 @@ export async function raiseEscalation(
         success: false,
         error:
           'This is implementation recovery, not an owner decision: do not ask the owner to resolve failed exact-string edits, whitespace mismatches, local template syntax, imports, or component props. Re-read the current file and component API, apply a smaller structural edit, or record a checkpoint and retry with the existing spec.',
+      }
+    }
+
+    if (configuredProviderEnvBlocksCredentialEscalation(input)) {
+      return {
+        success: false,
+        error:
+          'Do not raise a human escalation for provider credentials that Guildhall already has configured. Run the focused proof command through Guildhall shell/runtime execution, which supplies the configured provider environment, then record the real proof result or command failure.',
       }
     }
 

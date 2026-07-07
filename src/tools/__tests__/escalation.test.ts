@@ -16,6 +16,7 @@ import { readTasks } from '../task-queue.js'
 import { buildEffectiveTask } from '../../runtime/effective-task.js'
 import { appendTaskEvidence, readTaskRuntimeStore, upsertTaskRuntimeState } from '@guildhall/sessions'
 import type { Task } from '@guildhall/core'
+import { setProvider } from '../../config/global-providers.js'
 
 // ---------------------------------------------------------------------------
 // FR-10 escalation protocol tests — these events are load-bearing for the
@@ -696,6 +697,57 @@ describe('engine tool wrappers', () => {
 
     const { queue } = await readTasks({ tasksPath })
     expect(queue?.tasks[0]?.status).toBe('in_progress')
+  })
+
+  it('raiseEscalationTool rejects configured provider credential proof as owner setup work', async () => {
+    const previousHome = process.env.GUILDHALL_CONFIG_DIR
+    const previousOpenAiKey = process.env.OPENAI_API_KEY
+    const previousOpenAiBaseUrl = process.env.OPENAI_BASE_URL
+    const previousDeepinfraToken = process.env.DEEPINFRA_API_TOKEN
+    const providerHome = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-escalation-provider-'))
+    process.env.GUILDHALL_CONFIG_DIR = providerHome
+    delete process.env.OPENAI_API_KEY
+    delete process.env.OPENAI_BASE_URL
+    delete process.env.DEEPINFRA_API_TOKEN
+    try {
+      setProvider('openai-api', {
+        apiKey: 'fake-deepinfra-key',
+        baseUrl: 'https://api.deepinfra.com/v1/openai',
+      })
+      const result = await raiseEscalationTool.execute(
+        {
+          tasksPath,
+          taskId: 'task-001',
+          agentId: 'worker-agent',
+          reason: 'human_judgment_required',
+          summary: 'Provider API token required to complete proof execution',
+          details:
+            'The proof script `scripts/prove-deepinfra-drafting-model.mjs` requires a valid DEEPINFRA_API_TOKEN to execute.',
+          externalChecklist: [
+            {
+              id: 'configure-api-token',
+              title: 'Configure DEEPINFRA_API_TOKEN environment variable',
+              detail: 'Set the DEEPINFRA_API_TOKEN environment variable with a valid API token from DeepInfra',
+            },
+          ],
+        },
+        ctx,
+      )
+
+      expect(result.is_error).toBe(true)
+      expect(result.output).toMatch(/provider.*configured/i)
+      const { queue } = await readTasks({ tasksPath })
+      expect(queue?.tasks[0]?.status).toBe('in_progress')
+    } finally {
+      if (previousHome === undefined) delete process.env.GUILDHALL_CONFIG_DIR
+      else process.env.GUILDHALL_CONFIG_DIR = previousHome
+      if (previousOpenAiKey === undefined) delete process.env.OPENAI_API_KEY
+      else process.env.OPENAI_API_KEY = previousOpenAiKey
+      if (previousOpenAiBaseUrl === undefined) delete process.env.OPENAI_BASE_URL
+      else process.env.OPENAI_BASE_URL = previousOpenAiBaseUrl
+      if (previousDeepinfraToken === undefined) delete process.env.DEEPINFRA_API_TOKEN
+      else process.env.DEEPINFRA_API_TOKEN = previousDeepinfraToken
+    }
   })
 
   it('raiseEscalationTool marks unknown task as error', async () => {
