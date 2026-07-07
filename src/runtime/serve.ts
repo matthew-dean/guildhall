@@ -5207,13 +5207,25 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const overviewEffectiveTasksPromise = overviewSurface
         ? Promise.all(rawTasks.map((task) => buildEffectiveTask(project.path, task as Task)))
         : null
+      const resolvedConfig = resolveConfig({ workspacePath: project.path })
+      const runtimeProvider = getRuntimeProviderConfig({
+        projectPath: project.path,
+        models: resolvedConfig.models,
+      })
+      const startReadiness = await projectStartReadiness({
+        projectPath: project.path,
+        resolvedConfig,
+        runtimeProvider,
+        allowPaidProviderFallback: runtimeProvider.allowPaidProviderFallback,
+      })
       const releaseReadiness = fullSurface || overviewSurface
         ? await buildProjectReleaseReadinessPayload(overviewSurface
           ? {
               rawQueue,
               tasks: await overviewEffectiveTasksPromise as Task[],
+              startReadiness,
             }
-          : {})
+          : { startReadiness })
         : null
       const workProgress = deriveProjectWorkProgress(rawTasks as Array<Record<string, unknown>>)
       const tasks = overviewSurface
@@ -5243,11 +5255,6 @@ export function buildServeApp(opts: ServeOptions = {}): {
         : null
       const deliveryPrimitives = fullSurface ? listPrimitivesWithRelations(deliveryModel, rawTasks as Task[]) : null
       const gitStory = fullSurface ? await buildProjectGitStorySummary(project.path, rawTasks as Array<Record<string, unknown>>) : null
-      const resolvedConfig = resolveConfig({ workspacePath: project.path })
-      const runtimeProvider = getRuntimeProviderConfig({
-        projectPath: project.path,
-        models: resolvedConfig.models,
-      })
       const preferredProvider = runtimeProvider.preferredProvider
       const preferredActiveProvider = preferredProvider
         ? normalizePreferredProvider(preferredProvider)
@@ -5281,12 +5288,6 @@ export function buildServeApp(opts: ServeOptions = {}): {
             })
           : null
       )
-      const startReadiness = await projectStartReadiness({
-        projectPath: project.path,
-        resolvedConfig,
-        runtimeProvider,
-        allowPaidProviderFallback: runtimeProvider.allowPaidProviderFallback,
-      })
       const [runtime, memoryHealth, availability] = await Promise.all([
         readProjectRuntimeState(project.path),
         fullSurface
@@ -12862,6 +12863,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   async function buildProjectReleaseReadinessPayload(input: {
     rawQueue?: { tasks: Array<Record<string, unknown>>; releases: ProjectRelease[]; selectedReleaseId?: string }
     tasks?: Task[]
+    startReadiness?: Awaited<ReturnType<typeof projectStartReadinessForProject>>
   } = {}): Promise<Record<string, unknown>> {
     const fallbackRelease = {
       id: 'current-work',
@@ -12882,7 +12884,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       : { tasks: [], releases: [] })
     const rawTasks = rawQueue.tasks
     const tasks = input.tasks ?? await Promise.all(rawTasks.map((task) => buildEffectiveTask(project.path, task as Task)))
-    const releaseStartReadiness = await projectStartReadinessForProject(project.path)
+    const releaseStartReadiness = input.startReadiness ?? await projectStartReadinessForProject(project.path)
     const { orientationSpine: readinessSpine, releaseTruth } = buildOrientationSpineWithScopedReleaseTruth({
       projectId: project.id,
       charter: inferProjectCharterFromExistingSources(project.path, project.config),

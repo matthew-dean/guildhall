@@ -28806,3 +28806,84 @@ selected-scope readiness ordering.
     payload.
 - Schema Migration Decision: no persisted schema field was added, removed, or
   retyped. This is an API read-model correction only.
+
+## 2026-07-07T15:24:00Z - Overview detail must reuse start-readiness state
+
+- User job:
+  - Overview should show current-scope readiness, release status, blockers, and
+    next action from one coherent request model. It should not recompute the
+    same start-readiness answer in separate branches of the same request.
+- Finding:
+  - Root cause classification:
+    - Data model/schema problem: `/api/project?surface=overview` computed
+      `startReadiness`, while `buildProjectReleaseReadinessPayload` computed a
+      second `startReadiness` internally for the same request.
+    - Project structure/scope/release modeling problem: release readiness and
+      action readiness were treated as separate derivation roots even though
+      they both answer selected-scope execution readiness.
+    - Scheduler/action-state logic problem: duplicate start-readiness
+      derivation makes it easier for action state and release state to drift
+      when repairs, terminal-scope checks, repository follow-up, or source
+      conflicts are involved.
+    - Runtime/provider/infrastructure problem: installed timing showed
+      release-readiness alone cost about 1.3-2.8s, so recomputing its
+      start-readiness input inside Overview was visible route latency.
+- Fix:
+  - `/api/project` now computes `startReadiness` once and passes it into
+    `buildProjectReleaseReadinessPayload`.
+  - Standalone `/api/project/release-readiness` keeps its existing behavior and
+    computes start readiness internally when no caller supplies it.
+  - No persisted schema changed; this is shared derived-state reuse inside one
+    request.
+- Proof provided:
+  - Focused suite:
+    `CI=true ./node_modules/.bin/vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts
+    src/web/surfaces/__tests__/ProjectView.svelte.test.ts
+    src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts
+    src/web/surfaces/project/__tests__/ProjectMapTab.svelte.test.ts` passed
+    with 153 tests.
+  - Build and contract checks:
+    `git diff --check`, `node ./build.mjs`, and
+    `CI=true corepack pnpm lint:contracts` passed.
+  - Installed API proof:
+    After `CI=true corepack pnpm dev:install`, `guildhall stop`, and
+    `guildhall start`, `/api/stale-server` returned `stale:false` for PID
+    `90372`. Narrative Harness settled Overview detail returned three samples
+    at about `2245ms`, `2169ms`, and `2278ms`, `orientationNodes:0`, `11`
+    current work items, `31` deferred, `releaseReady:true`, and
+    `releaseBlockers:0`. Looma + Knit settled Overview detail returned
+    `3540ms`, `2147ms`, and `2164ms`, `orientationNodes:0`, `5` current work
+    items, `30` deferred, `releaseReady:false`, and `releaseBlockers:8`.
+    Standalone release-readiness remained about `1500ms` for Narrative Harness
+    and `1280-1300ms` for Looma + Knit, identifying it as the next real cost
+    center.
+  - Browser proof:
+    - Desktop `1280x720`: Narrative Harness Overview showed `Scope status`,
+      `Stage 1 Headless Drafting And Evaluation MVP is complete.`, `11 Current
+      scope`, `31 Deferred`, `Current release`, `Project map`, no `333` backlog
+      leak, and no detected clipped content. Looma + Knit Overview showed `Do
+      this next`, `Imported scope needs shaping`, `5 Current scope`, `30
+      Deferred`, `5 blocked`, `Current release`, `Project map`, no `333`
+      backlog leak, and no detected clipped content.
+  - Remaining failing proof:
+    - Settled Overview is still not subsecond because release-readiness itself
+      is still a heavyweight derived-state path. The next structural fix should
+      target release-readiness internals, especially terminal-scope checks,
+      repository follow-up inspection, and any repeated orientation/scope
+      projection work inside that path.
+- Contract Touch Decision:
+  - Work id: `overview-start-readiness-reuse`.
+  - Touched contracts: internal `/api/project` to
+    `buildProjectReleaseReadinessPayload` call contract.
+  - Contracts considered but not touched: persisted task schema, persisted
+    release schema, public release-readiness response payload,
+    `/api/project/spine`, Project Map, Work surface, Thread surface, and
+    Overview UI component contract.
+  - Required follow-up: profile and simplify release-readiness internals so the
+    shared summary/readiness model can serve Overview and Release without
+    recomputing expensive execution-boundary state.
+  - Apply/revert behavior: reverting reintroduces duplicate start-readiness
+    derivation in Overview detail and increases latency/state-drift risk.
+- Schema Migration Decision: no persisted schema field was added, removed, or
+  retyped. This is an in-request derived-state reuse change only.
