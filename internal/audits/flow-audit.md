@@ -28980,3 +28980,100 @@ selected-scope readiness ordering.
     readiness and Overview.
 - Schema Migration Decision: no persisted schema field was added, removed, or
   retyped. This is a shared derived-state/read-model correction only.
+
+## 2026-07-07T14:45:00Z - Release readiness repository follow-up read model
+
+- User job:
+  - From Overview or Release, the owner should see the selected current
+    scope/release readiness without Guildhall recomputing unrelated structural
+    maps or scattering repository follow-up interpretation across local view
+    code.
+  - Narrative Harness should still show its corrected current MVP scope as
+    complete from product-visible state. Looma + Knit should still show its
+    current V1 hardening scope as blocked by real follow-up, including
+    repository/dirty-checkout state.
+- Root cause classification:
+  - Runtime/provider/infrastructure problem: release-readiness still spends
+    about 1.25-1.4s on real calibration projects. The next obvious cost center
+    was sequential repository follow-up work: Guildhall-managed dirty-checkout
+    inspection followed by Git Story inspection.
+  - Data model/schema problem: repository follow-up was not named as a single
+    read model at the release-readiness boundary, even though the UI treats
+    dirty checkout and Git Story as one readiness concern.
+  - UI communication/orientation problem: slow first-stop readiness makes the
+    Overview feel less grounded even when the payload content is finally scoped
+    correctly.
+- Fix:
+  - Added `buildReleaseRepositoryFollowup(projectPath, tasks)` inside the
+    runtime API builder.
+  - Release readiness now consumes that named repository-follow-up projection
+    and collects dirty-checkout plus Git Story state in parallel, preserving the
+    existing API shape while making the next consolidation seam explicit.
+- Proof provided:
+  - Focused suite:
+    `CI=true ./node_modules/.bin/vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts` passed with 56
+    tests.
+  - Build and contract checks:
+    `git diff --check`, `node ./build.mjs`, and
+    `CI=true corepack pnpm lint:contracts` passed.
+  - Install proof:
+    `pnpm dev:install` failed in this noninteractive shell with
+    `ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY`; retrying with `CI=true`
+    restored only production dependencies and exposed missing `tsc`. After
+    restoring dependencies with `CI=true pnpm install`, the direct underlying
+    install script `node scripts/dev-install.mjs` succeeded, installed the
+    current branch artifact, and `guildhall stop && guildhall start` launched
+    PID `55345`.
+  - Installed freshness:
+    `/api/stale-server` returned `stale:false`,
+    `bootBuildMtimeMs:1783435153820`, `currentBuildMtimeMs:1783435153820`, and
+    dist path `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+  - Installed API proof:
+    Narrative Harness release-readiness returned five samples at about
+    `1375ms`, `1351ms`, `1354ms`, `1360ms`, and `1343ms`, selected
+    `Stage 1 Headless Drafting And Evaluation MVP`, `tasks:11`, `done:11`,
+    `ready:true`, `blockingCount:0`, `dirtyCheckoutBlockingCount:0`, and
+    `gitStoryBlockingCount:0`. Looma + Knit release-readiness returned
+    `1294ms`, `1277ms`, `1238ms`, `1240ms`, and `1238ms`, selected
+    `Stage 1: V1 Release Hardening`, `tasks:5`, `ready:false`,
+    `blockingCount:8`, `dirtyCheckoutBlockingCount:1`, and
+    `gitStoryBlockingCount:2`.
+  - Browser proof:
+    - Desktop `1280x720`: Narrative Harness Overview showed `Scope status`,
+      `Stage 1 Headless Drafting And Evaluation MVP is complete.`, `11 Current
+      scope`, `31 Deferred`, `Project map`, and `At a glance`; no horizontal
+      overflow and no detected clipped content. Looma + Knit Overview showed
+      `Do this next`, `5 imported drafts need task briefs`, `5 Current scope`,
+      `30 Deferred`, `5 blocked`, and `Stage 1: V1 Release Hardening`; no
+      horizontal overflow and no detected clipped content.
+    - Mobile `390x844`: Narrative Harness Overview showed the same closed-scope
+      and work-mix markers with no horizontal overflow or console
+      warnings/errors after retrying a transient empty read. Looma + Knit
+      showed the selected release, current/deferred counts, and blocked marker
+      with no horizontal overflow.
+- Remaining follow-up:
+  - The first-stop APIs are still too heavy: Overview remains around `2.0s` for
+    Narrative Harness and `2.1s+` for Looma + Knit, with one Looma + Knit
+    sample at `3559ms`. The repository follow-up seam is now named, but broader
+    Start/Overview/Release caching or shared request-level projections are still
+    needed.
+  - `pnpm dev:install` itself needs a tooling fix or documented noninteractive
+    path; direct `node scripts/dev-install.mjs` is currently the reliable
+    installed-app proof path in this shell.
+- Contract Touch Decision:
+  - Work id: `release-readiness-repository-followup-read-model`.
+  - Touched contracts: release-readiness internal derived-state ownership for
+    repository follow-up.
+  - Contracts considered but not touched: persisted task schema, persisted
+    release/scope schema, Git Story response payload, dirty-checkout payload,
+    Overview UI component contract, Release tab UI contract, Start action
+    response payload.
+  - Required follow-up: consolidate request-level repository follow-up reuse
+    between Start, Overview, and Release; fix or document noninteractive
+    dev-install behavior.
+  - Apply/revert behavior: reverting restores sequential release-readiness
+    repository checks and removes the named seam needed for shared
+    repository-follow-up caching.
+- Schema Migration Decision: no persisted schema field was added, removed, or
+  retyped. This is a shared derived-state/read-model extraction only.

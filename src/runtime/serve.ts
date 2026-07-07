@@ -13044,8 +13044,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
       unfinishedCount,
       gitStoryTasks,
     } = releaseTruth
-    const dirtyCheckout = await guildhallOwnedDirtyCheckout(project.path)
-    const gitStory = await buildProjectGitStorySummary(project.path, gitStoryTasks)
+    const repositoryFollowup = await buildReleaseRepositoryFollowup(project.path, gitStoryTasks)
+    const { dirtyCheckout, gitStory } = repositoryFollowup
     const readinessProofStyle = release?.proofStyle === 'script_only' || !scopedWorkNeedsDesignSystem(scopedTasks, release)
       ? 'script_only'
       : release?.proofStyle
@@ -13150,6 +13150,20 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }, 500)
     }
   })
+
+  async function buildReleaseRepositoryFollowup(
+    projectPath: string,
+    tasks: Array<Record<string, unknown>>,
+  ): Promise<{
+    dirtyCheckout: Awaited<ReturnType<typeof guildhallOwnedDirtyCheckout>>
+    gitStory: GitStorySummary
+  }> {
+    const [dirtyCheckout, gitStory] = await Promise.all([
+      guildhallOwnedDirtyCheckout(projectPath),
+      buildProjectGitStorySummary(projectPath, tasks),
+    ])
+    return { dirtyCheckout, gitStory }
+  }
 
   async function guildhallOwnedDirtyCheckout(projectPath: string): Promise<{
     ownedCount: number
