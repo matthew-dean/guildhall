@@ -9,6 +9,14 @@ export interface ProjectActionStartReadiness {
   focusTaskTitle?: string
   focusKind?: string
   count?: number
+  executionScope?: {
+    id: string
+    label: string
+    kind: string
+    source?: string
+    taskCount?: number
+    deferredTaskCount?: number
+  }
 }
 
 export interface ProjectActionInboxItem {

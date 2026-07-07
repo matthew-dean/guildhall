@@ -1170,6 +1170,13 @@ describe('POST /api/project/start', () => {
     expect(projectBody.startReadiness).toMatchObject({
       canStart: false,
       code: 'all_terminal',
+      executionScope: {
+        id: 'headless-mvp',
+        label: 'Headless MVP',
+        kind: 'release',
+        taskCount: 1,
+        deferredTaskCount: 1,
+      },
     })
     expect(projectBody.startReadiness?.message).toContain('Headless MVP')
     expect(projectBody.startReadiness?.message).toContain('complete')
@@ -1194,6 +1201,13 @@ describe('POST /api/project/start', () => {
     expect(startBody).toMatchObject({
       status: 'stopped',
       code: 'all_terminal',
+      executionScope: {
+        id: 'headless-mvp',
+        label: 'Headless MVP',
+        kind: 'release',
+        taskCount: 1,
+        deferredTaskCount: 1,
+      },
       stopSummary: { reason: 'all_terminal' },
     })
   })

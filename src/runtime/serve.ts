@@ -301,7 +301,7 @@ import {
 } from '@guildhall/skills'
 import { importedTaskNeedsBriefShaping, importedTaskNeedsSourceRecovery, normalizeImportedDraftTask } from './import-drafts.js'
 import { taskShapingBlockers } from '../shared/task-shaping-blockers.js'
-import { selectedReleaseScopeForQueue } from './orchestrator-picker.js'
+import { selectedReleaseScopeForQueue, selectedTaskScopeForQueue } from './orchestrator-picker.js'
 import { specReviewRequiresOwnerApproval } from './spec-review-ownership.js'
 import {
   buildInbox,
@@ -584,6 +584,7 @@ interface ServiceProjectSummary {
     focusKind?: string
     proofTaskIds?: string[]
     count?: number
+    executionScope?: StartExecutionScopeSummary
   } | null
   migrationSummary?: {
     pending: number
@@ -2551,6 +2552,31 @@ function tasksEligibleForScopeExecution(tasks: Task[], scope: OrientationScope |
   if (!scope) return tasks
   const tasksById = new Map(tasks.map(task => [task.id, task] as const))
   return tasks.filter(task => taskEligibleForSelectedScope(task, scope, { tasksById }).eligible)
+}
+
+function sourceConflictCompetesWithSelectedScope(
+  gap: { kind: string; severity: string; refs?: string[] },
+  tasks: Task[],
+  scope: OrientationScope | null | undefined,
+): boolean {
+  if (gap.kind !== 'source_conflict') return false
+  if (!scope) return gap.severity === 'blocker'
+  const tasksById = new Map(tasks.map(task => [task.id, task] as const))
+  const refTasks = (gap.refs ?? [])
+    .map(ref => ref.startsWith('task:') ? ref.slice('task:'.length) : '')
+    .map(taskId => tasksById.get(taskId))
+    .filter((task): task is Task => Boolean(task))
+  const hasIncludedTask = refTasks.some(task =>
+    taskEligibleForSelectedScope(task, scope, { tasksById }).eligible,
+  )
+  const hasCompetingScopedTask = refTasks.some((task) => {
+    if (taskEligibleForSelectedScope(task, scope, { tasksById }).eligible) return false
+    const releaseIds = (task as { releaseIds?: unknown }).releaseIds
+    if (Array.isArray(releaseIds) && releaseIds.length > 0) return true
+    const taskScope = String((task as { scope?: unknown }).scope ?? '').trim()
+    return taskScope.length > 0 && taskScope !== 'current'
+  })
+  return hasIncludedTask && hasCompetingScopedTask
 }
 
 async function chooseProjectFolderMacOS(): Promise<string | null> {
@@ -6635,62 +6661,65 @@ export function buildServeApp(opts: ServeOptions = {}): {
     count?: number
     loadedModels?: string[]
     missingModels?: string[]
+    executionScope?: StartExecutionScopeSummary
   }> {
+    const executionScope = await startExecutionScopeSummary(input.projectPath, input.requestedTaskId)
+    const attachExecutionScope = <T extends { canStart: boolean }>(status: T): T & { executionScope?: StartExecutionScopeSummary } =>
+      executionScope ? { ...status, executionScope } : status
+
     const runtimeBlocker = projectRuntimeCompatibilityBlocker({ projectRoot: input.projectPath })
-    if (runtimeBlocker) return runtimeBlocker
+    if (runtimeBlocker) return attachExecutionScope(runtimeBlocker)
 
     const requiredMigrationBlocker = await startBlockerForRequiredMigrations(input.projectPath)
-    if (requiredMigrationBlocker) return requiredMigrationBlocker
+    if (requiredMigrationBlocker) return attachExecutionScope(requiredMigrationBlocker)
 
     const ownerInputBlocker = startBlockerForOwnerInput(input.projectPath)
-    if (ownerInputBlocker) return ownerInputBlocker
+    if (ownerInputBlocker) return attachExecutionScope(ownerInputBlocker)
 
     const terminal = await terminalStartState(input.projectPath, input.requestedTaskId)
     if (terminal?.selectedReleaseTerminal) {
-      if (terminal.code === 'proof_evidence_missing') {
-        const orientationShapingBlocker = await startBlockerForOrientationScopeShaping(input.projectPath, input.requestedTaskId)
-        if (orientationShapingBlocker) return orientationShapingBlocker
-        const importDraftBlocker = await startBlockerForImportDrafts(input.projectPath, input.requestedTaskId)
-        if (importDraftBlocker) return importDraftBlocker
-      }
+      const orientationShapingBlocker = await startBlockerForOrientationScopeShaping(input.projectPath, input.requestedTaskId)
+      if (orientationShapingBlocker) return attachExecutionScope(orientationShapingBlocker)
+      const importDraftBlocker = await startBlockerForImportDrafts(input.projectPath, input.requestedTaskId)
+      if (importDraftBlocker) return attachExecutionScope(importDraftBlocker)
       if (terminal.code === 'all_terminal' && input.allowTaskReadinessBlocker !== false) {
         const selectedReleaseReviewBlocker = await startBlockerForSelectedReleaseReview(input.projectPath, input.resolvedConfig)
-        if (selectedReleaseReviewBlocker) return selectedReleaseReviewBlocker
+        if (selectedReleaseReviewBlocker) return attachExecutionScope(selectedReleaseReviewBlocker)
       }
-      return startReadinessForTerminalState(terminal)
+      return attachExecutionScope(startReadinessForTerminalState(terminal))
     }
     const hasMaterializedStartWork = await hasMaterializedScopedStartWork(input.projectPath, input.requestedTaskId)
     const workspaceImportCoverageBlocker = hasMaterializedStartWork
       ? null
       : await startBlockerForWorkspaceImportCoverage(input.projectPath)
-    if (workspaceImportCoverageBlocker) return workspaceImportCoverageBlocker
+    if (workspaceImportCoverageBlocker) return attachExecutionScope(workspaceImportCoverageBlocker)
 
     if (terminal && terminal.code !== 'proof_evidence_missing') {
-      return startReadinessForTerminalState(terminal)
+      return attachExecutionScope(startReadinessForTerminalState(terminal))
     }
 
     const orientationShapingBlocker = await startBlockerForOrientationScopeShaping(input.projectPath, input.requestedTaskId)
     if (input.allowTaskReadinessBlocker !== false) {
       const selectedReleaseReviewBlocker = await startBlockerForSelectedReleaseReview(input.projectPath, input.resolvedConfig)
-      if (selectedReleaseReviewBlocker) return selectedReleaseReviewBlocker
+      if (selectedReleaseReviewBlocker) return attachExecutionScope(selectedReleaseReviewBlocker)
     }
 
-    if (orientationShapingBlocker) return orientationShapingBlocker
+    if (orientationShapingBlocker) return attachExecutionScope(orientationShapingBlocker)
 
     const importDraftBlocker = await startBlockerForImportDrafts(input.projectPath, input.requestedTaskId)
-    if (importDraftBlocker) return importDraftBlocker
+    if (importDraftBlocker) return attachExecutionScope(importDraftBlocker)
 
     if (terminal && terminal.code !== 'proof_evidence_missing') {
-      return startReadinessForTerminalState(terminal)
+      return attachExecutionScope(startReadinessForTerminalState(terminal))
     }
 
-	    if (input.allowTaskReadinessBlocker !== false) {
-	      const taskReadinessBlocker = await startBlockerForTaskReadiness(input.projectPath)
-	      if (taskReadinessBlocker) return taskReadinessBlocker
-	    }
+    if (input.allowTaskReadinessBlocker !== false) {
+      const taskReadinessBlocker = await startBlockerForTaskReadiness(input.projectPath)
+      if (taskReadinessBlocker) return attachExecutionScope(taskReadinessBlocker)
+    }
 
     if (terminal) {
-      return startReadinessForTerminalState(terminal)
+      return attachExecutionScope(startReadinessForTerminalState(terminal))
     }
 
     try {
@@ -6699,52 +6728,52 @@ export function buildServeApp(opts: ServeOptions = {}): {
       })
       const invariant = projectLeverInvariantError(settings.project)
       if (invariant) {
-        return {
+        return attachExecutionScope({
           canStart: false,
           code: 'invalid_lever_combo',
           message: invariant,
           actionHref: '/settings/advanced',
-        }
+        })
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       if (/concurrent_task_dispatch.*worktree_isolation/i.test(message)) {
-        return {
+        return attachExecutionScope({
           canStart: false,
           code: 'invalid_lever_combo',
           message,
           actionHref: '/settings/advanced',
-        }
+        })
       }
     }
 
     const preflight = await selectApiClient(input.runtimeProvider.selectOptions)
     if (preflight.providerName === 'none') {
-      return {
+      return attachExecutionScope({
         canStart: false,
         code: 'no_provider',
         message:
           preflight.reason ??
           'No provider configured. Open Providers to choose one before starting.',
         actionHref: '/providers',
-      }
+      })
     }
 
     if (preflight.providerName !== 'llama-cpp') {
-      return await readyStartStatus(
+      return attachExecutionScope(await readyStartStatus(
         input.projectPath,
         input.requestedTaskId,
         input.resolvedConfig.id ?? basename(input.projectPath),
-      )
+      ))
     }
 
     const creds = input.runtimeProvider.credentials
     if (!creds.llamaCppUrl) {
-      return await readyStartStatus(
+      return attachExecutionScope(await readyStartStatus(
         input.projectPath,
         input.requestedTaskId,
         input.resolvedConfig.id ?? basename(input.projectPath),
-      )
+      ))
     }
 
     const loadedModels = await loadedLlamaModelIds(creds.llamaCppUrl).catch(() => [])
@@ -6753,42 +6782,42 @@ export function buildServeApp(opts: ServeOptions = {}): {
         ? await selectPaidFallbackProvider(creds)
         : null
       if (!paidFallback || paidFallback.providerName === 'none') {
-        return {
+        return attachExecutionScope({
           canStart: false,
           code: 'no_loaded_model',
           message:
             'The configured local server is reachable, but no loaded model was visible. To avoid surprise memory pressure from JIT loading, load the model you want on that server, then start again.',
           actionHref: '/providers',
           loadedModels,
-        }
+        })
       }
-      return await readyStartStatus(
+      return attachExecutionScope(await readyStartStatus(
         input.projectPath,
         input.requestedTaskId,
         input.resolvedConfig.id ?? basename(input.projectPath),
-      )
+      ))
     }
 
     const missingModels = missingAssignedModels(input.resolvedConfig.models, loadedModels)
     if (missingModels.length === 0) {
-      return await readyStartStatus(
+      return attachExecutionScope(await readyStartStatus(
         input.projectPath,
         input.requestedTaskId,
         input.resolvedConfig.id ?? basename(input.projectPath),
-      )
+      ))
     }
 
     const paidFallback = input.allowPaidProviderFallback
       ? await selectPaidFallbackProvider(creds)
       : null
     if (paidFallback && paidFallback.providerName !== 'none') {
-      return await readyStartStatus(
+      return attachExecutionScope(await readyStartStatus(
         input.projectPath,
         input.requestedTaskId,
         input.resolvedConfig.id ?? basename(input.projectPath),
-      )
+      ))
     }
-    return {
+    return attachExecutionScope({
       canStart: false,
       code: 'model_unavailable',
       message:
@@ -6797,7 +6826,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       actionHref: '/providers',
       loadedModels,
       missingModels,
-    }
+    })
   }
 
   async function readyStartStatus(projectPath: string, requestedTaskId: string | undefined, projectId: string): Promise<{
@@ -6949,6 +6978,67 @@ export function buildServeApp(opts: ServeOptions = {}): {
         return 409
       default:
         return 400
+    }
+  }
+
+  type StartExecutionScopeSummary = {
+    id: string
+    label: string
+    kind: string
+    source?: string
+    taskCount?: number
+    deferredTaskCount?: number
+  }
+
+  async function startExecutionScopeSummary(
+    projectPath: string,
+    requestedTaskId?: string,
+  ): Promise<StartExecutionScopeSummary | undefined> {
+    const tasksPath = projectTasksPath(projectPath)
+    const queue = await readTaskQueueFileNormalized(tasksPath).catch(() => null)
+    if (requestedTaskId) {
+      const task = queue?.tasks.find(candidate => candidate.id === requestedTaskId)
+      return {
+        id: requestedTaskId,
+        label: typeof task?.title === 'string' && task.title.trim() ? task.title.trim() : requestedTaskId,
+        kind: 'work_item',
+        source: 'owner_selected',
+        taskCount: task ? 1 : undefined,
+      }
+    }
+    if (!queue) return undefined
+    const typedTasks = queue.tasks as Task[]
+    const selectedReleaseScope = selectedReleaseScopeFromQueueLike({
+      tasks: typedTasks,
+      releases: queue.releases,
+      ...(queue.selectedReleaseId ? { selectedReleaseId: queue.selectedReleaseId } : {}),
+    })
+    const workspaceGoalsState = selectedReleaseScope
+      ? null
+      : await readWorkspaceGoalsState(getProjectStateDir(projectPath)).catch(() => null)
+    const selectedScope = selectedReleaseScope ?? selectedTaskScopeForQueue(
+      { tasks: typedTasks },
+      workspaceGoalsState?.approved ?? null,
+    )
+    if (selectedScope) {
+      return {
+        id: selectedScope.id,
+        label: selectedScope.label,
+        kind: selectedScope.kind,
+        source: selectedScope.source,
+        taskCount: selectedScope.nodeIds.length,
+        deferredTaskCount: selectedScope.deferredNodeIds.length,
+      }
+    }
+    const currentTasks = typedTasks.filter(task => !['archived', 'cancelled', 'shelved'].includes(String(task.status ?? '')))
+    const deferredTasks = typedTasks.filter(task => ['archived', 'cancelled', 'shelved'].includes(String(task.status ?? '')))
+    return {
+      id: 'current-work',
+      label: 'Current task scope',
+      kind: 'proposed_feature_set',
+      source: 'inferred',
+      taskCount: currentTasks.length,
+      deferredTaskCount: deferredTasks.length,
     }
   }
 
@@ -7152,7 +7242,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
     }
     const sourceConflict = scopedOrientation?.orientationSpine.gaps.find(gap =>
-      gap.kind === 'source_conflict' && gap.severity === 'blocker',
+      sourceConflictCompetesWithSelectedScope(gap, effectiveTasks, selectedReleaseScope),
     )
     if (sourceConflict) {
       const scopeLabel = selectedReleaseScope?.label ?? 'Current task scope'
@@ -7996,13 +8086,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
   async function startBlockerForOrientationScopeShaping(projectPath: string, requestedTaskId?: string): Promise<{
     canStart: false
-    code: 'no_unattended_progress'
+    code: 'no_unattended_progress' | 'scope_source_conflict'
     message: string
     actionHref: string
     focusTaskId?: string
     focusTaskTitle?: string
-    focusKind: 'brief_cleanup'
-    count: number
+    focusKind: 'brief_cleanup' | 'source_conflict'
+    count?: number
   } | null> {
     if (requestedTaskId) return null
     const tasksPath = projectTasksPath(projectPath)
@@ -8031,6 +8121,19 @@ export function buildServeApp(opts: ServeOptions = {}): {
       workspaceImportDraft: await workspaceImportDraftForOrientation(projectPath, null),
       sourceRefs: projectOrientationSourceRefs(projectPath),
     })
+    const sourceConflict = orientationSpine.gaps.find(gap =>
+      sourceConflictCompetesWithSelectedScope(gap, effectiveTasks, selectedReleaseScope),
+    )
+    if (sourceConflict) {
+      const scopeLabel = orientationSpine.scope?.label ?? selectedReleaseScope?.label ?? 'Current task scope'
+      return {
+        canStart: false,
+        code: 'scope_source_conflict',
+        message: `${scopeLabel} has source conflicts to review before work can start: ${sourceConflict.label}`,
+        actionHref: '/map',
+        focusKind: 'source_conflict',
+      }
+    }
     const rows = orientationSpine.scopeRows.filter(row =>
       row.scope === 'included' &&
       row.taskId.startsWith('workspace-import:') &&
@@ -8597,12 +8700,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
       })
       if (!startReadiness.canStart) {
         if (startReadiness.code === 'all_terminal') {
-	          const terminal = await terminalStartState(project.path, body.taskId)
+          const terminal = await terminalStartState(project.path, body.taskId)
           if (terminal) {
             return c.json({
               status: 'stopped',
               mode: 'continuous',
               code: terminal.code,
+              ...(startReadiness.executionScope ? { executionScope: startReadiness.executionScope } : {}),
               stopSummary: terminal.stopSummary,
             })
           }
@@ -8614,6 +8718,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
               actionHref: startReadiness.actionHref,
               loadedModels: startReadiness.loadedModels,
               missingModels: startReadiness.missingModels,
+              ...(startReadiness.executionScope ? { executionScope: startReadiness.executionScope } : {}),
             },
             blockedStartStatus(startReadiness.code),
           )
@@ -8785,6 +8890,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         status: run.status,
         mode: run.mode,
         startedAt: run.startedAt,
+        ...(startReadiness.executionScope ? { executionScope: startReadiness.executionScope } : {}),
         ...(run.stopSummary ? { stopSummary: run.stopSummary } : {}),
         provider: effectiveProvider,
         providerStatus: run.providerStatus,

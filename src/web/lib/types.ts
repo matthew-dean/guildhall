@@ -1329,6 +1329,14 @@ export interface StartReadiness {
   focusKind?: string
   proofTaskIds?: string[]
   count?: number
+  executionScope?: {
+    id: string
+    label: string
+    kind: string
+    source?: string
+    taskCount?: number
+    deferredTaskCount?: number
+  }
 }
 
 export interface ProjectAvailability {

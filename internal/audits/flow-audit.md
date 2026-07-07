@@ -29151,3 +29151,97 @@ selected-scope readiness ordering.
     failures or production-only workspace installs.
 - Schema Migration Decision: no persisted Guildhall schema field was added,
   removed, or retyped. This is package-manager configuration only.
+
+## 2026-07-07T15:05:00Z - Start responses expose the selected execution boundary
+
+- User job:
+  - Pressing Start/Resume must make it obvious what bounded scope Guildhall is
+    allowed to consume: a selected release when one exists, or the current
+    bounded scope when no release exists.
+  - The Overview, release/readiness payloads, and Start endpoint must agree on
+    that boundary so agents cannot accidentally report "complete", "blocked",
+    or "running" for the wrong slice of a project.
+- Root cause classification:
+  - Project structure/scope/release modeling problem: Start readiness already
+    used selected release/current-scope scheduling rules, but the API response
+    did not expose the selected execution boundary as a first-class read-model
+    field.
+  - Scheduler/action-state logic problem: blocked and terminal Start responses
+    returned different payload shapes, so the caller could not verify that the
+    blocker or no-op completion belonged to the selected release.
+  - Task hierarchy/dependency/proof modeling problem: duplicate scoped work
+    conflicts were too easy to lose behind repository follow-up when the
+    selected scope had no runnable tasks left.
+  - UI communication/orientation problem: product surfaces could show a scoped
+    release summary while the Start button/endpoint still required hidden
+    inference to know which scope Start would consume.
+- Fix:
+  - Added `startReadiness.executionScope` to the shared project read model,
+    web type, and Start endpoint responses.
+  - The execution-scope summary is derived from the same selected release /
+    selected task scope helpers used by the scheduler instead of local UI copy.
+  - Blocked, terminal, and started Start responses now return the same
+    `executionScope` shape when one is known.
+  - Source-conflict readiness now treats cross-scope duplicate work as blocking
+    only when the conflict includes current selected-scope work and a competing
+    real scoped/deferred task; unscoped stale importer residue does not widen
+    the selected release.
+- Proof provided:
+  - `git diff --check` passed.
+  - `CI=true ./node_modules/.bin/vitest run
+    src/runtime/__tests__/orchestrator-picker.test.ts
+    src/runtime/__tests__/project-action-model.test.ts
+    src/runtime/__tests__/serve-settings.test.ts
+    src/runtime/__tests__/serve-release-readiness.test.ts` passed: 4 files,
+    214 tests.
+  - `CI=true corepack pnpm lint:contracts` passed with contract decision
+    evidence.
+  - `node ./build.mjs` passed.
+  - `pnpm dev:install` passed with no environment override.
+  - `guildhall stop && guildhall start` restarted the installed app.
+  - `/api/stale-server` returned `stale:false`, PID `91566`,
+    `bootBuildMtimeMs:1783436558984`, and
+    `currentBuildMtimeMs:1783436558984`.
+  - Installed API proof:
+    - Narrative Harness `/api/project?projectId=narrative-harness&surface=overview`
+      reports selected scope `Stage 1 Headless Drafting And Evaluation MVP`,
+      `startReadiness.code: all_terminal`, and `executionScope` with
+      `kind: release`, `taskCount:11`, `deferredTaskCount:0`.
+    - Narrative Harness `POST /api/project/start?projectId=narrative-harness`
+      returns `status: stopped`, `code: all_terminal`, the same execution
+      scope, and stop-summary counts `total:11`, `done:11`, `actionable:0`.
+    - Looma + Knit `/api/project?projectId=looma-knit&surface=overview`
+      reports selected scope `Stage 1: V1 Release Hardening`,
+      `startReadiness.code: imported_scope_shaping`, and `executionScope` with
+      `kind: release`, `taskCount:5`, `deferredTaskCount:0`.
+    - Looma + Knit `POST /api/project/start?projectId=looma-knit` returns
+      HTTP 400 with `code: imported_scope_shaping`, `actionHref:
+      /task/task-import-kj0cyz`, and the same execution scope.
+  - Browser proof:
+    - `/projects/narrative-harness/overview` visibly shows `Stage 1 Headless
+      Drafting And Evaluation MVP is complete`, `11 Current scope`,
+      `31 Deferred`, `11 work items in view`, `0 missing verification`,
+      `0 blocked`, `11 verified`, and Work/Map/Release navigation.
+    - `/projects/looma-knit/overview` visibly shows `5 current-scope tasks
+      still need source-backed shaping`, `Shape first task`, `5 Current scope`,
+      `30 Deferred`, current release `Stage 1: V1 Release Hardening`,
+      `0 / 5 done`, `5 unfinished`, and the same first shaping task named in
+      the API.
+- Contract Touch Decision:
+  - Work id: `start-readiness-execution-scope`.
+  - Touched contracts: `/api/project` start-readiness payload,
+    `/api/project/start` response payload, runtime project action model type,
+    and web `StartReadiness` type.
+  - Contracts considered but not touched: persisted task queue schema,
+    persisted release/scope schema, release-readiness payload shape,
+    orchestrator task-picking contract, Overview component contract, Release tab
+    UI contract, and project registry schema.
+  - Required follow-up: continue reducing duplicated projection work between
+    Overview, Release, and Start so `executionScope`, release readiness, and
+    repository follow-up are computed once per request rather than rebuilt in
+    several helpers.
+  - Apply/revert behavior: reverting removes the visible execution boundary
+    from Start readiness and Start responses, reintroducing the need to infer
+    what Start/Resume would consume from nearby release or task data.
+- Schema Migration Decision: no persisted schema field was added, removed, or
+  retyped. This is a read-model/API contract extension only.
