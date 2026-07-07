@@ -263,6 +263,8 @@ export interface OrientationTaskInput {
   doneSummaryBundle?: unknown
   gateResults?: unknown[]
   reviewVerdicts?: unknown[]
+  latestReviewerSummary?: string
+  latestSelfCritique?: string
   completionHandoff?: {
     verified?: string[]
     notVerified?: string[]

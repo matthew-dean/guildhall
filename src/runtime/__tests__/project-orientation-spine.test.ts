@@ -1285,6 +1285,97 @@ describe('buildProjectOrientationSpine', () => {
     expect(spine.proofContracts[0]?.state).toBe('needed')
   })
 
+  it('does not treat imported proof-path status as completed proof evidence', () => {
+    const spine = buildProjectOrientationSpine({
+      projectId: 'narrative-harness',
+      now: '2026-07-06T12:00:00.000Z',
+      scope: {
+        id: 'stage-1-headless-mvp',
+        label: 'Stage 1 Headless MVP',
+        kind: 'release',
+        source: 'release_plan',
+        nodeIds: ['work:world-state-review'],
+        deferredNodeIds: [],
+      },
+      tasks: [{
+        id: 'world-state-review',
+        title: 'Prove world-state continuity review over elapsed-time object and property changes.',
+        status: 'done',
+        acceptanceCriteria: [
+          { id: 'state-transition', description: 'The reviewer catches object property changes caused by elapsed time.', met: true },
+        ],
+        proofPaths: [{
+          kind: 'review',
+          source: 'inferred',
+          status: 'verified',
+          expectedEvidence: [
+            'The reviewer catches object property changes caused by elapsed time.',
+            'The proof explains whether wet hair would dry in the story climate.',
+          ],
+        }],
+      }],
+    })
+
+    expect(spine.summary.progress).toMatchObject({
+      done: 0,
+      proven: 0,
+    })
+    expect(spine.nodes['work:world-state-review']?.maturity).toBe('proof_needed')
+    expect(spine.proofContracts[0]).toMatchObject({
+      title: 'Prove world-state continuity review over elapsed-time object and property changes.',
+      state: 'needed',
+      missing: ['Required proof evidence has not been attached yet.'],
+    })
+  })
+
+  it('surfaces latest reviewer proof text when it satisfies imported proof evidence', () => {
+    const spine = buildProjectOrientationSpine({
+      projectId: 'narrative-harness',
+      now: '2026-07-06T12:00:00.000Z',
+      scope: {
+        id: 'stage-1-headless-mvp',
+        label: 'Stage 1 Headless MVP',
+        kind: 'release',
+        source: 'release_plan',
+        nodeIds: ['work:world-state-review'],
+        deferredNodeIds: [],
+      },
+      tasks: [{
+        id: 'world-state-review',
+        title: 'Prove world-state continuity review over elapsed-time object and property changes.',
+        status: 'done',
+        acceptanceCriteria: [
+          { id: 'state-transition', description: 'The reviewer catches object property changes caused by elapsed time.', met: true },
+        ],
+        latestReviewerSummary: [
+          '**Verdict:** Approved',
+          'The proof runs `node scripts/prove-world-state-continuity.mjs`.',
+          'The reviewer catches object property changes caused by elapsed time.',
+          'The proof explains whether wet hair would dry in the story climate.',
+        ].join('\n'),
+        proofPaths: [{
+          kind: 'review',
+          source: 'inferred',
+          status: 'verified',
+          expectedEvidence: [
+            'The reviewer catches object property changes caused by elapsed time.',
+            'The proof explains whether wet hair would dry in the story climate.',
+          ],
+        }],
+      }],
+    })
+
+    expect(spine.summary.progress).toMatchObject({
+      done: 1,
+      proven: 1,
+    })
+    expect(spine.proofContracts[0]).toMatchObject({
+      state: 'proven',
+      missing: [],
+    })
+    expect(spine.proofContracts[0]?.verified[0]).toBe('Reviewer proof: The proof runs `node scripts/prove-world-state-continuity.mjs`.')
+  })
+
   it('counts ready work with missing proof as ready but not proven', () => {
     const spine = buildProjectOrientationSpine({
       projectId: 'narrative-harness',

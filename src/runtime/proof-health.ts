@@ -241,6 +241,10 @@ function completionEvidenceTextForTask(task: unknown): string {
       if (typeof value === 'string') chunks.push(value)
     }
   }
+  for (const key of ['latestReviewerSummary', 'latestSelfCritique']) {
+    const value = record[key]
+    if (typeof value === 'string') chunks.push(value)
+  }
   return normalizedText(chunks.join('\n')).toLowerCase()
 }
 
@@ -302,7 +306,6 @@ function proofPathMissingEvidence(proofPath: unknown, task: unknown): boolean {
       reviewProofCanSettleStringEvidenceHint(record, task)
     )
   }
-  if (record.status === 'verified') return false
   return verificationRecords.every(item => !Boolean(item && typeof item === 'object' && (item as { status?: unknown }).status === 'passed'))
 }
 

@@ -13,6 +13,33 @@ function recordValue(value: unknown): Record<string, unknown> | null {
     : null
 }
 
+function approvedReviewerProofSummary(value: unknown): string | null {
+  const text = stringValue(value)
+  if (!text) return null
+  const normalized = text.replace(/\*\*/g, '')
+  if (!/\b(?:verdict|review)\s*:\s*(?:approved|approve)\b/i.test(normalized)) return null
+  const lines = text
+    .split(/\r?\n/)
+    .map(line => line.replace(/^\s*[-*]\s*/, '').replace(/\*\*/g, '').trim())
+    .filter(Boolean)
+    .filter(line => !/\b(?:verdict|review)\s*:\s*(?:approved|approve)\b/i.test(line))
+  const proofLine = lines.find(line => /\b(?:proof|command|script|pnpm|npm|node|test|fixture|reviewer|model|output|evidence)\b/i.test(line))
+  return proofLine ? `Reviewer proof: ${proofLine}` : 'Reviewer proof: approved completion evidence.'
+}
+
+function proofEvidenceRank(value: string): number {
+  if (value.startsWith('Reviewer proof:')) return 0
+  if (/^Gate passed: (?!content\.no-truncated-data\b)/i.test(value)) return 1
+  if (/^Done summary:/i.test(value) && !/\bcontent\.no-truncated-data\b/i.test(value)) return 2
+  if (/^Review approved:/i.test(value)) return 3
+  if (/\bcontent\.no-truncated-data\b/i.test(value)) return 5
+  return 4
+}
+
+function prioritizeProofEvidence(values: string[]): string[] {
+  return [...values].sort((a, b) => proofEvidenceRank(a) - proofEvidenceRank(b))
+}
+
 export function recordedCompletionProofForTask(task: unknown): RecordedCompletionProof {
   const record = recordValue(task)
   if (!record) return { verified: [], latestAt: null }
@@ -65,9 +92,12 @@ export function recordedCompletionProofForTask(task: unknown): RecordedCompletio
     addProofDate(note.timestamp)
   }
 
+  const latestReviewerSummary = approvedReviewerProofSummary(record.latestReviewerSummary)
+  if (latestReviewerSummary) verified.push(latestReviewerSummary)
+
   const latestAt = proofDates
     .sort((a, b) => Date.parse(b) - Date.parse(a))[0] ?? null
-  return { verified, latestAt }
+  return { verified: prioritizeProofEvidence(verified), latestAt }
 }
 
 export function taskHasRecordedCompletionProof(task: unknown): boolean {

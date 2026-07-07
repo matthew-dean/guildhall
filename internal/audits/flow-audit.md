@@ -25523,3 +25523,68 @@ selected-scope readiness ordering.
     `artifacts/flow-audit/looma-knit-overview-orientation-only-preview-desktop-2026-07-06.png`.
   - Apply/revert behavior: reverting restores the contradiction where a cold
     Overview can show fast orientation plus fabricated action/health defaults.
+
+## 2026-07-06 — Proof contracts lead with real reviewer evidence
+
+- Work id: `codex:proof-contract-evidence-truth-2026-07-06`.
+- User job: a user reading the Project Map or Overview proof state should be
+  able to tell why scoped work is considered proven. Guildhall must not ask the
+  user to trust generic hygiene gates, imported proof-path status, or hidden
+  reviewer notes as if they were self-explanatory capability proof.
+- Root-cause classification:
+  - Task hierarchy/dependency/proof modeling problem: imported proof-path
+    `status: verified` was too easy to confuse with actual task proof evidence.
+    Proof status must come from recorded task evidence, verification records, or
+    reviewer/self-critique proof text.
+  - UI communication/orientation problem: Narrative Harness had richer reviewer
+    proof text, but orientation proof contracts led with generic entries such
+    as `content.no-truncated-data`, so the product looked less trustworthy than
+    the underlying task evidence.
+  - Bad project data produced by an earlier Guildhall bug: current calibration
+    tasks include imported proof metadata and repaired completion state from
+    earlier intake/execution passes, so the shared model must be strict about
+    what counts as evidence.
+- Fix:
+  - `taskDoneButProofMissing` no longer treats bare proof-path
+    `status: verified` as proof evidence.
+  - Proof evidence matching now considers latest reviewer/self-critique text,
+    so real review proof can satisfy imported expected-evidence strings.
+  - Orientation proof contracts now receive prioritized proof evidence, leading
+    with reviewer proof summaries before generic build/hygiene/review labels.
+- Contract Touch Decision:
+  - Touched contracts: runtime proof-health classification,
+    recorded-completion-proof projection, and orientation task input fields used
+    by the project spine.
+  - Contracts considered but not touched: persisted task schema,
+    workspace-import proof-path schema, release-readiness API response shape,
+    Project Map UI components, Overview UI components, scheduler/start
+    contract, and release/scope selection.
+  - Existing data impact: no migration. Existing task records with
+    reviewer/self-critique proof text can now communicate that proof in the
+    project spine; proof paths with only `status: verified` no longer count as
+    proof by themselves.
+  - Required follow-up: continue separating proof metadata from proof evidence,
+    and make proof source trails visible enough that users can inspect where a
+    reviewer-proof claim came from.
+  - Proof required: failing spine regression for imported proof-path status
+    without evidence, failing spine regression for reviewer proof text being
+    ignored, release-readiness regression for proof-path status alone,
+    focused proof/readiness tests, installed-app stale-server proof, and live
+    API proof on Narrative Harness and Looma + Knit.
+  - Proof provided: the reviewer-proof regression first failed with
+    `done:0/proven:0` because latest reviewer proof text was ignored. After the
+    fix, focused Project Orientation Spine tests passed (`5` tests selected)
+    and focused Release Readiness tests passed (`12` tests selected), run via
+    `./node_modules/.bin/vitest` after restoring dev dependencies from the
+    repo's CI-pruning behavior. `node ./build.mjs` passed. After
+    `node ./scripts/dev-install.mjs` and service restart, `/api/stale-server`
+    returned `stale:false` for PID `2178`. Live Narrative Harness API proof
+    showed current scope `42` total, `11` done, `11` proven, release readiness
+    `ready:true`, and proof contracts leading with reviewer proof for
+    author-intent, world-state, and spatial/geographic continuity tasks.
+    Live Looma + Knit API proof showed current scope `35` total, `5` blocked,
+    `30` deferred, release readiness `ready:false`, and proof contracts still
+    honestly `needed` with empty verified evidence.
+  - Apply/revert behavior: reverting restores the model/UI split where proof
+    contracts can lead with generic process labels and proof-path metadata can
+    be mistaken for actual evidence.

@@ -688,6 +688,65 @@ describe('GET /api/project/release-readiness', () => {
     expect(readiness.proofMissingDoneTasks).toEqual([])
   })
 
+  it('does not accept imported proof-path status without recorded task evidence', async () => {
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: 'headless-mvp',
+      releases: [{
+        id: 'headless-mvp',
+        label: 'Headless MVP',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-current'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [
+        makeTask({
+          id: 'task-current',
+          title: 'Prove world-state continuity review over elapsed-time object and property changes.',
+          status: 'done',
+          releaseIds: ['headless-mvp'],
+          proofPaths: [{
+            kind: 'review',
+            source: 'inferred',
+            status: 'verified',
+            expectedEvidence: [
+              'The reviewer catches object property changes caused by elapsed time.',
+              'The proof explains whether wet hair would dry in the story climate.',
+            ],
+          }],
+        } as Partial<Task>),
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await approveDesignSystem(app)
+    await commitAndPush('imported proof-path status release readiness')
+
+    const readinessRes = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
+    const readiness = await readinessRes.json() as any
+
+    expect(readiness.ready).toBe(false)
+    expect(readiness.totals).toMatchObject({
+      tasks: 1,
+      done: 1,
+      proofEvidenceBlockingCount: 1,
+    })
+    expect(readiness.proofMissingDoneTasks).toEqual([{
+      id: 'task-current',
+      title: 'Prove world-state continuity review over elapsed-time object and property changes.',
+    }])
+
+    const projectRes = await app.fetch(new Request(projectUrl('/api/project')))
+    const project = await projectRes.json() as any
+    expect(project.orientationSpine?.summary?.progress).toMatchObject({
+      done: 1,
+      proven: 0,
+    })
+  })
+
   it('accepts review-backed imported proof hints when later completion evidence exists', async () => {
     await seedQueue({
       version: 1,
