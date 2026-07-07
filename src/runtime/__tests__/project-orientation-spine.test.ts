@@ -2459,6 +2459,47 @@ describe('buildProjectOrientationSpine', () => {
     expect(spine.release.blockers[1]).not.toHaveProperty('owningNodeId')
   })
 
+  it('does not duplicate start-readiness repository blockers already reported by release readiness', () => {
+    const repositoryLabel = 'main has 3 local commits not pushed to origin/main.'
+    const startMessage = `Stage 1 Headless Drafting And Evaluation MVP has no runnable task work left, but repository follow-up is still needed: ${repositoryLabel}`
+
+    const spine = buildProjectOrientationSpine({
+      projectId: 'narrative-harness',
+      now: '2026-07-07T12:30:00.000Z',
+      selectedReleaseId: 'stage-1',
+      releases: [{
+        id: 'stage-1',
+        label: 'Stage 1 Headless Drafting And Evaluation MVP',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: [],
+        deferredNodeIds: [],
+      }],
+      tasks: [],
+      releaseReadiness: {
+        verdict: 'blocked',
+        blockers: [{
+          id: 'repository-followup:repo:0',
+          label: repositoryLabel,
+        }],
+      },
+      startReadiness: {
+        canStart: false,
+        code: 'repository_followup_required',
+        message: startMessage,
+        actionHref: '/release',
+      },
+    })
+
+    expect(spine.release.blockers).toEqual([
+      expect.objectContaining({
+        id: 'repository-followup:repo:0',
+        label: repositoryLabel,
+      }),
+    ])
+  })
+
   it('preserves detected release buckets for later tasks that already exist in saved task state', () => {
     const spine = buildProjectOrientationSpine({
       projectId: 'narrative-harness',

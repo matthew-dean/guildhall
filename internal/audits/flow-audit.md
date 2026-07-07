@@ -27988,3 +27988,69 @@ selected-scope readiness ordering.
 - Schema Migration Decision: no persisted schema field was added, removed, or
   retyped. This changes derived spine/readiness projection and permissive web
   payload typing only.
+
+## 2026-07-07T12:32:20Z - Synthetic Start blockers must not duplicate release-readiness blockers
+
+- User job:
+  - When Narrative Harness has one real release blocker, the owner should see
+    one blocker in the Project Map and spine APIs. Guildhall can repeat the
+    same condition in the top action summary, but it must not list the same
+    release blocker twice under different ids.
+- Finding:
+  - Root cause classification:
+    - Data model/schema problem: the orientation spine merged release-readiness
+      blockers and synthetic Start-readiness blockers by id only.
+    - UI communication/orientation problem: Narrative Harness readiness had one
+      repository blocker, but the spine showed both `repository-followup:repo:0`
+      and `start-readiness:repository_followup_required` with the same
+      underlying push action.
+    - Project structure/scope/release modeling problem: a Start-level summary
+      can describe the release boundary, but it should not become a second
+      release blocker when release readiness already carries the concrete
+      blocker row.
+- Fix:
+  - The spine builder now suppresses a synthetic Start blocker when its label
+    contains an already-reported non-task blocker label.
+  - Task blockers are excluded from that semantic suppression, so a separate
+    repository/closure Start blocker can still appear alongside task-shaping
+    blockers when it describes a genuinely additional condition.
+- Proof provided:
+  - Red/green regression:
+    `CI=true ./node_modules/.bin/vitest run
+    src/runtime/__tests__/project-orientation-spine.test.ts -t "does not
+    duplicate start-readiness repository blockers"` first failed with both the
+    repository blocker and synthetic Start blocker; it now passes.
+  - Broader regression:
+    `CI=true ./node_modules/.bin/vitest run
+    src/runtime/__tests__/project-orientation-spine.test.ts
+    src/runtime/__tests__/serve-release-readiness.test.ts` passed (`117`
+    tests).
+  - Build/contracts:
+    `node ./build.mjs`, `CI=true corepack pnpm lint:contracts`, and `git diff
+    --check` passed.
+  - Installed/live proof:
+    `CI=true corepack pnpm dev:install`, `guildhall stop`, and
+    `guildhall start` installed and restarted the current branch artifact.
+    `/api/stale-server` returned `stale:false` for PID `43400`.
+    `/api/project/release-readiness?projectId=narrative-harness`,
+    `/api/project/spine?projectId=narrative-harness`, and the main
+    `/api/project?projectId=narrative-harness` payload all report exactly one
+    release blocker with id `repository-followup:repo:0`.
+    Browser proof against `/projects/narrative-harness/map` found the `Release
+    blockers` card and confirmed its section contains
+    `main has 3 local commits not pushed to origin/main.` exactly once.
+- Contract Touch Decision:
+  - Work id: `synthetic-start-blocker-dedupe`.
+  - Touched contracts: orientation spine release-blocker merge semantics and
+    Project Map blocker count derived from `spine.release.blockers`.
+  - Contracts considered but not touched: release-readiness response field
+    names, persisted task schema, persisted release schema, Git Story snapshot
+    schema, and Start-readiness response shape.
+  - Required follow-up: if more synthetic blockers wrap concrete readiness rows,
+    move semantic blocker identity into a shared derived blocker identity helper
+    instead of adding view-specific suppression.
+  - Apply/revert behavior: reverting can make a single repository action appear
+    as two release blockers in Project Map and spine APIs, weakening trust in
+    blocker counts.
+- Schema Migration Decision: no persisted schema field was added, removed, or
+  retyped. This changes derived orientation-spine blocker merging only.

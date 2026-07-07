@@ -2202,8 +2202,14 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
     ...(input.startReadiness?.canStart !== true ? input.releaseReadiness?.blockers ?? [] : []),
   ]
   const startReleaseBlocker = startReadinessReleaseBlocker(input.startReadiness)
+  const normalizedStartReleaseBlockerLabel = normalizeText(startReleaseBlocker?.label ?? '')
   const hasStartReleaseBlocker = startReleaseBlocker
-    ? explicitReleaseBlockers.some(blocker => blocker.id === startReleaseBlocker.id)
+    ? explicitReleaseBlockers.some((blocker) => {
+        if (blocker.id === startReleaseBlocker.id) return true
+        if (blocker.id?.startsWith('task-')) return false
+        const blockerLabel = normalizeText(blocker.label ?? blocker.title ?? blocker.id ?? '')
+        return blockerLabel.length > 0 && normalizedStartReleaseBlockerLabel.includes(blockerLabel)
+      })
     : false
   const releaseBlockerInput = [
     ...explicitReleaseBlockers,
