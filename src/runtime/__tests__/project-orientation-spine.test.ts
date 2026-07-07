@@ -2395,6 +2395,70 @@ describe('buildProjectOrientationSpine', () => {
     ])
   })
 
+  it('keeps start-readiness closure blockers when task release blockers also exist', () => {
+    const tasks = [
+      {
+        id: 'task-unit-tests',
+        title: 'Unit tests: use-collections',
+        domain: 'quality',
+        status: 'proposed',
+        priority: 'normal',
+        releaseIds: ['v1-hardening'],
+      },
+    ] as any[]
+    const releases = [{
+      id: 'v1-hardening',
+      label: 'V1 Release Hardening',
+      kind: 'release',
+      state: 'active',
+      source: 'release_plan',
+      nodeIds: ['work:task-unit-tests'],
+      deferredNodeIds: [],
+    }] as any[]
+    const scopeProjection = buildProjectScopeProjection({
+      version: 1,
+      lastUpdated: '2026-07-07T12:05:00.000Z',
+      selectedReleaseId: 'v1-hardening',
+      releases,
+      tasks,
+    })
+    const repositoryMessage = 'V1 Release Hardening has no runnable task work left, but repository follow-up is still needed: Knit main has 28 changed files.'
+
+    const spine = buildProjectOrientationSpine({
+      projectId: 'looma-knit',
+      now: '2026-07-07T12:05:00.000Z',
+      selectedReleaseId: 'v1-hardening',
+      releases,
+      tasks,
+      scopeProjection,
+      startReadiness: {
+        canStart: false,
+        code: 'repository_followup_required',
+        message: repositoryMessage,
+        actionHref: '/release',
+      },
+    })
+
+    expect(scopeProjection.release.blockers).toEqual([
+      expect.objectContaining({
+        id: 'task-unit-tests',
+        label: expect.stringContaining('needs a clearer brief'),
+      }),
+    ])
+    expect(spine.release.blockers).toEqual([
+      expect.objectContaining({
+        id: 'task-unit-tests',
+        label: expect.stringContaining('needs a clearer brief'),
+        owningNodeId: 'work:task-unit-tests',
+      }),
+      expect.objectContaining({
+        id: 'start-readiness:repository_followup_required',
+        label: repositoryMessage,
+      }),
+    ])
+    expect(spine.release.blockers[1]).not.toHaveProperty('owningNodeId')
+  })
+
   it('preserves detected release buckets for later tasks that already exist in saved task state', () => {
     const spine = buildProjectOrientationSpine({
       projectId: 'narrative-harness',

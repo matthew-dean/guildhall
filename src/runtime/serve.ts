@@ -2488,11 +2488,31 @@ function buildOrientationSpineWithScopedReleaseTruth(
     now,
     scopeProjection,
     releaseReadiness: {
-      verdict: releaseTruth.releaseBlockers.length > 0 ? 'blocked' : 'clear',
-      blockers: releaseTruth.releaseBlockers,
+      verdict: input.releaseReadiness?.verdict ?? (releaseTruth.releaseBlockers.length > 0 ? 'blocked' : 'clear'),
+      blockers: [
+        ...releaseTruth.releaseBlockers,
+        ...(input.releaseReadiness?.blockers ?? []),
+      ],
     },
   })
   return { orientationSpine, releaseTruth }
+}
+
+function orientationReleaseReadinessFromPayload(
+  payload: Record<string, unknown> | null,
+): BuildProjectOrientationSpineInput['releaseReadiness'] | null {
+  if (!payload) return null
+  const releaseBlockers = Array.isArray(payload.releaseBlockers) ? payload.releaseBlockers : []
+  return {
+    verdict: payload.ready === true ? 'clear' : 'blocked',
+    blockers: releaseBlockers
+      .filter((blocker): blocker is { id?: string; label?: string; title?: string } => Boolean(blocker && typeof blocker === 'object'))
+      .map(blocker => ({
+        id: typeof blocker.id === 'string' ? blocker.id : undefined,
+        label: typeof blocker.label === 'string' ? blocker.label : undefined,
+        title: typeof blocker.title === 'string' ? blocker.title : undefined,
+      })),
+  }
 }
 
 function selectedReleaseScopeFromTaskMembership(tasks: Task[]): OrientationScope | null {
@@ -5058,6 +5078,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         tasks: orientationTasks as unknown as Task[],
         runStatus: run?.status ?? 'stopped',
         startReadiness,
+        releaseReadiness: orientationReleaseReadinessFromPayload(releaseReadiness),
         workspaceImportDraft: orientationWorkspaceImportDraft,
         sourceRefs: projectOrientationSourceRefs(project.path),
       })
@@ -5153,6 +5174,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const rawQueue = await readTaskQueueFileNormalized(projectTasksPath(project.path))
       const tasks = await Promise.all(rawQueue.tasks.map(task => buildEffectiveTask(project.path, task as Task)))
       const startReadiness = await projectStartReadinessForProject(project.path)
+      const releaseReadiness = await buildProjectReleaseReadinessPayload()
       const { orientationSpine: spine } = buildOrientationSpineWithScopedReleaseTruth({
         projectId: project.id,
         charter: inferProjectCharterFromExistingSources(project.path, project.config),
@@ -5161,6 +5183,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         tasks: tasks as unknown as Task[],
         runStatus: supervisor.get(project.id)?.status ?? 'stopped',
         startReadiness,
+        releaseReadiness: orientationReleaseReadinessFromPayload(releaseReadiness),
         workspaceImportDraft: await workspaceImportDraftForOrientation(project.path, startReadiness),
         sourceRefs: projectOrientationSourceRefs(project.path),
       })

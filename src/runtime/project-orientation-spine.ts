@@ -2201,12 +2201,13 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
     ...projectionBlockers,
     ...(input.startReadiness?.canStart !== true ? input.releaseReadiness?.blockers ?? [] : []),
   ]
-  const fallbackStartBlocker = explicitReleaseBlockers.length === 0
-    ? startReadinessReleaseBlocker(input.startReadiness)
-    : null
+  const startReleaseBlocker = startReadinessReleaseBlocker(input.startReadiness)
+  const hasStartReleaseBlocker = startReleaseBlocker
+    ? explicitReleaseBlockers.some(blocker => blocker.id === startReleaseBlocker.id)
+    : false
   const releaseBlockerInput = [
     ...explicitReleaseBlockers,
-    ...(fallbackStartBlocker ? [fallbackStartBlocker] : []),
+    ...(startReleaseBlocker && !hasStartReleaseBlocker ? [startReleaseBlocker] : []),
   ]
   const { blockers, gaps: blockerGaps } = attachReleaseBlockers(releaseBlockerInput, byId)
   const executionBoundary = buildExecutionBoundary({

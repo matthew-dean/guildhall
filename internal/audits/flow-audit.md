@@ -27910,3 +27910,81 @@ selected-scope readiness ordering.
 - Schema Migration Decision: no persisted schema field was added, removed, or
   retyped. This changes the derived Git Story blocker list over existing
   snapshot data only.
+
+## 2026-07-07T12:18:55Z - Project Map must show the same release blockers as readiness
+
+- User job:
+  - In the 1,000-foot Project Map, the owner should be able to tell why the
+    selected release or current scope is blocked without opening Release
+    readiness or relying on Codex-only API inspection. If Release readiness
+    reports task, repository, design-system, or checkout blockers, Project Map
+    should show the same blocker list from the shared spine.
+- Finding:
+  - Root cause classification:
+    - Data model/schema problem: `/api/project/spine` and the main
+      `/api/project` orientation spine were built from scoped task truth and
+      Start readiness, but did not carry the richer Release readiness blocker
+      rows for repository follow-up, dirty checkout, or design-system state.
+    - Project structure/scope/release modeling problem: non-task closure
+      blockers are still selected-release/current-scope blockers even when task
+      shaping blockers also exist.
+    - UI communication/orientation problem: after the API blocker list was
+      corrected, Project Map still did not render `spine.release.blockers`, so
+      the 1,000-foot view hid the reason a selected release could not close.
+- Fix:
+  - `buildOrientationSpineWithScopedReleaseTruth` now merges caller-provided
+    Release readiness blockers with scoped task release blockers before building
+    the shared orientation spine.
+  - `/api/project` and `/api/project/spine` pass the already-computed Release
+    readiness blocker payload into the spine wrapper.
+  - Project Map now renders a compact `Release blockers` or `Scope blockers`
+    card from `spine.release.blockers`, using existing `Card`, `CardList`,
+    `CardListItem`, and `Chip` primitives.
+  - The web type surface now includes the permissive `ProjectOrientationRelease`
+    and `ProjectOrientationSpine.release` shape that the runtime already emits.
+- Proof provided:
+  - Red/green regression:
+    `CI=true ./node_modules/.bin/vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts -t "inspects child
+    repos"` first failed because Project and Spine blockers contained only the
+    task blocker while readiness contained task, repository, and dirty-checkout
+    blockers; it now passes.
+  - Broader regression:
+    `CI=true ./node_modules/.bin/vitest run
+    src/runtime/__tests__/project-orientation-spine.test.ts
+    src/runtime/__tests__/serve-release-readiness.test.ts
+    src/web/surfaces/project/__tests__/ProjectMapTab.svelte.test.ts` passed
+    (`125` tests).
+  - Build:
+    `node ./build.mjs` and `git diff --check` passed before this audit entry.
+  - Installed/live proof:
+    `CI=true corepack pnpm dev:install`, `guildhall stop`, and
+    `guildhall start` installed and restarted the current branch artifact.
+    `/api/stale-server` returned `stale:false` for PID `19389`.
+    `/api/project/release-readiness?projectId=looma-knit` and
+    `/api/project/spine?projectId=looma-knit` both report `8` release
+    blockers with matching ids, including `repository-followup:repo:0`,
+    `repository-followup:repo:1`, and `dirty-checkout`.
+    Browser proof against `/projects/looma-knit/map` found the `Release
+    blockers` heading plus `codex/component-audit-roadmap is pushed to
+    bitbucket/codex/component-audit-roadmap.`, `28 changed files are not
+    committed.`, and `1 Guildhall-managed checkout file needs cleanup or
+    landing.`
+- Contract Touch Decision:
+  - Work id: `project-map-release-readiness-blocker-agreement`.
+  - Touched contracts: `/api/project` orientation spine release blockers,
+    `/api/project/spine` release blockers, Project Map blocker presentation,
+    and permissive web payload typing for `ProjectOrientationRelease` and
+    `ProjectOrientationSpine.release`.
+  - Contracts considered but not touched: persisted task schema, persisted
+    release schema, release-readiness response field names, Git Story snapshot
+    schema, dirty-checkout schema, and design-system persisted schema.
+  - Required follow-up: move remaining Release/Map blocker presentation helpers
+    toward one shared UI copy helper if another surface-specific divergence
+    appears.
+  - Apply/revert behavior: reverting can make Project Map claim the selected
+    scope has only task blockers while Release readiness shows additional
+    repository or checkout blockers, undermining the 1,000-foot orientation.
+- Schema Migration Decision: no persisted schema field was added, removed, or
+  retyped. This changes derived spine/readiness projection and permissive web
+  payload typing only.

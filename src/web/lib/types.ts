@@ -390,6 +390,19 @@ export interface GitStorySummary {
   snapshots?: GitStorySnapshot[]
 }
 
+export interface ProjectOrientationRelease {
+  id?: string
+  label?: string
+  kind?: string
+  state?: string
+  source?: ProjectOrientationSource | 'owner_approved' | 'spec' | 'release_plan' | 'inferred' | string
+  description?: string | null
+  nodeIds?: string[]
+  deferredNodeIds?: string[]
+  proofStyle?: string
+  blockers?: Array<{ id?: string; label?: string; severity?: string; owner?: string; sourceRef?: string }>
+}
+
 export interface ProjectReleaseReadiness {
   initializationNeeded?: boolean
   release?: ProjectOrientationRelease | null
@@ -783,6 +796,7 @@ export interface ProjectOrientationSpine {
     missing?: string[]
     refs?: string[]
   }>
+  release?: ProjectOrientationRelease | null
   selectedRelease?: {
     id?: string
     label?: string

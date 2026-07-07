@@ -90,6 +90,9 @@
   const sourceGapCount = $derived(spine?.sourceHealth?.gaps ?? spine?.gaps?.length ?? 0)
   const sourceInferredCount = $derived(spine?.sourceHealth?.inferred ?? 0)
   const executionBoundary = $derived(spine?.executionBoundary ?? null)
+  const releaseBlockers = $derived(spine?.release?.blockers ?? [])
+  const visibleReleaseBlockers = $derived(releaseBlockers.slice(0, 8))
+  const hiddenReleaseBlockerCount = $derived(Math.max(0, releaseBlockers.length - visibleReleaseBlockers.length))
   const selectedScopeDescendantIds = $derived.by(() => {
     const ids = new Set(selectedScopeNodeIds)
     if (!spine || selectedScopeNodeIds.size === 0) return ids
@@ -327,6 +330,14 @@
       later > 0 ? countLabel(later, 'later work item') : null,
     ].filter(Boolean)
     return pieces.join(' · ') || 'No work assigned yet'
+  }
+
+  function releaseBlockerTone(blocker: { severity?: string }): Tone {
+    return blocker.severity === 'high' || blocker.severity === 'blocker' ? 'danger' : 'warn'
+  }
+
+  function releaseBlockerHref(blocker: { id?: string }): string | null {
+    return blocker.id?.startsWith('task-') ? currentTaskHref(blocker.id, activeProjectId) : null
   }
 
   async function selectRelease(release: { id?: string; label?: string }): Promise<void> {
@@ -746,6 +757,34 @@
           </div>
         </Card>
 
+        {#if releaseBlockers.length > 0}
+          <Card title={selectedRelease ? 'Release blockers' : 'Scope blockers'} titleTag="h2" padding="compact" density="dense">
+            <CardList>
+              {#each visibleReleaseBlockers as blocker (`${blocker.id ?? 'blocker'}:${blocker.label ?? ''}`)}
+                {@const href = releaseBlockerHref(blocker)}
+                <CardListItem
+                  as={href ? 'button' : 'div'}
+                  interactive={Boolean(href)}
+                  className="release-blocker-row"
+                  tone={releaseBlockerTone(blocker)}
+                  dense
+                  onclick={() => {
+                    if (href) go(href)
+                  }}
+                >
+                  <div>
+                    <Chip label="Blocked" tone={releaseBlockerTone(blocker)} />
+                    <strong>{blocker.label ?? blocker.id ?? 'Release blocker'}</strong>
+                  </div>
+                </CardListItem>
+              {/each}
+            </CardList>
+            {#if hiddenReleaseBlockerCount > 0}
+              <p class="overflow-summary">{countLabel(hiddenReleaseBlockerCount, 'additional blocker')} summarized in release readiness.</p>
+            {/if}
+          </Card>
+        {/if}
+
         <Card title="Proof contract" titleTag="h2" padding="compact" density="dense">
           {#if proofContracts.length === 0}
             <p class="muted">No scoped proof contracts are available yet.</p>
@@ -1095,13 +1134,15 @@
     line-height: var(--gh-type-line-height-tight);
   }
 
-  :global(.proof-contract-row div) {
+  :global(.proof-contract-row div),
+  :global(.release-blocker-row div) {
     display: grid;
     gap: var(--s-1);
     min-width: 0;
   }
 
-  :global(.proof-contract-row strong) {
+  :global(.proof-contract-row strong),
+  :global(.release-blocker-row strong) {
     color: var(--text);
     overflow-wrap: anywhere;
   }

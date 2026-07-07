@@ -3094,6 +3094,16 @@ describe('GET /api/project/release-readiness', () => {
         inspectedPath: taskWorktreePath,
         state: 'dirty_uncommitted',
       })
+
+      const spineRes = await app.fetch(new Request(`http://localhost/api/project/spine?projectId=${encodeURIComponent(envelopeId)}`))
+      const spineBody = await spineRes.json() as any
+      expect(spineRes.status).toBe(200)
+      expect(projectBody.orientationSpine.release.blockers.map((blocker: any) => blocker.id)).toEqual(
+        body.releaseBlockers.map((blocker: any) => blocker.id),
+      )
+      expect(spineBody.spine.release.blockers.map((blocker: any) => blocker.id)).toEqual(
+        body.releaseBlockers.map((blocker: any) => blocker.id),
+      )
     } finally {
       await fs.rm(envelopePath, { recursive: true, force: true })
       await fs.rm(taskWorktreePath, { recursive: true, force: true })
