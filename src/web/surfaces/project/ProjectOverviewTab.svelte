@@ -180,10 +180,13 @@
     if (!blocker) return null
     return typeof blocker === 'string' ? { label: blocker } : blocker
   })
+  const orientationHasSourceConflict = $derived(orientationSpine?.gaps?.some(gap => gap.kind === 'source_conflict') ?? false)
   const orientationNextAction = $derived.by(() => {
     const action = orientationSpine?.summary?.nextAction
     if (!action) return null
-    return typeof action === 'string' ? { label: action, href: currentProjectHref('/work', activeProjectId) } : action
+    return typeof action === 'string'
+      ? { label: action, href: currentProjectHref(orientationHasSourceConflict ? '/map' : '/work', activeProjectId) }
+      : action
   })
   const orientationGap = $derived(orientationSpine?.gaps?.find(gap => gap.severity === 'high' || gap.kind === 'missing_charter' || gap.kind === 'source_conflict') ?? orientationSpine?.gaps?.[0] ?? null)
   const orientationScopeLabel = $derived(orientationSpine?.summary?.selectedScopeLabel ?? orientationSpine?.selectedTaskScope?.label ?? orientationSpine?.scope?.label ?? orientationSpine?.summary?.selectedReleaseLabel ?? orientationSpine?.selectedRelease?.label ?? 'Current task scope')
@@ -249,6 +252,11 @@
     if (orientationPins.length > 0) return 'accent'
     return 'ok'
   })
+
+  function orientationActionButtonLabel(href: string | undefined): string {
+    return href?.includes('/map') ? 'Open map' : 'Open Work'
+  }
+
   const orientationMapStatus = $derived.by(() => {
     if (!orientationSpine) return 'No project spine has been generated yet.'
     const roots = orientationSpine.roots?.length ?? 0
@@ -599,7 +607,7 @@
       return {
         label: orientationNextAction.label,
         detail: orientationNextAction.reason ?? orientationTopBlocker?.label ?? orientationGap?.label ?? 'Open the work list to review the next task.',
-        button: 'Open Work',
+        button: orientationActionButtonLabel(orientationNextAction.href),
         href: orientationNextAction.href ?? currentProjectHref('/work', activeProjectId),
         tone: orientationTopBlocker || orientationGap ? 'warn' as Tone : 'accent' as Tone,
         action: 'navigate' as NextActionKind,

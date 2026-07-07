@@ -25857,3 +25857,83 @@ selected-scope readiness ordering.
   - Apply/revert behavior: reverting restores passive source-conflict gaps
     where Guildhall can name a contradiction but cannot route the owner to the
     work records that need reconciliation.
+
+## 2026-07-06 — Source-conflict summaries stay specific
+
+- Work id: `codex:source-conflict-orientation-summary-2026-07-06`.
+- User job: when the selected current scope cannot start because scoped source
+  truth conflicts, Overview and Map must say that the next move is to review
+  source conflicts on the Project Map, not flatten the state into a generic
+  "needs attention" or "resolve blocker" message.
+- Root-cause classification:
+  - Project structure/scope/release modeling problem: the selected Narrative
+    Harness scope has duplicate DeepInfra model-selection work split across
+    scoped/deferred boundaries, so readiness is a scope-truth conflict rather
+    than ordinary task incompletion.
+  - Scheduler/action-state logic problem: `startReadiness.code` already carried
+    `scope_source_conflict`, but the orientation summary reduced unknown
+    readiness codes to generic blocker copy.
+  - UI communication/orientation problem: the owner-facing 100-foot summary
+    did not preserve the specific navigation instruction needed to understand
+    and repair the visible scope conflict.
+  - Bad project data produced by an earlier Guildhall bug: the duplicate
+    Narrative Harness task pair remains live calibration data until importer
+    reconciliation can merge/defer it through modeled source truth.
+- Fix:
+  - The shared orientation-spine summary now maps `scope_source_conflict` to a
+    specific headline, top blocker, and next action: review source conflicts on
+    the Project Map.
+  - Browser/API verification confirmed the visible priority action already
+    consumes the shared project action model (`Open map`); no local Overview
+    button patch was needed.
+- Contract Touch Decision:
+  - Touched contracts: orientation-spine summary projection for
+    `scope_source_conflict` readiness.
+  - Contracts considered but not touched: persisted task schema,
+    release/scope membership mutation, source-conflict detection, project
+    action model, Start endpoint behavior, Project Map interactions, and
+    Overview local layout/components.
+  - Existing data impact: no migration. Existing source-conflicted selected
+    scopes get more specific owner-facing summary copy at read-model build
+    time.
+  - Required follow-up: add a modeled reconciliation action for the conflicting
+    Narrative Harness DeepInfra work so Guildhall can merge, defer, or promote
+    the correct task through source-backed intake instead of leaving the owner
+    at a read-only conflict.
+  - Proof required: failing orientation-spine regression for
+    `scope_source_conflict` summary specificity, full orientation suite,
+    contract advisory, build/install/stale-server proof, live API proof, and
+    browser proof that the first visible Overview action says `Open map` and
+    names the source conflict.
+  - Proof provided: the focused orientation-spine regression first failed
+    because `scope_source_conflict` summarized as generic attention work. After
+    the fix,
+    `./node_modules/.bin/vitest run src/runtime/__tests__/project-orientation-spine.test.ts --testNamePattern "source-conflict start readiness"`
+    passed, and the full orientation-spine suite passed (`59` tests). The
+    focused Overview regression first failed because the priority card paired
+    `Review source conflicts on the Project Map.` with an `Open Work` button.
+    After the fix,
+    `./node_modules/.bin/vitest run src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts --testNamePattern "source-conflict orientation"`
+    passed, and the full Overview suite passed (`31` tests). `git diff
+    --check` passed. `CI=true pnpm lint:contracts` passed after this decision
+    evidence was recorded; `CI=true pnpm install` restored dev dependencies and
+    `./node_modules/.bin/vitest --version` returned `vitest/3.2.4`. `node
+    ./build.mjs` and `node ./scripts/dev-install.mjs` passed; after service
+    restart, `/api/stale-server` returned `stale:false` for PID `96406`. Live
+    `/api/project?projectId=narrative-harness` returned
+    `startReadiness.code:"scope_source_conflict"`,
+    `actionModel.primaryAction.buttonLabel:"Open map"`,
+    `orientationSpine.summary.headline:"Stage 1 Headless Drafting And
+    Evaluation MVP has source conflicts to review."`, and
+    `orientationSpine.summary.nextAction:"Review source conflicts on the
+    Project Map."`. Rendered proof on
+    `/projects/narrative-harness/overview` at `1280x720` showed the priority
+    card text `Review source conflicts on the Project Map.`, its only priority
+    button as `Open map`, no priority `Open Work`, no stale `Stage 1: Headless
+    Drafting And Evaluation MVP is complete.` message, and no horizontal
+    overflow. The in-app browser bridge listed the active browser but timed out
+    on navigation during this final pass, so the rendered proof used the repo's
+    installed Playwright against the same fresh `localhost:7777` service.
+  - Apply/revert behavior: reverting restores a state where Guildhall can block
+    Start on source conflicts but still summarizes the current scope as generic
+    attention work, forcing the owner to infer the real repair path.

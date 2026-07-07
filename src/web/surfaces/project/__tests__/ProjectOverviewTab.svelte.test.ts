@@ -133,6 +133,65 @@ describe('ProjectOverviewTab', () => {
     expect(screen.getByRole('heading', { name: 'Do this next' })).toBeInTheDocument()
   })
 
+  it('routes source-conflict orientation next actions to the project map', async () => {
+    window.history.replaceState({}, '', '/projects/narrative-harness/overview')
+    render(ProjectOverviewTab, {
+      detail: {
+        id: 'narrative-harness',
+        name: 'Narrative Harness',
+        path: '/Users/matthew/git/oss/narrative-harness',
+        tasks: [],
+        orientationSpine: {
+          scope: { label: 'Stage 1 Headless Drafting And Evaluation MVP' },
+          summary: {
+            headline: 'Stage 1 Headless Drafting And Evaluation MVP has source conflicts to review.',
+            purpose: 'Build the first headless Narrative Harness proofs.',
+            selectedScopeLabel: 'Stage 1 Headless Drafting And Evaluation MVP',
+            includedWorkCount: 11,
+            deferredWorkCount: 31,
+            progress: {
+              scopedNodeCount: 11,
+              speccedCount: 8,
+              provenCount: 11,
+              blockedCount: 0,
+              deferredCount: 31,
+            },
+            topBlocker: 'Stage 1 has source conflicts to review before it can be treated as complete.',
+            nextAction: 'Review source conflicts on the Project Map.',
+          },
+          gaps: [{
+            kind: 'source_conflict',
+            label: 'Possible duplicate work is split across scopes.',
+            severity: 'high',
+            refs: ['task:task-a', 'task:task-b'],
+          }],
+          roots: [],
+          nodes: {},
+          sourceHealth: { status: 'warn', gaps: 1 },
+        },
+      },
+      inboxLoaded: true,
+      inboxItems: [],
+      projectTicker: {
+        label: 'Not running',
+        actorLabel: 'Guildhall',
+        message: 'Project is waiting for source conflict review.',
+        tone: 'idle',
+        pulse: false,
+      },
+      activeProjectId: 'narrative-harness',
+    })
+
+    expect(screen.getByRole('heading', { name: 'Do this next' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Review source conflicts on the Project Map.' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Open map' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Open Work' })).not.toBeInTheDocument()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Open map' }))
+
+    expect(window.location.pathname).toBe('/projects/narrative-harness/map')
+  })
+
   it('shows current release readiness from child repo git state', () => {
     render(ProjectOverviewTab, {
       detail: {

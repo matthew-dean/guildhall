@@ -1262,6 +1262,43 @@ describe('buildProjectOrientationSpine', () => {
     expect(spine.summary.nextAction).toBe('Refresh the workspace import.')
   })
 
+  it('turns source-conflict start readiness into a specific orientation next action', () => {
+    const message = 'Stage 1 has source conflicts to review before it can be treated as complete.'
+    const spine = buildProjectOrientationSpine({
+      projectId: 'narrative-harness',
+      now: '2026-07-06T12:00:00.000Z',
+      selectedReleaseId: 'stage-1-headless-drafting-and-evaluation-mvp',
+      releases: [{
+        id: 'stage-1-headless-drafting-and-evaluation-mvp',
+        label: 'Stage 1 Headless Drafting And Evaluation MVP',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:model-proof'],
+        deferredNodeIds: [],
+      }],
+      tasks: [{
+        id: 'model-proof',
+        title: 'Select and prove a DeepInfra drafting model for broad-genre chapter writing.',
+        description: 'Current scope work.',
+        domain: 'harness',
+        status: 'done',
+        releaseIds: ['stage-1-headless-drafting-and-evaluation-mvp'],
+      }],
+      startReadiness: {
+        canStart: false,
+        code: 'scope_source_conflict',
+        message,
+        actionHref: '/map',
+        focusKind: 'source_conflict',
+      },
+    })
+
+    expect(spine.summary.headline).toBe('Stage 1 Headless Drafting And Evaluation MVP has source conflicts to review.')
+    expect(spine.summary.topBlocker).toBe(message)
+    expect(spine.summary.nextAction).toBe('Review source conflicts on the Project Map.')
+  })
+
   it('keeps workspace-import refresh as the top blocker when ordinary task blockers also exist', () => {
     const spine = buildProjectOrientationSpine({
       projectId: 'looma-knit',

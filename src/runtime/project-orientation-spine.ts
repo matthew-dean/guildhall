@@ -1814,6 +1814,12 @@ function summarizeStartReadiness(input: {
         topBlocker: message,
         nextAction: 'Resolve the current start blocker.',
       }
+    case 'scope_source_conflict':
+      return {
+        headline: `${genericWorkLabel} has source conflicts to review.`,
+        topBlocker: message,
+        nextAction: 'Review source conflicts on the Project Map.',
+      }
     default:
       return {
         headline: `${genericWorkLabel} needs attention.`,
