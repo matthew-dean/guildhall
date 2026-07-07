@@ -584,6 +584,34 @@ describe('GET /api/project/task/:id', () => {
     ])
   })
 
+  it('serves the current proof-recovery blocker instead of stale max-revisions text', async () => {
+    await seedTask('task-1', {
+      status: 'blocked',
+      blockReason: 'max_revisions_exceeded: reviewer loop hit its old cap before proof recovery reopened.',
+      proofRecovery: {
+        reopenedAt: '2026-07-07T09:50:00.000Z',
+        reason: 'provider_missing: DEEPINFRA_API_TOKEN is required.',
+      },
+      escalations: [{
+        id: 'esc-task-1',
+        taskId: 'task-1',
+        agentId: 'coordinator',
+        reason: 'max_revisions_exceeded',
+        summary: 'Reviewer loop hit its old cap.',
+        raisedAt: '2026-07-07T09:40:00.000Z',
+      }],
+    })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(projectUrl('/api/project/task/task-1')))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, any>
+
+    expect(body.task?.blockReason).toBe('provider_missing: DEEPINFRA_API_TOKEN is required.')
+    expect(body.task?.persistedBlockReason).toBe('max_revisions_exceeded: reviewer loop hit its old cap before proof recovery reopened.')
+    expect(body.task?.runtime?.proofRecovery?.reason).toBe('provider_missing: DEEPINFRA_API_TOKEN is required.')
+  })
+
   it('surfaces derived reviewer, self-critique, and checkpoint summaries', async () => {
     await seedTask('task-1', {
       status: 'review',

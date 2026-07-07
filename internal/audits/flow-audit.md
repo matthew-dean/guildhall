@@ -27053,3 +27053,54 @@ selected-scope readiness ordering.
     and max-revisions for the same task.
 - Schema Migration Decision: no persisted schema field was added, removed, or
   retyped. This is evidence recording plus shared derived-state filtering.
+
+## 2026-07-07T10:20:00Z - Task drawer must not foreground stale blocker text
+
+- User job:
+  - Opening the blocked Narrative Harness task should show the same current
+    blocker as Overview and Release readiness. The drawer may preserve
+    historical blocker text for debugging, but the first-class `blockReason`
+    served to the product must not lead with stale max-revisions text after
+    proof recovery has a clearer provider-missing cause.
+- Finding:
+  - Root cause classification:
+    - Data model/schema problem: the persisted task definition still contains
+      old `blockReason` while runtime proof recovery contains the current
+      blocker.
+    - UI communication/orientation problem: `/api/project/task/:id` returned
+      raw stale `blockReason`, so the drawer could disagree with Overview and
+      Release readiness.
+    - Bad project data produced by an earlier Guildhall bug: the old
+      max-revisions escalation and completion-era fields remain attached to
+      a task that now needs live proof.
+- Fix:
+  - `normalizeTaskForDrawer()` now uses the shared `taskBlockerSummary()`.
+    When the visible blocker differs from the persisted blocker, the served
+    task gets the current `blockReason` and preserves the old text as
+    `persistedBlockReason`.
+- Proof provided:
+  - Focused regression:
+    `CI=true ./node_modules/.bin/vitest run
+    src/runtime/__tests__/serve-task-endpoints.test.ts -t "current
+    proof-recovery blocker"` passed (`1` test, `108` skipped).
+  - Installed-app proof after `CI=true corepack pnpm dev:install &&
+    guildhall stop && guildhall start`: `/api/stale-server` reported
+    `stale:false` for PID `12081`; `/api/project/task/...` for the Narrative
+    Harness DeepInfra task now returns `blockReason` as the provider-missing
+    proof blocker, `persistedBlockReason` as the old max-revisions text, and
+    the latest failed hard gate with `missingCredential:"DEEPINFRA_API_TOKEN"`.
+- Contract Touch Decision:
+  - Work id: `task-detail-current-blocker-projection`.
+  - Touched contracts: `/api/project/task/:id` task-detail projection for
+    blocker display.
+  - Contracts considered but not touched: persisted task schema, runtime
+    proof-recovery schema, escalation schema, and task evidence schema.
+  - Required follow-up: add a true proof/criteria state model so served
+    acceptance criteria cannot claim `met:true` while a newer hard proof gate
+    is failed.
+  - Apply/revert behavior: reverting can make the drawer show
+    `max_revisions_exceeded` while Overview and Release correctly show
+    provider credentials.
+- Schema Migration Decision: no persisted schema field was added, removed, or
+  retyped. `persistedBlockReason` is a read-model/debug field on the task
+  detail API projection only.

@@ -2855,9 +2855,19 @@ function noteMatchesCanonicalAcceptance(
 }
 
 function normalizeTaskForDrawer(task: Record<string, unknown>): Record<string, unknown> {
+  const rawBlockReason = typeof task.blockReason === 'string' ? task.blockReason.trim() : ''
+  const visibleBlockReason = taskBlockerSummary(task as Task).trim()
+  let normalized = task
+  if (rawBlockReason && visibleBlockReason && rawBlockReason !== visibleBlockReason) {
+    normalized = {
+      ...normalized,
+      blockReason: visibleBlockReason,
+      persistedBlockReason: rawBlockReason,
+    }
+  }
   const canonicalDescriptions = new Set(
-    Array.isArray(task.acceptanceCriteria)
-      ? task.acceptanceCriteria
+    Array.isArray(normalized.acceptanceCriteria)
+      ? normalized.acceptanceCriteria
           .map((criterion) =>
             typeof (criterion as { description?: unknown }).description === 'string'
               ? (criterion as { description: string }).description.trim()
@@ -2866,10 +2876,10 @@ function normalizeTaskForDrawer(task: Record<string, unknown>): Record<string, u
           .filter(Boolean)
       : [],
   )
-  if (canonicalDescriptions.size === 0 || !Array.isArray(task.notes)) return task
-  const notes = (task.notes as Array<Record<string, unknown>>)
+  if (canonicalDescriptions.size === 0 || !Array.isArray(normalized.notes)) return normalized
+  const notes = (normalized.notes as Array<Record<string, unknown>>)
     .filter((note) => noteMatchesCanonicalAcceptance(note, canonicalDescriptions))
-  return notes.length === task.notes.length ? task : { ...task, notes }
+  return notes.length === normalized.notes.length ? normalized : { ...normalized, notes }
 }
 
 function latestTaskNoteContent(
