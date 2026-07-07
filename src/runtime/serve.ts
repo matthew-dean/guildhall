@@ -2255,6 +2255,7 @@ function summarizeScopedReleaseWork(
   gitStoryTasks: Task[]
 } {
   const effectiveReleaseStatus = (task: Task): string => recordedCompletionProofCanSettleTaskStatus(task)
+    && !taskDoneButProofMissing(task)
     ? 'done'
     : String((task as { status?: string }).status ?? 'unknown')
   const completionProofSupersedesEscalation = (

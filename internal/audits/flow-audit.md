@@ -26598,3 +26598,62 @@ selected-scope readiness ordering.
 - Schema Migration Decision: no persisted schema field was added, removed, or
   retyped. This only projects existing `runtime.proofRecovery` state through
   shared API summaries; no migration id is required.
+
+## 2026-07-07T08:18:34Z - Blocked proof recovery must not count as completed proof-missing work
+
+- User job:
+  - When proof recovery stalls because the worker hit a revision/tool-use limit,
+    Guildhall should show the task as blocked recovery work, not as completed
+    work that merely needs proof attached.
+- Finding:
+  - Root cause classification:
+    - Task hierarchy/dependency/proof modeling problem: release readiness used
+      old recorded completion evidence to derive effective `done` status before
+      checking whether required proof was still missing.
+    - Scheduler/action-state logic problem: Start readiness could focus a
+      duplicate done proof row while release readiness still had an open
+      max-revisions escalation on the more complete proof-recovery task.
+    - Bad project data produced by an earlier Guildhall bug: Narrative Harness
+      currently has multiple DeepInfra capability rows with missing
+      provenance/sourceRefs, so projection has to avoid amplifying the old
+      contradiction.
+- Fix:
+  - Release readiness and project-scope handoff projection now refuse to let
+    recorded completion proof settle a task to `done` when
+    `taskDoneButProofMissing` still says the required proof is missing.
+- Proof provided so far:
+  - `CI=true ./node_modules/.bin/vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts -t "keeps blocked
+    proof recovery out|proof|release-readiness|completionProof|orientation"`
+    passed (`49` tests).
+  - `CI=true ./node_modules/.bin/vitest run
+    src/runtime/__tests__/project-scope-projection.test.ts
+    src/runtime/__tests__/serve-release-readiness.test.ts -t
+    "blocked|proof|done|release|scope"` passed (`62` tests, `4` skipped).
+  - `CI=true pnpm lint:contracts` passed with this decision evidence.
+    `node ./build.mjs` passed after restoring dev dependencies pruned by the
+    contract script. `CI=true pnpm dev:install && guildhall stop && guildhall
+    start` installed and restarted the app; `/api/stale-server` returned
+    `stale:false` for PID `49067`.
+  - Installed API proof:
+    `/api/project?projectId=narrative-harness&surface=map` now reports the
+    older DeepInfra proof-recovery task under `openEscalations` and
+    `blockedByAgent`, leaves only the duplicate imported row in
+    `proofMissingDoneTasks`, and totals `done:11`, `unfinishedCount:1`,
+    `proofEvidenceBlockingCount:1` instead of counting the blocked recovery
+    task as done proof-missing work.
+- Contract Touch Decision:
+  - Work id: blocked-proof-recovery-not-effective-done.
+  - Touched contracts: release-readiness status counts,
+    `proofMissingDoneTasks`, `openEscalations`, release blocker totals, and
+    project-scope handoff state.
+  - Contracts considered but not touched: persisted task queue schema,
+    persisted runtime proof-recovery schema, proof-path schema, Start/Resume
+    mutation semantics, duplicate-task reconciliation.
+  - Required follow-up: Start readiness still focuses the duplicate imported
+    DeepInfra row, so a separate pass is needed on duplicate capability
+    rows/source provenance and start-blocker ordering.
+  - Apply/revert behavior: reverting allows stale completion evidence to make
+    blocked proof-recovery tasks appear effectively done again.
+- Schema Migration Decision: no persisted schema field was added, removed, or
+  retyped. This changes shared projections over existing task/proof state.

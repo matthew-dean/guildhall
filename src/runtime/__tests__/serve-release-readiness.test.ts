@@ -2627,6 +2627,67 @@ describe('GET /api/project/release-readiness', () => {
     expect(body.totals.unfinishedCount).toBe(1)
   })
 
+  it('keeps blocked proof recovery out of completed proof-missing rows', async () => {
+    await seed([
+      makeTask({
+        id: 'task-current',
+        title: 'Select and prove a DeepInfra drafting model',
+        status: 'blocked',
+        blockReason: 'max_revisions_exceeded: Worker hit its turn budget while creating proof.',
+        proofPaths: [{
+          kind: 'review',
+          expectedEvidence: [
+            'DeepInfra drafting telemetry recorded refusal behavior, cost, latency, and voice preservation.',
+          ],
+        }],
+        doneSummaryBundle: {
+          status: 'done',
+          completedAt: '2026-07-06T20:00:00.000Z',
+          summary: {
+            evidence: 'content.no-truncated-data passed.',
+          },
+        },
+        gateResults: [{
+          gateId: 'content.no-truncated-data',
+          passed: true,
+          output: 'no truncated content',
+          checkedAt: '2026-07-06T20:00:00.000Z',
+        }],
+        reviewVerdicts: [{
+          verdict: 'approve',
+          reasoning: 'All acceptance criteria are met.',
+          recordedAt: '2026-07-06T20:00:00.000Z',
+        }],
+        escalations: [{
+          id: 'esc-1',
+          taskId: 'task-current',
+          agentId: 'coordinator',
+          reason: 'max_revisions_exceeded',
+          summary: 'Worker hit its turn budget while creating proof.',
+          raisedAt: '2026-07-06T20:10:00.000Z',
+        }],
+      } as Partial<Task>),
+    ])
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
+    const body = await res.json() as any
+
+    expect(body.proofMissingDoneTasks).toEqual([])
+    expect(body.openEscalations).toEqual([expect.objectContaining({
+      taskId: 'task-current',
+      escalationId: 'esc-1',
+      reason: 'max_revisions_exceeded',
+    })])
+    expect(body.blockedByAgent.map((task: any) => task.id)).toEqual(['task-current'])
+    expect(body.statusCounts).toMatchObject({ blocked: 1 })
+    expect(body.totals).toMatchObject({
+      done: 0,
+      unfinishedCount: 1,
+      humanBlockingCount: 1,
+      proofEvidenceBlockingCount: 0,
+    })
+  })
+
   it('collapses repeated active escalations for the same task and reason in release readiness', async () => {
     const now = new Date().toISOString()
     await seed([
