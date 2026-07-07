@@ -126,6 +126,27 @@
   const projectRunning = $derived(detail.run?.status === 'running')
   const projectRunActive = $derived(detail.run?.status === 'running' || detail.run?.status === 'stopping')
   const deliveryReadyCount = $derived(deliveryQueue?.runnable?.length ?? 0)
+  const orientationScopeCounts = $derived.by(() => {
+    const spine = detail.orientationSpine
+    const summary = spine?.summary
+    if (!summary) return null
+    const includedRows = spine?.scopeRows?.filter(row => row.scope === 'included') ?? []
+    const deferredRows = spine?.scopeRows?.filter(row => row.scope === 'deferred') ?? []
+    const current = summary.includedWorkCount ?? summary.includedCount ?? includedRows.length
+    const deferred = summary.deferredWorkCount ?? summary.deferredCount ?? deferredRows.length
+    const blocked = summary.progress?.blocked ?? includedRows.filter(row => row.blocksRelease || row.blocksStart).length
+    const title = summary.headline ?? summary.selectedScopeLabel ?? spine?.scope?.label ?? 'Current task scope'
+    const nextAction = typeof summary.nextAction === 'string'
+      ? summary.nextAction
+      : summary.nextAction?.label
+    return {
+      current,
+      blocked,
+      deferred,
+      title,
+      detail: nextAction ?? 'Open the current scoped work to inspect its current and deferred items.',
+    }
+  })
   const proofMissingTaskIds = $derived.by(() => {
     const ids = detail.startReadiness?.proofTaskIds ?? []
     if (ids.length > 0) return new Set(ids.filter(Boolean))
@@ -143,11 +164,25 @@
   })
   const scopeQueueFallback = $derived.by(() => {
     if (deliveryFirstRunnable) return null
-    const counts = detail.workProgress?.counts
+    const orientationCounts = orientationScopeCounts
     const scopeLabel = detail.orientationSpine?.summary?.selectedScopeLabel ?? detail.orientationSpine?.scope?.label
-    if (!counts || !scopeLabel) return null
-    if (counts.visibleActive + counts.visibleBlocked + counts.visibleShelved <= 0) return null
+    if (!scopeLabel) return null
     const primaryAction = detail.actionModel?.primaryAction
+    if (orientationCounts) {
+      if (orientationCounts.current + orientationCounts.blocked + orientationCounts.deferred + proofMissingCount <= 0) return null
+      return {
+        label: scopeLabel,
+        title: primaryAction?.label ?? orientationCounts.title,
+        detail: primaryAction?.detail ?? orientationCounts.detail,
+        current: orientationCounts.current,
+        blocked: orientationCounts.blocked,
+        proofMissing: proofMissingCount,
+        deferred: orientationCounts.deferred,
+      }
+    }
+    const counts = detail.workProgress?.counts
+    if (!counts) return null
+    if (counts.visibleActive + counts.visibleBlocked + counts.visibleShelved <= 0) return null
     return {
       label: scopeLabel,
       title: primaryAction?.label ?? scopeLabel,

@@ -24915,3 +24915,59 @@ selected-scope readiness ordering.
     parents can inflate later counts, child splits can be promoted back into
     current scope, and Start can block a complete selected release on proof for
     deferred/container work.
+
+## 2026-07-06 — Work view keeps selected-scope truth separate from runnable list filters
+
+- Work id: `codex:work-scope-banner-orientation-counts-2026-07-06`.
+- User job: when the selected Narrative Harness release is complete, the Work
+  view must still orient the user to the selected scope. An empty runnable list
+  can say there is no work ready to run, but the delivery/scope banner must not
+  imply the current scope has zero work or erase later/deferred work.
+- Root-cause classification:
+  - UI communication/orientation problem: the Work delivery banner used
+    filtered Work-list counts (`visibleActive`, `visibleBlocked`, and
+    `visibleShelved`) as if they were selected-scope counts.
+  - Shared state ownership problem: WorkTab ignored the already-correct
+    orientation spine summary and scope rows for current/deferred scope totals,
+    so it could drift from Overview, Map, Start/Resume, and release readiness
+    after all current work became terminal.
+- Fix:
+  - The Work delivery/scope fallback now reads the orientation spine summary
+    first for included/current, blocked, and deferred counts.
+  - The primary action model still owns the banner title/detail when present,
+    so Work does not invent competing action copy.
+  - The filtered Work list remains separate and can still report `0 shown`
+    when no ready/current cards remain.
+- Contract Touch Decision:
+  - Touched contracts: Work surface selected-scope banner projection and its
+    presentation of orientation-spine summary counts.
+  - Contracts considered but not touched: persisted task schema, persisted
+    release schema, scheduler/start contract, release readiness response,
+    orientation spine builder, project scope projection, Overview component
+    logic, and Project Map component logic.
+  - Existing data impact: no migration. Persisted Narrative Harness state is
+    unchanged; Work now consumes the same selected-scope read model as the
+    other project surfaces.
+  - Required follow-up: keep collapsing duplicated action/count derivation so
+    Work, Overview, Map, Start/Resume, and Thread cannot each reinterpret the
+    selected release boundary.
+  - Proof required: focused WorkTab regression for completed selected scope with
+    an empty runnable list, installed-app stale-server proof, live Work-surface
+    API proof, and browser proof if the browser bridge is responsive.
+  - Proof provided: `/api/stale-server` returned `stale:false` for PID `85027`.
+    Live `/api/project?projectId=narrative-harness&surface=work` reported
+    headline `Stage 1 Headless Drafting And Evaluation MVP is complete.`,
+    next action `Review completed scope.`, `includedWorkCount: 11`,
+    `deferredWorkCount: 31`, blocked `0`, and `startReadiness.code:
+    all_terminal`; the same payload separately reported filtered Work-list
+    counts of `visibleActive: 0`, `visibleBlocked: 0`, and `visibleShelved: 12`.
+    `WorkTab.svelte.test.ts` covers this exact split and passed `38` tests.
+  - Browser proof status: attempted installed-app browser proof for
+    `/projects/narrative-harness/work`, but the in-app browser bridge timed out
+    during navigation/evaluation while direct route and API curls remained
+    responsive. Treat this as browser-instrumentation unavailable for this
+    slice, not as visual proof.
+  - Apply/revert behavior: reverting restores the failure where a completed
+    selected release can make the Work banner show `0 current tasks` even
+    though the selected scope contains completed current work and deferred
+    later work.

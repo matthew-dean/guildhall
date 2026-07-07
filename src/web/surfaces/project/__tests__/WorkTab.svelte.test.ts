@@ -428,6 +428,64 @@ describe('WorkTab', () => {
     expect(screen.getByRole('button', { name: /^run proof$/i })).toBeTruthy()
   })
 
+  it('keeps completed selected-scope counts visible when no work is ready to run', async () => {
+    render(WorkTab, {
+      props: {
+        detail: detail([
+          task({
+            id: 'current-done',
+            title: 'Generate a CLI-first story synopsis and chapter draft',
+            status: 'done',
+          }),
+          task({
+            id: 'later-shelved',
+            title: 'Later reviewer lane',
+            status: 'shelved',
+          }),
+        ], {
+          id: 'narrative-harness',
+          name: 'Narrative Harness',
+          startReadiness: {
+            canStart: false,
+            code: 'all_terminal',
+            message: 'Stage 1: Headless Drafting And Evaluation MVP is complete.',
+          },
+          orientationSpine: {
+            scope: { label: 'Stage 1 Headless Drafting And Evaluation MVP' },
+            summary: {
+              headline: 'Stage 1 Headless Drafting And Evaluation MVP is complete.',
+              selectedScopeLabel: 'Stage 1 Headless Drafting And Evaluation MVP',
+              nextAction: 'Review completed scope.',
+              includedWorkCount: 11,
+              deferredWorkCount: 31,
+              progress: { blocked: 0 },
+            },
+            scopeRows: [],
+            roots: [],
+            nodes: {},
+          },
+          deliverySpine: {
+            queue: {
+              runnable: [],
+              firstRunnable: null,
+              blocked: [],
+            },
+          },
+        }),
+      },
+    })
+
+    const queue = await screen.findByRole('region', { name: 'Delivery queue' })
+    expect(queue).toHaveTextContent('Stage 1 Headless Drafting And Evaluation MVP is complete.')
+    expect(queue).toHaveTextContent('Review completed scope.')
+    expect(queue).toHaveTextContent('11 current tasks')
+    expect(queue).toHaveTextContent('0 blocked')
+    expect(queue).toHaveTextContent('31 deferred')
+    expect(queue).not.toHaveTextContent('0 current tasks')
+    expect(await screen.findByText('0 shown · 2 total')).toBeTruthy()
+    expect(screen.getByText('No work is ready to run yet.')).toBeTruthy()
+  })
+
   it('reopens proof-missing completed work before starting the selected item', async () => {
     const fetchSpy = vi.mocked(fetch)
     window.history.replaceState({}, '', '/projects/narrative-harness/work?task=proof-task')
