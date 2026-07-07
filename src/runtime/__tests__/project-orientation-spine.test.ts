@@ -888,6 +888,81 @@ describe('buildProjectOrientationSpine', () => {
     ])
   })
 
+  it('flags near-duplicate work split across scopes instead of hiding richer owner requirements', () => {
+    const tasks = [
+      {
+        id: 'task-model-current',
+        title: 'Select and prove a DeepInfra drafting model for broad-genre chapter writing.',
+        description: 'Imported roadmap task.',
+        domain: 'harness',
+        projectPath: '/tmp/narrative-harness/docs/harness',
+        status: 'done',
+        priority: 'normal',
+        releaseIds: ['stage-1-headless-mvp'],
+        references: ['/tmp/narrative-harness/docs/harness/implementation-roadmap.md'],
+      },
+      {
+        id: 'task-model-owner',
+        title: 'Select and prove a DeepInfra drafting model for broad-genre and legal adult fiction chapter writing.',
+        description: 'Recovered owner requirement with the legally allowed adult-fiction boundary.',
+        domain: 'harness',
+        projectPath: '/tmp/narrative-harness',
+        status: 'done',
+        priority: 'normal',
+        releaseIds: ['near-term-proof-scope'],
+        references: ['/tmp/narrative-harness/docs/product/deepinfra-drafting-model-selection.md'],
+      },
+    ] as any[]
+
+    const scopeProjection = buildProjectScopeProjection({
+      version: 1,
+      lastUpdated: '2026-07-06T07:10:00.000Z',
+      selectedReleaseId: 'stage-1-headless-mvp',
+      releases: [{
+        id: 'stage-1-headless-mvp',
+        label: 'Stage 1 Headless MVP',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-model-current'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks,
+    })
+
+    const spine = buildProjectOrientationSpine({
+      projectId: 'narrative-harness',
+      now: '2026-07-06T07:10:00.000Z',
+      selectedReleaseId: 'stage-1-headless-mvp',
+      releases: [{
+        id: 'stage-1-headless-mvp',
+        label: 'Stage 1 Headless MVP',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-model-current'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks,
+      scopeProjection,
+    })
+
+    expect(spine.gaps).toContainEqual(expect.objectContaining({
+      kind: 'source_conflict',
+      severity: 'warn',
+      label: expect.stringContaining('legal adult fiction'),
+      refs: expect.arrayContaining([
+        'import:/tmp/narrative-harness/docs/harness/implementation-roadmap.md',
+        'import:/tmp/narrative-harness/docs/product/deepinfra-drafting-model-selection.md',
+      ]),
+    }))
+    expect(spine.sourceHealth.gaps).toBeGreaterThan(0)
+    expect(spine.summary.headline).toBe('Stage 1 Headless MVP has source conflicts to review.')
+    expect(spine.summary.nextAction).toBe('Review source conflicts before treating the scope as settled.')
+  })
+
   it('does not count workspace-import preview nodes once the imported task is materialized', () => {
     const spine = buildProjectOrientationSpine({
       projectId: 'looma-knit',

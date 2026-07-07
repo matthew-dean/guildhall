@@ -250,6 +250,20 @@ function readinessTicker(detail: ProjectDetail | null | undefined): ProjectActiv
   const readiness = detail?.startReadiness
   if (!readiness || readiness.canStart) return null
   if (readiness.code === 'all_terminal') {
+    const summary = detail?.orientationSpine?.summary
+    const gapCount = detail?.orientationSpine?.sourceHealth?.gaps ?? detail?.orientationSpine?.gaps?.length ?? 0
+    const topBlocker = orientationText(summary?.topBlocker)
+    if (gapCount > 0 || topBlocker) {
+      return {
+        tone: 'warn',
+        pulse: false,
+        actorLabel: 'Review',
+        label: 'Review',
+        message: orientationText(summary?.headline) ?? 'Current scope needs review.',
+        detail: topBlocker ?? orientationText(summary?.nextAction) ?? undefined,
+        timeLabel: null,
+      }
+    }
     return {
       tone: 'ok',
       pulse: false,

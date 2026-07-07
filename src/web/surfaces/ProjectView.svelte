@@ -761,8 +761,30 @@
     const paths = migrationApplyResult?.applied?.flatMap(item => item.affectedPaths ?? []) ?? []
     return [...new Set(paths)].slice(0, 8)
   })
+  function orientationLabel(value: unknown): string | null {
+    if (typeof value === 'string') {
+      const trimmed = value.trim()
+      return trimmed.length > 0 ? trimmed : null
+    }
+    if (value && typeof value === 'object') {
+      const label = (value as { label?: unknown }).label
+      return typeof label === 'string' && label.trim().length > 0 ? label.trim() : null
+    }
+    return null
+  }
+  const allTerminalReviewNotice = $derived.by(() => {
+    if (!allTerminalStart) return null
+    const spine = detail?.orientationSpine
+    const gapCount = spine?.sourceHealth?.gaps ?? spine?.gaps?.length ?? 0
+    const topBlocker = orientationLabel(spine?.summary?.topBlocker)
+    if (gapCount <= 0 && !topBlocker) return null
+    return {
+      message: orientationLabel(spine?.summary?.headline) ?? 'Current scope needs review.',
+      detail: topBlocker ?? orientationLabel(spine?.summary?.nextAction),
+    }
+  })
   const allTerminalReadinessMessage = $derived(
-    allTerminalStart
+    allTerminalStart && !allTerminalReviewNotice
       ? startReadiness?.message ?? 'All tasks are already finished.'
       : null,
   )
@@ -1569,6 +1591,14 @@
         {#if detail && allTerminalReadinessMessage}
           <AlertBand tone="ok" role="status" density="compact" ariaLabel="Ready">
             <strong>{allTerminalReadinessMessage}</strong>
+          </AlertBand>
+        {/if}
+        {#if detail && allTerminalReviewNotice}
+          <AlertBand tone="warn" role="alert" density="compact" ariaLabel="Review current scope">
+            <strong>{allTerminalReviewNotice.message}</strong>
+            {#if allTerminalReviewNotice.detail}
+              <span>{allTerminalReviewNotice.detail}</span>
+            {/if}
           </AlertBand>
         {/if}
         {#each shellAttentionNotices as notice (notice.key ?? notice.id)}

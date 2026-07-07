@@ -896,6 +896,53 @@ describe('ProjectView', () => {
     expect(screen.queryByText('Stop requested after tick 4.')).toBeNull()
   })
 
+  it('does not show complete shell chrome when all-terminal readiness hides orientation gaps', async () => {
+    const conflictMessage = 'Possible duplicate work is split across scopes.'
+    const projectPayload = detail({
+      startReadiness: {
+        canStart: false,
+        code: 'all_terminal',
+        message: 'Stage 1: Headless Drafting And Evaluation MVP is complete.',
+      },
+      orientationSpine: {
+        summary: {
+          headline: 'Stage 1 Headless Drafting And Evaluation MVP has source conflicts to review.',
+          purpose: 'Headless proof scope.',
+          selectedScopeLabel: 'Stage 1 Headless Drafting And Evaluation MVP',
+          selectedReleaseLabel: 'Stage 1 Headless Drafting And Evaluation MVP',
+          includedCount: 1,
+          includedWorkCount: 1,
+          deferredCount: 1,
+          deferredWorkCount: 1,
+          pinnedNow: [],
+          topBlocker: conflictMessage,
+          nextAction: 'Review source conflicts before treating the scope as settled.',
+          progress: { scopeId: 'stage-1', total: 2, done: 1, deferred: 1 },
+        },
+        gaps: [{ kind: 'source_conflict', label: conflictMessage, severity: 'warn', refs: ['docs:narrative-harness'] }],
+        sourceHealth: { inferred: 1, conflicts: 1, gaps: 1 },
+        scopeRows: [],
+        releases: [],
+        charter: { goal: 'Headless proof scope.', targetAudience: null, currentReleaseTarget: null, successDefinition: null, nonGoals: [], source: 'inferred' },
+        executionBoundary: { label: 'Headless proof', mode: 'headless', proofStyle: 'script_only', detail: 'Script proof.', source: { kind: 'inferred', refs: [], confidence: 'medium', freshness: 'fresh', inferred: true, refreshedAt: now } },
+        proofContracts: [],
+        roots: [],
+        nodes: {},
+        activePins: [],
+        release: { state: 'ready', blockers: [] },
+        projectId: 'looma-knit',
+        updatedAt: now,
+      } as any,
+    } as Partial<ProjectDetail>)
+    installFetchFakes(projectPayload)
+
+    await renderProjectView('map', null, 'looma-knit', projectPayload)
+
+    expect(screen.queryByText('Stage 1: Headless Drafting And Evaluation MVP is complete.')).toBeNull()
+    expect(screen.getAllByText('Stage 1 Headless Drafting And Evaluation MVP has source conflicts to review.').length).toBeGreaterThan(0)
+    expect(screen.getAllByText(conflictMessage).length).toBeGreaterThan(0)
+  })
+
   it('does not let deferred blocked work override completed current-scope chrome', async () => {
     const projectPayload = detail({
       startReadiness: { canStart: true, message: 'Ready' },

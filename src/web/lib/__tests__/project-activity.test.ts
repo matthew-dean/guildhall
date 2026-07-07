@@ -136,6 +136,38 @@ describe('buildProjectTicker', () => {
     })
   })
 
+  it('does not call all-terminal scope complete when the orientation spine has gaps', () => {
+    const detail: ProjectDetail = {
+      startReadiness: {
+        canStart: false,
+        code: 'all_terminal',
+        message: 'Stage 1 is complete.',
+      },
+      orientationSpine: {
+        summary: {
+          headline: 'Stage 1 has source conflicts to review.',
+          selectedScopeLabel: 'Stage 1',
+          topBlocker: 'Possible duplicate work is split across scopes.',
+          nextAction: 'Review source conflicts before treating the scope as settled.',
+        },
+        sourceHealth: {
+          gaps: 1,
+          conflicts: 1,
+          inferred: 0,
+        },
+      } as any,
+      tasks: [{ id: 'task-1', status: 'done', title: 'Done task' }],
+    }
+
+    expect(buildProjectTicker(detail, null, now)).toMatchObject({
+      tone: 'warn',
+      actorLabel: 'Review',
+      label: 'Review',
+      message: 'Stage 1 has source conflicts to review.',
+      detail: 'Possible duplicate work is split across scopes.',
+    })
+  })
+
   it('surfaces active worker progress from recent events', () => {
     const detail: ProjectDetail = {
       run: { status: 'running' },

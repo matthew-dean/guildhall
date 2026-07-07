@@ -1439,6 +1439,83 @@ function normalizeText(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
 }
 
+const DUPLICATE_SCOPE_STOPWORDS = new Set([
+  'a',
+  'an',
+  'and',
+  'for',
+  'of',
+  'the',
+  'to',
+])
+
+function titleTokens(value: string): Set<string> {
+  return new Set(normalizeText(value)
+    .split(/\s+/)
+    .filter(token => token.length > 2)
+    .filter(token => !DUPLICATE_SCOPE_STOPWORDS.has(token)))
+}
+
+function coreTitleOverlap(left: string, right: string): number {
+  const leftTokens = titleTokens(left)
+  const rightTokens = titleTokens(right)
+  const smaller = Math.min(leftTokens.size, rightTokens.size)
+  if (smaller < 5) return 0
+  let overlap = 0
+  for (const token of leftTokens) {
+    if (rightTokens.has(token)) overlap += 1
+  }
+  return overlap / smaller
+}
+
+function materiallyDifferentScope(
+  left: OrientationTaskInput,
+  right: OrientationTaskInput,
+  scope: OrientationScope | null,
+  tasksById: ReadonlyMap<string, OrientationTaskInput>,
+): boolean {
+  const leftEligibility = taskEligibleForSelectedScope(left, scope, { tasksById })
+  const rightEligibility = taskEligibleForSelectedScope(right, scope, { tasksById })
+  if (leftEligibility.eligible !== rightEligibility.eligible) return true
+  const leftReleases = (left.releaseIds ?? []).join('\n')
+  const rightReleases = (right.releaseIds ?? []).join('\n')
+  return leftReleases !== rightReleases
+}
+
+function duplicateScopeConflictGaps(
+  tasks: OrientationTaskInput[],
+  scope: OrientationScope | null,
+): OrientationGap[] {
+  const tasksById = new Map(tasks.map(task => [task.id, task]))
+  const candidates = tasks.filter((task) => {
+    if (task.status === 'archived' || task.status === 'cancelled') return false
+    return visibilityForTask(task, tasksById).countInProjectTotals
+  })
+  const gaps: OrientationGap[] = []
+  const seenPairs = new Set<string>()
+  for (let i = 0; i < candidates.length; i += 1) {
+    for (let j = i + 1; j < candidates.length; j += 1) {
+      const left = candidates[i]!
+      const right = candidates[j]!
+      if (left.domain && right.domain && left.domain !== right.domain) continue
+      if (coreTitleOverlap(taskTitle(left), taskTitle(right)) < 0.8) continue
+      if (!materiallyDifferentScope(left, right, scope, tasksById)) continue
+      const key = [left.id, right.id].sort().join('\n')
+      if (seenPairs.has(key)) continue
+      seenPairs.add(key)
+      const richer = taskTitle(left).length >= taskTitle(right).length ? left : right
+      const other = richer === left ? right : left
+      gaps.push({
+        kind: 'source_conflict',
+        label: `Possible duplicate work is split across scopes: "${taskTitle(richer)}" overlaps "${taskTitle(other)}".`,
+        refs: [...new Set([...sourceRefsForTask(richer), ...sourceRefsForTask(other)])],
+        severity: 'warn',
+      })
+    }
+  }
+  return gaps
+}
+
 function sourceRefsForTask(task: OrientationTaskInput): string[] {
   const refs = (task.references ?? [])
     .map(ref => typeof ref === 'string' ? ref.trim() : '')
@@ -1832,6 +1909,22 @@ function buildSummary(input: {
   }
 }
 
+function summaryWithSourceConflicts(
+  summary: ProjectOrientationSummary,
+  gaps: readonly OrientationGap[],
+): ProjectOrientationSummary {
+  if (summary.topBlocker) return summary
+  const conflict = gaps.find(gap => gap.kind === 'source_conflict')
+  if (!conflict) return summary
+  const label = summary.selectedScopeLabel ?? summary.selectedReleaseLabel ?? 'Current scope'
+  return {
+    ...summary,
+    headline: `${label} has source conflicts to review.`,
+    topBlocker: conflict.label,
+    nextAction: 'Review source conflicts before treating the scope as settled.',
+  }
+}
+
 export function buildProjectOrientationSpine(input: BuildProjectOrientationSpineInput): ProjectOrientationSpine {
   const now = input.now ?? new Date().toISOString()
   const baseTasks = (input.tasks ?? []).filter(task =>
@@ -1915,6 +2008,7 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
     sourceRefs: input.sourceRefs ?? [],
   })
   const proofContracts = proofContractsForNodes(roots, executionBoundary)
+  const duplicateGaps = duplicateScopeConflictGaps(tasks, scope)
   const gaps: OrientationGap[] = [
     ...(charter.source === 'missing'
       ? [{
@@ -1942,6 +2036,7 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
       })),
     ...nodeGaps,
     ...blockerGaps,
+    ...duplicateGaps,
     ...sourceConflictGaps(input.sourceConflicts),
   ]
   const pins = activePins(roots)
@@ -1956,6 +2051,17 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
       : scope
         ? 'shaping'
         : 'unknown'
+  const summary = summaryWithSourceConflicts(buildSummary({
+    projectId: input.projectId,
+    charter,
+    selectedRelease: selectedReleaseForReadModel,
+    scope,
+    progress,
+    pins,
+    blockers,
+    startReadiness: input.startReadiness,
+    runStatus: input.runStatus,
+  }), gaps)
   return {
     projectId: input.projectId,
     updatedAt: now,
@@ -1966,17 +2072,7 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
     charter,
     executionBoundary,
     proofContracts,
-    summary: buildSummary({
-      projectId: input.projectId,
-      charter,
-      selectedRelease: selectedReleaseForReadModel,
-      scope,
-      progress,
-      pins,
-      blockers,
-      startReadiness: input.startReadiness,
-      runStatus: input.runStatus,
-    }),
+    summary,
     roots,
     nodes: Object.fromEntries(byId.entries()),
     activePins: pins,

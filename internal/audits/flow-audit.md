@@ -25643,3 +25643,78 @@ selected-scope readiness ordering.
   - Apply/revert behavior: reverting restores the owner-facing gap where the
     1,000-foot Project Map can claim proof status without showing the source
     trail that justifies or limits that claim.
+
+## 2026-07-06 — Duplicate scoped work becomes a source conflict
+
+- Work id: `codex:duplicate-scope-source-conflict-2026-07-06`.
+- User job: a user reading the Narrative Harness current scope should not see
+  the MVP/current release presented as cleanly complete when richer owner
+  requirements for the same work are split into another scope. The product must
+  show that contradiction from Guildhall itself, not rely on Codex noticing it
+  from raw project files.
+- Root-cause classification:
+  - Project structure/scope/release modeling problem: overlapping DeepInfra
+    model-selection work was split across different scope membership, so the
+    selected scope could show a blander sibling while the richer
+    `legal adult fiction` requirement lived elsewhere.
+  - Task hierarchy/dependency/proof modeling problem: terminal task status and
+    selected-scope readiness hid that the proof obligation was duplicated and
+    materially different.
+  - UI communication/orientation problem: Project Map and shell chrome could
+    flatten that contradiction into a clean completion story instead of
+    explaining that source truth needs review.
+  - Bad project data produced by an earlier Guildhall bug: the duplicate
+    Narrative Harness DeepInfra tasks came from prior intake/execution churn
+    and should be treated as calibration data for import/model repair.
+- Fix:
+  - The shared orientation spine now detects near-duplicate visible work records
+    that overlap materially by title/domain but differ by selected-scope or
+    release membership, then emits a `source_conflict` gap with source refs.
+  - Orientation summary now promotes the first source conflict into the
+    headline, top blocker, and next action when no stronger blocker already
+    owns the summary.
+  - Project activity and ProjectView shell chrome now let orientation-spine gaps
+    override all-terminal start readiness, so old `complete` strings do not
+    outrank visible source conflicts.
+- Contract Touch Decision:
+  - Touched contracts: orientation-spine gap/source-health/summary projection,
+    Project activity ticker priority, and ProjectView all-terminal shell alert
+    presentation.
+  - Contracts considered but not touched: persisted task schema, release/scope
+    membership mutation, workspace-import draft schema, scheduler/start
+    readiness calculation, proof-health calculation, and release-readiness
+    calculation.
+  - Existing data impact: no migration. Existing duplicate or overlapping work
+    remains intact but becomes owner-visible as a source conflict when it
+    affects selected-scope truth.
+  - Required follow-up: decide whether duplicated scope membership should be
+    repaired by importer/model reconciliation rather than only flagged, and
+    continue simplifying the release/scope data model so adding a release later
+    does not require task rewrites.
+  - Proof required: failing regression for near-duplicate scoped work, failing
+    Project activity regression for all-terminal readiness with spine gaps,
+    failing ProjectView shell regression for stale complete chrome, focused
+    runtime/web tests, installed-app stale-server proof, live Narrative Harness
+    API proof, and desktop/mobile browser proof.
+  - Proof provided: the ProjectView regression first failed because the shell
+    still rendered `Stage 1: Headless Drafting And Evaluation MVP is complete.`
+    from `startReadiness.message`. After the fix,
+    `./node_modules/.bin/vitest run src/runtime/__tests__/project-orientation-spine.test.ts`
+    passed (`58` tests),
+    `./node_modules/.bin/vitest run src/web/lib/__tests__/project-activity.test.ts`
+    passed (`20` tests), and
+    `./node_modules/.bin/vitest run src/web/surfaces/__tests__/ProjectView.svelte.test.ts`
+    passed (`56` tests). `node ./build.mjs` and
+    `node ./scripts/dev-install.mjs` passed; after service restart,
+    `/api/stale-server` returned `stale:false` for PID `34605`. Live
+    Narrative Harness API proof showed headline
+    `Stage 1 Headless Drafting And Evaluation MVP has source conflicts to review.`
+    with `sourceHealth.gaps:1` and a source-conflict blocker comparing the
+    DeepInfra `legal adult fiction` task to the blander broad-genre sibling.
+    Browser proof on `/projects/narrative-harness/map` showed the warning
+    alert and footer ticker with the source-conflict text, no stale complete
+    message, and no horizontal overflow at `1280px` or `390px`.
+  - Apply/revert behavior: reverting restores the model/UI contradiction where
+    selected-scope all-terminal readiness can hide a richer overlapping owner
+    requirement and make Guildhall look more complete than its source trail
+    supports.
