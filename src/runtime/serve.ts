@@ -5431,11 +5431,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const selectedTaskId = requestedTaskId && tasks.some(task => task.id === requestedTaskId)
         ? requestedTaskId
         : null
-      const deliveryModel = await readProjectDeliveryModel(project.path)
-      const deliveryQueue = deriveQueueCandidates({
-        model: deliveryModel,
-        tasks: rawTasks as Task[],
-      })
+      const deliveryModel = mapSurface ? null : await readProjectDeliveryModel(project.path)
+      const deliveryQueue = deliveryModel
+        ? deriveQueueCandidates({
+            model: deliveryModel,
+            tasks: rawTasks as Task[],
+          })
+        : []
       const deliveryValidation = fullSurface
         ? validateProjectDeliveryModel({
             model: deliveryModel,
@@ -5449,7 +5451,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const preferredActiveProvider = preferredProvider
         ? normalizePreferredProvider(preferredProvider)
         : undefined
-      const recent = supervisor.recent(project.id, undefined, project.path)
+      const recent = mapSurface ? [] : supervisor.recent(project.id, undefined, project.path)
       const bootstrapStatus = readBootstrapStatus(getProjectStateDir(project.path))
       const preferredHealth = providerHealthForRun({
         credentials: runtimeProvider.credentials,
@@ -5479,7 +5481,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           : null
       )
       const [runtime, memoryHealth, availability] = await Promise.all([
-        readProjectRuntimeState(project.path),
+        mapSurface ? Promise.resolve(null) : readProjectRuntimeState(project.path),
         fullSurface
           ? projectMemoryHealth(
               project.path,
@@ -5489,35 +5491,41 @@ export function buildServeApp(opts: ServeOptions = {}): {
           : Promise.resolve(null),
         readProjectAvailability(project.path),
       ])
-      const acceptedStructuralMap = readAcceptedStructuralMap(project.path)
+      const acceptedStructuralMap = mapSurface ? null : readAcceptedStructuralMap(project.path)
       const structuralMapReview = acceptedStructuralMap ? summarizeStructuralMapForReview(acceptedStructuralMap) : null
-      const taskRoutingContexts = summarizeStructuralTaskContexts({
-        map: acceptedStructuralMap,
-        tasks: tasks
-          .filter((task): task is typeof task & { id: string } => typeof task.id === 'string')
-          .map(task => ({
-            id: task.id,
-            title: typeof task.title === 'string' ? task.title : task.id,
-            description: typeof task.description === 'string' ? task.description : undefined,
-            spec: typeof task.spec === 'string' ? task.spec : undefined,
-          })),
-      })
-      const inbox = await buildProjectInboxSnapshot({
-        projectPath: project.path,
-        initializationNeeded: project.initializationNeeded,
-        coordinatorCount: project.config?.coordinators?.length ?? 0,
-      })
-      const threadState = await loadThreadProjectionState(project.path)
-      const thread = buildThread({
-        projectPath: project.path,
-        snapshot: threadState.snapshot,
-        tasks: threadState.tasks as never,
-        boundedChatSessions: threadState.boundedChatSessions,
-        pressureTestIntakes: threadState.pressureTestIntakes,
-        projectCheckInSummary: threadState.projectCheckInSummary,
-        runStatus: run?.status ?? 'stopped',
-        recentEvents: recent,
-      })
+      const taskRoutingContexts = mapSurface
+        ? {}
+        : summarizeStructuralTaskContexts({
+            map: acceptedStructuralMap,
+            tasks: tasks
+              .filter((task): task is typeof task & { id: string } => typeof task.id === 'string')
+              .map(task => ({
+                id: task.id,
+                title: typeof task.title === 'string' ? task.title : task.id,
+                description: typeof task.description === 'string' ? task.description : undefined,
+                spec: typeof task.spec === 'string' ? task.spec : undefined,
+              })),
+          })
+      const inbox = mapSurface
+        ? null
+        : await buildProjectInboxSnapshot({
+            projectPath: project.path,
+            initializationNeeded: project.initializationNeeded,
+            coordinatorCount: project.config?.coordinators?.length ?? 0,
+          })
+      const threadState = mapSurface ? null : await loadThreadProjectionState(project.path)
+      const thread = threadState
+        ? buildThread({
+            projectPath: project.path,
+            snapshot: threadState.snapshot,
+            tasks: threadState.tasks as never,
+            boundedChatSessions: threadState.boundedChatSessions,
+            pressureTestIntakes: threadState.pressureTestIntakes,
+            projectCheckInSummary: threadState.projectCheckInSummary,
+            runStatus: run?.status ?? 'stopped',
+            recentEvents: recent,
+          })
+        : null
       const orientationCharter = inferProjectCharterFromExistingSources(project.path, project.config)
       const fullOrientationSpine = buildOrientationSpineWithScopedReleaseTruth({
         projectId: project.id,
@@ -5583,7 +5591,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         selectedTaskId,
         tasks: responseTasks.map(mapSurface ? compactTaskIdentity : fullSurface ? compactTaskForProjectSummary : compactTaskForWorkSurface),
         workProgress,
-        inbox,
+        ...(inbox ? { inbox } : {}),
         run: run
           ? {
               status: run.status,

@@ -13,6 +13,7 @@
   import FrameCard from '../../../packages/ui/src/components/FrameCard.svelte'
   import { onEvent } from '../lib/events.js'
   import { nav, path } from '../lib/nav.svelte.js'
+  import { project } from '../lib/project.svelte.js'
   import { projectActionHref, projectFetch } from '../lib/project-routes.js'
   import type { ProjectActionModel } from '../lib/types.js'
 
@@ -51,30 +52,34 @@
 
   async function load(): Promise<void> {
     try {
-      const projectRes = await projectFetch('/api/project')
-      if (projectRes.ok) {
-        const projectJson = (await projectRes.json()) as {
-          actionModel?: ProjectActionModel | null
-          startReadiness?: StartReadiness | null
-        }
-        actionModel = projectJson.actionModel ?? null
-        if (actionModel?.primaryAction) {
-          items = []
-          threadTurn = null
-          return
-        }
-        const terminalScope =
-          projectJson.startReadiness?.canStart === false &&
-          projectJson.startReadiness.code === 'all_terminal' &&
-          actionModel?.runControl?.startEnabled === false &&
-          actionModel.ownerInput?.active !== true
-        if (terminalScope) {
-          items = []
-          threadTurn = null
-          return
-        }
-      } else {
-        actionModel = null
+      const current = project.detail
+      let projectJson: {
+        actionModel?: ProjectActionModel | null
+        startReadiness?: StartReadiness | null
+      } | null = current
+        ? { actionModel: current.actionModel ?? null, startReadiness: current.startReadiness ?? null }
+        : null
+      if (!projectJson) {
+        const projectRes = await projectFetch('/api/project')
+        projectJson = projectRes.ok
+          ? await projectRes.json() as typeof projectJson
+          : null
+      }
+      actionModel = projectJson?.actionModel ?? null
+      if (actionModel?.primaryAction) {
+        items = []
+        threadTurn = null
+        return
+      }
+      const terminalScope =
+        projectJson?.startReadiness?.canStart === false &&
+        projectJson.startReadiness.code === 'all_terminal' &&
+        actionModel?.runControl?.startEnabled === false &&
+        actionModel.ownerInput?.active !== true
+      if (terminalScope) {
+        items = []
+        threadTurn = null
+        return
       }
       const inboxRes = await projectFetch('/api/project/inbox')
       if (inboxRes.ok) {

@@ -3176,6 +3176,11 @@ describe('GET /api/project/release-readiness', () => {
       status: 'ready',
     })])
     expect(mapBody.tasks[0].acceptanceCriteria).toBeUndefined()
+    expect(mapBody.inbox).toBeUndefined()
+    expect(mapBody.taskRoutingContexts).toEqual({})
+    expect(mapBody.runtime).toBeNull()
+    expect(mapBody.recentEvents).toEqual([])
+    expect(mapBody.actionModel?.runControl?.label).toBeTruthy()
   })
 
   it('does not turn terminal complete start readiness into an overview blocker', async () => {

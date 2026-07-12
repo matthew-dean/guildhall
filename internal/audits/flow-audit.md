@@ -29984,3 +29984,68 @@ selected-scope readiness ordering.
   - Apply/revert behavior: reverting restores the duplicate
     `/api/project/spine` request on Map first render.
 - Schema Migration Decision: no persisted schema field or migration changed.
+
+## 2026-07-12T23:14:02Z - Map surface stops carrying unused project-detail weight
+
+- User job:
+  - Narrative Harness Map should be a 1,000-foot orientation view backed by the
+    compact map payload, without also building and shipping unrelated inbox,
+    thread, routing, runtime, delivery, and recent-event payloads.
+- Root cause classification:
+  - Runtime/provider/infrastructure problem: `/api/project?surface=map` still
+    built several general project-detail sections the Map view does not render.
+  - UI communication/orientation problem: `DoThisNext` refetched full
+    `/api/project` even when ProjectView already had the shared `actionModel`,
+    creating another full-detail read immediately after the compact Map read.
+  - Data model/schema problem: not changed in this slice; this preserves the
+    existing project-detail contract and narrows only the Map surface payload.
+- Fix:
+  - Map surface now omits unused inbox, thread, routing, runtime, delivery
+    model, and recent-event work while keeping task identities, start
+    readiness, action model, release/source-backed orientation, availability,
+    provider status, bootstrap status, work progress, and scope data.
+  - `DoThisNext` now reads the already-loaded project store action model before
+    fetching `/api/project`, so Map does not immediately trigger a duplicate
+    full project read after it renders.
+- Proof provided:
+  - `corepack pnpm vitest run src/web/surfaces/__tests__/DoThisNext.svelte.test.ts`
+    passed: 9 tests.
+  - `corepack pnpm vitest run src/web/lib/__tests__/project-store.test.ts`
+    passed: 4 tests.
+  - `corepack pnpm vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts --testNamePattern
+    "compact project spine"` passed: 1 test.
+  - `git diff --check` passed.
+  - `node ./build.mjs` passed.
+  - `corepack pnpm dev:install` passed.
+  - `guildhall start` started the installed app.
+  - `/api/stale-server` returned `stale:false`, PID `20582`,
+    `bootBuildMtimeMs:1783897858514`, and
+    `currentBuildMtimeMs:1783897858514`.
+  - Installed API proof for
+    `/api/project?projectId=narrative-harness&surface=map` returned size
+    `328382` bytes after this slice, down from `439992` bytes before it.
+  - Three installed API timings after this slice were `6.481877s`,
+    `4.806438s`, and `2.930666s`; before this slice the same route measured
+    `4.420401s`, `4.458350s`, and `4.131422s`.
+  - Installed browser proof in a fresh tab at
+    `/projects/narrative-harness/map` showed `Project map`, `Stage 1`, `11
+    assigned work items`, `30 later work items`, `58 documented capabilities`,
+    `0 gaps`, proof mode, and no horizontal overflow at `1280x720`.
+- Contract Touch Decision:
+  - Work id: `map-surface-unused-detail-trim`.
+  - Touched contracts: `/api/project?surface=map` payload semantics,
+    ProjectView/DoThisNext shared action-model consumption, compact Map
+    runtime test expectations, and DoThisNext shared-store test expectations.
+  - Contracts considered but not touched: persisted task schema, persisted
+    release schema, `/api/project` full payload semantics, `/api/project`
+    overview/work payload semantics, `/api/project/spine`, ProjectMapTab
+    component contract, release/readiness semantics, source trail semantics,
+    and proof contract semantics.
+  - Required follow-up: profile the remaining orientation spine construction
+    and source/proof aggregation work; payload trimming reduces waste but does
+    not make Map first render reliably instant.
+  - Apply/revert behavior: reverting restores unused Map payload sections and
+    lets `DoThisNext` trigger a full project-detail read even when the shared
+    project store already has the action model.
+- Schema Migration Decision: no persisted schema field or migration changed.
