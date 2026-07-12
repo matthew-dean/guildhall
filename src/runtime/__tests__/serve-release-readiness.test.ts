@@ -1274,6 +1274,79 @@ describe('GET /api/project/release-readiness', () => {
     })
   })
 
+  it('does not show verified completion proof for unfinished overview work', async () => {
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: 'headless-mvp',
+      releases: [{
+        id: 'headless-mvp',
+        label: 'Headless MVP',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-ready-with-old-gates', 'work:task-ready-with-proof-plan'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [
+        makeTask({
+          id: 'task-ready-with-old-gates',
+          title: 'Mobile: test on real device',
+          status: 'ready',
+          releaseIds: ['headless-mvp'],
+          gateResults: [{
+            gateId: 'build',
+            type: 'hard',
+            passed: true,
+            output: 'build passed before the task was reset to ready',
+            checkedAt: '2026-05-16T20:30:00.000Z',
+          }],
+          reviewVerdicts: [{
+            verdict: 'approve',
+            reviewerPath: 'llm',
+            reason: 'Old review approved',
+            reasoning: 'This evidence is not completion proof for the current ready task.',
+            failingSignals: [],
+            recordedAt: '2026-05-16T20:30:00.000Z',
+          }],
+        } as Partial<Task>),
+        makeTask({
+          id: 'task-ready-with-proof-plan',
+          title: 'Run the release proof script',
+          status: 'ready',
+          releaseIds: ['headless-mvp'],
+          proofPaths: [{
+            kind: 'command',
+            command: 'pnpm test -- release-proof',
+            expectedEvidence: ['release proof script passes'],
+          }],
+          gateResults: [{
+            gateId: 'old-build',
+            type: 'hard',
+            passed: true,
+            output: 'old build passed',
+            checkedAt: '2026-05-16T20:30:00.000Z',
+          }],
+        } as Partial<Task>),
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await approveDesignSystem(app)
+    await commitAndPush('ready task stale proof')
+
+    const project = await (await app.fetch(new Request(projectUrl('/api/project?surface=overview')))).json() as any
+    const staleGateTask = project.tasks.find((task: any) => task.id === 'task-ready-with-old-gates')
+    const plannedProofTask = project.tasks.find((task: any) => task.id === 'task-ready-with-proof-plan')
+
+    expect(staleGateTask?.completionProof).toBeUndefined()
+    expect(plannedProofTask?.completionProof).toMatchObject({
+      state: 'planned',
+      expectedCount: 1,
+      verifiedCount: 0,
+    })
+  })
+
   it('accepts review-backed imported proof hints when later completion evidence exists', async () => {
     await seedQueue({
       version: 1,

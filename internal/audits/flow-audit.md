@@ -29589,3 +29589,64 @@ selected-scope readiness ordering.
   - Apply/revert behavior: reverting can make Overview say a scope is complete
     while its own visible task cards say proof is missing.
 - Schema Migration Decision: no persisted schema field or migration changed.
+
+## 2026-07-12T21:52:08Z - Unfinished Looma work no longer shows completed proof
+
+- User job:
+  - Looma + Knit Overview must not mark ready current-scope work as having
+    verified completion proof merely because older gate or reviewer evidence
+    exists on the task record.
+- Root cause classification:
+  - Task hierarchy/dependency/proof modeling problem: `completionProof` treated
+    any recorded proof evidence as verified completion proof, even when the task
+    status was still `ready`.
+  - UI communication/orientation problem: unfinished current-scope work could
+    look proven on the same page that correctly said the release was not ready.
+  - Bad project data produced by an earlier Guildhall bug: Looma + Knit carries
+    old gate/review evidence on ready imported work, which should not be
+    promoted into completion state.
+- Fix:
+  - `compactTaskCompletionProof` now returns verified completion proof only for
+    `done` tasks.
+  - Unfinished tasks with no proof paths no longer emit `completionProof`.
+  - Unfinished tasks with proof paths emit `state:"planned"` with zero verified
+    completion evidence.
+- Proof provided:
+  - `git diff --check` passed.
+  - `corepack pnpm vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts --testNamePattern
+    "unfinished overview work|effective task proof state|stale imported proof
+    status|imported proof-path status|truncation-only|semantically matching
+    review proof|provider/model proof|unrelated completion proof|generic build
+    proof|recorded completion proof release readiness"` passed: 9 tests.
+  - `corepack pnpm lint:contracts` passed.
+  - `node ./build.mjs` passed.
+  - `corepack pnpm dev:install` passed.
+  - `guildhall stop || true; guildhall start` restarted the installed app.
+  - `/api/stale-server` returned `stale:false`, PID `56607`,
+    `bootBuildMtimeMs:1783893028975`, and
+    `currentBuildMtimeMs:1783893028975`.
+  - Installed API proof for
+    `/api/project?projectId=looma-knit&surface=overview` now reports both
+    ready current-scope tasks with `completionProof:null`, while the one done
+    task still reports `completionProof.state:"verified"`.
+  - Installed API proof for Narrative Harness Overview still reports
+    `releaseReadiness.ready:true` and all 11 Stage 1 tasks with
+    `completionProof.state:"verified"`.
+  - Browser proof at `/projects/looma-knit/overview` visibly reports
+    `Stage 1: V1 Release Hardening`, `needs attention`, `1 verified`, and no
+    misleading ready-task verified completion text or horizontal overflow at
+    `1280x720`.
+- Contract Touch Decision:
+  - Work id: `unfinished-work-no-completion-proof`.
+  - Touched contracts: `/api/project` task-card `completionProof` presentation
+    semantics.
+  - Contracts considered but not touched: persisted task schema, proof path
+    schema, release-readiness payload shape, Start readiness payload shape, and
+    task evidence storage.
+  - Required follow-up: align Overview "Current focus" with the highest-value
+    actionable blocker so Looma does not pin a ready task while Start says the
+    owner must shape E2E work first.
+  - Apply/revert behavior: reverting can make ready work look complete/proven
+    from stale proof events.
+- Schema Migration Decision: no persisted schema field or migration changed.

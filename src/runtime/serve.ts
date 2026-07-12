@@ -3685,16 +3685,25 @@ function compactTaskEscalationsForProjectSummary(escalations: unknown): Array<Re
 function compactTaskCompletionProof(task: Record<string, unknown>): Record<string, unknown> | undefined {
   const recorded = recordedCompletionProofForTask(task)
   const proofPaths = Array.isArray(task.proofPaths) ? task.proofPaths : []
+  const status = String(task.status ?? '')
   const runtime = task.runtime && typeof task.runtime === 'object' && !Array.isArray(task.runtime)
     ? task.runtime as Record<string, unknown>
     : null
   const activeProofRecovery =
-    String(task.status ?? '') !== 'done' &&
+    status !== 'done' &&
     Boolean(
       (task.proofRecovery && typeof task.proofRecovery === 'object' && !Array.isArray(task.proofRecovery)) ||
       (runtime?.proofRecovery && typeof runtime.proofRecovery === 'object' && !Array.isArray(runtime.proofRecovery)),
     )
-  const proofMissing = String(task.status ?? '') === 'done' && taskDoneButProofMissing(task)
+  const proofMissing = status === 'done' && taskDoneButProofMissing(task)
+  if (status !== 'done' && !activeProofRecovery) {
+    if (proofPaths.length === 0) return undefined
+    return {
+      state: 'planned',
+      expectedCount: proofPaths.length,
+      verifiedCount: 0,
+    }
+  }
   if (recorded.verified.length === 0 && proofPaths.length === 0 && !proofMissing && !activeProofRecovery) return undefined
   return {
     state: proofMissing || activeProofRecovery ? 'missing' : recorded.verified.length > 0 ? 'verified' : 'planned',
