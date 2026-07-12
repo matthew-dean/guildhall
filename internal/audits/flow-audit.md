@@ -29864,3 +29864,71 @@ selected-scope readiness ordering.
   - Apply/revert behavior: reverting makes Map request the full project payload
     again and increases the orientation route's payload/cognitive load.
 - Schema Migration Decision: no persisted schema field or migration changed.
+
+## 2026-07-12T22:54:46Z - Map and spine avoid duplicate task/read-model work
+
+- User job:
+  - Narrative Harness Map and spine endpoints must orient the owner from real
+    project truth without rebuilding expensive project/task read models more
+    times than the route needs.
+- Root cause classification:
+  - Runtime/provider/infrastructure problem: `buildEffectiveTask` reread the
+    same runtime/workspace stores once per task in bulk project read-model
+    paths.
+  - Project structure/scope/release modeling problem: the source-backed
+    orientation wrapper built a provisional full spine only to discover the
+    selected scope, then built the final spine again with release truth.
+  - UI communication/orientation problem: slow Map/Spine response time made the
+    1,000-foot orientation view feel unreliable even when the returned state
+    was source-correct.
+- Fix:
+  - Added `buildEffectiveTasks(projectRoot, tasks)` so bulk read-model paths
+    read shared task runtime/workspace stores once and reuse them.
+  - Map now builds batch effective tasks directly and then returns compact task
+    identities, instead of running Work-screen task enrichment and discarding
+    most of it.
+  - `buildOrientationSpineWithScopedReleaseTruth` now derives the selected
+    scope from existing queue/release data with `selectedProjectScopeForQueue`
+    before building the final spine, avoiding the provisional full-spine build.
+- Proof provided:
+  - `git diff --check` passed.
+  - `corepack pnpm vitest run src/runtime/__tests__/effective-task.test.ts`
+    passed: 11 tests.
+  - `corepack pnpm vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts --testNamePattern
+    "compact project spine|source metadata|release source|selected scope|overview
+    source"` passed: 2 matching tests.
+  - `corepack pnpm vitest run
+    src/runtime/__tests__/project-orientation-spine.test.ts` passed: 66 tests.
+  - `node ./build.mjs` passed.
+  - `corepack pnpm dev:install` passed.
+  - `guildhall stop || true; guildhall start` restarted the installed app.
+  - `/api/stale-server` returned `stale:false`, PID `80625`,
+    `bootBuildMtimeMs:1783896797034`, and
+    `currentBuildMtimeMs:1783896797034`.
+  - Warm installed API proof for Narrative Harness improved
+    `/api/project/spine` from about `4.56s` to about `3.72s` and
+    `/api/project?surface=map` from about `2.89s` to about `2.42s`, while
+    preserving the same compact Map payload size and source-backed release
+    truth.
+  - Browser proof at `/projects/narrative-harness/map` still renders Stage 1,
+    `11 assigned work items`, `30 later work items`, `0 gaps`, source-backed
+    release copy, proof mode, and no horizontal overflow at `1280x720`.
+    However, the page still visibly showed `Loading project...` after an
+    initial 3.5 second wait, so page-level loading remains an open follow-up.
+- Contract Touch Decision:
+  - Work id: `map-spine-read-model-duplicate-work-reduction`.
+  - Touched contracts: effective task bulk construction helper semantics,
+    `/api/project?surface=map` internal task-enrichment source, and
+    source-backed orientation wrapper scope derivation.
+  - Contracts considered but not touched: persisted task schema, task evidence
+    schema, task runtime/workspace store schema, `/api/project` response field
+    names, `/api/project/spine` response field names, release/readiness
+    semantics, source trail semantics, and project map UI components.
+  - Required follow-up: continue reducing Map/Spine latency by profiling the
+    remaining orientation/source/proof aggregation work; this slice removes
+    duplicate work but does not make the route instant.
+  - Apply/revert behavior: reverting restores per-task repeated store reads in
+    bulk paths and the provisional full-spine build before the final
+    source-backed orientation spine.
+- Schema Migration Decision: no persisted schema field or migration changed.

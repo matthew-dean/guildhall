@@ -383,7 +383,7 @@ import {
   buildCoordinatorProjectPathMap,
   resolveTaskProjectPath,
 } from './task-project-path.js'
-import { buildEffectiveTask } from './effective-task.js'
+import { buildEffectiveTask, buildEffectiveTasks } from './effective-task.js'
 import { buildDoneTaskSummaryBundle } from './done-task-summary.js'
 import { readContextDebugForTask } from './context-observability.js'
 import { createReviewAuditStore } from './review-audit-store.js'
@@ -1883,7 +1883,7 @@ async function buildProjectInboxSnapshot(input: {
   let inboxTaskStateOverride: TaskQueue | null = null
   try {
     const rawQueue = await readTaskQueueFileNormalized(projectTasksPath(input.projectPath))
-    const effectiveTasks = await Promise.all(rawQueue.tasks.map(task => buildEffectiveTask(input.projectPath, task as Task)))
+    const effectiveTasks = await buildEffectiveTasks(input.projectPath, rawQueue.tasks as Task[])
     inboxTaskStateOverride = {
       ...rawQueue,
       tasks: effectiveTasks as Task[],
@@ -2472,20 +2472,43 @@ function buildOrientationSpineWithScopedReleaseTruth(
     workspaceImportDraft: input.workspaceImportDraft,
     now,
   }).tasks as unknown as Task[]
-  const provisionalSpine = buildProjectOrientationSpine({ ...input, now })
+  const releasesById = new Map<string, ProjectRelease>()
+  for (const release of [
+    ...augmentedTasks.flatMap(task => task.releaseIds ?? []).map(id => ({ id })),
+    ...(input.releases ?? []),
+  ]) {
+    if (!release.id) continue
+    releasesById.set(release.id, {
+      id: release.id,
+      label: release.label ?? releaseLabelFromId(release.id),
+      kind: release.kind === 'milestone' ? 'milestone' : 'release',
+      state: release.state === 'ready' || release.state === 'shipped' || release.state === 'deferred' || release.state === 'planned' ? release.state : 'active',
+      source: release.source === 'owner_approved' || release.source === 'spec' || release.source === 'release_plan' ? release.source : 'inferred',
+      nodeIds: release.nodeIds ?? [],
+      deferredNodeIds: release.deferredNodeIds ?? [],
+      ...(release.proofStyle ? { proofStyle: release.proofStyle } : {}),
+    })
+  }
+  const selectedScope = input.scope
+    ? input.scope as ProjectScope
+    : selectedProjectScopeForQueue({
+        version: 1,
+        lastUpdated: new Date(0).toISOString(),
+        tasks: augmentedTasks,
+        releases: [...releasesById.values()],
+        ...(input.selectedReleaseId ? { selectedReleaseId: input.selectedReleaseId } : {}),
+      })
   const scopeProjection = buildProjectScopeProjection(
     {
       version: 1,
       lastUpdated: new Date(0).toISOString(),
       tasks: augmentedTasks,
-      releases: [],
+      releases: [...releasesById.values()],
+      ...(input.selectedReleaseId ? { selectedReleaseId: input.selectedReleaseId } : {}),
     },
-    { selectedScope: provisionalSpine.scope as ProjectScope | null | undefined },
+    { selectedScope },
   )
-  const releaseTruth = summarizeScopedReleaseWork(
-    augmentedTasks,
-    scopeProjection.selectedScope ?? provisionalSpine.scope,
-  )
+  const releaseTruth = summarizeScopedReleaseWork(augmentedTasks, scopeProjection.selectedScope)
   const orientationSpine = buildProjectOrientationSpine({
     ...input,
     now,
@@ -5365,7 +5388,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const rawQueue = await readTaskQueueFileNormalized(tasksPath)
       const rawTasks = rawQueue.tasks
       const overviewEffectiveTasksPromise = overviewSurface
-        ? Promise.all(rawTasks.map((task) => buildEffectiveTask(project.path, task as Task)))
+        ? buildEffectiveTasks(project.path, rawTasks as Task[])
+        : null
+      const mapEffectiveTasksPromise = mapSurface
+        ? buildEffectiveTasks(project.path, rawTasks as Task[])
         : null
       const resolvedConfig = resolveConfig({ workspacePath: project.path })
       const runtimeProvider = getRuntimeProviderConfig({
@@ -5390,13 +5416,17 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const workProgress = deriveProjectWorkProgress(rawTasks as Array<Record<string, unknown>>)
       const tasks = overviewSurface
         ? await overviewEffectiveTasksPromise as Task[]
+        : mapSurface
+          ? await mapEffectiveTasksPromise as Task[]
         : await Promise.all(rawTasks.map((task) => fullSurface
           ? enrichTaskForServe(project.path, task)
           : enrichTaskForWorkSurface(project.path, task)))
       const orientationTasks = fullSurface
-        ? await Promise.all(rawTasks.map(task => buildEffectiveTask(project.path, task as Task)))
+        ? await buildEffectiveTasks(project.path, rawTasks as Task[])
         : overviewSurface
           ? await overviewEffectiveTasksPromise as Task[]
+          : mapSurface
+            ? await mapEffectiveTasksPromise as Task[]
         : tasks as unknown as Task[]
       const selectedTaskId = requestedTaskId && tasks.some(task => task.id === requestedTaskId)
         ? requestedTaskId
@@ -5614,7 +5644,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         })
       }
       const rawQueue = await readTaskQueueFileNormalized(projectTasksPath(project.path))
-      const tasks = await Promise.all(rawQueue.tasks.map(task => buildEffectiveTask(project.path, task as Task)))
+      const tasks = await buildEffectiveTasks(project.path, rawQueue.tasks as Task[])
       const startReadiness = await projectStartReadinessForProject(project.path)
       const releaseReadiness = await buildProjectReleaseReadinessPayload()
       const charter = inferProjectCharterFromExistingSources(project.path, project.config)
@@ -5678,7 +5708,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (!releaseId) return c.json({ error: 'releaseId is required.' }, 400)
       const startReadiness = await projectStartReadinessForProject(project.path)
       const queueBeforeSelection = await readTaskQueueFileNormalized(projectTasksPath(project.path))
-      const tasksBeforeSelection = await Promise.all(queueBeforeSelection.tasks.map(task => buildEffectiveTask(project.path, task as Task)))
+      const tasksBeforeSelection = await buildEffectiveTasks(project.path, queueBeforeSelection.tasks as Task[])
       const { orientationSpine: selectableSpine } = buildOrientationSpineWithScopedReleaseTruth({
         projectId: project.id,
         charter: inferProjectCharterFromExistingSources(project.path, project.config),
@@ -5692,7 +5722,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       })
       const result = await writeSelectedReleaseId(projectTasksPath(project.path), releaseId, selectableSpine.releases as ProjectRelease[])
       const rawQueue = await readTaskQueueFileNormalized(projectTasksPath(project.path))
-      const tasks = await Promise.all(rawQueue.tasks.map(task => buildEffectiveTask(project.path, task as Task)))
+      const tasks = await buildEffectiveTasks(project.path, rawQueue.tasks as Task[])
       const { orientationSpine: spine } = buildOrientationSpineWithScopedReleaseTruth({
         projectId: project.id,
         charter: inferProjectCharterFromExistingSources(project.path, project.config),
@@ -5726,7 +5756,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (!archiveTaskId) return c.json({ error: 'archiveTaskId is required.' }, 400)
       const tasksPath = projectTasksPath(project.path)
       const queue = await readTaskQueueFileNormalized(tasksPath)
-      const tasks = await Promise.all(queue.tasks.map(task => buildEffectiveTask(project.path, task as Task)))
+      const tasks = await buildEffectiveTasks(project.path, queue.tasks as Task[])
       const startReadinessBefore = await projectStartReadinessForProject(project.path)
       const { orientationSpine } = buildOrientationSpineWithScopedReleaseTruth({
         projectId: project.id,

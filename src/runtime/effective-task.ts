@@ -197,6 +197,31 @@ export async function buildEffectiveTask(
     readTaskWorkspaceStore(projectRoot),
     readTaskEvidence(projectRoot, task.id),
   ])
+  return buildEffectiveTaskFromState(task, runtimeStore, workspaceStore, storedEvidence)
+}
+
+export async function buildEffectiveTasks(
+  projectRoot: string,
+  tasks: Task[],
+): Promise<EffectiveTask[]> {
+  const [runtimeStore, workspaceStore] = await Promise.all([
+    readTaskRuntimeStore(projectRoot),
+    readTaskWorkspaceStore(projectRoot),
+  ])
+  return await Promise.all(tasks.map(async task => buildEffectiveTaskFromState(
+    task,
+    runtimeStore,
+    workspaceStore,
+    await readTaskEvidence(projectRoot, task.id),
+  )))
+}
+
+function buildEffectiveTaskFromState(
+  task: Task,
+  runtimeStore: Awaited<ReturnType<typeof readTaskRuntimeStore>>,
+  workspaceStore: Awaited<ReturnType<typeof readTaskWorkspaceStore>>,
+  storedEvidence: TaskEvidenceEvent[],
+): EffectiveTask {
   const runtime = runtimeStore.tasks[task.id] ?? legacyRuntimeFromTask(task)
   const workspace = workspaceStore.workspaces[task.id] ?? legacyWorkspaceFromTask(task)
   const evidence = normalizeEvidenceProjection(storedEvidence.length > 0 ? storedEvidence : legacyEvidenceFromTask(task))
