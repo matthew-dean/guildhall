@@ -2848,6 +2848,43 @@ describe('GET /api/project/release-readiness', () => {
     expect(previewBody.spine.release).toEqual(fullBody.spine.release)
   })
 
+  it('does not turn terminal complete start readiness into an overview blocker', async () => {
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: 'headless-mvp',
+      releases: [{
+        id: 'headless-mvp',
+        label: 'Headless MVP',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-runner'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [
+        makeTask({
+          id: 'task-runner',
+          title: 'Completed no-UI runner.',
+          status: 'done',
+          completedAt: '2026-05-09T00:00:00Z',
+          releaseIds: ['headless-mvp'],
+        }),
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await commitAndPush('completed headless mvp')
+
+    const previewUrl = new URL(projectUrl('/api/project/spine'))
+    previewUrl.searchParams.set('surface', 'overview')
+    const previewBody = await (await app.fetch(new Request(previewUrl))).json() as any
+
+    expect(previewBody.spine.summary.headline).toBe('Headless MVP is complete.')
+    expect(previewBody.spine.summary.topBlocker).toBeNull()
+    expect(previewBody.spine.summary.nextAction).toBe('Review completed scope.')
+  })
+
   it('keeps imported source-recovery work visible as incomplete brief cleanup', async () => {
     await seedQueue({
       version: 1,

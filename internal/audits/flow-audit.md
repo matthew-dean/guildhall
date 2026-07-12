@@ -29416,3 +29416,50 @@ selected-scope readiness ordering.
   - Safety: automatic, required, idempotence covered by
     `migrations.test.ts: restores shaped done evidence from evacuated task
     archive over hollow same-id imported drafts`.
+
+## 2026-07-12T21:25:13Z - Terminal complete scope is not an Overview blocker
+
+- User job:
+  - When Narrative Harness Stage 1 is complete, Overview, Map, and Start must
+    agree that the scope is complete without also presenting that completion
+    message as a blocker.
+- Root cause classification:
+  - UI communication/orientation problem: the compact Overview preview treated
+    every non-startable `startReadiness` message as a `topBlocker`, including
+    the terminal `all_terminal` complete message.
+  - Scheduler/action-state logic problem: terminal complete state and blocked
+    start state shared the same `canStart:false` boolean in the preview
+    adapter, so the adapter lost the distinction between "nothing runnable
+    because complete" and "nothing runnable because blocked."
+- Fix:
+  - The Overview preview now suppresses `topBlocker` for terminal complete
+    messages that simply state the selected scope is complete.
+  - Added a focused regression test for `/api/project/spine?surface=overview`.
+- Proof provided:
+  - `CI=true ./node_modules/.bin/vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts` passed: 57 tests.
+  - `git diff --check` passed.
+  - `CI=true corepack pnpm lint:contracts` passed.
+  - `node ./build.mjs` passed.
+  - `pnpm dev:install` passed.
+  - `guildhall stop || true; guildhall start` restarted the installed app.
+  - `/api/stale-server` returned `stale:false`, PID `21455`,
+    `bootBuildMtimeMs:1783891479579`, and
+    `currentBuildMtimeMs:1783891479579`.
+  - Installed API proof for
+    `/api/project?projectId=narrative-harness&surface=overview` now reports
+    `headline:"Stage 1 Headless Drafting And Evaluation MVP is complete."`,
+    `topBlocker:null`, `nextAction:"Review completed scope."`,
+    `startReadiness.code:"all_terminal"`, `releaseReady:true`, and
+    `statusCounts:{done:11}`.
+- Contract Touch Decision:
+  - Work id: `overview-terminal-complete-not-blocker`.
+  - Touched contracts: compact Overview spine preview semantics.
+  - Contracts considered but not touched: persisted task schema, release
+    readiness payload shape, Start readiness payload shape, full Project Map
+    spine semantics, and `/api/project` field names.
+  - Required follow-up: continue removing duplicated blocker/next-action
+    derivation from compact surface adapters.
+  - Apply/revert behavior: reverting makes a complete release look blocked in
+    Overview even while Map/Start say it is complete.
+- Schema Migration Decision: no persisted schema field or migration changed.

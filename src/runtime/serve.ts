@@ -4086,9 +4086,10 @@ function buildOverviewOrientationPreviewSpine(input: {
   const startMessage = typeof start?.message === 'string' && start.message.trim()
     ? start.message.trim()
     : null
+  const terminalCompleteMessage = start?.code === 'all_terminal' && startMessage !== null && /\bis complete\.$/i.test(startMessage)
   const firstBlocker = projection.release.blockers[0]
   const topBlocker = firstBlocker?.label ?? (
-    start?.canStart === false
+    start?.canStart === false && !terminalCompleteMessage
       ? startMessage
       : (projection.start.canStart || projection.start.code === 'all_terminal'
           ? null
