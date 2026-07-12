@@ -888,6 +888,89 @@ describe('buildProjectOrientationSpine', () => {
     ])
   })
 
+  it('keeps documented release metadata when imported tasks already materialized membership', () => {
+    const tasks = [{
+      id: 'task-model-proof',
+      title: 'Select and prove a DeepInfra drafting model for broad-genre and legal adult fiction chapter writing.',
+      description: 'Model proof lane.',
+      domain: 'harness',
+      projectPath: '/tmp/narrative-harness',
+      status: 'done',
+      priority: 'normal',
+      releaseIds: ['stage-1-headless-drafting-and-evaluation-mvp'],
+      references: ['/tmp/narrative-harness/docs/product/deepinfra-drafting-model-selection.md'],
+      proofPaths: [{ kind: 'command', command: 'pnpm test', status: 'passed' }],
+    }] as any[]
+    const scopeProjection = buildProjectScopeProjection({
+      version: 1,
+      lastUpdated: '2026-07-12T22:10:00.000Z',
+      selectedReleaseId: 'stage-1-headless-drafting-and-evaluation-mvp',
+      releases: [{
+        id: 'stage-1-headless-drafting-and-evaluation-mvp',
+        label: 'Stage 1 Headless Drafting And Evaluation MVP',
+        kind: 'release',
+        state: 'ready',
+        source: 'inferred',
+        nodeIds: ['work:task-model-proof'],
+        deferredNodeIds: [],
+        proofStyle: 'unspecified',
+      }],
+      tasks,
+    })
+
+    const spine = buildProjectOrientationSpine({
+      projectId: 'narrative-harness',
+      now: '2026-07-12T22:10:00.000Z',
+      selectedReleaseId: 'stage-1-headless-drafting-and-evaluation-mvp',
+      releases: [{
+        id: 'stage-1-headless-drafting-and-evaluation-mvp',
+        label: 'Stage 1 Headless Drafting And Evaluation MVP',
+        kind: 'release',
+        state: 'ready',
+        source: 'inferred',
+        nodeIds: ['work:task-model-proof'],
+        deferredNodeIds: [],
+        proofStyle: 'unspecified',
+      }],
+      tasks,
+      scopeProjection,
+      workspaceImportDraft: {
+        source: {
+          kind: 'workspace_import',
+          refs: ['/tmp/narrative-harness/docs/harness/implementation-roadmap.md'],
+          confidence: 'high',
+          freshness: 'fresh',
+          inferred: false,
+          refreshedAt: '2026-07-12T22:10:00.000Z',
+        },
+        releases: [{
+          id: 'stage-1-headless-drafting-and-evaluation-mvp',
+          label: 'Stage 1: Headless Drafting And Evaluation MVP',
+          source: 'release_plan',
+          proofStyle: 'script_only',
+        }],
+        tasks: [],
+        contexts: [],
+      },
+    })
+
+    expect(spine.selectedRelease).toMatchObject({
+      id: 'stage-1-headless-drafting-and-evaluation-mvp',
+      label: 'Stage 1: Headless Drafting And Evaluation MVP',
+      source: 'release_plan',
+      proofStyle: 'script_only',
+      nodeIds: ['work:task-model-proof'],
+    })
+    expect(spine.scope).toMatchObject({
+      source: 'release_plan',
+      nodeIds: ['work:task-model-proof'],
+    })
+    expect(spine.sourceTrail.find(row => row.label === 'Scope')).toMatchObject({
+      value: 'Release Plan',
+      tone: 'ok',
+    })
+  })
+
   it('flags near-duplicate work split across scopes instead of hiding richer owner requirements', () => {
     const tasks = [
       {

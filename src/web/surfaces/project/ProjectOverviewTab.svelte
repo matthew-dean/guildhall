@@ -240,6 +240,14 @@
       .flatMap(row => row.sourceRefs ?? [])
     return sourceRefsSummary(refs, 2)
   })
+  const orientationScopeSourceLine = $derived.by(() => {
+    const sourceKind = orientationSpine?.sourceTrail?.find(row => row.label === 'Scope')?.value
+    const pieces = [
+      sourceKind,
+      orientationScopeSourceSummary,
+    ].filter(Boolean)
+    return pieces.length > 0 ? `Sources: ${pieces.join(' · ')}` : null
+  })
   const orientationScopeProofSummary = $derived.by(() => {
     const contracts = orientationSpine?.proofContracts ?? []
     if (contracts.length === 0) return null
@@ -275,7 +283,7 @@
     const blockerPrefix = orientationBlockedCount > 0 ? 'Blocking' : 'Waiting on'
     const pieces = [
       orientationScopeProofSummary ? `Proof: ${orientationScopeProofSummary}` : null,
-      orientationScopeSourceSummary ? `Sources: ${orientationScopeSourceSummary}` : null,
+      orientationScopeSourceLine,
       orientationPins[0]?.label ? `Current focus: ${orientationPins[0].label}` : null,
       orientationTopBlocker?.label ? `${blockerPrefix}: ${orientationTopBlocker.label}` : orientationGap?.label ? `Needs attention: ${orientationGap.label}` : null,
     ]

@@ -29464,6 +29464,100 @@ selected-scope readiness ordering.
     Overview even while Map/Start say it is complete.
 - Schema Migration Decision: no persisted schema field or migration changed.
 
+## 2026-07-12T22:31:20Z - Narrative Harness release provenance agrees across Overview, Map, and Start
+
+- User job:
+  - Narrative Harness must show Stage 1 as a documented current release/scope
+    with visible source provenance, not as a fake inferred MVP bucket, and
+    Overview, Map, and Start must agree on that boundary.
+- Root cause classification:
+  - Project structure/scope/release modeling problem: release-only workspace
+    import metadata was discarded when the importer had no draft task rows, so
+    an inferred persisted release shell could beat the documented release plan.
+  - Scheduler/action-state logic problem: Start readiness derived execution
+    scope from the queue/projection path and ignored matching workspace-goals
+    release metadata.
+  - UI communication/orientation problem: compact Overview used projection-only
+    metadata and hid the scope provenance even when the full Map spine had the
+    source-backed release plan.
+  - UI communication/orientation problem: `/api/project/spine?surface=overview`
+    still used the old compact build path, so the page-rendered Overview
+    differed from `/api/project?surface=overview`.
+  - Runtime/provider/infrastructure problem: the full Map project API response
+    is currently large and slow enough to undercut orientation.
+- Fix:
+  - Preserve release-only workspace import draft metadata.
+  - Prefer better documented release metadata
+    (`owner_approved > spec > release_plan > inferred`) while preserving
+    materialized task membership.
+  - Overlay selected release metadata onto the selected scope and Start
+    execution scope when the ids match.
+  - Let compact Overview borrow full orientation source metadata and source
+    trail while keeping compact rows and Start blocker pinning.
+  - Route `/api/project/spine?surface=overview` through the same source-backed
+    compact spine build path.
+  - Reuse the existing Overview source summary line to show the selected
+    scope provenance, for example `Sources: Release Plan · ...`.
+- Proof provided:
+  - `corepack pnpm vitest run
+    src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts
+    --testNamePattern "completed spine previews"` passed.
+  - `corepack pnpm vitest run
+    src/runtime/__tests__/project-orientation-spine.test.ts
+    src/runtime/__tests__/serve-release-readiness.test.ts --testNamePattern
+    "documented release metadata|uses documented release metadata|pins the
+    start blocker|unfinished overview work|effective task proof state|keeps
+    overview task rows scoped|returns a compact project spine|imported
+    current-scope shaping work|does not turn terminal complete"` passed: 9
+    tests.
+  - `git diff --check` passed.
+  - `corepack pnpm lint:contracts` passed.
+  - `node ./build.mjs` passed.
+  - `corepack pnpm dev:install` passed.
+  - `guildhall stop || true && guildhall start` restarted the installed app.
+  - `/api/stale-server` returned `stale:false`, PID `84994`,
+    `bootBuildMtimeMs:1783895429247`, and
+    `currentBuildMtimeMs:1783895429247`.
+  - Installed API proof for
+    `/api/project?projectId=narrative-harness&surface=overview` returned
+    `selectedRelease.source:"release_plan"`, `scope.source:"release_plan"`,
+    `sourceTrail[Scope].value:"Release Plan"`, and
+    `startReadiness.executionScope.source:"release_plan"`.
+  - Installed API proof for
+    `/api/project/spine?projectId=narrative-harness&surface=overview` returned
+    `selectedRelease.source:"release_plan"`, `scope.source:"release_plan"`,
+    `summary.selectedScopeLabel:"Stage 1: Headless Drafting And Evaluation
+    MVP"`, and `sourceTrail[Scope].value:"Release Plan"`.
+  - Installed API proof for
+    `/api/project?projectId=narrative-harness&surface=map` returned the same
+    selected Stage 1 release/scope source metadata and source trail, but still
+    returned `1,718,483` bytes.
+  - Browser proof at `/projects/narrative-harness/overview` rendered
+    `Stage 1: Headless Drafting And Evaluation MVP is complete.`, `11 Current
+    scope`, `30 Deferred`, and `Sources: Release Plan ·
+    implementation-roadmap.md, remaining-spec-decomposition-inventory.md +16
+    more` with no horizontal overflow at `1280x720`.
+  - Mobile browser proof at `390x844` rendered the same Stage 1 and Release
+    Plan source line with no horizontal overflow.
+- Contract Touch Decision:
+  - Work id: `nh-release-provenance-shared-read-model`.
+  - Touched contracts: `/api/project?surface=overview` compact
+    `orientationSpine` source metadata/source trail, `/api/project?surface=map`
+    selected release/scope metadata, `startReadiness.executionScope`
+    label/source, `/api/project/spine?surface=overview` compact
+    source-backed spine semantics, workspace import draft release-only read
+    semantics, and Overview source-summary presentation.
+  - Contracts considered but not touched: persisted task schema, persisted
+    release schema, task membership, project data, completion proof schema, and
+    project-source document storage.
+  - Required follow-up: reduce Map payload/runtime cost; keep reducing
+    compact/full orientation duplication if another surface diverges.
+  - Apply/revert behavior: reverting can make Stage 1 look inferred or
+    unlabeled on Overview/Start while Map/source docs say it came from a
+    release plan.
+- Schema Migration Decision: no persisted schema field or migration changed;
+  this is a compatibility/read-model and UI presentation change only.
+
 ## 2026-07-12T21:31:34Z - Narrative Harness duplicate scope reconciled and source-trail counts agree
 
 - User job:

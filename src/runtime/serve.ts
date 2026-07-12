@@ -199,6 +199,7 @@ import {
   type OrientationRelease,
   type OrientationScope,
   type ProjectOrientationCharter,
+  type ProjectOrientationSpine,
 } from './project-orientation-spine.js'
 import { buildProjectScopeProjection, deriveReleaseContainersFromTaskMembership, executionScopeRows, releaseLabelFromId, selectedProjectScopeForQueue, taskScopeNodeId, type ProjectScope, type ProjectScopeProjection } from './project-scope-projection.js'
 import type { SurfaceReviewPacket } from './contract-surfaces.js'
@@ -4038,6 +4039,7 @@ function buildOverviewOrientationPreviewSpine(input: {
     focusTaskTitle?: string
     focusKind?: string
   } | null
+  sourceSpine?: Pick<ProjectOrientationSpine, 'selectedRelease' | 'selectedTaskScope' | 'scope' | 'sourceHealth' | 'sourceTrail'> | null
   now?: string
 }): Record<string, unknown> {
   const now = input.now ?? new Date().toISOString()
@@ -4052,8 +4054,15 @@ function buildOverviewOrientationPreviewSpine(input: {
   const scope = projection.selectedScope
   const scopeRows = executionScopeRows(projection.rows)
   const selectedRelease = scope
-    ? input.rawQueue.releases.find(release => release.id === scope.id) ?? null
+    ? input.sourceSpine?.selectedRelease?.id === scope.id
+      ? input.sourceSpine.selectedRelease
+      : input.rawQueue.releases.find(release => release.id === scope.id) ?? null
     : null
+  const sourceScope = scope && input.sourceSpine?.scope?.id === scope.id
+    ? input.sourceSpine.scope
+    : scope && input.sourceSpine?.selectedTaskScope?.id === scope.id
+      ? input.sourceSpine.selectedTaskScope
+      : null
   const release = selectedRelease
     ? {
         id: selectedRelease.id,
@@ -4069,10 +4078,10 @@ function buildOverviewOrientationPreviewSpine(input: {
     : null
   const scopeReadModel = scope
     ? {
-        id: scope.id,
-        label: scope.label,
-        kind: scope.kind,
-        source: scope.source,
+        id: sourceScope?.id ?? scope.id,
+        label: sourceScope?.label ?? scope.label,
+        kind: sourceScope?.kind ?? scope.kind,
+        source: sourceScope?.source ?? scope.source,
         nodeIds: scope.nodeIds,
         deferredNodeIds: scope.deferredNodeIds,
       }
@@ -4091,6 +4100,7 @@ function buildOverviewOrientationPreviewSpine(input: {
     deferred: projection.counts.deferred,
   }
   const scopeLabel = scope?.label ?? release?.label ?? 'Current task scope'
+  const displayScopeLabel = scopeReadModel?.label ?? release?.label ?? scopeLabel
   const start = input.startReadiness ?? null
   const startMessage = typeof start?.message === 'string' && start.message.trim()
     ? start.message.trim()
@@ -4125,14 +4135,14 @@ function buildOverviewOrientationPreviewSpine(input: {
           : projection.start.message)
   )
   const headline = projection.release.state === 'ready'
-    ? `${scopeLabel} is complete.`
+    ? `${displayScopeLabel} is complete.`
     : projection.release.state === 'blocked'
-      ? `${scopeLabel} needs attention.`
+      ? `${displayScopeLabel} needs attention.`
       : projection.release.state === 'shaping'
-        ? `${scopeLabel} is being shaped.`
+        ? `${displayScopeLabel} is being shaped.`
         : projection.start.canStart
-          ? `${scopeLabel} is ready to continue.`
-          : `${scopeLabel} is being mapped.`
+          ? `${displayScopeLabel} is ready to continue.`
+          : `${displayScopeLabel} is being mapped.`
   const sourceRefs = new Set(scopeRows.flatMap(row => row.sourceRefs ?? []))
   const documented = [...sourceRefs].filter(ref => !ref.startsWith('task:')).length
 
@@ -4170,7 +4180,7 @@ function buildOverviewOrientationPreviewSpine(input: {
       headline,
       purpose: input.charter?.goal ?? 'Project shape is being inferred.',
       selectedReleaseLabel: release?.label ?? null,
-      selectedScopeLabel: scope?.label ?? release?.label ?? null,
+      selectedScopeLabel: displayScopeLabel,
       includedCount: projection.counts.included,
       includedWorkCount: projection.counts.included,
       deferredCount: projection.counts.deferred,
@@ -4224,13 +4234,14 @@ function buildOverviewOrientationPreviewSpine(input: {
       })),
     },
     sourceHealth: {
+      ...(input.sourceSpine?.sourceHealth ?? {}),
       inferred: projection.rows.length,
       documented,
       deferred: projection.counts.deferred,
       conflicts: 0,
       gaps: scope ? 0 : 1,
     },
-    sourceTrail: [],
+    sourceTrail: input.sourceSpine?.sourceTrail ?? [],
   }
 }
 
@@ -5469,25 +5480,28 @@ export function buildServeApp(opts: ServeOptions = {}): {
         runStatus: run?.status ?? 'stopped',
         recentEvents: recent,
       })
+      const orientationCharter = inferProjectCharterFromExistingSources(project.path, project.config)
+      const fullOrientationSpine = buildOrientationSpineWithScopedReleaseTruth({
+        projectId: project.id,
+        charter: orientationCharter,
+        selectedReleaseId: rawQueue.selectedReleaseId,
+        releases: rawQueue.releases,
+        tasks: orientationTasks as unknown as Task[],
+        runStatus: run?.status ?? 'stopped',
+        startReadiness,
+        releaseReadiness: orientationReleaseReadinessFromPayload(releaseReadiness),
+        workspaceImportDraft: await workspaceImportDraftForOrientation(project.path, startReadiness),
+        sourceRefs: projectOrientationSourceRefs(project.path),
+      }).orientationSpine
       const orientationSpine = overviewSurface
         ? buildOverviewOrientationPreviewSpine({
             projectId: project.id,
             rawQueue,
-            charter: inferProjectCharterFromExistingSources(project.path, project.config),
+            charter: orientationCharter,
             startReadiness,
+            sourceSpine: fullOrientationSpine,
           })
-        : buildOrientationSpineWithScopedReleaseTruth({
-            projectId: project.id,
-            charter: inferProjectCharterFromExistingSources(project.path, project.config),
-            selectedReleaseId: rawQueue.selectedReleaseId,
-            releases: rawQueue.releases,
-            tasks: orientationTasks as unknown as Task[],
-            runStatus: run?.status ?? 'stopped',
-            startReadiness,
-            releaseReadiness: orientationReleaseReadinessFromPayload(releaseReadiness),
-            workspaceImportDraft: await workspaceImportDraftForOrientation(project.path, startReadiness),
-            sourceRefs: projectOrientationSourceRefs(project.path),
-          }).orientationSpine
+        : fullOrientationSpine
       const actionScope = orientationSpine.selectedTaskScope ?? orientationSpine.scope ?? null
       const actionTasksById = new Map((orientationTasks as unknown as Task[]).map(candidate => [candidate.id, candidate]))
       const scopedActionTaskIds = actionScope
@@ -5592,22 +5606,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
         })
       }
       const rawQueue = await readTaskQueueFileNormalized(projectTasksPath(project.path))
-      if (overviewSurface) {
-        return c.json({
-          spine: buildOverviewOrientationPreviewSpine({
-            projectId: project.id,
-            rawQueue,
-            charter: inferProjectCharterFromExistingSources(project.path, project.config),
-            startReadiness: await projectStartReadinessForProject(project.path),
-          }),
-        })
-      }
       const tasks = await Promise.all(rawQueue.tasks.map(task => buildEffectiveTask(project.path, task as Task)))
       const startReadiness = await projectStartReadinessForProject(project.path)
       const releaseReadiness = await buildProjectReleaseReadinessPayload()
+      const charter = inferProjectCharterFromExistingSources(project.path, project.config)
       const { orientationSpine: spine } = buildOrientationSpineWithScopedReleaseTruth({
         projectId: project.id,
-        charter: inferProjectCharterFromExistingSources(project.path, project.config),
+        charter,
         selectedReleaseId: rawQueue.selectedReleaseId,
         releases: rawQueue.releases,
         tasks: tasks as unknown as Task[],
@@ -5618,7 +5623,15 @@ export function buildServeApp(opts: ServeOptions = {}): {
         sourceRefs: projectOrientationSourceRefs(project.path),
       })
       return c.json({
-        spine: overviewSurface ? compactOrientationSpineForWorkSurface(spine as unknown as Record<string, unknown>) : spine,
+        spine: overviewSurface
+          ? buildOverviewOrientationPreviewSpine({
+              projectId: project.id,
+              rawQueue,
+              charter,
+              startReadiness,
+              sourceSpine: spine,
+            })
+          : spine,
       })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
@@ -7057,24 +7070,23 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
     if (!queue) return undefined
     const typedTasks = queue.tasks as Task[]
+    const workspaceGoalsState = await readWorkspaceGoalsState(getProjectStateDir(projectPath)).catch(() => null)
     const selectedReleaseScope = selectedReleaseScopeFromQueueLike({
       tasks: typedTasks,
       releases: queue.releases,
       ...(queue.selectedReleaseId ? { selectedReleaseId: queue.selectedReleaseId } : {}),
     })
-    const workspaceGoalsState = selectedReleaseScope
-      ? null
-      : await readWorkspaceGoalsState(getProjectStateDir(projectPath)).catch(() => null)
     const selectedScope = selectedReleaseScope ?? selectedTaskScopeForQueue(
       { tasks: typedTasks },
       workspaceGoalsState?.approved ?? null,
     )
     if (selectedScope) {
+      const releaseMetadata = workspaceGoalsState?.releases?.find(release => release.id === selectedScope.id)
       return {
         id: selectedScope.id,
-        label: selectedScope.label,
+        label: releaseMetadata?.label ?? selectedScope.label,
         kind: selectedScope.kind,
-        source: selectedScope.source,
+        source: releaseMetadata?.source ?? selectedScope.source,
         taskCount: selectedScope.nodeIds.length,
         deferredTaskCount: selectedScope.deferredNodeIds.length,
       }

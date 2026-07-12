@@ -1406,6 +1406,91 @@ describe('GET /api/project/release-readiness', () => {
     })
   })
 
+  it('uses documented release metadata in the overview preview when the map has source-backed scope', async () => {
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: 'stage-1-headless-drafting-and-evaluation-mvp',
+      releases: [{
+        id: 'stage-1-headless-drafting-and-evaluation-mvp',
+        label: 'Stage 1 Headless Drafting And Evaluation MVP',
+        kind: 'release',
+        state: 'ready',
+        source: 'inferred',
+        nodeIds: ['work:task-model-proof'],
+        deferredNodeIds: [],
+        proofStyle: 'unspecified',
+      }],
+      tasks: [
+        makeTask({
+          id: 'task-model-proof',
+          title: 'Select and prove a DeepInfra drafting model for broad-genre and legal adult fiction chapter writing.',
+          status: 'done',
+          releaseIds: ['stage-1-headless-drafting-and-evaluation-mvp'],
+          proofPaths: [{ kind: 'command', command: 'pnpm test', status: 'passed' }],
+          references: ['docs/product/deepinfra-drafting-model-selection.md'],
+        } as Partial<Task>),
+      ],
+    })
+    await writeProjectStateJsonAsync(tmpDir, 'workspace-goals.json', {
+      version: 3,
+      recordedAt: new Date().toISOString(),
+      goals: [],
+      releases: [{
+        id: 'stage-1-headless-drafting-and-evaluation-mvp',
+        label: 'Stage 1: Headless Drafting And Evaluation MVP',
+        source: 'release_plan',
+      }],
+      tasks: [],
+      milestones: [],
+      context: [{
+        label: 'Stage 1 source',
+        excerpt: 'Stage 1 is defined by the implementation roadmap.',
+        domain: 'harness',
+        source: 'docs/harness/implementation-roadmap.md',
+        role: 'capability',
+        scopeHint: 'current',
+        releaseIds: ['stage-1-headless-drafting-and-evaluation-mvp'],
+        references: ['docs/harness/implementation-roadmap.md'],
+      }],
+      approved: {
+        goalCount: 0,
+        taskCount: 0,
+        milestoneCount: 1,
+        currentTaskCount: 0,
+        laterTaskCount: 0,
+        taskIds: [],
+        currentTaskIds: [],
+        laterTaskIds: [],
+      },
+      detected: null,
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await approveDesignSystem(app)
+    await commitAndPush('overview source metadata')
+
+    const overview = await (await app.fetch(new Request(projectUrl('/api/project?surface=overview')))).json() as any
+    const map = await (await app.fetch(new Request(projectUrl('/api/project?surface=map')))).json() as any
+
+    expect(map.orientationSpine?.scope).toMatchObject({
+      label: 'Stage 1: Headless Drafting And Evaluation MVP',
+      source: 'release_plan',
+    })
+    expect(overview.orientationSpine?.scope).toMatchObject({
+      label: 'Stage 1: Headless Drafting And Evaluation MVP',
+      source: 'release_plan',
+    })
+    expect(overview.orientationSpine?.sourceTrail?.find((row: any) => row.label === 'Scope')).toMatchObject({
+      value: 'Release Plan',
+      tone: 'ok',
+    })
+    expect(overview.startReadiness?.executionScope).toMatchObject({
+      id: 'stage-1-headless-drafting-and-evaluation-mvp',
+      label: 'Stage 1: Headless Drafting And Evaluation MVP',
+      source: 'release_plan',
+    })
+  })
+
   it('accepts review-backed imported proof hints when later completion evidence exists', async () => {
     await seedQueue({
       version: 1,
@@ -3067,6 +3152,12 @@ describe('GET /api/project/release-readiness', () => {
     expect(previewBody.spine.roots).toEqual([])
     expect(previewBody.spine.nodes).toEqual({})
     expect(previewBody.spine.summary.includedWorkCount).toBe(1)
+    expect(previewBody.spine.selectedRelease.source).toBe('release_plan')
+    expect(previewBody.spine.scope.source).toBe('release_plan')
+    expect(previewBody.spine.sourceTrail).toContainEqual(expect.objectContaining({
+      label: 'Scope',
+      value: 'Release Plan',
+    }))
     expect(previewBody.spine.selectedRelease.nodeIds).toEqual(['work:task-runner'])
     expect(previewBody.spine.release).toEqual(fullBody.spine.release)
   })

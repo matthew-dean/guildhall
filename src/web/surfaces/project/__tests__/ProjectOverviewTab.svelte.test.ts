@@ -658,6 +658,9 @@ describe('ProjectOverviewTab', () => {
           roots: [],
           nodes: {},
           sourceHealth: { status: 'ok', gaps: 0, inferred: 0 },
+          sourceTrail: [
+            { label: 'Scope', value: 'Release Plan', detail: 'Stage 1 contains 11 assigned work items.', tone: 'ok' },
+          ],
         },
       },
       inboxLoaded: true,
@@ -682,7 +685,7 @@ describe('ProjectOverviewTab', () => {
     expect(screen.getByText(/3 deferred/)).toBeInTheDocument()
     expect(screen.getByText(/0 missing verification/)).toBeInTheDocument()
     expect(screen.getByText(/Proof: 11 proven items · 0 missing proof/)).toBeInTheDocument()
-    expect(screen.getByText(/Sources: implementation-roadmap.md, deepinfra-drafting-model-selection.md/)).toBeInTheDocument()
+    expect(screen.getByText(/Sources: Release Plan · implementation-roadmap.md, deepinfra-drafting-model-selection.md/)).toBeInTheDocument()
     expect(screen.getByText('The selected scope is complete. Choose another release or open Work to inspect completed and deferred items.')).toBeInTheDocument()
     expect(screen.queryByText('The next run is blocked until the project blocker is resolved.')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Blocked/ })).not.toBeInTheDocument()

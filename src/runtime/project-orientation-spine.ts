@@ -477,7 +477,13 @@ export function augmentTasksWithWorkspaceImportDraft(input: {
 } {
   const draft = input.workspaceImportDraft
   if (!draft || draft.tasks.length === 0) {
-    return { tasks: input.tasks, scope: null, releases: [], selectedReleaseId: null, contexts: draft?.contexts ?? [] }
+    return {
+      tasks: input.tasks,
+      scope: null,
+      releases: draft?.releases ?? [],
+      selectedReleaseId: draft?.releases?.[0]?.id ?? null,
+      contexts: draft?.contexts ?? [],
+    }
   }
 
   const augmented = input.tasks.map(task => ({
@@ -2157,6 +2163,14 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
         state: releaseStateFromScopeProjection(selectedRelease, input.scopeProjection),
       }
     : selectedRelease
+  const projectionScopeForReadModel = projectionScope && selectedReleaseForReadModel?.id === projectionScope.id
+    ? {
+        ...projectionScope,
+        label: selectedReleaseForReadModel.label ?? projectionScope.label,
+        kind: selectedReleaseForReadModel.kind === 'milestone' ? 'milestone' as const : 'release' as const,
+        source: selectedReleaseForReadModel.source,
+      }
+    : projectionScope
   const normalizedReleases = releases
     .map(release => normalizeRelease({
       ...input,
@@ -2173,7 +2187,7 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
     .map(release => normalizeReadModelReleaseState(release, selectedReleaseForReadModel?.id ?? null))
     .filter(release => releaseVisibleInReadModel(release, selectedReleaseForReadModel?.id ?? null, tasks))
   const projectionScopeRows = scopeRowsFromProjection(input.scopeProjection)
-  const rawScopeBase = projectionScope ?? releaseToScope(selectedReleaseForReadModel) ?? draftAugmentation.scope ?? normalizeScope(input, tasks)
+  const rawScopeBase = projectionScopeForReadModel ?? releaseToScope(selectedReleaseForReadModel) ?? draftAugmentation.scope ?? normalizeScope(input, tasks)
   const rawScope = rawScopeBase ? mergeScopeRowsIntoScope(rawScopeBase, projectionScopeRows) : null
   const scopeWithDraftDeferred = rawScope && draftAugmentation.scope && projectionScopeRows.length === 0
     ? {
@@ -2393,6 +2407,23 @@ function releaseHasMaterializedMembership(release: Partial<OrientationRelease>):
     .some(nodeId => !nodeIdIsWorkspaceImportPreview(nodeId))
 }
 
+function releaseSourceRank(source: Partial<OrientationRelease>['source']): number {
+  switch (source) {
+    case 'owner_approved': return 4
+    case 'spec': return 3
+    case 'release_plan': return 2
+    case 'inferred': return 1
+    default: return 0
+  }
+}
+
+function betterReleaseMetadata(
+  existing: Partial<OrientationRelease>,
+  incoming: Partial<OrientationRelease>,
+): Partial<OrientationRelease> {
+  return releaseSourceRank(incoming.source) > releaseSourceRank(existing.source) ? incoming : existing
+}
+
 function mergeOrientationReleaseInputs(
   primary: BuildProjectOrientationSpineInput['releases'],
   secondary: Array<Partial<OrientationRelease>>,
@@ -2409,17 +2440,22 @@ function mergeOrientationReleaseInputs(
       continue
     }
     const keepExistingMembership = releaseHasMaterializedMembership(existing)
+    const metadata = betterReleaseMetadata(existing, release)
     const combined: Partial<OrientationRelease> = {
       ...release,
       ...existing,
+      label: metadata.label ?? existing.label ?? release.label,
+      kind: metadata.kind ?? existing.kind ?? release.kind,
+      source: metadata.source ?? existing.source ?? release.source,
+      state: existing.state ?? release.state,
       nodeIds: keepExistingMembership
         ? [...(existing.nodeIds ?? [])]
         : [...new Set([...(existing.nodeIds ?? []), ...(release.nodeIds ?? [])])],
       deferredNodeIds: keepExistingMembership
         ? [...(existing.deferredNodeIds ?? [])]
         : [...new Set([...(existing.deferredNodeIds ?? []), ...(release.deferredNodeIds ?? [])])],
-      description: existing.description ?? release.description ?? null,
-      proofStyle: existing.proofStyle ?? release.proofStyle,
+      description: metadata.description ?? existing.description ?? release.description ?? null,
+      proofStyle: metadata.proofStyle ?? existing.proofStyle ?? release.proofStyle,
     }
     byId.set(id, combined)
     const index = merged.findIndex(item => item.id === id)
