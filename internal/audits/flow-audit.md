@@ -29530,3 +29530,62 @@ selected-scope readiness ordering.
     scoped work again; reverting the project data reconciliation can restore
     the stale DeepInfra duplicate conflict.
 - Schema Migration Decision: no persisted schema field or migration changed.
+
+## 2026-07-12T21:44:32Z - Overview proof state now uses effective task truth
+
+- User job:
+  - Narrative Harness Overview must not tell the owner that Stage 1 is
+    complete while the visible scoped task cards say every completed task is
+    missing proof.
+- Root cause classification:
+  - Task hierarchy/dependency/proof modeling problem: release readiness used
+    effective task state with system-local evidence, but Overview task cards
+    rendered raw persisted task records.
+  - UI communication/orientation problem: one response could show
+    `releaseReadiness.ready:true` and `completionProof.state:"missing"` for
+    the same scoped work.
+  - Runtime/provider/infrastructure problem: the installed app needed a fresh
+    rebuild/reinstall before source-level proof fixes were visible.
+- Fix:
+  - Overview now renders task cards from the already-built effective task list
+    used by release readiness instead of recomputing card proof from stale raw
+    task records.
+  - Added a regression to prove `/api/project?surface=overview` task cards use
+    effective proof state when the release summary does.
+  - Added a regression for stale imported proof status plus
+    `content.no-truncated-data`-only done evidence, so generic imported proof
+    cannot satisfy release readiness by itself.
+- Proof provided:
+  - `git diff --check` passed.
+  - `corepack pnpm vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts --testNamePattern
+    "effective task proof state|stale imported proof status|imported
+    proof-path status|truncation-only|semantically matching review
+    proof|provider/model proof|unrelated completion proof|generic build proof"`
+    passed: 8 tests.
+  - `corepack pnpm lint:contracts` passed.
+  - `node ./build.mjs` passed.
+  - `corepack pnpm dev:install` passed.
+  - `guildhall stop || true; guildhall start` restarted the installed app.
+  - `/api/stale-server` returned `stale:false`, PID `93081`,
+    `bootBuildMtimeMs:1783892602430`, and
+    `currentBuildMtimeMs:1783892602430`.
+  - Installed API proof for
+    `/api/project?projectId=narrative-harness&surface=overview` reports
+    `releaseReady:true`, `proofEvidenceBlockingCount:0`, and all 11 visible
+    Stage 1 task cards with `completionProof.state:"verified"`.
+  - Browser proof at `/projects/narrative-harness/overview` visibly reports
+    `Stage 1 Headless Drafting And Evaluation MVP is complete`, `0 missing
+    verification`, `11 verified`, and no horizontal overflow at `1280x720`.
+- Contract Touch Decision:
+  - Work id: `overview-effective-task-proof-state`.
+  - Touched contracts: `/api/project?surface=overview` task-card source
+    semantics.
+  - Contracts considered but not touched: persisted task schema,
+    release-readiness payload shape, Start readiness payload shape, proof path
+    schema, and source-conflict reconciliation API.
+  - Required follow-up: continue reducing raw-vs-effective task duplication so
+    Overview, Work, Map, and Start cannot diverge on proof/readiness state.
+  - Apply/revert behavior: reverting can make Overview say a scope is complete
+    while its own visible task cards say proof is missing.
+- Schema Migration Decision: no persisted schema field or migration changed.

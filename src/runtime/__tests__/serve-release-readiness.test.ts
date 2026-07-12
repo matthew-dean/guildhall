@@ -1188,6 +1188,92 @@ describe('GET /api/project/release-readiness', () => {
     })
   })
 
+  it('does not accept stale imported proof status plus truncation-only done evidence', async () => {
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: 'headless-mvp',
+      releases: [{
+        id: 'headless-mvp',
+        label: 'Headless MVP',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-current'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [
+        makeTask({
+          id: 'task-current',
+          title: 'Select and prove a DeepInfra drafting model for broad-genre chapter writing.',
+          status: 'done',
+          releaseIds: ['headless-mvp'],
+          proofPaths: [{
+            kind: 'review',
+            source: 'inferred',
+            status: 'verified',
+            expectedEvidence: [
+              'Select and prove a DeepInfra drafting model for broad-genre chapter writing has a bounded proof plan for harness.',
+              'Select and prove a DeepInfra drafting model for broad-genre chapter writing reuses Stage 1.',
+            ],
+          }],
+          doneSummaryBundle: {
+            taskId: 'task-current',
+            status: 'done',
+            completedAt: '2026-07-06T11:56:59.195Z',
+            summary: {
+              journey: 'worker-agent recorded: The worker timed out before mutating a likely target file.',
+              decision: 'Task finished as done.',
+              evidence: 'content.no-truncated-data passed.',
+              learningCandidates: [],
+              openResidue: 'No open residue recorded.',
+            },
+            retention: {
+              transcriptPrimaryArtifact: false,
+              compactedFullTranscript: false,
+              fullEvidenceAvailable: true,
+            },
+            evidenceRefs: [],
+            createdAt: '2026-07-06T11:56:59.195Z',
+            createdBy: 'orchestrator',
+          },
+          gateResults: [{
+            gateId: 'content.no-truncated-data',
+            type: 'soft',
+            passed: true,
+            output: 'no truncated semantic data detected',
+            checkedAt: '2026-07-06T11:56:59.195Z',
+          }],
+          reviewVerdicts: [],
+        } as Partial<Task>),
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await approveDesignSystem(app)
+    await commitAndPush('stale imported proof status release readiness')
+
+    const projectRes = await app.fetch(new Request(projectUrl('/api/project?surface=overview')))
+    const project = await projectRes.json() as any
+
+    expect(project.releaseReadiness).toMatchObject({
+      ready: false,
+      proofMissingDoneTasks: [{
+        id: 'task-current',
+        title: 'Select and prove a DeepInfra drafting model for broad-genre chapter writing.',
+      }],
+    })
+    expect(project.startReadiness).toMatchObject({
+      canStart: false,
+      code: 'proof_evidence_missing',
+      focusTaskId: 'task-current',
+    })
+    expect(project.tasks[0]?.completionProof).toMatchObject({
+      state: 'missing',
+      expectedCount: 1,
+    })
+  })
+
   it('accepts review-backed imported proof hints when later completion evidence exists', async () => {
     await seedQueue({
       version: 1,
@@ -2799,10 +2885,15 @@ describe('GET /api/project/release-readiness', () => {
     await commitAndPush('runner proof landed')
 
     const readiness = await (await app.fetch(new Request(projectUrl('/api/project/release-readiness')))).json() as any
+    const overview = await (await app.fetch(new Request(projectUrl('/api/project?surface=overview')))).json() as any
     const spineBody = await (await app.fetch(new Request(projectUrl('/api/project/spine')))).json() as any
 
     expect(readiness.ready).toBe(true)
     expect(readiness.totals.proofEvidenceBlockingCount).toBe(0)
+    expect(overview.releaseReadiness.ready).toBe(true)
+    expect(overview.tasks.find((task: any) => task.id === 'task-runner')?.completionProof).toMatchObject({
+      state: 'verified',
+    })
     expect(spineBody.spine.gaps.map((gap: any) => gap.kind)).not.toContain('proof_needed')
     expect(spineBody.spine.release.blockers).toEqual([])
     expect(spineBody.spine.nodes['work:task-runner']?.maturity).toBe('proven')

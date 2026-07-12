@@ -5341,7 +5341,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         : null
       const workProgress = deriveProjectWorkProgress(rawTasks as Array<Record<string, unknown>>)
       const tasks = overviewSurface
-        ? rawTasks
+        ? await overviewEffectiveTasksPromise as Task[]
         : await Promise.all(rawTasks.map((task) => fullSurface
           ? enrichTaskForServe(project.path, task)
           : enrichTaskForWorkSurface(project.path, task)))
