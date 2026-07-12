@@ -5401,7 +5401,15 @@ export function buildServeApp(opts: ServeOptions = {}): {
   }
 
   app.get('/api/project', async c => {
+    const timing: Array<{ name: string; startedAt: number; endedAt?: number }> = []
+    const startTiming = (name: string) => {
+      const metric = { name, startedAt: Date.now() }
+      timing.push(metric)
+      return () => { metric.endedAt = Date.now() }
+    }
+    const endTotal = startTiming('total')
     try {
+      const endSetup = startTiming('setup')
       const requestedSurface = c.req.query('surface')
       const surface = requestedSurface === 'overview' || requestedSurface === 'work' || requestedSurface === 'map'
         ? requestedSurface
@@ -5411,6 +5419,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const mapSurface = surface === 'map'
       const requestedTaskId = (c.req.query('task') ?? c.req.query('work') ?? '').trim()
       if (project.initializationNeeded) {
+        endSetup()
+        endTotal()
+        c.header('server-timing', formatServerTiming(timing))
         return c.json({
           initializationNeeded: true,
           path: project.path,
@@ -5424,6 +5435,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
         await repairLegacyNoCheckpointProviderRecoveryPlans(project.path)
         await repairImportedShapingExecutionState(project.path)
       }
+      endSetup()
+      const endQueue = startTiming('queue')
       const tasksPath = projectTasksPath(project.path)
       const rawQueue = await readTaskQueueFileNormalized(tasksPath)
       const rawTasks = rawQueue.tasks
@@ -5438,11 +5451,14 @@ export function buildServeApp(opts: ServeOptions = {}): {
         projectPath: project.path,
         models: resolvedConfig.models,
       })
+      endQueue()
+      const endReadiness = startTiming('readiness')
       const startReadiness = await projectStartReadiness({
         projectPath: project.path,
         resolvedConfig,
         runtimeProvider,
         allowPaidProviderFallback: runtimeProvider.allowPaidProviderFallback,
+        startTiming: name => startTiming(`readiness_${name}`),
       })
       const releaseReadiness = fullSurface || overviewSurface
         ? await buildProjectReleaseReadinessPayload(overviewSurface
@@ -5453,6 +5469,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
             }
           : { startReadiness })
         : null
+      endReadiness()
+      const endTasks = startTiming('tasks')
       const workProgress = deriveProjectWorkProgress(rawTasks as Array<Record<string, unknown>>)
       const tasks = overviewSurface
         ? await overviewEffectiveTasksPromise as Task[]
@@ -5468,6 +5486,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
           : mapSurface
             ? await mapEffectiveTasksPromise as Task[]
         : tasks as unknown as Task[]
+      endTasks()
+      const endAncillary = startTiming('ancillary')
       const selectedTaskId = requestedTaskId && tasks.some(task => task.id === requestedTaskId)
         ? requestedTaskId
         : null
@@ -5546,6 +5566,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
                 spec: typeof task.spec === 'string' ? task.spec : undefined,
               })),
           })
+      endAncillary()
+      const endThreadInbox = startTiming('thread_inbox')
       const inbox = mapSurface
         ? null
         : await buildProjectInboxSnapshot({
@@ -5566,6 +5588,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
             recentEvents: recent,
           })
         : null
+      endThreadInbox()
+      const endSpine = startTiming('spine')
       const orientationCharter = inferProjectCharterFromExistingSources(project.path, project.config)
       const fullOrientationSpine = buildOrientationSpineWithScopedReleaseTruth({
         projectId: project.id,
@@ -5588,6 +5612,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
             sourceSpine: fullOrientationSpine,
           })
         : fullOrientationSpine
+      endSpine()
+      const endAction = startTiming('action')
       const actionScope = orientationSpine.selectedTaskScope ?? orientationSpine.scope ?? null
       const actionTasksById = new Map((orientationTasks as unknown as Task[]).map(candidate => [candidate.id, candidate]))
       const scopedActionTaskIds = actionScope
@@ -5610,6 +5636,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
         runStatus: run?.status ?? 'stopped',
         availability,
       })
+      endAction()
+      const endResponse = startTiming('response')
       const overviewTaskIds = overviewSurface
         ? overviewTaskIdsForSurface({
             orientationSpine: orientationSpine as unknown as Record<string, unknown>,
@@ -5621,7 +5649,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const responseTasks = overviewTaskIds && overviewTaskIds.size > 0
         ? tasks.filter(task => typeof task.id === 'string' && overviewTaskIds.has(task.id))
         : tasks
-      return c.json({
+      const payload = {
         initializationNeeded: false,
         id: project.id,
         path: project.path,
@@ -5670,8 +5698,14 @@ export function buildServeApp(opts: ServeOptions = {}): {
             },
         recentEvents: recent,
         ...(bootstrapStatus ? { bootstrapStatus } : {}),
-      })
+      }
+      endResponse()
+      endTotal()
+      c.header('server-timing', formatServerTiming(timing))
+      return c.json(payload)
     } catch (err) {
+      endTotal()
+      c.header('server-timing', formatServerTiming(timing))
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
   })
@@ -6798,6 +6832,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     allowPaidProviderFallback: boolean
     allowTaskReadinessBlocker?: boolean
     requestedTaskId?: string
+    startTiming?: (name: string) => () => void
   }): Promise<{
     canStart: boolean
     code?: string
@@ -6811,50 +6846,50 @@ export function buildServeApp(opts: ServeOptions = {}): {
     missingModels?: string[]
     executionScope?: StartExecutionScopeSummary
   }> {
-    const executionScope = await startExecutionScopeSummary(input.projectPath, input.requestedTaskId)
+    const time = async <T>(name: string, fn: () => Promise<T>): Promise<T> => {
+      const end = input.startTiming?.(name)
+      try {
+        return await fn()
+      } finally {
+        end?.()
+      }
+    }
+    const executionScope = await time('scope', () => startExecutionScopeSummary(input.projectPath, input.requestedTaskId))
     const attachExecutionScope = <T extends { canStart: boolean }>(status: T): T & { executionScope?: StartExecutionScopeSummary } =>
       executionScope ? { ...status, executionScope } : status
 
     const runtimeBlocker = projectRuntimeCompatibilityBlocker({ projectRoot: input.projectPath })
     if (runtimeBlocker) return attachExecutionScope(runtimeBlocker)
 
-    const requiredMigrationBlocker = await startBlockerForRequiredMigrations(input.projectPath)
+    const requiredMigrationBlocker = await time('migrations', () => startBlockerForRequiredMigrations(input.projectPath))
     if (requiredMigrationBlocker) return attachExecutionScope(requiredMigrationBlocker)
 
     const ownerInputBlocker = startBlockerForOwnerInput(input.projectPath)
     if (ownerInputBlocker) return attachExecutionScope(ownerInputBlocker)
 
-    const terminal = await terminalStartState(input.projectPath, input.requestedTaskId)
+    const terminal = await time('terminal', () => terminalStartState(input.projectPath, input.requestedTaskId))
     if (terminal?.selectedReleaseTerminal) {
-      const orientationShapingBlocker = await startBlockerForOrientationScopeShaping(input.projectPath, input.requestedTaskId)
-      if (orientationShapingBlocker) return attachExecutionScope(orientationShapingBlocker)
-      const importDraftBlocker = await startBlockerForImportDrafts(input.projectPath, input.requestedTaskId)
-      if (importDraftBlocker) return attachExecutionScope(importDraftBlocker)
-      if (terminal.code === 'all_terminal' && input.allowTaskReadinessBlocker !== false) {
-        const selectedReleaseReviewBlocker = await startBlockerForSelectedReleaseReview(input.projectPath, input.resolvedConfig)
-        if (selectedReleaseReviewBlocker) return attachExecutionScope(selectedReleaseReviewBlocker)
-      }
       return attachExecutionScope(startReadinessForTerminalState(terminal))
     }
-    const hasMaterializedStartWork = await hasMaterializedScopedStartWork(input.projectPath, input.requestedTaskId)
+    const hasMaterializedStartWork = await time('materialized', () => hasMaterializedScopedStartWork(input.projectPath, input.requestedTaskId))
     const workspaceImportCoverageBlocker = hasMaterializedStartWork
       ? null
-      : await startBlockerForWorkspaceImportCoverage(input.projectPath)
+      : await time('workspace_coverage', () => startBlockerForWorkspaceImportCoverage(input.projectPath))
     if (workspaceImportCoverageBlocker) return attachExecutionScope(workspaceImportCoverageBlocker)
 
     if (terminal && terminal.code !== 'proof_evidence_missing') {
       return attachExecutionScope(startReadinessForTerminalState(terminal))
     }
 
-    const orientationShapingBlocker = await startBlockerForOrientationScopeShaping(input.projectPath, input.requestedTaskId)
+    const orientationShapingBlocker = await time('shape', () => startBlockerForOrientationScopeShaping(input.projectPath, input.requestedTaskId))
     if (input.allowTaskReadinessBlocker !== false) {
-      const selectedReleaseReviewBlocker = await startBlockerForSelectedReleaseReview(input.projectPath, input.resolvedConfig)
+      const selectedReleaseReviewBlocker = await time('release_review', () => startBlockerForSelectedReleaseReview(input.projectPath, input.resolvedConfig))
       if (selectedReleaseReviewBlocker) return attachExecutionScope(selectedReleaseReviewBlocker)
     }
 
     if (orientationShapingBlocker) return attachExecutionScope(orientationShapingBlocker)
 
-    const importDraftBlocker = await startBlockerForImportDrafts(input.projectPath, input.requestedTaskId)
+    const importDraftBlocker = await time('drafts', () => startBlockerForImportDrafts(input.projectPath, input.requestedTaskId))
     if (importDraftBlocker) return attachExecutionScope(importDraftBlocker)
 
     if (terminal && terminal.code !== 'proof_evidence_missing') {
@@ -6862,7 +6897,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
 
     if (input.allowTaskReadinessBlocker !== false) {
-      const taskReadinessBlocker = await startBlockerForTaskReadiness(input.projectPath)
+      const taskReadinessBlocker = await time('task_readiness', () => startBlockerForTaskReadiness(input.projectPath))
       if (taskReadinessBlocker) return attachExecutionScope(taskReadinessBlocker)
     }
 
@@ -6871,9 +6906,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
 
     try {
-      const settings = await loadLeverSettings({
+      const settings = await time('levers', () => loadLeverSettings({
         path: defaultAgentSettingsPath(input.projectPath),
-      })
+      }))
       const invariant = projectLeverInvariantError(settings.project)
       if (invariant) {
         return attachExecutionScope({
@@ -6895,7 +6930,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
     }
 
-    const preflight = await selectApiClient(input.runtimeProvider.selectOptions)
+    const preflight = await time('provider_preflight', () => selectApiClient(input.runtimeProvider.selectOptions))
     if (preflight.providerName === 'none') {
       return attachExecutionScope({
         canStart: false,
@@ -6908,26 +6943,26 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
 
     if (preflight.providerName !== 'llama-cpp') {
-      return attachExecutionScope(await readyStartStatus(
+      return attachExecutionScope(await time('ready_status', () => readyStartStatus(
         input.projectPath,
         input.requestedTaskId,
         input.resolvedConfig.id ?? basename(input.projectPath),
-      ))
+      )))
     }
 
     const creds = input.runtimeProvider.credentials
     if (!creds.llamaCppUrl) {
-      return attachExecutionScope(await readyStartStatus(
+      return attachExecutionScope(await time('ready_status', () => readyStartStatus(
         input.projectPath,
         input.requestedTaskId,
         input.resolvedConfig.id ?? basename(input.projectPath),
-      ))
+      )))
     }
 
-    const loadedModels = await loadedLlamaModelIds(creds.llamaCppUrl).catch(() => [])
+    const loadedModels = await time('llama_models', () => loadedLlamaModelIds(creds.llamaCppUrl).catch(() => []))
     if (loadedModels.length === 0) {
       const paidFallback = input.allowPaidProviderFallback
-        ? await selectPaidFallbackProvider(creds)
+        ? await time('paid_fallback', () => selectPaidFallbackProvider(creds))
         : null
       if (!paidFallback || paidFallback.providerName === 'none') {
         return attachExecutionScope({
@@ -6939,31 +6974,31 @@ export function buildServeApp(opts: ServeOptions = {}): {
           loadedModels,
         })
       }
-      return attachExecutionScope(await readyStartStatus(
+      return attachExecutionScope(await time('ready_status', () => readyStartStatus(
         input.projectPath,
         input.requestedTaskId,
         input.resolvedConfig.id ?? basename(input.projectPath),
-      ))
+      )))
     }
 
     const missingModels = missingAssignedModels(input.resolvedConfig.models, loadedModels)
     if (missingModels.length === 0) {
-      return attachExecutionScope(await readyStartStatus(
+      return attachExecutionScope(await time('ready_status', () => readyStartStatus(
         input.projectPath,
         input.requestedTaskId,
         input.resolvedConfig.id ?? basename(input.projectPath),
-      ))
+      )))
     }
 
     const paidFallback = input.allowPaidProviderFallback
-      ? await selectPaidFallbackProvider(creds)
+      ? await time('paid_fallback', () => selectPaidFallbackProvider(creds))
       : null
     if (paidFallback && paidFallback.providerName !== 'none') {
-      return attachExecutionScope(await readyStartStatus(
+      return attachExecutionScope(await time('ready_status', () => readyStartStatus(
         input.projectPath,
         input.requestedTaskId,
         input.resolvedConfig.id ?? basename(input.projectPath),
-      ))
+      )))
     }
     return attachExecutionScope({
       canStart: false,

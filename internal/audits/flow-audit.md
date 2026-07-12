@@ -29464,6 +29464,75 @@ selected-scope readiness ordering.
     Overview even while Map/Start say it is complete.
 - Schema Migration Decision: no persisted schema field or migration changed.
 
+## 2026-07-12T23:31:44Z - Map readiness stops rebuilding terminal release blockers
+
+- User job:
+  - Narrative Harness Map should open as the 1,000-foot project/release view
+    and still show the selected release completion state without making the
+    user wait on duplicated readiness reconstruction.
+- Root cause classification:
+  - Scheduler/action-state logic problem: `projectStartReadiness` kept running
+    scope-shaping, import-draft, and selected-release review checks after
+    `terminalStartState` had already proven the selected release terminal
+    state.
+  - Project structure/scope/release modeling problem: selected-release
+    terminal truth was not being treated as the authoritative execution
+    boundary result, so follow-up checks rebuilt scope/release truth for the
+    same answer.
+  - Runtime/provider/infrastructure problem: `/api/project` had no route-level
+    timing proof, so slow Map loads were hard to attribute to setup,
+    readiness, spine construction, payload size, or browser rendering.
+  - UI communication/orientation problem: a slow 1,000-foot Map view undermines
+    the orientation job even when the displayed project truth is correct.
+- Fix:
+  - `/api/project` now emits a `server-timing` header with setup, queue,
+    readiness, readiness subchecks, tasks, ancillary data, thread/inbox, spine,
+    action model, and response timings.
+  - Once `terminalStartState` returns a selected-release terminal result,
+    `projectStartReadiness` returns that result directly. Terminal state already
+    names proof gaps, source conflicts, blocked selected-release work, and
+    repository follow-up before claiming `all_terminal`.
+- Proof provided:
+  - Before the terminal-readiness cut, installed
+    `/api/project?projectId=narrative-harness&surface=map` repeated timings were
+    about `2.119s`, `2.148s`, with `readiness;dur≈1500ms` and extra
+    `readiness_shape_terminal`, `readiness_drafts_terminal`, and
+    `readiness_release_review_terminal` work.
+  - After the cut, installed timings were `1.178914s`, `1.132251s`, and
+    `1.114747s`; `readiness;dur≈499ms`; `readiness_terminal;dur≈438ms`;
+    payload size stayed `281563` bytes.
+  - Installed API payload still reported
+    `Stage 1: Headless Drafting And Evaluation MVP is complete`, execution
+    scope kind `release`, `taskCount:11`, and `orientationSpine.roots.length:11`.
+  - Browser proof at
+    `http://localhost:7777/projects/narrative-harness/map` loaded at
+    `1280x720` with no loading state and visible text including
+    `Stage 1: Headless Drafting And Evaluation MVP is complete`, `Project map`,
+    and `Source trail`.
+  - `corepack pnpm vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts` passed `61` tests.
+  - `node ./build.mjs` passed.
+  - `git diff --check` passed.
+  - `corepack pnpm dev:install` passed, `guildhall start` restarted the
+    installed app, and `/api/stale-server` returned `stale:false` with matching
+    boot/current build mtimes.
+- Contract Touch Decision:
+  - Work id: `map-terminal-readiness-timing-and-dedupe`.
+  - Touched contracts: `/api/project` diagnostic response headers and
+    selected-release terminal readiness semantics.
+  - Contracts considered but not touched: persisted task schema, persisted
+    release schema, `/api/project` JSON body shape, `/api/project/spine`,
+    `/api/project/release-readiness`, ProjectMapTab component props, proof
+    evidence schema, workspace-import draft schema, and provider config schema.
+  - Required follow-up: reduce the remaining repeated orientation/spine work in
+    `terminalStartState` and the Map spine builder; this slice makes the
+    terminal path honest and measurably faster but does not yet share a single
+    readiness/spine context object across the route.
+  - Apply/revert behavior: reverting removes route timing proof and restores
+    duplicated terminal-release blocker reconstruction after a selected release
+    is already terminal.
+- Schema Migration Decision: no persisted schema field or migration changed.
+
 ## 2026-07-12T22:31:20Z - Narrative Harness release provenance agrees across Overview, Map, and Start
 
 - User job:
