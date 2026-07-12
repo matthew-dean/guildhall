@@ -56,6 +56,23 @@ describe('project store', () => {
     expect(requested.searchParams.get('surface')).toBe('work')
   })
 
+  it('requests a Map-scoped project payload when the active surface is map', async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(json({
+      id: 'narrative-harness',
+      name: 'Narrative Harness',
+      path: '/repo/narrative-harness',
+      tasks: [],
+    })))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await project.refresh('narrative-harness', 'map')
+
+    const requested = new URL(String(fetchMock.mock.calls[0]?.[0]), 'http://localhost')
+    expect(requested.pathname).toBe('/api/project')
+    expect(requested.searchParams.get('projectId')).toBe('narrative-harness')
+    expect(requested.searchParams.get('surface')).toBe('map')
+  })
+
   it('passes the route-focused work item through Work-scoped project refreshes', async () => {
     const fetchMock = vi.fn(() => Promise.resolve(json({
       id: 'looma-knit',

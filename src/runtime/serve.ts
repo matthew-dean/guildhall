@@ -4026,6 +4026,13 @@ function compactOrientationSpineForWorkSurface(spine: Record<string, unknown>): 
   }
 }
 
+function compactOrientationSpineForMapSurface(spine: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...spine,
+    nodes: {},
+  }
+}
+
 function buildOverviewOrientationPreviewSpine(input: {
   projectId: string
   rawQueue: { tasks: Array<Record<string, unknown>>; releases: ProjectRelease[]; selectedReleaseId?: string }
@@ -5333,11 +5340,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project', async c => {
     try {
       const requestedSurface = c.req.query('surface')
-      const surface = requestedSurface === 'overview' || requestedSurface === 'work'
+      const surface = requestedSurface === 'overview' || requestedSurface === 'work' || requestedSurface === 'map'
         ? requestedSurface
         : 'full'
       const fullSurface = surface === 'full'
       const overviewSurface = surface === 'overview'
+      const mapSurface = surface === 'map'
       const requestedTaskId = (c.req.query('task') ?? c.req.query('work') ?? '').trim()
       if (project.initializationNeeded) {
         return c.json({
@@ -5543,7 +5551,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         tags: project.config?.tags ?? [],
         config: project.config,
         selectedTaskId,
-        tasks: responseTasks.map(fullSurface ? compactTaskForProjectSummary : compactTaskForWorkSurface),
+        tasks: responseTasks.map(mapSurface ? compactTaskIdentity : fullSurface ? compactTaskForProjectSummary : compactTaskForWorkSurface),
         workProgress,
         inbox,
         run: run
@@ -5569,8 +5577,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
         ...(releaseReadiness ? { releaseReadiness } : {}),
         startReadiness,
         actionModel,
-        orientationSpine: fullSurface
-          ? orientationSpine
+        orientationSpine: mapSurface
+          ? compactOrientationSpineForMapSurface(orientationSpine as unknown as Record<string, unknown>)
           : orientationSpine,
         deliverySpine: fullSurface
           ? {

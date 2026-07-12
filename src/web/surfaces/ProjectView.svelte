@@ -147,8 +147,8 @@
   const pageMode = $derived<'document' | 'surface-fill'>(
     currentView === 'thread' ? 'surface-fill' : 'document',
   )
-  const projectDetailSurface = $derived<'overview' | 'work' | null>(
-    currentView === 'overview' ? 'overview' : currentView === 'work' ? 'work' : null,
+  const projectDetailSurface = $derived<'overview' | 'work' | 'map' | null>(
+    currentView === 'overview' ? 'overview' : currentView === 'work' ? 'work' : currentView === 'map' ? 'map' : null,
   )
   const routeFocusedTaskId = $derived.by(() => {
     path.value
@@ -1681,7 +1681,7 @@
                 <ProjectMapTab
                   detail={orientationPreviewDetail}
                   activeProjectId={activeProjectId}
-                  onReleaseSelected={() => project.refresh(activeProjectId)}
+                  onReleaseSelected={() => project.refresh(activeProjectId, 'map')}
                 />
               {/await}
             {:else}
@@ -1781,7 +1781,7 @@
               <ProjectMapTab
                 {detail}
                 activeProjectId={activeProjectId}
-                onReleaseSelected={() => project.refresh(activeProjectId)}
+                onReleaseSelected={() => project.refresh(activeProjectId, 'map')}
               />
             {/await}
           {:else if currentView === 'structure'}

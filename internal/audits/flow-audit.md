@@ -29804,3 +29804,63 @@ selected-scope readiness ordering.
   - Apply/revert behavior: reverting can make Overview pin a ready task while
     Start says shaping another task is the required next action.
 - Schema Migration Decision: no persisted schema field or migration changed.
+
+## 2026-07-12T22:41:55Z - Map route uses a compact source-backed surface
+
+- User job:
+  - Narrative Harness Map must show the recovered release/source truth without
+    loading the full project payload that non-map surfaces need.
+- Root cause classification:
+  - UI communication/orientation problem: ProjectView treated Map like an
+    unscoped project refresh, so a route meant to orient the owner requested a
+    full payload instead of a map-shaped one.
+  - Runtime/provider/infrastructure problem: the installed app still spends
+    visible time computing the full project read model before compaction, so
+    payload size improved before render latency fully did.
+- Fix:
+  - `project.refresh` and ProjectView now pass `surface=map` for the Map route
+    and release selection refreshes.
+  - `/api/project` accepts `surface=map`, returns compact task identity rows,
+    and drops the duplicate `orientationSpine.nodes` index while preserving map
+    roots, source trail, scope rows, proof contracts, and release metadata.
+- Proof provided:
+  - `corepack pnpm vitest run src/web/lib/__tests__/project-store.test.ts`
+    passed: 4 tests.
+  - `corepack pnpm vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts --testNamePattern
+    "compact project spine"` passed: 1 test.
+  - `git diff --check` passed.
+  - `node ./build.mjs` passed.
+  - `corepack pnpm dev:install` passed.
+  - `guildhall stop || true; guildhall start` restarted the installed app.
+  - `/api/stale-server` returned `stale:false`, PID `51230`,
+    `bootBuildMtimeMs:1783895898907`, and
+    `currentBuildMtimeMs:1783895898907`.
+  - Installed API proof for
+    `/api/project?projectId=narrative-harness&surface=map` returned HTTP 200,
+    `SIZE:439992`, `tasks:168`, `taskBytes:73240`,
+    `orientationBytes:215323`, `roots:11`, `nodes:0`, selected release source
+    `release_plan`, and source trail `Release Plan`.
+  - The same full API route remained available at `SIZE:1718483`, proving the
+    compact surface did not replace full-detail callers.
+  - Browser proof at `/projects/narrative-harness/map` visibly shows `Stage 1:
+    Headless Drafting And Evaluation MVP is complete`, `11 assigned work
+    items`, `30 later work items`, `0 gaps`, source-backed release copy, source
+    docs, and no horizontal overflow at `1280x720`.
+  - Mobile browser proof at `390x844` shows the same Stage 1 release scope,
+    `11 assigned work items`, `30 later work items`, `0 gaps`, source-backed
+    release copy, and no horizontal overflow.
+- Contract Touch Decision:
+  - Work id: `map-route-compact-source-backed-surface`.
+  - Touched contracts: `project.refresh` surface query semantics,
+    `/api/project?surface=map` payload semantics, ProjectView Map refresh
+    behavior, map `orientationSpine` payload shape, and map task payload shape.
+  - Contracts considered but not touched: persisted task schema, full
+    `/api/project` payload, `/api/project/spine`, release/readiness semantics,
+    task data, source trail semantics, and proof contract semantics.
+  - Required follow-up: build a compute-level map projection or cached
+    orientation read model so Map stops showing a long loading state before the
+    compact response is sent.
+  - Apply/revert behavior: reverting makes Map request the full project payload
+    again and increases the orientation route's payload/cognitive load.
+- Schema Migration Decision: no persisted schema field or migration changed.

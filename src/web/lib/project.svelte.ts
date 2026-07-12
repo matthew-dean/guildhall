@@ -16,9 +16,9 @@ class ProjectStore {
   #inFlight: Promise<ProjectDetail | null> | null = null
   #inFlightKey: string | null = null
 
-  async refresh(projectId?: string | null, surface?: 'overview' | 'work' | null, selectedTaskId?: string | null): Promise<ProjectDetail | null> {
+  async refresh(projectId?: string | null, surface?: 'overview' | 'work' | 'map' | null, selectedTaskId?: string | null): Promise<ProjectDetail | null> {
     const normalizedProjectId = projectId?.trim() || null
-    const normalizedSurface = surface === 'overview' || surface === 'work' ? surface : null
+    const normalizedSurface = surface === 'overview' || surface === 'work' || surface === 'map' ? surface : null
     const normalizedSelectedTaskId = normalizedSurface === 'work' ? selectedTaskId?.trim() || null : null
     const requestKey = `${normalizedProjectId ?? ''}:${normalizedSurface ?? ''}:${normalizedSelectedTaskId ?? ''}`
     if (this.#inFlight && this.#inFlightKey === requestKey) return this.#inFlight

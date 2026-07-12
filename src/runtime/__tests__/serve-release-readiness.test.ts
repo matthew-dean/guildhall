@@ -3146,6 +3146,9 @@ describe('GET /api/project/release-readiness', () => {
     const previewUrl = new URL(projectUrl('/api/project/spine'))
     previewUrl.searchParams.set('surface', 'overview')
     const previewBody = await (await app.fetch(new Request(previewUrl))).json() as any
+    const mapUrl = new URL(projectUrl('/api/project'))
+    mapUrl.searchParams.set('surface', 'map')
+    const mapBody = await (await app.fetch(new Request(mapUrl))).json() as any
 
     expect(fullBody.spine.roots.length).toBeGreaterThan(0)
     expect(fullBody.spine.nodes['work:task-runner']).toMatchObject({ title: 'Implement no-UI runner.' })
@@ -3160,6 +3163,19 @@ describe('GET /api/project/release-readiness', () => {
     }))
     expect(previewBody.spine.selectedRelease.nodeIds).toEqual(['work:task-runner'])
     expect(previewBody.spine.release).toEqual(fullBody.spine.release)
+    expect(mapBody.orientationSpine.roots.length).toBeGreaterThan(0)
+    expect(mapBody.orientationSpine.nodes).toEqual({})
+    expect(mapBody.orientationSpine.selectedRelease.source).toBe('release_plan')
+    expect(mapBody.orientationSpine.sourceTrail).toContainEqual(expect.objectContaining({
+      label: 'Scope',
+      value: 'Release Plan',
+    }))
+    expect(mapBody.tasks).toEqual([expect.objectContaining({
+      id: 'task-runner',
+      title: 'Implement no-UI runner.',
+      status: 'ready',
+    })])
+    expect(mapBody.tasks[0].acceptanceCriteria).toBeUndefined()
   })
 
   it('does not turn terminal complete start readiness into an overview blocker', async () => {
