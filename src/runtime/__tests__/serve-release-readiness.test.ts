@@ -1347,6 +1347,65 @@ describe('GET /api/project/release-readiness', () => {
     })
   })
 
+  it('pins the start blocker over ready work in the overview preview', async () => {
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: 'hardening',
+      releases: [{
+        id: 'hardening',
+        label: 'Hardening',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-workspace-import', 'work:task-import-e2e', 'work:task-mobile'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [
+        makeTask({
+          id: 'task-workspace-import',
+          title: 'Import project notes and plans',
+          domain: '_workspace_import',
+          status: 'done',
+          releaseIds: ['hardening'],
+        } as Partial<Task>),
+        makeTask({
+          id: 'task-import-e2e',
+          title: 'E2E tests: login -> create page -> edit -> search flow',
+          status: 'import_draft',
+          releaseIds: ['hardening'],
+        } as Partial<Task>),
+        makeTask({
+          id: 'task-mobile',
+          title: 'Mobile: test on real device',
+          status: 'ready',
+          releaseIds: ['hardening'],
+        } as Partial<Task>),
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await approveDesignSystem(app)
+    await commitAndPush('overview pin start blocker')
+
+    const project = await (await app.fetch(new Request(projectUrl('/api/project?surface=overview')))).json() as any
+
+    expect(project.startReadiness).toMatchObject({
+      canStart: false,
+      code: 'imported_scope_shaping',
+      actionHref: '/task/task-import-e2e',
+    })
+    expect(project.orientationSpine?.summary?.topBlocker).toContain('E2E tests')
+    expect(project.orientationSpine?.summary?.pinnedNow).toEqual([
+      'E2E tests: login -> create page -> edit -> search flow',
+    ])
+    expect(project.orientationSpine?.activePins?.[0]).toMatchObject({
+      nodeId: 'work:task-import-e2e',
+      kind: 'owner_input',
+      label: 'E2E tests: login -> create page -> edit -> search flow',
+    })
+  })
+
   it('accepts review-backed imported proof hints when later completion evidence exists', async () => {
     await seedQueue({
       version: 1,

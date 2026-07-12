@@ -4095,6 +4095,26 @@ function buildOverviewOrientationPreviewSpine(input: {
   const startMessage = typeof start?.message === 'string' && start.message.trim()
     ? start.message.trim()
     : null
+  const startHrefTaskId = start?.canStart === false && start.actionHref
+    ? /^\/task\/([^/?#]+)/.exec(start.actionHref)?.[1]
+    : undefined
+  const startFocusTaskId = start?.focusTaskId ?? (startHrefTaskId ? decodeURIComponent(startHrefTaskId) : undefined)
+  const startFocusTask = startFocusTaskId
+    ? input.rawQueue.tasks.find(task => task.id === startFocusTaskId)
+    : undefined
+  const startFocusTaskTitle = start?.focusTaskTitle ?? (typeof startFocusTask?.title === 'string' ? startFocusTask.title : undefined)
+  const focusTaskId = start?.canStart === false && startFocusTaskId
+    ? startFocusTaskId
+    : projection.start.focusTaskId
+  const focusTaskTitle = start?.canStart === false && startFocusTaskTitle
+    ? startFocusTaskTitle
+    : projection.start.focusTaskTitle
+  const focusKind = start?.canStart === false && start.focusKind
+    ? start.focusKind
+    : projection.start.focusKind
+  const focusHref = start?.canStart === false && start.actionHref
+    ? start.actionHref
+    : projection.start.actionHref
   const terminalCompleteMessage = start?.code === 'all_terminal' && startMessage !== null && /\bis complete\.$/i.test(startMessage)
   const firstBlocker = projection.release.blockers[0]
   const topBlocker = firstBlocker?.label ?? (
@@ -4155,7 +4175,7 @@ function buildOverviewOrientationPreviewSpine(input: {
       includedWorkCount: projection.counts.included,
       deferredCount: projection.counts.deferred,
       deferredWorkCount: projection.counts.deferred,
-      pinnedNow: projection.start.focusTaskTitle ? [projection.start.focusTaskTitle] : [],
+      pinnedNow: focusTaskTitle ? [focusTaskTitle] : [],
       topBlocker,
       nextAction: projection.release.state === 'ready'
         ? 'Review completed scope.'
@@ -4166,13 +4186,13 @@ function buildOverviewOrientationPreviewSpine(input: {
     },
     roots: [],
     nodes: {},
-    activePins: projection.start.focusTaskId
+    activePins: focusTaskId
       ? [{
-          id: `scope-preview:${projection.start.focusTaskId}`,
-          nodeId: taskScopeNodeId(projection.start.focusTaskId),
-          label: projection.start.focusTaskTitle ?? projection.start.focusTaskId,
-          kind: projection.start.focusKind === 'spec_review' ? 'review' : projection.start.canStart ? 'active_work' : 'owner_input',
-          href: projection.start.actionHref,
+          id: `scope-preview:${focusTaskId}`,
+          nodeId: taskScopeNodeId(focusTaskId),
+          label: focusTaskTitle ?? focusTaskId,
+          kind: focusKind === 'spec_review' ? 'review' : start?.canStart === false ? 'owner_input' : projection.start.canStart ? 'active_work' : 'owner_input',
+          href: focusHref,
         }]
       : [],
     scopeRows: scopeRows.map(row => ({

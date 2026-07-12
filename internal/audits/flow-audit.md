@@ -29650,3 +29650,63 @@ selected-scope readiness ordering.
   - Apply/revert behavior: reverting can make ready work look complete/proven
     from stale proof events.
 - Schema Migration Decision: no persisted schema field or migration changed.
+
+## 2026-07-12T21:59:48Z - Looma overview pins the Start blocker
+
+- User job:
+  - Looma + Knit Overview must pin the same actionable blocker that Start
+    would open, so the owner sees what needs shaping before unattended work can
+    run instead of a merely ready task.
+- Root cause classification:
+  - Scheduler/action-state logic problem: compact Overview preview used the
+    projection focus task even when `startReadiness` had a stronger blocking
+    action target.
+  - UI communication/orientation problem: Overview could say "Current focus:
+    Mobile" while the top action and Start readiness both required E2E shaping.
+- Fix:
+  - Compact Overview preview now derives focus from `startReadiness.focusTaskId`
+    or the `/task/<id>` in `startReadiness.actionHref` when Start is blocked.
+  - `pinnedNow` and `activePins` use that shared Start blocker focus before
+    falling back to the projection focus.
+- Proof provided:
+  - `corepack pnpm vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts --testNamePattern
+    "pins the start blocker"` passed.
+  - `git diff --check && corepack pnpm vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts --testNamePattern
+    "pins the start blocker|unfinished overview work|effective task proof
+    state|keeps overview task rows scoped|returns a compact project spine|
+    imported current-scope shaping work|does not turn terminal complete"`
+    passed: 7 tests.
+  - `corepack pnpm lint:contracts` passed.
+  - `node ./build.mjs` passed.
+  - `corepack pnpm dev:install` passed.
+  - `guildhall stop || true; guildhall start` restarted the installed app.
+  - `/api/stale-server` returned `stale:false`, PID `68472`,
+    `bootBuildMtimeMs:1783893663263`, and
+    `currentBuildMtimeMs:1783893663263`.
+  - Installed API proof for
+    `/api/project?projectId=looma-knit&surface=overview` reports
+    `pinnedNow:["E2E tests: login → create page → edit → search flow"]`,
+    `activePins[0].nodeId:"work:task-import-ik1i7i"`, and
+    `startReadiness.actionHref:"/task/task-import-ik1i7i"`.
+  - Browser proof at `/projects/looma-knit/overview` reports `Current focus:
+    E2E tests: login → create page → edit → search flow`, does not report
+    `Current focus: Mobile`, and has no horizontal overflow at `1280x720`
+    after reinstall/restart.
+  - Responsive browser proof has no horizontal overflow at `900x720` and
+    `390x844`; after the live connection completes, mobile shows the same E2E
+    blocker and no console warnings/errors.
+- Contract Touch Decision:
+  - Work id: `overview-pin-start-blocker-focus`.
+  - Touched contracts: compact `/api/project?surface=overview`
+    `orientationSpine.summary.pinnedNow` and `orientationSpine.activePins`
+    focus semantics.
+  - Contracts considered but not touched: persisted task schema,
+    project-scope projection shape, release-readiness payload shape,
+    Start-readiness payload shape, and full project map spine.
+  - Required follow-up: continue unifying compact/full focus derivation if
+    another surface diverges from Start readiness.
+  - Apply/revert behavior: reverting can make Overview pin a ready task while
+    Start says shaping another task is the required next action.
+- Schema Migration Decision: no persisted schema field or migration changed.
