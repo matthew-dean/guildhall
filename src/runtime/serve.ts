@@ -1848,6 +1848,43 @@ function formatServerTiming(metrics: Array<{ name: string; startedAt: number; en
     .join(', ')
 }
 
+const stoppedProjectReadRepairSignatures = new Map<string, string>()
+
+function taskQueueRepairSignature(projectPath: string): string {
+  const tasksPath = projectTasksPath(projectPath)
+  if (!existsSync(tasksPath)) return 'missing'
+  const stat = statSync(tasksPath)
+  return `${stat.mtimeMs}:${stat.size}`
+}
+
+async function runStoppedProjectReadRepairs(input: {
+  projectPath: string
+  staleBlockerRepair?: 'runtime' | 'sync' | 'none'
+  startTiming?: (name: string) => () => void
+}) {
+  const staleBlockerRepair = input.staleBlockerRepair ?? 'none'
+  const key = `${input.projectPath}:${staleBlockerRepair}`
+  const before = taskQueueRepairSignature(input.projectPath)
+  if (stoppedProjectReadRepairSignatures.get(key) === before) return
+  const time = async (name: string, fn: () => Promise<unknown> | unknown) => {
+    const end = input.startTiming?.(name)
+    try {
+      await fn()
+    } finally {
+      end?.()
+    }
+  }
+  if (staleBlockerRepair === 'runtime') {
+    await time('setup_repair_stale_blockers', () => repairStaleBlockersForProjectWithRuntime(input.projectPath))
+  } else if (staleBlockerRepair === 'sync') {
+    await time('setup_repair_stale_blockers', () => repairStaleBlockersForProject(input.projectPath))
+  }
+  await time('setup_repair_phantom_tasks', () => repairStoppedRunPhantomActiveTasks(input.projectPath))
+  await time('setup_repair_provider_plans', () => repairLegacyNoCheckpointProviderRecoveryPlans(input.projectPath))
+  await time('setup_repair_imported_shaping', () => repairImportedShapingExecutionState(input.projectPath))
+  stoppedProjectReadRepairSignatures.set(key, taskQueueRepairSignature(input.projectPath))
+}
+
 async function buildProjectInboxSnapshot(input: {
   projectPath: string
   initializationNeeded: boolean
@@ -5430,10 +5467,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
       const run = supervisor.get(project.id)
       if (run?.status !== 'running' && run?.status !== 'stopping') {
-        await repairStaleBlockersForProjectWithRuntime(project.path)
-        await repairStoppedRunPhantomActiveTasks(project.path)
-        await repairLegacyNoCheckpointProviderRecoveryPlans(project.path)
-        await repairImportedShapingExecutionState(project.path)
+        await runStoppedProjectReadRepairs({
+          projectPath: project.path,
+          staleBlockerRepair: 'runtime',
+          startTiming,
+        })
       }
       endSetup()
       const endQueue = startTiming('queue')
@@ -11099,9 +11137,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (!existsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
       const run = supervisor.get(project.id)
       if (run?.status !== 'running' && run?.status !== 'stopping') {
-        await repairStoppedRunPhantomActiveTasks(project.path)
-        await repairLegacyNoCheckpointProviderRecoveryPlans(project.path)
-        await repairImportedShapingExecutionState(project.path)
+        await runStoppedProjectReadRepairs({ projectPath: project.path })
       }
       const tasks = await readTasksFileNormalized(tasksPath)
       const workProgress = deriveProjectWorkProgress(tasks as Array<Record<string, unknown>>)
@@ -12732,10 +12768,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const empty = { running: run?.status === 'running', counts: {}, inFlight: [] as unknown[] }
       if (!existsSync(tasksPath)) return c.json(empty)
       if (run?.status !== 'running' && run?.status !== 'stopping') {
-        repairStaleBlockersForProject(project.path)
-        await repairStoppedRunPhantomActiveTasks(project.path)
-        await repairLegacyNoCheckpointProviderRecoveryPlans(project.path)
-        await repairImportedShapingExecutionState(project.path)
+        await runStoppedProjectReadRepairs({
+          projectPath: project.path,
+          staleBlockerRepair: 'sync',
+        })
       }
       const raw = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')) as
         | { tasks?: Array<Record<string, unknown>> }

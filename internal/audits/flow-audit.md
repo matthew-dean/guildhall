@@ -29464,6 +29464,67 @@ selected-scope readiness ordering.
     Overview even while Map/Start say it is complete.
 - Schema Migration Decision: no persisted schema field or migration changed.
 
+## 2026-07-12T23:45:17Z - Read-only project surfaces gate stopped-run repair sweeps
+
+- User job:
+  - Narrative Harness Map should open as a read-only orientation surface, not
+    rerun stopped-run cleanup work on every refresh when the task queue has not
+    changed.
+- Root cause classification:
+  - Runtime/provider/infrastructure problem: stopped-project repair sweeps ran
+    during every read of `/api/project?surface=map`, adding repeated setup cost
+    to a user-facing orientation page.
+  - Scheduler/action-state logic problem: self-healing task repair was coupled
+    to read frequency instead of task-queue changes.
+  - UI communication/orientation problem: the Map could have correct content
+    while still feeling heavy because unrelated repair work happened before the
+    page could render it.
+  - Data model/schema problem: no persisted schema changed in this slice; the
+    deeper structural sync question remains open for the next model pass.
+- Fix:
+  - Added a shared stopped-project read-repair gate keyed by project path,
+    repair mode, and task queue `mtime`/size signature.
+  - Reused that helper from project detail, task detail, and activity reads so
+    repairs still run after task data changes but skip repeated no-op sweeps.
+- Proof provided:
+  - Before this slice, installed Map reads showed repeated setup repair timings
+    around `439ms` after warmup:
+    `setup_repair_stale_blockers;dur=13`,
+    `setup_repair_phantom_tasks;dur=132`,
+    `setup_repair_provider_plans;dur=169`, and
+    `setup_repair_imported_shaping;dur=125`.
+  - `node ./build.mjs` passed.
+  - `corepack pnpm vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts` passed: 61 tests.
+  - `git diff --check` passed.
+  - `corepack pnpm lint:contracts` passed.
+  - `/api/stale-server` returned `stale:false`, PID `45570`,
+    `bootBuildMtimeMs:1783899971384`, and
+    `currentBuildMtimeMs:1783899971384`.
+  - Installed API proof for
+    `/api/project?projectId=narrative-harness&surface=map` returned repeated
+    timings of `0.564535s`, `0.571527s`, and `0.559597s` with
+    `content-length: 281563`.
+  - Those installed reads reported `setup;dur=0` or `setup;dur=1` and no
+    repeated `setup_repair_*` timings, while preserving `startReadiness.code:
+    all_terminal`, execution scope `Stage 1: Headless Drafting And Evaluation
+    MVP`, and `orientationSpine.roots.length: 11`.
+- Contract Touch Decision:
+  - Work id: `stopped-project-read-repair-gate`.
+  - Touched contracts: runtime read-repair cadence for `/api/project`, task
+    detail, and activity reads; diagnostic `Server-Timing` output for read-time
+    repairs.
+  - Contracts considered but not touched: persisted task schema, persisted
+    release schema, `/api/project` JSON body shape, release readiness semantics,
+    owner approval semantics, orientation spine semantics, and start/resume
+    action semantics.
+  - Required follow-up: decide whether these repair sweeps should move out of
+    read paths entirely into explicit runtime maintenance or scheduler hooks.
+    This slice only removes repeated no-op repair churn.
+  - Apply/revert behavior: reverting restores repair sweeps on every stopped
+    project read, increasing Map read latency without changing visible truth.
+- Schema Migration Decision: no persisted schema field or migration changed.
+
 ## 2026-07-12T23:35:54Z - Map terminal readiness reuses route task projection
 
 - User job:
