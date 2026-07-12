@@ -29464,6 +29464,62 @@ selected-scope readiness ordering.
     Overview even while Map/Start say it is complete.
 - Schema Migration Decision: no persisted schema field or migration changed.
 
+## 2026-07-12T23:35:54Z - Map terminal readiness reuses route task projection
+
+- User job:
+  - Narrative Harness Map should render the selected release skeleton and
+    completion state from the product quickly enough that the 1,000-foot view
+    feels like an orientation surface, not a heavyweight report.
+- Root cause classification:
+  - Scheduler/action-state logic problem: `projectStartReadiness` asked
+    `terminalStartState` to rebuild normalized queue/effective task state that
+    `/api/project` had already loaded for the same request.
+  - Runtime/provider/infrastructure problem: duplicated file reads and
+    effective-task projection kept the terminal readiness path slower than the
+    visible Map work required.
+  - Data model/schema problem: not changed; this is a shared read-model reuse
+    fix inside the runtime route.
+- Fix:
+  - `/api/project` passes its already-normalized task queue and already-started
+    effective task projection into `projectStartReadiness`.
+  - `terminalStartState` reuses that projection when supplied and only falls
+    back to its old self-contained reads for callers that do not have a route
+    snapshot.
+- Proof provided:
+  - Before this slice, installed Map timings after the prior cut were
+    `1.178914s`, `1.132251s`, and `1.114747s`, with
+    `readiness_terminal;dur≈437ms`.
+  - After this slice, installed Map timings were `1.048301s`, `0.994012s`,
+    `0.999738s`, and `1.013219s` after warmup; terminal readiness dropped to
+    `321–333ms`; payload size stayed `281563` bytes.
+  - Installed API payload still reported
+    `Stage 1: Headless Drafting And Evaluation MVP is complete`, execution
+    scope kind `release`, `taskCount:11`, and `orientationSpine.roots.length:11`.
+  - `corepack pnpm vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts --testNamePattern
+    "terminal|compact project spine|selected release"` passed `7` focused
+    tests.
+  - `node ./build.mjs` passed.
+  - `git diff --check` passed.
+  - `corepack pnpm dev:install` passed, `guildhall start` restarted the
+    installed app, and `/api/stale-server` returned `stale:false` with matching
+    boot/current build mtimes.
+- Contract Touch Decision:
+  - Work id: `map-terminal-readiness-route-projection-reuse`.
+  - Touched contracts: internal `projectStartReadiness`/`terminalStartState`
+    call contract and `/api/project` diagnostic timing behavior.
+  - Contracts considered but not touched: persisted task schema, persisted
+    release schema, `/api/project` JSON body shape, `/api/project/spine`,
+    `/api/project/release-readiness`, ProjectMapTab props, proof evidence
+    schema, workspace-import draft schema, provider config schema, and owner
+    approval semantics.
+  - Required follow-up: share or split the remaining orientation-spine build so
+    terminal readiness and Map display do not both construct nearby release
+    truth; do that only with a clear shared read model, not a second cache layer.
+  - Apply/revert behavior: reverting keeps correctness but restores duplicated
+    queue/effective-task reconstruction in Map terminal readiness.
+- Schema Migration Decision: no persisted schema field or migration changed.
+
 ## 2026-07-12T23:31:44Z - Map readiness stops rebuilding terminal release blockers
 
 - User job:

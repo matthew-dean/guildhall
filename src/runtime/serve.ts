@@ -5458,6 +5458,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
         resolvedConfig,
         runtimeProvider,
         allowPaidProviderFallback: runtimeProvider.allowPaidProviderFallback,
+        queue: rawQueue,
+        effectiveTasks: mapSurface
+          ? await mapEffectiveTasksPromise as Task[]
+          : overviewSurface
+            ? await overviewEffectiveTasksPromise as Task[]
+            : undefined,
         startTiming: name => startTiming(`readiness_${name}`),
       })
       const releaseReadiness = fullSurface || overviewSurface
@@ -6832,6 +6838,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
     allowPaidProviderFallback: boolean
     allowTaskReadinessBlocker?: boolean
     requestedTaskId?: string
+    queue?: Awaited<ReturnType<typeof readTaskQueueFileNormalized>>
+    effectiveTasks?: Task[]
     startTiming?: (name: string) => () => void
   }): Promise<{
     canStart: boolean
@@ -6867,7 +6875,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
     const ownerInputBlocker = startBlockerForOwnerInput(input.projectPath)
     if (ownerInputBlocker) return attachExecutionScope(ownerInputBlocker)
 
-    const terminal = await time('terminal', () => terminalStartState(input.projectPath, input.requestedTaskId))
+    const terminal = await time('terminal', () => terminalStartState(input.projectPath, input.requestedTaskId, {
+      queue: input.queue,
+      effectiveTasks: input.effectiveTasks,
+    }))
     if (terminal?.selectedReleaseTerminal) {
       return attachExecutionScope(startReadinessForTerminalState(terminal))
     }
@@ -7235,7 +7246,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
     return ''
   }
 
-	  async function terminalStartState(projectPath: string, requestedTaskId?: string): Promise<{
+	  async function terminalStartState(projectPath: string, requestedTaskId?: string, opts: {
+      queue?: Awaited<ReturnType<typeof readTaskQueueFileNormalized>>
+      effectiveTasks?: Task[]
+    } = {}): Promise<{
 	    canStart: false
 	    code: 'all_terminal' | 'proof_evidence_missing' | 'repository_followup_required' | 'scope_source_conflict'
 	    message: string
@@ -7264,11 +7278,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
 	  } | null> {
     const tasksPath = projectTasksPath(projectPath)
     if (!existsSync(tasksPath)) return null
-    let raw: unknown
-    try {
-      raw = JSON.parse(readManagedTextFileSync(tasksPath, 'utf-8'))
-    } catch {
-      return null
+    let raw: unknown = opts.queue
+    if (!raw) {
+      try {
+        raw = JSON.parse(readManagedTextFileSync(tasksPath, 'utf-8'))
+      } catch {
+        return null
+      }
     }
     const tasks = Array.isArray(raw)
       ? raw
@@ -7284,10 +7300,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
 
     const typedTasks = tasks.filter((task): task is Task => Boolean(task && typeof task === 'object'))
-    const effectiveTasks = await Promise.all(typedTasks.map(task => buildEffectiveTask(projectPath, task)))
-    const normalizedQueue = !requestedTaskId
+    const effectiveTasks = opts.effectiveTasks ?? await Promise.all(typedTasks.map(task => buildEffectiveTask(projectPath, task)))
+    const normalizedQueue = opts.queue ?? (!requestedTaskId
       ? await readTaskQueueFileNormalized(tasksPath).catch(() => null)
-      : null
+      : null)
     const rawReleases = normalizedQueue?.releases ?? (
       !Array.isArray(raw) && raw && typeof raw === 'object' && Array.isArray((raw as { releases?: unknown }).releases)
         ? (raw as { releases: TaskQueue['releases'] }).releases
