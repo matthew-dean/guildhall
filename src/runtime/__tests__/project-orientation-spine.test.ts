@@ -1136,6 +1136,60 @@ describe('buildProjectOrientationSpine', () => {
     expect(spine.nodes['work:workspace-import:task-import-1v8sume']).toBeUndefined()
   })
 
+  it('does not let stale workspace-import release hints override durable task release membership', () => {
+    const spine = buildProjectOrientationSpine({
+      projectId: 'narrative-harness',
+      now: '2026-07-12T12:00:00.000Z',
+      tasks: [{
+        id: 'task-import-1c4eedx',
+        title: 'Implement fixture-and-expected-record schemas',
+        description: 'Durable task was reclassified after import.',
+        domain: 'harness',
+        projectPath: '/tmp/narrative-harness',
+        status: 'done',
+        priority: 'normal',
+        releaseIds: ['near-term-proof-scope'],
+        proofPaths: [{
+          kind: 'command',
+          command: 'pnpm test -- schema-fixtures',
+          source: 'inferred',
+          status: 'blocked',
+          expectedEvidence: ['Fixture records prove rollback behavior.'],
+        }],
+      }] as any[],
+      workspaceImportDraft: {
+        source: {
+          kind: 'inferred',
+          refs: ['workspace-import:draft'],
+          confidence: 'medium',
+          freshness: 'fresh',
+          inferred: true,
+          refreshedAt: '2026-07-12T12:00:00.000Z',
+        },
+        releases: [{
+          id: 'stage-1-headless-drafting-and-evaluation-mvp',
+          label: 'Stage 1 Headless Drafting And Evaluation MVP',
+          source: 'release_plan',
+          state: 'active',
+        }],
+        tasks: [{
+          id: 'task-import-1c4eedx',
+          title: 'Implement fixture-and-expected-record schemas',
+          description: 'Stale detector still thinks this is Stage 1.',
+          domain: 'harness',
+          scope: 'current',
+          releaseIds: ['stage-1-headless-drafting-and-evaluation-mvp'],
+          refs: ['import:docs/specs/schema-contract-roadmap.md'],
+        }],
+        contexts: [],
+      },
+    })
+
+    expect(spine.selectedRelease?.id).toBe('near-term-proof-scope')
+    expect(spine.scope?.id).toBe('near-term-proof-scope')
+    expect(spine.selectedRelease?.nodeIds).toEqual(['work:task-import-1c4eedx'])
+  })
+
   it('uses release records recovered from the workspace import draft as the visible scope', () => {
     const spine = buildProjectOrientationSpine({
       projectId: 'narrative-harness',

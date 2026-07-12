@@ -539,14 +539,14 @@ export function augmentTasksWithWorkspaceImportDraft(input: {
       augmented.push(synthetic)
       idToTask.set(synthetic.id, synthetic)
       titleToTask.set(normalizeText(draftTask.title), synthetic)
-    } else if (draftTask.releaseIds?.length) {
+    } else if (draftTask.releaseIds?.length && (existing.releaseIds ?? []).length === 0) {
       existing.releaseIds = [...new Set([...(existing.releaseIds ?? []), ...draftTask.releaseIds])]
     }
 
     const nodeId = taskNodeId(taskId)
-    const taskReleaseIds = draftTask.releaseIds?.length
-      ? draftTask.releaseIds
-      : existing?.releaseIds ?? []
+    const taskReleaseIds = existing?.releaseIds?.length
+      ? existing.releaseIds
+      : draftTask.releaseIds ?? []
     if (draftTask.scope === 'later') {
       deferredNodeIds.push(nodeId)
       for (const releaseId of taskReleaseIds) {

@@ -29245,3 +29245,78 @@ selected-scope readiness ordering.
     what Start/Resume would consume from nearby release or task data.
 - Schema Migration Decision: no persisted schema field was added, removed, or
   retyped. This is a read-model/API contract extension only.
+
+## 2026-07-12T20:49:05Z - Durable release membership wins over stale import hints
+
+- User job:
+  - Narrative Harness Overview, Start, and Release must agree on the selected
+    scope before the owner can trust whether the MVP is complete or still
+    blocked.
+  - A task that durable project state has already moved into a later/near-term
+    proof scope must not be pulled back into Stage 1 by stale workspace-import
+    draft metadata.
+- Root cause classification:
+  - Data-model/source-of-truth problem: workspace-import draft tasks and
+    durable tasks were both treated as release-membership sources after the
+    durable task had already been reclassified.
+  - Project structure/scope/release modeling problem: release buckets were
+    rebuilt from merged task projections, so stale inferred release IDs could
+    widen the selected release even when durable task state said otherwise.
+  - Scheduler/action-state logic problem: Start readiness consumed the widened
+    release projection and reported proof blockers for work that was no longer
+    part of the selected Stage 1 scope.
+  - UI communication/orientation problem: Overview could say Stage 1 was
+    complete while Start/Release still implied Stage 1 was blocked by a later
+    proof task.
+- Fix:
+  - `augmentTasksWithWorkspaceImportDraft` now uses draft release IDs only as a
+    fill-in when the durable task has no release membership.
+  - Release buckets now prefer the existing durable task release IDs when a
+    draft task matches a materialized task, instead of unioning stale import
+    hints into the current scope.
+- Proof provided:
+  - `CI=true ./node_modules/.bin/vitest run
+    src/runtime/__tests__/project-orientation-spine.test.ts --testNamePattern
+    "stale workspace-import release hints"` passed.
+  - `CI=true ./node_modules/.bin/vitest run
+    src/runtime/__tests__/project-orientation-spine.test.ts
+    src/runtime/__tests__/serve-release-readiness.test.ts
+    src/runtime/__tests__/serve-settings.test.ts` passed: 3 files, 242 tests.
+  - `git diff --check` passed.
+  - `CI=true corepack pnpm lint:contracts` passed.
+  - `node ./build.mjs` passed.
+  - `pnpm dev:install` passed.
+  - `guildhall stop && guildhall start` restarted the installed app.
+  - `/api/stale-server` returned `stale:false`, PID `46704`,
+    `bootBuildMtimeMs:1783889226314`, and
+    `currentBuildMtimeMs:1783889226314`.
+  - Installed API proof for Narrative Harness
+    `/api/project?projectId=narrative-harness&surface=overview` now reports
+    `scope`, `startReadiness.executionScope`, and
+    `releaseReadiness.release` all as `stage-1-headless-drafting-and-evaluation-mvp`.
+    The Stage 1 node list has 11 tasks, `startReadiness.code` is
+    `all_terminal`, `releaseReadiness.ready` is `true`, and
+    `proofMissingDoneTasks` is empty.
+  - Browser proof at `/projects/narrative-harness/overview`:
+    - Desktop 1280x720: visible copy includes `Stage 1 Headless Drafting And
+      Evaluation MVP is complete`, does not include the stale proof-blocker
+      copy, and has no horizontal overflow or clipped sampled elements.
+    - Mobile 390x844: visible copy still includes the complete Stage 1
+      headline, does not include stale proof-blocker copy, and has no
+      horizontal overflow or clipped sampled elements.
+- Contract Touch Decision:
+  - Work id: `durable-release-membership-import-draft`.
+  - Touched contracts: orientation-spine task augmentation semantics and
+    derived release bucket construction.
+  - Contracts considered but not touched: persisted task schema, persisted
+    release/scope schema, `/api/project` response shape,
+    `/api/project/start` response shape, release-readiness payload shape, and
+    workspace-import draft persisted schema.
+  - Required follow-up: continue collapsing scope/release derivation so durable
+    membership, draft intake hints, release readiness, and Start execution
+    scope share a smaller source-of-truth path.
+  - Apply/revert behavior: reverting allows stale import draft release IDs to
+    widen a durable task's release membership again, recreating the false
+    Stage 1 blocker.
+- Schema Migration Decision: no persisted schema field was added, removed, or
+  retyped. This is read-model precedence behavior only.
