@@ -1535,6 +1535,51 @@ describe('buildProjectOrientationSpine', () => {
     ]))
   })
 
+  it('does not undercount scoped task records when work is sourced from docs', () => {
+    const spine = buildProjectOrientationSpine({
+      projectId: 'narrative-harness',
+      now: '2026-07-12T21:30:00.000Z',
+      selectedReleaseId: 'stage-1',
+      releases: [{
+        id: 'stage-1',
+        label: 'Stage 1',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-with-task-ref', 'work:task-with-doc-ref'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [
+        {
+          id: 'task-with-task-ref',
+          title: 'Task-backed proof',
+          description: 'Has no document source.',
+          domain: 'harness',
+          status: 'done',
+          priority: 'normal',
+          releaseIds: ['stage-1'],
+        },
+        {
+          id: 'task-with-doc-ref',
+          title: 'Document-backed proof',
+          description: 'Has document source.',
+          domain: 'harness',
+          status: 'done',
+          priority: 'normal',
+          releaseIds: ['stage-1'],
+          references: ['docs/harness/implementation-roadmap.md'],
+        },
+      ] as any[],
+    })
+
+    expect(spine.summary.includedWorkCount).toBe(2)
+    expect(spine.sourceTrail).toContainEqual(expect.objectContaining({
+      label: 'Work records',
+      value: '2 task records',
+    }))
+  })
+
   it('does not treat planned proof paths as already proven evidence', () => {
     const spine = buildProjectOrientationSpine({
       projectId: 'narrative-harness',

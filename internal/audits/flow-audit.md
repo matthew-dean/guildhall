@@ -29463,3 +29463,70 @@ selected-scope readiness ordering.
   - Apply/revert behavior: reverting makes a complete release look blocked in
     Overview even while Map/Start say it is complete.
 - Schema Migration Decision: no persisted schema field or migration changed.
+
+## 2026-07-12T21:31:34Z - Narrative Harness duplicate scope reconciled and source-trail counts agree
+
+- User job:
+  - Narrative Harness Project Map must not leave a stale duplicate DeepInfra
+    model-selection row as an unresolved source conflict after the owner has
+    chosen the richer Stage 1 task as canonical.
+  - Source trail counts must not contradict the release scope count.
+- Root cause classification:
+  - Project structure/scope/release modeling problem: the richer DeepInfra task
+    and the narrower imported roadmap task were split across current/deferred
+    scope until an owner-level reconciliation decision was applied.
+  - Bad project data produced by an earlier Guildhall bug: the narrower
+    duplicate survived as a done-but-superseded imported task.
+  - UI communication/orientation problem: source trail counted only explicit
+    `task:` source refs, so document-backed scoped task rows could make the UI
+    say `11 assigned work items` and `10 task records` at the same time.
+- Fix:
+  - Acting as Matthew for the calibration run, used
+    `/api/project/source-conflicts/reconcile` to keep
+    `task-select-and-prove-a-deep-infra-drafting-model-for-broad-genre-chapter-writing`
+    and archive `task-import-lu6waj`.
+  - `buildSourceTrail` now reports at least the selected scope's included work
+    count for `Work records`, so document-backed scoped work cannot be
+    undercounted below the release's assigned work count.
+  - Added a focused `project-orientation-spine` regression for doc-sourced
+    scoped task records.
+- Proof provided:
+  - Reconciliation API returned `ok:true`.
+  - Persisted Narrative Harness task state now keeps the richer DeepInfra task
+    as `done` in `stage-1-headless-drafting-and-evaluation-mvp`, archives
+    `task-import-lu6waj`, and records scope-reconciliation notes on both.
+  - Installed API proof for
+    `/api/project?projectId=narrative-harness&surface=map` now reports
+    `gaps:[]`, `sourceHealth.conflicts:0`, `sourceHealth.gaps:0`,
+    `includedWorkCount:11`, `deferredWorkCount:30`, and source trail
+    `Work records` value `11 task records`.
+  - Browser proof at `/projects/narrative-harness/map` visibly shows
+    `Stage 1 Headless Drafting And Evaluation MVP`, `11 assigned work items`,
+    `0 gaps`, `11 task records`, no duplicate source-conflict copy, and no
+    horizontal overflow.
+  - `CI=true ./node_modules/.bin/vitest run
+    src/runtime/__tests__/project-orientation-spine.test.ts
+    src/runtime/__tests__/serve-release-readiness.test.ts` passed: 122 tests.
+  - `git diff --check` passed.
+  - `CI=true corepack pnpm lint:contracts` passed.
+  - `node ./build.mjs` passed.
+  - `pnpm dev:install` passed.
+  - `guildhall stop || true; guildhall start` restarted the installed app.
+  - `/api/stale-server` returned `stale:false`, PID `78918`,
+    `bootBuildMtimeMs:1783891828178`, and
+    `currentBuildMtimeMs:1783891828178`.
+- Contract Touch Decision:
+  - Work id: `nh-source-conflict-reconciliation-and-source-trail-count`.
+  - Touched contracts: source trail read-model semantics and Narrative Harness
+    project task/release state through the existing source-conflict
+    reconciliation API.
+  - Contracts considered but not touched: persisted task schema, source
+    conflict reconciliation API shape, release-readiness payload shape, Start
+    readiness payload shape, and source refs schema.
+  - Required follow-up: decide whether obvious done/deferred superseded
+    duplicates should be auto-reconciled by import or queued as explicit owner
+    decisions, rather than lingering as warnings.
+  - Apply/revert behavior: reverting the code can make source trail undercount
+    scoped work again; reverting the project data reconciliation can restore
+    the stale DeepInfra duplicate conflict.
+- Schema Migration Decision: no persisted schema field or migration changed.
