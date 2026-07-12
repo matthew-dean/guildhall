@@ -670,6 +670,131 @@ describe('applyProjectMigrations', () => {
     }))
   })
 
+  it('restores shaped done evidence from evacuated task archive over hollow same-id imported drafts', async () => {
+    const systemTasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    await fs.mkdir(path.dirname(systemTasksPath), { recursive: true })
+    await fs.writeFile(systemTasksPath, JSON.stringify({
+      version: 1,
+      tasks: [
+        {
+          id: 'task-import-kj0cyz',
+          title: 'Unit tests: use-collections, use-presence, subdomain utils',
+          status: 'import_draft',
+          releaseIds: ['stage-1-v1-release-hardening'],
+          references: ['knit/PROJECT_STATE.md'],
+        },
+      ],
+    }, null, 2), 'utf8')
+    const evacuatedTasksPath = path.join(getProjectLocalHistoryDir(projectRoot), 'project-state-evacuation', 'TASKS.json')
+    await fs.mkdir(path.dirname(evacuatedTasksPath), { recursive: true })
+    await fs.writeFile(evacuatedTasksPath, JSON.stringify({ version: 1, tasks: [] }, null, 2), 'utf8')
+    const archivePath = path.join(getProjectLocalHistoryDir(projectRoot), 'project-state-evacuation', 'tasks', 'archive', 'task-import-kj0cyz.json')
+    await fs.mkdir(path.dirname(archivePath), { recursive: true })
+    await fs.writeFile(archivePath, JSON.stringify({
+      id: 'task-import-kj0cyz',
+      title: 'Unit tests: use-collections, use-presence, subdomain utils',
+      status: 'done',
+      acceptanceCriteria: [
+        {
+          id: 'ac-1',
+          description: 'Targeted unit tests pass.',
+          verifiedBy: 'automated',
+          command: 'pnpm test use-collections use-presence subdomain',
+          met: true,
+        },
+      ],
+      mergeRecord: {
+        result: 'merged',
+        mergedAt: '2026-05-15T07:37:45.052Z',
+      },
+    }, null, 2), 'utf8')
+
+    const before = await getProjectMigrationStatus({ projectRoot })
+    expect(before.blocked.some(item => item.id === '0.10.1/restore-evacuated-archive-shaped-task-state')).toBe(true)
+
+    await applyProjectMigrations({
+      projectRoot,
+      only: ['0.10.1/restore-evacuated-archive-shaped-task-state'],
+    })
+
+    const restored = JSON.parse(await fs.readFile(systemTasksPath, 'utf8')) as {
+      tasks: Array<{
+        id: string
+        status: string
+        acceptanceCriteria?: Array<{ met?: boolean }>
+        mergeRecord?: { result?: string }
+        releaseIds?: string[]
+        references?: string[]
+      }>
+    }
+    expect(restored.tasks).toEqual([
+      expect.objectContaining({
+        id: 'task-import-kj0cyz',
+        status: 'done',
+        acceptanceCriteria: [expect.objectContaining({ met: true })],
+        mergeRecord: expect.objectContaining({ result: 'merged' }),
+        releaseIds: ['stage-1-v1-release-hardening'],
+        references: ['knit/PROJECT_STATE.md'],
+      }),
+    ])
+  })
+
+  it('does not restore archived done status when evacuated criteria still lack proof', async () => {
+    const systemTasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    await fs.mkdir(path.dirname(systemTasksPath), { recursive: true })
+    await fs.writeFile(systemTasksPath, JSON.stringify({
+      version: 1,
+      tasks: [
+        {
+          id: 'task-import-mobile-proof',
+          title: 'Mobile: test on real device',
+          status: 'import_draft',
+          releaseIds: ['stage-1-v1-release-hardening'],
+        },
+      ],
+    }, null, 2), 'utf8')
+    const evacuatedTasksPath = path.join(getProjectLocalHistoryDir(projectRoot), 'project-state-evacuation', 'TASKS.json')
+    await fs.mkdir(path.dirname(evacuatedTasksPath), { recursive: true })
+    await fs.writeFile(evacuatedTasksPath, JSON.stringify({ version: 1, tasks: [] }, null, 2), 'utf8')
+    const archivePath = path.join(getProjectLocalHistoryDir(projectRoot), 'project-state-evacuation', 'tasks', 'archive', 'task-import-mobile-proof.json')
+    await fs.mkdir(path.dirname(archivePath), { recursive: true })
+    await fs.writeFile(archivePath, JSON.stringify({
+      id: 'task-import-mobile-proof',
+      title: 'Mobile: test on real device',
+      status: 'done',
+      spec: '## Summary\nRun the mobile smoke proof.',
+      acceptanceCriteria: [
+        {
+          id: 'ac-1',
+          description: 'Mobile smoke proof is reviewed.',
+          verifiedBy: 'review',
+          met: false,
+        },
+      ],
+      mergeRecord: {
+        result: 'merged',
+        mergedAt: '2026-05-15T07:37:45.052Z',
+      },
+    }, null, 2), 'utf8')
+
+    await applyProjectMigrations({
+      projectRoot,
+      only: ['0.10.1/restore-evacuated-archive-shaped-task-state'],
+    })
+
+    const restored = JSON.parse(await fs.readFile(systemTasksPath, 'utf8')) as {
+      tasks: Array<{ id: string; status: string; spec?: string; mergeRecord?: { result?: string } }>
+    }
+    expect(restored.tasks).toEqual([
+      expect.objectContaining({
+        id: 'task-import-mobile-proof',
+        status: 'ready',
+        spec: expect.stringContaining('mobile smoke proof'),
+        mergeRecord: expect.objectContaining({ result: 'merged' }),
+      }),
+    ])
+  })
+
   it('repairs clipped shaped task titles left behind after evacuated state restoration', async () => {
     const fullTitle = 'Continue the Knit-to-Looma promotion work into the next generic surfaces while primitive normalization continues.'
     const croppedTitle = 'Continue the Knit-to-Looma promotion work into the next generic surfaces while'

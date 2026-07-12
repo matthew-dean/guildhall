@@ -738,6 +738,32 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
     },
   },
   {
+    id: '0.10.1/restore-evacuated-archive-shaped-task-state',
+    title: 'Restore shaped archived task details masked by imported drafts',
+    introducedIn: '0.10.1',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Restores spec, brief, acceptance criteria, and done evidence from evacuated task archive records when a same-id system-local task is still a hollow imported draft.',
+    async detect(projectRoot) {
+      const result = await restoreEvacuatedTaskState(projectRoot, false)
+      return {
+        needed: result.needed,
+        affectedPaths: result.affectedPaths,
+      }
+    },
+    async apply(projectRoot) {
+      const result = await restoreEvacuatedTaskState(projectRoot, true)
+      const repaired = result.enriched + result.titleRepaired
+      return {
+        summary: repaired > 0
+          ? `Restored archived shaped details for ${result.enriched} imported draft task${result.enriched === 1 ? '' : 's'} and repaired ${result.titleRepaired} clipped task title${result.titleRepaired === 1 ? '' : 's'}.`
+          : 'No archived shaped imported draft details needed restoration.',
+        affectedPaths: result.affectedPaths,
+      }
+    },
+  },
+  {
     id: '0.10.1/repair-clipped-task-titles',
     title: 'Repair clipped task titles',
     introducedIn: '0.10.1',
@@ -871,6 +897,7 @@ const BUILT_IN_PROJECT_MIGRATION_IDEMPOTENCE_TESTS: Record<string, string> = {
   '0.10.0/project-state-storage-boundary': 'migrations.test.ts: storage-boundary migration is idempotent',
   '0.10.0/restore-evacuated-task-state': 'migrations.test.ts: restores stranded evacuated task state into the system-local queue and readable task files',
   '0.10.1/restore-evacuated-shaped-task-state': 'migrations.test.ts: restores richer evacuated task shape over hollow same-id imported drafts',
+  '0.10.1/restore-evacuated-archive-shaped-task-state': 'migrations.test.ts: restores shaped done evidence from evacuated task archive over hollow same-id imported drafts',
   '0.10.1/repair-clipped-task-titles': 'migrations.test.ts: repairs clipped task titles even when evacuation repair already ran',
   '0.10.1/attach-recovered-current-scope-work-to-selected-release': 'migrations.test.ts: attaches recovered current-scope owner requirement work to the selected release',
 }

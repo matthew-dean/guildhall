@@ -164,6 +164,24 @@ async function collectMissingTaskStateFiles(projectRoot: string): Promise<Array<
   return missing
 }
 
+async function readEvacuatedArchiveTasks(projectRoot: string): Promise<unknown[]> {
+  const archiveDir = path.join(getProjectLocalHistoryDir(projectRoot), 'project-state-evacuation', 'tasks', 'archive')
+  let entries: string[]
+  try {
+    entries = await fs.readdir(archiveDir)
+  } catch (err) {
+    if (String(err).includes('ENOENT')) return []
+    throw err
+  }
+  const tasks: unknown[] = []
+  for (const entry of entries) {
+    if (!entry.endsWith('.json')) continue
+    const task = await readJsonIfExists(path.join(archiveDir, entry))
+    if (taskId(task)) tasks.push(task)
+  }
+  return tasks
+}
+
 function hasTaskShape(task: unknown): boolean {
   if (!isRecord(task)) return false
   return typeof task.spec === 'string' && task.spec.trim().length > 0
@@ -184,12 +202,36 @@ function mergeTaskStringArray(existing: unknown, restored: unknown): string[] | 
 function enrichHollowTaskFromEvacuated(systemTask: unknown, evacuatedTask: unknown): unknown {
   if (!isRecord(systemTask) || !isRecord(evacuatedTask)) return systemTask
   const next: Record<string, unknown> = { ...systemTask, ...evacuatedTask }
+  if (next.status === 'done' && !archivedTaskHasPositiveDoneEvidence(next)) {
+    next.status = 'ready'
+  }
   const releaseIds = mergeTaskStringArray(systemTask.releaseIds, evacuatedTask.releaseIds)
   const references = mergeTaskStringArray(systemTask.references, evacuatedTask.references)
   if (releaseIds) next.releaseIds = releaseIds
   if (references) next.references = references
   repairEffectiveTaskTitle(next)
   return next
+}
+
+function archivedTaskHasPositiveDoneEvidence(task: Record<string, unknown>): boolean {
+  if (Array.isArray(task.acceptanceCriteria) && task.acceptanceCriteria.some(item => isRecord(item) && item.met === true)) {
+    return true
+  }
+  const doneSummary = isRecord(task.doneSummaryBundle) ? task.doneSummaryBundle : null
+  if (doneSummary?.status === 'done') return true
+  if (Array.isArray(task.gateResults) && task.gateResults.some(item =>
+    isRecord(item) && (item.passed === true || item.status === 'pass' || item.status === 'passed')
+  )) {
+    return true
+  }
+  const handoff = isRecord(task.completionHandoff) ? task.completionHandoff : null
+  if (handoff && (
+    (Array.isArray(handoff.verified) && handoff.verified.length > 0) ||
+    (Array.isArray(handoff.evidenceRefs) && handoff.evidenceRefs.length > 0)
+  )) {
+    return true
+  }
+  return false
 }
 
 function repairEffectiveTaskTitle(task: Record<string, unknown>): boolean {
@@ -207,9 +249,10 @@ export async function restoreEvacuatedTaskState(projectRoot: string, apply: bool
   const evacuatedQueue = await readJsonIfExists(evacuatedTasksPath)
   const systemQueue = await readJsonIfExists(systemTasksPath)
   const evacuatedTasks = readTasks(evacuatedQueue)
+  const evacuatedArchiveTasks = await readEvacuatedArchiveTasks(projectRoot)
   const systemTasks = readTasks(systemQueue)
   const systemIds = new Set(systemTasks.map(taskId).filter((id): id is string => id !== null))
-  const evacuatedById = new Map(evacuatedTasks.map(task => [taskId(task), task]).filter((entry): entry is [string, unknown] => entry[0] !== null))
+  const evacuatedById = new Map([...evacuatedArchiveTasks, ...evacuatedTasks].map(task => [taskId(task), task]).filter((entry): entry is [string, unknown] => entry[0] !== null))
   const missing = evacuatedTasks.filter((task) => {
     const id = taskId(task)
     return id !== null && !systemIds.has(id)

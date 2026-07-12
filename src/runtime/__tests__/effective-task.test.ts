@@ -211,6 +211,40 @@ describe('effective task projection', () => {
     expect(effective.completedAt).toBe('2026-07-04T09:16:20.780Z')
   })
 
+  it('does not treat a merge record alone as completed proof for a ready task', async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-effective-task-'))
+
+    const effective = await buildEffectiveTask(projectRoot, legacyTask({
+      status: 'ready',
+      assignedTo: 'worker-agent',
+      completedAt: '2026-07-04T09:16:20.780Z',
+      reviewVerdicts: [],
+      gateResults: [{
+        gateId: 'gate-1',
+        type: 'hard',
+        passed: true,
+        output: 'pnpm typecheck passed',
+        checkedAt: '2026-07-04T09:17:00.000Z',
+      }],
+      acceptanceCriteria: [{
+        id: 'ac-1',
+        description: 'Mobile smoke proof is reviewed.',
+        verifiedBy: 'review',
+        met: false,
+      }],
+      mergeRecord: {
+        result: 'merged',
+        mergedAt: '2026-07-04T09:18:47.938Z',
+        fromBranch: 'guildhall/task-task-auth-complete',
+        toBranch: 'main',
+      },
+    } as Partial<Task>))
+
+    expect(effective.status).toBe('ready')
+    expect(effective.assignedTo).toBe('worker-agent')
+    expect(effective.completedAt).toBe('2026-07-04T09:16:20.780Z')
+  })
+
   it('does not resurrect archived tasks from older durable completion evidence', async () => {
     const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-effective-task-'))
 

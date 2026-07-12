@@ -541,6 +541,13 @@ test('Looma + Knit map shows V1 hardening as current and Looma convergence as la
   expect(detail.orientationSpine?.summary?.includedWorkCount).toBe(5)
   expect(detail.orientationSpine?.summary?.deferredWorkCount).toBe(8)
 
+  const overviewResponse = await page.request.get('/api/project?projectId=looma-knit&surface=overview')
+  expect(overviewResponse.ok()).toBe(true)
+  const overviewDetail = await overviewResponse.json()
+  if (overviewDetail.startReadiness?.canStart === false && overviewDetail.startReadiness?.message) {
+    expect(overviewDetail.orientationSpine?.summary?.nextAction).toBe(overviewDetail.startReadiness.message)
+  }
+
   await page.goto('/projects/looma-knit/overview')
   await expect(page.getByRole('region', { name: 'Project overview' })).toBeVisible()
   await expect(page.getByText('Stage 1: V1 Release Hardening').first()).toBeVisible()

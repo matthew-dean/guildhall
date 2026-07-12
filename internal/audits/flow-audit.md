@@ -29320,3 +29320,99 @@ selected-scope readiness ordering.
     Stage 1 blocker.
 - Schema Migration Decision: no persisted schema field was added, removed, or
   retyped. This is read-model precedence behavior only.
+
+## 2026-07-12T21:18:16Z - Evacuated archive truth and Overview next action agree with Start
+
+- User job:
+  - Looma + Knit current release must recover already-completed archive work
+    instead of showing same-id hollow imported drafts as if no work happened.
+  - Guildhall must not call merged archived work done unless the task has
+    positive completion proof.
+  - Overview must not advertise a ready task as the next action while Start is
+    blocked on unshaped current-scope imported work.
+- Root cause classification:
+  - Data model/schema problem: readable evacuated archive task records were not
+    part of the shaped-task restore source set.
+  - Project structure/scope/release modeling problem: same-id hollow import
+    drafts masked shaped historical records inside the selected release.
+  - Task hierarchy/dependency/proof modeling problem: merge/gate records were
+    treated too much like terminal completion proof even when acceptance proof
+    was still absent.
+  - Scheduler/action-state logic problem: effective task normalization could
+    project ready work as done from old merge evidence.
+  - UI communication/orientation problem: the compact Overview preview had its
+    own next-action decision path and could disagree with Start readiness.
+  - Bad project data produced by an earlier Guildhall bug: Looma + Knit had
+    reintroduced hollow import drafts over historical shaped task records.
+- Fix:
+  - Added migration `0.10.1/restore-evacuated-archive-shaped-task-state`.
+  - `restoreEvacuatedTaskState` now reads evacuated task archive JSON records
+    and uses them to enrich same-id hollow imported drafts, while preserving
+    active evacuated task records as the higher-precedence source.
+  - Archived `done` restores are downgraded to `ready` unless the archived
+    record has positive done evidence.
+  - Effective task projection no longer treats a merge record by itself as
+    durable completion proof when proof health still says the task is missing
+    completion proof.
+  - The Overview preview now receives the shared `startReadiness` result and
+    uses it for blocked next-action copy instead of re-ranking scope rows.
+  - Looma + Knit live data was repaired after the migration restored two
+    archived `done` statuses that lacked positive proof; backup:
+    `/Users/matthew/.guildhall/data/projects/looma-knit-0c328d88ca44/project-state/TASKS.before-unverified-done-repair-2026-07-12T21-01-14-217Z.json`.
+- Proof provided:
+  - `CI=true ./node_modules/.bin/vitest run
+    src/runtime/__tests__/effective-task.test.ts
+    src/runtime/__tests__/migrations.test.ts
+    src/runtime/__tests__/serve-release-readiness.test.ts` passed: 3 files,
+    88 tests.
+  - `pnpm exec playwright test tests/rendered-ui/project-flow.spec.ts --grep
+    "Looma \\+ Knit map shows"` passed.
+  - `git diff --check` passed.
+  - `CI=true corepack pnpm lint:contracts` passed.
+  - `node ./build.mjs` passed.
+  - `pnpm dev:install` passed.
+  - `guildhall stop || true; guildhall start` restarted the installed app.
+  - `/api/stale-server` returned `stale:false`, PID `8334`,
+    `bootBuildMtimeMs:1783890928547`, and
+    `currentBuildMtimeMs:1783890928547`.
+  - Installed API proof for
+    `/api/project?projectId=looma-knit&surface=overview` now reports:
+    `startReadiness.code:"imported_scope_shaping"`, `summary.nextAction`
+    equals `startReadiness.message`, `statusCounts:{done:1, import_draft:2,
+    ready:2}`, `proofMissingDoneTasks:[]`, and
+    `progress:{total:35, done:1, proven:1, ready:2, blocked:2, deferred:30}`.
+  - Browser proof at `/projects/looma-knit/overview`:
+    - Desktop 1280x720: visible copy includes `Stage 1: V1 Release Hardening`
+      and the source-backed shaping blocker, has no horizontal overflow, has no
+      proof-missing done false positive, and does not say the mobile task is
+      ready to run.
+    - Narrow 390x844: visible copy includes `Stage 1: V1 Release Hardening`
+      and `2 imported drafts need task briefs`, has no horizontal overflow, has
+      no proof-missing done false positive, and does not say the mobile task is
+      ready to run.
+- Contract Touch Decision:
+  - Work id: `evacuated-archive-task-truth-and-overview-start-agreement`.
+  - Touched contracts: project migration registry, evacuated task restore
+    semantics, effective task completion projection, compact Overview spine
+    preview semantics, rendered flow agreement check.
+  - Contracts considered but not touched: persisted task field schema,
+    migration ledger schema, release-readiness payload shape,
+    task-completion-proof schema, workspace-import draft schema, and public
+    `/api/project` field names.
+  - Required follow-up: keep collapsing scope/release/start/overview next-action
+    derivation into shared derived state so Overview, Start, Release, Work, and
+    Map cannot rank different "next" work from the same queue.
+  - Apply/revert behavior: reverting can re-mask archived shaped task records
+    with hollow import drafts, re-count unproven merge records as done, and let
+    Overview advertise ready work while Start blocks.
+- Schema Migration Decision:
+  - Persisted schema touched: migration registry only; no task field was added,
+    removed, or retyped.
+  - Existing data impact: automatic migration may enrich same-id hollow import
+    drafts from evacuated archive tasks and downgrade archived `done` to
+    `ready` when the archived record lacks positive completion proof.
+  - Migration id:
+    `0.10.1/restore-evacuated-archive-shaped-task-state`.
+  - Safety: automatic, required, idempotence covered by
+    `migrations.test.ts: restores shaped done evidence from evacuated task
+    archive over hollow same-id imported drafts`.

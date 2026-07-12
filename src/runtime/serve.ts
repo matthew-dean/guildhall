@@ -4020,6 +4020,15 @@ function buildOverviewOrientationPreviewSpine(input: {
   projectId: string
   rawQueue: { tasks: Array<Record<string, unknown>>; releases: ProjectRelease[]; selectedReleaseId?: string }
   charter: Partial<ProjectOrientationCharter> | null
+  startReadiness?: {
+    canStart: boolean
+    code?: string
+    message?: string
+    actionHref?: string
+    focusTaskId?: string
+    focusTaskTitle?: string
+    focusKind?: string
+  } | null
   now?: string
 }): Record<string, unknown> {
   const now = input.now ?? new Date().toISOString()
@@ -4073,11 +4082,17 @@ function buildOverviewOrientationPreviewSpine(input: {
     deferred: projection.counts.deferred,
   }
   const scopeLabel = scope?.label ?? release?.label ?? 'Current task scope'
+  const start = input.startReadiness ?? null
+  const startMessage = typeof start?.message === 'string' && start.message.trim()
+    ? start.message.trim()
+    : null
   const firstBlocker = projection.release.blockers[0]
   const topBlocker = firstBlocker?.label ?? (
-    projection.start.canStart || projection.start.code === 'all_terminal'
-      ? null
-      : projection.start.message
+    start?.canStart === false
+      ? startMessage
+      : (projection.start.canStart || projection.start.code === 'all_terminal'
+          ? null
+          : projection.start.message)
   )
   const headline = projection.release.state === 'ready'
     ? `${scopeLabel} is complete.`
@@ -4134,7 +4149,9 @@ function buildOverviewOrientationPreviewSpine(input: {
       topBlocker,
       nextAction: projection.release.state === 'ready'
         ? 'Review completed scope.'
-        : projection.start.message,
+        : start?.canStart === false
+          ? startMessage ?? 'Resolve the current start blocker.'
+          : projection.start.message,
       progress,
     },
     roots: [],
@@ -5427,6 +5444,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
             projectId: project.id,
             rawQueue,
             charter: inferProjectCharterFromExistingSources(project.path, project.config),
+            startReadiness,
           })
         : buildOrientationSpineWithScopedReleaseTruth({
             projectId: project.id,
@@ -5550,6 +5568,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
             projectId: project.id,
             rawQueue,
             charter: inferProjectCharterFromExistingSources(project.path, project.config),
+            startReadiness: await projectStartReadinessForProject(project.path),
           }),
         })
       }
