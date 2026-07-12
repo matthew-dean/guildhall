@@ -1543,6 +1543,7 @@ function duplicateScopeConflictGaps(
   const tasksById = new Map(tasks.map(task => [task.id, task]))
   const candidates = tasks.filter((task) => {
     if (task.status === 'archived' || task.status === 'cancelled') return false
+    if (nodeIdIsWorkspaceImportPreview(taskScopeNodeId(task.id))) return false
     return visibilityForTask(task, tasksById).countInProjectTotals
   })
   const gaps: OrientationGap[] = []
@@ -1551,8 +1552,7 @@ function duplicateScopeConflictGaps(
     for (let j = i + 1; j < candidates.length; j += 1) {
       const left = candidates[i]!
       const right = candidates[j]!
-      if (left.domain && right.domain && left.domain !== right.domain) continue
-      if (taskTitleOverlap(taskTitle(left), taskTitle(right)) < 0.8) continue
+      if (taskTitleOverlap(taskTitle(left), taskTitle(right)) < 0.65) continue
       if (!materiallyDifferentScope(left, right, scope, tasksById)) continue
       const key = [left.id, right.id].sort().join('\n')
       if (seenPairs.has(key)) continue

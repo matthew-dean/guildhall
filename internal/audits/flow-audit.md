@@ -29464,6 +29464,68 @@ selected-scope readiness ordering.
     Overview even while Map/Start say it is complete.
 - Schema Migration Decision: no persisted schema field or migration changed.
 
+## 2026-07-12T23:54:34Z - Source conflicts cross imported domains
+
+- User job:
+  - Narrative Harness Map must not show a completed current scope while stale
+    owner-request split tasks for the same DeepInfra, world-state, and
+    spatial/geographic review work remain as separate deferred skeleton rows.
+- Root cause classification:
+  - Project structure/scope/release modeling problem: source-conflict detection
+    treated imported `domain` as a hard semantic boundary, so duplicate work
+    split between `product`, `harness`, and `coherence` could look clean.
+  - Task hierarchy/dependency/proof modeling problem: a broad owner request and
+    its split children could coexist with newer canonical proof tasks without a
+    visible supersession/conflict signal.
+  - UI communication/orientation problem: Map implied the release was complete
+    while still showing stale deferred rows for work that the selected release
+    had already proven elsewhere.
+  - Bad project data produced by an earlier Guildhall bug: Narrative Harness
+    still has old task-150 split rows from a previous intake/decomposition pass.
+- Fix:
+  - Source-conflict detection no longer lets differing imported domains suppress
+    duplicate-scope conflicts.
+  - The detector ignores workspace-import preview task ids so temporary import
+    scaffolding does not create owner-facing duplicate conflict noise.
+  - The duplicate threshold for source conflicts now catches shared intent when
+    titles differ by action verb, such as `Define world-state continuity review
+    lane` versus `Prove world-state continuity review...`.
+- Proof provided:
+  - `corepack pnpm vitest run
+    src/runtime/__tests__/project-orientation-spine.test.ts --testNamePattern
+    "near-duplicate work split across scopes"` passed.
+  - `corepack pnpm vitest run
+    src/runtime/__tests__/project-orientation-spine.test.ts` passed: 66 tests.
+  - `node ./build.mjs` passed.
+  - `corepack pnpm dev:install` passed.
+  - `guildhall stop && guildhall start` refreshed the installed app.
+  - `/api/stale-server` returned `stale:false`, PID `74897`,
+    `bootBuildMtimeMs:1783900434344`, and
+    `currentBuildMtimeMs:1783900434344`.
+  - Installed API proof for
+    `/api/project?projectId=narrative-harness&surface=map` returned
+    `startReadiness.code: scope_source_conflict`, `focusKind:
+    source_conflict`, `sourceHealth.conflicts: 3`, and three source conflicts:
+    DeepInfra drafting model, world-state continuity review, and
+    spatial/geographic continuity review.
+  - `git diff --check` passed.
+  - `corepack pnpm lint:contracts` passed.
+- Contract Touch Decision:
+  - Work id: `cross-domain-source-conflict-detection`.
+  - Touched contracts: orientation spine source-conflict detection and
+    start-readiness behavior when source conflicts are present.
+  - Contracts considered but not touched: persisted task schema, persisted
+    release schema, source-conflict reconciliation endpoint payload, release
+    readiness proof semantics, owner approval semantics, and workspace-import
+    draft payloads.
+  - Required follow-up: use the existing source-conflict reconciliation flow, or
+    a model-level supersession repair, to archive/supersede the old task-150
+    split rows after owner-level selection. Detection is not the final cleanup.
+  - Apply/revert behavior: reverting hides these cross-domain conflicts again
+    and lets the Map/Start path treat the selected Narrative Harness scope as
+    complete while stale duplicate rows remain visible elsewhere.
+- Schema Migration Decision: no persisted schema field or migration changed.
+
 ## 2026-07-12T23:45:17Z - Read-only project surfaces gate stopped-run repair sweeps
 
 - User job:
