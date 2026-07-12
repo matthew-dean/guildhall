@@ -3165,6 +3165,13 @@ describe('GET /api/project/release-readiness', () => {
     expect(previewBody.spine.release).toEqual(fullBody.spine.release)
     expect(mapBody.orientationSpine.roots.length).toBeGreaterThan(0)
     expect(mapBody.orientationSpine.nodes).toEqual({})
+    expect(mapBody.orientationSpine.roots[0]).toMatchObject({
+      id: expect.any(String),
+      title: expect.any(String),
+      children: expect.any(Array),
+    })
+    expect(mapBody.orientationSpine.roots[0].ownerAction).toBeUndefined()
+    expect(mapBody.orientationSpine.roots[0].proof).toBeUndefined()
     expect(mapBody.orientationSpine.selectedRelease.source).toBe('release_plan')
     expect(mapBody.orientationSpine.sourceTrail).toContainEqual(expect.objectContaining({
       label: 'Scope',

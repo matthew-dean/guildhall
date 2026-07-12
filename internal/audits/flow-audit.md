@@ -30049,3 +30049,64 @@ selected-scope readiness ordering.
     lets `DoThisNext` trigger a full project-detail read even when the shared
     project store already has the action model.
 - Schema Migration Decision: no persisted schema field or migration changed.
+
+## 2026-07-12T23:18:58Z - Map roots use compact recursive orientation nodes
+
+- User job:
+  - Narrative Harness Map should keep the 1,000-foot project/release skeleton
+    visible without shipping full per-node implementation payloads the Map does
+    not read.
+- Root cause classification:
+  - Runtime/provider/infrastructure problem: the Map compact surface dropped the
+    `nodes` index but still returned untrimmed recursive `roots`.
+  - UI communication/orientation problem: oversized Map payloads kept the
+    orientation view slower than the user-visible job needs, even when the final
+    information was correct.
+  - Data model/schema problem: not changed in this slice; this is a read-model
+    projection/serialization fix.
+- Fix:
+  - `compactOrientationSpineForMapSurface` now recursively compacts root nodes
+    to the fields ProjectMapTab reads: identity, hierarchy, labels, summary,
+    maturity, progress, visibility, compact refs, compact source, and children.
+  - Per-node `ownerAction`, full proof blobs, and empty ref buckets are omitted
+    from the Map surface; proof remains available through `proofContracts`.
+- Proof provided:
+  - `corepack pnpm vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts --testNamePattern
+    "compact project spine"` passed: 1 test.
+  - `git diff --check` passed.
+  - `corepack pnpm lint:contracts` passed.
+  - `node ./build.mjs` passed.
+  - `corepack pnpm dev:install` passed.
+  - `guildhall start` started the installed app.
+  - `/api/stale-server` returned `stale:false`, PID `75636`,
+    `bootBuildMtimeMs:1783898277681`, and
+    `currentBuildMtimeMs:1783898277681`.
+  - Installed API proof for
+    `/api/project?projectId=narrative-harness&surface=map` returned size
+    `281563` bytes after this slice, down from `328382` bytes after the
+    previous slice and `439992` bytes before the Map surface trims.
+  - Installed API timings after this slice were `2.327805s`, `2.148638s`, and
+    `2.145129s`.
+  - Installed API payload proof showed `orientationSpine.roots` at `119720`
+    bytes, no `ownerAction` in root JSON, and no per-node `"proof"` payload in
+    root JSON.
+  - Installed browser proof in a fresh tab at
+    `/projects/narrative-harness/map` showed `Project map`, `Stage 1`, `11
+    assigned work items`, `30 later work items`, `58 documented capabilities`,
+    `0 gaps`, proof mode, and no horizontal overflow at `1280x720`.
+- Contract Touch Decision:
+  - Work id: `map-recursive-root-node-compaction`.
+  - Touched contracts: `/api/project?surface=map` orientation root payload
+    shape and the compact Map runtime test expectations.
+  - Contracts considered but not touched: persisted task schema, persisted
+    release schema, `/api/project` full payload semantics, `/api/project`
+    overview/work payload semantics, `/api/project/spine`, ProjectMapTab props,
+    release/readiness semantics, source trail semantics, and proof contract
+    semantics.
+  - Required follow-up: profile remaining compute time inside orientation spine
+    construction; this slice reduces serialization and transfer size but does
+    not eliminate server-side spine construction cost.
+  - Apply/revert behavior: reverting restores full recursive Map root nodes and
+    increases the Map payload without adding information ProjectMapTab uses.
+- Schema Migration Decision: no persisted schema field or migration changed.

@@ -4052,8 +4052,48 @@ function compactOrientationSpineForWorkSurface(spine: Record<string, unknown>): 
 function compactOrientationSpineForMapSurface(spine: Record<string, unknown>): Record<string, unknown> {
   return {
     ...spine,
+    roots: Array.isArray(spine.roots) ? spine.roots.map(compactOrientationMapNode) : [],
     nodes: {},
   }
+}
+
+function compactOrientationMapNode(node: unknown): unknown {
+  if (!node || typeof node !== 'object' || Array.isArray(node)) return node
+  const raw = node as Record<string, unknown>
+  const compact: Record<string, unknown> = {}
+  for (const key of ['id', 'parentId', 'kind', 'title', 'summary', 'maturity', 'progress', 'visibility']) {
+    if (key in raw) compact[key] = raw[key]
+  }
+  const refs = compactOrientationMapRefs(raw.refs)
+  if (Object.keys(refs).length > 0) compact.refs = refs
+  const source = compactOrientationMapSource(raw.source)
+  if (source) compact.source = source
+  const children = Array.isArray(raw.children)
+    ? raw.children.map(compactOrientationMapNode).filter(Boolean)
+    : []
+  compact.children = children
+  return compact
+}
+
+function compactOrientationMapRefs(refs: unknown): Record<string, unknown> {
+  if (!refs || typeof refs !== 'object' || Array.isArray(refs)) return {}
+  const raw = refs as Record<string, unknown>
+  const compact: Record<string, unknown> = {}
+  for (const key of ['taskIds', 'artifactIds', 'structuralDomainIds']) {
+    const value = raw[key]
+    if (Array.isArray(value) && value.length > 0) compact[key] = value
+  }
+  return compact
+}
+
+function compactOrientationMapSource(source: unknown): Record<string, unknown> | null {
+  if (!source || typeof source !== 'object' || Array.isArray(source)) return null
+  const raw = source as Record<string, unknown>
+  const compact: Record<string, unknown> = {}
+  for (const key of ['kind', 'refs', 'confidence', 'inferred']) {
+    if (key in raw) compact[key] = raw[key]
+  }
+  return compact
 }
 
 function buildOverviewOrientationPreviewSpine(input: {
