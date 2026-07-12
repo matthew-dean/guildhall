@@ -248,7 +248,7 @@
   })
 
   $effect(() => {
-    const needsPreview = currentView === 'overview' || currentView === 'map'
+    const needsPreview = currentView === 'overview'
     const key = `${activeProjectId ?? ''}:${currentView}`
     if (!needsPreview || detail) {
       orientationPreview = null

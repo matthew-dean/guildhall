@@ -1027,7 +1027,7 @@ describe('ProjectView', () => {
     expect(screen.getByText(/Run finished: 1 done\./i)).toBeInTheDocument()
   })
 
-  it('renders overview and map orientation from the fast spine while project detail is still loading', async () => {
+  it('renders overview from the spine preview but map from the compact project payload', async () => {
     const projectPayload = detail({
       startReadiness: { canStart: false, code: 'all_terminal', message: 'Stage 1 is complete.' },
       orientationSpine: {
@@ -1088,14 +1088,16 @@ describe('ProjectView', () => {
     expect(screen.queryByText('Loading project...')).toBeNull()
 
     cleanup()
-    const mapFetch = installFetchFakesWithPendingProject(projectPayload).fetchMock
+    const { fetchMock: mapFetch, pendingProject: pendingMapProject } = installFetchFakesWithPendingProject(projectPayload)
     project.detail = null
     project.error = null
 
     render(ProjectView, { initialView: 'map', initialSub: null, projectId: 'looma-knit' })
 
+    expect(mapFetch).not.toHaveBeenCalledWith('/api/project/spine?projectId=looma-knit', { cache: 'no-store' })
+    pendingMapProject.resolve(json(projectPayload))
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Project map' })).toBeInTheDocument())
-    expect(mapFetch).toHaveBeenCalledWith('/api/project/spine?projectId=looma-knit', { cache: 'no-store' })
+    expect(mapFetch).toHaveBeenCalledWith('/api/project?surface=map&projectId=looma-knit', { cache: 'no-store' })
     expect(screen.getByRole('heading', { name: 'Release scope' })).toBeInTheDocument()
     expect(screen.getAllByText('Stage 1').length).toBeGreaterThan(0)
     expect(screen.getByText('1 assigned work item')).toBeInTheDocument()

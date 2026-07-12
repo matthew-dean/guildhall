@@ -29932,3 +29932,55 @@ selected-scope readiness ordering.
     bulk paths and the provisional full-spine build before the final
     source-backed orientation spine.
 - Schema Migration Decision: no persisted schema field or migration changed.
+
+## 2026-07-12T23:02:36Z - Map first render stops competing spine preview request
+
+- User job:
+  - Narrative Harness Map should show the 1,000-foot project/release structure
+    from the compact map payload, not compete with another orientation preview
+    request while the user waits on `Loading project...`.
+- Root cause classification:
+  - UI communication/orientation problem: Map still displayed a loading state
+    while the route had no user-visible fallback specific to the map view.
+  - Runtime/provider/infrastructure problem: ProjectView requested the slower
+    `/api/project/spine` preview on Map even though Map already has a compact
+    `/api/project?surface=map` payload.
+  - Project structure/scope/release modeling problem: not changed in this
+    slice; this is a read-path/request ownership fix.
+- Fix:
+  - ProjectView now keeps the fast spine preview for Overview only.
+  - Map first render waits for `/api/project?surface=map`, avoiding the
+    duplicate `/api/project/spine` preview request.
+- Proof provided:
+  - `git diff --check` passed before the audit note was appended.
+  - `corepack pnpm vitest run
+    src/web/surfaces/__tests__/ProjectView.svelte.test.ts --testNamePattern
+    "renders overview from the spine preview"` passed: 1 test.
+  - `corepack pnpm vitest run src/web/lib/__tests__/project-store.test.ts`
+    passed: 4 tests.
+  - `node ./build.mjs` passed.
+  - `corepack pnpm dev:install` passed.
+  - `guildhall start` confirmed the installed app was running.
+  - `/api/stale-server` on the installed app returned `stale:false`, PID
+    `51863`, `bootBuildMtimeMs:1783897431661`, and
+    `currentBuildMtimeMs:1783897431661` after this source change was rebuilt
+    and installed.
+  - Fresh installed browser proof at `/projects/narrative-harness/map` still
+    showed `Loading project...` after an initial 3.5 second wait.
+  - After waiting for the route to finish, browser proof at `1280x720` showed
+    `Stage 1: Headless Drafting And Evaluation MVP is complete`, `11 assigned
+    work items`, `30 later work items`, `58 documented capabilities`, `0 gaps`,
+    proof mode, source-backed project copy, and no horizontal overflow.
+- Contract Touch Decision:
+  - Work id: `map-first-render-no-spine-preview`.
+  - Touched contracts: ProjectView orientation preview behavior and the
+    ProjectView test contract for Map first render.
+  - Contracts considered but not touched: persisted schemas, `/api/project`
+    payload shape, `/api/project/spine` payload shape, ProjectMapTab, release
+    semantics, task data, source trail semantics, and proof contract semantics.
+  - Required follow-up: profile and reduce the remaining Map project payload
+    compute/render time; removing the duplicate preview request is not enough
+    to make first render fast.
+  - Apply/revert behavior: reverting restores the duplicate
+    `/api/project/spine` request on Map first render.
+- Schema Migration Decision: no persisted schema field or migration changed.
