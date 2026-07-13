@@ -30388,6 +30388,63 @@ selected-scope readiness ordering.
     Overview even while Map/Start say it is complete.
 - Schema Migration Decision: no persisted schema field or migration changed.
 
+## 2026-07-13T04:03:49Z - Release-less scopes do not get release action copy
+
+- User job:
+  - When a project has no named release and Guildhall is using the current
+    bounded scope, Overview should not tell the user to open a "release." The
+    UI must preserve the model distinction: releases are supported, not
+    mandatory.
+- Root cause classification:
+  - UI communication/orientation problem: the readiness card already derived
+    `Current release` versus `Current scope`, but its action label was
+    hard-coded to `Open release`.
+  - Project structure/scope/release modeling problem: release-less current
+    scope was modeled correctly but presented with release-only language,
+    weakening the owner-visible execution boundary.
+- Fix:
+  - Overview now derives the readiness action label from the same release/scope
+    decision as the card title: `Open release` for named releases, `Open scope`
+    for release-less current scopes.
+  - Added a component regression proving a release-less scope renders
+    `Current scope` and `Open scope`, without `Open release`.
+- Proof provided:
+  - `corepack pnpm vitest run
+    src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts -t
+    "release-less current scope"` passed: 1 test.
+  - `corepack pnpm vitest run
+    src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts`
+    passed: 33 tests.
+  - `git diff --check` passed.
+  - `corepack pnpm lint:contracts` passed.
+  - `node ./build.mjs` passed.
+  - `corepack pnpm dev:install` passed.
+  - `guildhall stop && guildhall start` restarted the installed app.
+  - `/api/stale-server` returned `stale:false`, PID `32129`,
+    `bootBuildMtimeMs:1783915498747`, and
+    `currentBuildMtimeMs:1783915498747`.
+  - Installed browser proof for `t-minus-t` Overview showed headings including
+    `Current scope`, one visible `Open scope`, and zero visible `Open release`.
+  - Installed browser proof for Narrative Harness Overview still showed one
+    visible `Open release`, because that project has a named selected release.
+- Contract Touch Decision:
+  - Work id: `overview-release-less-scope-action-copy`.
+  - Touched contracts: Overview presentation of the existing release readiness
+    read model.
+  - Contracts considered but not touched: persisted release schema, persisted
+    task schema, `/api/project/release-readiness`, `/api/project`, release
+    selection, scheduler/start semantics, and route contracts.
+  - Required follow-up: keep collapsing release/scope semantics into shared
+    read-model fields so views do not locally invent release language.
+  - Proof required: focused component regression, build, installed-app
+    freshness, and live UI/API spot check.
+  - Proof provided: focused component regression, full Overview component
+    regression, contract lint, build, installed-app freshness, and installed
+    browser proof for release and release-less branches.
+  - Apply/revert behavior: reverting makes Overview call a release-less current
+    scope `Open release` again.
+- Schema Migration Decision: no persisted schema field or migration changed.
+
 ## 2026-07-13T03:58:48Z - Shelved release work remains visible as deferred scope
 
 - User job:

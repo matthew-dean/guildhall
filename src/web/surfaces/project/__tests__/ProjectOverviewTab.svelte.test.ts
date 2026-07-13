@@ -527,6 +527,36 @@ describe('ProjectOverviewTab', () => {
     expect(screen.queryByText('Old unrelated blocked work.')).not.toBeInTheDocument()
   })
 
+  it('does not call a release-less current scope a release in overview actions', () => {
+    render(ProjectOverviewTab, {
+      detail: {
+        id: 'scope-only',
+        name: 'Scope Only',
+        path: '/tmp/scope-only',
+        tasks: [],
+        releaseReadiness: {
+          scope: { id: 'current-work', label: 'Current task scope', kind: 'proposed_feature_set', source: 'inferred', nodeIds: [] },
+          ready: false,
+          totals: { tasks: 2, done: 1, unfinishedCount: 1, humanBlockingCount: 0, blockingCount: 0 },
+        },
+      },
+      inboxLoaded: true,
+      inboxItems: [],
+      projectTicker: {
+        label: 'Not running',
+        actorLabel: 'Guildhall',
+        message: 'Current scope has work remaining.',
+        tone: 'idle',
+        pulse: false,
+      },
+      activeProjectId: 'scope-only',
+    })
+
+    expect(screen.getByRole('heading', { name: 'Current scope' })).toBeInTheDocument()
+    expect(screen.getByText('Open scope')).toBeInTheDocument()
+    expect(screen.queryByText('Open release')).not.toBeInTheDocument()
+  })
+
   it('labels proof waits as waiting instead of blocking when scoped blocked count is zero', () => {
     const { container } = render(ProjectOverviewTab, {
       detail: {

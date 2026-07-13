@@ -112,6 +112,7 @@
       ? 'Current release'
       : 'Current scope',
   )
+  const releaseReadinessActionLabel = $derived(releaseReadinessTitle === 'Current release' ? 'Open release' : 'Open scope')
   const releaseWorkComplete = $derived.by(() => {
     const totals = releaseReadiness?.totals
     if (!totals) return Boolean(releaseReadiness?.ready)
@@ -1175,7 +1176,7 @@
                   <p>{releaseReadiness.notReadyReason}</p>
                 {/if}
               </div>
-              <span class="preview-action">Open release</span>
+              <span class="preview-action">{releaseReadinessActionLabel}</span>
             </CardListItem>
             {#each releaseBlockerRows as row (row.id)}
               <CardListItem
