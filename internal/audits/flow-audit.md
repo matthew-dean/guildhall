@@ -8,6 +8,104 @@ help_summary: |
 
 # Web UI flow audit
 
+2026-07-13T20:35:00Z - Compact task rows must inherit source-grounding from the orientation spine when raw task records are hollow.
+
+- Work id: `codex:compact-task-grounding-projection-2026-07-13`.
+- User job: A user looking at Overview or Work should be able to tell which doc
+  grounded a visible task without opening the repo, cross-referencing a hidden
+  Map view, or fetching a separate task-detail payload. If the orientation
+  spine already knows the source trail for scoped work, the task-facing rows
+  must not collapse back into vague prose.
+- Finding:
+  - Live Narrative Harness Work still showed tasks like `task-009` with empty
+    compact `sourceRefs` and stale raw task copy even though the shared
+    orientation spine already had `scopeRows.sourceRefs` and node-level source
+    provenance for the same task.
+  - Work and Overview therefore fell back to generic task description/question
+    text in places where the owner actually needed grounding like “what doc did
+    this come from?”.
+- Root cause classification:
+  - Data model/schema problem: compact task payloads treated raw task records as
+    authoritative even when the shared orientation spine had stronger derived
+    provenance for the same work item.
+  - UI communication/orientation problem: Work and Overview had source truth
+    available elsewhere in the project payload but still surfaced low-signal
+    task copy because the compact rows did not inherit that truth.
+- Change:
+  - `/api/project` now backfills compact task `sourceRefs` and `references`
+    from the full orientation spine when raw task records do not already carry
+    them, preferring scoped row provenance and then node source refs.
+  - Compact task payloads now also carry a lightweight `orientationSummary`
+    field so surfaces can reuse the spine’s summary text when it adds signal.
+  - Work row subcopy, the selected Work inspector, and Overview task detail now
+    prefer grounded source/summary context before falling back to vague
+    description text.
+- Contract Touch Decision:
+  - Work id: `codex:compact-task-grounding-projection-2026-07-13`.
+  - Touched contracts:
+    - `GET /api/project` compact task shape for Work, Overview, and Map now
+      backfills task `sourceRefs`/`references` from orientation truth when the
+      raw task record is empty and includes `orientationSummary`.
+    - Work and Overview task-detail copy now treats source-grounding as shared
+      compact task truth instead of reconstructing it ad hoc from only raw task
+      descriptions.
+    - Touched UI consumers: `src/web/surfaces/project/WorkTab.svelte`,
+      `src/web/surfaces/project/WorkTreePreview.svelte`, and
+      `src/web/surfaces/project/ProjectOverviewTab.svelte`.
+  - Contracts considered but not touched: persisted task schema, full
+    task-detail endpoint, orientation spine builder schema, release-readiness
+    schema, scheduler/start contract.
+  - Required follow-up: keep reducing the gap between raw task persistence and
+    derived orientation truth so future flows need less read-model backfill.
+  - Proof required: focused serve/runtime/UI tests, contract detector, build,
+    install/restart, stale-server check, and live API/browser proof that
+    Narrative Harness and Looma + Knit task rows now expose source-grounded
+    detail from Guildhall itself.
+  - Proof provided: focused `serve-task-endpoints`, `WorkTab`, and
+    `ProjectOverviewTab` regressions passed with `187` tests total; `pnpm
+    lint:contracts` passed; `pnpm build` passed; `pnpm dev:install` passed;
+    `guildhall stop` plus `guildhall start` refreshed the installed app;
+    `/api/stale-server` returned `stale:false`; live
+    `/api/project?projectId=narrative-harness&surface=work&task=task-009`
+    returned `task-009` with backfilled `sourceRefs` and `references`
+    (`docs/harness/smoke-test-commands.md`) plus `orientationSummary`, while
+    other selected-scope tasks returned rich source-backed summaries from
+    implementation/spec docs; live
+    `/api/project?projectId=narrative-harness&surface=overview` returned
+    compact tasks with `orientationSummary` and source refs including
+    `remaining-spec-decomposition-inventory.md` and
+    `schema-contract-roadmap.md`; live
+    `/api/project?projectId=looma-knit&surface=work` returned compact scoped
+    tasks with source-grounded summaries and refs including `PROJECT_STATE.md`,
+    `editor-roadmap.md`, and `component-library-audit.md`. Browser proof on
+    fresh installed-app tabs showed `/projects/looma-knit/overview` at
+    `1280x720`, `900x720`, and `390x844` with the At-a-glance source line
+    `Sources: Release Plan · PROJECT_STATE.md, release-plan.md`, with
+    `scrollWidth === clientWidth` at each viewport. Browser proof on
+    `/projects/narrative-harness/work?task=task-009` at `390x844` showed the
+    selected work label `Define safe smoke-test commands`, selected inspector
+    text including `Source smoke-test-commands.md`, and `scrollWidth ===
+    clientWidth`.
+  - Apply/revert behavior: reverting restores the mismatch where scoped task
+    source truth exists in the orientation spine but compact Work/Overview task
+    rows still present hollow local task copy.
+- Schema Migration Decision:
+  - Persisted schema touched: none.
+  - Scope: derived read-model/task projection and UI presentation only.
+  - Change class: additive compact response field plus runtime backfill.
+  - Existing data impact: none; no task queue or release file is rewritten.
+  - Migration id: none required.
+  - Safety: backward compatible because the change only enriches compact task
+    payloads with already-derived project truth.
+  - Compatibility reader: UI falls back to raw task description/copy when the
+    new compact grounding fields are absent.
+  - Fixtures/tests: focused `serve-task-endpoints`, `WorkTab`, and
+    `ProjectOverviewTab` regressions.
+  - Owner-facing plan text: “If the project map already knows which doc
+    grounded a task, the task row should say so too.”
+  - Rollback/revert behavior: no data migration required; removing the
+    projection reopens the compact-surface grounding gap.
+
 2026-07-13T19:30:00Z - Release completion and readiness must come from one shared model across Overview and Release.
 
 - Work id: `codex:shared-release-completion-readiness-2026-07-13`.

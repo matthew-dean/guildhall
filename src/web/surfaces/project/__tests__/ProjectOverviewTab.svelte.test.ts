@@ -133,6 +133,53 @@ describe('ProjectOverviewTab', () => {
     expect(screen.getByRole('heading', { name: 'Do this next' })).toBeInTheDocument()
   })
 
+  it('uses task source grounding when a live task has no stronger status detail', async () => {
+    window.history.replaceState({}, '', '/projects/narrative-harness/overview')
+
+    render(ProjectOverviewTab, {
+      detail: {
+        id: 'narrative-harness',
+        name: 'Narrative Harness',
+        path: '/Users/matthew/git/oss/narrative-harness',
+        run: { status: 'stopped', mode: 'continuous' },
+        availability: { status: 'active', pausedAt: null, resumedAt: null },
+        tasks: [
+          {
+            id: 'task-source',
+            title: 'Define safe smoke-test commands',
+            status: 'in_progress',
+            sourceRefs: ['docs/harness/smoke-test-commands.md'],
+          },
+        ],
+        orientationSpine: {
+          scope: { label: 'Current scope' },
+          summary: {
+            headline: 'Current scope is in motion.',
+            selectedScopeLabel: 'Current scope',
+            includedWorkCount: 1,
+            deferredWorkCount: 0,
+            progress: { total: 1, active: 1 },
+          },
+          roots: [],
+          nodes: {},
+          sourceHealth: { status: 'ok' },
+        },
+      },
+      inboxLoaded: true,
+      inboxItems: [],
+      projectTicker: {
+        label: 'Running',
+        actorLabel: 'Guildhall',
+        message: 'Advancing one task.',
+        tone: 'active',
+        pulse: true,
+      },
+      activeProjectId: 'narrative-harness',
+    })
+
+    expect((await screen.findAllByText('Source: smoke-test-commands.md')).length).toBeGreaterThan(0)
+  })
+
   it('routes source-conflict orientation next actions to the project map', async () => {
     window.history.replaceState({}, '', '/projects/narrative-harness/overview')
     render(ProjectOverviewTab, {

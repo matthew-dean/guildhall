@@ -196,6 +196,30 @@ describe('WorkTab', () => {
     expect(within(inspector).getByRole('button', { name: /running/i })).toBeDisabled()
   })
 
+  it('shows source-grounded task detail in the row subcopy and selected inspector', async () => {
+    window.history.replaceState({}, '', '/projects/looma-knit/work?task=task-source')
+    path.value = '/projects/looma-knit/work?task=task-source'
+
+    render(WorkTab, {
+      props: {
+        detail: detail([
+          task({
+            id: 'task-source',
+            title: 'Define safe smoke-test commands',
+            status: 'ready',
+            sourceRefs: ['docs/harness/smoke-test-commands.md'],
+          }),
+        ]),
+      },
+    })
+
+    const row = await screen.findByRole('button', { name: /inspect work define safe smoke-test commands/i })
+    expect(row).toHaveTextContent('Source: smoke-test-commands.md')
+    const inspector = screen.getByLabelText('Selected work inspector')
+    expect(inspector).toHaveTextContent('Source')
+    expect(inspector).toHaveTextContent('smoke-test-commands.md')
+  })
+
   it('explains why an imported source-recovery task is not runnable in the selected work inspector', async () => {
     window.history.replaceState({}, '', '/projects/narrative-harness/work?task=task-import-contract')
     path.value = '/projects/narrative-harness/work?task=task-import-contract'

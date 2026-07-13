@@ -24,6 +24,7 @@
   import { releaseCompletionSummary } from '../../lib/release-readiness.js'
   import { inboxItemKey, type InboxItem } from '../../lib/inbox-item-key.js'
   import { sourceRefsSummary } from '../../lib/source-refs.js'
+  import { taskGroundingDetail } from '../../lib/task-grounding.js'
   import type { EventEnvelope, ProjectDetail, ProjectMemoryHealth, Task } from '../../lib/types.js'
   import { hasCurrentGitUnavailableStory, type ProjectActivityLine } from '../../lib/project-activity.js'
   import { isGitUnavailableMessage } from '../../lib/runtime-message.js'
@@ -900,6 +901,8 @@
   function statusDetail(task: Task): string {
     if (task.blockReason) return friendlyBlockerText(task.blockReason)
     if (task.latestCheckpoint?.nextPlannedAction) return friendlyBlockerText(task.latestCheckpoint.nextPlannedAction)
+    const grounding = taskGroundingDetail(task)
+    if (grounding) return grounding
     if (task.description) return task.description
     return taskPresentation(task).label
   }

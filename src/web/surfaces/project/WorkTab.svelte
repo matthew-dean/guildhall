@@ -21,6 +21,7 @@
   import { project } from '../../lib/project.svelte.js'
   import { currentProjectHref, currentTaskHref, projectFetch } from '../../lib/project-routes.js'
   import { sourceRefsSummary } from '../../lib/source-refs.js'
+  import { taskGroundingDetail } from '../../lib/task-grounding.js'
   import { buildWorkSurface } from '../../lib/project-data.js'
   import { friendlyRuntimeMessage } from '../../lib/runtime-message.js'
   import { hasUnmetDependencies, unmetDependencyIds } from '../../lib/task-dependencies.js'
@@ -675,6 +676,8 @@
     if (task.blockReason) return friendlyRuntimeMessage(task.blockReason)
     if (task.terminalSummary?.headline) return task.terminalSummary.headline
     if (task.latestCheckpoint?.nextPlannedAction) return task.latestCheckpoint.nextPlannedAction
+    const grounding = taskGroundingDetail(task)
+    if (grounding) return grounding
     if (taskSourceQuestion(task)) return taskSourceQuestion(task)!
     if (task.description) return task.description
     return friendlyTaskId(task.id)

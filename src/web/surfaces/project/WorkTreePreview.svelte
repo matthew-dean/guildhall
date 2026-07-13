@@ -4,6 +4,7 @@
   import { friendlyTaskId } from '../../lib/identifier-labels.js'
   import { nav, path } from '../../lib/nav.svelte.js'
   import { currentTaskHref } from '../../lib/project-routes.js'
+  import { taskSourceSummary } from '../../lib/task-grounding.js'
   import { hasUnmetDependencies } from '../../lib/task-dependencies.js'
   import { taskStagePresentation, type TaskPresentationTone } from '../../lib/task-presentation.js'
   import { buildWorkHierarchy } from '../../lib/work-hierarchy.js'
@@ -214,6 +215,7 @@
     {@const rollup = rollupFor(selectedTask)}
     {@const deliverySteps = deliveryStepsFor(selectedTask)}
     {@const plannedUnits = semanticUnitCount(selectedTask)}
+    {@const sourceSummary = taskSourceSummary(selectedTask, 3)}
     <div class="inspector-head">
       <div>
         <p class="details-context">{containedWork.length ? 'Containing work' : 'Selected work'}</p>
@@ -227,6 +229,10 @@
       <dd>{primaryText(selectedTask)}</dd>
       <dt>Proof</dt>
       <dd>{proofText(selectedTask)}</dd>
+      {#if sourceSummary}
+        <dt>Source</dt>
+        <dd>{sourceSummary}</dd>
+      {/if}
       <dt>Rollup</dt>
       <dd>{rollup.done} / {rollup.total} done · {rollup.blocked} blocked · {rollup.needsYou} needs you</dd>
     </dl>

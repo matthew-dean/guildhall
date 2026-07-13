@@ -1203,6 +1203,54 @@ describe('GET /api/project/task/:id', () => {
     expect(body.startReadiness?.message).toContain('Headless MVP is waiting on proof evidence for "Prove the drafting model".')
   })
 
+  it('backfills compact task provenance from selected-scope orientation truth when raw task refs are empty', async () => {
+    const now = '2026-07-13T20:10:00.000Z'
+    await writeRawTaskQueue({
+      version: 1,
+      lastUpdated: now,
+      tasks: [{
+        id: 'task-smoke',
+        title: 'Define safe smoke-test commands',
+        description: 'Ground this in docs/harness/smoke-test-commands.md so the project can be smoke tested safely.',
+        domain: 'narrative-harness',
+        projectPath: tmpDir,
+        status: 'ready',
+        priority: 'normal',
+        revisionCount: 0,
+        remediationAttempts: 0,
+        origination: 'human',
+        createdAt: now,
+        updatedAt: now,
+        references: [],
+      }],
+    })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const workRes = await app.fetch(new Request(projectUrl('/api/project?surface=work&task=task-smoke')))
+    const workBody = (await workRes.json()) as Record<string, any>
+    const overviewRes = await app.fetch(new Request(projectUrl('/api/project?surface=overview')))
+    const overviewBody = (await overviewRes.json()) as Record<string, any>
+
+    expect(workRes.status, workBody.error).toBe(200)
+    expect(overviewRes.status, overviewBody.error).toBe(200)
+    expect(workBody.orientationSpine?.scopeRows).toEqual([
+      expect.objectContaining({
+        taskId: 'task-smoke',
+        sourceRefs: ['docs/harness/smoke-test-commands.md'],
+      }),
+    ])
+    expect(workBody.tasks?.find((task: Record<string, any>) => task.id === 'task-smoke')).toMatchObject({
+      sourceRefs: ['docs/harness/smoke-test-commands.md'],
+      references: ['docs/harness/smoke-test-commands.md'],
+      orientationSummary: 'Ground this in docs/harness/smoke-test-commands.md so the project can be smoke tested safely.',
+    })
+    expect(overviewBody.tasks?.find((task: Record<string, any>) => task.id === 'task-smoke')).toMatchObject({
+      sourceRefs: ['docs/harness/smoke-test-commands.md'],
+      references: ['docs/harness/smoke-test-commands.md'],
+      orientationSummary: 'Ground this in docs/harness/smoke-test-commands.md so the project can be smoke tested safely.',
+    })
+  })
+
   it('derives terminal summaries from merge records on task detail and project rows', async () => {
     await seedTask('task-1', {
       status: 'done',

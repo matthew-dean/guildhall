@@ -3981,11 +3981,80 @@ function compactProofPathsForServe(value: unknown): unknown {
   })
 }
 
+function compactTaskSourceRefsForServe(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return [...new Set(value
+    .map(ref => typeof ref === 'string' ? ref.trim() : '')
+    .filter(Boolean)
+    .map(ref => ref.startsWith('import:') ? ref.slice('import:'.length) : ref))]
+}
+
+function firstCompactTaskRefList(...values: unknown[]): string[] {
+  for (const value of values) {
+    const refs = compactTaskSourceRefsForServe(value)
+    if (refs.length > 0) return refs
+  }
+  return []
+}
+
+function orientationNodeSourceRefsForServe(node: unknown): string[] {
+  if (!node || typeof node !== 'object' || Array.isArray(node)) return []
+  const source = (node as Record<string, unknown>).source
+  if (!source || typeof source !== 'object' || Array.isArray(source)) return []
+  return compactTaskSourceRefsForServe((source as Record<string, unknown>).refs)
+}
+
+function orientationNodeSummaryForServe(node: unknown): string | undefined {
+  if (!node || typeof node !== 'object' || Array.isArray(node)) return undefined
+  const summary = (node as Record<string, unknown>).summary
+  return typeof summary === 'string' && summary.trim() ? summary.trim() : undefined
+}
+
+function backfillCompactTaskOrientationForServe(
+  tasks: Array<Record<string, unknown>>,
+  orientationSpine: Record<string, unknown>,
+): Array<Record<string, unknown>> {
+  const rowsByTaskId = new Map<string, Record<string, unknown>>()
+  if (Array.isArray(orientationSpine.scopeRows)) {
+    for (const row of orientationSpine.scopeRows) {
+      if (!row || typeof row !== 'object' || Array.isArray(row)) continue
+      const record = row as Record<string, unknown>
+      const taskId = typeof record.taskId === 'string' && record.taskId.trim() ? record.taskId.trim() : ''
+      if (taskId) rowsByTaskId.set(taskId, record)
+    }
+  }
+  const nodes = orientationSpine.nodes && typeof orientationSpine.nodes === 'object' && !Array.isArray(orientationSpine.nodes)
+    ? orientationSpine.nodes as Record<string, unknown>
+    : {}
+  return tasks.map(task => {
+    const taskId = typeof task.id === 'string' && task.id.trim() ? task.id.trim() : ''
+    if (!taskId) return task
+    const scopeRow = rowsByTaskId.get(taskId)
+    const node = nodes[`work:${taskId}`]
+    const sourceRefs = firstCompactTaskRefList(task.sourceRefs, task.references, scopeRow?.sourceRefs, orientationNodeSourceRefsForServe(node))
+    const orientationSummary = orientationNodeSummaryForServe(node)
+    return {
+      ...task,
+      ...((!task.title || typeof task.title !== 'string' || !task.title.trim()) && typeof scopeRow?.title === 'string' && scopeRow.title.trim()
+        ? { title: scopeRow.title.trim() }
+        : {}),
+      ...((!task.sourceRefs || !Array.isArray(task.sourceRefs) || task.sourceRefs.length === 0) && sourceRefs.length > 0
+        ? { sourceRefs }
+        : {}),
+      ...((!task.references || !Array.isArray(task.references) || task.references.length === 0) && sourceRefs.length > 0
+        ? { references: sourceRefs }
+        : {}),
+      ...(orientationSummary ? { orientationSummary } : {}),
+    }
+  })
+}
+
 function compactTaskForProjectSummary(task: Record<string, unknown>): Record<string, unknown> {
   const summaryKeys = [
     'id',
     'title',
     'description',
+    'orientationSummary',
     'domain',
     'projectPath',
     'status',
@@ -4058,6 +4127,7 @@ function compactTaskForWorkSurface(task: Record<string, unknown>): Record<string
     'id',
     'title',
     'description',
+    'orientationSummary',
     'domain',
     'status',
     'priority',
@@ -4823,7 +4893,7 @@ function compactTaskIdentity(task: unknown): Record<string, unknown> | undefined
   if (!task || typeof task !== 'object' || Array.isArray(task)) return undefined
   const raw = task as Record<string, unknown>
   const summary: Record<string, unknown> = {}
-  for (const key of ['id', 'title', 'description', 'status', 'domain', 'priority', 'workKind', 'releaseIds', 'sourceRefs', 'references']) {
+  for (const key of ['id', 'title', 'description', 'orientationSummary', 'status', 'domain', 'priority', 'workKind', 'releaseIds', 'sourceRefs', 'references']) {
     if (key in raw) summary[key] = raw[key]
   }
   return summary
@@ -6011,6 +6081,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const responseTasks = overviewTaskIds && overviewTaskIds.size > 0
         ? proofAdjustedTasks.filter(task => typeof task.id === 'string' && overviewTaskIds.has(task.id))
         : proofAdjustedTasks
+      const surfaceTasks = backfillCompactTaskOrientationForServe(
+        responseTasks,
+        fullOrientationSpine as unknown as Record<string, unknown>,
+      )
       const taskPayload = {
         surface,
         kind: overviewSurface
@@ -6033,7 +6107,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         tags: project.config?.tags ?? [],
         config: project.config,
         selectedTaskId,
-        tasks: responseTasks.map(mapSurface ? compactTaskIdentity : fullSurface ? compactTaskForProjectSummary : compactTaskForWorkSurface),
+        tasks: surfaceTasks.map(mapSurface ? compactTaskIdentity : fullSurface ? compactTaskForProjectSummary : compactTaskForWorkSurface),
         taskPayload,
         workProgress,
         ...(inbox ? { inbox } : {}),

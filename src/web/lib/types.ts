@@ -444,6 +444,9 @@ export interface Task {
   displayKey?: string
   title?: string
   description?: string
+  sourceRefs?: string[]
+  references?: string[]
+  orientationSummary?: string
   status?: string
   dependsOn?: string[]
   domain?: string
