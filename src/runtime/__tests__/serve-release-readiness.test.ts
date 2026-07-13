@@ -3299,7 +3299,8 @@ describe('GET /api/project/release-readiness', () => {
       tasks: [
         makeTask({
           id: 'task-runner',
-          title: 'Implement no-UI runner.',
+          title: 'Implement command-line runner.',
+          description: 'A script-only command runner for the headless release.',
           status: 'ready',
           releaseIds: ['headless-mvp'],
         }),
@@ -3314,14 +3315,22 @@ describe('GET /api/project/release-readiness', () => {
     const mapUrl = new URL(projectUrl('/api/project'))
     mapUrl.searchParams.set('surface', 'map')
     const mapBody = await (await app.fetch(new Request(mapUrl))).json() as any
+    const overviewUrl = new URL(projectUrl('/api/project'))
+    overviewUrl.searchParams.set('surface', 'overview')
+    const overviewBody = await (await app.fetch(new Request(overviewUrl))).json() as any
 
     expect(fullBody.spine.roots.length).toBeGreaterThan(0)
-    expect(fullBody.spine.nodes['work:task-runner']).toMatchObject({ title: 'Implement no-UI runner.' })
+    expect(fullBody.spine.nodes['work:task-runner']).toMatchObject({ title: 'Implement command-line runner.' })
     expect(previewBody.spine.roots).toEqual([])
     expect(previewBody.spine.nodes).toEqual({})
     expect(previewBody.spine.summary.includedWorkCount).toBe(1)
     expect(previewBody.spine.selectedRelease.source).toBe('release_plan')
     expect(previewBody.spine.scope.source).toBe('release_plan')
+    expect(previewBody.spine.executionBoundary).toMatchObject({
+      label: 'Headless proof',
+      mode: 'headless',
+      proofStyle: 'script_only',
+    })
     expect(previewBody.spine.sourceTrail).toContainEqual(expect.objectContaining({
       label: 'Scope',
       value: 'Release Plan',
@@ -3338,13 +3347,25 @@ describe('GET /api/project/release-readiness', () => {
     expect(mapBody.orientationSpine.roots[0].ownerAction).toBeUndefined()
     expect(mapBody.orientationSpine.roots[0].proof).toBeUndefined()
     expect(mapBody.orientationSpine.selectedRelease.source).toBe('release_plan')
+    expect(mapBody.orientationSpine.executionBoundary).toMatchObject({
+      label: fullBody.spine.executionBoundary.label,
+      mode: fullBody.spine.executionBoundary.mode,
+      proofStyle: fullBody.spine.executionBoundary.proofStyle,
+      detail: fullBody.spine.executionBoundary.detail,
+    })
+    expect(overviewBody.orientationSpine.executionBoundary).toMatchObject({
+      label: fullBody.spine.executionBoundary.label,
+      mode: fullBody.spine.executionBoundary.mode,
+      proofStyle: fullBody.spine.executionBoundary.proofStyle,
+      detail: fullBody.spine.executionBoundary.detail,
+    })
     expect(mapBody.orientationSpine.sourceTrail).toContainEqual(expect.objectContaining({
       label: 'Scope',
       value: 'Release Plan',
     }))
     expect(mapBody.tasks).toEqual([expect.objectContaining({
       id: 'task-runner',
-      title: 'Implement no-UI runner.',
+      title: 'Implement command-line runner.',
       status: 'ready',
     })])
     expect(mapBody.tasks[0].acceptanceCriteria).toBeUndefined()

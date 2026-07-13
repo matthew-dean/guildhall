@@ -30524,6 +30524,70 @@ selected-scope readiness ordering.
     Overview even while Map/Start say it is complete.
 - Schema Migration Decision: no persisted schema field or migration changed.
 
+## codex:compact-spine-execution-boundary-truth-2026-07-13
+
+- User job:
+  - When Overview requests a compact project spine, Guildhall should preserve the
+    real current execution boundary instead of replacing it with generic copy.
+    Overview, Map, and compact spine consumers should agree on whether the
+    selected scope is headless, UI-visible, mixed, or unspecified.
+- Root cause classification:
+  - Data model/schema problem: the compact overview projection dropped the
+    source `executionBoundary` object even though downstream surfaces still
+    needed its authoritative mode/proof fields.
+  - Project structure/scope/release modeling problem: a selected release with
+    script-only proof could be shown as a generic current scope in one surface
+    while the Map correctly showed the headless scope boundary.
+  - UI communication/orientation problem: the product could say `Headless proof`
+    in the Map but `Current scope`/open-the-map placeholder copy through the
+    Overview projection, forcing users to reconcile surfaces manually.
+- Fix:
+  - `compactOrientationSpineForWorkSurface` now carries `executionBoundary`
+    through with the other compact spine summary fields.
+  - `buildOverviewOrientationPreviewSpine` now reuses
+    `sourceSpine.executionBoundary` when available and only falls back to the
+    generic placeholder when the source spine truly lacks a boundary.
+- Proof provided:
+  - `CI=true pnpm exec vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts --testNamePattern
+    "compact project spine"` passed.
+  - `CI=true pnpm exec vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts` passed: 62 tests.
+  - `CI=true pnpm exec vitest run
+    src/runtime/__tests__/project-orientation-spine.test.ts` passed: 68 tests.
+  - `CI=true pnpm lint:contracts` passed.
+  - `CI=true pnpm build` passed.
+  - `CI=true pnpm dev:install` passed, then `guildhall stop && guildhall start`
+    restarted the installed app.
+  - `/api/stale-server` returned `stale:false`, PID `67090`,
+    `bootBuildMtimeMs:1783918808357`, and
+    `currentBuildMtimeMs:1783918808357`.
+  - Live Narrative Harness API proof showed Overview, Map, and compact spine all
+    reporting `label:"Headless proof"`, `mode:"headless"`, and
+    `proofStyle:"script_only"` with the script/command proof detail.
+  - Browser proof on `/projects/narrative-harness/map` showed visible
+    `Proof mode`, `HEADLESS PROOF`, `Script Only`, and the command-proof detail,
+    with no horizontal overflow at 1280x720.
+- Contract Touch Decision:
+  - Work id: `compact-spine-execution-boundary-truth`.
+  - Touched contracts: compact project spine projection contract,
+    overview-preview orientation projection contract, and release-readiness
+    route expectations for cross-surface execution-boundary agreement.
+  - Contracts considered but not touched: persisted task schema, persisted
+    release schema, `ProjectOrientationSpine` field names, Map surface compacting
+    behavior, Start/Resume scheduling semantics, and browser UI component props.
+  - Required follow-up: keep treating any divergence between Overview, Map,
+    Work, Timeline, and Start/Resume boundary/readiness language as a shared
+    projection bug before applying local UI copy patches.
+  - Proof required: focused route regression, full neighboring runtime suites,
+    contract lint, build/install freshness, live API agreement, and browser
+    visibility proof on the real calibration project.
+  - Proof provided: all proof listed above.
+  - Apply/revert behavior: reverting restores the generic compact boundary,
+    allowing Overview consumers to disagree with the Map about the current proof
+    mode.
+- Schema Migration Decision: no persisted schema field or migration changed.
+
 ## 2026-07-13T04:53:00Z - Selected release proof style follows the execution boundary
 
 - User job:

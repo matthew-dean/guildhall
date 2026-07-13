@@ -4101,6 +4101,7 @@ function compactOrientationSpineForWorkSurface(spine: Record<string, unknown>): 
     summary: spine.summary,
     scopeRows: compactOrientationScopeRows(spine.scopeRows),
     proofContracts: compactOrientationProofContracts(spine.proofContracts),
+    executionBoundary: spine.executionBoundary,
     sourceHealth,
     release: spine.release,
     roots: [],
@@ -4168,7 +4169,7 @@ function buildOverviewOrientationPreviewSpine(input: {
     focusTaskTitle?: string
     focusKind?: string
   } | null
-  sourceSpine?: Pick<ProjectOrientationSpine, 'selectedRelease' | 'selectedTaskScope' | 'scope' | 'summary' | 'release' | 'sourceHealth' | 'sourceTrail'> | null
+  sourceSpine?: Pick<ProjectOrientationSpine, 'selectedRelease' | 'selectedTaskScope' | 'scope' | 'summary' | 'release' | 'sourceHealth' | 'sourceTrail' | 'executionBoundary'> | null
   now?: string
 }): Record<string, unknown> {
   const now = input.now ?? new Date().toISOString()
@@ -4343,7 +4344,7 @@ function buildOverviewOrientationPreviewSpine(input: {
       nonGoals: input.charter?.nonGoals ?? [],
       source: input.charter?.source ?? 'inferred',
     },
-    executionBoundary: {
+    executionBoundary: input.sourceSpine?.executionBoundary ?? {
       label: 'Current scope',
       mode: 'unspecified',
       proofStyle: release?.proofStyle ?? 'unspecified',
