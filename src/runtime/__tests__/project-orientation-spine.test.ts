@@ -971,6 +971,41 @@ describe('buildProjectOrientationSpine', () => {
     })
   })
 
+  it('uses the inferred execution boundary as the selected release proof style fallback', () => {
+    const spine = buildProjectOrientationSpine({
+      projectId: 'narrative-harness',
+      now: '2026-07-13T05:00:00.000Z',
+      charter: {
+        goal: 'The first MVP is headless: script-only proofs of all systems.',
+        currentReleaseTarget: 'Stage 1 headless drafting and evaluation MVP.',
+        successDefinition: 'Each scoped feature has runnable command-line or script proof.',
+        source: 'inferred',
+      },
+      selectedReleaseId: 'stage-1-headless-drafting-and-evaluation-mvp',
+      releases: [{
+        id: 'stage-1-headless-drafting-and-evaluation-mvp',
+        label: 'Stage 1: Headless Drafting And Evaluation MVP',
+        kind: 'release',
+        state: 'ready',
+        source: 'release_plan',
+        nodeIds: ['work:task-model-proof'],
+        deferredNodeIds: [],
+        proofStyle: 'unspecified',
+      }],
+      tasks: [{
+        id: 'task-model-proof',
+        title: 'Select and prove a DeepInfra drafting model.',
+        description: 'Run a CLI proof for broad-genre chapter drafting.',
+        status: 'done',
+        releaseIds: ['stage-1-headless-drafting-and-evaluation-mvp'],
+      }],
+    })
+
+    expect(spine.executionBoundary.proofStyle).toBe('script_only')
+    expect(spine.selectedRelease?.proofStyle).toBe('script_only')
+    expect(spine.releases.find(release => release.id === 'stage-1-headless-drafting-and-evaluation-mvp')?.proofStyle).toBe('script_only')
+  })
+
   it('flags near-duplicate work split across scopes instead of hiding richer owner requirements', () => {
     const tasks = [
       {

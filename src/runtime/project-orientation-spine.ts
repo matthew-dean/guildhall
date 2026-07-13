@@ -690,7 +690,10 @@ function orientationScopeFromProjection(projection: ProjectScopeProjection | nul
   }
 }
 
-function normalizeRelease(input: BuildProjectOrientationSpineInput, tasks: OrientationTaskInput[]): OrientationRelease | null {
+function normalizeRelease(
+  input: BuildProjectOrientationSpineInput & { proofStyleFallback?: OrientationReleaseProofStyle },
+  tasks: OrientationTaskInput[],
+): OrientationRelease | null {
   const releases = input.releases ?? []
   const selected =
     releases.find(release => release.id && release.id === input.selectedReleaseId) ??
@@ -711,7 +714,9 @@ function normalizeRelease(input: BuildProjectOrientationSpineInput, tasks: Orien
       description: selected.description ?? null,
       nodeIds: selected.nodeIds?.length ? selected.nodeIds : assignedByTask,
       deferredNodeIds: selected.deferredNodeIds ?? [],
-      proofStyle: selected.proofStyle ?? 'unspecified',
+      proofStyle: selected.proofStyle === 'unspecified' || !selected.proofStyle
+        ? input.proofStyleFallback ?? 'unspecified'
+        : selected.proofStyle,
     }, tasks)
   }
   return null
@@ -2234,12 +2239,19 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
   const tasks = draftAugmentation.tasks
   const startReadiness = startReadinessWithFocus(input.startReadiness, input.scopeProjection, tasks)
   const charter = normalizeCharter(input)
+  const executionBoundary = buildExecutionBoundary({
+    charter,
+    tasks,
+    now,
+    sourceRefs: input.sourceRefs ?? [],
+  })
   const releases = mergeOrientationReleaseInputs(input.releases, draftAugmentation.releases)
   const selectedReleaseId = selectedReleaseIdForOrientation(input, draftAugmentation.selectedReleaseId, releases)
   const selectedRelease = normalizeRelease({
     ...input,
     selectedReleaseId,
     releases,
+    proofStyleFallback: executionBoundary.proofStyle,
   }, tasks)
   const projectionScope = orientationScopeFromProjection(input.scopeProjection)
   const selectedReleaseForReadModel = selectedRelease && projectionScope?.id === selectedRelease.id
@@ -2261,6 +2273,7 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
       ...input,
       selectedReleaseId: release.id,
       releases: [release],
+      ...(release.id === selectedReleaseId ? { proofStyleFallback: executionBoundary.proofStyle } : {}),
     }, tasks))
     .filter((release): release is OrientationRelease => Boolean(release))
     .map(release => projectionScope?.id === release.id
@@ -2318,12 +2331,6 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
     ...(startReleaseBlocker && !hasStartReleaseBlocker ? [startReleaseBlocker] : []),
   ]
   const { blockers, gaps: blockerGaps } = attachReleaseBlockers(releaseBlockerInput, byId)
-  const executionBoundary = buildExecutionBoundary({
-    charter,
-    tasks,
-    now,
-    sourceRefs: input.sourceRefs ?? [],
-  })
   const proofContracts = proofContractsForNodes(roots, executionBoundary)
   const duplicateGaps = duplicateScopeConflictGaps(tasks, scope)
   const gaps: OrientationGap[] = [

@@ -30524,6 +30524,67 @@ selected-scope readiness ordering.
     Overview even while Map/Start say it is complete.
 - Schema Migration Decision: no persisted schema field or migration changed.
 
+## 2026-07-13T04:53:00Z - Selected release proof style follows the execution boundary
+
+- User job:
+  - When Guildhall has inferred that the current Narrative Harness scope is
+    headless/script-only, every owner-facing release/scope projection should
+    agree. The API must not say release readiness is `script_only` while the
+    project spine selected release is still `unspecified`.
+- Root cause classification:
+  - Project structure/scope/release modeling problem: release readiness applied
+    the inferred execution-boundary proof style when persisted release metadata
+    was unspecified, but the project spine selected-release projection did not.
+  - Data model/schema/projection problem: two read models projected the same
+    selected release with different proof-style fallback rules.
+  - UI communication/orientation problem: downstream map/overview surfaces could
+    present a correct headless purpose while the selected-release model still
+    carried an unspecified proof mode.
+- Fix:
+  - `buildProjectOrientationSpine` now builds the execution boundary before
+    normalizing release read models and uses that proof style as the fallback
+    for the selected release only.
+  - Planned/later releases do not inherit the current scope proof style.
+- Contract Touch Decision:
+  - Work id:
+    `codex:selected-release-proof-style-boundary-fallback-2026-07-13`.
+  - Touched contracts: orientation spine selected-release read-model proof-style
+    fallback semantics.
+  - Contracts considered but not touched: persisted release schema, persisted
+    task schema, release readiness API schema, workspace import draft schema,
+    Start/Resume execution-boundary semantics.
+  - Required follow-up: continue finding and collapsing duplicate release/scope
+    projection rules when API or UI surfaces disagree.
+  - Proof required: focused spine regression, release-readiness regression,
+    contract detector, build/install/stale proof, live Narrative Harness API and
+    browser proof.
+  - Proof provided: listed below.
+  - Apply/revert behavior: reverting restores the selected-release proof-style
+    mismatch whenever persisted release metadata is `unspecified` but the
+    execution boundary is inferred.
+- Verification:
+  - `CI=true pnpm exec vitest run
+    src/runtime/__tests__/project-orientation-spine.test.ts` passed 68 tests.
+  - `CI=true pnpm exec vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts` passed 62 tests.
+  - `CI=true pnpm lint:contracts` passed.
+  - `CI=true pnpm build` passed.
+  - `CI=true pnpm dev:install` completed and installed the current branch
+    artifact.
+  - `guildhall stop && guildhall start` restarted the installed service.
+  - `/api/stale-server` returned `stale:false` for PID `26472` with matching
+    boot/current build mtimes.
+  - Live Narrative Harness API proof at
+    `/api/project?projectId=narrative-harness&surface=overview` returned
+    `releaseReadiness.release.proofStyle:"script_only"`,
+    `orientationSpine.selectedRelease.proofStyle:"script_only"`, and
+    `orientationSpine.executionBoundary.proofStyle:"script_only"` for
+    `Stage 1: Headless Drafting And Evaluation MVP`.
+  - Live browser proof at `/projects/narrative-harness/overview`, viewport
+    `1280x720`: complete Stage 1 headline present, current release label
+    present, headless/script-only purpose text visible, proof summary visible,
+    and horizontal overflow was `0`.
+
 2026-07-12T21:44:00-07:00 - Kept Overview verification signals on the same
 orientation proof projection as scope summary.
 
