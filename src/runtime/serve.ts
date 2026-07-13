@@ -11493,6 +11493,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const effectiveTasks = await buildEffectiveTasks(project.path, tasks as Task[])
       const workProgress = deriveProjectWorkProgress(effectiveTasks as unknown as Array<Record<string, unknown>>)
       const id = c.req.param('id')
+      const releaseReadiness = await buildProjectReleaseReadinessPayload()
+      const proofMissingTaskIds = releaseProofMissingTaskIds(releaseReadiness)
       const task = tasks.find(t => (t as { id?: string }).id === id)
       if (!task) return c.json({ error: 'task not found' }, 404)
       const deliveryModel = await readProjectDeliveryModel(project.path)
@@ -11558,10 +11560,18 @@ export function buildServeApp(opts: ServeOptions = {}): {
         [...relatedTaskIds]
           .map(relatedId => tasks.find(candidate => (candidate as { id?: string }).id === relatedId))
           .filter((candidate): candidate is Record<string, unknown> => Boolean(candidate))
-          .map(candidate => enrichTaskForServe(project.path, candidate)),
+          .map(async (candidate) => {
+            const enriched = await enrichTaskForServe(project.path, candidate)
+            return proofMissingTaskIds.has(String(enriched.id ?? '')) && String(enriched.status ?? '') === 'done'
+              ? { ...enriched, completionProof: releaseProofMissingCompletionProof(enriched) }
+              : enriched
+          }),
       )
+      const enrichedTask = await enrichTaskForServe(project.path, rawTask)
       return c.json({
-        task: await enrichTaskForServe(project.path, rawTask),
+        task: proofMissingTaskIds.has(String(enrichedTask.id ?? '')) && String(enrichedTask.status ?? '') === 'done'
+          ? { ...enrichedTask, completionProof: releaseProofMissingCompletionProof(enrichedTask) }
+          : enrichedTask,
         relatedTasks,
         workProgress,
         runStatus,

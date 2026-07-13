@@ -228,6 +228,65 @@ describe('GET /api/project/task/:id', () => {
     expect(Array.isArray(body.contextDebug)).toBe(true)
   })
 
+  it('shows release-required script proof as missing in task detail', async () => {
+    const now = new Date().toISOString()
+    await writeTaskQueue({
+      version: 1,
+      lastUpdated: now,
+      selectedReleaseId: 'headless-mvp',
+      releases: [{
+        id: 'headless-mvp',
+        label: 'Stage 1: Headless Drafting MVP',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-1'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [{
+        id: 'task-1',
+        title: 'Prove world-state continuity review',
+        description: 'A test task',
+        domain: 'looma',
+        projectPath: tmpDir,
+        status: 'done',
+        priority: 'normal',
+        revisionCount: 0,
+        remediationAttempts: 0,
+        releaseIds: ['headless-mvp'],
+        proofPaths: [{
+          kind: 'review',
+          expectedEvidence: ['The reviewer catches object property changes caused by elapsed time.'],
+        }],
+        doneSummaryBundle: {
+          status: 'done',
+          completedAt: '2026-07-06T20:00:00.000Z',
+          summary: { evidence: 'content.no-truncated-data passed.' },
+        },
+        gateResults: [{
+          gateId: 'content.no-truncated-data',
+          passed: true,
+          checkedAt: '2026-07-06T20:00:00.000Z',
+        }],
+        reviewVerdicts: [{
+          verdict: 'approve',
+          reasoning: 'All acceptance criteria are met.',
+          recordedAt: '2026-07-06T20:00:00.000Z',
+        }],
+        createdAt: now,
+        updatedAt: now,
+      }],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(projectUrl('/api/project/task/task-1')))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, any>
+
+    expect(body.task?.completionProof).toMatchObject({ state: 'missing' })
+    expect(body.task?.completionProof?.missing?.length).toBeGreaterThan(0)
+  })
+
   it('builds drawer work progress from effective proof state, not stale raw task records', async () => {
     await seedTask('task-1', {
       title: 'Run fixture evaluator proof',

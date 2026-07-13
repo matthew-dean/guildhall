@@ -30604,9 +30604,61 @@ selected-scope readiness ordering.
   - Proof required: focused bootstrap regression, contract lint, whitespace
     check, build, installed-app freshness, and live Narrative Harness run proof.
   - Proof provided: local proof listed above; installed-app proof remains next.
+  - Installed-app proof update: after `CI=true pnpm dev:install` and
+    `guildhall stop && guildhall start`, `/api/stale-server` returned
+    `stale:false`, PID `5990`, `bootBuildMtimeMs:1783935447800`, and
+    `currentBuildMtimeMs:1783935447800`. Live Narrative Harness release
+    readiness then showed the author-intent task no longer blocking execution:
+    Stage 1 had 11 done tasks, 0 unfinished tasks, 0 git-story blockers, and
+    only 2 proof-evidence blockers remaining.
   - Apply/revert behavior: reverting allows pnpm approve-builds preflight to
     block noninteractive gates again and misclassify the failure as project
     work instead of bootstrap environment leakage.
+- Schema Migration Decision: no persisted schema field or migration changed.
+
+## codex:task-drawer-release-proof-agreement-2026-07-13
+
+- User job:
+  - If Overview/Release says a completed task still blocks the selected
+    script-only scope because proof evidence is missing, opening that task must
+    show the same proof-needed state. The user should not see `verified` in the
+    drawer while the release action says `Attach proof`.
+- Root cause classification:
+  - Task hierarchy/dependency/proof modeling problem: release readiness and task
+    detail projected different proof standards for the same task.
+  - UI communication/orientation problem: the task drawer recomputed generic
+    completion proof after release-readiness had already identified selected
+    release proof blockers.
+- Fix:
+  - `/api/project/task/:id` now applies the existing release-proof-missing
+    completion override after task enrichment, at the payload boundary used by
+    the drawer.
+- Proof provided:
+  - `CI=true pnpm exec vitest run
+    src/runtime/__tests__/serve-task-endpoints.test.ts --testNamePattern
+    "release-required script proof"` passed.
+  - `CI=true pnpm exec vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts --testNamePattern
+    "requires recorded proof|does not accept unrelated completion proof|does not
+    accept imported proof-path status|accepts command-backed review proof"`
+    passed: 4 selected tests.
+- Contract Touch Decision:
+  - Work id: `task-drawer-release-proof-agreement`.
+  - Touched contracts: task-detail API projection for selected-release proof
+    blockers and task endpoint regression coverage.
+  - Contracts considered but not touched: persisted task schema, persisted
+    release schema, release-readiness proof rules, proof-path schema,
+    completion-proof schema, and drawer components.
+  - Required follow-up: build/install and verify live Narrative Harness proof
+    blockers show `completionProof.state:"missing"` in task detail while the
+    release remains blocked.
+  - Proof required: focused task endpoint regression, focused release-readiness
+    regressions, contract lint, build, installed-app freshness, and live API
+    agreement on Narrative Harness.
+  - Proof provided: local proof listed above; installed-app proof remains next.
+  - Apply/revert behavior: reverting lets task detail claim generic completion
+    proof is verified even when the selected release still requires proof
+    evidence.
 - Schema Migration Decision: no persisted schema field or migration changed.
 
 ## codex:reconciled-task-worktree-residue-2026-07-13
