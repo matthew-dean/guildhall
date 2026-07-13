@@ -16,7 +16,7 @@ import {
   readTaskWorkspaceStore,
 } from './task-state-store.js'
 import { effectiveTaskTitle } from '../shared/task-display-label.js'
-import { taskDoneButProofMissing } from './proof-health.js'
+import { normalizeAcceptanceCriteriaForCurrentProof, taskDoneButProofMissing } from './proof-health.js'
 import { taskHasRecordedCompletionProof } from './task-completion-proof.js'
 
 type LegacyTask = Task & Record<string, unknown>
@@ -231,10 +231,24 @@ function buildEffectiveTaskFromState(
     ...projected,
     ...(runtime?.proofRecovery ? { proofRecovery: runtime.proofRecovery } : {}),
   })
-  const proofPathStatusProjection = normalizeProofPathStatuses({
+  const effectiveDefinition = {
     ...task,
     ...projected,
+    ...(runtime?.proofRecovery ? { proofRecovery: runtime.proofRecovery } : {}),
     ...normalized,
+  }
+  const proofAware = normalizeAcceptanceCriteriaForCurrentProof(effectiveDefinition)
+  const proofAwarenessProjection = {
+    ...(proofAware.acceptanceCriteria !== effectiveDefinition.acceptanceCriteria
+      ? { acceptanceCriteria: proofAware.acceptanceCriteria }
+      : {}),
+    ...(proofAware.acceptanceCriteriaProofState !== effectiveDefinition.acceptanceCriteriaProofState
+      ? { acceptanceCriteriaProofState: proofAware.acceptanceCriteriaProofState }
+      : {}),
+  }
+  const proofPathStatusProjection = normalizeProofPathStatuses({
+    ...effectiveDefinition,
+    ...proofAwarenessProjection,
   })
   return {
     ...task,
@@ -251,6 +265,7 @@ function buildEffectiveTaskFromState(
     ...(runtime ? { runtime } : {}),
     ...(workspace ? { workspace } : {}),
     ...normalized,
+    ...proofAwarenessProjection,
     ...proofPathStatusProjection,
     evidence,
   }
@@ -283,8 +298,9 @@ function normalizeTerminalCompletionEvidence(task: Record<string, unknown>): Rec
   const mergeRecord = task.mergeRecord && typeof task.mergeRecord === 'object' && !Array.isArray(task.mergeRecord)
     ? task.mergeRecord as Record<string, unknown>
     : null
+  const proofMissingForDone = taskDoneButProofMissing({ ...task, status: 'done' })
   const hasDurableDoneEvidence = (doneSummary?.status === 'done' || taskHasRecordedCompletionProof(task)) &&
-    !taskDoneButProofMissing({ ...task, status: 'done' })
+    !proofMissingForDone
   if (!completedAt || !hasDurableDoneEvidence) return {}
   const proofRecovery = task.proofRecovery && typeof task.proofRecovery === 'object' && !Array.isArray(task.proofRecovery)
     ? task.proofRecovery as Record<string, unknown>

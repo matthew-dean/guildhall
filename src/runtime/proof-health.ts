@@ -67,10 +67,130 @@ function latestApprovingReviewReasoning(task: unknown): string | null {
   return null
 }
 
+function hasActiveProofRecovery(task: unknown): boolean {
+  if (!task || typeof task !== 'object') return false
+  const record = task as Record<string, unknown>
+  const runtime = record.runtime && typeof record.runtime === 'object' && !Array.isArray(record.runtime)
+    ? record.runtime as Record<string, unknown>
+    : null
+  const proofRecovery = record.proofRecovery && typeof record.proofRecovery === 'object' && !Array.isArray(record.proofRecovery)
+    ? record.proofRecovery as Record<string, unknown>
+    : runtime?.proofRecovery && typeof runtime.proofRecovery === 'object' && !Array.isArray(runtime.proofRecovery)
+      ? runtime.proofRecovery as Record<string, unknown>
+      : null
+  return typeof proofRecovery?.reopenedAt === 'string' && proofRecovery.reopenedAt.trim().length > 0
+}
+
+function hasCurrentFailedHardGate(task: unknown): boolean {
+  if (!task || typeof task !== 'object') return false
+  const gateResults = Array.isArray((task as { gateResults?: unknown }).gateResults)
+    ? (task as { gateResults: unknown[] }).gateResults
+    : []
+  const hardGates = gateResults
+    .filter((gate): gate is Record<string, unknown> => Boolean(gate) && typeof gate === 'object' && !Array.isArray(gate))
+    .filter(gate => gate.type === 'hard')
+    .sort((left, right) => Date.parse(String(left.checkedAt ?? '')) - Date.parse(String(right.checkedAt ?? '')))
+  const latest = hardGates.at(-1)
+  return Boolean(latest && latest.passed === false)
+}
+
+function activeProofRecoveryReason(task: Record<string, unknown>): string {
+  const runtime = task.runtime && typeof task.runtime === 'object' && !Array.isArray(task.runtime)
+    ? task.runtime as Record<string, unknown>
+    : null
+  const proofRecovery =
+    task.proofRecovery && typeof task.proofRecovery === 'object' && !Array.isArray(task.proofRecovery)
+      ? task.proofRecovery as Record<string, unknown>
+      : runtime?.proofRecovery && typeof runtime.proofRecovery === 'object' && !Array.isArray(runtime.proofRecovery)
+        ? runtime.proofRecovery as Record<string, unknown>
+        : null
+  if (!proofRecovery || typeof proofRecovery.reopenedAt !== 'string' || !proofRecovery.reopenedAt.trim()) return ''
+  return typeof proofRecovery.reason === 'string' && proofRecovery.reason.trim()
+    ? proofRecovery.reason.trim()
+    : 'Required proof evidence is being recovered.'
+}
+
+function latestFailedHardGate(task: Record<string, unknown>): Record<string, unknown> | null {
+  const gates = Array.isArray(task.gateResults)
+    ? task.gateResults.filter((gate): gate is Record<string, unknown> => Boolean(gate) && typeof gate === 'object' && !Array.isArray(gate))
+    : []
+  for (let index = gates.length - 1; index >= 0; index -= 1) {
+    const gate = gates[index]
+    if (gate.type === 'hard' && gate.passed === false) return gate
+  }
+  return null
+}
+
+function failedHardGateReason(gate: Record<string, unknown> | null): string {
+  if (!gate) return ''
+  const output = typeof gate.output === 'string' ? gate.output.trim() : ''
+  if (output) return output
+  const gateId = typeof gate.gateId === 'string' ? gate.gateId.trim() : ''
+  return gateId ? `${gateId} failed.` : 'A required hard gate failed.'
+}
+
+export function normalizeAcceptanceCriteriaForCurrentProof(task: Record<string, unknown>): Record<string, unknown> {
+  const criteria = Array.isArray(task.acceptanceCriteria)
+    ? task.acceptanceCriteria.filter((criterion): criterion is Record<string, unknown> =>
+        Boolean(criterion) && typeof criterion === 'object' && !Array.isArray(criterion),
+      )
+    : []
+  if (criteria.length === 0) return task
+
+  const failedHardGate = latestFailedHardGate(task)
+  const proofReason = activeProofRecoveryReason(task) || failedHardGateReason(failedHardGate)
+  if (!proofReason) return task
+  const gateCheckedAt = typeof failedHardGate?.checkedAt === 'string' ? failedHardGate.checkedAt : undefined
+  const existingProofState = task.acceptanceCriteriaProofState &&
+    typeof task.acceptanceCriteriaProofState === 'object' &&
+    !Array.isArray(task.acceptanceCriteriaProofState)
+    ? task.acceptanceCriteriaProofState as Record<string, unknown>
+    : null
+  const staleMetCriteria = criteria.filter(criterion => criterion.met === true)
+  if (staleMetCriteria.length === 0) {
+    return {
+      ...task,
+      acceptanceCriteriaProofState: {
+        state: 'blocked',
+        reason: proofReason,
+        ...(failedHardGate?.gateId ? { gateId: failedHardGate.gateId } : {}),
+        ...(gateCheckedAt ? { checkedAt: gateCheckedAt } : {}),
+        ...(typeof existingProofState?.staleMetCount === 'number'
+          ? { staleMetCount: existingProofState.staleMetCount }
+          : {}),
+      },
+    }
+  }
+
+  return {
+    ...task,
+    acceptanceCriteria: criteria.map(criterion => criterion.met === true
+      ? {
+          ...criterion,
+          met: false,
+          persistedMet: true,
+          verificationState: 'stale',
+          staleReason: proofReason,
+          ...(failedHardGate?.gateId ? { staleGateId: failedHardGate.gateId } : {}),
+        }
+      : criterion),
+    acceptanceCriteriaProofState: {
+      state: 'blocked',
+      reason: proofReason,
+      staleMetCount: staleMetCriteria.length,
+      ...(failedHardGate?.gateId ? { gateId: failedHardGate.gateId } : {}),
+      ...(gateCheckedAt ? { checkedAt: gateCheckedAt } : {}),
+    },
+  }
+}
+
 export function completionProofCanSettleUnmetAcceptanceCriteria(task: unknown): boolean {
   if (!task || typeof task !== 'object') return false
   if (String((task as { status?: unknown }).status ?? '') !== 'done') return false
   if (unmetAcceptanceCriteriaCount(task) === 0) return false
+  // Historical approval cannot settle criteria after a newer proof recovery or
+  // failed hard gate has reopened the task's completion claim.
+  if (hasActiveProofRecovery(task) || hasCurrentFailedHardGate(task)) return false
   const reviewText = latestApprovingReviewReasoning(task)
   if (!reviewText) return false
   return (

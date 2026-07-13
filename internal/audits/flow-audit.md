@@ -30823,6 +30823,69 @@ selected-scope readiness ordering.
     Overview even while Map/Start say it is complete.
 - Schema Migration Decision: no persisted schema field or migration changed.
 
+## 2026-07-13T21:30:00Z - Shared effective task proof recovery agreement
+
+- User job:
+  - When a completed current-scope task has been reopened for proof recovery,
+    the user should see the same state in the project API, Overview, Work, Map,
+    and release readiness. Guildhall must not call the release ready merely
+    because an older review once approved the task.
+- Discovery:
+  - Before this fix, Narrative Harness release readiness reported one proof
+    blocker while Work reported three stale completed tasks and Overview still
+    showed two of those tasks as verified. The disagreement was caused by the
+    shared effective-task builder dropping runtime `proofRecovery` for tasks
+    whose terminal-evidence helper intentionally returned no projection.
+- Root cause classification:
+  - Shared read-model/proof-semantics problem, not a page-specific UI problem:
+    release readiness and product surfaces were evaluating different meanings
+    of the same completed task.
+- Fix:
+  - Extracted acceptance-criteria proof recovery normalization into the shared
+    proof-health module and removed the duplicate drawer-local implementation.
+  - The effective task model now carries runtime proof recovery directly into
+    the effective definition before normalizing acceptance criteria, while
+    preserving authoritative runtime overlays and existing terminal evidence.
+  - Historical approval cannot settle criteria after a newer proof recovery or
+    current failed hard gate has reopened the completion claim.
+- Proof provided:
+  - Focused runtime regression suites passed: 248 tests across effective task,
+    release readiness, task endpoints, and project orientation spine tests.
+  - `pnpm build`, `pnpm dev:install`, `guildhall stop && guildhall start`, and
+    `/api/stale-server` passed with `stale:false` for the installed artifact.
+  - Live Narrative Harness API proof now agrees across release readiness,
+    Overview, Work, and Map: the selected release has 11/11 scoped tasks done,
+    three proof blockers, and the same three task ids in `proofMissingDoneTasks`.
+  - Live Looma + Knit release readiness remains independently blocked by one
+    unfinished shaping task and repository follow-ups; it was not collapsed
+    into Narrative Harness's proof state.
+- Residual findings:
+  - Narrative Harness is not release-complete: implementation/proof evidence
+    is still required for the DeepInfra model, author-intent inputs, and the
+    CLI generation path. This is the next execution lane, not a Guildhall
+    summary bug.
+  - Browser screenshot proof remains pending because the in-app browser bridge
+    was not discoverable in this run; API/install agreement is recorded without
+    claiming browser proof.
+- Contract Touch Decision:
+  - Work id: `shared-effective-task-proof-recovery-2026-07-13`.
+  - Touched contracts: effective task read model, release-readiness proof
+    semantics, and project task response projections.
+  - Contracts considered but not touched: persisted task schema, acceptance
+    criteria schema, proof-path schema, release schema, and scheduler execution
+    boundary.
+  - Required follow-up: complete real Narrative Harness implementation proof,
+    then perform installed browser verification against the same shared state.
+  - Proof required: focused regressions, installed build freshness, API
+    agreement across all surfaces, and browser geometry/state proof.
+  - Proof provided: focused regressions, installed build freshness, stale-server
+    proof, and live API agreement above; browser proof is explicitly open.
+  - Apply/revert behavior: reverting the shared normalization restores the
+    raw-vs-effective disagreement and can falsely settle a release after proof
+    recovery.
+- Schema Migration Decision: no persisted schema field or migration changed;
+  this is a derived read-model correction over existing runtime proof state.
+
 ## codex:looma-knit-import-shaping-state-regression-2026-07-13
 
 - User job:

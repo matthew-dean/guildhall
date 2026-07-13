@@ -2149,6 +2149,62 @@ describe('GET /api/project/release-readiness', () => {
     })
   })
 
+  it('does not let historical review approval settle active proof recovery', async () => {
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: 'headless-mvp',
+      releases: [{
+        id: 'headless-mvp',
+        label: 'Headless MVP',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-current'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [
+        makeTask({
+          id: 'task-current',
+          title: 'Select and prove a DeepInfra drafting model',
+          status: 'done',
+          releaseIds: ['headless-mvp'],
+          acceptanceCriteria: [{
+            id: 'provider-proof',
+            description: 'Live provider proof records model quality and telemetry.',
+            verifiedBy: 'review',
+            met: true,
+          }],
+          proofPaths: [{
+            kind: 'review',
+            source: 'inferred',
+            expectedEvidence: ['Live provider proof records model quality and telemetry.'],
+          }],
+          proofRecovery: {
+            reopenedAt: '2026-07-07T10:00:00.000Z',
+            reason: 'provider_missing: DEEPINFRA_API_TOKEN is required.',
+          },
+          reviewVerdicts: [{
+            verdict: 'approve',
+            reviewerPath: 'llm',
+            reasoning: 'All acceptance criteria are met.',
+            recordedAt: '2026-07-06T10:00:00.000Z',
+          }],
+        } as Partial<Task>),
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await approveDesignSystem(app)
+    await commitAndPush('active proof recovery outranks historical approval')
+
+    const readiness = await (await app.fetch(new Request(projectUrl('/api/project/release-readiness')))).json() as any
+
+    expect(readiness.ready).toBe(false)
+    expect(readiness.proofMissingDoneTasks).toEqual([{ id: 'task-current', title: 'Select and prove a DeepInfra drafting model' }])
+    expect(readiness.totals.proofEvidenceBlockingCount).toBe(1)
+  })
+
   it('accepts semantically matching review proof for inferred Narrative Harness proof paths', async () => {
     await seedQueue({
       version: 1,
