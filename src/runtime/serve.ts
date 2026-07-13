@@ -4168,7 +4168,7 @@ function buildOverviewOrientationPreviewSpine(input: {
     focusTaskTitle?: string
     focusKind?: string
   } | null
-  sourceSpine?: Pick<ProjectOrientationSpine, 'selectedRelease' | 'selectedTaskScope' | 'scope' | 'sourceHealth' | 'sourceTrail'> | null
+  sourceSpine?: Pick<ProjectOrientationSpine, 'selectedRelease' | 'selectedTaskScope' | 'scope' | 'summary' | 'sourceHealth' | 'sourceTrail'> | null
   now?: string
 }): Record<string, unknown> {
   const now = input.now ?? new Date().toISOString()
@@ -4293,6 +4293,24 @@ function buildOverviewOrientationPreviewSpine(input: {
         conflicts: 0,
         gaps: scope ? 0 : 1,
       }
+  const summary = input.sourceSpine?.summary ?? {
+    headline,
+    purpose: input.charter?.goal ?? 'Project shape is being inferred.',
+    selectedReleaseLabel: release?.label ?? null,
+    selectedScopeLabel: displayScopeLabel,
+    includedCount: projection.counts.included,
+    includedWorkCount: projection.counts.included,
+    deferredCount: projection.counts.deferred,
+    deferredWorkCount: projection.counts.deferred,
+    pinnedNow: focusTaskTitle ? [focusTaskTitle] : [],
+    topBlocker,
+    nextAction: projection.release.state === 'ready'
+      ? 'Review completed scope.'
+      : start?.canStart === false
+        ? startMessage ?? 'Resolve the current start blocker.'
+        : projection.start.message,
+    progress,
+  }
 
   return {
     projectId: input.projectId,
@@ -4324,24 +4342,7 @@ function buildOverviewOrientationPreviewSpine(input: {
       },
     },
     proofContracts: [],
-    summary: {
-      headline,
-      purpose: input.charter?.goal ?? 'Project shape is being inferred.',
-      selectedReleaseLabel: release?.label ?? null,
-      selectedScopeLabel: displayScopeLabel,
-      includedCount: projection.counts.included,
-      includedWorkCount: projection.counts.included,
-      deferredCount: projection.counts.deferred,
-      deferredWorkCount: projection.counts.deferred,
-      pinnedNow: focusTaskTitle ? [focusTaskTitle] : [],
-      topBlocker,
-      nextAction: projection.release.state === 'ready'
-        ? 'Review completed scope.'
-        : start?.canStart === false
-          ? startMessage ?? 'Resolve the current start blocker.'
-          : projection.start.message,
-      progress,
-    },
+    summary,
     roots: [],
     nodes: {},
     activePins: focusTaskId

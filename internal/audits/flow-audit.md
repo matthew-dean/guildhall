@@ -8,6 +8,59 @@ help_summary: |
 
 # Web UI flow audit
 
+2026-07-13T03:51:00Z - Overview should reuse spine summary truth instead of recomputing progress.
+
+- Work id: `codex:overview-summary-shared-2026-07-13`.
+- User job: Overview, Work, and Map should tell the same story for the same
+  selected scope. A user should not see a completed scope with zero
+  briefed/specced work on Overview while Work and Map show the actual maturity
+  counts.
+- Finding:
+  - Live Narrative Harness Overview reported progress
+    `briefed:0` and `specced:0`; Work and Map reported `briefed:8` and
+    `specced:23` for the same selected release.
+  - Live Looma + Knit Overview reported `briefed:0`, `specced:0`, and headline
+    `needs attention`; Work and Map reported `briefed:1`, `specced:1`, and
+    headline `is being shaped`.
+  - The mismatch came from `buildOverviewOrientationPreviewSpine` recomputing
+    `summary` locally from task statuses instead of reusing the canonical
+    orientation spine summary.
+- Root cause classification:
+  - Data model/schema problem: the API allowed one surface preview to replace
+    canonical summary state with weaker local projection math.
+  - UI communication/orientation problem: Overview could communicate a
+    different release story than Work and Map for the same selected scope.
+- Change:
+  - Overview preview spines now reuse the full orientation spine `summary`
+    when present.
+  - The local summary calculation remains only as a fallback when no full spine
+    exists.
+- Contract Touch Decision:
+  - Work id: `codex:overview-summary-shared-2026-07-13`.
+  - Touched contracts: `/api/project?surface=overview` orientation spine
+    `summary` semantics.
+  - Contracts considered but not touched: persisted task schema, release
+    readiness schema, Project Overview component props, Project Map component
+    props.
+  - Required follow-up: continue checking response task payload counts versus
+    selected scope counts; Overview intentionally sends scoped cards while Map
+    and Work send broader payloads.
+  - Proof required: focused project endpoint regression, contract detector,
+    build/install/restart, stale-server check, live API proof that Narrative
+    Harness and Looma + Knit Overview/Work summary headline, next action, and
+    progress agree.
+  - Proof provided: focused project endpoint regression passed; `corepack pnpm
+    lint:contracts` passed; `node ./build.mjs` passed; `corepack pnpm
+    dev:install` passed; `guildhall stop && guildhall start` restarted the
+    installed app; `/api/stale-server` returned `stale:false`; live Narrative
+    Harness Overview and Work matched on headline, next action, and progress
+    with `briefed:8`, `specced:23`, `done:11`, `deferred:27`; live Looma +
+    Knit Overview and Work matched on headline, next action, and progress with
+    `briefed:1`, `specced:1`, `done:3`, `blocked:2`, `deferred:64`.
+  - Apply/revert behavior: reverting lets Overview recompute headline,
+    next-action, and progress independently, causing project orientation drift
+    across tabs.
+
 2026-07-13T03:45:00Z - Overview should reuse source-health truth instead of recomputing it.
 
 - Work id: `codex:overview-source-health-shared-2026-07-13`.
