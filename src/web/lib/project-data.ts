@@ -168,6 +168,7 @@ function visibleProjectTasks(detail: ProjectDetail): Task[] {
     const id = typeof task.id === 'string' ? task.id : ''
     const progress = id ? progressByTaskId[id] as { visibility?: { kind?: string; countInProjectTotals?: boolean } } | undefined : undefined
     if (!progress?.visibility) return true
+    if (progress.visibility.countInProjectTotals === false) return false
     return progress.visibility.kind !== 'internal_step' && progress.visibility.kind !== 'hidden'
   })
 }

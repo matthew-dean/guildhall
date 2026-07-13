@@ -68,6 +68,35 @@ describe('buildWorkSurface', () => {
     expect(model.importDraftCount).toBe(1)
   })
 
+  it('keeps non-total supporting work out of ordinary work surfaces', () => {
+    const detail: ProjectDetail = {
+      tasks: [
+        { id: 'task-primary', status: 'ready', title: 'Current implementation task' },
+        { id: 'task-supporting', status: 'ready', title: 'Later supporting idea' },
+      ],
+      workProgress: {
+        counts: {
+          visibleTotal: 1,
+          visibleActive: 1,
+          visibleBlocked: 0,
+          visibleDone: 0,
+          visibleShelved: 0,
+          deliveryTotal: 1,
+          deliveryRequired: 1,
+          deliveryDone: 0,
+          deliveryBlocked: 0,
+        },
+        byTaskId: {
+          'task-primary': { visibility: { kind: 'primary', countInProjectTotals: true } },
+          'task-supporting': { visibility: { kind: 'supporting', countInProjectTotals: false } },
+        },
+      },
+    }
+
+    const model = buildWorkSurface(detail)
+    expect(model.tasks.map(task => task.id)).toEqual(['task-primary'])
+  })
+
   it('derives work areas from accepted structural map paths before source-path fallback', () => {
     const detail: ProjectDetail = {
       structuralMapReview: {

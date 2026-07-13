@@ -8,6 +8,57 @@ help_summary: |
 
 # Web UI flow audit
 
+2026-07-13 - Work surfaces honor non-total visibility rows.
+
+- Work id: `codex:work-surface-non-total-visibility-2026-07-13`.
+- User job: Work and Coordinator surfaces should show ordinary project work,
+  not supporting rows that the shared progress model already marked as outside
+  project totals. Otherwise the product can say the current scope has one
+  visible item while Work lists extra supporting/later rows as if they are
+  current work.
+- Live finding:
+  - `visibleProjectTasks` already hid `internal_step` and `hidden`
+    `workProgress.byTaskId[*].visibility.kind` rows, but it ignored
+    `visibility.countInProjectTotals:false`.
+  - That allowed `supporting` non-total rows to leak into ordinary Work and
+    Coordinator surfaces even though the shared visible progress counts excluded
+    them.
+- Root-cause classification:
+  - Data model/schema problem: the visibility model had the needed field, but
+    the shared Work-surface reader only honored part of it.
+  - UI communication/orientation problem: Work-list rows could contradict the
+    visible project totals and selected-scope summary.
+- Change:
+  - `visibleProjectTasks` now excludes rows when
+    `workProgress.byTaskId[id].visibility.countInProjectTotals === false`,
+    while still preserving the explicit primary action and live in-progress
+    rows that are intentionally surfaced.
+  - Added a regression proving a `supporting` row with
+    `countInProjectTotals:false` stays out of ordinary Work surface tasks.
+- Contract Touch Decision:
+  - Work id: `codex:work-surface-non-total-visibility-2026-07-13`.
+  - Touched contracts: Work/Coordinator shared surface interpretation of
+    `workProgress.byTaskId[*].visibility.countInProjectTotals`.
+  - Contracts considered but not touched: persisted task schema, work-progress
+    payload shape, WorkTab chip rendering, Coordinator card rendering.
+  - Required follow-up: keep removing consumers that infer visible work directly
+    from raw task status instead of `workProgress` visibility.
+  - Proof required: failing shared Work-surface regression; WorkTab and
+    Coordinators rendered regression slices; installed-app stale proof before
+    commit.
+  - Proof provided: the new `buildWorkSurface` regression first failed with
+    `['task-primary', 'task-supporting']`; after the shared helper fix,
+    `project-data.test.ts`, `WorkTab.svelte.test.ts`, and
+    `CoordinatorsTab.svelte.test.ts` passed (`53` tests); `pnpm
+    lint:contracts` and `git diff --check` passed; installed app was rebuilt
+    and reinstalled with `/api/stale-server` reporting `stale:false`.
+  - Waivers: none.
+  - Owner-review items: none. This changes visibility interpretation, not owner
+    approval automation.
+  - Apply/revert behavior: reverting this change lets non-total supporting rows
+    appear as ordinary Work/Coordinator items while progress totals exclude
+    them.
+
 2026-07-13 - Project-card ticker uses visible progress counts.
 
 - Work id: `codex:project-card-ticker-visible-progress-2026-07-13`.
