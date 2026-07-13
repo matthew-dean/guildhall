@@ -8,6 +8,53 @@ help_summary: |
 
 # Web UI flow audit
 
+2026-07-13T03:01:30Z - Imported proof labels must not preserve checklist ghosts or filler proof text.
+
+- Work id: `codex:generic-imported-proof-labels-2026-07-13`.
+- User job: project orientation should explain real proof obligations. It must
+  not show a proof step copied from a different checklist item or filler such
+  as `has a bounded proof plan for harness`.
+- Finding:
+  - Live Narrative Harness had no `Proof 1` placeholders after the prior fix,
+    but one selected task still exposed `Expected proof: ... has a bounded
+    proof plan for harness`.
+  - Live Looma + Knit exposed `Expected proof: [ ] Unit tests:
+    use-collections...` as a delivery step for the separate `pnpm db:types`
+    task.
+- Root cause classification:
+  - Task hierarchy/dependency/proof modeling problem: imported proof paths can
+    preserve generic or sibling checklist expected-evidence strings.
+  - Bad project data produced by an earlier Guildhall bug: existing project
+    state already contained stale imported proof text, so display needed an
+    honest fallback even before reimport.
+- Change:
+  - `importedProofPathsLookGeneric` now treats markdown checklist evidence,
+    `has a bounded proof plan for harness`, and `reuses Stage N` strings as
+    generic import residue.
+  - `deriveProjectWorkProgress` ignores those strings for delivery-step labels
+    and falls back to useful recorded proof or `Proof needs shaping`.
+- Contract Touch Decision:
+  - Work id: `codex:generic-imported-proof-labels-2026-07-13`.
+  - Touched contracts: shared `workProgress.byTaskId[*].deliverySteps.title`
+    semantics and workspace-import proof-path generic filtering.
+  - Contracts considered but not touched: persisted task schema,
+    release-readiness blocker schema, `completionProof`.
+  - Required follow-up: installed-app proof against Narrative Harness and Looma
+    + Knit.
+  - Proof required: focused progress regression, full workspace-importer suite,
+    focused release-readiness regression, contract detector, build/install,
+    stale-server check, live API proof.
+  - Proof provided: focused progress regression passed; full
+    `workspace-importer` suite passed; focused release-readiness regression
+    passed; `corepack pnpm lint:contracts` passed; `node ./build.mjs` passed;
+    `corepack pnpm dev:install` passed; `guildhall stop && guildhall start`
+    restarted the installed app; `/api/stale-server` returned `stale:false`;
+    live Narrative Harness and Looma + Knit selected-scope delivery-step labels
+    returned `badTitles:[]` for `Proof N`, markdown checkbox proof text,
+    `has a bounded proof plan for harness`, and `reuses Stage N` patterns.
+  - Apply/revert behavior: reverting lets stale imported checklist/filler proof
+    strings appear as proof-step labels again.
+
 2026-07-13T02:53:44Z - Proof-complete work must expose named proof obligations in shared progress.
 
 - Work id: `codex:proof-step-placeholder-2026-07-13`.

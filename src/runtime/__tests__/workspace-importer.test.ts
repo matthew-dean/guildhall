@@ -666,6 +666,46 @@ describe('workspaceNeedsImport', () => {
     }))
   })
 
+  it('drops generic imported proof evidence instead of preserving stale checklist text', async () => {
+    const draft = {
+      goals: [],
+      tasks: [
+        {
+          suggestedId: 'task-db-types',
+          title: 'TypeScript: generate proper types from Supabase (pnpm db:types)',
+          description: 'Generate proper types from Supabase.',
+          domain: 'knit',
+          scope: 'current',
+          priority: 'normal' as const,
+          references: [],
+          source: 'workspace-importer' as const,
+          confidence: 'medium' as const,
+          acceptanceCriteria: [
+            { id: 'source-implementation', description: 'Generate proper types from Supabase with pnpm db:types.' },
+          ],
+          proofPaths: [{
+            kind: 'review' as const,
+            source: 'inferred' as const,
+            expectedEvidence: ['[ ] Unit tests: use-collections, use-presence, subdomain utils'],
+          }],
+        },
+      ],
+      milestones: [],
+      context: [],
+      stats: { inputSignals: 1, drafted: 1, deduped: 0 },
+    } satisfies WorkspaceImportDraft
+
+    const materialized = await materializeWorkspaceImportDraft({
+      memoryDir,
+      projectPath: tmpDir,
+      draft,
+    })
+
+    const expectedEvidence = materialized.tasks[0]?.proofPaths?.[0]?.expectedEvidence ?? []
+    expect(expectedEvidence).not.toContain('[ ] Unit tests: use-collections, use-presence, subdomain utils')
+    expect(expectedEvidence.join('\n')).not.toMatch(/\[[ x]\]\s+/i)
+  })
+
   it('shapes later-stage imported capabilities into real slices instead of one generic work unit', async () => {
     await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
     await fs.mkdir(path.join(tmpDir, 'docs', 'specs'), { recursive: true })

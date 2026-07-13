@@ -277,7 +277,7 @@ function proofPathDeliverySteps(
         stringValue(proof.label) ??
         expectedEvidenceTitle(proof) ??
         recordedProofTitle ??
-        `Proof ${index + 1}`
+        proofPathFallbackTitle(proof, index)
       const step: DeliveryStep = {
         id: `proof:${id}`,
         title,
@@ -304,13 +304,29 @@ function expectedEvidenceTitle(proof: TaskRecord): string | undefined {
 }
 
 function expectedEvidenceLabel(value: unknown): string | undefined {
-  if (typeof value === 'string') return stringValue(value)
+  if (typeof value === 'string') return usefulExpectedEvidenceLabel(value)
   const record = objectValue(value)
   if (!record) return undefined
-  return stringValue(record.description) ??
-    stringValue(record.summary) ??
-    stringValue(record.title) ??
-    stringValue(record.id)
+  return usefulExpectedEvidenceLabel(record.description) ??
+    usefulExpectedEvidenceLabel(record.summary) ??
+    usefulExpectedEvidenceLabel(record.title) ??
+    usefulExpectedEvidenceLabel(record.id)
+}
+
+function usefulExpectedEvidenceLabel(value: unknown): string | undefined {
+  const label = stringValue(value)
+  if (!label || importedProofEvidenceLooksGeneric(label)) return undefined
+  return label
+}
+
+function importedProofEvidenceLooksGeneric(value: string): boolean {
+  return /^\[[ x]\]\s+/i.test(value.trim()) ||
+    /\bhas a bounded proof plan for harness\b/i.test(value) ||
+    /\breuses Stage \d+\b/i.test(value)
+}
+
+function proofPathFallbackTitle(proof: TaskRecord, index: number): string {
+  return stringValue(proof.source) === 'inferred' ? 'Proof needs shaping' : `Proof ${index + 1}`
 }
 
 function firstUsefulRecordedProofTitle(task: TaskRecord): string | undefined {

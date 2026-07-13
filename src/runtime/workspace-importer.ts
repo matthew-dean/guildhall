@@ -3836,7 +3836,10 @@ function importedProofPathsLookGeneric(paths: Task['proofPaths']): boolean {
     .flatMap(path => path.expectedEvidence ?? [])
     .join('\n')
   return /\brecords focused implementation, verification, or reviewer evidence\b/i.test(text) ||
-    /\bcites how .* shaped the completed work\b/i.test(text)
+    /\bcites how .* shaped the completed work\b/i.test(text) ||
+    /^\[[ x]\]\s+/im.test(text) ||
+    /\bhas a bounded proof plan for harness\b/i.test(text) ||
+    /\breuses Stage \d+\b/i.test(text)
 }
 
 function splitMarkdownSections(content: string): Array<{ heading: string; body: string }> {

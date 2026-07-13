@@ -223,6 +223,44 @@ describe('deriveProjectWorkProgress', () => {
     ])
   })
 
+  it('does not label proof steps from imported checklist or filler evidence', () => {
+    const progress = deriveProjectWorkProgress([
+      {
+        id: 'db-types',
+        title: 'Generate proper Supabase types',
+        status: 'import_draft',
+        proofPaths: [{
+          kind: 'review',
+          source: 'inferred',
+          expectedEvidence: ['[ ] Unit tests: use-collections, use-presence, subdomain utils'],
+        }],
+      },
+      {
+        id: 'deepinfra',
+        title: 'Select and prove a DeepInfra drafting model',
+        status: 'done',
+        proofPaths: [{
+          kind: 'review',
+          source: 'inferred',
+          expectedEvidence: ['Select and prove a DeepInfra drafting model has a bounded proof plan for harness.'],
+        }],
+        gateResults: [{
+          gateId: 'pnpm-build',
+          status: 'passed',
+          checkedAt: '2026-07-12T12:00:00.000Z',
+        }],
+      },
+    ])
+
+    expect(progress.byTaskId['db-types']?.deliverySteps[0]).toMatchObject({
+      title: 'Proof needs shaping',
+      status: 'todo',
+    })
+    expect(progress.byTaskId['deepinfra']?.deliverySteps[0]).toMatchObject({
+      title: 'Gate passed: pnpm-build',
+    })
+  })
+
   it('does not keep parent proof paths as blockers after materialized child work exists', () => {
     const progress = deriveProjectWorkProgress([
       {
