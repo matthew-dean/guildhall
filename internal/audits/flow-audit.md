@@ -30934,6 +30934,79 @@ selected-scope readiness ordering.
 - Schema Migration Decision: no persisted schema field or migration changed;
   this is a derived summary presentation correction.
 
+## 2026-07-13T21:50:00Z - Narrative Harness CLI proof boundary recovered
+
+- User job:
+  - Narrative Harness's selected Stage 1 scope must produce real planning,
+    drafting, and review evidence from explicit author intent. A fixture or
+    hard-coded PASS result must never make Guildhall report the release ready.
+- Discovery:
+  - The prior `generate:story` command returned a canned coastal-fiction
+    sample, hard-coded five PASS findings, ignored the selected model, and
+    wrote to `src/fixtures` even though the documented proof path named
+    `fixtures/story-output.json`.
+  - The DeepInfra proof command had no durable blocked result when the required
+    credential was unavailable.
+- Root cause classification:
+  - External-project implementation/proof boundary problem, with a direct
+    impact on Guildhall's release evidence semantics. The task state was
+    correctly blocked, but the repository's local proof path could still make
+    fake completion look plausible.
+- Fix in Narrative Harness commit `6d4afe0`:
+  - Added explicit author-intent input validation for voice, genre, audience,
+    theme, premise, heat/content boundary, protected choices, and source notes.
+  - Replaced canned generation with a live DeepInfra pipeline: structured
+    planning, chapter drafting, and seven explicit review lanes covering author
+    voice, character voice, world state, temporal continuity, spatial
+    continuity, geography/travel time, and genre/audience.
+  - Added `--validate` and local Node tests so missing credentials are testable
+    without pretending to prove model behavior.
+  - Shared the DeepInfra client with the model proof script and made provider
+    absence produce a durable `status: blocked` result.
+  - Updated the roadmap to distinguish implementation from live proof and
+    changed project examples to use `pnpm`.
+- Proof provided:
+  - `pnpm validate:story`, `pnpm prove:author-intent`, and `pnpm test` pass;
+    all five Node tests pass.
+  - Deterministic world-state, spatial/geographic, dialogue/voice, theme, and
+    reader-knowledge fixtures pass.
+  - Live generation and DeepInfra model proof fail honestly with
+    `DEEPINFRA_API_TOKEN is required for live generation` and no output is
+    accepted as model proof.
+  - Narrative Harness has a clean local working tree at commit `6d4afe0`, but
+    `git push origin main` could not authenticate to Bitbucket (`Permission
+    denied (publickey)`).
+  - Docusaurus compilation reaches server/client compilation but fails in the
+    existing Node 25 environment with `require.resolveWeak is not a function`;
+    this is separate from the CLI validation/proof path.
+- Residual findings:
+  - Narrative Harness's current release remains blocked on three real live
+    proof items: model selection/bakeoff, author-intent-to-packet proof, and
+    live generation output. The first two local contract checks are now ready;
+    the provider-backed proof still requires a credential.
+  - Guildhall MCP evidence append was attempted twice but the configured
+    transport closed; no MCP append is claimed.
+- Contract Touch Decision:
+  - Work id: `narrative-harness-live-cli-proof-boundary-2026-07-13`.
+  - Touched contracts: none in Guildhall runtime; this change updates the
+    external Narrative Harness CLI, its provider client, proof scripts, and
+    project documentation.
+  - Contracts considered but not touched: Guildhall task schema, release
+    schema, proof evidence schema, scheduler policy, and UI summary model.
+  - Required follow-up: provide a valid DeepInfra credential through the
+    approved environment, run the live generation/model proof, record the
+    resulting evidence through Guildhall, then re-run installed API/browser
+    agreement checks.
+  - Proof required: live provider output, review-lane coverage, cost/latency/
+    refusal telemetry, Guildhall evidence record, and installed UI/API/browser
+    agreement.
+  - Proof provided: local contract/deterministic tests and honest blocked
+    provider proof; live provider and browser evidence remain open.
+  - Apply/revert behavior: reverting this external commit restores the canned
+    generation path and would invalidate any apparent completion claim.
+- Schema Migration Decision: no persisted Guildhall schema or Narrative Harness
+  storage migration changed.
+
 ## codex:looma-knit-import-shaping-state-regression-2026-07-13
 
 - User job:
