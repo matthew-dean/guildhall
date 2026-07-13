@@ -747,6 +747,49 @@ describe('buildProjectCardTicker', () => {
     })
   })
 
+  it('uses visible work progress instead of raw historical task counts', () => {
+    const project: ServiceProjectSummary = {
+      id: 'narrative-harness',
+      name: 'Narrative Harness',
+      path: '/work/narrative-harness',
+      taskCounts: { total: 168, active: 121, draftReview: 0, blocked: 0, done: 35, shelved: 12 },
+      workProgress: {
+        counts: {
+          visibleTotal: 38,
+          visibleActive: 0,
+          visibleBlocked: 0,
+          visibleDone: 26,
+          visibleShelved: 12,
+          deliveryTotal: 28,
+          deliveryRequired: 28,
+          deliveryDone: 24,
+          deliveryBlocked: 2,
+        },
+        selectedCounts: {
+          visibleTotal: 11,
+          visibleActive: 0,
+          visibleBlocked: 0,
+          visibleDone: 11,
+          visibleShelved: 0,
+          deliveryTotal: 17,
+          deliveryRequired: 17,
+          deliveryDone: 17,
+          deliveryBlocked: 0,
+        },
+        byTaskId: {},
+      },
+      highlights: { recentCompletedTaskTitle: 'Headless MVP scope completed' },
+      run: { status: 'stopped' },
+    }
+
+    expect(buildProjectCardTicker(project)).toEqual({
+      tone: 'ok',
+      pulse: false,
+      label: 'Recent',
+      message: 'Headless MVP scope completed',
+    })
+  })
+
   it('covers setup, draft, paused, recent, and idle project-card states', () => {
     expect(
       buildProjectCardTicker({

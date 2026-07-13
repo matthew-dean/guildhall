@@ -1,5 +1,5 @@
 import type { ProjectRun, ProviderStatus, ServiceDetail, ServiceProjectSummary } from './types.js'
-import { buildProjectCardTicker, type ProjectActivityLine } from './project-activity.js'
+import { buildProjectCardTicker, type ProjectActivityLine, visibleProjectCounts } from './project-activity.js'
 import { formatUserPath } from './display-path.js'
 import { humanizeProjectName } from './project-name.js'
 
@@ -349,15 +349,7 @@ export function summarizeProjectCard(
   defaultProviderStatus?: ProviderStatus | null,
 ): ProjectCardSummary {
   const projectStatusLoading = Boolean(project.projectStatusLoading)
-  const visibleWorkCounts = project.workProgress?.counts
-  const counts = {
-    total: visibleWorkCounts?.visibleTotal ?? project.taskCounts?.total ?? 0,
-    active: visibleWorkCounts?.visibleActive ?? project.taskCounts?.active ?? 0,
-    draftReview: project.taskCounts?.draftReview ?? 0,
-    blocked: visibleWorkCounts?.visibleBlocked ?? project.taskCounts?.blocked ?? 0,
-    done: visibleWorkCounts?.visibleDone ?? project.taskCounts?.done ?? 0,
-    shelved: visibleWorkCounts?.visibleShelved ?? project.taskCounts?.shelved ?? 0,
-  }
+  const counts = visibleProjectCounts(project)
   const running = project.run?.status === 'running'
   const initializationNeeded = Boolean(project.initializationNeeded)
   const maturityState = maturity(project, counts)

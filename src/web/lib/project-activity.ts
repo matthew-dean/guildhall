@@ -14,6 +14,25 @@ export interface ProjectActivityLine {
   timeLabel?: string | null
 }
 
+export function visibleProjectCounts(project: ServiceProjectSummary): {
+  total: number
+  active: number
+  draftReview: number
+  blocked: number
+  done: number
+  shelved: number
+} {
+  const visibleWorkCounts = project.workProgress?.counts
+  return {
+    total: visibleWorkCounts?.visibleTotal ?? project.taskCounts?.total ?? 0,
+    active: visibleWorkCounts?.visibleActive ?? project.taskCounts?.active ?? 0,
+    draftReview: project.taskCounts?.draftReview ?? 0,
+    blocked: visibleWorkCounts?.visibleBlocked ?? project.taskCounts?.blocked ?? 0,
+    done: visibleWorkCounts?.visibleDone ?? project.taskCounts?.done ?? 0,
+    shelved: visibleWorkCounts?.visibleShelved ?? project.taskCounts?.shelved ?? 0,
+  }
+}
+
 function pluralize(count: number, singular: string, plural = `${singular}s`): string {
   return count === 1 ? singular : plural
 }
@@ -480,7 +499,7 @@ export function hasCurrentGitUnavailableStory(detail: ProjectDetail | null | und
 }
 
 export function buildProjectCardTicker(project: ServiceProjectSummary): ProjectActivityLine {
-  const counts = project.taskCounts ?? { total: 0, active: 0, draftReview: 0, blocked: 0, done: 0, shelved: 0 }
+  const counts = visibleProjectCounts(project)
   if (project.initializationNeeded) {
     return { tone: 'warn', pulse: false, label: 'Setup', message: 'First-time setup' }
   }
