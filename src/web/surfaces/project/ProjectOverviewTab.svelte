@@ -21,6 +21,7 @@
   import { friendlyTaskId } from '../../lib/identifier-labels.js'
   import { nav, path } from '../../lib/nav.svelte.js'
   import { currentProjectHref, currentTaskHref, projectActionHref } from '../../lib/project-routes.js'
+  import { releaseCompletionSummary } from '../../lib/release-readiness.js'
   import { inboxItemKey, type InboxItem } from '../../lib/inbox-item-key.js'
   import { sourceRefsSummary } from '../../lib/source-refs.js'
   import type { EventEnvelope, ProjectDetail, ProjectMemoryHealth, Task } from '../../lib/types.js'
@@ -113,34 +114,10 @@
       : 'Current scope',
   )
   const releaseReadinessActionLabel = $derived(releaseReadinessTitle === 'Current release' ? 'Open release' : 'Open scope')
-  const releaseWorkComplete = $derived.by(() => {
-    const totals = releaseReadiness?.totals
-    if (!totals) return Boolean(releaseReadiness?.ready)
-    const taskCount = totals.tasks ?? 0
-    return taskCount > 0 && (totals.done ?? 0) >= taskCount && (totals.unfinishedCount ?? 0) === 0 && (totals.humanBlockingCount ?? 0) === 0
-  })
-  const releaseReadinessTone = $derived<Tone>(
-    releaseReadiness?.ready
-      ? 'ok'
-      : (releaseReadiness?.totals?.blockingCount ?? 0) > 0
-        || (releaseReadiness?.totals?.unfinishedCount ?? 0) > 0
-          ? 'warn'
-          : 'neutral',
-  )
-  const releaseReadinessProgress = $derived.by(() => {
-    const totals = releaseReadiness?.totals
-    if (!totals) return releaseReadiness?.notReadyReason ?? 'Open Release for the current scope check.'
-    const done = totals.done ?? 0
-    const total = totals.tasks ?? 0
-    const pieces = [
-      `${done} / ${total} done`,
-      totals.unfinishedCount ? `${totals.unfinishedCount} unfinished` : null,
-      totals.humanBlockingCount ? releaseHumanBlockingPhrase(totals.humanBlockingCount, releaseReadiness?.releaseBlockers ?? []) : null,
-    ].filter(Boolean)
-    return pieces.length ? pieces.join(' · ') : 'No release blockers reported.'
-  })
-  const releaseReadinessChipLabel = $derived(releaseReadiness?.ready ? 'Complete' : releaseWorkComplete ? 'Work complete' : 'Not complete')
-  const releaseReadinessChipTone = $derived<Tone>(releaseReadiness?.ready || releaseWorkComplete ? 'ok' : releaseReadinessTone === 'warn' ? 'warn' : 'neutral')
+  const releaseCompletion = $derived(releaseCompletionSummary(releaseReadiness))
+  const releaseReadinessProgress = $derived(releaseCompletion?.detail ?? releaseReadiness?.notReadyReason ?? 'Open Release for the current scope check.')
+  const releaseReadinessChipLabel = $derived(releaseCompletion?.label ?? 'Not complete')
+  const releaseReadinessChipTone = $derived<Tone>(releaseCompletion?.tone === 'ok' ? 'ok' : releaseCompletion?.tone === 'warn' ? 'warn' : 'neutral')
   const releaseGitBlockers = $derived((releaseReadiness?.gitStory?.blockers ?? []).slice(0, 2))
   const currentScopeTaskIds = $derived.by(() => {
     const nodeIds = [
@@ -348,12 +325,6 @@
 
   function orientationActionButtonLabel(href: string | undefined): string {
     return href?.includes('/map') ? 'Open map' : 'Open Work'
-  }
-
-  function releaseHumanBlockingPhrase(count: number, blockers: NonNullable<ProjectDetail['releaseReadiness']>['releaseBlockers']): string {
-    const needsShaping = blockers?.some(blocker => /brief|source-backed|shaping|clearer/i.test(`${blocker.label ?? ''} ${blocker.title ?? ''}`)) ?? false
-    if (needsShaping) return `${count} ${count === 1 ? 'needs shaping' : 'need shaping'}`
-    return `${count} ${count === 1 ? 'needs you' : 'need you'}`
   }
 
   const orientationMapStatus = $derived.by(() => {

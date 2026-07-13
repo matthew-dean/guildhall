@@ -3961,6 +3961,18 @@ describe('GET /api/project/release-readiness', () => {
     const res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
     const body = await res.json() as any
     expect(body.ready).toBe(true)
+    expect(body.completion).toMatchObject({
+      state: 'complete',
+      label: 'Complete',
+      tone: 'ok',
+      detail: '1 / 1 done',
+    })
+    expect(body.verdict).toMatchObject({
+      state: 'ready',
+      label: 'Ready',
+      tone: 'ok',
+      detail: '1/1 tasks done · no open scope blockers.',
+    })
     expect(body.totals.done).toBe(1)
     expect(body.totals.blockingCount).toBe(0)
   })
@@ -3984,6 +3996,18 @@ describe('GET /api/project/release-readiness', () => {
     const body = await res.json() as any
 
     expect(body.ready).toBe(false)
+    expect(body.completion).toMatchObject({
+      state: 'work_complete',
+      label: 'Work complete',
+      tone: 'ok',
+      detail: '1 / 1 done',
+    })
+    expect(body.verdict).toMatchObject({
+      state: 'blocked',
+      label: 'Blocked',
+      tone: 'warn',
+      detail: '1 Guildhall-managed checkout file needs cleanup or landing.',
+    })
     expect(body.dirtyCheckout.ownedCount).toBe(1)
     expect(body.dirtyCheckout.files).toEqual(['.guildhall/release-note.md'])
     expect(body.totals.dirtyCheckoutBlockingCount).toBe(1)

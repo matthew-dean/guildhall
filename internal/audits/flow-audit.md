@@ -8,6 +8,92 @@ help_summary: |
 
 # Web UI flow audit
 
+2026-07-13T19:30:00Z - Release completion and readiness must come from one shared model across Overview and Release.
+
+- Work id: `codex:shared-release-completion-readiness-2026-07-13`.
+- User job: The same selected scope should tell one coherent story everywhere:
+  Overview should say how complete the current scope is, Release should say
+  whether that scope is actually ready, and neither surface should improvise
+  its own wording or math.
+- Finding:
+  - Overview and Release were both trying to answer the same owner questions,
+    but they were doing it with separate local logic.
+  - The API exposed raw readiness totals plus a boolean, then each surface
+    translated that into its own “complete,” “work complete,” “blocked,” or
+    “ready” language.
+  - That made structural drift likely: the pending-question branch could say a
+    scope was blocked while its totals still claimed nothing was blocked, and a
+    wording fix in one surface could quietly diverge from the other.
+- Root cause classification:
+  - Data model/schema problem: the readiness API exposed too much raw material
+    and not enough authoritative semantic state for the two owner-facing
+    judgments it needed to support.
+  - UI communication/orientation problem: Overview and Release were each
+    reconstructing “what this means” locally, so the product could not promise
+    one consistent answer to “how complete is this?” versus “is this ready?”
+- Change:
+  - `/api/project/release-readiness` now emits explicit `completion` and
+    `verdict` summaries alongside the raw totals.
+  - The shared completion/verdict builders now live in
+    `src/shared/release-readiness.ts`, so runtime copy and decision rules do
+    not fork.
+  - `src/web/lib/release-readiness.ts` now acts as a thin compatibility layer:
+    it prefers the shared API summaries when present and uses the same shared
+    builders when older payloads need fallback derivation.
+  - The pressure-test pending-question path now reports blocking totals
+    honestly instead of saying “blocked” while returning zero blockers.
+- Contract Touch Decision:
+  - Work id: `codex:shared-release-completion-readiness-2026-07-13`.
+  - Touched contracts:
+    - `/api/project/release-readiness` response semantics now include explicit
+      `completion` and `verdict` summaries.
+    - Owner-facing Release and Overview completion/readiness copy semantics now
+      flow from the shared release-readiness builders instead of per-surface
+      logic.
+    - Touched UI consumers: `src/web/surfaces/project/ProjectOverviewTab.svelte`
+      and `src/web/surfaces/project/ReleaseTab.svelte`.
+  - Contracts considered but not touched: persisted task schema, persisted
+    release schema, Project Map spine schema, Start/readiness route contract,
+    workspace-import persistence schema.
+  - Required follow-up: if another surface needs “how complete is this?” or “is
+    this ready?”, extend the shared summary contract instead of adding a third
+    local interpreter.
+  - Proof required: focused Release/Overview/runtime tests, contract detector,
+    build/install/restart, stale-server check, and installed-app proof on both
+    a completed scope and a blocked/incomplete scope.
+  - Proof provided: focused `ReleaseTab`, `ProjectOverviewTab`, and
+    `serve-release-readiness` suites passed with `124` tests; `pnpm build`
+    passed; `pnpm dev:install` passed; `/api/stale-server` returned
+    `stale:false`; live Narrative Harness `/release` showed `Complete` plus
+    verdict `Ready` for the same current scope; live Narrative Harness
+    `/overview` showed `Current release` `COMPLETE` with `11 / 11 done` from
+    the same shared summary; live Looma + Knit `/release` showed `Work
+    remaining` with `4/5 done`, `Needs shaping`, dirty-checkout follow-up, and
+    repository follow-up blockers for the same selected release; live Looma +
+    Knit `/overview` showed `5 in current scope · 4 completed · 1 blocked`
+    while the top action stayed pinned to the shaped-first blocker instead of
+    pretending the release was complete.
+  - Apply/revert behavior: reverting restores split release semantics where the
+    API returns raw totals only, surfaces reinterpret readiness locally, and
+    branch-specific edge cases can disagree about whether work is complete or
+    merely ready.
+- Schema Migration Decision:
+  - Persisted schema touched: none.
+  - Scope: endpoint projection and UI contract only.
+  - Change class: additive response semantics plus shared derivation utility.
+  - Existing data impact: none; persisted task/release files remain unchanged.
+  - Migration id: none required.
+  - Safety: backward compatible because raw totals and existing fields remain.
+  - Compatibility reader: `src/web/lib/release-readiness.ts` derives the same
+    summaries from older payloads when explicit shared summaries are absent.
+  - Fixtures/tests: `src/runtime/__tests__/serve-release-readiness.test.ts`,
+    `src/web/surfaces/project/__tests__/ReleaseTab.svelte.test.ts`, and
+    `src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts`.
+  - Owner-facing plan text: “Overview tells you how complete the current scope
+    is. Release tells you whether that same scope is actually ready.”
+  - Rollback/revert behavior: removing the new summaries does not require data
+    migration, but it reopens semantic drift between surfaces.
+
 2026-07-13T13:50:00Z - Workspace import must recover archived completion truth from real task history, not reanimate duplicate current drafts.
 
 - Work id: `codex:workspace-import-archived-completion-recovery-2026-07-13`.

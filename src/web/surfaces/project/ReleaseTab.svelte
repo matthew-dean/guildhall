@@ -11,7 +11,8 @@
   import StatusPill from '../../../../packages/ui/src/components/StatusPill.svelte'
   import { nav } from '../../lib/nav.svelte.js'
   import { currentProjectHref, currentTaskHref, projectFetch } from '../../lib/project-routes.js'
-  import type { ProjectOrientationSpine } from '../../lib/types.js'
+  import { releaseVerdictSummary } from '../../lib/release-readiness.js'
+  import type { ProjectOrientationSpine, ProjectReleaseReadiness } from '../../lib/types.js'
 
   interface ReleaseItem {
     id?: string
@@ -24,7 +25,7 @@
     summary?: string
   }
 
-  interface ReleasePayload {
+  interface ReleasePayload extends ProjectReleaseReadiness {
     ready?: boolean
     notReadyReason?: string
     initializationNeeded?: boolean
@@ -357,66 +358,7 @@
   const openCheckNoun = $derived(hasNamedRelease ? 'release check' : 'scope check')
   const openCheckCount = $derived(Math.max(data?.totals.blockingCount ?? 0, unfinishedCount))
 
-  const verdict = $derived.by(() => {
-    if (!data) return { label: 'Loading', tone: 'neutral' as const, reason: '' }
-    if (data.ready === false && data.notReadyReason) {
-      return {
-        label: 'Blocked',
-        tone: 'warn' as const,
-        reason: data.notReadyReason,
-      }
-    }
-    if (data.totals.tasks === 0) {
-      return {
-        label: 'Not yet',
-        tone: 'warn' as const,
-        reason: `No tracked work yet. Shape the first task before judging ${readinessNoun} readiness.`,
-      }
-    }
-    if (data.totals.blockingCount === 0 && unfinishedCount === 0 && dirtyCheckoutCount === 0 && !dirtyCheckoutError && designSystemBlockingCount === 0) {
-      return {
-        label: 'Ready',
-        tone: 'ok' as const,
-        reason: `${data.totals.done}/${data.totals.tasks} tasks done · no open ${blockerNoun}s.`,
-      }
-    }
-    if (unfinishedCount > 0) {
-      return {
-        label: 'Work remaining',
-        tone: 'warn' as const,
-        reason: `${unfinishedCount} task${unfinishedCount === 1 ? '' : 's'} still need shaping, worker execution, review, or recovery.`,
-      }
-    }
-    if (dirtyCheckoutCount > 0) {
-      return {
-        label: 'Blocked',
-        tone: 'warn' as const,
-        reason: `${managedCheckoutFilesLabel(dirtyCheckoutCount)} still ${managedCheckoutNeedsVerb(dirtyCheckoutCount)} cleanup or landing.`,
-      }
-    }
-    if (dirtyCheckoutError) {
-      return {
-        label: 'Blocked',
-        tone: 'warn' as const,
-        reason: 'Could not inspect the project checkout.',
-      }
-    }
-    if (designSystemBlockingCount > 0) {
-      return {
-        label: 'Blocked',
-        tone: 'warn' as const,
-        reason: data.designSystem?.reason
-          ?? (data.designSystem?.drafted
-            ? 'A design guardrail is drafted but still needs approval.'
-            : 'No design-system guardrail is captured yet.'),
-      }
-    }
-    return {
-      label: 'Blocked',
-      tone: 'warn' as const,
-      reason: `${data.totals.blockingCount} item${data.totals.blockingCount === 1 ? '' : 's'} waiting on you.`,
-    }
-  })
+  const verdict = $derived(data ? releaseVerdictSummary(data) ?? { label: 'Loading', tone: 'neutral' as const, detail: '', state: 'empty' } : { label: 'Loading', tone: 'neutral' as const, detail: '', state: 'empty' })
 
   const sectionCopy = $derived(
     section === 'criteria'
@@ -576,7 +518,7 @@
         label="Verdict"
         title={verdict.label}
       >
-        <p>{verdict.reason}</p>
+        <p>{verdict.detail}</p>
       </NoticeBand>
 
       <FrameCard

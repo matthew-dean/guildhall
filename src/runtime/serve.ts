@@ -302,6 +302,7 @@ import {
 } from '@guildhall/skills'
 import { importedTaskNeedsBriefShaping, importedTaskNeedsSourceRecovery, normalizeImportedDraftTask } from './import-drafts.js'
 import { taskShapingBlockers } from '../shared/task-shaping-blockers.js'
+import { buildReleaseCompletionSummary, buildReleaseVerdictSummary } from '../shared/release-readiness.js'
 import { selectedReleaseScopeForQueue, selectedTaskScopeForQueue } from './orchestrator-picker.js'
 import { specReviewRequiresOwnerApproval } from './spec-review-ownership.js'
 import {
@@ -13659,6 +13660,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
       label: 'Current task scope',
       state: 'active',
       source: 'inferred',
+      nodeIds: [],
+      deferredNodeIds: [],
       description: 'Guildhall is checking the currently selected task scope. No named release is defined for this project yet.',
     }
     if (project.initializationNeeded) return { initializationNeeded: true, release: null, scope: fallbackRelease }
@@ -13718,11 +13721,30 @@ export function buildServeApp(opts: ServeOptions = {}): {
     const activePressureTest = listPressureTestIntakes(memoryDir)
       .find(intake => intake.status === 'active' && intake.pendingQuestion)
     if (activePressureTest?.pendingQuestion) {
+      const rawDoneCount = rawTasks.filter(task => task.status === 'done').length
+      const rawUnfinishedCount = Math.max(0, rawTasks.length - rawDoneCount)
+      const completion = buildReleaseCompletionSummary({
+        ready: false,
+        totals: {
+          tasks: rawTasks.length,
+          done: rawDoneCount,
+          unfinishedCount: rawUnfinishedCount,
+          humanBlockingCount: 1,
+        },
+        releaseBlockers: [],
+      })
       return {
         release,
         scope: readinessScope,
         ready: false,
         notReadyReason: `Guildhall has one more question for ${activePressureTest.target.title}. Answer it before judging whether current work is ready.`,
+        completion,
+        verdict: {
+          state: 'blocked',
+          label: 'Blocked',
+          tone: 'warn',
+          detail: `Guildhall has one more question for ${activePressureTest.target.title}. Answer it before judging whether current work is ready.`,
+        },
         statusCounts: {},
         openEscalations: [],
         incompleteBriefs: [],
@@ -13749,13 +13771,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
         },
         totals: {
           tasks: rawTasks.length,
-          blockingCount: 0,
-          humanBlockingCount: 0,
-          unfinishedCount: 0,
+          blockingCount: 1,
+          humanBlockingCount: 1,
+          unfinishedCount: rawUnfinishedCount,
           designSystemBlockingCount: 0,
           dirtyCheckoutBlockingCount: 0,
           gitStoryBlockingCount: 0,
-          done: rawTasks.filter(task => task.status === 'done').length,
+          done: rawDoneCount,
         },
       }
     }
@@ -13861,12 +13883,39 @@ export function buildServeApp(opts: ServeOptions = {}): {
         }
       : release
     const effectiveScope = readinessScope === release && effectiveRelease ? effectiveRelease : readinessScope
+    const completion = buildReleaseCompletionSummary({
+      ready,
+      totals: {
+        tasks: scopedTasks.length,
+        done: statusCounts['done'] ?? 0,
+        unfinishedCount,
+        humanBlockingCount,
+      },
+      releaseBlockers: effectiveReleaseBlockers,
+    })
+    const verdict = buildReleaseVerdictSummary({
+      hasNamedRelease: Boolean(effectiveRelease?.label),
+      ready,
+      notReadyReason: scopedTasks.length === 0 ? 'No tasks in this scope yet.' : undefined,
+      totals: {
+        tasks: scopedTasks.length,
+        done: statusCounts['done'] ?? 0,
+        blockingCount,
+        unfinishedCount,
+        designSystemBlockingCount,
+        dirtyCheckoutBlockingCount,
+      },
+      designSystem,
+      dirtyCheckout,
+    })
 
     return {
       release: effectiveRelease,
       scope: effectiveScope,
       ready,
       ...(scopedTasks.length === 0 ? { notReadyReason: 'No tasks in this scope yet.' } : {}),
+      completion,
+      verdict,
       statusCounts,
       openEscalations,
       incompleteBriefs,

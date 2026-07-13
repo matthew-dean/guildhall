@@ -409,6 +409,18 @@ export interface ProjectReleaseReadiness {
   scope?: ProjectOrientationRelease | null
   ready?: boolean
   notReadyReason?: string
+  completion?: {
+    state?: 'empty' | 'incomplete' | 'work_complete' | 'complete' | string
+    label?: string
+    tone?: 'ok' | 'warn' | 'neutral' | string
+    detail?: string
+  }
+  verdict?: {
+    state?: 'empty' | 'work_remaining' | 'blocked' | 'ready' | string
+    label?: string
+    tone?: 'ok' | 'warn' | 'neutral' | string
+    detail?: string
+  }
   statusCounts?: Record<string, number>
   proofMissingDoneTasks?: Array<{ id?: string; title?: string }>
   releaseBlockers?: Array<{ id?: string; title?: string; label?: string; nextAction?: string }>
