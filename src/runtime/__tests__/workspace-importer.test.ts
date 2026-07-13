@@ -617,6 +617,14 @@ describe('workspaceNeedsImport', () => {
 
     expect(runner?.proofPaths).toEqual([
       expect.objectContaining({
+        kind: 'command',
+        source: 'inferred',
+        launchSteps: [expect.objectContaining({
+          kind: 'blocked_until_setup',
+          setupRequirement: 'No repo-local pnpm script or CLI proof command is named yet.',
+        })],
+      }),
+      expect.objectContaining({
         kind: 'review',
         source: 'inferred',
         expectedEvidence: expect.arrayContaining([
@@ -2384,6 +2392,13 @@ tasks:
           expect.objectContaining({ id: 'deterministic-proof' }),
         ]),
         proofPaths: [
+          expect.objectContaining({
+            kind: 'command',
+            source: 'inferred',
+            launchSteps: [expect.objectContaining({
+              kind: 'blocked_until_setup',
+            })],
+          }),
           expect.objectContaining({ kind: 'review', source: 'inferred' }),
         ],
       },
@@ -4808,7 +4823,14 @@ tasks:
     expect(task?.spec).toContain('Verification environment: Local filesystem and repo-local tooling already available in the execution environment')
     expect(task?.spec).not.toContain('Proof target:')
     expect(task?.spec).not.toContain('pnpm test -- define-fixture-expected-record-prototype-run-and-evaluation-schemas')
-    expect(task?.proofPaths?.some(path => path.kind === 'command')).toBe(false)
+    expect(task?.proofPaths?.some(path => path.kind === 'command')).toBe(true)
+    expect(task?.proofPaths?.find(path => path.kind === 'command')).toMatchObject({
+      source: 'inferred',
+      launchSteps: [expect.objectContaining({
+        kind: 'blocked_until_setup',
+        setupRequirement: 'No repo-local pnpm script or CLI proof command is named yet.',
+      })],
+    })
     expect(task?.acceptanceCriteria?.find(criterion => criterion.id === 'deterministic-proof')).toMatchObject({
       verifiedBy: 'review',
       source: 'inferred',
@@ -5397,6 +5419,14 @@ tasks:
       'spatial-finding-shape',
       'deterministic-proof',
     ])
+    expect(materialized.tasks.filter(task => task.scope !== 'later')).toHaveLength(5)
+    const missingCommandProof = materialized.tasks.filter(task => task.scope !== 'later' && !task.proofPaths?.some(path =>
+        path.kind === 'command' &&
+        path.source === 'inferred' &&
+        path.launchSteps?.some(step => step.kind === 'blocked_until_setup'),
+      ),
+    ).map(task => ({ title: task.title, proofPaths: task.proofPaths }))
+    expect(missingCommandProof).toEqual([])
 
     await createWorkspaceImportTask({ memoryDir, projectPath: tmpDir, inventory })
     await approveWorkspaceImport({

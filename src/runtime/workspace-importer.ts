@@ -783,6 +783,47 @@ function importedCommandId(command: string): string {
     .slice(0, 64) || 'imported-command-proof'
 }
 
+function finalizeDraftTaskProofPaths(task: {
+  suggestedId: string
+  title: string
+  proofPaths?: Task['proofPaths']
+}): Task['proofPaths'] | undefined {
+  const proofPaths = task.proofPaths?.map(path =>
+    path && typeof path === 'object' && !Array.isArray(path)
+      ? normalizeImportedProofPath(path as Record<string, unknown>)
+      : path,
+  )
+  if (!importedPrototypeTaskKind({
+    id: task.suggestedId,
+    title: task.title,
+    description: '',
+    domain: '',
+    priority: 'normal',
+    references: [],
+  })) return proofPaths
+  const withoutGenericCommand = (proofPaths ?? []).filter(path => {
+    if (!path || typeof path !== 'object' || Array.isArray(path)) return true
+    const record = path as Record<string, unknown>
+    return !(record.kind === 'command' && record.source === 'inferred' && typeof record.command === 'string')
+  })
+  const hasModeledCommandNeed = withoutGenericCommand.some(path => {
+    if (!path || typeof path !== 'object' || Array.isArray(path)) return false
+    const record = path as Record<string, unknown>
+    if (record.kind !== 'command') return false
+    if (record.source !== 'inferred' && typeof record.command === 'string' && record.command.trim()) return true
+    const launchSteps = Array.isArray(record.launchSteps) ? record.launchSteps : []
+    return launchSteps.some(step =>
+      step && typeof step === 'object' && !Array.isArray(step) &&
+      (step as Record<string, unknown>).kind === 'blocked_until_setup',
+    )
+  })
+  return hasModeledCommandNeed
+    ? withoutGenericCommand
+    : [importedMissingCommandProofPath({ id: task.suggestedId, title: task.title }, [
+        `Add a repo-local pnpm script or CLI proof command for ${task.title}.`,
+      ]), ...withoutGenericCommand]
+}
+
 function normalizeImportText(value: string): string {
   return value
     .toLowerCase()
@@ -1127,6 +1168,12 @@ export function mergeWorkspaceImportDraft(
       const resolvedProofPaths = preserveDetectedScope
         ? task.proofPaths ?? parsedTask.proofPaths
         : parsedTask.proofPaths ?? task.proofPaths
+      const useParsedTaskIdentity = exactTitleMatch || taskTitleContainsCompletionMetadata(task.title)
+      const mergedProofPaths = finalizeDraftTaskProofPaths({
+        suggestedId: useParsedTaskIdentity ? parsedTask.id : task.suggestedId,
+        title: useParsedTaskIdentity ? parsedTask.title : task.title,
+        proofPaths: resolvedProofPaths,
+      })
       const resolvedReleaseIds = preserveDetectedScope
         ? task.releaseIds ?? parsedTask.releaseIds
         : parsedTask.releaseIds ?? task.releaseIds
@@ -1134,7 +1181,6 @@ export function mergeWorkspaceImportDraft(
         ...(task.sourceClaims ?? []),
         ...(parsedTask.sourceClaims ?? []),
       ]
-      const useParsedTaskIdentity = exactTitleMatch || taskTitleContainsCompletionMetadata(task.title)
       mergedTasks.push({
         ...task,
         suggestedId: useParsedTaskIdentity ? parsedTask.id : task.suggestedId,
@@ -1152,7 +1198,7 @@ export function mergeWorkspaceImportDraft(
         ...(resolvedReleaseIds ? { releaseIds: [...resolvedReleaseIds] } : {}),
         ...(resolvedAcceptanceCriteria ? { acceptanceCriteria: resolvedAcceptanceCriteria } : {}),
         ...(resolvedDependsOn ? { dependsOn: [...resolvedDependsOn] } : {}),
-        ...(resolvedProofPaths ? { proofPaths: [...resolvedProofPaths] } : {}),
+        ...(mergedProofPaths ? { proofPaths: mergedProofPaths } : {}),
         ...(resolvedSourceClaims.length > 0 ? { sourceClaims: dedupeImportSourceClaims(resolvedSourceClaims) } : {}),
       })
       continue
@@ -1168,6 +1214,11 @@ export function mergeWorkspaceImportDraft(
     if (usedTaskTitles.has(normalizedTitle)) continue
     if (detected.tasks.some(detectedTask => parsedTaskShadowsDetectedTask(detectedTask, task))) continue
     if (!retainParsedOnlyTasks) continue
+    const proofPaths = finalizeDraftTaskProofPaths({
+      suggestedId: task.id,
+      title: task.title,
+      proofPaths: task.proofPaths,
+    })
     mergedTasks.push({
       suggestedId: task.id,
       title: task.title,
@@ -1185,7 +1236,7 @@ export function mergeWorkspaceImportDraft(
       source: 'workspace-importer',
       ...(task.acceptanceCriteria ? { acceptanceCriteria: task.acceptanceCriteria } : {}),
       ...(task.dependsOn ? { dependsOn: [...task.dependsOn] } : {}),
-      ...(task.proofPaths ? { proofPaths: [...task.proofPaths] } : {}),
+      ...(proofPaths ? { proofPaths } : {}),
       ...(task.references.length > 0 ? { references: [...task.references] } : {}),
       ...(task.releaseIds && task.releaseIds.length > 0 ? { releaseIds: [...task.releaseIds] } : {}),
       ...(task.sourceClaims && task.sourceClaims.length > 0 ? { sourceClaims: [...task.sourceClaims] as Task['sourceClaims'] } : {}),
@@ -3588,9 +3639,9 @@ function deriveContractProofPaths(
     'The imported schema layer exposes the cited fixture and run contracts without ad hoc gaps',
   )
   return [
-    ...(command ? [importedCommandProofPath(command, [
+    importedCommandProofExpectation(task, command, [
       verificationSummary,
-    ], 'documented')] : []),
+    ]),
     {
       kind: 'review' as const,
       source: 'inferred' as const,
@@ -3623,6 +3674,35 @@ function importedCommandProofPath(
   }
 }
 
+function importedMissingCommandProofPath(
+  task: Pick<MaterializedImportTask, 'id' | 'title'>,
+  expectedEvidence: string[],
+): NonNullable<Task['proofPaths']>[number] {
+  const title = task.title.replace(/[.?!]\s*$/, '')
+  return {
+    kind: 'command' as const,
+    source: 'inferred' as const,
+    launchSteps: [{
+      id: `${task.id}-proof-command-needed`,
+      title: 'Add proof command',
+      kind: 'blocked_until_setup',
+      setupRequirement: 'No repo-local pnpm script or CLI proof command is named yet.',
+      ownerAction: `Name or implement the command that proves ${title}.`,
+    }],
+    expectedEvidence,
+  }
+}
+
+function importedCommandProofExpectation(
+  task: Pick<MaterializedImportTask, 'id' | 'title'>,
+  command: string | null,
+  expectedEvidence: string[],
+): NonNullable<Task['proofPaths']>[number] {
+  return command
+    ? importedCommandProofPath(command, expectedEvidence, 'documented')
+    : importedMissingCommandProofPath(task, expectedEvidence)
+}
+
 function materializedProofPaths(
   task: MaterializedImportTask,
   evidenceDetail?: ImportedEvidenceDetail,
@@ -3636,7 +3716,7 @@ function materializedProofPaths(
     switch (prototypeTaskKind) {
       case 'fixture':
         return [
-          ...(command ? [importedCommandProofPath(command, ['The bounded fixture and expected records load and compare successfully.'], 'documented')] : []),
+          importedCommandProofExpectation(task, command, ['The bounded fixture and expected records load and compare successfully.']),
           {
             kind: 'review' as const,
             source: 'inferred' as const,
@@ -3648,7 +3728,7 @@ function materializedProofPaths(
         ]
       case 'runner':
         return [
-          ...(command ? [importedCommandProofPath(command, ['The runner ingests the fixture, builds records, runs a packet, and saves output.'], 'documented')] : []),
+          importedCommandProofExpectation(task, command, ['The runner ingests the fixture, builds records, runs a packet, and saves output.']),
           {
             kind: 'review' as const,
             source: 'inferred' as const,
@@ -3660,7 +3740,7 @@ function materializedProofPaths(
         ]
       case 'evaluation':
         return [
-          ...(command ? [importedCommandProofPath(command, ['Evaluation output classifies missing, noisy, stale, useful, schema, and model-behavior outcomes.'], 'documented')] : []),
+          importedCommandProofExpectation(task, command, ['Evaluation output classifies missing, noisy, stale, useful, schema, and model-behavior outcomes.']),
           {
             kind: 'review' as const,
             source: 'inferred' as const,
@@ -3672,7 +3752,7 @@ function materializedProofPaths(
         ]
       case 'debug_report':
         return [
-          ...(command ? [importedCommandProofPath(command, ['The debug report records the run summary, packet/context receipts, and trace spine.'], 'documented')] : []),
+          importedCommandProofExpectation(task, command, ['The debug report records the run summary, packet/context receipts, and trace spine.']),
           {
             kind: 'review' as const,
             source: 'inferred' as const,
@@ -3684,7 +3764,7 @@ function materializedProofPaths(
         ]
       case 'schema_prune':
         return [
-          ...(command ? [importedCommandProofPath(command, ['The first bounded run still passes after schema narrowing.'], 'documented')] : []),
+          importedCommandProofExpectation(task, command, ['The first bounded run still passes after schema narrowing.']),
           {
             kind: 'review' as const,
             source: 'inferred' as const,

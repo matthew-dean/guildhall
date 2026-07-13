@@ -30566,6 +30566,71 @@ selected-scope readiness ordering.
     Overview even while Map/Start say it is complete.
 - Schema Migration Decision: no persisted schema field or migration changed.
 
+## codex:workspace-import-missing-command-proof-truth-2026-07-13
+
+- User job:
+  - When real docs say the current scope is headless, script-only, no-UI, or
+    CLI-first, Guildhall must model command proof as a proof requirement even
+    when the exact command is not documented yet. It must not hide the missing
+    command inside review prose or invent a fake `pnpm test -- title` command.
+- Root cause classification:
+  - Task hierarchy/dependency/proof modeling problem: command proof was derived
+    only when a parsed task already contained a command string.
+  - Data model/schema problem: the importer had two proof concepts competing:
+    review evidence text that said "add bounded local proof" and command proof
+    paths that release readiness could reason about.
+  - Project structure/scope/release modeling problem: Narrative Harness Stage 1
+    had a script/headless release boundary, but graph-expanded current tasks
+    could keep review-only proof after merge.
+  - Bad project data produced by an earlier Guildhall bug: existing NH tasks
+    still need re-intake/apply after corrected draft generation.
+- Fix:
+  - Known imported headless/prototype task shapes now get a command proof
+    expectation even when no exact command is documented.
+  - Missing commands are modeled as `kind: command`, `source: inferred`, with a
+    `blocked_until_setup` launch step. This keeps release readiness blocked
+    until a real runnable `copy_command` exists.
+  - The merge boundary now removes inferred generic `pnpm test -- title`
+    commands for these prototype tasks and preserves explicit/imported commands.
+- Proof provided:
+  - `CI=true pnpm exec vitest run
+    src/runtime/__tests__/workspace-importer.test.ts` passed `85` tests.
+  - `CI=true pnpm exec vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts` passed `64` tests.
+  - `CI=true pnpm lint:contracts` passed.
+  - `CI=true pnpm build` passed.
+  - `CI=true pnpm dev:install` passed, then `guildhall stop && guildhall start`
+    restarted the installed app.
+  - `/api/stale-server` returned `stale:false`, PID `75202`,
+    `bootBuildMtimeMs:1783927561038`, and
+    `currentBuildMtimeMs:1783927561038`.
+  - Live `guildhall workspace-import draft
+    /Users/matthew/git/oss/narrative-harness --json` returned `23` tasks, `11`
+    current tasks, `11` command-proof tasks, `11` current command-proof tasks,
+    `11` current blocked command-proof tasks, and `0` current runnable
+    `copy_command` tasks.
+- Residual findings:
+  - The corrected NH draft now says every current task needs command proof, but
+    the commands are still not implemented/named. The next step is applying the
+    corrected re-intake, then driving work that creates real PNPM/CLI proof
+    commands and records passing evidence.
+- Contract Touch Decision:
+  - Work id: `workspace-import-missing-command-proof-truth`.
+  - Touched contracts: workspace-import proof-path derivation and import-draft
+    merge proof-path normalization.
+  - Contracts considered but not touched: persisted task schema, persisted
+    release schema, release-readiness proof calculation, Project Map UI,
+    Overview UI, Work UI, and workspace-import approval schema.
+  - Required follow-up: apply/re-intake the corrected NH draft through the real
+    product path and verify Map/Overview/Work expose the missing command proof
+    as proof blockers instead of review prose.
+  - Proof required: importer regression, release-readiness consumer regression,
+    contract lint, build/install freshness, and live NH draft proof.
+  - Proof provided: all proof listed above.
+  - Apply/revert behavior: reverting lets headless/CLI current work fall back to
+    review-only proof or fake inferred `pnpm test -- title` commands.
+- Schema Migration Decision: no persisted schema field or migration changed.
+
 ## codex:workspace-import-command-proof-shape-2026-07-13
 
 - User job:
