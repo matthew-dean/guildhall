@@ -8,6 +8,53 @@ help_summary: |
 
 # Web UI flow audit
 
+2026-07-13T03:45:00Z - Overview should reuse source-health truth instead of recomputing it.
+
+- Work id: `codex:overview-source-health-shared-2026-07-13`.
+- User job: A user comparing Overview, Work, Map, and Release should see one
+  source-health truth for the same selected project/scope. Overview may show a
+  lighter preview, but it must not recompute source health with different
+  counts from the shared spine.
+- Finding:
+  - Live Narrative Harness reported the same selected release as complete on
+    Overview, Work, Map, and Release, but Overview returned
+    `sourceHealth.inferred:38`, `documented:40`, and `deferred:27` while Work
+    returned `sourceHealth.inferred:67`, `documented:58`, and `deferred:19`.
+  - The mismatch came from `buildOverviewOrientationPreviewSpine`, which
+    replaced the full spine source health with local projection counts.
+- Root cause classification:
+  - Data model/schema problem: the API read model let a preview spine override
+    canonical source-health fields.
+  - UI communication/orientation problem: Overview and Work could disagree
+    about source-trail health while displaying the same selected release.
+- Change:
+  - Added one compact source-health summarizer and reused it for Work-surface
+    compaction and Overview preview spines.
+  - Overview keeps its lightweight preview shape but inherits the same
+    source-health truth as the full orientation spine.
+- Contract Touch Decision:
+  - Work id: `codex:overview-source-health-shared-2026-07-13`.
+  - Touched contracts: `/api/project?surface=overview` orientation spine
+    `sourceHealth` semantics, compact orientation-spine source-health
+    derivation.
+  - Contracts considered but not touched: persisted task schema, project
+    release schema, Project Overview component props, Project Map component
+    props.
+  - Required follow-up: continue checking other summary fields for cross-surface
+    drift, especially selected task counts versus full map counts.
+  - Proof required: focused project endpoint regression, contract detector,
+    build/install/restart, stale-server check, live API proof that Narrative
+    Harness Overview and Work source health agree.
+  - Proof provided: focused project endpoint regression passed; `corepack pnpm
+    lint:contracts` passed; `node ./build.mjs` passed; `corepack pnpm
+    dev:install` passed; `guildhall stop && guildhall start` restarted the
+    installed app; `/api/stale-server` returned `stale:false`; live Narrative
+    Harness Overview and Work both returned
+    `sourceHealth:{inferred:67,conflicts:0,gaps:0,documented:58,deferred:19}`.
+  - Apply/revert behavior: reverting makes Overview reintroduce local
+    source-health math and allows the same selected release to report different
+    source-health counts on different surfaces.
+
 2026-07-13T03:38:00Z - Source-health gaps should count source provenance only.
 
 - Work id: `codex:source-health-gap-count-2026-07-13`.

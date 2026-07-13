@@ -993,8 +993,12 @@ describe('GET /api/project/task/:id', () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
     const workRes = await app.fetch(new Request(projectUrl('/api/project?surface=work&task=task-storybook')))
     const workBody = (await workRes.json()) as Record<string, any>
+    const overviewRes = await app.fetch(new Request(projectUrl('/api/project?surface=overview')))
+    const overviewBody = (await overviewRes.json()) as Record<string, any>
 
     expect(workRes.status, workBody.error).toBe(200)
+    expect(overviewRes.status, overviewBody.error).toBe(200)
+    expect(overviewBody.orientationSpine?.sourceHealth).toEqual(workBody.orientationSpine?.sourceHealth)
     expect(workBody.selectedTaskId).toBe('task-storybook')
     expect(workBody.tasks?.some((task: Record<string, any>) => task.id === 'task-storybook')).toBe(true)
     const workTask = workBody.tasks?.find((task: Record<string, any>) => task.id === 'task-storybook')

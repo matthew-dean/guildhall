@@ -4062,7 +4062,7 @@ function compactDeliveryQueueForWorkSurface(queue: Record<string, unknown>): Rec
   }
 }
 
-function compactOrientationSpineForWorkSurface(spine: Record<string, unknown>): Record<string, unknown> {
+function sourceHealthForCompactOrientationSpine(spine: Record<string, unknown>): Record<string, unknown> {
   const roots = Array.isArray(spine.roots) ? spine.roots : []
   const documented = roots.reduce((sum, root) => {
     if (!root || typeof root !== 'object' || Array.isArray(root)) return sum
@@ -4085,9 +4085,13 @@ function compactOrientationSpineForWorkSurface(spine: Record<string, unknown>): 
       return (record.visibility as { kind?: unknown } | undefined)?.kind === 'supporting' && record.maturity === 'deferred'
     }).length
   }, 0)
-  const sourceHealth = spine.sourceHealth && typeof spine.sourceHealth === 'object' && !Array.isArray(spine.sourceHealth)
+  return spine.sourceHealth && typeof spine.sourceHealth === 'object' && !Array.isArray(spine.sourceHealth)
     ? { ...spine.sourceHealth as Record<string, unknown>, documented, deferred }
     : { documented, deferred }
+}
+
+function compactOrientationSpineForWorkSurface(spine: Record<string, unknown>): Record<string, unknown> {
+  const sourceHealth = sourceHealthForCompactOrientationSpine(spine)
   return {
     projectId: spine.projectId,
     updatedAt: spine.updatedAt,
@@ -4279,8 +4283,16 @@ function buildOverviewOrientationPreviewSpine(input: {
         : projection.start.canStart
           ? `${displayScopeLabel} is ready to continue.`
           : `${displayScopeLabel} is being mapped.`
-  const sourceRefs = new Set(scopeRows.flatMap(row => row.sourceRefs ?? []))
-  const documented = [...sourceRefs].filter(ref => !ref.startsWith('task:')).length
+  const sourceHealth = input.sourceSpine
+    ? sourceHealthForCompactOrientationSpine(input.sourceSpine as unknown as Record<string, unknown>)
+    : {
+        inferred: projection.rows.length,
+        documented: [...new Set(scopeRows.flatMap(row => row.sourceRefs ?? []))]
+          .filter(ref => !ref.startsWith('task:')).length,
+        deferred: projection.counts.deferred,
+        conflicts: 0,
+        gaps: scope ? 0 : 1,
+      }
 
   return {
     projectId: input.projectId,
@@ -4369,14 +4381,7 @@ function buildOverviewOrientationPreviewSpine(input: {
         ...(blocker.owningTaskId ? { owningNodeId: taskScopeNodeId(blocker.owningTaskId) } : {}),
       })),
     },
-    sourceHealth: {
-      ...(input.sourceSpine?.sourceHealth ?? {}),
-      inferred: projection.rows.length,
-      documented,
-      deferred: projection.counts.deferred,
-      conflicts: 0,
-      gaps: scope ? 0 : 1,
-    },
+    sourceHealth,
     sourceTrail: input.sourceSpine?.sourceTrail ?? [],
   }
 }
