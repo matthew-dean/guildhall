@@ -30566,6 +30566,49 @@ selected-scope readiness ordering.
     Overview even while Map/Start say it is complete.
 - Schema Migration Decision: no persisted schema field or migration changed.
 
+## codex:noninteractive-pnpm-bootstrap-proof-2026-07-13
+
+- User job:
+  - When Guildhall runs a selected Narrative Harness scope unattended, a task
+    worktree bootstrap or success gate must not stop on pnpm's interactive
+    dependency-build approval prompt. If a project command fails, it should be
+    the project's command failing, not package-manager approval state leaking
+    into agent scheduling.
+- Root cause classification:
+  - Runtime/provider/infrastructure problem: `runBootstrap` only tolerated
+    `ERR_PNPM_IGNORED_BUILDS` for literal `pnpm install` commands, while pnpm
+    can surface the same ignored-builds preflight before later gates such as
+    `pnpm build`.
+  - Scheduler/action-state logic problem: the gate failure kept Narrative
+    Harness author-intent work pinned in `gate_check` even after the task's
+    substantive proof had already passed.
+- Fix:
+  - `runBootstrap` now runs bootstrap commands and gates with
+    `PNPM_CONFIG_IGNORE_SCRIPTS=true` in the noninteractive task-worktree
+    environment.
+- Proof provided:
+  - `CI=true pnpm exec vitest run src/runtime/__tests__/bootstrap-runner.test.ts`
+    passed: 13 tests.
+  - `CI=true pnpm lint:contracts` passed.
+  - `git diff --check` passed.
+  - `CI=true pnpm build` passed.
+- Contract Touch Decision:
+  - Work id: `noninteractive-pnpm-bootstrap-proof`.
+  - Touched contracts: task-worktree bootstrap command environment and
+    bootstrap-runner regression tests.
+  - Contracts considered but not touched: persisted task schema, release schema,
+    bootstrap result schema, project import schema, scheduler action-state
+    schema, and UI components.
+  - Required follow-up: install the rebuilt app and verify Narrative Harness no
+    longer repeats the ignored-builds bootstrap blocker when Stage 1 resumes.
+  - Proof required: focused bootstrap regression, contract lint, whitespace
+    check, build, installed-app freshness, and live Narrative Harness run proof.
+  - Proof provided: local proof listed above; installed-app proof remains next.
+  - Apply/revert behavior: reverting allows pnpm approve-builds preflight to
+    block noninteractive gates again and misclassify the failure as project
+    work instead of bootstrap environment leakage.
+- Schema Migration Decision: no persisted schema field or migration changed.
+
 ## codex:reconciled-task-worktree-residue-2026-07-13
 
 - User job:

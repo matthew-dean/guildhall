@@ -123,6 +123,18 @@ describe('runBootstrap', () => {
     expect(res.steps[0]?.result).toBe('pass')
   })
 
+  it('runs bootstrap commands with pnpm dependency scripts disabled for noninteractive worktrees', () => {
+    const res = runBootstrap({
+      projectPath: dir,
+      memoryDir: join(dir, 'memory'),
+      commands: ['test "$PNPM_CONFIG_IGNORE_SCRIPTS" = "true"'],
+      successGates: [],
+      timeoutMs: 5_000,
+    })
+    expect(res.success).toBe(true)
+    expect(res.steps[0]?.result).toBe('pass')
+  })
+
   it('does not block work when pnpm install only reports ignored build scripts', () => {
     const fakePnpm = join(dir, 'pnpm')
     writeFileSync(

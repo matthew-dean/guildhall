@@ -112,7 +112,7 @@ function runStep(
     command,
     cwd: opts.projectPath,
     timeoutMs: opts.timeoutMs,
-    env: { CI: 'true' },
+    env: { CI: 'true', PNPM_CONFIG_IGNORE_SCRIPTS: 'true' },
   })
   const ignoredPnpmBuildScripts =
     kind === 'command' &&
