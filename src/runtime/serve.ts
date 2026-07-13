@@ -4257,12 +4257,15 @@ function buildOverviewOrientationPreviewSpine(input: {
     : scope && input.sourceSpine?.selectedTaskScope?.id === scope.id
       ? input.sourceSpine.selectedTaskScope
       : null
+  const sourceReleaseState = input.sourceSpine?.selectedRelease?.id === scope?.id
+    ? input.sourceSpine.release?.state
+    : undefined
   const release = selectedRelease
     ? {
         id: selectedRelease.id,
         label: selectedRelease.label,
         kind: selectedRelease.kind === 'milestone' ? 'milestone' : selectedRelease.kind === 'marker' ? 'marker' : 'release',
-        state: projection.release.state === 'ready' ? 'ready' : projection.release.state === 'blocked' ? 'blocked' : selectedRelease.state ?? 'active',
+        state: sourceReleaseState ?? (projection.release.state === 'ready' ? 'ready' : projection.release.state === 'blocked' ? 'blocked' : selectedRelease.state ?? 'active'),
         source: selectedRelease.source ?? 'inferred',
         description: selectedRelease.description ?? null,
         nodeIds: scope?.nodeIds ?? selectedRelease.nodeIds ?? [],
@@ -7712,12 +7715,15 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
     const detailMessage = `No actionable tasks remain: ${done} done, ${blocked} blocked, ${shelved} shelved, ${pendingPr} pending PR, ${archived} archived, ${cancelled} cancelled.`
     if (selectedReleaseScope && blocked > 0) return null
-    if (proofMissingDoneTasks.length > 0) {
-      const first = proofMissingDoneTasks[0]!
+    const terminalProofMissingDoneTasks = releaseTruth?.proofMissingDoneTasks.length
+      ? releaseTruth.proofMissingDoneTasks
+      : proofMissingDoneTasks
+    if (terminalProofMissingDoneTasks.length > 0) {
+      const first = terminalProofMissingDoneTasks[0]!
       const scopeLabel = selectedReleaseScope?.label ?? 'Current task scope'
-      const message = proofMissingDoneTasks.length === 1
+      const message = terminalProofMissingDoneTasks.length === 1
         ? `${scopeLabel} is waiting on proof evidence for "${first.title}".`
-        : `${scopeLabel} is waiting on proof evidence for ${proofMissingDoneTasks.length} completed tasks, starting with "${first.title}".`
+        : `${scopeLabel} is waiting on proof evidence for ${terminalProofMissingDoneTasks.length} completed tasks, starting with "${first.title}".`
       return {
         canStart: false,
         code: 'proof_evidence_missing',
@@ -7726,8 +7732,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
         focusTaskId: first.id,
         focusTaskTitle: first.title,
         focusKind: 'proof',
-        proofTaskIds: proofMissingDoneTasks.map(task => task.id),
-        count: proofMissingDoneTasks.length,
+        proofTaskIds: terminalProofMissingDoneTasks.map(task => task.id),
+        count: terminalProofMissingDoneTasks.length,
         ...(selectedReleaseScope ? { selectedReleaseTerminal: true } : {}),
         stopSummary: {
           reason: 'all_terminal',

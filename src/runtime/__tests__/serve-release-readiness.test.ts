@@ -2089,6 +2089,13 @@ describe('GET /api/project/release-readiness', () => {
     expect(readiness.totals.proofEvidenceBlockingCount).toBe(1)
 
     const project = await (await app.fetch(new Request(projectUrl('/api/project')))).json() as any
+    expect(project.startReadiness).toMatchObject({
+      canStart: false,
+      code: 'proof_evidence_missing',
+      focusTaskId: 'task-current',
+      focusKind: 'proof',
+      proofTaskIds: ['task-current'],
+    })
     expect(project.orientationSpine?.proofContracts[0]).toMatchObject({
       state: 'needed',
     })
@@ -3531,6 +3538,63 @@ describe('GET /api/project/release-readiness', () => {
     expect(mapBody.runtime).toBeNull()
     expect(mapBody.recentEvents).toEqual([])
     expect(mapBody.actionModel?.runControl?.label).toBeTruthy()
+  })
+
+  it('keeps overview spine preview release state aligned with proof blockers', async () => {
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: 'headless-mvp',
+      releases: [{
+        id: 'headless-mvp',
+        label: 'Headless MVP',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-runner'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [
+        makeTask({
+          id: 'task-runner',
+          title: 'Implement command-line runner.',
+          description: 'A script-only command runner for the headless release.',
+          status: 'done',
+          releaseIds: ['headless-mvp'],
+          proofPaths: [{
+            kind: 'command',
+            source: 'inferred',
+            launchSteps: [{
+              id: 'task-runner-proof-command-needed',
+              title: 'Add proof command',
+              kind: 'blocked_until_setup',
+              setupRequirement: 'No repo-local pnpm script or CLI proof command is named yet.',
+            }],
+            expectedEvidence: ['Add a repo-local pnpm script or CLI proof command.'],
+          }],
+        } as Partial<Task>),
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const previewUrl = new URL(projectUrl('/api/project/spine'))
+    previewUrl.searchParams.set('surface', 'overview')
+    const previewBody = await (await app.fetch(new Request(previewUrl))).json() as any
+    const projectBody = await (await app.fetch(new Request(projectUrl('/api/project')))).json() as any
+
+    expect(previewBody.spine.release.state).toBe('blocked')
+    expect(previewBody.spine.selectedRelease.state).toBe('blocked')
+    expect(previewBody.spine.releases.map((release: any) => [release.id, release.state])).toEqual([
+      ['headless-mvp', 'blocked'],
+    ])
+    expect(projectBody.startReadiness).toMatchObject({
+      canStart: false,
+      code: 'proof_evidence_missing',
+      focusTaskId: 'task-runner',
+      focusKind: 'proof',
+      proofTaskIds: ['task-runner'],
+    })
   })
 
   it('does not turn terminal complete start readiness into an overview blocker', async () => {

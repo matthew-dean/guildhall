@@ -30566,6 +30566,91 @@ selected-scope readiness ordering.
     Overview even while Map/Start say it is complete.
 - Schema Migration Decision: no persisted schema field or migration changed.
 
+## codex:overview-preview-release-state-proof-blocker-2026-07-13
+
+- User job:
+  - Overview and Map should describe the same selected release state. If
+    release readiness says a completed headless scope is blocked by missing
+    proof evidence, the overview spine preview must not still label the
+    selected release or release list as `ready`.
+- Root cause classification:
+  - UI communication/orientation problem: the overview preview spine adapter
+    recomputed selected-release state from shallow scope projection rows instead
+    of preserving the full spine's resolved release blocker state.
+  - Scheduler/action-state logic problem: scope projection treats all included
+    terminal rows as `ready`, while release readiness can still block completion
+    on missing proof evidence. Those two derived states were not reconciled in
+    the preview payload.
+  - Task hierarchy/dependency/proof modeling problem: completed tasks with
+    modeled command proof requirements can be terminal for execution but still
+    block release completion until evidence is recorded.
+- Fix:
+  - `buildOverviewOrientationPreviewSpine` now uses the full source spine's
+    resolved `release.state` for the selected release when building the compact
+    overview preview. The preview's `release`, `selectedRelease`, and
+    `releases[]` state now agree.
+  - `terminalStartState` now reuses scoped `releaseTruth.proofMissingDoneTasks`
+    before falling back to its older local proof-missing detector. Start
+    readiness no longer has to rediscover every proof mode that release
+    readiness already modeled.
+- Proof provided:
+  - Added regression:
+    `keeps overview spine preview release state aligned with proof blockers`.
+  - `CI=true pnpm exec vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts --testNamePattern
+    "keeps overview spine preview release state aligned|compact project spine"`
+    failed before the fix with `selectedRelease.state` equal to `ready`, then
+    passed after the fix.
+  - `CI=true pnpm exec vitest run
+    src/runtime/__tests__/project-orientation-spine.test.ts` passed `68` tests.
+  - `CI=true pnpm exec vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts` passed `65` tests.
+  - `CI=true pnpm lint:contracts` passed.
+  - `CI=true pnpm build` passed.
+  - `CI=true pnpm dev:install` passed, then the installed app was restarted.
+  - `/api/stale-server` returned `stale:false`, PID `29302`,
+    `bootBuildMtimeMs:1783928711167`, and
+    `currentBuildMtimeMs:1783928711167`.
+  - Live `/api/project/spine?projectId=narrative-harness&surface=overview`
+    reported `selectedRelease.state: blocked`, `release.state: blocked`,
+    `releases[0].state: blocked`, and headline
+    `Stage 1: Headless Drafting And Evaluation MVP is waiting on proof.`
+  - Live `/api/project/release-readiness?projectId=narrative-harness`
+    reported `ready:false`, selected release `state: blocked`, `11`
+    `proofMissingDoneTasks`, `11` release blockers, and `11` proof-evidence
+    blockers.
+  - Live `/api/project?projectId=narrative-harness&surface=overview` no longer
+    reported Start readiness as `all_terminal` or complete; it reported
+    `workspace_import_refresh_needed` while the orientation spine still showed
+    the selected release as blocked on proof.
+- Residual findings:
+  - Narrative Harness now exposes a higher-priority
+    `workspace_import_refresh_needed` blocker: the live detector still sees
+    `Docusaurus docs build cleanly with npm run build` as current active work
+    outside the approved current scope. Classify next as
+    project structure/scope/release modeling plus bad project data from earlier
+    importer behavior.
+- Contract Touch Decision:
+  - Work id: `overview-preview-release-state-proof-blocker`.
+  - Touched contracts: overview spine preview read model and
+    release-readiness/project-spine/Start-readiness agreement for selected
+    release state and terminal proof blockers.
+  - Contracts considered but not touched: persisted task schema, persisted
+    release schema, full project orientation spine schema, release-readiness
+    payload schema, Map UI, Overview UI, and workspace-import approval schema.
+  - Required follow-up: fix the remaining Narrative Harness
+    `workspace_import_refresh_needed` source/scope mismatch by consolidating
+    importer scope truth, not by suppressing the Start blocker.
+  - Proof required: red/green route regression, release-readiness suite,
+    orientation-spine suite, contract lint, build/install freshness, and live
+    project API agreement.
+  - Proof provided: all proof listed above.
+  - Apply/revert behavior: reverting lets Overview say a selected release is
+    ready while the same payload's release summary and Release view say proof
+    evidence blocks completion, and lets Start collapse terminal proof blockers
+    back into a false complete state.
+- Schema Migration Decision: no persisted schema field or migration changed.
+
 ## codex:workspace-import-missing-command-proof-truth-2026-07-13
 
 - User job:
