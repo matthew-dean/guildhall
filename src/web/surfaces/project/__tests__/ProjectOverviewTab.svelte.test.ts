@@ -409,6 +409,7 @@ describe('ProjectOverviewTab', () => {
     expect(screen.getByText(/14 \/ 14 done/)).toBeInTheDocument()
     expect(screen.getAllByText(/main has 6 local commits not pushed to origin\/main/).length).toBeGreaterThan(0)
     expect(document.querySelector('.signal-row--wide')).toBeInTheDocument()
+    expect(document.querySelectorAll('.signal-row.is-dense').length).toBe(document.querySelectorAll('.signal-row').length)
   })
 
   it('keeps Overview signals scoped to release git state when project-wide git work is unrelated', () => {

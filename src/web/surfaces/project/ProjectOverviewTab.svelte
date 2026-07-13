@@ -1374,7 +1374,7 @@
       <Card title="Signals" titleTag="h2" padding="compact" density="dense" className="overview-card overview-signals-card">
         <div class="signals-grid">
         {#if inboxError}
-          <UtilityPanel className="signal-row" tone="warn">
+          <UtilityPanel className="signal-row" tone="warn" dense>
             <Icon name="alert-triangle" size={16} />
             <div>
               <strong>Needs you</strong>
@@ -1382,7 +1382,7 @@
             </div>
           </UtilityPanel>
         {:else if !inboxLoaded}
-          <UtilityPanel className="signal-row" tone="neutral">
+          <UtilityPanel className="signal-row" tone="neutral" dense>
             <Icon name="inbox" size={16} />
             <div>
               <strong>Needs you</strong>
@@ -1391,7 +1391,7 @@
           </UtilityPanel>
         {:else if actionableInbox.length > 0}
           {#each actionableInbox as item (inboxItemKey(item))}
-            <UtilityPanel as="button" interactive className="signal-row" tone="warn" onclick={() => go(item.actionHref ?? '/thread')}>
+            <UtilityPanel as="button" interactive className="signal-row" tone="warn" dense onclick={() => go(item.actionHref ?? '/thread')}>
               <Icon name="inbox" size={16} />
               <div>
                 <strong>Needs you</strong>
@@ -1406,6 +1406,7 @@
           <UtilityPanel
             as="button"
             interactive
+            dense
             className={`signal-row ${item.layout === 'wide' ? 'signal-row--wide' : ''}`}
             tone={item.tone === 'running' ? 'ok' : item.tone === 'ok' ? 'ok' : item.tone === 'danger' ? 'danger' : item.tone === 'warn' ? 'warn' : 'neutral'}
             onclick={() => go(item.href)}
@@ -1419,7 +1420,7 @@
         {/each}
 
         {#if structuralMapReview}
-          <UtilityPanel as="button" interactive className="signal-row" tone={(structuralMapReview.conflicts ?? []).length > 0 || (structuralMapReview.questions ?? []).length > 0 ? 'warn' : structuralMapReview.state === 'accepted' ? 'ok' : 'neutral'} onclick={() => go(currentProjectHref('/structure', activeProjectId))}>
+          <UtilityPanel as="button" interactive dense className="signal-row" tone={(structuralMapReview.conflicts ?? []).length > 0 || (structuralMapReview.questions ?? []).length > 0 ? 'warn' : structuralMapReview.state === 'accepted' ? 'ok' : 'neutral'} onclick={() => go(currentProjectHref('/structure', activeProjectId))}>
             <Icon name="package" size={16} />
             <div>
               <strong>Structure</strong>
@@ -1433,7 +1434,7 @@
           </UtilityPanel>
         {/if}
 
-        <UtilityPanel as="button" interactive className="signal-row" tone={verificationSignal.tone} onclick={() => go(currentProjectHref('/work', activeProjectId))}>
+        <UtilityPanel as="button" interactive dense className="signal-row" tone={verificationSignal.tone} onclick={() => go(currentProjectHref('/work', activeProjectId))}>
           <Icon name="check-circle-2" size={16} />
           <div>
             <strong>Verification</strong>
@@ -1443,7 +1444,7 @@
           </div>
         </UtilityPanel>
 
-        <UtilityPanel as="button" interactive className="signal-row" tone="neutral" onclick={() => go(currentProjectHref('/timeline', activeProjectId))}>
+        <UtilityPanel as="button" interactive dense className="signal-row" tone="neutral" onclick={() => go(currentProjectHref('/timeline', activeProjectId))}>
           <Icon name="clock" size={16} />
           <div>
             <strong>Recent changes</strong>
@@ -1660,6 +1661,9 @@
   .signals-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
     align-items: start;
+  }
+  .signals-grid > :global(.signal-row) {
+    align-self: start;
   }
   :global(.signal-row) span {
     color: var(--text-soft);

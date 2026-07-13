@@ -35108,3 +35108,48 @@ orientation proof projection as scope summary.
 - Schema Migration Decision:
   - Scope: none. No persisted field, enum, or serialized task shape changed;
     this reuses existing `proofPaths` and `launchSteps` fields.
+
+## codex:overview-signal-card-density-2026-07-13
+
+- User job:
+  - On Overview, the user should be able to scan project health signals
+    without short status items becoming giant empty boxes because a neighboring
+    alert has more text.
+- Root cause classification:
+  - UI layout problem: signal panels shared grid rows with the longest panel
+    and did not explicitly opt into content-sized alignment.
+  - Design-system usage problem: the existing `UtilityPanel` dense treatment
+    was available but the Overview signal instances were using the default
+    padding.
+- Fix:
+  - Signal panels now use `UtilityPanel`'s existing `dense` prop.
+  - Signal grid children explicitly self-size at the start of their grid area,
+    so a long repository follow-up no longer stretches adjacent short status
+    panels.
+  - The wide repository follow-up treatment remains intact for its longer
+    source-backed detail.
+- Proof provided:
+  - `CI=true pnpm vitest run
+    src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts`
+    passed: 34 tests.
+  - Regression verifies every rendered signal row uses the shared dense panel
+    treatment and the repository follow-up remains wide.
+  - `pnpm build`, `pnpm dev:install`, and `guildhall stop && guildhall start`
+    passed; `/api/stale-server` reported `stale:false` for the installed
+    `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+  - A clean local Playwright route check reached the live project URL but stayed
+    at `Loading project...` and rendered no signal grid, so geometry proof from
+    that context is explicitly pending rather than claimed. The in-app browser
+    bridge also exposed no page for direct inspection in this session.
+- Contract Touch Decision:
+  - Work id: `overview-signal-card-density`.
+  - Touched contracts: none; this changes only existing Overview presentation.
+  - Contracts considered but not touched: project summary/action model, task
+    schema, release schema, proof schema, API routes, and scheduler behavior.
+  - Proof required: focused component test, contract detector, installed build,
+    and stale-server verification.
+  - Apply/revert behavior: reverting restores the previous default-padding and
+    grid-item alignment presentation without changing project state.
+- Schema Migration Decision:
+  - Scope: none. No persisted schema, API field, enum, or serialized state
+    changed.
