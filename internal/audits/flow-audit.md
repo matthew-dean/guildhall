@@ -30952,7 +30952,7 @@ selected-scope readiness ordering.
     impact on Guildhall's release evidence semantics. The task state was
     correctly blocked, but the repository's local proof path could still make
     fake completion look plausible.
-- Fix in Narrative Harness commit `6d4afe0`:
+- Fix in Narrative Harness commits `6d4afe0` and `ee326cc`:
   - Added explicit author-intent input validation for voice, genre, audience,
     theme, premise, heat/content boundary, protected choices, and source notes.
   - Replaced canned generation with a live DeepInfra pipeline: structured
@@ -30961,6 +30961,9 @@ selected-scope readiness ordering.
     continuity, geography/travel time, and genre/audience.
   - Added `--validate` and local Node tests so missing credentials are testable
     without pretending to prove model behavior.
+  - Tightened field-level validation so non-empty character, world-state,
+    review-plan, evidence, and recommendation records are required rather than
+    merely counted.
   - Shared the DeepInfra client with the model proof script and made provider
     absence produce a durable `status: blocked` result.
   - Updated the roadmap to distinguish implementation from live proof and
@@ -30973,7 +30976,7 @@ selected-scope readiness ordering.
   - Live generation and DeepInfra model proof fail honestly with
     `DEEPINFRA_API_TOKEN is required for live generation` and no output is
     accepted as model proof.
-  - Narrative Harness has a clean local working tree at commit `6d4afe0`, but
+  - Narrative Harness has a clean local working tree at commit `ee326cc`, but
     `git push origin main` could not authenticate to Bitbucket (`Permission
     denied (publickey)`).
   - Docusaurus compilation reaches server/client compilation but fails in the
