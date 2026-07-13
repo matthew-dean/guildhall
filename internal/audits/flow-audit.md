@@ -30524,6 +30524,68 @@ selected-scope readiness ordering.
     Overview even while Map/Start say it is complete.
 - Schema Migration Decision: no persisted schema field or migration changed.
 
+2026-07-12T21:44:00-07:00 - Kept Overview verification signals on the same
+orientation proof projection as scope summary.
+
+- Work id: `codex:overview-verification-signal-proof-projection-2026-07-12`.
+- User job:
+  - When Narrative Harness Overview says a selected scope is complete, the same
+    first screen must not also say there are no verification checks linked. The
+    owner should see one coherent proof state across Scope status, At a glance,
+    and Signals.
+- Root-cause classification:
+  - Data model/schema/projection problem: Overview had two proof summaries in
+    one component. The scope summary used the orientation spine/release proof
+    projection, while the Signals card read raw task `proofPaths`.
+  - UI communication/orientation problem: a completed selected scope could show
+    `0 missing verification` and proven proof contracts while the Signals card
+    fell back to `No verification checks linked yet.`
+  - Project structure/scope/release modeling problem: the misleading Signals row
+    ignored the selected scope boundary and therefore failed as a current-release
+    health signal.
+- Fix:
+  - `ProjectOverviewTab` now derives one orientation proof count from
+    `proofContracts` when present, falling back to orientation progress/gaps.
+  - Scope summary and the Signals `Verification` row both consume that derived
+    proof count before falling back to raw task proof paths.
+- Contract Touch Decision:
+  - Work id:
+    `codex:overview-verification-signal-proof-projection-2026-07-12`.
+  - Touched contracts: none persisted; Overview presentation now treats
+    orientation proof contracts as the selected-scope proof projection.
+  - Contracts considered but not touched: persisted task schema, persisted proof
+    path schema, release readiness schema, project orientation spine schema,
+    inbox/action model contracts, Start/Resume API semantics.
+  - Required follow-up: continue consolidating duplicated Overview summary logic
+    into shared runtime/API projections when additional contradictions appear.
+  - Proof required: focused Overview regression, installed-app freshness,
+    browser proof on Narrative Harness Overview at desktop and mobile widths.
+  - Proof provided: focused Overview regression, contract lint, build/install,
+    stale-server check, and live browser proof listed below.
+  - Apply/revert behavior: reverting restores the local Signals proof-path
+    fallback and can make completed scoped proof look absent again.
+- Verification:
+  - `CI=true pnpm exec vitest run
+    src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts`
+    passed 33 tests.
+  - `CI=true pnpm lint:contracts` passed.
+  - `CI=true pnpm build` passed.
+  - `CI=true pnpm dev:install` completed and installed the current branch
+    artifact.
+  - `guildhall stop && guildhall start` restarted the installed service.
+  - `/api/stale-server` returned `stale:false` for PID `3238` with matching
+    boot/current build mtimes.
+  - Live desktop browser proof at
+    `/projects/narrative-harness/overview`, viewport `1280x720`: complete
+    Stage 1 headline present; scope summary showed
+    `11 work items in view · 0 missing verification · 0 blocked · 11 verified`;
+    Signals showed `Verification 11 verified items · 0 missing verification`;
+    `No verification checks linked yet.` was absent; horizontal overflow was
+    `0`.
+  - Live mobile browser proof at the same route, viewport `390x844`: the same
+    Stage 1, scope summary, and Signals verification text was present; old bad
+    copy was absent; horizontal overflow was `0`.
+
 ## 2026-07-13T04:12:26Z - Overview preview pins start blockers over ready work
 
 - User job:

@@ -234,6 +234,20 @@
   })
   const scopedWorkComplete = $derived(allTerminalStart || orientationCompletedScopedPreview)
   const orientationProofGapCount = $derived(orientationSpine?.gaps?.filter(gap => gap.kind === 'proof_needed').length ?? 0)
+  const orientationProofCounts = $derived.by(() => {
+    const contracts = orientationSpine?.proofContracts ?? []
+    const progress = orientationSpine?.summary?.progress
+    if (contracts.length > 0) {
+      return {
+        proven: contracts.filter(contract => contract.state === 'proven').length,
+        missing: contracts.reduce((sum, contract) => sum + (contract.missing?.length ?? 0), 0),
+      }
+    }
+    return {
+      proven: progress?.provenCount ?? progress?.proven ?? 0,
+      missing: orientationProofGapCount,
+    }
+  })
   const orientationScopeSourceSummary = $derived.by(() => {
     const rows = orientationSpine?.scopeRows ?? []
     const refs = rows
@@ -252,12 +266,48 @@
   const orientationScopeProofSummary = $derived.by(() => {
     const contracts = orientationSpine?.proofContracts ?? []
     if (contracts.length === 0) return null
-    const proven = contracts.filter(contract => contract.state === 'proven').length
-    const missing = contracts.reduce((sum, contract) => sum + (contract.missing?.length ?? 0), 0)
+    const { proven, missing } = orientationProofCounts
     if (proven === 0 && missing === 0) return null
     return missing > 0
       ? `${countLabel(proven, 'proven item')} · ${countLabel(missing, 'missing proof', 'missing proof')}`
       : `${countLabel(proven, 'proven item')} · 0 missing proof`
+  })
+  const verificationSignal = $derived.by((): { tone: Tone; lines: string[] } => {
+    const contracts = orientationSpine?.proofContracts ?? []
+    if (contracts.length > 0) {
+      const { proven, missing } = orientationProofCounts
+      if (proven > 0 || missing > 0) {
+        return {
+          tone: missing > 0 ? 'warn' : 'ok',
+          lines: [`${countLabel(proven, 'verified item')} · ${missing} missing verification`],
+        }
+      }
+    }
+
+    const proven = orientationProofCounts.proven
+    if (orientationSpine && (proven > 0 || orientationProofGapCount > 0)) {
+      return {
+        tone: orientationProofCounts.missing > 0 ? 'warn' : 'ok',
+        lines: [`${countLabel(proven, 'verified item')} · ${orientationProofCounts.missing} missing verification`],
+      }
+    }
+
+    const primary = primaryProofPaths[0]
+    if (primary) {
+      return {
+        tone: primaryProofPaths.some(item => item.proofPath.status === 'blocked')
+          ? 'warn'
+          : primaryProofPaths.some(item => item.proofPath.status === 'verified')
+            ? 'ok'
+            : 'neutral',
+        lines: [
+          proofPathTitle(primary.task, primary.proofPath),
+          friendlyStatus(primary.proofPath.status),
+        ],
+      }
+    }
+
+    return { tone: 'neutral', lines: ['No verification checks linked yet.'] }
   })
   const orientationBlockedCount = $derived.by(() => {
     const progress = orientationSpine?.summary?.progress
@@ -269,12 +319,11 @@
   })
   const orientationScopeDetail = $derived.by(() => {
     if (!orientationSpine) return 'No bounded scope has been derived for this project yet.'
-    const proven = orientationSpine.summary?.progress?.provenCount ?? orientationSpine.summary?.progress?.proven ?? 0
     const pieces = [
       `${orientationIncludedCount} work items in view`,
-      `${orientationProofGapCount} missing verification`,
+      `${orientationProofCounts.missing} missing verification`,
       `${orientationBlockedCount} blocked`,
-      `${proven} verified`,
+      `${orientationProofCounts.proven} verified`,
       `${orientationDeferredCount} deferred`,
     ]
     return pieces.join(' · ')
@@ -1407,16 +1456,13 @@
           </UtilityPanel>
         {/if}
 
-        <UtilityPanel as="button" interactive className="signal-row" tone={primaryProofPaths.some(item => item.proofPath.status === 'blocked') ? 'warn' : primaryProofPaths.some(item => item.proofPath.status === 'verified') ? 'ok' : 'neutral'} onclick={() => go(currentProjectHref('/work', activeProjectId))}>
+        <UtilityPanel as="button" interactive className="signal-row" tone={verificationSignal.tone} onclick={() => go(currentProjectHref('/work', activeProjectId))}>
           <Icon name="check-circle-2" size={16} />
           <div>
             <strong>Verification</strong>
-            {#if primaryProofPaths.length === 0}
-              <span>No verification checks linked yet.</span>
-            {:else}
-              <span>{proofPathTitle(primaryProofPaths[0].task, primaryProofPaths[0].proofPath)}</span>
-              <span>{friendlyStatus(primaryProofPaths[0].proofPath.status)}</span>
-            {/if}
+            {#each verificationSignal.lines as line (line)}
+              <span>{line}</span>
+            {/each}
           </div>
         </UtilityPanel>
 
