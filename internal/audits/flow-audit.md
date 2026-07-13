@@ -30599,6 +30599,76 @@ selected-scope readiness ordering.
     stale import boundaries behind proof cleanup or unshaped drafts.
 - Schema Migration Decision: no persisted schema field or migration changed.
 
+## codex:hide-empty-release-roadmap-scopes-2026-07-13
+
+- User job:
+  - Project Map should behave like a release/scope roadmap, not a dumping ground
+    for every stage heading ever detected in docs.
+  - Documented stages with no assigned current or later work should not appear
+    as selectable planned release rows saying `No work assigned yet`; that reads
+    like a real release container even when Guildhall has no work modeled there.
+- Root cause classification:
+  - Project structure/scope/release modeling problem: the read-model visibility
+    predicate kept every non-inferred release visible, even when it had no
+    `nodeIds` and no `deferredNodeIds`.
+  - UI communication/orientation problem: Narrative Harness Map showed empty
+    planned Stage 0/Stage 1 rows beside the real selected Stage 1 release and
+    later releases with work, making the 1,000-foot release roadmap noisier than
+    the actual modeled scope.
+- Fix:
+  - `releaseVisibleInReadModel` now keeps the selected release and releases with
+    assigned current or later work, but hides empty non-selected release
+    containers from the owner-facing roadmap.
+  - Existing release-roadmap coverage now includes an empty release-plan marker
+    and proves it is omitted from `spine.releases`.
+- Proof provided:
+  - `CI=true pnpm exec vitest run
+    src/runtime/__tests__/project-orientation-spine.test.ts --testNamePattern
+    "hides stale inferred closed scopes"` passed.
+  - `CI=true pnpm exec vitest run
+    src/runtime/__tests__/project-orientation-spine.test.ts` passed: 68 tests.
+  - `CI=true pnpm exec vitest run
+    src/web/surfaces/project/__tests__/ProjectMapTab.svelte.test.ts` passed: 9
+    tests.
+  - `CI=true pnpm exec vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts` passed: 62 tests.
+  - Focused `serve-settings` selected-release/project-orientation cases passed:
+    2 tests.
+  - `CI=true pnpm lint:contracts` passed.
+  - `pnpm build` passed.
+  - `pnpm dev:install` passed, then `guildhall stop && guildhall start`
+    restarted the installed app.
+  - `/api/stale-server` returned `stale:false`, PID `40296`,
+    `bootBuildMtimeMs:1783920945783`, and
+    `currentBuildMtimeMs:1783920945783`.
+  - Live installed API proof for
+    `/api/project/spine?projectId=narrative-harness` returned 5 releases:
+    selected Stage 1 with 11 current work items, and Stage 2/3/4/5 planned
+    releases with 6/5/5/7 later work items. Empty Stage 0 and old empty Stage 1
+    release markers were absent.
+  - Browser proof on `/projects/narrative-harness/map` showed no
+    `Stage 0: Spec Baseline`, no `Stage 1: Fixture And Evaluation Harness`, no
+    `No work assigned yet`, and no horizontal overflow at 1280x720.
+- Residual findings:
+  - None for this narrow release-roadmap visibility fix.
+- Contract Touch Decision:
+  - Work id: `hide-empty-release-roadmap-scopes`.
+  - Touched contracts: orientation spine release read-model visibility and Map
+    release-roadmap expectations.
+  - Contracts considered but not touched: persisted release schema, workspace
+    import schema, release selection mutation contract, release readiness
+    response shape, and Map component layout.
+  - Required follow-up: if users need to create/assign work into a documented
+    empty future release, expose that as an explicit planning action rather than
+    a passive selectable release row.
+  - Proof required: spine regression, Map UI regression, release-readiness
+    regression, contract lint, build/install freshness, and live Map API/browser
+    proof.
+  - Proof provided: all proof listed above.
+  - Apply/revert behavior: reverting makes empty release-plan markers visible
+    again as planned roadmap rows with no assigned work.
+- Schema Migration Decision: no persisted schema field or migration changed.
+
 ## codex:compact-spine-execution-boundary-truth-2026-07-13
 
 - User job:

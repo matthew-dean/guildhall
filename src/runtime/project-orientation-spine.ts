@@ -2486,10 +2486,10 @@ function releaseVisibleInReadModel(
   tasks: readonly OrientationTaskInput[],
 ): boolean {
   if (release.id === selectedReleaseId) return true
-  if (release.source !== 'inferred') return true
   if (release.deferredNodeIds.length > 0) return true
   const taskByNodeId = new Map(tasks.map(task => [taskNodeId(task.id), task]))
   if (release.nodeIds.length === 0) return false
+  if (release.source !== 'inferred') return true
   return !release.nodeIds.every(nodeId => {
     const task = taskByNodeId.get(nodeId)
     return task ? taskStatusIsTerminal(task.status) : false

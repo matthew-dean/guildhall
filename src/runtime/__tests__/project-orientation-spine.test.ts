@@ -3758,6 +3758,15 @@ describe('buildProjectOrientationSpine', () => {
           nodeIds: [],
           deferredNodeIds: ['work:future-ui'],
         },
+        {
+          id: 'stage-5-empty-later-marker',
+          label: 'Stage 5 Empty Later Marker',
+          kind: 'release',
+          state: 'planned',
+          source: 'release_plan',
+          nodeIds: [],
+          deferredNodeIds: [],
+        },
       ],
       tasks: [
         {
