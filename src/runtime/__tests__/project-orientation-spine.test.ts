@@ -779,7 +779,7 @@ describe('buildProjectOrientationSpine', () => {
       scopeProjection,
     })
 
-    expect(spine.selectedRelease?.nodeIds).toEqual(['work:task-current'])
+    expect(spine.selectedRelease?.nodeIds).toEqual(['work:task-current', 'work:task-model-proof'])
     expect(spine.scope?.nodeIds).toEqual(['work:task-current', 'work:task-model-proof'])
     expect(spine.summary.includedWorkCount).toBe(2)
     expect(spine.scopeRows.find(row => row.taskId === 'task-model-proof')).toMatchObject({

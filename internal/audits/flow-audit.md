@@ -30566,6 +30566,87 @@ selected-scope readiness ordering.
     Overview even while Map/Start say it is complete.
 - Schema Migration Decision: no persisted schema field or migration changed.
 
+## codex:selected-scope-release-membership-agreement-2026-07-13
+
+- User job:
+  - In Map and Overview, the user should be able to understand the current
+    release/scope without reconciling contradictory containers. If the selected
+    scope projection says a task is in the current release or deferred from it,
+    the selected release read model, selected task scope, progress counts, and
+    release-readiness payload must agree.
+  - Looma + Knit should show Stage 1 as 5 current tasks with the remaining
+    imported work deferred, rather than one surface knowing about the 64
+    deferred rows while the release container drops them.
+  - The same selected release should not be `manual` in the Map spine and
+    `unspecified` in release-readiness. UI-visible unspecified work should
+    resolve to manual proof until the project explicitly says otherwise.
+- Root cause classification:
+  - Data/read-model problem: `buildProjectOrientationSpine` merged projection
+    membership into the visible task scope but only copied projection state into
+    `selectedRelease` and `releases[]`. That let the project map tell two
+    different stories about the same selected scope.
+  - Runtime summary-model problem: release-readiness used `script_only` as a
+    fallback when UI/design-system proof was unnecessary, but did not apply the
+    opposite fallback when unspecified work was UI-visible.
+  - UI communication/orientation problem: the Map view depends on the shared
+    spine payload, so dropped release membership made the owner-facing skeleton
+    look thinner than the real scoped work.
+- Fix:
+  - Added a shared read-model merge helper so any release matching the
+    authoritative projected scope receives the same `nodeIds`,
+    `deferredNodeIds`, and projection-derived state as the selected task scope.
+    Generic project-level later work is not copied into release buckets unless
+    it belongs to the projected selected scope.
+  - Release-readiness now resolves unspecified UI-visible release work to
+    `manual` proof style, while preserving the existing script-only fallback for
+    headless/no-UI work.
+  - Updated the spine regression that previously allowed selected-release
+    membership to omit unassigned current-scope projection rows.
+  - Added a release-readiness regression for unspecified UI-visible work.
+- Proof provided:
+  - `pnpm vitest run src/runtime/__tests__/project-orientation-spine.test.ts`
+    passed: 68 tests.
+  - `pnpm vitest run src/runtime/__tests__/serve-release-readiness.test.ts`
+    passed: 67 tests.
+  - `pnpm lint:contracts` passed.
+  - `pnpm build` passed.
+  - `pnpm dev:install` passed, then `guildhall stop && guildhall start`
+    restarted the installed app.
+  - `/api/stale-server` returned `stale:false`, PID `79383`,
+    `bootBuildMtimeMs:1783946371262`, and
+    `currentBuildMtimeMs:1783946371262`.
+  - Live Looma + Knit API proof showed `selectedRelease`,
+    `releases[]` selected release, `scope`, `selectedTaskScope`,
+    `release-readiness.release`, and `release-readiness.scope` all reporting
+    `stage-1-v1-release-hardening` with 5 current nodes, 64 deferred nodes, and
+    `manual` proof style where applicable.
+  - Browser proof on `/projects/looma-knit/map` at 1280x800, 760x900, and
+    390x844 showed the release scope, Stage 1 label, `5 assigned work items`,
+    `64 later work items`, manual proof mode, and scope ledger with zero
+    horizontal overflow.
+- Residual findings:
+  - None for this membership/proof-style agreement fix.
+- Contract Touch Decision:
+  - Work id: `selected-scope-release-membership-agreement`.
+  - Touched contracts: project orientation spine read-model contract for
+    `selectedRelease`, `releases[]`, `scope`, and `selectedTaskScope`
+    membership agreement; release-readiness effective proof-style fallback for
+    unspecified UI-visible selected releases.
+  - Contracts considered but not touched: persisted release schema, persisted
+    task schema, scope projection schema, release-readiness schema, Map UI
+    components, Overview UI components, and scheduler execution eligibility.
+  - Required follow-up: continue broader project-structure calibration, but no
+    follow-up is required for this specific membership/proof-style agreement
+    fix.
+  - Proof required: spine unit regression, served release-readiness regression,
+    contract lint, build/install freshness, and live API/browser proof on the
+    calibration project.
+  - Proof provided: all proof listed above.
+  - Apply/revert behavior: reverting lets selected-scope projections continue
+    to widen `scope` while leaving `selectedRelease` and `releases[]` with stale
+    membership.
+- Schema Migration Decision: no persisted schema field or migration changed.
+
 ## codex:map-release-blocker-authority-agreement-2026-07-13
 
 - User job:

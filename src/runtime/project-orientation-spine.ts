@@ -2310,11 +2310,11 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
     proofStyleFallback: executionBoundary.proofStyle,
   }, tasks)
   const projectionScope = orientationScopeFromProjection(input.scopeProjection)
-  const selectedReleaseForReadModel = selectedRelease && projectionScope?.id === selectedRelease.id
-    ? {
-        ...selectedRelease,
-        state: releaseStateFromScopeProjection(selectedRelease, input.scopeProjection),
-      }
+  const selectedReleaseScope = selectedRelease
+    ? matchingReadModelScope(selectedRelease, projectionScope, draftAugmentation.scope)
+    : null
+  const selectedReleaseForReadModel = selectedRelease
+    ? releaseWithReadModelScope(selectedRelease, selectedReleaseScope, input.scopeProjection)
     : selectedRelease
   const projectionScopeForReadModel = projectionScope && selectedReleaseForReadModel?.id === projectionScope.id
     ? {
@@ -2334,12 +2334,11 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
       ...(release.id === selectedReleaseId ? { proofStyleFallback: executionBoundary.proofStyle } : {}),
     }, tasks))
     .filter((release): release is OrientationRelease => Boolean(release))
-    .map(release => projectionScope?.id === release.id
-      ? {
-          ...release,
-          state: releaseStateFromScopeProjection(release, input.scopeProjection),
-        }
-      : release)
+    .map(release => releaseWithReadModelScope(
+      release,
+      matchingReadModelScope(release, projectionScope, draftAugmentation.scope),
+      input.scopeProjection,
+    ))
     .map(release => normalizeReadModelReleaseState(release, selectedReleaseForReadModel?.id ?? null))
     .filter(release => releaseVisibleInReadModel(release, selectedReleaseForReadModel?.id ?? null, tasks, projectionScopeNodeIds))
   const rawScopeBase = projectionScopeForReadModel ?? releaseToScope(selectedReleaseForReadModel) ?? draftAugmentation.scope ?? normalizeScope(input, tasks)
@@ -2354,8 +2353,19 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
       }
     : rawScope
   const scope = scopeWithDraftDeferred ? normalizeScopeTaskLists(scopeWithDraftDeferred, tasks) : null
-  const effectiveExecutionBoundary = selectedReleaseForReadModel?.proofStyle && selectedReleaseForReadModel.proofStyle !== 'unspecified'
-    ? { ...executionBoundary, proofStyle: selectedReleaseForReadModel.proofStyle }
+  const finalProjectionScope = input.scopeProjection ? scope : null
+  const selectedReleaseWithFinalScope = selectedReleaseForReadModel
+    ? releaseWithReadModelScope(selectedReleaseForReadModel, finalProjectionScope, input.scopeProjection)
+    : selectedReleaseForReadModel
+  const normalizedReleasesWithFinalScope = normalizedReleases.map(release =>
+    releaseWithReadModelScope(
+      release,
+      release.id === selectedReleaseWithFinalScope?.id ? finalProjectionScope : null,
+      input.scopeProjection,
+    ),
+  )
+  const effectiveExecutionBoundary = selectedReleaseWithFinalScope?.proofStyle && selectedReleaseWithFinalScope.proofStyle !== 'unspecified'
+    ? { ...executionBoundary, proofStyle: selectedReleaseWithFinalScope.proofStyle }
     : executionBoundary
   const built = buildNodes(tasks, scope, now, effectiveExecutionBoundary.proofStyle)
   const roots = mergeWorkspaceImportContexts({
@@ -2448,10 +2458,10 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
       : scope
         ? 'shaping'
         : 'unknown'
-  const effectiveSelectedRelease = selectedReleaseForReadModel && releaseState === 'blocked'
-    ? { ...selectedReleaseForReadModel, state: 'blocked' as const }
-    : selectedReleaseForReadModel
-  const effectiveReleases = normalizedReleases.map(release =>
+  const effectiveSelectedRelease = selectedReleaseWithFinalScope && releaseState === 'blocked'
+    ? { ...selectedReleaseWithFinalScope, state: 'blocked' as const }
+    : selectedReleaseWithFinalScope
+  const effectiveReleases = normalizedReleasesWithFinalScope.map(release =>
     effectiveSelectedRelease && release.id === effectiveSelectedRelease.id
       ? { ...release, state: effectiveSelectedRelease.state }
       : release,
@@ -2471,7 +2481,7 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
     charter,
     executionBoundary: effectiveExecutionBoundary,
     scope,
-    selectedRelease: selectedReleaseForReadModel,
+    selectedRelease: selectedReleaseWithFinalScope,
     summary,
     roots,
     nodesById: byId,
@@ -2539,6 +2549,30 @@ function releaseStateFromScopeProjection(
   if (projection.release.state === 'ready') return 'ready'
   if (release.state === 'ready') return 'active'
   return release.state
+}
+
+function matchingReadModelScope(
+  release: OrientationRelease,
+  projectionScope: OrientationScope | null,
+  draftScope: OrientationScope | null | undefined,
+): OrientationScope | null {
+  if (projectionScope?.id === release.id) return projectionScope
+  if (draftScope?.id === release.id) return draftScope
+  return null
+}
+
+function releaseWithReadModelScope(
+  release: OrientationRelease,
+  scope: OrientationScope | null,
+  projection: ProjectScopeProjection | null | undefined,
+): OrientationRelease {
+  if (!scope || scope.id !== release.id) return release
+  return {
+    ...release,
+    state: releaseStateFromScopeProjection(release, projection),
+    nodeIds: [...scope.nodeIds],
+    deferredNodeIds: [...scope.deferredNodeIds],
+  }
 }
 
 function releaseVisibleInReadModel(

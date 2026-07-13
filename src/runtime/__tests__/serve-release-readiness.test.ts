@@ -292,6 +292,41 @@ describe('GET /api/project/release-readiness', () => {
     expect(body.totals.designSystemBlockingCount).toBe(0)
   })
 
+  it('uses manual proof style when unspecified release work is UI-visible', async () => {
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: 'ui-proof',
+      releases: [{
+        id: 'ui-proof',
+        label: 'UI proof',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-toolbar'],
+        deferredNodeIds: [],
+        proofStyle: 'unspecified',
+      }],
+      tasks: [
+        makeTask({
+          id: 'task-toolbar',
+          title: 'Build the responsive toolbar UI',
+          description: 'Manual browser proof is expected for the toolbar layout.',
+          status: 'done',
+          completedAt: '2026-05-08T00:00:00Z',
+          releaseIds: ['ui-proof'],
+        }),
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
+    const body = await res.json() as any
+
+    expect(body.release).toMatchObject({ id: 'ui-proof', proofStyle: 'manual' })
+    expect(body.totals.designSystemBlockingCount).toBe(1)
+  })
+
   it('does not treat negated UI copy as release UI work', async () => {
     await seedQueue({
       version: 1,

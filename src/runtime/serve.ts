@@ -13779,9 +13779,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
     } = releaseTruth
     const repositoryFollowup = await buildReleaseRepositoryFollowup(project.path, gitStoryTasks)
     const { dirtyCheckout, gitStory } = repositoryFollowup
-    const readinessProofStyle = release?.proofStyle === 'script_only' || !scopedWorkNeedsDesignSystem(scopedTasks, release)
-      ? 'script_only'
-      : release?.proofStyle
+    const readinessProofStyle = release?.proofStyle && release.proofStyle !== 'unspecified'
+      ? release.proofStyle
+      : scopedWorkNeedsDesignSystem(scopedTasks, release)
+        ? 'manual'
+        : 'script_only'
     const commandProofRequired = release && readinessProofStyle === 'script_only' && scopeRequiresCommandProof(release)
     const routeProofMissingDoneTasks = commandProofRequired
       ? scopedTasks
