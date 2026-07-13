@@ -29464,6 +29464,80 @@ selected-scope readiness ordering.
     Overview even while Map/Start say it is complete.
 - Schema Migration Decision: no persisted schema field or migration changed.
 
+## 2026-07-13 - Approved import release selection authority
+
+- User job:
+  - After a workspace import is approved, the project Map, Overview, release
+    readiness, and Start/Resume surfaces should all agree on the current
+    release/scope. If approved import state says the current release is V1
+    hardening, Guildhall must not keep orienting the user around an older
+    blocked inferred release just because stale task membership still exists.
+- Root cause classification:
+  - Data model/read-model authority problem: fresh approved import truth lived
+    in `workspace-goals.json`, while selected release truth could still be read
+    from stale `TASKS.json` release membership. The read model then let the
+    stale release win for scope projection.
+  - Project structure/scope/release modeling problem: approval could correctly
+    store imported current work under one release while product surfaces still
+    chose another release as "current." That made release bounded work
+    structurally incoherent before the UI rendered anything.
+  - UI communication/orientation problem: Map/Overview/readiness were downstream
+    of the disagreement, so the user saw a project that looked like an
+    amorphous blob even when imported task counts were correct.
+- Fix:
+  - Workspace import approval now prefers the release that contains imported
+    current work when refreshing release containers, moving selection off stale
+    blocked release buckets.
+  - Orientation and release-readiness projection now use the fresh approved
+    workspace import selected release when it exists.
+  - Orientation and release-readiness now share one release projection input
+    builder so imported task release IDs and imported release metadata are
+    available to both surfaces.
+- Proof provided:
+  - `corepack pnpm vitest run
+    src/runtime/__tests__/workspace-importer.test.ts -t "moves selection off a
+    stale blocked release"` passed.
+  - `corepack pnpm vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts -t "uses fresh
+    approved import scope"` passed.
+  - `corepack pnpm vitest run
+    src/runtime/workspace-import/__tests__/detect.test.ts
+    src/runtime/workspace-import/__tests__/hypothesis.test.ts
+    src/runtime/__tests__/workspace-importer.test.ts
+    src/runtime/__tests__/serve-release-readiness.test.ts` passed: 239 tests.
+  - `corepack pnpm lint:contracts` passed.
+  - `git diff --check` passed.
+  - `node ./build.mjs` passed.
+  - `corepack pnpm dev:install` installed the current branch artifact.
+  - `guildhall stop && guildhall start` restarted the installed app.
+  - `/api/stale-server` returned `stale:false`, PID `76660`,
+    `bootBuildMtimeMs:1783904182963`, and
+    `currentBuildMtimeMs:1783904182963`.
+  - Installed API proof after re-approving `looma-knit` showed Map, Overview,
+    release readiness, and Start execution scope all selecting
+    `stage-1-v1-release-hardening` / `Stage 1: V1 Release Hardening`, with 5
+    current tasks and 64 deferred.
+- Contract Touch Decision:
+  - Work id: `approved-import-release-selection-authority`.
+  - Touched contracts: workspace import approval selected-release semantics,
+    orientation scope projection, release-readiness scope projection, and shared
+    release projection input normalization.
+  - Contracts considered but not touched: persisted task schema, persisted
+    release schema, release state enum, task lifecycle/status schema,
+    Start/Resume execution semantics, UI component contracts, and workspace
+    import detector schema.
+  - Required follow-up: continue reducing duplicated release-scope selection
+    helper logic into a smaller shared runtime utility if this path is touched
+    again; the immediate stale-release disagreement is fixed and proved.
+  - Proof required: focused unit/integration tests, contract lint, build,
+    installed-app freshness, and installed API proof on Looma+Knit.
+  - Proof provided: focused unit/integration tests, broader importer/readiness
+    subset, contract lint, build, installed-app freshness, and installed API
+    proof on Looma+Knit.
+  - Apply/revert behavior: reverting lets a stale inferred release in
+    `TASKS.json` override fresh approved import scope in product read models.
+- Schema Migration Decision: no persisted schema field or migration changed.
+
 ## 2026-07-13T00:42:18Z - Imported tasks preserve source claims on the task model
 
 - User job:

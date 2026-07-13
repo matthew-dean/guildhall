@@ -2437,6 +2437,7 @@ function ensureImportedReleaseContainers(
   queue: TaskQueue,
   now: string,
   importedReleases: readonly ParsedRelease[] = [],
+  preferredSelectedReleaseId?: string,
 ): void {
   const importedReleaseLabels = new Map(
     importedReleases
@@ -2472,6 +2473,13 @@ function ensureImportedReleaseContainers(
     now,
   })
   queue.releases = derived.releases
+  if (
+    preferredSelectedReleaseId &&
+    derived.releases.some(release => release.id === preferredSelectedReleaseId)
+  ) {
+    queue.selectedReleaseId = preferredSelectedReleaseId
+    return
+  }
   const selectedRelease = queue.selectedReleaseId
     ? derived.releases.find(release => release.id === queue.selectedReleaseId)
     : undefined
@@ -2481,6 +2489,15 @@ function ensureImportedReleaseContainers(
   if (!queue.selectedReleaseId || (!selectedHasCurrentWork && derived.selectedReleaseId)) {
     queue.selectedReleaseId = derived.selectedReleaseId ?? releaseIds[0]
   }
+}
+
+function selectedReleaseIdFromCurrentImport(tasks: readonly MaterializedImportTask[]): string | undefined {
+  for (const task of tasks) {
+    if (task.scope === 'later') continue
+    const releaseId = task.releaseIds?.find(id => id.trim().length > 0)?.trim()
+    if (releaseId) return releaseId
+  }
+  return undefined
 }
 
 function releaseHasOpenCurrentWork(release: ProjectRelease, tasks: readonly Task[]): boolean {
@@ -5531,7 +5548,12 @@ export async function approveWorkspaceImport(
   task.status = 'done'
   task.updatedAt = now
   task.completedAt = now
-  ensureImportedReleaseContainers(queue, now, materializedParsed.releases ?? [])
+  ensureImportedReleaseContainers(
+    queue,
+    now,
+    materializedParsed.releases ?? [],
+    selectedReleaseIdFromCurrentImport(materializedTasks),
+  )
   queue.lastUpdated = now
   await writeQueue(input.memoryDir, queue)
 

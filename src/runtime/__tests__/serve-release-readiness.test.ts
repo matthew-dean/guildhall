@@ -1491,6 +1491,100 @@ describe('GET /api/project/release-readiness', () => {
     })
   })
 
+  it('uses fresh approved import scope instead of stale task release selection', async () => {
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: 'stage-1-finish-primitive-wave',
+      releases: [{
+        id: 'stage-1-finish-primitive-wave',
+        label: 'Stage 1: Finish Primitive Wave',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-block-menu'],
+        deferredNodeIds: [],
+      }],
+      tasks: [
+        makeTask({
+          id: 'task-block-menu',
+          title: 'Block menu / side menu',
+          status: 'blocked',
+          releaseIds: ['stage-1-finish-primitive-wave'],
+        }),
+      ],
+    })
+    await writeProjectStateJsonAsync(tmpDir, 'workspace-goals.json', {
+      version: 3,
+      recordedAt: new Date().toISOString(),
+      goals: [],
+      releases: [{
+        id: 'stage-1-v1-release-hardening',
+        label: 'Stage 1: V1 Release Hardening',
+        source: 'release_plan',
+      }],
+      tasks: [
+        {
+          id: 'imported-toolbar',
+          title: 'Floating toolbar',
+          description: 'Current approved release work.',
+          domain: 'editor',
+          priority: 'high',
+          references: ['docs/releases/v1-hardening.md'],
+          releaseIds: ['stage-1-v1-release-hardening'],
+          scope: 'current',
+        },
+      ],
+      milestones: [],
+      context: [],
+      approved: {
+        goalCount: 0,
+        taskCount: 1,
+        milestoneCount: 1,
+        currentTaskCount: 1,
+        laterTaskCount: 0,
+        taskIds: ['imported-toolbar'],
+        currentTaskIds: ['imported-toolbar'],
+        laterTaskIds: [],
+      },
+      detected: null,
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await approveDesignSystem(app)
+    await commitAndPush('fresh approved import scope')
+
+    const map = await (await app.fetch(new Request(projectUrl('/api/project?surface=map')))).json() as any
+    const overview = await (await app.fetch(new Request(projectUrl('/api/project?surface=overview')))).json() as any
+    const readiness = await (await app.fetch(new Request(projectUrl('/api/project/release-readiness')))).json() as any
+
+    expect(map.orientationSpine?.summary?.selectedReleaseLabel).toBe('Stage 1: V1 Release Hardening')
+    expect(map.orientationSpine?.scope).toMatchObject({
+      id: 'stage-1-v1-release-hardening',
+      label: 'Stage 1: V1 Release Hardening',
+      source: 'release_plan',
+    })
+    expect(overview.orientationSpine?.summary?.selectedReleaseLabel).toBe('Stage 1: V1 Release Hardening')
+    expect(overview.orientationSpine?.scope).toMatchObject({
+      id: 'stage-1-v1-release-hardening',
+      label: 'Stage 1: V1 Release Hardening',
+      source: 'release_plan',
+    })
+    expect(overview.startReadiness?.executionScope).toMatchObject({
+      id: 'stage-1-v1-release-hardening',
+      label: 'Stage 1: V1 Release Hardening',
+      source: 'release_plan',
+      taskCount: 1,
+    })
+    expect(readiness.scope).toMatchObject({
+      id: 'stage-1-v1-release-hardening',
+      label: 'Stage 1: V1 Release Hardening',
+      source: 'release_plan',
+    })
+    expect(readiness.statusCounts).toMatchObject({
+      import_draft: 1,
+    })
+  })
+
   it('accepts review-backed imported proof hints when later completion evidence exists', async () => {
     await seedQueue({
       version: 1,

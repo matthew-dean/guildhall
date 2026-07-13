@@ -2504,15 +2504,63 @@ function buildOrientationSpineWithScopedReleaseTruth(
   releaseTruth: ReturnType<typeof summarizeScopedReleaseWork>
 } {
   const now = input.now ?? new Date().toISOString()
-  const augmentedTasks = augmentTasksWithWorkspaceImportDraft({
+  const draftAugmentation = augmentTasksWithWorkspaceImportDraft({
     tasks: input.tasks ?? [],
     workspaceImportDraft: input.workspaceImportDraft,
     now,
-  }).tasks as unknown as Task[]
+  })
+  const augmentedTasks = draftAugmentation.tasks as unknown as Task[]
+  const selectedReleaseId = input.workspaceImportDraft?.source.freshness === 'fresh'
+    ? draftAugmentation.selectedReleaseId ?? input.selectedReleaseId
+    : input.selectedReleaseId
+  const releaseProjectionInputs = releaseProjectionInputsForTasks(augmentedTasks, [
+    ...(input.releases ?? []),
+  ])
+  const selectedScope = input.scope
+    ? input.scope as ProjectScope
+    : selectedProjectScopeForQueue({
+        version: 1,
+        lastUpdated: new Date(0).toISOString(),
+        tasks: augmentedTasks,
+        releases: releaseProjectionInputs,
+        ...(selectedReleaseId ? { selectedReleaseId } : {}),
+      })
+  const scopeProjection = buildProjectScopeProjection(
+    {
+      version: 1,
+      lastUpdated: new Date(0).toISOString(),
+      tasks: augmentedTasks,
+      releases: releaseProjectionInputs,
+      ...(selectedReleaseId ? { selectedReleaseId } : {}),
+    },
+    { selectedScope },
+  )
+  const releaseTruth = summarizeScopedReleaseWork(augmentedTasks, scopeProjection.selectedScope)
+  const orientationSpine = buildProjectOrientationSpine({
+    ...input,
+    now,
+    selectedReleaseId,
+    releases: releaseProjectionInputs,
+    scopeProjection,
+    releaseReadiness: {
+      verdict: input.releaseReadiness?.verdict ?? (releaseTruth.releaseBlockers.length > 0 ? 'blocked' : 'clear'),
+      blockers: [
+        ...releaseTruth.releaseBlockers,
+        ...(input.releaseReadiness?.blockers ?? []),
+      ],
+    },
+  })
+  return { orientationSpine, releaseTruth }
+}
+
+function releaseProjectionInputsForTasks(
+  tasks: readonly Task[],
+  releases: readonly Partial<ProjectRelease>[],
+): ProjectRelease[] {
   const releasesById = new Map<string, ProjectRelease>()
   for (const release of [
-    ...augmentedTasks.flatMap(task => task.releaseIds ?? []).map(id => ({ id })),
-    ...(input.releases ?? []),
+    ...tasks.flatMap(task => task.releaseIds ?? []).map(id => ({ id })),
+    ...releases,
   ]) {
     if (!release.id) continue
     releasesById.set(release.id, {
@@ -2526,39 +2574,7 @@ function buildOrientationSpineWithScopedReleaseTruth(
       ...(release.proofStyle ? { proofStyle: release.proofStyle } : {}),
     })
   }
-  const selectedScope = input.scope
-    ? input.scope as ProjectScope
-    : selectedProjectScopeForQueue({
-        version: 1,
-        lastUpdated: new Date(0).toISOString(),
-        tasks: augmentedTasks,
-        releases: [...releasesById.values()],
-        ...(input.selectedReleaseId ? { selectedReleaseId: input.selectedReleaseId } : {}),
-      })
-  const scopeProjection = buildProjectScopeProjection(
-    {
-      version: 1,
-      lastUpdated: new Date(0).toISOString(),
-      tasks: augmentedTasks,
-      releases: [...releasesById.values()],
-      ...(input.selectedReleaseId ? { selectedReleaseId: input.selectedReleaseId } : {}),
-    },
-    { selectedScope },
-  )
-  const releaseTruth = summarizeScopedReleaseWork(augmentedTasks, scopeProjection.selectedScope)
-  const orientationSpine = buildProjectOrientationSpine({
-    ...input,
-    now,
-    scopeProjection,
-    releaseReadiness: {
-      verdict: input.releaseReadiness?.verdict ?? (releaseTruth.releaseBlockers.length > 0 ? 'blocked' : 'clear'),
-      blockers: [
-        ...releaseTruth.releaseBlockers,
-        ...(input.releaseReadiness?.blockers ?? []),
-      ],
-    },
-  })
-  return { orientationSpine, releaseTruth }
+  return [...releasesById.values()]
 }
 
 function orientationReleaseReadinessFromPayload(
@@ -4154,10 +4170,21 @@ function buildOverviewOrientationPreviewSpine(input: {
     version: 1,
     lastUpdated: now,
     tasks: input.rawQueue.tasks as unknown as Task[],
-    releases: input.rawQueue.releases,
-    ...(input.rawQueue.selectedReleaseId ? { selectedReleaseId: input.rawQueue.selectedReleaseId } : {}),
+    releases: input.sourceSpine?.selectedRelease
+      ? [
+          input.sourceSpine.selectedRelease as ProjectRelease,
+          ...input.rawQueue.releases.filter(release => release.id !== input.sourceSpine?.selectedRelease?.id),
+        ]
+      : input.rawQueue.releases,
+    ...(input.sourceSpine?.scope?.id
+      ? { selectedReleaseId: input.sourceSpine.scope.id }
+      : input.rawQueue.selectedReleaseId ? { selectedReleaseId: input.rawQueue.selectedReleaseId } : {}),
   }
-  const projection = buildProjectScopeProjection(queue)
+  const sourceSelectedScope = input.sourceSpine?.selectedTaskScope ?? input.sourceSpine?.scope ?? null
+  const projection = buildProjectScopeProjection(
+    queue,
+    sourceSelectedScope ? { selectedScope: sourceSelectedScope as ProjectScope } : {},
+  )
   const scope = projection.selectedScope
   const scopeRows = executionScopeRows(projection.rows)
   const selectedRelease = scope
@@ -7110,7 +7137,20 @@ export function buildServeApp(opts: ServeOptions = {}): {
       releases: queue.releases,
       ...(queue.selectedReleaseId ? { selectedReleaseId: queue.selectedReleaseId } : {}),
     }
-    const selectedReleaseScope = selectedReleaseScopeFromQueueLike(typedQueue)
+    const { orientationSpine } = buildOrientationSpineWithScopedReleaseTruth({
+      projectId: basename(projectPath),
+      charter: inferProjectCharterFromExistingSources(projectPath),
+      selectedReleaseId: queue.selectedReleaseId,
+      releases: queue.releases,
+      tasks: typedQueue.tasks,
+      runStatus: 'stopped',
+      workspaceImportDraft: await workspaceImportDraftForOrientation(projectPath, null),
+      sourceRefs: projectOrientationSourceRefs(projectPath),
+    })
+    const selectedReleaseScope =
+      (orientationSpine.selectedTaskScope as OrientationScope | null | undefined) ??
+      (orientationSpine.scope as OrientationScope | null | undefined) ??
+      selectedReleaseScopeFromQueueLike(typedQueue)
     const scopedTasks = tasksEligibleForScopeExecution(typedQueue.tasks, selectedReleaseScope)
     if (selectedReleaseScope) {
       return scopedTasks.some(task => {
@@ -7149,7 +7189,20 @@ export function buildServeApp(opts: ServeOptions = {}): {
       releases: queue.releases,
       ...(queue.selectedReleaseId ? { selectedReleaseId: queue.selectedReleaseId } : {}),
     }
-    const selectedReleaseScope = selectedReleaseScopeFromQueueLike(typedQueue)
+    const { orientationSpine } = buildOrientationSpineWithScopedReleaseTruth({
+      projectId: basename(projectPath),
+      charter: inferProjectCharterFromExistingSources(projectPath),
+      selectedReleaseId: queue.selectedReleaseId,
+      releases: queue.releases,
+      tasks: typedQueue.tasks,
+      runStatus: 'stopped',
+      workspaceImportDraft: await workspaceImportDraftForOrientation(projectPath, null),
+      sourceRefs: projectOrientationSourceRefs(projectPath),
+    })
+    const selectedReleaseScope =
+      (orientationSpine.selectedTaskScope as OrientationScope | null | undefined) ??
+      (orientationSpine.scope as OrientationScope | null | undefined) ??
+      selectedReleaseScopeFromQueueLike(typedQueue)
     const scopedTasks = tasksEligibleForScopeExecution(typedQueue.tasks, selectedReleaseScope)
     const pausedTasks = scopedTasks.filter(task => {
       if (!task || typeof task !== 'object') return false
@@ -7241,7 +7294,20 @@ export function buildServeApp(opts: ServeOptions = {}): {
     if (!queue) return undefined
     const typedTasks = queue.tasks as Task[]
     const workspaceGoalsState = await readWorkspaceGoalsState(getProjectStateDir(projectPath)).catch(() => null)
-    const selectedReleaseScope = selectedReleaseScopeFromQueueLike({
+    const { orientationSpine } = buildOrientationSpineWithScopedReleaseTruth({
+      projectId: basename(projectPath),
+      charter: inferProjectCharterFromExistingSources(projectPath),
+      selectedReleaseId: queue.selectedReleaseId,
+      releases: queue.releases,
+      tasks: typedTasks,
+      runStatus: 'stopped',
+      workspaceImportDraft: await workspaceImportDraftForOrientation(projectPath, null),
+      sourceRefs: projectOrientationSourceRefs(projectPath),
+    })
+    const orientationScope =
+      (orientationSpine.selectedTaskScope as OrientationScope | null | undefined) ??
+      (orientationSpine.scope as OrientationScope | null | undefined)
+    const selectedReleaseScope = orientationScope ?? selectedReleaseScopeFromQueueLike({
       tasks: typedTasks,
       releases: queue.releases,
       ...(queue.selectedReleaseId ? { selectedReleaseId: queue.selectedReleaseId } : {}),
@@ -8335,18 +8401,6 @@ export function buildServeApp(opts: ServeOptions = {}): {
     if (!existsSync(tasksPath)) return null
     const queue = await readTaskQueueFileNormalized(tasksPath)
     const effectiveTasks = await Promise.all((queue.tasks as Task[]).map(task => buildEffectiveTask(projectPath, task)))
-    const selectedReleaseScope = selectedReleaseScopeFromQueueLike({
-      tasks: effectiveTasks,
-      releases: queue.releases,
-      ...(queue.selectedReleaseId ? { selectedReleaseId: queue.selectedReleaseId } : {}),
-    })
-    if (
-      selectedReleaseScope &&
-      tasksEligibleForScopeExecution(effectiveTasks, selectedReleaseScope)
-        .some(task => taskShapingBlockers(task).length > 0)
-    ) {
-      return null
-    }
     const { orientationSpine } = buildOrientationSpineWithScopedReleaseTruth({
       projectId: basename(projectPath),
       charter: inferProjectCharterFromExistingSources(projectPath),
@@ -8357,6 +8411,21 @@ export function buildServeApp(opts: ServeOptions = {}): {
       workspaceImportDraft: await workspaceImportDraftForOrientation(projectPath, null),
       sourceRefs: projectOrientationSourceRefs(projectPath),
     })
+    const selectedReleaseScope =
+      (orientationSpine.selectedTaskScope as OrientationScope | null | undefined) ??
+      (orientationSpine.scope as OrientationScope | null | undefined) ??
+      selectedReleaseScopeFromQueueLike({
+        tasks: effectiveTasks,
+        releases: queue.releases,
+        ...(queue.selectedReleaseId ? { selectedReleaseId: queue.selectedReleaseId } : {}),
+      })
+    if (
+      selectedReleaseScope &&
+      tasksEligibleForScopeExecution(effectiveTasks, selectedReleaseScope)
+        .some(task => taskShapingBlockers(task).length > 0)
+    ) {
+      return null
+    }
     const sourceConflict = orientationSpine.gaps.find(gap =>
       sourceConflictCompetesWithSelectedScope(gap, effectiveTasks, selectedReleaseScope),
     )
@@ -8410,7 +8479,20 @@ export function buildServeApp(opts: ServeOptions = {}): {
       releases: queue.releases,
       ...(queue.selectedReleaseId ? { selectedReleaseId: queue.selectedReleaseId } : {}),
     }
-    const selectedReleaseScope = selectedReleaseScopeFromQueueLike(typedQueue)
+    const { orientationSpine } = buildOrientationSpineWithScopedReleaseTruth({
+      projectId: basename(projectPath),
+      charter: inferProjectCharterFromExistingSources(projectPath),
+      selectedReleaseId: queue.selectedReleaseId,
+      releases: queue.releases,
+      tasks: typedQueue.tasks,
+      runStatus: 'stopped',
+      workspaceImportDraft: await workspaceImportDraftForOrientation(projectPath, null),
+      sourceRefs: projectOrientationSourceRefs(projectPath),
+    })
+    const selectedReleaseScope =
+      (orientationSpine.selectedTaskScope as OrientationScope | null | undefined) ??
+      (orientationSpine.scope as OrientationScope | null | undefined) ??
+      selectedReleaseScopeFromQueueLike(typedQueue)
     const tasksById = new Map(typedQueue.tasks.map(task => [task.id, task]))
     if (selectedReleaseScope) {
       const projection = buildProjectScopeProjection(typedQueue, {
@@ -8645,13 +8727,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       rawQueue.tasks.some(task => ((task as Task).releaseIds?.length ?? 0) > 0)
     if (!hasReleaseBoundary) return null
     const tasks = await Promise.all(rawQueue.tasks.map(task => buildEffectiveTask(projectPath, task as Task)))
-    const selectedReleaseScope = selectedReleaseScopeFromQueueLike({
-      tasks: tasks as Task[],
-      releases: rawQueue.releases,
-      ...(rawQueue.selectedReleaseId ? { selectedReleaseId: rawQueue.selectedReleaseId } : {}),
-    })
-    const scopedTasks = tasksEligibleForScopeExecution(tasks as Task[], selectedReleaseScope)
-    const { releaseTruth } = buildOrientationSpineWithScopedReleaseTruth({
+    const { orientationSpine, releaseTruth } = buildOrientationSpineWithScopedReleaseTruth({
       projectId: resolvedConfig.id ?? basename(projectPath),
       charter: inferProjectCharterFromExistingSources(projectPath, resolvedConfig),
       selectedReleaseId: rawQueue.selectedReleaseId,
@@ -8660,6 +8736,15 @@ export function buildServeApp(opts: ServeOptions = {}): {
       workspaceImportDraft: await workspaceImportDraftForOrientation(projectPath, null),
       sourceRefs: projectOrientationSourceRefs(projectPath),
     })
+    const selectedReleaseScope =
+      (orientationSpine.selectedTaskScope as OrientationScope | null | undefined) ??
+      (orientationSpine.scope as OrientationScope | null | undefined) ??
+      selectedReleaseScopeFromQueueLike({
+        tasks: tasks as Task[],
+        releases: rawQueue.releases,
+        ...(rawQueue.selectedReleaseId ? { selectedReleaseId: rawQueue.selectedReleaseId } : {}),
+      })
+    const scopedTasks = tasksEligibleForScopeExecution(tasks as Task[], selectedReleaseScope)
     const gitStory = await buildProjectGitStorySummary(projectPath, releaseTruth.gitStoryTasks)
     const firstBlocked = scopedTasks.find(task => {
       const status = String(task.status ?? '')
@@ -13294,24 +13379,33 @@ export function buildServeApp(opts: ServeOptions = {}): {
     const tasks = input.tasks ?? await Promise.all(rawTasks.map((task) => buildEffectiveTask(project.path, task as Task)))
     const releaseStartReadiness = input.startReadiness ?? await projectStartReadinessForProject(project.path)
     const now = new Date().toISOString()
-    const augmentedTasks = augmentTasksWithWorkspaceImportDraft({
+    const workspaceImportDraft = await workspaceImportDraftForOrientation(project.path, releaseStartReadiness)
+    const draftAugmentation = augmentTasksWithWorkspaceImportDraft({
       tasks: tasks as unknown as Task[],
-      workspaceImportDraft: await workspaceImportDraftForOrientation(project.path, releaseStartReadiness),
+      workspaceImportDraft,
       now,
-    }).tasks as unknown as Task[]
+    })
+    const augmentedTasks = draftAugmentation.tasks as unknown as Task[]
+    const selectedReleaseId = workspaceImportDraft?.source.freshness === 'fresh'
+      ? draftAugmentation.selectedReleaseId ?? rawQueue.selectedReleaseId
+      : rawQueue.selectedReleaseId
+    const releaseProjectionInputs = releaseProjectionInputsForTasks(augmentedTasks, [
+      ...rawQueue.releases,
+      ...draftAugmentation.releases,
+    ])
     const selectedScope =
       selectedProjectScopeForQueue({
         tasks: augmentedTasks,
-        releases: rawQueue.releases,
-        ...(rawQueue.selectedReleaseId ? { selectedReleaseId: rawQueue.selectedReleaseId } : {}),
+        releases: releaseProjectionInputs,
+        ...(selectedReleaseId ? { selectedReleaseId } : {}),
       }) ??
       fallbackCurrentWorkScope(augmentedTasks)
     const scopeProjection = buildProjectScopeProjection({
       version: 1,
       lastUpdated: now,
       tasks: augmentedTasks,
-      releases: rawQueue.releases,
-      ...(rawQueue.selectedReleaseId ? { selectedReleaseId: rawQueue.selectedReleaseId } : {}),
+      releases: releaseProjectionInputs,
+      ...(selectedReleaseId ? { selectedReleaseId } : {}),
     }, { selectedScope })
     const readinessScope = releaseReadinessScopeFromProjection(scopeProjection, selectedScope) ?? fallbackRelease
     const releaseTruth = summarizeScopedReleaseWork(augmentedTasks, readinessScope === fallbackRelease ? null : readinessScope)

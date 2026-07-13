@@ -1595,7 +1595,7 @@ tasks:
     ]))
   })
 
-  it('moves selection off a stale release when imported current work lands in another release', async () => {
+  it('moves selection off a stale blocked release when imported current work lands in another release', async () => {
     await writeQueue({
       version: 1,
       lastUpdated: '2026-04-01T00:00:00Z',
@@ -1612,11 +1612,11 @@ tasks:
       }],
       tasks: [TaskQueue.shape.tasks.element.parse({
         id: 'task-old-proof',
-        title: 'Finished old proof',
-        description: 'Already complete.',
+        title: 'Blocked old proof',
+        description: 'Stale blocked work from an older selected release.',
         domain: 'harness',
         projectPath: tmpDir,
-        status: 'done',
+        status: 'blocked',
         priority: 'normal',
         releaseIds: ['near-term-proof-scope'],
         origination: 'human',
