@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen, waitFor } from '@testing-library/svelte'
+import { cleanup, render, screen, waitFor, within } from '@testing-library/svelte'
 import userEvent from '@testing-library/user-event'
 import ReleaseTab from '../ReleaseTab.svelte'
 import { path } from '../../../lib/nav.svelte.js'
@@ -344,6 +344,61 @@ describe('ReleaseTab', () => {
     expect(screen.getByText('Link editing UI')).toBeTruthy()
     expect(screen.getByText('Link editing UI: needs a clearer brief before unattended work can run.')).toBeTruthy()
     expect(screen.getByText('Block menu / block side menu')).toBeTruthy()
+  })
+
+  it('keeps repository and checkout blockers out of the release-blocker task row', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        json({
+          ...readyPayload,
+          ready: false,
+          release: { id: 'primitive-wave', label: 'Primitive wave' },
+          releaseBlockers: [
+            {
+              id: 'task-link',
+              title: 'Link editing UI',
+              label: 'Link editing UI: needs a clearer brief before unattended work can run.',
+            },
+            {
+              id: 'repository-followup:repo:0',
+              title: 'Repository follow-up: main',
+              label: 'Branch needs a sharing decision.',
+            },
+            {
+              id: 'dirty-checkout',
+              title: 'Project checkout',
+              label: '1 Guildhall-managed checkout file needs cleanup or landing.',
+            },
+          ],
+          dirtyCheckout: { ownedCount: 1, files: ['TASKS.json'] },
+          gitStory: {
+            ready: false,
+            blockers: [{ id: 'repo:0', label: 'main', state: 'no_upstream', reason: 'Branch needs a sharing decision.' }],
+          },
+          totals: {
+            blockingCount: 3,
+            gitStoryBlockingCount: 1,
+            dirtyCheckoutBlockingCount: 1,
+            humanBlockingCount: 1,
+            unfinishedCount: 1,
+            tasks: 1,
+            done: 0,
+          },
+        }),
+      ),
+    )
+
+    render(ReleaseTab, { props: { subView: 'criteria' } })
+
+    const releaseBlockersLabel = await screen.findByText('Release blockers')
+    const releaseBlockersRow = releaseBlockersLabel.closest('li')
+    expect(releaseBlockersRow).toBeTruthy()
+    expect(within(releaseBlockersRow as HTMLElement).getByText('1 task still open.')).toBeTruthy()
+    expect(within(releaseBlockersRow as HTMLElement).queryByText('Repository follow-up: main')).toBeNull()
+    expect(within(releaseBlockersRow as HTMLElement).queryByText('Project checkout')).toBeNull()
+    expect(screen.getByText('1 repository follow-up.')).toBeTruthy()
+    expect(screen.getAllByText('Repository follow-up').length).toBeGreaterThanOrEqual(1)
   })
 
   it('names design-system readiness as the hard release blocker', async () => {

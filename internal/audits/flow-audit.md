@@ -8,6 +8,54 @@ help_summary: |
 
 # Web UI flow audit
 
+2026-07-13 - Release criteria separate work blockers from repository follow-up.
+
+- Work id: `codex:release-criteria-work-blocker-partition-2026-07-13`.
+- User job: Release criteria should not tell the owner that repository or
+  checkout follow-ups are task blockers. The verdict can count every blocking
+  signal, but the task/work blocker row must list only task/work blockers while
+  repository follow-up and checkout cleanup stay in their own rows.
+- Live finding:
+  - Looma + Knit correctly reported `2` selected-scope blocked tasks, but
+    `releaseReadiness.releaseBlockers` also carried repository follow-up and
+    dirty-checkout blockers.
+  - `ReleaseTab` rendered that mixed list directly under `Release blockers`,
+    so the criteria row could say `3 tasks still open` and list `Repository
+    follow-up` / `Project checkout` as if they were tasks.
+- Root-cause classification:
+  - UI communication/orientation problem: the release criteria UI collapsed
+    work blockers, repository blockers, design-system blockers, and checkout
+    blockers into one task-shaped row even though separate rows already existed.
+  - Data model/schema pressure: `releaseBlockers` remains a mixed compatibility
+    list; consumers need explicit partitioning until the contract is split.
+- Change:
+  - `ReleaseTab` now filters repository follow-up, dirty-checkout, and
+    design-system ids out of the `Release blockers`/`Scope blockers` task row.
+  - The existing repository follow-up and checkout summary/criteria rows keep
+    showing those non-task blockers.
+- Contract Touch Decision:
+  - Work id: `codex:release-criteria-work-blocker-partition-2026-07-13`.
+  - Touched contracts: ReleaseTab interpretation of
+    `releaseReadiness.releaseBlockers`.
+  - Contracts considered but not touched: `/api/project/release-readiness`
+    payload shape, release-readiness totals, git-story payload, dirty-checkout
+    payload.
+  - Required follow-up: split the API into explicit work blockers and
+    non-work readiness blockers when the compatibility cost is worth it.
+  - Proof required: failing rendered ReleaseTab criteria regression; focused
+    ReleaseTab test pass; installed-app stale proof before commit.
+  - Proof provided: the new rendered regression first failed with `3 tasks
+    still open` and repository/checkout items inside the `Release blockers`
+    row; after the filter, `ReleaseTab.svelte.test.ts` passed (`24` tests).
+    The related Release/Overview/Map rendered slice passed (`65` tests);
+    `pnpm lint:contracts` and `git diff --check` passed; installed app was
+    rebuilt and reinstalled with `/api/stale-server` reporting `stale:false`.
+  - Waivers: none.
+  - Owner-review items: none. This changes blocker presentation, not owner
+    approval automation.
+  - Apply/revert behavior: reverting this change lets non-task readiness
+    blockers appear as task-shaped release blockers in the criteria UI.
+
 2026-07-13 - Work surfaces honor non-total visibility rows.
 
 - Work id: `codex:work-surface-non-total-visibility-2026-07-13`.

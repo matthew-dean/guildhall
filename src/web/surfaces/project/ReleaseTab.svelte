@@ -159,6 +159,15 @@
     if (id) nav(currentTaskHref(id, activeProjectId))
   }
 
+  function isWorkReleaseBlocker(item: ReleaseItem): boolean {
+    const id = idOf(item)
+    return !(
+      id.startsWith('repository-followup:') ||
+      id === 'dirty-checkout' ||
+      id === 'design-system'
+    )
+  }
+
   interface Criterion {
     key: string
     label: string
@@ -172,7 +181,7 @@
           {
             key: 'release-blockers',
             label: hasNamedRelease ? 'Release blockers' : 'Scope blockers',
-            items: data.releaseBlockers ?? [],
+            items: (data.releaseBlockers ?? []).filter(isWorkReleaseBlocker),
             clearLabel: `No open ${blockerNoun}s.`,
           },
           {
