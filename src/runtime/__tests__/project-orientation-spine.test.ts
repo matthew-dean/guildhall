@@ -2121,7 +2121,6 @@ describe('buildProjectOrientationSpine', () => {
           title: 'Implement no-UI runner.',
           status: 'done',
           spec: 'Done.',
-          proofPaths: [{ expectedEvidence: ['runner-smoke'] }],
           gateResults: [{ gateId: 'runner-smoke', status: 'pass' }],
           reviewVerdicts: [{ reviewerPath: 'deterministic', verdict: 'approve' }],
         },
@@ -2134,10 +2133,10 @@ describe('buildProjectOrientationSpine', () => {
     })
 
     expect(spine.summary.headline).toBe('Stage 1: Fixture And Evaluation Harness is complete.')
-    expect(spine.summary.progress.proven).toBe(2)
-    expect(spine.summary.progress.done).toBe(2)
     expect(spine.nodes['work:fixture-schema']?.maturity).toBe('proven')
     expect(spine.nodes['work:runner-proof']?.maturity).toBe('proven')
+    expect(spine.summary.progress.proven).toBe(2)
+    expect(spine.summary.progress.done).toBe(2)
     expect(spine.nodes['work:fixture-schema']?.proof.verified[0]).toContain('pnpm test -- fixture-schema passed')
     expect(spine.nodes['work:runner-proof']?.proof.verified).toEqual(expect.arrayContaining([
       'Gate passed: runner-smoke',

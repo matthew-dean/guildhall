@@ -30566,6 +30566,90 @@ selected-scope readiness ordering.
     Overview even while Map/Start say it is complete.
 - Schema Migration Decision: no persisted schema field or migration changed.
 
+## codex:nh-complete-release-proof-state-agreement-2026-07-13
+
+- User job:
+  - When Narrative Harness Stage 1 is complete, Overview, Map, Release, and
+    release-readiness should all communicate the same thing: 11 current scoped
+    work items are done, 31 later items are deferred, no blockers remain, and
+    recorded completion proof is accepted where release-readiness accepts it.
+  - The Map must not keep showing scoped rows as `PROOF NEEDED` after the
+    release-readiness model says the release is complete.
+- Root cause classification:
+  - Task hierarchy/dependency/proof modeling problem: orientation proof
+    summaries required an explicit modeled command proof path for every done
+    script-only task, even when durable recorded completion proof already
+    existed.
+  - Runtime summary-model problem: release-readiness accepted recorded
+    completion proof, but the orientation spine recomputed stricter proof
+    state locally and produced a contradictory Map.
+  - UI communication/orientation problem: the browser-visible Map displayed
+    `PROOF NEEDED` rows under a complete release, undermining the 1,000-foot
+    project view.
+- Owner-level action:
+  - Codex acted as Matthew for this calibration run and pushed Narrative
+    Harness `main` to `origin/main`, resolving the repository follow-up blocker
+    for commit `5a40b073 Add world-state continuity proof script`.
+- Fix:
+  - `proofForTask` now treats recorded completion proof as satisfying the
+    script-only proof requirement unless release-readiness explicitly reports a
+    proof blocker for that task.
+  - The orientation spine now receives release-readiness proof-blocked task ids
+    and keeps those tasks proof-needed when release-readiness is still blocking
+    them.
+  - The durable-completion regression now covers a task with recorded
+    gate/review evidence and no modeled `proofPaths`.
+- Proof provided:
+  - Narrative Harness git state after push: `main...origin/main` with no local
+    changes or ahead commits.
+  - Live Narrative Harness API proof showed Stage 1 `ready:true`, 11/11 done,
+    31 deferred, 0 blockers, 0 dirty checkout files, and clean git story.
+  - Browser proof before the fix caught the contradiction: Overview and Release
+    communicated completion, while Map still displayed `PROOF NEEDED`.
+  - `pnpm vitest run src/runtime/__tests__/project-orientation-spine.test.ts`
+    passed: 68 tests.
+  - `pnpm vitest run src/runtime/__tests__/serve-release-readiness.test.ts`
+    passed: 67 tests.
+  - `pnpm lint:contracts` passed.
+  - `pnpm build` passed.
+  - `pnpm dev:install` passed, then `guildhall stop && guildhall start`
+    restarted the installed app.
+  - `/api/stale-server` returned `stale:false`, PID `6891`,
+    `bootBuildMtimeMs:1783947391544`, and
+    `currentBuildMtimeMs:1783947391544`.
+  - Live Narrative Harness release-readiness API proof showed Stage 1
+    `ready:true`, 11/11 done, 31 deferred, 0 blockers, 0 proof evidence
+    blockers, and clean/merged git story.
+  - Live Narrative Harness spine API proof showed Stage 1 `ready`, script-only
+    proof style, 11 selected release nodes, 31 deferred nodes, progress
+    `proven:11`, `done:11`, `blocked:0`, `deferred:31`, and 0 current release
+    rows with `proof_needed` maturity or proof-missing messages.
+  - Browser proof on `/projects/narrative-harness/map` at 1280x800, 760x900,
+    and 390x844 showed the complete headline, `11 assigned work items`,
+    `31 later work items`, `0 Missing proof`, `HEADLESS PROOF`, no
+    `PROOF NEEDED` text, zero horizontal overflow, and no clipped sampled
+    heading/card/chip/button elements.
+- Residual findings:
+  - None for this release-readiness-to-spine proof-state agreement fix.
+- Contract Touch Decision:
+  - Work id: `nh-complete-release-proof-state-agreement`.
+  - Touched contracts: project orientation spine proof-summary contract,
+    release-readiness blocker-to-spine proof-state agreement, and owner-facing
+    completion/proof state shown in Overview/Map/Release.
+  - Contracts considered but not touched: persisted task schema, persisted proof
+    schema, release-readiness response shape, task completion proof extraction,
+    Map UI components, Release UI components, and scheduler execution
+    eligibility.
+  - Required follow-up: continue broader calibration against Looma + Knit
+    shaping/repository blockers.
+  - Proof required: spine regression, served release-readiness regression,
+    contract lint, build/install freshness, and browser-visible NH completion
+    proof.
+  - Proof provided: all proof listed above.
+  - Apply/revert behavior: reverting lets completed releases remain ready in
+    release-readiness while Map rows still show stale proof-needed status.
+- Schema Migration Decision: no persisted schema field or migration changed.
+
 ## codex:selected-scope-release-membership-agreement-2026-07-13
 
 - User job:

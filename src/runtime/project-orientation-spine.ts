@@ -856,7 +856,7 @@ function hasBrief(task: OrientationTaskInput): boolean {
 
 function proofForTask(
   task: OrientationTaskInput,
-  options: { suppressMissingProof?: boolean; requireModeledProof?: boolean } = {},
+  options: { suppressMissingProof?: boolean; requireModeledProof?: boolean; forceModeledProofMissing?: boolean } = {},
 ): OrientationProofSummary {
   const recorded = recordedCompletionProofForTask(task)
   const handoff = task.completionHandoff && typeof task.completionHandoff === 'object'
@@ -870,7 +870,11 @@ function proofForTask(
   const missing = [...(handoff?.notVerified ?? []), ...(handoff?.remainingRisks ?? [])].filter(Boolean)
   const plannedProof = Array.isArray(task.proofPaths) ? task.proofPaths.length : 0
   const base = { expectationCount: plannedProof }
-  if (options.requireModeledProof && task.status === 'done' && !taskHasScriptProofPath(task)) {
+  if (
+    task.status === 'done' &&
+    !taskHasScriptProofPath(task) &&
+    (options.forceModeledProofMissing || (options.requireModeledProof && verified.length === 0))
+  ) {
     return {
       state: 'needed',
       verified,
@@ -982,6 +986,7 @@ function unfinishedChildRollupMaturity(
   scope: OrientationScope | null,
   tasksById: ReadonlyMap<string, OrientationTaskInput>,
   suppressedProofTaskIds: ReadonlySet<string>,
+  proofBlockedTaskIds: ReadonlySet<string>,
   proofStyle: OrientationExecutionBoundary['proofStyle'],
 ): OrientationMaturity | null {
   const children = childTasksFor(task, childIdsByParent, tasksById)
@@ -995,6 +1000,7 @@ function unfinishedChildRollupMaturity(
     const proof = proofForTask(child, {
       suppressMissingProof: suppressedProofTaskIds.has(child.id),
       requireModeledProof: proofStyle === 'script_only',
+      forceModeledProofMissing: proofBlockedTaskIds.has(child.id),
     })
     return (hasExplicitProofExpectation(child) || proofStyle === 'script_only') &&
       (proof.state === 'needed' || proof.state === 'partial')
@@ -1008,6 +1014,7 @@ function unfinishedChildRollupMaturity(
     const proof = proofForTask(child, {
       suppressMissingProof: suppressedProofTaskIds.has(child.id),
       requireModeledProof: proofStyle === 'script_only',
+      forceModeledProofMissing: proofBlockedTaskIds.has(child.id),
     })
     return (hasExplicitProofExpectation(child) || proofStyle === 'script_only') &&
       (proof.state === 'needed' || proof.state === 'partial')
@@ -1021,6 +1028,7 @@ function maturityForTask(
   scope: OrientationScope | null,
   tasksById: ReadonlyMap<string, OrientationTaskInput>,
   suppressedProofTaskIds: ReadonlySet<string>,
+  proofBlockedTaskIds: ReadonlySet<string>,
   proofStyle: OrientationExecutionBoundary['proofStyle'],
 ): OrientationMaturity {
   if (!taskEligibleForSelectedScope(task, scope, { tasksById }).eligible) return 'deferred'
@@ -1028,13 +1036,14 @@ function maturityForTask(
   if (task.status === 'blocked') return 'blocked'
   if (task.status === 'in_progress') return 'active'
   if (task.status === 'review' || task.status === 'gate_check') return 'review'
-  const childRollup = unfinishedChildRollupMaturity(task, childIdsByParent, scope, tasksById, suppressedProofTaskIds, proofStyle)
+  const childRollup = unfinishedChildRollupMaturity(task, childIdsByParent, scope, tasksById, suppressedProofTaskIds, proofBlockedTaskIds, proofStyle)
   if (childRollup === 'active' || childRollup === 'review' || childRollup === 'blocked') return childRollup
   if (task.status === 'done') {
     if (childRollup) return childRollup
     const proof = proofForTask(task, {
       suppressMissingProof: suppressedProofTaskIds.has(task.id),
       requireModeledProof: proofStyle === 'script_only',
+      forceModeledProofMissing: proofBlockedTaskIds.has(task.id),
     })
     if (proof.state === 'proven') return 'proven'
     if ((hasExplicitProofExpectation(task) || proofStyle === 'script_only') && (proof.state === 'needed' || proof.state === 'partial')) return 'proof_needed'
@@ -1047,6 +1056,7 @@ function maturityForTask(
   const proof = proofForTask(task, {
     suppressMissingProof: suppressedProofTaskIds.has(task.id),
     requireModeledProof: proofStyle === 'script_only',
+    forceModeledProofMissing: proofBlockedTaskIds.has(task.id),
   })
   if (task.status === 'ready' && proof.state === 'needed') return 'proof_needed'
   if (proof.state === 'partial') return 'proof_needed'
@@ -1075,6 +1085,7 @@ function progressForSelectedScope(
   tasks: OrientationTaskInput[],
   scope: OrientationScope | null,
   proofStyle: OrientationExecutionBoundary['proofStyle'],
+  proofBlockedTaskIds: ReadonlySet<string> = new Set(),
 ): OrientationProgress {
   const tasksById = new Map(tasks.map(task => [task.id, task]))
   const childIdsByParent = buildChildMap(tasks)
@@ -1083,7 +1094,7 @@ function progressForSelectedScope(
     if (isProjectSetupTask(task.id) || task.status === 'archived' || task.status === 'cancelled') return progress
     if (!visibilityForTask(task, tasksById).countInProjectTotals) return progress
     if (!taskCountsTowardScopeProgress(task, scope)) return progress
-    const maturity = maturityForTask(task, childIdsByParent, scope, tasksById, suppressedProofTaskIds, proofStyle)
+    const maturity = maturityForTask(task, childIdsByParent, scope, tasksById, suppressedProofTaskIds, proofBlockedTaskIds, proofStyle)
     return addProgress(progress, progressForTask(task, maturity, scope?.id ?? null))
   }, emptyProgress(scope?.id ?? null))
 }
@@ -1182,6 +1193,7 @@ function buildNodes(
   scope: OrientationScope | null,
   now: string,
   proofStyle: OrientationExecutionBoundary['proofStyle'],
+  proofBlockedTaskIds: ReadonlySet<string> = new Set(),
 ): { roots: OrientationNode[]; byId: Map<string, OrientationNode>; gaps: OrientationGap[] } {
   const tasksById = new Map(tasks.map(task => [task.id, task]))
   const childIdsByParent = buildChildMap(tasks)
@@ -1192,7 +1204,7 @@ function buildNodes(
   const build = (task: OrientationTaskInput): OrientationNode => {
     const existing = byId.get(taskNodeId(task.id))
     if (existing) return existing
-    const maturity = maturityForTask(task, childIdsByParent, scope, tasksById, suppressedProofTaskIds, proofStyle)
+    const maturity = maturityForTask(task, childIdsByParent, scope, tasksById, suppressedProofTaskIds, proofBlockedTaskIds, proofStyle)
     const visibility = visibilityForTask(task, tasksById)
     const children = (childIdsByParent.get(task.id) ?? [])
       .map(childId => tasksById.get(childId))
@@ -1211,6 +1223,7 @@ function buildNodes(
     const proof = proofForTask(task, {
       suppressMissingProof: suppressedProofTaskIds.has(task.id),
       requireModeledProof: proofStyle === 'script_only',
+      forceModeledProofMissing: proofBlockedTaskIds.has(task.id),
     })
     const node: OrientationNode = {
       id: taskNodeId(task.id),
@@ -2043,6 +2056,21 @@ function proofContractsForNodes(
     })
 }
 
+function releaseReadinessProofBlockedTaskIds(
+  blockers: BuildProjectOrientationSpineInput['releaseReadiness'] extends infer T
+    ? T extends { blockers?: infer B } ? B : never
+    : never,
+): Set<string> {
+  const ids = new Set<string>()
+  for (const blocker of Array.isArray(blockers) ? blockers : []) {
+    const label = `${blocker.label ?? ''} ${blocker.title ?? ''}`
+    if (!/\bproof\b/i.test(label)) continue
+    const id = blocker.id?.replace(/^work:/, '').trim()
+    if (id && !id.startsWith('repository-followup:')) ids.add(id)
+  }
+  return ids
+}
+
 function sourceHealth(nodes: OrientationNode[], gaps: OrientationGap[]): OrientationSourceHealth {
   const allNodes: OrientationNode[] = []
   const visit = (node: OrientationNode) => {
@@ -2367,7 +2395,8 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
   const effectiveExecutionBoundary = selectedReleaseWithFinalScope?.proofStyle && selectedReleaseWithFinalScope.proofStyle !== 'unspecified'
     ? { ...executionBoundary, proofStyle: selectedReleaseWithFinalScope.proofStyle }
     : executionBoundary
-  const built = buildNodes(tasks, scope, now, effectiveExecutionBoundary.proofStyle)
+  const proofBlockedTaskIds = releaseReadinessProofBlockedTaskIds(input.releaseReadiness?.blockers)
+  const built = buildNodes(tasks, scope, now, effectiveExecutionBoundary.proofStyle, proofBlockedTaskIds)
   const roots = mergeWorkspaceImportContexts({
     roots: built.roots,
     byId: built.byId,
@@ -2445,7 +2474,7 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
           ...pins.filter(pin => pin.nodeId !== readinessFocusPin.nodeId),
         ].slice(0, 5)
     : pins
-  const fallbackProgress = progressForSelectedScope(tasks, scope, effectiveExecutionBoundary.proofStyle)
+  const fallbackProgress = progressForSelectedScope(tasks, scope, effectiveExecutionBoundary.proofStyle, proofBlockedTaskIds)
   const progress = input.scopeProjection
     ? progressFromScopeProjection(input.scopeProjection, scope?.id ?? null, fallbackProgress)
     : fallbackProgress
