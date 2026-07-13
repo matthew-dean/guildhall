@@ -34140,3 +34140,70 @@ orientation proof projection as scope summary.
   - Apply/revert behavior: reverting or skipping reconciliation leaves completed
     Narrative Harness Stage 1 with duplicate source-conflict warnings.
 - Schema Migration Decision: no persisted schema field or migration changed.
+
+## codex:looma-knit-current-import-shaping-2026-07-13
+
+- User job:
+  - Looma + Knit current release work should not sit forever as raw imported
+    draft titles. If Guildhall says two current-scope items need shaping, the
+    product action should promote those drafts into shapeable work and make the
+    next execution boundary clear.
+- Root cause classification:
+  - Project structure/scope/release modeling problem: Stage 1 has 5 current
+    work items, but 2 are still raw `import_draft` records.
+  - Task hierarchy/dependency/proof modeling problem: imported current work has
+    source references but no brief/spec/acceptance criteria yet, so unattended
+    execution is correctly blocked.
+  - Runtime summary/action-state problem: `shape-draft` returned `exploring`,
+    but the next project/work read still showed `import_draft`; the follow-up
+    Start path then ran against stale task shape.
+  - UI communication/orientation problem: the user can see "needs shaping"; the
+    calibration task is to verify the available product action advances that
+    state and does not hide the work.
+- Owner-level action planned:
+  - Codex will act as Matthew for this calibration run and use Guildhall's
+    `shape-draft` task action on the two current-scope Looma + Knit imported
+    drafts, then verify Start/Overview/Map expose the updated state.
+- Discovery:
+  - Live Looma + Knit proof: POST `shape-draft` returned `exploring` for both
+    current-scope drafts, then POST Start launched `task-import-ik1i7i`, but
+    `/api/project?surface=work` still reported both tasks as `import_draft` and
+    kept `startReadiness.code=imported_scope_shaping`.
+  - Persisted task proof: `TASKS.json` still had no `shaping-request` note after
+    the attempted run. Existing transcript evidence showed an older spec pass
+    had identified `task-import-ik1i7i` as duplicate finished work, but that
+    conclusion was not represented in the durable task model.
+- Fix:
+  - `shape-draft` now invalidates the shared task queue read caches immediately
+    after `shapeImportDraft` mutates the queue, matching the other task mutation
+    paths. This keeps the project/work/readiness surfaces from using stale
+    import-draft state after a successful action.
+  - Regression warms the stale detail read first, then runs `shape-draft`, then
+    verifies both task detail and `/api/project?surface=work` expose
+    `exploring`.
+- Contract Touch Decision:
+  - Work id: `looma-knit-current-import-shaping`.
+  - Touched contracts: task action/read-model boundary for imported draft
+    shaping; shared task queue cache invalidation.
+  - Contracts considered but not touched: persisted task schema, release schema,
+    import-draft schema, scheduler execution boundary, Work UI components, and
+    Project Map components.
+  - Required follow-up: verify in installed app whether refreshed `shape-draft`
+    correctly advances both Looma + Knit current-scope drafts; if the spec lane
+    discovers duplicates again, durable duplicate/superseded state must be
+    modeled instead of reverting to raw draft.
+  - Proof required: API proof before/after, browser proof where useful, and git
+    status for affected repos.
+  - Proof provided: focused regression
+    `pnpm vitest run src/runtime/__tests__/serve-task-endpoints.test.ts -t
+    "promotes an import draft into exploring when shaping starts"` passed.
+    Full `pnpm vitest run src/runtime/__tests__/serve-task-endpoints.test.ts`
+    passed. `pnpm lint:contracts` passed. `pnpm build`, `pnpm dev:install`,
+    and `guildhall stop && guildhall start` passed; `/api/stale-server`
+    reported `stale:false` for
+    `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`. Live Looma + Knit
+    API proof after refreshed `shape-draft` shows both current-scope drafts as
+    `exploring` in `/api/project?surface=work`, with durable `shaping-request`
+    notes in `TASKS.json`; release readiness now blocks on incomplete briefs
+    for those two shaped tasks rather than losing the transition.
+- Schema Migration Decision: no persisted schema field or migration changed.

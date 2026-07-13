@@ -12509,11 +12509,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
 
       if (action === 'shape-draft') {
+        const tasksPath = projectTasksPath(project.path)
         const result = await shapeImportDraft({
           memoryDir,
           taskId: id,
         })
         if (!result.success) return c.json({ error: result.error ?? 'shape failed' }, 400)
+        invalidateTaskQueueReadCaches(tasksPath)
         return c.json({ ok: true, status: result.newStatus })
       }
 

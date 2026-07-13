@@ -3286,6 +3286,12 @@ describe('POST /api/project/task/:id/resume', () => {
       updatedAt: new Date().toISOString(),
     })
     const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const cachedBeforeRes = await app.fetch(new Request(projectUrl('/api/project/task/task-1')))
+    expect(cachedBeforeRes.status).toBe(200)
+    const cachedBeforeBody = (await cachedBeforeRes.json()) as Record<string, any>
+    expect(cachedBeforeBody.task?.status).toBe('import_draft')
+
     const res = await app.fetch(
       new Request(projectUrl('/api/project/task/task-1/shape-draft'), {
         method: 'POST',
@@ -3327,6 +3333,11 @@ describe('POST /api/project/task/:id/resume', () => {
       openIssueIds: [],
     })
     expect(detailBody.task?.workspace).toBeUndefined()
+
+    const workRes = await app.fetch(new Request(projectUrl('/api/project?surface=work')))
+    expect(workRes.status).toBe(200)
+    const workBody = (await workRes.json()) as Record<string, any>
+    expect(workBody.tasks.find((task: Record<string, any>) => task.id === 'task-1')?.status).toBe('exploring')
   })
 
   it('repairs stale worker overlays on imported tasks already back in shaping', async () => {
