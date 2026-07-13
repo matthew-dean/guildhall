@@ -30823,6 +30823,52 @@ selected-scope readiness ordering.
     Overview even while Map/Start say it is complete.
 - Schema Migration Decision: no persisted schema field or migration changed.
 
+## codex:looma-knit-overview-signal-density-2026-07-13
+
+- User job:
+  - On the Looma + Knit Overview, scan project health without short status
+    facts becoming giant empty cards or long actionable alerts becoming hard to
+    read.
+- Root cause classification:
+  - UI layout problem: the Signals grid stretched every UtilityPanel to the
+    tallest item in its grid row.
+  - Typography application problem: signal detail text used the muted role and
+    strong labels inherited browser line-height instead of explicitly using the
+    shared type scale.
+- Fix:
+  - Kept the existing shared UtilityPanel and added a semantic wide layout only
+    to repository follow-up alerts.
+  - Let signal items align to their natural height, top-align their contents,
+    and use the existing body/secondary text and tight/body line-height tokens.
+  - Added container-query breakpoints for the Signals grid so it responds to the
+    section's available width rather than only the viewport.
+- Proof provided:
+  - `CI=true pnpm vitest run
+    src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts`
+    passed: 34 tests.
+  - `pnpm build` passed.
+  - `pnpm dev:install`, `guildhall stop`, and `guildhall start` passed.
+  - `/api/stale-server` reported `stale:false` with matching build mtimes.
+  - The in-app browser bridge was discovered without an attached context in
+    this run, so screenshot geometry proof remains outstanding; no visual pass
+    is claimed from the unavailable browser context.
+- Contract Touch Decision:
+  - Work id: `looma-knit-overview-signal-density`.
+  - Touched contracts: Overview component presentation contract for semantic
+    signal layout; no API or persisted project contract changed.
+  - Contracts considered but not touched: UtilityPanel public props, project
+    summary/action model, release/readiness state, task schema, and migration
+    behavior.
+  - Required follow-up: verify the installed Overview at desktop, narrow
+    desktop, and mobile widths when the in-app browser context is available.
+  - Proof required: focused component regression, build/install freshness, and
+    browser geometry proof.
+  - Proof provided: focused component regression and installed freshness proof
+    above; browser geometry proof is explicitly pending.
+  - Apply/revert behavior: reverting this change restores the stretched grid
+    behavior and muted signal detail treatment; no data repair is required.
+- Schema Migration Decision: no persisted schema field or migration changed.
+
 ## codex:proof-review-cannot-settle-command-criteria-2026-07-13
 
 - User job:

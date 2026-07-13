@@ -408,6 +408,7 @@ describe('ProjectOverviewTab', () => {
     expect(screen.getByText('Near-term proof scope')).toBeInTheDocument()
     expect(screen.getByText(/14 \/ 14 done/)).toBeInTheDocument()
     expect(screen.getAllByText(/main has 6 local commits not pushed to origin\/main/).length).toBeGreaterThan(0)
+    expect(document.querySelector('.signal-row--wide')).toBeInTheDocument()
   })
 
   it('keeps Overview signals scoped to release git state when project-wide git work is unrelated', () => {

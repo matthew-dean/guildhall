@@ -1,0 +1,43 @@
+id: stretched-signal-cards
+title: Stretched signal cards
+domain: ux
+productType: project-management
+surfaceType: dashboard
+userGoal: Scan project health quickly and distinguish compact facts from work that needs action.
+scenario: A Signals grid stretches short provider, setup, and runtime facts to the height of a long repository alert, leaving large empty areas and making every item look equally urgent.
+artifacts:
+  - id: signal-grid
+    kind: layout_evidence
+    description: A grid containing compact status facts and a long repository follow-up.
+    content: "Signals: Provider healthy, Repository follow-up, Setup checks passed, Runtime stopped, Verification, Recent changes. Short cards inherit the long alert's row height."
+reviewLanes:
+  - ux_comprehension
+  - visual_design
+  - copy_clarity
+knownFindings:
+  - id: accidental-equal-weight
+    lane: visual_design
+    severity: high
+    summary: Grid stretching gives compact facts the same visual weight as a long actionable alert.
+    impact: Users spend attention on empty containers and cannot scan what is actually actionable.
+    minimumUsefulFix: Let compact signals keep natural height and give long actionable signals a semantic wide treatment.
+    matchHints:
+      - stretched
+      - empty space
+      - signal cards
+      - repository follow-up
+falsePositiveTraps:
+  - id: dont-remove-status-context
+    summary: Do not solve the problem by hiding useful health facts; reduce their container treatment instead.
+source:
+  kind: production_miss
+  citation: Generalized from Looma + Knit Overview Signals feedback on 2026-07-13.
+labelGovernance:
+  labeledBy: product-review
+  labeledAt: 2026-07-13T20:00:00.000Z
+  reviewStatus: seed
+privacyClassification: internal
+negativeControl: false
+stalenessPolicy:
+  reviewAfter: 2026-10-13
+  reason: Overview signal hierarchy and layout primitives may change.

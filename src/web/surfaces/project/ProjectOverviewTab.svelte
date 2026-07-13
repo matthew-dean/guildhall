@@ -465,7 +465,7 @@
   })
 
   const healthItems = $derived.by(() => {
-    const items: Array<{ label: string; detail: string; tone: Tone; href: string }> = []
+    const items: Array<{ label: string; detail: string; tone: Tone; href: string; layout?: 'compact' | 'wide' }> = []
     const provider = detail.providerStatus
     if (provider?.fallback) {
       items.push({
@@ -491,6 +491,7 @@
         detail: friendlyBlockerText(gitBlockers[0]?.reason ?? gitBlockers[0]?.label ?? `${gitBlockers.length} git ${gitBlockers.length === 1 ? 'item' : 'items'} need attention.`),
         tone: 'warn',
         href: currentProjectHref('/release', activeProjectId),
+        layout: 'wide',
       })
     } else if (scopedGitStory?.ready) {
       items.push({
@@ -543,7 +544,9 @@
         href: currentProjectHref('/settings', activeProjectId),
       })
     }
-    return items.slice(0, 4)
+    return items
+      .slice(0, 4)
+      .sort((left, right) => Number(right.layout === 'wide') - Number(left.layout === 'wide'))
   })
 
   const knowledgeCards = $derived.by(() => {
@@ -1403,7 +1406,7 @@
           <UtilityPanel
             as="button"
             interactive
-            className="signal-row"
+            className={`signal-row ${item.layout === 'wide' ? 'signal-row--wide' : ''}`}
             tone={item.tone === 'running' ? 'ok' : item.tone === 'ok' ? 'ok' : item.tone === 'danger' ? 'danger' : item.tone === 'warn' ? 'warn' : 'neutral'}
             onclick={() => go(item.href)}
           >
@@ -1656,11 +1659,13 @@
   }
   .signals-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+    align-items: start;
   }
   :global(.signal-row) span {
-    color: var(--text-muted);
+    color: var(--text-soft);
     font-size: var(--gh-type-size-meta);
     line-height: var(--gh-type-line-height-body);
+    overflow-wrap: anywhere;
   }
   :global(.signal-row),
   :global(.run-blocker),
@@ -1668,7 +1673,7 @@
     display: grid;
     grid-template-columns: auto minmax(0, 1fr);
     gap: var(--s-3);
-    align-items: center;
+    align-items: start;
   }
   :global(.signal-row) div,
   :global(.run-blocker) div,
@@ -1681,14 +1686,20 @@
   :global(.run-blocker) strong,
   :global(.run-plan-row) strong {
     color: var(--text);
+    line-height: var(--gh-type-line-height-tight);
     overflow-wrap: anywhere;
+  }
+  :global(.signal-row--wide) {
+    grid-column: 1 / -1;
+  }
+  :global(.signal-row--wide div) {
+    max-inline-size: var(--gh-layout-measure-comfortable);
   }
   .motion-list :global(.overview-task-row),
   .blocked-work-list :global(.overview-task-row) {
     min-height: 0;
   }
   :global(.run-blocker) span,
-  :global(.signal-row) span,
   :global(.run-plan-row) span {
     color: var(--text-muted);
     font-size: var(--gh-type-size-meta);
@@ -1729,9 +1740,6 @@
     :global(.orientation-map-card) {
       grid-column: auto;
     }
-    .signals-grid {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
     .overview {
       padding: var(--s-4);
     }
@@ -1741,9 +1749,6 @@
     .overview {
       padding: var(--s-3);
       gap: var(--s-3);
-    }
-    .signals-grid {
-      grid-template-columns: 1fr;
     }
     :global(.live-card) {
       grid-template-columns: auto minmax(0, 1fr);
@@ -1771,6 +1776,22 @@
     .run-index {
       width: 1.5rem;
       height: 1.5rem;
+    }
+  }
+
+  :global(.overview-signals-card) {
+    container-type: inline-size;
+  }
+
+  @container (max-width: 52rem) {
+    .signals-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
+  @container (max-width: 34rem) {
+    .signals-grid {
+      grid-template-columns: 1fr;
     }
   }
 </style>
