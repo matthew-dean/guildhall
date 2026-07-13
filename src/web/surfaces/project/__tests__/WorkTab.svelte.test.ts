@@ -593,6 +593,114 @@ describe('WorkTab', () => {
     expect(screen.getByRole('button', { name: /inspect work later reviewer lane/i })).toBeTruthy()
   })
 
+  it('defaults to the selected scope before unrelated global blocked work', async () => {
+    render(WorkTab, {
+      props: {
+        detail: detail([
+          task({
+            id: 'old-global-blocker',
+            title: 'Block menu / block side menu',
+            status: 'blocked',
+            updatedAt: '2026-05-19T12:00:00.000Z',
+            blockReason: 'Old backlog row outside the current release.',
+          }),
+          task({
+            id: 'scope-blocker',
+            title: 'E2E tests: complete current-scope proof',
+            status: 'import_draft',
+            updatedAt: '2026-05-19T08:00:00.000Z',
+          }),
+          task({
+            id: 'scope-blocker-two',
+            title: 'TypeScript: generate proper types from Supabase',
+            status: 'import_draft',
+            updatedAt: '2026-05-19T13:00:00.000Z',
+          }),
+          task({
+            id: 'scope-done',
+            title: 'TypeScript tests: verified',
+            status: 'done',
+            updatedAt: '2026-05-19T11:00:00.000Z',
+          }),
+          task({
+            id: 'scope-later',
+            title: 'Later release polish',
+            status: 'shelved',
+            updatedAt: '2026-05-19T13:00:00.000Z',
+          }),
+        ], {
+          orientationSpine: {
+            scope: { label: 'Stage 1: V1 Release Hardening' },
+            summary: {
+              selectedScopeLabel: 'Stage 1: V1 Release Hardening',
+              includedWorkCount: 3,
+              deferredWorkCount: 1,
+              progress: { blocked: 2 },
+            },
+            scopeRows: [
+              {
+                taskId: 'scope-done',
+                nodeId: 'work:scope-done',
+                title: 'TypeScript tests: verified',
+                scope: 'included',
+                status: 'done',
+              },
+              {
+                taskId: 'scope-blocker',
+                nodeId: 'work:scope-blocker',
+                title: 'E2E tests: complete current-scope proof',
+                scope: 'included',
+                status: 'ready',
+                blocksStart: true,
+                blocksRelease: true,
+              },
+              {
+                taskId: 'scope-blocker-two',
+                nodeId: 'work:scope-blocker-two',
+                title: 'TypeScript: generate proper types from Supabase',
+                scope: 'included',
+                status: 'ready',
+                blocksStart: true,
+                blocksRelease: true,
+              },
+              {
+                taskId: 'scope-later',
+                nodeId: 'work:scope-later',
+                title: 'Later release polish',
+                scope: 'deferred',
+                status: 'shelved',
+              },
+            ],
+            roots: [],
+            nodes: {},
+          },
+          startReadiness: {
+            canStart: false,
+            code: 'imported_scope_needs_shaping',
+            message: 'Start with E2E tests: complete current-scope proof.',
+            focusTaskId: 'scope-blocker',
+          },
+          releaseReadiness: {
+            ready: false,
+            releaseBlockers: [
+              { id: 'scope-blocker', title: 'E2E tests: complete current-scope proof' },
+              { id: 'scope-blocker-two', title: 'TypeScript: generate proper types from Supabase' },
+            ],
+          },
+        }),
+      },
+    })
+
+    await screen.findByText('3 current items · 1 deferred item · 5 total')
+    expect(screen.getByRole('combobox', { name: /^show$/i })).toHaveValue('scope')
+    const rows = screen.getAllByRole('button', { name: /inspect work/i })
+    expect(rows[0]).toHaveTextContent('E2E tests: complete current-scope proof')
+    expect(rows[1]).toHaveTextContent('TypeScript: generate proper types from Supabase')
+    expect(rows[2]).toHaveTextContent('TypeScript tests: verified')
+    expect(rows[3]).toHaveTextContent('Later release polish')
+    expect(screen.queryByRole('button', { name: /inspect work block menu/i })).not.toBeInTheDocument()
+  })
+
   it('reopens proof-missing completed work before starting the selected item', async () => {
     const fetchSpy = vi.mocked(fetch)
     window.history.replaceState({}, '', '/projects/narrative-harness/work?task=proof-task')

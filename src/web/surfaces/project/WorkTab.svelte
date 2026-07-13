@@ -186,6 +186,26 @@
       .map(row => [row.taskId, row.scope] as const)
     return new Map(entries)
   })
+  const scopeRowByTaskId = $derived.by(() => {
+    const entries = (detail.orientationSpine?.scopeRows ?? [])
+      .filter((row): row is typeof row & { taskId: string } => Boolean(row.taskId))
+      .map(row => [row.taskId, row] as const)
+    return new Map(entries)
+  })
+  const releaseBlockerTaskIds = $derived.by(() => {
+    const taskIds = new Set((detail.tasks ?? []).map(task => task.id))
+    return new Set((detail.releaseReadiness?.releaseBlockers ?? [])
+      .map(blocker => blocker.id)
+      .filter((id): id is string => Boolean(id && taskIds.has(id))))
+  })
+  const releaseBlockerRankByTaskId = $derived.by(() => {
+    const taskIds = new Set((detail.tasks ?? []).map(task => task.id))
+    const entries = (detail.releaseReadiness?.releaseBlockers ?? [])
+      .map((blocker, index) => ({ id: blocker.id, index }))
+      .filter((entry): entry is { id: string; index: number } => Boolean(entry.id && taskIds.has(entry.id)))
+      .map(entry => [entry.id, entry.index] as const)
+    return new Map(entries)
+  })
   const proofMissingCount = $derived(proofMissingTaskIds.size || (detail.startReadiness?.code === 'proof_evidence_missing' ? detail.startReadiness.count ?? 0 : 0))
   const deliveryPrimitiveBlockers = $derived.by(() => {
     return deliveryQueue?.blocked
@@ -227,7 +247,7 @@
   const allWorkItems = $derived([...tasks, ...importDrafts])
   const workAreasByTaskId = $derived(viewModel.workAreasByTaskId)
   const workAreaOptions = $derived(viewModel.workAreaOptions)
-  const showsPlanningArtifacts = $derived(['planning', 'open', 'all'].includes(workFilter))
+  const showsPlanningArtifacts = $derived(['scope', 'planning', 'open', 'all'].includes(workFilter))
   const filterableTasks = $derived(showsPlanningArtifacts ? allWorkItems : tasks)
   const visibleTasks = $derived(filterableTasks.filter(matchesWorkFilter))
   const partFilterOptions = $derived.by(() => {
@@ -297,7 +317,13 @@
 
   const sortedTasks = $derived.by(() => {
     const list = [...visibleTasks]
-    list.sort((left, right) => compareTasks(left, right, sortKey, sortDir))
+    list.sort((left, right) => {
+      if (workFilter === 'scope') {
+        const scopeDelta = compareScopedTasks(left, right)
+        if (scopeDelta !== 0) return scopeDelta
+      }
+      return compareTasks(left, right, sortKey, sortDir)
+    })
     return list
   })
   const selectedWorkVisible = $derived(Boolean(selectedWorkId && allWorkItems.some(task => task.id === selectedWorkId)))
@@ -332,6 +358,24 @@
       delta = compareText(left.title ?? '', right.title ?? '')
     }
     return delta * direction
+  }
+
+  function compareScopedTasks(left: Task, right: Task): number {
+    const delta = scopeTaskRank(left) - scopeTaskRank(right)
+    if (delta !== 0) return delta
+    return 0
+  }
+
+  function scopeTaskRank(task: Task): number {
+    const row = scopeRowByTaskId.get(task.id)
+    if (!row) return 50
+    if (row.scope === 'deferred') return 40
+    if (detail.startReadiness?.focusTaskId === task.id) return 0
+    const releaseBlockerRank = releaseBlockerRankByTaskId.get(task.id)
+    if (typeof releaseBlockerRank === 'number') return 1 + releaseBlockerRank
+    if (releaseBlockerTaskIds.has(task.id) || row.blocksStart || row.blocksRelease || row.humanBlocking) return 10
+    if (!['done', 'pending_pr'].includes(task.status ?? '')) return 10
+    return 20
   }
 
   function toggleSort(next: SortKey): void {
@@ -534,11 +578,11 @@
   }
 
   function defaultWorkFilterForTasks(): WorkFilter {
+    if (scopeTaskIds.size > 0) return 'scope'
     if (tasks.some(isQueuedWorkTask)) return 'queued'
     if (tasks.some(isPlanningTask)) return 'planning'
     if (tasks.some(task => task.status === 'blocked')) return 'blocked'
     if (tasks.some(isProofMissingTask)) return 'needs-proof'
-    if (scopeTaskIds.size > 0) return 'scope'
     if (tasks.length > 0) return 'all'
     return 'queued'
   }

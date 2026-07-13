@@ -8,6 +8,78 @@ help_summary: |
 
 # Web UI flow audit
 
+2026-07-13 - Work surface uses selected-scope readiness blockers.
+
+- Work id: `codex:work-surface-selected-readiness-blockers-2026-07-13`.
+- User job: when the owner opens Work from Overview, the Work surface must
+  describe the same selected release/current-scope blocker state as Overview and
+  Release. A task that blocks unattended Start/Resume must not become "active"
+  just because the Work endpoint used a lighter read path, and unrelated global
+  backlog rows must not displace the selected execution scope on first view.
+- Live finding:
+  - Looma + Knit Overview and Full reported `Stage 1: V1 Release Hardening`
+    selected progress as `3` done and `2` blocked after applying release
+    readiness task blockers.
+  - `/api/project?surface=work` still reported the same selected scope as
+    `3` done, `2` active, and `0` blocked because Work did not build release
+    readiness before deriving progress.
+  - After aligning the Work endpoint, the Work page summary reported `5`
+    current tasks and `2` blocked but the list still defaulted to global
+    blocked work, showing `Block menu / block side menu` instead of the selected
+    release blockers.
+- Root-cause classification:
+  - UI communication/orientation problem: Overview and Work disagreed on whether
+    current-scope work was blocked or merely active.
+  - Scheduler/action-state logic problem: Work omitted the readiness blockers
+    that decide whether Start/Resume can run unattended.
+  - Project structure/scope/release modeling problem: the selected execution
+    boundary was shared, but Work derived progress from a lighter task projection
+    that did not include selected-scope blocker truth.
+- Change:
+  - `/api/project?surface=work` now builds the same effective task projection and
+    release-readiness blocker ids used by Overview before deriving
+    `workProgress`.
+  - Work keeps its compact task rendering; only the shared progress/readiness
+    read model was aligned.
+  - When an orientation scope exists, Work now defaults to `Current scope` before
+    global `Ready to run`, `Planning`, or `Blocked` filters. The scoped list
+    sorts included release/start blockers first, then other included active
+    work, completed work, and deferred work.
+- Contract Touch Decision:
+  - Work id: `codex:work-surface-selected-readiness-blockers-2026-07-13`.
+  - Touched contracts: `/api/project?surface=work` progress semantics,
+    selected-scope blocker projection, and Work list default presentation for
+    selected execution scopes.
+  - Contracts considered but not touched: persisted task schema, persisted
+    release/scope schema, release-readiness payload shape, Work UI component
+    layout, task-card display contract, scheduler Start/Resume command
+    semantics.
+  - Required follow-up: inspect `/api/service` project-card summaries, which
+    still expose raw historical `taskCounts` that can disagree with effective
+    visible work progress.
+  - Proof required: focused runtime regression proving Work and Overview both
+    count selected readiness blockers, contract detector, build/install,
+    stale-server proof, and live Looma + Knit Work/Overview API proof.
+  - Proof provided: `corepack pnpm vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts
+    src/runtime/__tests__/work-progress.test.ts
+    src/web/surfaces/project/__tests__/WorkTab.svelte.test.ts
+    src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts
+    --reporter=dot` passed `145` tests; `corepack pnpm lint:contracts` passed;
+    `git diff --check` passed; `node ./build.mjs && corepack pnpm dev:install`
+    installed the branch artifact; `/api/stale-server` reported `stale:false`.
+    Live Looma + Knit API proof showed Overview and Work both reporting selected
+    `Stage 1: V1 Release Hardening` as `5` total, `3` done, `2` blocked. Live
+    browser proof on `/projects/looma-knit/work` showed `Current scope`,
+    `5 current items · 64 deferred items · 328 total`, E2E first, TypeScript
+    second, and the old `Block menu / block side menu` row after the current
+    scoped rows.
+  - Waivers: none.
+  - Owner-review items: none. This does not automate owner approval; it makes
+    Work report the same selected-scope blocker truth as the readiness model.
+  - Apply/revert behavior: reverting this change lets Work show selected-scope
+    shaping blockers as active while Overview and Release show them as blocked.
+
 2026-07-13 - Selected-scope progress counts release-readiness task blockers.
 
 - Work id: `codex:selected-scope-progress-readiness-blockers-2026-07-13`.

@@ -2864,6 +2864,14 @@ describe('GET /api/project/release-readiness', () => {
       visibleBlocked: 3,
       visibleActive: 0,
     })
+
+    const workRes = await app.fetch(new Request(projectUrl('/api/project?surface=work')))
+    const work = await workRes.json() as any
+    expect(work.workProgress.selectedCounts).toMatchObject({
+      visibleTotal: 3,
+      visibleBlocked: 3,
+      visibleActive: 0,
+    })
   })
 
   it('counts imported selected-scope rows the same way as the project spine', async () => {

@@ -5509,6 +5509,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         : 'full'
       const fullSurface = surface === 'full'
       const overviewSurface = surface === 'overview'
+      const workSurface = surface === 'work'
       const mapSurface = surface === 'map'
       const requestedTaskId = (c.req.query('task') ?? c.req.query('work') ?? '').trim()
       if (project.initializationNeeded) {
@@ -5534,10 +5535,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const tasksPath = projectTasksPath(project.path)
       const rawQueue = await readTaskQueueFileNormalized(tasksPath)
       const rawTasks = rawQueue.tasks
-      const overviewEffectiveTasksPromise = overviewSurface
-        ? buildEffectiveTasks(project.path, rawTasks as Task[])
-        : null
-      const mapEffectiveTasksPromise = mapSurface
+      const compactSurfaceEffectiveTasksPromise = overviewSurface || workSurface || mapSurface
         ? buildEffectiveTasks(project.path, rawTasks as Task[])
         : null
       const resolvedConfig = resolveConfig({ workspacePath: project.path })
@@ -5554,17 +5552,17 @@ export function buildServeApp(opts: ServeOptions = {}): {
         allowPaidProviderFallback: runtimeProvider.allowPaidProviderFallback,
         queue: rawQueue,
         effectiveTasks: mapSurface
-          ? await mapEffectiveTasksPromise as Task[]
-          : overviewSurface
-            ? await overviewEffectiveTasksPromise as Task[]
+          ? await compactSurfaceEffectiveTasksPromise as Task[]
+          : overviewSurface || workSurface
+            ? await compactSurfaceEffectiveTasksPromise as Task[]
             : undefined,
         startTiming: name => startTiming(`readiness_${name}`),
       })
-      const releaseReadiness = fullSurface || overviewSurface
-        ? await buildProjectReleaseReadinessPayload(overviewSurface
+      const releaseReadiness = fullSurface || overviewSurface || workSurface
+        ? await buildProjectReleaseReadinessPayload(overviewSurface || workSurface
           ? {
               rawQueue,
-              tasks: await overviewEffectiveTasksPromise as Task[],
+              tasks: await compactSurfaceEffectiveTasksPromise as Task[],
               startReadiness,
             }
           : { startReadiness })
@@ -5572,18 +5570,20 @@ export function buildServeApp(opts: ServeOptions = {}): {
       endReadiness()
       const endTasks = startTiming('tasks')
       const tasks = overviewSurface
-        ? await overviewEffectiveTasksPromise as Task[]
+        ? await compactSurfaceEffectiveTasksPromise as Task[]
         : mapSurface
-          ? await mapEffectiveTasksPromise as Task[]
+          ? await compactSurfaceEffectiveTasksPromise as Task[]
         : await Promise.all(rawTasks.map((task) => fullSurface
           ? enrichTaskForServe(project.path, task)
           : enrichTaskForWorkSurface(project.path, task)))
       const orientationTasks = fullSurface
         ? await buildEffectiveTasks(project.path, rawTasks as Task[])
         : overviewSurface
-          ? await overviewEffectiveTasksPromise as Task[]
+          ? await compactSurfaceEffectiveTasksPromise as Task[]
+          : workSurface
+            ? await compactSurfaceEffectiveTasksPromise as Task[]
           : mapSurface
-            ? await mapEffectiveTasksPromise as Task[]
+            ? await compactSurfaceEffectiveTasksPromise as Task[]
             : tasks as unknown as Task[]
       endTasks()
       const endAncillary = startTiming('ancillary')
