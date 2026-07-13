@@ -11,10 +11,11 @@ help_summary: |
 2026-07-13 - Project-card ticker uses visible progress counts.
 
 - Work id: `codex:project-card-ticker-visible-progress-2026-07-13`.
-- User job: the project list card must not tell the owner a completed/current
-  scope has a large pile of paused work just because the project still contains
-  old raw task records. The card's compact activity line should agree with the
-  same visible work-progress model used by the rest of the card.
+- User job: project list cards and project top bars must not tell the owner a
+  completed/current scope has a large pile of paused work just because the
+  project still contains old raw task records. Compact activity lines should
+  agree with the same visible work-progress model used by the rest of the
+  surface.
 - Live finding:
   - Installed Narrative Harness service data had raw `taskCounts.active: 121`
     while `workProgress.counts.visibleActive: 0` and selected current scope was
@@ -23,6 +24,9 @@ help_summary: |
     `buildProjectCardTicker` still used raw `taskCounts`, so the card ticker
     could say `121 tasks paused` while the card counts and project surfaces
     said no visible active work.
+  - `buildProjectTicker` had the same leak for project detail surfaces: it
+    counted raw ready/in-progress/blocked task statuses even when
+    `detail.workProgress.counts` said those rows were not visible current work.
 - Root-cause classification:
   - Data model/schema problem: raw historical task counts and visible
     work-progress counts coexisted without one shared read helper.
@@ -31,13 +35,19 @@ help_summary: |
 - Change:
   - Extracted `visibleProjectCounts` in the existing project activity module and
     reused it from both project-card summary counts and the card ticker.
+  - Updated the existing project-detail active/blocked count helpers to prefer
+    `detail.workProgress.counts` before scanning raw task statuses.
   - Added a regression that reproduces the Narrative Harness shape: raw active
     work remains high, visible active work is zero, and the ticker must not show
     a paused-work line from raw history.
+  - Added the sibling project-detail regression for stopped projects whose raw
+    task statuses still look ready/active while visible progress says no active
+    work remains.
 - Contract Touch Decision:
   - Work id: `codex:project-card-ticker-visible-progress-2026-07-13`.
   - Touched contracts: project-card summary/ticker interpretation of
-    `/api/service` `taskCounts` versus `workProgress`.
+    `/api/service` `taskCounts` versus `workProgress`, and project-detail
+    ticker interpretation of `/api/project` raw `tasks` versus `workProgress`.
   - Contracts considered but not touched: `/api/service` payload shape,
     persisted task schema, selected-scope progress schema, ProjectCard visual
     component API.
@@ -45,20 +55,23 @@ help_summary: |
     consumers; raw historical counts should not drive current-state copy.
   - Proof required: failing ticker regression, project-card summary regression,
     Projects Home regression, installed-app freshness proof.
-  - Proof provided: the new ticker regression first failed with `Paused` /
-    `121 tasks paused`; after the shared-helper fix,
-    `project-activity.test.ts`, `project-summary.test.ts`, and
-    `ProjectsHome.svelte.test.ts` passed (`65` tests); installed app was rebuilt
-    and reinstalled with `/api/stale-server` reporting `stale:false`; the built
-    client bundle contains the `visibleProjectCounts` ticker path.
+  - Proof provided: the new card ticker regression first failed with `Paused` /
+    `121 tasks paused`, and the project-detail ticker regression first failed
+    with `Ready` / `2 tasks ready when you resume`; after the visible-progress
+    fixes, `project-activity.test.ts`, `project-summary.test.ts`,
+    `ProjectsHome.svelte.test.ts`, and `ProjectView.svelte.test.ts` passed
+    together (`122` tests); `pnpm lint:contracts` and `git diff --check`
+    passed; installed app was rebuilt and reinstalled with `/api/stale-server`
+    reporting `stale:false`; the built client bundle contains the
+    `visibleProjectCounts` ticker path.
   - Waivers: no browser screenshot for this slice; the deterministic rendered
     homepage tests cover the visible card path, and the installed bundle/source
     proof covers the deployed helper.
   - Owner-review items: none. This only changes how existing service truth is
     summarized.
-  - Apply/revert behavior: reverting this change lets project-list cards use raw
-    historical task counts for ticker copy while other card counts use
-    work-progress truth.
+  - Apply/revert behavior: reverting this change lets project-list cards and
+    project top bars use raw historical task counts for ticker copy while the
+    rest of the surface uses work-progress truth.
 
 2026-07-13 - Service and Map summaries use selected-scope blocker truth.
 

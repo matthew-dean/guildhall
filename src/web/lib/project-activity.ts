@@ -68,6 +68,8 @@ function runReasonLabel(reason: string | undefined): string {
 }
 
 function activeTaskCount(detail: ProjectDetail | null | undefined): number {
+  const visibleActive = detail?.workProgress?.counts?.visibleActive
+  if (Number.isFinite(visibleActive)) return visibleActive as number
   return (detail?.tasks ?? []).filter(task =>
     ['exploring', 'spec_review', 'ready', 'in_progress', 'review', 'gate_check'].includes(task.status ?? ''),
   ).length
@@ -78,6 +80,8 @@ function importDraftCount(detail: ProjectDetail | null | undefined): number {
 }
 
 function blockedTaskCount(detail: ProjectDetail | null | undefined): number {
+  const visibleBlocked = detail?.workProgress?.counts?.visibleBlocked
+  if (Number.isFinite(visibleBlocked)) return visibleBlocked as number
   return (detail?.tasks ?? []).filter(task => (task.status ?? '') === 'blocked').length
 }
 

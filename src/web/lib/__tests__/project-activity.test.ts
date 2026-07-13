@@ -553,6 +553,36 @@ describe('buildProjectTicker', () => {
     })
   })
 
+  it('uses visible detail progress instead of raw task statuses for paused work', () => {
+    const detail: ProjectDetail = {
+      run: { status: 'stopped' },
+      tasks: [
+        { id: 'task-1', status: 'ready', title: 'Old ready task' },
+        { id: 'task-2', status: 'in_progress', title: 'Old active task' },
+      ],
+      workProgress: {
+        counts: {
+          visibleTotal: 2,
+          visibleActive: 0,
+          visibleBlocked: 0,
+          visibleDone: 2,
+          visibleShelved: 0,
+          deliveryTotal: 2,
+          deliveryRequired: 2,
+          deliveryDone: 2,
+          deliveryBlocked: 0,
+        },
+        byTaskId: {},
+      },
+    }
+
+    expect(buildProjectTicker(detail, null, now)).toMatchObject({
+      tone: 'idle',
+      actorLabel: 'Idle',
+      message: 'No recent activity',
+    })
+  })
+
   it('surfaces immediate all-terminal supervisor stop details', () => {
     const detail: ProjectDetail = {
       run: { status: 'stopped' },
