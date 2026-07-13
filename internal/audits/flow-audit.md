@@ -30524,6 +30524,81 @@ selected-scope readiness ordering.
     Overview even while Map/Start say it is complete.
 - Schema Migration Decision: no persisted schema field or migration changed.
 
+## codex:workspace-import-current-scope-truth-2026-07-13
+
+- User job:
+  - Guildhall should treat fresh unsegmented project work as current, even in a
+    multi-repo workspace, unless the docs or selected release explicitly defer
+    it.
+  - If an owner narrows an import approval to specific tasks, that approved
+    slice should be current while the detected project breadth remains visible.
+  - Start should prefer fresher current-scope import truth over stale proof
+    cleanup, but should still allow already-shaped runnable work to continue
+    when a broader import is under-scoped.
+- Root cause classification:
+  - Project structure/scope/release modeling problem: the planning-doc detector
+    collapsed "secondary nested root" into "later work" even when no primary
+    release/current root had been identified.
+  - Scheduler/action-state logic problem: Start skipped workspace-import
+    coverage whenever any selected-scope task was non-terminal, including
+    unshaped import drafts and stale current work.
+  - UI communication/orientation taxonomy problem: a source conflict was being
+    asserted as a source gap in route coverage even though the spine model has a
+    separate `sourceHealth.conflicts` bucket.
+- Fix:
+  - Multi-root planning docs only default non-primary roots to `later` after a
+    real primary release/current root is known. Fresh nested roadmaps without a
+    primary release scope stay current.
+  - Explicit task-id import approval promotes the narrowed approved slice to
+    current while leaving detected breadth intact for status/review.
+  - Start no longer returns selected-release proof cleanup before current-scope
+    import shaping/refresh checks. The materialized-work shortcut now requires
+    runnable shaped work, or an explicitly selected release whose import draft is
+    intentionally being shaped.
+  - The source-conflict regression now checks `sourceHealth.conflicts`, keeping
+    conflicts distinct from missing-provenance gaps.
+- Proof provided:
+  - `CI=true pnpm exec vitest run
+    src/runtime/workspace-import/__tests__/detect.test.ts
+    src/runtime/workspace-import/__tests__/hypothesis.test.ts` passed: 94 tests.
+  - `CI=true pnpm exec vitest run src/runtime/__tests__/serve-settings.test.ts`
+    passed: 122 tests.
+  - `CI=true pnpm exec vitest run
+    src/runtime/__tests__/project-orientation-spine.test.ts
+    src/runtime/__tests__/serve-release-readiness.test.ts` passed: 130 tests.
+  - `CI=true pnpm lint:contracts` passed.
+  - `pnpm build` passed.
+  - `pnpm dev:install` passed, then `guildhall stop && guildhall start`
+    restarted the installed app.
+  - `/api/stale-server` returned `stale:false`, PID `82633`,
+    `bootBuildMtimeMs:1783920383749`, and
+    `currentBuildMtimeMs:1783920383749`.
+  - Live installed API proof for
+    `/api/project?projectId=narrative-harness` returned selected scope
+    `Stage 1: Headless Drafting And Evaluation MVP`, start readiness
+    `all_terminal`, message `Stage 1: Headless Drafting And Evaluation MVP is
+    complete.`, `sourceHealth.gaps:0`, and `sourceHealth.conflicts:0`.
+- Residual findings:
+  - This removes the five workspace-import coverage failures recorded in the
+    previous audit entry.
+- Contract Touch Decision:
+  - Work id: `workspace-import-current-scope-truth`.
+  - Touched contracts: planning-doc scope inference, workspace-import approval
+    projection, Start readiness precedence, and source-health route assertions.
+  - Contracts considered but not touched: persisted task schema, persisted
+    release schema, workspace-goals schema shape, orientation spine field names,
+    release-readiness response shape, and UI components.
+  - Required follow-up: keep pushing import/scope failures into shared
+    scope/release models before adding page-specific presentation logic.
+  - Proof required: importer detector/hypothesis tests, full serve-settings,
+    release/orientation suites, contract lint, build/install freshness, and live
+    app stale-server proof.
+  - Proof provided: all proof listed above.
+  - Apply/revert behavior: reverting restores the multi-root over-deferral,
+    lets narrowed approvals lose their current-scope count, and lets Start hide
+    stale import boundaries behind proof cleanup or unshaped drafts.
+- Schema Migration Decision: no persisted schema field or migration changed.
+
 ## codex:compact-spine-execution-boundary-truth-2026-07-13
 
 - User job:

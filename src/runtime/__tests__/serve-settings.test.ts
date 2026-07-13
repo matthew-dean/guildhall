@@ -3720,11 +3720,11 @@ describe('Workspace Import review endpoints', () => {
     const res = await app.fetch(new Request(scoped('/api/project')))
     const body = await res.json() as {
       startReadiness?: { code?: string; message?: string; actionHref?: string; focusKind?: string }
-      orientationSpine?: { sourceHealth?: { gaps?: number }; summary?: { topBlocker?: string | null } }
+      orientationSpine?: { sourceHealth?: { conflicts?: number }; summary?: { topBlocker?: string | null } }
     }
 
     expect(res.status).toBe(200)
-    expect(body.orientationSpine?.sourceHealth?.gaps).toBeGreaterThan(0)
+    expect(body.orientationSpine?.sourceHealth?.conflicts).toBeGreaterThan(0)
     expect(body.startReadiness).toMatchObject({
       canStart: false,
       code: 'scope_source_conflict',

@@ -7093,7 +7093,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       queue: input.queue,
       effectiveTasks: input.effectiveTasks,
     }))
-    if (terminal?.selectedReleaseTerminal) {
+    if (terminal?.selectedReleaseTerminal && terminal.code !== 'proof_evidence_missing') {
       return attachExecutionScope(startReadinessForTerminalState(terminal))
     }
     const hasMaterializedStartWork = await time('materialized', () => hasMaterializedScopedStartWork(input.projectPath, input.requestedTaskId))
@@ -7307,7 +7307,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
         if (requestedTaskId && task.id !== requestedTaskId) return false
         const status = String(task.status ?? '')
         if (['archived', 'cancelled', 'done', 'shelved'].includes(status)) return false
-        return true
+        if (taskShapingBlockers(task).length > 0) return Boolean(queue.selectedReleaseId)
+        if (status === 'ready' && !isReadyForWorkerHandoffRecord(task)) return false
+        if (!['ready', 'in_progress', 'review', 'gate_check'].includes(status)) return false
+        return deriveWorkExecutionState(typedQueue.tasks, task.id).summaryState !== 'blocked'
       })
     }
     return scopedTasks.some(task => {
@@ -10537,6 +10540,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
         sourceKeys: selectedSourceKeys,
         taskIds: selectedTaskIds,
       })
+      if (Array.isArray(body.taskIds)) {
+        filteredDraft.tasks = filteredDraft.tasks.map(task => ({ ...task, scope: 'current' }))
+      }
       let parsedSavedImporterSpec: ReturnType<typeof parseWorkspaceImport> | null = null
       if (!hasExplicitNarrowing && !hasExplicitSelectionEnvelope && importerTaskSpec) {
         try {

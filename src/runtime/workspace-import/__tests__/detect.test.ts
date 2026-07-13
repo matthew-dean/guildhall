@@ -738,6 +738,57 @@ Scope:
     }))
   })
 
+  it('keeps fresh nested roadmap work current when no primary release scope is defined', async () => {
+    mkdirSync(join(dir, 'knit/docs'), { recursive: true })
+    mkdirSync(join(dir, 'looma/docs'), { recursive: true })
+    writeFileSync(
+      join(dir, 'knit/docs/feature-roadmap.md'),
+      `# Feature Roadmap
+
+- [ ] Auth callback redirect
+- [ ] Collections parity
+`,
+    )
+    writeFileSync(
+      join(dir, 'looma/docs/component-roadmap.md'),
+      `# Component Roadmap
+
+- [ ] Listbox
+- [ ] Combobox
+`,
+    )
+
+    const sigs = await planningDocsSource.detect({
+      projectPath: dir,
+      exec: fakeExec(() => ({
+        stdout: [
+          'knit/docs/feature-roadmap.md',
+          'looma/docs/component-roadmap.md',
+        ].join('\n'),
+        code: 0,
+      })),
+    })
+
+    expect(sigs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'open_work',
+        title: 'Auth callback redirect',
+        domainHint: 'knit',
+      }),
+      expect.objectContaining({
+        kind: 'open_work',
+        title: 'Listbox',
+        domainHint: 'looma',
+      }),
+    ]))
+    expect(sigs).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'open_work',
+        scopeHint: 'later',
+      }),
+    ]))
+  })
+
   it('attaches explicitly named release scope to current and later planning work without making later work current', async () => {
     mkdirSync(join(dir, 'docs'), { recursive: true })
     writeFileSync(

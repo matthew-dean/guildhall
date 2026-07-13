@@ -566,7 +566,7 @@ export const planningDocsSource: TaskSource = {
     for (const [domain, contents] of contentsByDomain) {
       currentMilestoneStageByDomain.set(
         domain,
-        multiProjectRoots.size > 1 && domain && domain !== primaryDomain
+        multiProjectRoots.size > 1 && primaryDomain && domain && domain !== primaryDomain
           ? detectExplicitCurrentMilestoneStage(contents)
           : detectCurrentMilestoneStage(contents),
       )
@@ -583,9 +583,9 @@ export const planningDocsSource: TaskSource = {
       const domainKey = domainHint ?? ''
       const currentMilestoneStage = currentMilestoneStageByDomain.get(domainKey) ?? null
       const unknownStageScope: WorkspaceSignal['scopeHint'] =
-        multiProjectRoots.size > 1 && domainHint && domainHint !== primaryDomain ? 'later' : 'current'
+        multiProjectRoots.size > 1 && primaryDomain && domainHint && domainHint !== primaryDomain ? 'later' : 'current'
       const defaultOpenWorkScopeHint: WorkspaceSignal['scopeHint'] | undefined =
-        multiProjectRoots.size > 1 && domainHint && domainHint !== primaryDomain ? 'later' : undefined
+        multiProjectRoots.size > 1 && primaryDomain && domainHint && domainHint !== primaryDomain ? 'later' : undefined
       let currentSection: string | null = null
       let currentSectionRaw: string | null = null
       let currentLabel: 'deliverables' | 'scope' | 'success_gates' | 'done_gate' | 'do_not_start' | null = null
