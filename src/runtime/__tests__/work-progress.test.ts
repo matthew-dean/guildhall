@@ -199,6 +199,30 @@ describe('deriveProjectWorkProgress', () => {
     })
   })
 
+  it('labels untitled proof delivery steps from expected evidence', () => {
+    const progress = deriveProjectWorkProgress([
+      {
+        id: 'runner-proof',
+        title: 'Run the headless fixture proof',
+        status: 'done',
+        proofPaths: [{ kind: 'review', expectedEvidence: ['pnpm-test-headless-fixture'] }],
+        gateResults: [{
+          gateId: 'pnpm-test-headless-fixture',
+          status: 'passed',
+          checkedAt: '2026-07-12T12:00:00.000Z',
+        }],
+      },
+    ])
+
+    expect(progress.byTaskId['runner-proof']?.deliverySteps).toEqual([
+      expect.objectContaining({
+        id: 'proof:1',
+        title: 'Expected proof: pnpm-test-headless-fixture',
+        status: 'done',
+      }),
+    ])
+  })
+
   it('does not keep parent proof paths as blockers after materialized child work exists', () => {
     const progress = deriveProjectWorkProgress([
       {

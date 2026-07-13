@@ -1,5 +1,5 @@
 import { taskDoneButProofMissing } from './proof-health.js'
-import { taskHasRecordedCompletionProof } from './task-completion-proof.js'
+import { recordedCompletionProofForTask, taskHasRecordedCompletionProof } from './task-completion-proof.js'
 
 export type WorkVisibilityKind = 'primary' | 'supporting' | 'internal_step' | 'hidden'
 
@@ -266,13 +266,18 @@ function proofPathDeliverySteps(
 ): DeliveryStep[] {
   if (hasMaterializedChildWork) return []
   const proofSettled = taskHasRecordedCompletionProof(task) && !taskDoneButProofMissing(task)
+  const recordedProofTitle = firstUsefulRecordedProofTitle(task)
   return arrayValue(task.proofPaths)
     .map((raw, index): DeliveryStep | null => {
       const proof = objectValue(raw)
       if (!proof) return null
       const id = stringValue(proof.id) ?? `${index + 1}`
       const proofKind = stringValue(proof.kind)
-      const title = stringValue(proof.title) ?? stringValue(proof.label) ?? `Proof ${index + 1}`
+      const title = stringValue(proof.title) ??
+        stringValue(proof.label) ??
+        expectedEvidenceTitle(proof) ??
+        recordedProofTitle ??
+        `Proof ${index + 1}`
       const step: DeliveryStep = {
         id: `proof:${id}`,
         title,
@@ -289,6 +294,31 @@ function proofPathDeliverySteps(
       return step
     })
     .filter((step): step is DeliveryStep => step !== null)
+}
+
+function expectedEvidenceTitle(proof: TaskRecord): string | undefined {
+  const first = arrayValue(proof.expectedEvidence)
+    .map(expectedEvidenceLabel)
+    .find((label): label is string => Boolean(label))
+  return first ? `Expected proof: ${first}` : undefined
+}
+
+function expectedEvidenceLabel(value: unknown): string | undefined {
+  if (typeof value === 'string') return stringValue(value)
+  const record = objectValue(value)
+  if (!record) return undefined
+  return stringValue(record.description) ??
+    stringValue(record.summary) ??
+    stringValue(record.title) ??
+    stringValue(record.id)
+}
+
+function firstUsefulRecordedProofTitle(task: TaskRecord): string | undefined {
+  return recordedCompletionProofForTask(task).verified.find(isUsefulRecordedProofTitle)
+}
+
+function isUsefulRecordedProofTitle(value: string): boolean {
+  return !/\bcontent\.no-truncated-data\b/i.test(value)
 }
 
 function internalStepFromTask(task: TaskRecord): DeliveryStep | null {

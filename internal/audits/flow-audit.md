@@ -8,6 +8,52 @@ help_summary: |
 
 # Web UI flow audit
 
+2026-07-13T02:53:44Z - Proof-complete work must expose named proof obligations in shared progress.
+
+- Work id: `codex:proof-step-placeholder-2026-07-13`.
+- User job: when a current scope is complete, the owner should be able to see
+  what proof obligations were satisfied without opening raw task data or
+  trusting a generic `Proof 1` row.
+- Finding:
+  - Live Narrative Harness API proof showed `Stage 1: Headless Drafting And
+    Evaluation MVP` complete with `selectedCounts.deliveryDone:17` and
+    `proofMissingDoneTasks:[]`, but most selected tasks exposed delivery steps
+    titled `Proof 1`.
+  - Those tasks did have `completionProof.state:"verified"` and recorded gate
+    or review evidence, so the loss happened in the shared `workProgress`
+    projection, not only in Overview/Map/Release page rendering.
+- Root cause classification:
+  - Task hierarchy/dependency/proof modeling problem: proof-path rows without
+    explicit titles lost the useful expected-evidence contract.
+  - UI communication/orientation problem: shared progress consumers inherited
+    placeholder proof text and could not explain why completed work was proven.
+- Change:
+  - `deriveProjectWorkProgress` now labels untitled proof-path delivery steps
+    from expected evidence first, then useful recorded completion proof, before
+    falling back to `Proof N`.
+  - Explicit proof titles still win, so existing authored proof labels keep
+    their wording.
+- Contract Touch Decision:
+  - Work id: `codex:proof-step-placeholder-2026-07-13`.
+  - Touched contracts: shared runtime `workProgress.byTaskId[*].deliverySteps`
+    label semantics.
+  - Contracts considered but not touched: persisted task schema,
+    `completionProof`, release-readiness blocker schema.
+  - Required follow-up: live installed-app proof that Narrative Harness selected
+    scope no longer displays generic proof placeholders where expected evidence
+    is available.
+  - Proof required: focused `work-progress` regression, focused
+    release-readiness regression, build/install, stale-server check, live
+    Narrative Harness API proof.
+  - Proof provided: `work-progress` regression passed; focused
+    release-readiness regression passed; `node ./build.mjs` passed;
+    `corepack pnpm dev:install` passed; `guildhall stop && guildhall start`
+    restarted the installed app; `/api/stale-server` returned `stale:false`;
+    live Narrative Harness API reported selected scope complete with
+    `deliveryDone:17`, `deliveryRequired:17`, and `proofOneCount:0`.
+  - Apply/revert behavior: reverting restores placeholder `Proof N` labels for
+    untitled proof paths even when completion proof exists.
+
 2026-07-13 - Release criteria separate work blockers from repository follow-up.
 
 - Work id: `codex:release-criteria-work-blocker-partition-2026-07-13`.
