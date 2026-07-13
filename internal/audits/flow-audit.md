@@ -29464,6 +29464,70 @@ selected-scope readiness ordering.
     Overview even while Map/Start say it is complete.
 - Schema Migration Decision: no persisted schema field or migration changed.
 
+## 2026-07-13 - Overview delivery counts follow selected scope
+
+- User job:
+  - When Overview says the selected release/current scope is complete, the Work
+    card must not warn from deferred proof work elsewhere in the project. The
+    user should still be able to inspect all mapped work, but selected-scope
+    progress and global backlog progress must be separate facts.
+- Root cause classification:
+  - UI communication/orientation problem: Overview mixed selected-scope work
+    counts with global delivery/proof counts in the same card.
+  - Data model/schema/source modeling problem: the shared `workProgress` summary
+    only exposed global counts, forcing product surfaces to guess whether counts
+    described the selected scope or all visible work.
+  - Project structure/scope/release modeling problem: deferred work correctly
+    stayed outside the selected release, but its blocked delivery count could
+    still make the selected release look warned.
+- Fix:
+  - `deriveProjectWorkProgress` now accepts selected task ids and returns
+    `selectedCounts` beside global `counts`.
+  - Project reads pass selected-scope task ids from the orientation spine into
+    `workProgress`.
+  - Overview uses `selectedCounts` for delivery-step copy and warning tone while
+    preserving the global counts for full project/backlog surfaces.
+- Proof provided:
+  - `corepack pnpm vitest run
+    src/runtime/__tests__/work-progress.test.ts
+    src/runtime/__tests__/serve-release-readiness.test.ts
+    src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts`
+    passed: 104 tests.
+  - `corepack pnpm lint:contracts` passed.
+  - `git diff --check` passed.
+  - `node ./build.mjs && corepack pnpm dev:install` passed.
+  - `guildhall stop && guildhall start` restarted the installed app.
+  - `/api/stale-server` returned `stale:false`, PID `79158`,
+    `bootBuildMtimeMs:1783906196263`, and
+    `currentBuildMtimeMs:1783906196263`.
+  - Installed API proof for `narrative-harness` returned selected release
+    `Stage 1: Headless Drafting And Evaluation MVP`, 11 included work items, 27
+    deferred work items, start readiness `code:"all_terminal"`, readiness
+    totals `tasks:11`, `done:11`, `blockingCount:0`, and selected
+    work-progress counts `visibleTotal:11`, `visibleDone:11`,
+    `deliveryRequired:17`, `deliveryDone:17`, `deliveryBlocked:0`, while global
+    counts still honestly reported 38 visible mapped items and 2 deferred
+    delivery blockers.
+- Contract Touch Decision:
+  - Work id: `overview-selected-scope-progress-counts`.
+  - Touched contracts: project work-progress read-model payload,
+    selected-scope progress semantics, Overview Work-card delivery copy/tone,
+    and API/frontend type shape for `workProgress.selectedCounts`.
+  - Contracts considered but not touched: persisted task schema, persisted
+    release schema, proof-path storage shape, task lifecycle/status enum,
+    Start/Resume API behavior, Work/Map component row rendering, and release
+    branch/runtime execution behavior.
+  - Required follow-up: continue checking other cards/surfaces for global counts
+    masquerading as selected-scope state.
+  - Proof required: work-progress unit coverage, overview API regression,
+    Overview component regression, contract lint, build/install freshness, and
+    installed Narrative Harness API proof of global counts vs selected counts.
+  - Proof provided: all required proof above.
+  - Apply/revert behavior: reverting removes selected-scope counts and lets
+    deferred blocked delivery work influence Overview's selected-scope delivery
+    tone again.
+- Schema Migration Decision: no persisted schema field or migration changed.
+
 ## 2026-07-13 - Drawer and Work surfaces use effective progress truth
 
 - User job:

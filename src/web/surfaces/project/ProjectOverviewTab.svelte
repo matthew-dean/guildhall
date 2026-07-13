@@ -362,6 +362,7 @@
   })
 
   const workProgressCounts = $derived(detail.workProgress?.counts ?? null)
+  const selectedWorkProgressCounts = $derived(detail.workProgress?.selectedCounts ?? workProgressCounts)
 
   const segments = $derived<WorkMixSegment[]>([
     { key: 'working', label: running ? 'Moving now' : 'Paused work', count: counts.working, tone: 'working' },
@@ -542,8 +543,8 @@
       ? scopedProgress?.doneCount ?? scopedProgress?.done ?? doneCount
       : doneCount
     const displayedTotalCount = orientationTotalCount ?? totalCount
-    const deliveryDetail = workProgressCounts && workProgressCounts.deliveryRequired > 0
-      ? `${workProgressCounts.deliveryDone} / ${workProgressCounts.deliveryRequired} delivery steps done${workProgressCounts.deliveryBlocked ? ` · ${workProgressCounts.deliveryBlocked} blocked` : ''}.`
+    const deliveryDetail = selectedWorkProgressCounts && selectedWorkProgressCounts.deliveryRequired > 0
+      ? `${selectedWorkProgressCounts.deliveryDone} / ${selectedWorkProgressCounts.deliveryRequired} delivery steps done${selectedWorkProgressCounts.deliveryBlocked ? ` · ${selectedWorkProgressCounts.deliveryBlocked} blocked` : ''}.`
       : null
     const baseCards = [
       {
@@ -556,7 +557,7 @@
           : `${displayedActiveCount} active or shaping · ${displayedDoneCount} completed · ${displayedBlockedCount} blocked.`,
         secondaryDetail: deliveryDetail,
         href: currentProjectHref('/work', activeProjectId),
-        tone: displayedBlockedCount > 0 || (workProgressCounts?.deliveryBlocked ?? 0) > 0 ? 'warn' as Tone : displayedActiveCount > 0 ? 'accent' as Tone : 'neutral' as Tone,
+        tone: displayedBlockedCount > 0 || (selectedWorkProgressCounts?.deliveryBlocked ?? 0) > 0 ? 'warn' as Tone : displayedActiveCount > 0 ? 'accent' as Tone : 'neutral' as Tone,
       },
       {
         label: 'History',

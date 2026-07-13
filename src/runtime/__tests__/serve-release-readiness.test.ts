@@ -3015,9 +3015,10 @@ describe('GET /api/project/release-readiness', () => {
         makeTask({
           id: 'task-later',
           title: 'Later release task',
-          status: 'ready',
+          status: 'blocked',
           releaseIds: [],
           spec: 'Later release work.',
+          proofPaths: [{ id: 'proof', title: 'Later proof', status: 'blocked' }],
           acceptanceCriteria: [{ id: 'AC-later', description: 'Later task is shaped.', verifiedBy: 'review' }],
         }),
       ],
@@ -3034,6 +3035,17 @@ describe('GET /api/project/release-readiness', () => {
     expect(body.orientationSpine.roots).toEqual([])
     expect(body.orientationSpine.nodes).toEqual({})
     expect(body.tasks.map((task: any) => task.id)).toEqual(['task-current'])
+    expect(body.workProgress.counts).toMatchObject({
+      visibleTotal: 2,
+      visibleBlocked: 1,
+      deliveryBlocked: 1,
+    })
+    expect(body.workProgress.selectedCounts).toMatchObject({
+      visibleTotal: 1,
+      visibleActive: 1,
+      visibleBlocked: 0,
+      deliveryBlocked: 0,
+    })
   })
 
   it('does not widen the selected release with an unscoped import duplicate of scoped work', async () => {

@@ -4529,6 +4529,21 @@ function compactOrientationProofContracts(contracts: unknown): Array<Record<stri
     })
 }
 
+function selectedTaskIdsForProgress(spine: Record<string, unknown>): string[] {
+  const selectedScope = (
+    spine.selectedTaskScope && typeof spine.selectedTaskScope === 'object' && !Array.isArray(spine.selectedTaskScope)
+      ? spine.selectedTaskScope
+      : spine.scope && typeof spine.scope === 'object' && !Array.isArray(spine.scope)
+        ? spine.scope
+        : null
+  ) as { nodeIds?: unknown } | null
+  return Array.isArray(selectedScope?.nodeIds)
+    ? selectedScope.nodeIds
+      .map(value => typeof value === 'string' ? value.replace(/^work:/, '') : '')
+      .filter(Boolean)
+    : []
+}
+
 function compactOrientationScope(scope: unknown): unknown {
   if (!scope || typeof scope !== 'object' || Array.isArray(scope)) return scope
   const raw = scope as Record<string, unknown>
@@ -5557,7 +5572,6 @@ export function buildServeApp(opts: ServeOptions = {}): {
           : mapSurface
             ? await mapEffectiveTasksPromise as Task[]
             : tasks as unknown as Task[]
-      const workProgress = deriveProjectWorkProgress(orientationTasks as unknown as Array<Record<string, unknown>>)
       endTasks()
       const endAncillary = startTiming('ancillary')
       const selectedTaskId = requestedTaskId && tasks.some(task => task.id === requestedTaskId)
@@ -5684,6 +5698,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
             sourceSpine: fullOrientationSpine,
           })
         : fullOrientationSpine
+      const selectedProgressTaskIds = selectedTaskIdsForProgress(orientationSpine as Record<string, unknown>)
+      const workProgress = deriveProjectWorkProgress(
+        orientationTasks as unknown as Array<Record<string, unknown>>,
+        selectedProgressTaskIds.length > 0 ? { selectedTaskIds: selectedProgressTaskIds } : {},
+      )
       endSpine()
       const endAction = startTiming('action')
       const actionScope = orientationSpine.selectedTaskScope ?? orientationSpine.scope ?? null

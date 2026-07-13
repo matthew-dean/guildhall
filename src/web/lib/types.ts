@@ -1569,6 +1569,17 @@ export interface ServiceProjectSummary {
       deliveryDone: number
       deliveryBlocked: number
     }
+    selectedCounts?: {
+      visibleTotal: number
+      visibleActive: number
+      visibleBlocked: number
+      visibleDone: number
+      visibleShelved: number
+      deliveryTotal: number
+      deliveryRequired: number
+      deliveryDone: number
+      deliveryBlocked: number
+    }
     byTaskId: Record<string, unknown>
   }
   highlights?: {

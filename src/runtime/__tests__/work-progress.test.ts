@@ -44,6 +44,37 @@ describe('deriveProjectWorkProgress', () => {
     })
   })
 
+  it('keeps selected-scope counts separate from global deferred work', () => {
+    const progress = deriveProjectWorkProgress([
+      {
+        id: 'current-proof',
+        title: 'Current proof',
+        status: 'done',
+        proofPaths: [{ id: 'proof', title: 'Proof', status: 'done' }],
+      },
+      {
+        id: 'later-proof',
+        title: 'Later proof',
+        status: 'blocked',
+        proofPaths: [{ id: 'proof', title: 'Proof', status: 'blocked' }],
+      },
+    ], { selectedTaskIds: ['current-proof'] })
+
+    expect(progress.counts).toMatchObject({
+      visibleTotal: 2,
+      visibleBlocked: 1,
+      deliveryRequired: 2,
+      deliveryBlocked: 1,
+    })
+    expect(progress.selectedCounts).toMatchObject({
+      visibleTotal: 1,
+      visibleDone: 1,
+      deliveryRequired: 1,
+      deliveryDone: 1,
+      deliveryBlocked: 0,
+    })
+  })
+
   it('treats importer-generated decomposition children as internal steps even without explicit visibility', () => {
     const progress = deriveProjectWorkProgress([
       {

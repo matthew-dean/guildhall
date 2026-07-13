@@ -55,18 +55,21 @@ export interface TaskWorkProgress {
   rollup: WorkProgressRollup
 }
 
+export interface ProjectWorkProgressCounts {
+  visibleTotal: number
+  visibleActive: number
+  visibleBlocked: number
+  visibleDone: number
+  visibleShelved: number
+  deliveryTotal: number
+  deliveryRequired: number
+  deliveryDone: number
+  deliveryBlocked: number
+}
+
 export interface ProjectWorkProgress {
-  counts: {
-    visibleTotal: number
-    visibleActive: number
-    visibleBlocked: number
-    visibleDone: number
-    visibleShelved: number
-    deliveryTotal: number
-    deliveryRequired: number
-    deliveryDone: number
-    deliveryBlocked: number
-  }
+  counts: ProjectWorkProgressCounts
+  selectedCounts?: ProjectWorkProgressCounts
   byTaskId: Record<string, TaskWorkProgress>
 }
 
@@ -92,7 +95,10 @@ function isProjectSetupTask(task: TaskRecord): boolean {
   return id === 'task-meta-intake' || id === 'task-workspace-import'
 }
 
-export function deriveProjectWorkProgress(tasks: TaskRecord[]): ProjectWorkProgress {
+export function deriveProjectWorkProgress(
+  tasks: TaskRecord[],
+  options: { selectedTaskIds?: Iterable<string> } = {},
+): ProjectWorkProgress {
   const byId = new Map<string, TaskRecord>()
   for (const task of tasks) {
     const id = stringValue(task.id)
@@ -108,7 +114,24 @@ export function deriveProjectWorkProgress(tasks: TaskRecord[]): ProjectWorkProgr
     byTaskId[progress.id] = progress
   }
 
-  const counts: ProjectWorkProgress['counts'] = {
+  const counts = emptyProgressCounts()
+  const selectedTaskIds = options.selectedTaskIds ? new Set(options.selectedTaskIds) : null
+  const selectedCounts = selectedTaskIds ? emptyProgressCounts() : null
+
+  for (const progress of taskProgressEntries) {
+    addProgressCounts(counts, progress)
+    if (selectedTaskIds?.has(progress.id)) addProgressCounts(selectedCounts!, progress)
+  }
+
+  return {
+    counts,
+    ...(selectedCounts ? { selectedCounts } : {}),
+    byTaskId,
+  }
+}
+
+function emptyProgressCounts(): ProjectWorkProgressCounts {
+  return {
     visibleTotal: 0,
     visibleActive: 0,
     visibleBlocked: 0,
@@ -119,26 +142,24 @@ export function deriveProjectWorkProgress(tasks: TaskRecord[]): ProjectWorkProgr
     deliveryDone: 0,
     deliveryBlocked: 0,
   }
+}
 
-  for (const progress of taskProgressEntries) {
-    if (progress.visibility.countInProjectTotals) {
-      counts.visibleTotal += 1
-      const status = progress.status ?? ''
-      if (TASK_DONE_STATUSES.has(status)) counts.visibleDone += 1
-      else if (TASK_BLOCKED_STATUSES.has(status)) counts.visibleBlocked += 1
-      else if (TASK_SHELVED_STATUSES.has(status)) counts.visibleShelved += 1
-      else if (TASK_ACTIVE_STATUSES.has(status) || status) counts.visibleActive += 1
-    }
-
-    for (const step of progress.deliverySteps) {
-      counts.deliveryTotal += 1
-      if (step.required) counts.deliveryRequired += 1
-      if (step.status === 'done') counts.deliveryDone += 1
-      if (step.status === 'blocked') counts.deliveryBlocked += 1
-    }
+function addProgressCounts(counts: ProjectWorkProgressCounts, progress: TaskWorkProgress): void {
+  if (progress.visibility.countInProjectTotals) {
+    counts.visibleTotal += 1
+    const status = progress.status ?? ''
+    if (TASK_DONE_STATUSES.has(status)) counts.visibleDone += 1
+    else if (TASK_BLOCKED_STATUSES.has(status)) counts.visibleBlocked += 1
+    else if (TASK_SHELVED_STATUSES.has(status)) counts.visibleShelved += 1
+    else if (TASK_ACTIVE_STATUSES.has(status) || status) counts.visibleActive += 1
   }
 
-  return { counts, byTaskId }
+  for (const step of progress.deliverySteps) {
+    counts.deliveryTotal += 1
+    if (step.required) counts.deliveryRequired += 1
+    if (step.status === 'done') counts.deliveryDone += 1
+    if (step.status === 'blocked') counts.deliveryBlocked += 1
+  }
 }
 
 function deriveTaskWorkProgress(task: TaskRecord, byId: Map<string, TaskRecord>): TaskWorkProgress | null {
