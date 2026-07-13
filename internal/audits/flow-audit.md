@@ -8,6 +8,64 @@ help_summary: |
 
 # Web UI flow audit
 
+2026-07-13T04:08:00Z - Task evidence arrays should contribute explicit source refs.
+
+- Work id: `codex:task-evidence-source-ref-recovery-2026-07-13`.
+- User job: Project Map should recover source docs from task evidence already
+  projected onto effective task records. If a completed task's notes, review
+  verdicts, adjudications, or gate results explicitly cite a docs path, that
+  path should count as provenance before Guildhall reports a task-only source
+  gap.
+- Finding:
+  - After spec-text source recovery, live Narrative Harness still reported
+    `missing_source_provenance` for `author-voice-loop-mvp`,
+    `context-packet-compaction-core`, and `task-009`.
+  - Each of those task-local evidence files already contained explicit docs
+    paths, and `buildEffectiveTasks` already projects notes/review/adjudication
+    evidence onto Map/Overview task records.
+- Root cause classification:
+  - Data model/schema problem: legacy task records kept source provenance in
+    evidence payloads instead of normalized `references`.
+  - Project structure/scope/release modeling problem: source-health derivation
+    ignored existing effective task evidence even though it was already part of
+    the current read model.
+  - Bad project data produced by an earlier Guildhall bug: older/manual tasks
+    were saved without normalized source refs.
+- Change:
+  - The shared explicit markdown source-ref extractor now also scans effective
+    task `notes`, `gateResults`, `reviewVerdicts`, and `adjudications`.
+  - This reuses existing effective-task projection and still only accepts
+    explicit docs markdown paths.
+- Contract Touch Decision:
+  - Work id: `codex:task-evidence-source-ref-recovery-2026-07-13`.
+  - Touched contracts: derived `ProjectScopeRow.sourceRefs`,
+    `OrientationNode.source.refs`, and downstream `orientationSpine.gaps`
+    semantics for task records with explicit doc refs in effective task
+    evidence arrays.
+  - Contracts considered but not touched: persisted task schema,
+    task-state/evidence storage schema, workspace import schema,
+    release-readiness schema.
+  - Required follow-up: Looma + Knit `task-039` still has no explicit docs path
+    in compact task/effective evidence and should stay visible until re-intake
+    or source backfill.
+  - Proof required: focused orientation-spine regression, contract detector,
+    build/install/restart, stale-server check, live API proof that Narrative
+    Harness source-health no longer reports task-only provenance gaps while
+    Looma + Knit still reports its genuine gap.
+  - Proof provided: focused orientation-spine regression passed; `corepack pnpm
+    lint:contracts` passed; `node ./build.mjs` passed; `corepack pnpm
+    dev:install` passed; `guildhall stop && guildhall start` restarted the
+    installed app; `/api/stale-server` returned `stale:false`; live Narrative
+    Harness Map returned `sourceHealth.gaps:0` and recovered
+    `docs/specs/author-voice-system.md`,
+    `docs/specs/editor-writer-feedback-chain.md`,
+    `docs/specs/agent-context-packets-and-compaction.md`,
+    `docs/harness/context-packet-compaction-core.md`, and
+    `docs/harness/smoke-test-commands.md`; live Looma + Knit still reports
+    `missing_source_provenance` for `task-039`.
+  - Apply/revert behavior: reverting restores false task-only provenance gaps
+    for effective task evidence that already cites source docs.
+
 2026-07-13T03:52:00Z - Source provenance should recover explicit doc refs from task specs.
 
 - Work id: `codex:task-spec-source-ref-recovery-2026-07-13`.

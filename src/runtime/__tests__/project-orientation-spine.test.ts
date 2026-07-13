@@ -3421,6 +3421,15 @@ describe('buildProjectOrientationSpine', () => {
         releaseIds: ['stage-1'],
         spec: 'Use `docs/specs/source-backed-work.md` as the source contract.',
       },
+      {
+        id: 'evidence-cited',
+        title: 'Evidence-cited work',
+        description: 'Old task record whose task evidence cites its source document.',
+        domain: 'harness',
+        status: 'done' as const,
+        releaseIds: ['stage-1'],
+        notes: [{ content: 'Validated against docs/harness/evidence-backed-work.md.' }],
+      },
     ]
     const releases = [{
       id: 'stage-1',
@@ -3428,7 +3437,7 @@ describe('buildProjectOrientationSpine', () => {
       kind: 'release' as const,
       state: 'active' as const,
       source: 'release_plan' as const,
-      nodeIds: ['work:legacy-done', 'work:doc-backed', 'work:spec-cited'],
+      nodeIds: ['work:legacy-done', 'work:doc-backed', 'work:spec-cited', 'work:evidence-cited'],
       deferredNodeIds: ['work:legacy-deferred'],
       proofStyle: 'script_only' as const,
     }]
@@ -3449,6 +3458,8 @@ describe('buildProjectOrientationSpine', () => {
     }))
     expect(spine.scopeRows.find(row => row.taskId === 'spec-cited')?.sourceRefs)
       .toContain('docs/specs/source-backed-work.md')
+    expect(spine.scopeRows.find(row => row.taskId === 'evidence-cited')?.sourceRefs)
+      .toContain('docs/harness/evidence-backed-work.md')
     expect(spine.sourceHealth.gaps).toBeGreaterThan(0)
   })
 
