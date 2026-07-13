@@ -30388,6 +30388,119 @@ selected-scope readiness ordering.
     Overview even while Map/Start say it is complete.
 - Schema Migration Decision: no persisted schema field or migration changed.
 
+## 2026-07-13T04:12:26Z - Overview preview pins start blockers over ready work
+
+- User job:
+  - When Start/Resume is blocked by a current-scope shaping task, Overview
+    should pin that blocking task. It should not say one task blocks the run
+    while "pinned now" points at a different ready task.
+- Root cause classification:
+  - Scheduler/action-state logic problem: start readiness had the correct
+    blocking task and action href, but the compact Overview spine reused the
+    full spine summary before applying the start-readiness focus.
+  - UI communication/orientation problem: Overview could present a correct top
+    blocker while the pinned-now summary pointed at different work, making the
+    next action contradictory.
+  - Project structure/scope/release modeling problem: selected-scope summaries
+    and start-readiness summaries were both valid individually, but not merged
+    under one ownership rule.
+- Fix:
+  - The Overview preview spine still reuses the full spine summary for shared
+    counts and scope wording, but when start readiness is blocked it overrides
+    only `pinnedNow`, `topBlocker`, and `nextAction` with the start-readiness
+    focus.
+  - Existing regression `pins the start blocker over ready work in the overview
+    preview` now passes.
+- Proof provided:
+  - `corepack pnpm vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts -t "pins the start
+    blocker|uses the orientation execution boundary"` passed: 2 tests.
+  - `corepack pnpm vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts` passed: 62 tests.
+  - `git diff --check` passed.
+  - `corepack pnpm lint:contracts` passed.
+  - `node ./build.mjs` passed.
+  - `corepack pnpm dev:install` passed.
+  - `guildhall start` confirmed the installed app running on
+    `http://localhost:7777`.
+  - `/api/stale-server` returned `stale:false`, PID `10976`,
+    `bootBuildMtimeMs:1783916073433`, and
+    `currentBuildMtimeMs:1783916073433`.
+  - Installed Narrative Harness release-readiness API proof returned
+    `ready:true`, `release.proofStyle:"script_only"`, 11 tasks, 11 done, and
+    zero blockers.
+  - Installed Narrative Harness Map API proof returned source trail `Proof
+    mode: Headless proof` and the same `release.proofStyle:"script_only"` from
+    release readiness.
+- Contract Touch Decision:
+  - Work id: `overview-preview-start-blocker-summary`.
+  - Touched contracts: `/api/project?surface=overview` compact orientation
+    spine summary semantics for start-blocked scopes.
+  - Contracts considered but not touched: persisted task schema, persisted
+    release schema, action-model contract, start-readiness contract,
+    release-readiness schema, and Overview component props.
+  - Required follow-up: consolidate start readiness, selected-scope summary,
+    and release readiness into one read model so blocked/action state is not
+    locally merged by surface builders.
+  - Proof required: focused regression, full release-readiness regression,
+    contract lint, build, installed-app freshness, and live API proof.
+  - Proof provided: focused regression, full release-readiness regression,
+    contract lint, build, installed-app freshness, and live Narrative Harness
+    API proof.
+  - Apply/revert behavior: reverting can make Overview show the right blocker
+    message while pinning a different ready task as the current focus.
+- Schema Migration Decision: no persisted schema field or migration changed.
+
+## 2026-07-13T04:10:14Z - Release readiness returns the proof boundary it uses
+
+- User job:
+  - When Guildhall marks a current release ready, the Release/Overview/Map
+    surfaces should agree on how that scope was supposed to be proven. A user
+    should not see Map say "Headless proof" while release readiness reports an
+    unspecified proof style.
+- Root cause classification:
+  - Data model/schema problem: release readiness computed an effective proof
+    style for readiness decisions but did not return that effective value in
+    the release payload.
+  - Project structure/scope/release modeling problem: selected release metadata
+    could drift from the selected execution boundary, making a headless current
+    release look less specified than it actually was.
+  - UI communication/orientation problem: downstream views could communicate
+    weaker proof semantics than the readiness model used.
+- Fix:
+  - The release readiness payload now preserves the effective proof style on
+    the returned release object.
+  - Extended the existing headless-boundary regression so an unspecified raw
+    release that is proven by the orientation execution boundary returns
+    `proofStyle: script_only`.
+- Proof provided:
+  - `corepack pnpm vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts -t "uses the
+    orientation execution boundary"` passed: 1 test.
+  - The same verification batch also ran the full release-readiness regression,
+    contract lint, build, installed-app freshness, and live Narrative Harness
+    API proof recorded in the `overview-preview-start-blocker-summary` entry
+    above.
+- Contract Touch Decision:
+  - Work id: `release-readiness-effective-proof-style`.
+  - Touched contracts: `/api/project/release-readiness` release payload proof
+    style semantics.
+  - Contracts considered but not touched: persisted release schema, persisted
+    task schema, orientation spine proof-boundary inference, design-system
+    guardrail detection, release selection, and Overview/Map component props.
+  - Required follow-up: keep eliminating duplicated release/scope proof
+    inference so proof mode has one owner across Overview, Map, Release, and
+    Start readiness.
+  - Proof required: focused release-readiness regression, contract lint, build,
+    installed-app freshness, and live Narrative Harness API proof.
+  - Proof provided: focused regression, full release-readiness regression,
+    contract lint, build, installed-app freshness, and live Narrative Harness
+    API proof.
+  - Apply/revert behavior: reverting makes release readiness report
+    `proofStyle: unspecified` even when it used a script-only proof boundary to
+    decide readiness.
+- Schema Migration Decision: no persisted schema field or migration changed.
+
 ## 2026-07-13T04:03:49Z - Release-less scopes do not get release action copy
 
 - User job:

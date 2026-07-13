@@ -4293,7 +4293,7 @@ function buildOverviewOrientationPreviewSpine(input: {
         conflicts: 0,
         gaps: scope ? 0 : 1,
       }
-  const summary = input.sourceSpine?.summary ?? {
+  const computedSummary = {
     headline,
     purpose: input.charter?.goal ?? 'Project shape is being inferred.',
     selectedReleaseLabel: release?.label ?? null,
@@ -4311,6 +4311,14 @@ function buildOverviewOrientationPreviewSpine(input: {
         : projection.start.message,
     progress,
   }
+  const summary = input.sourceSpine?.summary && start?.canStart === false && !terminalCompleteMessage
+    ? {
+        ...input.sourceSpine.summary,
+        pinnedNow: focusTaskTitle ? [focusTaskTitle] : [],
+        topBlocker,
+        nextAction: startMessage ?? 'Resolve the current start blocker.',
+      }
+    : input.sourceSpine?.summary ?? computedSummary
   const releaseSummary = input.sourceSpine?.release ?? {
     state: projection.release.state,
     blockers: projection.release.blockers.map(blocker => ({
@@ -13662,6 +13670,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       ? {
           ...release,
           state: ready ? 'ready' : blockingCount > 0 ? 'blocked' : 'active',
+          ...(readinessProofStyle ? { proofStyle: readinessProofStyle } : {}),
         }
       : release
     const effectiveScope = readinessScope === release && effectiveRelease ? effectiveRelease : readinessScope

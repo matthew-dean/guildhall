@@ -270,7 +270,7 @@ describe('GET /api/project/release-readiness', () => {
     const res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
     const body = await res.json() as any
 
-    expect(body.release).toMatchObject({ id: 'near-term-proof', proofStyle: 'unspecified' })
+    expect(body.release).toMatchObject({ id: 'near-term-proof', proofStyle: 'script_only' })
     expect(body.totals.designSystemBlockingCount).toBe(0)
   })
 
