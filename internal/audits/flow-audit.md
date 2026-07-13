@@ -30566,6 +30566,82 @@ selected-scope readiness ordering.
     Overview even while Map/Start say it is complete.
 - Schema Migration Decision: no persisted schema field or migration changed.
 
+## codex:workspace-import-coverage-raw-signal-veto-2026-07-13
+
+- User job:
+  - On Narrative Harness, Start should not tell the user to refresh the
+    workspace import because a proof/status bullet exists in project docs.
+    Current executable work should be judged from the materialized import/task
+    model; success gates remain evidence/proof context, not phantom tasks.
+- Root cause classification:
+  - Data model/project-structure problem: Start-readiness had a second
+    raw-signal scan that could reinterpret planning-doc bullets after the
+    workspace importer had already materialized the canonical current task set.
+  - Scheduler/action-state logic problem: the Start blocker trusted detector
+    evidence directly, so a proof-only line such as `Docusaurus docs build
+    cleanly with npm run build` could outrank the approved/imported work model.
+  - UI communication/orientation problem: the resulting user-facing blocker
+    made the project look under-scoped even when the actual current work had
+    been carried into the active queue.
+- Fix:
+  - Removed the `rawCurrentDeliverableMissing` veto from
+    `startBlockerForWorkspaceImportCoverage`. Import-refresh coverage now uses
+    the materialized draft tasks, saved approved tasks, stale approved-current
+    checks, context-only imported ghosts, structural refresh checks, and
+    uncovered capability specs.
+  - Added a regression proving proof-only success gates do not require import
+    refresh when current work is already represented.
+- Proof provided so far:
+  - `CI=true pnpm exec vitest run src/runtime/__tests__/serve-settings.test.ts
+    --testNamePattern "workspace_import_refresh_needed|success gates|proof-only
+    success gates|under-scoped|saved import spec covers only part|materialized
+    current-scope work|stale imported work"` passed: 6 focused tests.
+  - `CI=true pnpm exec vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts
+    src/runtime/__tests__/project-orientation-spine.test.ts` passed: 133 tests.
+  - `CI=true pnpm lint:contracts` passed.
+  - `CI=true pnpm build` passed.
+  - `CI=true pnpm dev:install` passed; `guildhall stop` stopped the service and
+    `guildhall start` reported the service running at `http://localhost:7777`.
+  - `/api/stale-server` returned `stale:false`, PID `63868`,
+    `bootBuildMtimeMs:1783929273306`, and
+    `currentBuildMtimeMs:1783929273306`.
+  - Live Narrative Harness Overview API proof showed
+    `startReadiness.code: proof_evidence_missing`, not
+    `workspace_import_refresh_needed`; the blocker is now proof evidence for
+    completed scoped work, starting with `Define fixture, expected-record,
+    prototype-run, and evaluation schemas.`
+  - Live Narrative Harness Overview API proof showed the selected execution
+    scope as `Stage 1: Headless Drafting And Evaluation MVP`, with 11 selected
+    scope tasks and 27 deferred tasks.
+  - Live workspace-import draft proof showed no task title containing
+    `Docusaurus` or `npm run build`.
+  - The installed route served the new built asset hash
+    `/_app/immutable/entry/start.DziiaYRi.js` from
+    `/projects/narrative-harness/overview`.
+- Residual findings:
+  - The in-app browser bridge timed out during a DOM read and then reported the
+    browser unavailable. This was treated as browser-bridge instability, not app
+    failure, because the installed route and live APIs both responded correctly.
+- Contract Touch Decision:
+  - Work id: `workspace-import-coverage-raw-signal-veto`.
+  - Touched contracts: Start-readiness import-coverage decision contract and
+    route-level workspace-import coverage regression tests.
+  - Contracts considered but not touched: persisted task schema, persisted
+    workspace-goals schema, workspace-import signal schema, release schema,
+    detector signal emission, project orientation spine field names, and UI
+    route components.
+  - Required follow-up: if another raw detector-only blocker appears, remove or
+    route it through the materialized draft model rather than adding another
+    signal-specific exception.
+  - Proof required: focused route regression, contract lint, build/install
+    freshness, and live Narrative Harness API proof showing Start no longer
+    blocks on the Docusaurus success gate.
+  - Proof provided: focused route regression listed above.
+  - Apply/revert behavior: reverting restores the raw detector veto, allowing
+    proof/status bullets to become user-facing import-refresh blockers again.
+- Schema Migration Decision: no persisted schema field or migration changed.
+
 ## codex:overview-preview-release-state-proof-blocker-2026-07-13
 
 - User job:

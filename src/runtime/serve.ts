@@ -104,7 +104,6 @@ import {
 import { OrchestratorSupervisor } from './serve-supervisor.js'
 import { repairWeakRecoverySpecReviewSeedInQueue } from './orchestrator.js'
 import { resolveFanoutCapacity } from './fanout-dispatcher.js'
-import { detectShadowedCurrentMilestoneDeliverableImports as detectShadowedCurrentMilestoneDeliverables } from './current-milestone-shadowing.js'
 import { applySourceConflictReconciliation } from './source-conflict-reconciliation.js'
 import {
   normalizePreferredProvider,
@@ -8043,44 +8042,6 @@ export function buildServeApp(opts: ServeOptions = {}): {
       projectPath,
       draft: formWorkspaceHypothesis(inventory),
     })
-    const shadowedCurrentDeliverables = (() => {
-      const seen = new Set<string>()
-      const sources: Array<{ path: string; content: string }> = []
-      for (const signal of inventory.signals) {
-        if (signal.source !== 'planning-docs') continue
-        for (const reference of signal.references ?? []) {
-          if (!reference || /^[a-z]+:\/\//i.test(reference)) continue
-          const absolute = isAbsolute(reference) ? reference : resolve(projectPath, reference)
-          if (seen.has(absolute) || !existsSync(absolute) || extname(absolute).toLowerCase() !== '.md') continue
-          seen.add(absolute)
-          try {
-            sources.push({
-              path: absolute,
-              content: readFileSync(absolute, 'utf-8'),
-            })
-          } catch {
-            // Ignore unreadable files; readiness should keep going with what it can verify.
-          }
-        }
-      }
-      return detectShadowedCurrentMilestoneDeliverables(sources)
-    })()
-    const isShadowedCurrentDeliverable = (title: string, reference: string | null | undefined): boolean => {
-      const normalizedTitle = normalizeImportTitle(title)
-      if (!normalizedTitle) return false
-      const normalizedReference = reference
-        ? (isAbsolute(reference) ? reference : resolve(projectPath, reference)).replaceAll('\\', '/')
-        : null
-      const matchingCandidates = shadowedCurrentDeliverables.filter(
-        candidate => normalizeImportTitle(candidate.title) === normalizedTitle,
-      )
-      if (matchingCandidates.length === 0) return false
-      if (!normalizedReference || matchingCandidates.length === 1) return true
-      return matchingCandidates.some(candidate => {
-        const candidatePath = candidate.sourcePath.replaceAll('\\', '/')
-        return normalizedReference === candidatePath
-      })
-    }
     if (workspaceGoalsNeedStructuralRefresh(workspaceGoalsState)) {
       const firstStructuralLabel = (
         detected.context.find(context =>
@@ -8160,11 +8121,6 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
     const coveredTitles = new Set<string>()
     const currentScopeCoveredTitles = new Set<string>()
-    const currentScopeContextCoveredTitles = new Set(
-      (workspaceGoalsNeedStructuralRefresh(workspaceGoalsState) ? [] : (workspaceGoalsState?.context ?? []))
-        .map(context => normalizeImportTitle(context.label))
-        .filter(Boolean),
-    )
     const coveredRefs = new Set<string>()
     const activeTaskHints = new Set<string>()
     for (const task of parsed.tasks) {
@@ -8220,32 +8176,6 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const title = typeof task.title === 'string' ? task.title : ''
       return title.trim().length > 0 && !currentScopeCoveredTitles.has(normalizeImportTitle(title))
     })
-    const rawCurrentDeliverableMissing = (() => {
-      const seen = new Set<string>()
-      const missing: Array<{ title: string }> = []
-      for (const signal of inventory.signals) {
-        if (signal.kind !== 'open_work' && signal.kind !== 'context') continue
-        if (signal.scopeHint !== 'current') continue
-        if (signal.source !== 'planning-docs') continue
-        if (signal.role !== 'capability') continue
-        const title = typeof signal.title === 'string' ? signal.title.trim() : ''
-        if (!title) continue
-        const primaryRef = typeof signal.references?.[0] === 'string' ? signal.references[0] : null
-        if (isShadowedCurrentDeliverable(title, primaryRef)) continue
-        const evidence = typeof signal.evidence === 'string' ? signal.evidence.trim() : ''
-        if (!evidence.includes(': - ')) continue
-        const normalized = normalizeImportTitle(title)
-        if (
-          !normalized ||
-          seen.has(normalized) ||
-          currentScopeCoveredTitles.has(normalized) ||
-          currentScopeContextCoveredTitles.has(normalized)
-        ) continue
-        seen.add(normalized)
-        missing.push({ title })
-      }
-      return missing
-    })()
     const detectedCurrentTitles = new Set(
       detected.tasks
         .filter(task => task.scope !== 'later')
@@ -8306,7 +8236,6 @@ export function buildServeApp(opts: ServeOptions = {}): {
     if (
       missing.length === 0 &&
       currentScopeMissing.length === 0 &&
-      rawCurrentDeliverableMissing.length === 0 &&
       staleApprovedCurrent.length === 0 &&
       contextOnlyImportedGhosts.length === 0 &&
       uncoveredCapabilitySpecs.length === 0
@@ -8320,18 +8249,6 @@ export function buildServeApp(opts: ServeOptions = {}): {
         message:
           `Guildhall's saved import is under-scoped for the current project docs. ` +
           `The live detector still treats ${currentScopeMissing.length} current task${currentScopeMissing.length === 1 ? '' : 's'} as active work outside the approved current scope, starting with "${first}". Refresh the import before treating this project as complete.`,
-        actionHref: '/workspace-import',
-      }
-    }
-
-    if (rawCurrentDeliverableMissing.length > 0) {
-      const first = rawCurrentDeliverableMissing[0]?.title?.trim() || 'the first current-scope deliverable'
-      return {
-        canStart: false,
-        code: 'workspace_import_refresh_needed',
-        message:
-          `Guildhall's saved import is under-scoped for the current project docs. ` +
-          `The live detector still treats ${rawCurrentDeliverableMissing.length} current deliverable${rawCurrentDeliverableMissing.length === 1 ? '' : 's'} as active work outside the approved current scope, starting with "${first}". Refresh the import before treating this project as complete.`,
         actionHref: '/workspace-import',
       }
     }
