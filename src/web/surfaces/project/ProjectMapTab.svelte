@@ -947,14 +947,39 @@
 
   .scope-stack {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: var(--s-2);
     align-content: start;
+    justify-items: start;
+    min-inline-size: 0;
+    max-inline-size: 100%;
+  }
+
+  .scope-stack :global(.gh-tooltip) {
+    min-inline-size: 0;
+    max-inline-size: 100%;
+  }
+
+  .scope-stack :global(.chip) {
+    max-inline-size: 100%;
+    white-space: normal;
+    text-overflow: clip;
+    overflow-wrap: anywhere;
   }
 
   .scope-stack strong {
     color: var(--text);
     font-size: var(--gh-type-size-section-title);
     line-height: var(--gh-type-line-height-tight);
+    min-inline-size: 0;
+    max-inline-size: 100%;
+    overflow-wrap: anywhere;
+  }
+
+  .scope-stack span {
+    min-inline-size: 0;
+    max-inline-size: 100%;
+    overflow-wrap: anywhere;
   }
 
   .map-stats {

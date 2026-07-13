@@ -8,6 +8,48 @@ help_summary: |
 
 # Web UI flow audit
 
+2026-07-13T05:58:00Z - Project Map scope cards must wrap real release names inside constrained columns.
+
+- Work id: `codex:narrative-harness-map-scope-wrap-2026-07-13`.
+- User job: A user should be able to open Narrative Harness Project Map in a
+  split or narrow desktop viewport and read the selected release scope without
+  clipped text or horizontal page overflow.
+- Finding:
+  - Live Narrative Harness Map showed correct selected release data, but the
+    hero scope card overflowed at a constrained desktop width because the
+    scope-summary stack did not explicitly allow long release labels and count
+    summaries to wrap inside the card column.
+- Root cause classification:
+  - UI communication/orientation problem: correct model state became hard to
+    trust because the card clipped the release label at the point of
+    orientation.
+  - Not a data model/schema problem: the release label, selected scope counts,
+    and source-backed task state were already correct in the shared spine API.
+- Change:
+  - The Project Map scope-summary stack now constrains and wraps its text
+    content inside the existing `Card` layout instead of shortening real data
+    or adding a bespoke card treatment.
+- Contract Touch Decision:
+  - Work id: `codex:narrative-harness-map-scope-wrap-2026-07-13`.
+  - Touched contracts: none; presentation-only wrapping behavior.
+  - Contracts considered but not touched: `/api/project.orientationSpine`,
+    `/api/project/spine`, persisted release/task schemas, shared `FrameCard`
+    contract.
+  - Required follow-up: if another card family clips long model-backed names,
+    evaluate a shared text-wrap primitive instead of repeating local fixes.
+  - Proof required: focused UI test, contract detector, build,
+    install/restart, stale-server check, live Narrative Harness Map split
+    desktop, narrow desktop, and mobile overflow proof.
+  - Proof provided: focused `ProjectMapTab` component test passed with 9
+    tests; `corepack pnpm lint:contracts` passed; `node ./build.mjs` passed;
+    `corepack pnpm dev:install` passed; `guildhall stop && guildhall start`
+    restarted the installed app; `/api/stale-server` returned `stale:false`;
+    live Narrative Harness Map in the in-app browser reported no overflowers
+    at `1280x720`, `900x720`, or `390x844`, with scope/proof cards contained
+    inside their client widths.
+  - Apply/revert behavior: reverting restores clipped selected-scope text in
+    constrained Project Map columns.
+
 2026-07-13T05:10:00Z - Narrative Harness Map renders the completed current release as understandable product state.
 
 - Work id: `codex:narrative-harness-map-browser-proof-2026-07-13`.
