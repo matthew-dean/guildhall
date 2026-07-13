@@ -30591,3 +30591,86 @@ selected-scope readiness ordering.
   - Apply/revert behavior: reverting restores full recursive Map root nodes and
     increases the Map payload without adding information ProjectMapTab uses.
 - Schema Migration Decision: no persisted schema field or migration changed.
+
+## 2026-07-13T00:31:14Z - Multi-root import scope stays release bounded
+
+- User job:
+  - When Guildhall imports a workspace that contains multiple nested projects,
+    only the selected/current scope of work should be marked current. Other
+    documented Stage 1 or open-work sections should remain later unless their
+    own documents explicitly mark them as the active scope. Start/Resume should
+    not consume unrelated nested-project work just because it was nearby in the
+    same workspace.
+- Root cause classification:
+  - Project structure/scope/release modeling problem: workspace import used one
+    global current-stage fallback across all project roots, so `Stage 1` in one
+    nested project could make another nested project's `Stage 1` look current.
+  - Data model/schema/source modeling problem: automatic release assignment used
+    enriched task references, which include related context, instead of the
+    task's source claims and same-domain references. That let context from one
+    project leak into another project's current release.
+  - UI communication/orientation problem: downstream views were receiving an
+    over-current work queue, which made the overview/map/start surfaces look
+    ungrounded even when the visual layout was improved.
+  - Bad project data produced by earlier Guildhall behavior: previous
+    Looma+Knit drafts treated many Looma/provider/general planning items as
+    current work, leaving the user-facing state too broad for the intended
+    current release.
+- Fix:
+  - Planning-doc import now tracks the current milestone per nested domain
+    instead of applying one workspace-wide stage fallback.
+  - Non-primary nested roots default unscoped open work and unknown-stage work
+    to later unless their own documents explicitly mark a current stage.
+  - Stage-scoped context rows that carry scope/release evidence are promoted to
+    capability signals, preserving the project skeleton without turning every
+    heading into executable current work.
+  - Automatic release assignment now uses source-claim references plus
+    same-domain task references, preventing cross-domain context refs from
+    assigning unrelated tasks to the selected release.
+  - Exact duplicate imported tasks with the same normalized title and domain are
+    merged before enrichment; if any duplicate is later, the merged task stays
+    later so a stale current duplicate cannot survive beside the safer scope.
+- Proof provided:
+  - `corepack pnpm vitest run
+    src/runtime/workspace-import/__tests__/detect.test.ts
+    src/runtime/workspace-import/__tests__/hypothesis.test.ts` passed: 93
+    tests.
+  - `node ./build.mjs` passed.
+  - `guildhall stop && guildhall start` started the installed app.
+  - `/api/stale-server` returned `stale:false`, PID `14994`,
+    `bootBuildMtimeMs:1783902493308`, and
+    `currentBuildMtimeMs:1783902493308`.
+  - Installed CLI proof for `looma-knit` returned 67 draft tasks: 5 current, 62
+    later, all 67 with source claims. The only current release was
+    `stage-1-v1-release-hardening` with five Knit tasks.
+  - Installed CLI proof for `narrative-harness` returned 23 draft tasks: 11
+    current, 12 later, all 23 with source claims. The only current release was
+    `stage-1-headless-drafting-and-evaluation-mvp` with the headless MVP tasks,
+    including DeepInfra model selection, author-intent inputs, synopsis/outline/
+    chapter generation, world-state continuity review, and spatial/geographic
+    continuity review.
+- Contract Touch Decision:
+  - Work id: `multi-root-import-release-bounded-scope`.
+  - Touched contracts: workspace import draft scope semantics, planning-doc
+    detector stage/current inference, hypothesis duplicate-task merge behavior,
+    automatic release assignment semantics, source-claim-driven assignment
+    expectations, and workspace-import detector tests.
+  - Contracts considered but not touched: persisted task schema, persisted
+    release schema, task lifecycle/status schema, Start/Resume API semantics,
+    overview/map/work UI component props, applied project-task storage, and
+    release branch/runtime execution behavior.
+  - Required follow-up: apply/re-intake the corrected Narrative Harness and
+    Looma+Knit drafts through the real UI/API path, then verify Overview/Map/Work
+    surfaces communicate the same bounded current release without local
+    reinterpretation.
+  - Proof required: focused importer tests, build, contract lint, installed-app
+    freshness, installed CLI/API draft counts for both calibration projects,
+    and browser/API proof after the corrected draft is applied.
+  - Proof provided: focused importer tests, build, installed-app freshness, and
+    installed CLI draft counts for both calibration projects. Browser/API proof
+    after applying the corrected draft remains follow-up because this slice
+    corrected draft generation, not persisted project state.
+  - Apply/revert behavior: reverting restores workspace-wide current-stage
+    inference and enriched-reference release assignment, allowing nested project
+    work to become current for the wrong release again.
+- Schema Migration Decision: no persisted schema field or migration changed.

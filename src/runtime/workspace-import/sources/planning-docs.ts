@@ -130,6 +130,15 @@ function inferDomainHint(rel: string, enabledRoots: ReadonlySet<string>): string
   return enabledRoots.has(first) ? first : undefined
 }
 
+function primaryDomainHint(relPaths: readonly string[], roots: ReadonlySet<string>): string | null {
+  for (const rel of relPaths) {
+    if (!/(^|\/)docs\/release-plan\.md$/i.test(rel) && !/(^|\/)PROJECT_STATE\.md$/i.test(rel)) continue
+    const domain = inferDomainHint(rel, roots)
+    if (domain) return domain
+  }
+  return null
+}
+
 function detectMultiProjectRoots(relPaths: readonly string[]): Set<string> {
   const roots = new Set<string>()
   for (const rel of relPaths) {
@@ -416,13 +425,14 @@ function parseStageOrdinal(label: string | null | undefined): number | null {
 function scopeHintForStage(
   stageLabel: string | null | undefined,
   currentMilestoneStage: string | null | undefined,
+  unknown: WorkspaceSignal['scopeHint'] = 'current',
 ): WorkspaceSignal['scopeHint'] {
   const stageNumber = parseStageOrdinal(stageLabel)
   const currentStageNumber = parseStageOrdinal(currentMilestoneStage)
   if (stageNumber != null && currentStageNumber != null) {
     return stageNumber <= currentStageNumber ? 'current' : 'later'
   }
-  return 'current'
+  return unknown
 }
 
 function scopeHintForOpenWorkSection(
@@ -500,6 +510,7 @@ function isFutureStage(
 function stageDeliverableSignal(
   currentSection: string,
   currentMilestoneStage: string | null,
+  unknownStageScope: WorkspaceSignal['scopeHint'] = 'current',
 ): { kind: WorkspaceSignal['kind']; scopeHint?: WorkspaceSignal['scopeHint']; role?: WorkspaceSignal['role'] } {
   if (isFutureStage(currentSection, currentMilestoneStage)) {
     return {
@@ -510,7 +521,7 @@ function stageDeliverableSignal(
   return {
     kind: 'context',
     role: 'capability',
-    scopeHint: scopeHintForStage(currentSection, currentMilestoneStage),
+    scopeHint: scopeHintForStage(currentSection, currentMilestoneStage, unknownStageScope),
   }
 }
 
@@ -533,6 +544,7 @@ export const planningDocsSource: TaskSource = {
           .filter((rel) => likelyRelevantFile(rel))
       : listMarkdownFiles(projectPath)
     const multiProjectRoots = detectMultiProjectRoots(relPaths)
+    const primaryDomain = primaryDomainHint(relPaths, multiProjectRoots)
     const availableFiles = new Set(relPaths)
 
     const fileContents = new Map<string, string>()
@@ -543,7 +555,22 @@ export const planningDocsSource: TaskSource = {
       if (!raw.trim()) continue
       fileContents.set(rel, raw)
     }
-    const currentMilestoneStage = detectCurrentMilestoneStage(fileContents.values())
+    const contentsByDomain = new Map<string, string[]>()
+    for (const [rel, raw] of fileContents) {
+      const domain = inferDomainHint(rel, multiProjectRoots) ?? ''
+      const bucket = contentsByDomain.get(domain) ?? []
+      bucket.push(raw)
+      contentsByDomain.set(domain, bucket)
+    }
+    const currentMilestoneStageByDomain = new Map<string, string | null>()
+    for (const [domain, contents] of contentsByDomain) {
+      currentMilestoneStageByDomain.set(
+        domain,
+        multiProjectRoots.size > 1 && domain && domain !== primaryDomain
+          ? detectExplicitCurrentMilestoneStage(contents)
+          : detectCurrentMilestoneStage(contents),
+      )
+    }
 
     const signals: WorkspaceSignal[] = []
     for (const rel of relPaths) {
@@ -553,6 +580,12 @@ export const planningDocsSource: TaskSource = {
       if (!raw.trim()) continue
       const fileBase = basename(rel)
       const domainHint = inferDomainHint(rel, multiProjectRoots)
+      const domainKey = domainHint ?? ''
+      const currentMilestoneStage = currentMilestoneStageByDomain.get(domainKey) ?? null
+      const unknownStageScope: WorkspaceSignal['scopeHint'] =
+        multiProjectRoots.size > 1 && domainHint && domainHint !== primaryDomain ? 'later' : 'current'
+      const defaultOpenWorkScopeHint: WorkspaceSignal['scopeHint'] | undefined =
+        multiProjectRoots.size > 1 && domainHint && domainHint !== primaryDomain ? 'later' : undefined
       let currentSection: string | null = null
       let currentSectionRaw: string | null = null
       let currentLabel: 'deliverables' | 'scope' | 'success_gates' | 'done_gate' | 'do_not_start' | null = null
@@ -584,7 +617,7 @@ export const planningDocsSource: TaskSource = {
           }
           const scopeHint = scopeHintInsideExplicitRelease(
             currentReleaseId,
-            scopeHintForStage(currentRecommendedStageAlignment, currentMilestoneStage),
+            scopeHintForStage(currentRecommendedStageAlignment, currentMilestoneStage, unknownStageScope),
           )
           const domain = currentRecommendedDomain ?? domainHint
           const releaseId = currentReleaseIdForScope(currentReleaseId, scopeHint)
@@ -689,7 +722,7 @@ export const planningDocsSource: TaskSource = {
             })
           }
           if (STAGE_HEADING_RE.test(currentSection)) {
-            const scopeHint = scopeHintForStage(currentSection, currentMilestoneStage)
+            const scopeHint = scopeHintForStage(currentSection, currentMilestoneStage, unknownStageScope)
             const releaseId = currentReleaseIdForScope(currentReleaseId, scopeHint)
             const releaseLabel = releaseId ? currentReleaseLabel : null
             signals.push({
@@ -710,7 +743,7 @@ export const planningDocsSource: TaskSource = {
 
         const goalLabel = GOAL_LABEL_RE.exec(line.trim())
         if (goalLabel && currentSection && STAGE_HEADING_RE.test(currentSection)) {
-          const scopeHint = scopeHintForStage(currentSection, currentMilestoneStage)
+          const scopeHint = scopeHintForStage(currentSection, currentMilestoneStage, unknownStageScope)
           const releaseId = currentReleaseIdForScope(currentReleaseId, scopeHint)
           const releaseLabel = releaseId ? currentReleaseLabel : null
           signals.push({
@@ -844,7 +877,7 @@ export const planningDocsSource: TaskSource = {
           bulletStack.length = 0
           const scopeHint = scopeHintInsideExplicitRelease(
             currentReleaseId,
-            scopeHintForOpenWork(currentSection, unchecked[1]),
+            scopeHintForOpenWork(currentSection, unchecked[1]) ?? defaultOpenWorkScopeHint,
           )
           const releaseId = currentReleaseIdForScope(currentReleaseId, scopeHint)
           const releaseLabel = releaseId ? currentReleaseLabel : null
@@ -869,9 +902,9 @@ export const planningDocsSource: TaskSource = {
           const title = cleanHeading(bullet[2]!)
           const evidenceStatusBullet = isEvidenceStatusBullet(title)
           const stageScopedSignal = currentLabel === 'deliverables'
-            ? stageDeliverableSignal(currentSection, currentMilestoneStage)
+            ? stageDeliverableSignal(currentSection, currentMilestoneStage, unknownStageScope)
             : currentLabel === 'scope'
-              ? stageDeliverableSignal(currentSection, currentMilestoneStage)
+              ? stageDeliverableSignal(currentSection, currentMilestoneStage, unknownStageScope)
             : currentLabel === 'success_gates'
               ? { kind: 'context' as const }
               : currentLabel === 'done_gate'
@@ -888,7 +921,7 @@ export const planningDocsSource: TaskSource = {
           if (evidenceStatusBullet) {
             const scopeHint = scopeHintInsideExplicitRelease(
               currentReleaseId,
-              scopeHintForOpenWork(currentSection, title),
+              scopeHintForOpenWork(currentSection, title) ?? defaultOpenWorkScopeHint,
             )
             const releaseId = currentReleaseIdForScope(currentReleaseId, scopeHint)
             const releaseLabel = releaseId ? currentReleaseLabel : null
@@ -907,7 +940,7 @@ export const planningDocsSource: TaskSource = {
           } else if (grouping && !groupingChildrenAreTasks) {
             const scopeHint = scopeHintInsideExplicitRelease(
               currentReleaseId,
-              scopeHintForOpenWork(currentSection, title),
+              scopeHintForOpenWork(currentSection, title) ?? defaultOpenWorkScopeHint,
             )
             const releaseId = currentReleaseIdForScope(currentReleaseId, scopeHint)
             const releaseLabel = releaseId ? currentReleaseLabel : null
@@ -954,7 +987,7 @@ export const planningDocsSource: TaskSource = {
             )
             const scopeHint = scopeHintInsideExplicitRelease(
               currentReleaseId,
-              stageScopedSignal?.scopeHint ?? scopeHintForOpenWork(currentSection, title),
+              stageScopedSignal?.scopeHint ?? scopeHintForOpenWork(currentSection, title) ?? defaultOpenWorkScopeHint,
             )
             const releaseId = currentReleaseIdForScope(currentReleaseId, scopeHint)
             const releaseLabel = releaseId ? currentReleaseLabel : null
@@ -964,7 +997,11 @@ export const planningDocsSource: TaskSource = {
               title,
               evidence: `${rel}: ${line.trim()}`.slice(0, 240),
               references: [abs],
-              ...(stageScopedSignal?.role ? { role: stageScopedSignal.role } : {}),
+              ...(stageScopedSignal?.role
+                ? { role: stageScopedSignal.role }
+                : kind === 'context' && (currentLabel === 'deliverables' || currentLabel === 'scope')
+                  ? { role: 'capability' as const }
+                  : {}),
               ...(scopeHint ? { scopeHint } : {}),
               ...(releaseId ? { releaseId } : {}),
               ...(releaseLabel ? { releaseLabel } : {}),
@@ -996,7 +1033,7 @@ export const planningDocsSource: TaskSource = {
             : 'open_work'
           const scopeHint = scopeHintInsideExplicitRelease(
             currentReleaseId,
-            scopeHintForOpenWork(currentSection, numbered[1]),
+            scopeHintForOpenWork(currentSection, numbered[1]) ?? defaultOpenWorkScopeHint,
           )
           const releaseId = kind === 'open_work'
             ? currentReleaseIdForScope(currentReleaseId, scopeHint)
@@ -1020,18 +1057,25 @@ export const planningDocsSource: TaskSource = {
       flushPendingRecommendedTask()
     }
 
-    return mergeCoreLoopStructuralContext(signals)
+    return mergeCoreLoopStructuralContext(signals).map(signal =>
+      signal.kind === 'context' &&
+      !signal.role &&
+      signal.scopeHint &&
+      signal.releaseId &&
+      !STAGE_HEADING_RE.test(signal.title)
+        ? { ...signal, role: 'capability' as const }
+        : signal,
+    )
   },
 }
 
 function detectCurrentMilestoneStage(contents: Iterable<string>): string | null {
+  const all = [...contents]
+  const explicit = detectExplicitCurrentMilestoneStage(all)
+  if (explicit) return explicit
   let earliestStage: number | null = null
   let earliestNonBaselineStage: number | null = null
-  for (const raw of contents) {
-    const match = raw.match(/##\s+Current Next Milestone[\s\S]*?The next milestone is\s+(Stage\s+\d+)/i)
-    if (match?.[1]) {
-      return normalizeStageLabel(match[1])
-    }
+  for (const raw of all) {
     for (const stageMatch of raw.matchAll(/^#{2,4}\s+Stage\s+(\d+)(?:\b|\s*[:(].*)/gim)) {
       const stage = Number.parseInt(stageMatch[1] ?? '', 10)
       if (!Number.isFinite(stage)) continue
@@ -1045,6 +1089,14 @@ function detectCurrentMilestoneStage(contents: Iterable<string>): string | null 
   }
   const fallbackStage = earliestNonBaselineStage ?? earliestStage
   return fallbackStage == null ? null : normalizeStageLabel(`Stage ${fallbackStage}`)
+}
+
+function detectExplicitCurrentMilestoneStage(contents: Iterable<string>): string | null {
+  for (const raw of contents) {
+    const match = raw.match(/##\s+Current Next Milestone[\s\S]*?The next milestone is\s+(Stage\s+\d+)/i)
+    if (match?.[1]) return normalizeStageLabel(match[1])
+  }
+  return null
 }
 
 function normalizeStageLabel(value: string | null | undefined): string | null {

@@ -686,6 +686,58 @@ Done gate:
     ]))
   })
 
+  it('does not treat every nested project Stage 1 as current in a multi-project workspace', async () => {
+    mkdirSync(join(dir, 'knit/docs'), { recursive: true })
+    mkdirSync(join(dir, 'looma/docs'), { recursive: true })
+    writeFileSync(
+      join(dir, 'knit/docs/release-plan.md'),
+      `# Knit Release Plan
+
+## Stage 1: V1 Release Hardening
+
+Scope:
+
+- Fill unit and E2E gaps.
+`,
+    )
+    writeFileSync(
+      join(dir, 'looma/docs/milestones.md'),
+      `# Looma Milestones
+
+## Stage 1: Finish Knit Primitive Replacement Wave
+
+Scope:
+
+- Finish remaining primitive replacement.
+`,
+    )
+
+    const sigs = await planningDocsSource.detect({
+      projectPath: dir,
+      exec: fakeExec(() => ({
+        stdout: [
+          'knit/docs/release-plan.md',
+          'looma/docs/milestones.md',
+        ].join('\n'),
+        code: 0,
+      })),
+    })
+
+    expect(sigs).toContainEqual(expect.objectContaining({
+      kind: 'context',
+      title: 'Fill unit and E2E gaps.',
+      scopeHint: 'current',
+      releaseId: 'stage-1-v1-release-hardening',
+      domainHint: 'knit',
+    }))
+    expect(sigs).toContainEqual(expect.objectContaining({
+      title: 'Finish remaining primitive replacement.',
+      scopeHint: 'later',
+      releaseId: 'stage-1-finish-knit-primitive-replacement-wave',
+      domainHint: 'looma',
+    }))
+  })
+
   it('attaches explicitly named release scope to current and later planning work without making later work current', async () => {
     mkdirSync(join(dir, 'docs'), { recursive: true })
     writeFileSync(

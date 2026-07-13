@@ -431,7 +431,7 @@ export function formWorkspaceHypothesis(
   const context = [...contextIndex.values()]
   const preliminaryReleases = [...releaseIndex.values()]
   const tasks = assignCurrentReleaseScopes(
-    enrichTasksWithRelatedContext([...taskIndex.values()], context),
+    enrichTasksWithRelatedContext(mergeSameTitleTasks([...taskIndex.values()]), context),
     preliminaryReleases,
   )
   const releases = deriveReleaseScopesFromDraft(preliminaryReleases, tasks, context)
@@ -449,6 +449,32 @@ export function formWorkspaceHypothesis(
       deduped,
     },
   }
+}
+
+function mergeSameTitleTasks(tasks: DraftTask[]): DraftTask[] {
+  const byKey = new Map<string, DraftTask>()
+  for (const task of tasks) {
+    const key = `${task.domain}\0${normalize(task.title)}`
+    const existing = byKey.get(key)
+    if (!existing) {
+      byKey.set(key, task)
+      continue
+    }
+    byKey.set(key, {
+      ...existing,
+      scope: existing.scope === 'later' || task.scope === 'later' ? 'later' : 'current',
+      priority: CONFIDENCE_RANK[task.confidence] > CONFIDENCE_RANK[existing.confidence]
+        ? task.priority
+        : existing.priority,
+      confidence: CONFIDENCE_RANK[task.confidence] > CONFIDENCE_RANK[existing.confidence]
+        ? task.confidence
+        : existing.confidence,
+      references: mergeReferences(existing.references, task.references),
+      releaseIds: mergeReferences(existing.releaseIds, task.releaseIds),
+      sourceClaims: mergeSourceClaims(existing.sourceClaims, task.sourceClaims),
+    })
+  }
+  return [...byKey.values()]
 }
 
 function deriveReleaseScopesFromDraft(
@@ -815,12 +841,20 @@ function assignCurrentReleaseScopes(
   }))
   return tasks.map(task => {
     if (task.releaseIds?.length) return task
+    const assignmentRefs = (task.sourceClaims ?? [])
+      .flatMap(claim => claim.references ?? [])
+    const sameDomainRefs = (task.references ?? []).filter(ref => referenceMatchesDomain(ref, task.domain))
+    const refs = [...new Set([
+      ...assignmentRefs,
+      ...sameDomainRefs,
+    ])]
+    const matchingRefs = refs.length > 0 ? refs : task.references ?? []
     const matching = releasesWithRefs
       .filter(entry => {
         if (task.scope === 'later' && entry.release.scope !== 'later') return false
         if (task.scope !== 'later' && entry.release.scope === 'later') return false
         if (releases.length === 1 && task.scope !== 'later') return true
-        return (task.references ?? []).some(ref => entry.refs.has(ref))
+        return matchingRefs.some(ref => entry.refs.has(ref))
       })
       .map(entry => entry.release.id)
     const selected = task.scope === 'later'
@@ -832,6 +866,11 @@ function assignCurrentReleaseScopes(
       releaseIds: selected,
     }
   })
+}
+
+function referenceMatchesDomain(ref: string, domain: string): boolean {
+  if (!domain || domain === 'general' || domain === 'core') return true
+  return ref.toLowerCase().split(/[\\/]+/).includes(domain.toLowerCase())
 }
 
 function selectAutomaticCurrentReleaseIds(
