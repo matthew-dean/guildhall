@@ -30871,6 +30871,60 @@ selected-scope readiness ordering.
   - Apply/revert behavior: no persisted or source state changed.
 - Schema Migration Decision: no persisted schema or migration changed.
 
+## codex:narrative-harness-proof-run-2026-07-13
+
+- User job:
+  - The selected Narrative Harness release should show which capabilities have
+    deterministic proof, which require live provider proof, and which remain
+    externally blocked.
+- Proof run against `/Users/matthew/git/oss/narrative-harness`:
+  - Passed `pnpm prove:author-intent` with all required and optional intent
+    fields present and `unresolvedInputsRemainVisible: true`.
+  - Passed `pnpm test` with 5 tests, including rejection of missing grounding
+    fields, live-provider proof requirements, and honest no-credential failure.
+  - Passed `pnpm validate:story` for the author-intent contract.
+  - Passed `pnpm prove:world-state-continuity` for elapsed-time object/property
+    transitions such as wet hair drying in a hot, dry climate.
+  - Passed `pnpm prove:spatial-geographic-continuity` for travel time, terrain,
+    map distance, and walking-speed reasoning.
+  - Passed `pnpm prove:dialogue-and-character-voice` for character voice
+    differentiation findings.
+  - Passed `pnpm prove:theme-and-meaning-review` for value conflict and motif
+    movement findings.
+  - Passed `pnpm prove:reader-knowledge-and-revelation` for reader-fairness and
+    revelation findings.
+  - `pnpm prove:generation` correctly failed because the live story output is
+    absent and explicitly requires `DEEPINFRA_API_TOKEN`.
+  - `pnpm prove:deepinfra-drafting-model` correctly exited 2 with the same
+    missing-provider-credential explanation.
+- Evidence persistence:
+  - Attempted `guildhall.append_task_evidence` for the successful local
+    author-intent proof through the configured MCP bridge.
+  - The bridge returned `Transport closed`; no MCP evidence append is claimed.
+  - The installed API still exposes the prior explicit provider-token
+    escalation and current proof-recovery state, so the release remains
+    blocked rather than being marked complete.
+- Result:
+  - Deterministic capability proof is current and passing.
+  - Live model selection and live generation remain unproven for the precise
+    external reason the product displays.
+- Contract Touch Decision:
+  - Work id: `narrative-harness-proof-run-2026-07-13`.
+  - Touched contracts: none; this records executed project proofs and bridge
+    behavior.
+  - Contracts considered but not touched: task evidence schema, proof-path
+    schema, release readiness, provider configuration, and task status.
+  - Required follow-up: attach current proof through the supported Guildhall
+    evidence path once the bridge is available; never convert local proof into
+    live-provider proof.
+  - Proof required: command output, release-readiness API, and evidence-store
+    readback.
+  - Proof provided: command output and release-readiness API; bridge readback
+    remains unavailable.
+  - Apply/revert behavior: no project source or task state was changed by the
+    failed append attempt.
+- Schema Migration Decision: no persisted schema or migration changed.
+
 ## 2026-07-13T21:30:00Z - Shared effective task proof recovery agreement
 
 - User job:
