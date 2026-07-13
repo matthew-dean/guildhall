@@ -755,7 +755,32 @@ function parseImportedDependsOn(value: unknown): string[] {
 
 function parseImportedProofPaths(value: unknown): Array<Record<string, unknown>> {
   if (!Array.isArray(value)) return []
-  return value.filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === 'object' && !Array.isArray(entry))
+  return value
+    .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === 'object' && !Array.isArray(entry))
+    .map(normalizeImportedProofPath)
+}
+
+function normalizeImportedProofPath(path: Record<string, unknown>): Record<string, unknown> {
+  const command = typeof path.command === 'string' ? path.command.trim() : ''
+  if (path.kind !== 'command' || !command || Array.isArray(path.launchSteps)) return path
+  return {
+    ...path,
+    launchSteps: [{
+      id: importedCommandId(command),
+      title: command,
+      kind: 'copy_command',
+      command,
+    }],
+  }
+}
+
+function importedCommandId(command: string): string {
+  return command
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 64) || 'imported-command-proof'
 }
 
 function normalizeImportText(value: string): string {
@@ -3563,14 +3588,9 @@ function deriveContractProofPaths(
     'The imported schema layer exposes the cited fixture and run contracts without ad hoc gaps',
   )
   return [
-    ...(command ? [{
-      kind: 'command' as const,
-      command,
-      source: 'documented' as const,
-      expectedEvidence: [
-        verificationSummary,
-      ],
-    }] : []),
+    ...(command ? [importedCommandProofPath(command, [
+      verificationSummary,
+    ], 'documented')] : []),
     {
       kind: 'review' as const,
       source: 'inferred' as const,
@@ -3584,11 +3604,30 @@ function deriveContractProofPaths(
   ]
 }
 
+function importedCommandProofPath(
+  command: string,
+  expectedEvidence: string[],
+  source: 'documented' | 'inferred',
+): NonNullable<Task['proofPaths']>[number] {
+  return {
+    kind: 'command' as const,
+    command,
+    source,
+    launchSteps: [{
+      id: importedCommandId(command),
+      title: command,
+      kind: 'copy_command',
+      command,
+    }],
+    expectedEvidence,
+  }
+}
+
 function materializedProofPaths(
   task: MaterializedImportTask,
   evidenceDetail?: ImportedEvidenceDetail,
 ): Task['proofPaths'] {
-  const current = task.proofPaths ? [...task.proofPaths] : []
+  const current = task.proofPaths ? [...task.proofPaths].map(normalizeImportedProofPath) : []
   const fallback = importedAcceptanceProofPath(task, evidenceDetail)
   if (!evidenceDetail) return current.length > 0 && !importedProofPathsLookGeneric(current) ? current : fallback
   const prototypeTaskKind = importedPrototypeTaskKind(task)
@@ -3597,12 +3636,7 @@ function materializedProofPaths(
     switch (prototypeTaskKind) {
       case 'fixture':
         return [
-          ...(command ? [{
-            kind: 'command' as const,
-            command,
-            source: 'documented' as const,
-            expectedEvidence: ['The bounded fixture and expected records load and compare successfully.'],
-          }] : []),
+          ...(command ? [importedCommandProofPath(command, ['The bounded fixture and expected records load and compare successfully.'], 'documented')] : []),
           {
             kind: 'review' as const,
             source: 'inferred' as const,
@@ -3614,12 +3648,7 @@ function materializedProofPaths(
         ]
       case 'runner':
         return [
-          ...(command ? [{
-            kind: 'command' as const,
-            command,
-            source: 'documented' as const,
-            expectedEvidence: ['The runner ingests the fixture, builds records, runs a packet, and saves output.'],
-          }] : []),
+          ...(command ? [importedCommandProofPath(command, ['The runner ingests the fixture, builds records, runs a packet, and saves output.'], 'documented')] : []),
           {
             kind: 'review' as const,
             source: 'inferred' as const,
@@ -3631,12 +3660,7 @@ function materializedProofPaths(
         ]
       case 'evaluation':
         return [
-          ...(command ? [{
-            kind: 'command' as const,
-            command,
-            source: 'documented' as const,
-            expectedEvidence: ['Evaluation output classifies missing, noisy, stale, useful, schema, and model-behavior outcomes.'],
-          }] : []),
+          ...(command ? [importedCommandProofPath(command, ['Evaluation output classifies missing, noisy, stale, useful, schema, and model-behavior outcomes.'], 'documented')] : []),
           {
             kind: 'review' as const,
             source: 'inferred' as const,
@@ -3648,12 +3672,7 @@ function materializedProofPaths(
         ]
       case 'debug_report':
         return [
-          ...(command ? [{
-            kind: 'command' as const,
-            command,
-            source: 'documented' as const,
-            expectedEvidence: ['The debug report records the run summary, packet/context receipts, and trace spine.'],
-          }] : []),
+          ...(command ? [importedCommandProofPath(command, ['The debug report records the run summary, packet/context receipts, and trace spine.'], 'documented')] : []),
           {
             kind: 'review' as const,
             source: 'inferred' as const,
@@ -3665,12 +3684,7 @@ function materializedProofPaths(
         ]
       case 'schema_prune':
         return [
-          ...(command ? [{
-            kind: 'command' as const,
-            command,
-            source: 'documented' as const,
-            expectedEvidence: ['The first bounded run still passes after schema narrowing.'],
-          }] : []),
+          ...(command ? [importedCommandProofPath(command, ['The first bounded run still passes after schema narrowing.'], 'documented')] : []),
           {
             kind: 'review' as const,
             source: 'inferred' as const,
@@ -3689,12 +3703,7 @@ function materializedProofPaths(
       'The workflow records deterministic finding, weighting, and packet output evidence',
     )
     return [
-      ...(command ? [{
-        kind: 'command' as const,
-        command,
-        source: 'documented' as const,
-        expectedEvidence: [verificationSummary],
-      }] : []),
+      ...(command ? [importedCommandProofPath(command, [verificationSummary], 'documented')] : []),
       {
         kind: 'review' as const,
         source: 'inferred' as const,
@@ -3719,12 +3728,7 @@ function materializedProofPaths(
       'The reviewer lane runs against a bounded fiction fixture and records structured findings',
     )
     return [
-      ...(command ? [{
-        kind: 'command' as const,
-        command,
-        source: 'documented' as const,
-        expectedEvidence: [verificationSummary],
-      }] : []),
+      ...(command ? [importedCommandProofPath(command, [verificationSummary], 'documented')] : []),
       {
         kind: 'review' as const,
         source: 'inferred' as const,
@@ -3743,12 +3747,7 @@ function materializedProofPaths(
   switch (importedGeneralShapeKind(task)) {
     case 'retrieval':
       return [
-        ...(command ? [{
-          kind: 'command' as const,
-          command,
-          source: 'documented' as const,
-          expectedEvidence: ['Retrieval answers stay deterministic and cite structured story records.'],
-        }] : []),
+        ...(command ? [importedCommandProofPath(command, ['Retrieval answers stay deterministic and cite structured story records.'], 'documented')] : []),
         {
           kind: 'review' as const,
           source: 'inferred' as const,
@@ -3760,12 +3759,7 @@ function materializedProofPaths(
       ]
     case 'agent_call':
       return [
-        ...(command ? [{
-          kind: 'command' as const,
-          command,
-          source: 'documented' as const,
-          expectedEvidence: ['The agent call receives the bounded packet contract and keeps blocked provenance out of output.'],
-        }] : []),
+        ...(command ? [importedCommandProofPath(command, ['The agent call receives the bounded packet contract and keeps blocked provenance out of output.'], 'documented')] : []),
         {
           kind: 'review' as const,
           source: 'inferred' as const,
@@ -3777,12 +3771,7 @@ function materializedProofPaths(
       ]
     case 'invalidation':
       return [
-        ...(command ? [{
-          kind: 'command' as const,
-          command,
-          source: 'documented' as const,
-          expectedEvidence: ['Edited sections or scenes invalidate stale context before reruns reuse it.'],
-        }] : []),
+        ...(command ? [importedCommandProofPath(command, ['Edited sections or scenes invalidate stale context before reruns reuse it.'], 'documented')] : []),
         {
           kind: 'review' as const,
           source: 'inferred' as const,
@@ -3794,12 +3783,7 @@ function materializedProofPaths(
       ]
     case 'telemetry':
       return [
-        ...(command ? [{
-          kind: 'command' as const,
-          command,
-          source: 'documented' as const,
-          expectedEvidence: ['Bounded runs emit cost, latency, quality, and run identity telemetry.'],
-        }] : []),
+        ...(command ? [importedCommandProofPath(command, ['Bounded runs emit cost, latency, quality, and run identity telemetry.'], 'documented')] : []),
         {
           kind: 'review' as const,
           source: 'inferred' as const,

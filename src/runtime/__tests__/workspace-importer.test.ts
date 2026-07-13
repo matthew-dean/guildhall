@@ -844,6 +844,14 @@ describe('workspaceNeedsImport', () => {
     expect(approved).toMatchObject({ success: true, tasksAdded: 4 })
 
     const queue = await readQueue()
+    expect(queue.tasks.find(task => task.title === 'deterministic retrieval tools over structured story records')?.proofPaths?.[0]).toMatchObject({
+      kind: 'command',
+      command: 'pnpm test -- retrieval',
+      launchSteps: [expect.objectContaining({
+        kind: 'copy_command',
+        command: 'pnpm test -- retrieval',
+      })],
+    })
     expect(queue.tasks.find(task => task.title === 'deterministic retrieval tools over structured story records')?.workUnitAnalysis?.units.map(unit => unit.title)).toEqual([
       'Define the retrieval question surface over story records',
       'Resolve deterministic answers from structured story records',

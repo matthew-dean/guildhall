@@ -30566,6 +30566,73 @@ selected-scope readiness ordering.
     Overview even while Map/Start say it is complete.
 - Schema Migration Decision: no persisted schema field or migration changed.
 
+## codex:workspace-import-command-proof-shape-2026-07-13
+
+- User job:
+  - When workspace import or re-intake produces a command-backed proof path, the
+    persisted task must carry the same runnable proof contract that release
+    readiness and Project Map inspect. Imported command proof must not be a
+    private mini-shape that looks like proof in the importer but disappears from
+    the shared proof model.
+- Root cause classification:
+  - Data model/schema problem: workspace import used a simplified
+    `{ kind, command, expectedEvidence }` proof hint while release readiness now
+    inspects proof paths through `launchSteps` with `kind: copy_command`.
+  - Task hierarchy/dependency/proof modeling problem: materialized Narrative
+    Harness proof paths could encode command-required work as inferred review
+    prose, so completed tasks had no modeled command proof path to satisfy.
+  - Bad project data produced by an earlier Guildhall bug: existing Narrative
+    Harness imported tasks still need a corrected import/re-intake pass after
+    the model emits runnable proof paths.
+- Fix:
+  - `parseImportedProofPaths` now normalizes imported command proof hints by
+    attaching a `copy_command` launch step.
+  - `materializedProofPaths` now uses one shared helper for synthesized command
+    proof paths instead of repeating ad hoc command-proof objects in each
+    Narrative Harness evidence branch.
+  - The old `kind: command` fields remain for compatibility, but the shared
+    runnable proof contract now exists for downstream readiness/proof consumers.
+- Proof provided:
+  - `CI=true pnpm exec vitest run
+    src/runtime/__tests__/workspace-importer.test.ts` passed `85` tests.
+  - `CI=true pnpm exec vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts` passed `64` tests.
+  - `CI=true pnpm lint:contracts` passed.
+  - `CI=true pnpm build` passed.
+  - `CI=true pnpm dev:install` passed, then `guildhall stop && guildhall start`
+    restarted the installed app.
+  - `/api/stale-server` returned `stale:false`, PID `17487`,
+    `bootBuildMtimeMs:1783926837472`, and
+    `currentBuildMtimeMs:1783926837472`.
+  - Live `guildhall workspace-import draft
+    /Users/matthew/git/oss/narrative-harness --json` showed `23` drafted tasks,
+    `11` current tasks, and `0` command proof tasks. This proves the remaining
+    Narrative Harness failure is not command-proof shape loss; it is upstream
+    command-proof derivation/intake.
+- Residual findings:
+  - Narrative Harness Stage 1 still derives command-required proof as inferred
+    review prose, including `Add bounded local workspace proof...` evidence.
+    Next fix should make Guildhall either derive documented runnable commands
+    or surface explicit owner/intake questions for missing command proof, not
+    bury the gap inside review text.
+- Contract Touch Decision:
+  - Work id: `workspace-import-command-proof-shape`.
+  - Touched contracts: workspace-import proof-path normalization and
+    materialized import proof-path shape.
+  - Contracts considered but not touched: persisted task schema, persisted
+    release schema, release-readiness proof calculation, Project Map UI,
+    Overview UI, and workspace-import approval schema.
+  - Required follow-up: fix Narrative Harness command-proof derivation so
+    headless/CLI/script-required current work either has documented runnable
+    proof paths or visible missing-proof intake questions.
+  - Proof required: focused workspace-import regression, release-readiness
+    consumer regression, contract lint, build/install freshness, and live
+    Narrative Harness draft proof.
+  - Proof provided: all proof listed above.
+  - Apply/revert behavior: reverting lets workspace import keep writing command
+    proof hints that readiness cannot recognize as runnable proof paths.
+- Schema Migration Decision: no persisted schema field or migration changed.
+
 ## codex:script-only-release-proof-expectation-truth-2026-07-13
 
 - User job:
