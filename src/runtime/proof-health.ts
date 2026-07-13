@@ -188,6 +188,24 @@ export function completionProofCanSettleUnmetAcceptanceCriteria(task: unknown): 
   if (!task || typeof task !== 'object') return false
   if (String((task as { status?: unknown }).status ?? '') !== 'done') return false
   if (unmetAcceptanceCriteriaCount(task) === 0) return false
+  const criteria = Array.isArray((task as { acceptanceCriteria?: unknown }).acceptanceCriteria)
+    ? (task as { acceptanceCriteria: unknown[] }).acceptanceCriteria
+    : []
+  const requiresObservedProof = criteria.some((criterion) => {
+    if (!criterion || typeof criterion !== 'object' || Array.isArray(criterion)) return false
+    const record = criterion as Record<string, unknown>
+    if (record.met !== false) return false
+    if (typeof record.command === 'string' && record.command.trim()) return true
+    if (record.verifiedBy === 'automated' || record.verifiedBy === 'provider') return true
+    return requiresCommandBackedProofText(
+      [record.description, record.scenario, record.expectation]
+        .filter((value): value is string => typeof value === 'string')
+        .join(' '),
+    )
+  })
+  // Review narration can explain a result, but it cannot stand in for an
+  // executable command or provider observation named by the criterion.
+  if (requiresObservedProof) return false
   // Historical approval cannot settle criteria after a newer proof recovery or
   // failed hard gate has reopened the task's completion claim.
   if (hasActiveProofRecovery(task) || hasCurrentFailedHardGate(task)) return false

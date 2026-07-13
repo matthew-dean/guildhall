@@ -30823,6 +30823,57 @@ selected-scope readiness ordering.
     Overview even while Map/Start say it is complete.
 - Schema Migration Decision: no persisted schema field or migration changed.
 
+## codex:proof-review-cannot-settle-command-criteria-2026-07-13
+
+- User job:
+  - A completed implementation task must not look proven merely because a
+    reviewer repeated an unverified command, provider, model, or artifact claim.
+  - Narrative Harness must remain visibly blocked until the selected release's
+    live-provider and CLI proof actually exists.
+- Root cause classification:
+  - Proof/model boundary problem: review narration could settle unmet
+    acceptance criteria even when the criteria named automated, provider, or
+    command-backed evidence.
+  - Execution/data integrity problem: a Narrative Harness generation task
+    landed a canned fixture implementation that deleted the author-intent/live
+    pipeline, while the reviewer claimed a nonexistent `generate:story` proof
+    had passed. Git was clean because the replacement was a valid patch, so
+    repository merge success did not prove product-scope preservation.
+- Fix:
+  - `completionProofCanSettleUnmetAcceptanceCriteria` now refuses to settle an
+    unmet criterion when it names a command/provider/model/automation or has an
+    explicit command-backed verifier. Those criteria require observed gate or
+    provider evidence.
+  - Added focused regression coverage for command-backed review claims and
+    preserved review-only criteria behavior.
+  - Restored Narrative Harness to the known-good combined live pipeline commit
+    lineage: explicit author intent, real DeepInfra client, CLI planning/draft/
+    review flow, provider-proof output, and honest missing-token behavior.
+- Live result:
+  - `pnpm test`, `pnpm validate:story`, and `pnpm prove:author-intent` pass in
+    Narrative Harness.
+  - `pnpm prove:generation` correctly fails because no live output exists and
+    `DEEPINFRA_API_TOKEN` is unavailable. The Docusaurus build independently
+    fails on Node 25 with `require.resolveWeak`; this is recorded as a build
+    limitation, not mistaken for live story proof.
+  - Guildhall's Narrative Harness release remains blocked on the three proof
+    tasks; no release-ready claim was introduced.
+- Contract Touch Decision:
+  - Work id: `proof-review-cannot-settle-command-criteria-2026-07-13`.
+  - Touched contracts: runtime acceptance-criteria proof settlement and its
+    focused test contract.
+  - Contracts considered but not touched: persisted task schema, release
+    schema, proof-path schema, provider credentials, and merge strategy.
+  - Required follow-up: add a landing guard for semantic replacement of files
+    already owned by completed in-scope work; restore and re-run the three
+    Narrative Harness proof tasks after that guard is in place.
+  - Proof required: focused proof-health tests, release-readiness readback,
+    Narrative Harness CLI tests, and explicit live-provider failure output.
+  - Proof provided: all listed checks passed or failed honestly as described.
+  - Apply/revert behavior: reverting this change restores the risk that an
+    approving review can settle command-backed criteria without observed proof.
+- Schema Migration Decision: no persisted schema or migration changed.
+
 ## codex:cross-surface-calibration-2026-07-13
 
 - User job:
