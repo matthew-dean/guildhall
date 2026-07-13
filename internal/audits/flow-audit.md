@@ -30566,6 +30566,85 @@ selected-scope readiness ordering.
     Overview even while Map/Start say it is complete.
 - Schema Migration Decision: no persisted schema field or migration changed.
 
+## codex:reconciled-task-worktree-residue-2026-07-13
+
+- User job:
+  - A selected release should not be blocked by a completed task whose task
+    commit is already contained in the project repository history. Leftover
+    package-manager files in the stale task worktree should not make Guildhall
+    ask the user to manually inspect a branch that is already merged.
+- Root cause classification:
+  - Git-story data model problem: `reconciled` already existed as the correct
+    derived state, but reconciliation refused to run when the task worktree had
+    root-level `pnpm-lock.yaml` / `pnpm-workspace.yaml` residue.
+  - Classification ordering problem: even when a route provided
+    `mergeRecordResult:"reconciled"`, `classifyGitStoryState` let dirty counts
+    override it, turning a stronger derived fact back into
+    `dirty_uncommitted`.
+  - UX communication problem: release readiness showed
+    `Task completed without an automatic merge record; inspect branch state.`
+    even though Git proved the task commit was already in `main` and
+    `origin/main`.
+- Fix:
+  - Task-head reconciliation now allows only root-level `pnpm-lock.yaml` and
+    `pnpm-workspace.yaml` residue when the task worktree HEAD is already
+    contained in the target repository history.
+  - `classifyGitStoryState` now treats `mergeRecordResult:"reconciled"` as
+    merged before evaluating dirty counts. Ordinary stale `merged` records
+    still do not hide fresh dirty worktree changes.
+- Proof provided:
+  - Live Narrative Harness inspection showed task commit `f2a4174` is contained
+    in `main` and `origin/main`; the stale task worktree had no changed files,
+    two untracked residue files (`pnpm-lock.yaml`, `pnpm-workspace.yaml`), and
+    a skipped merge record.
+  - `CI=true pnpm exec vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts --testNamePattern
+    "reconciles skipped task merge records"` passed after the fixture was
+    updated to include the same untracked pnpm residue.
+  - `CI=true pnpm exec vitest run src/runtime/__tests__/git-story.test.ts
+    src/runtime/__tests__/serve-release-readiness.test.ts --testNamePattern
+    "reconciles skipped task merge records|reports merged when a skipped merge
+    record is reconciled"` passed.
+  - `CI=true pnpm lint:contracts` passed.
+  - `git diff --check` passed.
+  - `CI=true pnpm build` passed.
+  - `CI=true pnpm dev:install` passed, then `guildhall stop && guildhall start`
+    restarted the installed app.
+  - `/api/stale-server` returned `stale:false`, PID `70454`,
+    `bootBuildMtimeMs:1783934842107`, and
+    `currentBuildMtimeMs:1783934842107`.
+  - Live Narrative Harness release-readiness proof dropped
+    `gitStoryBlockingCount` from `1` to `0`, dropped total blocking count from
+    `3` to `2`, removed the author-intent repository-followup blocker, and
+    showed the author-intent task git snapshot as `state:"merged"`,
+    `mergeRecordResult:"reconciled"` with the two pnpm residue files still
+    visible.
+- Residual findings:
+  - Stage 1 still has two real proof-evidence blockers: world-state continuity
+    review and spatial/geographic continuity review.
+- Contract Touch Decision:
+  - Work id: `reconciled-task-worktree-residue`.
+  - Touched contracts: git-story classification precedence, task worktree
+    reconciliation guard, release-readiness git-story blockers, and
+    release-readiness regression fixture.
+  - Contracts considered but not touched: persisted task schema, merge-record
+    schema, workspace task-state schema, git-story snapshot schema, release
+    schema, and UI component contracts.
+  - Required follow-up: continue the Stage 1 proof run and verify the remaining
+    proof-evidence tasks produce command/script evidence instead of stale review
+    prose.
+  - Proof required: focused regression with pnpm residue, git-story unit
+    coverage, contract lint, build, installed-app freshness, and live
+    Narrative Harness release-readiness proof.
+  - Proof provided: live inspection, focused failing-then-passing regression,
+    focused git-story/release-readiness tests, contract lint, diff check, build,
+    installed-app freshness, live release-readiness API proof, and Stage 1
+    restart proof.
+  - Apply/revert behavior: reverting makes already-merged task worktrees with
+    pnpm bootstrap residue block release readiness as manual repository
+    follow-up.
+- Schema Migration Decision: no persisted schema field or migration changed.
+
 ## codex:headless-review-plan-modality-repair-2026-07-13
 
 - User job:

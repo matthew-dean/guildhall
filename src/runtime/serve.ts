@@ -3385,7 +3385,7 @@ async function reconciledTaskHeadMergeResult(
   if (!input.worktreePath) return undefined
   try {
     const status = await driver.statusSummary(input.worktreePath)
-    if (status.changedCount > 0 || status.untrackedCount > 0) return undefined
+    if (!hasOnlyReconciledTaskWorktreeResidue(status)) return undefined
     const taskHead = await driver.headSha(input.worktreePath)
     if (await driver.isAncestor(input.targetRepoRoot, taskHead, 'HEAD')) return 'reconciled'
     const targetStatus = await driver.statusSummary(input.targetRepoRoot)
@@ -3396,6 +3396,19 @@ async function reconciledTaskHeadMergeResult(
     return undefined
   }
   return undefined
+}
+
+function hasOnlyReconciledTaskWorktreeResidue(status: {
+  changedCount: number
+  untrackedCount: number
+  samplePaths: readonly string[]
+}): boolean {
+  if (status.changedCount > 0) return false
+  if (status.untrackedCount === 0) return true
+  if (status.untrackedCount !== status.samplePaths.length) return false
+  return status.samplePaths.every((samplePath) =>
+    samplePath === 'pnpm-lock.yaml' || samplePath === 'pnpm-workspace.yaml',
+  )
 }
 
 function taskGitStoryRepoPath(

@@ -830,6 +830,8 @@ describe('GET /api/project/release-readiness', () => {
     await execFileP('git', ['commit', '-m', 'add task proof'], { cwd: taskWorktreePath })
     await execFileP('git', ['merge', '--no-ff', 'guildhall/task-skipped-merge', '-m', 'land skipped task proof'], { cwd: tmpDir })
     await execFileP('git', ['push'], { cwd: tmpDir })
+    await fs.writeFile(path.join(taskWorktreePath, 'pnpm-lock.yaml'), 'lockfileVersion: 9.0\n', 'utf8')
+    await fs.writeFile(path.join(taskWorktreePath, 'pnpm-workspace.yaml'), 'packages: []\n', 'utf8')
 
     await seedQueue({
       version: 1,
