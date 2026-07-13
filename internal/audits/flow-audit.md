@@ -34071,3 +34071,72 @@ orientation proof projection as scope summary.
     stale raw queue release even when the orientation spine and approved import
     scope have already selected newer documented current work.
 - Schema Migration Decision: no persisted schema field or migration changed.
+
+## codex:nh-source-conflict-reconciliation-2026-07-13
+
+- User job:
+  - A completed Narrative Harness current release should not still look
+    structurally suspect because stale/deferred duplicate task records remain in
+    the map.
+  - When Guildhall detects duplicate work split across scopes, the product must
+    let the owner choose the source-of-truth task and archive the duplicate with
+    provenance instead of leaving the project skeleton ambiguous.
+- Root cause classification:
+  - Bad project data produced by an earlier Guildhall bug: older imported split
+    tasks and later residue overlapped the corrected Stage 1 current-scope
+    tasks.
+  - Project structure/scope/release modeling problem: the selected current
+    release was complete, but duplicate deferred rows still appeared as source
+    conflicts in the 1,000-foot map.
+  - UI communication/orientation problem: source-conflict warnings under a
+    complete release make the user doubt whether the release skeleton is
+    actually settled.
+- Owner-level action planned:
+  - Codex acted as Matthew for this calibration run and used Guildhall's
+    source-conflict reconciliation endpoint to keep the corrected completed
+    Stage 1 tasks and archive the duplicate deferred/stale rows.
+- Action taken:
+  - Kept `task-select-and-prove-a-deep-infra-drafting-model-for-broad-genre-chapter-writing`
+    over `task-150-split-select-and-prove-deepinfra-drafting-model`.
+  - Kept `task-prove-world-state-continuity-review-over-elapsed-time-object-and-property-changes`
+    over `task-150-split-define-world-state-continuity-review-lane`.
+  - Kept `task-prove-spatial-geographic-continuity-review-for-travel-terrain-walking-speed-map-consistency-weather-light-and-physical-plausibility`
+    over `task-150-split-define-spatial-geographic-continuity-review-lane`.
+  - Kept `task-select-and-prove-a-deep-infra-drafting-model-for-broad-genre-chapter-writing`
+    over `task-import-lu6waj`.
+- Proof provided:
+  - All four source-conflict reconciliation API calls succeeded through
+    `/api/project/source-conflicts/reconcile?projectId=narrative-harness`.
+  - Live Narrative Harness spine API proof showed Stage 1 complete, selected
+    release `ready`, 11 current nodes, 27 deferred nodes, progress `proven:11`,
+    `done:11`, `blocked:0`, source health `conflicts:0`, `gaps:0`, and an
+    empty `gaps` list.
+  - Live Narrative Harness release-readiness API proof showed `ready:true`,
+    totals `tasks:11`, `done:11`, `blockingCount:0`, no proof blockers, no
+    git-story blockers, and no release blockers.
+  - Narrative Harness git status remained clean on `main...origin/main`; the
+    reconciliation affected Guildhall-managed project state, not repo source
+    files.
+  - Browser proof on `/projects/narrative-harness/map` showed the complete
+    Stage 1 headline, `11 assigned work items`, `27 later work items`, `No map
+    gaps are currently reported.`, no source-conflict/duplicate text, no
+    `PROOF NEEDED` text, zero horizontal overflow, and no clipped sampled
+    heading/card/chip/button elements.
+- Residual findings:
+  - None for this Narrative Harness source-conflict reconciliation.
+- Contract Touch Decision:
+  - Work id: `nh-source-conflict-reconciliation`.
+  - Touched contracts: no code contracts yet; this uses the existing
+    source-conflict reconciliation product action and records flow-audit
+    evidence.
+  - Contracts considered but not touched: persisted task schema, release schema,
+    orientation source-conflict detection, Project Map components, and scheduler
+    execution boundary.
+  - Required follow-up: continue broader Looma + Knit calibration and investigate
+    any remaining orientation/execution contradictions surfaced by live proof.
+  - Proof required: API proof before/after, browser proof from the Map, and git
+    status for affected repositories.
+  - Proof provided: all proof listed above.
+  - Apply/revert behavior: reverting or skipping reconciliation leaves completed
+    Narrative Harness Stage 1 with duplicate source-conflict warnings.
+- Schema Migration Decision: no persisted schema field or migration changed.
