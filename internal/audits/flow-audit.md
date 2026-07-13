@@ -8,6 +8,71 @@ help_summary: |
 
 # Web UI flow audit
 
+2026-07-13T04:42:00Z - Start focus and release metadata should be shared model truth, not preview-only repair.
+
+- Work id: `codex:start-focus-release-metadata-shared-2026-07-13`.
+- User job: When Start is blocked, Overview, Work, and Map should all name the
+  exact current item that needs attention. When a selected scope has
+  release-plan metadata, release readiness should use the same release name and
+  source instead of showing a weaker inferred container.
+- Finding:
+  - Live Looma + Knit Overview pinned `E2E tests: login → create page → edit →
+    search flow`, but Work/Map collapsed the blocker into a generic shaping
+    message and pinned no current item.
+  - Release readiness called the same selected scope `Stage 1 V1 Release
+    Hardening` with source `inferred`, while the spine/source trail called it
+    `Stage 1: V1 Release Hardening` with source `release_plan`.
+  - The mismatch came from focus-task reconstruction living only in
+    `buildOverviewOrientationPreviewSpine`, while `buildProjectOrientationSpine`
+    discarded `startReadiness.focus*` fields and could not recover a focus title
+    from `actionHref`. Release readiness also preferred a generated raw release
+    record over the selected scope's stronger release-plan metadata.
+- Root cause classification:
+  - Data model/schema problem: the shared orientation spine contract lacked the
+    Start focus fields already produced by the Start/readiness model.
+  - Project structure/scope/release problem: release readiness could downgrade
+    selected-scope release metadata for the same scope id.
+  - UI communication/orientation problem: a blocked-start project could show
+    different "pinned now" and release identity across tabs.
+- Change:
+  - `BuildProjectOrientationSpineInput.startReadiness` now carries
+    `focusTaskId`, `focusTaskTitle`, and `focusKind`.
+  - The full spine enriches Start focus from `actionHref`, scope projection, and
+    task titles, then uses that focus as the exclusive pin while Start is
+    blocked.
+  - Imported-scope shaping blockers now use the concrete focused task blocker
+    when release readiness already supplies one.
+  - Release readiness now prefers selected-scope label/source when the matching
+    raw release record is only inferred.
+- Contract Touch Decision:
+  - Work id: `codex:start-focus-release-metadata-shared-2026-07-13`.
+  - Touched contracts: `/api/project.orientationSpine.summary.pinnedNow`,
+    `/api/project.orientationSpine.summary.topBlocker`,
+    `/api/project.orientationSpine.activePins`, and
+    `/api/project/release-readiness.release` label/source semantics.
+  - Contracts considered but not touched: persisted task schema, persisted
+    release schema, action-model schema, compact Work payload active pin
+    slimming, Project Overview/Work/Map component props.
+  - Required follow-up: keep classifying future drift as schema/model issues
+    before adding surface-specific UI repairs.
+  - Proof required: focused spine tests, focused release-readiness API tests,
+    contract detector, build/install/restart, stale-server check, live Looma +
+    Knit API proof across Overview/Work/Map and release-readiness.
+  - Proof provided: focused spine/release-readiness regression passed with
+    `129` tests; `corepack pnpm lint:contracts` passed; `node ./build.mjs`
+    passed; `corepack pnpm dev:install` passed; `guildhall stop && guildhall
+    start` restarted the installed app; `/api/stale-server` returned
+    `stale:false`; live Looma + Knit Overview, Work, and Map all returned
+    `summary.topBlocker:"E2E tests: login → create page → edit → search flow:
+    needs a clearer brief before unattended work can run."` and
+    `summary.pinnedNow:["E2E tests: login → create page → edit → search flow"]`;
+    live release-readiness returned `release.label:"Stage 1: V1 Release
+    Hardening"`, `release.source:"release_plan"`, and matching scope metadata.
+  - Apply/revert behavior: reverting lets Overview keep preview-only focus
+    recovery while Work/Map lose the exact blocked item, and lets release
+    readiness present generated inferred release metadata for a documented
+    selected scope.
+
 2026-07-13T04:07:00Z - Overview should reuse release blocker truth from the orientation spine.
 
 - Work id: `codex:overview-release-blockers-shared-2026-07-13`.

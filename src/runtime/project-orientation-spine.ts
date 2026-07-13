@@ -352,6 +352,9 @@ export interface BuildProjectOrientationSpineInput {
     code?: string
     message?: string
     actionHref?: string
+    focusTaskId?: string
+    focusTaskTitle?: string
+    focusKind?: string
   } | null
   scopeProjection?: ProjectScopeProjection | null
   runStatus?: 'running' | 'stopping' | 'stopped' | 'error' | string | null
@@ -1808,6 +1811,53 @@ function activePins(nodes: OrientationNode[]): OrientationPin[] {
   return pins.slice(0, 5)
 }
 
+function startReadinessFocusPin(
+  startReadiness: BuildProjectOrientationSpineInput['startReadiness'],
+): OrientationPin | null {
+  if (!startReadiness?.focusTaskId || !startReadiness.focusTaskTitle) return null
+  const nodeId = taskScopeNodeId(startReadiness.focusTaskId)
+  const focusKind = startReadiness.focusKind ?? ''
+  const kind: OrientationPin['kind'] = focusKind === 'proof'
+    ? 'proof'
+    : focusKind === 'spec_review'
+      ? 'review'
+      : startReadiness.canStart
+        ? 'active_work'
+        : 'owner_input'
+  return {
+    id: `start-focus:${startReadiness.focusTaskId}`,
+    nodeId,
+    label: startReadiness.focusTaskTitle,
+    kind,
+    href: startReadiness.actionHref ?? `/task/${encodeURIComponent(startReadiness.focusTaskId)}`,
+  }
+}
+
+function startReadinessWithFocus(
+  startReadiness: BuildProjectOrientationSpineInput['startReadiness'],
+  scopeProjection: ProjectScopeProjection | null | undefined,
+  tasks: readonly OrientationTaskInput[],
+): BuildProjectOrientationSpineInput['startReadiness'] {
+  if (!startReadiness) return startReadiness
+  const hrefTaskId = startReadiness.actionHref
+    ? /^\/task\/([^/?#]+)/.exec(startReadiness.actionHref)?.[1]
+    : undefined
+  const focusTaskId = startReadiness.focusTaskId ?? (hrefTaskId ? decodeURIComponent(hrefTaskId) : undefined) ?? scopeProjection?.start.focusTaskId
+  if (!focusTaskId) return startReadiness
+  const taskTitle = tasks.find(task => task.id === focusTaskId)?.title
+  const focusTaskTitle = startReadiness.focusTaskTitle ?? taskTitle ?? (
+    scopeProjection?.start.focusTaskId === focusTaskId ? scopeProjection.start.focusTaskTitle : undefined
+  )
+  return {
+    ...startReadiness,
+    focusTaskId,
+    ...(focusTaskTitle ? { focusTaskTitle } : {}),
+    focusKind: startReadiness.focusKind ?? (
+      scopeProjection?.start.focusTaskId === focusTaskId ? scopeProjection.start.focusKind : undefined
+    ),
+  }
+}
+
 function sourceConflictGaps(conflicts: BuildProjectOrientationSpineInput['sourceConflicts'] = []): OrientationGap[] {
   return conflicts.map(conflict => ({
     kind: 'source_conflict' as const,
@@ -2062,7 +2112,15 @@ function buildSummary(input: {
     )
     ? null
     : rawReadinessSummary
-  const topBlocker = readinessSummary ? readinessSummary.topBlocker : input.blockers[0]?.label ?? null
+  const focusedShapingBlocker = input.startReadiness?.canStart === false &&
+    input.startReadiness.code === 'imported_scope_shaping' &&
+    input.startReadiness.focusTaskId
+    ? input.blockers.find(blocker =>
+        blocker.id === input.startReadiness?.focusTaskId ||
+        blocker.id === taskScopeNodeId(input.startReadiness.focusTaskId ?? ''),
+      )?.label ?? input.blockers[0]?.label ?? null
+    : null
+  const topBlocker = focusedShapingBlocker ?? (readinessSummary ? readinessSummary.topBlocker : input.blockers[0]?.label ?? null)
   const hasActionableWork =
     input.progress.ready > 0 ||
     input.progress.active > 0 ||
@@ -2171,6 +2229,7 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
     now,
   })
   const tasks = draftAugmentation.tasks
+  const startReadiness = startReadinessWithFocus(input.startReadiness, input.scopeProjection, tasks)
   const charter = normalizeCharter(input)
   const releases = mergeOrientationReleaseInputs(input.releases, draftAugmentation.releases)
   const selectedReleaseId = selectedReleaseIdForOrientation(input, draftAugmentation.selectedReleaseId, releases)
@@ -2239,9 +2298,9 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
     : []
   const explicitReleaseBlockers = [
     ...projectionBlockers,
-    ...(input.startReadiness?.canStart !== true ? input.releaseReadiness?.blockers ?? [] : []),
+    ...(startReadiness?.canStart !== true ? input.releaseReadiness?.blockers ?? [] : []),
   ]
-  const startReleaseBlocker = startReadinessReleaseBlocker(input.startReadiness)
+  const startReleaseBlocker = startReadinessReleaseBlocker(startReadiness)
   const normalizedStartReleaseBlockerLabel = normalizeText(startReleaseBlocker?.label ?? '')
   const hasStartReleaseBlocker = startReleaseBlocker
     ? explicitReleaseBlockers.some((blocker) => {
@@ -2296,6 +2355,15 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
     ...sourceConflictGaps(input.sourceConflicts),
   ]
   const pins = activePins(roots)
+  const readinessFocusPin = startReadinessFocusPin(startReadiness)
+  const activePinsForSummary = readinessFocusPin
+    ? startReadiness?.canStart === false
+      ? [readinessFocusPin]
+      : [
+          readinessFocusPin,
+          ...pins.filter(pin => pin.nodeId !== readinessFocusPin.nodeId),
+        ].slice(0, 5)
+    : pins
   const fallbackProgress = progressForSelectedScope(tasks, scope)
   const progress = input.scopeProjection
     ? progressFromScopeProjection(input.scopeProjection, scope?.id ?? null, fallbackProgress)
@@ -2323,9 +2391,9 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
     selectedRelease: effectiveSelectedRelease,
     scope,
     progress,
-    pins,
+    pins: activePinsForSummary,
     blockers,
-    startReadiness: input.startReadiness,
+    startReadiness,
     runStatus: input.runStatus,
   }), gaps)
   const sourceTrail = buildSourceTrail({
@@ -2351,7 +2419,7 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
     summary,
     roots,
     nodes: Object.fromEntries(byId.entries()),
-    activePins: pins,
+    activePins: activePinsForSummary,
     scopeRows: projectionScopeRows,
     gaps,
     release: {

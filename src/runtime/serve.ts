@@ -4405,16 +4405,20 @@ function releaseReadinessReleaseFromScope(input: {
   if (!scope) return null
   const existing = input.rawQueue.releases.find(release => release.id === scope.id) ?? null
   if (!existing && scope.kind !== 'release' && scope.kind !== 'milestone') return null
+  const scopeCarriesReleaseTruth =
+    existing?.id === scope.id &&
+    (existing.source === undefined || existing.source === 'inferred') &&
+    scope.source !== 'inferred'
   return {
     id: existing?.id ?? scope.id,
-    label: existing?.label ?? scope.label,
+    label: scopeCarriesReleaseTruth ? scope.label : existing?.label ?? scope.label,
     kind: existing?.kind === 'milestone' ? 'milestone' : existing?.kind === 'marker' ? 'marker' : 'release',
     state: input.releaseState === 'ready'
       ? 'ready'
       : input.releaseState === 'blocked'
         ? 'blocked'
         : existing?.state ?? 'active',
-    source: existing?.source ?? scope.source,
+    source: scopeCarriesReleaseTruth ? scope.source : existing?.source ?? scope.source,
     description: existing?.description ?? null,
     nodeIds: scope.nodeIds,
     deferredNodeIds: scope.deferredNodeIds,

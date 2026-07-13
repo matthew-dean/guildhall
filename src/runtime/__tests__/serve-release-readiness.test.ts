@@ -1390,21 +1390,27 @@ describe('GET /api/project/release-readiness', () => {
     await commitAndPush('overview pin start blocker')
 
     const project = await (await app.fetch(new Request(projectUrl('/api/project?surface=overview')))).json() as any
+    const work = await (await app.fetch(new Request(projectUrl('/api/project?surface=work')))).json() as any
+    const map = await (await app.fetch(new Request(projectUrl('/api/project?surface=map')))).json() as any
 
     expect(project.startReadiness).toMatchObject({
       canStart: false,
       code: 'imported_scope_shaping',
       actionHref: '/task/task-import-e2e',
     })
-    expect(project.orientationSpine?.summary?.topBlocker).toContain('E2E tests')
-    expect(project.orientationSpine?.summary?.pinnedNow).toEqual([
-      'E2E tests: login -> create page -> edit -> search flow',
-    ])
-    expect(project.orientationSpine?.activePins?.[0]).toMatchObject({
-      nodeId: 'work:task-import-e2e',
-      kind: 'owner_input',
-      label: 'E2E tests: login -> create page -> edit -> search flow',
-    })
+    for (const body of [project, work, map]) {
+      expect(body.orientationSpine?.summary?.topBlocker).toContain('E2E tests')
+      expect(body.orientationSpine?.summary?.pinnedNow).toEqual([
+        'E2E tests: login -> create page -> edit -> search flow',
+      ])
+    }
+    for (const body of [project, map]) {
+      expect(body.orientationSpine?.activePins?.[0]).toMatchObject({
+        nodeId: 'work:task-import-e2e',
+        kind: 'owner_input',
+        label: 'E2E tests: login -> create page -> edit -> search flow',
+      })
+    }
   })
 
   it('uses documented release metadata in the overview preview when the map has source-backed scope', async () => {
@@ -1577,6 +1583,11 @@ describe('GET /api/project/release-readiness', () => {
       taskCount: 1,
     })
     expect(readiness.scope).toMatchObject({
+      id: 'stage-1-v1-release-hardening',
+      label: 'Stage 1: V1 Release Hardening',
+      source: 'release_plan',
+    })
+    expect(readiness.release).toMatchObject({
       id: 'stage-1-v1-release-hardening',
       label: 'Stage 1: V1 Release Hardening',
       source: 'release_plan',

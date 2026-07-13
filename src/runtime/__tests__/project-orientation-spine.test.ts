@@ -3073,6 +3073,14 @@ describe('buildProjectOrientationSpine', () => {
       releases,
       tasks,
       scopeProjection,
+      startReadiness: scopeProjection.start,
+      releaseReadiness: {
+        verdict: 'blocked',
+        blockers: [{
+          id: 'task-current',
+          label: 'Materialized release task: needs a clearer brief before unattended work can run.',
+        }],
+      },
     })
 
     expect(spine.scopeRows.filter(row => row.scope === 'deferred').map(row => row.nodeId)).toEqual(['work:task-demoted-child'])
@@ -3080,6 +3088,14 @@ describe('buildProjectOrientationSpine', () => {
     expect(spine.scope?.deferredNodeIds).toEqual(['work:task-demoted-child'])
     expect(spine.summary.deferredWorkCount).toBe(1)
     expect(spine.summary.progress.deferred).toBe(1)
+    expect(spine.summary.pinnedNow).toEqual(['Materialized release task'])
+    expect(spine.summary.topBlocker).toBe('Materialized release task: needs a clearer brief before unattended work can run.')
+    expect(spine.activePins[0]).toMatchObject({
+      nodeId: 'work:task-current',
+      label: 'Materialized release task',
+      kind: 'owner_input',
+      href: '/task/task-current',
+    })
   })
 
   it('merges saved release labels with detected orientation buckets for the same release id', () => {
