@@ -2278,6 +2278,18 @@ function scopedWorkNeedsDesignSystem(
   })
 }
 
+type ReleaseBlockerSummary = {
+  id: string
+  title: string
+  label: string
+  reason?: string
+  nextAction?: string
+  state?: string
+  repoId?: string
+  repoLabel?: string
+  taskId?: string
+}
+
 function summarizeScopedReleaseWork(
   tasks: Task[],
   scope: OrientationScope | null | undefined,
@@ -2294,7 +2306,7 @@ function summarizeScopedReleaseWork(
   shelvedUnclaimed: Array<{ id: string; title: string; detail?: string }>
   blockedByAgent: Array<{ id: string; title: string; reason?: string }>
   proofMissingDoneTasks: Array<{ id: string; title: string }>
-  releaseBlockers: Array<{ id: string; title: string; label: string }>
+  releaseBlockers: ReleaseBlockerSummary[]
   humanBlockingCount: number
   unfinishedCount: number
   scopedTasks: Task[]
@@ -2362,12 +2374,12 @@ function summarizeScopedReleaseWork(
   const shelvedUnclaimed: Array<{ id: string; title: string; detail?: string }> = []
   const blockedByAgent: Array<{ id: string; title: string; reason?: string }> = []
   const proofMissingDoneTasks: Array<{ id: string; title: string }> = []
-  const releaseBlockersById = new Map<string, { id: string; title: string; label: string }>()
+  const releaseBlockersById = new Map<string, ReleaseBlockerSummary>()
   const escalationKeys = new Set<string>()
   const terminalStatuses = new Set(['done', 'shelved', 'cancelled', 'archived', 'pending_pr'])
   let unfinishedCount = 0
 
-  const addReleaseBlocker = (blocker: { id: string; title: string; label: string }) => {
+  const addReleaseBlocker = (blocker: ReleaseBlockerSummary) => {
     if (!releaseBlockersById.has(blocker.id)) releaseBlockersById.set(blocker.id, blocker)
   }
   const blockerSubject = (title: string) => title.trim().replace(/[.?!:;,\s]+$/g, '')
@@ -7892,9 +7904,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
     if (startBlockingGitStoryBlockers.length > 0) {
       const scopeLabel = selectedReleaseScope?.label ?? 'Current task scope'
       const first = startBlockingGitStoryBlockers[0]!
+      const next = first.nextAction ? ` Next: ${first.nextAction}` : ''
       const message = startBlockingGitStoryBlockers.length === 1
-        ? `${scopeLabel} has no runnable task work left, but repository follow-up is still needed: ${first.reason}`
-        : `${scopeLabel} has no runnable task work left, but ${startBlockingGitStoryBlockers.length} repository follow-ups are still needed, starting with: ${first.reason}`
+        ? `${scopeLabel} has no runnable task work left, but repository follow-up is still needed: ${first.reason}${next}`
+        : `${scopeLabel} has no runnable task work left, but ${startBlockingGitStoryBlockers.length} repository follow-ups are still needed, starting with: ${first.reason}${next}`
       return {
         canStart: false,
         code: 'repository_followup_required',
@@ -9073,12 +9086,15 @@ export function buildServeApp(opts: ServeOptions = {}): {
         ? `"${focusTitle}" is waiting for review before work can start.`
         : `${releaseTruth.unapprovedSpecs.length} specs are waiting for review before work can start. Start with "${focusTitle}".`
       : null
+    const blockerMessage = blocker.nextAction
+      ? `${blocker.label} Next: ${blocker.nextAction}`
+      : blocker.label
     return {
       canStart: false,
       code: 'no_unattended_progress',
       message: specReviewMessage ?? (
         startBlockingReleaseBlockers.length === 1
-          ? blocker.label
+          ? blockerMessage
           : `${startBlockingReleaseBlockers.length} release blockers remain. Start with "${focusTitle}".`
       ),
       actionHref: blocker.id
@@ -13800,6 +13816,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
       id: `repository-followup:${blocker.id}`,
       title: `Repository follow-up: ${blocker.label}`,
       label: blocker.reason,
+      reason: blocker.reason,
+      ...(blocker.nextAction ? { nextAction: blocker.nextAction } : {}),
+      ...(blocker.state ? { state: blocker.state } : {}),
+      ...(blocker.repoId ? { repoId: blocker.repoId } : {}),
+      ...(blocker.repoLabel ? { repoLabel: blocker.repoLabel } : {}),
+      ...(blocker.taskId ? { taskId: blocker.taskId } : {}),
     }))
     const designSystemBlockers = designSystemBlockingCount > 0
       ? [{

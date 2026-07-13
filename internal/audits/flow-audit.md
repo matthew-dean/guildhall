@@ -30566,6 +30566,67 @@ selected-scope readiness ordering.
     Overview even while Map/Start say it is complete.
 - Schema Migration Decision: no persisted schema field or migration changed.
 
+## codex:release-repository-followup-next-action-truth-2026-07-13
+
+- User job:
+  - When a selected release or current scope has no runnable task work left but
+    still has repository follow-up, Overview, Release, Map, and Start should say
+    both what is blocking completion and what the next repository action is.
+  - The user should not have to infer "what now?" from a passive
+    `Repository follow-up` label or hunt through another view for the action.
+- Root cause classification:
+  - Data model / shared summary problem: `gitStory.blockers` already carried
+    `nextAction`, `state`, and repository metadata, but the release-readiness
+    adapter flattened repository blockers to `{ id, title, label }`.
+  - UI communication problem caused by model loss: downstream surfaces had to
+    infer actionability from labels and could only show a vague release blocker
+    even though the shared git-story model knew the next step.
+- Fix:
+  - `ReleaseBlockerSummary` now preserves repository follow-up `reason`,
+    `nextAction`, state, and repo/task metadata when git-story blockers become
+    release blockers.
+  - Start readiness now appends the preserved repository `nextAction` to the
+    blocking message when repository follow-up is the current start gate.
+  - The orientation spine blocker input now preserves `nextAction` so Project
+    Map does not become a lower-fidelity adapter of release readiness.
+- Proof provided:
+  - `pnpm vitest run src/runtime/__tests__/serve-release-readiness.test.ts`
+    passed: 66 tests.
+  - `pnpm lint:contracts` passed.
+  - `pnpm build` passed.
+  - `pnpm dev:install` passed; `guildhall stop` stopped the old service and
+    `guildhall start` reported the service running at `http://localhost:7777`.
+  - `/api/stale-server` returned `stale:false`, PID `90776`,
+    `bootBuildMtimeMs:1783937134691`, and
+    `currentBuildMtimeMs:1783937134691`.
+  - Live Narrative Harness `/api/project/release-readiness` returned the
+    repository blocker with both commit identity
+    `5a40b073 Add world-state continuity proof script` and
+    `nextAction: Push the branch or open a PR according to this project policy.`
+  - Live Narrative Harness `/api/project?surface=overview` returned the same
+    blocker and next action in `startReadiness.message`,
+    `actionModel.primaryAction.detail`, `releaseReadiness.releaseBlockers`, and
+    `releaseReadiness.gitStory.blockers`.
+- Contract Touch Decision:
+  - Work id: `release-repository-followup-next-action-truth`.
+  - Touched contracts: release-readiness runtime payload, start-readiness
+    repository-followup message composition, and orientation-spine release
+    blocker input.
+  - Contracts considered but not touched: persisted project/task/release schema,
+    git-story snapshot schema, UI component styling, task drawer, scheduler
+    execution policy, and repository action execution.
+  - Required follow-up: if Guildhall itself attempts a repository action such as
+    push or PR creation, persist that action result and failure evidence in the
+    git-story/action model instead of relying on terminal/chat context.
+  - Proof required: release-readiness regression coverage, contract lint,
+    build/install freshness, and live Narrative Harness API proof that the
+    installed app reports the blocker reason plus next repository action.
+  - Proof provided: all proof listed above.
+  - Apply/revert behavior: reverting drops repository `nextAction` as soon as
+    git-story blockers are adapted into release blockers, returning Start and
+    Release to passive follow-up copy.
+- Schema Migration Decision: no persisted schema field or migration changed.
+
 ## codex:noninteractive-pnpm-bootstrap-proof-2026-07-13
 
 - User job:

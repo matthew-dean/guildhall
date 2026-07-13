@@ -128,6 +128,7 @@ export interface OrientationOwnerAction {
 export interface OrientationBlocker {
   id: string
   label: string
+  nextAction?: string
   owningNodeId?: string
 }
 
@@ -346,7 +347,7 @@ export interface BuildProjectOrientationSpineInput {
   tasks?: OrientationTaskInput[]
   releaseReadiness?: {
     verdict?: string
-    blockers?: Array<{ id?: string; label?: string; title?: string }>
+    blockers?: Array<{ id?: string; label?: string; title?: string; nextAction?: string }>
   } | null
   startReadiness?: {
     canStart: boolean
@@ -1820,6 +1821,7 @@ function attachReleaseBlockers(
     const output: OrientationBlocker = {
       id: blocker.id ?? `release-blocker-${index + 1}`,
       label,
+      ...(blocker.nextAction ? { nextAction: blocker.nextAction } : {}),
       ...(owningNode ? { owningNodeId: owningNode.id } : {}),
     }
     if (!owningNode) {

@@ -508,6 +508,7 @@ describe('GET /api/project/release-readiness', () => {
         id: 'repository-followup:repo:0',
         title: 'Repository follow-up: main',
         label: expect.stringContaining('not pushed'),
+        nextAction: 'Push the branch or open a PR according to this project policy.',
       }),
     ])
     expect(body.ready).toBe(false)
@@ -521,6 +522,7 @@ describe('GET /api/project/release-readiness', () => {
       count: 1,
     })
     expect(projectBody.startReadiness.message).toContain('repository follow-up')
+    expect(projectBody.startReadiness.message).toContain('Push the branch or open a PR')
     expect(projectBody.startReadiness.message).not.toContain('is complete')
 
     const [spineRes, threadRes] = await Promise.all([
@@ -778,7 +780,7 @@ describe('GET /api/project/release-readiness', () => {
       expect.objectContaining({
         id: 'repo:0',
         state: 'committed_local',
-        reason: 'main has 2 local commits not pushed to origin/main.',
+        reason: expect.stringContaining('main has 2 local commits not pushed to origin/main'),
       }),
     ])
     expect(body.gitStory.snapshots.find((snapshot: any) => snapshot.taskId === 'task-current')).toMatchObject({
@@ -815,7 +817,8 @@ describe('GET /api/project/release-readiness', () => {
       expect.objectContaining({
         id: 'repository-followup:repo:0',
         title: 'Repository follow-up: main',
-        label: 'main has 2 local commits not pushed to origin/main.',
+        label: expect.stringContaining('main has 2 local commits not pushed to origin/main'),
+        nextAction: 'Push the branch or open a PR according to this project policy.',
       }),
     ])
 
