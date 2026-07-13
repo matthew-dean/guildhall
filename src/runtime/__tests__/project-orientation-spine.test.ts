@@ -3412,6 +3412,15 @@ describe('buildProjectOrientationSpine', () => {
         status: 'shelved' as const,
         releaseIds: ['stage-1'],
       },
+      {
+        id: 'spec-cited',
+        title: 'Spec-cited work',
+        description: 'Old task record whose spec cites its source document.',
+        domain: 'harness',
+        status: 'done' as const,
+        releaseIds: ['stage-1'],
+        spec: 'Use `docs/specs/source-backed-work.md` as the source contract.',
+      },
     ]
     const releases = [{
       id: 'stage-1',
@@ -3419,7 +3428,7 @@ describe('buildProjectOrientationSpine', () => {
       kind: 'release' as const,
       state: 'active' as const,
       source: 'release_plan' as const,
-      nodeIds: ['work:legacy-done', 'work:doc-backed'],
+      nodeIds: ['work:legacy-done', 'work:doc-backed', 'work:spec-cited'],
       deferredNodeIds: ['work:legacy-deferred'],
       proofStyle: 'script_only' as const,
     }]
@@ -3438,6 +3447,8 @@ describe('buildProjectOrientationSpine', () => {
       kind: 'missing_source_provenance',
       refs: ['task:legacy-done', 'task:legacy-deferred'],
     }))
+    expect(spine.scopeRows.find(row => row.taskId === 'spec-cited')?.sourceRefs)
+      .toContain('docs/specs/source-backed-work.md')
     expect(spine.sourceHealth.gaps).toBeGreaterThan(0)
   })
 

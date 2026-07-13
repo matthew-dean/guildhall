@@ -9,6 +9,7 @@ import {
 } from './project-scope-projection.js'
 import { taskDoneButProofMissing } from './proof-health.js'
 import { recordedCompletionProofForTask } from './task-completion-proof.js'
+import { explicitMarkdownSourceRefsFromTask } from './task-source-refs.js'
 import { taskTitleOverlap } from './task-title-overlap.js'
 import { deriveTaskWorkVisibility } from './work-visibility.js'
 
@@ -1582,6 +1583,7 @@ function sourceRefsForTask(task: OrientationTaskInput): string[] {
   const refs = [
     ...(task.references ?? []),
     ...((task.sourceClaims ?? []).flatMap(claim => claim.references ?? [])),
+    ...explicitMarkdownSourceRefsFromTask(task),
   ]
     .map(ref => typeof ref === 'string' ? ref.trim() : '')
     .filter(Boolean)

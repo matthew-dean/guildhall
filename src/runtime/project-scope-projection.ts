@@ -7,6 +7,7 @@ import { specReviewRequiresOwnerApproval } from './spec-review-ownership.js'
 import { recordedCompletionProofCanSettleTaskStatus } from './task-completion-proof.js'
 import { taskDoneButProofMissing } from './proof-health.js'
 import { taskBlockerSummary } from './task-blocker-summary.js'
+import { explicitMarkdownSourceRefsFromTask } from './task-source-refs.js'
 
 export type ProjectScopeKind = 'release' | 'milestone' | 'proposed_feature_set'
 export type ProjectScopeSource = 'owner_approved' | 'spec' | 'release_plan' | 'inferred'
@@ -571,6 +572,7 @@ function sourceRefsForTask(task: Task): string[] {
   const refs = [
     ...(task.references ?? []),
     ...((task.sourceClaims ?? []).flatMap(claim => claim.references ?? [])),
+    ...explicitMarkdownSourceRefsFromTask(task),
   ].filter(ref => ref.trim().length > 0)
   return refs.length > 0 ? refs : [`task:${task.id}`]
 }

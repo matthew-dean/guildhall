@@ -8,6 +8,61 @@ help_summary: |
 
 # Web UI flow audit
 
+2026-07-13T03:52:00Z - Source provenance should recover explicit doc refs from task specs.
+
+- Work id: `codex:task-spec-source-ref-recovery-2026-07-13`.
+- User job: if an older task record has no persisted `references` but its
+  task text explicitly cites a source document, Project Map should use that
+  document as provenance instead of leaving the row as task-only.
+- Finding:
+  - Live Narrative Harness Map correctly exposed six task-only provenance
+    rows, but several of those tasks had specs that explicitly named source
+    docs, such as `docs/coherence/world-state-reviewer.md`,
+    `docs/specs/debuggability-and-traceability.md`, and
+    `docs/product/ai-model-hosting-and-content-policy.md`.
+  - The shared source-ref calculators only read `references` and
+    `sourceClaims`, so they under-recovered available provenance already in
+    Guildhall task state.
+- Root cause classification:
+  - Data model/schema problem: legacy task records preserved source evidence
+    in spec text instead of normalized provenance fields.
+  - Project structure/scope/release modeling problem: map/source-health logic
+    treated missing normalized refs as missing provenance even when explicit
+    doc refs were present in task text.
+  - Bad project data produced by an earlier Guildhall bug: older/manual tasks
+    were saved without normalized `references`.
+- Change:
+  - Added one shared conservative extractor for explicit markdown docs paths in
+    task title/description/spec/structured spec/acceptance criteria.
+  - Project-scope and orientation-spine source-ref derivation now reuse that
+    extractor before falling back to `task:<id>`.
+  - The extractor does not fuzzy-match titles to docs or invent provenance.
+- Contract Touch Decision:
+  - Work id: `codex:task-spec-source-ref-recovery-2026-07-13`.
+  - Touched contracts: derived `ProjectScopeRow.sourceRefs`,
+    `OrientationNode.source.refs`, and downstream `orientationSpine.gaps`
+    semantics for task records with explicit doc refs in task text.
+  - Contracts considered but not touched: persisted task schema, workspace
+    import schema, task-detail endpoint, release-readiness schema.
+  - Required follow-up: installed-app proof against Narrative Harness and Looma
+    + Knit after build/install; remaining task-only gaps should stay visible
+    until artifact-backed provenance is modeled or the tasks are re-intaken.
+  - Proof required: focused orientation-spine regression, contract detector,
+    build/install/restart, stale-server check, live API proof that Map recovers
+    explicit spec-cited docs and still reports genuine task-only rows.
+  - Proof provided: focused orientation-spine regression passed; `corepack pnpm
+    lint:contracts` passed; `node ./build.mjs` passed; `corepack pnpm
+    dev:install` passed; `guildhall stop && guildhall start` restarted the
+    installed app; `/api/stale-server` returned `stale:false`; live Narrative
+    Harness Map recovered source refs for `coherence-reviewer-mvp`,
+    `decision-trace-pipeline`, and `hosting-policy-boundary-checks`, reducing
+    the `missing_source_provenance` gap from six task refs to three:
+    `author-voice-loop-mvp`, `context-packet-compaction-core`, and `task-009`;
+    live Looma + Knit still reports `task-039`, which has no explicit docs path
+    in the compact task text.
+  - Apply/revert behavior: reverting leaves explicit spec-cited docs unused and
+    overstates task-only provenance gaps.
+
 2026-07-13T03:36:00Z - Source health must count current-scope rows with only task-local provenance.
 
 - Work id: `codex:selected-scope-source-provenance-gap-2026-07-13`.
