@@ -2508,7 +2508,6 @@ describe('buildProjectOrientationSpine', () => {
     expect(spine.selectedRelease?.id).toBe('stage-1-v1-release-hardening')
     expect(spine.releases.map(release => [release.id, release.state])).toEqual([
       ['stage-1-v1-release-hardening', 'active'],
-      ['stage-1-finish-knit-primitive-replacement-wave', 'planned'],
     ])
   })
 

@@ -733,8 +733,11 @@ Scope:
     expect(sigs).toContainEqual(expect.objectContaining({
       title: 'Finish remaining primitive replacement.',
       scopeHint: 'later',
-      releaseId: 'stage-1-finish-knit-primitive-replacement-wave',
       domainHint: 'looma',
+    }))
+    expect(sigs).not.toContainEqual(expect.objectContaining({
+      title: 'Finish remaining primitive replacement.',
+      releaseId: 'stage-1-finish-knit-primitive-replacement-wave',
     }))
   })
 

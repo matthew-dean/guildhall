@@ -30524,6 +30524,85 @@ selected-scope readiness ordering.
     Overview even while Map/Start say it is complete.
 - Schema Migration Decision: no persisted schema field or migration changed.
 
+## codex:release-roadmap-capability-stage-split-2026-07-13
+
+- User job:
+  - On Looma + Knit Map, the user should be able to tell which scope Guildhall
+    can execute now and which future releases/scopes are selectable. Product
+    skeleton and milestone-stage context should stay visible, but not as fake
+    release roadmap rows.
+- Root cause classification:
+  - Project structure/scope/release modeling problem: the planning-doc detector
+    promoted every `Stage N:` heading into a release container, including
+    `milestones.md` stage groupings that describe product/history shape rather
+    than execution scopes.
+  - UI communication/orientation problem: Project Map then rendered those
+    capability-stage containers beside real release-plan scopes, producing
+    duplicate `Stage 1`/`Stage 2` release lanes.
+  - Bad project data produced by an earlier Guildhall bug: persisted/imported
+    preview release nodes can remain in project state even after visible scope
+    rows come from the corrected projection.
+- Fix:
+  - `planning-docs` no longer treats `milestones.md` stage headings as release
+    declarations. Release-plan and implementation-roadmap stage scopes still
+    work.
+  - `buildProjectOrientationSpine` filters non-selected release-roadmap rows
+    against the shared execution projection when projection rows exist, so
+    release containers without visible scope rows no longer appear as selectable
+    roadmap peers.
+- Proof provided so far:
+  - `pnpm vitest run src/runtime/workspace-import/__tests__/detect.test.ts
+    src/runtime/workspace-import/__tests__/hypothesis.test.ts
+    src/runtime/__tests__/project-orientation-spine.test.ts
+    src/runtime/__tests__/project-scope-projection.test.ts` passed: 181 tests.
+  - `pnpm vitest run src/web/surfaces/project/__tests__/ProjectMapTab.svelte.test.ts
+    src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts`
+    passed: 42 tests.
+  - `pnpm vitest run src/runtime/__tests__/project-orientation-spine.test.ts
+    --testNamePattern "active run boundary|copy unassigned later|live
+    workspace-import draft|legacy future release"` passed: 4 tests.
+  - `pnpm vitest run src/runtime/workspace-import/__tests__/detect.test.ts
+    src/runtime/workspace-import/__tests__/hypothesis.test.ts
+    src/runtime/__tests__/project-scope-projection.test.ts
+    src/web/surfaces/project/__tests__/ProjectMapTab.svelte.test.ts` passed:
+    122 tests.
+  - `pnpm lint:contracts` passed.
+  - `pnpm build` passed.
+  - `pnpm dev:install` passed, then `guildhall stop && guildhall start`
+    restarted the installed app.
+  - `/api/stale-server` returned `stale:false`, PID `59673`,
+    `bootBuildMtimeMs:1783921904572`, and
+    `currentBuildMtimeMs:1783921904572`.
+  - Live `/api/project/spine?projectId=looma-knit` returned release roadmap
+    rows only for `Stage 1: V1 Release Hardening`,
+    `Stage 2: Looma Primitive Convergence`, `Stage 3: Looma Editor
+    Integration`, and `Stage 4: Launch Readiness And V2 Cut Line`; the old
+    `Stage 1: Finish Knit Primitive Replacement Wave` family was absent.
+  - Browser proof on `/projects/looma-knit/map` showed `Release roadmap` with
+    the selected V1 release family, no `Stage 1: Finish Knit Primitive
+    Replacement Wave`, no `Stage 2: Integrate @looma/editor Phase 1 In Knit`,
+    and no horizontal overflow. The milestone material still appeared under
+    `Documented skeleton`, not as a selectable release row.
+- Contract Touch Decision:
+  - Work id: `release-roadmap-capability-stage-split`.
+  - Touched contracts: workspace planning-doc stage-to-release inference and
+    orientation-spine release roadmap visibility.
+  - Contracts considered but not touched: persisted task/release schema,
+    workspace-import approval schema, Project Map component props, Release tab
+    route contract, scheduler start boundary, and source provenance schema.
+  - Required follow-up: if live installed proof still shows stale release rows,
+    repair the persisted import/read model through the shared model rather than
+    hiding rows in the component.
+  - Proof required: detector regression, orientation-spine regression, map and
+    overview component regressions, contract lint, build/install freshness, and
+    live calibration-project proof.
+  - Proof provided: focused detector/orientation/UI unit proof, contract lint,
+    build/install freshness, live API proof, and browser proof listed above.
+  - Apply/revert behavior: reverting allows milestone/product-stage headings to
+    reappear as release roadmap rows and lets invisible imported release
+    containers survive in the owner-facing Map.
+- Schema Migration Decision: no persisted schema field or migration changed.
+
 ## codex:workspace-import-current-scope-truth-2026-07-13
 
 - User job:

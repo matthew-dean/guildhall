@@ -2247,10 +2247,11 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
   })
   const releases = mergeOrientationReleaseInputs(input.releases, draftAugmentation.releases)
   const selectedReleaseId = selectedReleaseIdForOrientation(input, draftAugmentation.selectedReleaseId, releases)
+  const releasesForReadModel = releaseFamilyForSelectedStage(releases, selectedReleaseId)
   const selectedRelease = normalizeRelease({
     ...input,
     selectedReleaseId,
-    releases,
+    releases: releasesForReadModel,
     proofStyleFallback: executionBoundary.proofStyle,
   }, tasks)
   const projectionScope = orientationScopeFromProjection(input.scopeProjection)
@@ -2268,7 +2269,9 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
         source: selectedReleaseForReadModel.source,
       }
     : projectionScope
-  const normalizedReleases = releases
+  const projectionScopeRows = scopeRowsFromProjection(input.scopeProjection)
+  const projectionScopeNodeIds = new Set(projectionScopeRows.map(row => row.nodeId))
+  const normalizedReleases = releasesForReadModel
     .map(release => normalizeRelease({
       ...input,
       selectedReleaseId: release.id,
@@ -2283,8 +2286,7 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
         }
       : release)
     .map(release => normalizeReadModelReleaseState(release, selectedReleaseForReadModel?.id ?? null))
-    .filter(release => releaseVisibleInReadModel(release, selectedReleaseForReadModel?.id ?? null, tasks))
-  const projectionScopeRows = scopeRowsFromProjection(input.scopeProjection)
+    .filter(release => releaseVisibleInReadModel(release, selectedReleaseForReadModel?.id ?? null, tasks, projectionScopeNodeIds))
   const rawScopeBase = projectionScopeForReadModel ?? releaseToScope(selectedReleaseForReadModel) ?? draftAugmentation.scope ?? normalizeScope(input, tasks)
   const rawScope = rawScopeBase ? mergeScopeRowsIntoScope(rawScopeBase, projectionScopeRows) : null
   const scopeWithDraftDeferred = rawScope && draftAugmentation.scope && projectionScopeRows.length === 0
@@ -2484,8 +2486,13 @@ function releaseVisibleInReadModel(
   release: OrientationRelease,
   selectedReleaseId: string | null,
   tasks: readonly OrientationTaskInput[],
+  projectionScopeNodeIds: ReadonlySet<string> = new Set(),
 ): boolean {
   if (release.id === selectedReleaseId) return true
+  if (
+    projectionScopeNodeIds.size > 0 &&
+    ![...release.nodeIds, ...release.deferredNodeIds].some(nodeId => projectionScopeNodeIds.has(nodeId))
+  ) return false
   if (release.deferredNodeIds.length > 0) return true
   const taskByNodeId = new Map(tasks.map(task => [taskNodeId(task.id), task]))
   if (release.nodeIds.length === 0) return false
@@ -2507,6 +2514,55 @@ function nodeIdIsWorkspaceImportPreview(nodeId: string): boolean {
 function releaseHasMaterializedMembership(release: Partial<OrientationRelease>): boolean {
   return [...(release.nodeIds ?? []), ...(release.deferredNodeIds ?? [])]
     .some(nodeId => !nodeIdIsWorkspaceImportPreview(nodeId))
+}
+
+function releaseFamilyForSelectedStage<T extends Partial<OrientationRelease>>(
+  releases: readonly T[],
+  selectedReleaseId: string | null,
+): T[] {
+  if (!selectedReleaseId) return [...releases]
+  const selectedIndex = releases.findIndex(release => release.id === selectedReleaseId)
+  if (selectedIndex < 0) return [...releases]
+  const stages = releases.map(release => parseReleaseStageNumber(release.label))
+  const selectedStage = stages[selectedIndex]
+  if (selectedStage == null) return [...releases]
+  const stagedCountByNumber = new Map<number, number>()
+  for (const stage of stages) {
+    if (stage == null) continue
+    stagedCountByNumber.set(stage, (stagedCountByNumber.get(stage) ?? 0) + 1)
+  }
+  if (![...stagedCountByNumber.values()].some(count => count > 1)) return [...releases]
+
+  let start = 0
+  for (let index = selectedIndex; index > 0; index -= 1) {
+    const previous = stages[index - 1]
+    const current = stages[index]
+    if (previous != null && current != null && current <= previous) {
+      start = index
+      break
+    }
+  }
+  let end = releases.length
+  for (let index = selectedIndex + 1; index < releases.length; index += 1) {
+    const previous = stages[index - 1]
+    const current = stages[index]
+    if (previous != null && current != null && current <= previous) {
+      end = index
+      break
+    }
+  }
+  return releases.filter((release, index) => {
+    if (stages[index] == null) return true
+    return index >= start && index < end
+  })
+}
+
+function parseReleaseStageNumber(label: string | null | undefined): number | null {
+  if (!label) return null
+  const match = /^stage\s+(\d+)(?:\b|\s*[:(].*)/i.exec(label.trim())
+  if (!match?.[1]) return null
+  const value = Number.parseInt(match[1], 10)
+  return Number.isFinite(value) ? value : null
 }
 
 function releaseSourceRank(source: Partial<OrientationRelease>['source']): number {

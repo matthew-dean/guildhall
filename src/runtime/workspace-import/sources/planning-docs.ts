@@ -468,6 +468,11 @@ function explicitReleaseLabelForHeading(heading: string): string | null {
   return suffixLabel ? cleanReleaseLabel(suffixLabel) : null
 }
 
+function stageHeadingDeclaresRelease(rel: string, fileBase: string): boolean {
+  if (/milestones?\.md$/i.test(fileBase)) return false
+  return /(^|\/)release-plan\.md$/i.test(rel) || /(^|\/)implementation-roadmap\.md$/i.test(rel) || /\brelease\b/i.test(fileBase)
+}
+
 function cleanReleaseLabel(label: string): string | null {
   const cleaned = cleanHeading(label).replace(/\s+/g, ' ').trim()
   if (!cleaned || /^(plan|roadmap|notes?|tbd)$/i.test(cleaned)) return null
@@ -700,7 +705,7 @@ export const planningDocsSource: TaskSource = {
             currentReleaseId = releaseIdFromLabel(releaseLabel)
             currentReleaseLabel = releaseLabel
             currentReleaseDepth = headingDepth
-          } else if (STAGE_HEADING_RE.test(currentSection)) {
+          } else if (STAGE_HEADING_RE.test(currentSection) && stageHeadingDeclaresRelease(rel, fileBase)) {
             currentReleaseId = releaseIdFromLabel(currentSection)
             currentReleaseLabel = currentSection
             currentReleaseDepth = headingDepth
