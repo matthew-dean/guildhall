@@ -2000,6 +2000,11 @@ describe('POST /api/project/start', () => {
       includedCount: 1,
       progress: { total: 1, done: 0 },
     })
+    const overviewProjectRes = await app.fetch(new Request(scoped('/api/project?surface=overview')))
+    const overviewProjectBody = (await overviewProjectRes.json()) as {
+      orientationSpine?: { summary?: { nextAction?: string } }
+    }
+    expect(overviewProjectBody.orientationSpine?.summary?.nextAction).toBe('Shape the first current-scope task.')
 
     const startRes = await app.fetch(
       new Request(scoped('/api/project/start'), { method: 'POST', body: '{}' }),

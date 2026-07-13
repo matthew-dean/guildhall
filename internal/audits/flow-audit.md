@@ -32412,3 +32412,78 @@ orientation proof projection as scope summary.
     inference and enriched-reference release assignment, allowing nested project
     work to become current for the wrong release again.
 - Schema Migration Decision: no persisted schema field or migration changed.
+
+## codex:overview-next-action-and-hidden-split-start-truth-2026-07-13
+
+- User job:
+  - Overview, Map, Work, and Start should agree on the next action for a
+    shaped/current scope. When current work needs shaping, the user should see a
+    short action such as `Shape the first current-scope task`, with the longer
+    start-readiness sentence available as detail.
+  - Start readiness must not call a selected release complete just because a
+    child split is hidden from project totals. Hidden-from-summary work can still
+    be executable or approval-blocking work.
+- Root cause classification:
+  - Scheduler/action-state logic problem: the overview preview adapter replaced
+    the full spine's normalized `summary.nextAction` with raw start-readiness
+    prose, so Overview could answer the same state differently from Map.
+  - Task hierarchy/dependency/proof modeling problem: `terminalStartState`
+    filtered selected-scope tasks through the display-total visibility flag,
+    letting hidden materialized child splits disappear from Start readiness.
+  - UI communication/orientation problem: Looma + Knit's Overview carried the
+    correct blocker but exposed the wrong level of next-action text in the shared
+    summary projection.
+- Fix:
+  - `buildOverviewOrientationPreviewSpine` now preserves
+    `sourceSpine.summary.nextAction` when the full spine already computed one.
+  - `terminalStartState` now uses `tasksEligibleForScopeExecution` without the
+    display-total filter, so hidden child splits can still block Start.
+- Proof provided:
+  - `CI=true pnpm exec vitest run src/runtime/__tests__/serve-settings.test.ts
+    --testNamePattern "approved import drafts"` passed.
+  - `CI=true pnpm exec vitest run src/runtime/__tests__/serve-settings.test.ts
+    --testNamePattern "keeps inferred release child splits"` passed.
+  - `CI=true pnpm exec vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts` passed: 62 tests.
+  - `CI=true pnpm lint:contracts` passed.
+  - `CI=true pnpm build` passed.
+  - `CI=true pnpm dev:install` passed, then `guildhall stop && guildhall start`
+    restarted the installed app.
+  - `/api/stale-server` returned `stale:false`, PID `79698`,
+    `bootBuildMtimeMs:1783919446977`, and
+    `currentBuildMtimeMs:1783919446977`.
+  - Live Looma + Knit API proof showed Overview and Map both reporting
+    `Shape the first current-scope task.` as `orientationSpine.summary.nextAction`
+    while the longer start-readiness sentence remained in `startReadiness.message`
+    and `actionModel.primaryAction.detail`.
+  - Browser proof on `/projects/looma-knit/overview` showed the concise
+    `Shape first task` action, the focused E2E shaping blocker, and no
+    horizontal overflow at 1280x720.
+- Residual findings:
+  - Full `CI=true pnpm exec vitest run src/runtime/__tests__/serve-settings.test.ts`
+    still fails 5 workspace-import coverage cases. Classified as
+    project structure/scope/release modeling problems and bad project data
+    produced by earlier importer behavior; the remaining cluster concerns
+    duplicate source-conflict gaps, proof-cleanup vs detected current-scope
+    prioritization, and approved-scope breadth after narrowed approvals.
+- Contract Touch Decision:
+  - Work id: `overview-next-action-and-hidden-split-start-truth`.
+  - Touched contracts: overview-preview summary projection contract,
+    start-readiness terminal-state task selection, and route tests for
+    import-shaping next-action consistency and hidden child split readiness.
+  - Contracts considered but not touched: persisted task schema, persisted
+    release schema, project orientation spine field names, workspace-import
+    approval schema, Map UI components, Work UI components, and release-readiness
+    totals.
+  - Required follow-up: fix the remaining workspace-import coverage cluster by
+    consolidating approved-scope/current-doc coverage truth instead of patching
+    individual failing route assertions.
+  - Proof required: focused regressions for overview next-action and hidden
+    child split Start readiness, release-readiness regression suite,
+    contract lint, build/install freshness, live API agreement, and browser
+    proof on the calibration project.
+  - Proof provided: all proof listed above.
+  - Apply/revert behavior: reverting lets Overview summary drift back to raw
+    start-readiness prose and lets hidden child split work vanish from Start's
+    terminal-state check.
+- Schema Migration Decision: no persisted schema field or migration changed.

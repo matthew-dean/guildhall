@@ -4317,7 +4317,9 @@ function buildOverviewOrientationPreviewSpine(input: {
         ...input.sourceSpine.summary,
         pinnedNow: focusTaskTitle ? [focusTaskTitle] : [],
         topBlocker,
-        nextAction: startMessage ?? 'Resolve the current start blocker.',
+        nextAction: typeof input.sourceSpine.summary.nextAction === 'string' && input.sourceSpine.summary.nextAction.trim()
+          ? input.sourceSpine.summary.nextAction
+          : startMessage ?? 'Resolve the current start blocker.',
       }
     : input.sourceSpine?.summary ?? computedSummary
   const releaseSummary = input.sourceSpine?.release ?? {
@@ -7602,11 +7604,6 @@ export function buildServeApp(opts: ServeOptions = {}): {
     const scopedTasks = selectedReleaseScope
       ? tasksEligibleForScopeExecution(effectiveTasks, selectedReleaseScope)
 	        .filter(task => task.id !== META_INTAKE_TASK_ID && task.id !== WORKSPACE_IMPORT_TASK_ID)
-	        .filter(task => {
-	          const parentId = task.hierarchy?.parentId?.trim()
-	          const parent = parentId ? tasksById.get(parentId) ?? null : null
-	          return deriveTaskWorkVisibility(task, parent).countInProjectTotals
-	        })
 	      : effectiveTasks.filter(task => task.id !== META_INTAKE_TASK_ID && task.id !== WORKSPACE_IMPORT_TASK_ID)
 	    if (selectedReleaseScope && scopedTasks.length === 0) return null
     const releaseTruth = selectedReleaseScope ? scopedOrientation?.releaseTruth ?? null : null
