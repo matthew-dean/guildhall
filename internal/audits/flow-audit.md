@@ -30871,6 +30871,46 @@ selected-scope readiness ordering.
   - Apply/revert behavior: no persisted or source state changed.
 - Schema Migration Decision: no persisted schema or migration changed.
 
+## codex:mcp-proof-evidence-readback-2026-07-13
+
+- User job:
+  - Codex should be able to record externally executed proof context in
+    Guildhall without turning a narrative note into a passing command gate.
+- Action:
+  - Rebuilt Guildhall and started a real local MCP server with
+    `node dist/cli.js mcp serve /Users/matthew/git/oss/narrative-harness`.
+  - Connected a real MCP client and called
+    `guildhall.append_task_evidence` for the three recovered Narrative Harness
+    tasks.
+  - Recorded deterministic intent proof, deterministic generation-contract
+    proof, and the explicit missing-`DEEPINFRA_API_TOKEN` live-provider result.
+- Readback:
+  - `/api/project/task/:id/evidence` returned the new MCP evidence for all
+    three task IDs with the exact source paths and timestamps.
+  - Release readiness remains `blocked` with `3 items need proof evidence.`
+    This is correct: MCP notes provide visible provenance, but do not pretend
+    to be Guildhall-authorized hard command gates.
+- Result:
+  - The local MCP bridge works when launched from the current built artifact.
+  - The previously observed configured-bridge `Transport closed` condition is
+    an external bridge/session issue, not evidence that the project proof was
+    lost.
+  - The release remains blocked on live-provider proof and command-gate
+    authority, with no false completion introduced.
+- Contract Touch Decision:
+  - Work id: `mcp-proof-evidence-readback-2026-07-13`.
+  - Touched contracts: none; existing MCP note evidence contract exercised.
+  - Contracts considered but not touched: hard gate authorization, proof-path
+    schema, task completion, release readiness, and provider credentials.
+  - Required follow-up: run the provider-dependent proof through Guildhall's
+    authorized command-gate path once DeepInfra credentials are available.
+  - Proof required: MCP write/readback, task evidence readback, and release
+    readiness readback.
+  - Proof provided: all three readbacks above.
+  - Apply/revert behavior: removing the MCP notes would remove provenance only;
+    it would not make the release ready.
+- Schema Migration Decision: no persisted schema or migration changed.
+
 ## codex:narrative-harness-proof-run-2026-07-13
 
 - User job:
