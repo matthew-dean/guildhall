@@ -3205,6 +3205,19 @@ describe('GET /api/project/release-readiness', () => {
     expect(overview.tasks.find((task: any) => task.id === 'task-runner')?.completionProof).toMatchObject({
       state: 'verified',
     })
+    expect(overview.workProgress.byTaskId['task-runner']).toMatchObject({
+      rollup: {
+        primaryState: 'done',
+        requiredStepCount: 1,
+        doneStepCount: 1,
+      },
+    })
+    expect(overview.workProgress.byTaskId['task-runner'].deliverySteps).toEqual([
+      expect.objectContaining({
+        id: 'proof:1',
+        status: 'done',
+      }),
+    ])
     expect(spineBody.spine.gaps.map((gap: any) => gap.kind)).not.toContain('proof_needed')
     expect(spineBody.spine.release.blockers).toEqual([])
     expect(spineBody.spine.nodes['work:task-runner']?.maturity).toBe('proven')

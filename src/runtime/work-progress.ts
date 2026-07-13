@@ -1,3 +1,6 @@
+import { taskDoneButProofMissing } from './proof-health.js'
+import { taskHasRecordedCompletionProof } from './task-completion-proof.js'
+
 export type WorkVisibilityKind = 'primary' | 'supporting' | 'internal_step' | 'hidden'
 
 export interface WorkVisibility {
@@ -149,9 +152,13 @@ function deriveTaskWorkProgress(task: TaskRecord, byId: Map<string, TaskRecord>)
   const visibleChildProgress = childTasks
     .map(child => deriveTaskWorkProgress(child, byId))
     .filter((progress): progress is TaskWorkProgress => Boolean(progress && progress.visibility.countInProjectTotals))
+  const hasMaterializedChildWork = childTasks.some((child) => {
+    const childVisibility = deriveWorkVisibility(child, byId)
+    return childVisibility.countInProjectTotals || childVisibility.kind === 'internal_step'
+  })
   const deliverySteps = [
     ...explicitDeliverySteps(task),
-    ...proofPathDeliverySteps(task),
+    ...proofPathDeliverySteps(task, { hasMaterializedChildWork }),
     ...internalChildTasks.map(internalStepFromTask).filter((step): step is DeliveryStep => step !== null),
   ]
   const rollup = deriveRollup(task, visibleChildProgress, deliverySteps, internalChildTasks.length)
@@ -222,7 +229,12 @@ function normalizeDeliveryStep(raw: unknown, fallbackId: string): DeliveryStep |
   return step
 }
 
-function proofPathDeliverySteps(task: TaskRecord): DeliveryStep[] {
+function proofPathDeliverySteps(
+  task: TaskRecord,
+  { hasMaterializedChildWork }: { hasMaterializedChildWork: boolean },
+): DeliveryStep[] {
+  if (hasMaterializedChildWork) return []
+  const proofSettled = taskHasRecordedCompletionProof(task) && !taskDoneButProofMissing(task)
   return arrayValue(task.proofPaths)
     .map((raw, index): DeliveryStep | null => {
       const proof = objectValue(raw)
@@ -234,7 +246,7 @@ function proofPathDeliverySteps(task: TaskRecord): DeliveryStep[] {
         id: `proof:${id}`,
         title,
         kind: 'verify',
-        status: semanticStepStatus(stringValue(proof.status)),
+        status: proofSettled ? 'done' : semanticStepStatus(stringValue(proof.status)),
         required: true,
         blocksCompletion: true,
       }

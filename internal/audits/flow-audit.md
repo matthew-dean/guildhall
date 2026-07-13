@@ -29464,6 +29464,66 @@ selected-scope readiness ordering.
     Overview even while Map/Start say it is complete.
 - Schema Migration Decision: no persisted schema field or migration changed.
 
+## 2026-07-13 - Overview work progress uses effective release truth
+
+- User job:
+  - When Guildhall says a selected release or bounded scope is complete, the
+    same project read must not show those scoped work rows as pending because an
+    older raw proof placeholder survived in a different read model. The user
+    should be able to trust one answer about what is done, what still needs
+    proof, and whether Start/Resume has anything left to consume.
+- Root cause classification:
+  - Task hierarchy/dependency/proof modeling problem: parent/container work
+    could keep stale proof-path blockers after real child work had been
+    materialized and completed.
+  - Data model/schema/source modeling problem: `/api/project?surface=overview`
+    derived `workProgress` from raw task records while release readiness,
+    completion proof, and the project spine used effective task records.
+  - UI communication/orientation problem: the same Overview payload could say a
+    selected release was complete while the visible task progress rows still
+    looked pending, making the project spine feel untrustworthy.
+- Fix:
+  - `workProgress` for project reads now derives from the same effective
+    orientation task snapshot used by the release/spine model on that surface.
+  - Proof-path delivery steps settle through the shared completion-proof and
+    proof-health predicates instead of interpreting raw proof status locally.
+  - Parent/container proof paths no longer remain blocking delivery steps once
+    materialized child work exists; the child work is the executable split.
+- Proof provided:
+  - `corepack pnpm vitest run
+    src/runtime/__tests__/work-progress.test.ts
+    src/runtime/__tests__/serve-release-readiness.test.ts` passed: 71 tests.
+  - `corepack pnpm lint:contracts` passed.
+  - `node ./build.mjs && corepack pnpm dev:install` passed.
+  - `guildhall stop && guildhall start` restarted the installed app.
+  - `/api/stale-server` returned `stale:false`, PID `92696`,
+    `bootBuildMtimeMs:1783905069066`, and
+    `currentBuildMtimeMs:1783905069066`.
+  - Installed API proof for `narrative-harness` returned selected release
+    `Stage 1: Headless Drafting And Evaluation MVP`, start readiness
+    `code:"all_terminal"`, readiness totals `tasks:11`, `done:11`,
+    `blockingCount:0`, `proofEvidenceBlockingCount:0`, no release blockers, 11
+    scoped progress records, and zero unsettled blocking proof steps.
+- Contract Touch Decision:
+  - Work id: `overview-work-progress-effective-proof-truth`.
+  - Touched contracts: project overview read-model semantics, work-progress
+    proof-step status semantics, parent/container delivery rollup semantics, and
+    release-readiness regression coverage for overview `workProgress`.
+  - Contracts considered but not touched: persisted task schema, persisted
+    release schema, proof-path storage shape, task lifecycle/status schema,
+    Start/Resume API behavior, release branch/runtime execution behavior, and UI
+    component props.
+  - Required follow-up: keep collapsing other duplicated project-state
+    interpretations into shared runtime summary/action/read models before
+    polishing layout.
+  - Proof required: focused work-progress tests, release-readiness overview
+    regression, contract lint, build/install freshness, and installed
+    Narrative Harness API agreement across readiness/start/work-progress.
+  - Proof provided: all required proof above.
+  - Apply/revert behavior: reverting restores raw-task `workProgress` on
+    overview reads and can make completed selected releases look pending again.
+- Schema Migration Decision: no persisted schema field or migration changed.
+
 ## 2026-07-13 - Approved import release selection authority
 
 - User job:

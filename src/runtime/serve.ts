@@ -5542,7 +5542,6 @@ export function buildServeApp(opts: ServeOptions = {}): {
         : null
       endReadiness()
       const endTasks = startTiming('tasks')
-      const workProgress = deriveProjectWorkProgress(rawTasks as Array<Record<string, unknown>>)
       const tasks = overviewSurface
         ? await overviewEffectiveTasksPromise as Task[]
         : mapSurface
@@ -5556,7 +5555,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
           ? await overviewEffectiveTasksPromise as Task[]
           : mapSurface
             ? await mapEffectiveTasksPromise as Task[]
-        : tasks as unknown as Task[]
+            : tasks as unknown as Task[]
+      const workProgress = deriveProjectWorkProgress(orientationTasks as unknown as Array<Record<string, unknown>>)
       endTasks()
       const endAncillary = startTiming('ancillary')
       const selectedTaskId = requestedTaskId && tasks.some(task => task.id === requestedTaskId)

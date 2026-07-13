@@ -102,6 +102,77 @@ describe('deriveProjectWorkProgress', () => {
     ])
   })
 
+  it('settles proof-path delivery steps when completion proof is recorded', () => {
+    const progress = deriveProjectWorkProgress([
+      {
+        id: 'world-state-proof',
+        title: 'Prove world-state continuity review',
+        status: 'done',
+        proofPaths: [
+          {
+            id: 'review-proof',
+            title: 'Reviewer proof',
+            kind: 'review',
+            expectedEvidence: ['world-state-reviewer'],
+          },
+        ],
+        reviewVerdicts: [
+          {
+            verdict: 'approved',
+            reviewerPath: 'world-state-reviewer',
+            recordedAt: '2026-07-06T13:35:47.512Z',
+          },
+        ],
+      },
+    ])
+
+    expect(progress.byTaskId['world-state-proof']?.deliverySteps[0]).toMatchObject({
+      id: 'proof:review-proof',
+      status: 'done',
+    })
+    expect(progress.byTaskId['world-state-proof']?.rollup).toMatchObject({
+      primaryState: 'done',
+      doneStepCount: 1,
+      requiredStepCount: 1,
+    })
+  })
+
+  it('does not keep parent proof paths as blockers after materialized child work exists', () => {
+    const progress = deriveProjectWorkProgress([
+      {
+        id: 'parent-task',
+        title: 'Build the headless story evaluator',
+        status: 'done',
+        proofPaths: [
+          {
+            id: 'proof-1',
+            title: 'Proof 1',
+            kind: 'review',
+          },
+        ],
+        hierarchy: {
+          childIds: ['child-task'],
+        },
+      },
+      {
+        id: 'child-task',
+        title: 'Run the story evaluator fixture',
+        status: 'done',
+        hierarchy: {
+          parentId: 'parent-task',
+        },
+      },
+    ])
+
+    expect(progress.byTaskId['parent-task']?.deliverySteps).toEqual([])
+    expect(progress.byTaskId['parent-task']?.rollup).toMatchObject({
+      primaryState: 'done',
+      visibleChildCount: 1,
+      visibleChildDoneCount: 1,
+      requiredStepCount: 0,
+    })
+  })
+
   it('honors explicit visibility and preserves future evidence channel values', () => {
     const progress = deriveProjectWorkProgress([
       {
