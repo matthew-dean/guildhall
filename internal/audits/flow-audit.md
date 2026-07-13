@@ -30875,6 +30875,119 @@ selected-scope readiness ordering.
     back to `import_draft` on the next normalized read.
 - Schema Migration Decision: no persisted schema field or migration changed.
 
+## codex:looma-knit-approved-import-read-boundary-2026-07-13
+
+- User job:
+  - When Guildhall compares live project documentation with an approved
+    workspace import, Start, Workspace Import, Map, and Overview must compare
+    against the same approved record.
+- Root cause classification:
+  - Data model/schema problem: the durable `workspace-goals.json` snapshot and
+    the reserved importer-task spec were treated as equally authoritative even
+    after an approved refresh, allowing them to contain different task sets.
+  - Project structure/scope problem: Looma + Knit's saved import omitted seven
+    later tasks from the live documented set while the current release still
+    contained the correct five Now tasks.
+  - UI communication problem: the import surface and readiness path could show
+    different effective import records.
+- Discovery:
+  - The live Workspace Import draft showed 66 source-derived tasks: 5 current
+    and 61 later. The saved imported state and reserved task spec had diverged.
+  - The live project readiness response reported 7 missing later tasks and
+    preserved a five-task `Stage 1: V1 Release Hardening` execution scope.
+- Fix:
+  - Added `canonicalApprovedWorkspaceImport()`, which prefers the valid durable
+    approved snapshot and only falls back to the reserved task spec for older
+    projects without a usable current-version snapshot yet. Start/readiness,
+    workspace-import status, and project facts now use that same boundary.
+- Calibration action and proof:
+  - After the Guildhall change was committed, the real `/api/project/workspace-import/approve`
+    path refreshed Looma + Knit from current detected documentation. The
+    warning about seven missing tasks cleared; Now remained five and the
+    selected execution scope remained `Stage 1: V1 Release Hardening`.
+  - Installed proof reported `stale:false`; focused workspace-import and
+    readiness tests passed; the full importer, integrity, and settings-route
+    suite passed (216 tests); `pnpm lint:contracts` and `pnpm build` passed.
+- Residual finding:
+  - The current task `TypeScript: generate proper types from Supabase
+    (pnpm db:types)` is now honestly `import_draft` after a bounded shaping run
+    timed out without a durable brief/spec/acceptance criteria. The cited docs
+    name the command and release gate, but Guildhall must still produce a
+    concrete proof boundary before this task can be approved or executed.
+- Contract Touch Decision:
+  - Work id: `looma-knit-approved-import-read-boundary`.
+  - Touched contracts: workspace-import approved-read selection and Start
+    readiness coverage calculation.
+  - Contracts considered but not touched: persisted task schema, release
+    schema, task hierarchy, execution API shapes, and source detector rules.
+  - Required follow-up: make thin imported tasks visibly unresolved and shape
+    them from cited evidence before spec approval; add a route-level regression
+    for a durable snapshot diverging from a stale importer spec.
+  - Compatibility rule: version-3 snapshots are authoritative after approval;
+    version-2 snapshots remain on the legacy spec path until a refresh upgrades
+    them, so an older project is not silently interpreted as already migrated.
+  - Proof required: canonical-reader unit test, route-level status regression,
+    focused readiness/import tests,
+    contract lint, installed freshness, live refresh preserving Now/Later, and
+    live task-state proof.
+  - Proof provided: canonical-reader test, route-level status regression, full
+    importer/readiness suites (212 tests), contract lint, installed build, live
+    refresh, and live task shaping evidence above.
+  - Apply/revert behavior: reverting restores the competing spec-vs-snapshot
+    read path and can reintroduce contradictory import coverage.
+- Schema Migration Decision: no persisted schema or migration changed; the
+  existing durable snapshot remains backward-compatible and the importer spec
+  remains a legacy fallback.
+
+## codex:looma-knit-import-proof-boundary-2026-07-13
+
+- User job:
+  - When an imported current task already names a repo command, Guildhall must
+    show that command as the proof action and must not attach neighboring
+    checklist bullets or invent setup work.
+- Root cause classification:
+  - Import evidence-model problem: explicit commands in task titles and
+    descriptions were ignored unless a separate `proofPaths` field already
+    existed, so the importer created an artificial "Add proof command" need.
+  - Classification problem: generated database artifacts such as
+    `TypeScript: generate proper types from Supabase` were treated as abstract
+    contract-surface tasks because the title contained `types`.
+  - Source-selection problem: unchecked checklist bullets from a shared
+    project document were promoted into unrelated task proof expectations.
+- Fix:
+  - Extract explicit `pnpm` commands from documented task text.
+  - Treat generated type artifacts as command/proof work rather than requiring
+    abstract contract names.
+  - Exclude unchecked checklist metadata from task-specific evidence extraction.
+  - Ensure every generated command proof path has a non-empty expected-evidence
+    statement.
+- Calibration action and proof:
+  - After the installed refresh, Looma + Knit Workspace Import exposed exactly
+    `pnpm db:types` with `source: documented`, a copy-command launch step, and
+    non-empty expected evidence; the unrelated unit-test checklist was absent.
+  - Full importer, integrity, and settings-route tests passed (216 tests),
+    including the explicit command and neighboring-checklist regressions.
+    Installed proof reported `stale:false` before the live refresh.
+- Residual finding:
+  - This improves the proof boundary but does not approve the task or invent a
+    brief/spec. The task remains `import_draft` until Guildhall shapes a
+    source-backed completion contract, which is the correct unresolved state.
+- Contract Touch Decision:
+  - Work id: `looma-knit-import-proof-boundary`.
+  - Touched contracts: imported proof-path derivation and imported-task
+    contract-shape classification.
+  - Contracts considered but not touched: persisted task schema, release
+    schema, task hierarchy, execution API, and owner-approval semantics.
+  - Required follow-up: shape the task from the cited release gate, then prove
+    the command and generated-output boundary without owner setup.
+  - Proof required: focused importer/integrity tests, contract lint, installed
+    freshness, and live Workspace Import task proof.
+  - Proof provided: focused tests, contract lint, installed freshness, and live
+    draft proof above.
+  - Apply/revert behavior: reverting restores the artificial missing-command
+    path and the unrelated checklist evidence.
+- Schema Migration Decision: no persisted schema or migration changed.
+
 ## codex:nh-complete-release-proof-state-agreement-2026-07-13
 
 - User job:

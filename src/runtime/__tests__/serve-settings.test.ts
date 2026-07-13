@@ -3361,6 +3361,74 @@ describe('GET /api/health', () => {
 // then falls back to the detector when the spec is still empty, so the
 // user is never blocked on an agent round-trip.
 describe('Workspace Import review endpoints', () => {
+  it('status reports the durable approved snapshot when the reserved importer spec is stale', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, 'README.md'),
+      '# Existing project\n\n## Direction\n\n- Keep the current project scope source-backed.\n',
+      'utf8',
+    )
+    await fs.writeFile(path.join(tmpDir, 'package.json'), JSON.stringify({ name: 'approved-snapshot-boundary' }), 'utf8')
+    await writeSystemJson('workspace-goals.json', {
+      version: 3,
+      recordedAt: '2026-01-01T00:00:00.000Z',
+      goals: [],
+      tasks: [{
+        id: 'task-current-snapshot',
+        title: 'Current snapshot task',
+        description: 'The approved current task.',
+        domain: 'core',
+        priority: 'normal',
+        references: ['README.md'],
+      }],
+      milestones: [],
+      context: [],
+      approved: {
+        goalCount: 0,
+        taskCount: 1,
+        milestoneCount: 0,
+        currentTaskCount: 1,
+        laterTaskCount: 0,
+        taskIds: ['task-current-snapshot'],
+        currentTaskIds: ['task-current-snapshot'],
+        laterTaskIds: [],
+      },
+      detected: null,
+    })
+    await writeSystemTasks({
+      version: 1,
+      lastUpdated: '2026-01-01T00:00:00.000Z',
+      tasks: [{
+        id: 'task-workspace-import',
+        title: 'Review existing project work',
+        description: 'Reserved importer with an obsolete spec.',
+        domain: '_workspace_import',
+        status: 'done',
+        spec: [
+          '```yaml',
+          'tasks:',
+          '  - id: task-stale-a',
+          '    title: Stale importer task A',
+          '  - id: task-stale-b',
+          '    title: Stale importer task B',
+          '```',
+        ].join('\n'),
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      }],
+    })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const response = await app.fetch(new Request(scoped('/api/project/workspace-import/status')))
+    const rawBody = await response.text()
+    expect(response.status, rawBody).toBe(200)
+    const body = JSON.parse(rawBody) as {
+      draft: { goals: number; tasks: number; milestones: number }
+      specPresent: boolean
+    }
+    expect(body.specPresent).toBe(true)
+    expect(body.draft).toEqual({ goals: 0, tasks: 1, milestones: 0 })
+  })
+
   it('status treats missing task state as an empty existing workspace queue', async () => {
     await fs.rm(getProjectSystemStatePath(tmpDir, 'TASKS.json'), { force: true })
     await fs.writeFile(

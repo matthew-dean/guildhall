@@ -263,6 +263,7 @@ import {
 import {
   maybeSeedWorkspaceImport,
   approveWorkspaceImport,
+  canonicalApprovedWorkspaceImport,
   createWorkspaceImportTask,
   materializeParsedWorkspaceImport,
   materializeWorkspaceImportDraft,
@@ -8225,7 +8226,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
     const spec = taskSpecText(importTask.spec)
     if (!['done', 'spec_review'].includes(status) || !spec.trim()) return null
 
-    const parsed = parseWorkspaceImport(spec)
+    const parsed = canonicalApprovedWorkspaceImport(workspaceGoalsState, spec)
+    if (!parsed) return null
     const inventory = await detectWorkspaceSignals({ projectPath })
     const detected = await materializeWorkspaceImportDraft({
       memoryDir: getProjectStateDir(projectPath),

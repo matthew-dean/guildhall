@@ -47,4 +47,13 @@ describe('imported work integrity', () => {
     expect(taskHasConcreteContractNames(task)).toBe(true)
     expect(importedContractWorkIsStructurallyIncomplete(task)).toBe(false)
   })
+
+  it('does not classify generated database types as a contract-surface task', () => {
+    const task = {
+      title: 'TypeScript: generate proper types from Supabase (pnpm db:types)',
+      references: ['PROJECT_STATE.md', 'docs/release-plan.md'],
+    }
+
+    expect(importedContractWorkIsStructurallyIncomplete(task)).toBe(false)
+  })
 })

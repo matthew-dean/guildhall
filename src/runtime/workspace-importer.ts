@@ -1963,6 +1963,32 @@ export function workspaceGoalsNeedStructuralRefresh(state: WorkspaceGoalsState |
   return false
 }
 
+/**
+ * Return the one approved import record used by scope/readiness consumers.
+ * The durable workspace snapshot is newer than the reserved task spec after
+ * an approved refresh; the spec remains a compatibility fallback for older
+ * projects that have no usable snapshot yet.
+ */
+export function canonicalApprovedWorkspaceImport(
+  state: WorkspaceGoalsState | null | undefined,
+  spec: string,
+): ParsedImport | null {
+  if (
+    state &&
+    state.version >= WORKSPACE_GOALS_STRUCTURAL_VERSION &&
+    !workspaceGoalsNeedStructuralRefresh(state) &&
+    (state.goals.length > 0 || state.tasks.length > 0 || state.milestones.length > 0)
+  ) {
+    return {
+      goals: [...state.goals],
+      ...(state.releases ? { releases: [...state.releases] } : {}),
+      tasks: [...state.tasks],
+      milestones: [...state.milestones],
+    }
+  }
+  return spec.trim() ? parseWorkspaceImport(spec) : null
+}
+
 export async function materializeParsedWorkspaceImport(input: {
   memoryDir: string
   projectPath: string
@@ -2252,7 +2278,6 @@ export async function readWorkspaceImportSummary(input: {
   const tasksPath = workspaceImportTasksPath(input.memoryDir)
   let taskStatus: string | null = null
   let importerTaskSpec = ''
-  let strictApprovedFromSpec: WorkspaceImportScopeSnapshot | null = null
 
   try {
     const raw = JSON.parse(await readManagedTextFile(tasksPath, 'utf-8')) as
@@ -2266,26 +2291,16 @@ export async function readWorkspaceImportSummary(input: {
       taskStatus = task.status ?? null
       if (typeof task.spec === 'string' && task.spec.trim().length > 0) {
         importerTaskSpec = task.spec
-        const parsed = parseWorkspaceImport(task.spec)
-        const strictSummary = workspaceScopeSnapshotFromParsed(parsed)
-        if (
-          strictSummary.goalCount > 0 ||
-          strictSummary.taskCount > 0 ||
-          strictSummary.milestoneCount > 0
-        ) {
-          strictApprovedFromSpec = strictSummary
-        }
       }
     }
   } catch {
     taskStatus = taskStatus ?? null
   }
 
-  const approvedFromSpec = strictApprovedFromSpec ?? (
-    importerTaskSpec ? summarizeWorkspaceImportSpec(importerTaskSpec) : null
-  )
-
-  const approved = approvedFromSpec ?? workspaceGoalsState?.approved ?? null
+  const approvedImport = canonicalApprovedWorkspaceImport(workspaceGoalsState, importerTaskSpec)
+  const approved = approvedImport
+    ? workspaceScopeSnapshotFromParsed(approvedImport)
+    : workspaceGoalsState?.approved ?? null
 
   const detected = input.detectedDraft
     ? workspaceScopeSnapshotFromDraft(input.detectedDraft)
@@ -3731,7 +3746,24 @@ function firstImportedProofCommand(task: MaterializedImportTask): string | null 
       typeof proof.command === 'string' &&
       proof.command.trim(),
   )
-  return proofCommand?.command?.trim() ?? null
+  if (proofCommand?.command?.trim()) return proofCommand.command.trim()
+
+  // Imported task text is source evidence too. Preserve an explicit command
+  // already named in the title/description instead of inventing a missing
+  // proof-command setup step.
+  const commandPattern = /pnpm(?:\s+[a-z0-9@:_./-]+)+/i
+  const text = `${task.title}\n${task.description}`
+  const candidates = [
+    ...text.matchAll(/`([^`\n]+)`/g),
+    ...text.matchAll(/\(([^)\n]+)\)/g),
+    ...text.matchAll(/\b(?:run|using|via|command(?:\s+is)?)\s+([^\n.]+)/gi),
+  ]
+  for (const match of candidates) {
+    const candidate = match[1]?.trim() ?? ''
+    const command = candidate.match(commandPattern)?.[0]?.replace(/[.,;!?]+$/, '').trim()
+    if (command) return command
+  }
+  return null
 }
 
 function deterministicImportedCriterion(
@@ -3808,6 +3840,9 @@ function importedCommandProofPath(
   expectedEvidence: string[],
   source: 'documented' | 'inferred',
 ): NonNullable<Task['proofPaths']>[number] {
+  const evidence = expectedEvidence.length > 0
+    ? expectedEvidence
+    : [`Command \`${command}\` completes successfully and records proof for the imported task boundary.`]
   return {
     kind: 'command' as const,
     command,
@@ -3818,7 +3853,7 @@ function importedCommandProofPath(
       kind: 'copy_command',
       command,
     }],
-    expectedEvidence,
+    expectedEvidence: evidence,
   }
 }
 
@@ -4022,7 +4057,12 @@ function materializedProofPaths(
         },
       ]
     case 'general':
-      return current.length > 0 && !importedProofPathsLookGeneric(current) ? current : fallback
+      if (current.length > 0 && !importedProofPathsLookGeneric(current)) return current
+      return command
+        ? [importedCommandProofPath(command, [
+            ...materializedAcceptanceCriteria(task, evidenceDetail).map(criterion => criterion.description.trim()).filter(Boolean).slice(0, 6),
+          ], 'documented')]
+        : fallback
   }
 }
 
@@ -4098,6 +4138,7 @@ function importedRawLineIsMetadata(line: string): boolean {
 
 function importedBulletIsAuditNoise(bullet: string): boolean {
   return (
+    /^\[[ x]\]\s+/i.test(bullet) ||
     /directory does not exist on disk/i.test(bullet) ||
     /\bcannot run\b/i.test(bullet) ||
     /\bartifact missing\b/i.test(bullet) ||

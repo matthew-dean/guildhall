@@ -3,11 +3,19 @@ import type { Task } from '@guildhall/core'
 type RecordLike = Record<string, unknown>
 
 export function titleLooksContractShaped(title: unknown): boolean {
-  return typeof title === 'string' && /\b(schema|schemas|contract|contracts|typed?\b|types)\b/i.test(title)
+  if (typeof title !== 'string') return false
+  if (generatedTypeArtifactTitle(title)) return false
+  return /\b(schema|schemas|contract|contracts|typed?\b|types)\b/i.test(title)
 }
 
 export function titleRequiresConcreteContractNames(title: unknown): boolean {
-  return typeof title === 'string' && /\b(contract|contracts|typed?\b|types)\b/i.test(title)
+  if (typeof title !== 'string') return false
+  if (generatedTypeArtifactTitle(title)) return false
+  return /\b(contract|contracts|typed?\b|types)\b/i.test(title)
+}
+
+function generatedTypeArtifactTitle(title: string): boolean {
+  return /\b(?:generate|regenerate|update|refresh)\b[\s\S]*\btypes?\b[\s\S]*\b(?:from|using|in|into)\b/i.test(title)
 }
 
 export function taskLooksContractShaped(task: Pick<Task, 'title'> | RecordLike): boolean {

@@ -15,6 +15,7 @@ import {
   workspaceNeedsImport,
   materializeWorkspaceImportDraft,
   approveWorkspaceImport,
+  canonicalApprovedWorkspaceImport,
   parseWorkspaceImport,
   maybeSeedWorkspaceImport,
   formatDetectedDraftAsSpec,
@@ -713,6 +714,72 @@ describe('workspaceNeedsImport', () => {
     const expectedEvidence = materialized.tasks[0]?.proofPaths?.[0]?.expectedEvidence ?? []
     expect(expectedEvidence).not.toContain('[ ] Unit tests: use-collections, use-presence, subdomain utils')
     expect(expectedEvidence.join('\n')).not.toMatch(/\[[ x]\]\s+/i)
+    expect(materialized.tasks[0]?.proofPaths).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'command',
+        source: 'documented',
+        command: 'pnpm db:types',
+        launchSteps: [expect.objectContaining({
+          kind: 'copy_command',
+          command: 'pnpm db:types',
+        })],
+      }),
+    ]))
+    expect(materialized.tasks[0]?.proofPaths?.some(path =>
+      path.kind === 'command' && path.launchSteps?.some(step => step.kind === 'blocked_until_setup'),
+    )).toBe(false)
+  })
+
+  it('does not attach neighboring unchecked checklist bullets to an explicit command task', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, 'README.md'),
+      [
+        '# Knit release notes',
+        '',
+        '## Verification',
+        '- [ ] Unit tests: use-collections, use-presence, subdomain utils',
+      ].join('\n'),
+      'utf8',
+    )
+    const materialized = await materializeWorkspaceImportDraft({
+      memoryDir,
+      projectPath: tmpDir,
+      draft: {
+        goals: [],
+        tasks: [{
+          suggestedId: 'task-db-types-source',
+          title: 'TypeScript: generate proper types from Supabase (pnpm db:types)',
+          description: 'Generate proper types from Supabase.',
+          domain: 'knit',
+          scope: 'current',
+          priority: 'normal',
+          references: ['README.md'],
+          source: 'workspace-importer',
+          confidence: 'high',
+          proofPaths: [{
+            kind: 'review',
+            source: 'inferred',
+            expectedEvidence: ['[ ] Unit tests: use-collections, use-presence, subdomain utils'],
+          }],
+        }],
+        milestones: [],
+        context: [],
+        stats: { inputSignals: 1, drafted: 1, deduped: 0 },
+      },
+    })
+
+    expect(materialized.tasks[0]?.proofPaths).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'command',
+        source: 'documented',
+        command: 'pnpm db:types',
+        expectedEvidence: [expect.stringContaining('pnpm db:types')],
+      }),
+    ]))
+    expect(materialized.tasks[0]?.proofPaths).toHaveLength(1)
+    expect(materialized.tasks[0]?.proofPaths?.some(path =>
+      path.expectedEvidence?.some(evidence => /\[[ x]\]\s+/i.test(evidence)),
+    )).toBe(false)
   })
 
   it('shapes later-stage imported capabilities into real slices instead of one generic work unit', async () => {
@@ -937,6 +1004,45 @@ milestones:
     expect(parsed.milestones).toEqual([
       { title: 'Ship v0.1.0', evidence: 'abc12345' },
     ])
+  })
+
+  it('prefers the durable approved snapshot over a stale importer spec', () => {
+    const state = parseWorkspaceGoalsState({
+      version: 3,
+      recordedAt: '2026-07-13T12:00:00.000Z',
+      goals: [],
+      tasks: [{
+        id: 'task-current-snapshot',
+        title: 'Current snapshot task',
+        description: 'Current snapshot task.',
+        domain: 'core',
+        priority: 'normal',
+        references: ['PROJECT_STATE.md'],
+      }],
+      milestones: [],
+      context: [],
+      approved: {
+        goalCount: 0,
+        taskCount: 1,
+        milestoneCount: 0,
+        currentTaskCount: 1,
+        laterTaskCount: 0,
+        taskIds: ['task-current-snapshot'],
+        currentTaskIds: ['task-current-snapshot'],
+        laterTaskIds: [],
+      },
+      detected: null,
+    })
+
+    const parsed = canonicalApprovedWorkspaceImport(state, [
+      '```yaml',
+      'tasks:',
+      '  - id: task-stale-spec',
+      '    title: Stale importer task',
+      '```',
+    ].join('\n'))
+
+    expect(parsed?.tasks.map(task => task.title)).toEqual(['Current snapshot task'])
   })
 
   it('falls back to normal priority and default domain on invalid values', () => {
