@@ -2096,6 +2096,9 @@ describe('GET /api/project/release-readiness', () => {
       focusKind: 'proof',
       proofTaskIds: ['task-current'],
     })
+    expect(project.tasks.find((candidate: any) => candidate.id === 'task-current')?.completionProof).toMatchObject({
+      state: 'missing',
+    })
     expect(project.orientationSpine?.proofContracts[0]).toMatchObject({
       state: 'needed',
     })

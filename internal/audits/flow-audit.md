@@ -30595,6 +30595,10 @@ selected-scope readiness ordering.
     could satisfy task detail state, but the script-only release gate still
     rejected inferred review proof paths even when the effective task had
     modeled proof paths and non-review command-backed evidence.
+  - Task proof display problem: task cards could still show
+    `completionProof.state:"verified"` for done tasks that the selected
+    script-only release correctly counted as missing command/script proof.
+    That made release readiness and task detail contradict each other.
   - UI communication/orientation problem: the run control was disabled and
     labeled `Needs proof`, which made proof recovery look like an owner-only
     manual step rather than runnable scoped work.
@@ -30613,6 +30617,10 @@ selected-scope readiness ordering.
     proof blockers and filters owner-facing proof blockers to visible release
     work rows, so hidden/internal decomposition rows can help execution without
     becoming the top project blocker.
+  - Project task responses now apply the selected-release proof-missing set to
+    task completion-proof badges, so a task listed as blocking script-only
+    release proof also renders `completionProof.state:"missing"` in Overview,
+    Work, and full task summaries.
   - The shared action model keeps the proof warning/primary action visible, but
     enables the run control and labels it `Resume` for proof recovery.
 - Proof provided so far:
@@ -30636,6 +30644,11 @@ selected-scope readiness ordering.
     release completion|inferred review proof|semantically matching review proof|
     command-backed review proof|provider/model proof paths"` passed: 7
     script-only proof classification tests.
+  - `CI=true pnpm exec vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts --testNamePattern
+    "inferred review proof as derived script-only|semantically matching review
+    proof|command-backed review proof"` passed: 3 task-badge/release-proof
+    agreement tests.
   - `CI=true pnpm lint:contracts` passed.
   - `CI=true pnpm build` passed.
   - `CI=true pnpm dev:install && guildhall stop && guildhall start && sleep 2
@@ -30655,17 +30668,28 @@ selected-scope readiness ordering.
     Stage 1 proof blockers from 11 to 3 visible release tasks:
     author-intent inputs, world-state continuity review, and spatial/geographic
     continuity review.
+  - Live Narrative Harness proof, after pressing Start: `/api/project/start`
+    returned `status:"running"` scoped to the author-intent proof gap; Overview
+    showed the task reopened to `in_progress`, then `review`, then `gate_check`,
+    with the release proof count dropping from 3 to 2 while the task was no
+    longer a completed proof-missing row.
 - Residual findings:
   - The live worker still needs to produce/attach the remaining three proof
     packets; this fix proves Start can now identify and advance visible
     release-level proof gaps instead of stopping as `all_terminal` or pinning
     hidden split rows.
+  - The active Narrative Harness run exposed a separate live-work visibility
+    gap: the Work payload's `recentEvents` sample still showed stale July 7
+    assistant deltas while the provider health reported an active request on
+    July 13. That should become its own flow-audit fix instead of being hidden
+    under proof recovery.
 - Contract Touch Decision:
   - Work id: `proof-missing-release-start-recovery`.
   - Touched contracts: project Start readiness execution behavior, shared
     project action-model run-control behavior, shared work execution-state
     runnable semantics, script-only release proof classification, proof-health
-    command-backed evidence export, and route-level proof-recovery Start tests.
+    command-backed evidence export, selected-release task proof badge
+    semantics, and route-level proof-recovery Start tests.
   - Contracts considered but not touched: persisted task schema, persisted
     proof-path schema, release schema, WorkTab per-task `Run proof` behavior,
     provider configuration schema, and completion-proof verification semantics.

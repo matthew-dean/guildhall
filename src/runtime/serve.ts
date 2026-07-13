@@ -4075,6 +4075,50 @@ function compactTaskForWorkSurface(task: Record<string, unknown>): Record<string
   return summary
 }
 
+function releaseProofMissingTaskIds(releaseReadiness: Record<string, unknown> | null | undefined): Set<string> {
+  const proofMissing = Array.isArray(releaseReadiness?.proofMissingDoneTasks)
+    ? releaseReadiness.proofMissingDoneTasks
+    : []
+  return new Set(
+    proofMissing
+      .map(item => item && typeof item === 'object' && !Array.isArray(item)
+        ? (item as { id?: unknown }).id
+        : null)
+      .filter((id): id is string => typeof id === 'string' && id.trim().length > 0),
+  )
+}
+
+function releaseProofMissingCompletionProof(task: Record<string, unknown>): Record<string, unknown> {
+  const base = compactTaskCompletionProof(task) ?? {}
+  const missing = Array.isArray(base.missing) ? base.missing.filter((item): item is string => typeof item === 'string') : []
+  const proofPaths = Array.isArray(task.proofPaths) ? task.proofPaths : []
+  return {
+    ...base,
+    state: 'missing',
+    expectedCount: typeof base.expectedCount === 'number' ? base.expectedCount : proofPaths.length,
+    verifiedCount: typeof base.verifiedCount === 'number' ? base.verifiedCount : 0,
+    missing: missing.length > 0
+      ? missing
+      : ['Selected release requires command/script proof evidence for this completed task.'],
+  }
+}
+
+function applyReleaseProofMissingCompletionOverrides(
+  tasks: Record<string, unknown>[],
+  releaseReadiness: Record<string, unknown> | null | undefined,
+): Record<string, unknown>[] {
+  const proofMissingIds = releaseProofMissingTaskIds(releaseReadiness)
+  if (proofMissingIds.size === 0) return tasks
+  return tasks.map(task => {
+    const id = typeof task.id === 'string' ? task.id : ''
+    if (!proofMissingIds.has(id) || String(task.status ?? '') !== 'done') return task
+    return {
+      ...task,
+      completionProof: releaseProofMissingCompletionProof(task),
+    }
+  })
+}
+
 function compactTaskProductBriefForWorkSurface(brief: unknown): Record<string, unknown> | undefined {
   if (!brief || typeof brief !== 'object' || Array.isArray(brief)) return undefined
   const raw = brief as Record<string, unknown>
@@ -5924,9 +5968,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
             selectedTaskId,
           })
         : null
+      const proofAdjustedTasks = applyReleaseProofMissingCompletionOverrides(tasks as Array<Record<string, unknown>>, releaseReadiness)
       const responseTasks = overviewTaskIds && overviewTaskIds.size > 0
-        ? tasks.filter(task => typeof task.id === 'string' && overviewTaskIds.has(task.id))
-        : tasks
+        ? proofAdjustedTasks.filter(task => typeof task.id === 'string' && overviewTaskIds.has(task.id))
+        : proofAdjustedTasks
       const taskPayload = {
         surface,
         kind: overviewSurface
