@@ -3,7 +3,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { load as yamlLoad } from 'js-yaml'
 import { ProjectReleaseState, TaskQueue, TERMINAL_TASK_STATUSES, buildDecompositionChildDrafts, type ProjectRelease, type Task, type TaskPriority } from '@guildhall/core'
-import { getProjectSystemStatePathFromMemoryDir } from '@guildhall/sessions'
+import { getProjectLocalHistoryDir, getProjectSystemStatePathFromMemoryDir, inferProjectRootFromMemoryDir } from '@guildhall/sessions'
 import { appendExploringTranscript } from '@guildhall/tools'
 import { loadLeverSettings, defaultAgentSettingsPath } from '@guildhall/levers'
 import {
@@ -950,6 +950,152 @@ function existingImportedTaskMatchesIncoming(
   const shorter = existingTitle.length < importedTitle.length ? existingTitle : importedTitle
   const longer = existingTitle.length < importedTitle.length ? importedTitle : existingTitle
   return shorter.length >= 50 && longer.startsWith(shorter)
+}
+
+const ARCHIVED_IMPORT_DUPLICATE_STOPWORDS = new Set([
+  'add',
+  'build',
+  'create',
+  'implement',
+  'write',
+  'draft',
+  'task',
+  'tests',
+  'test',
+  'view',
+  'deferred',
+  'the',
+  'a',
+  'an',
+  'to',
+  'for',
+  'of',
+  'and',
+])
+
+function archivedImportTitleTokens(title: string | undefined): string[] {
+  return (title ?? '')
+    .toLowerCase()
+    .replace(/[→>\-–—/:()"'`.,[\]{}]/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean)
+    .filter(token => !ARCHIVED_IMPORT_DUPLICATE_STOPWORDS.has(token))
+}
+
+function archivedImportSimilarityScore(left: string[], right: string[]): number {
+  if (left.length === 0 || right.length === 0) return 0
+  const leftSet = new Set(left)
+  const rightSet = new Set(right)
+  let overlap = 0
+  for (const token of leftSet) {
+    if (rightSet.has(token)) overlap += 1
+  }
+  return overlap / Math.max(leftSet.size, rightSet.size)
+}
+
+async function readRecoverableArchivedImportTasks(memoryDir: string): Promise<Task[]> {
+  const archivePaths = new Set<string>()
+  const archiveDir = workspaceImportStatePath(memoryDir, path.join('tasks', 'archive'))
+  try {
+    const entries = await fs.readdir(archiveDir)
+    for (const entry of entries) {
+      if (entry.endsWith('.json')) archivePaths.add(path.join(archiveDir, entry))
+    }
+  } catch (err) {
+    if (!String(err).includes('ENOENT')) throw err
+  }
+
+  const taskHistoryDir = path.join(
+    getProjectLocalHistoryDir(inferProjectRootFromMemoryDir(memoryDir)),
+    'tasks',
+  )
+  try {
+    const entries = await fs.readdir(taskHistoryDir, { withFileTypes: true })
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue
+      archivePaths.add(path.join(taskHistoryDir, entry.name, 'archive-evidence.json'))
+    }
+  } catch (err) {
+    if (!String(err).includes('ENOENT')) throw err
+  }
+
+  const tasks: Task[] = []
+  for (const file of archivePaths) {
+    const raw = await readManagedTextFile(file, 'utf-8').catch((err: unknown) => {
+      if (String(err).includes('ENOENT')) return null
+      throw err
+    })
+    if (!raw) continue
+    const parsed = JSON.parse(raw) as Task
+    if (!parsed || typeof parsed !== 'object') continue
+    repairImportedTaskTitleFromSourceDescription(parsed)
+    if (!archivedTaskCanRecoverImportedWork(parsed)) continue
+    tasks.push(parsed)
+  }
+  return tasks
+}
+
+function archivedTaskCanRecoverImportedWork(task: Task): boolean {
+  return task.status === 'done' || taskHasDurableCompletionEvidence(task)
+}
+
+function archivedImportTaskMatchesIncoming(
+  archived: Task,
+  imported: MaterializedImportTask,
+  input: Pick<ApproveWorkspaceImportInput, 'coordinatorProjectPaths' | 'projectPath'>,
+): boolean {
+  if (!archivedTaskCanRecoverImportedWork(archived)) return false
+  const domain = normalizeImportedTaskDomain(
+    imported.domain,
+    input.coordinatorProjectPaths,
+    imported.references,
+    input.projectPath,
+  )
+  if (archived.domain && domain && archived.domain !== domain) return false
+  const projectPath = input.coordinatorProjectPaths?.[domain]
+    ?? resolveTaskProjectPath({
+      workspaceProjectPath: input.projectPath,
+      domain,
+    })
+  if (archived.projectPath && projectPath && archived.projectPath !== projectPath) return false
+  const archivedTokens = archivedImportTitleTokens(archived.title)
+  const importedTokens = archivedImportTitleTokens(imported.title)
+  if (archivedTokens.length < 4 || importedTokens.length < 4) return false
+  return archivedImportSimilarityScore(archivedTokens, importedTokens) >= 0.75
+}
+
+function activeImportedTaskShouldYieldToArchivedCompletion(existing: Task, archived: Task): boolean {
+  if (!isWorkspaceImportManagedTask(existing)) return false
+  if (taskHasDurableCompletionEvidence(existing)) return false
+  if (existing.status === 'done' || existing.status === 'pending_pr') return false
+  return archivedTaskCanRecoverImportedWork(archived)
+}
+
+function ensureArchivedTaskRecoveredForImport(input: {
+  queue: TaskQueue
+  archived: Task
+  existingImportedTasks: Task[]
+  existingImportedTasksByTitle: Map<string, Task>
+}): Task {
+  const existing = input.queue.tasks.find(task => task.id === input.archived.id)
+  if (existing) return existing
+  const restored = JSON.parse(JSON.stringify(input.archived)) as Task
+  restored.notes = [
+    ...(restored.notes ?? []),
+    {
+      agentId: 'workspace-importer',
+      role: 'system',
+      content: 'Recovered archived completion evidence because current imported scope still points at this work.',
+      timestamp: new Date().toISOString(),
+    },
+  ]
+  input.queue.tasks.push(restored)
+  input.existingImportedTasks.push(restored)
+  const normalizedTitle = normalizeImportText(restored.title)
+  if (normalizedTitle && !input.existingImportedTasksByTitle.has(normalizedTitle)) {
+    input.existingImportedTasksByTitle.set(normalizedTitle, restored)
+  }
+  return restored
 }
 
 function importTaskStructuralForm(
@@ -5373,6 +5519,7 @@ export async function approveWorkspaceImport(
   const approvedSpec = input.draftOverride
     ? formatParsedImportAsSpec(normalizeParsedImportForSpec(materializedParsed, input.projectPath))
     : null
+  const recoverableArchivedTasks = await readRecoverableArchivedImportTasks(input.memoryDir)
   const existingImportedTasksByTitle = new Map<string, Task>()
   const existingImportedTasks: Task[] = []
   for (const existingTask of queue.tasks) {
@@ -5384,12 +5531,27 @@ export async function approveWorkspaceImport(
     existingImportedTasksByTitle.set(normalizedTitle, existingTask)
   }
   const refreshableTasks: Array<{ existing: Task; imported: MaterializedImportTask }> = []
+  const supersededImportedTaskIds = new Set<string>()
   const pendingTitleSeen = new Set<string>()
   const mergeableTasks = materializedTasks.filter(task => {
     const normalizedTitle = normalizeImportText(task.title)
     if (!normalizedTitle) return true
     const existing = existingImportedTasksByTitle.get(normalizedTitle)
       ?? existingImportedTasks.find(candidate => existingImportedTaskMatchesIncoming(candidate, task))
+    const archived = recoverableArchivedTasks.find(candidate =>
+      archivedImportTaskMatchesIncoming(candidate, task, input),
+    )
+    if (archived && (!existing || activeImportedTaskShouldYieldToArchivedCompletion(existing, archived))) {
+      const restored = ensureArchivedTaskRecoveredForImport({
+        queue,
+        archived,
+        existingImportedTasks,
+        existingImportedTasksByTitle,
+      })
+      if (existing && existing.id !== restored.id) supersededImportedTaskIds.add(existing.id)
+      refreshableTasks.push({ existing: restored, imported: task })
+      return false
+    }
     if (existing) {
       refreshableTasks.push({ existing, imported: task })
       return false
@@ -5515,8 +5677,27 @@ export async function approveWorkspaceImport(
     materializeImportedSplitChildren(queue, existing, imported.scope, now)
   }
 
+  const archivedImportedParentIds: string[] = []
+  for (const taskId of supersededImportedTaskIds) {
+    const existingTask = queue.tasks.find(task => task.id === taskId)
+    if (!existingTask || existingTask.id === WORKSPACE_IMPORT_TASK_ID) continue
+    if (existingTask.status === 'archived') continue
+    existingTask.status = 'archived'
+    existingTask.releaseIds = []
+    existingTask.updatedAt = now
+    archivedImportedParentIds.push(existingTask.id)
+    existingTask.notes = [
+      ...(existingTask.notes ?? []),
+      {
+        agentId: 'workspace-importer',
+        role: 'system',
+        timestamp: now,
+        content: 'Workspace import recovered archived completion evidence for this work and archived the stale imported duplicate.',
+      },
+    ]
+  }
+
   if (input.replacePreviouslyImportedTasks) {
-    const archivedImportedParentIds: string[] = []
     for (const existingTask of queue.tasks) {
       if (existingTask.id === WORKSPACE_IMPORT_TASK_ID) continue
       if (!importedTaskCanBeArchivedDuringScopeRefresh(existingTask.status)) continue
@@ -5535,8 +5716,8 @@ export async function approveWorkspaceImport(
         },
       ]
     }
-    archiveGeneratedImportedDescendants(queue, archivedImportedParentIds, now)
   }
+  archiveGeneratedImportedDescendants(queue, archivedImportedParentIds, now)
 
   let tasksAdded = 0
   for (const [index, t] of mergeableTasks.entries()) {

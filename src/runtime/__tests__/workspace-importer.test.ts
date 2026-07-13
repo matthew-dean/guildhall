@@ -5,6 +5,7 @@ import os from 'node:os'
 import { bootstrapWorkspace } from '@guildhall/config'
 import { TaskQueue } from '@guildhall/core'
 import {
+  getProjectTaskLocalHistoryDir,
   readProjectStateJsonAsync,
   readProjectStateTextAsync,
   writeProjectStateJsonFromMemoryDirAsync,
@@ -3684,6 +3685,144 @@ tasks:
       ],
     })
     expect(q.tasks.find(task => task.id === 'task-later')?.status).toBe('shelved')
+  })
+
+  it('prefers archived completed work over a hollow current imported duplicate during refresh', async () => {
+    const now = new Date().toISOString()
+    await writeQueue({
+      version: 1,
+      lastUpdated: now,
+      tasks: [
+        {
+          id: WORKSPACE_IMPORT_TASK_ID,
+          title: 'Review existing project work',
+          description: 'Reserved importer',
+          domain: WORKSPACE_IMPORT_DOMAIN,
+          projectPath: tmpDir,
+          status: 'spec_review',
+          priority: 'high',
+          spec: '',
+          acceptanceCriteria: [],
+          dependsOn: [],
+          outOfScope: [],
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          adjudications: [],
+          escalations: [],
+          agentIssues: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          origination: 'system',
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          id: 'task-import-e2e-current',
+          title: 'E2E tests: login → create page → edit → search flow',
+          description: 'knit/PROJECT_STATE.md: - [ ] E2E tests: login → create page → edit → search flow',
+          domain: 'knit',
+          projectPath: tmpDir,
+          status: 'import_draft',
+          priority: 'normal',
+          acceptanceCriteria: [],
+          dependsOn: [],
+          outOfScope: [],
+          references: [path.join(tmpDir, 'knit', 'PROJECT_STATE.md')],
+          requestIntake: {
+            createdBy: 'workspace-importer',
+          },
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          adjudications: [],
+          escalations: [],
+          agentIssues: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          origination: 'human',
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+    })
+    const archiveEvidencePath = path.join(
+      getProjectTaskLocalHistoryDir(tmpDir, 'task-006'),
+      'archive-evidence.json',
+    )
+    await fs.mkdir(path.dirname(archiveEvidencePath), { recursive: true })
+    await fs.writeFile(archiveEvidencePath, JSON.stringify({
+      id: 'task-006',
+      title: 'Add E2E login -> create page -> edit -> search flow',
+      description: 'Canonical completed work.',
+      domain: 'knit',
+      projectPath: path.join(tmpDir, 'knit'),
+      status: 'done',
+      priority: 'normal',
+      acceptanceCriteria: [{
+        id: 'AC-1',
+        description: 'The end-to-end flow is covered by automated proof.',
+        verifiedBy: 'review',
+        met: true,
+      }],
+      dependsOn: [],
+      outOfScope: [],
+      notes: [],
+      gateResults: [],
+      reviewVerdicts: [],
+      adjudications: [],
+      escalations: [],
+      agentIssues: [],
+      mergeRecord: {
+        fromBranch: 'guildhall/task-006',
+        toBranch: 'main',
+        strategy: 'manual_pr',
+        result: 'merged',
+        mergedAt: now,
+      },
+      origination: 'human',
+      createdAt: now,
+      updatedAt: now,
+    }, null, 2), 'utf8')
+    await seedImporterWithSpec(`
+\`\`\`yaml
+releases:
+  - id: stage-1-v1-release-hardening
+    label: "Stage 1: V1 Release Hardening"
+tasks:
+  - id: task-import-e2e-current
+    title: "E2E tests: login → create page → edit → search flow"
+    description: Keep the current release honest about this E2E proof.
+    domain: knit
+    priority: normal
+    references:
+      - knit/PROJECT_STATE.md
+      - knit/docs/release-plan.md
+    releaseIds:
+      - stage-1-v1-release-hardening
+\`\`\`
+`)
+
+    const res = await approveWorkspaceImport({
+      memoryDir,
+      projectPath: tmpDir,
+      coordinatorProjectPaths: {
+        knit: path.join(tmpDir, 'knit'),
+      },
+      replacePreviouslyImportedTasks: true,
+    })
+    expect(res.success, JSON.stringify(res)).toBe(true)
+    expect(res).toMatchObject({ success: true, tasksAdded: 0 })
+
+    const q = await readQueue()
+    expect(q.tasks.find(task => task.id === 'task-006'), JSON.stringify(q.tasks, null, 2)).toMatchObject({
+      status: 'done',
+      releaseIds: ['stage-1-v1-release-hardening'],
+    })
+    expect(q.tasks.find(task => task.id === 'task-import-e2e-current')).toMatchObject({
+      status: 'archived',
+      releaseIds: [],
+    })
   })
 
   it('reactivates previously shelved current-scope imported tasks during refresh', async () => {

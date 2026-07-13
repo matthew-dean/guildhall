@@ -8,6 +8,79 @@ help_summary: |
 
 # Web UI flow audit
 
+2026-07-13T13:50:00Z - Workspace import must recover archived completion truth from real task history, not reanimate duplicate current drafts.
+
+- Work id: `codex:workspace-import-archived-completion-recovery-2026-07-13`.
+- User job: When a project note still lists work that Guildhall already
+  completed, approved workspace import should keep the selected release honest:
+  restore the real completed task, archive the stale imported duplicate, and
+  move the next-action surface to the remaining unfinished current work.
+- Finding:
+  - Live Looma + Knit still treated `task-import-ik1i7i` (`E2E tests: login →
+    create page → edit → search flow`) as current shaping work even though
+    local task history already contained `task-006` as the merged completed
+    implementation for the same work.
+  - The first repair pass only proved a synthetic archive layout in a test. The
+    real app stores archived truth in per-task local-history records like
+    `tasks/task-006/archive-evidence.json`, and the importer was not reading
+    those records during approval refresh.
+  - The archived matcher also rebuilt coordinator project paths too weakly for
+    workspace envelopes like Looma + Knit, so archived Knit-scoped completion
+    could fail to match a root-scoped imported duplicate even when the titles
+    and sources clearly overlapped.
+- Root cause classification:
+  - Data model/schema problem: archived completion truth lives in task-local
+    history, but workspace import approval was effectively treating the active
+    queue as the only durable source of import reconciliation truth.
+  - Project structure/scope/release problem: envelope projects with child repo
+    coordinators need subproject-aware path matching during import refresh.
+  - UI communication/orientation problem: Work and Start kept pinning a stale
+    imported draft, which made the selected release look less complete than the
+    real completed task history.
+- Change:
+  - Workspace import approval now scans both legacy archive snapshots and the
+    real per-task `archive-evidence.json` records in local history.
+  - Archived completion recovery now matches imported drafts against
+    coordinator-aware project paths, restores the archived completed task into
+    the queue when it is the stronger truth, and archives the stale imported
+    duplicate instead of resurfacing it as current scope.
+  - The importer regression now uses the same local-history archive layout as
+    the real app so future fixes prove the real storage model rather than a
+    made-up fixture.
+- Contract Touch Decision:
+  - Work id: `codex:workspace-import-archived-completion-recovery-2026-07-13`.
+  - Touched contracts: workspace import approval reconciliation semantics for
+    archived completed work and coordinator-aware project-path matching.
+  - Contracts considered but not touched: persisted task schema, release
+    schema, Start/readiness schema, Project Work component props, Project Map
+    component props.
+  - Required follow-up: keep auditing other import-refresh failures for hidden
+    local-history truth before adding more queue-local repair logic.
+  - Proof required: focused importer regression on real archive layout, full
+    workspace-importer suite, selected-release regression, contract detector,
+    build/install/restart, stale-server check, live Looma + Knit import
+    approval proof, and browser verification that the next-action surface moves
+    off the recovered completed task.
+  - Proof provided: focused workspace-importer regression `prefers archived
+    completed work over a hollow current imported duplicate during refresh`
+    passed; full `src/runtime/__tests__/workspace-importer.test.ts` passed with
+    `86` tests; focused release-readiness regression `does not widen the
+    selected release with an unscoped import duplicate of scoped work` passed;
+    `pnpm lint:contracts` passed; `pnpm build` passed; `pnpm dev:install`
+    passed; `guildhall stop && guildhall start` refreshed the installed app;
+    `/api/stale-server` returned `stale:false`; live Looma + Knit workspace
+    import approval returned `tasksAdded:0`; live
+    `/api/project?projectId=looma-knit&surface=work` then reported
+    `task-import-ik1i7i` as `archived`, restored `task-006` as `done` in the
+    selected release, and changed `startReadiness.message` to start with
+    `TypeScript: generate proper types from Supabase (pnpm db:types)` instead
+    of the E2E duplicate; browser proof on `/projects/looma-knit/work`
+    confirmed the top action now points at the TypeScript task while the E2E
+    row renders as `Done`.
+  - Apply/revert behavior: reverting brings back queue-only reconciliation, so
+    completed work documented only in task-local history can be re-imported as
+    active current scope and steal the release pin/next action again.
+
 2026-07-13T05:58:00Z - Project Map scope cards must wrap real release names inside constrained columns.
 
 - Work id: `codex:narrative-harness-map-scope-wrap-2026-07-13`.
