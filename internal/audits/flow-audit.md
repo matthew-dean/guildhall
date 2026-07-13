@@ -30823,6 +30823,54 @@ selected-scope readiness ordering.
     Overview even while Map/Start say it is complete.
 - Schema Migration Decision: no persisted schema field or migration changed.
 
+## codex:cross-surface-calibration-2026-07-13
+
+- User job:
+  - From any primary project surface, the user should see the same selected
+    scope, current/deferred counts, current state, next action, readiness, and
+    blocker set for the real project.
+- Proof performed against the installed service:
+  - `/api/stale-server` reported `stale:false` for the installed artifact.
+  - Narrative Harness returned identical values across `overview`, `work`, and
+    `map`: selected scope `Stage 1: Headless Drafting And Evaluation MVP`,
+    `11` included, `27` deferred, headline `waiting on proof`, next action
+    `Attach proof for the completed scoped work.`, readiness `false`, verdict
+    `3 items need proof evidence.`, and the same four release blocker IDs.
+  - Looma + Knit returned identical values across `overview`, `work`, and
+    `map`: selected scope `Stage 1: V1 Release Hardening`, `5` included,
+    `67` deferred, headline `being shaped`, next action `Shape the first
+    current-scope task.`, readiness `false`, verdict `1 task still need
+    shaping, worker execution, review, or recovery.`, and the same four release
+    blocker IDs.
+  - The standalone Narrative Harness release-readiness endpoint agreed with
+    the project surfaces on scope, readiness, verdict, and blocker IDs.
+- Result:
+  - API/shared-summary agreement passes for both calibration projects.
+  - Narrative Harness remains honestly incomplete: implementation work is
+    terminal, but three current tasks still lack live proof and the repository
+    has two local commits that cannot be pushed from this environment.
+  - Looma + Knit remains honestly incomplete: one current task needs shaping,
+    with repository and checkout follow-up visible as separate blockers.
+- Visual proof gap:
+  - The in-app browser connection exposed no current tab/context, so viewport,
+    clipping, and rendered-text proof could not be collected in this pass.
+  - Do not treat API agreement as browser/UI completion; repeat the same checks
+    through the installed browser before closing the calibration goal.
+- Contract Touch Decision:
+  - Work id: `cross-surface-calibration-2026-07-13`.
+  - Touched contracts: none; this is live validation of the existing shared
+    summary/action model and installed artifact.
+  - Contracts considered but not touched: project detail payload, release
+    readiness payload, orientation spine, project views, and browser layout.
+  - Required follow-up: collect installed-browser geometry and visible-copy
+    proof, then reconcile any browser/API disagreement before completion.
+  - Proof required: API agreement, installed artifact freshness, and browser
+    agreement.
+  - Proof provided: API agreement and `stale:false`; browser proof remains
+    explicitly pending.
+  - Apply/revert behavior: no persisted or source state changed.
+- Schema Migration Decision: no persisted schema or migration changed.
+
 ## 2026-07-13T21:30:00Z - Shared effective task proof recovery agreement
 
 - User job:
