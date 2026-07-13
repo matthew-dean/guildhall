@@ -8,6 +8,32 @@ help_summary: |
 
 # Web UI flow audit
 
+2026-07-13T05:10:00Z - Narrative Harness Map renders the completed current release as understandable product state.
+
+- Work id: `codex:narrative-harness-map-browser-proof-2026-07-13`.
+- User job: A user should be able to open Project Map and understand the
+  current Narrative Harness release state without reading CLI output or hidden
+  API JSON.
+- Browser proof:
+  - Desktop viewport `1280x720`, live route
+    `/projects/narrative-harness/map`: visible text includes `Stage 1:
+    Headless Drafting And Evaluation MVP is complete.`, release scope `11
+    assigned work items`, `27 later work items`, `58 documented capabilities`,
+    `0 gaps`, `Headless proof`, progress `11 Proven`, Release roadmap, Scope
+    ledger, Tasks in scope, Documented skeleton, and Source trail.
+  - Source trail rendered `Source docs` as `66 source documents` and `Work
+    records` as `11 task records` with `66 source documents attached to mapped
+    work.`
+  - Desktop geometry check found no horizontal overflow.
+  - Mobile viewport `390x844`: visible first-screen/body text still includes
+    the completed release headline, `11 assigned work items`, `27 later`,
+    `Headless proof`, `66 source documents`, and the work-record source detail;
+    mobile geometry check found no horizontal overflow.
+- Result:
+  - No code change required from this pass.
+  - Remaining risk: this proves Map orientation communication, not every
+    Overview/Work interaction or every future release-selection flow.
+
 2026-07-13T05:00:00Z - Source trail work records should not warn when scoped work is source-backed.
 
 - Work id: `codex:source-trail-work-record-grounding-2026-07-13`.
