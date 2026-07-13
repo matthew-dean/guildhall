@@ -30886,6 +30886,54 @@ selected-scope readiness ordering.
 - Schema Migration Decision: no persisted schema field or migration changed;
   this is a derived read-model correction over existing runtime proof state.
 
+## 2026-07-13T21:37:00Z - Proof blockers no longer impersonate owner blockers
+
+- User job:
+  - A project blocked on proof evidence should tell the user that evidence is
+    missing. It must not imply that Matthew has to approve or unblock work when
+    `humanBlockingCount` is zero.
+- Finding:
+  - Narrative Harness had `proofEvidenceBlockingCount: 3` and
+    `humanBlockingCount: 0`, but the shared verdict fallback said
+    `3 items waiting on you.`
+- Root cause classification:
+  - Shared summary vocabulary bug: the verdict builder considered any blocked
+    state owner-facing and ignored the proof-evidence count.
+- Fix:
+  - The shared verdict model now prioritizes `proofEvidenceBlockingCount` with
+    `N item(s) need(s) proof evidence`, uses owner language only when
+    `humanBlockingCount` is positive, and uses neutral readiness language for
+    other system blockers.
+  - Runtime and web fallback callers pass the same proof and owner counts.
+- Proof provided:
+  - The focused proof-recovery regression and the full affected runtime suite
+    pass: 248 tests.
+  - `pnpm build`, `pnpm dev:install`, `guildhall stop && guildhall start`, and
+    `/api/stale-server` passed with `stale:false`.
+  - Live Narrative Harness release readiness now reports:
+    `3 items need proof evidence.` with the same three proof-missing task ids;
+    it no longer says those items are waiting on the owner.
+  - Live Looma + Knit retains its independent `Work remaining` verdict for the
+    one current task that still needs shaping.
+- Contract Touch Decision:
+  - Work id: `release-verdict-proof-vs-owner-vocabulary-2026-07-13`.
+  - Touched contracts: shared release verdict summary input and derived detail
+    vocabulary; runtime/web summary projections.
+  - Contracts considered but not touched: persisted task schema, release
+    schema, blocker storage, task execution policy, and UI-specific components.
+  - Required follow-up: add browser proof when the in-app browser bridge is
+    available; retain this wording as a calibration case for owner-vs-proof
+    confusion.
+  - Proof required: focused regression, full affected suite, installed build,
+    stale-server proof, and live API output.
+  - Proof provided: all listed checks except browser proof, which remains
+    explicitly pending.
+  - Apply/revert behavior: reverting this change restores owner-facing copy
+    for non-owner proof blockers and reopens the ambiguity between Codex work
+    performed on the user's behalf and Guildhall owner actions.
+- Schema Migration Decision: no persisted schema field or migration changed;
+  this is a derived summary presentation correction.
+
 ## codex:looma-knit-import-shaping-state-regression-2026-07-13
 
 - User job:

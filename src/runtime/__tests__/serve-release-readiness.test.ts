@@ -2203,6 +2203,7 @@ describe('GET /api/project/release-readiness', () => {
     expect(readiness.ready).toBe(false)
     expect(readiness.proofMissingDoneTasks).toEqual([{ id: 'task-current', title: 'Select and prove a DeepInfra drafting model' }])
     expect(readiness.totals.proofEvidenceBlockingCount).toBe(1)
+    expect(readiness.verdict.detail).toBe('1 item needs proof evidence.')
   })
 
   it('accepts semantically matching review proof for inferred Narrative Harness proof paths', async () => {

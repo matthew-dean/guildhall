@@ -80,6 +80,8 @@ export function buildReleaseVerdictSummary(input: {
     tasks: number
     done: number
     blockingCount: number
+    humanBlockingCount?: number
+    proofEvidenceBlockingCount?: number
     unfinishedCount: number
     designSystemBlockingCount: number
     dirtyCheckoutBlockingCount: number
@@ -88,6 +90,8 @@ export function buildReleaseVerdictSummary(input: {
   dirtyCheckout: { ownedCount: number; error?: string }
 }): ReleaseStatusSummary<ReleaseVerdictState> {
   const { hasNamedRelease, ready, notReadyReason, totals, designSystem, dirtyCheckout } = input
+  const humanBlockingCount = totals.humanBlockingCount ?? 0
+  const proofEvidenceBlockingCount = totals.proofEvidenceBlockingCount ?? 0
   const readinessNoun = hasNamedRelease ? 'release' : 'scope'
   const blockerNoun = hasNamedRelease ? 'release blocker' : 'scope blocker'
   if (totals.tasks === 0) {
@@ -145,6 +149,11 @@ export function buildReleaseVerdictSummary(input: {
     state: 'blocked',
     label: 'Blocked',
     tone: 'warn',
-    detail: notReadyReason ?? `${totals.blockingCount} item${totals.blockingCount === 1 ? '' : 's'} waiting on you.`,
+    detail: notReadyReason
+      ?? (proofEvidenceBlockingCount > 0
+        ? `${proofEvidenceBlockingCount} ${proofEvidenceBlockingCount === 1 ? 'item needs' : 'items need'} proof evidence.`
+        : humanBlockingCount > 0
+          ? `${humanBlockingCount} ${humanBlockingCount === 1 ? 'item' : 'items'} waiting on you.`
+          : `${totals.blockingCount} ${totals.blockingCount === 1 ? 'item blocks' : 'items block'} ${readinessNoun} readiness.`),
   }
 }

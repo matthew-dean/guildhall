@@ -13900,6 +13900,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
         tasks: scopedTasks.length,
         done: statusCounts['done'] ?? 0,
         blockingCount,
+        humanBlockingCount,
+        proofEvidenceBlockingCount: effectiveProofMissingDoneTasks.length,
         unfinishedCount,
         designSystemBlockingCount,
         dirtyCheckoutBlockingCount,

@@ -107,6 +107,8 @@ export function releaseVerdictSummary(
       tasks: taskCount,
       done: doneCount,
       blockingCount,
+      humanBlockingCount: humanBlocking,
+      proofEvidenceBlockingCount: totals?.proofEvidenceBlockingCount ?? 0,
       unfinishedCount,
       designSystemBlockingCount,
       dirtyCheckoutBlockingCount: dirtyCheckoutCount,
