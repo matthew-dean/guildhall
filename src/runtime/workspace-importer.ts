@@ -2015,16 +2015,24 @@ export async function materializeParsedWorkspaceImport(input: {
     parsedTasks: input.parsed.tasks,
   })
   const enrichedTasks = tasks.map((task) => {
-    const evidenceDetail = extractReferenceEvidenceDetail(task, input.projectPath)
+    // Evidence readers accept relative references, while proof-command
+    // discovery also needs to walk up to the project's package.json. Keep the
+    // persisted references unchanged, but give the materializer an absolute
+    // view for this source-backed derivation.
+    const proofTask: MaterializedImportTask = {
+      ...task,
+      references: absoluteImportedReferences(task.references, input.projectPath),
+    }
+    const evidenceDetail = extractReferenceEvidenceDetail(proofTask, input.projectPath)
     return {
       ...task,
-      acceptanceCriteria: materializedAcceptanceCriteria(task, evidenceDetail).map((criterion) => ({
+      acceptanceCriteria: materializedAcceptanceCriteria(proofTask, evidenceDetail).map((criterion) => ({
         id: criterion.id,
         description: criterion.description,
         verifiedBy: criterion.verifiedBy,
         source: criterion.source,
       })),
-      proofPaths: materializedProofPaths(task, evidenceDetail),
+      proofPaths: materializedProofPaths(proofTask, evidenceDetail),
     }
   })
   return {
@@ -3748,6 +3756,9 @@ function firstImportedProofCommand(task: MaterializedImportTask): string | null 
   )
   if (proofCommand?.command?.trim()) return proofCommand.command.trim()
 
+  const documentedCommand = documentedImportedProofCommands(task)[0]
+  if (documentedCommand) return documentedCommand
+
   // Imported task text is source evidence too. Preserve an explicit command
   // already named in the title/description instead of inventing a missing
   // proof-command setup step.
@@ -3764,6 +3775,100 @@ function firstImportedProofCommand(task: MaterializedImportTask): string | null 
     if (command) return command
   }
   return null
+}
+
+function documentedImportedProofCommands(task: Pick<MaterializedImportTask, 'title' | 'description' | 'references'>): string[] {
+  const commands = new Set<string>()
+  const genericProofKeywords = new Set([
+    'check',
+    'command',
+    'executable',
+    'proof',
+    'prove',
+    'review',
+    'run',
+    'script',
+    'test',
+    'validate',
+    'verification',
+    'verify',
+  ])
+  const taskKeywords = titleKeywords(task.title).filter(keyword => !genericProofKeywords.has(keyword))
+  const add = (command: string): void => {
+    const normalized = command.trim().replace(/[.,;!?]+$/, '')
+    if (normalized) commands.add(normalized)
+  }
+
+  const commandMatchesTask = (command: string): boolean => {
+    const commandKeywords = normalizeImportText(command)
+      .split(/[\s:_\/-]+/)
+      .filter(keyword => keyword.length >= 4 && !genericProofKeywords.has(keyword))
+    return taskKeywords.some(taskKeyword => commandKeywords.some(commandKeyword =>
+      taskKeyword === commandKeyword ||
+      (taskKeyword.length >= 5 && commandKeyword.length >= 5 && (
+        taskKeyword.startsWith(commandKeyword.slice(0, 5)) ||
+        commandKeyword.startsWith(taskKeyword.slice(0, 5))
+      )),
+    ))
+  }
+
+  const collectFromText = (text: string, requireTaskMatch: boolean): void => {
+    for (const line of text.split(/\r?\n/)) {
+      const trimmed = line.trim()
+      if (!trimmed) continue
+      for (const match of trimmed.matchAll(/\bpnpm\s+(?:(run)\s+)?([a-z0-9@:_./-]+)/gi)) {
+        const script = match[2]?.trim()
+        if (!script) continue
+        const command = `pnpm${match[1] ? ' run' : ''} ${script}`
+        if (
+          (!requireTaskMatch || commandMatchesTask(command)) &&
+          (/\b(prove|test|check|validate|verify|verification|proof|executable)\b/i.test(trimmed) || /\b(prove|test|check|validate|verify)\b/i.test(script))
+        ) {
+          add(command)
+        }
+      }
+    }
+  }
+
+  collectFromText(`${task.title}\n${task.description}`, false)
+  for (const reference of task.references ?? []) {
+    // Materialized imports normalize references to absolute paths. Relative
+    // references are still valid source claims, but cannot safely be opened
+    // here without the importer project root; leave them to the existing
+    // evidence reader rather than resolving them against Guildhall's cwd.
+    if (!path.isAbsolute(reference)) continue
+    const absoluteReference = path.resolve(reference)
+    let content: string
+    try {
+      content = readManagedTextFileSync(absoluteReference, 'utf-8')
+    } catch {
+      continue
+    }
+    collectFromText(content, true)
+
+    const scriptReferences = [...content.matchAll(/\b(scripts\/[A-Za-z0-9._/-]+)/g)]
+      .map(match => match[1])
+      .filter((value): value is string => Boolean(value) && /\b(prove|test|check|validate|verify)\b/i.test(value))
+    if (scriptReferences.length === 0) continue
+
+    let directory = path.dirname(absoluteReference)
+    while (directory !== path.dirname(directory)) {
+      try {
+        const packageJson = JSON.parse(readManagedTextFileSync(path.join(directory, 'package.json'), 'utf-8')) as {
+          scripts?: Record<string, unknown>
+        }
+        for (const [name, value] of Object.entries(packageJson.scripts ?? {})) {
+          if (typeof value !== 'string') continue
+          const command = `pnpm run ${name}`
+          if (scriptReferences.some(script => value.includes(script)) && commandMatchesTask(command)) add(command)
+        }
+        break
+      } catch {
+        directory = path.dirname(directory)
+      }
+    }
+  }
+  return [...commands]
 }
 
 function deterministicImportedCriterion(

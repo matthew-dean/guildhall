@@ -5701,6 +5701,80 @@ tasks:
     expect(deepInfraTask?.taskReadiness?.recommendation).toBe('ready')
   })
 
+  it('uses documented proof scripts instead of inventing a proof-command setup gap', async () => {
+    const proofDoc = path.join(tmpDir, 'docs', 'harness', 'generation-proof.md')
+    await fs.mkdir(path.dirname(proofDoc), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'package.json'),
+      JSON.stringify({
+        scripts: {
+          'prove:generation': 'node scripts/prove-generation.mjs',
+          'prove:world-state-continuity': 'node scripts/prove-world-state-continuity.mjs',
+        },
+      }),
+      'utf-8',
+    )
+    await fs.writeFile(
+      proofDoc,
+      [
+        '# Generation proof',
+        '',
+        '## Verification',
+        '',
+        '- Verification: scripts/prove-generation.mjs (proof script)',
+        '- A separate world-state task uses `pnpm run prove-world-state-continuity`.',
+      ].join('\n'),
+      'utf-8',
+    )
+
+    await seedImporterWithSpec(`
+\`\`\`yaml
+tasks:
+  - id: task-generation
+    title: Generate a CLI-first story synopsis and one chapter draft from the selected model.
+    description: Generate the bounded story output from the selected author intent.
+    domain: harness
+    scope: current
+    priority: high
+    references:
+      - ${proofDoc}
+  - id: task-world-state
+    title: Prove world-state continuity review over elapsed-time object changes.
+    description: Check world-state transitions over elapsed time.
+    domain: coherence
+    scope: current
+    priority: high
+    references:
+      - ${proofDoc}
+\`\`\`
+`)
+
+    const approved = await approveWorkspaceImport({ memoryDir, projectPath: tmpDir })
+    expect(approved.success).toBe(true)
+    const task = (await readQueue()).tasks.find(candidate => candidate.id === 'task-generation')
+    expect(task?.proofPaths).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'command',
+        command: 'pnpm run prove:generation',
+        source: 'documented',
+        launchSteps: [expect.objectContaining({ kind: 'copy_command' })],
+      }),
+    ]))
+    expect(task?.proofPaths?.some(path => path.launchSteps?.some(step => step.kind === 'blocked_until_setup'))).toBe(false)
+    expect(task?.acceptanceCriteria?.find(criterion => criterion.id === 'deterministic-proof')).toMatchObject({
+      verifiedBy: 'automated',
+      source: 'documented',
+    })
+    const worldStateTask = (await readQueue()).tasks.find(candidate => candidate.id === 'task-world-state')
+    expect(worldStateTask?.proofPaths).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'command',
+        command: 'pnpm run prove-world-state-continuity',
+        source: 'documented',
+      }),
+    ]))
+  })
+
   it('does not resurrect stale imported queue work when materializing a parsed current slice', async () => {
     await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
     await fs.mkdir(path.join(tmpDir, 'docs', 'specs'), { recursive: true })

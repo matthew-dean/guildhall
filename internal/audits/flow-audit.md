@@ -35055,3 +35055,56 @@ orientation proof projection as scope summary.
     notes in `TASKS.json`; release readiness now blocks on incomplete briefs
     for those two shaped tasks rather than losing the transition.
 - Schema Migration Decision: no persisted schema field or migration changed.
+
+## codex:workspace-import-documented-proof-2026-07-13
+
+- User job:
+  - When Guildhall imports a source-backed implementation task, the user
+    should see the real repository proof command already named by the cited
+    documentation, rather than an invented setup gap.
+  - A task without a documented command must remain honest about that missing
+    proof path; this change must not turn inferred commands into evidence.
+- Root cause classification:
+  - Project intake/modeling problem: the importer recognized verification
+    prose, but only searched the task title/description for commands and did
+    not resolve documented `scripts/prove-*.mjs` references through the
+    project's package scripts.
+  - Runtime summary/proof communication problem: imported tasks could show a
+    generic review path even when the source trail named an executable proof.
+- Fix:
+  - Reused the existing `proofPaths` contract and taught source-backed proof
+    derivation to recognize explicit `pnpm` proof/test/validation commands.
+  - When a cited document names a proof script, the importer resolves that
+    script against the nearest source `package.json` and emits the matching
+    `pnpm run <script>` command with a normal copy-command launch step.
+  - Relative persisted references remain unchanged; only the derivation view
+    uses absolute paths while materializing source-backed proof.
+  - Missing commands still produce the existing inferred
+    `blocked_until_setup` path; no command is fabricated.
+- Proof provided:
+  - Focused importer regression for a Narrative Harness-style generation proof
+    document and `package.json` script passes.
+  - Existing Narrative Harness MVP drafting/continuity importer regression
+    still passes.
+- Remaining calibration work:
+  - Rebuild/reinstall the app, re-intake the real Narrative Harness docs, and
+    verify its current tasks expose the documented proof commands in API and
+    UI state. This code change alone does not claim that project state has
+    been refreshed.
+- Contract Touch Decision:
+  - Work id: `workspace-import-documented-proof`.
+  - Touched contracts: source-backed proof derivation inside the existing task
+    `proofPaths` and launch-step contract; importer materialization behavior.
+  - Contracts considered but not touched: persisted task schema, release
+    schema, proof-result schema, scheduler execution boundary, Project Map,
+    Overview, and Work UI components.
+  - Required follow-up: live re-intake and cross-surface proof against
+    Narrative Harness, then Looma + Knit calibration.
+  - Proof required: focused importer tests, contract detector, installed build,
+    API state after re-intake, and browser-visible proof where the bridge is
+    available.
+  - Apply/revert behavior: reverting restores generic review/inferred setup
+    paths for imported tasks even when the cited docs name executable proof.
+- Schema Migration Decision:
+  - Scope: none. No persisted field, enum, or serialized task shape changed;
+    this reuses existing `proofPaths` and `launchSteps` fields.
