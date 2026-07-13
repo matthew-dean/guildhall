@@ -152,6 +152,30 @@ describe('buildReviewPlan', () => {
     expect(plan.budget.maxReviewerAgents).toBeGreaterThan(3)
   })
 
+  it('does not require visual proof for headless no-UI packet work that mentions product UI as absent', () => {
+    const plan = buildReviewPlan({
+      task: task({
+        title: 'Add author-intent inputs for voice, genre, audience, theme, synopsis, outline, characters, character voices, world-state facts, and review plan.',
+        description: 'Records exist for author intent. The no-UI packet builder feeds author-intent records into drafting and review without relying on a completed product UI.',
+        acceptanceCriteria: [
+          { id: 'records', description: 'Records exist for voice, genre, audience, theme, synopsis, outline, characters, character voices, world-state facts, and review plan.', met: false },
+          { id: 'packet', description: 'The no-UI packet builder can feed author-intent records into drafting and review without relying on a completed product UI.', met: false },
+          { id: 'proof', description: 'Run the bounded local workspace proof command for the headless packet builder.', met: false, command: 'pnpm test -- author-intent-inputs' },
+        ],
+      }),
+      createdAt: '2026-05-25T12:00:00.000Z',
+    })
+
+    expect(plan.selectedLanes).not.toEqual(expect.arrayContaining([
+      'ux_comprehension',
+      'visual_design',
+      'accessibility',
+    ]))
+    expect(plan.requiredArtifacts).not.toContain('visual-evidence')
+    expect(plan.deterministicChecks).not.toContain('browser-or-screenshot-evidence')
+    expect(plan.reasons).toContain('Headless/no-UI proof scope removes product UI review lanes and visual evidence requirements.')
+  })
+
   it('brings design-system control-choice work into generic UX, visual, and accessibility review', () => {
     const plan = buildReviewPlan({
       task: task({
@@ -447,5 +471,60 @@ describe('ensureTaskReviewPlanRecorded', () => {
     expect(result.recorded).toBe(false)
     expect(result.plan.createdAt).toBe('2026-05-25T11:00:00.000Z')
     expect(writes).toBe(0)
+  })
+
+  it('repairs stored visual artifact gates when the task resolves to headless no-UI proof', async () => {
+    const existing = buildReviewPlan({
+      task: task({
+        title: 'Improve setup wizard empty state',
+        description: 'The browser setup flow has confusing labels and missing keyboard focus behavior.',
+      }),
+      changedFiles: ['src/web/surfaces/SetupWizard.svelte'],
+      createdAt: '2026-05-25T11:00:00.000Z',
+    })
+    const savedPlans: ReviewPlanRecord[] = []
+    const savedEvents: ReviewPlanEvent[] = []
+    const store: Pick<ReviewAuditStore, 'readTaskReviewAudit' | 'saveReviewPlan' | 'appendReviewPlanEvent'> = {
+      async readTaskReviewAudit() {
+        return {
+          plan: persistedPlan(existing),
+          events: [],
+          reviewerRuns: [],
+          escapedMisses: [],
+        }
+      },
+      async saveReviewPlan(plan) {
+        const saved = plan as ReviewPlanRecord
+        savedPlans.push(saved)
+        return persistedPlan(saved)
+      },
+      async appendReviewPlanEvent(event) {
+        const saved = event as ReviewPlanEvent
+        savedEvents.push(saved)
+        return persistedPlanEvent(saved)
+      },
+    }
+
+    const result = await ensureTaskReviewPlanRecorded({
+      store,
+      task: task({
+        title: 'Add author-intent inputs',
+        description: 'The no-UI packet builder feeds author-intent records into drafting and review without relying on a completed product UI.',
+      }),
+      createdBy: 'coordinator:test',
+      now: () => new Date('2026-05-25T12:00:00.000Z'),
+    })
+
+    expect(result.recorded).toBe(true)
+    expect(result.plan.selectedLanes).not.toContain('ux_comprehension')
+    expect(result.plan.requiredArtifacts).not.toContain('visual-evidence')
+    expect(result.reviewRisk.requiredArtifacts).not.toContain('visual-evidence')
+    expect(savedPlans).toHaveLength(1)
+    expect(savedEvents).toMatchObject([
+      {
+        kind: 'override',
+        summary: 'Removed UI review artifacts from a stored plan after the task resolved to headless/no-UI proof.',
+      },
+    ])
   })
 })

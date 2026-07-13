@@ -24,6 +24,7 @@ import {
 import { readTaskWorkspaceStore } from './task-state-store.js'
 import { latestRecordedCompletionProofAt, recordedCompletionProofCanSettleTaskStatus, recordedCompletionProofForTask, taskHasRecordedCompletionProof } from './task-completion-proof.js'
 import { taskDoneButProofMissing, taskHasNonReviewCommandBackedProof } from './proof-health.js'
+import { normalizeReviewPlanForTask } from './review-planner.js'
 import { taskBlockerSummary } from './task-blocker-summary.js'
 import { taskTitleOverlap } from './task-title-overlap.js'
 import {
@@ -3675,12 +3676,24 @@ async function enrichTaskForServe(
         persistence: new FileBackedGuildhallPersistence(),
       }).readTaskReviewAudit(taskId).catch(() => null)
     : null
+  const normalizedReviewPlan = reviewAudit?.plan
+    ? normalizeReviewPlanForTask({ task: normalized }, reviewAudit.plan.payload).plan
+    : null
+  const normalizedReviewAudit = reviewAudit && normalizedReviewPlan
+    ? {
+        ...reviewAudit,
+        plan: {
+          ...reviewAudit.plan!,
+          payload: normalizedReviewPlan,
+        },
+      }
+    : reviewAudit
 
   const enriched = {
     ...normalized,
     ...buildTaskEvidenceSummary(normalized),
-    ...(reviewAudit?.plan ? { reviewPlan: reviewAudit.plan.payload } : {}),
-    ...(reviewAudit ? { reviewAuditSummary: buildReviewAuditSummary(reviewAudit) } : {}),
+    ...(normalizedReviewPlan ? { reviewPlan: normalizedReviewPlan } : {}),
+    ...(normalizedReviewAudit ? { reviewAuditSummary: buildReviewAuditSummary(normalizedReviewAudit) } : {}),
     ...(latestReviewerSummary ? { latestReviewerSummary } : {}),
     ...(latestSelfCritique ? { latestSelfCritique } : {}),
     ...(terminalSummary ? { terminalSummary } : {}),

@@ -30566,6 +30566,65 @@ selected-scope readiness ordering.
     Overview even while Map/Start say it is complete.
 - Schema Migration Decision: no persisted schema field or migration changed.
 
+## codex:headless-review-plan-modality-repair-2026-07-13
+
+- User job:
+  - A headless/no-UI Narrative Harness proof task should be reviewed as
+    command-backed product/runtime work, not as a visual UI task. The user
+    should not see or inherit screenshot/live-preview requirements when the
+    task explicitly says it does not rely on a completed product UI.
+- Root cause classification:
+  - Review-plan data model problem: `ux_comprehension` implied
+    `visual-evidence`, so a headless packet-builder task that mentioned
+    absent product UI inherited visual artifact gates even when
+    `visual_design` was skipped.
+  - Stale derived-state problem: existing stored review plans were treated as
+    final, so once a bad plan was recorded, later task text proving
+    `no-UI`/headless scope did not repair the plan before reviewer selection or
+    task-detail display.
+  - UX communication problem: task detail could display the stale derived plan,
+    making Guildhall look like it needed screenshots for non-visual work.
+- Fix:
+  - `buildReviewPlan` now removes `ux_comprehension`, `visual_design`, and
+    `accessibility` lanes when the task declares headless/no-UI proof and has
+    no frontend changed-file hint.
+  - `ensureTaskReviewPlanRecorded` now normalizes an existing stored plan for
+    the current task modality and records an `override` review-plan event when
+    visual gates are removed.
+  - Task-detail enrichment uses the same normalizer before exposing
+    `reviewPlan` or `reviewAuditSummary`, so read-only surfaces do not keep
+    showing disproven visual artifact requirements.
+- Proof provided:
+  - `CI=true pnpm exec vitest run src/runtime/__tests__/review-planner.test.ts`
+    passed: 14 tests.
+  - `CI=true pnpm lint:contracts` passed.
+  - `git diff --check` passed.
+  - `CI=true pnpm build` passed.
+- Residual findings:
+  - The fixed build has not been installed into `localhost:7777` yet because
+    the Narrative Harness run was still actively streaming through DeepInfra at
+    the time of this audit entry. Install proof is still required after the run
+    stops or is safely paused.
+- Contract Touch Decision:
+  - Work id: `headless-review-plan-modality-repair`.
+  - Touched contracts: review-plan lane selection, review-plan artifact
+    requirements, stored review-plan normalization, task-detail review-plan
+    projection, and review-planner regression coverage.
+  - Contracts considered but not touched: persisted review-plan schema,
+    review-plan event schema, task schema, release schema, reviewer verdict
+    schema, project orientation spine schema, and UI component contracts.
+  - Required follow-up: install the fixed build when safe, verify the live
+    Narrative Harness author-intent task no longer exposes `visual-evidence`,
+    and continue the Stage 1 proof run.
+  - Proof required: focused review-planner regressions, contract lint, build,
+    installed-app freshness, live task-detail API proof, and resumed NH run
+    proof.
+  - Proof provided: focused regression, contract lint, diff check, and build.
+  - Apply/revert behavior: reverting restores visual-evidence gates for
+    headless/no-UI tasks and lets stored bad plans continue to leak into
+    reviewer selection and task detail.
+- Schema Migration Decision: no persisted schema field or migration changed.
+
 ## codex:proof-missing-release-start-recovery-2026-07-13
 
 - User job:
