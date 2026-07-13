@@ -30388,6 +30388,68 @@ selected-scope readiness ordering.
     Overview even while Map/Start say it is complete.
 - Schema Migration Decision: no persisted schema field or migration changed.
 
+## 2026-07-13T03:58:48Z - Shelved release work remains visible as deferred scope
+
+- User job:
+  - When a project has a named release or current scope, Guildhall should keep
+    every release member in the project skeleton. Moving work out of "now"
+    should make it deferred/later, not make it disappear from the release
+    boundary and downstream orientation counts.
+- Root cause classification:
+  - Data model/schema problem: release membership and task status were being
+    normalized in the same pass, and `shelved` status could remove a release
+    member from active scope without preserving it as deferred scope.
+  - Project structure/scope/release problem: a release container could lose
+    intentionally later work during scope projection, which undermines the
+    1,000-foot view of what belongs to the selected release versus what is
+    simply not current.
+  - UI communication/orientation problem: any downstream Overview/Map/Work
+    surface that trusts the projection would be unable to communicate the full
+    release boundary if the model had already dropped a shelved member.
+- Fix:
+  - `buildProjectScopeProjection` now preserves a `shelved` task that belongs
+    to the selected release as a deferred node while removing it from the active
+    node set.
+  - Added a projection regression proving that a shelved release member remains
+    in `selectedScope.deferredNodeIds`, appears as a deferred row, and
+    contributes to deferred counts.
+- Proof provided:
+  - `corepack pnpm vitest run
+    src/runtime/__tests__/project-scope-projection.test.ts` passed: 19 tests.
+  - `git diff --check` passed.
+  - `corepack pnpm lint:contracts` passed.
+  - `node ./build.mjs` passed.
+  - `corepack pnpm dev:install` passed.
+  - `guildhall stop && guildhall start` restarted the installed app.
+  - `/api/stale-server` returned `stale:false`, PID `98144`,
+    `bootBuildMtimeMs:1783915194203`, and
+    `currentBuildMtimeMs:1783915194203`.
+  - Installed API proof for Narrative Harness Overview still showed the
+    selected scope `Stage 1: Headless Drafting And Evaluation MVP` with 11
+    included work items, 27 deferred work items, and ready release state.
+  - Installed API proof for Looma + Knit Overview still showed the selected
+    scope `Stage 1: V1 Release Hardening` with 5 included work items, 64
+    deferred work items, and blocked release state with the known shaping,
+    repository-followup, and dirty-checkout blockers.
+- Contract Touch Decision:
+  - Work id: `shelved-release-member-deferred-scope`.
+  - Touched contracts: runtime scope projection semantics for release
+    membership, deferred scope counts, and selected release node normalization.
+  - Contracts considered but not touched: persisted task schema, persisted
+    release schema, task status values, release readiness repository blockers,
+    project action model, and Overview/Map/Work component props.
+  - Required follow-up: continue consolidating Overview/Map/Work around one
+    authoritative project-state read model so projection invariants are reused
+    instead of re-derived per surface.
+  - Proof required: focused projection regression, contract lint, build, and
+    installed-app freshness because the user is testing against `localhost:7777`.
+  - Proof provided: focused projection regression, contract lint, build,
+    installed-app freshness, and live calibration project API spot checks.
+  - Apply/revert behavior: reverting can cause a release-assigned shelved task
+    to vanish from the selected release projection instead of showing as later
+    scoped work.
+- Schema Migration Decision: no persisted schema field or migration changed.
+
 ## 2026-07-13 - Overview delivery counts follow selected scope
 
 - User job:

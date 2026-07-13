@@ -188,6 +188,48 @@ describe('buildProjectScopeProjection', () => {
     expect(projection.counts.included).toBe(1)
   })
 
+  it('keeps shelved release members inside the release as deferred scope', () => {
+    const projection = buildProjectScopeProjection({
+      version: 1,
+      lastUpdated: now,
+      selectedReleaseId: 'stage-2',
+      releases: [{
+        id: 'stage-2',
+        label: 'Stage 2',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-now', 'work:task-later'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [
+        task({
+          id: 'task-now',
+          title: 'Current release work',
+          status: 'ready',
+          releaseIds: ['stage-2'],
+        }),
+        task({
+          id: 'task-later',
+          title: 'Deferred release work',
+          status: 'shelved',
+          releaseIds: ['stage-2'],
+        }),
+      ],
+    })
+
+    expect(projection.selectedScope?.nodeIds).toEqual(['work:task-now'])
+    expect(projection.selectedScope?.deferredNodeIds).toEqual(['work:task-later'])
+    expect(projection.rows.find(row => row.taskId === 'task-later')).toMatchObject({
+      scope: 'deferred',
+      eligibilityReason: 'deferred',
+      handoffState: 'deferred',
+    })
+    expect(projection.counts.included).toBe(1)
+    expect(projection.counts.deferred).toBe(1)
+  })
+
   it('treats release node membership as executable scope even when tasks lack releaseIds', () => {
     const projection = buildProjectScopeProjection({
       version: 1,

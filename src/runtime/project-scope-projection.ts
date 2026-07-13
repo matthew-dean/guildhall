@@ -391,7 +391,7 @@ function normalizeSelectedScope(scope: ProjectScope | null, tasks: readonly Task
     }
     if (task.status === 'shelved') {
       nodeIds.delete(nodeId)
-      if (deferredNodeIds.has(nodeId)) deferredNodeIds.add(nodeId)
+      if (deferredNodeIds.has(nodeId) || task.releaseIds?.includes(scope.id)) deferredNodeIds.add(nodeId)
       continue
     }
     const parent = task.hierarchy?.parentId ? tasksById.get(task.hierarchy.parentId) ?? null : null
