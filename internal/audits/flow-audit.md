@@ -8,6 +8,66 @@ help_summary: |
 
 # Web UI flow audit
 
+2026-07-13 - Service and Map summaries use selected-scope blocker truth.
+
+- Work id: `codex:service-map-selected-scope-blocker-truth-2026-07-13`.
+- User job: every project entry point must describe the same current
+  release/current-scope state. The owner should not see Overview and Work say a
+  selected scope is blocked while Project Map or the fleet/service summary says
+  the same scoped work is active.
+- Live finding:
+  - Installed Looma + Knit Overview and Work reported `Stage 1: V1 Release
+    Hardening` as `5` selected tasks, `3` done, `2` blocked, and `0` active.
+  - `/api/project?surface=map` and `/api/service` still derived progress
+    without selected-scope readiness blockers, so they reported selected/current
+    work as active instead of blocked.
+- Root-cause classification:
+  - Project structure/scope/release modeling problem: release-less/current-scope
+    fallback and explicit release scopes were not being projected consistently
+    into fleet and map summaries.
+  - Scheduler/action-state logic problem: release readiness blockers decide
+    whether Start/Resume can run, but Map and service progress ignored those
+    blocker ids.
+  - UI communication/orientation problem: entry points disagreed about the same
+    execution boundary, making the product look ungrounded.
+- Change:
+  - Project Map now builds release readiness for compact map payloads before
+    deriving `workProgress`, matching Overview and Work.
+  - `/api/service` now derives `workProgress` from each registered project's own
+    selected scope/current-work fallback and scoped release blockers, without
+    using a closure-bound project endpoint helper.
+  - The shared selected-task-id helper now falls back from `selectedTaskScope` to
+    `scope` to `selectedRelease`, and service uses the existing current-work
+    fallback when no named release is present.
+- Contract Touch Decision:
+  - Work id: `codex:service-map-selected-scope-blocker-truth-2026-07-13`.
+  - Touched contracts: `/api/service` `workProgress` semantics and
+    `/api/project?surface=map` selected-scope progress semantics.
+  - Contracts considered but not touched: persisted task schema, persisted
+    release/scope schema, release-readiness payload shape, project card visual
+    components, scheduler Start/Resume command semantics.
+  - Required follow-up: keep pressure on raw `taskCounts` consumers; project
+    cards should prefer `workProgress` for user-facing current-state language.
+  - Proof required: focused runtime regression covering Overview, Work, Map, and
+    Service agreement; contract detector; installed-app stale proof; live Looma
+    + Knit and Narrative Harness API proof.
+  - Proof provided: focused release-readiness regression passed; broader
+    runtime/web regression slice passed (`146` tests across service readiness,
+    work progress, project summary/activity, Projects Home, and Project Map);
+    `pnpm lint:contracts` and `git diff --check` passed; installed app was
+    rebuilt and reinstalled with `/api/stale-server` reporting `stale:false`.
+    Live API proof: Looma + Knit service, Overview, Work, and Map all report
+    selected scope `5` total, `0` active, `2` blocked, `3` done for `Stage 1:
+    V1 Release Hardening`; Narrative Harness service, Overview, Work, and Map
+    all report selected scope `11` total, `0` active, `0` blocked, `11` done for
+    `Stage 1: Headless Drafting And Evaluation MVP`.
+  - Waivers: none.
+  - Owner-review items: none. This changes reporting truth, not owner approval
+    automation.
+  - Apply/revert behavior: reverting this change lets Map and service summaries
+    show selected-scope blockers as active work while Overview and Work show
+    them as blocked.
+
 2026-07-13 - Work surface uses selected-scope readiness blockers.
 
 - Work id: `codex:work-surface-selected-readiness-blockers-2026-07-13`.

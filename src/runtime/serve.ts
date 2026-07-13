@@ -4529,19 +4529,51 @@ function compactOrientationProofContracts(contracts: unknown): Array<Record<stri
     })
 }
 
+function taskIdsFromScopeNodeIds(scope: unknown): string[] {
+  if (!scope || typeof scope !== 'object' || Array.isArray(scope)) return []
+  const nodeIds = (scope as { nodeIds?: unknown }).nodeIds
+  return Array.isArray(nodeIds)
+    ? nodeIds
+      .map(value => typeof value === 'string' ? value.replace(/^work:/, '') : '')
+      .filter(Boolean)
+    : []
+}
+
 function selectedTaskIdsForProgress(spine: Record<string, unknown>): string[] {
-  const selectedScope = (
+  return taskIdsFromScopeNodeIds(
     spine.selectedTaskScope && typeof spine.selectedTaskScope === 'object' && !Array.isArray(spine.selectedTaskScope)
       ? spine.selectedTaskScope
       : spine.scope && typeof spine.scope === 'object' && !Array.isArray(spine.scope)
         ? spine.scope
-        : null
-  ) as { nodeIds?: unknown } | null
-  return Array.isArray(selectedScope?.nodeIds)
-    ? selectedScope.nodeIds
-      .map(value => typeof value === 'string' ? value.replace(/^work:/, '') : '')
-      .filter(Boolean)
-    : []
+        : spine.selectedRelease && typeof spine.selectedRelease === 'object' && !Array.isArray(spine.selectedRelease)
+          ? spine.selectedRelease
+          : null,
+  )
+}
+
+function selectedScopeForServiceProgress(
+  queue: Pick<TaskQueue, 'tasks' | 'releases' | 'selectedReleaseId'>,
+): ProjectScope | null {
+  const scope = selectedProjectScopeForQueue(queue)
+  if (taskIdsFromScopeNodeIds(scope).length > 0) return scope
+  const releases = queue.releases ?? []
+  const release =
+    releases.find(candidate => candidate.id === queue.selectedReleaseId) ??
+    releases.find(candidate => candidate.state === 'active') ??
+    releases.find(candidate => candidate.state === 'planned') ??
+    releases[0]
+  if (!release) return fallbackCurrentWorkScope(queue.tasks)
+  const releaseScope: ProjectScope = {
+    id: release.id,
+    label: release.label,
+    kind: release.kind === 'milestone' ? 'milestone' : release.kind === 'release' ? 'release' : 'proposed_feature_set',
+    source: release.source,
+    nodeIds: release.nodeIds ?? [],
+    deferredNodeIds: release.deferredNodeIds ?? [],
+  }
+  return taskIdsFromScopeNodeIds(releaseScope).length > 0
+    ? releaseScope
+    : fallbackCurrentWorkScope(queue.tasks)
 }
 
 function releaseBlockerTaskIdsForProgress(
@@ -5033,10 +5065,44 @@ export function buildServeApp(opts: ServeOptions = {}): {
           ? null
           : await readProjectAvailability(entry.path).catch(() => null)
         try {
-          const tasks = await readTasksFileNormalized(projectTasksPath(entry.path))
+          const rawQueue = await readTaskQueueFileNormalized(projectTasksPath(entry.path))
+          const tasks = rawQueue.tasks
           const effectiveTasks = await buildEffectiveTasks(entry.path, tasks as Task[])
+          const now = new Date().toISOString()
+          const workspaceImportDraft = await workspaceImportDraftForOrientation(entry.path, startReadiness)
+          const draftAugmentation = augmentTasksWithWorkspaceImportDraft({
+            tasks: effectiveTasks,
+            workspaceImportDraft,
+            now,
+          })
+          const serviceTasks = draftAugmentation.tasks as unknown as Task[]
+          const serviceSelectedReleaseId = workspaceImportDraft?.source.freshness === 'fresh'
+            ? draftAugmentation.selectedReleaseId ?? rawQueue.selectedReleaseId
+            : rawQueue.selectedReleaseId
+          const serviceReleases = releaseProjectionInputsForTasks(serviceTasks, [
+            ...rawQueue.releases,
+            ...draftAugmentation.releases,
+          ])
+          const selectedScope = selectedScopeForServiceProgress({
+            tasks: serviceTasks,
+            releases: serviceReleases,
+            ...(serviceSelectedReleaseId ? { selectedReleaseId: serviceSelectedReleaseId } : {}),
+          })
+          const serviceReleaseTruth = summarizeScopedReleaseWork(serviceTasks, selectedScope)
           taskCounts = summarizeTaskCounts(tasks)
-          workProgress = deriveProjectWorkProgress(effectiveTasks as unknown as Array<Record<string, unknown>>)
+          const progressTaskIds = new Set(
+            serviceTasks
+              .map(task => task.id)
+              .filter((id): id is string => typeof id === 'string' && id.trim().length > 0),
+          )
+          const selectedTaskIds = taskIdsFromScopeNodeIds(selectedScope)
+          const blockerTaskIds = serviceReleaseTruth.releaseBlockers
+            .map(blocker => blocker.id)
+            .filter(id => progressTaskIds.has(id))
+          workProgress = deriveProjectWorkProgress(serviceTasks as unknown as Array<Record<string, unknown>>, {
+            ...(selectedTaskIds.length > 0 ? { selectedTaskIds } : {}),
+            ...(blockerTaskIds.length > 0 ? { blockerTaskIds } : {}),
+          })
           taskActivity = summarizeTaskActivity(tasks)
           const gitStory = await buildProjectGitStorySummary(entry.path, tasks as Array<Record<string, unknown>>).catch(() => undefined)
           const inbox = await buildProjectInboxSnapshot({
@@ -5558,8 +5624,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
             : undefined,
         startTiming: name => startTiming(`readiness_${name}`),
       })
-      const releaseReadiness = fullSurface || overviewSurface || workSurface
-        ? await buildProjectReleaseReadinessPayload(overviewSurface || workSurface
+      const releaseReadiness = fullSurface || overviewSurface || workSurface || mapSurface
+        ? await buildProjectReleaseReadinessPayload(overviewSurface || workSurface || mapSurface
           ? {
               rawQueue,
               tasks: await compactSurfaceEffectiveTasksPromise as Task[],

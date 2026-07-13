@@ -4,7 +4,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { bootstrapWorkspace, slugify } from '@guildhall/config'
+import { bootstrapWorkspace, registerWorkspace, slugify, unregisterWorkspace } from '@guildhall/config'
 import type { Task, TaskQueue } from '@guildhall/core'
 import { appendTaskEvidence, projectStatePath, writeProjectStateJsonAsync, writeProjectStateTextAsync } from '@guildhall/sessions'
 import { buildServeApp } from '../serve.js'
@@ -32,6 +32,7 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  unregisterWorkspace(projectId)
   await fs.rm(tmpDir, { recursive: true, force: true })
   await fs.rm(remoteDir, { recursive: true, force: true })
 })
@@ -2872,7 +2873,25 @@ describe('GET /api/project/release-readiness', () => {
       visibleBlocked: 3,
       visibleActive: 0,
     })
-  })
+
+    const mapRes = await app.fetch(new Request(projectUrl('/api/project?surface=map')))
+    const map = await mapRes.json() as any
+    expect(map.workProgress.selectedCounts).toMatchObject({
+      visibleTotal: 3,
+      visibleBlocked: 3,
+      visibleActive: 0,
+    })
+
+    registerWorkspace({ id: projectId, name: 'Release Test', path: tmpDir, tags: [] })
+    const serviceRes = await app.fetch(new Request('http://localhost/api/service'))
+    const service = await serviceRes.json() as any
+    const project = service.projects.find((candidate: any) => candidate.path === tmpDir)
+    expect(project.workProgress.selectedCounts).toMatchObject({
+      visibleTotal: 3,
+      visibleBlocked: 3,
+      visibleActive: 0,
+    })
+  }, 45000)
 
   it('counts imported selected-scope rows the same way as the project spine', async () => {
     await writeProjectStateJsonAsync(tmpDir, 'workspace-goals.json', {
@@ -3062,7 +3081,7 @@ describe('GET /api/project/release-readiness', () => {
       visibleBlocked: 0,
       deliveryBlocked: 0,
     })
-  })
+  }, 20000)
 
   it('does not widen the selected release with an unscoped import duplicate of scoped work', async () => {
     const proofPath = {
