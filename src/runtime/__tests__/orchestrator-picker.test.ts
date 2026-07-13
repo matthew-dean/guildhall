@@ -136,6 +136,36 @@ describe('pickNextTask bounded scope eligibility', () => {
     expect(pickNextTask(q, undefined, undefined, undefined, undefined, { scope })?.id).toBe('child')
   })
 
+  it('picks a selected containing task reopened for missing proof after child work is done', () => {
+    const q = queueWithRelease([
+      {
+        id: 'included',
+        title: 'Define fixture and evaluation schemas',
+        status: 'in_progress',
+        priority: 'normal',
+        hierarchy: { childIds: ['child'], order: 0 },
+        releaseIds: ['2-0-alpha'],
+        proofPaths: [{
+          kind: 'review',
+          expectedEvidence: ['Recorded proof artifact exists.'],
+          status: 'verified',
+        }],
+      },
+      {
+        id: 'child',
+        title: 'Shape fixture ground truth',
+        status: 'done',
+        priority: 'normal',
+        hierarchy: { parentId: 'included', childIds: [], order: 0 },
+      },
+    ])
+
+    expect(pickNextTask(q, undefined, undefined, undefined, 'included')?.id).toBe('included')
+    expect(pickNextTask(q, undefined, undefined, undefined, undefined, {
+      scope: selectedReleaseScopeForQueue(q),
+    })?.id).toBe('included')
+  })
+
   it('does not pick deferred ready work during normal unattended current-scope work', () => {
     const q = queue([
       { id: 'later', title: 'Later feature', priority: 'critical' },

@@ -23,7 +23,7 @@ import {
 } from '@guildhall/sessions'
 import { readTaskWorkspaceStore } from './task-state-store.js'
 import { latestRecordedCompletionProofAt, recordedCompletionProofCanSettleTaskStatus, recordedCompletionProofForTask, taskHasRecordedCompletionProof } from './task-completion-proof.js'
-import { taskDoneButProofMissing } from './proof-health.js'
+import { taskDoneButProofMissing, taskHasNonReviewCommandBackedProof } from './proof-health.js'
 import { taskBlockerSummary } from './task-blocker-summary.js'
 import { taskTitleOverlap } from './task-title-overlap.js'
 import {
@@ -2531,7 +2531,24 @@ function proofPathIsScriptRunnable(proofPath: unknown): boolean {
 }
 
 function taskHasScriptProofPath(task: { proofPaths?: unknown }): boolean {
-  return Array.isArray(task.proofPaths) && task.proofPaths.some(proofPathIsScriptRunnable)
+  if (!Array.isArray(task.proofPaths)) return false
+  if (task.proofPaths.some(proofPathIsScriptRunnable)) return true
+  if (!taskHasNonReviewCommandBackedProof(task)) return false
+  if (!taskDoneButProofMissing(task)) {
+    return task.proofPaths.some((proofPath) =>
+      Boolean(proofPath && typeof proofPath === 'object' && !Array.isArray(proofPath)),
+    )
+  }
+  return task.proofPaths.some((proofPath) => {
+    if (!proofPath || typeof proofPath !== 'object' || Array.isArray(proofPath)) return false
+    const record = proofPath as { kind?: unknown; expectedEvidence?: unknown }
+    if (record.kind !== 'review') return false
+    const expectedEvidence = Array.isArray(record.expectedEvidence) ? record.expectedEvidence : []
+    return expectedEvidence.some(item =>
+      typeof item === 'string' &&
+      /\b(?:pnpm|npm|node|script|command|cli|command-line|no-ui|no ui|headless)\b/i.test(item),
+    )
+  })
 }
 
 function scopeRequiresCommandProof(scope: { id?: string | null; label?: string | null; description?: string | null } | null | undefined): boolean {
@@ -7667,8 +7684,6 @@ export function buildServeApp(opts: ServeOptions = {}): {
 	        .filter(task => task.id !== META_INTAKE_TASK_ID && task.id !== WORKSPACE_IMPORT_TASK_ID)
 	      : effectiveTasks.filter(task => task.id !== META_INTAKE_TASK_ID && task.id !== WORKSPACE_IMPORT_TASK_ID)
 	    if (selectedReleaseScope && scopedTasks.length === 0) return null
-    const releaseTruth = selectedReleaseScope ? scopedOrientation?.releaseTruth ?? null : null
-
     let done = 0
     let blocked = 0
     let shelved = 0
@@ -7714,9 +7729,25 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
     const detailMessage = `No actionable tasks remain: ${done} done, ${blocked} blocked, ${shelved} shelved, ${pendingPr} pending PR, ${archived} archived, ${cancelled} cancelled.`
     if (selectedReleaseScope && blocked > 0) return null
-    const terminalProofMissingDoneTasks = releaseTruth?.proofMissingDoneTasks.length
-      ? releaseTruth.proofMissingDoneTasks
-      : proofMissingDoneTasks
+    const proofSummaryScope = queueSelectedReleaseScope ?? selectedReleaseScope
+    const selectedScopeProofStyle = proofSummaryScope
+      ? proofStyleForScope(rawReleases ?? [], proofSummaryScope)
+      : undefined
+    const scopedReleaseSummary = proofSummaryScope
+      ? summarizeScopedReleaseWork(effectiveTasks, proofSummaryScope, {
+        proofStyle: selectedScopeProofStyle,
+        commandProofRequired: scopeRequiresCommandProof(proofSummaryScope),
+      })
+      : null
+    const terminalProofMissingDoneTasks = (scopedReleaseSummary
+      ? scopedReleaseSummary.proofMissingDoneTasks
+      : proofMissingDoneTasks)
+      .filter(task => {
+        const taskRecord = tasksById.get(task.id)
+        const parentId = taskRecord?.hierarchy?.parentId?.trim()
+        const parent = parentId ? tasksById.get(parentId) ?? null : null
+        return !taskRecord || deriveTaskWorkVisibility(taskRecord, parent).countInProjectTotals
+      })
     if (terminalProofMissingDoneTasks.length > 0) {
       const first = terminalProofMissingDoneTasks[0]!
       const scopeLabel = selectedReleaseScope?.label ?? 'Current task scope'
@@ -7782,7 +7813,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
     const gitStory = await buildProjectGitStorySummary(
       projectPath,
-      (releaseTruth?.gitStoryTasks ?? scopedTasks) as Array<Record<string, unknown>>,
+      (scopedReleaseSummary?.gitStoryTasks ?? scopedTasks) as Array<Record<string, unknown>>,
     )
     const startBlockingGitStoryBlockers = queueSelectedReleaseScope && (selectedReleaseScope?.kind === 'release' || selectedReleaseScope?.kind === 'milestone')
       ? gitStory.blockers.filter(blocker => blocker.state !== 'no_upstream')
@@ -9146,6 +9177,40 @@ export function buildServeApp(opts: ServeOptions = {}): {
         ...(body.taskId ? { requestedTaskId: body.taskId } : {}),
       })
       if (!startReadiness.canStart) {
+        if (
+          startReadiness.code === 'proof_evidence_missing' &&
+          startReadiness.focusTaskId &&
+          !body.taskId
+        ) {
+          const retryUrl = new URL(c.req.url)
+          retryUrl.pathname = `/api/project/task/${encodeURIComponent(startReadiness.focusTaskId)}/retry-work`
+          const retryRes = await app.fetch(
+            new Request(retryUrl, {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({
+                instruction:
+                  'Recover the missing release proof for this completed work item. Do not treat the task as complete again until the expected proof evidence is recorded.',
+              }),
+            }),
+            c.env,
+          )
+          if (!retryRes.ok) return retryRes
+          const restartUrl = new URL(c.req.url)
+          restartUrl.pathname = '/api/project/start'
+          return app.fetch(
+            new Request(restartUrl, {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({
+                ...body,
+                taskId: startReadiness.focusTaskId,
+                mode: body.mode ?? 'continuous',
+              }),
+            }),
+            c.env,
+          )
+        }
         if (startReadiness.code === 'all_terminal') {
           const terminal = await terminalStartState(project.path, body.taskId)
           if (terminal) {

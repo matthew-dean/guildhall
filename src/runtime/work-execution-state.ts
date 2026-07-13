@@ -2,6 +2,7 @@ import type { Task } from '@guildhall/core'
 import { buildWorkHierarchy, needsOwnerAction, workSubtreeIds } from './work-hierarchy.js'
 import { deriveProjectWorkProgress } from './work-progress.js'
 import { deriveTaskWorkVisibility } from './work-visibility.js'
+import { taskDoneButProofMissing } from './proof-health.js'
 
 export type WorkExecutionSummaryState =
   | 'ready'
@@ -172,7 +173,9 @@ export function deriveWorkExecutionState(tasks: Task[], workId: string): WorkExe
 function deriveLeafRunnableState(tasks: Task[], workId: string): boolean {
   const task = tasks.find(candidate => candidate.id === workId)
   if (!task) return false
-  if (descendantsFor(tasks, workId).length > 0) return false
+  const hasDescendants = descendantsFor(tasks, workId).length > 0
+  const reopenedForOwnProof = task.status === 'in_progress' && taskDoneButProofMissing(task)
+  if (hasDescendants && !reopenedForOwnProof) return false
   if (hasBlockReason(task)) return false
   if (decompositionBlocksDispatch(task)) return false
   const visibility = visibilityForTask(task, tasks)

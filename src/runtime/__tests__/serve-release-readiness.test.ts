@@ -1767,8 +1767,8 @@ describe('GET /api/project/release-readiness', () => {
       focusTaskId: 'task-current',
     })
     expect(project.actionModel?.runControl).toMatchObject({
-      label: 'Needs proof',
-      startEnabled: false,
+      label: 'Resume',
+      startEnabled: true,
     })
   })
 
@@ -2218,6 +2218,83 @@ describe('GET /api/project/release-readiness', () => {
       latestAt: '2026-07-04T08:50:00.000Z',
     })
     expect(task.completionProof.verified.join('\n')).toContain('tests/generate.test.mjs')
+  })
+
+  it('accepts command-backed review proof paths for headless drafting script-only scopes', async () => {
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: 'headless-drafting',
+      releases: [{
+        id: 'headless-drafting',
+        label: 'Stage 1: Headless Drafting MVP',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-current'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [
+        makeTask({
+          id: 'task-current',
+          title: 'Generate a CLI-first story draft',
+          status: 'done',
+          releaseIds: ['headless-drafting'],
+          proofPaths: [{
+            kind: 'review',
+            source: 'inferred',
+            expectedEvidence: [
+              'A pnpm script or CLI command drafts one chapter from the selected model using the bounded context packet and review plan.',
+            ],
+          }],
+          doneSummaryBundle: {
+            taskId: 'task-current',
+            status: 'done',
+            completedAt: '2026-07-04T08:50:00.000Z',
+            summary: {
+              journey: 'Worker completed the chapter generation proof.',
+              decision: 'Task finished as done.',
+              evidence: 'pnpm build passed and tests/generate.test.mjs passed.',
+              learningCandidates: [],
+              openResidue: 'No open residue recorded.',
+            },
+            retention: {
+              transcriptPrimaryArtifact: false,
+              compactedFullTranscript: false,
+              fullEvidenceAvailable: true,
+            },
+            evidenceRefs: [],
+            createdAt: '2026-07-04T08:50:00.000Z',
+            createdBy: 'orchestrator',
+          },
+          gateResults: [{
+            gateId: 'pnpm-build',
+            type: 'hard',
+            passed: true,
+            output: 'pnpm build passed',
+            checkedAt: '2026-07-04T08:50:00.000Z',
+          }],
+          reviewVerdicts: [{
+            verdict: 'approve',
+            reviewerPath: 'llm',
+            reason: 'LLM reviewer approved',
+            reasoning: 'The generate:story pnpm script invokes src/cli/generate.ts and drafts one chapter from the selected model using the bounded context packet and review plan.',
+            failingSignals: [],
+            recordedAt: '2026-07-04T08:50:00.000Z',
+          }],
+        } as Partial<Task>),
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await approveDesignSystem(app)
+    await commitAndPush('headless drafting command-backed proof')
+
+    const readiness = await (await app.fetch(new Request(projectUrl('/api/project/release-readiness')))).json() as any
+
+    expect(readiness.ready).toBe(true)
+    expect(readiness.proofMissingDoneTasks).toEqual([])
+    expect(readiness.totals.proofEvidenceBlockingCount).toBe(0)
   })
 
   it('does not accept review prose alone for provider/model proof paths', async () => {

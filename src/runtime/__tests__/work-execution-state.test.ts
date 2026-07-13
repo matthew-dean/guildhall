@@ -157,6 +157,35 @@ describe('work execution state', () => {
     expect(parent?.runnableChildIds).toEqual(['task-runner-split-load-fixture-inputs'])
   })
 
+  it('treats a containing task reopened for missing proof as runnable parent work', () => {
+    const tasks = [
+      task({
+        id: 'parent',
+        title: 'Define fixture and evaluation schemas',
+        status: 'in_progress',
+        hierarchy: { childIds: ['child'], order: 0 },
+        proofPaths: [{
+          kind: 'review',
+          expectedEvidence: ['Recorded proof artifact exists.'],
+          status: 'verified',
+        }],
+      }),
+      task({
+        id: 'child',
+        title: 'Shape fixture ground truth',
+        status: 'done',
+        hierarchy: { parentId: 'parent', childIds: [], order: 0 },
+      }),
+    ]
+
+    const state = deriveWorkExecutionState(tasks, 'parent')
+
+    expect(state.isContaining).toBe(true)
+    expect(state.isRunnable).toBe(true)
+    expect(state.runnableChildIds).toEqual([])
+    expect(state.summaryState).toBe('running')
+  })
+
   it('does not treat legacy split recommendations as runtime authority when hierarchy already exists', () => {
     const tasks = [
       task({

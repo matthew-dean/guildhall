@@ -1554,6 +1554,10 @@ describe('POST /api/project/start', () => {
       ],
     })
 
+    setProvider('anthropic-api', { apiKey: 'sk-ant-test' })
+    updateGlobalConfig({ preferredProvider: 'anthropic-api' })
+    writeProjectConfig(tmpDir, { ...readProjectConfig(tmpDir), preferredProvider: 'anthropic-api' })
+
     const { app } = buildServeApp({ projectPath: tmpDir })
     await applyStorageBoundaryMigration(app)
     const projectRes = await app.fetch(new Request(scoped('/api/project')))
@@ -1602,21 +1606,172 @@ describe('POST /api/project/start', () => {
       nextAction: 'Attach proof for the completed scoped work.',
     })
     expect(projectBody.actionModel?.runControl).toMatchObject({
-      label: 'Needs proof',
-      startEnabled: false,
+      label: 'Resume',
+      startEnabled: true,
     })
 
     const startRes = await app.fetch(
       new Request(scoped('/api/project/start'), { method: 'POST', body: '{}' }),
     )
-    expect(startRes.status).toBe(400)
-    const startBody = await startRes.json() as { code?: string; actionHref?: string; error?: string; stopSummary?: { reason?: string } }
+    const startBody = await startRes.json() as { status?: string; mode?: string }
+    expect(startRes.status, JSON.stringify(startBody)).toBe(200)
     expect(startBody).toMatchObject({
-      code: 'proof_evidence_missing',
-      actionHref: '/work?task=current-done',
+      status: 'running',
+      mode: 'continuous',
     })
-    expect(startBody.error).toContain('waiting on proof evidence')
-    expect(startBody.stopSummary?.reason).not.toBe('all_terminal')
+    const tasks = await readTasks(tmpDir)
+    const reopened = tasks.find(task => task.id === 'current-done')
+    expect(reopened).toMatchObject({
+      status: 'in_progress',
+    })
+    expect(JSON.stringify(reopened?.notes ?? [])).toContain('Reopen completed task for missing release proof')
+  })
+
+  it('uses scoped release proof blockers for project start instead of stale hidden split rows', async () => {
+    const now = new Date().toISOString()
+    await writeSystemTasks({
+      version: 1,
+      lastUpdated: now,
+      selectedReleaseId: 'headless-mvp',
+      releases: [
+        {
+          id: 'headless-mvp',
+          label: 'Stage 1: Headless Drafting MVP',
+          kind: 'release',
+          state: 'active',
+          source: 'release_plan',
+          proofStyle: 'script_only',
+          nodeIds: ['work:imported-parent', 'work:real-proof-gap'],
+          deferredNodeIds: [],
+        },
+      ],
+      tasks: [
+        {
+          id: 'imported-parent',
+          title: 'Define fixture, expected-record, prototype-run, and evaluation schemas.',
+          description: 'Imported parent work with command-backed proof already recorded.',
+          domain: 'core',
+          status: 'done',
+          releaseIds: ['headless-mvp'],
+          proofPaths: [{
+            title: 'Run schema proof',
+            launchSteps: [{ id: 'schema-proof', title: 'Run schema proof', kind: 'copy_command', command: 'pnpm test:schema' }],
+            expectedEvidence: ['pnpm test:schema passed.'],
+          }],
+          gateResults: [{
+            gateId: 'schema-proof',
+            command: 'pnpm test:schema',
+            type: 'hard',
+            passed: true,
+            output: 'pnpm test:schema passed.',
+            checkedAt: now,
+          }],
+          requestIntake: {
+            createdBy: 'workspace-importer',
+            evidenceRefs: ['import:docs/harness/implementation-roadmap.md'],
+          },
+          priority: 'normal',
+          acceptanceCriteria: [],
+          outOfScope: [],
+          dependsOn: [],
+          notes: [],
+          reviewVerdicts: [],
+          adjudications: [],
+          escalations: [],
+          agentIssues: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          id: 'imported-parent-split-shape-fixture-and-expected-record-ground-truth',
+          title: 'Shape fixture and expected-record ground truth',
+          description: 'Hidden imported split row that should not become the selected-release proof blocker.',
+          domain: 'core',
+          status: 'done',
+          releaseIds: ['headless-mvp'],
+          hierarchy: { parentId: 'imported-parent', relation: 'decomposes' },
+          requestIntake: {
+            createdBy: 'workspace-importer',
+            evidenceRefs: ['import:docs/harness/implementation-roadmap.md'],
+          },
+          priority: 'normal',
+          acceptanceCriteria: [],
+          outOfScope: [],
+          dependsOn: [],
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          adjudications: [],
+          escalations: [],
+          agentIssues: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          id: 'real-proof-gap',
+          title: 'Prove world-state continuity review over elapsed-time object changes.',
+          description: 'The selected release still needs real proof here.',
+          domain: 'core',
+          status: 'done',
+          releaseIds: ['headless-mvp'],
+          proofPaths: [{
+            kind: 'review',
+            source: 'inferred',
+            expectedEvidence: ['Headless command proof records the world-state continuity review result.'],
+          }],
+          priority: 'normal',
+          acceptanceCriteria: [],
+          outOfScope: [],
+          dependsOn: [],
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          adjudications: [],
+          escalations: [],
+          agentIssues: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+    })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await applyStorageBoundaryMigration(app)
+
+    const readinessRes = await app.fetch(new Request(scoped('/api/project/release-readiness')))
+    expect(readinessRes.status).toBe(200)
+    const readiness = await readinessRes.json() as {
+      proofMissingDoneTasks?: Array<{ id: string }>
+      totals?: { proofEvidenceBlockingCount?: number }
+    }
+    expect(readiness.proofMissingDoneTasks?.map(task => task.id)).toEqual(['real-proof-gap'])
+    expect(readiness.totals?.proofEvidenceBlockingCount).toBe(1)
+
+    const projectRes = await app.fetch(new Request(scoped('/api/project')))
+    expect(projectRes.status).toBe(200)
+    const projectBody = await projectRes.json() as {
+      startReadiness?: {
+        code?: string
+        focusTaskId?: string
+        proofTaskIds?: string[]
+        count?: number
+        message?: string
+      }
+    }
+    expect(projectBody.startReadiness).toMatchObject({
+      code: 'proof_evidence_missing',
+      focusTaskId: 'real-proof-gap',
+      proofTaskIds: ['real-proof-gap'],
+      count: 1,
+    })
+    expect(projectBody.startReadiness?.message).toContain('Prove world-state continuity')
+    expect(projectBody.startReadiness?.message).not.toContain('Shape fixture')
   })
 
   it('treats archived, cancelled, and pending PR tasks as terminal for Start readiness', async () => {

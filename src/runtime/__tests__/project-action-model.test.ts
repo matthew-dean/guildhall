@@ -75,6 +75,31 @@ describe('buildProjectActionModel', () => {
       startEnabled: false,
     })
 
+    const proofRecovery = buildProjectActionModel({
+      startReadiness: {
+        canStart: false,
+        code: 'proof_evidence_missing',
+        message: 'Headless MVP is waiting on proof evidence for "Run fixture evaluator proof".',
+        actionHref: '/work?task=current-done',
+        focusTaskId: 'current-done',
+        focusTaskTitle: 'Run fixture evaluator proof',
+        focusKind: 'proof',
+      },
+      tasks: [{ id: 'current-done', title: 'Run fixture evaluator proof', status: 'done' }],
+      thread: { turns: [], activeTurnId: null },
+      runStatus: 'stopped',
+    })
+    expect(proofRecovery.primaryAction).toMatchObject({
+      source: 'start_readiness',
+      buttonLabel: 'Attach proof',
+      href: '/work?task=current-done',
+      tone: 'warn',
+    })
+    expect(proofRecovery.runControl).toMatchObject({
+      label: 'Resume',
+      startEnabled: true,
+    })
+
     const repositoryFollowup = buildProjectActionModel({
       startReadiness: {
         canStart: false,

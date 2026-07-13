@@ -237,7 +237,7 @@ function runControlLabel(readiness: ProjectActionStartReadiness | null | undefin
   if (readiness.code === 'all_terminal') return 'No runnable tasks'
   if (readiness.code === 'imported_scope_shaping') return 'Needs shaping'
   if (readiness.code === 'workspace_import_refresh_needed') return 'Refresh import'
-  if (readiness.code === 'proof_evidence_missing') return 'Needs proof'
+  if (readiness.code === 'proof_evidence_missing') return 'Resume'
   if (readiness.code === 'scope_source_conflict') return 'Review conflict'
   if (readiness.code === 'repository_followup_required') return 'Repo follow-up'
   if (readiness.code === 'paused_live_work') return 'Resume'
@@ -573,7 +573,8 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
 
   const primaryAction = candidates[0] ?? null
   const secondaryActions = candidates.slice(1, 4)
-  const disabledReason = !running && startReadiness?.canStart === false
+  const blockedButRunnable = startReadiness?.code === 'proof_evidence_missing'
+  const disabledReason = !running && startReadiness?.canStart === false && !blockedButRunnable
     ? startReadiness.message
     : stopping
       ? 'Pause requested. Guildhall is waiting for active work to stop.'
@@ -585,7 +586,7 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
     secondaryActions,
     runControl: {
       label: setupBlocksStart && !running && !stopping ? 'Waiting on setup' : runControlLabel(startReadiness, running, stopping),
-      startEnabled: running || (!stopping && startReadiness?.canStart !== false && !setupBlocksStart),
+      startEnabled: running || (!stopping && (startReadiness?.canStart !== false || blockedButRunnable) && !setupBlocksStart),
       disabledReason,
       href: startReadiness?.actionHref ?? setup.href,
     },

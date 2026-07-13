@@ -30566,6 +30566,123 @@ selected-scope readiness ordering.
     Overview even while Map/Start say it is complete.
 - Schema Migration Decision: no persisted schema field or migration changed.
 
+## codex:proof-missing-release-start-recovery-2026-07-13
+
+- User job:
+  - When the selected Narrative Harness scope has completed work that still
+    lacks required proof evidence, the product should say proof is missing but
+    Start/Resume should still be able to run the selected scope by reopening the
+    first proof gap for proof recovery.
+  - The user should not have to manually click `Run proof` on every done row
+    before a scoped release can continue.
+- Root cause classification:
+  - Scheduler/action-state logic problem: project-level Start treated
+    `proof_evidence_missing` as a terminal external blocker, even though Work
+    already had a `retry-work` path that could reopen a done-but-proof-missing
+    task and run it.
+  - Task hierarchy/dependency/proof modeling problem: the selected release can
+    legitimately contain done rows whose proof contract is unsatisfied; that
+    state is not complete and should become executable proof-recovery work.
+  - Work execution model problem: a containing task reopened for its own
+    missing completion proof was still treated as non-runnable because all of
+    its split children were terminal. That made the run stop as `all_terminal`
+    even after proof recovery correctly reopened the parent.
+  - Release proof model problem: release readiness and Start readiness had two
+    competing proof summaries. Release readiness correctly used the scoped
+    release proof rules, while Start could still count stale hidden split rows
+    from the orientation-expanded execution scope.
+  - Script-only proof classification problem: command-backed completion proof
+    could satisfy task detail state, but the script-only release gate still
+    rejected inferred review proof paths even when the effective task had
+    modeled proof paths and non-review command-backed evidence.
+  - UI communication/orientation problem: the run control was disabled and
+    labeled `Needs proof`, which made proof recovery look like an owner-only
+    manual step rather than runnable scoped work.
+- Fix:
+  - `/api/project/start` now reuses the existing `retry-work` action when the
+    selected project is blocked only by `proof_evidence_missing`, then restarts
+    with the focused proof task as the preferred task.
+  - `deriveWorkExecutionState` now treats a containing task as runnable when it
+    has been reopened for its own missing proof contract, instead of forcing all
+    executable work through child rows that may already be done.
+  - Script-only release readiness now accepts modeled proof paths that have
+    matching command-backed task evidence, while still rejecting review prose
+    alone, generic build proof, unrelated completion proof, and tasks with no
+    modeled proof path.
+  - Terminal Start readiness now uses the same scoped release summarizer for
+    proof blockers and filters owner-facing proof blockers to visible release
+    work rows, so hidden/internal decomposition rows can help execution without
+    becoming the top project blocker.
+  - The shared action model keeps the proof warning/primary action visible, but
+    enables the run control and labels it `Resume` for proof recovery.
+- Proof provided so far:
+  - `CI=true pnpm exec vitest run
+    src/runtime/__tests__/project-action-model.test.ts
+    src/runtime/__tests__/serve-settings.test.ts --testNamePattern
+    "proof|completed current work is still missing proof|normalizes risky start
+    blockers"` passed: 5 focused tests.
+  - `CI=true pnpm exec vitest run
+    src/runtime/__tests__/work-execution-state.test.ts
+    src/runtime/__tests__/orchestrator-picker.test.ts
+    src/runtime/__tests__/project-action-model.test.ts
+    src/runtime/__tests__/serve-settings.test.ts
+    src/runtime/__tests__/serve-release-readiness.test.ts --testNamePattern
+    "proof|containing task reopened|completed current work is still missing
+    proof|scoped release proof blockers|requires recorded proof|command-backed"`
+    passed: 33 focused tests.
+  - `CI=true pnpm exec vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts
+    --testNamePattern "unrelated completion proof|generic build proof|script-only
+    release completion|inferred review proof|semantically matching review proof|
+    command-backed review proof|provider/model proof paths"` passed: 7
+    script-only proof classification tests.
+  - `CI=true pnpm lint:contracts` passed.
+  - `CI=true pnpm build` passed.
+  - `CI=true pnpm dev:install && guildhall stop && guildhall start && sleep 2
+    && curl -s http://localhost:7777/api/stale-server` installed the artifact
+    and returned `stale:false`.
+  - Live Narrative Harness proof, before Start: selected Stage 1 scope reported
+    proof recovery for `task-import-9s8tkc`, run control `Resume`, target task
+    `in_progress`, completion proof `missing`.
+  - Live Narrative Harness proof, after Start:
+    `/api/project/start?projectId=narrative-harness` returned `status: running`
+    for execution scope `stage-1-headless-drafting-and-evaluation-mvp`; a
+    follow-up `/api/project?projectId=narrative-harness&surface=overview`
+    showed run `running`, run control `Pause`, and `task-import-9s8tkc`
+    assigned to `worker-agent` with completion proof still honestly `missing`.
+  - Live Narrative Harness proof, after script-only proof classification:
+    `/api/project/release-readiness?projectId=narrative-harness` dropped the
+    Stage 1 proof blockers from 11 to 3 visible release tasks:
+    author-intent inputs, world-state continuity review, and spatial/geographic
+    continuity review.
+- Residual findings:
+  - The live worker still needs to produce/attach the remaining three proof
+    packets; this fix proves Start can now identify and advance visible
+    release-level proof gaps instead of stopping as `all_terminal` or pinning
+    hidden split rows.
+- Contract Touch Decision:
+  - Work id: `proof-missing-release-start-recovery`.
+  - Touched contracts: project Start readiness execution behavior, shared
+    project action-model run-control behavior, shared work execution-state
+    runnable semantics, script-only release proof classification, proof-health
+    command-backed evidence export, and route-level proof-recovery Start tests.
+  - Contracts considered but not touched: persisted task schema, persisted
+    proof-path schema, release schema, WorkTab per-task `Run proof` behavior,
+    provider configuration schema, and completion-proof verification semantics.
+  - Required follow-up: prove against live Narrative Harness that Start moves
+    from the remaining proof-missing selected release state into proof-recovery
+    work without widening beyond the selected release or surfacing hidden split
+    rows as owner-facing blockers.
+  - Proof required: focused route/action-model tests, contract lint,
+    release/orientation tests, build/install freshness, and live Narrative
+    Harness API proof before and after Start.
+  - Proof provided: focused tests, contract lint, build/install freshness, and
+    live Narrative Harness API proof listed above.
+  - Apply/revert behavior: reverting disables project-level proof recovery and
+    forces the user back to manually opening proof rows before the selected
+    release can continue.
+- Schema Migration Decision: no persisted schema field or migration changed.
+
 ## codex:workspace-import-coverage-raw-signal-veto-2026-07-13
 
 - User job:

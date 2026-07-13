@@ -248,7 +248,7 @@ function completionEvidenceTextForTask(task: unknown): string {
   return normalizedText(chunks.join('\n')).toLowerCase()
 }
 
-function taskHasNonReviewCommandBackedProof(task: unknown): boolean {
+export function taskHasNonReviewCommandBackedProof(task: unknown): boolean {
   const record = recordValue(task)
   if (!record) return false
   const doneSummary = recordValue(record.doneSummaryBundle)
