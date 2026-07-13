@@ -4195,7 +4195,7 @@ describe('Workspace Import review endpoints', () => {
           title: string
           domain: string
           dependsOn?: string[]
-          proofPaths?: Array<{ kind: string }>
+          proofPaths?: Array<{ kind: string; source?: string; launchSteps?: Array<{ kind?: string }> }>
           acceptanceCriteria?: Array<{ id: string }>
         }>
       } | null
@@ -4208,9 +4208,16 @@ describe('Workspace Import review endpoints', () => {
         expect.objectContaining({ id: 'contracts-defined' }),
         expect.objectContaining({ id: 'deterministic-proof' }),
       ]),
-      proofPaths: [
+      proofPaths: expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'command',
+          source: 'inferred',
+          launchSteps: expect.arrayContaining([
+            expect.objectContaining({ kind: 'blocked_until_setup' }),
+          ]),
+        }),
         expect.objectContaining({ kind: 'review', source: 'inferred' }),
-      ],
+      ]),
     })
     expect(fixtureTask?.dependsOn).toEqual([schemaTask?.suggestedId].filter(Boolean))
 
@@ -4232,7 +4239,7 @@ describe('Workspace Import review endpoints', () => {
           title: string
           domain: string
           dependsOn?: string[]
-          proofPaths?: Array<{ kind: string }>
+          proofPaths?: Array<{ kind: string; source?: string; launchSteps?: Array<{ kind?: string }> }>
           acceptanceCriteria?: Array<{ id: string }>
         }>
       } | null
@@ -4245,9 +4252,16 @@ describe('Workspace Import review endpoints', () => {
         expect.objectContaining({ id: 'contracts-defined' }),
         expect.objectContaining({ id: 'deterministic-proof' }),
       ]),
-      proofPaths: [
+      proofPaths: expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'command',
+          source: 'inferred',
+          launchSteps: expect.arrayContaining([
+            expect.objectContaining({ kind: 'blocked_until_setup' }),
+          ]),
+        }),
         expect.objectContaining({ kind: 'review', source: 'inferred' }),
-      ],
+      ]),
     })
     expect(parsedFixtureTask?.dependsOn).toEqual([parsedSchemaTask?.id].filter(Boolean))
   })

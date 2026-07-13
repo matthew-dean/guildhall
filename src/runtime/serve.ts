@@ -7812,7 +7812,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
     const detailMessage = `No actionable tasks remain: ${done} done, ${blocked} blocked, ${shelved} shelved, ${pendingPr} pending PR, ${archived} archived, ${cancelled} cancelled.`
     if (selectedReleaseScope && blocked > 0) return null
-    const proofSummaryScope = queueSelectedReleaseScope ?? selectedReleaseScope
+    const proofSummaryScope = selectedReleaseScope ?? queueSelectedReleaseScope
     const selectedScopeProofStyle = proofSummaryScope
       ? proofStyleForScope(rawReleases ?? [], proofSummaryScope)
       : undefined

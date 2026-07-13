@@ -33973,3 +33973,101 @@ orientation proof projection as scope summary.
     start-readiness prose and lets hidden child split work vanish from Start's
     terminal-state check.
 - Schema Migration Decision: no persisted schema field or migration changed.
+
+## codex:fresh-import-scope-start-proof-truth-2026-07-13
+
+- User job:
+  - When approved workspace-goals/import scope is fresher than legacy task
+    release selection, Start, Overview, Map, and release-readiness should use
+    the same selected execution boundary and focus blockers on current scoped
+    work, not stale historical release rows.
+  - Import preview/materialization should keep missing headless command proof
+    visible as a command-proof setup requirement while avoiding duplicate review
+    evidence lines.
+- Root cause classification:
+  - Project structure/scope/release modeling problem: terminal Start readiness
+    selected the orientation scope from augmented workspace-import truth, then
+    summarized proof blockers with the raw queue-selected release scope first.
+    That let a stale release task (`legacy-proof`) win over the fresher
+    documented Stage 1 task.
+  - Task hierarchy/dependency/proof modeling problem: the import preview test
+    still expected review-only proof even though headless/current prototype work
+    now needs an explicit missing command-proof path.
+  - Data model/schema problem: contract-driven import proof evidence could
+    duplicate the same review expectation when no contract names were extracted.
+  - UI communication/orientation problem: stale Start focus would point the user
+    at old proof cleanup while the visible Map/Overview described a different
+    current scope.
+- Fix:
+  - Terminal Start proof summaries now prefer the same selected scope that the
+    orientation spine exposes, falling back to queue-selected release scope only
+    when no orientation-selected scope exists.
+  - Contract-driven import proof evidence now dedupes identical review
+    expectations.
+  - The import preview/materialization regression now asserts the intended
+    model: missing command proof stays visible as a `blocked_until_setup`
+    command proof path plus review evidence.
+- Proof provided:
+  - `CI=true pnpm exec vitest run src/runtime/__tests__/serve-settings.test.ts
+    --testNamePattern "keeps start readiness aligned with a fresher documented
+    import scope"` passed.
+  - `CI=true pnpm exec vitest run src/runtime/__tests__/serve-settings.test.ts
+    --testNamePattern "materializes detector and approved import previews"`
+    passed.
+  - `CI=true pnpm exec vitest run src/runtime/__tests__/serve-settings.test.ts`
+    passed: 124 tests.
+  - `CI=true pnpm exec vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts` passed: 67 tests.
+  - `CI=true pnpm exec vitest run
+    src/runtime/__tests__/project-orientation-spine.test.ts` passed: 68 tests.
+  - `CI=true pnpm exec vitest run src/runtime/__tests__/workspace-importer.test.ts`
+    passed: 85 tests.
+  - `CI=true pnpm lint:contracts` passed.
+  - `CI=true pnpm build` passed.
+  - `CI=true pnpm dev:install` passed, then `guildhall stop && guildhall start`
+    restarted the installed app.
+  - `/api/stale-server` returned `stale:false`, PID `55754`,
+    `bootBuildMtimeMs:1783947932964`, and
+    `currentBuildMtimeMs:1783947932964`.
+  - Live Looma + Knit `/api/project?surface=overview` proof showed
+    `startReadiness.code:"imported_scope_shaping"`, the current E2E shaping
+    blocker, `orientationSpine.summary.nextAction:"Shape the first
+    current-scope task."`, selected release `Stage 1: V1 Release Hardening`,
+    5 current nodes, and 64 deferred nodes.
+  - Live Narrative Harness `/api/project?surface=overview` proof showed
+    `startReadiness.code:"all_terminal"`, selected release `Stage 1: Headless
+    Drafting And Evaluation MVP`, 11 current nodes, 31 deferred nodes, and a
+    complete headline.
+  - Browser proof on `/projects/looma-knit/overview` showed the current E2E
+    shaping blocker and `Shape first task`, with no stale `Near-term proof
+    scope` text and no horizontal overflow.
+  - Browser proof on `/projects/looma-knit/map` showed `Stage 1: V1 Release
+    Hardening`, `5 assigned work items`, `64 later work items`, no stale
+    `Near-term proof scope` text, and no horizontal overflow.
+  - Browser proof on `/projects/narrative-harness/overview` and
+    `/projects/narrative-harness/map` showed the Stage 1 complete headline;
+    Map also showed `11 assigned work items`, `31 later work items`, no
+    `PROOF NEEDED` text, and no horizontal overflow.
+- Residual findings:
+  - Direct project-route browser hydration can take tens of seconds immediately
+    after service restart; tracked as observation, not fixed in this patch.
+- Contract Touch Decision:
+  - Work id: `fresh-import-scope-start-proof-truth`.
+  - Touched contracts: terminal Start readiness selected-scope proof summary,
+    workspace-import proof-path evidence normalization, and import preview
+    regression expectations.
+  - Contracts considered but not touched: persisted task schema, persisted
+    release schema, workspace-goals schema, Project Map components, Overview
+    components, release-readiness response shape, and scheduler dispatch.
+  - Required follow-up: continue calibrating Looma + Knit shaping/repository
+    blockers and direct-route hydration performance if it keeps affecting live
+    user proof.
+  - Proof required: focused Start/import regressions, full settings route
+    suite, release-readiness suite, orientation spine suite, workspace importer
+    suite, contract lint, build/install freshness, live API proof, and browser
+    proof.
+  - Proof provided: all proof listed above.
+  - Apply/revert behavior: reverting lets terminal Start proof blockers use a
+    stale raw queue release even when the orientation spine and approved import
+    scope have already selected newer documented current work.
+- Schema Migration Decision: no persisted schema field or migration changed.

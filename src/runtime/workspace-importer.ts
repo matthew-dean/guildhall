@@ -3646,10 +3646,12 @@ function deriveContractProofPaths(
       kind: 'review' as const,
       source: 'inferred' as const,
       expectedEvidence: [
-        contractList
-          ? `The imported contract surface explicitly names and uses ${contractList}.`
-          : implementationSummary,
-        implementationSummary,
+        ...new Set([
+          contractList
+            ? `The imported contract surface explicitly names and uses ${contractList}.`
+            : implementationSummary,
+          implementationSummary,
+        ]),
       ],
     },
   ]
