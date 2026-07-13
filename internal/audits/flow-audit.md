@@ -29464,6 +29464,67 @@ selected-scope readiness ordering.
     Overview even while Map/Start say it is complete.
 - Schema Migration Decision: no persisted schema field or migration changed.
 
+## 2026-07-13 - Drawer and Work surfaces use effective progress truth
+
+- User job:
+  - Opening a task drawer or Work surface should show the same proof/progress
+    truth as Overview and release readiness. A completed task with recorded
+    proof must not look pending in the drawer, and a stale raw retry must not
+    reopen work that effective completion proof already settled.
+- Root cause classification:
+  - Data model/schema/source modeling problem: task detail and fleet summaries
+    derived `workProgress` from raw `TASKS.json` rows while task detail itself
+    was enriched from effective task state.
+  - Scheduler/action-state logic problem: the retry-work mutation guarded on
+    raw terminal status, so stale raw `in_progress` state could try to reopen an
+    effectively done task.
+  - UI communication/orientation problem: the Work surface response returned
+    the full map tree instead of the compact work-surface spine, which made a
+    task-focused view carry extra orientation structure.
+- Fix:
+  - Task detail and service summaries now derive `workProgress` from effective
+    tasks.
+  - `retry-work` blocks on effective terminal status, not stale raw status.
+  - `surface=work` uses the compact work-surface orientation spine while full,
+    overview, and map keep their intended spine shapes.
+- Proof provided:
+  - `corepack pnpm vitest run
+    src/runtime/__tests__/serve-task-endpoints.test.ts
+    src/runtime/__tests__/serve-release-readiness.test.ts
+    src/runtime/__tests__/work-progress.test.ts` passed: 181 tests.
+  - `corepack pnpm lint:contracts` passed.
+  - `git diff --check` passed.
+  - `node ./build.mjs && corepack pnpm dev:install` passed.
+  - `guildhall stop && guildhall start` restarted the installed app.
+  - `/api/stale-server` returned `stale:false`, PID `98013`,
+    `bootBuildMtimeMs:1783905732989`, and
+    `currentBuildMtimeMs:1783905732989`.
+  - Installed API proof for `narrative-harness` task `task-import-dh34s5`
+    returned task status `done`, completion proof `state:"verified"`, drawer
+    rollup `primaryState:"done"`, and `proof:1` status `done`.
+  - Installed Work-surface proof for the same task returned selected scope
+    `Stage 1: Headless Drafting And Evaluation MVP`, `orientationRootsLength:0`,
+    `scopeRowsCount:38`, and task progress rollup `primaryState:"done"`.
+- Contract Touch Decision:
+  - Work id: `drawer-work-effective-progress-truth`.
+  - Touched contracts: task detail read-model semantics, service summary
+    work-progress semantics, retry-work terminal guard semantics, and
+    Work-surface orientation response shape.
+  - Contracts considered but not touched: persisted task schema, persisted
+    release schema, proof-path storage shape, task lifecycle/status enum,
+    Start/Resume project-scope semantics, release branch/runtime execution
+    behavior, and UI component props.
+  - Required follow-up: continue removing duplicated raw/effective task
+    interpretations from other action/read paths before adding UI polish.
+  - Proof required: task endpoint regressions, release-readiness regressions,
+    work-progress unit coverage, contract lint, build/install freshness, and
+    installed Narrative Harness API agreement across drawer and Work surfaces.
+  - Proof provided: all required proof above.
+  - Apply/revert behavior: reverting restores drawer/service progress reads from
+    raw task state and allows stale raw retry state to contradict effective
+    completion proof.
+- Schema Migration Decision: no persisted schema field or migration changed.
+
 ## 2026-07-13 - Overview work progress uses effective release truth
 
 - User job:

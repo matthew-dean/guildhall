@@ -228,6 +228,45 @@ describe('GET /api/project/task/:id', () => {
     expect(Array.isArray(body.contextDebug)).toBe(true)
   })
 
+  it('builds drawer work progress from effective proof state, not stale raw task records', async () => {
+    await seedTask('task-1', {
+      title: 'Run fixture evaluator proof',
+      status: 'done',
+      proofPaths: [{ expectedEvidence: ['runner-smoke'] }],
+      gateResults: [],
+    })
+    await appendTaskEvidence(tmpDir, 'task-1', {
+      id: 'gate-task-1-runner-smoke',
+      kind: 'gate_result',
+      recordedAt: '2026-07-06T12:00:00.000Z',
+      payload: {
+        gateId: 'runner-smoke',
+        status: 'pass',
+        checkedAt: '2026-07-06T12:00:00.000Z',
+      },
+    })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(new Request(projectUrl('/api/project/task/task-1')))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as Record<string, any>
+
+    expect(body.task?.completionProof).toMatchObject({ state: 'verified' })
+    expect(body.workProgress?.byTaskId?.['task-1']).toMatchObject({
+      rollup: {
+        primaryState: 'done',
+        requiredStepCount: 1,
+        doneStepCount: 1,
+      },
+    })
+    expect(body.workProgress?.byTaskId?.['task-1']?.deliverySteps).toEqual([
+      expect.objectContaining({
+        id: 'proof:1',
+        status: 'done',
+      }),
+    ])
+  })
+
   it('returns adjacent task links for hierarchy and dependency display', async () => {
     await seedTasks([
       {
@@ -3032,7 +3071,7 @@ describe('POST /api/project/task/:id/resume', () => {
     expect(task?.runtime?.proofRecovery?.reason).toBe('Run the real provider proof and attach the evidence.')
   })
 
-  it('recognizes proof recovery when stale completion evidence overrides a raw retry', async () => {
+  it('does not reopen stale raw retries when effective completion proof already settled the task', async () => {
     await seedTask('task-1', {
       status: 'in_progress',
       assignedTo: 'worker-agent',
@@ -3045,16 +3084,29 @@ describe('POST /api/project/task/:id/resume', () => {
         ],
       }],
       doneSummaryBundle: {
+        taskId: 'task-1',
         status: 'done',
         completedAt: '2026-07-06T20:00:00.000Z',
         summary: {
-          evidence: 'npm-run-build passed.',
+          journey: 'Worker proved the provider drafting lane.',
+          decision: 'Task finished as done.',
+          evidence: 'DeepInfra drafting telemetry recorded refusal behavior, cost, latency, and voice preservation.',
+          learningCandidates: [],
+          openResidue: 'No residue.',
         },
+        retention: {
+          transcriptPrimaryArtifact: false,
+          compactedFullTranscript: false,
+          fullEvidenceAvailable: true,
+        },
+        evidenceRefs: [],
+        createdAt: '2026-07-06T20:00:00.000Z',
+        createdBy: 'orchestrator',
       },
       gateResults: [{
-        gateId: 'npm-run-build',
+        gateId: 'deepinfra-drafting-telemetry',
         passed: true,
-        output: 'build passed',
+        output: 'DeepInfra drafting telemetry recorded refusal behavior, cost, latency, and voice preservation.',
         checkedAt: '2026-07-06T20:00:00.000Z',
       }],
       reviewVerdicts: [{
@@ -3076,11 +3128,11 @@ describe('POST /api/project/task/:id/resume', () => {
       }),
     )
     const body = (await res.json()) as Record<string, any>
-    expect(res.status, JSON.stringify(body)).toBe(200)
-    expect(body).toMatchObject({ ok: true, status: 'in_progress' })
+    expect(res.status, JSON.stringify(body)).toBe(400)
+    expect(body).toMatchObject({ error: 'task is done' })
     const effective = await readEffectiveTask('task-1')
-    expect(effective.status).toBe('in_progress')
-    expect(effective.runtime?.proofRecovery?.reason).toBe('Run the real provider proof and attach the evidence.')
+    expect(effective.status).toBe('done')
+    expect(effective.runtime?.proofRecovery).toBeUndefined()
   })
 
   it('promotes an import draft into exploring when shaping starts', async () => {

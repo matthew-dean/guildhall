@@ -5006,8 +5006,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
           : await readProjectAvailability(entry.path).catch(() => null)
         try {
           const tasks = await readTasksFileNormalized(projectTasksPath(entry.path))
+          const effectiveTasks = await buildEffectiveTasks(entry.path, tasks as Task[])
           taskCounts = summarizeTaskCounts(tasks)
-          workProgress = deriveProjectWorkProgress(tasks as Array<Record<string, unknown>>)
+          workProgress = deriveProjectWorkProgress(effectiveTasks as unknown as Array<Record<string, unknown>>)
           taskActivity = summarizeTaskActivity(tasks)
           const gitStory = await buildProjectGitStorySummary(entry.path, tasks as Array<Record<string, unknown>>).catch(() => undefined)
           const inbox = await buildProjectInboxSnapshot({
@@ -5756,7 +5757,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
         actionModel,
         orientationSpine: mapSurface
           ? compactOrientationSpineForMapSurface(orientationSpine as unknown as Record<string, unknown>)
-          : orientationSpine,
+          : fullSurface || overviewSurface
+            ? orientationSpine
+            : compactOrientationSpineForWorkSurface(orientationSpine as unknown as Record<string, unknown>),
         deliverySpine: fullSurface
           ? {
               model: deliveryModel,
@@ -11225,7 +11228,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
         await runStoppedProjectReadRepairs({ projectPath: project.path })
       }
       const tasks = await readTasksFileNormalized(tasksPath)
-      const workProgress = deriveProjectWorkProgress(tasks as Array<Record<string, unknown>>)
+      const effectiveTasks = await buildEffectiveTasks(project.path, tasks as Task[])
+      const workProgress = deriveProjectWorkProgress(effectiveTasks as unknown as Array<Record<string, unknown>>)
       const id = c.req.param('id')
       const task = tasks.find(t => (t as { id?: string }).id === id)
       if (!task) return c.json({ error: 'task not found' }, 404)
@@ -12128,8 +12132,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
         const isProofRecovery =
           (task.status === 'done' && taskDoneButProofMissing(task)) ||
           taskDoneButProofMissing(effectiveTask)
-        if ((task.status === 'done' && !isProofRecovery) || task.status === 'shelved' || task.status === 'pending_pr') {
-          return c.json({ error: `task is ${task.status}` }, 400)
+        const effectiveStatus = typeof effectiveTask.status === 'string' ? effectiveTask.status : String(task.status ?? '')
+        if ((effectiveStatus === 'done' && !isProofRecovery) || effectiveStatus === 'shelved' || effectiveStatus === 'pending_pr') {
+          return c.json({ error: `task is ${effectiveStatus}` }, 400)
         }
         const now = new Date().toISOString()
         const instruction = body.instruction?.trim()
