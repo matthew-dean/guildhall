@@ -160,6 +160,8 @@ describe('inspectGitStory', () => {
 
     expect(snapshot.state).toBe('committed_local')
     expect(snapshot.localCommits.map(commit => commit.subject)).toEqual(['first change', 'second change'])
+    expect(snapshot.reason).toContain('abc123 first change')
+    expect(snapshot.reason).toContain('def456 second change')
   })
 
   it('expands home-relative task worktree paths before inspecting git', async () => {

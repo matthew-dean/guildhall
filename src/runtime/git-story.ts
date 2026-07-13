@@ -129,6 +129,7 @@ export function reasonForGitStorySnapshot(input: {
   changedCount: number
   untrackedCount: number
   ahead: number
+  localCommits?: Array<{ sha: string; subject: string }>
   branch?: string
   upstream?: string
   pr?: PullRequestResult
@@ -138,8 +139,16 @@ export function reasonForGitStorySnapshot(input: {
   switch (input.state) {
     case 'dirty_uncommitted':
       return `${input.changedCount + input.untrackedCount} changed file${input.changedCount + input.untrackedCount === 1 ? '' : 's'} ${input.changedCount + input.untrackedCount === 1 ? 'is' : 'are'} not committed.`
-    case 'committed_local':
-      return `${input.branch ?? 'Branch'} has ${input.ahead} local commit${input.ahead === 1 ? '' : 's'} not pushed to ${input.upstream ?? 'upstream'}.`
+    case 'committed_local': {
+      const base = `${input.branch ?? 'Branch'} has ${input.ahead} local commit${input.ahead === 1 ? '' : 's'} not pushed to ${input.upstream ?? 'upstream'}.`
+      const commits = input.localCommits ?? []
+      if (commits.length === 0) return base
+      const shown = commits.slice(0, 2)
+        .map(commit => `${commit.sha.slice(0, 8)} ${commit.subject}`.trim())
+        .join('; ')
+      const remaining = commits.length > shown.length ? `; +${commits.length - shown.length} more` : ''
+      return `${base.replace(/\.$/, '')}: ${shown}${remaining}.`
+    }
     case 'no_upstream':
       return `${input.branch ?? 'Branch'} has no upstream branch, so Guildhall cannot compare or publish this work yet.`
     case 'pr_open':
@@ -244,6 +253,7 @@ export async function inspectGitStory(
         ahead: status.ahead,
         branch: status.branch,
         upstream: status.upstream,
+        localCommits,
         pr,
         mergeRecordResult,
         overrideReason,

@@ -30628,6 +30628,55 @@ selected-scope readiness ordering.
     work instead of bootstrap environment leakage.
 - Schema Migration Decision: no persisted schema field or migration changed.
 
+## codex:repository-followup-commit-identity-2026-07-13
+
+- User job:
+  - When a release is blocked only because repository follow-up remains, the
+    blocker should name the actual unpublished commit, not only a count. The
+    owner should be able to tell what needs pushing without leaving Guildhall to
+    inspect git manually.
+- Root cause classification:
+  - UI communication/orientation problem: the git-story snapshot already carried
+    `localCommits`, but the shared `reason` string only exposed the ahead count.
+  - Project structure/scope/release modeling problem: release readiness depended
+    on repository closure, but the blocker did not identify the concrete
+    closure unit.
+- Fix:
+  - `reasonForGitStorySnapshot` now includes up to two unpublished commit
+    `sha subject` pairs in `committed_local` reasons.
+- Proof provided:
+  - `CI=true pnpm exec vitest run src/runtime/__tests__/git-story.test.ts`
+    passed: 21 tests.
+  - `CI=true pnpm lint:contracts` passed.
+  - `git diff --check` passed.
+- Contract Touch Decision:
+  - Work id: `repository-followup-commit-identity`.
+  - Touched contracts: git-story blocker reason text and git-story regression
+    tests.
+  - Contracts considered but not touched: persisted task schema, release schema,
+    git-story snapshot field names, release-readiness payload shape, Overview
+    components, Release components, and git driver APIs.
+  - Required follow-up: install the rebuilt app and verify Narrative Harness
+    release readiness names commit `5a40b07 Add world-state continuity proof
+    script` in the repository-follow-up blocker.
+  - Proof required: focused git-story regression, contract lint, build/install
+    freshness, and live Narrative Harness API proof.
+  - Proof provided: local proof listed above plus installed-app proof:
+    `CI=true pnpm dev:install` installed the current branch artifact;
+    `guildhall stop; guildhall start` restarted the service; `/api/stale-server`
+    returned `stale:false`, PID `55880`,
+    `bootBuildMtimeMs:1783936587347`, and
+    `currentBuildMtimeMs:1783936587347`.
+  - Live Narrative Harness API proof showed both
+    `/api/project/release-readiness?projectId=narrative-harness` and
+    `/api/project?projectId=narrative-harness&surface=overview` reporting the
+    remaining repository blocker as
+    `main has 1 local commit not pushed to origin/main: 5a40b073 Add
+    world-state continuity proof script.`
+  - Apply/revert behavior: reverting keeps repository follow-up truthful but
+    forces the user to leave Guildhall to identify the unpublished commit.
+- Schema Migration Decision: no persisted schema field or migration changed.
+
 ## codex:task-drawer-release-proof-agreement-2026-07-13
 
 - User job:
