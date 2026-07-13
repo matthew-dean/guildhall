@@ -8,6 +8,51 @@ help_summary: |
 
 # Web UI flow audit
 
+2026-07-13T05:00:00Z - Source trail work records should not warn when scoped work is source-backed.
+
+- Work id: `codex:source-trail-work-record-grounding-2026-07-13`.
+- User job: A completed current release should not show a warning that implies
+  work records are ungrounded when the selected scope rows and proof contracts
+  already carry source document references.
+- Finding:
+  - Live Narrative Harness Map had `sourceHealth.gaps:0`, 11 included rows with
+    source refs, and proven proof contracts, but Source trail still showed
+    `Work records` with warning text: `Document-level artifact references are
+    not attached to every lane yet.`
+  - The warning was triggered only by missing artifact refs, even though the row
+    was labeled `Work records` and the map had source document refs.
+- Root cause classification:
+  - UI communication/orientation problem: the label and warning copy described
+    a broader grounding problem than the data actually showed.
+  - Data model/schema problem: `buildSourceTrail` treated artifact refs as the
+    only positive signal for work-record grounding, ignoring source document
+    refs already collected in the same model.
+- Change:
+  - `Work records` now reports artifact refs when present, otherwise source
+    documents attached to mapped work, and only warns when neither artifact refs
+    nor source document refs exist.
+- Contract Touch Decision:
+  - Work id: `codex:source-trail-work-record-grounding-2026-07-13`.
+  - Touched contracts: `/api/project.orientationSpine.sourceTrail` `Work
+    records` detail/tone semantics.
+  - Contracts considered but not touched: persisted task schema, source-ref
+    extraction, proof contract schema, Project Map component props.
+  - Required follow-up: if artifact refs become important separately, expose
+    them as their own row instead of overloading `Work records`.
+  - Proof required: focused orientation spine test, contract detector,
+    build/install/restart, stale-server check, live Narrative Harness Source
+    trail proof.
+  - Proof provided: focused orientation spine test passed with `67` tests;
+    `corepack pnpm lint:contracts` passed; `node ./build.mjs` passed;
+    `corepack pnpm dev:install` passed; `guildhall stop && guildhall start`
+    restarted the installed app; `/api/stale-server` returned `stale:false`;
+    live Narrative Harness Map returned Source trail `Work records` with value
+    `11 task records`, detail `66 source documents attached to mapped work.`,
+    and tone `ok`, while `sourceHealth.gaps:0` and release state remained
+    `ready`.
+  - Apply/revert behavior: reverting restores a false warning on completed,
+    source-backed current scopes that lack artifact refs.
+
 2026-07-13T04:42:00Z - Start focus and release metadata should be shared model truth, not preview-only repair.
 
 - Work id: `codex:start-focus-release-metadata-shared-2026-07-13`.

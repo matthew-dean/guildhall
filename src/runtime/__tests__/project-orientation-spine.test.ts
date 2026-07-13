@@ -1692,6 +1692,8 @@ describe('buildProjectOrientationSpine', () => {
     expect(spine.sourceTrail).toContainEqual(expect.objectContaining({
       label: 'Work records',
       value: '2 task records',
+      detail: '1 source document attached to mapped work.',
+      tone: 'ok',
     }))
   })
 

@@ -1686,6 +1686,11 @@ function buildSourceTrail(input: {
   const sourceDocNames = [...sourceDocRefs].map(sourceRefLabel).filter(Boolean)
   const scopeLabel = input.summary.selectedScopeLabel ?? input.scope?.label ?? input.summary.selectedReleaseLabel ?? input.selectedRelease?.label ?? 'Current scope'
   const workRecordCount = Math.max(taskRefs.size, input.summary.includedWorkCount) || input.taskCount
+  const workRecordDetail = artifactRefs.size > 0
+    ? `${artifactRefs.size} artifact references are attached to mapped work.`
+    : sourceDocRefs.size > 0
+      ? `${countLabel(sourceDocRefs.size, 'source document')} attached to mapped work.`
+      : 'Task records are mapped, but source documents are not attached yet.'
   return [
     {
       label: 'Charter',
@@ -1712,10 +1717,8 @@ function buildSourceTrail(input: {
     {
       label: 'Work records',
       value: `${workRecordCount} task records`,
-      detail: artifactRefs.size > 0
-        ? `${artifactRefs.size} artifact references are attached to mapped work.`
-        : 'Document-level artifact references are not attached to every lane yet.',
-      tone: artifactRefs.size > 0 ? 'ok' : 'warn',
+      detail: workRecordDetail,
+      tone: artifactRefs.size > 0 || sourceDocRefs.size > 0 ? 'ok' : 'warn',
     },
     {
       label: 'Proof mode',
