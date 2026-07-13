@@ -30707,6 +30707,58 @@ selected-scope readiness ordering.
     release can continue.
 - Schema Migration Decision: no persisted schema field or migration changed.
 
+## codex:headless-proof-reviewer-visual-rubric-mismatch-2026-07-13
+
+- User job:
+  - When Guildhall is recovering proof for a headless/CLI-first release task,
+    reviewers should judge the proof path that the task actually requires. A
+    no-UI author-intent proof task should not be blocked because no screenshot
+    or live preview exists.
+- Finding:
+  - Live Narrative Harness Stage 1 proof recovery reopened the author-intent
+    task, found existing worker proof, moved through review/gate-check, and then
+    stopped again.
+  - The task ended in `review`/revision flow because the Visual Designer
+    requested a rendered screenshot or live preview, even though the task is
+    explicitly headless/no-UI and the proof path is a local script/CLI proof.
+  - The run then stopped as `awaiting_human` / `spec_review` until Codex, acting
+    as delegated human reviewer, approved the spec checkpoint. After resuming,
+    the same visual-rubric mismatch reappeared in the reviewer notes.
+- Root cause classification:
+  - Review planning/model problem: reviewer lanes are not constrained tightly
+    enough by task modality (`headless`, `no-ui`, `script_only`, `proofStyle`).
+  - Project structure/proof model problem: release proof style is known, but it
+    does not yet fully shape reviewer participation and rubric selection.
+  - UI/live-work visibility problem: Work payload `recentEvents` showed stale
+    July 7 events while provider health showed an active July 13 request,
+    making it too hard to see the live review failure as it happened.
+- Required fix:
+  - Reviewer planning must derive reviewer lanes/rubric from the selected
+    release/task proof modality. Visual/UI evidence criteria must be disabled
+    or replaced with CLI/output evidence criteria for headless proof tasks.
+  - Proof-recovery runs should not turn a script-only proof gap into a generic
+    visual-review ask.
+  - Live work/event surfaces should expose the current run stream or an honest
+    link to it instead of stale historical deltas.
+- Proof required:
+  - A focused regression where a `script_only`/headless selected release task
+    with CLI proof does not receive visual screenshot/live-preview reviewer
+    requirements.
+  - A live Narrative Harness retry that no longer blocks the author-intent proof
+    gap on visual evidence.
+- Contract Touch Decision:
+  - Work id: `headless-proof-reviewer-visual-rubric-mismatch`.
+  - Touched contracts: none yet; this is a discovered failing flow-audit
+    blocker.
+  - Contracts considered but not touched: reviewer-plan contract, review audit
+    schema, release proof-style semantics, live event stream API.
+  - Required follow-up: fix reviewer-planning/rubric selection before treating
+    the Narrative Harness MVP proof recovery as complete.
+  - Proof provided: live Narrative Harness task detail showed Visual Designer
+    revision text requesting screenshot/live preview on a headless proof task,
+    plus run stop state `awaiting_human` and stale live-event surface.
+- Schema Migration Decision: no persisted schema field or migration changed.
+
 ## codex:workspace-import-coverage-raw-signal-veto-2026-07-13
 
 - User job:
