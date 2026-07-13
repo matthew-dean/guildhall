@@ -29464,6 +29464,70 @@ selected-scope readiness ordering.
     Overview even while Map/Start say it is complete.
 - Schema Migration Decision: no persisted schema field or migration changed.
 
+## 2026-07-12T23:58:29Z - Source reconciliation archives settled split parents
+
+- User job:
+  - When Codex acts as owner to reconcile stale split children against canonical
+    current-scope proof tasks, Guildhall should not leave the old broad parent
+    as a separate deferred skeleton row.
+- Root cause classification:
+  - Task hierarchy/dependency/proof modeling problem: source-conflict
+    reconciliation archived only the selected duplicate child and did not roll
+    the supersession up to a completed parent whose children were all gone.
+  - Project structure/scope/release modeling problem: stale parent release
+    membership could keep old scope structure visible after the selected scope
+    had canonical proof tasks.
+  - UI communication/orientation problem: Map could show no source conflicts
+    and a completed release while still rendering the superseded parent as
+    deferred work.
+  - Bad project data produced by an earlier Guildhall bug: Narrative Harness
+    task-150 remained from an older owner-request decomposition after its child
+    work had been superseded.
+- Fix:
+  - `applySourceConflictReconciliation` now archives a done split parent when
+    the reconciled child was the last live child under that parent.
+  - Reconciliation also removes that parent from release `nodeIds` and
+    `deferredNodeIds`.
+  - The current Narrative Harness queue was repaired to archive `task-150`
+    after its three split children were reconciled to the canonical Stage 1
+    proof tasks.
+- Proof provided:
+  - `corepack pnpm vitest run
+    src/runtime/__tests__/source-conflict-reconciliation.test.ts` passed: 2
+    tests.
+  - `corepack pnpm vitest run
+    src/runtime/__tests__/source-conflict-reconciliation.test.ts
+    src/runtime/__tests__/project-orientation-spine.test.ts` passed: 68 tests.
+  - `node ./build.mjs` passed.
+  - `git diff --check` passed.
+  - `corepack pnpm lint:contracts` passed.
+  - Final installed refresh returned `/api/stale-server` with `stale:false`,
+    PID `93933`, `bootBuildMtimeMs:1783900768067`, and
+    `currentBuildMtimeMs:1783900768067`.
+  - Source-conflict reconciliation API calls kept the canonical current-scope
+    DeepInfra, world-state, and spatial/geographic proof tasks and archived the
+    three stale task-150 split children. After the third call,
+    `startReadiness.code` returned `all_terminal`.
+  - Installed API proof for
+    `/api/project?projectId=narrative-harness&surface=map` after the parent
+    repair returned `startReadiness.code: all_terminal`,
+    `sourceHealth.conflicts: 0`, `sourceHealth.gaps: 0`, no visible stale nodes
+    for `task-150` or its split children, and deferred work dropped from `30`
+    to `27`.
+- Contract Touch Decision:
+  - Work id: `source-conflict-parent-rollup`.
+  - Touched contracts: source-conflict reconciliation side effects on task
+    hierarchy parents and release membership.
+  - Contracts considered but not touched: persisted schema shape,
+    source-conflict endpoint request/response shape, owner approval semantics,
+    release readiness proof semantics, and orientation spine payload shape.
+  - Required follow-up: the endpoint still records `actor: human`; calibration
+    runs where Codex acts as owner need an honest owner-delegation actor field
+    instead of pretending the click came directly from Matthew.
+  - Apply/revert behavior: reverting keeps child reconciliation pairwise and can
+    leave superseded parents visible after all their split children are gone.
+- Schema Migration Decision: no persisted schema field or migration changed.
+
 ## 2026-07-12T23:54:34Z - Source conflicts cross imported domains
 
 - User job:

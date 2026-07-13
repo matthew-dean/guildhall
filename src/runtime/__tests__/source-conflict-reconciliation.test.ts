@@ -94,4 +94,90 @@ describe('applySourceConflictReconciliation', () => {
     expect(result.keepTask.notes.at(-1)?.content).toContain('kept as the source of truth')
     expect(result.archivedTask.notes.at(-1)?.content).toContain('Archived as a superseded duplicate')
   })
+
+  it('archives a done split parent after the final child is superseded', () => {
+    const base = {
+      description: 'Task.',
+      status: 'done' as const,
+      domain: 'harness',
+      projectPath: '.',
+      priority: 'normal' as const,
+      notes: [],
+      gateResults: [],
+      reviewVerdicts: [],
+      adjudications: [],
+      acceptanceCriteria: [],
+      outOfScope: [],
+      dependsOn: [],
+      escalations: [],
+      agentIssues: [],
+      createdAt: '2026-07-06T00:00:00.000Z',
+      updatedAt: '2026-07-06T00:00:00.000Z',
+    }
+    const queue: TaskQueue = {
+      version: 1,
+      lastUpdated: '2026-07-06T00:00:00.000Z',
+      selectedReleaseId: 'stage-1',
+      releases: [{
+        id: 'stage-1',
+        label: 'Stage 1',
+        kind: 'release',
+        state: 'active',
+        source: 'inferred',
+        proofStyle: 'unspecified',
+        nodeIds: ['work:canonical-world'],
+        deferredNodeIds: ['work:owner-parent'],
+      }],
+      tasks: [
+        {
+          ...base,
+          id: 'canonical-world',
+          title: 'Prove world-state continuity review over elapsed-time object and property changes.',
+          releaseIds: ['stage-1'],
+        },
+        {
+          ...base,
+          id: 'owner-parent',
+          title: 'Define Narrative Harness MVP drafting model and physical-world review lanes',
+          releaseIds: ['old-scope'],
+          hierarchy: { childIds: ['old-model', 'old-world'], relation: 'contains' },
+        },
+        {
+          ...base,
+          id: 'old-model',
+          title: 'Select and prove DeepInfra drafting model',
+          status: 'archived',
+          releaseIds: [],
+          hierarchy: { parentId: 'owner-parent', childIds: [], relation: 'decomposes', order: 0 },
+        },
+        {
+          ...base,
+          id: 'old-world',
+          title: 'Define world-state continuity review lane',
+          releaseIds: ['old-scope'],
+          hierarchy: { parentId: 'owner-parent', childIds: [], relation: 'decomposes', order: 1 },
+        },
+      ],
+    }
+
+    const result = applySourceConflictReconciliation({
+      queue,
+      selectedReleaseId: 'stage-1',
+      keepTaskId: 'canonical-world',
+      archiveTaskId: 'old-world',
+      now: '2026-07-06T12:00:00.000Z',
+      actor: 'codex-as-owner',
+    })
+
+    expect(result.tasks.find(task => task.id === 'old-world')?.status).toBe('archived')
+    expect(result.tasks.find(task => task.id === 'owner-parent')).toMatchObject({
+      status: 'archived',
+      releaseIds: [],
+    })
+    expect(result.tasks.find(task => task.id === 'owner-parent')?.notes.at(-1)?.content).toContain('all split children were superseded')
+    expect(result.releases.find(release => release.id === 'stage-1')).toMatchObject({
+      nodeIds: ['work:canonical-world'],
+      deferredNodeIds: [],
+    })
+  })
 })

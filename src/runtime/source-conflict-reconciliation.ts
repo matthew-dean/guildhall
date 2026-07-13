@@ -52,12 +52,19 @@ export function applySourceConflictReconciliation(
     content: `Archived as a superseded duplicate of "${keepTask.title}" for ${selectedReleaseId}.`,
     timestamp: input.now,
   })
+  const archivedParentIds = archiveSupersededParentIfSettled({
+    tasks,
+    archivedTask,
+    keepTask,
+    selectedReleaseId,
+    now: input.now,
+  })
 
   const releases = reconcileReleaseMembership({
     releases: input.queue.releases ?? [],
     selectedReleaseId,
     keepTaskId: keepTask.id,
-    archiveTaskId: archivedTask.id,
+    archiveTaskIds: [archivedTask.id, ...archivedParentIds],
     now: input.now,
   })
 
@@ -74,16 +81,18 @@ function reconcileReleaseMembership(input: {
   releases: readonly ProjectRelease[]
   selectedReleaseId: string
   keepTaskId: string
-  archiveTaskId: string
+  archiveTaskIds: string[]
   now: string
 }): ProjectRelease[] {
   const keepNodeId = `work:${input.keepTaskId}`
-  const archivedNodeId = `work:${input.archiveTaskId}`
+  const archivedNodeIds = new Set(input.archiveTaskIds.map(taskId => `work:${taskId}`))
   return input.releases.map(release => {
     const nodeIds = new Set(release.nodeIds ?? [])
     const deferredNodeIds = new Set(release.deferredNodeIds ?? [])
-    nodeIds.delete(archivedNodeId)
-    deferredNodeIds.delete(archivedNodeId)
+    for (const archivedNodeId of archivedNodeIds) {
+      nodeIds.delete(archivedNodeId)
+      deferredNodeIds.delete(archivedNodeId)
+    }
     deferredNodeIds.delete(keepNodeId)
     if (release.id === input.selectedReleaseId || nodeIds.has(keepNodeId)) {
       nodeIds.add(keepNodeId)
@@ -95,4 +104,38 @@ function reconcileReleaseMembership(input: {
       updatedAt: input.now,
     }
   })
+}
+
+function archiveSupersededParentIfSettled(input: {
+  tasks: Task[]
+  archivedTask: Task
+  keepTask: Task
+  selectedReleaseId: string
+  now: string
+}): string[] {
+  const parentId = input.archivedTask.hierarchy?.parentId?.trim()
+  if (!parentId) return []
+  const parent = input.tasks.find(task => task.id === parentId)
+  if (!parent || parent.status !== 'done') return []
+  const childIds = new Set([
+    ...(parent.hierarchy?.childIds ?? []),
+    ...input.tasks
+      .filter(task => task.hierarchy?.parentId === parent.id)
+      .map(task => task.id),
+  ])
+  if (childIds.size === 0) return []
+  const allChildrenArchived = [...childIds]
+    .map(childId => input.tasks.find(task => task.id === childId))
+    .every(child => child?.status === 'archived' || child?.status === 'cancelled')
+  if (!allChildrenArchived) return []
+  parent.status = 'archived'
+  parent.releaseIds = []
+  parent.updatedAt = input.now
+  parent.notes = [...(parent.notes ?? []), {
+    agentId: 'scope-reconciliation',
+    role: 'system',
+    content: `Archived because all split children were superseded by current-scope source-of-truth work, including "${input.keepTask.title}" for ${input.selectedReleaseId}.`,
+    timestamp: input.now,
+  }]
+  return [parent.id]
 }
