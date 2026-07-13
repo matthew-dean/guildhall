@@ -1660,10 +1660,14 @@
   }
   .signals-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-auto-rows: max-content;
     align-items: start;
+    align-content: start;
   }
   .signals-grid > :global(.signal-row) {
     align-self: start;
+    block-size: fit-content;
+    min-block-size: 0;
   }
   :global(.signal-row) span {
     color: var(--text-soft);

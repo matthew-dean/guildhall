@@ -35207,3 +35207,48 @@ orientation proof projection as scope summary.
 - Schema Migration Decision:
   - Scope: none. No persisted schema, API field, enum, or serialized state
     changed.
+
+## codex:overview-signal-natural-height-2026-07-13
+
+- User job:
+  - On Overview, short health facts should occupy only the space their content
+    needs, while a long actionable repository alert remains readable without
+    making neighboring facts look like giant empty cards.
+- Root cause classification:
+  - UI layout problem: the Signals grid relied on implicit grid-row sizing;
+    one long signal could establish a tall row even when shorter panels were
+    aligned to its start.
+- Fix:
+  - Signals now use max-content implicit rows and pack content from the top.
+  - Each signal row explicitly uses content-sized block sizing and a zero
+    minimum block size, preserving the existing shared `UtilityPanel`, dense
+    treatment, responsive container queries, and wide repository alert.
+- Proof provided:
+  - `CI=true pnpm vitest run
+    src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts`
+    passed: 34 tests.
+  - `git diff --check` passed.
+  - `pnpm lint:contracts`, `pnpm build`, and `pnpm dev:install` passed.
+  - After `guildhall stop && guildhall start`, `/api/stale-server` reported
+    `stale:false` with matching build mtimes.
+  - Live Looma + Knit Overview proof at `1280x900` rendered the repository
+    follow-up at 75px, short provider/setup/runtime facts at 56px, and the
+    two-line recent-change item at 75px; no short item inherited the alert's
+    height.
+  - Live mobile proof at `390x844` collapsed the grid to one column with
+    `scrollWidth=390` and `clientWidth=390`; signal heights were
+    `168, 56, 56, 56, 56, 75` according to content.
+- Contract Touch Decision:
+  - Work id: `overview-signal-natural-height`.
+  - Touched contracts: none; this changes only the layout rules of the
+    existing Overview Signals presentation.
+  - Contracts considered but not touched: shared `UtilityPanel` props,
+    project summary/action model, task schema, release schema, proof schema,
+    API routes, scheduler behavior, and persisted project state.
+  - Proof required: focused component test, contract detector, installed
+    build, stale-server verification, and desktop/mobile geometry checks.
+  - Apply/revert behavior: reverting restores the prior implicit grid sizing;
+    it does not alter project state or task behavior.
+- Schema Migration Decision:
+  - Scope: none. No persisted schema, API field, enum, or serialized state
+    changed.
