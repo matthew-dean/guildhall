@@ -34,7 +34,15 @@ export function applySourceConflictReconciliation(
   if (!keepTask) throw new Error(`Task not found: ${input.keepTaskId}`)
   if (!archivedTask) throw new Error(`Task not found: ${input.archiveTaskId}`)
 
-  keepTask.releaseIds = [...new Set([...(keepTask.releaseIds ?? []), selectedReleaseId])]
+  const promoteToSelectedRelease = conflictTouchesSelectedRelease({
+    releases: input.queue.releases ?? [],
+    selectedReleaseId,
+    keepTask,
+    archivedTask,
+  })
+  if (promoteToSelectedRelease) {
+    keepTask.releaseIds = [...new Set([...(keepTask.releaseIds ?? []), selectedReleaseId])]
+  }
   keepTask.updatedAt = input.now
   keepTask.notes.push({
     agentId: 'scope-reconciliation',
@@ -65,6 +73,7 @@ export function applySourceConflictReconciliation(
     selectedReleaseId,
     keepTaskId: keepTask.id,
     archiveTaskIds: [archivedTask.id, ...archivedParentIds],
+    promoteToSelectedRelease,
     now: input.now,
   })
 
@@ -82,6 +91,7 @@ function reconcileReleaseMembership(input: {
   selectedReleaseId: string
   keepTaskId: string
   archiveTaskIds: string[]
+  promoteToSelectedRelease: boolean
   now: string
 }): ProjectRelease[] {
   const keepNodeId = `work:${input.keepTaskId}`
@@ -93,8 +103,10 @@ function reconcileReleaseMembership(input: {
       nodeIds.delete(archivedNodeId)
       deferredNodeIds.delete(archivedNodeId)
     }
-    deferredNodeIds.delete(keepNodeId)
-    if (release.id === input.selectedReleaseId || nodeIds.has(keepNodeId)) {
+    if (nodeIds.has(keepNodeId) || (release.id === input.selectedReleaseId && input.promoteToSelectedRelease)) {
+      deferredNodeIds.delete(keepNodeId)
+    }
+    if ((release.id === input.selectedReleaseId && input.promoteToSelectedRelease) || nodeIds.has(keepNodeId)) {
       nodeIds.add(keepNodeId)
     }
     return {
@@ -104,6 +116,20 @@ function reconcileReleaseMembership(input: {
       updatedAt: input.now,
     }
   })
+}
+
+function conflictTouchesSelectedRelease(input: {
+  releases: readonly ProjectRelease[]
+  selectedReleaseId: string
+  keepTask: Task
+  archivedTask: Task
+}): boolean {
+  if (input.keepTask.releaseIds?.includes(input.selectedReleaseId)) return true
+  if (input.archivedTask.releaseIds?.includes(input.selectedReleaseId)) return true
+  const selectedRelease = input.releases.find(release => release.id === input.selectedReleaseId)
+  if (!selectedRelease) return false
+  const nodeIds = new Set([...(selectedRelease.nodeIds ?? []), ...(selectedRelease.deferredNodeIds ?? [])])
+  return nodeIds.has(`work:${input.keepTask.id}`) || nodeIds.has(`work:${input.archivedTask.id}`)
 }
 
 function archiveSupersededParentIfSettled(input: {

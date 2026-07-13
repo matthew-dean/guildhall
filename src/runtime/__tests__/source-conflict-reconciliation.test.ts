@@ -180,4 +180,101 @@ describe('applySourceConflictReconciliation', () => {
       deferredNodeIds: [],
     })
   })
+
+  it('does not promote later-scope conflicts into the selected current release', () => {
+    const base = {
+      description: 'Task.',
+      status: 'shelved' as const,
+      domain: 'looma',
+      projectPath: '.',
+      priority: 'normal' as const,
+      notes: [],
+      gateResults: [],
+      reviewVerdicts: [],
+      adjudications: [],
+      acceptanceCriteria: [],
+      outOfScope: [],
+      dependsOn: [],
+      escalations: [],
+      agentIssues: [],
+      createdAt: '2026-07-06T00:00:00.000Z',
+      updatedAt: '2026-07-06T00:00:00.000Z',
+    }
+    const queue: TaskQueue = {
+      version: 1,
+      lastUpdated: '2026-07-06T00:00:00.000Z',
+      selectedReleaseId: 'stage-1',
+      releases: [{
+        id: 'stage-1',
+        label: 'Stage 1',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        proofStyle: 'unspecified',
+        nodeIds: ['work:e2e-tests'],
+        deferredNodeIds: [],
+      }, {
+        id: 'stage-2',
+        label: 'Stage 2',
+        kind: 'release',
+        state: 'planned',
+        source: 'release_plan',
+        proofStyle: 'unspecified',
+        nodeIds: [],
+        deferredNodeIds: ['work:looma-task'],
+      }, {
+        id: 'stage-3',
+        label: 'Stage 3',
+        kind: 'release',
+        state: 'planned',
+        source: 'release_plan',
+        proofStyle: 'unspecified',
+        nodeIds: [],
+        deferredNodeIds: ['work:knit-task'],
+      }],
+      tasks: [
+        {
+          ...base,
+          id: 'e2e-tests',
+          title: 'E2E tests: login create page edit search flow',
+          status: 'import_draft',
+          releaseIds: ['stage-1'],
+        },
+        {
+          ...base,
+          id: 'looma-task',
+          title: 'Register Looma extension helpers from @looma/editor/extensions in Knit.',
+          releaseIds: ['stage-2'],
+        },
+        {
+          ...base,
+          id: 'knit-task',
+          title: 'Use Looma extension helpers in Knit.',
+          releaseIds: ['stage-3'],
+        },
+      ],
+    }
+
+    const result = applySourceConflictReconciliation({
+      queue,
+      selectedReleaseId: 'stage-1',
+      keepTaskId: 'looma-task',
+      archiveTaskId: 'knit-task',
+      now: '2026-07-06T12:00:00.000Z',
+      actor: 'codex-as-owner',
+    })
+
+    expect(result.keepTask.releaseIds).toEqual(['stage-2'])
+    expect(result.archivedTask.releaseIds).toEqual([])
+    expect(result.releases.find(release => release.id === 'stage-1')).toMatchObject({
+      nodeIds: ['work:e2e-tests'],
+      deferredNodeIds: [],
+    })
+    expect(result.releases.find(release => release.id === 'stage-2')).toMatchObject({
+      deferredNodeIds: ['work:looma-task'],
+    })
+    expect(result.releases.find(release => release.id === 'stage-3')).toMatchObject({
+      deferredNodeIds: [],
+    })
+  })
 })

@@ -29464,6 +29464,67 @@ selected-scope readiness ordering.
     Overview even while Map/Start say it is complete.
 - Schema Migration Decision: no persisted schema field or migration changed.
 
+## 2026-07-13T00:05:03Z - Later-scope source reconciliation preserves later scope
+
+- User job:
+  - Looma + Knit source-conflict cleanup must not pull deferred/later duplicate
+    work into the selected current release just because the owner is looking at
+    that release.
+- Root cause classification:
+  - Project structure/scope/release modeling problem: source-conflict
+    reconciliation treated `selectedReleaseId` as the scope to assign the kept
+    task to, even when both conflicting tasks belonged to later releases.
+  - Task hierarchy/dependency/proof modeling problem: duplicate cleanup was
+    conflating supersession with execution-boundary membership.
+  - Scheduler/action-state logic problem: promoting later work into the current
+    release would make it eligible for the wrong Start/Resume boundary.
+  - Bad project data produced by an earlier Guildhall bug: Looma + Knit had
+    duplicated later tasks imported from both Looma and Knit planning docs.
+- Fix:
+  - `applySourceConflictReconciliation` now promotes the kept task into the
+    selected release only when the kept or archived task already touches that
+    selected release.
+  - Reconciliation no longer removes the kept task from deferred membership in
+    unrelated future releases.
+  - Codex-as-owner used the product reconciliation endpoint to keep the richer
+    Looma-authored Stage 2 rows and archive the duplicate Knit Stage 3 rows.
+- Proof provided:
+  - `corepack pnpm vitest run
+    src/runtime/__tests__/source-conflict-reconciliation.test.ts` passed: 3
+    tests.
+  - `corepack pnpm vitest run
+    src/runtime/__tests__/source-conflict-reconciliation.test.ts
+    src/runtime/__tests__/project-orientation-spine.test.ts` passed: 69 tests.
+  - `node ./build.mjs` passed.
+  - `corepack pnpm dev:install` passed.
+  - `/api/stale-server` returned `stale:false`, PID `14114`,
+    `bootBuildMtimeMs:1783901042042`, and
+    `currentBuildMtimeMs:1783901042042`.
+  - Before reconciliation, installed Looma + Knit Map proof showed selected
+    release `stage-1-v1-release-hardening` with 5 node ids, 0 deferred ids,
+    `sourceHealth.conflicts: 2`, and conflicts for editor UI replacement and
+    Looma extension helpers.
+  - After reconciliation, the kept tasks retained only
+    `stage-2-integrate-looma-editor-phase-1-in-knit`; the archived tasks were
+    removed; selected Stage 1 node ids stayed unchanged; `sourceHealth.conflicts`
+    and `sourceHealth.gaps` both became `0`.
+  - `git diff --check` passed.
+  - `corepack pnpm lint:contracts` passed.
+- Contract Touch Decision:
+  - Work id: `later-scope-source-conflict-preservation`.
+  - Touched contracts: source-conflict reconciliation release-membership side
+    effects.
+  - Contracts considered but not touched: persisted schema shape,
+    source-conflict endpoint request/response shape, selected release API,
+    release readiness proof semantics, and orientation spine payload shape.
+  - Required follow-up: the Map UI should make it clearer whether a source
+    conflict is current-scope or later-scope before the owner clicks a keep
+    button; the shared model now preserves scope, but the UI copy can still
+    make the action feel current-release scoped.
+  - Apply/revert behavior: reverting can reintroduce accidental current-release
+    promotion when reconciling later-scope duplicates.
+- Schema Migration Decision: no persisted schema field or migration changed.
+
 ## 2026-07-12T23:58:29Z - Source reconciliation archives settled split parents
 
 - User job:
