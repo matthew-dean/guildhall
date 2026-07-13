@@ -30823,6 +30823,58 @@ selected-scope readiness ordering.
     Overview even while Map/Start say it is complete.
 - Schema Migration Decision: no persisted schema field or migration changed.
 
+## codex:looma-knit-import-shaping-state-regression-2026-07-13
+
+- User job:
+  - When Guildhall starts a current-scope imported task that has already entered
+    shaping, the task should remain visibly in shaping until it produces a brief,
+    question, escalation, or runnable spec.
+- Root cause classification:
+  - Task hierarchy/dependency/proof modeling problem: the task's durable shaping
+    state was represented indirectly by notes, while the normalizer treated the
+    absence of brief fields as proof that shaping had never started.
+  - Scheduler/action-state logic problem: a focused run re-read and normalized
+    the task before the spec agent could save progress, changing `exploring` back
+    to `import_draft` while the run still reported active shaping.
+  - UI communication/orientation problem: the thread said Guildhall was drafting
+    a brief while the task state and project readiness said an unshaped draft was
+    waiting.
+- Discovery:
+  - Live Looma + Knit task `task-import-1vghvf6` was `exploring` before a focused
+    start. The task detail contained a state-repair note saying imported draft
+    shaping had begun, but no product brief or acceptance criteria yet.
+  - Starting the task through the real `/api/project/task/:id/start` path changed
+    the durable task back to `import_draft`; the run remained `running` and the
+    thread remained `drafting a task brief`.
+- Fix:
+  - Imported-task normalization now treats Guildhall's persisted imported-draft
+    shaping repair note as shaping progress, alongside the explicit shaping
+    request. An active shaping task is no longer demoted merely because its brief
+    fields have not been written yet.
+- Contract Touch Decision:
+  - Work id: `looma-knit-import-shaping-state-regression`.
+  - Touched contracts: imported-task state normalization and the read boundary
+    used by focused task starts.
+  - Contracts considered but not touched: persisted task schema, release schema,
+    scheduler dispatch protocol, brief/spec approval endpoints, and UI surface
+    response shapes.
+  - Required follow-up: verify that the spec agent records durable brief/spec
+    progress or an explicit owner question before its liveness boundary.
+  - Proof required: imported-state regression, focused task endpoint tests,
+    contract lint, installed-app freshness, and live API proof across task,
+    thread, work, and release readiness.
+  - Proof provided:
+    - `pnpm vitest run src/runtime/__tests__/import-drafts.test.ts src/runtime/__tests__/serve-task-endpoints.test.ts src/runtime/__tests__/project-orientation-spine.test.ts src/runtime/__tests__/project-action-model.test.ts src/runtime/__tests__/thread.test.ts` passed with 275 tests.
+    - `pnpm lint:contracts` passed.
+    - `pnpm build` and `pnpm dev:install` passed; the installed service reported `stale:false`.
+    - On the installed service, shaping `task-import-1vghvf6` and starting it through the real focused-start endpoint kept the task in `exploring` while the spec lane was active. After the bounded run ended, the task was `spec_review` with a durable product brief, spec, and three acceptance criteria; it was not demoted back to `import_draft`.
+    - The same live project response showed the remaining Looma + Knit import-calibration finding: the map surface reports seven source-backed tasks missing from the saved import/queue. This is recorded as residual calibration work, not as evidence of completion.
+  - Residual finding:
+    - The imported task now reaches an honest `spec_review` boundary, but the generated acceptance criteria and proof paths still need source-specific review before implementation can begin. Separately, the project import detector still needs to recover the seven missing Looma + Knit tasks without generic decomposition or duplicate scope.
+  - Apply/revert behavior: reverting can demote an already-shaped imported task
+    back to `import_draft` on the next normalized read.
+- Schema Migration Decision: no persisted schema field or migration changed.
+
 ## codex:nh-complete-release-proof-state-agreement-2026-07-13
 
 - User job:

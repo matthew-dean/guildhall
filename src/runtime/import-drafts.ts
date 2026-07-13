@@ -14,8 +14,11 @@ function noteArray(task: Task): Task['notes'] {
   return Array.isArray(task.notes) ? task.notes : []
 }
 
-function hasShapingRequest(task: Task): boolean {
-  return noteArray(task).some((note) => note?.role === 'shaping-request')
+function hasShapingProgress(task: Task): boolean {
+  return noteArray(task).some((note) => {
+    if (note?.role === 'shaping-request') return true
+    return note?.role === 'state-repair' && /imported draft shaping/i.test(note.content ?? '')
+  })
 }
 
 export function hasWorkspaceImportProvenance(task: Task): boolean {
@@ -167,7 +170,7 @@ async function buildImportedEvidenceSummary(task: Task): Promise<string> {
 
 export function shouldUseImportDraftState(task: Task): boolean {
   if (!hasWorkspaceImportProvenance(task)) return false
-  if (hasShapingRequest(task)) return false
+  if (hasShapingProgress(task)) return false
   if (task.status === 'import_draft') return true
   if (task.status !== 'exploring') return false
   return !hasSpecDraft(task) && !hasProductBriefShape(task) && !hasAnyAcceptanceCriteria(task) && !hasOpenQuestions(task)
@@ -246,7 +249,7 @@ export async function continueImportedSourceRecovery(task: Task, memoryDir: stri
   delete task.branchName
   delete task.baseBranch
   task.updatedAt = now
-  if (!hasShapingRequest(task)) {
+  if (!hasShapingProgress(task)) {
     task.notes = [
       ...noteArray(task),
       {
