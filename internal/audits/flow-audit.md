@@ -30566,6 +30566,74 @@ selected-scope readiness ordering.
     Overview even while Map/Start say it is complete.
 - Schema Migration Decision: no persisted schema field or migration changed.
 
+## codex:script-only-release-proof-expectation-truth-2026-07-13
+
+- User job:
+  - When Narrative Harness says the selected release is script-only/headless,
+    Guildhall must not treat generic completion records as release proof. The
+    user should see whether each selected task has an explicit proof expectation
+    and whether matching evidence satisfies it.
+- Root cause classification:
+  - Task hierarchy/dependency/proof modeling problem: Stage 1 readiness accepted
+    selected done tasks with `0` modeled `proofPaths` because completion evidence
+    and release proof were collapsed into the same truth.
+  - Project structure/scope/release modeling problem: the selected release kept
+    `proofStyle: script_only`, but release summarization received only the
+    projected scope and lost that proof-style constraint.
+  - UI communication/orientation problem: the Map proof contracts displayed
+    generic build/truncation/review records as if they satisfied script-only
+    release proof contracts.
+- Fix:
+  - Separated the broad `proofStyle: script_only` presentation contract from the
+    narrower command/script proof contract. A release only requires command proof
+    when its selected scope/release text explicitly names script-only, command
+    proof, script proof, CLI-first, or headless drafting work.
+  - Release readiness now checks the real persisted proof-path shape for
+    runnable command evidence (`launchSteps` with `kind: copy_command`) instead
+    of accepting stripped ad-hoc `command` fields or generic review evidence.
+  - The selected release blocker count is filtered to selected scoped task ids,
+    so child/split leakage cannot make the UI claim more blockers than the
+    release actually contains.
+  - The orientation spine receives the same proof requirement and reports
+    missing script proof as proof-contract state, not as a local Map-only
+    interpretation.
+- Proof provided:
+  - `CI=true pnpm exec vitest run
+    src/runtime/__tests__/serve-release-readiness.test.ts` passed `64` tests.
+  - `CI=true pnpm exec vitest run
+    src/runtime/__tests__/project-orientation-spine.test.ts` passed `68` tests.
+  - `CI=true pnpm lint:contracts` passed.
+  - `CI=true pnpm build` passed.
+  - `CI=true pnpm dev:install` passed.
+  - `guildhall stop && guildhall start` succeeded.
+  - Installed `/api/stale-server` returned `stale:false` for PID `74342`.
+  - Live Narrative Harness `/api/project?projectId=narrative-harness&surface=work`
+    returned selected release
+    `stage-1-headless-drafting-and-evaluation-mvp`, `ready:false`,
+    `state:"blocked"`, `proofStyle:"script_only"`, `proofMissing:11`,
+    `releaseBlockerCount:11`, totals `tasks:11`, `blockingCount:11`,
+    `proofEvidenceBlockingCount:11`, `done:11`, and spine headline `Stage 1:
+    Headless Drafting And Evaluation MVP is waiting on proof.`
+- Contract Touch Decision:
+  - Work id: `script-only-release-proof-expectation-truth`.
+  - Touched contracts: release-readiness proof blocker calculation and project
+    orientation proof state for script-only scopes.
+  - Contracts considered but not touched: persisted task schema, persisted
+    release schema, workspace import approval schema, task evidence event
+    schema, Map UI components, and Overview UI components.
+  - Required follow-up: repopulate or repair Narrative Harness Stage 1 tasks
+    through importer/model fixes so each selected task has explicit proof paths
+    from project docs.
+  - Proof required: focused readiness/orientation regressions, contract lint,
+    build/install freshness, and live Narrative Harness API proof.
+  - Proof provided: focused readiness and orientation suites passed, contract
+    lint passed, build/install passed, installed app was fresh, and live
+    Narrative Harness API proof showed the selected Stage 1 release blocked on
+    exactly `11` missing proof contracts for `11` selected tasks.
+  - Apply/revert behavior: reverting lets script-only releases appear ready even
+    when selected done tasks have no modeled proof expectations.
+- Schema Migration Decision: no persisted schema field or migration changed.
+
 ## codex:release-roadmap-capability-stage-split-2026-07-13
 
 - User job:

@@ -1512,7 +1512,13 @@ describe('buildProjectOrientationSpine', () => {
           domain: 'coherence',
           status: 'done',
           spec: 'Run the reviewer from a script and inspect output.',
-          proofPaths: [],
+          proofPaths: [{ kind: 'command', command: 'pnpm test -- coherence' }],
+          gateResults: [{
+            gateId: 'pnpm test -- coherence',
+            command: 'pnpm test -- coherence',
+            type: 'hard',
+            passed: true,
+          }],
         },
         {
           id: 'duplicate-split-child',
@@ -1525,7 +1531,7 @@ describe('buildProjectOrientationSpine', () => {
       ],
     })
 
-    expect(spine.nodes['work:coherence-reviewer-mvp']?.maturity).toBe('done')
+    expect(spine.nodes['work:coherence-reviewer-mvp']?.maturity).toBe('proven')
     expect(spine.gaps.map(gap => gap.kind)).not.toContain('proof_needed')
     expect(spine.summary.progress.done).toBe(1)
     expect(spine.summary.headline).toBe('Current task scope is complete.')

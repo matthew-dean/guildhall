@@ -65,6 +65,24 @@ function makeTask(overrides: Partial<Task>): Task {
   }
 }
 
+function modeledScriptProof(command = 'pnpm test'): Pick<Task, 'proofPaths' | 'gateResults'> {
+  return {
+    proofPaths: [{
+      title: command,
+      launchSteps: [{ id: command, title: command, kind: 'copy_command', command }],
+      expectedEvidence: [`${command} passed.`],
+    }],
+    gateResults: [{
+      gateId: command,
+      command,
+      type: 'hard',
+      passed: true,
+      output: `${command} passed.`,
+      checkedAt: '2026-07-04T08:50:00.000Z',
+    }],
+  } as Pick<Task, 'proofPaths' | 'gateResults'>
+}
+
 async function seed(tasks: Task[]): Promise<void> {
   const queue: TaskQueue = { version: 1, lastUpdated: new Date().toISOString(), tasks }
   await writeProjectStateJsonAsync(tmpDir, 'TASKS.json', queue)
@@ -415,7 +433,7 @@ describe('GET /api/project/release-readiness', () => {
       selectedReleaseId: 'headless-mvp',
       releases: [{
         id: 'headless-mvp',
-        label: 'Headless MVP',
+        label: 'Headless script-only MVP',
         kind: 'release',
         state: 'active',
         source: 'release_plan',
@@ -424,7 +442,7 @@ describe('GET /api/project/release-readiness', () => {
         proofStyle: 'script_only',
       }],
       tasks: [
-        makeTask({ id: 'task-current', title: 'Current proof lane', status: 'done', releaseIds: ['headless-mvp'] }),
+        makeTask({ id: 'task-current', title: 'Current proof lane', status: 'done', releaseIds: ['headless-mvp'], ...modeledScriptProof() }),
         makeTask({
           id: 'task-archived',
           title: 'Archived residue with stale merge story',
@@ -466,7 +484,7 @@ describe('GET /api/project/release-readiness', () => {
         proofStyle: 'script_only',
       }],
       tasks: [
-        makeTask({ id: 'task-current', title: 'Current proof lane', status: 'done', releaseIds: ['headless-mvp'] }),
+        makeTask({ id: 'task-current', title: 'Current proof lane', status: 'done', releaseIds: ['headless-mvp'], ...modeledScriptProof() }),
       ],
     })
     const { app } = buildServeApp({ projectPath: tmpDir })
@@ -833,6 +851,7 @@ describe('GET /api/project/release-readiness', () => {
           title: 'Current proof lane',
           status: 'done',
           releaseIds: ['headless-mvp'],
+          ...modeledScriptProof(),
           worktreePath: taskWorktreePath,
           mergeRecord: {
             result: 'skipped',
@@ -925,7 +944,8 @@ describe('GET /api/project/release-readiness', () => {
 
   it('prioritizes blocked release work over duplicate completed proof rows in start readiness', async () => {
     const proofPath = {
-      kind: 'review',
+      title: 'DeepInfra drafting proof command',
+      launchSteps: [{ id: 'deepinfra-model-proof', title: 'Run DeepInfra model proof', kind: 'copy_command', command: 'pnpm nh:prove:deepinfra' }],
       expectedEvidence: [
         'DeepInfra drafting telemetry recorded refusal behavior, cost, latency, and voice preservation.',
       ],
@@ -1939,6 +1959,138 @@ describe('GET /api/project/release-readiness', () => {
     expect(project.orientationSpine?.summary?.progress).toMatchObject({
       done: 1,
       proven: 0,
+    })
+  })
+
+  it('does not accept script-only release completion without modeled proof paths', async () => {
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: 'headless-mvp',
+      releases: [{
+        id: 'headless-mvp',
+        label: 'Headless script-only MVP',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-current'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [
+        makeTask({
+          id: 'task-current',
+          title: 'Generate the first chapter draft',
+          status: 'done',
+          releaseIds: ['headless-mvp'],
+          doneSummaryBundle: {
+            taskId: 'task-current',
+            status: 'done',
+            completedAt: '2026-07-04T08:50:00.000Z',
+            summary: {
+              journey: 'Worker completed the task.',
+              decision: 'Task finished as done.',
+              evidence: 'pnpm-build passed.',
+              learningCandidates: [],
+              openResidue: 'No open residue recorded.',
+            },
+            retention: {
+              transcriptPrimaryArtifact: false,
+              compactedFullTranscript: false,
+              fullEvidenceAvailable: true,
+            },
+            evidenceRefs: [],
+            createdAt: '2026-07-04T08:50:00.000Z',
+            createdBy: 'orchestrator',
+          },
+          gateResults: [{
+            gateId: 'pnpm-build',
+            type: 'hard',
+            passed: true,
+            output: 'build passed',
+            checkedAt: '2026-07-04T08:50:00.000Z',
+          }],
+        } as Partial<Task>),
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await approveDesignSystem(app)
+    await commitAndPush('script-only release without modeled proof paths')
+
+    const readinessRes = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
+    const readiness = await readinessRes.json() as any
+
+    expect(readiness.ready).toBe(false)
+    expect(readiness.totals).toMatchObject({
+      tasks: 1,
+      done: 1,
+      proofEvidenceBlockingCount: 1,
+    })
+    expect(readiness.proofMissingDoneTasks).toEqual([{ id: 'task-current', title: 'Generate the first chapter draft' }])
+
+    const projectRes = await app.fetch(new Request(projectUrl('/api/project')))
+    const project = await projectRes.json() as any
+    expect(project.orientationSpine?.summary?.progress).toMatchObject({
+      done: 1,
+      proven: 0,
+    })
+    expect(project.orientationSpine?.proofContracts[0]).toMatchObject({
+      state: 'needed',
+      missing: ['Script-only scope needs a command proof path for this completed task.'],
+    })
+  })
+
+  it('does not accept inferred review proof as derived script-only release proof', async () => {
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: 'headless-mvp',
+      releases: [{
+        id: 'headless-mvp',
+        label: 'Headless script-only MVP',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-current'],
+        deferredNodeIds: [],
+        proofStyle: 'unspecified',
+      }],
+      tasks: [
+        makeTask({
+          id: 'task-current',
+          title: 'Generate the first chapter draft',
+          status: 'done',
+          releaseIds: ['headless-mvp'],
+          proofPaths: [{
+            kind: 'review',
+            source: 'inferred',
+            expectedEvidence: ['The chapter draft is reviewed for continuity.'],
+            status: 'verified',
+          }],
+          gateResults: [{
+            gateId: 'content.no-truncated-data',
+            type: 'hard',
+            passed: true,
+            output: 'content check passed',
+            checkedAt: '2026-07-04T08:50:00.000Z',
+          }],
+        } as Partial<Task>),
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await approveDesignSystem(app)
+    await commitAndPush('derived script-only release with review proof only')
+
+    const readiness = await (await app.fetch(new Request(projectUrl('/api/project/release-readiness')))).json() as any
+
+    expect(readiness.ready).toBe(false)
+    expect(readiness.release).toMatchObject({ proofStyle: 'script_only' })
+    expect(readiness.proofMissingDoneTasks).toEqual([{ id: 'task-current', title: 'Generate the first chapter draft' }])
+    expect(readiness.totals.proofEvidenceBlockingCount).toBe(1)
+
+    const project = await (await app.fetch(new Request(projectUrl('/api/project')))).json() as any
+    expect(project.orientationSpine?.proofContracts[0]).toMatchObject({
+      state: 'needed',
     })
   })
 
@@ -3096,7 +3248,8 @@ describe('GET /api/project/release-readiness', () => {
 
   it('does not widen the selected release with an unscoped import duplicate of scoped work', async () => {
     const proofPath = {
-      kind: 'review' as const,
+      title: 'DeepInfra drafting proof command',
+      launchSteps: [{ id: 'deepinfra-model-proof', title: 'Run DeepInfra model proof', kind: 'copy_command' as const, command: 'pnpm nh:prove:deepinfra' }],
       source: 'inferred' as const,
       expectedEvidence: [
         'DeepInfra proof records refusal behavior, repetition, cost, latency, and voice preservation.',
@@ -3223,7 +3376,11 @@ describe('GET /api/project/release-readiness', () => {
           title: 'Implement no-UI runner.',
           status: 'done',
           releaseIds: ['headless-mvp'],
-          proofPaths: [{ expectedEvidence: ['runner-smoke'] }],
+          proofPaths: [{
+            title: 'Runner smoke command',
+            launchSteps: [{ id: 'runner-smoke', title: 'Run runner smoke', kind: 'copy_command', command: 'pnpm test -- runner-smoke' }],
+            expectedEvidence: ['runner-smoke'],
+          }],
           gateResults: [],
           reviewVerdicts: [],
         }),
@@ -3398,6 +3555,7 @@ describe('GET /api/project/release-readiness', () => {
           status: 'done',
           completedAt: '2026-05-09T00:00:00Z',
           releaseIds: ['headless-mvp'],
+          ...modeledScriptProof(),
         }),
       ],
     })
@@ -3493,6 +3651,7 @@ describe('GET /api/project/release-readiness', () => {
           title: 'Completed release task',
           status: 'done',
           releaseIds: ['stage-1'],
+          ...modeledScriptProof(),
         }),
         makeTask({
           id: 'unassigned-ready',

@@ -2281,6 +2281,10 @@ function scopedWorkNeedsDesignSystem(
 function summarizeScopedReleaseWork(
   tasks: Task[],
   scope: OrientationScope | null | undefined,
+  options: {
+    proofStyle?: 'script_only' | 'manual' | 'mixed' | 'unspecified'
+    commandProofRequired?: boolean
+  } = {},
 ): {
   statusCounts: Record<string, number>
   openEscalations: Array<{ taskId: string; taskTitle: string; escalationId: string; reason: string; summary: string }>
@@ -2300,6 +2304,10 @@ function summarizeScopedReleaseWork(
     && !taskDoneButProofMissing(task)
     ? 'done'
     : String((task as { status?: string }).status ?? 'unknown')
+  const taskMissingModeledProofExpectation = (task: Task): boolean =>
+    options.commandProofRequired === true &&
+    String((task as { status?: string }).status ?? '') === 'done' &&
+    !taskHasScriptProofPath(task)
   const completionProofSupersedesEscalation = (
     task: Task,
     escalation: { raisedAt?: string },
@@ -2404,7 +2412,7 @@ function summarizeScopedReleaseWork(
       addReleaseBlocker({ id, title, label: `${blockerSubject(title)} needs shaping before unattended work can start.` })
       continue
     }
-    if (status === 'done' && taskDoneButProofMissing(t)) {
+    if (status === 'done' && (taskDoneButProofMissing(t) || taskMissingModeledProofExpectation(t))) {
       if (!proofMissingTaskIsDuplicateOfBlockedWork(t)) {
         proofMissingDoneTasks.push({ id, title })
         addReleaseBlocker({ id, title, label: `${blockerSubject(title)} needs proof evidence before the release is complete.` })
@@ -2497,6 +2505,48 @@ function summarizeScopedReleaseWork(
   }
 }
 
+function proofStyleForScope(
+  releases: readonly { id?: string; proofStyle?: 'script_only' | 'manual' | 'mixed' | 'unspecified' | string | null }[],
+  scope: { id?: string | null } | null | undefined,
+): 'script_only' | 'manual' | 'mixed' | 'unspecified' | undefined {
+  const proofStyle = releases.find(release => release.id === scope?.id)?.proofStyle
+  return proofStyle === 'script_only' || proofStyle === 'manual' || proofStyle === 'mixed' || proofStyle === 'unspecified'
+    ? proofStyle
+    : undefined
+}
+
+function proofPathIsScriptRunnable(proofPath: unknown): boolean {
+  if (typeof proofPath === 'string') return proofPath.trim().length > 0
+  if (!proofPath || typeof proofPath !== 'object' || Array.isArray(proofPath)) return false
+  const record = proofPath as Record<string, unknown>
+  if (typeof record.command === 'string' && record.command.trim().length > 0) return true
+  if (record.kind === 'command' || record.kind === 'script') return true
+  const launchSteps = Array.isArray(record.launchSteps) ? record.launchSteps : []
+  return launchSteps.some((step) =>
+    step &&
+    typeof step === 'object' &&
+    !Array.isArray(step) &&
+    (step as Record<string, unknown>).kind === 'copy_command' &&
+    typeof (step as Record<string, unknown>).command === 'string' &&
+    String((step as Record<string, unknown>).command).trim().length > 0)
+}
+
+function taskHasScriptProofPath(task: { proofPaths?: unknown }): boolean {
+  return Array.isArray(task.proofPaths) && task.proofPaths.some(proofPathIsScriptRunnable)
+}
+
+function scopeRequiresCommandProof(scope: { id?: string | null; label?: string | null; description?: string | null } | null | undefined): boolean {
+  const text = [scope?.id, scope?.label, scope?.description]
+    .filter((value): value is string => typeof value === 'string')
+    .join(' ')
+    .toLowerCase()
+  return /\bscript[-\s]?only\b/.test(text) ||
+    /\bcommand proof\b/.test(text) ||
+    /\bscript proof\b/.test(text) ||
+    /\bcli[-\s]?first\b/.test(text) ||
+    /\bheadless drafting\b/.test(text)
+}
+
 function buildOrientationSpineWithScopedReleaseTruth(
   input: BuildProjectOrientationSpineInput,
 ): {
@@ -2535,7 +2585,10 @@ function buildOrientationSpineWithScopedReleaseTruth(
     },
     { selectedScope },
   )
-  const releaseTruth = summarizeScopedReleaseWork(augmentedTasks, scopeProjection.selectedScope)
+  const releaseTruth = summarizeScopedReleaseWork(augmentedTasks, scopeProjection.selectedScope, {
+    proofStyle: proofStyleForScope(releaseProjectionInputs, scopeProjection.selectedScope),
+    commandProofRequired: scopeRequiresCommandProof(scopeProjection.selectedScope),
+  })
   const orientationSpine = buildProjectOrientationSpine({
     ...input,
     now,
@@ -5112,7 +5165,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
             releases: serviceReleases,
             ...(serviceSelectedReleaseId ? { selectedReleaseId: serviceSelectedReleaseId } : {}),
           })
-          const serviceReleaseTruth = summarizeScopedReleaseWork(serviceTasks, selectedScope)
+          const serviceReleaseTruth = summarizeScopedReleaseWork(serviceTasks, selectedScope, {
+            proofStyle: proofStyleForScope(serviceReleases, selectedScope),
+            commandProofRequired: scopeRequiresCommandProof(selectedScope),
+          })
           taskCounts = summarizeTaskCounts(tasks)
           const progressTaskIds = new Set(
             serviceTasks
@@ -13560,11 +13616,17 @@ export function buildServeApp(opts: ServeOptions = {}): {
       ...(selectedReleaseId ? { selectedReleaseId } : {}),
     }, { selectedScope })
     const readinessScope = releaseReadinessScopeFromProjection(scopeProjection, selectedScope) ?? fallbackRelease
-    const releaseTruth = summarizeScopedReleaseWork(augmentedTasks, readinessScope === fallbackRelease ? null : readinessScope)
     const release = releaseReadinessReleaseFromScope({
       rawQueue,
       scope: readinessScope === fallbackRelease ? null : readinessScope,
       releaseState: scopeProjection.release.state,
+    })
+    const selectedScopeProofStyle = proofStyleForScope(releaseProjectionInputs, readinessScope) ??
+      proofStyleForScope(rawQueue.releases, readinessScope) ??
+      proofStyleForScope(release ? [release] : [], readinessScope)
+    const releaseTruth = summarizeScopedReleaseWork(augmentedTasks, readinessScope === fallbackRelease ? null : readinessScope, {
+      proofStyle: selectedScopeProofStyle,
+      commandProofRequired: scopeRequiresCommandProof(readinessScope === fallbackRelease ? null : readinessScope),
     })
     const activePressureTest = listPressureTestIntakes(memoryDir)
       .find(intake => intake.status === 'active' && intake.pendingQuestion)
@@ -13635,6 +13697,28 @@ export function buildServeApp(opts: ServeOptions = {}): {
     const readinessProofStyle = release?.proofStyle === 'script_only' || !scopedWorkNeedsDesignSystem(scopedTasks, release)
       ? 'script_only'
       : release?.proofStyle
+    const commandProofRequired = release && readinessProofStyle === 'script_only' && scopeRequiresCommandProof(release)
+    const routeProofMissingDoneTasks = commandProofRequired
+      ? scopedTasks
+        .filter(task => String(task.status ?? '') === 'done')
+        .filter(task => !taskHasScriptProofPath(task))
+        .map(task => ({ id: task.id, title: task.title }))
+      : []
+    const scopedTaskIds = new Set(scopedTasks.map(task => task.id))
+    const effectiveProofMissingDoneTasks = [
+      ...proofMissingDoneTasks,
+      ...routeProofMissingDoneTasks.filter(task => !proofMissingDoneTasks.some(existing => existing.id === task.id)),
+    ].filter(task => scopedTaskIds.has(task.id))
+    const effectiveReleaseBlockers = [
+      ...releaseBlockers,
+      ...routeProofMissingDoneTasks
+        .filter(task => !releaseBlockers.some(existing => existing.id === task.id))
+        .map(task => ({
+          id: task.id,
+          title: task.title,
+          label: `${task.title.trim().replace(/[.?!:;,\s]+$/g, '')} needs proof evidence before the release is complete.`,
+        })),
+    ].filter(blocker => scopedTaskIds.has(blocker.id))
     const designSystemBlockingCount =
       scopedTasks.length > 0 &&
       scopedWorkNeedsDesignSystem(scopedTasks, { proofStyle: readinessProofStyle }) &&
@@ -13665,8 +13749,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
         }]
       : []
     const blockingKeys = new Set<string>()
-    for (const blocker of releaseBlockers) blockingKeys.add(`task:${blocker.id}`)
-    for (const task of proofMissingDoneTasks) blockingKeys.add(`task:${task.id}`)
+    for (const blocker of effectiveReleaseBlockers) blockingKeys.add(`task:${blocker.id}`)
+    for (const task of effectiveProofMissingDoneTasks) blockingKeys.add(`task:${task.id}`)
     for (const blocker of gitStory.blockers) {
       blockingKeys.add(blocker.taskId ? `task:${blocker.taskId}` : `repo:${blocker.id}`)
     }
@@ -13695,9 +13779,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
       unapprovedSpecs,
       shelvedUnclaimed,
       blockedByAgent,
-      proofMissingDoneTasks,
+      proofMissingDoneTasks: effectiveProofMissingDoneTasks,
       releaseBlockers: [
-        ...releaseBlockers,
+        ...effectiveReleaseBlockers,
         ...repositoryFollowupBlockers,
         ...designSystemBlockers,
         ...dirtyCheckoutBlockers,
@@ -13710,7 +13794,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         blockingCount,
         humanBlockingCount,
         incompleteBriefBlockingCount: incompleteBriefs.length,
-        proofEvidenceBlockingCount: proofMissingDoneTasks.length,
+        proofEvidenceBlockingCount: effectiveProofMissingDoneTasks.length,
         unfinishedCount,
         designSystemBlockingCount,
         dirtyCheckoutBlockingCount,
