@@ -30600,11 +30600,24 @@ selected-scope readiness ordering.
   - `CI=true pnpm lint:contracts` passed.
   - `git diff --check` passed.
   - `CI=true pnpm build` passed.
+  - `CI=true pnpm dev:install` passed, then `guildhall stop && guildhall start`
+    restarted the installed app.
+  - `/api/stale-server` returned `stale:false`, PID `16521`,
+    `bootBuildMtimeMs:1783934078107`, and
+    `currentBuildMtimeMs:1783934078107`.
+  - Live Narrative Harness task-detail API proof for the author-intent task
+    showed selected lanes without `ux_comprehension`, `visual_design`, or
+    `accessibility`; required artifacts without `visual-evidence`; skipped UI
+    lanes explaining `Task declares headless/no-UI proof and has no frontend
+    changed-file hint.`; and the headless/no-UI reason on the normalized plan.
+  - Codex explicitly approved the spec as delegated owner review for this
+    calibration run, then restarted the selected Stage 1 scope. `/api/project/start`
+    returned `status:"running"` for
+    `stage-1-headless-drafting-and-evaluation-mvp`.
 - Residual findings:
-  - The fixed build has not been installed into `localhost:7777` yet because
-    the Narrative Harness run was still actively streaming through DeepInfra at
-    the time of this audit entry. Install proof is still required after the run
-    stops or is safely paused.
+  - Stage 1 is still running after the restart; continue monitoring remaining
+    proof blockers and treat any new owner-review stop as delegated-Codex review,
+    not as Guildhall unattended approval.
 - Contract Touch Decision:
   - Work id: `headless-review-plan-modality-repair`.
   - Touched contracts: review-plan lane selection, review-plan artifact
@@ -30613,13 +30626,14 @@ selected-scope readiness ordering.
   - Contracts considered but not touched: persisted review-plan schema,
     review-plan event schema, task schema, release schema, reviewer verdict
     schema, project orientation spine schema, and UI component contracts.
-  - Required follow-up: install the fixed build when safe, verify the live
-    Narrative Harness author-intent task no longer exposes `visual-evidence`,
-    and continue the Stage 1 proof run.
+  - Required follow-up: continue the Stage 1 proof run and watch for any
+    remaining proof blockers caused by stale review/task modeling.
   - Proof required: focused review-planner regressions, contract lint, build,
     installed-app freshness, live task-detail API proof, and resumed NH run
     proof.
-  - Proof provided: focused regression, contract lint, diff check, and build.
+  - Proof provided: focused regression, contract lint, diff check, build,
+    installed-app freshness, live task-detail API proof, delegated owner
+    approval, and Stage 1 restart proof.
   - Apply/revert behavior: reverting restores visual-evidence gates for
     headless/no-UI tasks and lets stored bad plans continue to leak into
     reviewer selection and task detail.
