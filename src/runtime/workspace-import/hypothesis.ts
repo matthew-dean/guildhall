@@ -23,6 +23,20 @@ import type { WorkspaceSignal } from './types.js'
 
 export type DraftConfidence = 'high' | 'medium' | 'low'
 
+export interface DraftSourceClaim {
+  source: string
+  title: string
+  evidence: string
+  references?: readonly string[]
+  role?: 'capability' | 'reference' | 'brief_input'
+  structure?: 'record' | 'note'
+  scopeHint?: 'current' | 'later'
+  releaseId?: string
+  releaseLabel?: string
+  confidence: DraftConfidence
+  linkedTaskHints?: readonly string[]
+}
+
 export interface DraftGoal {
   id: string
   title: string
@@ -55,6 +69,7 @@ export interface DraftTask {
   dependsOn?: readonly string[]
   proofPaths?: ReadonlyArray<Record<string, unknown>>
   releaseIds?: readonly string[]
+  sourceClaims?: readonly DraftSourceClaim[]
   source: string
   references?: readonly string[]
   confidence: DraftConfidence
@@ -619,6 +634,7 @@ function addTask(
     }
   }
   const existing = index.get(key)
+  const sourceClaim = sourceClaimFromSignal(sig)
   if (!existing) {
     index.set(key, {
       suggestedId: compactGeneratedId('task-import', sig.title, index.size + 1),
@@ -633,6 +649,7 @@ function addTask(
       source: sig.source,
       ...(sig.references ? { references: sig.references } : {}),
       ...(releaseIdsFromSignal(sig) ? { releaseIds: releaseIdsFromSignal(sig) } : {}),
+      sourceClaims: [sourceClaim],
       confidence: sig.confidence,
     })
     return
@@ -657,6 +674,7 @@ function addTask(
   if (refs) merged.references = refs
   const releaseIds = mergeReferences(existing.releaseIds, releaseIdsFromSignal(sig))
   if (releaseIds) merged.releaseIds = releaseIds
+  merged.sourceClaims = mergeSourceClaims(existing.sourceClaims, [sourceClaim])
   if (shouldBump) {
     if (scopeFromSignal(sig) === 'later') merged.title = sig.title
     merged.description = supportingText(sig.title, sig.evidence)
@@ -666,6 +684,41 @@ function addTask(
     merged.source = sig.source
   }
   index.set(key, merged)
+}
+
+function sourceClaimFromSignal(sig: WorkspaceSignal): DraftSourceClaim {
+  return {
+    source: sig.source,
+    title: sig.title,
+    evidence: sig.evidence,
+    ...(sig.references ? { references: sig.references } : {}),
+    ...(sig.role ? { role: sig.role } : {}),
+    ...(sig.structure ? { structure: sig.structure } : {}),
+    ...(sig.scopeHint ? { scopeHint: sig.scopeHint } : {}),
+    ...(sig.releaseId ? { releaseId: sig.releaseId } : {}),
+    ...(sig.releaseLabel ? { releaseLabel: sig.releaseLabel } : {}),
+    confidence: sig.confidence,
+    ...(sig.linkedTaskHints ? { linkedTaskHints: sig.linkedTaskHints } : {}),
+  }
+}
+
+function mergeSourceClaims(
+  left: readonly DraftSourceClaim[] | undefined,
+  right: readonly DraftSourceClaim[] | undefined,
+): DraftSourceClaim[] | undefined {
+  const claims = [...(left ?? []), ...(right ?? [])]
+  if (claims.length === 0) return undefined
+  const byKey = new Map<string, DraftSourceClaim>()
+  for (const claim of claims) {
+    const key = [
+      claim.source,
+      normalize(claim.title),
+      claim.evidence.trim().toLowerCase(),
+      (claim.references ?? []).join('|'),
+    ].join('\0')
+    if (!byKey.has(key)) byKey.set(key, claim)
+  }
+  return [...byKey.values()]
 }
 
 function addMilestone(

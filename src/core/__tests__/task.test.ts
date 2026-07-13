@@ -157,9 +157,27 @@ describe('Task', () => {
     const result = Task.parse({
       ...validTask,
       references: ['import:/repo/docs/specs/story-memory-schemas.md'],
+      sourceClaims: [{
+        source: 'planning-docs',
+        title: 'Generate story synopsis',
+        evidence: 'The MVP starts from author intent and produces a synopsis.',
+        references: ['/repo/docs/specs/story-memory-schemas.md'],
+        scopeHint: 'current',
+        releaseId: 'headless-mvp',
+        confidence: 'high',
+        linkedTaskHints: ['Generate story synopsis'],
+      }],
     })
 
     expect(result.references).toEqual(['import:/repo/docs/specs/story-memory-schemas.md'])
+    expect(result.sourceClaims[0]).toMatchObject({
+      source: 'planning-docs',
+      title: 'Generate story synopsis',
+      references: ['/repo/docs/specs/story-memory-schemas.md'],
+      scopeHint: 'current',
+      releaseId: 'headless-mvp',
+      confidence: 'high',
+    })
   })
 
   it('accepts a review-risk profile for calibrated review routing', () => {

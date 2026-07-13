@@ -568,7 +568,10 @@ function hasApprovedCompleteBrief(task: Task): boolean {
 }
 
 function sourceRefsForTask(task: Task): string[] {
-  const refs = task.references?.filter(ref => ref.trim().length > 0) ?? []
+  const refs = [
+    ...(task.references ?? []),
+    ...((task.sourceClaims ?? []).flatMap(claim => claim.references ?? [])),
+  ].filter(ref => ref.trim().length > 0)
   return refs.length > 0 ? refs : [`task:${task.id}`]
 }
 

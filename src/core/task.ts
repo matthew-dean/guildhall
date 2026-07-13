@@ -1066,6 +1066,21 @@ export const RequestIntake = z.preprocess(normalizeRequestIntake, z.object({
 }))
 export type RequestIntake = z.infer<typeof RequestIntake>
 
+export const TaskSourceClaim = z.object({
+  source: z.string(),
+  title: z.string(),
+  evidence: z.string(),
+  references: z.array(z.string()).default([]),
+  role: z.enum(['capability', 'reference', 'brief_input']).optional(),
+  structure: z.enum(['record', 'note']).optional(),
+  scopeHint: z.enum(['current', 'later']).optional(),
+  releaseId: z.string().optional(),
+  releaseLabel: z.string().optional(),
+  confidence: z.enum(['high', 'medium', 'low']).default('medium'),
+  linkedTaskHints: z.array(z.string()).default([]),
+})
+export type TaskSourceClaim = z.infer<typeof TaskSourceClaim>
+
 export const ProjectReleaseKind = z.enum(['release', 'milestone', 'marker', 'current_work'])
 export type ProjectReleaseKind = z.infer<typeof ProjectReleaseKind>
 
@@ -1113,6 +1128,7 @@ export const Task = z.object({
   request: TaskRequest.optional(),
   requestIntake: RequestIntake.optional(),
   references: z.array(z.string()).default([]),
+  sourceClaims: z.array(TaskSourceClaim).default([]),
 
   status: TaskStatus,
   priority: TaskPriority.default('normal'),

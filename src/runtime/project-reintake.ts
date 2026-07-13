@@ -88,6 +88,7 @@ export interface ReintakeTaskDraft {
   dependsOn: string[]
   acceptanceCriteria: Task['acceptanceCriteria']
   references?: string[]
+  sourceClaims?: Task['sourceClaims']
   releaseIds?: string[]
   stageAlignment?: string
   spec?: string
@@ -756,6 +757,7 @@ function evidenceTaskToDraft(
     acceptanceCriteria,
     references,
     ...(releaseIds?.length ? { releaseIds } : {}),
+    ...(importedBlueprint?.sourceClaims?.length ? { sourceClaims: importedBlueprint.sourceClaims } : {}),
     ...(task.stageAlignment ? { stageAlignment: task.stageAlignment } : {}),
     spec: importedBlueprint?.spec ?? evidenceTaskSpec({ task, references, acceptanceCriteria, sources, contractNames }),
     ...(reviewableBlueprint ? { productBrief: reintakeOwnedProductBrief(importedBlueprint?.productBrief) ?? reintakeProductBrief(task, contractNames) } : {}),
@@ -1650,6 +1652,7 @@ function reintakeDraftFromExistingTask(
     dependsOn: arrayStringField(task.dependsOn),
     acceptanceCriteria: Array.isArray(task.acceptanceCriteria) ? task.acceptanceCriteria as Task['acceptanceCriteria'] : [],
     references: arrayStringField(task.references),
+    ...(Array.isArray(task.sourceClaims) ? { sourceClaims: task.sourceClaims as Task['sourceClaims'] } : {}),
     ...(overrides.releaseIds?.length ? { releaseIds: overrides.releaseIds } : {}),
     ...(stringField(task, 'stageAlignment') ? { stageAlignment: stringField(task, 'stageAlignment') } : {}),
     ...(stringField(task, 'spec') ? { spec: stringField(task, 'spec') } : {}),

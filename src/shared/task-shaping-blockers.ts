@@ -28,6 +28,7 @@ interface TaskLike {
   productBrief?: TaskBriefLike | null
   acceptanceCriteria?: unknown[]
   taskReadiness?: TaskReadinessLike
+  sourceClaims?: unknown[]
   requestIntake?: {
     createdBy?: string
     evidenceRefs?: unknown[]
@@ -67,6 +68,7 @@ function isTerminalTaskStatus(status: string | undefined): boolean {
 function hasWorkspaceImportProvenance(task: TaskLike): boolean {
   if (task.requestIntake?.createdBy === 'workspace-importer') return true
   if (task.requestIntake?.evidenceRefs?.some(ref => typeof ref === 'string' && /^import:/.test(ref))) return true
+  if ((task.sourceClaims?.length ?? 0) > 0) return true
   return (task.notes ?? []).some(note =>
     note?.role === 'importer' ||
     note?.agentId === 'workspace-importer' ||

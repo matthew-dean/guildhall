@@ -29464,6 +29464,114 @@ selected-scope readiness ordering.
     Overview even while Map/Start say it is complete.
 - Schema Migration Decision: no persisted schema field or migration changed.
 
+## 2026-07-13T00:42:18Z - Imported tasks preserve source claims on the task model
+
+- User job:
+  - When Guildhall imports or re-intakes project docs, the saved task should
+    still know what source claim created it, what evidence text backed it, and
+    what scope/release hint came with that claim. Overview, Map, Start, and
+    Work should not have to infer this truth later from importer notes or a
+    bare reference path.
+- Root cause classification:
+  - Data model/schema problem: imported source signals carried evidence,
+    confidence, scope hints, release hints, and linked-task hints, but task
+    records persisted mostly `references` and `requestIntake.evidenceRefs`.
+    That information loss forced downstream UI and readiness code to scrape
+    notes/transcripts and made scoped work feel amorphous.
+  - UI communication/orientation problem: Project Map and scope rows could show
+    source refs, but not the durable claim that explained why the work exists.
+  - Runtime/provider/infrastructure problem: not changed in this slice.
+- Fix:
+  - Added `TaskSourceClaim` and `task.sourceClaims[]` to the core task
+    contract as an additive persisted field.
+  - Workspace hypothesis now stores source claims on draft tasks and preserves
+    all merged claims during dedupe.
+  - Workspace import and project re-intake now carry source claims into
+    materialized task records and imported blueprint seeds.
+  - Import shaping, task-shaping blockers, project scope projection, and the
+    orientation spine now read `sourceClaims` alongside legacy `references`.
+- Proof provided:
+  - `corepack pnpm vitest run src/core/__tests__/task.test.ts
+    src/runtime/workspace-import/__tests__/hypothesis.test.ts` passed: 72
+    tests.
+  - `corepack pnpm vitest run
+    src/runtime/__tests__/serve-task-endpoints.test.ts --testNamePattern
+    "promotes an import draft|continues source recovery"` passed: 2 tests.
+  - `node ./build.mjs` passed.
+- Contract Touch Decision:
+  - Work id: `imported-task-source-claims`.
+  - Touched contracts: persisted task schema, task parse/normalization
+    contract, workspace import draft/materialization contract, project
+    re-intake task draft contract, import shaping source context, project scope
+    source refs, and orientation spine source refs.
+  - Contracts considered but not touched: persisted release schema,
+    workspace signal schema, task status lifecycle, task transition events,
+    worker execution contract, approval/spec status semantics, browser UI
+    component props, and project run/start API route shape.
+  - Required follow-up: expose the claims directly in the owner-facing task/map
+    payloads where useful, then regenerate/re-intake Narrative Harness and
+    Looma+Knit to prove real saved tasks carry source claims instead of
+    relying on old note text.
+  - Proof required: focused schema/import tests, build, contract lint, installed
+    app freshness, and live API proof on Narrative Harness and Looma+Knit after
+    re-intake.
+  - Proof provided so far: focused schema/import tests and build; remaining
+    proof follows after contract lint and installed-app refresh.
+  - Waivers: none.
+  - Owner-review items: none; this is additive evidence preservation, not a
+    new owner approval requirement.
+  - Apply/revert behavior: applying keeps old tasks valid with
+    `sourceClaims: []` and preserves richer evidence on new/re-intaken tasks;
+    reverting removes the durable claim field and sends source-shaping back to
+    reference/note scraping.
+- Schema Migration Decision:
+  - Persisted schema touched: task records in `TASKS.json`.
+  - Scope: additive optional/defaulted field `sourceClaims[]`.
+  - Change class: backward-compatible additive schema extension.
+  - Existing data impact: existing task records parse with
+    `sourceClaims: []`; no rewrite is required before run.
+  - Migration id: none required for compatibility; future re-intake can
+    repopulate claims from source evidence.
+  - Safety: low-risk additive field; unknown older readers may ignore the
+    field, current readers default it.
+  - Required before run: no.
+  - Compatibility reader: `TaskSourceClaim` defaults nested arrays and
+    confidence; `Task` defaults `sourceClaims` to an empty array.
+  - Fixtures/tests: core task schema test and workspace hypothesis claim
+    preservation test.
+  - Owner-facing plan text: source-backed task origin is now stored on the
+    task, so Guildhall can explain why work exists without asking the user to
+    reconstruct it from notes.
+  - Rollback/revert behavior: remove the field and propagation code; existing
+    saved `sourceClaims` would be stripped by current schema parsing if the
+    contract reverted.
+
+- Follow-up proof after installed refresh:
+  - `corepack pnpm lint:contracts` passed.
+  - `git diff --check` passed.
+  - `corepack pnpm dev:install` passed.
+  - `guildhall stop && guildhall start` restarted the installed app.
+  - `/api/stale-server` returned `stale:false`, PID `64669`,
+    `bootBuildMtimeMs:1783901725876`, and
+    `currentBuildMtimeMs:1783901725876`.
+  - Live Narrative Harness Map API remained compatible with old saved data:
+    `168` tasks, `0` existing saved tasks with `sourceClaims`, `0` conflicts,
+    `0` gaps, selected release
+    `Stage 1: Headless Drafting And Evaluation MVP`, and start readiness
+    `all_terminal`.
+  - Installed `guildhall workspace-import draft narrative-harness --json`
+    produced `23` draft tasks and `23` tasks with `sourceClaims`; sample claims
+    carried source, evidence, references, scope hints, release ids, and release
+    labels.
+  - Installed `guildhall workspace-import draft looma-knit --json` produced
+    `73` draft tasks and `73` tasks with `sourceClaims`, including nested
+    `knit/PROJECT_STATE.md` and `knit/docs/release-plan.md` references.
+- Remaining critique:
+  - This fixes source-evidence loss, not decomposition quality. Looma+Knit
+    still drafts `48` current tasks from the raw import draft, so the next
+    structural pass should attack release/scope grouping and current-vs-later
+    reasoning rather than UI polish.
+
 ## 2026-07-13T00:05:03Z - Later-scope source reconciliation preserves later scope
 
 - User job:

@@ -262,6 +262,7 @@ export interface OrientationTaskInput {
   title?: string
   description?: string
   references?: string[]
+  sourceClaims?: Array<{ references?: string[] }>
   domain?: string
   projectPath?: string
   status?: string
@@ -1577,7 +1578,10 @@ function duplicateScopeConflictGaps(
 }
 
 function sourceRefsForTask(task: OrientationTaskInput): string[] {
-  const refs = (task.references ?? [])
+  const refs = [
+    ...(task.references ?? []),
+    ...((task.sourceClaims ?? []).flatMap(claim => claim.references ?? [])),
+  ]
     .map(ref => typeof ref === 'string' ? ref.trim() : '')
     .filter(Boolean)
     .map(ref => ref.startsWith('import:') ? ref : `import:${ref}`)

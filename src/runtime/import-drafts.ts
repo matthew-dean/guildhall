@@ -21,6 +21,7 @@ function hasShapingRequest(task: Task): boolean {
 export function hasWorkspaceImportProvenance(task: Task): boolean {
   if (task.requestIntake?.createdBy === 'workspace-importer') return true
   if (task.requestIntake?.evidenceRefs?.some(ref => /^import:/.test(ref))) return true
+  if ((task.sourceClaims?.length ?? 0) > 0) return true
   return noteArray(task).some((note) =>
     note?.role === 'importer' ||
     note?.agentId === 'workspace-importer' ||
@@ -60,6 +61,12 @@ function importedEvidencePaths(task: Task): string[] {
     const trimmed = ref.trim()
     if (!trimmed) continue
     refs.add(trimmed)
+  }
+  for (const claim of task.sourceClaims ?? []) {
+    for (const ref of claim.references ?? []) {
+      const trimmed = ref.trim()
+      if (trimmed) refs.add(trimmed)
+    }
   }
   for (const ref of task.requestIntake?.evidenceRefs ?? []) {
     if (typeof ref !== 'string') continue
@@ -105,6 +112,18 @@ async function buildImportedEvidenceSummary(task: Task): Promise<string> {
     sections.push('-------------------------')
     for (const missing of task.requestIntake.missingInformation) {
       sections.push(`- ${missing}`)
+    }
+  }
+
+  if (task.sourceClaims?.length) {
+    sections.push('')
+    sections.push('Source claims')
+    sections.push('-------------')
+    for (const claim of task.sourceClaims.slice(0, 8)) {
+      const evidence = compactImportText(claim.evidence, 500)
+      sections.push(`- ${claim.title}${claim.source ? ` (${claim.source})` : ''}`)
+      if (evidence) sections.push(`  Evidence: ${evidence}`)
+      if (claim.references?.length) sections.push(`  References: ${claim.references.join(', ')}`)
     }
   }
 

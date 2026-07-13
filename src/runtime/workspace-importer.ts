@@ -554,6 +554,7 @@ export interface ParsedTask {
   dependsOn?: readonly string[]
   proofPaths?: Task['proofPaths']
   releaseIds?: readonly string[]
+  sourceClaims?: Task['sourceClaims']
 }
 
 export interface MaterializedImportTask extends ParsedTask {
@@ -578,6 +579,54 @@ function simpleImportedProofPaths(paths: Task['proofPaths'] | undefined): Simple
   })
 }
 
+function importedSourceClaimsForTask(
+  task: Pick<MaterializedImportTask, 'title' | 'description' | 'whyThisMayMatter' | 'references' | 'scope' | 'releaseIds'>,
+  normalizedReferences: readonly string[],
+): Task['sourceClaims'] {
+  const evidence = [
+    task.whyThisMayMatter,
+    task.description,
+  ].find(value => typeof value === 'string' && value.trim().length > 0)?.trim() ?? task.title
+  const releaseId = task.releaseIds?.[0]
+  return [{
+    source: 'workspace-importer',
+    title: task.title,
+    evidence,
+    references: [...normalizedReferences],
+    ...(task.scope ? { scopeHint: task.scope } : {}),
+    ...(releaseId ? { releaseId } : {}),
+    confidence: normalizedReferences.length > 0 ? 'high' : 'medium',
+    linkedTaskHints: [task.title],
+  }]
+}
+
+function dedupeImportSourceClaims(claims: readonly NonNullable<MaterializedImportTask['sourceClaims']>[number][]): Task['sourceClaims'] {
+  const byKey = new Map<string, Task['sourceClaims'][number]>()
+  for (const claim of claims) {
+    const normalized: Task['sourceClaims'][number] = {
+      source: claim.source,
+      title: claim.title,
+      evidence: claim.evidence,
+      references: [...(claim.references ?? [])],
+      ...(claim.role ? { role: claim.role } : {}),
+      ...(claim.structure ? { structure: claim.structure } : {}),
+      ...(claim.scopeHint ? { scopeHint: claim.scopeHint } : {}),
+      ...(claim.releaseId ? { releaseId: claim.releaseId } : {}),
+      ...(claim.releaseLabel ? { releaseLabel: claim.releaseLabel } : {}),
+      confidence: claim.confidence,
+      linkedTaskHints: [...(claim.linkedTaskHints ?? [])],
+    }
+    const key = [
+      normalized.source,
+      normalizeImportText(normalized.title),
+      normalized.evidence.trim().toLowerCase(),
+      normalized.references.join('|'),
+    ].join('\0')
+    if (!byKey.has(key)) byKey.set(key, normalized)
+  }
+  return [...byKey.values()]
+}
+
 type ImportedEvidenceDetail = {
   contractNames: string[]
   implementationBullets: string[]
@@ -599,6 +648,7 @@ type ImportedEvidenceDetail = {
 type ImportedBlueprintSeed = {
   status: Task['status']
   requestIntake: Task['requestIntake']
+  sourceClaims: Task['sourceClaims']
   acceptanceCriteria?: Task['acceptanceCriteria']
   productBrief?: Task['productBrief']
   spec?: Task['spec']
@@ -1055,6 +1105,10 @@ export function mergeWorkspaceImportDraft(
       const resolvedReleaseIds = preserveDetectedScope
         ? task.releaseIds ?? parsedTask.releaseIds
         : parsedTask.releaseIds ?? task.releaseIds
+      const resolvedSourceClaims = [
+        ...(task.sourceClaims ?? []),
+        ...(parsedTask.sourceClaims ?? []),
+      ]
       const useParsedTaskIdentity = exactTitleMatch || taskTitleContainsCompletionMetadata(task.title)
       mergedTasks.push({
         ...task,
@@ -1074,6 +1128,7 @@ export function mergeWorkspaceImportDraft(
         ...(resolvedAcceptanceCriteria ? { acceptanceCriteria: resolvedAcceptanceCriteria } : {}),
         ...(resolvedDependsOn ? { dependsOn: [...resolvedDependsOn] } : {}),
         ...(resolvedProofPaths ? { proofPaths: [...resolvedProofPaths] } : {}),
+        ...(resolvedSourceClaims.length > 0 ? { sourceClaims: dedupeImportSourceClaims(resolvedSourceClaims) } : {}),
       })
       continue
     }
@@ -1108,6 +1163,7 @@ export function mergeWorkspaceImportDraft(
       ...(task.proofPaths ? { proofPaths: [...task.proofPaths] } : {}),
       ...(task.references.length > 0 ? { references: [...task.references] } : {}),
       ...(task.releaseIds && task.releaseIds.length > 0 ? { releaseIds: [...task.releaseIds] } : {}),
+      ...(task.sourceClaims && task.sourceClaims.length > 0 ? { sourceClaims: [...task.sourceClaims] as Task['sourceClaims'] } : {}),
       confidence: 'medium',
     })
   }
@@ -1566,6 +1622,7 @@ function parsedImportFromDraft(draft: WorkspaceImportDraft): ParsedImport {
       priority: task.priority,
       references: [...(task.references ?? [])],
       ...(task.releaseIds?.length ? { releaseIds: [...task.releaseIds] } : {}),
+      ...(task.sourceClaims?.length ? { sourceClaims: [...task.sourceClaims] as Task['sourceClaims'] } : {}),
       ...(task.acceptanceCriteria ? { acceptanceCriteria: [...task.acceptanceCriteria] } : {}),
       ...(task.dependsOn ? { dependsOn: [...task.dependsOn] } : {}),
       ...(task.proofPaths ? { proofPaths: [...task.proofPaths] } : {}),
@@ -4995,6 +5052,9 @@ export function buildImportedBlueprintSeed(
   const evidenceDetail = extractReferenceEvidenceDetail(normalizedTask, workspaceProjectPath)
   const acceptanceCriteria = materializedAcceptanceCriteria(normalizedTask, evidenceDetail)
   const evidenceRefs = normalizedReferences.map(ref => `import:${ref}`)
+  const sourceClaims = task.sourceClaims && task.sourceClaims.length > 0
+    ? [...task.sourceClaims]
+    : importedSourceClaimsForTask(normalizedTask, normalizedReferences)
   const notes = normalizedReferences.length > 0
     ? [{
         agentId: 'workspace-importer',
@@ -5058,6 +5118,7 @@ export function buildImportedBlueprintSeed(
         createdAt: now,
         createdBy: 'workspace-importer',
       },
+      sourceClaims,
     }
   }
 
@@ -5113,6 +5174,7 @@ export function buildImportedBlueprintSeed(
       createdBy: 'workspace-importer',
     },
     references: [...normalizedReferences],
+    sourceClaims,
     notes: [],
     gateResults: [],
     reviewVerdicts: [],
@@ -5133,6 +5195,7 @@ export function buildImportedBlueprintSeed(
   return {
     status: normalizedTask.scope === 'later' ? 'shelved' : 'spec_review',
     requestIntake: shapedSeedTask.requestIntake,
+    sourceClaims,
     acceptanceCriteria,
     productBrief: seededProductBrief,
     spec: seededSpec,

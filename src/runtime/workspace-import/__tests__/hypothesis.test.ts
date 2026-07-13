@@ -134,6 +134,53 @@ describe('formWorkspaceHypothesis', () => {
     ]))
   })
 
+  it('preserves every merged source claim on a draft task', () => {
+    const draft = formWorkspaceHypothesis(
+      invFrom([
+        {
+          source: 'planning-docs',
+          kind: 'open_work',
+          title: 'Add world state reviewer',
+          evidence: 'docs/harness/mvp.md: Review object state changes over elapsed time.',
+          references: ['docs/harness/mvp.md'],
+          scopeHint: 'current',
+          releaseId: 'headless-mvp',
+          releaseLabel: 'Headless MVP',
+          confidence: 'high',
+          linkedTaskHints: ['World state reviewer'],
+        },
+        {
+          source: 'roadmap',
+          kind: 'open_work',
+          title: 'Add world state reviewer',
+          evidence: 'docs/roadmap.md: Prove wet hair dries according to climate and time passage.',
+          references: ['docs/roadmap.md'],
+          scopeHint: 'current',
+          releaseId: 'headless-mvp',
+          releaseLabel: 'Headless MVP',
+          confidence: 'medium',
+          linkedTaskHints: ['World state reviewer'],
+        },
+      ]),
+    )
+
+    expect(draft.tasks).toHaveLength(1)
+    expect(draft.tasks[0]?.sourceClaims).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        source: 'planning-docs',
+        evidence: expect.stringContaining('object state changes'),
+        references: ['docs/harness/mvp.md'],
+        releaseId: 'headless-mvp',
+      }),
+      expect.objectContaining({
+        source: 'roadmap',
+        evidence: expect.stringContaining('wet hair dries'),
+        references: ['docs/roadmap.md'],
+        releaseId: 'headless-mvp',
+      }),
+    ]))
+  })
+
   it('records explicit release containers with owner-visible labels', () => {
     const draft = formWorkspaceHypothesis(
       invFrom([
