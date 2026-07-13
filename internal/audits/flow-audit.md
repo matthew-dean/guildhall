@@ -30603,7 +30603,19 @@ selected-scope readiness ordering.
     longer repeats the ignored-builds bootstrap blocker when Stage 1 resumes.
   - Proof required: focused bootstrap regression, contract lint, whitespace
     check, build, installed-app freshness, and live Narrative Harness run proof.
-  - Proof provided: local proof listed above; installed-app proof remains next.
+  - Proof provided: local proof listed above plus installed-app proof:
+    `CI=true pnpm dev:install` installed the current branch artifact;
+    `guildhall start` confirmed the service at `http://localhost:7777`; and
+    `/api/stale-server` returned `stale:false`, PID `33553`,
+    `bootBuildMtimeMs:1783935911530`, and
+    `currentBuildMtimeMs:1783935911530`.
+  - Live Narrative Harness API proof showed
+    `/api/project?projectId=narrative-harness&surface=overview` still reporting
+    the selected Stage 1 scope blocked by exactly 2 proof-evidence blockers and
+    `Attach proof` as the primary action. Opening both blocker task detail
+    endpoints returned `completionProof.state:"missing"` instead of
+    `verified`, while preserving the recorded reviewer/gate evidence as partial
+    evidence.
   - Installed-app proof update: after `CI=true pnpm dev:install` and
     `guildhall stop && guildhall start`, `/api/stale-server` returned
     `stale:false`, PID `5990`, `bootBuildMtimeMs:1783935447800`, and
@@ -30659,6 +30671,69 @@ selected-scope readiness ordering.
   - Apply/revert behavior: reverting lets task detail claim generic completion
     proof is verified even when the selected release still requires proof
     evidence.
+- Schema Migration Decision: no persisted schema field or migration changed.
+
+## codex:narrative-harness-stage1-proof-recorded-2026-07-13
+
+- User job:
+  - Narrative Harness Stage 1 should not be called complete until the selected
+    proof-only scope has real executable evidence for the world-state and
+    spatial/geographic reviewer tasks. Once proof is recorded, Guildhall should
+    stop asking for proof and show only genuine remaining release follow-up.
+- Root cause classification:
+  - Bad project data produced by earlier Guildhall behavior: the world-state
+    task was marked done before a local proof script existed.
+  - Task hierarchy/dependency/proof modeling problem: the two review-lane tasks
+    had required proof-path evidence, but no passed verification records.
+  - Runtime/provider/infrastructure problem: the Narrative Harness remote push
+    cannot be completed from this environment because Bitbucket rejects the
+    available SSH key.
+- Fix/progress:
+  - Added and locally committed Narrative Harness commit `5a40b07`:
+    `Add world-state continuity proof script`.
+  - Ran `pnpm run prove:world-state-continuity` and
+    `pnpm run prove:spatial-geographic-continuity`; both passed.
+  - Recorded passed verification records on the two Stage 1 proof-path tasks
+    and appended gate-result evidence in Guildhall local history.
+- Proof provided:
+  - `pnpm run prove:world-state-continuity` returned `ok:true` for
+    `world-state-wet-hair-001` with finding `world-state-proof-001`,
+    category `elapsed_time_state_transition`, severity `break`, and the
+    expected wet-hair elapsed-time contradiction.
+  - `pnpm run prove:spatial-geographic-continuity` returned `ok:true` for
+    `spatial-impossible-walk-001` with finding `spatial-proof-001`, category
+    `travel_time`, severity `break`, and the expected impossible walking-speed
+    contradiction.
+  - Live Narrative Harness API proof after recording evidence:
+    `/api/project?projectId=narrative-harness&surface=overview` reported
+    `tasks:11`, `done:11`, `unfinishedCount:0`,
+    `proofEvidenceBlockingCount:0`, `gitStoryBlockingCount:1`, and one blocker:
+    `main has 1 local commit not pushed to origin/main.`
+  - Both proof task detail endpoints now report
+    `completionProof.state:"verified"` and include the matching `Gate passed:
+    pnpm run ...` evidence.
+- Residual blocker:
+  - `git push` in `/Users/matthew/git/oss/narrative-harness` failed with
+    `git@bitbucket.org: Permission denied (publickey).` Guildhall is correctly
+    showing repository follow-up rather than proof or task work as the remaining
+    Stage 1 blocker.
+- Contract Touch Decision:
+  - Work id: `narrative-harness-stage1-proof-recorded`.
+  - Touched contracts: Narrative Harness project proof artifacts and Guildhall
+    local task proof records for the selected Stage 1 scope.
+  - Contracts considered but not touched: Guildhall persisted task schema,
+    release schema, proof-path schema, task-detail API, release-readiness API,
+    and scheduler logic.
+  - Required follow-up: push Narrative Harness commit `5a40b07` once Bitbucket
+    SSH access is available, then verify Stage 1 release readiness becomes
+    ready with no repository-follow-up blocker.
+  - Proof required: executable proof commands, Guildhall API proof that proof
+    blockers clear, and repository follow-up proof.
+  - Proof provided: proof commands and API proof listed above; remote push is
+    blocked by external SSH auth.
+  - Apply/revert behavior: reverting the Narrative Harness commit or removing
+    the Guildhall verification records brings back the proof evidence blockers;
+    pushing the local commit should clear the remaining repository follow-up.
 - Schema Migration Decision: no persisted schema field or migration changed.
 
 ## codex:reconciled-task-worktree-residue-2026-07-13
