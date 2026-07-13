@@ -1937,10 +1937,13 @@ function sourceHealth(nodes: OrientationNode[], gaps: OrientationGap[]): Orienta
     node.children.forEach(visit)
   }
   nodes.forEach(visit)
+  const sourceGaps = gaps
+    .filter(gap => gap.kind === 'missing_source_provenance')
+    .reduce((sum, gap) => sum + Math.max(1, gap.refs.length), 0)
   return {
     inferred: allNodes.filter(node => node.source.inferred).length,
     conflicts: gaps.filter(gap => gap.kind === 'source_conflict').length,
-    gaps: gaps.length,
+    gaps: sourceGaps,
   }
 }
 

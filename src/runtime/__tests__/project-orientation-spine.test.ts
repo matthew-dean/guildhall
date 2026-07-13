@@ -1074,7 +1074,8 @@ describe('buildProjectOrientationSpine', () => {
         'task:task-world-owner',
       ]),
     }))
-    expect(spine.sourceHealth.gaps).toBeGreaterThan(0)
+    expect(spine.sourceHealth.conflicts).toBe(2)
+    expect(spine.sourceHealth.gaps).toBe(0)
     expect(spine.summary.headline).toBe('Stage 1 Headless MVP is complete.')
     expect(spine.summary.nextAction).toBe('Review current work.')
   })
@@ -3460,7 +3461,8 @@ describe('buildProjectOrientationSpine', () => {
       .toContain('docs/specs/source-backed-work.md')
     expect(spine.scopeRows.find(row => row.taskId === 'evidence-cited')?.sourceRefs)
       .toContain('docs/harness/evidence-backed-work.md')
-    expect(spine.sourceHealth.gaps).toBeGreaterThan(0)
+    expect(spine.gaps.length).toBeGreaterThan(spine.sourceHealth.gaps)
+    expect(spine.sourceHealth.gaps).toBe(2)
   })
 
   it('keeps archived imported drafts out of the live spine while preserving map-only capability context', () => {

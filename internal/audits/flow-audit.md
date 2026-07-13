@@ -8,6 +8,59 @@ help_summary: |
 
 # Web UI flow audit
 
+2026-07-13T03:38:00Z - Source-health gaps should count source provenance only.
+
+- Work id: `codex:source-health-gap-count-2026-07-13`.
+- User job: Project Map and Overview should summarize source-trail health
+  without mixing proof, breakdown, or execution-boundary concerns into the
+  source gap count. If Guildhall reports one source-provenance finding, the
+  source-health summary should not say there are three source gaps.
+- Finding:
+  - Live Looma + Knit Map reported one `missing_source_provenance` finding for
+    `task-039`, but `orientationSpine.sourceHealth.gaps` was `3`.
+  - `task-039` is an honest provenance gap: it is a human-originated shelved
+    task with no `references`, no `sourceClaims`, and no intake evidence. The
+    Looma docs contain `AlertDialog`, but auto-linking it by keyword would be
+    a brittle inference.
+- Root cause classification:
+  - Data model/schema problem: `OrientationSourceHealth` collapsed source
+    health and general orientation gap accounting into the same `gaps` field.
+  - UI communication/orientation problem: Map/Overview read
+    `sourceHealth.gaps` as source-trail health, so unrelated gaps made the
+    source summary look worse than the actual source findings.
+  - Bad project data produced by an earlier Guildhall bug: `task-039` remains
+    legacy/manual data without normalized source provenance and should stay
+    visible instead of being guessed into shape.
+- Change:
+  - `sourceHealth.gaps` now counts only missing source-provenance rows.
+  - `sourceHealth.conflicts` remains the count for source conflicts.
+  - General proof/breakdown/execution concerns remain in `orientationSpine.gaps`
+    instead of leaking into the source-health summary.
+- Contract Touch Decision:
+  - Work id: `codex:source-health-gap-count-2026-07-13`.
+  - Touched contracts: `ProjectOrientationSpine.sourceHealth.gaps` derived
+    read-model semantics.
+  - Contracts considered but not touched: persisted task schema, workspace
+    import schema, release-readiness schema, Project Map component props.
+  - Required follow-up: Looma + Knit `task-039` still needs re-intake or
+    explicit source backfill if it should cite
+    `looma/docs/component-roadmap.md` or
+    `looma/docs/component-library-audit.md`.
+  - Proof required: focused orientation-spine regression, contract detector,
+    build/install/restart, stale-server check, live API proof that Looma + Knit
+    reports one source gap for the one task-only provenance row.
+  - Proof provided: focused orientation-spine regression passed; `corepack pnpm
+    lint:contracts` passed; `node ./build.mjs` passed; `corepack pnpm
+    dev:install` passed; `guildhall stop && guildhall start` restarted the
+    installed app; `/api/stale-server` returned `stale:false`; live Looma +
+    Knit Map returned `sourceHealth.gaps:1`, one
+    `missing_source_provenance` finding for `task-039`, and
+    `sourceHealth.conflicts:0`; live Narrative Harness Map stayed at
+    `sourceHealth.gaps:0`.
+  - Apply/revert behavior: reverting makes `sourceHealth.gaps` count unrelated
+    orientation gaps again, causing Map/Overview source summaries to disagree
+    with visible source-provenance findings.
+
 2026-07-13T04:08:00Z - Task evidence arrays should contribute explicit source refs.
 
 - Work id: `codex:task-evidence-source-ref-recovery-2026-07-13`.
