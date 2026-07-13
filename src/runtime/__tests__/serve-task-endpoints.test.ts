@@ -1002,6 +1002,20 @@ describe('GET /api/project/task/:id', () => {
     expect(overviewBody.orientationSpine?.summary?.headline).toEqual(workBody.orientationSpine?.summary?.headline)
     expect(overviewBody.orientationSpine?.summary?.nextAction).toEqual(workBody.orientationSpine?.summary?.nextAction)
     expect(overviewBody.orientationSpine?.summary?.progress).toEqual(workBody.orientationSpine?.summary?.progress)
+    expect(overviewBody.taskPayload).toMatchObject({
+      surface: 'overview',
+      kind: 'selected_scope_cards',
+      count: overviewBody.tasks.length,
+      selectedScopeCount: overviewBody.orientationSpine?.summary?.includedWorkCount,
+      selectedScopeAndDeferredCount: overviewBody.orientationSpine?.summary?.progress?.total,
+    })
+    expect(workBody.taskPayload).toMatchObject({
+      surface: 'work',
+      kind: 'project_work_inventory',
+      count: workBody.tasks.length,
+      selectedScopeCount: workBody.orientationSpine?.summary?.includedWorkCount,
+      selectedScopeAndDeferredCount: workBody.orientationSpine?.summary?.progress?.total,
+    })
     expect(workBody.selectedTaskId).toBe('task-storybook')
     expect(workBody.tasks?.some((task: Record<string, any>) => task.id === 'task-storybook')).toBe(true)
     const workTask = workBody.tasks?.find((task: Record<string, any>) => task.id === 'task-storybook')

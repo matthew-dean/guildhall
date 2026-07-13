@@ -5836,6 +5836,20 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const responseTasks = overviewTaskIds && overviewTaskIds.size > 0
         ? tasks.filter(task => typeof task.id === 'string' && overviewTaskIds.has(task.id))
         : tasks
+      const taskPayload = {
+        surface,
+        kind: overviewSurface
+          ? 'selected_scope_cards'
+          : mapSurface
+            ? 'project_inventory_identities'
+            : workSurface
+              ? 'project_work_inventory'
+              : 'project_full_inventory',
+        count: responseTasks.length,
+        totalEffectiveCount: orientationTasks.length,
+        selectedScopeCount: orientationSpine.summary?.includedWorkCount ?? null,
+        selectedScopeAndDeferredCount: orientationSpine.summary?.progress?.total ?? null,
+      }
       const payload = {
         initializationNeeded: false,
         id: project.id,
@@ -5845,6 +5859,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         config: project.config,
         selectedTaskId,
         tasks: responseTasks.map(mapSurface ? compactTaskIdentity : fullSurface ? compactTaskForProjectSummary : compactTaskForWorkSurface),
+        taskPayload,
         workProgress,
         ...(inbox ? { inbox } : {}),
         run: run

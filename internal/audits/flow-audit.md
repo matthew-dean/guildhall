@@ -8,6 +8,54 @@ help_summary: |
 
 # Web UI flow audit
 
+2026-07-13T03:58:00Z - Project task payloads should describe their surface contract.
+
+- Work id: `codex:project-task-payload-contract-2026-07-13`.
+- User job: A user or agent should not have to guess whether `/api/project`
+  `tasks.length` means selected-scope cards, full project inventory, map
+  identities, or work inventory. Counts should be comparable only through
+  explicit selected-scope summary fields.
+- Finding:
+  - Live Narrative Harness Overview returned `11` tasks while Work/Map returned
+    `168`; Looma + Knit Overview returned `5` tasks while Work/Map returned
+    `333`.
+  - Those differences are intentional surface payload differences, but the API
+    exposed no metadata describing the contract. That makes downstream UI or
+    agents likely to compare `tasks.length` against scope progress incorrectly.
+- Root cause classification:
+  - Data model/schema problem: the project response lacked an explicit read
+    model for task payload meaning.
+  - UI communication/orientation problem: consumers could confuse visible cards
+    with current-scope totals or full project inventory.
+- Change:
+  - `/api/project` now returns `taskPayload` with `surface`, `kind`, `count`,
+    `totalEffectiveCount`, `selectedScopeCount`, and
+    `selectedScopeAndDeferredCount`.
+  - Existing `tasks` payloads are unchanged; the new metadata makes the
+    contract explicit without broad reshaping.
+- Contract Touch Decision:
+  - Work id: `codex:project-task-payload-contract-2026-07-13`.
+  - Touched contracts: `/api/project` response shape for all surfaces.
+  - Contracts considered but not touched: persisted task schema, project
+    orientation spine schema, release-readiness schema, web component props.
+  - Required follow-up: UI can choose whether to display or use the descriptor
+    directly; for now it prevents agents/tests from inferring progress from
+    raw `tasks.length`.
+  - Proof required: focused project endpoint regression, contract detector,
+    build/install/restart, stale-server check, live API proof for Narrative
+    Harness and Looma + Knit task payload descriptors.
+  - Proof provided: focused project endpoint regression passed; `corepack pnpm
+    lint:contracts` passed; `node ./build.mjs` passed; `corepack pnpm
+    dev:install` passed; `guildhall stop && guildhall start` restarted the
+    installed app; `/api/stale-server` returned `stale:false`; live Narrative
+    Harness reported Overview `taskPayload.kind:selected_scope_cards` with
+    `count:11`, Work/Map inventory counts `168`, and shared selected-scope
+    counts `11/38`; live Looma + Knit reported Overview
+    `taskPayload.kind:selected_scope_cards` with `count:5`, Work/Map inventory
+    counts `333`, and shared selected-scope counts `5/69`.
+  - Apply/revert behavior: reverting removes the only explicit API distinction
+    between scoped Overview cards and broader project task inventories.
+
 2026-07-13T03:51:00Z - Overview should reuse spine summary truth instead of recomputing progress.
 
 - Work id: `codex:overview-summary-shared-2026-07-13`.
