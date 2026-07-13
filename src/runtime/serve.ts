@@ -4544,6 +4544,19 @@ function selectedTaskIdsForProgress(spine: Record<string, unknown>): string[] {
     : []
 }
 
+function releaseBlockerTaskIdsForProgress(
+  releaseReadiness: Record<string, unknown> | null,
+  taskIds: ReadonlySet<string>,
+): string[] {
+  const releaseBlockers = releaseReadiness?.releaseBlockers
+  if (!Array.isArray(releaseBlockers)) return []
+  return releaseBlockers
+    .map(blocker => blocker && typeof blocker === 'object'
+      ? String((blocker as { id?: unknown }).id ?? '').trim()
+      : '')
+    .filter(id => id && taskIds.has(id))
+}
+
 function compactOrientationScope(scope: unknown): unknown {
   if (!scope || typeof scope !== 'object' || Array.isArray(scope)) return scope
   const raw = scope as Record<string, unknown>
@@ -5699,9 +5712,18 @@ export function buildServeApp(opts: ServeOptions = {}): {
           })
         : fullOrientationSpine
       const selectedProgressTaskIds = selectedTaskIdsForProgress(orientationSpine as Record<string, unknown>)
+      const progressTaskIds = new Set(
+        (orientationTasks as unknown as Task[])
+          .map(task => task.id)
+          .filter((id): id is string => typeof id === 'string' && id.trim().length > 0),
+      )
+      const blockerTaskIds = releaseBlockerTaskIdsForProgress(releaseReadiness, progressTaskIds)
       const workProgress = deriveProjectWorkProgress(
         orientationTasks as unknown as Array<Record<string, unknown>>,
-        selectedProgressTaskIds.length > 0 ? { selectedTaskIds: selectedProgressTaskIds } : {},
+        {
+          ...(selectedProgressTaskIds.length > 0 ? { selectedTaskIds: selectedProgressTaskIds } : {}),
+          ...(blockerTaskIds.length > 0 ? { blockerTaskIds } : {}),
+        },
       )
       endSpine()
       const endAction = startTiming('action')

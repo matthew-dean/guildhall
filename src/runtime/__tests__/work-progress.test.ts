@@ -75,6 +75,37 @@ describe('deriveProjectWorkProgress', () => {
     })
   })
 
+  it('counts selected-scope readiness blockers as blocked visible work', () => {
+    const progress = deriveProjectWorkProgress([
+      {
+        id: 'current-shaping',
+        title: 'Current shaping',
+        status: 'ready',
+      },
+      {
+        id: 'later-proof',
+        title: 'Later proof',
+        status: 'blocked',
+      },
+    ], {
+      selectedTaskIds: ['current-shaping'],
+      blockerTaskIds: ['current-shaping'],
+    })
+
+    expect(progress.counts).toMatchObject({
+      visibleTotal: 2,
+      visibleBlocked: 2,
+    })
+    expect(progress.selectedCounts).toMatchObject({
+      visibleTotal: 1,
+      visibleBlocked: 1,
+      visibleActive: 0,
+    })
+    expect(progress.byTaskId['current-shaping']).toMatchObject({
+      blocksSelectedScope: true,
+    })
+  })
+
   it('treats importer-generated decomposition children as internal steps even without explicit visibility', () => {
     const progress = deriveProjectWorkProgress([
       {

@@ -50,6 +50,7 @@ export interface TaskWorkProgress {
   id: string
   title?: string
   status?: string
+  blocksSelectedScope?: boolean
   visibility: WorkVisibility
   deliverySteps: DeliveryStep[]
   rollup: WorkProgressRollup
@@ -97,16 +98,20 @@ function isProjectSetupTask(task: TaskRecord): boolean {
 
 export function deriveProjectWorkProgress(
   tasks: TaskRecord[],
-  options: { selectedTaskIds?: Iterable<string> } = {},
+  options: {
+    selectedTaskIds?: Iterable<string>
+    blockerTaskIds?: Iterable<string>
+  } = {},
 ): ProjectWorkProgress {
   const byId = new Map<string, TaskRecord>()
   for (const task of tasks) {
     const id = stringValue(task.id)
     if (id) byId.set(id, task)
   }
+  const blockerTaskIds = options.blockerTaskIds ? new Set(options.blockerTaskIds) : new Set<string>()
 
   const taskProgressEntries = tasks
-    .map(task => deriveTaskWorkProgress(task, byId))
+    .map(task => deriveTaskWorkProgress(task, byId, blockerTaskIds))
     .filter((progress): progress is TaskWorkProgress => progress !== null)
 
   const byTaskId: Record<string, TaskWorkProgress> = {}
@@ -149,7 +154,7 @@ function addProgressCounts(counts: ProjectWorkProgressCounts, progress: TaskWork
     counts.visibleTotal += 1
     const status = progress.status ?? ''
     if (TASK_DONE_STATUSES.has(status)) counts.visibleDone += 1
-    else if (TASK_BLOCKED_STATUSES.has(status)) counts.visibleBlocked += 1
+    else if (progress.blocksSelectedScope || TASK_BLOCKED_STATUSES.has(status)) counts.visibleBlocked += 1
     else if (TASK_SHELVED_STATUSES.has(status)) counts.visibleShelved += 1
     else if (TASK_ACTIVE_STATUSES.has(status) || status) counts.visibleActive += 1
   }
@@ -162,7 +167,11 @@ function addProgressCounts(counts: ProjectWorkProgressCounts, progress: TaskWork
   }
 }
 
-function deriveTaskWorkProgress(task: TaskRecord, byId: Map<string, TaskRecord>): TaskWorkProgress | null {
+function deriveTaskWorkProgress(
+  task: TaskRecord,
+  byId: Map<string, TaskRecord>,
+  blockerTaskIds: ReadonlySet<string>,
+): TaskWorkProgress | null {
   const id = stringValue(task.id)
   if (!id) return null
   const status = stringValue(task.status)
@@ -171,7 +180,7 @@ function deriveTaskWorkProgress(task: TaskRecord, byId: Map<string, TaskRecord>)
   const visibility = deriveWorkVisibility(task, byId)
   const internalChildTasks = childTasks.filter(child => deriveWorkVisibility(child, byId).kind === 'internal_step')
   const visibleChildProgress = childTasks
-    .map(child => deriveTaskWorkProgress(child, byId))
+    .map(child => deriveTaskWorkProgress(child, byId, blockerTaskIds))
     .filter((progress): progress is TaskWorkProgress => Boolean(progress && progress.visibility.countInProjectTotals))
   const hasMaterializedChildWork = childTasks.some((child) => {
     const childVisibility = deriveWorkVisibility(child, byId)
@@ -188,6 +197,7 @@ function deriveTaskWorkProgress(task: TaskRecord, byId: Map<string, TaskRecord>)
     id,
     title: stringValue(task.title),
     status: stringValue(task.status),
+    ...(blockerTaskIds.has(id) ? { blocksSelectedScope: true } : {}),
     visibility,
     deliverySteps,
     rollup,

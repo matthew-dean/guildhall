@@ -8,6 +8,73 @@ help_summary: |
 
 # Web UI flow audit
 
+2026-07-13 - Selected-scope progress counts release-readiness task blockers.
+
+- Work id: `codex:selected-scope-progress-readiness-blockers-2026-07-13`.
+- User job: when Guildhall says the selected release or current scope is blocked,
+  every summary surface that reports selected-scope progress must count the same
+  task blockers. The owner should not see `5 blockers` in readiness beside
+  `0 blocked` in selected progress for the same execution boundary.
+- Live finding:
+  - Looma + Knit selected `Stage 1: V1 Release Hardening` reported `5`
+    release-readiness blockers, including `2` source-backed shaping task
+    blockers, while `workProgress.selectedCounts` reported
+    `visibleBlocked: 0` and `visibleActive: 2`.
+- Root-cause classification:
+  - UI communication/orientation problem: progress summaries and readiness
+    summaries described the same selected scope with contradictory blocker
+    counts.
+  - Scheduler/action-state logic problem: task statuses such as `ready` and
+    `import_draft` can still block unattended Start/Resume through the shared
+    readiness model, but progress only counted raw `blocked` status.
+  - Project structure/scope/release modeling problem: selected-scope blocker
+    membership existed in release readiness but was not passed into the shared
+    progress projection.
+- Change:
+  - `deriveProjectWorkProgress` now accepts task ids that block the selected
+    scope and counts those visible tasks as blocked without turning repository,
+    checkout, or design-system follow-ups into fake task rows.
+  - `/api/project` passes release-readiness task blockers into the shared
+    progress projection, so Overview and other project surfaces share the same
+    selected-scope blocker count.
+- Contract Touch Decision:
+  - Work id: `codex:selected-scope-progress-readiness-blockers-2026-07-13`.
+  - Touched contracts: `ProjectWorkProgress` summary semantics and
+    `/api/project` selected-scope progress projection.
+  - Contracts considered but not touched: persisted task schema, persisted
+    release/scope schema, release-readiness payload shape, scheduler Start/Resume
+    command semantics, web task-card display contract.
+  - Required follow-up: continue checking project-list and Work-tab summaries for
+    places that still display global progress counts when the user is looking at
+    a selected release/current scope.
+  - Proof required: focused work-progress unit coverage, project API regression
+    proving selected readiness blockers affect selected progress counts, contract
+    detector, build/install, stale-server proof, and live Looma + Knit API proof.
+  - Proof provided: `corepack pnpm vitest run
+    src/runtime/__tests__/work-progress.test.ts
+    src/runtime/__tests__/serve-release-readiness.test.ts
+    src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts
+    --reporter=dot` passed `105` tests; `corepack pnpm lint:contracts` passed;
+    `git diff --check` passed; `node ./build.mjs && corepack pnpm dev:install
+    && guildhall stop && guildhall start` completed; `/api/stale-server`
+    returned `stale:false` for the installed app. Live Looma + Knit
+    `/api/project?surface=overview` reported selected release `Stage 1: V1
+    Release Hardening`, `5` included, `64` deferred, readiness blockers `5`,
+    and selected progress `visibleDone: 3`, `visibleBlocked: 2`,
+    `visibleActive: 0`. Browser proof on
+    `http://localhost:7777/projects/looma-knit/overview` showed `Work mix` with
+    `5 Current scope` and `64 Deferred`, `Current release` with `3 / 5 done · 2
+    unfinished · 2 need shaping`, and `At a glance` with `5 work items in view ·
+    0 missing verification · 2 blocked · 3 verified · 64 deferred`; geometry
+    showed no page horizontal overflow, only the intended vertical scroll
+    container.
+  - Waivers: none.
+  - Owner-review items: none. This does not imply owner approval; it only makes
+    selected-scope blocker truth consistent across read models.
+  - Apply/revert behavior: reverting this change lets selected release readiness
+    report task blockers while progress summaries still count those same tasks as
+    active.
+
 2026-07-07T07:55:11Z - Provider/model proof cannot be satisfied by review prose alone.
 
 - Work id: `codex:provider-proof-review-prose-false-green-2026-07-07`.

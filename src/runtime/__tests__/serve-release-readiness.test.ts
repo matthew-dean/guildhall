@@ -2856,6 +2856,14 @@ describe('GET /api/project/release-readiness', () => {
       'Link editing UI: needs a clearer brief before unattended work can run.',
       'Audit the remaining replacement scope: needs a clearer brief before unattended work can run.',
     ])
+
+    const overviewRes = await app.fetch(new Request(projectUrl('/api/project?surface=overview')))
+    const overview = await overviewRes.json() as any
+    expect(overview.workProgress.selectedCounts).toMatchObject({
+      visibleTotal: 3,
+      visibleBlocked: 3,
+      visibleActive: 0,
+    })
   })
 
   it('counts imported selected-scope rows the same way as the project spine', async () => {
