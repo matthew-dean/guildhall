@@ -8,6 +8,62 @@ help_summary: |
 
 # Web UI flow audit
 
+2026-07-13T03:36:00Z - Source health must count current-scope rows with only task-local provenance.
+
+- Work id: `codex:selected-scope-source-provenance-gap-2026-07-13`.
+- User job: when Project Map says a current scope is source-backed, the owner
+  must be able to tell which scoped work is backed by source documents and
+  which work only exists as older task state. Guildhall must not report zero
+  source gaps when included rows only cite `task:<id>`.
+- Finding:
+  - Live Narrative Harness Map showed selected scope `Stage 1: Headless
+    Drafting And Evaluation MVP` with `sourceHealth.gaps:0`.
+  - Six included rows only exposed task-local provenance:
+    `coherence-reviewer-mvp`, `decision-trace-pipeline`,
+    `author-voice-loop-mvp`, `context-packet-compaction-core`,
+    `hosting-policy-boundary-checks`, and `task-009`.
+  - Looma + Knit showed one similar selected-scope row: `task-039`.
+- Root cause classification:
+  - Project structure/scope/release modeling problem: current-scope membership
+    was treated as sufficiently sourced even when it had no document/source
+    trail.
+  - UI communication/orientation problem: source health reported no gaps, so
+    the product could not distinguish doc-backed imported work from legacy
+    task-only work.
+  - Bad project data produced by an earlier Guildhall bug: legacy/manual task
+    records exist without persisted references.
+- Change:
+  - Shared orientation spine now emits one aggregate
+    `missing_source_provenance` gap for included scope rows whose source refs
+    do not include a document/import ref.
+  - The gap points at the task records that need source backfill or re-intake
+    instead of inventing fake document provenance.
+- Contract Touch Decision:
+  - Work id: `codex:selected-scope-source-provenance-gap-2026-07-13`.
+  - Touched contracts: `orientationSpine.gaps[*].kind` adds
+    `missing_source_provenance`; `orientationSpine.sourceHealth.gaps` now
+    counts selected-scope map rows without source-document provenance.
+  - Contracts considered but not touched: persisted task schema,
+    project-scope projection row schema, task import schema, release-readiness
+    schema.
+  - Required follow-up: installed-app proof against Narrative Harness and Looma
+    + Knit after build/install.
+  - Proof required: focused orientation-spine regression, contract detector,
+    build/install/restart, stale-server check, live API proof that Map reports
+    `missing_source_provenance` for the known legacy/manual rows.
+  - Proof provided: focused orientation-spine regression passed; `corepack pnpm
+    lint:contracts` passed; `node ./build.mjs` passed; `corepack pnpm
+    dev:install` passed; `guildhall stop && guildhall start` restarted the
+    installed app; `/api/stale-server` returned `stale:false`; live Narrative
+    Harness Map returned `sourceHealth.gaps:1` with
+    `missing_source_provenance` refs for `coherence-reviewer-mvp`,
+    `decision-trace-pipeline`, `author-voice-loop-mvp`,
+    `context-packet-compaction-core`, `hosting-policy-boundary-checks`, and
+    `task-009`; live Looma + Knit Map returned
+    `missing_source_provenance` for `task-039`.
+  - Apply/revert behavior: reverting restores false `sourceHealth.gaps:0` for
+    selected scopes that still contain task-only provenance.
+
 2026-07-13T03:18:00Z - Compact project surfaces must preserve task source provenance.
 
 - Work id: `codex:compact-task-source-provenance-2026-07-13`.

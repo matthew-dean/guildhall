@@ -3385,6 +3385,62 @@ describe('buildProjectOrientationSpine', () => {
     ]))
   })
 
+  it('reports selected scope rows that lack source document provenance', () => {
+    const tasks = [
+      {
+        id: 'legacy-done',
+        title: 'Legacy completed work',
+        description: 'Old task record with no source trail.',
+        domain: 'harness',
+        status: 'done' as const,
+        releaseIds: ['stage-1'],
+      },
+      {
+        id: 'doc-backed',
+        title: 'Doc-backed current work',
+        description: 'Imported task with source trail.',
+        domain: 'harness',
+        status: 'ready' as const,
+        releaseIds: ['stage-1'],
+        references: ['docs/harness/implementation-roadmap.md'],
+      },
+      {
+        id: 'legacy-deferred',
+        title: 'Legacy deferred work',
+        description: 'Old deferred task record with no source trail.',
+        domain: 'harness',
+        status: 'shelved' as const,
+        releaseIds: ['stage-1'],
+      },
+    ]
+    const releases = [{
+      id: 'stage-1',
+      label: 'Stage 1',
+      kind: 'release' as const,
+      state: 'active' as const,
+      source: 'release_plan' as const,
+      nodeIds: ['work:legacy-done', 'work:doc-backed'],
+      deferredNodeIds: ['work:legacy-deferred'],
+      proofStyle: 'script_only' as const,
+    }]
+    const scopeProjection = buildProjectScopeProjection({ tasks, releases, selectedReleaseId: 'stage-1' })
+
+    const spine = buildProjectOrientationSpine({
+      projectId: 'demo',
+      now: '2026-07-13T03:30:00.000Z',
+      selectedReleaseId: 'stage-1',
+      releases,
+      tasks,
+      scopeProjection,
+    })
+
+    expect(spine.gaps).toContainEqual(expect.objectContaining({
+      kind: 'missing_source_provenance',
+      refs: ['task:legacy-done', 'task:legacy-deferred'],
+    }))
+    expect(spine.sourceHealth.gaps).toBeGreaterThan(0)
+  })
+
   it('keeps archived imported drafts out of the live spine while preserving map-only capability context', () => {
     const spine = buildProjectOrientationSpine({
       projectId: 'narrative-harness',

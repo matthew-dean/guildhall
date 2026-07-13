@@ -165,6 +165,7 @@ export interface OrientationGap {
     | 'unanchored_thread'
     | 'unanchored_release_blocker'
     | 'source_conflict'
+    | 'missing_source_provenance'
     | 'needs_breakdown'
     | 'proof_needed'
     | 'missing_execution_boundary'
@@ -1594,6 +1595,19 @@ function isSourceDocumentRef(ref: string): boolean {
   return /[/\\]/.test(ref) || /\.(md|mdx|txt|json|ya?ml)$/i.test(ref)
 }
 
+function missingSourceProvenanceGaps(rows: OrientationScopeRow[]): OrientationGap[] {
+  const missing = rows.filter(row =>
+    !row.sourceRefs.some(isSourceDocumentRef),
+  )
+  if (missing.length === 0) return []
+  return [{
+    kind: 'missing_source_provenance',
+    label: `Selected scope map has ${missing.length} work ${missing.length === 1 ? 'item' : 'items'} without source document references.`,
+    refs: missing.map(row => `task:${row.taskId}`),
+    severity: 'warn',
+  }]
+}
+
 function sourceRefLabel(ref: string): string {
   const value = ref.startsWith('import:') ? ref.slice('import:'.length) : ref
   const parts = value.split(/[/\\]/).filter(Boolean)
@@ -2273,6 +2287,7 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
     ...nodeGaps,
     ...blockerGaps,
     ...duplicateGaps,
+    ...missingSourceProvenanceGaps(projectionScopeRows),
     ...sourceConflictGaps(input.sourceConflicts),
   ]
   const pins = activePins(roots)
