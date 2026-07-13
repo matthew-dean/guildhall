@@ -4168,7 +4168,7 @@ function buildOverviewOrientationPreviewSpine(input: {
     focusTaskTitle?: string
     focusKind?: string
   } | null
-  sourceSpine?: Pick<ProjectOrientationSpine, 'selectedRelease' | 'selectedTaskScope' | 'scope' | 'summary' | 'sourceHealth' | 'sourceTrail'> | null
+  sourceSpine?: Pick<ProjectOrientationSpine, 'selectedRelease' | 'selectedTaskScope' | 'scope' | 'summary' | 'release' | 'sourceHealth' | 'sourceTrail'> | null
   now?: string
 }): Record<string, unknown> {
   const now = input.now ?? new Date().toISOString()
@@ -4311,6 +4311,14 @@ function buildOverviewOrientationPreviewSpine(input: {
         : projection.start.message,
     progress,
   }
+  const releaseSummary = input.sourceSpine?.release ?? {
+    state: projection.release.state,
+    blockers: projection.release.blockers.map(blocker => ({
+      id: blocker.id,
+      label: blocker.label,
+      ...(blocker.owningTaskId ? { owningNodeId: taskScopeNodeId(blocker.owningTaskId) } : {}),
+    })),
+  }
 
   return {
     projectId: input.projectId,
@@ -4374,14 +4382,7 @@ function buildOverviewOrientationPreviewSpine(input: {
       refs: [`project:${input.projectId}`],
       severity: 'warn',
     }],
-    release: {
-      state: projection.release.state,
-      blockers: projection.release.blockers.map(blocker => ({
-        id: blocker.id,
-        label: blocker.label,
-        ...(blocker.owningTaskId ? { owningNodeId: taskScopeNodeId(blocker.owningTaskId) } : {}),
-      })),
-    },
+    release: releaseSummary,
     sourceHealth,
     sourceTrail: input.sourceSpine?.sourceTrail ?? [],
   }

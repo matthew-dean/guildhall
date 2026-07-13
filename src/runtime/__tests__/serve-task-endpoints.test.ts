@@ -1002,6 +1002,7 @@ describe('GET /api/project/task/:id', () => {
     expect(overviewBody.orientationSpine?.summary?.headline).toEqual(workBody.orientationSpine?.summary?.headline)
     expect(overviewBody.orientationSpine?.summary?.nextAction).toEqual(workBody.orientationSpine?.summary?.nextAction)
     expect(overviewBody.orientationSpine?.summary?.progress).toEqual(workBody.orientationSpine?.summary?.progress)
+    expect(overviewBody.orientationSpine?.release).toEqual(workBody.orientationSpine?.release)
     expect(overviewBody.taskPayload).toMatchObject({
       surface: 'overview',
       kind: 'selected_scope_cards',

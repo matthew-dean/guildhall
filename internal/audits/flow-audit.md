@@ -8,6 +8,55 @@ help_summary: |
 
 # Web UI flow audit
 
+2026-07-13T04:07:00Z - Overview should reuse release blocker truth from the orientation spine.
+
+- Work id: `codex:overview-release-blockers-shared-2026-07-13`.
+- User job: Overview, Work, and Map should agree on why a selected scope is
+  blocked. A user should not see one blocker list on Overview and a fuller
+  blocker list on Work/Map for the same release.
+- Finding:
+  - Live Looma + Knit Overview `orientationSpine.release.blockers` listed only
+    the two source-backed shaping blockers.
+  - Work and Map listed those two blockers plus repository follow-up and dirty
+    checkout blockers from release readiness.
+  - The mismatch came from `buildOverviewOrientationPreviewSpine` recomputing
+    `release` locally instead of reusing the canonical orientation spine release
+    summary.
+- Root cause classification:
+  - Data model/schema problem: the API allowed the Overview preview spine to
+    replace canonical release-blocker state with weaker local projection state.
+  - UI communication/orientation problem: selected-scope blocker explanations
+    could differ across tabs.
+- Change:
+  - Overview preview spines now reuse the full orientation spine `release`
+    summary when present.
+  - The local release projection remains only as a fallback when no full spine
+    exists.
+- Contract Touch Decision:
+  - Work id: `codex:overview-release-blockers-shared-2026-07-13`.
+  - Touched contracts: `/api/project?surface=overview` orientation spine
+    `release` semantics.
+  - Contracts considered but not touched: persisted task schema,
+    release-readiness schema, action-model schema, Project Overview component
+    props.
+  - Required follow-up: continue checking that action model blocker wording and
+    release blockers remain intentionally different views of the same blocker
+    set.
+  - Proof required: focused project endpoint regression, contract detector,
+    build/install/restart, stale-server check, live API proof that Looma + Knit
+    Overview/Work release blockers agree.
+  - Proof provided: focused project endpoint regression passed; `corepack pnpm
+    lint:contracts` passed; `node ./build.mjs` passed; `corepack pnpm
+    dev:install` passed; `guildhall stop && guildhall start` restarted the
+    installed app; `/api/stale-server` returned `stale:false`; live Looma +
+    Knit Overview and Work both returned release state `blocked` with blocker
+    ids `task-import-ik1i7i`, `task-import-1vghvf6`,
+    `repository-followup:repo:0`, `repository-followup:repo:1`, and
+    `dirty-checkout`; live Narrative Harness Overview and Work both returned
+    release state `ready` with no blockers.
+  - Apply/revert behavior: reverting lets Overview recompute release blocker
+    state independently, causing selected-scope blockers to drift across tabs.
+
 2026-07-13T03:58:00Z - Project task payloads should describe their surface contract.
 
 - Work id: `codex:project-task-payload-contract-2026-07-13`.
