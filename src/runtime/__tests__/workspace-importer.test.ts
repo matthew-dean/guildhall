@@ -5775,6 +5775,76 @@ tasks:
     ]))
   })
 
+  it('attaches a separate subject-matched proof document to an imported task', async () => {
+    const worldSpec = path.join(tmpDir, 'docs', 'specs', 'world-and-object-continuity.md')
+    const worldReviewer = path.join(tmpDir, 'docs', 'coherence', 'world-state-reviewer.md')
+    await fs.mkdir(path.dirname(worldSpec), { recursive: true })
+    await fs.mkdir(path.dirname(worldReviewer), { recursive: true })
+    await fs.writeFile(
+      path.join(tmpDir, 'package.json'),
+      JSON.stringify({
+        scripts: {
+          'prove:world-state-continuity': 'node scripts/prove-world-state-continuity.mjs',
+        },
+      }),
+      'utf-8',
+    )
+    await fs.writeFile(
+      worldSpec,
+      '# World and object continuity\n\nTrack state changes over elapsed time.\n',
+      'utf-8',
+    )
+    await fs.writeFile(
+      worldReviewer,
+      [
+        '# World-State Reviewer',
+        '',
+        'Review object and property state changes over elapsed time.',
+        '',
+        'Executable proof: `pnpm run prove:world-state-continuity`.',
+      ].join('\n'),
+      'utf-8',
+    )
+
+    await seedImporterWithSpec(`
+\`\`\`yaml
+tasks:
+  - id: task-world-state
+    title: Prove world-state continuity review over elapsed-time object changes.
+    description: Check world-state transitions over elapsed time.
+    domain: coherence
+    scope: current
+    priority: high
+    references:
+      - ${worldSpec}
+  - id: task-author-intent
+    title: Add author-intent inputs for voice, genre, audience, theme, synopsis, outline, characters, character voices, world-state facts, and review plan.
+    description: Capture the broad author-intent record used by the story pipeline.
+    domain: harness
+    scope: current
+    priority: high
+    references:
+      - ${worldSpec}
+\`\`\`
+`)
+
+    const approved = await approveWorkspaceImport({ memoryDir, projectPath: tmpDir })
+    expect(approved.success).toBe(true)
+    const worldStateTask = (await readQueue()).tasks.find(candidate => candidate.id === 'task-world-state')
+    expect(worldStateTask?.references).toContain(worldReviewer)
+    expect(worldStateTask?.proofPaths).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'command',
+        command: 'pnpm run prove:world-state-continuity',
+        source: 'documented',
+      }),
+    ]))
+    expect(worldStateTask?.proofPaths?.some(path => path.launchSteps?.some(step => step.kind === 'blocked_until_setup'))).toBe(false)
+    const authorIntentTask = (await readQueue()).tasks.find(candidate => candidate.id === 'task-author-intent')
+    expect(authorIntentTask?.references).not.toContain(worldReviewer)
+    expect(authorIntentTask?.proofPaths?.some(path => path.command === 'pnpm run prove:world-state-continuity')).toBe(false)
+  })
+
   it('does not resurrect stale imported queue work when materializing a parsed current slice', async () => {
     await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
     await fs.mkdir(path.join(tmpDir, 'docs', 'specs'), { recursive: true })

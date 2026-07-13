@@ -35109,6 +35109,60 @@ orientation proof projection as scope summary.
   - Scope: none. No persisted field, enum, or serialized task shape changed;
     this reuses existing `proofPaths` and `launchSteps` fields.
 
+## codex:workspace-import-subject-matched-proof-trail-2026-07-13
+
+- User job:
+  - When a project task is backed by a general spec but its executable proof is
+    documented in a separate reviewer or harness document, the task should
+    show that source trail and the real proof command without requiring the
+    user to manually wire every document together.
+  - A broad parent task that merely mentions a review lane must not inherit that
+    lane's proof command and appear falsely executable.
+- Root cause classification:
+  - Source-trail modeling problem: intake only opened references already on a
+    parsed task, so separate but explicit proof documents were invisible to
+    proof derivation.
+  - Proof/readiness communication problem: Narrative Harness's world-state
+    task showed an invented `blocked_until_setup` gap despite the repository
+    documenting `pnpm run prove:world-state-continuity`.
+- Fix:
+  - After evidence-graph materialization, scan project documentation files for
+    explicit proof commands or proof scripts and attach a document only when
+    its command subject has a focused multi-token match to the task subject.
+  - Reuse the existing task `references` and `proofPaths` contracts; this does
+    not create a second relationship or source-trail model.
+  - Broad umbrella tasks do not inherit lane-specific proofs; compound subjects
+    such as `world-state` are tokenized for matching, while generic words such
+    as `continuity` do not establish a relationship by themselves.
+- Proof provided:
+  - Added a regression with a separate world-state reviewer document and a
+    broad author-intent task; the reviewer attaches only to the focused
+    world-state task.
+  - Focused importer proof and the full importer/orientation suites pass:
+    `CI=true pnpm vitest run src/runtime/__tests__/workspace-importer.test.ts
+    src/runtime/__tests__/project-orientation-spine.test.ts` (158 tests).
+  - `pnpm lint:contracts`, `pnpm build`, and `pnpm dev:install` passed; the
+    installed CLI was restarted and the real Narrative Harness draft now shows:
+    - world-state task references
+      `docs/coherence/world-state-reviewer.md` and derives
+      `pnpm run prove:world-state-continuity`;
+    - author-intent task does not reference the world-state reviewer;
+    - spatial task remains attached to its spatial reviewer/proof documents.
+- Contract Touch Decision:
+  - Work id: `workspace-import-subject-matched-proof-trail`.
+  - Touched contracts: source-derived population of existing task `references`
+    and existing `proofPaths` during workspace import materialization.
+  - Contracts considered but not touched: persisted task schema, release
+    schema, proof-result schema, scheduler boundary, API routes, and UI
+    components.
+  - Proof required: focused and full importer tests, contract detector,
+    installed build, stale-server proof, and real-project CLI draft output.
+  - Apply/revert behavior: reverting restores the previous behavior where only
+    already-cited documents can supply imported proof commands.
+- Schema Migration Decision:
+  - Scope: none. No persisted field, enum, or serialized task shape changed;
+    the existing `references` and `proofPaths` fields are reused.
+
 ## codex:overview-signal-card-density-2026-07-13
 
 - User job:

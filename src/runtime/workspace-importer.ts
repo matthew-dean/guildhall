@@ -2456,6 +2456,106 @@ async function evidenceSourcesForParsedTasks(
   return sources
 }
 
+const IMPORT_DOCUMENT_IGNORE_RE = /(^|\/)(node_modules|\.git|dist|build|coverage|\.nuxt|memory)(\/|$)/i
+const IMPORT_DOCUMENT_RE = /\.(?:md|markdown|txt)$/i
+
+async function listProjectDocumentationFiles(projectPath: string): Promise<string[]> {
+  const files: string[] = []
+  const visit = async (directory: string): Promise<void> => {
+    let entries: Awaited<ReturnType<typeof fs.readdir>>
+    try {
+      entries = await fs.readdir(directory, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      const absolute = path.join(directory, entry.name)
+      const relative = path.relative(projectPath, absolute).replaceAll('\\', '/')
+      if (IMPORT_DOCUMENT_IGNORE_RE.test(relative)) continue
+      if (entry.isDirectory()) {
+        await visit(absolute)
+      } else if (entry.isFile() && IMPORT_DOCUMENT_RE.test(relative)) {
+        files.push(absolute)
+      }
+    }
+  }
+
+  await visit(projectPath)
+  return files.sort((left, right) => left.localeCompare(right))
+}
+
+function discoveredProofCommandMatchesTask(command: string, title: string): boolean {
+  const generic = new Set([
+    'check',
+    'command',
+    'continuity',
+    'executable',
+    'proof',
+    'prove',
+    'review',
+    'reviewer',
+    'run',
+    'script',
+    'test',
+    'validate',
+    'verification',
+    'verify',
+  ])
+  const taskKeywords = titleKeywords(title)
+    .flatMap(keyword => keyword.split('-'))
+    .filter(keyword => keyword.length >= 4 && !generic.has(keyword))
+  const commandKeywords = normalizeImportText(command)
+    .split(/[\s:_\/-]+/)
+    .filter(keyword => keyword.length >= 4 && !generic.has(keyword))
+  const shared = taskKeywords.filter(keyword => commandKeywords.includes(keyword))
+  if (shared.length < 2) return false
+  return taskKeywords.length <= 12 || shared.length / taskKeywords.length >= 0.16
+}
+
+async function attachDocumentedProofReferences(
+  projectPath: string,
+  tasks: readonly MaterializedImportTask[],
+): Promise<MaterializedImportTask[]> {
+  if (tasks.length === 0) return []
+  const candidates = await listProjectDocumentationFiles(projectPath)
+  if (candidates.length === 0) return [...tasks]
+
+  const referencesByTask = new Map<string, string[]>()
+  for (const absolute of candidates) {
+    let content: string
+    try {
+      content = await readManagedTextFile(absolute, 'utf-8')
+    } catch {
+      continue
+    }
+    if (!/\b(?:pnpm|npm)\s+(?:run\s+)?[a-z0-9@:_./-]+|\bscripts\/prove-[a-z0-9._/-]+/i.test(content)) {
+      continue
+    }
+
+    for (const task of tasks) {
+      const commands = documentedImportedProofCommands({
+        title: task.title,
+        description: task.description,
+        references: [absolute],
+      })
+      if (!commands.some(command => discoveredProofCommandMatchesTask(command, task.title))) continue
+      referencesByTask.set(
+        task.id,
+        mergeImportReferences(referencesByTask.get(task.id), [absolute]),
+      )
+    }
+  }
+
+  return tasks.map(task => {
+    const relatedReferences = referencesByTask.get(task.id)
+    if (!relatedReferences?.length) return task
+    return {
+      ...task,
+      references: mergeImportReferences(task.references, relatedReferences),
+    }
+  })
+}
+
 async function materializeEvidenceWorkGraphTasks(
   input: {
     projectPath: string
@@ -2469,7 +2569,7 @@ async function materializeEvidenceWorkGraphTasks(
     : []
   const sources = await evidenceSourcesForParsedTasks(input.projectPath, input.parsedTasks, inventoryReferences)
   if (sources.length === 0) {
-    return [...input.parsedTasks]
+    return attachDocumentedProofReferences(input.projectPath, input.parsedTasks)
   }
 
   const plan = planEvidenceWorkGraph({
@@ -2487,7 +2587,7 @@ async function materializeEvidenceWorkGraphTasks(
     ],
   })
   if (plan.tasks.length === 0) {
-    return [...input.parsedTasks]
+    return attachDocumentedProofReferences(input.projectPath, input.parsedTasks)
   }
 
   const graphTaskIds = new Set(plan.tasks.map(task => task.id))
@@ -2589,7 +2689,7 @@ async function materializeEvidenceWorkGraphTasks(
     !isShadowedCurrentMilestoneDeliverableTask(task, shadowedImports),
   )
 
-  return [...graphTasks, ...untouchedParsedTasks]
+  return attachDocumentedProofReferences(input.projectPath, [...graphTasks, ...untouchedParsedTasks])
 }
 
 function isShadowedCurrentMilestoneDeliverableTask(
