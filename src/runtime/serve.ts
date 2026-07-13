@@ -2618,6 +2618,8 @@ function buildOrientationSpineWithScopedReleaseTruth(
     proofStyle: proofStyleForScope(releaseProjectionInputs, scopeProjection.selectedScope),
     commandProofRequired: scopeRequiresCommandProof(scopeProjection.selectedScope),
   })
+  const suppliedReleaseBlockers = input.releaseReadiness?.blockers
+  const releaseBlockers = suppliedReleaseBlockers ?? releaseTruth.releaseBlockers
   const orientationSpine = buildProjectOrientationSpine({
     ...input,
     now,
@@ -2625,11 +2627,8 @@ function buildOrientationSpineWithScopedReleaseTruth(
     releases: releaseProjectionInputs,
     scopeProjection,
     releaseReadiness: {
-      verdict: input.releaseReadiness?.verdict ?? (releaseTruth.releaseBlockers.length > 0 ? 'blocked' : 'clear'),
-      blockers: [
-        ...releaseTruth.releaseBlockers,
-        ...(input.releaseReadiness?.blockers ?? []),
-      ],
+      verdict: input.releaseReadiness?.verdict ?? (releaseBlockers.length > 0 ? 'blocked' : 'clear'),
+      blockers: releaseBlockers,
     },
   })
   return { orientationSpine, releaseTruth }
@@ -2667,11 +2666,12 @@ function orientationReleaseReadinessFromPayload(
   return {
     verdict: payload.ready === true ? 'clear' : 'blocked',
     blockers: releaseBlockers
-      .filter((blocker): blocker is { id?: string; label?: string; title?: string } => Boolean(blocker && typeof blocker === 'object'))
+      .filter((blocker): blocker is { id?: string; label?: string; title?: string; nextAction?: string } => Boolean(blocker && typeof blocker === 'object'))
       .map(blocker => ({
         id: typeof blocker.id === 'string' ? blocker.id : undefined,
         label: typeof blocker.label === 'string' ? blocker.label : undefined,
         title: typeof blocker.title === 'string' ? blocker.title : undefined,
+        nextAction: typeof blocker.nextAction === 'string' ? blocker.nextAction : undefined,
       })),
   }
 }

@@ -400,7 +400,7 @@ export interface ProjectOrientationRelease {
   nodeIds?: string[]
   deferredNodeIds?: string[]
   proofStyle?: string
-  blockers?: Array<{ id?: string; label?: string; severity?: string; owner?: string; sourceRef?: string }>
+  blockers?: Array<{ id?: string; label?: string; nextAction?: string; severity?: string; owner?: string; sourceRef?: string }>
 }
 
 export interface ProjectReleaseReadiness {
@@ -411,7 +411,7 @@ export interface ProjectReleaseReadiness {
   notReadyReason?: string
   statusCounts?: Record<string, number>
   proofMissingDoneTasks?: Array<{ id?: string; title?: string }>
-  releaseBlockers?: Array<{ id?: string; title?: string; label?: string }>
+  releaseBlockers?: Array<{ id?: string; title?: string; label?: string; nextAction?: string }>
   gitStory?: GitStorySummary
   totals?: {
     tasks?: number

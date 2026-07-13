@@ -535,6 +535,7 @@ describe('GET /api/project/release-readiness', () => {
 
     expect(projectBody.orientationSpine.release.blockers.map((blocker: any) => blocker.id)).toEqual(releaseBlockerIds)
     expect(spineBody.spine.release.blockers.map((blocker: any) => blocker.id)).toEqual(releaseBlockerIds)
+    expect(spineBody.spine.release.blockers[0]?.nextAction).toBe('Push the branch or open a PR according to this project policy.')
     expect(threadBody.orientationSpine.release.blockers.map((blocker: any) => blocker.id)).toEqual(releaseBlockerIds)
   })
 
@@ -1132,6 +1133,10 @@ describe('GET /api/project/release-readiness', () => {
       proofEvidenceBlockingCount: 0,
     })
     expect(readiness.proofMissingDoneTasks).toEqual([])
+
+    const spineRes = await app.fetch(new Request(projectUrl('/api/project/spine')))
+    const spine = await spineRes.json() as any
+    expect(spine.spine.release.blockers).toEqual([])
 
     const projectRes = await app.fetch(new Request(projectUrl('/api/project')))
     const project = await projectRes.json() as any

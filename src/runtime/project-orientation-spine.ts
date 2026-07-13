@@ -2366,7 +2366,8 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
     now,
   })
   const { byId, gaps: nodeGaps } = built
-  const projectionBlockers = input.scopeProjection
+  const authoritativeReleaseBlockers = input.releaseReadiness?.blockers ?? null
+  const projectionBlockers = input.scopeProjection && !authoritativeReleaseBlockers
     ? input.scopeProjection.release.blockers.map(blocker => ({
         id: blocker.id,
         label: blocker.label,
@@ -2374,7 +2375,7 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
     : []
   const explicitReleaseBlockers = [
     ...projectionBlockers,
-    ...(startReadiness?.canStart !== true ? input.releaseReadiness?.blockers ?? [] : []),
+    ...(startReadiness?.canStart !== true ? authoritativeReleaseBlockers ?? [] : []),
   ]
   const startReleaseBlocker = startReadinessReleaseBlocker(startReadiness)
   const normalizedStartReleaseBlockerLabel = normalizeText(startReleaseBlocker?.label ?? '')

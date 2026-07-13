@@ -30566,6 +30566,75 @@ selected-scope readiness ordering.
     Overview even while Map/Start say it is complete.
 - Schema Migration Decision: no persisted schema field or migration changed.
 
+## codex:map-release-blocker-authority-agreement-2026-07-13
+
+- User job:
+  - Project Map must show the same current release/scope blockers as Release
+    readiness. It must not resurrect stale proof blockers after the authoritative
+    release-readiness path has accepted completion proof.
+  - When the blocker is repository follow-up, Map should show both the blocking
+    reason and the next repository action without making the user infer it from
+    a long label.
+- Root cause classification:
+  - Project structure/scope/release modeling problem: `buildProjectOrientationSpine`
+    prepended projection-derived release blockers before authoritative
+    release-readiness blockers, so stale scope-projection proof expectations
+    could override the release-readiness truth.
+  - UI communication/orientation problem: Project Map rendered release blockers
+    as only a blocked chip plus label, hiding `nextAction` even when the shared
+    model carried it.
+- Fix:
+  - Project orientation now treats an explicitly supplied release-readiness
+    blocker list, including an empty list, as authoritative. Projection blockers
+    remain only as a fallback when no release readiness was supplied.
+  - Project Map release-blocker rows now render `nextAction` as supporting text
+    using the existing row treatment.
+- Proof provided:
+  - `pnpm vitest run src/runtime/__tests__/project-orientation-spine.test.ts`
+    passed: 68 tests.
+  - `pnpm vitest run src/runtime/__tests__/serve-release-readiness.test.ts`
+    passed: 66 tests.
+    - Added regression coverage that a release accepted as proof-complete by
+      release readiness has no stale Map/spine blockers, and that repository
+      follow-up blockers keep `nextAction` through `/api/project/spine`.
+  - `pnpm lint:contracts` passed.
+  - `pnpm build` passed.
+  - `pnpm dev:install` passed; the installed app was restarted and
+    `/api/stale-server` returned `stale:false`, PID `57946`,
+    `bootBuildMtimeMs:1783937935936`, and
+    `currentBuildMtimeMs:1783937935936`.
+  - Live Narrative Harness `/api/project/release-readiness` reported exactly
+    one release blocker: `repository-followup:repo:0`, with the unpushed commit
+    `5a40b073 Add world-state continuity proof script`, no
+    `proofMissingDoneTasks`, `proofEvidenceBlockingCount:0`, `unfinishedCount:0`,
+    and `done:11`.
+  - Live Narrative Harness `/api/project/spine` reported exactly one Map
+    release blocker, the same `repository-followup:repo:0`, with
+    `nextAction: Push the branch or open a PR according to this project policy.`
+  - Browser proof on `/projects/narrative-harness/map` showed the rendered Map
+    page contains the repo blocker, commit identity, and next action, and does
+    not contain the stale phrase `needs proof evidence before the release is
+    complete`.
+- Contract Touch Decision:
+  - Work id: `map-release-blocker-authority-agreement`.
+  - Touched contracts: orientation-spine release blocker precedence, Project Map
+    release-blocker row rendering, and web read-model types for blocker
+    `nextAction`.
+  - Contracts considered but not touched: persisted task/release schema,
+    git-story snapshot schema, release-readiness API field names, scheduler
+    execution policy, and design-system component APIs.
+  - Required follow-up: installed-app proof should show Narrative Harness Map
+    and Release agreeing that the only current blocker is repository follow-up
+    for the unpushed world-state continuity commit.
+  - Proof required: orientation-spine regression suite, release-readiness suite,
+    contract lint, build/install freshness, and live Narrative Harness API/browser
+    proof across Map and Release.
+  - Proof provided: all proof listed above.
+  - Apply/revert behavior: reverting lets Project Map display stale
+    projection-derived blockers that Release readiness has already cleared, and
+    hides repository next actions from Map blocker rows.
+- Schema Migration Decision: no persisted schema field or migration changed.
+
 ## codex:release-repository-followup-next-action-truth-2026-07-13
 
 - User job:

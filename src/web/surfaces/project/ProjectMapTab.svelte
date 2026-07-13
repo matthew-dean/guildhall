@@ -783,6 +783,9 @@
                   <div>
                     <Chip label="Blocked" tone={releaseBlockerTone(blocker)} />
                     <strong>{blocker.label ?? blocker.id ?? 'Release blocker'}</strong>
+                    {#if blocker.nextAction}
+                      <p>{blocker.nextAction}</p>
+                    {/if}
                   </div>
                 </CardListItem>
               {/each}
@@ -1180,7 +1183,8 @@
     overflow-wrap: anywhere;
   }
 
-  :global(.proof-contract-row p) {
+  :global(.proof-contract-row p),
+  :global(.release-blocker-row p) {
     margin: 0;
     color: var(--text-muted);
     font-size: var(--gh-type-size-meta);
