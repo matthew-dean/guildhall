@@ -8,6 +8,55 @@ help_summary: |
 
 # Web UI flow audit
 
+2026-07-13T03:18:00Z - Compact project surfaces must preserve task source provenance.
+
+- Work id: `codex:compact-task-source-provenance-2026-07-13`.
+- User job: project orientation must let the owner see where current-scope
+  work came from. If a task was imported from source docs, Overview, Work, and
+  Map payloads must preserve those source references instead of requiring a
+  separate task-detail fetch to prove the spine.
+- Finding:
+  - Live Narrative Harness persisted task state contained real `references`
+    and `requestIntake.evidenceRefs` for Stage 1 tasks.
+  - The installed `/api/project?surface=overview` and `surface=map` compact task
+    payloads stripped those references, so the UI/API could not audit the
+    source trail for included work even though the model already had it.
+- Root cause classification:
+  - Project structure/scope/release modeling problem: provenance was treated as
+    task-detail decoration instead of orientation structure.
+  - UI communication/orientation problem: compact surfaces could display
+    current work but not why Guildhall believed that work belonged in scope.
+- Change:
+  - Work-surface and compact task identity projections now retain `sourceRefs`
+    and `references`.
+  - The existing scoped Work payload regression now checks that source
+    provenance survives while still omitting heavy detail-only fields.
+- Contract Touch Decision:
+  - Work id: `codex:compact-task-source-provenance-2026-07-13`.
+  - Touched contracts: `GET /api/project` compact task shape for `surface=work`,
+    `surface=overview`, and `surface=map` where task records now retain
+    `sourceRefs` and `references`.
+  - Contracts considered but not touched: persisted task schema, task-detail
+    endpoint, release-readiness schema, orientation-spine schema.
+  - Required follow-up: installed-app proof against Narrative Harness and Looma
+    + Knit after build/install. Map proof still exposes older/manual current
+    scope records with no persisted provenance, which should be handled as a
+    source-backfill/re-intake model gap rather than hidden by UI copy.
+  - Proof required: focused serve regression, contract detector,
+    build/install/restart, stale-server check, live API proof that selected
+    scoped tasks with persisted references expose them on compact project
+    surfaces.
+  - Proof provided: focused serve regression passed; `corepack pnpm
+    lint:contracts` passed; `node ./build.mjs` passed; `corepack pnpm
+    dev:install` passed; `guildhall stop && guildhall start` restarted the
+    installed app; `/api/stale-server` returned `stale:false`; live
+    Narrative Harness and Looma + Knit Overview selected-scope task payloads
+    returned `noOverviewRefs:[]`, while Map honestly surfaced legacy/manual
+    current-scope records that still lack persisted references.
+  - Apply/revert behavior: reverting restores the compact-surface provenance
+    gap and forces users or UI code to fetch task detail to answer basic source
+    trail questions.
+
 2026-07-13T03:01:30Z - Imported proof labels must not preserve checklist ghosts or filler proof text.
 
 - Work id: `codex:generic-imported-proof-labels-2026-07-13`.

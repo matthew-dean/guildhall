@@ -3967,6 +3967,8 @@ function compactTaskForWorkSurface(task: Record<string, unknown>): Record<string
     'dependsOn',
     'hierarchy',
     'releaseIds',
+    'sourceRefs',
+    'references',
     'acceptanceCriteria',
     'acceptanceCriteriaProofState',
     'openQuestions',
@@ -4644,7 +4646,7 @@ function compactTaskIdentity(task: unknown): Record<string, unknown> | undefined
   if (!task || typeof task !== 'object' || Array.isArray(task)) return undefined
   const raw = task as Record<string, unknown>
   const summary: Record<string, unknown> = {}
-  for (const key of ['id', 'title', 'description', 'status', 'domain', 'priority', 'workKind', 'releaseIds']) {
+  for (const key of ['id', 'title', 'description', 'status', 'domain', 'priority', 'workKind', 'releaseIds', 'sourceRefs', 'references']) {
     if (key in raw) summary[key] = raw[key]
   }
   return summary

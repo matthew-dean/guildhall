@@ -998,7 +998,8 @@ describe('GET /api/project/task/:id', () => {
     expect(workBody.selectedTaskId).toBe('task-storybook')
     expect(workBody.tasks?.some((task: Record<string, any>) => task.id === 'task-storybook')).toBe(true)
     const workTask = workBody.tasks?.find((task: Record<string, any>) => task.id === 'task-storybook')
-    expect(workTask?.references).toBeUndefined()
+    expect(workTask?.sourceRefs).toEqual(['docs/storybook.md', 'docs/menu.md'])
+    expect(workTask?.references).toEqual(['docs/storybook.md', 'docs/menu.md'])
     expect(workTask?.projectPath).toBeUndefined()
     expect(workTask?.createdAt).toBeUndefined()
     expect(workTask?.origination).toBeUndefined()
@@ -1061,9 +1062,17 @@ describe('GET /api/project/task/:id', () => {
     expect(workBody.deliverySpine?.queue?.firstRunnable?.task?.evidence).toBeUndefined()
     expect(workBody.deliverySpine?.model).toBeUndefined()
     expect(workBody.deliverySpine?.primitives).toBeUndefined()
-    expect(workBody.releaseReadiness).toBeUndefined()
+    expect(workBody.releaseReadiness?.releaseBlockers).toEqual(expect.any(Array))
     expect(workBody.gitStory).toBeUndefined()
     expect(workBody.memoryHealth).toBeUndefined()
+
+    const mapRes = await app.fetch(new Request(projectUrl('/api/project?surface=map')))
+    const mapBody = (await mapRes.json()) as Record<string, any>
+    expect(mapRes.status, mapBody.error).toBe(200)
+    const mapTask = mapBody.tasks?.find((task: Record<string, any>) => task.id === 'task-storybook')
+    expect(mapTask?.sourceRefs).toEqual(['docs/storybook.md', 'docs/menu.md'])
+    expect(mapTask?.references).toEqual(['docs/storybook.md', 'docs/menu.md'])
+    expect(mapTask?.projectPath).toBeUndefined()
   })
 
   it('does not call a consumed release complete when a done task still has unmet acceptance criteria', async () => {
