@@ -35601,3 +35601,37 @@ orientation proof projection as scope summary.
   - Rollback: code rollback leaves existing task records readable; no
     migration rollback is needed because no persisted field is renamed or
     removed.
+
+## codex:signal-tile-height-2026-07-14
+
+- User job:
+  - Scan the Overview Signals section without spending attention on empty
+    panel area; each status tile should be only as tall as its content, while
+    the long repository signal may use a full row.
+- Finding:
+  - Wrapped signal rows could inherit cross-line distribution from the flex
+    container and had no explicit content-sized block dimension. In a taller
+    surrounding layout this made short status tiles expand into large empty
+    boxes.
+- Fix:
+  - The existing Signals flex layout now anchors wrapped lines at the start
+    and declares each signal row `block-size: fit-content`, preserving the
+    existing shared `UtilityPanel` treatment and container-query breakpoints.
+- Proof provided:
+  - Before this hardening, the live Looma + Knit Overview measured the
+    content-sized rows at 56px for short signals, 75px for the recent-change
+    signal, and 93px for the long repository signal. The rebuilt installed
+    bundle contains the new constraints and `/api/health` reports
+    `served.stale: false`.
+  - A fresh post-restart project API request was held by an unrelated
+    high-CPU coordinator cycle, so no stronger post-restart browser claim is
+    recorded here; the runtime condition is kept separate from the CSS proof.
+- Contract Touch Decision:
+  - Work id: `signal-tile-height`.
+  - Touched contracts: none; this is a local presentation constraint on an
+    existing shared component composition.
+  - Contracts considered but not touched: Signal data shape, summary/action
+    ownership, UtilityPanel props, API responses, and responsive breakpoints.
+  - Proof required: build, installed stale check, and live geometry check.
+- Schema Migration Decision:
+  - Scope: none. No persisted data or runtime state changes.

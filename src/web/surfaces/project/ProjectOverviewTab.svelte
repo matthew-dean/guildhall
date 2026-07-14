@@ -1662,9 +1662,11 @@
     flex-wrap: wrap;
     gap: var(--s-2);
     align-items: start;
+    align-content: start;
   }
   .signals-grid > :global(.signal-row) {
     flex: 0 0 calc((100% - (2 * var(--s-2))) / 3);
+    block-size: fit-content;
     min-block-size: 0;
     align-self: flex-start;
   }
