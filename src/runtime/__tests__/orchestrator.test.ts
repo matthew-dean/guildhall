@@ -7597,6 +7597,78 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
     expect(queue.tasks[0]!.notes.at(-1)?.content).toContain('simulated provider evidence')
   })
 
+  it('rejects a blocked provider proof artifact even when the reviewer claims success', async () => {
+    const worktreePath = path.join(tmpDir, 'blocked-provider-proof-worktree')
+    await fs.mkdir(path.join(worktreePath, 'proof-results'), { recursive: true })
+    await fs.writeFile(
+      path.join(worktreePath, 'proof-results', 'deepinfra-proof-results.json'),
+      JSON.stringify({
+        summary: {
+          passed: false,
+          status: 'blocked',
+          reason: 'DEEPINFRA_API_TOKEN is required for live generation.',
+        },
+        results: [],
+      }),
+      'utf8',
+    )
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        title: 'Select and prove a DeepInfra drafting model for broad-genre chapter writing.',
+        status: 'gate_check',
+        assignedTo: 'gate-checker-agent',
+        worktreePath,
+        acceptanceCriteria: [{
+          id: 'provider-proof',
+          description: 'The model is tested against chapter-drafting scenarios and records refusal, repetition, cost, latency, and voice preservation.',
+          verifiedBy: 'review',
+          met: false,
+        }],
+        proofPaths: [{
+          kind: 'review',
+          source: 'inferred',
+          expectedEvidence: ['The model proof records live provider evidence.'],
+        }],
+        reviewVerdicts: [],
+        gateResults: [],
+      }),
+    ])
+    await appendTaskEvidence(tmpDir, 'a', {
+      id: 'a-review-approve',
+      kind: 'review_verdict',
+      recordedAt: '2026-07-04T10:07:21.557Z',
+      payload: {
+        verdict: 'approve',
+        reviewerPath: 'llm',
+        reason: 'Reviewer approved.',
+        reasoning: 'All provider proof criteria are met.',
+        failingSignals: [],
+        recordedAt: '2026-07-04T10:07:21.557Z',
+      },
+    })
+    const gc = stubAgent('gate-checker-agent', async () => {
+      throw new Error('gate-checker should not run when the proof artifact is blocked')
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ gateChecker: gc }),
+    })
+
+    const out = await orch.tick()
+
+    expect(gc.calls).toHaveLength(0)
+    expect(out.kind).toBe('processed')
+    if (out.kind === 'processed') expect(out.afterStatus).toBe('in_progress')
+    const queue = await readQueue()
+    expect(queue.tasks[0]!.status).toBe('in_progress')
+    expect(queue.tasks[0]!.gateResults.at(-1)).toMatchObject({
+      gateId: 'proof.real-provider-evidence',
+      passed: false,
+      output: expect.stringContaining('DEEPINFRA_API_TOKEN'),
+    })
+  })
+
   it('does not complete review-only gate_check while checkpoint verification still records a failure', async () => {
     await writeQueue([
       mkTask({

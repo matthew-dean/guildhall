@@ -13217,6 +13217,12 @@ async function simulatedProviderProofIssue(
   const files = await listProviderProofScanFiles(root)
   for (const file of files) {
     const content = await fs.readFile(file, 'utf8').catch(() => '')
+    const artifactIssue = blockedProviderProofArtifact(content, file)
+    if (artifactIssue) {
+      return {
+        summary: `Provider proof integrity failed: ${path.relative(root, file)} reports blocked or failed live evidence (${artifactIssue}).`,
+      }
+    }
     const match = simulatedProviderProofMarker(content)
     if (!match) continue
     return {
@@ -13254,7 +13260,7 @@ function simulatedProviderProofMarker(content: string): string | null {
 
 async function listProviderProofScanFiles(root: string): Promise<string[]> {
   const out: string[] = []
-  const queue = ['docs', 'fixtures', 'scripts', 'src', 'test', 'tests'].map((entry) => path.join(root, entry))
+  const queue = ['docs', 'fixtures', 'proof-results', 'scripts', 'src', 'test', 'tests'].map((entry) => path.join(root, entry))
   while (queue.length > 0 && out.length < 80) {
     const current = queue.shift()!
     const stat = await fs.stat(current).catch(() => null)
@@ -13271,6 +13277,28 @@ async function listProviderProofScanFiles(root: string): Promise<string[]> {
     if (/\.(?:mjs|js|ts|json|md|txt|yaml|yml)$/i.test(current)) out.push(current)
   }
   return out
+}
+
+function blockedProviderProofArtifact(content: string, file: string): string | null {
+  if (!/(?:^|[\\/])proof-results[\\/]/i.test(file) || !/\.json$/i.test(file)) return null
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(content)
+  } catch {
+    return null
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+  const record = parsed as Record<string, unknown>
+  const summary = record.summary && typeof record.summary === 'object' && !Array.isArray(record.summary)
+    ? record.summary as Record<string, unknown>
+    : record
+  const passed = summary.passed
+  const status = typeof summary.status === 'string' ? summary.status.trim().toLowerCase() : ''
+  if (passed !== false && status !== 'blocked' && status !== 'failed' && status !== 'error') return null
+  const reason = typeof summary.reason === 'string' && summary.reason.trim()
+    ? summary.reason.trim()
+    : status || 'the live provider proof did not pass'
+  return reason
 }
 
 function latestHardGateResultForId(

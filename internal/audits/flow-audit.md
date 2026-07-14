@@ -35460,6 +35460,11 @@ orientation proof projection as scope summary.
     existing current task still points at archived or shelved work. Applying
     it changes only `dependsOn` and appends an audit note; it does not rewrite
     the task, erase its history, or manufacture replacement work.
+  - Provider proof integrity now scans structured `proof-results/*.json`
+    artifacts. A result with `passed: false` or `status: blocked|failed|error`
+    is a hard negative signal even when an LLM reviewer claims that the proof
+    passed; the task remains open until the artifact itself records live
+    evidence.
 - Proof required:
   - Re-intake planner/apply tests, workspace importer regressions, Overview
     component tests, contract lint, build/install, stale-server verification,
@@ -35467,7 +35472,9 @@ orientation proof projection as scope summary.
     Map, Work, and release readiness agree about reopened proof work.
 - Contract Touch Decision:
   - Work id: `source-proof-refresh-and-signal-density`.
-  - Touched contracts: re-intake draft change union gains
+  - Touched contracts: provider proof integrity now treats structured
+    `proof-results/*.json` status as authoritative negative evidence;
+    re-intake draft change union gains
     `refresh_evidence` and `repair_dependencies`; re-intake summary gains
     `refreshedEvidence` and `repairedDependencies`; existing
     source-title matching now reconciles qualifying title detail; Overview
