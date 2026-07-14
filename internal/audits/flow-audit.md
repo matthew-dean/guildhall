@@ -35129,6 +35129,13 @@ orientation proof projection as scope summary.
   - After evidence-graph materialization, scan project documentation files for
     explicit proof commands or proof scripts and attach a document only when
     its command subject has a focused multi-token match to the task subject.
+  - Proof-command matching now ignores `pnpm`/`npm` plumbing and tokenizes
+    hyphenated subjects such as `world-state`. A documented proof script can
+    also be found directly from the nearest source `package.json`, even when
+    the cited document names the task's proof lane without an inline command.
+    The matcher still requires every semantic token in a multi-token command
+    to belong to the task, so an unrelated retrieval task cannot inherit a
+    world-state proof merely because both mention “world.”
   - Reuse the existing task `references` and `proofPaths` contracts; this does
     not create a second relationship or source-trail model.
   - Broad umbrella tasks do not inherit lane-specific proofs; compound subjects
@@ -35138,6 +35145,10 @@ orientation proof projection as scope summary.
   - Added a regression with a separate world-state reviewer document and a
     broad author-intent task; the reviewer attaches only to the focused
     world-state task.
+  - Added Narrative Harness-shaped regressions proving direct package-script
+    discovery for DeepInfra model selection and author-intent input proofs,
+    while rejecting the world-state proof for an unrelated askable-retrieval
+    task. The focused importer suite passes all 90 tests.
   - Focused importer proof and the full importer/orientation suites pass:
     `CI=true pnpm vitest run src/runtime/__tests__/workspace-importer.test.ts
     src/runtime/__tests__/project-orientation-spine.test.ts` (158 tests).
@@ -35294,6 +35305,9 @@ orientation proof projection as scope summary.
   - Signals now use a wrapping flex layout with explicit 3/2/1-column bases at
     the existing container-query breakpoints. Each `UtilityPanel` stays
     content-sized, and the wide repository alert still occupies a full line.
+  - The wide-card selector now has the same parent-child specificity as the
+    base column rule, so `layout: 'wide'` cannot be silently overridden and
+    force a long repository message into a narrow column.
   - The existing shared `UtilityPanel`, dense treatment, responsive
     container queries, and semantic click targets remain unchanged.
 - Proof provided:
@@ -35310,6 +35324,10 @@ orientation proof projection as scope summary.
   - Live mobile proof at `390x844` collapsed all five signals to one column;
     their widths were `324px`, their heights remained content-sized, and
     `scrollWidth=390` matched `clientWidth=390`.
+  - Follow-up live geometry proof found the wide marker was losing to the
+    three-column selector (`296px` wide). The corrected selector makes the
+    repository follow-up span the Signals row instead of wrapping its commit
+    history into a narrow card.
   - The prior Grid-based geometry evidence is superseded by this flex-layout
     change and must not be reused as proof.
 - Contract Touch Decision:

@@ -3883,6 +3883,8 @@ function documentedImportedProofCommands(task: Pick<MaterializedImportTask, 'tit
     'check',
     'command',
     'executable',
+    'npm',
+    'pnpm',
     'proof',
     'prove',
     'review',
@@ -3893,7 +3895,9 @@ function documentedImportedProofCommands(task: Pick<MaterializedImportTask, 'tit
     'verification',
     'verify',
   ])
-  const taskKeywords = titleKeywords(task.title).filter(keyword => !genericProofKeywords.has(keyword))
+  const taskKeywords = titleKeywords(task.title)
+    .flatMap(keyword => keyword.split('-'))
+    .filter(keyword => keyword.length >= 4 && !genericProofKeywords.has(keyword))
   const add = (command: string): void => {
     const normalized = command.trim().replace(/[.,;!?]+$/, '')
     if (normalized) commands.add(normalized)
@@ -3903,9 +3907,10 @@ function documentedImportedProofCommands(task: Pick<MaterializedImportTask, 'tit
     const commandKeywords = normalizeImportText(command)
       .split(/[\s:_\/-]+/)
       .filter(keyword => keyword.length >= 4 && !genericProofKeywords.has(keyword))
-    return taskKeywords.some(taskKeyword => commandKeywords.some(commandKeyword =>
+    if (commandKeywords.length === 0) return false
+    return commandKeywords.every(commandKeyword => taskKeywords.some(taskKeyword =>
       taskKeyword === commandKeyword ||
-      (taskKeyword.length >= 5 && commandKeyword.length >= 5 && (
+      (commandKeywords.length === 1 && taskKeyword.length >= 5 && commandKeyword.length >= 5 && (
         taskKeyword.startsWith(commandKeyword.slice(0, 5)) ||
         commandKeyword.startsWith(taskKeyword.slice(0, 5))
       )),
@@ -3949,7 +3954,6 @@ function documentedImportedProofCommands(task: Pick<MaterializedImportTask, 'tit
     const scriptReferences = [...content.matchAll(/\b(scripts\/[A-Za-z0-9._/-]+)/g)]
       .map(match => match[1])
       .filter((value): value is string => Boolean(value) && /\b(prove|test|check|validate|verify)\b/i.test(value))
-    if (scriptReferences.length === 0) continue
 
     let directory = path.dirname(absoluteReference)
     while (directory !== path.dirname(directory)) {
@@ -3960,7 +3964,11 @@ function documentedImportedProofCommands(task: Pick<MaterializedImportTask, 'tit
         for (const [name, value] of Object.entries(packageJson.scripts ?? {})) {
           if (typeof value !== 'string') continue
           const command = `pnpm run ${name}`
-          if (scriptReferences.some(script => value.includes(script)) && commandMatchesTask(command)) add(command)
+          const isProofScript = /\b(prove|test|check|validate|verify|verification)\b/i.test(name)
+          if (
+            (isProofScript && commandMatchesTask(command)) ||
+            (scriptReferences.length > 0 && scriptReferences.some(script => value.includes(script)) && commandMatchesTask(command))
+          ) add(command)
         }
         break
       } catch {

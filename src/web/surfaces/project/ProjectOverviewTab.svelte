@@ -1695,7 +1695,7 @@
     line-height: var(--gh-type-line-height-tight);
     overflow-wrap: anywhere;
   }
-  :global(.signal-row--wide) {
+  .signals-grid > :global(.signal-row--wide) {
     flex-basis: 100%;
   }
   :global(.signal-row--wide div) {

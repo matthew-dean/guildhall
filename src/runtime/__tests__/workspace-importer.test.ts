@@ -5708,6 +5708,8 @@ tasks:
       path.join(tmpDir, 'package.json'),
       JSON.stringify({
         scripts: {
+          'prove:deepinfra-drafting-model': 'node scripts/prove-deepinfra-drafting-model.mjs',
+          'prove:author-intent': 'node scripts/prove-author-intent-inputs.mjs',
           'prove:generation': 'node scripts/prove-generation.mjs',
           'prove:world-state-continuity': 'node scripts/prove-world-state-continuity.mjs',
         },
@@ -5746,6 +5748,30 @@ tasks:
     priority: high
     references:
       - ${proofDoc}
+  - id: task-model
+    title: Select and prove a DeepInfra drafting model for broad-genre chapter writing.
+    description: Select the model used for broad-genre chapter drafting.
+    domain: harness
+    scope: current
+    priority: high
+    references:
+      - ${proofDoc}
+  - id: task-author-intent
+    title: Add author-intent inputs for voice, genre, audience, theme, synopsis, outline, characters, character voices, world-state facts, and review plan.
+    description: Capture the author intent record used by the story pipeline.
+    domain: harness
+    scope: current
+    priority: high
+    references:
+      - ${proofDoc}
+  - id: task-retrieval
+    title: Add an askable retrieval interface for character, scene, reader-state, and world questions.
+    description: Answer bounded story-record questions.
+    domain: harness
+    scope: current
+    priority: high
+    references:
+      - ${proofDoc}
 \`\`\`
 `)
 
@@ -5773,6 +5799,24 @@ tasks:
         source: 'documented',
       }),
     ]))
+    const modelTask = (await readQueue()).tasks.find(candidate => candidate.id === 'task-model')
+    expect(modelTask?.proofPaths).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'command',
+        command: 'pnpm run prove:deepinfra-drafting-model',
+        source: 'documented',
+      }),
+    ]))
+    const authorIntentTask = (await readQueue()).tasks.find(candidate => candidate.id === 'task-author-intent')
+    expect(authorIntentTask?.proofPaths).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'command',
+        command: 'pnpm run prove:author-intent',
+        source: 'documented',
+      }),
+    ]))
+    const retrievalTask = (await readQueue()).tasks.find(candidate => candidate.id === 'task-retrieval')
+    expect(retrievalTask?.proofPaths?.some(path => path.command === 'pnpm run prove-world-state-continuity')).toBe(false)
   })
 
   it('attaches a separate subject-matched proof document to an imported task', async () => {
