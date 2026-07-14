@@ -11,6 +11,7 @@ import {
   reconcileRequestedGatesWithAuthority,
 } from '@guildhall/core'
 import { summarizeScopedHardGateDisposition } from './gate-scope-exceptions.js'
+import { stableProofPathId } from '../runtime/proof-paths.js'
 
 export { reconcileRequestedGatesWithAuthority } from '@guildhall/core'
 
@@ -86,6 +87,7 @@ export type RunGatesToolInput = z.input<typeof runGatesInputSchema>
 
 async function persistGateResultsForCurrentTask(input: {
   metadata: Record<string, unknown>
+  gates: Array<{ id: string; command: string }>
   results: Array<{ gateId: string; type: 'hard' | 'soft'; passed: boolean; output?: string; checkedAt: string }>
 }): Promise<boolean> {
   const taskId = typeof input.metadata['current_task_id'] === 'string'
@@ -118,6 +120,7 @@ async function persistGateResultsForCurrentTask(input: {
         )
       : []
     task['gateResults'] = [...existingGateResults, ...input.results]
+    recordCommandProofPaths(task, input.gates, input.results)
     const now = new Date().toISOString()
     task['updatedAt'] = now
     queue.lastUpdated = now
@@ -135,6 +138,73 @@ async function persistGateResultsForCurrentTask(input: {
     return true
   } catch {
     return false
+  }
+}
+
+function comparableCommand(value: unknown): string {
+  return typeof value === 'string' ? value.trim().replace(/\s+/g, ' ') : ''
+}
+
+function recordCommandProofPaths(
+  task: Record<string, unknown>,
+  gates: Array<{ id: string; command: string }>,
+  results: Array<{ gateId: string; type: 'hard' | 'soft'; passed: boolean; output?: string; checkedAt: string }>,
+): void {
+  if (!Array.isArray(task.proofPaths)) return
+  const commandById = new Map(gates.map((gate) => [gate.id, comparableCommand(gate.command)]))
+
+  for (const [index, proofPath] of task.proofPaths.entries()) {
+    if (!proofPath || typeof proofPath !== 'object' || Array.isArray(proofPath)) continue
+    const pathRecord = proofPath as Record<string, unknown>
+    if (pathRecord.kind !== 'command') continue
+    const proofPathId = stableProofPathId(pathRecord, index)
+    if (typeof pathRecord.id !== 'string' || !pathRecord.id.trim()) pathRecord.id = proofPathId
+    const proofCommand = comparableCommand(pathRecord.command)
+    if (!proofCommand) continue
+    const result = results.find((candidate) => {
+      const gateCommand = commandById.get(candidate.gateId) ?? ''
+      return candidate.gateId === pathRecord.id || gateCommand === proofCommand
+    })
+    if (!result) continue
+
+    const expectedEvidence = Array.isArray(pathRecord.expectedEvidence) ? pathRecord.expectedEvidence : []
+    const existingRecords = Array.isArray(pathRecord.verificationRecords)
+      ? pathRecord.verificationRecords.filter((record): record is Record<string, unknown> =>
+          Boolean(record) && typeof record === 'object' && !Array.isArray(record),
+        )
+      : []
+    let records = existingRecords
+    const evidenceItems = expectedEvidence.length > 0 ? expectedEvidence : [{ id: `${proofPathId}-evidence-0`, description: proofCommand }]
+    for (const [index, rawEvidence] of evidenceItems.entries()) {
+      const evidence = rawEvidence && typeof rawEvidence === 'object' && !Array.isArray(rawEvidence)
+        ? rawEvidence as Record<string, unknown>
+        : { id: `${proofPathId}-evidence-${index}`, description: String(rawEvidence) }
+      const evidenceId = typeof evidence.id === 'string' && evidence.id.trim()
+        ? evidence.id.trim()
+        : `${proofPathId}-evidence-${index}`
+      const record = {
+        id: `command-proof-${evidenceId}-${result.checkedAt.replace(/[^0-9A-Za-z]/g, '')}`,
+        evidenceId,
+        kind: 'automated',
+        status: result.passed ? 'passed' : 'failed',
+        summary: result.passed
+          ? `Observed command passed: ${proofCommand}`
+          : `Observed command failed: ${proofCommand}`,
+        command: proofCommand,
+        recordedAt: result.checkedAt,
+        recordedBy: 'run-gates',
+        evidenceRefs: [],
+      }
+      records = [...records.filter((candidate) => candidate.evidenceId !== evidenceId), record]
+    }
+
+    pathRecord.verificationRecords = records
+    const requiredEvidence = evidenceItems.filter((evidence) =>
+      !(evidence && typeof evidence === 'object' && !Array.isArray(evidence) && (evidence as Record<string, unknown>).required === false),
+    )
+    pathRecord.status = result.passed && requiredEvidence.length > 0 ? 'verified' : 'blocked'
+    pathRecord.updatedAt = result.checkedAt
+    pathRecord.updatedBy = 'run-gates'
   }
 }
 
@@ -198,6 +268,7 @@ export const runGatesTool = defineTool({
     )
     const persistedTaskGateResults = await persistGateResultsForCurrentTask({
       metadata: ctx.metadata,
+      gates: effective.gates,
       results: summary.results,
     })
     const effectiveAllPassed = scopeDisposition?.shouldPass ?? summary.allPassed

@@ -3,6 +3,7 @@ import {
   summarizeScopedHardGateDisposition,
   type ScopedGateContext,
 } from '@guildhall/tools'
+import { stableProofPathId } from './proof-paths.js'
 
 // ---------------------------------------------------------------------------
 // FR-27 / AC-18: reviewer dispatch with deterministic fallback.
@@ -326,8 +327,75 @@ function extractStructuredLlmVerdict(reasoning: string | undefined): ReviewVerdi
   const text = reasoning?.trim()
   if (!text) return undefined
   const match = /\*\*Verdict:\*\*\s*(Approved|Approve|Revised?|Revision requested|Needs revision)\b/i.exec(text)
-  if (!match?.[1]) return undefined
-  return /^approve?d?$/i.test(match[1]) ? 'approve' : 'revise'
+  if (match?.[1]) return /^approve?d?$/i.test(match[1]) ? 'approve' : 'revise'
+
+  // Reviewers sometimes emit the handoff as a status sentence instead of
+  // repeating the formal verdict heading. That sentence still carries a
+  // durable decision and must not be mistaken for a revision.
+  if (
+    /\bapproved\b/i.test(text) &&
+    /\bgate[_ -]?check\b/i.test(text) &&
+    !/\bnot approved\b|\bneeds revision\b|\brevision requested\b/i.test(text)
+  ) {
+    return 'approve'
+  }
+
+  return undefined
+}
+
+function recordApprovedReviewProof(task: Task, reasoning: string | undefined, now: string): void {
+  const text = reasoning?.trim() ?? ''
+  if (!text) return
+  if (!/\bacceptance-criteria-met\s*:\s*yes\b/i.test(text)) return
+  if (!/\bproof path:\*{0,2}\s*yes\b/i.test(text)) return
+
+  const proofPaths = (task as Task & { proofPaths?: Array<Record<string, unknown>> }).proofPaths
+  if (!Array.isArray(proofPaths)) return
+
+  for (const [index, proofPath] of proofPaths.entries()) {
+    if (proofPath.kind !== 'review') continue
+    const proofPathId = stableProofPathId(proofPath, index)
+    if (typeof proofPath.id !== 'string' || !proofPath.id.trim()) proofPath.id = proofPathId
+    const expectedEvidence = Array.isArray(proofPath.expectedEvidence) ? proofPath.expectedEvidence : []
+    if (expectedEvidence.length === 0) continue
+
+    const existingRecords = Array.isArray(proofPath.verificationRecords)
+      ? proofPath.verificationRecords.filter((record): record is Record<string, unknown> =>
+          Boolean(record) && typeof record === 'object' && !Array.isArray(record),
+        )
+      : []
+    const currentRecords = [...existingRecords]
+
+    expectedEvidence.forEach((rawEvidence, index) => {
+      const evidence = rawEvidence && typeof rawEvidence === 'object' && !Array.isArray(rawEvidence)
+        ? rawEvidence as Record<string, unknown>
+        : { id: `${proofPathId}-evidence-${index}`, description: String(rawEvidence) }
+      if (evidence.required === false) return
+      const evidenceId = typeof evidence.id === 'string' && evidence.id.trim()
+        ? evidence.id.trim()
+        : `${proofPathId}-evidence-${index}`
+      const description = typeof evidence.description === 'string' && evidence.description.trim()
+        ? evidence.description.trim()
+        : evidenceId
+      const withoutCurrentRecord = currentRecords.filter((record) => record.evidenceId !== evidenceId)
+      withoutCurrentRecord.push({
+        id: `review-proof-${evidenceId}-${now.replace(/[^0-9A-Za-z]/g, '')}`,
+        evidenceId,
+        kind: 'manual',
+        status: 'passed',
+        summary: `Approved review verified: ${description}`,
+        recordedAt: now,
+        recordedBy: 'reviewer-agent',
+        evidenceRefs: [],
+      })
+      currentRecords.splice(0, currentRecords.length, ...withoutCurrentRecord)
+    })
+
+    proofPath.verificationRecords = currentRecords
+    proofPath.status = 'verified'
+    proofPath.updatedAt = now
+    proofPath.updatedBy = 'reviewer-agent'
+  }
 }
 
 function extractRubricImpliedLlmVerdict(reasoning: string | undefined): ReviewVerdict['verdict'] | undefined {
@@ -412,6 +480,7 @@ export function recordLlmVerdict(input: {
     recordedAt: input.now,
     ...(input.policyVersion !== undefined ? { policyVersion: input.policyVersion } : {}),
   }
+  if (verdict === 'approve') recordApprovedReviewProof(task, reasoning, input.now)
   task.reviewVerdicts.push(record)
   return { record, normalizedStatus }
 }

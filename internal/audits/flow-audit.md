@@ -35635,3 +35635,76 @@ orientation proof projection as scope summary.
   - Proof required: build, installed stale check, and live geometry check.
 - Schema Migration Decision:
   - Scope: none. No persisted data or runtime state changes.
+
+## codex:signal-tile-content-grid-2026-07-14
+
+- User job:
+  - Scan Overview Signals without decoding decorative empty space; short status
+    items should read as compact status rows, while a genuinely long repository
+    follow-up may occupy a deliberate full row.
+- Finding:
+  - The first height fix still used a wrapped flex layout. That made the
+    layout's row behavior dependent on the longest neighboring item and left
+    the short tiles visually over-allocated in some installed renders.
+- Fix:
+  - Signals now use an explicit content-sized grid with `max-content` rows and
+    `align-self: start`. The existing `UtilityPanel` remains the sole tile
+    treatment; the wide repository item spans the grid, and the existing
+    container-query breakpoints become 3, 2, and 1 columns. Signal detail is
+    visually clamped to two lines; persisted text is unchanged.
+- Proof provided:
+  - Focused Svelte coverage passes in
+    `src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts`.
+  - Installed-app geometry proof after rebuild/restart measured the real
+    Looma + Knit Overview at 1920px, 980px, and 640px widths. At desktop the
+    wide repository row is 75px and short status rows are 56px; at narrow
+    desktop the grid is two columns; at 640px the grid is one column. All
+    measured layouts had equal document and viewport widths, with no horizontal
+    overflow or short tile stretched to a neighboring tile's height.
+- Contract Touch Decision:
+  - Work id: `signal-tile-content-grid`.
+  - Touched contracts: none; this changes only the presentation layout around
+    existing `UtilityPanel` instances.
+  - Contracts considered but not touched: signal payloads, shared summary/action
+    ownership, UtilityPanel props, API responses, and container breakpoints.
+  - Apply/revert behavior: safe to revert as a presentation-only change.
+- Schema Migration Decision:
+  - Scope: none. No persisted data or runtime state changes.
+
+## codex:proof-path-identity-reconciliation-2026-07-14
+
+- User job:
+  - When Guildhall runs a documented command or records an approved review,
+    the visible verification record must remain attached to the same proof path
+    and evidence item in raw task state and served API state.
+- Finding:
+  - Imported compact proof paths could omit IDs in persisted task data while
+    the API synthesized IDs on read. Runtime writers then recorded evidence
+    under a different fallback identity, leaving a false missing-proof state.
+- Fix:
+  - Added one deterministic proof-path ID derivation shared by reviewer and
+    `run-gates` writers. Missing command/review path IDs now resolve to the same
+    identities used by the API projection, and those IDs are persisted when
+    evidence is recorded. No new proof-path kind or owner approval was added.
+- Proof provided:
+  - Focused reviewer, gate-tool, and Overview tests pass: 73 tests across 3
+    files.
+  - Installed Narrative Harness proof remains required after redeploy: run the
+    exact command proof through Guildhall, confirm raw and served evidence IDs
+    agree, and confirm release readiness consumes the records.
+- Contract Touch Decision:
+  - Work id: `proof-path-identity-reconciliation`.
+  - Touched contracts: existing persisted `ProofPath.id` and expected-evidence
+    identity behavior for legacy records that previously omitted IDs.
+  - Contracts considered but not touched: proof-path kinds, task status enums,
+    release readiness math, API field names, and owner approval semantics.
+  - Apply/revert behavior: existing records remain readable; reverting stops
+    future identity repair but does not delete evidence already recorded.
+- Schema Migration Decision:
+  - Scope: compatibility write-through, not a migration. Existing records are
+    read as before; a missing identity is populated only when the corresponding
+    proof is actually observed.
+  - Existing data impact: no task is marked complete by this change; only the
+    path/evidence identity needed to represent an observed result is persisted.
+  - Rollback: no migration rollback is needed because no field is renamed or
+    removed.

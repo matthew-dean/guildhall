@@ -3,6 +3,22 @@ import type { EvidenceRef, GuildhallPersistence, PersistedRecord, PersistencePla
 
 export { LaunchStepBase, LaunchStep, EvidenceKind, ExpectedEvidence, ProofPath, ProofPathScope, VerificationRecord }
 
+export function stableProofPathId(value: Record<string, unknown>, index: number): string {
+  const existing = typeof value.id === 'string' ? value.id.trim() : ''
+  if (existing) return existing
+  const title = typeof value.title === 'string' && value.title.trim()
+    ? value.title.trim()
+    : typeof value.kind === 'string' && value.kind.trim()
+      ? `${value.kind.trim().replace(/[_-]/g, ' ')} proof path`
+      : `Proof path ${index + 1}`
+  const compact = title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48)
+  return compact || `proof-path-${index}`
+}
+
 const proofPathPlacement: PersistencePlacement = {
   scope: 'shared_project',
   retention: 'active',

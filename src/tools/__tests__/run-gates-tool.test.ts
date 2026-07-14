@@ -204,6 +204,13 @@ describe('runGatesTool scoped exceptions', () => {
         acceptanceCriteria: [],
         notes: [],
         gateResults: [],
+        proofPaths: [{
+          kind: 'command',
+          command: 'pnpm test',
+          expectedEvidence: ['runner-smoke'],
+          status: 'planned',
+          verificationRecords: [],
+        }],
         reviewVerdicts: [],
         adjudications: [],
         escalations: [],
@@ -252,6 +259,10 @@ describe('runGatesTool scoped exceptions', () => {
           checkedAt: '2026-06-03T00:01:00.000Z',
           output: 'ok',
         },
+      ])
+      expect(raw.tasks[0].proofPaths[0]).toMatchObject({ id: 'command-proof-path', status: 'verified', updatedBy: 'run-gates' })
+      expect(raw.tasks[0].proofPaths[0].verificationRecords).toEqual([
+        expect.objectContaining({ evidenceId: 'command-proof-path-evidence-0', status: 'passed', command: 'pnpm test' }),
       ])
       const evidence = await readTaskEvidence(projectRoot, 'task-001', { kind: 'gate_result' })
       expect(evidence.map((event) => event.payload)).toEqual([

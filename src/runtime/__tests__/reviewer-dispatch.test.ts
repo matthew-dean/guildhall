@@ -436,6 +436,58 @@ describe('recordLlmVerdict', () => {
     expect(result?.normalizedStatus).toBe('gate_check')
   })
 
+  it('recognizes the compact approved-to-gate-check handoff sentence', () => {
+    const q = baseQueue()
+    q.tasks[0]!.notes.push({
+      agentId: 'reviewer-agent',
+      role: 'reviewer',
+      content: 'Task task-001 has been approved and transitioned to **gate_check** status.',
+      timestamp: 't1',
+    })
+
+    const result = recordLlmVerdict({
+      queue: q,
+      taskId: 'task-001',
+      beforeStatus: 'review',
+      afterStatus: 'in_progress',
+      now: 'now',
+    })
+
+    expect(result?.record.verdict).toBe('approve')
+    expect(result?.normalizedStatus).toBe('gate_check')
+  })
+
+  it('records approved review evidence on the review proof path', () => {
+    const q = baseQueue()
+    q.tasks[0]!.proofPaths = [{
+      kind: 'review',
+      expectedEvidence: [
+        { id: 'scope', kind: 'artifact', description: 'The scoped boundary is explicit', required: true },
+      ],
+      verificationRecords: [],
+      status: 'planned',
+    }] as NonNullable<Task['proofPaths']>
+    q.tasks[0]!.notes.push({
+      agentId: 'reviewer-agent',
+      role: 'reviewer',
+      content: '**Rubric**\n- acceptance-criteria-met: yes\n\n**Proof path:** yes\n\n**Verdict:** Approved',
+      timestamp: 't1',
+    })
+
+    recordLlmVerdict({
+      queue: q,
+      taskId: 'task-001',
+      beforeStatus: 'review',
+      afterStatus: 'gate_check',
+      now: '2026-07-14T00:00:00.000Z',
+    })
+
+    expect(q.tasks[0]!.proofPaths?.[0]).toMatchObject({ id: 'review-proof-path', status: 'verified' })
+    expect((q.tasks[0]!.proofPaths?.[0] as Record<string, any>).verificationRecords).toEqual([
+      expect.objectContaining({ evidenceId: 'scope', status: 'passed', kind: 'manual' }),
+    ])
+  })
+
   it('does not infer approval when the review body contains a revision phrase', () => {
     const q = baseQueue()
     q.tasks[0]!.notes.push({
