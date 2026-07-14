@@ -438,7 +438,7 @@ describe('project re-intake apply', () => {
           `work:${worldStateTask?.id}`,
           `work:${spatialTask?.id}`,
         ]),
-        deferredNodeIds: expect.arrayContaining([`work:${laterTask?.id}`]),
+        deferredNodeIds: [],
       }),
     ])
     expect(currentTask).toMatchObject({
@@ -566,7 +566,7 @@ describe('project re-intake apply', () => {
     expect(approvedTask?.sizePlan?.action).toBe('proceed_with_warning')
   })
 
-  it('does not collapse a documented near-term proof scope into only the next milestone', async () => {
+  it('respects an explicit current release despite broad near-term proof prose', async () => {
     const memoryDir = await makeState([])
     const projectPath = path.dirname(memoryDir)
     await fs.mkdir(path.join(projectPath, 'docs', 'harness'), { recursive: true })
@@ -599,45 +599,34 @@ describe('project re-intake apply', () => {
     const themeTask = queue.tasks.find(task => task.title === 'Implement theme-and-meaning-review reviewer lane')
     const shellTask = queue.tasks.find(task => task.title === 'Build local authoring shell')
 
-    expect(queue.selectedReleaseId).toBe('near-term-proof-scope')
+    expect(queue.selectedReleaseId).toBe('stage-1-fixture-and-evaluation-harness')
     expect(queue.releases).toEqual([
       expect.objectContaining({
-        id: 'near-term-proof-scope',
-        label: 'Near-term proof scope',
-        source: 'inferred',
+        id: 'stage-1-fixture-and-evaluation-harness',
+        label: 'Stage 1: Fixture And Evaluation Harness',
+        source: 'release_plan',
         nodeIds: expect.arrayContaining([
           `work:${runnerTask?.id}`,
-          `work:${dialogueTask?.id}`,
-          `work:${themeTask?.id}`,
         ]),
-        deferredNodeIds: expect.arrayContaining([`work:${shellTask?.id}`]),
+        deferredNodeIds: [],
       }),
     ])
     expect(dialogueTask).toMatchObject({
-      releaseIds: ['near-term-proof-scope'],
-      status: 'spec_review',
+      status: 'shelved',
       references: [
         'docs/harness/remaining-spec-decomposition-inventory.md',
         'docs/specs/dialogue-and-character-voice.md',
       ],
     })
+    expect(dialogueTask?.releaseIds ?? []).toEqual([])
     expect(dialogueTask?.spec ?? '').toContain('Could the line be reassigned to another character without anyone noticing?')
     expect(dialogueTask?.spec ?? '').not.toContain('exposes the expected public contract')
     expect(dialogueTask?.decomposition).toBeUndefined()
     expect(dialogueTask?.sizePlan).toBeUndefined()
     expect(themeTask).toMatchObject({
-      releaseIds: ['near-term-proof-scope'],
-      status: 'spec_review',
+      status: 'shelved',
     })
-    const approval = await approveSpec({ memoryDir, taskId: dialogueTask!.id })
-    expect(approval).toMatchObject({ success: true, newStatus: 'ready' })
-    const approvedQueue = await readQueue(memoryDir)
-    expect(approvedQueue.tasks.find(task => task.id === dialogueTask!.id)).toMatchObject({
-      status: 'ready',
-    })
-    expect(approvedQueue.tasks.find(task => task.id === dialogueTask!.id)?.sizePlan?.action).not.toBe('split_required')
-    expect(approvedQueue.tasks.find(task => task.id === dialogueTask!.id)?.decomposition?.action).not.toBe('split')
-    expect(approvedQueue.tasks.filter(task => task.hierarchy?.parentId === dialogueTask!.id)).toEqual([])
+    expect(themeTask?.releaseIds ?? []).toEqual([])
     expect(shellTask).toMatchObject({
       status: 'shelved',
     })
@@ -676,7 +665,7 @@ describe('project re-intake apply', () => {
       task.title === 'Recover source-backed contract surface for author-involvement-modes contract and involvement-dial types',
     )
     expect(task).toMatchObject({
-      status: 'import_draft',
+      status: 'shelved',
       projectPath,
       references: [
         'docs/harness/remaining-spec-decomposition-inventory.md',

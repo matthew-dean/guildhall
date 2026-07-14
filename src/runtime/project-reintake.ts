@@ -1277,8 +1277,6 @@ function detectSelectedRelease(sources: ProjectReintakeSource[]): SelectedReleas
     const current = source.content.match(/##\s+Current Next Milestone[\s\S]{0,500}?The next milestone is\s+(Stage\s+(\d+)(?::\s*([^.\n]+))?)/i)
     if (!current?.[1] || !current[2]) continue
     const currentStageNumber = Number(current[2])
-    const inferredBoundedScope = detectNearTermProofScope(source.content, currentStageNumber)
-    if (inferredBoundedScope) return inferredBoundedScope
     const stagePrefix = `Stage ${currentStageNumber}`
     const labelFromCurrent = current[3]?.trim() ? `${stagePrefix}: ${current[3].trim()}` : null
     const label = labelFromCurrent ?? matchingStageHeading(source.content, currentStageNumber) ?? stagePrefix
@@ -1306,38 +1304,6 @@ function firstReleasePlanStage(source: ProjectReintakeSource): SelectedRelease |
     label,
     stageNumber: Number(match[2]),
     source: 'release_plan',
-  }
-}
-
-function detectNearTermProofScope(content: string, currentStageNumber: number): SelectedRelease | null {
-  const lower = content.toLowerCase()
-  const describesBoundedProof =
-    /\bnear-term goal\b/.test(lower) &&
-    /\bnot\b[\s\S]{0,80}\b(editor|ui|frontend|product surface|shell)\b/.test(lower) &&
-    /\bprove\b/.test(lower)
-  if (!describesBoundedProof) return null
-
-  const stageNumbers = [...content.matchAll(/^##\s+Stage\s+(\d+)\s*:\s*(.+?)\s*$/gim)]
-    .map(match => ({
-      number: Number(match[1]),
-      label: match[2]?.trim().toLowerCase() ?? '',
-    }))
-    .filter(stage => Number.isFinite(stage.number))
-  const firstUiStage = stageNumbers
-    .filter(stage => /\b(ui|shell|authoring|frontend|product surface)\b/i.test(stage.label))
-    .sort((left, right) => left.number - right.number)[0]?.number
-  const maxProofStage = stageNumbers
-    .filter(stage => stage.number >= currentStageNumber)
-    .filter(stage => firstUiStage == null || stage.number < firstUiStage)
-    .map(stage => stage.number)
-    .sort((left, right) => right - left)[0]
-  if (maxProofStage == null || maxProofStage <= currentStageNumber) return null
-
-  return {
-    id: 'near-term-proof-scope',
-    label: 'Near-term proof scope',
-    stageNumber: maxProofStage,
-    source: 'inferred',
   }
 }
 
@@ -1385,10 +1351,11 @@ function releaseDraftsFor(
   for (const change of groups.flatMap(group => group.changes)) {
     const task = change.kind === 'create' ? change.task : change.kind === 'reframe' ? change.after : null
     if (!task) continue
+    if (!task.releaseIds?.includes(selectedRelease.id)) continue
     const nodeId = `work:${task.id}`
     if (task.status === 'shelved') {
       deferredNodeIds.push(nodeId)
-    } else if (task.releaseIds?.includes(selectedRelease.id)) {
+    } else {
       nodeIds.push(nodeId)
     }
   }
@@ -1545,7 +1512,10 @@ function releaseIdsForStageAlignment(stageAlignment: string | undefined, selecte
   if (alignedReleaseId === selectedRelease.id || normalize(stageAlignment) === normalize(selectedRelease.label)) {
     return [selectedRelease.id]
   }
-  return [alignedReleaseId]
+  // Do not manufacture a release record from a later-stage label. The selected
+  // release owns current work; later alignment is enough to defer the task
+  // until that release is explicitly defined or selected.
+  return undefined
 }
 
 function repairConflictingSelectedReleaseMemberships(

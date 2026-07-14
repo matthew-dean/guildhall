@@ -35219,6 +35219,68 @@ orientation proof projection as scope summary.
   - Scope: none. No persisted schema, API field, enum, or serialized state
     changed.
 
+## codex:reintake-explicit-release-boundary-2026-07-14
+
+- User job:
+  - When a project document names its current release, re-intake should select
+    that release, keep its source-backed work current, and defer later-stage
+    work without inventing a second release label or dangling release ID.
+- Finding:
+  - Narrative Harness explicitly names `Stage 1: Headless Drafting And
+    Evaluation MVP`, but the re-intake detector let broad “near-term goal”
+    prose override that marker with an inferred `Near-term proof scope`.
+    Later-stage tasks then received synthetic release IDs that had no release
+    record, making the persisted scope internally inconsistent.
+- Root cause classification:
+  - Release-boundary modeling and re-intake projection, not a Narrative
+    Harness source problem. Explicit current-release evidence had the wrong
+    precedence, and later stage alignment was being mistaken for an existing
+    release assignment.
+- Fix:
+  - An explicit `Current Next Milestone` release is authoritative. The removed
+    near-term inference cannot override a named release.
+  - Re-intake assigns `releaseIds` only when a task matches the selected
+    release. A later stage is represented by `shelved` status and stage
+    alignment until that release is explicitly defined or selected.
+  - The selected release projection includes only changed tasks actually
+    assigned to it; it does not put every shelved task into the selected
+    release's deferred list.
+- Proof provided:
+  - `CI=true pnpm vitest run
+    src/runtime/__tests__/project-reintake.test.ts
+    src/runtime/__tests__/project-reintake-apply.test.ts` passed: 30 tests.
+  - The updated calibration asserts that explicit Stage 1 wins over broad
+    near-term prose, Stage 2/4 work is shelved, and no later release ID is
+    manufactured.
+  - Remaining proof: rebuild/install, rerun the real Narrative Harness draft,
+    apply only after the resulting release projection is inspected, then
+    verify API and browser surfaces agree.
+- Contract Touch Decision:
+  - Work id: `reintake-explicit-release-boundary`.
+  - Touched contracts: existing `selectedReleaseId`, release `nodeIds` and
+    `deferredNodeIds`, task `releaseIds`, `stageAlignment`, and re-intake
+    status projection.
+  - Contracts considered but not touched: task hierarchy schema, proof-path
+    schema, task evidence, release readiness math, scheduler execution, and
+    Overview/Map/Work presentation components.
+  - Proof required: planner/apply regressions, contract detector, installed
+    runtime, real Narrative Harness draft/apply evidence, and cross-surface
+    release-state agreement.
+  - Apply/revert behavior: reverting restores the old release selection and
+    synthetic membership behavior; it does not delete task history. Applying
+    the corrected draft changes only derived release membership/status fields
+    selected by the draft.
+- Schema Migration Decision:
+  - Scope: no new persisted fields or migration. Existing release and task
+    fields are reprojected during re-intake.
+  - Existing data impact: old dangling later-release IDs require the selected
+    re-intake draft to remove or defer them; no task evidence or completed
+    work is deleted.
+  - Compatibility reader: existing queues without release fields continue to
+    use the no-release path; queues with explicit releases retain them.
+  - Rollback: restore the queue backup or revert the re-intake apply; code
+    rollback alone does not rewrite already-applied queue state.
+
 ## codex:completion-proof-current-vs-historical-2026-07-13
 
 - User job:

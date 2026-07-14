@@ -224,10 +224,10 @@ describe('project re-intake planner', () => {
     expect(created).toMatchObject({
       kind: 'create',
       task: {
-        releaseIds: ['stage-1-finish-knit-primitive-replacement-wave'],
         stageAlignment: 'stage 1: finish knit primitive replacement wave',
       },
     })
+    expect(created.kind === 'create' ? created.task.releaseIds : undefined).toBeUndefined()
   })
 
   it('keeps selected-release import drafts out of stale weak-spec archival', () => {
