@@ -35618,14 +35618,14 @@ orientation proof projection as scope summary.
     and declares each signal row `block-size: fit-content`, preserving the
     existing shared `UtilityPanel` treatment and container-query breakpoints.
 - Proof provided:
-  - Before this hardening, the live Looma + Knit Overview measured the
-    content-sized rows at 56px for short signals, 75px for the recent-change
-    signal, and 93px for the long repository signal. The rebuilt installed
-    bundle contains the new constraints and `/api/health` reports
-    `served.stale: false`.
-  - A fresh post-restart project API request was held by an unrelated
-    high-CPU coordinator cycle, so no stronger post-restart browser claim is
-    recorded here; the runtime condition is kept separate from the CSS proof.
+  - The final post-restart Looma + Knit Overview measured the content-sized
+    rows at 56px for short signals, 75px for the recent-change signal, and
+    93px for the long repository signal. The rebuilt installed bundle contains
+    the new constraints and `/api/health` reports `served.stale: false`.
+  - The project API briefly took longer to answer while the coordinator
+    resumed its current cycle; once it settled, the browser geometry matched
+    the installed bundle. That transient runtime delay is kept separate from
+    the CSS proof.
 - Contract Touch Decision:
   - Work id: `signal-tile-height`.
   - Touched contracts: none; this is a local presentation constraint on an
