@@ -1603,7 +1603,7 @@ describe('POST /api/project/start', () => {
     expect(projectBody.orientationSpine?.summary).toMatchObject({
       headline: 'Headless MVP is waiting on proof.',
       topBlocker: projectBody.startReadiness?.message,
-      nextAction: 'Attach proof for the completed scoped work.',
+      nextAction: projectBody.startReadiness?.message,
     })
     expect(projectBody.actionModel?.runControl).toMatchObject({
       label: 'Resume',
@@ -2151,7 +2151,7 @@ describe('POST /api/project/start', () => {
     expect(projectBody.startReadiness?.message).toContain('still needs source-backed shaping')
     expect(projectBody.orientationSpine?.summary).toMatchObject({
       headline: 'Current task scope is being shaped.',
-      nextAction: 'Shape the first current-scope task.',
+      nextAction: expect.stringContaining('Current scoped work still needs source-backed shaping'),
       includedCount: 1,
       progress: { total: 1, done: 0 },
     })
@@ -2159,7 +2159,7 @@ describe('POST /api/project/start', () => {
     const overviewProjectBody = (await overviewProjectRes.json()) as {
       orientationSpine?: { summary?: { nextAction?: string } }
     }
-    expect(overviewProjectBody.orientationSpine?.summary?.nextAction).toBe('Shape the first current-scope task.')
+    expect(overviewProjectBody.orientationSpine?.summary?.nextAction).toContain('Current scoped work still needs source-backed shaping')
 
     const startRes = await app.fetch(
       new Request(scoped('/api/project/start'), { method: 'POST', body: '{}' }),
@@ -5197,7 +5197,7 @@ describe('Workspace Import review endpoints', () => {
     expect(body.orientationSpine?.summary).toMatchObject({
       headline: 'Stage 1: Fixture And Evaluation Harness needs import refresh.',
       topBlocker: 'Workspace import is under-scoped.',
-      nextAction: 'Refresh the workspace import.',
+      nextAction: expect.stringContaining('under-scoped'),
     })
   })
 
@@ -6511,7 +6511,7 @@ describe('Workspace Import review endpoints', () => {
     expect(body.orientationSpine?.summary).toMatchObject({
       headline: 'Current task scope needs import refresh.',
       topBlocker: 'Workspace import is under-scoped.',
-      nextAction: 'Refresh the workspace import.',
+      nextAction: expect.stringContaining('structural project records'),
     })
   })
 

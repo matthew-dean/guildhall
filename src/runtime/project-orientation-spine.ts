@@ -2133,19 +2133,19 @@ function summarizeStartReadiness(input: {
       return {
         headline: `${genericWorkLabel} is waiting on proof.`,
         topBlocker: message,
-        nextAction: 'Attach proof for the completed scoped work.',
+        nextAction: message,
       }
     case 'import_drafts_waiting':
       return {
         headline: `${genericWorkLabel} needs import review.`,
-        topBlocker: 'Imported drafts need review.',
-        nextAction: 'Open the first imported draft.',
+        topBlocker: message,
+        nextAction: message,
       }
     case 'imported_scope_shaping':
       return {
         headline: `${genericWorkLabel} is being shaped.`,
         topBlocker: message,
-        nextAction: 'Shape the first current-scope task.',
+        nextAction: message,
       }
     case 'workspace_import_refresh_needed':
       if (input.progress.done > 0 && input.progress.active === 0 && input.progress.ready === 0 && input.progress.blocked === 0) {
@@ -2158,25 +2158,25 @@ function summarizeStartReadiness(input: {
       return {
         headline: `${genericWorkLabel} needs import refresh.`,
         topBlocker: 'Workspace import is under-scoped.',
-        nextAction: 'Refresh the workspace import.',
+        nextAction: message,
       }
     case 'no_unattended_progress':
       return {
         headline: `${genericWorkLabel} needs a decision.`,
         topBlocker: message,
-        nextAction: 'Resolve the current start blocker.',
+        nextAction: message,
       }
     case 'scope_source_conflict':
       return {
         headline: `${genericWorkLabel} has source conflicts to review.`,
         topBlocker: message,
-        nextAction: 'Review source conflicts on the Project Map.',
+        nextAction: message,
       }
     default:
       return {
         headline: `${genericWorkLabel} needs attention.`,
         topBlocker: message,
-        nextAction: 'Resolve the current start blocker.',
+        nextAction: message,
       }
   }
 }
@@ -2220,7 +2220,7 @@ function buildSummary(input: {
         blocker.id === taskScopeNodeId(input.startReadiness.focusTaskId ?? ''),
       )?.label ?? input.blockers[0]?.label ?? null
     : null
-  const topBlocker = focusedShapingBlocker ?? (readinessSummary ? readinessSummary.topBlocker : input.blockers[0]?.label ?? null)
+  const topBlocker = readinessSummary?.topBlocker ?? focusedShapingBlocker ?? input.blockers[0]?.label ?? null
   const hasActionableWork =
     input.progress.ready > 0 ||
     input.progress.active > 0 ||

@@ -4432,13 +4432,13 @@ function buildOverviewOrientationPreviewSpine(input: {
     : projection.start.actionHref
   const terminalCompleteMessage = start?.code === 'all_terminal' && startMessage !== null && /\bis complete\.$/i.test(startMessage)
   const firstBlocker = projection.release.blockers[0]
-  const topBlocker = firstBlocker?.label ?? (
-    start?.canStart === false && !terminalCompleteMessage
-      ? startMessage
-      : (projection.start.canStart || projection.start.code === 'all_terminal'
-          ? null
-          : projection.start.message)
-  )
+  const topBlocker = start?.canStart === false && !terminalCompleteMessage && startMessage
+    ? startMessage
+    : firstBlocker?.label ?? (
+      projection.start.canStart || projection.start.code === 'all_terminal'
+        ? null
+        : projection.start.message
+    )
   const headline = projection.release.state === 'ready'
     ? `${displayScopeLabel} is complete.`
     : projection.release.state === 'blocked'
@@ -4481,9 +4481,14 @@ function buildOverviewOrientationPreviewSpine(input: {
         ...input.sourceSpine.summary,
         pinnedNow: focusTaskTitle ? [focusTaskTitle] : [],
         topBlocker,
-        nextAction: typeof input.sourceSpine.summary.nextAction === 'string' && input.sourceSpine.summary.nextAction.trim()
-          ? input.sourceSpine.summary.nextAction
-          : startMessage ?? 'Resolve the current start blocker.',
+        // The start-readiness builder owns the current blocker message. Do not
+        // preserve an older generic orientation action when the selected
+        // scope has a more specific, actionable start message.
+        nextAction: startMessage ?? (
+          typeof input.sourceSpine.summary.nextAction === 'string' && input.sourceSpine.summary.nextAction.trim()
+            ? input.sourceSpine.summary.nextAction
+            : 'Resolve the current start blocker.'
+        ),
       }
     : input.sourceSpine?.summary ?? computedSummary
   const releaseSummary = input.sourceSpine?.release ?? {

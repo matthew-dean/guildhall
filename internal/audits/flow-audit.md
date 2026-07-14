@@ -35776,3 +35776,56 @@ orientation proof projection as scope summary.
     the prior blocker classification without changing persisted task state.
 - Schema Migration Decision:
   - Scope: none. No persisted data or schema is changed.
+
+## codex:shared-start-message-2026-07-14
+
+- User job:
+  - Across Overview, Work, Map, Release, and the spine API, the user should
+    see the same concrete explanation of what prevents the selected scope
+    from starting or what must happen next.
+- Finding:
+  - `startReadiness.message` contained the useful task-specific explanation,
+    while the orientation spine preserved generic actions such as `Shape the
+    first current-scope task.` or `Resolve the current start blocker.`.
+    Terminal and paused scopes also have different legitimate headings, so the
+    audit helper incorrectly treated those states as failures.
+- Fix:
+  - Blocked orientation summaries now use the authoritative start-readiness
+    message as both blocker and next action. The served Overview summary also
+    prefers that message when reconciling a source spine with live readiness.
+  - The rendered flow audit reuses the migration helper, accepts the real
+    terminal `Scope status` heading, and checks the concrete readiness message
+    except for paused work, where the visible Resume control is the action.
+- Proof provided:
+  - `pnpm exec vitest run src/runtime/__tests__/project-orientation-spine.test.ts
+    -t 'start-readiness|source-conflict|workspace-import refresh|import refresh'
+    --run` passed 6 tests.
+  - `pnpm exec vitest run src/runtime/__tests__/serve-settings.test.ts
+    -t 'import refresh|source-backed shaping' --run` passed 3 tests.
+  - Installed-fixture browser audit passed the shared orientation-spine test
+    across Narrative Harness, Looma + Knit, Jess, and Fair Labor; the Looma +
+    Knit map test passed with its concrete current-scope blocker.
+- Contract Touch Decision:
+  - Work id: `shared-start-message`.
+  - Touched contracts: orientation summary `topBlocker`/`nextAction` semantics
+    and the browser flow-audit assertion contract.
+  - Contracts considered but not touched: task status enums, release scope
+    membership, start-readiness codes, action-model schema, and persisted task
+    records.
+  - Proof provided:
+    - Rebuilt, installed, and restarted the app; `/api/stale-server` reported
+      `stale: false` for the installed build.
+    - Live Looma + Knit Spine, Overview, and Work summaries now agree on the
+      same source-backed shaping message, with `5` included and `67` deferred.
+    - Live Narrative Harness Spine, Overview, and Work summaries agree on
+      `Resume the current work.` for its paused selected release, with `11`
+      included and `31` deferred.
+    - Live release readiness remains honest: Narrative Harness is `7 / 11`
+      done with `4` unfinished and no fabricated release blockers; Looma +
+      Knit is `4 / 5` done with one shaping item plus its real repository
+      follow-ups.
+  - Apply/revert behavior: presentation and derived-summary behavior only;
+    reverting restores the old generic copy without changing saved project
+    state.
+- Schema Migration Decision:
+  - Scope: none. No persisted schema or migration is introduced.

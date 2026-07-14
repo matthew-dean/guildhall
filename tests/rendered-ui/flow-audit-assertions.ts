@@ -15,6 +15,8 @@ export interface GeometryTarget {
 export interface ProjectFlowState {
   startCanStart: boolean
   runControlLabel: string | null
+  startReadinessMessage: string | null
+  startReadinessCode: string | null
   visibleTotal: number
   visibleActive: number
   visibleBlocked: number
@@ -58,6 +60,12 @@ export async function readProjectFlowState(page: Page, projectId: string): Promi
     startCanStart: detail.startReadiness?.canStart === true,
     runControlLabel: typeof detail.actionModel?.runControl?.label === 'string'
       ? detail.actionModel.runControl.label
+      : null,
+    startReadinessMessage: typeof detail.startReadiness?.message === 'string'
+      ? detail.startReadiness.message
+      : null,
+    startReadinessCode: typeof detail.startReadiness?.code === 'string'
+      ? detail.startReadiness.code
       : null,
     visibleTotal: counts.visibleTotal ?? 0,
     visibleActive: counts.visibleActive ?? 0,
@@ -126,8 +134,11 @@ export async function expectProjectFlowStateAgreement(page: Page, projectId: str
       await expect(page.getByText(/\d+ blocked tasks/)).toHaveCount(0)
     }
   } else {
-    expect(state.runControlLabel).toBeTruthy()
-    await expect(page.getByText(state.runControlLabel!, { exact: true }).first()).toBeVisible()
+    const readinessMessage = state.startReadinessCode === 'paused_live_work'
+      ? state.runControlLabel
+      : state.startReadinessMessage ?? state.runControlLabel
+    expect(readinessMessage).toBeTruthy()
+    await expect(page.getByText(readinessMessage!, { exact: true }).first()).toBeVisible()
   }
 
   await page.goto(`/projects/${projectId}/thread`)
@@ -203,7 +214,7 @@ export async function expectProjectOrientationSpineAgreement(
   await page.goto(`/projects/${expected.projectId}/overview`)
   await expect(page.getByRole('region', { name: 'Project overview' })).toBeVisible()
   await expect(page.getByRole('region', { name: 'Project state' })).toHaveCount(0)
-  await expect(page.getByRole('heading', { name: 'Do this next' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: /^(Do this next|Scope status)$/ })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Current scope map' })).toHaveCount(0)
   await expect(page.getByRole('heading', { name: 'What needs attention' })).toHaveCount(0)
   await expect(page.getByRole('region', { name: 'Project orientation' })).toBeVisible()
@@ -216,9 +227,15 @@ export async function expectProjectOrientationSpineAgreement(
   if (topBlocker) {
     await expect(page.getByText(topBlocker).first()).toBeVisible()
   }
+  const readinessMessage = typeof detail.startReadiness?.message === 'string'
+    ? detail.startReadiness.message
+    : null
   const runControlLabel = detail.actionModel?.runControl?.label
-  if (typeof runControlLabel === 'string' && runControlLabel.trim()) {
-    await expect(page.getByText(runControlLabel, { exact: true }).first()).toBeVisible()
+  const currentStateMessage = detail.startReadiness?.code === 'paused_live_work'
+    ? runControlLabel
+    : readinessMessage ?? runControlLabel
+  if (typeof currentStateMessage === 'string' && currentStateMessage.trim()) {
+    await expect(page.getByText(currentStateMessage, { exact: true }).first()).toBeVisible()
   }
 
   await page.goto(`/projects/${expected.projectId}/work`)
@@ -253,7 +270,7 @@ export async function expectProjectOrientationSpineAgreement(
   await expect(page.getByText(`${included} included · ${deferred} later`).first()).toBeVisible()
 }
 
-async function ensureProjectMigrationsApplied(page: Page, projectId: string): Promise<void> {
+export async function ensureProjectMigrationsApplied(page: Page, projectId: string): Promise<void> {
   for (let attempt = 0; attempt < 6; attempt += 1) {
     const statusResponse = await page.request.get(`/api/project/migrations?projectId=${encodeURIComponent(projectId)}`)
     expect(statusResponse.ok()).toBe(true)

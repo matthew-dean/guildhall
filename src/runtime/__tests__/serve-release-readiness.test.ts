@@ -2704,7 +2704,7 @@ describe('GET /api/project/release-readiness', () => {
     })
     expect(project.orientationSpine?.summary).toMatchObject({
       headline: 'Headless MVP is waiting on proof.',
-      nextAction: 'Attach proof for the completed scoped work.',
+      nextAction: project.startReadiness.message,
     })
   })
 

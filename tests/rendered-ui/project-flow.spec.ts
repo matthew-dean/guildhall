@@ -5,6 +5,7 @@ import {
   expectProjectOrientationSpineAgreement,
   expectNoClippedContent,
   readProjectFlowState,
+  ensureProjectMigrationsApplied,
 } from './flow-audit-assertions'
 
 const projectSurfaceRoutes = [
@@ -421,6 +422,9 @@ test('flow audit protocol reconciles user job, visible state, and layout evidenc
     projectId: 'looma-knit',
     expectation: 'A user looking at route X should be able to tell what is happening now, what is queued, what is blocked, what they can do next, and whether the system is actually working.',
   })
+
+  await ensureProjectMigrationsApplied(page, 'narrative-harness')
+  await ensureProjectMigrationsApplied(page, 'looma-knit')
 
   await page.setViewportSize({ width: 1114, height: 692 })
   await page.goto('/projects/narrative-harness/work')

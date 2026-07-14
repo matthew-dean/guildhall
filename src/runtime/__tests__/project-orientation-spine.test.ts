@@ -1558,7 +1558,7 @@ describe('buildProjectOrientationSpine', () => {
 
     expect(spine.summary.headline).toBe('Current task scope needs import refresh.')
     expect(spine.summary.topBlocker).toBe('Workspace import is under-scoped.')
-    expect(spine.summary.nextAction).toBe('Refresh the workspace import.')
+    expect(spine.summary.nextAction).toBe('Guildhall saved an under-scoped import.')
   })
 
   it('turns source-conflict start readiness into a specific orientation next action', () => {
@@ -1595,7 +1595,7 @@ describe('buildProjectOrientationSpine', () => {
 
     expect(spine.summary.headline).toBe('Stage 1 Headless Drafting And Evaluation MVP has source conflicts to review.')
     expect(spine.summary.topBlocker).toBe(message)
-    expect(spine.summary.nextAction).toBe('Review source conflicts on the Project Map.')
+    expect(spine.summary.nextAction).toBe(message)
   })
 
   it('keeps workspace-import refresh as the top blocker when ordinary task blockers also exist', () => {
@@ -1628,7 +1628,7 @@ describe('buildProjectOrientationSpine', () => {
 
     expect(spine.summary.headline).toBe('Stage 1 Finish Knit Primitive Replacement Wave needs import refresh.')
     expect(spine.summary.topBlocker).toBe('Workspace import is under-scoped.')
-    expect(spine.summary.nextAction).toBe('Refresh the workspace import.')
+    expect(spine.summary.nextAction).toBe('Saved import is under-scoped for the current project docs.')
   })
 
   it('extracts a headless script-only execution boundary and proof contracts for scoped work', () => {
