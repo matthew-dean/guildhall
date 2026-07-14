@@ -35286,29 +35286,32 @@ orientation proof projection as scope summary.
     needs, while a long actionable repository alert remains readable without
     making neighboring facts look like giant empty cards.
 - Root cause classification:
-  - UI layout problem: the Signals grid relied on implicit grid-row sizing;
-    one long signal could establish a tall row even when shorter panels were
-    aligned to its start.
+  - UI layout problem: CSS Grid gives every item in a row the height of the
+    tallest item. One long repository alert therefore made short health facts
+    render as awkwardly tall empty boxes even after the children opted out of
+    stretching.
 - Fix:
-  - Signals now use max-content implicit rows and pack content from the top.
-  - Each signal row explicitly uses content-sized block sizing and a zero
-    minimum block size, preserving the existing shared `UtilityPanel`, dense
-    treatment, responsive container queries, and wide repository alert.
+  - Signals now use a wrapping flex layout with explicit 3/2/1-column bases at
+    the existing container-query breakpoints. Each `UtilityPanel` stays
+    content-sized, and the wide repository alert still occupies a full line.
+  - The existing shared `UtilityPanel`, dense treatment, responsive
+    container queries, and semantic click targets remain unchanged.
 - Proof provided:
   - `CI=true pnpm vitest run
     src/web/surfaces/project/__tests__/ProjectOverviewTab.svelte.test.ts`
-    passed: 34 tests.
-  - `git diff --check` passed.
-  - `pnpm lint:contracts`, `pnpm build`, and `pnpm dev:install` passed.
-  - After `guildhall stop && guildhall start`, `/api/stale-server` reported
-    `stale:false` with matching build mtimes.
-  - Live Looma + Knit Overview proof at `1280x900` rendered the repository
-    follow-up at 75px, short provider/setup/runtime facts at 56px, and the
-    two-line recent-change item at 75px; no short item inherited the alert's
-    height.
-  - Live mobile proof at `390x844` collapsed the grid to one column with
-    `scrollWidth=390` and `clientWidth=390`; signal heights were
-    `168, 56, 56, 56, 56, 75` according to content.
+    passed after the layout change.
+  - `git diff --check`, `pnpm lint:contracts`, `pnpm build`, and
+    `pnpm dev:install` passed. After `guildhall stop && guildhall start`,
+    `/api/stale-server` reported `stale:false` with matching build mtimes.
+  - Live Looma + Knit Overview proof at the default `1066px` browser width
+    rendered the repository follow-up at `168px`, adjacent short facts at
+    `56px`, and the recent-change item at `93px`; no short item inherited the
+    repository alert's height.
+  - Live mobile proof at `390x844` collapsed all five signals to one column;
+    their widths were `324px`, their heights remained content-sized, and
+    `scrollWidth=390` matched `clientWidth=390`.
+  - The prior Grid-based geometry evidence is superseded by this flex-layout
+    change and must not be reused as proof.
 - Contract Touch Decision:
   - Work id: `overview-signal-natural-height`.
   - Touched contracts: none; this changes only the layout rules of the
