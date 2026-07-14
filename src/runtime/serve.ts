@@ -13993,7 +13993,26 @@ export function buildServeApp(opts: ServeOptions = {}): {
       guildhallOwnedDirtyCheckout(projectPath),
       buildProjectGitStorySummary(projectPath, tasks),
     ])
-    return { dirtyCheckout, gitStory }
+    const activeTaskIds = new Set(
+      tasks
+        .filter(taskGitStoryIsAgentWorkInProgress)
+        .map(task => typeof task.id === 'string' ? task.id : '')
+        .filter(Boolean),
+    )
+    const releaseGitStory = summarizeGitStories(
+      gitStory.snapshots.filter(snapshot => !snapshot.taskId || !activeTaskIds.has(snapshot.taskId)),
+    )
+    return {
+      dirtyCheckout,
+      gitStory: {
+        ...releaseGitStory,
+        snapshots: gitStory.snapshots,
+      },
+    }
+  }
+
+  function taskGitStoryIsAgentWorkInProgress(task: Record<string, unknown>): boolean {
+    return ['in_progress', 'review', 'gate_check'].includes(String(task.status ?? ''))
   }
 
   async function guildhallOwnedDirtyCheckout(projectPath: string): Promise<{

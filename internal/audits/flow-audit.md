@@ -35744,3 +35744,35 @@ orientation proof projection as scope summary.
 - Schema Migration Decision:
   - Scope: none. No persisted fields are added, renamed, or rewritten; this is
     a compatibility interpretation of already-persisted merge state.
+
+## codex:active-agent-git-story-2026-07-14
+
+- User job:
+  - While an agent is actively implementing, reviewing, or gate-checking a
+    task, the release view should show that work as in progress rather than
+    telling the user to resolve the agent's expected uncommitted worktree.
+- Finding:
+  - Release readiness reused all task git-story blockers, so an active task's
+    legitimate edits appeared as a repository follow-up and inflated the
+    release blocker count. The task detail still had the useful dirty snapshot,
+    but the release summary assigned it the wrong responsibility.
+- Fix:
+  - Keep active task snapshots in the release payload for inspection, but
+    exclude task snapshots for `in_progress`, `review`, and `gate_check` work
+    from release-blocker aggregation. Blocked, done, pending-PR, and root/repo
+    follow-up snapshots remain blocking.
+- Proof provided:
+  - Focused release-readiness tests pass for active dirty work, blocked proof
+    recovery, clean no-upstream proof recovery, and merged package-manager
+    residue. The active-work regression asserts the release remains unfinished
+    without reporting a repository blocker, while the snapshot remains served.
+- Contract Touch Decision:
+  - Work id: `active-agent-git-story`.
+  - Touched contracts: release-readiness aggregation of existing git-story
+    snapshots.
+  - Contracts considered but not touched: task status values, git-story
+    snapshot shape, task detail API, repository policy, and release scope math.
+  - Apply/revert behavior: presentation/aggregation only; reverting restores
+    the prior blocker classification without changing persisted task state.
+- Schema Migration Decision:
+  - Scope: none. No persisted data or schema is changed.

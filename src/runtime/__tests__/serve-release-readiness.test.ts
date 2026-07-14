@@ -574,6 +574,51 @@ describe('GET /api/project/release-readiness', () => {
     expect(threadBody.orientationSpine.release.blockers.map((blocker: any) => blocker.id)).toEqual(releaseBlockerIds)
   })
 
+  it('does not count active agent worktree edits as release repository follow-up', async () => {
+    const taskWorktreePath = path.join(tmpDir, '..', `${path.basename(tmpDir)}-active-worktree`)
+    await execFileP('git', ['worktree', 'add', '-b', 'guildhall/task-active-work', taskWorktreePath], { cwd: tmpDir })
+    await fs.writeFile(path.join(taskWorktreePath, 'PROOF.md'), 'active worker proof in progress\n', 'utf8')
+
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: 'headless-mvp',
+      releases: [{
+        id: 'headless-mvp',
+        label: 'Headless MVP',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-current'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [
+        makeTask({
+          id: 'task-current',
+          title: 'Current implementation lane',
+          status: 'in_progress',
+          assignedTo: 'worker-agent',
+          releaseIds: ['headless-mvp'],
+          worktreePath: taskWorktreePath,
+        } as Partial<Task>),
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await approveDesignSystem(app)
+
+    const res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
+    const body = await res.json() as any
+
+    expect(body.ready).toBe(false)
+    expect(body.totals.unfinishedCount).toBe(1)
+    expect(body.totals.gitStoryBlockingCount).toBe(0)
+    expect(body.gitStory.blockers).toEqual([])
+    expect(body.releaseBlockers).toEqual([])
+
+    await execFileP('git', ['worktree', 'remove', '--force', taskWorktreePath], { cwd: tmpDir })
+  })
+
   it('does not let recorded proof and an old merge record hide dirty proof-recovery worktree changes', async () => {
     const taskWorktreePath = path.join(tmpDir, '..', `${path.basename(tmpDir)}-dirty-proof-worktree`)
     await execFileP('git', ['worktree', 'add', '-b', 'guildhall/task-dirty-proof', taskWorktreePath], { cwd: tmpDir })
