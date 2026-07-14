@@ -35708,3 +35708,39 @@ orientation proof projection as scope summary.
     path/evidence identity needed to represent an observed result is persisted.
   - Rollback: no migration rollback is needed because no field is renamed or
     removed.
+
+## codex:merged-task-package-residue-2026-07-14
+
+- User job:
+  - A release should distinguish unfinished work from repository residue that
+    Guildhall has already accounted for, so a completed merge does not reopen
+    as a human blocker merely because package-manager files remain in a task
+    worktree.
+- Finding:
+  - A task with a durable `mergeRecord.result: merged` could still be reported
+    as dirty when its task branch was no longer independently comparable and
+    only `pnpm-lock.yaml` or `pnpm-workspace.yaml` remained untracked. The
+    release then showed a repository follow-up blocker for work Guildhall had
+    already merged.
+- Fix:
+  - Reconcile the task git story from the existing structured merge record when
+    the worktree has no changed files and only known package-manager residue.
+    Real changed files remain blocking, and tasks without a merged record still
+    use the ancestry checks.
+- Proof provided:
+  - The release-readiness regression passes with an unfinished task, a merged
+    record, a non-comparable branch, and one untracked `pnpm-lock.yaml`; the
+    task snapshot is `merged` with `mergeRecordResult: reconciled`, while the
+    release remains not ready because the task is unfinished.
+- Contract Touch Decision:
+  - Work id: `merged-task-package-residue`.
+  - Touched contracts: existing git-story closure classification and existing
+    `mergeRecord.result` interpretation.
+  - Contracts considered but not touched: task status values, release scope
+    membership, proof-path identity, repository policy, and API response shape.
+  - Apply/revert behavior: the existing merge record is reused only for the
+    explicitly recognized residue case; reverting restores the prior dirty
+    classification without changing persisted task data.
+- Schema Migration Decision:
+  - Scope: none. No persisted fields are added, renamed, or rewritten; this is
+    a compatibility interpretation of already-persisted merge state.

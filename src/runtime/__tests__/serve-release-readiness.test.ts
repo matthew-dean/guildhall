@@ -861,6 +861,64 @@ describe('GET /api/project/release-readiness', () => {
     await execFileP('git', ['worktree', 'remove', '--force', taskWorktreePath], { cwd: tmpDir })
   })
 
+  it('does not reopen a merged task for package-manager residue when the task branch is no longer independently comparable', async () => {
+    const taskWorktreePath = path.join(tmpDir, '..', `${path.basename(tmpDir)}-merged-lockfile-worktree`)
+    await execFileP('git', ['worktree', 'add', '-b', 'guildhall/task-merged-lockfile', taskWorktreePath], { cwd: tmpDir })
+    await fs.writeFile(path.join(taskWorktreePath, 'PROOF.md'), 'task proof landed\n', 'utf8')
+    await execFileP('git', ['add', 'PROOF.md'], { cwd: taskWorktreePath })
+    await execFileP('git', ['commit', '-m', 'add task proof'], { cwd: taskWorktreePath })
+    await fs.writeFile(path.join(taskWorktreePath, 'pnpm-lock.yaml'), 'lockfileVersion: 9.0\n', 'utf8')
+
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: 'headless-mvp',
+      releases: [{
+        id: 'headless-mvp',
+        label: 'Headless MVP',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-current'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [
+        makeTask({
+          id: 'task-current',
+          title: 'Current proof lane',
+          status: 'in_progress',
+          releaseIds: ['headless-mvp'],
+          worktreePath: taskWorktreePath,
+          mergeRecord: {
+            result: 'merged',
+            fromBranch: 'guildhall/task-merged-lockfile',
+            toBranch: 'main',
+            strategy: 'ff_only_local',
+            mergedAt: '2026-07-06T20:01:00.000Z',
+          },
+        } as Partial<Task>),
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await approveDesignSystem(app)
+
+    const res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
+    const body = await res.json() as any
+
+    expect(body.ready).toBe(false)
+    expect(body.totals.gitStoryBlockingCount).toBe(0)
+    expect(body.gitStory.blockers).toEqual([])
+    expect(body.gitStory.snapshots.find((snapshot: any) => snapshot.taskId === 'task-current')).toMatchObject({
+      state: 'merged',
+      mergeRecordResult: 'reconciled',
+      untrackedCount: 1,
+      samplePaths: ['pnpm-lock.yaml'],
+    })
+
+    await execFileP('git', ['worktree', 'remove', '--force', taskWorktreePath], { cwd: tmpDir })
+  })
+
   it('reconciles skipped task merge records when the task worktree commit is already in project history', async () => {
     const taskWorktreePath = path.join(tmpDir, '..', `${path.basename(tmpDir)}-skipped-merge-worktree`)
     await execFileP('git', ['worktree', 'add', '-b', 'guildhall/task-skipped-merge', taskWorktreePath], { cwd: tmpDir })

@@ -3323,6 +3323,11 @@ async function reconciledTaskHeadMergeResult(
   try {
     const status = await driver.statusSummary(input.worktreePath)
     if (!hasOnlyReconciledTaskWorktreeResidue(status)) return undefined
+    const recordedMergeResult = input.task.mergeRecord?.result
+    if (
+      status.untrackedCount > 0 &&
+      (recordedMergeResult === 'merged' || recordedMergeResult === 'reconciled')
+    ) return 'reconciled'
     const taskHead = await driver.headSha(input.worktreePath)
     if (await driver.isAncestor(input.targetRepoRoot, taskHead, 'HEAD')) return 'reconciled'
     const targetStatus = await driver.statusSummary(input.targetRepoRoot)
