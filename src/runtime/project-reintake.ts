@@ -51,6 +51,7 @@ export interface ProjectReintakeDraft {
     created: number
     preservedDone: number
     refreshedEvidence: number
+    repairedDependencies: number
   }
   groups: ReintakeChangeGroup[]
 }
@@ -69,6 +70,7 @@ export type ReintakeChange =
   | { kind: 'archive'; taskId: string; reason: string }
   | { kind: 'create'; task: ReintakeTaskDraft; reason: string }
   | { kind: 'refresh_evidence'; taskId: string; before: TaskSummary; after: ReintakeTaskDraft; reopenForProof: boolean; reason: string }
+  | { kind: 'repair_dependencies'; taskId: string; beforeDependsOn: string[]; afterDependsOn: string[]; reason: string }
   | { kind: 'preserve_progress'; taskId: string; reason: string }
 
 type ReintakeMergeChange = { kind: 'merge'; survivorTaskId: string; mergedTaskIds: string[]; reason: string }
@@ -310,6 +312,15 @@ export function planProjectReintake(input: ProjectReintakeInput): ProjectReintak
       changes: progressChanges,
     })
   }
+  const dependencyRepairChanges = repairNonBlockingDependencies(input.tasks, graphPlan.tasks)
+  if (dependencyRepairChanges.length > 0) {
+    groups.push({
+      id: 'repair-non-blocking-dependencies',
+      title: 'Remove historical dependency blockers',
+      rationale: 'Archived and shelved work remains visible history or deferred scope, but cannot block current work.',
+      changes: dependencyRepairChanges,
+    })
+  }
 
   const archiveChanges = archiveUnsupportedBlockedTasks(input.tasks, usedTaskIds)
   if (archiveChanges.length > 0) {
@@ -421,6 +432,25 @@ export async function applyProjectReintakeDraft(input: {
 }
 
 function applyChange(tasks: Array<Record<string, unknown>>, change: ReintakeChange, now: string): void {
+  if (change.kind === 'repair_dependencies') {
+    const existing = tasks.find(task => task.id === change.taskId)
+    if (!existing) return
+    const notes = Array.isArray(existing.notes) ? existing.notes : []
+    Object.assign(existing, {
+      dependsOn: change.afterDependsOn,
+      updatedAt: now,
+      notes: [
+        ...notes,
+        {
+          agentId: 'project-reintake',
+          role: 'system',
+          content: `Re-intake removed archived or shelved prerequisites: ${change.reason}`,
+          timestamp: now,
+        },
+      ],
+    })
+    return
+  }
   if (change.kind === 'refresh_evidence') {
     const existing = tasks.find(task => task.id === change.taskId)
     if (!existing) return
@@ -1542,6 +1572,34 @@ function refreshCurrentEvidenceChanges(
   return changes
 }
 
+function repairNonBlockingDependencies(
+  existingTasks: Array<Record<string, unknown>>,
+  graphTasks: EvidenceTask[],
+): ReintakeChange[] {
+  const graphTaskIds = new Set(graphTasks.map(task => task.id))
+  const nonBlockingIds = new Set(existingTasks
+    .filter(task => ['archived', 'shelved'].includes(stringField(task, 'status') ?? ''))
+    .map(task => stringField(task, 'id'))
+    .filter((id): id is string => Boolean(id)))
+  return existingTasks
+    .filter(task => {
+      const id = stringField(task, 'id')
+      return Boolean(id && graphTaskIds.has(id))
+    })
+    .map(task => {
+      const taskId = stringField(task, 'id')!
+      const beforeDependsOn = arrayStringField(task.dependsOn)
+      const afterDependsOn = beforeDependsOn.filter(dependency => !nonBlockingIds.has(dependency))
+      return { taskId, beforeDependsOn, afterDependsOn }
+    })
+    .filter(change => change.afterDependsOn.length !== change.beforeDependsOn.length)
+    .map(change => ({
+      kind: 'repair_dependencies' as const,
+      ...change,
+      reason: 'Historical archived or shelved work is not a live prerequisite.',
+    }))
+}
+
 function documentedProofCommands(value: unknown): string[] {
   return Array.isArray(value)
     ? value
@@ -1857,7 +1915,7 @@ function singleEditChange(sources: ProjectReintakeSource[]): ReintakeChange | nu
 }
 
 function summarize(groups: ReintakeChangeGroup[]): ProjectReintakeDraft['summary'] {
-  const summary = { kept: 0, reframed: 0, merged: 0, archived: 0, created: 0, preservedDone: 0, refreshedEvidence: 0 }
+  const summary = { kept: 0, reframed: 0, merged: 0, archived: 0, created: 0, preservedDone: 0, refreshedEvidence: 0, repairedDependencies: 0 }
   for (const change of groups.flatMap(group => group.changes)) {
     if (change.kind === 'keep') summary.kept++
     if (change.kind === 'reframe') summary.reframed++
@@ -1866,6 +1924,7 @@ function summarize(groups: ReintakeChangeGroup[]): ProjectReintakeDraft['summary
     if (change.kind === 'create') summary.created++
     if (change.kind === 'preserve_progress') summary.preservedDone++
     if (change.kind === 'refresh_evidence') summary.refreshedEvidence++
+    if (change.kind === 'repair_dependencies') summary.repairedDependencies++
   }
   return summary
 }

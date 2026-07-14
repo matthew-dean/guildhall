@@ -35456,6 +35456,10 @@ orientation proof projection as scope summary.
   - This is a model correction, not a project-data exception: history may be
     retained for orientation, but it cannot participate as a live prerequisite
     or silently revive into the current release.
+  - Re-intake now emits an explicit `repair_dependencies` operation when an
+    existing current task still points at archived or shelved work. Applying
+    it changes only `dependsOn` and appends an audit note; it does not rewrite
+    the task, erase its history, or manufacture replacement work.
 - Proof required:
   - Re-intake planner/apply tests, workspace importer regressions, Overview
     component tests, contract lint, build/install, stale-server verification,
@@ -35464,7 +35468,8 @@ orientation proof projection as scope summary.
 - Contract Touch Decision:
   - Work id: `source-proof-refresh-and-signal-density`.
   - Touched contracts: re-intake draft change union gains
-    `refresh_evidence`; re-intake summary gains `refreshedEvidence`; existing
+    `refresh_evidence` and `repair_dependencies`; re-intake summary gains
+    `refreshedEvidence` and `repairedDependencies`; existing
     source-title matching now reconciles qualifying title detail; Overview
     signal presentation gains a visual-only line clamp.
   - Contracts considered but not touched: core Task status enum, persisted
@@ -35475,7 +35480,7 @@ orientation proof projection as scope summary.
     evidence remain on the task. Reverting code does not undo an already
     applied draft; queue backup or a new source-backed re-intake is required.
 - Schema Migration Decision:
-  - Scope: no migration. The new change kind and summary field are draft
+  - Scope: no migration. The new change kinds and summary fields are draft
     operation/response fields; persisted task records use existing fields.
   - Existing data impact: completed tasks with durable completion evidence stay
     done; completed tasks with missing proof can reopen to review while keeping

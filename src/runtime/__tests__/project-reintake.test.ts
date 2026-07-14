@@ -119,6 +119,36 @@ describe('project re-intake planner', () => {
     expect(draft.summary.reframed).toBe(1)
   })
 
+  it('repairs archived prerequisites without rewriting the current task', () => {
+    const draft = planProjectReintake({
+      now,
+      sources: [{ path: 'looma/docs/component-library-audit.md', content: loomaAudit }],
+      tasks: [
+        task({
+          id: 'task-dialog-history',
+          title: 'Build Dialog primitive',
+          status: 'archived',
+          deliverableName: 'Dialog',
+        }),
+        task({
+          id: 'task-alert-current',
+          title: 'Build AlertDialog',
+          status: 'ready',
+          dependsOn: ['task-dialog-history'],
+          deliverableName: 'AlertDialog',
+        }),
+      ],
+    })
+
+    expect(draft.groups.flatMap(group => group.changes)).toContainEqual(expect.objectContaining({
+      kind: 'repair_dependencies',
+      taskId: 'task-alert-current',
+      beforeDependsOn: ['task-dialog-history'],
+      afterDependsOn: [],
+    }))
+    expect(draft.summary.repairedDependencies).toBe(1)
+  })
+
   it('reframes weak legacy pre-implementation specs when current evidence still supports the task', () => {
     const draft = planProjectReintake({
       now,
