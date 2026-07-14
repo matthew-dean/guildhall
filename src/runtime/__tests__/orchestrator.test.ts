@@ -7669,6 +7669,111 @@ describe('Orchestrator.tick — progress logging (FR-09)', () => {
     })
   })
 
+  it('turns a passing provider proof artifact into durable command evidence', async () => {
+    const worktreePath = tmpDir
+    await fs.mkdir(path.join(worktreePath, 'proof-results'), { recursive: true })
+    await fs.writeFile(
+      path.join(worktreePath, 'proof-results', 'deepinfra-proof-results.json'),
+      JSON.stringify({
+        summary: {
+          passed: true,
+          status: 'passed',
+          model: 'Qwen/Qwen3-235B-A22B-Instruct-2507',
+          scenarioCount: 5,
+          checkedAt: '2026-07-14T02:26:39.091Z',
+        },
+        results: [
+          { name: 'fantasy', passed: true },
+          { name: 'legal-adult-fiction-boundary', passed: true },
+        ],
+      }),
+      'utf8',
+    )
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        title: 'Select and prove a DeepInfra drafting model for broad-genre chapter writing.',
+        status: 'gate_check',
+        assignedTo: 'gate-checker-agent',
+        worktreePath,
+        acceptanceCriteria: [{
+          id: 'provider-proof',
+          description: 'The model is tested against live provider scenarios.',
+          verifiedBy: 'review',
+          met: false,
+        }],
+        proofPaths: [{
+          id: 'command-proof-path',
+          kind: 'command',
+          command: 'pnpm run prove:deepinfra-drafting-model',
+          source: 'documented',
+          status: 'blocked',
+          expectedEvidence: [{
+            id: 'command-proof-path-evidence-0',
+            kind: 'artifact',
+            description: 'The live provider proof artifact passes.',
+            required: true,
+          }],
+          verificationRecords: [{
+            id: 'legacy-provider-proof',
+            evidenceId: 'provider-artifact-0',
+            kind: 'provider',
+            status: 'passed',
+            summary: 'Legacy provider proof record.',
+            recordedAt: '2026-07-14T02:25:30.000Z',
+            recordedBy: 'legacy-import',
+            evidenceRefs: [],
+          }],
+        }],
+        reviewVerdicts: [{
+          verdict: 'approve',
+          reviewerPath: 'llm',
+          reason: 'Reviewer approved.',
+          reasoning: 'The provider proof is present.',
+          failingSignals: [],
+          recordedAt: '2026-07-14T02:25:00.000Z',
+        }],
+        gateResults: [],
+      }),
+    ])
+    await upsertTaskRuntimeState(tmpDir, 'a', {
+      proofRecovery: {
+        reopenedAt: '2026-07-14T02:25:30.000Z',
+        reason: 'Recovery was opened before the provider artifact arrived.',
+      },
+    })
+    const gc = stubAgent('gate-checker-agent', async () => {
+      throw new Error('gate-checker should not run before artifact proof is recorded')
+    })
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ gateChecker: gc }),
+    })
+    const first = await orch.tick()
+    expect(first.kind).toBe('processed')
+    if (first.kind === 'processed') expect(first.afterStatus).toBe('gate_check')
+    const recorded = await readQueue()
+    expect(recorded.tasks[0]!.gateResults.at(-1)).toMatchObject({
+      gateId: 'pnpm run prove:deepinfra-drafting-model',
+      command: 'pnpm run prove:deepinfra-drafting-model',
+      type: 'hard',
+      passed: true,
+    })
+    expect(recorded.tasks[0]!.proofPaths?.[0]).toMatchObject({ status: 'verified' })
+    expect(recorded.tasks[0]!.proofPaths?.[0]?.verificationRecords?.[0]).toMatchObject({
+      status: 'passed',
+      evidenceId: 'command-proof-path-evidence-0',
+    })
+
+    const second = await orch.tick()
+    expect(second.kind).toBe('processed')
+    const completed = await readQueue()
+    expect(completed.tasks[0]!.status).toBe('done')
+    expect(completed.tasks[0]!.acceptanceCriteria[0]?.met).toBe(true)
+    expect((await readTaskRuntimeStore(tmpDir)).tasks.a?.proofRecovery).toBeUndefined()
+    expect(gc.calls).toHaveLength(0)
+  })
+
   it('does not complete review-only gate_check while checkpoint verification still records a failure', async () => {
     await writeQueue([
       mkTask({

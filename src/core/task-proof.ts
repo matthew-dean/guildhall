@@ -111,6 +111,10 @@ export const ProofPath = z.preprocess((value) => {
   scope: ProofPathScope,
   title: z.string(),
   summary: z.string(),
+  // Legacy/imported task paths use a compact command/review/browser shape;
+  // preserve it alongside the richer launch-step representation.
+  kind: z.enum(['command', 'review', 'browser']).optional(),
+  command: z.string().optional(),
   source: z.enum(['documented', 'inferred']).default('documented'),
   status: z.enum(['planned', 'in_progress', 'verified', 'blocked', 'stale']).default('planned'),
   launchSteps: z.array(LaunchStep).default([]),

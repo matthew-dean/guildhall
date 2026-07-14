@@ -1812,4 +1812,8 @@
       flex-basis: 100%;
     }
   }
+
+  .signals-grid > :global(.signal-row--wide) {
+    flex-basis: 100%;
+  }
 </style>

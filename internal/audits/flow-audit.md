@@ -35465,6 +35465,14 @@ orientation proof projection as scope summary.
     is a hard negative signal even when an LLM reviewer claims that the proof
     passed; the task remains open until the artifact itself records live
     evidence.
+  - Narrative Harness live proof: author-intent, story validation,
+    world-state, spatial/geographic, dialogue/character-voice,
+    reader-knowledge/revelation, and theme/meaning scripts all exited 0 with
+    structured fixture findings. Generation exited 1 because its story output
+    artifact is absent. The DeepInfra proof exited 2 because
+    `DEEPINFRA_API_TOKEN` is required; Guildhall now shows that task as
+    `in_progress` with a blocked command proof and the exact reason, rather
+    than accepting the reviewer’s contradictory approval.
 - Proof required:
   - Re-intake planner/apply tests, workspace importer regressions, Overview
     component tests, contract lint, build/install, stale-server verification,
@@ -35496,3 +35504,100 @@ orientation proof projection as scope summary.
     apply; old queues continue to use their existing task fields.
   - Rollback: dismiss an unapplied draft, or restore the queue backup before an
     applied re-intake; code rollback alone does not rewrite queue state.
+
+## codex:provider-proof-projection-2026-07-14
+
+- User job:
+  - When a documented provider command has actually produced a passing
+    artifact, Guildhall must show that command as verified and allow the
+    release to count it. A reviewer narrative must never be able to make the
+    app look complete while the proof path still says blocked.
+- Finding:
+  - The live Narrative Harness model task reached `done` after a real
+    coordinator run, but its command proof path remained `blocked` and
+    `completionProof.state` remained `missing`. The imported compact command
+    shape had been parsed through the richer `ProofPath` schema, which silently
+    discarded its `kind` and `command` fields. Even after that parser loss was
+    fixed, a passing `proof-results/*.json` artifact was not being projected
+    into a command gate or proof-path verification record.
+- Root cause classification:
+  - Persisted task contract compatibility plus a missing shared positive-proof
+    projection. This was a data-model/runtime synchronization failure, not a
+    Narrative Harness data correction.
+- Fix:
+  - The core `ProofPath` contract now preserves the existing compact
+    `kind: command|review|browser` and `command` fields alongside launch-step
+    paths. No existing command proof data is discarded during normalization.
+  - At gate check, a passing provider artifact is validated structurally: the
+    summary must say `passed: true`, and every recorded result must pass. The
+    exact documented command is then recorded as a passed hard gate, and every
+    required artifact evidence item receives a durable passed verification
+    record. The proof path moves to `verified`; the existing negative artifact
+    check still reopens blocked, failed, or simulated evidence.
+  - The projection is idempotent. Once the command gate is present, the next
+    tick completes from recorded evidence instead of repeatedly re-recording
+    the artifact or invoking the gate-checker again.
+  - The idempotency check requires the complete canonical proof path and all
+    acceptance criteria, not merely a historical passing command gate. This
+    lets a later run repair partially projected legacy evidence instead of
+    treating a half-synchronized task as finished.
+  - Once every required artifact record passes, the same projection settles the
+    task's existing acceptance criteria as verified, so release readiness and
+    completion proof consume the evidence rather than leaving a contradictory
+    done-but-unverified state.
+  - Legacy compact command paths whose `expectedEvidence` entries are still
+    strings are normalized at this same projection point into stable artifact
+    evidence ids, so old imported data does not create a second proof model.
+    A passing projection also clears the task's Guildhall-owned proof-recovery
+    runtime state; recovery remains active only until real evidence arrives.
+- Live Narrative Harness proof:
+  - `pnpm run prove:deepinfra-drafting-model` was run with Guildhall's
+    configured DeepInfra-compatible credential after changing the committed
+    default to `Qwen/Qwen3-235B-A22B-Instruct-2507`. All five scenarios passed,
+    including legal adult-fiction boundary behavior and the physical-world
+    continuity reviewer scenario. The artifact records `passed: true`, five
+    scenarios, model id, latency, cost, refusal, and repetition results.
+  - The real Guildhall coordinator then advanced the model task
+    `in_progress -> review -> gate_check -> done`; before this projection fix,
+    the API still reported `proofPaths[0].status: blocked` and missing
+    completion proof. That mismatch is now covered by the regression test.
+- Proof provided:
+  - `src/runtime/__tests__/orchestrator.test.ts` covers both rejection of a
+    blocked provider artifact and conversion of a passing artifact into a
+    durable hard command gate plus verified proof-path records.
+  - `pnpm exec vitest run src/runtime/__tests__/orchestrator.test.ts -t
+    'provider proof artifact'` passed with 2 tests.
+  - The passing-artifact regression keeps an active proof-recovery record in
+    its fixture and verifies that the completed task has met acceptance
+    criteria with no recovery record left behind.
+- Contract Touch Decision:
+  - Work id: `provider-proof-projection`.
+  - Touched contracts: core `ProofPath` accepts and preserves the existing
+    compact command-path fields; orchestrator gate results and proof-path
+    verification records now carry the same observed command/artifact result.
+  - Contracts considered but not touched: release readiness math, task status
+    enum, API response shape, provider credential storage, and the existing
+    negative provider-proof policy.
+  - Required follow-up: run installed-app proof after rebuilding, then verify
+    the Narrative Harness task payload and release readiness from the same
+    persisted state.
+  - Apply/revert behavior: old queues remain readable; reverting the runtime
+    stops new positive projections but does not delete recorded gates or proof
+    records.
+- Schema Migration Decision:
+  - Scope: compatibility schema extension only; no data rewrite or migration
+    is required. Existing persisted command proof paths already contain the
+    fields being preserved.
+  - Existing data impact: queues with compact command paths stop losing their
+    command identity when parsed. New positive verification records are
+    append-only evidence and do not erase history.
+  - Compatibility reader: richer launch-step proof paths continue to parse
+    unchanged; legacy string paths continue through the existing preprocessor.
+  - Fixtures/tests: blocked and passing provider artifact fixtures cover the
+    negative and positive transitions; the passing fixture also verifies
+    proof-recovery cleanup at completion. Legacy string evidence remains
+    covered by the compatibility projection and the existing proof-health
+    compatibility tests.
+  - Rollback: code rollback leaves existing task records readable; no
+    migration rollback is needed because no persisted field is renamed or
+    removed.

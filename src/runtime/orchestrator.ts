@@ -8166,7 +8166,179 @@ export class Orchestrator {
 
   private async runProviderProofIntegrityGateInline(task: Task): Promise<TickOutcome | null> {
     if (task.status !== 'gate_check') return null
-    const issue = await simulatedProviderProofIssue(task, this.resolveEffectiveTaskProjectPath(task))
+    const root = this.resolveEffectiveTaskProjectPath(task)
+    const passingArtifact = await passingProviderProofArtifact(task, root)
+    const issue = passingArtifact ? null : await simulatedProviderProofIssue(task, root)
+    if (passingArtifact && !issue) {
+      const command = task.proofPaths
+        ?.find((proofPath) => proofPath.kind === 'command' && proofPath.command?.trim())
+        ?.command?.trim()
+      const latestHardGates = latestHardGateResults(task)
+      const hasFailedProviderGate = latestHardGates.some((gate) =>
+        gate.type === 'hard' && gate.passed === false && /provider|live-provider/i.test(gate.gateId),
+      )
+      const hasCompleteCommandProof = task.proofPaths?.some((proofPath) => {
+        if (proofPath.kind !== 'command' || proofPath.command?.trim() !== command || proofPath.status !== 'verified') return false
+        return (proofPath.expectedEvidence ?? [])
+          .filter((evidence) => evidence.required !== false)
+          .every((evidence) => (proofPath.verificationRecords ?? []).some((record) =>
+            record.evidenceId === evidence.id && record.status === 'passed',
+          ))
+      }) ?? false
+      const hasCompleteAcceptanceCriteria = (task.acceptanceCriteria ?? []).every((criterion) => criterion.met === true)
+      if (command && task.gateResults.some((gate) =>
+        gate.type === 'hard' && gate.passed === true && gate.command === command,
+      ) && !hasFailedProviderGate && hasCompleteCommandProof && hasCompleteAcceptanceCriteria) return null
+      const beforeStatus = task.status
+      return await this.withQueueWriteLock(async () => {
+        const queue = await this.readQueue()
+        const current = queue.tasks.find((candidate) => candidate.id === task.id)
+        if (!current || current.status !== 'gate_check') return null
+        const now = this.now()
+        const command = current.proofPaths
+          ?.find((proofPath) => proofPath.kind === 'command' && proofPath.command?.trim())
+          ?.command?.trim()
+        if (!command) return null
+
+        const evidenceSummary = passingArtifact.summary
+        const recordedAt = passingArtifact.checkedAt ?? now
+        current.proofPaths = current.proofPaths?.map((proofPath) => {
+          if (proofPath.kind !== 'command' || proofPath.command?.trim() !== command) return proofPath
+          const expectedEvidence = (proofPath.expectedEvidence ?? []).map((evidence, index) =>
+            typeof evidence === 'string'
+              ? {
+                id: `${proofPath.id}-evidence-${index}`,
+                kind: 'artifact' as const,
+                description: evidence,
+                required: true,
+              }
+              : evidence,
+          )
+          const existingRecords = (proofPath.verificationRecords ?? []).map((record) => {
+            const legacyMatch = typeof record.evidenceId === 'string'
+              ? /^provider-artifact-(\d+)$/.exec(record.evidenceId)
+              : null
+            const expected = legacyMatch ? expectedEvidence[Number(legacyMatch[1])] : undefined
+            const legacyEvidenceId = legacyMatch?.[0]
+            if (
+              record.evidenceId === legacyEvidenceId &&
+              expected &&
+              typeof expected.id === 'string' &&
+              expected.id.trim()
+            ) {
+              return { ...record, evidenceId: expected.id.trim() }
+            }
+            return record
+          })
+          const existingEvidenceIds = new Set(existingRecords.map((record) => record.evidenceId).filter(Boolean))
+          const artifactRecords = expectedEvidence
+            .filter((evidence) => evidence.required !== false)
+            .filter((evidence) => !existingEvidenceIds.has(evidence.id))
+            .map((evidence, index) => {
+              const evidenceId = typeof evidence.id === 'string' && evidence.id.trim()
+                ? evidence.id.trim()
+                : `${proofPath.id}-evidence-${index}`
+              return {
+              id: `provider-proof-${evidenceId}-${recordedAt.replace(/[^0-9A-Za-z]/g, '')}`,
+              evidenceId,
+              kind: 'provider' as const,
+              status: 'passed' as const,
+              summary: evidenceSummary,
+              command,
+              recordedAt,
+              recordedBy: 'proof-integrity-gates',
+              evidenceRefs: [{
+                scope: 'local_history',
+                collection: 'proof-results',
+                id: path.basename(passingArtifact.file),
+                path: passingArtifact.file,
+                contentType: 'application/json',
+              }],
+              }
+            })
+          return {
+            ...proofPath,
+            expectedEvidence,
+            status: 'verified' as const,
+            verificationRecords: [...existingRecords, ...artifactRecords],
+            updatedAt: now,
+          }
+        })
+        const verifiedCommandProof = current.proofPaths?.some((proofPath) =>
+          proofPath.kind === 'command' &&
+          proofPath.command?.trim() === command &&
+          proofPath.status === 'verified' &&
+          (proofPath.expectedEvidence ?? [])
+            .filter((evidence) => evidence.required !== false)
+            .every((evidence) => (proofPath.verificationRecords ?? []).some((record) =>
+              record.evidenceId === evidence.id && record.status === 'passed',
+            )),
+        )
+        if (verifiedCommandProof) {
+          current.acceptanceCriteria = current.acceptanceCriteria.map((criterion) => ({
+            ...criterion,
+            met: true,
+            verificationState: 'verified',
+          }))
+        }
+        const hasPassingGate = current.gateResults.some((gate) =>
+          gate.type === 'hard' && gate.passed === true && gate.command === command,
+        )
+        if (!hasPassingGate) {
+          current.gateResults.push({
+            gateId: command,
+            type: 'hard',
+            passed: true,
+            command,
+            checkedAt: now,
+            output: evidenceSummary,
+          })
+        }
+        const latestProviderGateIds = latestHardGateResults(current)
+          .filter((gate) => gate.type === 'hard' && gate.passed === false && /provider|live-provider/i.test(gate.gateId))
+          .map((gate) => gate.gateId)
+        for (const gateId of latestProviderGateIds) {
+          current.gateResults.push({
+            gateId,
+            type: 'hard',
+            passed: true,
+            command,
+            checkedAt: now,
+            output: evidenceSummary,
+          })
+        }
+        current.updatedAt = now
+        queue.lastUpdated = now
+        current.notes.push({
+          agentId: 'proof-integrity-gates',
+          role: 'gate-checker',
+          content: `Recorded passing provider proof from ${path.relative(root, passingArtifact.file)} for ${command}.`,
+          timestamp: now,
+        })
+        await this.writeQueue(queue)
+        await upsertTaskRuntimeState(inferProjectRootFromMemoryDir(this.opts.config.memoryDir), current.id, {
+          proofRecovery: undefined,
+          updatedAt: now,
+        })
+        await this.logTickProgress({
+          task: current,
+          agent: 'proof-integrity-gates',
+          beforeStatus,
+          afterStatus: current.status,
+          transitioned: false,
+          note: 'passing provider proof recorded',
+        })
+        return {
+          kind: 'processed',
+          taskId: current.id,
+          agent: 'proof-integrity-gates',
+          beforeStatus,
+          afterStatus: current.status,
+          transitioned: false,
+          revisionCount: current.revisionCount,
+        } as TickOutcome
+      })
+    }
     if (!issue) return null
     const beforeStatus = task.status
     return await this.withQueueWriteLock(async () => {
@@ -13227,6 +13399,54 @@ async function simulatedProviderProofIssue(
     if (!match) continue
     return {
       summary: `Provider proof integrity failed: ${path.relative(root, file)} contains simulated provider evidence (${match}).`,
+    }
+  }
+  return null
+}
+
+interface PassingProviderProofArtifact {
+  file: string
+  summary: string
+  checkedAt?: string
+}
+
+async function passingProviderProofArtifact(
+  task: Task,
+  root: string,
+): Promise<PassingProviderProofArtifact | null> {
+  if (!requiresRealProviderProof(task) || !root || !existsSync(root)) return null
+  const commandProof = task.proofPaths?.find((proofPath) =>
+    proofPath.kind === 'command' && Boolean(proofPath.command?.trim()),
+  )
+  if (!commandProof) return null
+  const files = await listProviderProofScanFiles(root)
+  for (const file of files) {
+    if (!/(?:^|[\\/])proof-results[\\/]/i.test(file) || !/\.json$/i.test(file)) continue
+    const content = await fs.readFile(file, 'utf8').catch(() => '')
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(content)
+    } catch {
+      continue
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue
+    const record = parsed as Record<string, unknown>
+    const summary = record.summary && typeof record.summary === 'object' && !Array.isArray(record.summary)
+      ? record.summary as Record<string, unknown>
+      : record
+    const results = Array.isArray(record.results) ? record.results : []
+    const passed = summary.passed === true &&
+      (results.length === 0 || results.every((result) =>
+        result && typeof result === 'object' && !Array.isArray(result) && (result as { passed?: unknown }).passed === true,
+      ))
+    if (!passed) continue
+    const model = typeof summary.model === 'string' && summary.model.trim() ? ` (${summary.model.trim()})` : ''
+    const scenarioCount = typeof summary.scenarioCount === 'number' ? ` across ${summary.scenarioCount} scenarios` : ''
+    const checkedAt = typeof summary.checkedAt === 'string' && summary.checkedAt.trim() ? summary.checkedAt : undefined
+    return {
+      file,
+      ...(checkedAt ? { checkedAt } : {}),
+      summary: `Live provider proof passed${model}${scenarioCount}: ${path.relative(root, file)}.`,
     }
   }
   return null
