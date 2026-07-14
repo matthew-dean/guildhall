@@ -140,6 +140,24 @@ describe('evidence-to-work-graph intake', () => {
     })
   })
 
+  it('does not turn archived or shelved history into a live prerequisite', () => {
+    const plan = planEvidenceWorkGraph({
+      sources: [{ path: 'looma/docs/component-library-audit.md', content: loomaComponentEvidence }],
+      existingTasks: [
+        {
+          id: 'task-dialog-foundation',
+          title: 'Build Dialog primitive',
+          status: 'archived',
+          deliverableName: 'Dialog',
+          producedArtifact: 'ui-dialog',
+        },
+      ],
+    })
+
+    const alertDialog = plan.tasks.find(task => task.deliverableName === 'AlertDialog' && task.kind === 'implementation')
+    expect(alertDialog?.dependsOn).toEqual([])
+  })
+
   it('splits reusable deliverables from consuming-product integration work', () => {
     const plan = planEvidenceWorkGraph({
       sources: [{ path: 'looma/docs/component-library-audit.md', content: loomaComponentEvidence }],

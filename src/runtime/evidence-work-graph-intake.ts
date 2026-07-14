@@ -77,6 +77,7 @@ type ExistingTaskMatch = {
 }
 
 const DONEISH_STATUSES = new Set(['done', 'review', 'gate_check'])
+const NON_BLOCKING_DEPENDENCY_STATUSES = new Set(['archived', 'shelved'])
 const STRUCTURED_PLAN_STATUSES = new Set(['ready', 'spec_review'])
 const workGraphDomainAdapter = genericWorkGraphDomainAdapter
 
@@ -99,7 +100,7 @@ export function planEvidenceWorkGraph(input: EvidenceWorkGraphInput): EvidenceWo
     const existingMatch = findExistingTaskForUnit(unit, existingTasks)
     const isAlreadyShipped = unit.statusHint === 'shipped' || isExistingDone(existingMatch)
 
-    if (isAlreadyShipped && !existingMatch) {
+    if (isAlreadyShipped && (!existingMatch || isExistingNonBlockingDependency(existingMatch))) {
       continue
     }
 
@@ -532,7 +533,7 @@ function buildIntegrationTask(
     }
 
     const existingDependency = findExistingTaskByDeliverable(foundation, existingTasks)
-    if (existingDependency && !isExistingDone(existingDependency)) {
+    if (existingDependency && !isExistingDone(existingDependency) && !isExistingNonBlockingDependency(existingDependency)) {
       dependsOn.add(existingDependency.id)
     }
   }
@@ -577,7 +578,7 @@ function dependenciesFor(
     }
 
     const existingTask = findExistingTaskByDeliverable(foundation, existingTasks)
-    if (existingTask && !isExistingDone(existingTask)) {
+    if (existingTask && !isExistingDone(existingTask) && !isExistingNonBlockingDependency(existingTask)) {
       taskIds.push(existingTask.id)
       relatedTasks.push({
         taskId: existingTask.id,
@@ -946,6 +947,10 @@ function meaningfulTitleTokens(value: string): string[] {
 
 function isExistingDone(task: ExistingTaskMatch | undefined): boolean {
   return task?.status ? DONEISH_STATUSES.has(task.status) : false
+}
+
+function isExistingNonBlockingDependency(task: ExistingTaskMatch | undefined): boolean {
+  return task?.status ? NON_BLOCKING_DEPENDENCY_STATUSES.has(task.status) : false
 }
 
 function normalizeDeliverableName(value: string): string {

@@ -35447,6 +35447,15 @@ orientation proof projection as scope summary.
   - Signals use the existing dense `UtilityPanel`, self-size at the start of
     the wrapping row, and visually clamp only the final secondary text line to
     three lines. Stored titles and messages remain complete.
+- Dependency calibration:
+  - A live run of the refreshed Narrative Harness author-intent task stopped
+    before dispatch because its dependency list still contained an archived
+    packet-run record. Archived and shelved history is now explicitly
+    non-blocking during graph planning and re-intake; source-backed active
+    dependencies remain intact.
+  - This is a model correction, not a project-data exception: history may be
+    retained for orientation, but it cannot participate as a live prerequisite
+    or silently revive into the current release.
 - Proof required:
   - Re-intake planner/apply tests, workspace importer regressions, Overview
     component tests, contract lint, build/install, stale-server verification,

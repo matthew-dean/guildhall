@@ -155,7 +155,12 @@ export function planProjectReintake(input: ProjectReintakeInput): ProjectReintak
     .map(task => stringField(task, 'id'))
     .filter((id): id is string => Boolean(id)))
   const graphTaskIds = new Set(graphPlan.tasks.map(task => task.id))
-  const allowedDependencyIds = new Set([...graphTaskIds, ...protectedProgressTaskIds])
+  const nonBlockingDependencyIds = new Set(input.tasks
+    .filter(task => ['archived', 'shelved'].includes(stringField(task, 'status') ?? ''))
+    .map(task => stringField(task, 'id'))
+    .filter((id): id is string => Boolean(id)))
+  const allowedDependencyIds = new Set([...graphTaskIds, ...protectedProgressTaskIds]
+    .filter(id => !nonBlockingDependencyIds.has(id)))
   const graphChanges = graphPlan.tasks
     .filter(task => !completedTaskIds.has(task.id))
     .filter(task => !protectedProgressTaskIds.has(task.id))
