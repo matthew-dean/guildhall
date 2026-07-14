@@ -793,12 +793,15 @@ function evidenceTaskToDraft(
   const later = selectedRelease ? taskIsAfterSelectedRelease(task, selectedRelease) : false
   const releaseIds = releaseIdsForEvidenceTask(task, selectedRelease)
   const references = evidenceReferencesForTask(task, sources)
+  const normalizedReferences = projectPath
+    ? references.map(reference => path.isAbsolute(reference) ? reference : path.resolve(projectPath, reference))
+    : references
   const contractNames = unique(references
     .map(reference => sources.find(source => source.path === reference)?.content)
     .filter((content): content is string => Boolean(content))
     .flatMap(content => extractNeededContractNames(content, task.title)))
   const importedBlueprint = projectPath
-    ? buildImportedBlueprintSeed(evidenceTaskToMaterializedImportTask(task, references), references, projectPath, now)
+    ? buildImportedBlueprintSeed(evidenceTaskToMaterializedImportTask(task, normalizedReferences), normalizedReferences, projectPath, now)
     : null
   const sourceShapedCriteria = reintakeAcceptanceCriteria(task, contractNames)
   const acceptanceCriteriaSource = reintakePrototypeTaskKind(task.title)

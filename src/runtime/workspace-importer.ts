@@ -650,6 +650,7 @@ type ImportedBlueprintSeed = {
   requestIntake: Task['requestIntake']
   sourceClaims: Task['sourceClaims']
   acceptanceCriteria?: Task['acceptanceCriteria']
+  proofPaths?: Task['proofPaths']
   productBrief?: Task['productBrief']
   spec?: Task['spec']
   outOfScope: Task['outOfScope']
@@ -3953,9 +3954,11 @@ function documentedImportedProofCommands(task: Pick<MaterializedImportTask, 'tit
     } catch {
       continue
     }
-    collectFromText(content, true)
+    const scopedContent = sourceTaskBlockContent(content, task.title)
+    if (scopedContent === null) continue
+    collectFromText(scopedContent, true)
 
-    const scriptReferences = [...content.matchAll(/\b(scripts\/[A-Za-z0-9._/-]+)/g)]
+    const scriptReferences = [...scopedContent.matchAll(/\b(scripts\/[A-Za-z0-9._/-]+)/g)]
       .map(match => match[1])
       .filter((value): value is string => Boolean(value) && /\b(prove|test|check|validate|verify)\b/i.test(value))
 
@@ -3970,8 +3973,8 @@ function documentedImportedProofCommands(task: Pick<MaterializedImportTask, 'tit
           const command = `pnpm run ${name}`
           const isProofScript = /\b(prove|test|check|validate|verify|verification)\b/i.test(name)
           if (
-            (isProofScript && commandMatchesTask(command)) ||
-            (scriptReferences.length > 0 && scriptReferences.some(script => value.includes(script)) && commandMatchesTask(command))
+            (isProofScript && packageScriptMatchesTask(command)) ||
+            (scriptReferences.length > 0 && scriptReferences.some(script => value.includes(script)))
           ) add(command)
         }
         break
@@ -3981,6 +3984,58 @@ function documentedImportedProofCommands(task: Pick<MaterializedImportTask, 'tit
     }
   }
   return [...commands]
+
+  function packageScriptMatchesTask(command: string): boolean {
+    const commandKeywords = normalizeImportText(command)
+      .split(/[\s:_\/-]+/)
+      .filter(keyword => keyword.length >= 4 && !genericProofKeywords.has(keyword))
+    if (commandKeywords.length === 0) return false
+    if (commandKeywords.length > 1) return commandMatchesTask(command)
+    // A one-word script such as `prove:generation` is too generic to match a
+    // title that merely says "Generate ...". It must appear as the same
+    // substantive noun in the task title; explicit source references are
+    // handled by the branch above.
+    return meaningfulSourceTokens(task.title).includes(commandKeywords[0]!)
+  }
+}
+
+function sourceTaskBlockContent(content: string, taskTitle: string): string | null {
+  const lines = content.split(/\r?\n/)
+  const blocks: string[] = []
+  let current: string[] = []
+  for (const line of lines) {
+    if (/^\s*\d+[.)]\s+/.test(line) && current.length > 0) {
+      blocks.push(current.join('\n'))
+      current = []
+    }
+    if (/^\s*\d+[.)]\s+/.test(line) || current.length > 0) current.push(line)
+  }
+  if (current.length > 0) blocks.push(current.join('\n'))
+  if (blocks.length === 0) return content
+
+  const titleTokens = meaningfulSourceTokens(taskTitle)
+  const matching = blocks.filter(block => {
+    // A numbered roadmap item owns its proof commands until the next item,
+    // but its sub-bullets can mention other capabilities. Match the task only
+    // against the item heading/continuation, not those implementation notes.
+    const heading = block.split(/\n\s*[-*]\s+/)[0] ?? block
+    const blockTokens = new Set(meaningfulSourceTokens(heading))
+    const overlap = titleTokens.filter(token => blockTokens.has(token)).length
+    return overlap >= Math.min(3, Math.max(1, Math.ceil(titleTokens.length * 0.5)))
+  })
+  return matching.length > 0 ? matching.join('\n') : null
+}
+
+function meaningfulSourceTokens(value: string): string[] {
+  const stopWords = new Set([
+    'add', 'build', 'create', 'define', 'implement', 'the', 'a', 'an', 'and',
+    'for', 'from', 'into', 'one', 'this', 'that', 'with', 'each', 'use',
+    'first', 'selected', 'current', 'requested', 'prove', 'proof', 'run',
+  ])
+  return [...new Set(normalizeImportText(value)
+    .split(/\s+/)
+    .flatMap(token => token.split('-'))
+    .filter(token => token.length >= 4 && !stopWords.has(token)))]
 }
 
 function deterministicImportedCriterion(
@@ -4274,12 +4329,16 @@ function materializedProofPaths(
         },
       ]
     case 'general':
-      if (current.length > 0 && !importedProofPathsLookGeneric(current)) return current
-      return command
-        ? [importedCommandProofPath(command, [
+      if (command) {
+        return [
+          importedCommandProofPath(command, [
             ...materializedAcceptanceCriteria(task, evidenceDetail).map(criterion => criterion.description.trim()).filter(Boolean).slice(0, 6),
-          ], 'documented')]
-        : fallback
+          ], 'documented'),
+          ...current.filter(proof => proof.kind !== 'command' && !importedProofPathsLookGeneric([proof])),
+        ]
+      }
+      if (current.length > 0 && !importedProofPathsLookGeneric(current)) return current
+      return fallback
   }
 }
 
@@ -5609,6 +5668,7 @@ export function buildImportedBlueprintSeed(
         createdBy: 'workspace-importer',
       },
       sourceClaims,
+      proofPaths: materializedProofPaths(normalizedTask, evidenceDetail),
     }
   }
 
@@ -5687,6 +5747,7 @@ export function buildImportedBlueprintSeed(
     requestIntake: shapedSeedTask.requestIntake,
     sourceClaims,
     acceptanceCriteria,
+    proofPaths: materializedProofPaths(normalizedTask, evidenceDetail),
     productBrief: seededProductBrief,
     spec: seededSpec,
     outOfScope: [...(task.missingInformation ?? [])],

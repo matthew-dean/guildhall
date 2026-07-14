@@ -35438,6 +35438,12 @@ orientation proof projection as scope summary.
   - Source refresh only triggers for a newly documented command proof path;
     inferred review plans do not count as evidence. The existing persisted task
     schema is reused.
+  - Relative source references are normalized against the project root before
+    proof detection. Numbered roadmap items own their bounded source block,
+    one-word scripts such as `prove:generation` require a matching substantive
+    task noun unless the source explicitly names the script, and a documented
+    command takes precedence over an inferred review plan while dropping
+    generic stale checklist text.
   - Signals use the existing dense `UtilityPanel`, self-size at the start of
     the wrapping row, and visually clamp only the final secondary text line to
     three lines. Stored titles and messages remain complete.
