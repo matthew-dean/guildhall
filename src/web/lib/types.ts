@@ -492,6 +492,8 @@ export interface Task {
     expectedCount?: number
     verifiedCount?: number
     verified?: string[]
+    historicalCount?: number
+    historical?: string[]
     missing?: string[]
     latestAt?: string
   }

@@ -386,6 +386,23 @@
                   {/each}
                 </ul>
               {/if}
+              {#if completionProof.historical?.length}
+                <section class="detail historical-proof">
+                  <h4>Historical claims</h4>
+                  <p class="muted">These were recorded before the current proof gap and do not count toward release readiness.</p>
+                  <ul class="proof-list">
+                    {#each completionProof.historical as proof, i (`historical-proof-${i}`)}
+                      <li>
+                        <Chip label="Historical" tone="neutral" />
+                        <span>{proof}</span>
+                      </li>
+                    {/each}
+                  </ul>
+                  {#if (completionProof.historicalCount ?? 0) > completionProof.historical.length}
+                    <p class="muted">{(completionProof.historicalCount ?? 0) - completionProof.historical.length} more historical claims remain in the evidence trail.</p>
+                  {/if}
+                </section>
+              {/if}
               {#if completionProof.missing?.length}
                 <ul class="proof-list">
                   {#each completionProof.missing as missing, i (`missing-proof-${i}`)}

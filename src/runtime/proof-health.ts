@@ -67,7 +67,7 @@ function latestApprovingReviewReasoning(task: unknown): string | null {
   return null
 }
 
-function hasActiveProofRecovery(task: unknown): boolean {
+export function hasActiveProofRecovery(task: unknown): boolean {
   if (!task || typeof task !== 'object') return false
   const record = task as Record<string, unknown>
   const runtime = record.runtime && typeof record.runtime === 'object' && !Array.isArray(record.runtime)
@@ -523,6 +523,14 @@ export function taskDoneButProofMissing(task: unknown): boolean {
   if (proofPathMissing) return true
   if (taskHasRecordedCompletionProof(task)) return false
   return false
+}
+
+export function taskProofIsStale(task: unknown): boolean {
+  if (!task || typeof task !== 'object') return false
+  return hasActiveProofRecovery(task) || (
+    String((task as { status?: unknown }).status ?? '') === 'done' &&
+    taskDoneButProofMissing(task)
+  )
 }
 
 export function proofMissingDoneTasks(tasks: readonly Task[]): ProofMissingDoneTask[] {

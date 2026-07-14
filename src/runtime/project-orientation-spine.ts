@@ -7,8 +7,8 @@ import {
   type ProjectScope,
   type ProjectScopeProjection,
 } from './project-scope-projection.js'
-import { taskDoneButProofMissing } from './proof-health.js'
-import { recordedCompletionProofForTask } from './task-completion-proof.js'
+import { taskDoneButProofMissing, taskProofIsStale } from './proof-health.js'
+import { classifyCompletionProof, recordedCompletionProofForTask } from './task-completion-proof.js'
 import { explicitMarkdownSourceRefsFromTask } from './task-source-refs.js'
 import { taskTitleOverlap } from './task-title-overlap.js'
 import { deriveTaskWorkVisibility } from './work-visibility.js'
@@ -859,6 +859,7 @@ function proofForTask(
   options: { suppressMissingProof?: boolean; requireModeledProof?: boolean; forceModeledProofMissing?: boolean } = {},
 ): OrientationProofSummary {
   const recorded = recordedCompletionProofForTask(task)
+  const classified = classifyCompletionProof(recorded, taskProofIsStale(task))
   const handoff = task.completionHandoff && typeof task.completionHandoff === 'object'
     ? task.completionHandoff as {
         verified?: string[]
@@ -866,7 +867,7 @@ function proofForTask(
         remainingRisks?: string[]
       }
     : null
-  const verified = [...recorded.verified, ...(handoff?.verified ?? [])]
+  const verified = [...classified.current, ...(handoff?.verified ?? [])]
   const missing = [...(handoff?.notVerified ?? []), ...(handoff?.remainingRisks ?? [])].filter(Boolean)
   const plannedProof = Array.isArray(task.proofPaths) ? task.proofPaths.length : 0
   const base = { expectationCount: plannedProof }
@@ -887,6 +888,14 @@ function proofForTask(
       state: verified.length > 0 ? 'proven' : 'none',
       verified,
       missing: [],
+      ...base,
+    }
+  }
+  if (taskProofIsStale(task as unknown)) {
+    return {
+      state: 'needed',
+      verified,
+      missing: missing.length > 0 ? missing : ['Required proof evidence has not been attached yet.'],
       ...base,
     }
   }

@@ -1,6 +1,19 @@
+export type CompletionProofSource = 'done_summary' | 'gate' | 'review' | 'note'
+
+export interface RecordedCompletionProofEntry {
+  text: string
+  source: CompletionProofSource
+}
+
 export interface RecordedCompletionProof {
   verified: string[]
+  entries: RecordedCompletionProofEntry[]
   latestAt: string | null
+}
+
+export interface ClassifiedCompletionProof {
+  current: string[]
+  historical: string[]
 }
 
 function stringValue(value: unknown): string | null {
@@ -40,11 +53,30 @@ function prioritizeProofEvidence(values: string[]): string[] {
   return [...values].sort((a, b) => proofEvidenceRank(a) - proofEvidenceRank(b))
 }
 
+export function classifyCompletionProof(
+  recorded: RecordedCompletionProof,
+  proofIsStale: boolean,
+): ClassifiedCompletionProof {
+  const currentEntries = proofIsStale
+    ? recorded.entries.filter((entry) => entry.source !== 'review')
+    : recorded.entries
+  const historicalEntries = proofIsStale
+    ? recorded.entries.filter((entry) => entry.source === 'review')
+    : []
+  return {
+    current: currentEntries.map((entry) => entry.text),
+    historical: historicalEntries.map((entry) => entry.text),
+  }
+}
+
 export function recordedCompletionProofForTask(task: unknown): RecordedCompletionProof {
   const record = recordValue(task)
-  if (!record) return { verified: [], latestAt: null }
+  if (!record) return { verified: [], entries: [], latestAt: null }
 
-  const verified: string[] = []
+  const entries: RecordedCompletionProofEntry[] = []
+  const addEntry = (text: string, source: CompletionProofSource) => {
+    entries.push({ text, source })
+  }
   const proofDates: string[] = []
   const addProofDate = (value: unknown) => {
     const text = stringValue(value)
@@ -55,7 +87,7 @@ export function recordedCompletionProofForTask(task: unknown): RecordedCompletio
   const doneSummarySummary = recordValue(doneSummary?.summary)
   const doneSummaryEvidence = stringValue(doneSummarySummary?.evidence)
   if (doneSummary?.status === 'done' && doneSummaryEvidence) {
-    verified.push(`Done summary: ${doneSummaryEvidence}`)
+    addEntry(`Done summary: ${doneSummaryEvidence}`, 'done_summary')
     addProofDate(doneSummary.completedAt)
     addProofDate(doneSummary.createdAt)
   }
@@ -66,7 +98,7 @@ export function recordedCompletionProofForTask(task: unknown): RecordedCompletio
     if (!gate) continue
     const passed = gate.passed === true || gate.status === 'pass' || gate.status === 'passed'
     if (!passed) continue
-    verified.push(`Gate passed: ${stringValue(gate.gateId) ?? stringValue(gate.command) ?? stringValue(gate.name) ?? 'recorded gate'}`)
+    addEntry(`Gate passed: ${stringValue(gate.gateId) ?? stringValue(gate.command) ?? stringValue(gate.name) ?? 'recorded gate'}`, 'gate')
     addProofDate(gate.checkedAt)
     addProofDate(gate.recordedAt)
   }
@@ -78,7 +110,7 @@ export function recordedCompletionProofForTask(task: unknown): RecordedCompletio
     const approved = verdict.verdict === 'approve' || verdict.verdict === 'approved' ||
       verdict.decision === 'approve' || verdict.decision === 'approved'
     if (!approved) continue
-    verified.push(`Review approved: ${stringValue(verdict.reviewerPath) ?? stringValue(verdict.reviewer) ?? 'recorded review'}`)
+    addEntry(`Review approved: ${stringValue(verdict.reviewerPath) ?? stringValue(verdict.reviewer) ?? 'recorded review'}`, 'review')
     addProofDate(verdict.recordedAt)
   }
 
@@ -88,16 +120,17 @@ export function recordedCompletionProofForTask(task: unknown): RecordedCompletio
     if (!note) continue
     const content = stringValue(note.content)
     if (!content || !/^Closed containing work after linked child tasks completed:/i.test(content)) continue
-    verified.push('Containing work closed after linked child tasks completed')
+    addEntry('Containing work closed after linked child tasks completed', 'note')
     addProofDate(note.timestamp)
   }
 
   const latestReviewerSummary = approvedReviewerProofSummary(record.latestReviewerSummary)
-  if (latestReviewerSummary) verified.push(latestReviewerSummary)
+  if (latestReviewerSummary) addEntry(latestReviewerSummary, 'review')
 
   const latestAt = proofDates
     .sort((a, b) => Date.parse(b) - Date.parse(a))[0] ?? null
-  return { verified: prioritizeProofEvidence(verified), latestAt }
+  const prioritized = [...entries].sort((a, b) => proofEvidenceRank(a.text) - proofEvidenceRank(b.text))
+  return { verified: prioritized.map((entry) => entry.text), entries: prioritized, latestAt }
 }
 
 export function taskHasRecordedCompletionProof(task: unknown): boolean {

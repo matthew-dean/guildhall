@@ -35208,6 +35208,77 @@ orientation proof projection as scope summary.
   - Scope: none. No persisted schema, API field, enum, or serialized state
     changed.
 
+## codex:completion-proof-current-vs-historical-2026-07-13
+
+- User job:
+  - When a task has been reopened for missing proof, the user should be able
+    to tell immediately which evidence is still current, which claims are
+    historical, and why the task cannot count toward release completion.
+- Finding:
+  - Narrative Harness exposed a shared projection bug. A task with active
+    proof recovery was returned as `completionProof.state = missing` while
+    also reporting old reviewer approvals in `verified` and `verifiedCount`.
+    The release readiness calculation stayed blocked, but the task drawer
+    could make stale review narration look like current proof.
+- Root cause classification:
+  - Shared runtime projection and API presentation contract, not a project
+    data problem. Completion proof was flattening current evidence and prior
+    claims into one list.
+- Fix:
+  - When proof is missing or actively being recovered, command/gate evidence
+    remains in `verified`, while review-derived claims move to optional
+    `historical` and `historicalCount` fields.
+  - The Journey surface renders those claims under `Historical claims` and
+    explicitly says they do not count toward release readiness.
+  - The task remains `missing`; this presentation change cannot settle a
+    release or promote historical narration into proof.
+- Proof provided:
+  - `CI=true pnpm vitest run
+    src/runtime/__tests__/serve-task-endpoints.test.ts
+    src/web/surfaces/drawer/__tests__/drawer-tabs.svelte.test.ts` passed:
+    130 tests.
+  - The endpoint regression proves a stale approval is absent from current
+    `verified`, retained in `historical`, and the missing state remains.
+  - The drawer regression proves the historical distinction is visible to the
+    user rather than only present in raw API data.
+  - `pnpm lint:contracts` passed; `pnpm build`, `pnpm dev:install`, and
+    `guildhall stop && guildhall start` passed; `/api/stale-server` reported
+    `stale:false` for the installed artifact.
+  - Live Narrative Harness API proof after install returned the model task as
+    `completionProof.state = missing`, with current gate/build evidence
+    separate from `historical` reviewer claims.
+  - The shared project-spine projection now keeps that recovered task in a
+    proof-needed state and excludes its historical approvals from the current
+    proven count; the orientation regression covers this cross-surface case.
+  - Live Playwright proof at `1440x1000` opened the selected model task,
+    selected Journey, scrolled the drawer to Completion proof, and verified
+    that `Historical claims`, the explanation that those claims do not count
+    toward release readiness, and the missing-proof message were all visible.
+- Contract Touch Decision:
+  - Work id: `completion-proof-current-vs-historical`.
+  - Touched contracts: the optional task `completionProof` response shape,
+    adding `historical` and `historicalCount`; the Journey drawer rendering of
+    that shape.
+  - Contracts considered but not touched: persisted task schema,
+    `reviewVerdicts`, `gateResults`, release readiness math, task status
+    transitions, proof path schema, and scheduler behavior.
+  - Required follow-up: keep release readiness authoritative from current
+    proof state; future proof-source additions must classify current versus
+    historical evidence instead of appending to one undifferentiated list.
+  - Proof required: endpoint regression, drawer regression, contract lint,
+    build, installed runtime freshness, and a live Narrative Harness task
+    payload showing missing proof cannot be mistaken for approval.
+  - Apply/revert behavior: reverting removes the distinction from the API and
+    drawer only; it does not mutate existing task evidence.
+- Schema Migration Decision:
+  - Scope: no persisted schema migration. The new fields are derived response
+    fields and existing task evidence remains unchanged.
+  - Compatibility reader: clients that do not know the optional fields retain
+    the existing missing-state behavior; current clients show the historical
+    section when present.
+  - Rollback: remove the derived fields and drawer section without rewriting
+    project state.
+
 ## codex:overview-signal-natural-height-2026-07-13
 
 - User job:

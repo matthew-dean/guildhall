@@ -1763,6 +1763,51 @@ describe('buildProjectOrientationSpine', () => {
     expect(spine.proofContracts[0]?.state).toBe('needed')
   })
 
+  it('keeps historical approvals out of current project proof after recovery reopens a task', () => {
+    const spine = buildProjectOrientationSpine({
+      projectId: 'narrative-harness',
+      now: '2026-07-13T23:00:00.000Z',
+      scope: {
+        id: 'stage-1-headless-mvp',
+        label: 'Stage 1 Headless MVP',
+        kind: 'release',
+        source: 'release_plan',
+        nodeIds: ['work:model-proof'],
+        deferredNodeIds: [],
+      },
+      tasks: [{
+        id: 'model-proof',
+        title: 'Prove the drafting model',
+        status: 'review',
+        proofRecovery: {
+          reopenedAt: '2026-07-13T22:00:00.000Z',
+          reason: 'Live provider proof is missing.',
+        },
+        gateResults: [{
+          gateId: 'pnpm-build',
+          type: 'hard',
+          passed: true,
+          checkedAt: '2026-07-13T20:00:00.000Z',
+        }],
+        reviewVerdicts: [{
+          verdict: 'approve',
+          reviewerPath: 'llm',
+          recordedAt: '2026-07-07T20:00:00.000Z',
+        }],
+        proofPaths: [{
+          kind: 'command',
+          command: 'pnpm prove:deepinfra-drafting-model',
+          status: 'planned',
+        }],
+      }],
+    })
+
+    expect(spine.summary.progress).toMatchObject({ done: 0, proven: 0 })
+    expect(spine.proofContracts[0]).toMatchObject({ state: 'needed' })
+    expect(spine.proofContracts[0]?.verified).toEqual(['Gate passed: pnpm-build'])
+    expect(spine.proofContracts[0]?.verified).not.toContain('Review approved: llm')
+  })
+
   it('does not treat imported proof-path status as completed proof evidence', () => {
     const spine = buildProjectOrientationSpine({
       projectId: 'narrative-harness',

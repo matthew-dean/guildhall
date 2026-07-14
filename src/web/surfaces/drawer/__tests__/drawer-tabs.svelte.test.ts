@@ -351,6 +351,28 @@ describe('drawer task detail tabs', () => {
     expect(screen.getAllByText('content.no-truncated-data')).toHaveLength(2)
   })
 
+  it('labels completion claims superseded by a proof recovery as historical', () => {
+    render(JourneyTab, {
+      task: task({
+        completionProof: {
+          state: 'missing',
+          expectedCount: 1,
+          verifiedCount: 1,
+          verified: ['Gate passed: pnpm-build'],
+          historicalCount: 2,
+          historical: ['Review approved: llm', 'Reviewer proof: fixture output was complete.'],
+          missing: ['Live provider proof is still required.'],
+        },
+      }),
+    })
+
+    expect(screen.getByText('Historical claims')).toBeInTheDocument()
+    expect(screen.getByText(/do not count toward release readiness/)).toBeInTheDocument()
+    expect(screen.getByText('Review approved: llm')).toBeInTheDocument()
+    expect(screen.getByText('Reviewer proof: fixture output was complete.')).toBeInTheDocument()
+    expect(screen.getByText('Live provider proof is still required.')).toBeInTheDocument()
+  })
+
   it('renders legacy string expected evidence as readable proof expectations', () => {
     render(JourneyTab, {
       task: task({

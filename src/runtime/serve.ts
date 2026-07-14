@@ -22,8 +22,8 @@ import {
   upsertTaskRuntimeState,
 } from '@guildhall/sessions'
 import { readTaskWorkspaceStore } from './task-state-store.js'
-import { latestRecordedCompletionProofAt, recordedCompletionProofCanSettleTaskStatus, recordedCompletionProofForTask, taskHasRecordedCompletionProof } from './task-completion-proof.js'
-import { normalizeAcceptanceCriteriaForCurrentProof, taskDoneButProofMissing, taskHasNonReviewCommandBackedProof } from './proof-health.js'
+import { classifyCompletionProof, latestRecordedCompletionProofAt, recordedCompletionProofCanSettleTaskStatus, recordedCompletionProofForTask, taskHasRecordedCompletionProof } from './task-completion-proof.js'
+import { normalizeAcceptanceCriteriaForCurrentProof, taskDoneButProofMissing, taskHasNonReviewCommandBackedProof, taskProofIsStale } from './proof-health.js'
 import { normalizeReviewPlanForTask } from './review-planner.js'
 import { taskBlockerSummary } from './task-blocker-summary.js'
 import { taskTitleOverlap } from './task-title-overlap.js'
@@ -3814,13 +3814,23 @@ function compactTaskCompletionProof(task: Record<string, unknown>): Record<strin
     }
   }
   if (recorded.verified.length === 0 && proofPaths.length === 0 && !proofMissing && !activeProofRecovery) return undefined
+  const proofIsStale = taskProofIsStale(task)
+  const classified = classifyCompletionProof(recorded, proofIsStale)
+  const current = classified.current
+  const historical = classified.historical
   return {
-    state: proofMissing || activeProofRecovery ? 'missing' : recorded.verified.length > 0 ? 'verified' : 'planned',
+    state: proofIsStale ? 'missing' : current.length > 0 ? 'verified' : 'planned',
     expectedCount: proofPaths.length,
-    verifiedCount: recorded.verified.length,
-    verified: recorded.verified.slice(0, 4),
+    verifiedCount: current.length,
+    verified: current.slice(0, 4),
+    ...(historical.length > 0
+      ? {
+          historicalCount: historical.length,
+          historical: historical.slice(0, 4),
+        }
+      : {}),
     ...(recorded.latestAt ? { latestAt: recorded.latestAt } : {}),
-    ...(proofMissing || activeProofRecovery ? { missing: ['Required proof evidence has not been attached yet.'] } : {}),
+    ...(proofIsStale ? { missing: ['Required proof evidence has not been attached yet.'] } : {}),
   }
 }
 

@@ -285,6 +285,10 @@ describe('GET /api/project/task/:id', () => {
 
     expect(body.task?.completionProof).toMatchObject({ state: 'missing' })
     expect(body.task?.completionProof?.missing?.length).toBeGreaterThan(0)
+    expect(body.task?.completionProof?.verified).toContain('Gate passed: content.no-truncated-data')
+    expect(body.task?.completionProof?.verified).not.toContain('Review approved: recorded review')
+    expect(body.task?.completionProof?.historicalCount).toBe(1)
+    expect(body.task?.completionProof?.historical).toContain('Review approved: recorded review')
   })
 
   it('builds drawer work progress from effective proof state, not stale raw task records', async () => {
