@@ -2921,7 +2921,11 @@ function completionHandoffHasVerifiedEvidence(handoff: unknown): boolean {
 function proofPathHasPassedEvidence(proofPath: unknown): boolean {
   if (!proofPath || typeof proofPath !== 'object' || Array.isArray(proofPath)) return false
   const record = proofPath as Record<string, unknown>
-  if (record.status === 'verified') return true
+  // An inferred imported plan can carry a stale `verified` label from an old
+  // intake pass. Only an observed/unsourced status is allowed to preserve a
+  // completion claim; source-backed plans still need actual verification
+  // records before they settle work.
+  if (record.status === 'verified' && record.source !== 'inferred') return true
   return passedVerificationRecords(record.verificationRecords).length > 0
 }
 

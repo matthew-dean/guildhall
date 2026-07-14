@@ -35406,3 +35406,66 @@ orientation proof projection as scope summary.
 - Schema Migration Decision:
   - Scope: none. No persisted schema, API field, enum, or serialized state
     changed.
+
+## codex:source-proof-refresh-and-signal-density-2026-07-14
+
+- User job:
+  - When Guildhall re-intakes a project, source documents should be able to
+    improve a saved proof plan without erasing task history. A task marked done
+    without current observed proof must become visible review work again. On
+    Overview, short signal facts should stay compact even when one actionable
+    message is long.
+- Finding:
+  - Re-intake treated every structured started/completed task as immutable, so
+    newly documented commands could not replace stale inferred proof paths.
+    Separately, imported `proofPaths[].status: verified` could be mistaken for
+    observed completion evidence even when no gate, handoff, or provider result
+    existed. The Signals flex row still needed explicit self-sizing and a
+    visual bound for long secondary copy.
+- Root cause classification:
+  - Task evidence lifecycle and source-to-task matching model, plus a local
+    Overview layout rule. This is not a Narrative Harness-specific data patch.
+- Fix:
+  - Evidence graph intake can refresh structured existing tasks when explicitly
+    asked by project re-intake. Strong source-title matching preserves an
+    existing task id when the docs add qualifying detail such as legal-adult
+    coverage.
+  - A new `refresh_evidence` re-intake change updates source-backed criteria,
+    references, release membership, and proof paths in place. It preserves the
+    task record and history; if the old status is `done` and current proof is
+    missing, it reopens the task as `review` instead of preserving a false
+    completion claim.
+  - Source refresh only triggers for a newly documented command proof path;
+    inferred review plans do not count as evidence. The existing persisted task
+    schema is reused.
+  - Signals use the existing dense `UtilityPanel`, self-size at the start of
+    the wrapping row, and visually clamp only the final secondary text line to
+    three lines. Stored titles and messages remain complete.
+- Proof required:
+  - Re-intake planner/apply tests, workspace importer regressions, Overview
+    component tests, contract lint, build/install, stale-server verification,
+    and fresh Narrative Harness draft/apply API proof. Then verify Overview,
+    Map, Work, and release readiness agree about reopened proof work.
+- Contract Touch Decision:
+  - Work id: `source-proof-refresh-and-signal-density`.
+  - Touched contracts: re-intake draft change union gains
+    `refresh_evidence`; re-intake summary gains `refreshedEvidence`; existing
+    source-title matching now reconciles qualifying title detail; Overview
+    signal presentation gains a visual-only line clamp.
+  - Contracts considered but not touched: core Task status enum, persisted
+    proof-path shape, completion-proof API projection, release readiness math,
+    scheduler execution, and shared UtilityPanel props.
+  - Apply/revert behavior: applying a refresh changes only source-derived task
+    fields and, when proof is missing, the current status; notes and existing
+    evidence remain on the task. Reverting code does not undo an already
+    applied draft; queue backup or a new source-backed re-intake is required.
+- Schema Migration Decision:
+  - Scope: no migration. The new change kind and summary field are draft
+    operation/response fields; persisted task records use existing fields.
+  - Existing data impact: completed tasks with durable completion evidence stay
+    done; completed tasks with missing proof can reopen to review while keeping
+    their history. No task or proof record is deleted.
+  - Compatibility reader: old drafts without `refresh_evidence` continue to
+    apply; old queues continue to use their existing task fields.
+  - Rollback: dismiss an unapplied draft, or restore the queue backup before an
+    applied re-intake; code rollback alone does not rewrite queue state.

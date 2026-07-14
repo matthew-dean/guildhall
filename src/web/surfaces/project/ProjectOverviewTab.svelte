@@ -1666,12 +1666,24 @@
   .signals-grid > :global(.signal-row) {
     flex: 0 0 calc((100% - (2 * var(--s-2))) / 3);
     min-block-size: 0;
+    align-self: flex-start;
   }
   :global(.signal-row) span {
     color: var(--text-soft);
     font-size: var(--gh-type-size-meta);
     line-height: var(--gh-type-line-height-body);
     overflow-wrap: anywhere;
+  }
+
+  :global(.signal-row) div {
+    align-content: start;
+  }
+
+  :global(.signal-row) div > span:last-child {
+    display: -webkit-box;
+    overflow: hidden;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
   }
   :global(.signal-row),
   :global(.run-blocker),

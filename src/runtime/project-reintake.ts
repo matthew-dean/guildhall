@@ -23,6 +23,7 @@ import {
   importedContractStructuralRepairReadiness,
   importedContractWorkIsStructurallyIncomplete,
 } from './imported-work-integrity.js'
+import { taskDoneButProofMissing } from './proof-health.js'
 
 export type ProjectReintakeSource = EvidenceSource
 
@@ -49,6 +50,7 @@ export interface ProjectReintakeDraft {
     archived: number
     created: number
     preservedDone: number
+    refreshedEvidence: number
   }
   groups: ReintakeChangeGroup[]
 }
@@ -66,6 +68,7 @@ export type ReintakeChange =
   | ReintakeMergeChange
   | { kind: 'archive'; taskId: string; reason: string }
   | { kind: 'create'; task: ReintakeTaskDraft; reason: string }
+  | { kind: 'refresh_evidence'; taskId: string; before: TaskSummary; after: ReintakeTaskDraft; reopenForProof: boolean; reason: string }
   | { kind: 'preserve_progress'; taskId: string; reason: string }
 
 type ReintakeMergeChange = { kind: 'merge'; survivorTaskId: string; mergedTaskIds: string[]; reason: string }
@@ -145,6 +148,7 @@ export function planProjectReintake(input: ProjectReintakeInput): ProjectReintak
   const graphPlan = planEvidenceWorkGraph({
     sources: input.sources,
     existingTasks: input.tasks,
+    refreshStructuredExisting: true,
   })
   const completedTaskIds = new Set(input.tasks
     .filter(task => stringField(task, 'status') === 'done')
@@ -193,6 +197,27 @@ export function planProjectReintake(input: ProjectReintakeInput): ProjectReintak
     }
   }
 
+  const evidenceRefreshChanges = refreshCurrentEvidenceChanges(
+    graphPlan.tasks,
+    input.tasks,
+    selectedRelease,
+    input.sources,
+    input.projectPath,
+    now,
+  )
+  if (evidenceRefreshChanges.length > 0) {
+    groups.push({
+      id: 'refresh-current-evidence',
+      title: 'Refresh source-backed proof plans',
+      rationale: 'Current source documents now name concrete proof paths. Refresh the plan without discarding recorded work, and reopen only completion claims that still lack observed proof.',
+      changes: evidenceRefreshChanges,
+    })
+    for (const change of evidenceRefreshChanges) {
+      const taskId = taskIdForChange(change)
+      if (taskId) usedTaskIds.add(taskId)
+    }
+  }
+
   const structuralRepairChanges = repairStructurallyIncompleteImportedContractWork(
     input.tasks,
     usedTaskIds,
@@ -207,7 +232,10 @@ export function planProjectReintake(input: ProjectReintakeInput): ProjectReintak
       rationale: 'Imported contract/type work with hollow proof targets must be reshaped before Guildhall can schedule it.',
       changes: structuralRepairChanges,
     })
-    for (const change of structuralRepairChanges) usedTaskIds.add(change.taskId)
+    for (const change of structuralRepairChanges) {
+      const taskId = taskIdForChange(change)
+      if (taskId) usedTaskIds.add(taskId)
+    }
   }
 
   const sourceShapedPrototypeRefreshChanges = refreshSourceShapedPrototypeTasks(
@@ -224,7 +252,10 @@ export function planProjectReintake(input: ProjectReintakeInput): ProjectReintak
       rationale: 'Open prototype tasks should carry the current proof criteria from their source docs instead of keeping stale generic import criteria.',
       changes: sourceShapedPrototypeRefreshChanges,
     })
-    for (const change of sourceShapedPrototypeRefreshChanges) usedTaskIds.add(change.taskId)
+    for (const change of sourceShapedPrototypeRefreshChanges) {
+      const taskId = taskIdForChange(change)
+      if (taskId) usedTaskIds.add(taskId)
+    }
   }
 
   const conflictingReleaseMembershipChanges = repairConflictingSelectedReleaseMemberships(
@@ -240,7 +271,10 @@ export function planProjectReintake(input: ProjectReintakeInput): ProjectReintak
       rationale: 'One imported task should not silently belong to two differently named release boundaries.',
       changes: conflictingReleaseMembershipChanges,
     })
-    for (const change of conflictingReleaseMembershipChanges) usedTaskIds.add(change.taskId)
+    for (const change of conflictingReleaseMembershipChanges) {
+      const taskId = taskIdForChange(change)
+      if (taskId) usedTaskIds.add(taskId)
+    }
   }
 
   const restoreSelectedReleaseArchiveChanges = restoreSelectedReleaseImportsArchivedByReintake(
@@ -256,7 +290,10 @@ export function planProjectReintake(input: ProjectReintakeInput): ProjectReintak
       rationale: 'Source-backed selected-release drafts should stay in the current scope for shaping instead of being archived as stale weak specs.',
       changes: restoreSelectedReleaseArchiveChanges,
     })
-    for (const change of restoreSelectedReleaseArchiveChanges) usedTaskIds.add(change.taskId)
+    for (const change of restoreSelectedReleaseArchiveChanges) {
+      const taskId = taskIdForChange(change)
+      if (taskId) usedTaskIds.add(taskId)
+    }
   }
 
   const progressChanges = preserveProgressChanges(input.tasks, usedTaskIds)
@@ -360,6 +397,7 @@ export async function applyProjectReintakeDraft(input: {
   for (const change of groups.flatMap(group => group.changes)) {
     if (change.kind === 'create') refreshedTaskIds.add(change.task.id)
     if (change.kind === 'reframe') refreshedTaskIds.add(change.taskId)
+    if (change.kind === 'refresh_evidence') refreshedTaskIds.add(change.taskId)
   }
 
   for (const group of groups) {
@@ -378,6 +416,34 @@ export async function applyProjectReintakeDraft(input: {
 }
 
 function applyChange(tasks: Array<Record<string, unknown>>, change: ReintakeChange, now: string): void {
+  if (change.kind === 'refresh_evidence') {
+    const existing = tasks.find(task => task.id === change.taskId)
+    if (!existing) return
+    const notes = Array.isArray(existing.notes) ? existing.notes : []
+    clearStaleReintakeDerivedFields(existing)
+    Object.assign(existing, {
+      ...change.after,
+      id: change.taskId,
+      // Keep active work active. A completed task with no current proof is
+      // intentionally reopened into review; its historical notes/evidence
+      // remain attached to the same task record.
+      status: change.reopenForProof ? 'review' : (stringField(existing, 'status') ?? change.after.status),
+      updatedAt: now,
+      notes: [
+        ...notes,
+        {
+          agentId: 'project-reintake',
+          role: 'system',
+          content: change.reopenForProof
+            ? `Re-intake refreshed the source-backed proof plan and reopened this task because ${change.reason}`
+            : `Re-intake refreshed the source-backed proof plan because ${change.reason}`,
+          timestamp: now,
+        },
+      ],
+    })
+    return
+  }
+
   if (change.kind === 'reframe') {
     const existing = tasks.find(task => task.id === change.taskId)
     if (!existing) return
@@ -1437,6 +1503,54 @@ function preserveProgressChanges(tasks: Array<Record<string, unknown>>, usedTask
     }))
 }
 
+function refreshCurrentEvidenceChanges(
+  graphTasks: EvidenceTask[],
+  existingTasks: Array<Record<string, unknown>>,
+  selectedRelease: SelectedRelease | null,
+  sources: ProjectReintakeSource[],
+  projectPath: string | undefined,
+  now: string,
+): ReintakeChange[] {
+  const changes: ReintakeChange[] = []
+  for (const graphTask of graphTasks) {
+    const existing = existingTasks.find(candidate => stringField(candidate, 'id') === graphTask.id)
+    if (!existing) continue
+    const after = evidenceTaskToDraft(graphTask, selectedRelease, sources, projectPath, now)
+    if (!documentedProofPlanImproves(existing, after)) continue
+    const existingStatus = stringField(existing, 'status') ?? 'unknown'
+    changes.push({
+      kind: 'refresh_evidence',
+      taskId: graphTask.id,
+      before: {
+        id: graphTask.id,
+        title: stringField(existing, 'title') ?? graphTask.title,
+        status: existingStatus,
+      },
+      after,
+      reopenForProof: existingStatus === 'done' && taskDoneButProofMissing(existing),
+      reason: 'The current source trail names a more concrete proof path than the saved task plan.',
+    })
+  }
+  return changes
+}
+
+function documentedProofCommands(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value
+      .filter((proof): proof is Record<string, unknown> => Boolean(proof) && typeof proof === 'object' && !Array.isArray(proof))
+      .filter(proof => proof.kind === 'command' && proof.source === 'documented')
+      .map(proof => typeof proof.command === 'string' ? proof.command.trim() : '')
+      .filter(Boolean)
+    : []
+}
+
+function documentedProofPlanImproves(existing: Record<string, unknown>, after: ReintakeTaskDraft): boolean {
+  const refreshedCommands = documentedProofCommands(after.proofPaths)
+  if (refreshedCommands.length === 0) return false
+  const existingCommands = new Set(documentedProofCommands(existing.proofPaths))
+  return refreshedCommands.some(command => !existingCommands.has(command))
+}
+
 function refreshSourceShapedPrototypeTasks(
   tasks: Array<Record<string, unknown>>,
   usedTaskIds: Set<string>,
@@ -1735,7 +1849,7 @@ function singleEditChange(sources: ProjectReintakeSource[]): ReintakeChange | nu
 }
 
 function summarize(groups: ReintakeChangeGroup[]): ProjectReintakeDraft['summary'] {
-  const summary = { kept: 0, reframed: 0, merged: 0, archived: 0, created: 0, preservedDone: 0 }
+  const summary = { kept: 0, reframed: 0, merged: 0, archived: 0, created: 0, preservedDone: 0, refreshedEvidence: 0 }
   for (const change of groups.flatMap(group => group.changes)) {
     if (change.kind === 'keep') summary.kept++
     if (change.kind === 'reframe') summary.reframed++
@@ -1743,6 +1857,7 @@ function summarize(groups: ReintakeChangeGroup[]): ProjectReintakeDraft['summary
     if (change.kind === 'archive') summary.archived++
     if (change.kind === 'create') summary.created++
     if (change.kind === 'preserve_progress') summary.preservedDone++
+    if (change.kind === 'refresh_evidence') summary.refreshedEvidence++
   }
   return summary
 }
@@ -1759,6 +1874,10 @@ export function fingerprint(tasks: Array<Record<string, unknown>>): string {
 function stringField(source: Record<string, unknown>, key: string): string | undefined {
   const value = source[key]
   return typeof value === 'string' ? value : undefined
+}
+
+function taskIdForChange(change: ReintakeChange): string | undefined {
+  return 'taskId' in change && typeof change.taskId === 'string' ? change.taskId : undefined
 }
 
 function arrayStringField(value: unknown): string[] {

@@ -8,6 +8,7 @@ export type EvidenceSource = {
 export type EvidenceWorkGraphInput = {
   sources: EvidenceSource[]
   existingTasks?: Array<Record<string, unknown>>
+  refreshStructuredExisting?: boolean
 }
 
 export type EvidenceUnit = {
@@ -89,6 +90,7 @@ export function planEvidenceWorkGraph(input: EvidenceWorkGraphInput): EvidenceWo
     extractUnits(source, currentMilestoneStage, { suppressRoadmapStageDeliverables }),
   )
   const existingTasks = input.existingTasks ?? []
+  const refreshStructuredExisting = input.refreshStructuredExisting === true
   const tasks: EvidenceTask[] = []
   const reconciliations: EvidenceWorkGraphPlan['reconciliations'] = []
   const implementationByDeliverable = new Map<string, EvidenceTask>()
@@ -101,7 +103,7 @@ export function planEvidenceWorkGraph(input: EvidenceWorkGraphInput): EvidenceWo
       continue
     }
 
-    if (existingMatch?.structuredEnough) {
+    if (existingMatch?.structuredEnough && !refreshStructuredExisting) {
       continue
     }
 
@@ -882,7 +884,7 @@ function findExistingTaskByDeliverable(deliverable: string, existingTasks: Array
 
     const matches = exactFields.some(value => normalizeForMatch(value) === normalized)
       || textFields.some(value => deliverablePattern.test(value.toLowerCase()))
-    if (!matches) {
+    if (!matches && !similarSourceTitleMatch(deliverable, textFields)) {
       continue
     }
 
@@ -922,6 +924,24 @@ function findExistingTaskByDeliverable(deliverable: string, existingTasks: Array
   }
 
   return undefined
+}
+
+function similarSourceTitleMatch(deliverable: string, textFields: string[]): boolean {
+  const sourceTokens = meaningfulTitleTokens(deliverable)
+  if (sourceTokens.length < 4) return false
+  return textFields.some((value) => {
+    const candidateTokens = meaningfulTitleTokens(value)
+    if (candidateTokens.length < sourceTokens.length) return false
+    if (candidateTokens.length > Math.ceil(sourceTokens.length * 1.6)) return false
+    return sourceTokens.every(token => candidateTokens.includes(token))
+  })
+}
+
+function meaningfulTitleTokens(value: string): string[] {
+  const stopWords = new Set(['add', 'build', 'create', 'define', 'implement', 'the', 'a', 'an', 'and', 'for', 'from', 'into', 'one'])
+  return [...new Set(slugify(value)
+    .split('-')
+    .filter(token => token.length >= 4 && !stopWords.has(token)))]
 }
 
 function isExistingDone(task: ExistingTaskMatch | undefined): boolean {
