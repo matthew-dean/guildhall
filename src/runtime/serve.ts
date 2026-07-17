@@ -12314,7 +12314,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const savedSummary = readProjectSummaryAtBoundary(projectTasksPath(project.path))
       const snap = buildSnapshot({
         projectPath: project.path,
-        ...(savedSummary ? { taskCount: savedSummary.taskCounts.total } : {}),
+        ...(savedSummary ? { taskCount: savedSummary.counts.total } : {}),
       })
       const wizards = listWizards()
         .filter(w => w.applicable(snap))

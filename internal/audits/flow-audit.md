@@ -41147,6 +41147,46 @@ Route code may format those records or opt into a clearly labeled live
 diagnostic operation, but it cannot silently substitute a second current-state
 answer from a raw queue or checkout scan.
 
+## 2026-07-17 - Wizard reads use the saved summary shape
+
+The installed proof caught a small but important boundary violation: the
+wizard GET had been asking the saved summary for `taskCounts`, even though the
+persisted projection owns that value under `counts`. The result was a 500 only
+when a project had a persisted summary, which made the bug easy to miss in a
+fresh project. The route now reads the field from the projection contract and
+the regression creates a persisted project-state database before calling the
+ordinary wizard GET.
+
+- [x] Wizard GET returns 200 when a persisted summary is present.
+- [x] The route uses the saved summary only to seed the wizard snapshot; it
+  does not reconstruct task state or run a migration.
+- [x] Focused proof: 12 `serve-wizards` tests pass; installed `/api/project/wizards`
+  returns 200 for Narrative Harness after a fresh build/install.
+
+### Contract Touch Decision
+
+- Work id: `codex:wizard-saved-summary-field-2026-07-17`.
+- Touched contracts: the internal `ProjectSummaryProjection` read shape used
+  by the wizard snapshot seed.
+- Considered but not touched: wizard step definitions, project task schema,
+  migration behavior, and public wizard response fields.
+- Required follow-up: keep wizard setup reads on the named saved-summary
+  boundary as the remaining project surfaces migrate.
+- Proof provided: persisted-summary regression, focused test suite, and
+  installed route request.
+- Apply/revert behavior: code-only revert; no persisted data migration.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none. This corrects the reader to match the
+  existing summary projection shape.
+- Change class: read-contract correction.
+- Existing data impact: none; existing summaries are read without rewriting.
+- Migration id: not required.
+- Compatibility reader: none added. The projection's canonical `counts` shape
+  is used directly.
+- Rollback/revert: code-only revert.
+
 ## 2026-07-16 - Git Story uses the saved project diagnostic boundary
 
 - [x] Ordinary `GET /api/project/git-story` reads the saved Git diagnostic
