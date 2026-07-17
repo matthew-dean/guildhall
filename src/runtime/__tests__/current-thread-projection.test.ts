@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { buildCurrentThreadProjection } from '../current-thread-projection.js'
+import { buildCurrentThreadProjection, buildThreadHistoryProjection } from '../current-thread-projection.js'
 import type { Thread, ThreadTurn } from '../thread.js'
 
 function requestTurn(
@@ -109,5 +109,26 @@ describe('buildCurrentThreadProjection', () => {
     })
 
     expect(projection.turns.map(turn => turn.id)).toEqual(['pending-1', 'pending-2', 'active'])
+  })
+
+  it('builds a bounded historical projection with bounded text', () => {
+    const thread: Thread = {
+      turns: Array.from({ length: 4 }, (_, index) => requestTurn(`turn-${index}`, 'done', {
+        summary: 'abcdefghijklmnopqrstuvwxyz',
+      })),
+      activeTurnId: null,
+      caughtUp: true,
+    }
+
+    const projection = buildThreadHistoryProjection({
+      thread,
+      turnWindow: 2,
+      maxTextChars: 10,
+    })
+
+    expect(projection.truncated).toBe(true)
+    expect(projection.turns.map(turn => turn.id)).toEqual(['turn-2', 'turn-3'])
+    expect((projection.turns[0] as ThreadTurn & { summary: string }).summary).toBe('abcdefg...')
+    expect(thread.turns).toHaveLength(4)
   })
 })

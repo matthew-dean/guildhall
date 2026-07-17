@@ -21,7 +21,18 @@ export const PROJECT_STATE_DATABASE_FILE = 'project-state.db'
  * It backfills from the last authoritative release envelope exactly once;
  * ordinary reads never union or choose between the old mirrors.
  */
-export const PROJECT_STATE_DATABASE_SCHEMA_VERSION = 28
+/**
+ * Schema Migration Decision - `0.12.47/project-thread-history-read-model`:
+ * add the bounded `thread_history_state` metadata row and per-turn
+ * `thread_history` table. History is written only alongside the existing
+ * current-Thread projection boundary, capped at 2,000 sanitized turns, and
+ * read with one page-sized SQL query. Existing task, chat, intake, approval,
+ * and source-history records are unchanged; the migration creates empty
+ * history tables and the next projection refresh populates them.
+ */
+export const PROJECT_STATE_DATABASE_SCHEMA_VERSION = 29
+export const PROJECT_STATE_DATABASE_THREAD_HISTORY_MAX_TURNS = 2_000
+export const PROJECT_STATE_DATABASE_THREAD_HISTORY_MAX_BYTES = 512 * 1024
 export const PROJECT_STATE_DATABASE_DIAGNOSTIC_PROJECTION_DOMAIN = 'diagnostics'
 export const PROJECT_STATE_DATABASE_DIAGNOSTIC_MAX_BLOCKERS = 12
 export const PROJECT_STATE_DATABASE_DIAGNOSTIC_MAX_TEXT_LENGTH = 240
@@ -490,6 +501,8 @@ export interface ProjectStateDatabaseCurrentThread<T = unknown> {
   generatedAt: string
   sourceRevision: string | number
   sourceQueueRevision: number | null
+  /** Optional historical page replacement in the same write transaction. */
+  history?: ProjectStateDatabaseThreadHistoryWrite
 }
 
 /** One atomic read for Thread's current projection and freshness watermark. */
@@ -497,6 +510,35 @@ export interface ProjectStateDatabaseThreadSurfaceState<T = unknown> {
   thread: ProjectStateDatabaseCurrentThread<T> | null
   queueRevision: number | null
   projectRevision: number | null
+}
+
+/** One SQLite snapshot for a historical page and its current-state watermark. */
+export interface ProjectStateDatabaseThreadHistorySurfaceState<T = unknown> {
+  history: ProjectStateDatabaseThreadHistoryPage<T> | null
+  surface: ProjectStateDatabaseThreadSurfaceState<unknown>
+}
+
+/** A bounded page from the explicit historical Thread projection. */
+export interface ProjectStateDatabaseThreadHistoryPage<T = unknown> {
+  turns: T[]
+  offset: number
+  limit: number
+  total: number
+  hasMore: boolean
+  nextOffset?: number
+  sourceRevision: string
+  sourceQueueRevision: number | null
+  generatedAt: string
+  truncated: boolean
+}
+
+/** Input for replacing the historical Thread projection at a write boundary. */
+export interface ProjectStateDatabaseThreadHistoryWrite<T = unknown> {
+  turns: readonly T[]
+  sourceRevision: number
+  sourceQueueRevision: number | null
+  generatedAt: string
+  truncated: boolean
 }
 
 export interface ProjectStateDatabaseSummaryReadOptions {
@@ -1154,9 +1196,8 @@ function openDatabase(databasePath: string, options: { readOnly?: boolean } = {}
       generated_at TEXT NOT NULL,
       revision INTEGER NOT NULL DEFAULT 0
     );
-    -- One bounded current Thread projection. Historical turns remain in the
-    -- existing source stores and are reconstructed only by the explicit
-    -- history route.
+    -- One bounded current Thread projection. Historical turns live in the
+    -- separate paged detail projection below.
     CREATE TABLE IF NOT EXISTS current_thread (
       id INTEGER PRIMARY KEY CHECK (id = 1),
       payload_json TEXT NOT NULL,
@@ -1165,6 +1206,25 @@ function openDatabase(databasePath: string, options: { readOnly?: boolean } = {}
       source_queue_revision INTEGER,
       updated_at TEXT NOT NULL
     );
+    -- Historical Thread turns are an explicit, bounded detail projection.
+    -- Ordinary history reads page this table; they never rebuild Thread from
+    -- tasks, chat sessions, or intake records.
+    CREATE TABLE IF NOT EXISTS thread_history_state (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      source_revision TEXT NOT NULL,
+      source_queue_revision INTEGER,
+      generated_at TEXT NOT NULL,
+      turn_count INTEGER NOT NULL,
+      truncated INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE IF NOT EXISTS thread_history (
+      turn_index INTEGER PRIMARY KEY,
+      turn_id TEXT NOT NULL,
+      turn_at TEXT NOT NULL,
+      turn_status TEXT NOT NULL,
+      payload_json TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS thread_history_at_idx ON thread_history(turn_at DESC, turn_index DESC);
     -- Imported planning is provenance, not current execution state. Keep the
     -- latest accepted snapshot available for explicit detail views without
     -- embedding its task-id arrays in every compact summary read.
@@ -3843,6 +3903,32 @@ export function readProjectStateDatabaseCurrentThread<T = unknown>(
   }
 }
 
+function readThreadSurfaceStateFromDatabase<T = unknown>(
+  database: DatabaseSync,
+): ProjectStateDatabaseThreadSurfaceState<T> {
+  const queueRevision = tableExists(database, 'queue_state') ? currentQueueRevision(database) : null
+  const projectRevision = tableExists(database, 'project_meta') ? currentRevision(database) : null
+  let thread: ProjectStateDatabaseCurrentThread<T> | null = null
+  if (tableExists(database, 'current_thread')) {
+    const row = database.prepare(`
+      SELECT payload_json, generated_at, source_revision, source_queue_revision
+      FROM current_thread
+      WHERE id = 1
+    `).get() as JsonRecord | undefined
+    if (row && typeof row.generated_at === 'string' && typeof row.source_revision === 'string') {
+      thread = {
+        payload: parseJson<T>(row.payload_json, null as T),
+        generatedAt: row.generated_at,
+        sourceRevision: row.source_revision,
+        sourceQueueRevision: Number.isFinite(Number(row.source_queue_revision))
+          ? Number(row.source_queue_revision)
+          : null,
+      }
+    }
+  }
+  return { thread, queueRevision, projectRevision }
+}
+
 /**
  * Read Thread's current projection and both project watermarks together.
  * Thread navigation must not compare a saved row from one revision with a
@@ -3862,27 +3948,7 @@ export function readProjectStateDatabaseThreadSurfaceState<T = unknown>(
   try {
     database.exec('BEGIN')
     inReadTransaction = true
-    const queueRevision = tableExists(database, 'queue_state') ? currentQueueRevision(database) : null
-    const projectRevision = tableExists(database, 'project_meta') ? currentRevision(database) : null
-    let thread: ProjectStateDatabaseCurrentThread<T> | null = null
-    if (tableExists(database, 'current_thread')) {
-      const row = database.prepare(`
-        SELECT payload_json, generated_at, source_revision, source_queue_revision
-        FROM current_thread
-        WHERE id = 1
-      `).get() as JsonRecord | undefined
-      if (row && typeof row.generated_at === 'string' && typeof row.source_revision === 'string') {
-        thread = {
-          payload: parseJson<T>(row.payload_json, null as T),
-          generatedAt: row.generated_at,
-          sourceRevision: row.source_revision,
-          sourceQueueRevision: Number.isFinite(Number(row.source_queue_revision))
-            ? Number(row.source_queue_revision)
-            : null,
-        }
-      }
-    }
-    return { thread, queueRevision, projectRevision }
+    return readThreadSurfaceStateFromDatabase<T>(database)
   } finally {
     if (inReadTransaction) {
       try {
@@ -3921,6 +3987,12 @@ export function writeProjectStateDatabaseCurrentThread<T>(
         `Stale current Thread write: expected queue revision ${input.sourceQueueRevision}, found ${actualQueueRevision ?? 'none'}. Read the current queue and retry.`,
       )
     }
+    if (input.history && (
+      input.history.sourceRevision !== Number(input.sourceRevision) ||
+      input.history.sourceQueueRevision !== input.sourceQueueRevision
+    )) {
+      throw new Error('Current Thread history must use the same project and queue revisions as the current projection')
+    }
     const updatedAt = new Date().toISOString()
     database.prepare(`
       INSERT INTO current_thread (
@@ -3940,11 +4012,173 @@ export function writeProjectStateDatabaseCurrentThread<T>(
       input.sourceQueueRevision,
       updatedAt,
     )
+    if (input.history) replaceProjectStateDatabaseThreadHistory(database, input.history)
   })
 }
 
 /** Create the current-thread table for an existing database during migration. */
 export function ensureProjectStateDatabaseCurrentThreadStore(projectRoot: string): void {
+  withWritableDatabase(projectRoot, () => {})
+}
+
+function replaceProjectStateDatabaseThreadHistory(
+  database: DatabaseSync,
+  input: ProjectStateDatabaseThreadHistoryWrite,
+): void {
+  const retained: Array<{ turn: unknown; payload: string }> = []
+  let payloadBytes = 0
+  for (let index = input.turns.length - 1; index >= 0; index -= 1) {
+    const turn = input.turns[index]
+    const payload = json(turn)
+    const bytes = Buffer.byteLength(payload, 'utf8')
+    if (bytes > PROJECT_STATE_DATABASE_THREAD_HISTORY_MAX_BYTES - payloadBytes) break
+    retained.push({ turn, payload })
+    payloadBytes += bytes
+    if (retained.length >= PROJECT_STATE_DATABASE_THREAD_HISTORY_MAX_TURNS) break
+  }
+  retained.reverse()
+  const truncated = input.truncated || retained.length < input.turns.length
+  database.prepare('DELETE FROM thread_history').run()
+  database.prepare('DELETE FROM thread_history_state').run()
+  const insert = database.prepare(`
+    INSERT INTO thread_history (turn_index, turn_id, turn_at, turn_status, payload_json)
+    VALUES (?, ?, ?, ?, ?)
+  `)
+  retained.forEach(({ turn, payload }, index) => {
+    const record = isRecord(turn) ? turn : {}
+    insert.run(
+      index,
+      typeof record.id === 'string' ? record.id : `turn-${index}`,
+      typeof record.at === 'string' ? record.at : input.generatedAt,
+      typeof record.status === 'string' ? record.status : 'done',
+      payload,
+    )
+  })
+  database.prepare(`
+    INSERT INTO thread_history_state (
+      id, source_revision, source_queue_revision, generated_at, turn_count, truncated
+    ) VALUES (1, ?, ?, ?, ?, ?)
+  `).run(
+    String(input.sourceRevision),
+    input.sourceQueueRevision,
+    input.generatedAt,
+    retained.length,
+    truncated ? 1 : 0,
+  )
+}
+
+/**
+ * Read one bounded page from the durable Thread history projection. A null
+ * result means the database predates this projection; callers must report an
+ * honest cache miss or run the explicit migration, never rebuild history in a
+ * normal GET.
+ */
+function readThreadHistoryPageFromDatabase<T = unknown>(
+  database: DatabaseSync,
+  options: { offset?: number; limit?: number } = {},
+): ProjectStateDatabaseThreadHistoryPage<T> | null {
+  if (!tableExists(database, 'thread_history') || !tableExists(database, 'thread_history_state')) return null
+  const state = database.prepare(`
+    SELECT source_revision, source_queue_revision, generated_at, turn_count, truncated
+    FROM thread_history_state
+    WHERE id = 1
+  `).get() as JsonRecord | undefined
+  if (!state || typeof state.source_revision !== 'string' || typeof state.generated_at !== 'string') return null
+  const requestedOffset = options.offset ?? 0
+  const requestedLimit = options.limit ?? 50
+  const offset = Number.isFinite(requestedOffset)
+    ? Math.max(0, Math.floor(requestedOffset))
+    : 0
+  const limit = Number.isFinite(requestedLimit)
+    ? Math.min(100, Math.max(1, Math.floor(requestedLimit)))
+    : 50
+  const total = Math.max(0, Number(state.turn_count ?? 0))
+  const sourceQueueRevision = state.source_queue_revision === null || state.source_queue_revision === undefined
+    ? null
+    : Number.isFinite(Number(state.source_queue_revision))
+      ? Number(state.source_queue_revision)
+      : null
+  const rows = database.prepare(`
+    SELECT payload_json
+    FROM thread_history
+    ORDER BY turn_index ASC
+    LIMIT ? OFFSET ?
+  `).all(limit, offset) as JsonRecord[]
+  const turns = rows.map(row => parseJson<T>(row.payload_json, null as T))
+  const hasMore = offset + turns.length < total
+  return {
+    turns,
+    offset,
+    limit,
+    total,
+    hasMore,
+    ...(hasMore ? { nextOffset: offset + turns.length } : {}),
+    sourceRevision: state.source_revision,
+    sourceQueueRevision,
+    generatedAt: state.generated_at,
+    truncated: Number(state.truncated ?? 0) === 1,
+  }
+}
+
+export function readProjectStateDatabaseThreadHistoryPage<T = unknown>(
+  projectRoot: string,
+  options: { offset?: number; limit?: number } = {},
+): ProjectStateDatabaseThreadHistoryPage<T> | null {
+  const databasePath = projectStateDatabasePath(projectRoot)
+  try {
+    statSync(databasePath)
+  } catch {
+    return null
+  }
+  const database = openDatabase(databasePath, { readOnly: true })
+  try {
+    return readThreadHistoryPageFromDatabase<T>(database, options)
+  } finally {
+    database.close()
+  }
+}
+
+/** Read historical Thread detail and its freshness watermark atomically. */
+export function readProjectStateDatabaseThreadHistorySurfaceState(
+  projectRoot: string,
+  options: { offset?: number; limit?: number } = {},
+): ProjectStateDatabaseThreadHistorySurfaceState {
+  const databasePath = projectStateDatabasePath(projectRoot)
+  try {
+    statSync(databasePath)
+  } catch {
+    return {
+      history: null,
+      surface: { thread: null, queueRevision: null, projectRevision: null },
+    }
+  }
+  const database = openDatabase(databasePath, { readOnly: true })
+  let inReadTransaction = false
+  try {
+    database.exec('BEGIN')
+    inReadTransaction = true
+    return {
+      history: readThreadHistoryPageFromDatabase(database, options),
+      surface: readThreadSurfaceStateFromDatabase(database),
+    }
+  } finally {
+    if (inReadTransaction) {
+      try {
+        database.exec('COMMIT')
+      } catch {
+        try {
+          database.exec('ROLLBACK')
+        } catch {
+          // Preserve the original read result/error.
+        }
+      }
+    }
+    database.close()
+  }
+}
+
+/** Create the historical Thread tables for an existing database. */
+export function ensureProjectStateDatabaseThreadHistoryStore(projectRoot: string): void {
   withWritableDatabase(projectRoot, () => {})
 }
 
@@ -3975,7 +4209,7 @@ export function updateProjectStateDatabaseSummary(
       const updatedAt = stringValue(next.generatedAt) ?? new Date().toISOString()
       const revision = commitAuthoritativeMutation(database, {
         updatedAt,
-        domains: ['summary'],
+        domains: ['queue'],
         summaryFreshness: 'preserve',
       })
       database.prepare('UPDATE project_summary SET payload_json = ?, generated_at = ?, freshness = ?, revision = ? WHERE id = 1')

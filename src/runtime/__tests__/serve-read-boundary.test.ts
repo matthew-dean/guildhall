@@ -417,6 +417,11 @@ describe('GET route read boundaries', () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
     const response = await app.fetch(new Request(projectUrl('/api/project?detail=true')))
     const body = await response.json() as any
+    const timing = response.headers.get('server-timing') ?? ''
+    registerWorkspace({ id: projectId, name: 'Read Boundary Test', path: tmpDir, tags: [] })
+    const serviceResponse = await app.fetch(new Request('http://localhost/api/service?detail=true'))
+    const serviceBody = await serviceResponse.json() as any
+    const serviceProject = serviceBody.projects.find((candidate: any) => candidate.id === projectId)
 
     expect(response.status).toBe(200)
     expect(JSON.stringify(body).length).toBeLessThan(100_000)
@@ -428,6 +433,10 @@ describe('GET route read boundaries', () => {
     expect(body.memoryHealth).toBeDefined()
     expect(body.recentEvents).toBeDefined()
     expect(body.detailPayload).toBeUndefined()
+    expect(timing).not.toContain('readiness')
+    expect(serviceProject).toBeDefined()
+    expect(body.startReadiness).toEqual(serviceProject.startReadiness)
+    expect(body.actionModel).toEqual(serviceProject.actionModel)
   })
 
   it('keeps the structural projection usable after a dynamic task overlay write', async () => {

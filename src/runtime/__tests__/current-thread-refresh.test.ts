@@ -13,6 +13,7 @@ import {
   projectStateDatabasePath,
   recordProjectStateDatabaseProjectionObligations,
   readProjectStateDatabaseCurrentThread,
+  readProjectStateDatabaseThreadHistoryPage,
   upsertProjectStateDatabaseTaskRuntime,
 } from '@guildhall/sessions'
 
@@ -87,6 +88,15 @@ describe('current Thread projection refresh', () => {
     expect(body.turns).toEqual([])
     expect(body.currentThreadFreshness).toBe('missing')
 
+    const historyResponse = await app.fetch(new Request(
+      'http://localhost/api/project/thread/history?projectId=current-thread-test&limit=10',
+    ))
+    const historyBody = await historyResponse.json() as { turns?: unknown[]; historyFreshness?: string; requiresRefresh?: boolean }
+    expect(historyResponse.status).toBe(200)
+    expect(historyBody.turns).toEqual([])
+    expect(historyBody.historyFreshness).toBe('missing')
+    expect(historyBody.requiresRefresh).toBe(true)
+
     const diagnosticResponse = await app.fetch(new Request(
       'http://localhost/api/project?diagnostic=true&projectId=current-thread-test',
     ))
@@ -138,6 +148,21 @@ describe('current Thread projection refresh', () => {
     expect(response.status).toBe(200)
     expect(body.turns).toEqual((stored?.payload as { turns: unknown[] }).turns)
     expect(body.currentThreadFreshness).toBe('current')
+
+    const history = readProjectStateDatabaseThreadHistoryPage(projectRoot, { offset: 0, limit: 10 })
+    expect(history).toMatchObject({
+      total: expect.any(Number),
+      sourceRevision: String(sourceRevision),
+      sourceQueueRevision: stored?.sourceQueueRevision,
+    })
+    await fs.rm(getProjectSystemStatePath(projectRoot, 'TASKS.json'))
+    const historyResponse = await app.fetch(new Request(
+      'http://localhost/api/project/thread/history?projectId=current-thread-test&limit=10',
+    ))
+    const historyBody = await historyResponse.json() as { historyFreshness?: string; turns?: unknown[] }
+    expect(historyResponse.status).toBe(200)
+    expect(historyBody.historyFreshness).toBe('current')
+    expect(historyBody.turns).toEqual(history?.turns)
   })
 
   it('completes a claimed thread projection job after a thread-only refresh', async () => {
@@ -237,6 +262,56 @@ describe('current Thread projection refresh', () => {
     })
     const stored = readProjectStateDatabaseCurrentThread(projectRoot)
     expect(stored?.sourceRevision).toEqual(expect.any(String))
+  })
+
+  it('keeps older approved brief turns in history without widening current Thread', async () => {
+    const approvedAt = '2026-07-15T00:01:00.000Z'
+    const approvedTask = task(projectRoot, {
+      id: 'task-history-approved',
+      title: 'Preserve the approved history turn',
+      status: 'done',
+      createdAt: '2026-07-15T00:01:00.000Z',
+      updatedAt: '2026-07-15T00:01:00.000Z',
+      completedAt: '2026-07-15T00:01:00.000Z',
+      productBrief: {
+        userJob: 'Keep the approved brief visible in history.',
+        whyItMattersNow: 'The history reader must preserve owner decisions.',
+        successMetric: 'The approved turn retains its approval metadata.',
+        antiPatterns: ['Do not make history depend on the current window.'],
+        authoredBy: 'spec-agent',
+        approvedAt,
+      },
+    })
+    const recentTasks = Array.from({ length: 10 }, (_, index) => task(projectRoot, {
+      id: `task-history-recent-${index}`,
+      title: `Recent completed task ${index}`,
+      status: 'done',
+      createdAt: `2026-07-15T00:${String(index + 2).padStart(2, '0')}:00.000Z`,
+      updatedAt: `2026-07-15T00:${String(index + 2).padStart(2, '0')}:00.000Z`,
+      completedAt: `2026-07-15T00:${String(index + 2).padStart(2, '0')}:00.000Z`,
+    }))
+    writeProjectTaskQueueWithSummary(getProjectSystemStatePath(projectRoot, 'TASKS.json'), {
+      version: 1,
+      lastUpdated: '2026-07-15T00:30:00.000Z',
+      tasks: [approvedTask, ...recentTasks],
+    } satisfies TaskQueue, {
+      projectId: 'current-thread-test',
+      projectRoot,
+    })
+
+    await refreshCurrentThreadProjection(projectRoot, { runStatus: 'stopped', recentEvents: [] })
+
+    const current = readProjectStateDatabaseCurrentThread(projectRoot)
+    expect((current?.payload as { turns: Array<{ id: string }> }).turns)
+      .not.toEqual(expect.arrayContaining([expect.objectContaining({ id: 'brief:task-history-approved' })]))
+    const history = readProjectStateDatabaseThreadHistoryPage(projectRoot, { limit: 100 })
+    expect(history?.turns).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'brief:task-history-approved',
+        approvedAt,
+        brief: expect.objectContaining({ authoredBy: 'spec-agent' }),
+      }),
+    ]))
   })
 
   it('marks the current Thread stale when a non-queue project revision advances', async () => {

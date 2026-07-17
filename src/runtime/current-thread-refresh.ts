@@ -1,6 +1,8 @@
 import {
+  getProjectStateDir,
   getProjectSystemStatePath,
   readProjectStateDatabaseQueue,
+  readProjectStateDatabaseQueueDefinition,
   readProjectStateDatabaseQueueRevision,
   readProjectStateDatabaseRevisionFromTasksPath,
   readProjectStateDatabaseTasks,
@@ -16,10 +18,13 @@ import {
   buildCurrentThreadProjection,
   DEFAULT_CURRENT_THREAD_COMPLETED_TURN_WINDOW,
   DEFAULT_CURRENT_THREAD_PENDING_TURN_WINDOW,
+  buildThreadHistoryProjection,
   type CurrentThreadProjection,
 } from './current-thread-projection.js'
 import { readProjectTaskQueue } from './project-state-boundary.js'
 import { TaskQueue, type Task } from '@guildhall/core'
+import { listBoundedChatSessionsAsync } from './bounded-chat.js'
+import { listPressureTestIntakesAsync, summarizeProjectCheckIn } from './pressure-test-intake.js'
 
 type RecentEvent = NonNullable<BuildThreadOptions['recentEvents']>[number]
 
@@ -92,6 +97,13 @@ interface ThreadTaskRead {
   sourceProjectRevision: number
 }
 
+interface FullThreadProjectionSource {
+  tasks: Task[]
+  boundedChatSessions: Awaited<ReturnType<typeof listBoundedChatSessionsAsync>>
+  pressureTestIntakes: Awaited<ReturnType<typeof listPressureTestIntakesAsync>>
+  projectCheckInSummary: ReturnType<typeof summarizeProjectCheckIn>
+}
+
 /**
  * Read compact task rows first, then hydrate only the bounded task set whose
  * details can affect the current Thread window. The compact rows remain in
@@ -136,6 +148,36 @@ function readThreadTasks(projectRoot: string, tasksPath: string): ThreadTaskRead
     }
   }
   return null
+}
+
+/**
+ * Full Thread construction belongs to this projection boundary only. Current
+ * Thread still uses the bounded task-detail read above; history uses the
+ * revision-matched rich queue plus the bounded-chat/intake sources that the
+ * old history route assembled on demand.
+ */
+async function readFullThreadProjectionSource(
+  projectRoot: string,
+  tasksPath: string,
+  compactRead: ThreadTaskRead | null | undefined,
+  legacyQueue: unknown,
+): Promise<FullThreadProjectionSource | null> {
+  const queue = compactRead === undefined
+    ? legacyQueue
+    : readProjectStateDatabaseQueueDefinition(tasksPath)
+  const parsedQueue = TaskQueue.safeParse(queue)
+  if (!parsedQueue.success) return null
+  const memoryDir = getProjectStateDir(projectRoot)
+  const [boundedChatSessions, pressureTestIntakes] = await Promise.all([
+    listBoundedChatSessionsAsync(memoryDir).catch(() => []),
+    listPressureTestIntakesAsync(memoryDir).catch(() => []),
+  ])
+  return {
+    tasks: parsedQueue.data.tasks,
+    boundedChatSessions,
+    pressureTestIntakes,
+    projectCheckInSummary: summarizeProjectCheckIn(memoryDir),
+  }
 }
 
 function boundedThreadTaskIds(tasks: readonly ThreadTaskRecord[]): string[] {
@@ -222,6 +264,7 @@ export async function refreshCurrentThreadProjection(
   for (let attempt = 0; attempt < CURRENT_THREAD_READ_ATTEMPTS; attempt += 1) {
     const compactRead = readThreadTasks(projectRoot, tasksPath)
     let tasks: Task[]
+    let legacyQueue: unknown = null
     let sourceQueueRevision: number | null = null
     let sourceProjectRevision: number | null = null
     let sourceRevision: string | number
@@ -235,6 +278,7 @@ export async function refreshCurrentThreadProjection(
     } else {
       const queueRead = readProjectStateDatabaseQueueWithRevision(tasksPath)
       const queue = queueRead?.definition ?? await readProjectTaskQueue(tasksPath).catch(() => null)
+      legacyQueue = queue
       const parsedQueue = TaskQueue.safeParse(queue)
       if (!parsedQueue.success) return null
       tasks = parsedQueue.data.tasks
@@ -260,16 +304,54 @@ export async function refreshCurrentThreadProjection(
       continue
     }
 
+    const fullThreadSource = await readFullThreadProjectionSource(
+      projectRoot,
+      tasksPath,
+      compactRead,
+      legacyQueue,
+    )
+    const historyThread = fullThreadSource
+      ? buildThread({
+          projectPath: projectRoot,
+          snapshot,
+          tasks: fullThreadSource.tasks,
+          boundedChatSessions: fullThreadSource.boundedChatSessions,
+          pressureTestIntakes: fullThreadSource.pressureTestIntakes,
+          projectCheckInSummary: fullThreadSource.projectCheckInSummary,
+          ...(options.runStatus !== undefined ? { runStatus: options.runStatus } : {}),
+          ...(options.recentEvents ? { recentEvents: options.recentEvents } : {}),
+        })
+      : null
+    if (
+      sourceQueueRevision !== null &&
+      (readProjectStateDatabaseQueueRevision(tasksPath) !== sourceQueueRevision ||
+        readProjectStateDatabaseRevisionFromTasksPath(tasksPath) !== sourceProjectRevision)
+    ) {
+      continue
+    }
+
     const projection = buildCurrentThreadProjection({
       thread,
       generatedAt: new Date().toISOString(),
       sourceRevision,
     })
+    const history = historyThread ? buildThreadHistoryProjection({ thread: historyThread }) : null
     writeProjectStateDatabaseCurrentThread(projectRoot, {
       payload: projection,
       generatedAt: projection.generatedAt,
       sourceRevision: projection.sourceRevision,
       sourceQueueRevision,
+      ...(history && sourceProjectRevision !== null
+        ? {
+            history: {
+              turns: history.turns,
+              generatedAt: projection.generatedAt,
+              sourceRevision: sourceProjectRevision,
+              sourceQueueRevision,
+              truncated: history.truncated,
+            },
+          }
+        : {}),
     })
 
     // The sessions writer does not yet accept an expected project revision.

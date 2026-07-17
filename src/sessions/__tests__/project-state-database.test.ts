@@ -29,6 +29,7 @@ import {
   readProjectStateDatabaseQueueWithRevision,
   readProjectStateDatabaseSummary,
   readProjectStateDatabaseCurrentThread,
+  readProjectStateDatabaseThreadHistoryPage,
   readProjectStateDatabaseThreadSurfaceState,
   readProjectStateDatabaseTask,
   readProjectStateDatabaseTaskPoint,
@@ -162,6 +163,77 @@ describe('project-state database', () => {
       sourceQueueRevision,
     })).toThrow(/Stale current Thread write/)
     expect(readProjectStateDatabaseCurrentThread(projectRoot)?.payload).toEqual({ turns: [] })
+  })
+
+  it('stores bounded Thread history and serves indexed pages without rebuilding Thread', () => {
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: { tasks: [{ id: 'task-1', title: 'One', status: 'ready' }] },
+      summary: { generatedAt: '2026-07-14T00:00:00.000Z', freshness: 'current' },
+      projectRoot,
+    })
+    const sourceRevision = readProjectStateDatabaseRevisionFromTasksPath(tasksPath)!
+    const sourceQueueRevision = readProjectStateDatabaseQueueRevision(tasksPath)!
+    const turns = Array.from({ length: 2_005 }, (_, index) => ({
+      id: `turn-${index}`,
+      at: `2026-07-15T00:${String(Math.floor(index / 60) % 60).padStart(2, '0')}:${String(index % 60).padStart(2, '0')}.000Z`,
+      status: 'done',
+      summary: `Turn ${index}`,
+    }))
+    writeProjectStateDatabaseCurrentThread(projectRoot, {
+      payload: { turns: [] },
+      generatedAt: '2026-07-15T01:00:00.000Z',
+      sourceRevision,
+      sourceQueueRevision,
+      history: {
+        turns,
+        generatedAt: '2026-07-15T01:00:00.000Z',
+        sourceRevision,
+        sourceQueueRevision,
+        truncated: false,
+      },
+    })
+
+    const page = readProjectStateDatabaseThreadHistoryPage(projectRoot, { offset: 1_998, limit: 10 })
+    expect(page).toMatchObject({
+      offset: 1_998,
+      limit: 10,
+      total: 2_000,
+      hasMore: false,
+      truncated: true,
+      sourceRevision: String(sourceRevision),
+      sourceQueueRevision,
+    })
+    expect(page?.turns.map((turn: any) => turn.id)).toEqual(['turn-2003', 'turn-2004'])
+    const boundedPage = readProjectStateDatabaseThreadHistoryPage(projectRoot, { offset: 0, limit: 10_000 })
+    expect(boundedPage?.limit).toBe(100)
+    expect(boundedPage?.turns).toHaveLength(100)
+    const database = new DatabaseSync(projectStateDatabasePath(projectRoot), { readOnly: true })
+    expect(database.prepare('SELECT COUNT(*) AS count FROM thread_history').get()).toMatchObject({ count: 2_000 })
+    database.close()
+  })
+
+  it('rejects historical Thread writes from an older project revision', () => {
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: { tasks: [{ id: 'task-1', title: 'One', status: 'ready' }] },
+      summary: { generatedAt: '2026-07-14T00:00:00.000Z', freshness: 'current' },
+      projectRoot,
+    })
+    const sourceRevision = readProjectStateDatabaseRevisionFromTasksPath(tasksPath)!
+    const sourceQueueRevision = readProjectStateDatabaseQueueRevision(tasksPath)!
+    upsertProjectStateDatabaseRuntime(projectRoot, { status: 'running', updatedAt: '2026-07-15T00:01:00.000Z' })
+    expect(() => writeProjectStateDatabaseCurrentThread(projectRoot, {
+      payload: { turns: [{ id: 'stale' }] },
+      generatedAt: '2026-07-15T01:00:00.000Z',
+      sourceRevision,
+      sourceQueueRevision,
+      history: {
+        turns: [{ id: 'stale', status: 'done' }],
+        generatedAt: '2026-07-15T01:00:00.000Z',
+        sourceRevision,
+        sourceQueueRevision,
+        truncated: false,
+      },
+    })).toThrow(/Stale current Thread write/)
   })
 
   it('advances one source revision and enqueues obligations for a summary patch', () => {

@@ -40921,6 +40921,79 @@ source of current state. The project-state boundary chooses one revision and
 returns the membership and executable projections derived from it. Different
 views are allowed; different authorities are not.
 
+## 2026-07-16 - Thread history and rich Project detail use durable projections
+
+The historical Thread route and rich `/api/project?detail=true` route were two
+more ways to accidentally create a second current-state answer. Thread history
+replayed tasks, sessions, intakes, and recent events on every GET. Rich Project
+detail recomputed Start readiness, progress, and the action model even though
+the fleet summary and compact Project surfaces already had those answers saved.
+That meant the same project could show different readiness or next work solely
+because the user opened a different route.
+
+- [x] Added a bounded `thread_history_state` metadata row and paged
+  `thread_history` projection. It retains at most 2,000 sanitized turns and
+  512 KiB, with a maximum 100-turn SQL page.
+- [x] Current Thread and historical Thread are written in the same
+  compare-and-swap transaction, using the same project and queue revisions.
+  There is no standalone history writer that can create a competing watermark.
+- [x] `/api/project/thread/history` reads only the durable page. Missing or
+  stale history is reported as an explicit projection cache state and never
+  repaired by replaying source files during a GET.
+- [x] Ordinary rich Project detail now consumes the saved summary's
+  `startReadiness`, `actionModel`, and `workProgress`. Live readiness/Git
+  inspection is restricted to the explicit `diagnostic=true` route.
+- [x] Missing or stale summary state returns a bounded refresh-needed response
+  instead of silently inventing a fresh rich answer from source data.
+- [x] Migration `0.12.47/project-thread-history-read-model` creates the new
+  tables idempotently; existing source history is not copied into project
+  state until the asynchronous projection writer publishes a bounded result.
+- [x] Focused Thread/database/migration proof passes: 108/108. The route
+  boundary and task-endpoint suites pass: 204/204.
+- [ ] Full data-layer migration remains open. Ordinary task detail,
+  Git Story, delivery/context, and wizard routes still have explicit detail
+  aggregators identified by the architecture audit and must be moved to named
+  point/rich snapshot boundaries.
+
+### Contract Touch Decision
+
+- Work id: `codex:single-project-read-boundary-2026-07-16`.
+- Touched contracts: rich Project detail response, Thread history response,
+  current Thread projection writer, and project-state database schema.
+- Considered but not touched: task action POST semantics, diagnostic route
+  payloads, historical source ledgers, and the user-facing navigation labels.
+- Required follow-up: migrate the remaining explicit detail aggregators and
+  make each one consume the same named snapshot rather than rebuilding current
+  state locally.
+- Proof required: route agreement with `/api/service`, explicit stale/missing
+  projection behavior, bounded history retention/page reads, migration
+  idempotence, and installed runtime proof.
+- Proof provided: focused tests listed above; broader build and installed
+  runtime proof is still pending for this slice.
+- Apply/revert behavior: reverting restores request-time rich readiness and
+  Thread-history reconstruction; no persisted data rollback is required.
+
+### Schema Migration Decision
+
+- Persisted schema touched: new `thread_history_state` and `thread_history`
+  tables, plus schema version 29.
+- Change class: additive bounded read model; no existing task, intake, chat,
+  approval, or raw source-history rows are rewritten.
+- Existing data impact: existing databases receive empty history tables and
+  report `requiresRefresh` until the projection writer next runs. Current
+  Thread rows remain readable independently.
+- Migration id: `0.12.47/project-thread-history-read-model`.
+- Safety: automatic, idempotent, and bounded by the database writer's 2,000
+  turn / 512 KiB retention limits.
+- Compatibility reader: none in ordinary GETs; source reconstruction remains
+  inside the explicit asynchronous projection boundary only.
+- Fixtures/tests: current-thread projection, current-thread refresh, project
+  state database, and migration suites.
+- Owner-facing plan: Thread opens with a small current window and can request
+  older pages without making the project or fleet route load all history.
+- Rollback/revert: code revert leaves the additive tables unused; no data
+  rollback is required.
+
 ### Live proof and remaining boundary work
 
 - [x] `pnpm audit:project-state-agreement`: 7 projects, 0 mismatches, matching

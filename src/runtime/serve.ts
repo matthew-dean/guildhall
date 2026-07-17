@@ -28,6 +28,7 @@ import {
   readProjectStateDatabaseQueueDefinition,
   readProjectStateDatabaseCurrentAuthority,
   readProjectStateDatabaseCurrentThread,
+  readProjectStateDatabaseThreadHistorySurfaceState,
   readProjectStateDatabaseThreadSurfaceState,
   readProjectStateDatabaseTasks,
   readProjectStateDatabaseTaskPoint,
@@ -184,7 +185,6 @@ import {
   createPressureTestIntake,
   loadPressureTestIntake,
   listPressureTestIntakes,
-  listPressureTestIntakesAsync,
   summarizeProjectCheckIn,
 } from './pressure-test-intake.js'
 import { routeRequest } from './request-routing.js'
@@ -199,7 +199,6 @@ import {
 } from './bounded-chat-new-request.js'
 import {
   listBoundedChatSessions,
-  listBoundedChatSessionsAsync,
   loadBoundedChatSession,
   submitBoundedChatUserResponse,
 } from './bounded-chat.js'
@@ -394,7 +393,6 @@ import {
   runRuntimeBackendSetupAction,
   type RuntimeBackendSetupDetector,
 } from './runtime-backend-setup.js'
-import { buildThread } from './thread.js'
 import { buildProjectActionModel, type ProjectActionModel } from './project-action-model.js'
 import { NodeGitDriver } from './git-driver.js'
 import {
@@ -1289,38 +1287,6 @@ function isSurfaceReviewPacket(value: unknown): value is SurfaceReviewPacket {
     Array.isArray(packet.reviewFocus)
 }
 
-function projectCheckInSummaryFromState(
-  intakes: Array<{ status: string }>,
-  chats: Array<{ status: string; objective: { kind: string } }>,
-) {
-  const projectChats = chats.filter(session => session.objective.kind === 'project_check_in' || session.objective.kind === 'project_intake')
-  const activeCount =
-    intakes.filter(intake => intake.status === 'active').length +
-    projectChats.filter(chat => chat.status === 'waiting_for_owner' || chat.status === 'coordinator_review').length
-  const completedCount =
-    intakes.filter(intake => intake.status === 'complete').length +
-    projectChats.filter(chat => chat.status === 'fulfilled').length
-  const needed = intakes.length === 0 && projectChats.length === 0
-  return {
-    needed,
-    label: 'Project questions',
-    title: needed
-      ? 'Run project check-in'
-      : activeCount > 0
-        ? 'Project questions in progress'
-        : 'Project questions answered',
-    detail: needed
-      ? 'The first project questions have not been generated yet. Start the check-in pass so it can ask one clear question at a time.'
-      : activeCount > 0
-        ? 'Keep answering the current project questions in Thread.'
-        : 'Project-level answers are already recorded for this workspace.',
-    actionHref: '/thread',
-    totalCount: intakes.length,
-    activeCount,
-    completedCount,
-  }
-}
-
 function newRequestRoutingSummary(kind: string): string {
   switch (kind) {
     case 'project_question':
@@ -1658,23 +1624,6 @@ async function repairWeakRecoverySpecReviewTask(projectPath: string, requestedTa
 
 function projectBriefPath(projectPath: string): string {
   return getProjectSystemStatePath(projectPath, 'project-brief.md')
-}
-
-async function loadThreadProjectionState(projectPath: string) {
-  const memoryDir = getProjectStateDir(projectPath)
-  const [snapshot, tasks, boundedChatSessions, pressureTestIntakes] = await Promise.all([
-    buildSnapshotAsync({ projectPath }),
-    readTasksFileNormalized(projectTasksPath(projectPath)).catch(() => []),
-    listBoundedChatSessionsAsync(memoryDir).catch(() => []),
-    listPressureTestIntakesAsync(memoryDir).catch(() => []),
-  ])
-  return {
-    snapshot,
-    tasks,
-    boundedChatSessions,
-    pressureTestIntakes,
-    projectCheckInSummary: projectCheckInSummaryFromState(pressureTestIntakes, boundedChatSessions),
-  }
 }
 
 function formatServerTiming(metrics: Array<{ name: string; startedAt: number; endedAt?: number }>): string {
@@ -6735,20 +6684,48 @@ export function buildServeApp(opts: ServeOptions = {}): {
         models: resolvedConfig.models,
       })
       endQueue()
-      const endReadiness = startTiming('readiness')
-      const startReadiness = await projectStartReadiness({
-        projectPath: project.path,
-        resolvedConfig,
-        runtimeProvider,
-        allowPaidProviderFallback: runtimeProvider.allowPaidProviderFallback,
-        queue: rawQueue,
-        effectiveTasks: mapSurface
-          ? await compactSurfaceEffectiveTasksPromise as Task[]
-          : overviewSurface || workSurface
-            ? await compactSurfaceEffectiveTasksPromise as Task[]
-            : undefined,
-        startTiming: name => startTiming(`readiness_${name}`),
-      })
+      const projectedSummary = !diagnosticRequested && currentState.summary?.freshness === 'current'
+        ? summarizeProjectFromProjection(
+            { id: project.id, path: project.path },
+            project,
+            run,
+            currentState.summary,
+          )
+        : null
+      if (!diagnosticRequested && !projectedSummary?.startReadiness) {
+        endTotal()
+        c.header('server-timing', formatServerTiming(timing))
+        return c.json({
+          error: 'The saved project summary is not available yet.',
+          summaryFreshness: currentState.summary?.freshness ?? 'missing',
+          projectRevision: currentState.projectRevision,
+          queueRevision: currentState.queueRevision,
+          requiresRefresh: true,
+          detailPayload: {
+            kind: 'project-summary-projection',
+            freshness: currentState.summary?.freshness ?? 'missing',
+            unavailable: true,
+            omitted: ['request-time readiness', 'live Git inspection', 'task evidence and history'],
+            requiresRefresh: true,
+          },
+        }, 503)
+      }
+      const endReadiness = diagnosticRequested ? startTiming('readiness') : null
+      const startReadiness = diagnosticRequested
+        ? await projectStartReadiness({
+            projectPath: project.path,
+            resolvedConfig,
+            runtimeProvider,
+            allowPaidProviderFallback: runtimeProvider.allowPaidProviderFallback,
+            queue: rawQueue,
+            effectiveTasks: mapSurface
+              ? await compactSurfaceEffectiveTasksPromise as Task[]
+              : overviewSurface || workSurface
+                ? await compactSurfaceEffectiveTasksPromise as Task[]
+                : undefined,
+            startTiming: name => startTiming(`readiness_${name}`),
+          })
+        : projectedSummary?.startReadiness ?? null
       const releaseReadiness = fullSurface || overviewSurface || workSurface || mapSurface
         ? await buildProjectReleaseReadinessPayload({
             state: currentState,
@@ -6756,7 +6733,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
             liveDiagnostics: diagnosticRequested,
           })
         : null
-      endReadiness()
+      endReadiness?.()
       const endTasks = startTiming('tasks')
       const tasks = overviewSurface
         ? await compactSurfaceEffectiveTasksPromise as Task[]
@@ -6906,38 +6883,42 @@ export function buildServeApp(opts: ServeOptions = {}): {
           .filter((id): id is string => typeof id === 'string' && id.trim().length > 0),
       )
       const blockerTaskIds = releaseBlockerTaskIdsForProgress(releaseReadiness, progressTaskIds)
-      const workProgress = deriveProjectWorkProgress(
-        orientationTasks as unknown as Array<Record<string, unknown>>,
-        {
-          ...(selectedProgressTaskIds.length > 0 ? { selectedTaskIds: selectedProgressTaskIds } : {}),
-          ...(blockerTaskIds.length > 0 ? { blockerTaskIds } : {}),
-        },
-      )
-      endSpine()
-      const endAction = startTiming('action')
-      const actionScope = orientationSpine.selectedTaskScope ?? orientationSpine.scope ?? null
-      const actionTasksById = new Map((orientationTasks as unknown as Task[]).map(candidate => [candidate.id, candidate]))
-      const scopedActionTaskIds = actionScope
-        ? new Set(
-            (orientationTasks as unknown as Task[])
-              .filter(task => taskEligibleForSelectedScope(task, actionScope, {
-                tasksById: actionTasksById,
-              }).eligible)
-              .map(task => task.id),
+      const workProgress = !diagnosticRequested && currentState.summary
+        ? workProgressFromProjectSummaryProjection(currentState.summary)
+        : deriveProjectWorkProgress(
+            orientationTasks as unknown as Array<Record<string, unknown>>,
+            {
+              ...(selectedProgressTaskIds.length > 0 ? { selectedTaskIds: selectedProgressTaskIds } : {}),
+              ...(blockerTaskIds.length > 0 ? { blockerTaskIds } : {}),
+            },
           )
-        : null
-      const actionTasks = scopedActionTaskIds
-        ? tasks.filter(task => typeof task.id === 'string' && scopedActionTaskIds.has(task.id))
-        : tasks
-      const actionModel = buildProjectActionModel({
-        startReadiness,
-        inbox,
-        tasks: actionTasks as never,
-        thread,
-        runStatus: run?.status ?? 'stopped',
-        availability,
-      })
-      endAction()
+      endSpine()
+      const actionModel = !diagnosticRequested
+        ? projectedSummary?.actionModel ?? currentState.summary?.actionModel ?? null
+        : (() => {
+            const actionScope = orientationSpine.selectedTaskScope ?? orientationSpine.scope ?? null
+            const actionTasksById = new Map((orientationTasks as unknown as Task[]).map(candidate => [candidate.id, candidate]))
+            const scopedActionTaskIds = actionScope
+              ? new Set(
+                  (orientationTasks as unknown as Task[])
+                    .filter(task => taskEligibleForSelectedScope(task, actionScope, {
+                      tasksById: actionTasksById,
+                    }).eligible)
+                    .map(task => task.id),
+                )
+              : null
+            const actionTasks = scopedActionTaskIds
+              ? tasks.filter(task => typeof task.id === 'string' && scopedActionTaskIds.has(task.id))
+              : tasks
+            return buildProjectActionModel({
+              startReadiness,
+              inbox,
+              tasks: actionTasks as never,
+              thread,
+              runStatus: run?.status ?? 'stopped',
+              availability,
+            })
+          })()
       const endResponse = startTiming('response')
       const overviewTaskIds = overviewSurface
         ? overviewTaskIdsForSurface({
@@ -12117,25 +12098,33 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (project.initializationNeeded) return c.json({ turns: [], offset: 0, limit: 0, total: 0, hasMore: false })
       const offset = Math.max(0, Number.parseInt(c.req.query('offset') ?? '0', 10) || 0)
       const limit = Math.min(100, Math.max(1, Number.parseInt(c.req.query('limit') ?? '50', 10) || 50))
-      const state = await loadThreadProjectionState(project.path)
-      const thread = buildThread({
-        projectPath: project.path,
-        snapshot: state.snapshot,
-        tasks: state.tasks as never,
-        boundedChatSessions: state.boundedChatSessions,
-        pressureTestIntakes: state.pressureTestIntakes,
-        projectCheckInSummary: state.projectCheckInSummary,
-        runStatus: supervisor.get(project.id)?.status ?? 'stopped',
-        recentEvents: supervisor.recent(project.id, undefined, project.path),
-      })
-      const turns = thread.turns.slice(offset, offset + limit)
+      const { history, surface } = readProjectStateDatabaseThreadHistorySurfaceState(project.path, { offset, limit })
+      if (!history) {
+        return c.json({
+          turns: [],
+          offset,
+          limit,
+          total: 0,
+          hasMore: false,
+          historyFreshness: 'missing',
+          requiresRefresh: true,
+          detailPayload: {
+            kind: 'thread-history-projection',
+            unavailable: true,
+            omitted: 'Historical turns are populated by the asynchronous projection writer.',
+          },
+        })
+      }
       return c.json({
-        turns,
-        offset,
-        limit,
-        total: thread.turns.length,
-        hasMore: offset + turns.length < thread.turns.length,
-        ...(offset + turns.length < thread.turns.length ? { nextOffset: offset + turns.length } : {}),
+        ...history,
+        historyFreshness: history.sourceRevision === String(surface?.projectRevision ?? 'missing') &&
+          history.sourceQueueRevision === surface?.queueRevision
+          ? 'current'
+          : 'stale',
+        ...(history.sourceRevision !== String(surface?.projectRevision ?? 'missing') ||
+          history.sourceQueueRevision !== surface?.queueRevision
+          ? { requiresRefresh: true }
+          : {}),
       })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)

@@ -3900,13 +3900,48 @@ retention ownership.
   `currentThreadFreshness` as `missing`, `stale`, or `current`. It never calls
   `buildThread`. The full project diagnostic and task/thread extras consume the
   same current row or filter its current turns. `/api/project/thread/history`
-  is the only route that reconstructs historical turns.
+  reads the durable paged history projection; the asynchronous projection
+  writer is the only normal path that reconstructs historical turns.
 - **Safety/rollback:** a missing or queue-revision-mismatched row is surfaced
   as missing/stale; it is not rebuilt during a read. Removing the row does not
   remove any source or history data.
-- **Remaining limitation:** the background writer still uses `buildThread`
-  once per coalesced refresh. That work has moved out of ordinary reads, but a
-  smaller source-native projector is still a later optimization.
+- **Remaining limitation:** the background writer still uses `buildThread` to
+  materialize current and historical context at each coalesced refresh. That
+  work has moved out of ordinary reads, but a smaller source-native projector
+  is still a later optimization.
+
+**Contract Touch Decision - `codex:thread-history-page-read-model-2026-07-16`**
+
+- **Work id:** Thread history architecture slice.
+- **Touched contracts:** the `/api/project/thread/history` page and metadata
+  response, the project SQLite history tables, and the existing current-Thread
+  projection write boundary.
+- **Considered but not touched:** Thread construction, current-Thread payload
+  shape, task/chat/intake source schemas, owner approval semantics, and source
+  history files.
+- **Required proof:** history GET reads only the stored page; the page query is
+  bounded; projection writes publish current and history with matching
+  revisions; existing Thread behavior remains on the background writer.
+- **Apply/revert behavior:** the migration is additive and creates empty tables;
+  a cache miss reports `requiresRefresh` and does not backfill in a GET. Reverting
+  the reader leaves source histories and the existing current projection intact.
+
+**Schema Migration Decision - `0.12.47/project-thread-history-read-model`**
+
+- **Persisted schema touched:** `thread_history_state`, `thread_history`, and
+  project-state database schema version 29.
+- **Scope/change class:** additive, bounded paged history read model. Retention
+  is capped at 2,000 sanitized turns and 512 KiB of serialized payloads; reads
+  are capped at 100 turns per page.
+- **Existing data impact:** none. The automatic idempotent migration creates
+  empty tables; the next asynchronous projection refresh populates them. Task,
+  chat, intake, approval, and source-history data are not rewritten or deleted.
+- **Compatibility reader:** missing or stale history returns page metadata with
+  `historyFreshness` and `requiresRefresh`; normal GET never reconstructs Thread.
+- **Proof and rollback:** focused projection, route, database, and migration
+  tests cover atomic revision matching, retention, page limits, and source-file
+  independence. Code rollback can ignore the additive tables without affecting
+  the existing source stores.
 
 ## 2026-07-15 - Current Thread bounded-window correction
 

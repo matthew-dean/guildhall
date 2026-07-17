@@ -5,7 +5,7 @@ import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { parse as parseYaml } from 'yaml'
 import { FileBackedGuildhallPersistence } from '@guildhall/persistence'
-import { getProjectLocalHistoryDir, getProjectRuntimeCommandEvidencePath, getProjectSystemStatePath, projectStateDatabaseCompressedDetailPathFromTasksPath, projectStateDatabaseDetailPathFromTasksPath, projectStateDatabasePath, promoteProjectStateDatabaseAuthority, readProjectStateDatabaseMetadata, readProjectStateDatabaseQueueDefinition, readProjectStateDatabaseQueueRevision, readProjectStateDatabaseSummary, readProjectStateDatabaseTaskOverlay, readProjectStateDatabaseTaskEvidenceAuthority, readProjectStateDatabaseTaskEvidenceCurrent, readProjectStateDatabaseTaskEvidenceHistory, readProjectStateDatabaseTaskPoint, writeProjectStateDatabaseSnapshot } from '@guildhall/sessions'
+import { getProjectLocalHistoryDir, getProjectRuntimeCommandEvidencePath, getProjectSystemStatePath, projectStateDatabaseCompressedDetailPathFromTasksPath, projectStateDatabaseDetailPathFromTasksPath, projectStateDatabasePath, promoteProjectStateDatabaseAuthority, readProjectStateDatabaseMetadata, readProjectStateDatabaseQueueDefinition, readProjectStateDatabaseQueueRevision, readProjectStateDatabaseSummary, readProjectStateDatabaseTaskOverlay, readProjectStateDatabaseTaskEvidenceAuthority, readProjectStateDatabaseTaskEvidenceCurrent, readProjectStateDatabaseTaskEvidenceHistory, readProjectStateDatabaseTaskPoint, writeProjectStateDatabaseSnapshot, PROJECT_STATE_DATABASE_SCHEMA_VERSION } from '@guildhall/sessions'
 import {
   applyProjectMigrations,
   getProjectMigrationStatus,
@@ -211,7 +211,7 @@ describe('applyProjectMigrations', () => {
       only: ['0.12.0/project-state-database'],
     })
     expect(result.applied.map(item => item.id)).toContain('0.12.0/project-state-database')
-    expect(readProjectStateDatabaseMetadata(projectRoot)).toMatchObject({ schemaVersion: 28 })
+    expect(readProjectStateDatabaseMetadata(projectRoot)).toMatchObject({ schemaVersion: PROJECT_STATE_DATABASE_SCHEMA_VERSION })
     await expect(fs.access(projectStateDatabasePath(projectRoot))).resolves.toBeUndefined()
   })
 
@@ -432,7 +432,7 @@ describe('applyProjectMigrations', () => {
     })}\n`, 'utf8')
 
     await applyProjectMigrations({ projectRoot, only: ['0.12.0/project-state-database'] })
-    expect(readProjectStateDatabaseMetadata(projectRoot)?.schemaVersion).toBe(28)
+    expect(readProjectStateDatabaseMetadata(projectRoot)?.schemaVersion).toBe(PROJECT_STATE_DATABASE_SCHEMA_VERSION)
     expect(readProjectStateDatabaseTaskEvidenceCurrent(projectRoot, 'task-evidence-current')).toBeNull()
 
     const result = await applyProjectMigrations({ projectRoot, only: ['0.12.31/task-evidence-current-projection'] })
@@ -725,7 +725,7 @@ describe('applyProjectMigrations', () => {
     })
 
     expect(result.applied.map(item => item.id)).toContain('0.12.1/project-state-database-rollback-journal')
-    expect(readProjectStateDatabaseMetadata(projectRoot)).toMatchObject({ schemaVersion: 28 })
+    expect(readProjectStateDatabaseMetadata(projectRoot)).toMatchObject({ schemaVersion: PROJECT_STATE_DATABASE_SCHEMA_VERSION })
     const migratedDatabase = new DatabaseSync(projectStateDatabasePath(projectRoot), { readOnly: true })
     expect((migratedDatabase.prepare('PRAGMA journal_mode').get() as { journal_mode: string }).journal_mode).toBe('delete')
     migratedDatabase.close()
@@ -870,6 +870,20 @@ describe('applyProjectMigrations', () => {
     expect((await applyProjectMigrations({
       projectRoot,
       only: ['0.12.45/project-current-thread-projection-store'],
+    })).applied).toEqual([])
+
+    const threadHistoryStore = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.12.47/project-thread-history-read-model'],
+    })
+    expect(threadHistoryStore.applied.map(item => item.id)).toEqual(['0.12.47/project-thread-history-read-model'])
+    const threadHistoryDatabase = new DatabaseSync(projectStateDatabasePath(projectRoot), { readOnly: true })
+    expect(threadHistoryDatabase.prepare('SELECT COUNT(*) AS count FROM thread_history').get()).toMatchObject({ count: 0 })
+    expect(threadHistoryDatabase.prepare('SELECT COUNT(*) AS count FROM thread_history_state').get()).toMatchObject({ count: 0 })
+    threadHistoryDatabase.close()
+    expect((await applyProjectMigrations({
+      projectRoot,
+      only: ['0.12.47/project-thread-history-read-model'],
     })).applied).toEqual([])
   })
 

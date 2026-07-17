@@ -30,6 +30,7 @@ import {
   migrateProjectStateDatabaseReleaseMembership,
   clearProjectStateDatabaseQueueDetail,
   ensureProjectStateDatabaseCurrentThreadStore,
+  ensureProjectStateDatabaseThreadHistoryStore,
   writeProjectStateDatabaseSummarySnapshot,
   updateProjectStateDatabaseSummary,
   promoteProjectStateDatabaseAuthority,
@@ -175,6 +176,7 @@ const LEGACY_LIVE_STATE_CLEANUP_MIGRATION_ID = '0.13.0/project-state-legacy-live
 const EFFECTIVE_STATE_REALIGNMENT_MIGRATION_ID = '0.13.0/project-summary-effective-state-realignment'
 const CURRENT_STATUS_PROJECTION_MIGRATION_ID = '0.13.1/project-current-status-projection'
 const RELEASE_MEMBERSHIP_MIGRATION_ID = '0.13.1/release-membership'
+const THREAD_HISTORY_PROJECTION_MIGRATION_ID = '0.12.47/project-thread-history-read-model'
 
 interface FinalProjectStateMigrationResult {
   removedPaths: string[]
@@ -2462,6 +2464,32 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
     },
   },
   {
+    id: THREAD_HISTORY_PROJECTION_MIGRATION_ID,
+    title: 'Create the paged Thread history projection store',
+    introducedIn: '0.12.47',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Creates the bounded historical Thread projection tables; the next asynchronous refresh populates them without rebuilding history in a GET.',
+    async detect(projectRoot) {
+      const metadata = readProjectStateDatabaseMetadata(projectRoot)
+      if (metadata === null) return { needed: false, affectedPaths: [] }
+      const ledger = await readProjectMigrationLedger(projectRoot)
+      const applied = ledger.records.some(record => record.id === THREAD_HISTORY_PROJECTION_MIGRATION_ID && record.status === 'applied')
+      return {
+        needed: !applied,
+        affectedPaths: !applied ? [projectStateDatabasePath(projectRoot)] : [],
+      }
+    },
+    async apply(projectRoot) {
+      ensureProjectStateDatabaseThreadHistoryStore(projectRoot)
+      return {
+        summary: 'Created the paged Thread history projection store; historical reads now report a cache miss until the projector publishes the first bounded page set.',
+        affectedPaths: [projectStateDatabasePath(projectRoot)],
+      }
+    },
+  },
+  {
     id: '0.12.41/task-evidence-history-authority',
     title: 'Move promoted task evidence history into the project database',
     introducedIn: '0.12.41',
@@ -2781,6 +2809,7 @@ const BUILT_IN_PROJECT_MIGRATION_IDEMPOTENCE_TESTS: Record<string, string> = {
   '0.12.43/project-state-per-task-detail-index': 'project-state-database.test.ts: reads one task detail without the aggregate queue detail blob',
   '0.12.44/project-state-remove-aggregate-detail': 'migrations.test.ts: removes the duplicate aggregate detail only after the per-task index is complete',
   '0.12.45/project-current-thread-projection-store': 'migrations.test.ts: creates the bounded current Thread store without reconstructing history',
+  [THREAD_HISTORY_PROJECTION_MIGRATION_ID]: 'migrations.test.ts: creates the paged Thread history store without reconstructing history',
   '0.12.41/task-evidence-history-authority': 'migrations.test.ts: imports bounded legacy task evidence into SQLite and removes files only after retention-aware verification',
   '0.12.42/task-evidence-history-compression': 'migrations.test.ts: moves SQLite history into compressed ledgers before emptying the aggregate database',
   [LEGACY_LIVE_STATE_CLEANUP_MIGRATION_ID]: 'migrations.test.ts: removes legacy live-state files even when the SQLite cutover was already recorded',
