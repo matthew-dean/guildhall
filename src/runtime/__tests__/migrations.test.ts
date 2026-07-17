@@ -5,7 +5,7 @@ import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { parse as parseYaml } from 'yaml'
 import { FileBackedGuildhallPersistence } from '@guildhall/persistence'
-import { getProjectLocalHistoryDir, getProjectRuntimeCommandEvidencePath, getProjectSystemStatePath, projectStateDatabaseCompressedDetailPathFromTasksPath, projectStateDatabaseDetailPathFromTasksPath, projectStateDatabasePath, promoteProjectStateDatabaseAuthority, readProjectStateDatabaseMetadata, readProjectStateDatabaseQueueDefinition, readProjectStateDatabaseQueueRevision, readProjectStateDatabaseSummary, readProjectStateDatabaseTaskOverlay, readProjectStateDatabaseTaskEvidenceAuthority, readProjectStateDatabaseTaskEvidenceCurrent, readProjectStateDatabaseTaskEvidenceHistory, readProjectStateDatabaseTaskPoint, writeProjectStateDatabaseSnapshot, PROJECT_STATE_DATABASE_SCHEMA_VERSION } from '@guildhall/sessions'
+import { getProjectLocalHistoryDir, getProjectRuntimeCommandEvidencePath, getProjectSystemStatePath, projectStateDatabaseCompressedDetailPathFromTasksPath, projectStateDatabaseDetailPathFromTasksPath, projectStateDatabasePath, promoteProjectStateDatabaseAuthority, readProjectStateDatabaseInventory, readProjectStateDatabaseMetadata, readProjectStateDatabaseQueueDefinition, readProjectStateDatabaseQueueRevision, readProjectStateDatabaseSummary, readProjectStateDatabaseTaskOverlay, readProjectStateDatabaseTaskEvidenceAuthority, readProjectStateDatabaseTaskEvidenceCurrent, readProjectStateDatabaseTaskEvidenceHistory, readProjectStateDatabaseTaskPoint, writeProjectStateDatabaseSnapshot, PROJECT_STATE_DATABASE_SCHEMA_VERSION } from '@guildhall/sessions'
 import {
   applyProjectMigrations,
   getProjectMigrationStatus,
@@ -279,6 +279,59 @@ describe('applyProjectMigrations', () => {
       { release_id: 'release-one', task_id: 'task-later', disposition: 'deferred' },
     ])
     migrated.close()
+  })
+
+  it('backfills compact graph packets from task detail and is idempotent', async () => {
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: {
+        version: 1,
+        lastUpdated: '2026-07-16T12:00:00.000Z',
+        tasks: [{
+          id: 'task-packet',
+          title: 'Indexed packet task',
+          status: 'ready',
+          contractSurfaceReviewPackets: [{
+            id: 'packet-1',
+            surface: { id: 'surface-1', label: 'Shared surface' },
+            currentSpecRef: 'spec.md',
+            knownConsumers: [],
+            existingInvariants: [],
+            existingDecisions: [],
+            siblingSpecRefs: [],
+            driftFindings: [],
+            currentDelta: { summary: 'Keep the surface stable.' },
+            proofObligations: ['Run the contract proof.'],
+            reviewFocus: ['Check the shared vocabulary.'],
+          }],
+        }],
+        releases: [],
+      },
+      summary: { projectId: 'migration-test', generatedAt: '2026-07-16T12:00:00.000Z', freshness: 'current' },
+      projectRoot,
+    })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+    const database = new DatabaseSync(projectStateDatabasePath(projectRoot))
+    database.prepare('UPDATE work_items SET summary_json = ? WHERE id = ?').run('{}', 'task-packet')
+    database.close()
+
+    const result = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.2/compact-task-read-models'],
+    })
+    expect(result.applied.map(item => item.id)).toContain('0.13.2/compact-task-read-models')
+    expect(readProjectStateDatabaseInventory(tasksPath, { includeDefinitions: false })?.tasks[0]).toMatchObject({
+      id: 'task-packet',
+      contractSurfaceReviewPackets: [{
+        id: 'packet-1',
+        currentSpecRef: 'spec.md',
+        currentDelta: { summary: 'Keep the surface stable.' },
+      }],
+    })
+    expect((await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.2/compact-task-read-models'],
+    })).applied).toEqual([])
   })
 
   it('does not erase normalized membership when compatibility mirrors are empty', async () => {

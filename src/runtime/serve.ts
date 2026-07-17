@@ -57,7 +57,7 @@ import { taskBlockerSummary } from './task-blocker-summary.js'
 import { buildProjectSummaryProjection, prepareProjectSummaryProjectionFromUnknownQueue, queueForProjectSummaryScope, readApprovedPlan, readProjectSummaryProjection, readProjectSummaryShellProjection, updateProjectSummaryProjection, writeProjectSummaryProjectionFromIndexedState, writeProjectSummaryProjectionFromUnknownQueue, type ProjectSummaryProjection } from './project-summary-projection.js'
 import { inferProjectOrientationSnapshot } from './project-orientation-snapshot.js'
 import { refreshCurrentThreadProjection } from './current-thread-refresh.js'
-import { projectTaskRecordFromDatabasePoint, projectTaskStateExistsSync, readProjectCanonicalCurrentState, readProjectCompactStateModel, readProjectCurrentStateModel, readProjectMapStateModel, readProjectReleaseState, readProjectSavedReleaseState, readProjectStateAuthorityAtBoundary, readProjectSummaryAtBoundary, readProjectTaskDetailState, readProjectTaskQueue, readProjectTaskQueueForRichMutation, readProjectTaskQueueForMutationSync, readProjectTaskQueueSync, readProjectTaskRecordAtBoundary, readProjectTaskRecordsAtBoundary, writePromotedTaskDetailMutation, writeProjectTaskQueueAtCurrentStateBoundary, writeProjectTaskQueueWithSummary, type ProjectCanonicalCurrentState, type ProjectReleaseReadModel, type ProjectSavedReleaseReadModel } from './project-state-boundary.js'
+import { projectTaskRecordFromDatabasePoint, projectTaskStateExistsSync, readProjectCanonicalCurrentState, readProjectCompactStateModel, readProjectCurrentStateModel, readProjectGraphStateModel, readProjectReleaseState, readProjectSavedReleaseState, readProjectStateAuthorityAtBoundary, readProjectSummaryAtBoundary, readProjectTaskDetailState, readProjectTaskQueue, readProjectTaskQueueForRichMutation, readProjectTaskQueueForMutationSync, readProjectTaskQueueSync, readProjectTaskRecordAtBoundary, readProjectTaskRecordsAtBoundary, writePromotedTaskDetailMutation, writeProjectTaskQueueAtCurrentStateBoundary, writeProjectTaskQueueWithSummary, type ProjectCanonicalCurrentState, type ProjectReleaseReadModel, type ProjectSavedReleaseReadModel } from './project-state-boundary.js'
 import { taskTitleOverlap } from './task-title-overlap.js'
 import {
   readWorkspaceConfig,
@@ -2799,6 +2799,7 @@ function orientationTaskFromMapRow(row: {
   releaseIds: string[]
   sourceRefs: string[]
   updatedAt: string | null
+  contractSurfaceReviewPackets?: Array<Record<string, unknown>>
   definition: Record<string, unknown>
 }): Task {
   const definition = row.definition ?? {}
@@ -2821,6 +2822,7 @@ function orientationTaskFromMapRow(row: {
     dependsOn: row.dependsOn,
     releaseIds: row.releaseIds,
     sourceRefs: row.sourceRefs,
+    ...(row.contractSurfaceReviewPackets ? { contractSurfaceReviewPackets: row.contractSurfaceReviewPackets } : {}),
     ...(row.updatedAt !== null ? { updatedAt: row.updatedAt } : {}),
   } as unknown as Task
 }
@@ -7318,8 +7320,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
   app.get('/api/project/project-graph', async c => {
     try {
-      const mapState = readProjectMapStateModel(projectTasksPath(project.path))
-      const tasks = mapState?.inventory.tasks.map(orientationTaskFromMapRow) ?? []
+      const graphState = readProjectGraphStateModel(projectTasksPath(project.path))
+      const tasks = graphState?.inventory.tasks.map(orientationTaskFromMapRow) ?? []
       return c.json({
         projectGraph: queryProjectGraphView({
           projectId: project.id,

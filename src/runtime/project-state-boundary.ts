@@ -476,6 +476,17 @@ export function readProjectCompactStateModel(
   }
 }
 
+/**
+ * Project graph reads need indexed task identities and compact review packets,
+ * not full task definitions. Keeping this named boundary separate prevents a
+ * graph route from quietly widening back into the map/detail reader.
+ */
+export interface ProjectGraphStateReadModel extends ProjectCompactStateReadModel {}
+
+export function readProjectGraphStateModel(tasksPath: string): ProjectGraphStateReadModel | null {
+  return readProjectCompactStateModel(tasksPath, { includeDefinitions: false })
+}
+
 export interface ProjectTaskDetailReadModel {
   queue: ProjectStateDatabaseQueue
   task: ProjectStateDatabaseTask

@@ -730,6 +730,19 @@ describe('GET route read boundaries', () => {
     })
   })
 
+  it('keeps project graph reads on compact indexed task rows', async () => {
+    const prepare = vi.spyOn(DatabaseSync.prototype, 'prepare')
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const response = await app.fetch(new Request(projectUrl('/api/project/project-graph')))
+    const fullTaskReads = prepare.mock.calls.filter(([sql]) => (
+      typeof sql === 'string' && /FROM work_items[\s\S]*definition_json/.test(sql)
+    ))
+    prepare.mockRestore()
+
+    expect(response.status).toBe(200)
+    expect(fullTaskReads).toHaveLength(0)
+  })
+
   it('reads current activity from the summary shell without queue detail', async () => {
     const tasksPath = projectStatePath(tmpDir, 'TASKS.json')
     const database = new DatabaseSync(projectStateDatabasePath(tmpDir))

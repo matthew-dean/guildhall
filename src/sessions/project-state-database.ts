@@ -1076,6 +1076,74 @@ function parseWorkItemDetail(value: unknown): JsonRecord | null {
   }
 }
 
+function compactContractSurfaceReviewPackets(value: unknown): JsonRecord[] {
+  if (!Array.isArray(value)) return []
+  return value.flatMap(candidate => {
+    if (!isRecord(candidate)) return []
+    const surface = isRecord(candidate.surface) ? candidate.surface : null
+    const delta = isRecord(candidate.currentDelta) ? candidate.currentDelta : null
+    const id = stringValue(candidate.id)
+    const currentSpecRef = stringValue(candidate.currentSpecRef)
+    const summary = stringValue(delta?.summary)
+    if (!surface || !id || !currentSpecRef || !summary) return []
+    const surfaceSummary: JsonRecord = {}
+    for (const key of ['id', 'label', 'kind', 'authority', 'scope'] as const) {
+      if (surface[key] !== undefined) surfaceSummary[key] = surface[key]
+    }
+    for (const key of ['owningProject', 'domain'] as const) {
+      if (isRecord(surface[key])) {
+        const ref = surface[key] as JsonRecord
+        surfaceSummary[key] = {
+          ...(typeof ref.id === 'string' ? { id: ref.id } : {}),
+          ...(typeof ref.label === 'string' ? { label: ref.label } : {}),
+        }
+      }
+    }
+    const compactRefs = (items: unknown): JsonRecord[] => Array.isArray(items)
+      ? items.flatMap(item => {
+          if (!isRecord(item) || typeof item.id !== 'string') return []
+          return [{
+            id: item.id,
+            ...(typeof item.label === 'string' ? { label: item.label } : {}),
+          }]
+        })
+      : []
+    const compactInvariants = Array.isArray(candidate.existingInvariants)
+      ? candidate.existingInvariants.flatMap(item => {
+          if (!isRecord(item) || typeof item.id !== 'string') return []
+          return [{
+            id: item.id,
+            ...(typeof item.label === 'string' ? { label: item.label } : {}),
+            ...(typeof item.rule === 'string' ? { rule: item.rule } : {}),
+          }]
+        })
+      : []
+    const compactDecisions = Array.isArray(candidate.existingDecisions)
+      ? candidate.existingDecisions.flatMap(item => {
+          if (!isRecord(item) || typeof item.id !== 'string') return []
+          return [{
+            id: item.id,
+            ...(typeof item.summary === 'string' ? { summary: item.summary } : {}),
+            ...(typeof item.decidedAt === 'string' ? { decidedAt: item.decidedAt } : {}),
+          }]
+        })
+      : []
+    return [{
+      id,
+      surface: surfaceSummary,
+      currentSpecRef,
+      knownConsumers: compactRefs(candidate.knownConsumers),
+      existingInvariants: compactInvariants,
+      existingDecisions: compactDecisions,
+      siblingSpecRefs: stringArray(candidate.siblingSpecRefs),
+      driftFindings: stringArray(candidate.driftFindings),
+      currentDelta: { summary },
+      proofObligations: stringArray(candidate.proofObligations),
+      reviewFocus: stringArray(candidate.reviewFocus),
+    }]
+  })
+}
+
 export function projectStateDatabasePath(projectRoot: string): string {
   return getProjectSystemStatePath(projectRoot, PROJECT_STATE_DATABASE_FILE)
 }
@@ -2242,6 +2310,10 @@ function workItemSummary(task: JsonRecord): JsonRecord {
     if (Object.keys(compactDelivery).length > 0) summary.delivery = compactDelivery
   }
   if (typeof task.spec === 'string' && task.spec.trim()) summary.spec = 'present'
+  const contractSurfaceReviewPackets = compactContractSurfaceReviewPackets(task.contractSurfaceReviewPackets)
+  if (contractSurfaceReviewPackets.length > 0) {
+    summary.contractSurfaceReviewPackets = contractSurfaceReviewPackets
+  }
   const brief = isRecord(task.productBrief) ? task.productBrief : null
   const userJob = typeof brief?.userJob === 'string' && brief.userJob.trim().length > 0
   const successMetric = (
@@ -2543,6 +2615,63 @@ export interface ProjectStateDatabaseWorkItemDetailMigrationResult {
   migrated: boolean
   revision: number | null
   taskCount: number
+}
+
+export interface ProjectStateDatabaseCompactReadModelMigrationResult {
+  migrated: boolean
+  revision: number | null
+  taskCount: number
+  packetTaskCount: number
+}
+
+/**
+ * Backfill compact task read models from the one authoritative detail index.
+ * This is an explicit representation migration; ordinary reads never open
+ * detail payloads to discover graph-only fields.
+ */
+export function migrateProjectStateDatabaseCompactReadModels(
+  projectRoot: string,
+): ProjectStateDatabaseCompactReadModelMigrationResult {
+  const result: ProjectStateDatabaseCompactReadModelMigrationResult = {
+    migrated: false,
+    revision: null,
+    taskCount: 0,
+    packetTaskCount: 0,
+  }
+  withWritableDatabase(projectRoot, database => {
+    if (!tableExists(database, 'work_items') || !tableExists(database, 'work_item_detail')) return
+    const detailRows = database.prepare('SELECT task_id, payload_gzip FROM work_item_detail ORDER BY rowid').all() as JsonRecord[]
+    const update = database.prepare('UPDATE work_items SET summary_json = ? WHERE id = ?')
+    let changed = false
+    for (const row of detailRows) {
+      const taskId = stringValue(row.task_id)
+      const detail = parseWorkItemDetail(row.payload_gzip)
+      if (!taskId || !detail) continue
+      const nextSummary = workItemSummary(detail)
+      const current = database.prepare('SELECT summary_json FROM work_items WHERE id = ?').get(taskId) as JsonRecord | undefined
+      if (!current || JSON.stringify(parseJson<JsonRecord>(current.summary_json, {})) === JSON.stringify(nextSummary)) continue
+      update.run(json(nextSummary), taskId)
+      changed = true
+      result.migrated = true
+      if (Array.isArray(nextSummary.contractSurfaceReviewPackets) && nextSummary.contractSurfaceReviewPackets.length > 0) {
+        result.packetTaskCount += 1
+      }
+    }
+    result.taskCount = detailRows.length
+    if (!changed) {
+      result.revision = currentRevision(database)
+      return
+    }
+    const generatedAt = new Date().toISOString()
+    const revision = commitAuthoritativeMutation(database, {
+      updatedAt: generatedAt,
+      domains: ['queue'],
+      summaryFreshness: 'preserve',
+    })
+    database.prepare('UPDATE project_summary SET revision = ?, generated_at = ? WHERE id = 1').run(revision, generatedAt)
+    result.revision = revision
+  })
+  return result
 }
 
 /**

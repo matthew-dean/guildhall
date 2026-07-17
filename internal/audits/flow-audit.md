@@ -41430,6 +41430,55 @@ accident while rendering an ordinary drawer.
   regression, and current-state boundary suite.
 - Rollback/revert: code-only revert; no data rollback.
 
+## 2026-07-17 - Graph reads use the compact indexed task projection
+
+- [x] Added `readProjectGraphStateModel` as a named shared boundary over the
+  same SQLite snapshot used by compact project surfaces. It requests indexed
+  task rows without full task definitions.
+- [x] Moved contract-review packet summaries into the existing compact task
+  summary projection and added migration `0.13.2/compact-task-read-models`
+  to backfill existing promoted projects from their authoritative per-task
+  detail rows.
+- [x] Changed `/api/project/project-graph` to use the graph projection. The
+  route no longer loads the unbounded full map definition set merely to find
+  graph packets. Full task definitions remain explicit point/detail data.
+- [x] Focused proof: migration, boundary, and read-boundary suites pass;
+  `lint:data-layer`, `lint:contracts`, and `git diff --check` pass.
+
+### Contract Touch Decision
+
+- Work id: `codex:graph-compact-read-model-2026-07-17`.
+- Touched contracts: sessions task-summary projection, graph read boundary,
+  and project-graph packet discovery.
+- Considered but not touched: rich task detail shape, Release counts/readiness,
+  contract-surface registry files, and explicit live diagnostics.
+- Required follow-up: migrate delivery, Thread, memory, and context-debug
+  reads to the same typed projection rule; add a detector for ordinary routes
+  that request full task definitions without an explicit detail/diagnostic
+  intent.
+- Proof provided: `migrations.test.ts`, `project-state-boundary.test.ts`,
+  `serve-read-boundary.test.ts`, data-layer lint, and contract detector.
+- Apply/revert behavior: migration is idempotent and derives summaries from
+  the authoritative detail index; code revert leaves the compact rows valid.
+
+### Schema Migration Decision
+
+- Persisted schema touched: existing `work_items.summary_json` payload shape;
+  no new table or competing authority was introduced.
+- Change class: required read-model backfill and write-path projection update.
+- Existing data impact: existing compact summaries are recomputed from the
+  authoritative `work_item_detail` rows; task definitions and history are not
+  rewritten or deleted.
+- Migration id: `0.13.2/compact-task-read-models`.
+- Safety: automatic, idempotent, and only applicable after SQLite current-state
+  authority is promoted. It fails to invent rows when detail is unavailable.
+- Compatibility reader: none for ordinary graph reads; pre-cutover projects
+  remain on the explicit legacy path until promotion.
+- Fixtures/tests: packet backfill and second-run no-op coverage, plus graph
+  route read-boundary coverage.
+- Rollback/revert: code can be reverted; the compact summary fields are
+  additive and may be left in place without changing task authority.
+
 ## 2026-07-17 - Promoted projects fail closed when saved Release state is missing
 
 - [x] `readProjectSavedReleaseState` no longer falls through from a promoted

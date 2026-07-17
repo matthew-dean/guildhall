@@ -5040,3 +5040,50 @@ repairable; it does not fabricate a partial Release answer.
 - **Compatibility reader:** legacy-only, selected only after the authority
   boundary proves the project is not promoted.
 - **Rollback/revert:** code-only revert; no data rollback.
+
+## 2026-07-17 - One compact graph projection, one task authority
+
+The Release mismatch exposed the exact failure mode this plan is intended to
+eliminate: one route manufactured work from an intake snapshot while another
+read materialized SQLite rows. The durable fix is structural. Routes may ask
+for different read models, but every current-state fact must come through a
+named sessions/runtime boundary over one revisioned snapshot. A route must not
+choose between sources or silently widen a compact read into rich detail.
+
+The project graph was still violating the performance side of that rule. It
+loaded the full map definition set to discover contract-review packets. The
+packet summaries now live in the existing indexed task summary projection, and
+the graph route uses a compact graph boundary. Full definitions are now
+reserved for point/detail and explicit diagnostic workflows.
+
+Migration `0.13.2/compact-task-read-models` backfills the compact packets from
+the authoritative per-task detail index. Subsequent task writes compute the
+same summary in the existing write transaction, so the graph cannot drift into
+a second packet authority.
+
+**Contract Touch Decision - `codex:graph-compact-read-model-2026-07-17`**
+
+- **Touched contracts:** indexed task summary payload, graph read boundary,
+  and project-graph packet discovery.
+- **Considered but not touched:** rich task detail, Release readiness,
+  contract-surface registry files, and live diagnostics.
+- **Required follow-up:** apply the same typed boundary discipline to delivery,
+  Thread, memory, and context-debug; detect ordinary full-definition reads.
+- **Proof provided:** focused migration/boundary/read-boundary suites and
+  data-layer/contract lint.
+- **Apply/revert:** idempotent read-model migration; code revert is safe.
+
+**Schema Migration Decision - `codex:graph-compact-read-model-2026-07-17`**
+
+- **Persisted schema touched:** existing `work_items.summary_json` payload;
+  no new table or alternate authority.
+- **Change class:** required compact read-model backfill and write projection.
+- **Existing data impact:** summaries are recomputed from per-task detail;
+  task definitions and history remain unchanged.
+- **Migration id:** `0.13.2/compact-task-read-models`.
+- **Compatibility reader:** no ordinary graph fallback; legacy remains only
+  before current-state promotion.
+- **Fixtures/tests:** packet backfill, idempotence, and graph read-boundary
+  coverage.
+- **Rollback/revert:** code rollback is safe; additive compact fields can
+  remain in existing rows.

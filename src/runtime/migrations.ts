@@ -28,6 +28,7 @@ import {
   migrateProjectStateDatabaseQueueDetail,
   migrateProjectStateDatabaseWorkItemDetails,
   migrateProjectStateDatabaseReleaseMembership,
+  migrateProjectStateDatabaseCompactReadModels,
   clearProjectStateDatabaseQueueDetail,
   ensureProjectStateDatabaseCurrentThreadStore,
   ensureProjectStateDatabaseThreadHistoryStore,
@@ -176,6 +177,7 @@ const LEGACY_LIVE_STATE_CLEANUP_MIGRATION_ID = '0.13.0/project-state-legacy-live
 const EFFECTIVE_STATE_REALIGNMENT_MIGRATION_ID = '0.13.0/project-summary-effective-state-realignment'
 const CURRENT_STATUS_PROJECTION_MIGRATION_ID = '0.13.1/project-current-status-projection'
 const RELEASE_MEMBERSHIP_MIGRATION_ID = '0.13.1/release-membership'
+const COMPACT_READ_MODEL_MIGRATION_ID = '0.13.2/compact-task-read-models'
 const THREAD_HISTORY_PROJECTION_MIGRATION_ID = '0.12.47/project-thread-history-read-model'
 
 interface FinalProjectStateMigrationResult {
@@ -2752,6 +2754,31 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
       }
     },
   },
+  {
+    id: COMPACT_READ_MODEL_MIGRATION_ID,
+    title: 'Materialize compact task read models',
+    introducedIn: '0.13.2',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Backfills graph and list-facing task summaries from the authoritative per-task detail index so ordinary reads never open rich task definitions to discover compact facts.',
+    async detect(projectRoot) {
+      if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') return { needed: false, affectedPaths: [] }
+      const ledger = await readProjectMigrationLedger(projectRoot)
+      const applied = ledger.records.some(record => record.id === COMPACT_READ_MODEL_MIGRATION_ID && record.status === 'applied')
+      return {
+        needed: !applied,
+        affectedPaths: !applied ? [projectStateDatabasePath(projectRoot), 'indexed task read models'] : [],
+      }
+    },
+    async apply(projectRoot) {
+      const result = migrateProjectStateDatabaseCompactReadModels(projectRoot)
+      return {
+        summary: `Materialized compact summaries for ${result.taskCount} task${result.taskCount === 1 ? '' : 's'}${result.packetTaskCount > 0 ? `, including ${result.packetTaskCount} task${result.packetTaskCount === 1 ? '' : 's'} with contract-review packets` : ''}.`,
+        affectedPaths: [projectStateDatabasePath(projectRoot)],
+      }
+    },
+  },
 ]
 
 const BUILT_IN_PROJECT_MIGRATION_IDEMPOTENCE_TESTS: Record<string, string> = {
@@ -2816,6 +2843,7 @@ const BUILT_IN_PROJECT_MIGRATION_IDEMPOTENCE_TESTS: Record<string, string> = {
   [EFFECTIVE_STATE_REALIGNMENT_MIGRATION_ID]: 'migrations.test.ts: realigns promoted summary and scope from current evidence without reading compatibility files',
   [CURRENT_STATUS_PROJECTION_MIGRATION_ID]: 'migrations.test.ts: materializes the shared current task status rule into indexed rows',
   [RELEASE_MEMBERSHIP_MIGRATION_ID]: 'migrations.test.ts: normalizes release membership into one relation',
+  [COMPACT_READ_MODEL_MIGRATION_ID]: 'migrations.test.ts: backfills compact graph read models from per-task detail without making ordinary reads hydrate definitions',
   '0.11.0/project-summary-projection': 'migrations.test.ts: project summary backfill is idempotent and preserves task history',
   '0.11.1/project-summary-projection-v2': 'migrations.test.ts: project summary shape refresh is idempotent and preserves task history',
   '0.11.2/project-summary-projection-setup-state': 'migrations.test.ts: project summary setup-state refresh is idempotent and preserves task history',
