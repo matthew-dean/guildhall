@@ -41187,6 +41187,73 @@ ordinary wizard GET.
   is used directly.
 - Rollback/revert: code-only revert.
 
+## 2026-07-17 - Promoted task detail is point-hydrated
+
+The task drawer was using a good named detail boundary, but that boundary
+still returned a compact copy of every task. That meant the route could look
+point-oriented while paying the cost of an aggregate read. The current model
+now stores dependency edges as normalized current-state facts and returns a
+task-detail envelope with the selected task, release envelope, scope, overlay,
+summary, revisions, and direct relationship ids. The route then hydrates only
+the named adjacent task points.
+
+- [x] Default promoted task detail no longer executes the aggregate task
+  `ORDER BY rowid` query.
+- [x] Direct blockers and dependents come from the indexed
+  `task_dependencies` relation maintained with task writes.
+- [x] Parent, child, dependency, dependent, and materialized split-child
+  records are point-hydrated through `readProjectTaskRecordsAtBoundary`.
+- [x] Legacy projects retain their explicit compatibility path; no new
+  fallback was added to promoted reads.
+- [x] Proof: 61 project-state database tests, 32 read-boundary tests, and the
+  existing task-endpoint adjacent-task and delivery-spine tests pass.
+
+### Contract Touch Decision
+
+- Work id: `codex:promoted-task-detail-point-hydration-2026-07-17`.
+- Touched contracts: task-detail session envelope relationship fields,
+  `task_dependencies` current-state relation, and task-detail related-task
+  hydration.
+- Considered but not touched: public task-detail field names, legacy task
+  queue shape, delivery-spine schema, evidence/history retention, and Git
+  diagnostics.
+- Required follow-up: give delivery primitive proving-task links their own
+  bounded projection so delivery context does not need a project-wide task
+  collection as the delivery surface migrates.
+- Proof provided: no-aggregate SQL regression, session/index regression, read
+  boundary suite, and existing task-detail behavior suite.
+- Apply/revert behavior: code revert plus schema-version rollback only for
+  unreleased local databases; the normalized dependency table is derived from
+  `depends_on_json` and can be rebuilt from current work-item definitions.
+
+### Schema Migration Decision
+
+- Persisted schema touched: system-local `project-state.db`, schema version
+  30, adding `task_dependencies(task_id, depends_on_task_id)` and its reverse
+  lookup index.
+- Change class: automatic migration of a derived relation.
+- Existing data impact: existing dependency arrays are backfilled once when an
+  older database opens; future queue, batch, and point writes maintain edges
+  in the same transaction.
+- Migration id: `0.13.2/task-dependency-index`.
+- Safety: automatic; the relation is derived and current task definitions stay
+  authoritative.
+- Compatibility reader: legacy task detail still uses the explicit queue path;
+  promoted reads never fall back to it.
+- Fixtures/tests: 500-task no-aggregate detail fixture, dependency index query
+  plan assertion, promoted route SQL guard, and adjacent-task behavior tests.
+- Owner-facing plan: task detail loads the selected work item and the few
+  related records needed to explain it; it does not load the project backlog.
+- Rollback/revert: remove/rebuild the derived relation from current
+  `depends_on_json` definitions; no task definition data is lost.
+
+### Authority invariant
+
+Normal task detail now has one current-state transaction boundary and one
+bounded hydration rule. A route may ask the boundary for an explicit rich
+aggregate diagnostic, but it cannot receive an aggregate task collection by
+accident while rendering an ordinary drawer.
+
 ## 2026-07-16 - Git Story uses the saved project diagnostic boundary
 
 - [x] Ordinary `GET /api/project/git-story` reads the saved Git diagnostic

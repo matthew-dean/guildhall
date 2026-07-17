@@ -12566,7 +12566,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
             version: 1,
             ...(savedProjection?.source.taskQueueLastUpdated ? { lastUpdated: savedProjection.source.taskQueueLastUpdated } : {}),
             ...(indexedQueue.selectedReleaseId ? { selectedReleaseId: indexedQueue.selectedReleaseId } : {}),
-            tasks: indexedQueue.tasks.map(task => task.id === id ? pointDefinition : task),
+            // Promoted task detail starts with the selected point only.
+            // Related points are hydrated after the same snapshot names them.
+            tasks: [pointDefinition],
             releases: indexedQueue.releases,
           } as TaskQueue
         : databaseAuthority && indexedQueue && !pointTask
@@ -12609,59 +12611,63 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const scopedTaskIds = new Set(
         (readinessScope?.nodeIds ?? []).map(nodeId => nodeId.replace(/^work:/, '')),
       )
-      const proofMissingTaskIds = new Set<string>()
-      if (commandProofRequired) {
-        for (const candidate of tasks as Array<Record<string, unknown>>) {
-          if (candidate.status === 'done' && scopedTaskIds.has(String(candidate.id)) && !taskHasScriptProofPath(candidate)) {
-            proofMissingTaskIds.add(String(candidate.id))
-          }
-        }
-      }
-      const deliveryModel = await readProjectDeliveryModel(project.path)
-      const deliveryRelationships = deriveTaskRelationships({
-        model: deliveryModel,
-        tasks: tasks as unknown as Task[],
-        taskId: id,
-      })
-      const deliveryContextPacket = buildTaskContextPacket({
-        model: deliveryModel,
-        tasks: tasks as unknown as Task[],
-        taskId: id,
-        relationships: deliveryRelationships,
-      })
       const runStatus = run?.status ?? 'stopped'
       const availability = await readProjectAvailability(project.path)
       const relatedTaskIds = new Set<string>()
       const rawTask = task as Record<string, unknown>
-      for (const primitive of [
-        ...deliveryRelationships.primitiveUse.direct,
-        ...deliveryRelationships.primitiveUse.ancestors,
-      ]) {
-        for (const provingTask of primitive.provingTasks) {
-          if (typeof provingTask.id === 'string') relatedTaskIds.add(provingTask.id)
+      if (taskDetailState?.relationships) {
+        const relationships = taskDetailState.relationships
+        if (relationships.parentId) relatedTaskIds.add(relationships.parentId)
+        for (const childId of relationships.childIds) relatedTaskIds.add(childId)
+        for (const dependencyId of relationships.dependsOnIds) relatedTaskIds.add(dependencyId)
+        for (const dependentId of relationships.dependentIds) relatedTaskIds.add(dependentId)
+      } else {
+        const hierarchy = rawTask.hierarchy as { parentId?: unknown; childIds?: unknown } | undefined
+        if (typeof hierarchy?.parentId === 'string') relatedTaskIds.add(hierarchy.parentId)
+        if (Array.isArray(hierarchy?.childIds)) {
+          for (const childId of hierarchy.childIds) {
+            if (typeof childId === 'string') relatedTaskIds.add(childId)
+          }
         }
-      }
-      const hierarchy = rawTask.hierarchy as { parentId?: unknown; childIds?: unknown } | undefined
-      if (typeof hierarchy?.parentId === 'string') relatedTaskIds.add(hierarchy.parentId)
-      if (Array.isArray(hierarchy?.childIds)) {
-        for (const childId of hierarchy.childIds) {
-          if (typeof childId === 'string') relatedTaskIds.add(childId)
+        const dependsOn = Array.isArray(rawTask.dependsOn) ? rawTask.dependsOn : []
+        for (const dependency of dependsOn) {
+          if (typeof dependency === 'string') relatedTaskIds.add(dependency)
         }
-      }
-      const dependsOn = Array.isArray(rawTask.dependsOn) ? rawTask.dependsOn : []
-      for (const dependency of dependsOn) {
-        if (typeof dependency === 'string') relatedTaskIds.add(dependency)
+        for (const candidate of tasks as Array<Record<string, unknown>>) {
+          if (typeof candidate.id !== 'string' || candidate.id === id) continue
+          const candidateDependsOn = Array.isArray(candidate.dependsOn) ? candidate.dependsOn : []
+          if (candidateDependsOn.includes(id)) relatedTaskIds.add(candidate.id)
+        }
       }
       const sizePlan = rawTask.sizePlan as { recommendedChildren?: Array<{ createdTaskId?: unknown }> } | undefined
       for (const child of sizePlan?.recommendedChildren ?? []) {
         if (typeof child.createdTaskId === 'string') relatedTaskIds.add(child.createdTaskId)
       }
-      for (const candidate of tasks as Array<Record<string, unknown>>) {
-        if (typeof candidate.id !== 'string' || candidate.id === id) continue
-        const candidateDependsOn = Array.isArray(candidate.dependsOn) ? candidate.dependsOn : []
-        if (candidateDependsOn.includes(id)) relatedTaskIds.add(candidate.id)
-      }
       relatedTaskIds.delete(id)
+      const relatedTaskRecords = databaseAuthority
+        ? readProjectTaskRecordsAtBoundary(tasksPath, [...relatedTaskIds])
+        : [...relatedTaskIds]
+            .map(relatedId => tasks.find(candidate => (candidate as { id?: string }).id === relatedId))
+            .filter((candidate): candidate is Record<string, unknown> => Boolean(candidate))
+      const detailTasks = databaseAuthority
+        ? [rawTask, ...relatedTaskRecords]
+        : tasks as Array<Record<string, unknown>>
+      const proofMissingTaskIds = new Set<string>()
+      if (commandProofRequired && rawTask.status === 'done' && scopedTaskIds.has(id) && !taskHasScriptProofPath(rawTask)) {
+        proofMissingTaskIds.add(id)
+      }
+      const deliveryModel = await readProjectDeliveryModel(project.path)
+      const deliveryRelationships = deriveTaskRelationships({
+        model: deliveryModel,
+        tasks: detailTasks as unknown as Task[],
+        taskId: id,
+      })
+      const deliveryContextPacket = buildTaskContextPacket({
+        model: deliveryModel,
+        tasks: detailTasks as unknown as Task[],
+        taskId: id,
+        relationships: deliveryRelationships,
+      })
       // The drawer is an ordinary current-state read. Historical evidence is
       // behind the explicit history/review/evidence links below.
       const effectiveTask = await buildEffectiveTask(project.path, rawTask as Task, {
@@ -12681,10 +12687,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         ...projectedWorkProgress,
         byTaskId: selectedWorkProgress.byTaskId,
       }
-      const relatedTasks = [...relatedTaskIds]
-        .map(relatedId => tasks.find(candidate => (candidate as { id?: string }).id === relatedId))
-        .filter((candidate): candidate is Record<string, unknown> => Boolean(candidate))
-        .map(compactTaskForTaskDetailRelated)
+      const relatedTasks = relatedTaskRecords.map(compactTaskForTaskDetailRelated)
       return c.json({
         task: compactTaskForInitialDrawer(selectedTask),
         relatedTasks,
@@ -12693,7 +12696,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         availability,
         deliverySpine: {
           model: deliveryModel,
-          validation: validateProjectDeliveryModel({ model: deliveryModel, tasks: tasks as Task[], projectRoot: project.path }),
+          validation: validateProjectDeliveryModel({ model: deliveryModel, tasks: detailTasks as Task[], projectRoot: project.path }),
           relationships: deliveryRelationships,
           contextPacket: deliveryContextPacket,
         },

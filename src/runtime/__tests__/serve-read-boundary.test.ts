@@ -703,6 +703,33 @@ describe('GET route read boundaries', () => {
     expect(activityBody.inFlight).toEqual([expect.objectContaining({ id: 'task-boundary', status: 'in_progress' })])
   })
 
+  it('keeps promoted task detail on bounded point reads', async () => {
+    const tasksPath = projectStatePath(tmpDir, 'TASKS.json')
+    const database = new DatabaseSync(projectStateDatabasePath(tmpDir))
+    database.prepare("UPDATE project_meta SET project_state_authority = 'database'").run()
+    database.close()
+    await fs.rm(tasksPath)
+
+    const aggregateTaskSelect = vi.spyOn(DatabaseSync.prototype, 'prepare')
+    let response: Response
+    try {
+      const { app } = buildServeApp({ projectPath: tmpDir })
+      response = await app.fetch(new Request(projectUrl('/api/project/task/task-boundary')))
+    } finally {
+      const aggregateReads = aggregateTaskSelect.mock.calls.filter(([sql]) => (
+        typeof sql === 'string' && /FROM work_items\s+ORDER BY rowid/.test(sql)
+      ))
+      aggregateTaskSelect.mockRestore()
+      expect(aggregateReads).toHaveLength(0)
+    }
+
+    expect(response!.status).toBe(200)
+    expect((await response!.json()) as any).toMatchObject({
+      task: { id: 'task-boundary' },
+      relatedTasks: expect.any(Array),
+    })
+  })
+
   it('reads current activity from the summary shell without queue detail', async () => {
     const tasksPath = projectStatePath(tmpDir, 'TASKS.json')
     const database = new DatabaseSync(projectStateDatabasePath(tmpDir))
