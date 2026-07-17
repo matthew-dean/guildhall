@@ -5004,3 +5004,39 @@ release or its membership.
 - **Fixtures/tests:** saved Release no-expansion, release identity, and
   current-state boundary regressions.
 - **Rollback/revert:** code-only revert; no data rollback.
+
+## 2026-07-17 - Promoted reads fail closed on missing projections
+
+The saved Release boundary now checks authority before selecting a reader. A
+promoted project cannot fall through to the old aggregate current-state reader
+when its saved projection is missing. That would make the new data model
+optional precisely when it is unhealthy, and would allow a retired queue/detail
+shape to become a hidden second authority again.
+
+Only projects that have not crossed the current-state cutover may use the
+explicit legacy reader. A promoted project instead reports that its saved
+projection must be refreshed or migrated. The failure is intentionally loud and
+repairable; it does not fabricate a partial Release answer.
+
+**Contract Touch Decision - `codex:promoted-release-read-fail-closed-2026-07-17`**
+
+- **Touched contracts:** promoted saved Release boundary and projection
+  unavailable error behavior.
+- **Considered but not touched:** legacy reads, migration imports, public
+  Release fields, and rich diagnostics.
+- **Required follow-up:** apply the same no-fallback rule to every promoted
+  project route that still selects an aggregate reader after a projection miss.
+- **Proof provided:** boundary regression for a promoted database with a
+  deleted `queue_state` row.
+- **Apply/revert:** code-only revert; no persisted data change.
+
+**Schema Migration Decision - `codex:promoted-release-read-fail-closed-2026-07-17`**
+
+- **Persisted schema touched:** none.
+- **Change class:** authority and failure-mode tightening.
+- **Existing data impact:** promoted projects with missing projections expose a
+  repairable error rather than silently reading a retired source.
+- **Migration id:** not required.
+- **Compatibility reader:** legacy-only, selected only after the authority
+  boundary proves the project is not promoted.
+- **Rollback/revert:** code-only revert; no data rollback.

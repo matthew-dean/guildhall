@@ -179,6 +179,7 @@ describe('project-state-boundary', () => {
       })
       expect(projectTaskStateExistsSync(tasksPath)).toBe(false)
       expect(() => readProjectCurrentStateModel(tasksPath)).toThrow('Authoritative project detail store is unavailable')
+      expect(() => readProjectSavedReleaseState(root)).toThrow('Authoritative saved Release projection is unavailable')
     } finally {
       await fs.rm(root, { recursive: true, force: true })
     }

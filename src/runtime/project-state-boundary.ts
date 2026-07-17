@@ -330,8 +330,14 @@ export async function readProjectTaskQueueForRichMutation(
  */
 export function readProjectSavedReleaseState(projectRoot: string): ProjectSavedReleaseReadModel {
   const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
-  const current = readProjectStateDatabaseSavedReleaseState<ProjectSummaryProjection>(tasksPath)
-    ?? readProjectCurrentStateModel(tasksPath)
+  const saved = readProjectStateDatabaseSavedReleaseState<ProjectSummaryProjection>(tasksPath)
+  const current = saved ?? (() => {
+    const authority = readProjectStateAuthorityAtBoundary(tasksPath)
+    if (authority.authority === 'database') {
+      throw new Error(`Authoritative saved Release projection is unavailable for ${tasksPath}; refresh the project projection first.`)
+    }
+    return readProjectCurrentStateModel(tasksPath)
+  })()
   const queue = current.queue as Partial<ProjectStateDatabaseQueueDefinition>
   const releases = Array.isArray(queue.releases)
     ? queue.releases.map(release => persistableRelease(release as unknown as ProjectRelease))

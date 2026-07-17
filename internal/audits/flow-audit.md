@@ -41429,3 +41429,37 @@ accident while rendering an ordinary drawer.
 - Fixtures/tests: saved Release no-expansion regression, release identity
   regression, and current-state boundary suite.
 - Rollback/revert: code-only revert; no data rollback.
+
+## 2026-07-17 - Promoted projects fail closed when saved Release state is missing
+
+- [x] `readProjectSavedReleaseState` no longer falls through from a promoted
+  SQLite project into `readProjectCurrentStateModel`, which would reopen the
+  aggregate detail reader when the saved Release projection is unavailable.
+- [x] Promoted projects now return an explicit projection-refresh/migration
+  error. Only pre-cutover legacy projects may use the explicit legacy reader.
+- [x] Regression proof covers a promoted project whose `queue_state` row is
+  deleted: both current detail and saved Release reads fail closed instead of
+  consulting the compatibility queue.
+
+### Contract Touch Decision
+
+- Work id: `codex:promoted-release-read-fail-closed-2026-07-17`.
+- Touched contracts: promoted project saved Release boundary and projection
+  unavailable error behavior.
+- Considered but not touched: legacy project reads, migration import behavior,
+  public Release response fields, and rich diagnostics.
+- Required follow-up: apply the same no-fallback rule to remaining promoted
+  project routes that still select aggregate readers after projection misses.
+- Proof provided: project-state boundary regression and focused test suite.
+- Apply/revert behavior: code-only revert; no persisted data change.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none.
+- Change class: authority/failure-mode tightening.
+- Existing data impact: promoted projects with missing projections now expose a
+  repairable error instead of silently reading a retired source.
+- Migration id: not required.
+- Compatibility reader: legacy-only, selected after the authority boundary
+  proves the project has not been promoted.
+- Rollback/revert: code-only revert; no data rollback.
