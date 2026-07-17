@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -33,6 +33,7 @@ import {
   readProjectStateDatabaseThreadHistoryPage,
   readProjectStateDatabaseThreadSurfaceState,
   readProjectStateDatabaseTask,
+  readProjectStateDatabaseTaskDetailState,
   readProjectStateDatabaseTaskPoint,
   readProjectStateDatabaseTaskPointsWithRevision,
   readProjectStateDatabaseTaskRelationships,
@@ -1184,6 +1185,122 @@ describe('project-state database', () => {
         blocksRelease: true,
       },
     })
+  })
+
+  it('reads a bounded task-detail envelope without the aggregate task SELECT', () => {
+    const tasks = [
+      {
+        id: 'task-parent',
+        title: 'Parent task',
+        status: 'ready',
+        releaseIds: ['release-current'],
+      },
+      {
+        id: 'task-prerequisite',
+        title: 'Prerequisite',
+        status: 'done',
+        releaseIds: ['release-current'],
+      },
+      {
+        id: 'task-target',
+        title: 'Target task',
+        status: 'working',
+        hierarchy: { parentId: 'task-parent' },
+        dependsOn: ['task-prerequisite'],
+        releaseIds: ['release-current'],
+        spec: 'The drawer needs this definition only.',
+      },
+      {
+        id: 'task-child',
+        title: 'Target child',
+        status: 'ready',
+        hierarchy: { parentId: 'task-target' },
+        releaseIds: ['release-current'],
+      },
+      {
+        id: 'task-dependent',
+        title: 'Direct dependent',
+        status: 'blocked',
+        dependsOn: ['task-target'],
+        releaseIds: ['release-current'],
+      },
+      ...Array.from({ length: 500 }, (_, index) => ({
+        id: `task-${index}`,
+        title: `Background task ${index}`,
+        status: 'ready',
+      })),
+    ]
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: {
+        selectedReleaseId: 'release-current',
+        releases: [
+          { id: 'release-current', label: 'Current release', state: 'active', nodeIds: ['work:task-target'], deferredNodeIds: [] },
+          { id: 'release-later', label: 'Later release', state: 'planned', nodeIds: [], deferredNodeIds: [] },
+        ],
+        tasks,
+      },
+      scopeRows: [{
+        taskId: 'task-target',
+        scope: 'included',
+        eligibilityReason: 'selected release',
+        hierarchyRole: 'child',
+        handoffState: 'working',
+        blocksStart: false,
+        blocksRelease: true,
+        humanBlocking: false,
+        sourceRefs: ['docs/current-release.md'],
+      }],
+      summary: {
+        generatedAt: '2026-07-14T00:00:00.000Z',
+        freshness: 'current',
+        counts: { total: tasks.length },
+      },
+    })
+
+    const prepare = vi.spyOn(DatabaseSync.prototype, 'prepare')
+    let detail: ReturnType<typeof readProjectStateDatabaseTaskDetailState>
+    try {
+      detail = readProjectStateDatabaseTaskDetailState(tasksPath, 'task-target')
+      const aggregateTaskReads = prepare.mock.calls.filter(([sql]) => (
+        typeof sql === 'string' && /FROM work_items\s+ORDER BY rowid/.test(sql)
+      ))
+      expect(aggregateTaskReads).toHaveLength(0)
+    } finally {
+      prepare.mockRestore()
+    }
+
+    expect(detail).toMatchObject({
+      task: { id: 'task-target', definition: { spec: 'The drawer needs this definition only.' } },
+      queue: {
+        selectedReleaseId: 'release-current',
+        tasks: [],
+        releases: [
+          { id: 'release-current', label: 'Current release' },
+          { id: 'release-later', label: 'Later release' },
+        ],
+      },
+      relationships: {
+        parentId: 'task-parent',
+        childIds: ['task-child'],
+        dependsOnIds: ['task-prerequisite'],
+        dependentIds: ['task-dependent'],
+      },
+      scopeRows: [expect.objectContaining({ taskId: 'task-target', scope: 'included' })],
+      summary: { payload: { counts: { total: tasks.length } } },
+    })
+
+    const diagnostic = readProjectStateDatabaseTaskDetailState(tasksPath, 'task-target', {
+      includeAggregateTasks: true,
+    })
+    expect(diagnostic?.queue.tasks).toHaveLength(tasks.length)
+
+    const database = new DatabaseSync(projectStateDatabasePath(projectRoot), { readOnly: true })
+    const plan = database.prepare(`
+      EXPLAIN QUERY PLAN
+      SELECT task_id FROM task_dependencies WHERE depends_on_task_id = ?
+    `).all('task-target') as Array<{ detail?: string }>
+    database.close()
+    expect(plan.some(row => row.detail?.includes('task_dependencies_dependency_idx'))).toBe(true)
   })
 
   it('does not resurrect task definitions from a historical source queue', async () => {

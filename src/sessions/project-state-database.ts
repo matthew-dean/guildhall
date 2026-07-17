@@ -22,6 +22,14 @@ export const PROJECT_STATE_DATABASE_FILE = 'project-state.db'
  * ordinary reads never union or choose between the old mirrors.
  */
 /**
+ * Schema Migration Decision - `0.13.2/task-dependency-index`:
+ * add the normalized `task_dependencies` relation and index so current task
+ * detail can answer direct dependency and dependent questions without
+ * scanning every work-item definition. Existing `depends_on_json` values are
+ * backfilled when an older database opens; subsequent queue, batch, and point
+ * mutations maintain the relation in the same transaction as the task write.
+ */
+/**
  * Schema Migration Decision - `0.12.47/project-thread-history-read-model`:
  * add the bounded `thread_history_state` metadata row and per-turn
  * `thread_history` table. History is written only alongside the existing
@@ -30,7 +38,7 @@ export const PROJECT_STATE_DATABASE_FILE = 'project-state.db'
  * and source-history records are unchanged; the migration creates empty
  * history tables and the next projection refresh populates them.
  */
-export const PROJECT_STATE_DATABASE_SCHEMA_VERSION = 29
+export const PROJECT_STATE_DATABASE_SCHEMA_VERSION = 30
 export const PROJECT_STATE_DATABASE_THREAD_HISTORY_MAX_TURNS = 2_000
 export const PROJECT_STATE_DATABASE_THREAD_HISTORY_MAX_BYTES = 512 * 1024
 export const PROJECT_STATE_DATABASE_DIAGNOSTIC_PROJECTION_DOMAIN = 'diagnostics'
@@ -550,6 +558,11 @@ export interface ProjectStateDatabaseSummaryReadOptions {
   includeApprovedPlan?: boolean
 }
 
+export interface ProjectStateDatabaseTaskDetailReadOptions extends ProjectStateDatabaseSummaryReadOptions {
+  /** Include the full compact task inventory only for an explicit diagnostic read. */
+  includeAggregateTasks?: boolean
+}
+
 export interface ProjectStateDatabaseTask {
   id: string
   title: string
@@ -591,6 +604,8 @@ export interface ProjectStateDatabaseTaskRelationships {
   taskId: string
   parentId: string | null
   childIds: string[]
+  dependsOnIds: string[]
+  dependentIds: string[]
   scopeRow: ProjectStateDatabaseScopeRow | null
 }
 
@@ -1139,6 +1154,14 @@ function openDatabase(databasePath: string, options: { readOnly?: boolean } = {}
     );
     CREATE INDEX IF NOT EXISTS work_items_status_idx ON work_items(status);
     CREATE INDEX IF NOT EXISTS work_items_parent_idx ON work_items(parent_id);
+    -- Dependency edges are current-state facts, not a JSON search problem.
+    CREATE TABLE IF NOT EXISTS task_dependencies (
+      task_id TEXT NOT NULL,
+      depends_on_task_id TEXT NOT NULL,
+      PRIMARY KEY (task_id, depends_on_task_id)
+    );
+    CREATE INDEX IF NOT EXISTS task_dependencies_dependency_idx
+      ON task_dependencies(depends_on_task_id);
     -- Per-task detail keeps point reads independent from the compressed
     -- whole-queue compatibility/detail blob.
     CREATE TABLE IF NOT EXISTS work_item_detail (
@@ -1410,6 +1433,9 @@ function openDatabase(databasePath: string, options: { readOnly?: boolean } = {}
   }
   if (!scopeColumns.some(column => column.name === 'blocker_summary')) {
     database.exec('ALTER TABLE work_scope ADD COLUMN blocker_summary TEXT')
+  }
+  if (previousSchemaVersion > 0 && previousSchemaVersion < 30) {
+    rebuildTaskDependencies(database)
   }
   const projectMetaColumns = database.prepare('PRAGMA table_info(project_meta)').all() as JsonRecord[]
   if (!projectMetaColumns.some(column => column.name === 'project_state_authority')) {
@@ -1827,6 +1853,51 @@ function scopeRowFromRow(row: JsonRecord): ProjectStateDatabaseScopeRow | null {
       : {}),
     sourceRefs: parseJson<string[]>(row.scope_row_source_refs_json, []),
   }
+}
+
+function taskDependencyIdsFromRow(row: JsonRecord): string[] {
+  return [...new Set(parseJson<string[]>(row.depends_on_json, []).filter(id => typeof id === 'string' && id.trim().length > 0))]
+}
+
+function rebuildTaskDependencies(database: DatabaseSync): void {
+  if (!tableExists(database, 'task_dependencies')) return
+  database.prepare('DELETE FROM task_dependencies').run()
+  const insert = database.prepare('INSERT INTO task_dependencies (task_id, depends_on_task_id) VALUES (?, ?)')
+  const rows = database.prepare('SELECT id, depends_on_json FROM work_items').all() as JsonRecord[]
+  for (const row of rows) {
+    const taskId = stringValue(row.id)
+    if (!taskId) continue
+    for (const dependencyId of taskDependencyIdsFromRow(row)) insert.run(taskId, dependencyId)
+  }
+}
+
+function syncTaskDependencies(database: DatabaseSync, tasks: readonly JsonRecord[]): void {
+  if (!tableExists(database, 'task_dependencies')) return
+  const deleteTaskEdges = database.prepare('DELETE FROM task_dependencies WHERE task_id = ?')
+  const insert = database.prepare('INSERT OR IGNORE INTO task_dependencies (task_id, depends_on_task_id) VALUES (?, ?)')
+  for (const task of tasks) {
+    const taskId = stringValue(task.id)
+    if (!taskId) continue
+    deleteTaskEdges.run(taskId)
+    for (const dependencyId of stringArray(task.dependsOn)) insert.run(taskId, dependencyId)
+  }
+}
+
+function deleteTaskDependencies(database: DatabaseSync, taskIds: readonly string[]): void {
+  if (!tableExists(database, 'task_dependencies')) return
+  const deleteEdges = database.prepare('DELETE FROM task_dependencies WHERE task_id = ? OR depends_on_task_id = ?')
+  for (const taskId of taskIds) deleteEdges.run(taskId, taskId)
+}
+
+function readDependentTaskIds(database: DatabaseSync, taskId: string): string[] {
+  if (!tableExists(database, 'task_dependencies')) return []
+  const rows = database.prepare(`
+    SELECT task_id
+    FROM task_dependencies
+    WHERE depends_on_task_id = ?
+    ORDER BY rowid
+  `).all(taskId) as JsonRecord[]
+  return rows.flatMap(row => typeof row.task_id === 'string' ? [row.task_id] : [])
 }
 
 function readScopeRowsFromDatabase(database: DatabaseSync): ProjectStateDatabaseScopeRow[] {
@@ -2260,6 +2331,7 @@ function writeSnapshotToDatabase(
       }
     }
     database.prepare('DELETE FROM work_items').run()
+    database.prepare('DELETE FROM task_dependencies').run()
     database.prepare('DELETE FROM scopes').run()
     database.prepare('DELETE FROM work_scope').run()
 
@@ -2291,6 +2363,7 @@ function writeSnapshotToDatabase(
         stringValue(task.completedAt),
       )
     }
+    syncTaskDependencies(database, tasks)
     deleteOrphanTaskOverlays(database, tasks.map(task => String(task.id ?? '')).filter(Boolean))
 
     const insertScope = database.prepare(`
@@ -2691,6 +2764,7 @@ export function writeProjectStateDatabaseTaskMutation(
       if (Number(updated.changes ?? 0) !== 1) {
         throw new Error(`Cannot mutate current work item ${taskId}: item not found`)
       }
+      syncTaskDependencies(database, [mutation.task])
 
       // A task edit may legitimately assign or unassign the task from a
       // release. Normalize that relationship in this same transaction. The
@@ -3214,6 +3288,7 @@ export function writeProjectStateDatabaseTaskBatchMutation(
           stringValue(task.completedAt),
         )
       }
+      syncTaskDependencies(database, changedTasks)
       normalizedReleaseDefinitions ??= releaseDefinitionsWithTaskMembership(
         releaseDefinitionsFromDatabase(database),
         changedTasks,
@@ -3223,6 +3298,7 @@ export function writeProjectStateDatabaseTaskBatchMutation(
       syncReleaseMembershipFromDefinitions(database, normalizedReleaseDefinitions)
 
       for (const taskId of removedTaskIds) {
+        deleteTaskDependencies(database, [taskId])
         database.prepare('DELETE FROM release_membership WHERE task_id = ?').run(taskId)
         database.prepare('DELETE FROM work_scope WHERE task_id = ?').run(taskId)
         database.prepare('DELETE FROM work_item_detail WHERE task_id = ?').run(taskId)
@@ -3833,7 +3909,7 @@ export function readProjectStateDatabaseProjectionState<T = unknown>(
 export function readProjectStateDatabaseTaskDetailState<T = unknown>(
   tasksPath: string,
   taskId: string,
-  options: ProjectStateDatabaseSummaryReadOptions = {},
+  options: ProjectStateDatabaseTaskDetailReadOptions = {},
 ): ProjectStateDatabaseTaskDetailState<T> | null {
   const databasePath = projectStateDatabasePathFromTasksPath(tasksPath)
   try {
@@ -3859,11 +3935,13 @@ export function readProjectStateDatabaseTaskDetailState<T = unknown>(
       taskId,
       parentId: typeof row.parent_id === 'string' ? row.parent_id : null,
       childIds: childRows.flatMap(child => typeof child.id === 'string' ? [child.id] : []),
+      dependsOnIds: taskDependencyIdsFromRow(row),
+      dependentIds: readDependentTaskIds(database, taskId),
       scopeRow: scopeRowFromRow(row),
     }
     const queueRevision = currentQueueRevision(database)
     return {
-      queue: readCompactQueueFromDatabase(database),
+      queue: readTaskDetailQueueEnvelopeFromDatabase(database, options.includeAggregateTasks === true),
       task,
       overlay: readProjectStateDatabaseTaskOverlayFromDatabase(database, taskId),
       relationships,
@@ -6556,7 +6634,7 @@ export function readProjectStateDatabaseTaskRelationships(
   const database = openDatabase(databasePath, { readOnly: true })
   try {
     const includeScope = hasWorkScopeTable(database)
-    const row = database.prepare(`${workItemsWithScopeSelect('work_items.id, work_items.parent_id', includeScope)} WHERE work_items.id = ?`)
+    const row = database.prepare(`${workItemsWithScopeSelect('work_items.id, work_items.parent_id, work_items.depends_on_json', includeScope)} WHERE work_items.id = ?`)
       .get(taskId) as JsonRecord | undefined
     if (!row) return null
     const childRows = database.prepare('SELECT id FROM work_items WHERE parent_id = ? ORDER BY rowid').all(taskId) as JsonRecord[]
@@ -6564,6 +6642,8 @@ export function readProjectStateDatabaseTaskRelationships(
       taskId,
       parentId: typeof row.parent_id === 'string' ? row.parent_id : null,
       childIds: childRows.flatMap(child => typeof child.id === 'string' ? [child.id] : []),
+      dependsOnIds: taskDependencyIdsFromRow(row),
+      dependentIds: readDependentTaskIds(database, taskId),
       scopeRow: scopeRowFromRow(row),
     }
   } finally {
@@ -6740,9 +6820,14 @@ function compactTaskFromRow(row: ProjectStateDatabaseTask): JsonRecord {
   }
 }
 
-function readCompactQueueFromDatabase(database: DatabaseSync): ProjectStateDatabaseQueue {
-  const taskRows = database.prepare(`SELECT ${COMPACT_WORK_ITEM_COLUMNS} FROM work_items ORDER BY rowid`).all() as JsonRecord[]
-  applyReleaseMembershipToTaskRows(database, taskRows)
+function readTaskDetailQueueEnvelopeFromDatabase(
+  database: DatabaseSync,
+  includeAggregateTasks: boolean,
+): ProjectStateDatabaseQueue {
+  const taskRows = includeAggregateTasks
+    ? database.prepare(`SELECT ${COMPACT_WORK_ITEM_COLUMNS} FROM work_items ORDER BY rowid`).all() as JsonRecord[]
+    : []
+  if (includeAggregateTasks) applyReleaseMembershipToTaskRows(database, taskRows)
   const releaseRows = releaseDefinitionsFromDatabase(database)
   const queueState = database.prepare(`
     SELECT ${queueStateReadColumns(database, [
@@ -6761,6 +6846,10 @@ function readCompactQueueFromDatabase(database: DatabaseSync): ProjectStateDatab
     ...optionalJsonArray(queueState?.execution_plan_actions_json, 'executionPlanActions'),
     ...optionalJsonArray(queueState?.scope_authority_requests_json, 'scopeAuthorityRequests'),
   }
+}
+
+function readCompactQueueFromDatabase(database: DatabaseSync): ProjectStateDatabaseQueue {
+  return readTaskDetailQueueEnvelopeFromDatabase(database, true)
 }
 
 export function readProjectStateDatabaseQueue(tasksPath: string): ProjectStateDatabaseQueue | null {
