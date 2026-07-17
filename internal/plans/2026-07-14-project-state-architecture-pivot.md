@@ -4912,3 +4912,41 @@ the shared wrapper.
   existing project-state boundary.
 - **Rollback/revert:** restore the wider input type and removed arguments; no
   database rollback is needed.
+
+## 2026-07-17 - Fleet shell consumes one projection request
+
+The fleet audit found a client-side data-boundary violation even though the
+server already exposed a compact fleet projection. `ProjectsHome` loaded the
+lightweight project list and then fanned out into one richer `/api/service`
+request per project, using a two-worker queue and a 12-second timeout. That
+made the UI wait for data it did not need and made a project with a slow or
+broken detail read hold the fleet shell hostage.
+
+`ProjectsHome` now uses `/api/service/projects` for initial load, background
+polling, and action refreshes. Rich project state remains an explicit project
+route. This is a product-level application of the same authority rule: the
+fleet surface chooses the fleet projection; it does not assemble its own
+summary by joining a registry row to per-project detail responses.
+
+**Contract Touch Decision - `codex:fleet-shell-single-projection-read-2026-07-17`**
+
+- **Touched contracts:** ProjectsHome fleet refresh behavior and the existing
+  lightweight `/api/service/projects` response.
+- **Considered but not touched:** project detail payloads, project-store detail
+  hydration, server fleet summary fields, and diagnostic/history routes.
+- **Required follow-up:** introduce the same explicit summary-only versus
+  inventory/detail split inside project and Release routes.
+- **Proof provided:** 21 ProjectsHome tests, production build, installed
+  restart, and live shell inspection with seven projects and no loading/error
+  entries.
+- **Apply/revert:** client-only revert; no persisted data changes.
+
+**Schema Migration Decision - `codex:fleet-shell-single-projection-read-2026-07-17`**
+
+- **Persisted schema touched:** none.
+- **Change class:** client read-path consolidation.
+- **Existing data impact:** none; existing fleet projection data is reused.
+- **Migration id:** not required.
+- **Compatibility reader:** `/api/service?projectId=...` remains available for
+  explicit detail callers, never as the fleet-shell fallback.
+- **Rollback/revert:** restore the old client hydration loop; no data rollback.

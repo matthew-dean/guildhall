@@ -41339,3 +41339,43 @@ accident while rendering an ordinary drawer.
   existing shared project-state boundary.
 - Rollback/revert: restore the wider input type and removed call arguments; no
   database rollback is needed.
+
+## 2026-07-17 - Projects shell stops hydrating every project individually
+
+- [x] `ProjectsHome` now loads and refreshes `/api/service/projects`, the
+  projection-backed fleet shell, as its only project-list read. It no longer
+  fans out into one `/api/service?projectId=...` request per registered
+  project, waits behind a two-worker hydration queue, or leaves cards stuck on
+  a 12-second per-project status timeout.
+- [x] Background polling, attach, start, and stop refresh the same lightweight
+  fleet projection. Project detail remains the explicit route for richer
+  state, inventory, and history.
+- [x] Updated the UI regression to prove the shell renders from the one
+  lightweight request and never starts the old per-project service fanout.
+- [x] Installed proof after build/install/restart reports `/api/stale-server`
+  `stale:false`; the live shell returns all seven registered projects with no
+  `projectStatusLoading` or `projectStatusError` entries.
+
+### Contract Touch Decision
+
+- Work id: `codex:fleet-shell-single-projection-read-2026-07-17`.
+- Touched contracts: ProjectsHome fleet refresh behavior and its expected
+  lightweight `/api/service/projects` response.
+- Considered but not touched: project detail payloads, project-store detail
+  hydration, server fleet summary fields, and historical/diagnostic routes.
+- Required follow-up: make project detail and Release use similarly explicit
+  summary-only versus inventory/detail reads; do not reintroduce fanout to
+  compensate for a missing projection field.
+- Proof provided: 21 ProjectsHome tests, production build, installed restart,
+  and live shell API inspection.
+- Apply/revert behavior: client-only revert; no persisted data changes.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none.
+- Change class: client read-path consolidation.
+- Existing data impact: none; the shell consumes the existing fleet projection.
+- Migration id: not required.
+- Compatibility reader: no new reader; `/api/service?projectId=...` remains a
+  detail endpoint for explicit callers, not a fleet-shell fallback.
+- Rollback/revert: restore the old hydration loop if needed; no data rollback.

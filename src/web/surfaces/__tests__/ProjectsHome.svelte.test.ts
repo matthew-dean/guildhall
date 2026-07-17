@@ -67,8 +67,7 @@ describe('ProjectsHome', () => {
     expect(source).not.toContain('flex-wrap: wrap;\n    gap: var(--s-2);\n    align-items: stretch;')
   })
 
-  it('renders registered project cards from the lightweight shell before full status finishes', async () => {
-    const fullService = new Promise<Response>(() => {})
+  it('renders registered project cards from the single lightweight shell request', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       if (String(input) === '/api/service/projects') {
         return json({
@@ -83,7 +82,6 @@ describe('ProjectsHome', () => {
           })),
         } satisfies ServiceDetail)
       }
-      if (String(input) === '/api/service') return fullService
       return json(servicePayload)
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -98,7 +96,7 @@ describe('ProjectsHome', () => {
     expect(loadingCards[0]?.querySelectorAll('.gh-skeleton').length).toBeGreaterThan(0)
     expect(loadingCards[0]?.querySelector('.loading-bars')).toBeNull()
     expect(fetchMock.mock.calls.map(([input]) => String(input))).toContain('/api/service/projects')
-    expect(fetchMock.mock.calls.map(([input]) => String(input)).some(input => input.startsWith('/api/service?projectId='))).toBe(true)
+    expect(fetchMock.mock.calls.map(([input]) => String(input)).some(input => input.startsWith('/api/service?'))).toBe(false)
   })
 
   beforeEach(() => {
@@ -519,7 +517,7 @@ describe('ProjectsHome', () => {
 
     await vi.advanceTimersByTimeAsync(30000)
 
-    await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(3))
+    await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2))
     expect(getCachedService()).toBe(cachedAfterInitialLoad)
   })
 
