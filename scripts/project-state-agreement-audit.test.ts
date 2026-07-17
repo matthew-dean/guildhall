@@ -120,7 +120,14 @@ describe('project state agreement audit', () => {
       thread: { sourceRevision: 12 },
     })
 
-    expect(result.revisions).toEqual({ source: '10', project: '11', diagnostic: '10', thread: '12' })
+    expect(result.revisions).toEqual({
+      source: '10',
+      project: '11',
+      releaseQueue: null,
+      releaseProject: null,
+      diagnostic: '10',
+      thread: '12',
+    })
     expect(result.mismatches).toEqual(expect.arrayContaining([
       expect.objectContaining({ field: 'diagnostic-project-revision' }),
       expect.objectContaining({ field: 'thread-project-revision' }),

@@ -247,6 +247,8 @@ export function revisionMismatches({
   const revisions = {
     source: revision(spine?.queueRevision),
     project: revision(spine?.projectRevision),
+    releaseQueue: revision(releaseDetail?.queueRevision),
+    releaseProject: revision(releaseDetail?.projectRevision),
     diagnostic: revision(releaseDetail?.diagnosticSourceRevision ?? releaseDetail?.diagnostics?.sourceRevision),
     thread: revision(thread?.sourceRevision),
   }
@@ -254,8 +256,12 @@ export function revisionMismatches({
     addMismatch(mismatches, projectId, surface, field, true, value !== null)
   present('spine', 'saved-source-revision-present', revisions.source)
   present('spine', 'saved-project-revision-present', revisions.project)
+  present('release-detail', 'saved-queue-revision-present', revisions.releaseQueue)
+  present('release-detail', 'saved-project-revision-present', revisions.releaseProject)
   present('release-detail', 'saved-diagnostic-revision-present', revisions.diagnostic)
   present('thread', 'saved-thread-revision-present', revisions.thread)
+  addMismatch(mismatches, projectId, 'release-detail', 'queue-revision', revisions.source, revisions.releaseQueue)
+  addMismatch(mismatches, projectId, 'release-detail', 'project-revision', revisions.project, revisions.releaseProject)
   addMismatch(mismatches, projectId, 'release-detail', 'diagnostic-project-revision', revisions.project, revisions.diagnostic)
   addMismatch(mismatches, projectId, 'thread', 'thread-project-revision', revisions.project, revisions.thread)
   addMismatch(mismatches, projectId, 'release-detail', 'state-consistency', 'aligned', releaseDetail?.stateConsistency ?? null)

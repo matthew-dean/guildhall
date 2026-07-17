@@ -40597,3 +40597,61 @@ rows own eligibility and blocker state; the orientation snapshot owns
 narrative context only. Projections may present different amounts of detail,
 but an ordinary read cannot manufacture, broaden, or shrink membership by
 choosing a different source.
+
+## 2026-07-17 - Release payloads receive one state snapshot
+
+The release-membership fix exposed a more general architectural guardrail:
+even when the database boundary was correct, a route-level payload builder
+could still have selected a different source if it was allowed to read state
+itself. That is the exact shape of the old mismatch: one response could
+quietly reopen intake evidence while another consumed normalized current work.
+
+- [x] Added `readProjectReleaseState()` as the one selector for saved Release
+  reads versus explicitly requested live diagnostics.
+- [x] Release detail and Release summary now consume snapshots from that
+  boundary; `buildProjectReleaseReadinessPayload()` cannot choose an intake
+  snapshot, compatibility queue, or request-time task reconstruction itself.
+- [x] Release responses expose `queueRevision` and `projectRevision`, and the
+  fleet agreement audit requires those revisions to match the compact project
+  and spine surfaces.
+- [x] Regression coverage proves an intake-only `workspace-import:*` task in
+  `workspace-goals.json` cannot appear in current Release state.
+- [x] Focused boundary, Release, and agreement tests pass: 49/49.
+- [ ] Remaining: complete the same snapshot/revision contract for every
+  ordinary project route still carrying a legacy read helper, then rerun the
+  full installed fleet proof.
+
+### Contract Touch Decision
+
+- Work id: `codex:release-read-model-snapshot-2026-07-17`.
+- Touched contracts: Release read-model selection, Release revision metadata,
+  and cross-surface agreement auditing.
+- Considered but not touched: task/release persistence schema, release
+  membership semantics, diagnostic retention, and live diagnostic behavior.
+- Required follow-up: migrate remaining ordinary route helpers to named
+  boundary snapshots; live diagnostics remain explicit and labeled.
+- Proof provided: `serve-read-boundary.test.ts`,
+  `project-state-agreement-audit.test.ts`, and `project-state-boundary.test.ts`.
+- Apply/revert behavior: runtime and audit contract only; no project data
+  rewrite or migration is required.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none.
+- Change class: read-boundary consolidation and observability metadata.
+- Existing data impact: none; revision fields are read-only response fields.
+- Migration id: not required.
+- Compatibility reader: none added. The boundary deliberately rejects
+  request-time fallback for ordinary Release reads.
+- Fixtures/tests: existing promoted SQLite fixtures plus intake-only ghost
+  regression coverage.
+- Owner-facing plan: a Release response now carries the same state revisions
+  as Overview/Map, so split-brain reads become an explicit audit failure.
+- Rollback/revert: revert the boundary selector, response fields, and audit
+  assertions; no data rollback is needed.
+
+### Authority invariant
+
+A read-model formatter is not allowed to decide where current state comes
+from. A route chooses one named boundary snapshot, passes it through, and may
+only add explicitly labeled diagnostics that do not replace current work.

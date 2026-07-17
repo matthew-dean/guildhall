@@ -324,6 +324,48 @@ describe('GET route read boundaries', () => {
       nodeIds: ['work:task-boundary'],
       deferredNodeIds: [],
     })
+
+    const compactOverview = await (await app.fetch(new Request(projectUrl('/api/project?surface=overview&compact=true')))).json() as any
+    expect(readinessBody).toMatchObject({
+      queueRevision: compactOverview.queueRevision,
+      projectRevision: compactOverview.projectRevision,
+    })
+  })
+
+  it('does not let an intake snapshot manufacture current Release work', async () => {
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    await writeProjectStateJsonAsync(tmpDir, 'workspace-goals.json', {
+      version: 3,
+      recordedAt: '2026-07-14T00:00:00.000Z',
+      goals: [{ id: 'goal-boundary', title: 'Keep read scopes honest' }],
+      releases: [{ id: 'release-boundary', label: 'Boundary release', source: 'owner_approved', state: 'active' }],
+      tasks: [
+        { id: 'task-boundary', title: makeBoundaryTask().title, scope: 'current', releaseIds: ['release-boundary'] },
+        { id: 'workspace-import:ghost', title: 'Intake-only ghost work', scope: 'current', releaseIds: ['release-boundary'] },
+      ],
+      milestones: [],
+      approved: {
+        goalCount: 1,
+        taskCount: 2,
+        milestoneCount: 0,
+        currentTaskCount: 2,
+        laterTaskCount: 0,
+        taskIds: ['task-boundary', 'workspace-import:ghost'],
+        currentTaskIds: ['task-boundary', 'workspace-import:ghost'],
+        laterTaskIds: [],
+      },
+      detected: null,
+    })
+
+    const response = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
+    const body = await response.json() as any
+
+    expect(response.status).toBe(200)
+    expect(JSON.stringify(body)).not.toContain('workspace-import:ghost')
+    expect(body.scope).toMatchObject({
+      nodeIds: ['work:task-boundary'],
+      deferredNodeIds: [],
+    })
   })
 
   it('uses the bounded projection for an unqualified project read', async () => {

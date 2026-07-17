@@ -55,7 +55,7 @@ import { taskBlockerSummary } from './task-blocker-summary.js'
 import { buildProjectSummaryProjection, prepareProjectSummaryProjectionFromUnknownQueue, queueForProjectSummaryScope, readApprovedPlan, readProjectSummaryProjection, readProjectSummaryShellProjection, updateProjectSummaryProjection, writeProjectSummaryProjectionFromIndexedState, writeProjectSummaryProjectionFromUnknownQueue, type ProjectSummaryProjection } from './project-summary-projection.js'
 import { inferProjectOrientationSnapshot } from './project-orientation-snapshot.js'
 import { refreshCurrentThreadProjection } from './current-thread-refresh.js'
-import { projectTaskStateExistsSync, readProjectCanonicalCurrentState, readProjectCompactStateModel, readProjectCurrentStateModel, readProjectMapStateModel, readProjectSavedReleaseState, readProjectStateAuthorityAtBoundary, readProjectSummaryAtBoundary, readProjectTaskDetailState, readProjectTaskQueue, readProjectTaskQueueForRichMutation, readProjectTaskQueueForMutationSync, readProjectTaskQueueSync, writePromotedTaskDetailMutation, writeProjectTaskQueueAtCurrentStateBoundary, writeProjectTaskQueueWithSummary, type ProjectCanonicalCurrentState, type ProjectSavedReleaseReadModel } from './project-state-boundary.js'
+import { projectTaskStateExistsSync, readProjectCanonicalCurrentState, readProjectCompactStateModel, readProjectCurrentStateModel, readProjectMapStateModel, readProjectReleaseState, readProjectSavedReleaseState, readProjectStateAuthorityAtBoundary, readProjectSummaryAtBoundary, readProjectTaskDetailState, readProjectTaskQueue, readProjectTaskQueueForRichMutation, readProjectTaskQueueForMutationSync, readProjectTaskQueueSync, writePromotedTaskDetailMutation, writeProjectTaskQueueAtCurrentStateBoundary, writeProjectTaskQueueWithSummary, type ProjectCanonicalCurrentState, type ProjectReleaseReadModel, type ProjectSavedReleaseReadModel } from './project-state-boundary.js'
 import { taskTitleOverlap } from './task-title-overlap.js'
 import {
   readWorkspaceConfig,
@@ -6335,6 +6335,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
         name: project.config?.name ?? project.id,
         ...(input.includeConfig ? { config: project.config } : {}),
         coordinatorCount: project.config?.coordinators?.length ?? 0,
+        queueRevision: compactState?.queueRevision ?? null,
+        projectRevision: compactState?.projectRevision ?? null,
         selectedTaskId: null,
         tasks: [],
         taskPayload: {
@@ -6573,6 +6575,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
       ...(input.includeConfig ? { config: project.config } : {}),
       ...(providerStatus ? { providerStatus } : {}),
       coordinatorCount: project.config?.coordinators?.length ?? 0,
+      queueRevision: compactState?.queueRevision ?? null,
+      projectRevision: compactState?.projectRevision ?? null,
       selectedTaskId: input.requestedTaskId && responseTasks.some(task => task.id === input.requestedTaskId)
         ? input.requestedTaskId
         : null,
@@ -6698,13 +6702,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
         startTiming: name => startTiming(`readiness_${name}`),
       })
       const releaseReadiness = fullSurface || overviewSurface || workSurface || mapSurface
-        ? await buildProjectReleaseReadinessPayload(overviewSurface || workSurface || mapSurface
-            ? {
-              state: currentState,
-              startReadiness,
-              liveDiagnostics: diagnosticRequested,
-            }
-          : { startReadiness, liveDiagnostics: diagnosticRequested })
+        ? await buildProjectReleaseReadinessPayload({
+            state: currentState,
+            startReadiness,
+            liveDiagnostics: diagnosticRequested,
+          })
         : null
       endReadiness()
       const endTasks = startTiming('tasks')
@@ -15242,7 +15244,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
   })
 
-  function releaseReadinessSavedScope(state: ProjectCanonicalCurrentState | ProjectSavedReleaseReadModel): ProjectScope | null {
+  function releaseReadinessSavedScope(state: ProjectReleaseReadModel): ProjectScope | null {
     // The boundary owns release membership. Keeping this accessor deliberately
     // boring prevents the route from becoming a second scope authority.
     return state.scope
@@ -15267,7 +15269,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   }
 
   function releaseReadinessSavedRelease(
-    state: ProjectCanonicalCurrentState | ProjectSavedReleaseReadModel,
+    state: ProjectReleaseReadModel,
     scope: ProjectScope | null,
   ): OrientationRelease | null {
     // Release identity is a queue fact. The summary may project derived state,
@@ -15289,19 +15291,15 @@ export function buildServeApp(opts: ServeOptions = {}): {
   }
 
   async function buildProjectReleaseReadinessPayload(input: {
-    state?: ProjectCanonicalCurrentState | ProjectSavedReleaseReadModel
+    state: ProjectReleaseReadModel
     startReadiness?: Awaited<ReturnType<typeof projectStartReadinessForProject>>
     liveDiagnostics?: boolean
     projectRoot?: string
-  } = {}): Promise<Record<string, unknown>> {
+  }): Promise<Record<string, unknown>> {
     const projectPath = input.projectRoot ?? project.path
     if (!input.projectRoot && project.initializationNeeded) return { initializationNeeded: true, release: null, scope: null }
     const memoryDir = getProjectStateDir(projectPath)
-    const state = input.state ?? (
-      input.liveDiagnostics === true
-        ? await readProjectCanonicalCurrentState(projectPath)
-        : readProjectSavedReleaseState(projectPath)
-    )
+    const state = input.state
     const savedReleaseSummary = state.summary?.releaseSummary ?? null
     const summaryFreshness = state.summary?.freshness ?? 'missing'
     const savedScope = releaseReadinessSavedScope(state)
@@ -15426,6 +15424,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
         diagnosticSourceRevision: diagnostic?.sourceRevision ?? null,
         diagnosticGeneratedAt: diagnostic?.generatedAt ?? null,
         currentStateAuthority: state.authority,
+        queueRevision: state.queueRevision,
+        projectRevision: state.projectRevision,
         stateConsistency,
         ...(summaryFreshness !== 'current' && savedReleaseSummary
           ? { notReadyReason: 'The saved project summary is refreshing.' }
@@ -15675,6 +15675,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
       ready: savedReady,
       summaryFreshness,
       currentStateAuthority: state.authority,
+      queueRevision: state.queueRevision,
+      projectRevision: state.projectRevision,
       stateConsistency,
       ...(summaryFreshness !== 'current' && savedReleaseSummary
         ? { notReadyReason: 'The saved project summary is refreshing.' }
@@ -15778,12 +15780,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project/release-readiness/summary', async c => {
     try {
       if (project.initializationNeeded) return c.json({ initializationNeeded: true })
-      const tasksPath = projectTasksPath(project.path)
-      const promotedState = projectTaskStateExistsSync(tasksPath)
-      const compactState = promotedState
-        ? readProjectCompactStateModel(tasksPath, { limit: 1 })
-        : null
-      const projection = compactState?.summary ?? (promotedState ? null : readProjectSummaryAtBoundary(tasksPath))
+      const state = readProjectSavedReleaseState(project.path)
+      const projection = state.summary
       if (!projection) {
         return c.json({
           error: 'The saved release summary is not available yet.',
@@ -15794,6 +15792,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
         ...compactReleaseReadinessFromProjection({ projection }),
         summaryFreshness: projection.freshness,
         generatedAt: projection.generatedAt,
+        queueRevision: state.queueRevision,
+        projectRevision: state.projectRevision,
         detailEndpoint: '/api/project/release-readiness?detail=true',
       })
     } catch (err) {
@@ -15808,8 +15808,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
     try {
       // Ordinary Release detail is a saved projection read. Only an explicit
       // live/diagnostic query enters the rich canonical reader.
+      const liveDiagnostics = c.req.query('live') === 'true' || c.req.query('diagnostic') === 'true'
+      const state = await readProjectReleaseState(project.path, { liveDiagnostics })
       return c.json(await buildProjectReleaseReadinessPayload({
-        liveDiagnostics: c.req.query('live') === 'true' || c.req.query('diagnostic') === 'true',
+        state,
+        liveDiagnostics,
       }))
     } catch (err) {
       return c.json({

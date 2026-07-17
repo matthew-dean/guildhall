@@ -170,6 +170,8 @@ export interface ProjectSavedReleaseReadModel {
   projectRevision: number | null
 }
 
+export type ProjectReleaseReadModel = ProjectCanonicalCurrentState | ProjectSavedReleaseReadModel
+
 function persistableRelease(release: ProjectRelease): ProjectRelease {
   const description = (release as ProjectRelease & { description?: string | null }).description
   return {
@@ -328,6 +330,21 @@ export function readProjectSavedReleaseState(projectRoot: string): ProjectSavedR
     queueRevision: current.queueRevision,
     projectRevision: current.projectRevision,
   }
+}
+
+/**
+ * Select the Release read model once, at the shared boundary. Consumers must
+ * pass the returned snapshot through; they cannot silently choose an intake
+ * artifact, compatibility queue, or request-time task reconstruction while
+ * formatting Release state.
+ */
+export async function readProjectReleaseState(
+  projectRoot: string,
+  options: { liveDiagnostics?: boolean } = {},
+): Promise<ProjectReleaseReadModel> {
+  return options.liveDiagnostics === true
+    ? readProjectCanonicalCurrentState(projectRoot)
+    : readProjectSavedReleaseState(projectRoot)
 }
 
 /** Read the bounded saved summary without refreshing or repairing it. */
