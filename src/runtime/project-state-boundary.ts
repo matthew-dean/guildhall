@@ -197,23 +197,16 @@ function projectScopeFromSavedState(input: {
   // relation by the sessions queue reader. They are the authority when a
   // release is selected. `work_scope` is a different projection of
   // eligibility/blocker state and may legitimately be empty during refresh.
+  // In particular, do not replace membership with every current execution
+  // row: a split can add rows without assigning them to this release.
   if (selectedRelease) {
-    const executionRows = input.summary?.freshness === 'current'
-      ? executionScopeRows(input.scopeRows)
-      : []
-    const includedNodeIds = executionRows.length > 0
-      ? executionRows.filter(row => row.scope === 'included').map(row => taskScopeNodeId(row.taskId))
-      : [...(selectedRelease.nodeIds ?? [])]
-    const deferredNodeIds = executionRows.length > 0
-      ? executionRows.filter(row => row.scope === 'deferred').map(row => taskScopeNodeId(row.taskId))
-      : [...(selectedRelease.deferredNodeIds ?? [])]
     return {
       id,
       label: selectedRelease.label,
       kind: selectedRelease.kind as ProjectScope['kind'],
       source: (selectedRelease.source ?? 'inferred') as ProjectScope['source'],
-      nodeIds: includedNodeIds,
-      deferredNodeIds,
+      nodeIds: [...(selectedRelease.nodeIds ?? [])],
+      deferredNodeIds: [...(selectedRelease.deferredNodeIds ?? [])],
     }
   }
 

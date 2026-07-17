@@ -40477,3 +40477,123 @@ reconstruction.
   `stale:false`; the project-spine audit also passes.
 - Historical fixture compatibility remains available only in explicit
   bootstrap/migration paths. It is not an ordinary current-state reader.
+
+## 2026-07-17T02:10:00Z - Recovery state must be derived from current repository authority
+
+The Narrative Harness release run exposed a second form of stale state: a task
+that had been blocked because its target repository was dirty stayed terminally
+blocked after the repository was committed and pushed. The blocker text was no
+longer true, but the task projection continued to treat it as current state.
+
+- [x] The orchestrator rechecks a dirty-repository blocker through the shared
+  Git driver before selecting work.
+- [x] When the authoritative repository status is clean, the task transitions
+  from `blocked` to `ready`, clears the stale blocker, and records a recovery
+  note in the same queue write.
+- [x] The exact live NH task then progressed through `in_progress`, review, and
+  `done` after the only target-repository change was committed.
+- [x] A regression test proves a clean repository reopens a stale dirty-repo
+  blocker without a task-specific manual mutation.
+- [x] A real NH Stage 1 release run consumed only its selected release scope;
+  deferred work remained outside the execution scope.
+- [x] A later NH implementation failure remained an honest project blocker:
+  the worker's prescribed fixture validation command failed, the exact error
+  was visible, and the worker was retried with source-backed recovery guidance.
+
+### Contract Touch Decision
+
+- Work id: `codex:recover-stale-repository-blockers-2026-07-17`.
+- Touched contracts: task lifecycle recovery, Git repository status authority,
+  and release start/readiness projection.
+- Considered but not touched: release/task identity schema and persisted
+  evidence retention.
+- Required follow-up: any new environmental blocker must use a named authority
+  check and must not persist a blocker that the same authority now disproves.
+- Proof provided: focused orchestrator tests, installed live NH run, selected
+  release scope response, and `/api/stale-server` freshness proof.
+- Apply/revert behavior: runtime recovery rule; no manual queue rewrite is
+  required to recover a cleaned repository.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none.
+- Change class: lifecycle recovery and shared-authority correction.
+- Existing data impact: stale dirty-repository blockers are reopened when the
+  current Git authority reports clean; other blockers remain unchanged.
+- Migration id: not required.
+- Compatibility reader: none added.
+- Rollback/revert: revert the recovery branch and its regression test; no data
+  rollback is needed.
+
+### Authority invariant
+
+This is the intended DRY boundary: ordinary project surfaces do not each decide
+whether a repository is clean, whether a task is runnable, or whether a release
+is blocked. They consume the shared task/readiness projection. Git inspection is
+an explicit authority input, and the transition that consumes it updates task
+state once. A stale blocker can therefore be repaired from current authority;
+it cannot remain a competing current answer merely because old text was saved.
+
+## 2026-07-17T02:24:00Z - Named-release membership is one relation, not a row heuristic
+
+The agreement audit caught the exact failure mode this project-state refactor is
+intended to prevent. A task split had added internal child rows while an older
+orientation snapshot still described the pre-split six-root/sixteen-later
+shape. Release detail and Overview therefore answered different questions about
+the same selected release. Looma exposed the inverse legacy residue: its saved
+orientation snapshot carried 42 deferred rows even though the normalized
+selected release had no members.
+
+- [x] `projectScopeFromSavedState()` now reads named-release membership only
+  from the normalized `release_membership` relation. It never broadens a named
+  release to every `work_scope` row during a read.
+- [x] Compact Overview/Work/Map surfaces overlay the selected scope from the
+  same compact database snapshot onto the durable orientation narrative, so a
+  stale stored spine cannot override current release membership.
+- [x] Release detail and compact surfaces now agree on exact member ids across
+  Narrative Harness, Looma + Knit, Jess, and Fair Labor License, including
+  internal split children and empty selected releases.
+- [x] The agreement audit no longer equates release totals with membership
+  cardinality: internal split children are real release members but are
+  intentionally excluded from root/project totals.
+- [x] Regression coverage proves an unassigned split child does not enter a
+  named release merely because it appears in the task hierarchy.
+- [x] Installed agreement audit passes for all seven registered projects with
+  `mismatchCount: 0`; the performance audit remains within fleet, project,
+  rich-task, and Thread budgets; build/install/restart reports `stale:false`.
+
+### Contract Touch Decision
+
+- Work id: `codex:single-release-membership-projection-2026-07-17`.
+- Touched contracts: normalized release membership, compact orientation scope,
+  Release detail scope, and agreement-audit invariants.
+- Considered but not touched: task identity, release schema, evidence payload,
+  and transcript retention contracts.
+- Required follow-up: any task split or release-selection mutation must write
+  the membership relation through the same boundary; no GET may infer it from
+  hierarchy or scope rows.
+- Proof provided: boundary and read-route tests, installed fleet agreement and
+  performance audits, and direct current-state API comparison for NH and Looma.
+- Apply/revert behavior: runtime projection correction plus audit/test changes;
+  no manual project-state rewrite is required.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none; this consumes the existing normalized
+  `release_membership` relation as the authority.
+- Change class: read-model correction and stale-snapshot overlay.
+- Existing data impact: no task or release rows are rewritten by GETs; old
+  orientation snapshots can no longer override current membership.
+- Migration id: not required.
+- Compatibility reader: none added.
+- Rollback/revert: revert the boundary overlay and regression assertions; no
+  data rollback is needed.
+
+### Authority invariant
+
+There is one current answer for selected-release membership. The database
+relation owns membership; task hierarchy owns parent/child structure; scope
+rows own eligibility and blocker state; the orientation snapshot owns
+narrative context only. Projections may present different amounts of detail,
+but an ordinary read cannot manufacture, broaden, or shrink membership by
+choosing a different source.

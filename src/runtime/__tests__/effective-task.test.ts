@@ -241,7 +241,12 @@ describe('effective task projection', () => {
       id: 'gate-current',
       kind: 'gate_result',
       recordedAt: '2026-05-24T21:01:00.000Z',
-      payload: { gateId: 'build', passed: true },
+      payload: {
+        gateId: 'build',
+        type: 'hard',
+        passed: true,
+        checkedAt: '2026-05-24T21:01:00.000Z',
+      },
     })
     await fs.rm(path.dirname(taskEvidencePath(projectRoot, 'task-auth-complete', 'note')), { recursive: true, force: true })
     promoteProjectStateDatabaseAuthority(projectRoot)
@@ -250,7 +255,12 @@ describe('effective task projection', () => {
 
     expect(effective.evidence.map(event => event.kind)).toEqual(['note', 'gate_result'])
     expect(effective.notes).toEqual([expect.objectContaining({ content: 'Current projection note.' })])
-    expect(effective.gateResults).toEqual([{ gateId: 'build', passed: true }])
+    expect(effective.gateResults).toEqual([{
+      gateId: 'build',
+      type: 'hard',
+      passed: true,
+      checkedAt: '2026-05-24T21:01:00.000Z',
+    }])
   })
 
   it('uses bounded current evidence by default after the database boundary', async () => {

@@ -13,6 +13,7 @@ export const GitStoryClosureState = z.enum([
   'local_only',
   'deferred',
   'conflict',
+  'no_repository',
   'unknown',
 ])
 
@@ -93,6 +94,7 @@ export function gitStoryStateLabel(state: GitStoryClosureState): string {
     case 'local_only': return 'Local only'
     case 'deferred': return 'Deferred'
     case 'conflict': return 'Conflict'
+    case 'no_repository': return 'No repository'
     case 'unknown': return 'Unknown'
   }
 }
@@ -119,6 +121,8 @@ export function nextActionForGitStory(state: GitStoryClosureState): string {
       return 'No immediate action; repository follow-up was intentionally deferred.'
     case 'conflict':
       return 'Resolve the git conflict before calling this work closed.'
+    case 'no_repository':
+      return 'No repository follow-up applies to this workspace scope.'
     case 'unknown':
       return 'Inspect git state manually; Guildhall could not read it.'
   }
@@ -164,6 +168,10 @@ export function reasonForGitStorySnapshot(input: {
       return input.overrideReason ? `Deferred: ${input.overrideReason}` : 'Repository follow-up deferred.'
     case 'conflict':
       return 'A merge or landing conflict needs human attention.'
+    case 'no_repository':
+      return input.overrideReason
+        ? `No Git repository at this scope: ${input.overrideReason}`
+        : 'This workspace scope is not itself a Git repository; child repositories are inspected separately.'
     case 'unknown':
       return input.mergeRecordResult === 'skipped'
         ? 'Task completed without an automatic merge record; inspect branch state.'
@@ -202,6 +210,27 @@ export async function inspectGitStory(
   const inspectedAt = (input.now?.() ?? new Date()).toISOString()
   try {
     const status = await gitDriver.statusSummary(inspectedPath)
+    if (status.repository === false) {
+      const state: GitStoryClosureState = 'no_repository'
+      return GitStorySnapshot.parse({
+        state,
+        repoRoot: input.repoRoot,
+        repoId: input.repoId,
+        repoLabel: input.repoLabel,
+        inspectedPath,
+        taskId: input.task?.id,
+        taskTitle: input.task?.title,
+        worktreePath,
+        reason: reasonForGitStorySnapshot({
+          state,
+          changedCount: 0,
+          untrackedCount: 0,
+          ahead: 0,
+        }),
+        nextAction: nextActionForGitStory(state),
+        inspectedAt,
+      })
+    }
     const localCommits =
       status.upstream
         ? await gitDriver.localCommits(inspectedPath, status.upstream).catch(() => [])
@@ -305,6 +334,7 @@ const STATE_SEVERITY: Record<GitStoryClosureState, number> = {
   pr_open: 50,
   deferred: 40,
   local_only: 30,
+  no_repository: 0,
   pushed: 20,
   merged: 10,
   clean: 0,
@@ -315,6 +345,7 @@ const NON_BLOCKING_STATES = new Set<GitStoryClosureState>([
   'merged',
   'local_only',
   'deferred',
+  'no_repository',
 ])
 
 function gitStoryBlockerKey(snapshot: GitStorySnapshot): string {

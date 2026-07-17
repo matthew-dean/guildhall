@@ -142,6 +142,8 @@ export type TaskPermissionMode = z.infer<typeof TaskPermissionMode>
 
 export const GateResult = z.object({
   gateId: z.string(),
+  /** The exact command when this gate was command-backed. */
+  command: z.string().optional(),
   type: z.enum(['hard', 'soft']),
   passed: z.boolean(),
   output: z.string().optional(),

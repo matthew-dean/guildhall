@@ -55,7 +55,7 @@ import { taskBlockerSummary } from './task-blocker-summary.js'
 import { buildProjectSummaryProjection, prepareProjectSummaryProjectionFromUnknownQueue, queueForProjectSummaryScope, readApprovedPlan, readProjectSummaryProjection, readProjectSummaryShellProjection, updateProjectSummaryProjection, writeProjectSummaryProjectionFromIndexedState, writeProjectSummaryProjectionFromUnknownQueue, type ProjectSummaryProjection } from './project-summary-projection.js'
 import { inferProjectOrientationSnapshot } from './project-orientation-snapshot.js'
 import { refreshCurrentThreadProjection } from './current-thread-refresh.js'
-import { projectTaskStateExistsSync, readProjectCanonicalCurrentState, readProjectCompactStateModel, readProjectCurrentStateModel, readProjectMapStateModel, readProjectSavedReleaseState, readProjectStateAuthorityAtBoundary, readProjectSummaryAtBoundary, readProjectTaskDetailState, readProjectTaskQueue, readProjectTaskQueueForMutationSync, readProjectTaskQueueSync, writePromotedTaskDetailMutation, writeProjectTaskQueueAtCurrentStateBoundary, writeProjectTaskQueueWithSummary, type ProjectCanonicalCurrentState, type ProjectSavedReleaseReadModel } from './project-state-boundary.js'
+import { projectTaskStateExistsSync, readProjectCanonicalCurrentState, readProjectCompactStateModel, readProjectCurrentStateModel, readProjectMapStateModel, readProjectSavedReleaseState, readProjectStateAuthorityAtBoundary, readProjectSummaryAtBoundary, readProjectTaskDetailState, readProjectTaskQueue, readProjectTaskQueueForRichMutation, readProjectTaskQueueForMutationSync, readProjectTaskQueueSync, writePromotedTaskDetailMutation, writeProjectTaskQueueAtCurrentStateBoundary, writeProjectTaskQueueWithSummary, type ProjectCanonicalCurrentState, type ProjectSavedReleaseReadModel } from './project-state-boundary.js'
 import { taskTitleOverlap } from './task-title-overlap.js'
 import {
   readWorkspaceConfig,
@@ -6439,7 +6439,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       scopeProjection,
       sourceRefs: projection.orientation?.sourceRefs ?? [],
     }).orientationSpine
-    const baseOrientationSpine = storedSpine ?? (input.surface === 'overview'
+    const initialOrientationSpine = storedSpine ?? (input.surface === 'overview'
       ? buildOverviewOrientationPreviewSpine({
           projectId: project.id,
           rawQueue: {
@@ -6451,9 +6451,35 @@ export function buildServeApp(opts: ServeOptions = {}): {
           startReadiness: summary.startReadiness,
           sourceSpine: builtOrientationSpine,
         })
-      : input.surface === 'map'
+        : input.surface === 'map'
         ? compactOrientationSpineForMapSurface(builtOrientationSpine as unknown as Record<string, unknown>)
         : compactOrientationSpineForWorkSurface(builtOrientationSpine as unknown as Record<string, unknown>))
+    // A stored orientation snapshot can lag after task decomposition or
+    // release selection changes. Its charter and narrative are still useful,
+    // but the selected scope is owned by the same compact database snapshot
+    // consumed by Release detail. Overlay only that canonical scope here so
+    // every ordinary surface answers membership from one relation.
+    const baseOrientationSpine = compactState?.scope
+      ? {
+          ...initialOrientationSpine,
+          selectedRelease: initialOrientationSpine.selectedRelease
+            ? {
+                ...initialOrientationSpine.selectedRelease,
+                nodeIds: [...compactState.scope.nodeIds],
+                deferredNodeIds: [...compactState.scope.deferredNodeIds],
+              }
+            : initialOrientationSpine.selectedRelease,
+          releases: initialOrientationSpine.releases.map(release => release.id === compactState.scope?.id
+            ? {
+                ...release,
+                nodeIds: [...compactState.scope.nodeIds],
+                deferredNodeIds: [...compactState.scope.deferredNodeIds],
+              }
+            : release),
+          selectedTaskScope: compactState.scope as unknown as OrientationScope,
+          scope: compactState.scope as unknown as OrientationScope,
+        }
+      : initialOrientationSpine
     const overviewTaskIds = input.surface === 'overview'
       ? overviewTaskIdsForSurface({
           orientationSpine: baseOrientationSpine as Record<string, unknown>,
@@ -11472,10 +11498,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
       // first-class input. We never synthesize a fake importer spec here.
       try {
         const tasksPath = workspaceImportTasksPath(memoryDir)
-        let raw = projectTaskStateExistsSync(tasksPath)
-          ? (await readProjectTaskQueue(tasksPath) as
+        let raw = (readProjectStateDatabaseCurrentAuthority(project.path) !== null || projectTaskStateExistsSync(tasksPath))
+          ? await readProjectTaskQueueForRichMutation(project.path) as
               | Array<Record<string, unknown>>
-              | { tasks?: Array<Record<string, unknown>> })
+              | { tasks?: Array<Record<string, unknown>> }
           : { tasks: [] as Array<Record<string, unknown>> }
         let list = Array.isArray(raw) ? raw : raw.tasks ?? []
         let idx = list.findIndex(
@@ -11486,7 +11512,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
             memoryDir,
             projectPath: project.path,
           })
-          raw = await readProjectTaskQueue(tasksPath) as
+          raw = await readProjectTaskQueueForRichMutation(project.path) as
             | Array<Record<string, unknown>>
             | { tasks?: Array<Record<string, unknown>> }
           list = Array.isArray(raw) ? raw : raw.tasks ?? []

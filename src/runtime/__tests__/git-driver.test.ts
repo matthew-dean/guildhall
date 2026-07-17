@@ -88,6 +88,19 @@ describe('NodeGitDriver', () => {
     })
   })
 
+  it('treats a non-git workspace envelope as a clean, non-repository scope', async () => {
+    const driver = new NodeGitDriver()
+    const workspacePath = path.join(tmpDir, 'workspace-envelope')
+    await fs.mkdir(workspacePath, { recursive: true })
+
+    await expect(driver.statusSummary(workspacePath)).resolves.toMatchObject({
+      repository: false,
+      clean: true,
+      changedCount: 0,
+      untrackedCount: 0,
+    })
+  })
+
   it('checkpoints real shared-checkout edits from a subdirectory project path without committing Guildhall state files', async () => {
     const driver = new NodeGitDriver()
     await fs.writeFile(path.join(subdir, 'app.ts'), 'export const ready = false\n', 'utf8')

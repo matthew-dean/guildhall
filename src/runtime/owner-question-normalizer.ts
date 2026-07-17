@@ -124,5 +124,6 @@ export function normalizeLegacyOwnerQuestion(
 export function isInvalidOwnerQuestionPrompt(value: string | undefined | null): boolean {
   const prompt = (value ?? '').trim()
   if (!prompt) return true
+  if (/^what(?:'|’)s the remaining delta\??$/i.test(prompt)) return true
   return normalizeStructuredOwnerQuestion({ prompt }) === null
 }

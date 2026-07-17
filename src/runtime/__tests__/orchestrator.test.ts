@@ -2849,6 +2849,31 @@ describe('Orchestrator.tick — routing', () => {
     expect(task.openQuestions ?? []).toHaveLength(0)
   })
 
+  it('does not turn a process follow-up into owner input', async () => {
+    await writeQueue([mkTask({ id: 'a', status: 'exploring' })])
+    const spec = stubAgent(
+      'spec-agent',
+      undefined,
+      [
+        'I have enough context to continue.',
+        '',
+        "I'll start by reading the existing task and source records.",
+        '',
+        "What's the remaining delta?",
+      ].join('\n'),
+    )
+    const orch = new Orchestrator({
+      config: baseConfig(),
+      agents: agentSet({ spec }),
+    })
+
+    const out = await orch.tick()
+    expect(out.kind).toBe('processed')
+
+    const queue = await readQueue()
+    expect(queue.tasks[0]?.openQuestions ?? []).toHaveLength(0)
+  })
+
   it('does not convert transcript-note summaries into fallback questions', async () => {
     await writeQueue([mkTask({ id: 'a', status: 'exploring', title: 'Autoencoder baseline quality pass' })])
     const spec = stubAgent(
@@ -9491,6 +9516,70 @@ describe('Orchestrator.run — full loops', () => {
     expect(task?.status).toBe('blocked')
     expect(task?.assignedTo).toBeNull()
     expect(task?.blockReason).toContain(`base repo has uncommitted changes at ${subrepo}`)
+  })
+
+  it('reopens a dirty-repo blocker when the shared Git authority reports the repo clean', async () => {
+    const subrepo = path.join(tmpDir, 'knit-cleaned')
+    await fs.mkdir(subrepo, { recursive: true })
+
+    const settings = makeDefaultSettings(new Date('2026-05-03T00:00:00Z'))
+    settings.project.worktree_isolation = {
+      position: 'per_task',
+      rationale: 'test',
+      setAt: '2026-05-03T00:00:00Z',
+      setBy: 'user-direct',
+    }
+    await saveLeverSettings({
+      path: agentSettingsPath,
+      settings,
+    })
+
+    await writeQueue([
+      mkTask({
+        id: 'a',
+        status: 'blocked',
+        domain: 'knit',
+        projectPath: subrepo,
+        spec: VALID_SPEC,
+        blockReason:
+          `Guildhall could not start work because the target repo is dirty: ` +
+          `base repo has uncommitted changes at ${subrepo}. ` +
+          'Commit or stash those changes, then resume the task.',
+        notes: [
+          {
+            agentId: 'task-claimer',
+            role: 'orchestrator',
+            content: 'Claimed ready task for worker-agent.',
+            timestamp: '2026-05-03T00:00:00.000Z',
+          },
+        ],
+      }),
+    ])
+
+    const gitDriver = new InMemoryGitDriver({ clean: true })
+    const agents: OrchestratorAgentSet = {
+      spec: stubAgent('spec-agent'),
+      worker: stubAgent('worker-agent', async () => {
+        await mutateTask('a', { status: 'review' })
+      }),
+      reviewer: stubAgent('reviewer-agent'),
+      gateChecker: stubAgent('gate-checker-agent'),
+      coordinators: {},
+    }
+
+    const orch = new Orchestrator({
+      config: baseConfig({ projectPath: tmpDir }),
+      agents,
+      gitDriver,
+    })
+    const out = await orch.tick()
+
+    expect(out.kind).toBe('processed')
+    const queue = await readQueue()
+    const task = queue.tasks.find((candidate) => candidate.id === 'a')
+    expect(task?.status).not.toBe('blocked')
+    expect(task?.blockReason).toBeUndefined()
+    expect(task?.notes.some((note) => note.content.includes('found it clean'))).toBe(true)
   })
 
   it('packages Guildhall-owned shared-checkout edits into a task branch before creating a worktree', async () => {

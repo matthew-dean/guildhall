@@ -120,6 +120,7 @@ export interface AcceptanceCriterion {
 
 export interface GateResult {
   gateId?: string
+  command?: string
   type?: string
   passed?: boolean
   checkedAt?: string
@@ -349,6 +350,7 @@ export type GitStoryClosureState =
   | 'local_only'
   | 'deferred'
   | 'conflict'
+  | 'no_repository'
   | 'unknown'
 
 export interface GitStorySnapshot {

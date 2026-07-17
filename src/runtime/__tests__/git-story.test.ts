@@ -214,6 +214,25 @@ describe('inspectGitStory', () => {
     expect(summary.ready).toBe(true)
     expect(summary.blockers).toEqual([])
   })
+
+  it('keeps a non-git workspace scope out of repository blockers', async () => {
+    const driver = new InMemoryGitDriver()
+    driver.setStatusSummary('/workspace/docs', {
+      repository: false,
+      clean: true,
+    })
+
+    const snapshot = await inspectGitStory(driver, {
+      repoRoot: '/workspace/docs',
+      inspectPr: false,
+    })
+    const summary = summarizeGitStories([snapshot])
+
+    expect(snapshot.state).toBe('no_repository')
+    expect(snapshot.reason).toContain('not itself a Git repository')
+    expect(summary.ready).toBe(true)
+    expect(summary.blockers).toEqual([])
+  })
 })
 
 describe('summarizeGitStories', () => {

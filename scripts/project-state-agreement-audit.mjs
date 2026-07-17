@@ -420,8 +420,9 @@ async function auditProject(projectId, fleetProject) {
     addMismatch(mismatches, projectId, 'release-detail', 'task-count', compactRelease.counts.total, releaseDetail.totals?.tasks ?? 0)
     addMismatch(mismatches, projectId, 'release-detail', 'done-count', compactRelease.counts.done, releaseDetail.totals?.done ?? 0)
     addMismatch(mismatches, projectId, 'release-detail', 'unfinished-count', compactRelease.counts.unfinished, releaseDetail.totals?.unfinishedCount ?? 0)
-    addMismatch(mismatches, projectId, 'release-detail', 'scope-node-count', compactRelease.counts.total, detailScope?.nodeIds?.length ?? 0)
-    addMismatch(mismatches, projectId, 'release-detail', 'deferred-node-count', compactRelease.counts.deferred, detailScope?.deferredNodeIds?.length ?? 0)
+    // Scope membership includes internal split children, while release
+    // totals intentionally count only project-total rows. Exact membership is
+    // compared above; these cardinalities are different valid projections.
   }
   mismatches.push(...releaseProjectionMismatches({
     projectId,

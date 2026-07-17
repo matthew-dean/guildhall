@@ -2254,6 +2254,16 @@ function extractEmbeddedFallbackQuestion(text: string): FallbackQuestionDraft | 
   if (!rawQuestion) return null
   const context = normalizeFallbackWhitespace(trimmed.slice(0, match.index))
     .replace(/^i have enough context\.?\s*/i, '')
+  // A spec agent's process check is not an owner decision. In particular,
+  // questions about the "remaining delta" are runtime narration, not missing
+  // product input. Let source-backed recovery handle the failed turn.
+  if (
+    /\b(?:i(?:'|’)ll|i will|i am going to|let me)\b[\s\S]*\b(?:read|inspect|review|check|look at|audit|verify)\b/i.test(context) &&
+    /\b(?:remaining delta|what remains|what is left|what should i do next)\b/i.test(rawQuestion)
+  ) {
+    return null
+  }
+  if (/^what(?:'|’)s the remaining delta\??$/i.test(rawQuestion)) return null
   const subject = inferFallbackSubjectFromContext(context, rawQuestion)
   const choices: string[] = []
   for (const rawLine of trimmed.slice(match.index + match[0].length).split('\n')) {
@@ -2357,6 +2367,16 @@ function inferFallbackQuestionsFromPlaintext(text: string): FallbackQuestionDraf
   const trimmed = text.trim()
   if (!trimmed) return []
   if (isEvidenceSummaryPrompt(trimmed)) return []
+  // Never promote a process checkpoint into owner input. This guard covers
+  // multi-turn prose where the question is not immediately adjacent to the
+  // sentence that explains the agent's research activity.
+  if (
+    /\b(?:i(?:'|’)ll|i will|i am going to|let me)\b[\s\S]*\b(?:read|inspect|review|check|look at|audit|verify)\b/i.test(trimmed) &&
+    /\b(?:remaining delta|what remains|what is left|what should i do next)\b/i.test(trimmed)
+  ) {
+    return []
+  }
+  if (/^what(?:'|’)s the remaining delta\??$/i.test(trimmed)) return []
 
   const embeddedQuestion = extractEmbeddedFallbackQuestion(trimmed)
   if (embeddedQuestion) return [embeddedQuestion]
@@ -4020,8 +4040,18 @@ export class Orchestrator {
     // FR-24: if worktree_isolation is active, ensure a worktree exists before
     // the agent runs. On first creation, persist the path/branch/base on the
     // task so subsequent ticks reuse them. Skipped when mode is `none`.
-    const worktreeMode = await this.resolveWorktreeModeSafe()
     const effectiveTaskProjectPath = this.resolveEffectiveTaskProjectPath(task)
+    const configuredWorktreeMode = await this.resolveWorktreeModeSafe()
+    const repositoryStatus = configuredWorktreeMode !== 'none'
+      ? await this.gitDriver.statusSummary(effectiveTaskProjectPath)
+      : null
+    // A task can target documentation inside a workspace envelope that has no
+    // Git authority of its own. That is a valid execution scope, not a dirty
+    // checkout. Use the shared checkout until workspace/project resolution
+    // identifies an actual repository.
+    const worktreeMode = repositoryStatus?.repository === false
+      ? 'none'
+      : configuredWorktreeMode
     let activeWorktreePath = effectiveTaskProjectPath
     const baseBranch = await this.resolveBaseBranch(effectiveTaskProjectPath)
     if (worktreeMode !== 'none' && !shouldSkipGitIsolation(task, agent.name)) {
@@ -4815,10 +4845,22 @@ export class Orchestrator {
         task,
         agent: agent.name,
         beforeStatus,
-          afterStatus: beforeStatus,
-          transitioned: false,
-          note: `error: ${message}`,
-        })
+        afterStatus: beforeStatus,
+        transitioned: false,
+        note: `error: ${message}`,
+      })
+      if (
+        agent.name === 'spec-agent' &&
+        beforeStatus === 'exploring' &&
+        /Product brief must describe the user\/product outcome|Product brief (?:whyItMattersNow|successMetric)/i.test(message)
+      ) {
+        // A malformed LLM brief is a recoverable intake failure. The task
+        // already has source-backed state, so derive the product outcome and
+        // completion boundary from the task graph instead of turning a
+        // validator rejection into owner input or another research loop.
+        const seededSpec = await this.maybeWriteExploringRecoverySpecSeed(task, { force: true })
+        if (seededSpec) return seededSpec
+      }
       if (beforeStatus !== 'review' && isRetryableProviderCapacityError(message)) {
         return await this.preserveTaskStateOnRetryableProviderError({
           taskId: task.id,
@@ -9793,7 +9835,29 @@ export class Orchestrator {
       if (blockReason.includes('Guildhall could not start work because the target repo is dirty:')) {
         const repoRoot = this.resolveEffectiveTaskProjectPath(task)
         const repoClean = await this.gitDriver.isClean(repoRoot)
-        if (repoClean) continue
+        if (repoClean) {
+          transitionTaskStatus({
+            task,
+            event: 'recover_to_ready',
+            actor: 'orchestrator-recovery',
+            evidenceRefs: ['task:recovery:dirty-checkout-cleared'],
+            now,
+          })
+          task.assignedTo = null
+          task.blockReason = undefined
+          task.notes.push({
+            agentId: 'coordinator',
+            role: 'recovery',
+            content:
+              'Guildhall rechecked the target repository through the shared Git authority and found it clean. ' +
+              'Cleared the stale dirty-checkout blocker and returned the task to the runnable queue.',
+            timestamp: now,
+          })
+          task.updatedAt = now
+          queue.lastUpdated = now
+          changed = true
+          continue
+        }
         recoveryNote =
           'User restarted the project while Guildhall-owned shared-checkout edits were still present. Reopened the task so Guildhall can checkpoint those edits into an isolated task branch.'
       } else if (
@@ -12835,36 +12899,46 @@ export class Orchestrator {
               ...(draft.description ? { description: draft.description } : {}),
             }
       })
+      const acceptedQuestions: typeof questionRecords = []
       for (const question of questionRecords) {
-        await createOwnerInputRequest({
-          projectRoot: this.opts.config.projectPath,
-          projectId: this.opts.config.workspaceId,
-          commandId: `orchestrator:fallback-question:${task.id}:${question.id}`,
-          now,
-          actor: 'spec-agent',
-          source: { kind: 'task', taskId: task.id, questionId: question.id },
-          target: { kind: 'thread' },
-          question: {
-            kind: question.kind,
-            prompt: question.prompt,
-            ...(question.kind === 'choice' ? { choices: question.choices } : {}),
-            ...(question.description ? { description: question.description } : {}),
-          },
-          objective: {
-            kind: 'task_shaping',
-            label: `Clarify ${task.title}`,
-            successCriteria: ['Owner answers the linked bounded-chat session.'],
-          },
-          sessionSource: `orchestrator:fallback-question:${task.id}:${question.id}`,
-        })
+        try {
+          await createOwnerInputRequest({
+            projectRoot: this.opts.config.projectPath,
+            projectId: this.opts.config.workspaceId,
+            commandId: `orchestrator:fallback-question:${task.id}:${question.id}`,
+            now,
+            actor: 'spec-agent',
+            source: { kind: 'task', taskId: task.id, questionId: question.id },
+            target: { kind: 'thread' },
+            question: {
+              kind: question.kind,
+              prompt: question.prompt,
+              ...(question.kind === 'choice' ? { choices: question.choices } : {}),
+              ...(question.description ? { description: question.description } : {}),
+            },
+            objective: {
+              kind: 'task_shaping',
+              label: `Clarify ${task.title}`,
+              successCriteria: ['Owner answers the linked bounded-chat session.'],
+            },
+            sessionSource: `orchestrator:fallback-question:${task.id}:${question.id}`,
+          })
+          acceptedQuestions.push(question)
+        } catch (error) {
+          // A narration-like fallback question is disposable agent output. It
+          // must not turn a failed spec turn into a coordinator crash.
+          if (!/agent narration|not an answerable user question/i.test(String(error))) throw error
+        }
       }
-      task.openQuestions = [
-        ...(task.openQuestions ?? []),
-        ...questionRecords,
-      ]
-      task.updatedAt = now
-      queue.lastUpdated = now
-      fallbackQuestionPosted = true
+      if (acceptedQuestions.length > 0) {
+        task.openQuestions = [
+          ...(task.openQuestions ?? []),
+          ...acceptedQuestions,
+        ]
+        task.updatedAt = now
+        queue.lastUpdated = now
+        fallbackQuestionPosted = true
+      }
     }
 
     if (fallbackBriefAuthored || fallbackQuestionPosted) {

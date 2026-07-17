@@ -100,6 +100,11 @@ async function resolveGitTopLevel(repoRoot: string): Promise<string> {
   return stdout.trim() || repoRoot
 }
 
+function isNotGitRepositoryError(err: unknown): boolean {
+  const detail = errorDetail(err)
+  return /not a git repository|cannot find git repository/i.test(detail)
+}
+
 export interface CreateWorktreeOptions {
   worktreePath: string
   branch: string
@@ -145,6 +150,8 @@ export interface CheckpointResult {
 }
 
 export interface GitStatusSummary {
+  /** False when the path is a workspace/document scope rather than a Git repo. */
+  repository?: boolean
   branch?: string
   upstream?: string
   ahead: number
@@ -221,7 +228,21 @@ export class NodeGitDriver implements GitDriver {
   }
 
   async statusSummary(repoRoot: string): Promise<GitStatusSummary> {
-    const gitRoot = await resolveGitTopLevel(repoRoot)
+    let gitRoot: string
+    try {
+      gitRoot = await resolveGitTopLevel(repoRoot)
+    } catch (err) {
+      if (!isNotGitRepositoryError(err)) throw err
+      return {
+        repository: false,
+        ahead: 0,
+        behind: 0,
+        changedCount: 0,
+        untrackedCount: 0,
+        samplePaths: [],
+        clean: true,
+      }
+    }
     const { stdout } = await execGit(['status', '--porcelain=v1', '-b'], {
       cwd: gitRoot,
     })
@@ -237,6 +258,7 @@ export class NodeGitDriver implements GitDriver {
       return !isIgnorableGuildhallStatePath(file.replace(/\/$/, ''))
     })
     return {
+      repository: true,
       branch: parsedHeader.branch,
       upstream: parsedHeader.upstream,
       ahead: parsedHeader.ahead,
@@ -681,6 +703,7 @@ export class InMemoryGitDriver implements GitDriver {
   }
   setStatusSummary(repoRoot: string, summary: Partial<GitStatusSummary>): void {
     this.state.statuses[repoRoot] = {
+      ...(summary.repository === false ? { repository: false } : { repository: true }),
       branch: summary.branch ?? this.state.currentBranch,
       upstream: summary.upstream,
       ahead: summary.ahead ?? 0,
@@ -714,6 +737,7 @@ export class InMemoryGitDriver implements GitDriver {
 
   async statusSummary(repoRoot: string): Promise<GitStatusSummary> {
     return this.state.statuses[repoRoot] ?? {
+      repository: true,
       branch: this.state.currentBranch,
       upstream: 'origin/main',
       ahead: 0,

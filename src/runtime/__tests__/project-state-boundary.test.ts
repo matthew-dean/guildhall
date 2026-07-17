@@ -414,6 +414,55 @@ describe('project-state-boundary', () => {
     }
   })
 
+  it('keeps named-release membership bounded when a split adds unassigned child rows', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-boundary-release-membership-'))
+    const tasksPath = getProjectSystemStatePath(root, 'TASKS.json')
+    const release = {
+      id: 'release-1',
+      label: 'First release',
+      kind: 'release',
+      state: 'active',
+      source: 'owner_approved',
+      nodeIds: ['work:task-parent'],
+      deferredNodeIds: [],
+    }
+
+    try {
+      writeProjectTaskQueueWithSummary(tasksPath, {
+        version: 1,
+        lastUpdated: '2026-07-15T00:00:00.000Z',
+        selectedReleaseId: 'release-1',
+        releases: [release],
+        tasks: [
+          {
+            id: 'task-parent',
+            title: 'Parent task',
+            status: 'ready',
+            releaseIds: ['release-1'],
+          },
+          {
+            id: 'task-child',
+            title: 'Split child',
+            status: 'ready',
+            parentId: 'task-parent',
+          },
+        ],
+      }, { projectRoot: root })
+      promoteProjectStateDatabaseAuthority(root)
+
+      const saved = readProjectSavedReleaseState(root)
+
+      expect(saved.scope).toMatchObject({
+        id: 'release-1',
+        nodeIds: ['work:task-parent'],
+        deferredNodeIds: [],
+      })
+      expect(saved.scope?.nodeIds).not.toContain('work:task-child')
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('refreshes the shared summary projections at the queue write boundary', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-boundary-summary-'))
     const tasksPath = path.join(root, 'TASKS.json')

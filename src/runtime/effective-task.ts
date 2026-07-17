@@ -2,6 +2,14 @@ import {
   TaskRuntimeState as TaskRuntimeStateSchema,
   TaskWorkspaceState as TaskWorkspaceStateSchema,
 } from '@guildhall/core'
+import {
+  AdjudicationRecord as AdjudicationRecordSchema,
+  AgentIssue as AgentIssueSchema,
+  Escalation as EscalationSchema,
+  GateResult as GateResultSchema,
+  ReviewVerdict as ReviewVerdictSchema,
+  Task as TaskSchema,
+} from '@guildhall/core'
 import type {
   AgentIssue,
   AgentNote,
@@ -543,26 +551,30 @@ function legacyFieldsFromEvidence(evidence: TaskEvidenceEvent[]): Record<string,
     })
   const gateResults = evidence
     .filter((event) => event.kind === 'gate_result')
-    .map((event) => event.payload)
+    .flatMap((event) => parseEvidencePayload(GateResultSchema, event.payload))
   const reviewVerdicts = evidence
     .filter((event) => event.kind === 'review_verdict')
-    .map((event) => event.payload)
+    .flatMap((event) => parseEvidencePayload(ReviewVerdictSchema, event.payload))
   const adjudications = evidence
     .filter((event) => event.kind === 'adjudication')
-    .map((event) => event.payload)
+    .flatMap((event) => parseEvidencePayload(AdjudicationRecordSchema, event.payload))
   const escalations = coalescePayloadsById(
-    evidence.filter((event) => event.kind === 'escalation'),
+    evidence
+      .filter((event) => event.kind === 'escalation')
+      .flatMap((event) => parseEvidencePayload(EscalationSchema, event.payload))
   ).sort((left, right) => {
     const leftRaisedAt = typeof left.raisedAt === 'string' ? left.raisedAt : ''
     const rightRaisedAt = typeof right.raisedAt === 'string' ? right.raisedAt : ''
     return leftRaisedAt.localeCompare(rightRaisedAt)
   })
   const agentIssues = coalescePayloadsById(
-    evidence.filter((event) => event.kind === 'agent_issue'),
+    evidence
+      .filter((event) => event.kind === 'agent_issue')
+      .flatMap((event) => parseEvidencePayload(AgentIssueSchema, event.payload))
   )
   const mergeRecords = evidence
     .filter((event) => event.kind === 'merge_record')
-    .map((event) => event.payload)
+    .flatMap((event) => parseEvidencePayload(TaskSchema.shape.mergeRecord, event.payload))
   return {
     ...(notes.length > 0 ? { notes } : {}),
     ...(gateResults.length > 0 ? { gateResults } : {}),
@@ -574,11 +586,20 @@ function legacyFieldsFromEvidence(evidence: TaskEvidenceEvent[]): Record<string,
   }
 }
 
-function coalescePayloadsById(events: TaskEvidenceEvent[]): Record<string, unknown>[] {
+function parseEvidencePayload(
+  schema: { safeParse: (value: unknown) => { success: boolean; data?: unknown } },
+  payload: unknown,
+): Record<string, unknown>[] {
+  const parsed = schema.safeParse(payload)
+  return parsed.success && parsed.data && typeof parsed.data === 'object' && !Array.isArray(parsed.data)
+    ? [parsed.data as Record<string, unknown>]
+    : []
+}
+
+function coalescePayloadsById(payloads: Record<string, unknown>[]): Record<string, unknown>[] {
   const byId = new Map<string, Record<string, unknown>>()
   const anonymous: Record<string, unknown>[] = []
-  for (const event of events) {
-    const payload = event.payload
+  for (const payload of payloads) {
     const id = typeof payload.id === 'string' && payload.id.length > 0 ? payload.id : ''
     if (!id) {
       anonymous.push(payload)

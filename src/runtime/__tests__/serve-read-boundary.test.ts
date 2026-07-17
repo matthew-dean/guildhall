@@ -289,6 +289,11 @@ describe('GET route read boundaries', () => {
         id: 'release-boundary',
         label: 'Boundary release',
       })
+      expect(compactBody.orientationSpine.selectedTaskScope).toMatchObject({
+        id: 'release-boundary',
+        nodeIds: ['work:task-boundary'],
+        deferredNodeIds: [],
+      })
     }
 
     const activityResponse = await app.fetch(new Request(projectUrl('/api/project/activity')))
@@ -313,6 +318,11 @@ describe('GET route read boundaries', () => {
     expect(readinessBody.release).toMatchObject({
       id: 'release-boundary',
       label: 'Boundary release',
+    })
+    expect(readinessBody.scope).toMatchObject({
+      id: 'release-boundary',
+      nodeIds: ['work:task-boundary'],
+      deferredNodeIds: [],
     })
   })
 
