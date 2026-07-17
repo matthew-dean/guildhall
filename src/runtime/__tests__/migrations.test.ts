@@ -244,6 +244,21 @@ describe('applyProjectMigrations', () => {
     promoteProjectStateDatabaseAuthority(projectRoot)
     const database = new DatabaseSync(projectStateDatabasePath(projectRoot))
     database.prepare('DELETE FROM release_membership').run()
+    // Recreate the old pre-normalization mirrors so this test exercises the
+    // migration input shape rather than asking a normalized write to retain
+    // data that the new model intentionally no longer duplicates.
+    database.prepare('UPDATE work_items SET release_ids_json = ? WHERE id = ?').run('["release-one"]', 'task-current')
+    database.prepare('UPDATE work_items SET release_ids_json = ? WHERE id = ?').run('["release-one"]', 'task-later')
+    database.prepare('UPDATE scopes SET node_ids_json = ?, deferred_node_ids_json = ?, definition_json = ? WHERE id = ?')
+      .run('["work:task-current"]', '["work:task-later"]', JSON.stringify({
+        id: 'release-one',
+        label: 'Release One',
+        kind: 'release',
+        state: 'active',
+        source: 'owner_approved',
+        nodeIds: ['work:task-current'],
+        deferredNodeIds: ['work:task-later'],
+      }), 'release-one')
     database.close()
     expect(readProjectStateDatabaseQueueDefinition(tasksPath)).toMatchObject({
       releases: [{ id: 'release-one', nodeIds: [], deferredNodeIds: [] }],
@@ -262,6 +277,42 @@ describe('applyProjectMigrations', () => {
     expect(migrated.prepare('SELECT release_id, task_id, disposition FROM release_membership ORDER BY task_id').all()).toEqual([
       { release_id: 'release-one', task_id: 'task-current', disposition: 'included' },
       { release_id: 'release-one', task_id: 'task-later', disposition: 'deferred' },
+    ])
+    migrated.close()
+  })
+
+  it('does not erase normalized membership when compatibility mirrors are empty', async () => {
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: {
+        version: 1,
+        lastUpdated: '2026-07-16T12:00:00.000Z',
+        selectedReleaseId: 'release-one',
+        releases: [{
+          id: 'release-one',
+          label: 'Release One',
+          kind: 'release',
+          state: 'active',
+          source: 'owner_approved',
+          nodeIds: ['work:task-current'],
+          deferredNodeIds: [],
+        }],
+        tasks: [{ id: 'task-current', title: 'Current', status: 'ready', releaseIds: ['release-one'] }],
+      },
+      summary: { version: 12, freshness: 'current' },
+      scopeRows: [],
+      projectRoot,
+    })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+
+    const result = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.1/release-membership'],
+    })
+    expect(result.failed).toEqual([])
+    const migrated = new DatabaseSync(projectStateDatabasePath(projectRoot))
+    expect(migrated.prepare('SELECT release_id, task_id, disposition FROM release_membership').all()).toEqual([
+      { release_id: 'release-one', task_id: 'task-current', disposition: 'included' },
     ])
     migrated.close()
   })
@@ -470,7 +521,7 @@ describe('applyProjectMigrations', () => {
       id: 'gate-effective-done',
       kind: 'gate_result',
       recordedAt: completedAt,
-      payload: { gateId: 'smoke-test', passed: true, output: 'pnpm test passed', checkedAt: completedAt },
+      payload: { gateId: 'smoke-test', type: 'hard', passed: true, output: 'pnpm test passed', checkedAt: completedAt },
     })
 
     expect(readProjectSummaryProjection(tasksPath)).toMatchObject({

@@ -1358,8 +1358,11 @@ describe('GET /api/project/release-readiness', () => {
           ...modeledScriptProof(),
           worktreePath: taskWorktreePath,
           mergeRecord: {
+            fromBranch: 'guildhall/task-skipped-merge',
+            strategy: 'ff_only_local',
             result: 'skipped',
             toBranch: 'main',
+            mergedAt: '2026-07-06T20:01:00.000Z',
             detail: 'Legacy task completed before automatic merge record capture.',
           },
         } as Partial<Task>),
@@ -1370,7 +1373,6 @@ describe('GET /api/project/release-readiness', () => {
 
     const res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
     const body = await res.json() as any
-
     expect(body.diagnostics.ready).toBe(true)
     expect(body.diagnostics.totals.gitStoryBlockingCount).toBe(0)
     expect(body.diagnostics.gitStory.blockers).toEqual([])
@@ -3375,6 +3377,13 @@ describe('GET /api/project/release-readiness', () => {
     expect(body.diagnostics.statusCounts).toEqual({ in_progress: 1, ready: 2 })
     expect(body.totals.tasks).toBe(3)
     expect(body.totals.unfinishedCount).toBe(3)
+    expect([...body.scope.nodeIds].sort()).toEqual([
+      'work:task-contracts-split-model',
+      'work:task-contracts-split-world',
+      'work:task-contracts-split-space',
+    ].sort())
+    expect(body.scope.nodeIds).not.toContain('work:task-contracts')
+    expect(body.release.nodeIds).toEqual(body.scope.nodeIds)
     expect(body.diagnostics.blockedByAgent).toEqual([])
     expect(body.releaseBlockers ?? []).toEqual([])
   })

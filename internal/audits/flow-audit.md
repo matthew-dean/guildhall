@@ -40786,3 +40786,153 @@ One current-state snapshot has one revision and one writer. Different screens
 may request compact, point, or detail breadth, but no screen may combine
 independently read queue, overlay, evidence, or release facts and call the
 result current.
+
+## 2026-07-16 - Normalized release membership writes stop copying index mirrors
+
+The normalized `release_membership` relation was already the read authority,
+but promoted snapshot, task-mutation, release-selection, and task-batch writers
+still copied the same relationship into `work_items.release_ids_json`,
+`scopes.node_ids_json`, and `scopes.deferred_node_ids_json`. That left stale
+JSON-shaped values sitting beside the authoritative relation and made a future
+writer or reader more likely to accidentally revive the old split-brain model.
+
+- [x] Centralized release storage fields in one helper that writes the
+  normalized relation and keeps the indexed membership mirrors empty for every
+  promoted write path.
+- [x] Removed `releaseIds` from the compact task summary; compact task reads
+  continue to receive it from `release_membership` through the existing shared
+  read projection.
+- [x] Removed membership fields from newly written `scopes.definition_json`;
+  older rows still retain their fields for the explicit pre-normalization
+  migration reader, so this slice does not rewrite historical data or change
+  the migration boundary.
+- [x] Regression coverage proves raw index mirrors remain `[]` while queue,
+  task-point, and release membership reads return the same user-visible
+  assignments.
+- [x] Focused database suite passes: 55/55.
+
+### Contract Touch Decision
+
+- Work id: `codex:normalized-release-membership-write-guard-2026-07-17`.
+- Touched contracts: promoted release-membership persistence, compact task
+  summary projection, and normalized release/task read agreement.
+- Considered but not touched: release identity, selected-release semantics,
+  rich task-detail payloads, migration IDs, and user-facing route shapes.
+- Required follow-up: remove the retained rich membership fields only when the
+  explicit historical migration reader is retired and all registered projects
+  have completed the normalized migration.
+- Proof provided: `src/sessions/__tests__/project-state-database.test.ts`
+  (55 tests), including snapshot and task-edit writes plus queue/task reads.
+- Apply/revert behavior: revert the shared storage helper and its callers;
+  existing rows are unchanged and no data rollback is required.
+
+### Schema Migration Decision
+
+- Persisted schema touched: existing `work_items.release_ids_json`,
+  `scopes.node_ids_json`, and `scopes.deferred_node_ids_json` columns only;
+  no table or column was added or removed.
+- Change class: normalized write-path guardrail; future promoted writes no
+  longer create current-state membership mirrors in index rows.
+- Existing data impact: none. Existing mirror values remain available to the
+  explicit migration reader; ordinary reads already derive membership from
+  `release_membership`.
+- Migration id: not required for this bounded guardrail.
+- Compatibility reader: unchanged and deliberately isolated to migration;
+  no new fallback reader was added.
+- Fixtures/tests: normalized snapshot, targeted task mutation, queue, and
+  task-point fixtures in the focused session database suite.
+- Owner-facing plan: release and task surfaces keep showing the same assigned
+  and deferred work, while future writes no longer create another current
+  membership answer beside the normalized relation.
+- Rollback/revert: revert the write guardrail; persisted rows remain readable
+  because the normalized relation and existing compatibility fields are still
+  present.
+
+### Authority invariant
+
+`release_membership` is the only current release-to-task relationship. Scope
+and task index JSON may be retained for historical migration, but promoted
+writes do not refresh those mirrors and ordinary reads never consult them.
+
+## 2026-07-16 - Release detail uses one saved membership/execution boundary
+
+The release detail route previously had enough freedom to manufacture task
+rows from an intake snapshot while the durable queue projection counted only
+materialized work. The route now receives a named read model from
+`project-state-boundary.ts`. That boundary reads queue membership, scope rows,
+summary, diagnostics, and revisions from one current-state snapshot, then
+exposes the executable scope derived from those same rows. A route cannot
+choose an intake snapshot for membership or silently substitute a different
+task list.
+
+- [x] Release detail and release summary use `readProjectReleaseState` rather
+  than route-local task reconstruction.
+- [x] Selected release membership is normalized through
+  `release_membership`; executable parent/child suppression is derived by the
+  shared boundary from the saved `work_scope` rows.
+- [x] Empty scope rows preserve the same snapshot's persisted membership for
+  a release with no materialized execution projection; this is a named
+  membership view, not a second source or request-time repair.
+- [x] Migration coverage proves old mirrors are imported only when the
+  normalized relation is empty, while normalized writes with empty mirrors do
+  not erase existing membership.
+- [x] Focused boundary, migration, and release-readiness suites pass: 136/136.
+
+### Contract Touch Decision
+
+- Work id: `codex:release-snapshot-execution-boundary-2026-07-16`.
+- Touched contracts: saved Release/readiness read model, selected execution
+  scope, normalized release membership migration, and runtime state read
+  metadata.
+- Considered but not touched: user-facing Release JSON field names, release
+  identity, task hierarchy schema, and explicit live diagnostics behavior.
+- Required follow-up: move remaining request-time project/task aggregators to
+  named snapshot boundaries and retire compatibility readers after migration.
+- Proof provided: 136 focused tests, including materialized importer child
+  suppression, named-release membership, migration idempotence, and invalid
+  legacy merge/evidence fixtures corrected to the actual contracts.
+- Apply/revert behavior: revert the boundary derivation and test changes; no
+  persisted rows are rewritten by the read-model change.
+
+### Schema Migration Decision
+
+- Persisted schema touched: no new tables or columns. The read model consumes
+  the existing normalized release relation, scope projection, and revision
+  watermarks.
+- Change class: read-boundary consolidation; no compatibility data is
+  manufactured or promoted during a GET.
+- Existing data impact: none. Historical membership mirrors remain migration
+  input only; ordinary reads use normalized relation and saved scope rows.
+- Migration id: not required.
+- Compatibility reader: confined to the explicit release-membership
+  migration; it does not run as a route fallback.
+- Fixtures/tests: boundary, migration, release-readiness, and runtime-state
+  suites.
+- Owner-facing plan: Release counts and node lists come from one saved state
+  revision, and a materialized split appears as one executable child rather
+  than as a duplicate parent plus child.
+- Rollback/revert: revert the read-model code; persisted membership and scope
+  rows remain valid.
+
+### Authority invariant
+
+The route may ask for a compact or rich breadth, but it cannot select the
+source of current state. The project-state boundary chooses one revision and
+returns the membership and executable projections derived from it. Different
+views are allowed; different authorities are not.
+
+### Live proof and remaining boundary work
+
+- [x] `pnpm audit:project-state-agreement`: 7 projects, 0 mismatches, matching
+  source/project/release/diagnostic/thread revisions.
+- [x] `pnpm audit:project-state-performance`: fleet 27.55ms / 24,674 bytes;
+  all cold, warm, rich-task, and thread reads within their budgets.
+- [x] `pnpm audit:project-spine`: Narrative Harness and Looma + Knit are
+  classified as `rich-progressed`; the required project set is present.
+- [x] Installed app proof: `pnpm build`, `pnpm dev:install`, restart, and
+  `/api/stale-server` report `stale: false`.
+- [ ] Global single-boundary migration remains open. Ordinary project detail,
+  Git Story, task-detail aggregators, and wizard/delivery/context endpoints
+  still contain direct read seams identified by the architecture audit. They
+  must move to named compact, point, or rich snapshot boundaries before the
+  unified-state goal can be marked complete.

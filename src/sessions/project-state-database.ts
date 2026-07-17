@@ -682,6 +682,32 @@ function releaseMembershipFromDefinitions(releases: readonly JsonRecord[]): Proj
   return [...rows.values()]
 }
 
+const EMPTY_RELEASE_MEMBERSHIP_JSON = '[]'
+
+/**
+ * The normalized relation is the only current membership authority. These
+ * columns remain in the index for old databases and explicit migration reads,
+ * but promoted writes must not create another current membership copy.
+ */
+function releaseMembershipStorageFields(release: JsonRecord): {
+  nodeIdsJson: string
+  deferredNodeIdsJson: string
+  definitionJson: string
+} {
+  const {
+    nodeIds: _nodeIds,
+    deferredNodeIds: _deferredNodeIds,
+    ...definition
+  } = release
+  return {
+    nodeIdsJson: EMPTY_RELEASE_MEMBERSHIP_JSON,
+    deferredNodeIdsJson: EMPTY_RELEASE_MEMBERSHIP_JSON,
+    // New normalized rows do not retain a second membership envelope. Older
+    // rows still carry those fields so the explicit migration can import them.
+    definitionJson: json(definition),
+  }
+}
+
 /**
  * Normalize an intake envelope before it becomes current state. A task-level
  * release ID is an explicit assignment even when an older intake writer did
@@ -791,6 +817,7 @@ function upsertReleaseDefinitions(database: DatabaseSync, releases: readonly Jso
   for (const release of releases) {
     const id = stringValue(release.id)
     if (!id) continue
+    const stored = releaseMembershipStorageFields(release)
     upsert.run(
       id,
       String(release.label ?? id),
@@ -798,9 +825,9 @@ function upsertReleaseDefinitions(database: DatabaseSync, releases: readonly Jso
       stringValue(release.state),
       stringValue(release.source),
       stringValue(release.proofStyle),
-      json(stringArray(release.nodeIds)),
-      json(stringArray(release.deferredNodeIds)),
-      json(release),
+      stored.nodeIdsJson,
+      stored.deferredNodeIdsJson,
+      stored.definitionJson,
     )
   }
 }
@@ -2016,7 +2043,7 @@ function workItemSummary(task: JsonRecord): JsonRecord {
     'id', 'title', 'description', 'orientationSummary', 'domain', 'status',
     'priority', 'revisionCount', 'updatedAt', 'completedAt', 'assignedTo',
     'importedDraft', 'requestKind', 'requestStage', 'workKind', 'workVisibility',
-    'dependsOn', 'hierarchy', 'releaseIds', 'sourceRefs', 'blockReason',
+    'dependsOn', 'hierarchy', 'sourceRefs', 'blockReason',
     'persistedBlockReason', 'shelveReason', 'latestReviewerSummary',
     'terminalSummary', 'openQuestions', 'workerHandoff',
   ]
@@ -2178,7 +2205,7 @@ function writeSnapshotToDatabase(
         stringValue(hierarchy?.parentId),
         json(hierarchy),
         json(stringArray(task.dependsOn)),
-        json(stringArray(task.releaseIds)),
+        EMPTY_RELEASE_MEMBERSHIP_JSON,
         json(stringArray(task.sourceRefs ?? task.references)),
         json(workItemSummary(task)),
         '{}',
@@ -2195,6 +2222,7 @@ function writeSnapshotToDatabase(
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `)
     for (const release of releases) {
+      const stored = releaseMembershipStorageFields(release)
       insertScope.run(
         String(release.id ?? ''),
         String(release.label ?? release.id ?? ''),
@@ -2202,9 +2230,9 @@ function writeSnapshotToDatabase(
         stringValue(release.state),
         stringValue(release.source),
         stringValue(release.proofStyle),
-        json(stringArray(release.nodeIds)),
-        json(stringArray(release.deferredNodeIds)),
-        json(release),
+        stored.nodeIdsJson,
+        stored.deferredNodeIdsJson,
+        stored.definitionJson,
       )
     }
     syncReleaseMembershipFromDefinitions(database, releases)
@@ -2409,6 +2437,15 @@ export function migrateProjectStateDatabaseReleaseMembership(
   }
   withWritableDatabase(projectRoot, database => {
     if (!tableExists(database, 'release_membership')) return
+    const existing = database.prepare('SELECT release_id, task_id, disposition FROM release_membership').all() as JsonRecord[]
+    // A populated normalized relation is already the current authority. The
+    // migration may import old mirrors into an empty relation, but it must
+    // never overwrite a valid relation with intentionally empty compatibility
+    // columns from a newer write.
+    if (existing.length > 0) {
+      result.membershipCount = existing.length
+      return
+    }
     const releaseRows = database.prepare('SELECT definition_json FROM scopes ORDER BY id').all() as JsonRecord[]
     const releases = releaseRows
       .map(row => parseJson<JsonRecord>(row.definition_json, {}))
@@ -2427,7 +2464,6 @@ export function migrateProjectStateDatabaseReleaseMembership(
         }
       }
     }
-    const existing = database.prepare('SELECT release_id, task_id, disposition FROM release_membership').all() as JsonRecord[]
     const existingKey = new Set(existing.map(row => `${row.release_id}\0${row.task_id}\0${row.disposition}`))
     const desiredKey = new Set(desired.map(row => `${row.releaseId}\0${row.taskId}\0${row.disposition}`))
     result.membershipCount = desired.length
@@ -2566,7 +2602,7 @@ export function writeProjectStateDatabaseTaskMutation(
         stringValue(isRecord(mutation.task.hierarchy) ? mutation.task.hierarchy.parentId : undefined),
         json(isRecord(mutation.task.hierarchy) ? mutation.task.hierarchy : null),
         json(stringArray(mutation.task.dependsOn)),
-        json(stringArray(mutation.task.releaseIds)),
+        EMPTY_RELEASE_MEMBERSHIP_JSON,
         json(stringArray(mutation.task.sourceRefs ?? mutation.task.references)),
         json(workItemSummary(mutation.task)),
         '{}',
@@ -2789,7 +2825,8 @@ export function writeProjectStateDatabaseReleaseSelectionMutation(
       const existingReleasesById = new Map(existingReleases.map(row => [String(row.id), row]))
       for (const [id, release] of releasesById) {
         const existing = existingReleasesById.get(id)
-        const definitionJson = json(release)
+        const stored = releaseMembershipStorageFields(release)
+        const definitionJson = stored.definitionJson
         if (existing && existing.definition_json === definitionJson) continue
         database.prepare(`
           INSERT INTO scopes (
@@ -2812,8 +2849,8 @@ export function writeProjectStateDatabaseReleaseSelectionMutation(
           stringValue(release.state),
           stringValue(release.source),
           stringValue(release.proofStyle),
-          json(stringArray(release.nodeIds)),
-          json(stringArray(release.deferredNodeIds)),
+          stored.nodeIdsJson,
+          stored.deferredNodeIdsJson,
           definitionJson,
         )
       }
@@ -3032,6 +3069,7 @@ export function writeProjectStateDatabaseTaskBatchMutation(
             definition_json = excluded.definition_json
         `)
         for (const release of releasesById.values()) {
+          const stored = releaseMembershipStorageFields(release)
           upsertRelease.run(
             String(release.id),
             String(release.label ?? release.id),
@@ -3039,9 +3077,9 @@ export function writeProjectStateDatabaseTaskBatchMutation(
             stringValue(release.state),
             stringValue(release.source),
             stringValue(release.proofStyle),
-            json(stringArray(release.nodeIds)),
-            json(stringArray(release.deferredNodeIds)),
-            json(release),
+            stored.nodeIdsJson,
+            stored.deferredNodeIdsJson,
+            stored.definitionJson,
           )
         }
         for (const id of existingReleaseIds) {
@@ -3090,7 +3128,7 @@ export function writeProjectStateDatabaseTaskBatchMutation(
           stringValue(hierarchy?.parentId),
           json(hierarchy),
           json(stringArray(task.dependsOn)),
-          json(stringArray(task.releaseIds)),
+          EMPTY_RELEASE_MEMBERSHIP_JSON,
           json(stringArray(task.sourceRefs ?? task.references)),
           json(workItemSummary(task)),
           '{}',

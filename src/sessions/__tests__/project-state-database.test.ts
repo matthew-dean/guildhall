@@ -516,7 +516,7 @@ describe('project-state database', () => {
     expect(databaseAfter.prepare('SELECT scope FROM work_scope WHERE task_id = ?').get('task-1')).toMatchObject({ scope: 'included' })
     expect(databaseAfter.prepare('SELECT depends_on_json, release_ids_json FROM work_items WHERE id = ?').get('task-1')).toMatchObject({
       depends_on_json: '["task-2"]',
-      release_ids_json: '["release-1"]',
+      release_ids_json: '[]',
     })
     databaseAfter.close()
     expect(readProjectStateDatabaseTaskRelationships(tasksPath, 'task-1')).toMatchObject({
@@ -788,7 +788,27 @@ describe('project-state database', () => {
       { release_id: 'release-current', task_id: 'task-current', disposition: 'included' },
       { release_id: 'release-current', task_id: 'task-later', disposition: 'deferred' },
     ])
+    expect(database.prepare('SELECT release_ids_json FROM work_items ORDER BY id').all()).toEqual([
+      { release_ids_json: '[]' },
+      { release_ids_json: '[]' },
+    ])
+    expect(database.prepare('SELECT node_ids_json, deferred_node_ids_json FROM scopes').all()).toEqual([
+      { node_ids_json: '[]', deferred_node_ids_json: '[]' },
+    ])
+    expect(database.prepare('SELECT definition_json FROM scopes').get()?.definition_json).not.toMatch(/nodeIds|deferredNodeIds/)
     database.close()
+
+    expect(readProjectStateDatabaseQueue(tasksPath)).toMatchObject({
+      releases: [{
+        id: 'release-current',
+        nodeIds: ['work:task-current'],
+        deferredNodeIds: ['work:task-later'],
+      }],
+      tasks: [
+        { id: 'task-current', releaseIds: ['release-current'] },
+        { id: 'task-later', releaseIds: ['release-current'] },
+      ],
+    })
 
     writeProjectStateDatabaseTaskMutation(tasksPath, {
       expectedQueueRevision: readProjectStateDatabaseQueueRevision(tasksPath)!,
@@ -800,7 +820,16 @@ describe('project-state database', () => {
     expect(afterEdit.prepare('SELECT release_id, task_id, disposition FROM release_membership ORDER BY task_id').all()).toEqual([
       { release_id: 'release-current', task_id: 'task-later', disposition: 'deferred' },
     ])
+    expect(afterEdit.prepare('SELECT release_ids_json FROM work_items ORDER BY id').all()).toEqual([
+      { release_ids_json: '[]' },
+      { release_ids_json: '[]' },
+    ])
     afterEdit.close()
+
+    expect(readProjectStateDatabaseTask(tasksPath, 'task-current')).toMatchObject({
+      id: 'task-current',
+      releaseIds: [],
+    })
   })
 
   it('rejects a stale targeted mutation without changing the current task', () => {

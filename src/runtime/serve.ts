@@ -17,6 +17,7 @@ import {
   clearTaskRuntimeState,
   clearTaskWorkspaceState,
   getProjectStateDir,
+  getProjectRuntimeStatePath,
   getProjectSystemStatePath,
   getProjectTranscriptPath,
   readProjectStateDatabaseInventory,
@@ -5555,6 +5556,40 @@ function renderLegacyProjectProgress(raw: string): string {
   return rejoined.split('\n').slice(-120).join('\n')
 }
 
+function readSavedRuntimeState(projectRoot: string, kind: 'runtime' | 'health') {
+  const saved = existsSync(getProjectRuntimeStatePath(projectRoot))
+  return readProjectRuntimeState(projectRoot).then(state => {
+    const healthMissing = state.health.checkedAt === null
+    const startedAt = state.lastStartedAt ? Date.parse(state.lastStartedAt) : Number.NaN
+    const checkedAt = state.health.checkedAt ? Date.parse(state.health.checkedAt) : Number.NaN
+    const healthBehindRuntime = Number.isFinite(startedAt)
+      && Number.isFinite(checkedAt)
+      && checkedAt < startedAt
+    const stale = saved && state.status === 'running' && (healthMissing || healthBehindRuntime)
+    const freshness = !saved
+      ? 'missing'
+      : kind === 'health' && healthMissing
+        ? 'missing'
+        : stale
+          ? 'stale'
+          : 'current'
+    return {
+      state,
+      read: {
+        source: saved ? 'saved' : 'missing',
+        freshness,
+        reason: !saved
+          ? 'runtime_state_missing'
+          : kind === 'health' && healthMissing
+            ? 'runtime_health_missing'
+            : stale
+              ? 'runtime_health_stale'
+              : null,
+      },
+    }
+  })
+}
+
 /**
  * Build the Hono app for a project without binding to a port. Exposed for
  * integration tests that want to call `app.fetch(new Request(...))` directly;
@@ -7440,7 +7475,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
   app.get('/api/project/runtime', async c => {
     try {
-      return c.json(await runtimeSupervisor.inspect(project.path))
+      const runtime = await readSavedRuntimeState(project.path, 'runtime')
+      return c.json({ ...runtime.state, read: runtime.read })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
@@ -7448,7 +7484,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
   app.get('/api/project/runtime/health', async c => {
     try {
-      return c.json(await runtimeSupervisor.health(project.path))
+      const runtime = await readSavedRuntimeState(project.path, 'health')
+      return c.json({ ...runtime.state.health, read: runtime.read })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }

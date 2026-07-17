@@ -198,19 +198,37 @@ function projectScopeFromSavedState(input: {
   if (!id) return null
 
   // Release node lists are read from the normalized release_membership
-  // relation by the sessions queue reader. They are the authority when a
-  // release is selected. `work_scope` is a different projection of
-  // eligibility/blocker state and may legitimately be empty during refresh.
-  // In particular, do not replace membership with every current execution
-  // row: a split can add rows without assigning them to this release.
+  // relation by the sessions queue reader. That is the membership authority.
+  // The route-facing scope, however, is the executable view of that
+  // membership. It comes from the same saved revision's work_scope rows so a
+  // release detail read cannot expose a parent and its materialized child as
+  // two runnable units. The boundary owns both views; routes never choose.
   if (selectedRelease) {
+    const hasSavedScopeRows = input.summary?.freshness === 'current' && input.scopeRows.length > 0
+    const executionRows = hasSavedScopeRows
+      ? executionScopeRows(input.scopeRows)
+      : []
+    if (!hasSavedScopeRows) {
+      return {
+        id,
+        label: selectedRelease.label,
+        kind: selectedRelease.kind as ProjectScope['kind'],
+        source: (selectedRelease.source ?? 'inferred') as ProjectScope['source'],
+        nodeIds: [...(selectedRelease.nodeIds ?? [])],
+        deferredNodeIds: [...(selectedRelease.deferredNodeIds ?? [])],
+      }
+    }
     return {
       id,
       label: selectedRelease.label,
       kind: selectedRelease.kind as ProjectScope['kind'],
       source: (selectedRelease.source ?? 'inferred') as ProjectScope['source'],
-      nodeIds: [...(selectedRelease.nodeIds ?? [])],
-      deferredNodeIds: [...(selectedRelease.deferredNodeIds ?? [])],
+      nodeIds: executionRows
+        .filter(row => row.scope === 'included')
+        .map(row => taskScopeNodeId(row.taskId)),
+      deferredNodeIds: executionRows
+        .filter(row => row.scope === 'deferred')
+        .map(row => taskScopeNodeId(row.taskId)),
     }
   }
 
