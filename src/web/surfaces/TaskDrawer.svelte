@@ -853,7 +853,6 @@
 
   $effect(() => {
     void load()
-    void project.refresh()
   })
 
   $effect(() => {

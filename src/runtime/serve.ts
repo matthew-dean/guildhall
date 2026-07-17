@@ -1799,7 +1799,7 @@ async function refreshProjectProjections(
       if (!attentionOnly) {
       const metadata = databaseAuthority ? readProjectStateDatabaseMetadata(resolved.path) : null
       const compactRefreshDomains = new Set([
-        'queue', 'scope', 'release', 'attention', 'reconciliation', 'thread', 'diagnostics',
+        'queue', 'scope', 'release', 'delivery', 'attention', 'reconciliation', 'thread', 'diagnostics',
       ])
       const needsDetailProjection = !databaseAuthority ||
         domains.size === 0 ||
@@ -6302,7 +6302,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
       ? Math.min(100, input.inventoryLimit)
       : 100
     const compactState = promotedState
-      ? readProjectCompactStateModel(tasksPath, { offset: inventoryOffset, limit: inventoryLimit })
+      ? readProjectCompactStateModel(tasksPath, {
+          offset: inventoryOffset,
+          limit: inventoryLimit,
+          ...(input.requestedTaskId ? { selectedTaskId: input.requestedTaskId } : {}),
+        })
       : null
     const savedProjection = compactState?.summary ?? (promotedState ? null : readProjectSummaryAtBoundary(tasksPath))
     const compactProjection = savedProjection
@@ -6518,7 +6522,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       : scopedResponseTasks.slice(inventoryStart, inventoryEnd)
     const selectedTask = input.requestedTaskId
       ? storedSpine
-        ? readProjectStateDatabaseTasks(tasksPath, [input.requestedTaskId])?.[0]
+        ? compactState?.selectedTask ?? null
         : scopedResponseTasks.find(task => task.id === input.requestedTaskId)
       : undefined
     const responseTasks = selectedTask && !pagedResponseTasks.some(task => task.id === selectedTask.id)
@@ -12254,7 +12258,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project/wizards', c => {
     try {
       if (project.initializationNeeded) return c.json({ wizards: [] })
-      const snap = buildSnapshot({ projectPath: project.path })
+      const savedSummary = readProjectSummaryAtBoundary(projectTasksPath(project.path))
+      const snap = buildSnapshot({
+        projectPath: project.path,
+        ...(savedSummary ? { taskCount: savedSummary.taskCounts.total } : {}),
+      })
       const wizards = listWizards()
         .filter(w => w.applicable(snap))
         .map(w => progressFor(w, snap))
@@ -12310,13 +12318,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
     try {
       if (project.initializationNeeded) return c.json({ wizards: [] })
       const tasksPath = projectTasksPath(project.path)
-      if (!projectTaskStateExistsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
-      const raw = readProjectTaskQueueSync(tasksPath) as
-        | { tasks?: Array<Record<string, unknown>> }
-        | Array<Record<string, unknown>>
-      const tasks = Array.isArray(raw) ? raw : raw.tasks ?? []
       const id = c.req.param('id')
-      const task = tasks.find(t => (t as { id?: string }).id === id)
+      const task = readProjectTaskRecordAtBoundary(tasksPath, id)
       if (!task) return c.json({ error: 'task not found' }, 404)
       const snap = buildTaskSnapshot({
         projectPath: project.path,
@@ -16031,21 +16034,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   //   POST /api/providers/disconnect  revoke a stored credential
   // -------------------------------------------------------------------------
 
-  function describeProviders(projectPath?: string) {
-    // Run the legacy-config migration on every request. It is idempotent
-    // and cheap (a single YAML read + Zod parse) and means users who
-    // upgrade in-place never see stale credentials in their project file.
-    if (projectPath) {
-      try {
-        migrateProjectProvidersToGlobal(projectPath, {
-          readProject: (p) => readProjectConfig(p),
-          writeProject: (p, patch) => updateProjectConfig(p, patch),
-        })
-      } catch {
-        /* best-effort — never let migration break the endpoint */
-      }
-    }
-
+  function describeProviders() {
     const global = readGlobalProviders()
     const creds = resolveGlobalCredentials(global, process.env)
     const claudeCredPath = join(homedir(), '.claude', '.credentials.json')
@@ -16152,7 +16141,6 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
   app.get('/api/setup/providers', async c => {
     try {
-      describeProviders(currentProjectPath())
       const stored = readProjectConfig(currentProjectPath())
       return c.json(await providersPayload(stored.preferredProvider ?? readGlobalConfig().preferredProvider ?? null))
     } catch (err) {

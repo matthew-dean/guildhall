@@ -41009,3 +41009,77 @@ because the user opened a different route.
   still contain direct read seams identified by the architecture audit. They
   must move to named compact, point, or rich snapshot boundaries before the
   unified-state goal can be marked complete.
+
+## 2026-07-17 - Close three read-side authority leaks
+
+The release mismatch exposed the architectural rule that matters here: a
+route must not be able to choose between a durable project projection and a
+request-time reconstruction. This slice closes three concrete leaks without
+pretending the entire migration is finished.
+
+- [x] Compact Work reads now capture an explicitly selected task inside the
+  same SQLite projection transaction as queue, inventory, summary, scope, and
+  revision watermarks. The response cannot report one revision and inject a
+  task from a second unversioned read.
+- [x] Task wizard GET uses the shared point reader instead of parsing the whole
+  queue. Project wizard GET uses the saved summary's task count when the
+  summary exists; it no longer reopens the raw queue merely to count tasks.
+- [x] Provider setup GET is read-only. Legacy provider migration is now
+  available only through the explicit project migration write endpoint; a
+  page load cannot rewrite project config or the machine credential store.
+- [x] TaskDrawer no longer issues a duplicate project refresh after opening a
+  task. The parent project surface owns the current project refresh.
+- [x] Delivery invalidation is its own indexed refresh domain. Writing delivery
+  state refreshes delivery and Inbox projections without forcing a full rich
+  task/evidence reconstruction.
+- [x] Focused proof passes: 171 tests across provider, wizard, read-boundary,
+  delivery, and project-state database suites.
+- [ ] Remaining named boundaries are still open: ordinary task-detail
+  enrichment, delivery/context routes, Git Story diagnostics, and the richer
+  wizard/setup snapshot. These remain explicit next work, not hidden fallback
+  behavior.
+
+### Contract Touch Decision
+
+- Work id: `codex:atomic-selected-task-and-read-only-setup-2026-07-17`.
+- Touched contracts: compact Work response selected-task consistency, task
+  wizard point-read behavior, provider setup GET write safety, delivery
+  invalidation domains, and TaskDrawer refresh ownership.
+- Considered but not touched: task-detail response shape, delivery model
+  schema, provider migration semantics, live Git diagnostics, and historical
+  transcript retention.
+- Required follow-up: finish the named task-detail and delivery/context
+  snapshot boundaries before calling the unified-state migration complete.
+- Proof provided: focused 171-test suite listed above; build and installed
+  runtime proof remains pending for this continuation.
+- Apply/revert behavior: revert the route/boundary changes; no current-state
+  data rollback is required.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none. The selected-task field is a read-model
+  return value assembled from existing `work_items`, scope, summary, and
+  revision tables. The delivery domain only changes invalidation selection.
+- Change class: read-boundary and projection scheduling consolidation.
+- Existing data impact: none. Provider migration data is unchanged by GET;
+  legacy credentials move only when the explicit migration write runs.
+- Migration id: not required.
+- Compatibility reader: no new compatibility reader; historical provider
+  migration remains behind the explicit migration endpoint.
+- Fixtures/tests: selected-task atomic projection and route tests, provider
+  migration write-boundary test, delivery invalidation test, and task wizard
+  point-read regression.
+- Owner-facing plan: opening Work, a task wizard, or provider setup cannot
+  silently combine or mutate project state. Each surface either reads the
+  saved boundary or explicitly reports that migration/refresh is needed.
+- Rollback/revert: code revert only; persisted project and provider data remain
+  readable.
+
+### Authority invariant
+
+Current project state has one authority: the promoted project-state database
+and its named read boundaries. Compact, release, task, wizard, and Inbox
+surfaces may request different projections of that state, but they may not
+manufacture current task identities or silently repair data during GET. Raw
+files, live Git inspection, transcripts, and context-debug remain separate
+historical or diagnostic inputs and must be marked as such.

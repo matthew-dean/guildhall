@@ -497,7 +497,11 @@ export async function writeProjectDeliveryModel(
     createdBy: 'guildhall-runtime',
     payload: normalized,
   })
-  emitProjectSummaryInvalidation(projectRoot, 'delivery-spine-write', { domains: ['legacy'] })
+  // Delivery metadata is its own derived domain. It still refreshes Inbox,
+  // which surfaces delivery validation, but it must not masquerade as a
+  // generic legacy write and force the summary projector to expand every
+  // task's current evidence/runtime state.
+  emitProjectSummaryInvalidation(projectRoot, 'delivery-spine-write', { domains: ['delivery', 'attention'] })
   return normalized
 }
 

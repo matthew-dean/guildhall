@@ -474,6 +474,8 @@ export interface ProjectStateDatabaseProjectionState<T = unknown> {
   projectRevision: number
   scopeRows: ProjectStateDatabaseScopeRow[]
   inventory: ProjectStateDatabaseInventory
+  /** Optional selected task captured from the same SQLite snapshot. */
+  selectedTask: ProjectStateDatabaseTask | null
   repositories: ProjectStateDatabaseRepository[]
   diagnostics: ProjectStateDatabaseDiagnosticProjection | null
   summary: ProjectStateDatabaseSummary<T> | null
@@ -585,6 +587,11 @@ export interface ProjectStateDatabaseInventoryOptions {
   offset?: number
   limit?: number
   includeDefinitions?: boolean
+}
+
+export interface ProjectStateDatabaseProjectionReadOptions extends ProjectStateDatabaseInventoryOptions {
+  /** Include this task point in the same transaction as the compact surface. */
+  selectedTaskId?: string
 }
 
 export interface ProjectStateDatabaseInventory {
@@ -3741,7 +3748,7 @@ export function readProjectStateDatabaseCurrentState<T = unknown>(
  */
 export function readProjectStateDatabaseProjectionState<T = unknown>(
   tasksPath: string,
-  options: ProjectStateDatabaseInventoryOptions & ProjectStateDatabaseSummaryReadOptions = {},
+  options: ProjectStateDatabaseProjectionReadOptions & ProjectStateDatabaseSummaryReadOptions = {},
 ): ProjectStateDatabaseProjectionState<T> | null {
   const databasePath = projectStateDatabasePathFromTasksPath(tasksPath)
   try {
@@ -3784,6 +3791,9 @@ export function readProjectStateDatabaseProjectionState<T = unknown>(
       projectRevision: currentRevision(database),
       scopeRows: readScopeRowsFromDatabase(database),
       inventory: readInventoryFromDatabase(database, options),
+      selectedTask: options.selectedTaskId
+        ? readTaskFromDatabase(database, options.selectedTaskId, options.includeDefinitions === true)
+        : null,
       repositories: readProjectStateDatabaseRepositoriesFromDatabase(database),
       diagnostics: readProjectStateDatabaseDiagnosticProjectionFromDatabase(database),
       summary,
@@ -6599,6 +6609,22 @@ function readInventoryFromDatabase(
     limit,
     hasMore: limit !== null && offset + tasks.length < total,
   }
+}
+
+/** Read one task point while the caller's surrounding projection transaction is open. */
+function readTaskFromDatabase(
+  database: DatabaseSync,
+  taskId: string,
+  includeDefinitions: boolean,
+): ProjectStateDatabaseTask | null {
+  const row = database.prepare(`${workItemsWithScopeSelect(
+    includeDefinitions ? FULL_WORK_ITEM_SCOPED_COLUMNS : COMPACT_WORK_ITEM_SCOPED_COLUMNS,
+    hasWorkScopeTable(database),
+  )} WHERE work_items.id = ?`).get(taskId) as JsonRecord | undefined
+  if (!row) return null
+  applyReleaseMembershipToTaskRows(database, [row])
+  const task = taskFromRow(row, false)
+  return includeDefinitions ? attachWorkItemDetails([task], database)[0] ?? task : task
 }
 
 /** Read a small, explicit set of task identities without scanning the queue. */

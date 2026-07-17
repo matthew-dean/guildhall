@@ -702,19 +702,24 @@ describe('POST /api/setup/providers/config', () => {
     expect(res.status).toBe(400)
   })
 
-  it('migrates a legacy project-level anthropic key to the global store on first GET', async () => {
+  it('does not migrate or rewrite a legacy project-level key during GET', async () => {
     // Simulate a pre-0.3 project config with the key inlined.
     const cfgPath = path.join(tmpProject, '.guildhall', 'config.yaml')
     mkdirSync(path.dirname(cfgPath), { recursive: true })
     writeFileSync(cfgPath, 'anthropicApiKey: sk-ant-legacy\n', 'utf8')
     const { app } = buildServeApp({ projectPath: tmpProject })
-    // Hitting GET triggers the migration.
     await app.fetch(new Request(scoped('/api/setup/providers')))
-    const g = readGlobalProviders()
-    expect(g.providers['anthropic-api']?.apiKey).toBe('sk-ant-legacy')
-    // And the project file no longer holds the secret.
-    const after = await fs.readFile(cfgPath, 'utf8')
-    expect(after).not.toMatch(/sk-ant-legacy/)
+    expect(readGlobalProviders().providers['anthropic-api']).toBeUndefined()
+    expect(await fs.readFile(cfgPath, 'utf8')).toContain('sk-ant-legacy')
+
+    const migration = await app.fetch(new Request(scoped('/api/project/migrations/apply'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ migrationId: '0.8.0/provider-config-globalization' }),
+    }))
+    expect(migration.status).toBe(200)
+    expect(readGlobalProviders().providers['anthropic-api']?.apiKey).toBe('sk-ant-legacy')
+    expect(await fs.readFile(cfgPath, 'utf8')).not.toMatch(/sk-ant-legacy/)
   })
 })
 

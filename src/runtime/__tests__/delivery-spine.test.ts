@@ -3,7 +3,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import type { Task } from '@guildhall/core'
-import { getProjectStateDir } from '@guildhall/sessions'
+import { getProjectStateDir, subscribeProjectSummaryInvalidations } from '@guildhall/sessions'
 
 import {
   applyContractChangeSet,
@@ -119,6 +119,22 @@ describe('project-local delivery spine', () => {
     await expect(fs.stat(path.join(getProjectStateDir(projectRoot), 'delivery-spine.json'))).rejects.toMatchObject({
       code: 'ENOENT',
     })
+  })
+
+  it('emits a delivery-scoped invalidation without requesting a full detail rebuild', async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-delivery-spine-invalidation-'))
+    const events: Array<{ domains: readonly string[] }> = []
+    const unsubscribe = subscribeProjectSummaryInvalidations(event => {
+      if (event.projectRoot === projectRoot) events.push({ domains: event.domains })
+    })
+    try {
+      await writeProjectDeliveryModel(projectRoot, model)
+      await Promise.resolve()
+      expect(events).toEqual([{ domains: ['delivery', 'attention'] }])
+    } finally {
+      unsubscribe()
+      await fs.rm(projectRoot, { recursive: true, force: true })
+    }
   })
 
   it('records the schema migration decision for persisted primitive and delivery state', () => {

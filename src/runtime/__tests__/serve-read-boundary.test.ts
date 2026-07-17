@@ -379,6 +379,7 @@ describe('GET route read boundaries', () => {
       '/api/project/task/task-boundary/history?limit=10',
       '/api/project/task/task-boundary/review',
       '/api/project/task/task-boundary/git-story',
+      '/api/project/task/task-boundary/wizards',
       '/api/project/thread/extras?taskIds=task-boundary',
     ]) {
       const response = await app.fetch(new Request(projectUrl(route)))
@@ -387,6 +388,22 @@ describe('GET route read boundaries', () => {
 
     expect(aggregateRead).not.toHaveBeenCalled()
     aggregateRead.mockRestore()
+  })
+
+  it('captures a selected Work task in the compact project snapshot', async () => {
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const pointRead = vi.spyOn(sessions, 'readProjectStateDatabaseTasks')
+
+    const response = await app.fetch(new Request(projectUrl('/api/project?surface=work&compact=true&task=task-boundary')))
+    const body = await response.json() as any
+
+    expect(response.status).toBe(200)
+    expect(body.selectedTaskId).toBe('task-boundary')
+    expect(body.tasks).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'task-boundary' })]))
+    expect(body.queueRevision).toEqual(expect.any(Number))
+    expect(body.projectRevision).toEqual(expect.any(Number))
+    expect(pointRead).not.toHaveBeenCalled()
+    pointRead.mockRestore()
   })
 
   it('uses the bounded projection for an unqualified project read', async () => {

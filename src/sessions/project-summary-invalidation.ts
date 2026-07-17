@@ -13,6 +13,7 @@ export type ProjectStateDomain =
   | 'release'
   | 'reconciliation'
   | 'config'
+  | 'delivery'
   | 'thread'
   | 'legacy'
 

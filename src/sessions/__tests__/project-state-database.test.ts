@@ -21,6 +21,7 @@ import {
   projectStateDatabaseCompressedDetailPathFromTasksPath,
   projectStateDatabaseDetailPathFromTasksPath,
   readProjectStateDatabaseInventory,
+  readProjectStateDatabaseProjectionState,
   listProjectStateDatabaseProjectionJobs,
   readProjectStateDatabaseQueue,
   readProjectStateDatabaseQueueRevision,
@@ -1302,6 +1303,33 @@ describe('project-state database', () => {
       scope: 'included',
       sourceRefs: ['docs/plan.md'],
     })
+  })
+
+  it('captures a selected task in the same projection snapshot as its revisions', () => {
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: {
+        tasks: [
+          { id: 'task-1', title: 'One', status: 'ready', spec: 'The selected definition.' },
+          { id: 'task-2', title: 'Two', status: 'done', spec: 'Another definition.' },
+        ],
+      },
+      summary: { generatedAt: '2026-07-14T00:00:00.000Z', freshness: 'current' },
+    })
+
+    const snapshot = readProjectStateDatabaseProjectionState(tasksPath, {
+      limit: 1,
+      selectedTaskId: 'task-2',
+      includeDefinitions: true,
+    })
+
+    expect(snapshot?.inventory.tasks).toHaveLength(1)
+    expect(snapshot?.selectedTask).toMatchObject({
+      id: 'task-2',
+      title: 'Two',
+      definition: { spec: 'Another definition.' },
+    })
+    expect(snapshot?.queueRevision).toEqual(readProjectStateDatabaseQueueRevision(tasksPath))
+    expect(snapshot?.projectRevision).toEqual(readProjectStateDatabaseRevisionFromTasksPath(tasksPath))
   })
 
   it('materializes only the Work-card facts needed by a compact list read', () => {

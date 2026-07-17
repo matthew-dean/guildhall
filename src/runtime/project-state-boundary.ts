@@ -21,6 +21,7 @@ import {
   writeProjectStateDatabaseTaskMutation,
   type ProjectStateDatabaseTaskEvidenceRetentionInput,
   type ProjectStateDatabaseInventory,
+  type ProjectStateDatabaseProjectionReadOptions,
   type ProjectStateDatabaseQueueDefinition,
   type ProjectStateDatabaseQueue,
   type ProjectStateDatabaseRepository,
@@ -378,6 +379,8 @@ export function readProjectSummaryAtBoundary(tasksPath: string): ProjectSummaryP
 export interface ProjectCompactStateReadModel {
   queue: ProjectStateDatabaseQueue
   inventory: ProjectStateDatabaseInventory
+  /** Optional selected task captured from the same compact snapshot. */
+  selectedTask: ProjectStateDatabaseTask | null
   /** Selected execution scope from this same queue/scope snapshot. */
   scope: ProjectScope | null
   repositories: ProjectStateDatabaseRepository[]
@@ -417,6 +420,7 @@ export function readProjectMapStateModel(tasksPath: string): ProjectMapStateRead
       scopeRows: current.scopeRows,
     }),
     repositories: current.repositories,
+    selectedTask: current.selectedTask,
     diagnostics: current.diagnostics,
     summary,
     authority: 'database',
@@ -432,7 +436,7 @@ export function readProjectMapStateModel(tasksPath: string): ProjectMapStateRead
  */
 export function readProjectCompactStateModel(
   tasksPath: string,
-  options: { offset?: number; limit?: number } = {},
+  options: ProjectStateDatabaseProjectionReadOptions = {},
 ): ProjectCompactStateReadModel | null {
   const current = readProjectStateDatabaseProjectionState<ProjectSummaryProjection>(tasksPath, options)
   if (!current) return null
@@ -451,6 +455,7 @@ export function readProjectCompactStateModel(
       scopeRows: current.scopeRows,
     }),
     repositories: current.repositories,
+    selectedTask: current.selectedTask,
     diagnostics: current.diagnostics,
     summary,
     authority: 'database',
