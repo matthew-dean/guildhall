@@ -368,6 +368,27 @@ describe('GET route read boundaries', () => {
     })
   })
 
+  it('uses bounded task point reads for explicit task tabs', async () => {
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const aggregateRead = vi.spyOn(sessions, 'readProjectStateDatabaseQueue').mockImplementation(() => {
+      throw new Error('aggregate queue read is forbidden for a task tab')
+    })
+
+    for (const route of [
+      '/api/project/task/task-boundary/evidence',
+      '/api/project/task/task-boundary/history?limit=10',
+      '/api/project/task/task-boundary/review',
+      '/api/project/task/task-boundary/git-story',
+      '/api/project/thread/extras?taskIds=task-boundary',
+    ]) {
+      const response = await app.fetch(new Request(projectUrl(route)))
+      expect(response.status, route).toBe(200)
+    }
+
+    expect(aggregateRead).not.toHaveBeenCalled()
+    aggregateRead.mockRestore()
+  })
+
   it('uses the bounded projection for an unqualified project read', async () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
     const response = await app.fetch(new Request(projectUrl('/api/project')))

@@ -40655,3 +40655,134 @@ quietly reopen intake evidence while another consumed normalized current work.
 A read-model formatter is not allowed to decide where current state comes
 from. A route chooses one named boundary snapshot, passes it through, and may
 only add explicitly labeled diagnostics that do not replace current work.
+
+## 2026-07-17 - Explicit task tabs use the shared point-read boundary
+
+The ordinary task tabs (`evidence`, `history`, `review`, `file`, and Git Story)
+were still loading the aggregate task collection and selecting one id inside
+the route. That was a smaller version of the same authority problem: the UI
+asked for one task, but the route opened a project-wide queue and could have
+silently observed a different data source or revision. These routes now use
+the shared normalized task point boundary. A missing promoted task is a real
+404; only an unpromoted compatibility project may use the legacy reader while
+the migration is still in progress.
+
+- [x] Added `readProjectTaskRecordAtBoundary()` to adapt one normalized SQLite
+  task point into the task record consumed by explicit detail helpers.
+- [x] Added `readProjectTaskRecordsAtBoundary()` for explicit bounded batches;
+  Thread extras now loads only the requested task ids before Git Story work.
+- [x] Reused the boundary's row adapter in the main task drawer so point
+  reads and the drawer cannot drift in which normalized fields they expose.
+- [x] Migrated task evidence, history, review, file, and Git Story GETs to the
+  point-read boundary, with the compatibility fallback isolated in one
+  helper rather than repeated in routes.
+- [x] Added a regression test that forbids aggregate queue reads while those
+  task tabs are requested.
+- [ ] Remaining: replace the last cross-task detail helpers with explicit
+  bounded/batch boundary reads where their response contract permits it, then
+  rerun installed fleet performance and agreement proof.
+
+### Contract Touch Decision
+
+- Work id: `codex:bounded-task-point-reads-2026-07-17`.
+- Touched contracts: task-detail route payload source, normalized task-point
+  adapter, and promoted-project not-found behavior.
+- Considered but not touched: task identity, task evidence retention,
+  transcript retention, release membership, and task persistence columns.
+- Required follow-up: add a shared batch point-read boundary for cross-task
+  context/relationship helpers instead of reopening the aggregate queue where
+  their semantics allow it; remove the compatibility fallback after all
+  registered projects are migrated.
+- Proof provided: focused route-boundary tests (26), project-state boundary
+  tests (16), agreement-audit tests (8), data-layer lint, and contract lint.
+- Apply/revert behavior: route read-boundary correction only; no data rewrite
+  or migration is required. Reverting restores aggregate reads without
+  changing persisted task rows.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none; the existing normalized task table and
+  revision columns are reused.
+- Change class: point-read projection adapter and route-boundary correction.
+- Existing data impact: none; no rows, definitions, or evidence are rewritten.
+- Migration id: not required.
+- Compatibility reader: retained only for projects whose authority is still
+  `legacy`; promoted projects do not fall back to `TASKS.json` on a point miss.
+- Fixtures/tests: promoted task-tab fixture with aggregate queue reads
+  forbidden, plus the existing task-point and route boundary suites.
+- Owner-facing plan: a task tab opens one authoritative task record and cannot
+  accidentally cause a project-wide queue load.
+- Rollback/revert: revert the point adapter and route calls; no data rollback
+  is needed.
+
+### Authority invariant
+
+All current task reads enter through the project-state boundary. Read models
+may differ in breadth (one task, a bounded page, or a compact project
+snapshot), but no route may choose a second task source or reconstruct current
+work from intake prose. Compatibility is a migration exception, not a second
+authority.
+
+## 2026-07-17 - Rich task writes and reads share one snapshot boundary
+
+The point-read work exposed the write-side version of the same defect: a rich
+task save could update queue definitions, execution/workspace overlays, and
+evidence through separate stores and separate revisions. A reader could then
+observe a new task definition with old mutable state. Rich current-state writes
+now enter the database snapshot writer once; the task detail reader captures
+the task overlay from that same SQLite transaction and passes it into the
+effective-task builder instead of reopening the overlay store.
+
+- [x] Queue definitions, execution overlays, workspace overlays, bounded
+  current evidence, and the summary projection are committed by one promoted
+  project-state snapshot.
+- [x] Task detail captures the mutable overlay alongside the task row,
+  relationships, queue revision, project revision, and summary.
+- [x] Effective-task construction accepts captured overlays/stores so ordinary
+  current reads do not perform a second overlay read.
+- [x] Compressed historical evidence remains owned by its compressed ledger;
+  rich writes route new history through the canonical evidence writer rather
+  than placing data in a store the reader will ignore.
+- [x] Focused route, boundary, database, and task-action tests pass: 212/212.
+- [ ] Remaining: remove request-time state repair/reconstruction from ordinary
+  project routes and finish the normalized fleet migration.
+
+### Contract Touch Decision
+
+- Work id: `codex:rich-current-state-snapshot-2026-07-17`.
+- Touched contracts: promoted rich task write boundary, task detail snapshot,
+  effective-task overlay input, current evidence ownership, and task revision
+  agreement.
+- Considered but not touched: task identity, release membership semantics,
+  historical evidence retention limits, and the database table layout.
+- Required follow-up: make runtime health, Start readiness, Git Story, and
+  cross-task detail helpers consume saved/named boundaries rather than doing
+  work during ordinary GETs.
+- Proof provided: focused Vitest suites (212 tests), data-layer lint, contract
+  lint, and the atomic re-intake regression in `project-state-boundary.test.ts`.
+- Apply/revert behavior: runtime boundary change only; reverting restores the
+  former separate overlay/evidence writes without requiring data rollback.
+
+### Schema Migration Decision
+
+- Persisted schema touched: no new tables or columns; existing normalized
+  task/overlay/evidence tables are reused.
+- Change class: atomic projection/write boundary and read-path consolidation.
+- Existing data impact: none for existing rows; future rich saves no longer
+  leave queue and current overlays at different project revisions.
+- Migration id: not required.
+- Compatibility reader: compressed historical evidence remains an explicit
+  detail-store reader; it is not used as current project state.
+- Fixtures/tests: promoted task detail, rich re-intake, compressed evidence,
+  task action, and read-boundary fixtures.
+- Owner-facing plan: a task drawer is one revisioned current-state answer, and
+  history is clearly a separate bounded detail surface.
+- Rollback/revert: revert the writer options, captured overlay fields, and
+  builder input; no persisted data rollback is needed.
+
+### Authority invariant
+
+One current-state snapshot has one revision and one writer. Different screens
+may request compact, point, or detail breadth, but no screen may combine
+independently read queue, overlay, evidence, or release facts and call the
+result current.

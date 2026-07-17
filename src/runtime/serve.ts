@@ -55,7 +55,7 @@ import { taskBlockerSummary } from './task-blocker-summary.js'
 import { buildProjectSummaryProjection, prepareProjectSummaryProjectionFromUnknownQueue, queueForProjectSummaryScope, readApprovedPlan, readProjectSummaryProjection, readProjectSummaryShellProjection, updateProjectSummaryProjection, writeProjectSummaryProjectionFromIndexedState, writeProjectSummaryProjectionFromUnknownQueue, type ProjectSummaryProjection } from './project-summary-projection.js'
 import { inferProjectOrientationSnapshot } from './project-orientation-snapshot.js'
 import { refreshCurrentThreadProjection } from './current-thread-refresh.js'
-import { projectTaskStateExistsSync, readProjectCanonicalCurrentState, readProjectCompactStateModel, readProjectCurrentStateModel, readProjectMapStateModel, readProjectReleaseState, readProjectSavedReleaseState, readProjectStateAuthorityAtBoundary, readProjectSummaryAtBoundary, readProjectTaskDetailState, readProjectTaskQueue, readProjectTaskQueueForRichMutation, readProjectTaskQueueForMutationSync, readProjectTaskQueueSync, writePromotedTaskDetailMutation, writeProjectTaskQueueAtCurrentStateBoundary, writeProjectTaskQueueWithSummary, type ProjectCanonicalCurrentState, type ProjectReleaseReadModel, type ProjectSavedReleaseReadModel } from './project-state-boundary.js'
+import { projectTaskRecordFromDatabasePoint, projectTaskStateExistsSync, readProjectCanonicalCurrentState, readProjectCompactStateModel, readProjectCurrentStateModel, readProjectMapStateModel, readProjectReleaseState, readProjectSavedReleaseState, readProjectStateAuthorityAtBoundary, readProjectSummaryAtBoundary, readProjectTaskDetailState, readProjectTaskQueue, readProjectTaskQueueForRichMutation, readProjectTaskQueueForMutationSync, readProjectTaskQueueSync, readProjectTaskRecordAtBoundary, readProjectTaskRecordsAtBoundary, writePromotedTaskDetailMutation, writeProjectTaskQueueAtCurrentStateBoundary, writeProjectTaskQueueWithSummary, type ProjectCanonicalCurrentState, type ProjectReleaseReadModel, type ProjectSavedReleaseReadModel } from './project-state-boundary.js'
 import { taskTitleOverlap } from './task-title-overlap.js'
 import {
   readWorkspaceConfig,
@@ -1069,6 +1069,19 @@ async function readTaskQueueFileNormalized(
  */
 async function readProjectTasksForServe(tasksPath: string): Promise<Array<Record<string, unknown>>> {
   return readTasksFileNormalized(tasksPath)
+}
+
+/**
+ * Explicit task tabs are point reads. Only an unpromoted compatibility
+ * project may fall back to the aggregate helper; promoted state returns a
+ * miss without reopening the full queue.
+ */
+async function readProjectTaskForServe(tasksPath: string, taskId: string): Promise<Record<string, unknown> | null> {
+  const point = readProjectTaskRecordAtBoundary(tasksPath, taskId)
+  if (point) return point
+  if (readProjectStateAuthorityAtBoundary(tasksPath).authority === 'database') return null
+  const tasks = await readProjectTasksForServe(tasksPath)
+  return tasks.find(task => task.id === taskId) ?? null
 }
 
 async function writeTasksFilePreservingQueue(
@@ -12104,9 +12117,6 @@ export function buildServeApp(opts: ServeOptions = {}): {
           .map(id => id.trim())
           .filter(Boolean),
       )
-      const tasks = requestedTaskIds.size > 0
-        ? await readTasksFileNormalized(projectTasksPath(project.path)).catch(() => [])
-        : []
       const taskIds = requestedTaskIds.size > 0
         ? requestedTaskIds
         : new Set(
@@ -12116,6 +12126,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
               .map(turn => ('taskId' in turn ? turn.taskId : null))
               .filter((id): id is string => Boolean(id)),
           )
+      const tasks = taskIds.size > 0
+        ? readProjectTaskRecordsAtBoundary(projectTasksPath(project.path), [...taskIds])
+        : []
       const taskGitStories: Record<string, unknown> = {}
       if (taskIds.size > 0) {
         const workspaceStore = await readTaskWorkspaceStore(project.path).catch(() => undefined)
@@ -12442,17 +12455,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
       const pointDefinition = pointTask && Object.keys(pointTask.definition).length > 0
         ? {
-            ...pointTask.definition,
-            id: pointTask.id,
-            title: pointTask.title,
-            ...(pointTask.description !== null ? { description: pointTask.description } : {}),
-            ...(pointTask.status !== null ? { status: pointTask.status } : {}),
-            ...(pointTask.domain !== null ? { domain: pointTask.domain } : {}),
-            ...(pointTask.priority !== null ? { priority: pointTask.priority } : {}),
-            ...(pointTask.workKind !== null ? { workKind: pointTask.workKind } : {}),
-            ...(pointTask.hierarchy ? { hierarchy: pointTask.hierarchy } : {}),
-            ...(pointTask.dependsOn.length > 0 ? { dependsOn: pointTask.dependsOn } : {}),
-            ...(pointTask.releaseIds.length > 0 ? { releaseIds: pointTask.releaseIds } : {}),
+            ...projectTaskRecordFromDatabasePoint(pointTask),
             ...(indexedRelations?.parentId && (!pointTask.hierarchy || typeof pointTask.hierarchy.parentId !== 'string')
               ? { hierarchy: { ...(pointTask.hierarchy ?? {}), parentId: indexedRelations.parentId } }
               : {}),
@@ -12563,7 +12566,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
       relatedTaskIds.delete(id)
       // The drawer is an ordinary current-state read. Historical evidence is
       // behind the explicit history/review/evidence links below.
-      const effectiveTask = await buildEffectiveTask(project.path, rawTask as Task, { evidence: 'current' })
+      const effectiveTask = await buildEffectiveTask(project.path, rawTask as Task, {
+        evidence: 'current',
+        ...(taskDetailState ? { overlay: taskDetailState.overlay } : {}),
+      })
       const enrichedTask = await enrichTaskForServe(project.path, rawTask, effectiveTask)
       const selectedTask = proofMissingTaskIds.has(String(enrichedTask.id ?? '')) && String(enrichedTask.status ?? '') === 'done'
         ? { ...enrichedTask, completionProof: releaseProofMissingCompletionProof(enrichedTask) }
@@ -12768,9 +12774,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
     try {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
       const tasksPath = projectTasksPath(project.path)
-      const tasks = await readProjectTasksForServe(tasksPath)
       const id = c.req.param('id')
-      const task = tasks.find(t => (t as { id?: string }).id === id) as Task | undefined
+      const task = await readProjectTaskForServe(tasksPath, id) as Task | null
       if (!task) return c.json({ error: 'task not found' }, 404)
       const effective = await buildEffectiveTask(project.path, task, { evidence: 'full' })
       return c.json({ taskId: id, evidence: effective.evidence })
@@ -12783,9 +12788,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
     try {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
       const tasksPath = projectTasksPath(project.path)
-      const tasks = await readProjectTasksForServe(tasksPath)
       const id = c.req.param('id')
-      const task = tasks.find(t => (t as { id?: string }).id === id) as Record<string, unknown> | undefined
+      const task = await readProjectTaskForServe(tasksPath, id)
       if (!task) return c.json({ error: 'task not found' }, 404)
       const requestedPath = c.req.query('path')?.trim() ?? ''
       if (!requestedPath) return c.json({ error: 'path is required' }, 400)
@@ -12827,9 +12831,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
     try {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
       const tasksPath = projectTasksPath(project.path)
-      const tasks = await readProjectTasksForServe(tasksPath)
       const id = c.req.param('id')
-      const task = tasks.find(t => (t as { id?: string }).id === id) as Task | undefined
+      const task = await readProjectTaskForServe(tasksPath, id) as Task | null
       if (!task) return c.json({ error: 'task not found' }, 404)
       const canonicalDescriptions = new Set(
         Array.isArray(task.acceptanceCriteria)
@@ -12878,9 +12881,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
     try {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
       const tasksPath = projectTasksPath(project.path)
-      const tasks = await readProjectTasksForServe(tasksPath)
       const id = c.req.param('id')
-      const task = tasks.find(t => (t as { id?: string }).id === id) as Task | undefined
+      const task = await readProjectTaskForServe(tasksPath, id) as Task | null
       if (!task) return c.json({ error: 'task not found' }, 404)
       const effective = await buildEffectiveTask(project.path, task, { evidence: 'full' })
       return c.json({
@@ -12897,9 +12899,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
     try {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
       const tasksPath = projectTasksPath(project.path)
-      const tasks = await readProjectTasksForServe(tasksPath)
       const id = c.req.param('id')
-      const task = tasks.find(t => (t as { id?: string }).id === id) as Record<string, unknown> | undefined
+      const task = await readProjectTaskForServe(tasksPath, id)
       if (!task) return c.json({ error: 'task not found' }, 404)
       const workspaceStore = await readTaskWorkspaceStore(project.path).catch(() => undefined)
       const snapshot = await gitStoryForTaskIfUseful(project.path, task, workspaceStore?.workspaces[id])

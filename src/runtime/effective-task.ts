@@ -28,6 +28,8 @@ import {
   readProjectStateDatabaseCurrentAuthority,
   readProjectStateDatabaseTaskEvidenceCurrent,
   type ProjectStateDatabaseTaskEvidenceCurrent,
+  type ProjectStateDatabaseTaskOverlay,
+  type ProjectStateDatabaseTaskOverlayStores,
   type ProjectStateDatabaseTaskRuntime,
 } from '@guildhall/sessions'
 import {
@@ -299,9 +301,15 @@ export function stripLegacyRuntimeFields<T extends Record<string, unknown>>(task
 export async function buildEffectiveTask(
   projectRoot: string,
   task: Task,
-  options: { evidence?: 'full' | 'current' | 'none' } = {},
+  options: {
+    evidence?: 'full' | 'current' | 'none'
+    /** Use an overlay captured by the caller's authoritative read snapshot. */
+    overlay?: ProjectStateDatabaseTaskOverlay | null
+  } = {},
 ): Promise<EffectiveTask> {
-  const overlay = readProjectStateDatabaseTaskOverlay(projectRoot, task.id)
+  const overlay = options.overlay !== undefined
+    ? options.overlay
+    : readProjectStateDatabaseTaskOverlay(projectRoot, task.id)
   const databaseAuthority = readProjectStateDatabaseCurrentAuthority(projectRoot) === 'database'
   if (databaseAuthority && overlay === null) {
     throw new Error(`Normalized task state is unavailable for promoted task ${task.id}`)
@@ -335,9 +343,15 @@ export async function buildEffectiveTask(
 export async function buildEffectiveTasks(
   projectRoot: string,
   tasks: Task[],
-  options: { evidence?: 'full' | 'current' | 'none' } = {},
+  options: {
+    evidence?: 'full' | 'current' | 'none'
+    /** Use overlays captured by the caller's authoritative read snapshot. */
+    databaseStores?: ProjectStateDatabaseTaskOverlayStores | null
+  } = {},
 ): Promise<EffectiveTask[]> {
-  const databaseStores = readProjectStateDatabaseTaskOverlayStores(projectRoot)
+  const databaseStores = options.databaseStores !== undefined
+    ? options.databaseStores
+    : readProjectStateDatabaseTaskOverlayStores(projectRoot)
   const databaseAuthority = readProjectStateDatabaseCurrentAuthority(projectRoot) === 'database'
   if (databaseAuthority && databaseStores === null) {
     throw new Error('Normalized task state is unavailable for promoted project')

@@ -16,6 +16,8 @@ import {
   writeProjectStateDatabaseSnapshot,
   type ProjectStateDatabaseScopeRow,
   type ProjectStateDatabaseTask,
+  type ProjectStateDatabaseTaskEvidenceRetentionInput,
+  type ProjectStateDatabaseTaskRuntime,
   type ProjectStateDatabaseTaskStatusRow,
 } from '@guildhall/sessions'
 import { dirname, join } from 'node:path'
@@ -1138,6 +1140,13 @@ export function writeProjectSummaryProjectionFromUnknownQueue(
     existingSummary?: ProjectSummaryProjection | null
     /** The shared boundary already removed evidence/runtime-owned fields. */
     taskDefinitionsAlreadySanitized?: boolean
+    /** Optional normalized overlays/evidence for one atomic queue commit. */
+    taskRuntimes?: readonly ProjectStateDatabaseTaskRuntime[]
+    taskWorkspaces?: readonly ProjectStateDatabaseTaskRuntime[]
+    evidence?: readonly {
+      event: import('@guildhall/core').TaskEvidenceEvent
+      retention: ProjectStateDatabaseTaskEvidenceRetentionInput
+    }[]
   },
 ): ProjectSummaryProjection {
   // The queue/effective-task projection may expand many records. Its CAS
@@ -1176,6 +1185,9 @@ export function writeProjectSummaryProjectionFromUnknownQueue(
       ...(input.projectRoot ? { projectRoot: input.projectRoot } : {}),
       ...(scopeRows ? { scopeRows } : {}),
       ...(input.compatibilityExport ? { compatibilityExport: input.compatibilityExport } : {}),
+      ...(input.taskRuntimes !== undefined ? { taskRuntimes: input.taskRuntimes } : {}),
+      ...(input.taskWorkspaces !== undefined ? { taskWorkspaces: input.taskWorkspaces } : {}),
+      ...(input.evidence !== undefined ? { evidence: input.evidence } : {}),
       ...(input.expectedQueueRevision !== undefined && input.expectedQueueRevision !== null
         ? { expectedQueueRevision: input.expectedQueueRevision }
         : {}),

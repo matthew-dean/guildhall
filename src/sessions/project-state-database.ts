@@ -49,6 +49,15 @@ export interface ProjectStateDatabaseSnapshot {
   queue: unknown
   summary: unknown
   scopeRows?: ProjectStateDatabaseScopeRow[]
+  /** Replace normalized runtime rows in the same commit as the queue. */
+  taskRuntimes?: readonly ProjectStateDatabaseTaskRuntime[]
+  /** Replace normalized workspace rows in the same commit as the queue. */
+  taskWorkspaces?: readonly ProjectStateDatabaseTaskRuntime[]
+  /** Append bounded evidence in the same commit as the queue. */
+  evidence?: readonly {
+    event: TaskEvidenceEventRecord
+    retention: ProjectStateDatabaseTaskEvidenceRetentionInput
+  }[]
   /** Workspace root for first-write cache provenance; omitted by low-level migration callers. */
   projectRoot?: string
   /**
@@ -439,6 +448,8 @@ export interface ProjectStateDatabaseCurrentState<T = unknown> {
   repositories: ProjectStateDatabaseRepository[]
   diagnostics: ProjectStateDatabaseDiagnosticProjection | null
   summary: ProjectStateDatabaseSummary<T> | null
+  /** Mutable task overlays captured by the same SQLite read transaction. */
+  taskOverlays: ProjectStateDatabaseTaskOverlayStores | null
 }
 
 /**
@@ -461,6 +472,7 @@ export interface ProjectStateDatabaseProjectionState<T = unknown> {
 export interface ProjectStateDatabaseTaskDetailState<T = unknown> {
   queue: ProjectStateDatabaseQueue
   task: ProjectStateDatabaseTask
+  overlay: ProjectStateDatabaseTaskOverlay | null
   relationships: ProjectStateDatabaseTaskRelationships
   scopeRows: ProjectStateDatabaseScopeRow[]
   queueRevision: number
@@ -515,6 +527,7 @@ export interface ProjectStateDatabaseTask {
 
 export interface ProjectStateDatabaseTaskPointRead {
   task: ProjectStateDatabaseTask
+  overlay: ProjectStateDatabaseTaskOverlay | null
   revision: number
   projectRevision: number
 }
@@ -2279,6 +2292,24 @@ function writeSnapshotToDatabase(
       `).run(json(orientation), generatedAt, revision)
     }
     syncSummaryAuxiliaryRows(database, summary)
+    if (snapshot.taskRuntimes !== undefined) {
+      replaceTaskOverlayRowsInDatabase(database, 'task_execution', snapshot.taskRuntimes)
+    }
+    if (snapshot.taskWorkspaces !== undefined) {
+      replaceTaskOverlayRowsInDatabase(database, 'task_workspace', snapshot.taskWorkspaces)
+    }
+    for (const entry of snapshot.evidence ?? []) {
+      const durable = compactTaskEvidenceEvent(TaskEvidenceEvent.parse({ ...entry.event }))
+      const retention = validateTaskEvidenceRetention(entry.retention)
+      upsertTaskProofAndCurrentEvidence(database, {
+        id: durable.id,
+        taskId: durable.taskId,
+        kind: durable.kind,
+        recordedAt: durable.recordedAt,
+        payload: durable.payload,
+      })
+      appendTaskEvidenceHistory(database, durable, retention)
+    }
     // Per-task detail rows are the only current rich-detail authority now.
     // Keep the table name readable for compatibility with older databases,
     // but never write another full-queue payload after schema 22.
@@ -3587,6 +3618,7 @@ export function readProjectStateDatabaseCurrentState<T = unknown>(
       repositories: readProjectStateDatabaseRepositoriesFromDatabase(database),
       diagnostics: readProjectStateDatabaseDiagnosticProjectionFromDatabase(database),
       summary: readProjectStateDatabaseSummaryFromDatabase<T>(database, tasksPath, options),
+      taskOverlays: readProjectStateDatabaseTaskOverlayStoresFromDatabase(database),
     }
   } finally {
     if (inReadTransaction) {
@@ -3714,6 +3746,7 @@ export function readProjectStateDatabaseTaskDetailState<T = unknown>(
     return {
       queue: readCompactQueueFromDatabase(database),
       task,
+      overlay: readProjectStateDatabaseTaskOverlayFromDatabase(database, taskId),
       relationships,
       scopeRows: readScopeRowsFromDatabase(database),
       queueRevision,
@@ -4784,6 +4817,54 @@ type ProjectStateDatabaseTaskOverlayTable = 'task_execution' | 'task_workspace'
  * is a row diff so a one-task runtime update does not churn every task's
  * payload or revision metadata.
  */
+function replaceTaskOverlayRowsInDatabase(
+  database: DatabaseSync,
+  table: ProjectStateDatabaseTaskOverlayTable,
+  inputs: readonly ProjectStateDatabaseTaskRuntime[],
+): { changed: boolean; updatedAt: string } {
+  const now = new Date().toISOString()
+  const next = new Map(inputs.map(input => [input.taskId, {
+    taskId: input.taskId,
+    updatedAt: input.updatedAt ?? now,
+    payloadJson: json(input.payload),
+  }]))
+  const existing = (database.prepare(`
+    SELECT task_id, updated_at, payload_json
+    FROM ${table}
+  `).all() as JsonRecord[]).map(row => ({
+    taskId: String(row.task_id),
+    updatedAt: String(row.updated_at),
+    payloadJson: String(row.payload_json),
+  }))
+  const existingById = new Map(existing.map(row => [row.taskId, row]))
+  let changed = false
+
+  for (const row of existing) {
+    if (next.has(row.taskId)) continue
+    database.prepare(`DELETE FROM ${table} WHERE task_id = ?`).run(row.taskId)
+    changed = true
+  }
+
+  const upsert = database.prepare(`
+    INSERT INTO ${table} (task_id, updated_at, payload_json)
+    VALUES (?, ?, ?)
+    ON CONFLICT(task_id) DO UPDATE SET
+      updated_at = excluded.updated_at,
+      payload_json = excluded.payload_json
+  `)
+  for (const input of next.values()) {
+    const prior = existingById.get(input.taskId)
+    if (prior && prior.updatedAt === input.updatedAt && prior.payloadJson === input.payloadJson) continue
+    upsert.run(input.taskId, input.updatedAt, input.payloadJson)
+    changed = true
+  }
+  const updatedAt = [...next.values()].reduce(
+    (latest, input) => input.updatedAt > latest ? input.updatedAt : latest,
+    now,
+  )
+  return { changed, updatedAt }
+}
+
 function syncProjectStateDatabaseTaskOverlay(
   projectRoot: string,
   table: ProjectStateDatabaseTaskOverlayTable,
@@ -4791,49 +4872,10 @@ function syncProjectStateDatabaseTaskOverlay(
   domain: ProjectStateDomain,
 ): void {
   withWritableDatabase(projectRoot, database => {
-    const now = new Date().toISOString()
-    const next = new Map(inputs.map(input => [input.taskId, {
-      taskId: input.taskId,
-      updatedAt: input.updatedAt ?? now,
-      payloadJson: json(input.payload),
-    }]))
-    const existing = (database.prepare(`
-      SELECT task_id, updated_at, payload_json
-      FROM ${table}
-    `).all() as JsonRecord[]).map(row => ({
-      taskId: String(row.task_id),
-      updatedAt: String(row.updated_at),
-      payloadJson: String(row.payload_json),
-    }))
-    const existingById = new Map(existing.map(row => [row.taskId, row]))
-    let changed = false
-
-    for (const row of existing) {
-      if (next.has(row.taskId)) continue
-      database.prepare(`DELETE FROM ${table} WHERE task_id = ?`).run(row.taskId)
-      changed = true
-    }
-
-    const upsert = database.prepare(`
-      INSERT INTO ${table} (task_id, updated_at, payload_json)
-      VALUES (?, ?, ?)
-      ON CONFLICT(task_id) DO UPDATE SET
-        updated_at = excluded.updated_at,
-        payload_json = excluded.payload_json
-    `)
-    for (const input of next.values()) {
-      const prior = existingById.get(input.taskId)
-      if (prior && prior.updatedAt === input.updatedAt && prior.payloadJson === input.payloadJson) continue
-      upsert.run(input.taskId, input.updatedAt, input.payloadJson)
-      changed = true
-    }
-    if (!changed) return
-    const updatedAt = [...next.values()].reduce(
-      (latest, input) => input.updatedAt > latest ? input.updatedAt : latest,
-      now,
-    )
+    const result = replaceTaskOverlayRowsInDatabase(database, table, inputs)
+    if (!result.changed) return
     commitAuthoritativeMutation(database, {
-      updatedAt,
+      updatedAt: result.updatedAt,
       domains: [domain],
       projectRoot,
     })
@@ -5953,47 +5995,55 @@ export function readProjectStateDatabaseTaskOverlay(
   }
   const database = openDatabase(databasePath, { readOnly: true })
   try {
-    if (!['task_execution', 'task_workspace', 'task_proof', 'task_evidence_current'].every(table => tableExists(database, table))) return null
-    const runtime = database.prepare('SELECT updated_at, payload_json FROM task_execution WHERE task_id = ?').get(taskId) as JsonRecord | undefined
-    const workspace = database.prepare('SELECT updated_at, payload_json FROM task_workspace WHERE task_id = ?').get(taskId) as JsonRecord | undefined
-    const proof = database.prepare('SELECT latest_kind, latest_recorded_at, result, payload_json FROM task_proof WHERE task_id = ?').get(taskId) as JsonRecord | undefined
-    const current = tableExists(database, 'task_evidence_current')
-      ? database.prepare('SELECT updated_at, payload_json FROM task_evidence_current WHERE task_id = ?').get(taskId) as JsonRecord | undefined
-      : undefined
-    return {
-      ...(runtime ? {
-        runtime: {
-          taskId,
-          updatedAt: stringValue(runtime.updated_at) ?? undefined,
-          payload: parseStoredJson(runtime.payload_json, `runtime overlay for task ${taskId}`),
-        },
-      } : {}),
-      ...(workspace ? {
-        workspace: {
-          taskId,
-          updatedAt: stringValue(workspace.updated_at) ?? undefined,
-          payload: parseStoredJson(workspace.payload_json, `workspace overlay for task ${taskId}`),
-        },
-      } : {}),
-      ...(proof ? {
-        latestProof: {
-          taskId,
-          kind: stringValue(proof.latest_kind) ?? 'event',
-          recordedAt: stringValue(proof.latest_recorded_at) ?? '',
-          result: stringValue(proof.result),
-          payload: parseStoredJson(proof.payload_json, `proof overlay for task ${taskId}`),
-        },
-      } : {}),
-      ...(current ? {
-        evidenceCurrent: normalizeCurrentEvidence(
-          taskId,
-          stringValue(current.updated_at) ?? '',
-          parseStoredJson(current.payload_json, `current evidence for task ${taskId}`),
-        ),
-      } : {}),
-    }
+    return readProjectStateDatabaseTaskOverlayFromDatabase(database, taskId)
   } finally {
     database.close()
+  }
+}
+
+/** Read every current overlay for one task from the caller's existing snapshot. */
+function readProjectStateDatabaseTaskOverlayFromDatabase(
+  database: DatabaseSync,
+  taskId: string,
+): ProjectStateDatabaseTaskOverlay | null {
+  // A normalized queue is the current-state authority. Missing normalized
+  // overlay tables mean this project has not crossed the boundary yet.
+  if (!['task_execution', 'task_workspace', 'task_proof', 'task_evidence_current'].every(table => tableExists(database, table))) return null
+  const runtime = database.prepare('SELECT updated_at, payload_json FROM task_execution WHERE task_id = ?').get(taskId) as JsonRecord | undefined
+  const workspace = database.prepare('SELECT updated_at, payload_json FROM task_workspace WHERE task_id = ?').get(taskId) as JsonRecord | undefined
+  const proof = database.prepare('SELECT latest_kind, latest_recorded_at, result, payload_json FROM task_proof WHERE task_id = ?').get(taskId) as JsonRecord | undefined
+  const current = database.prepare('SELECT updated_at, payload_json FROM task_evidence_current WHERE task_id = ?').get(taskId) as JsonRecord | undefined
+  return {
+    ...(runtime ? {
+      runtime: {
+        taskId,
+        updatedAt: stringValue(runtime.updated_at) ?? undefined,
+        payload: parseStoredJson(runtime.payload_json, `runtime overlay for task ${taskId}`),
+      },
+    } : {}),
+    ...(workspace ? {
+      workspace: {
+        taskId,
+        updatedAt: stringValue(workspace.updated_at) ?? undefined,
+        payload: parseStoredJson(workspace.payload_json, `workspace overlay for task ${taskId}`),
+      },
+    } : {}),
+    ...(proof ? {
+      latestProof: {
+        taskId,
+        kind: stringValue(proof.latest_kind) ?? 'event',
+        recordedAt: stringValue(proof.latest_recorded_at) ?? '',
+        result: stringValue(proof.result),
+        payload: parseStoredJson(proof.payload_json, `proof overlay for task ${taskId}`),
+      },
+    } : {}),
+    ...(current ? {
+      evidenceCurrent: normalizeCurrentEvidence(
+        taskId,
+        stringValue(current.updated_at) ?? '',
+        parseStoredJson(current.payload_json, `current evidence for task ${taskId}`),
+      ),
+    } : {}),
   }
 }
 
@@ -6068,6 +6118,47 @@ export function readProjectStateDatabaseTaskEvidenceCurrentMany(
   }
 }
 
+function readProjectStateDatabaseTaskOverlayStoresFromDatabase(
+  database: DatabaseSync,
+): ProjectStateDatabaseTaskOverlayStores | null {
+  // A normalized queue is the current-state authority. Do not gate the
+  // overlay read on the historical promotion marker: during finalization it
+  // may still say legacy even though every current row is already indexed.
+  if (!tableExists(database, 'queue_state')) return null
+  if (!['task_execution', 'task_workspace', 'task_evidence_current'].every(table => tableExists(database, table))) return null
+  const read = (table: 'task_execution' | 'task_workspace'): ProjectStateDatabaseTaskRuntime[] =>
+    (database.prepare(`SELECT task_id, updated_at, payload_json FROM ${table} ORDER BY task_id`).all() as JsonRecord[])
+      .flatMap(row => {
+        const taskId = stringValue(row.task_id)
+        if (!taskId) return []
+        return [{
+          taskId,
+          updatedAt: stringValue(row.updated_at) ?? undefined,
+          payload: parseStoredJson(row.payload_json, `runtime/workspace overlay for task ${taskId}`),
+        }]
+      })
+  const evidenceCurrent = new Map<string, ProjectStateDatabaseTaskEvidenceCurrent>()
+  const evidenceRows = database.prepare(`
+    SELECT task_id, updated_at, payload_json
+    FROM task_evidence_current
+    ORDER BY task_id
+  `).all() as JsonRecord[]
+  for (const row of evidenceRows) {
+    const taskId = stringValue(row.task_id)
+    if (!taskId) continue
+    evidenceCurrent.set(taskId, normalizeCurrentEvidence(
+      taskId,
+      stringValue(row.updated_at) ?? '',
+      parseStoredJson<JsonRecord>(row.payload_json, `current evidence for task ${taskId}`),
+    ))
+  }
+  return {
+    runtime: read('task_execution'),
+    workspace: read('task_workspace'),
+    evidenceCurrent,
+  }
+}
+
 /**
  * Read all mutable task overlays from one database connection. A non-null
  * result means the project crossed the current-state database boundary, even
@@ -6086,44 +6177,9 @@ export function readProjectStateDatabaseTaskOverlayStores(
   const database = openDatabase(databasePath, { readOnly: true })
   let inReadTransaction = false
   try {
-    // A normalized queue is the current-state authority. Do not gate the
-    // overlay read on the historical promotion marker: during finalization it
-    // may still say legacy even though every current row is already indexed.
-    if (!tableExists(database, 'queue_state')) return null
-    if (!['task_execution', 'task_workspace', 'task_evidence_current'].every(table => tableExists(database, table))) return null
     database.exec('BEGIN')
     inReadTransaction = true
-    const read = (table: 'task_execution' | 'task_workspace'): ProjectStateDatabaseTaskRuntime[] =>
-      (database.prepare(`SELECT task_id, updated_at, payload_json FROM ${table} ORDER BY task_id`).all() as JsonRecord[])
-        .flatMap(row => {
-          const taskId = stringValue(row.task_id)
-          if (!taskId) return []
-          return [{
-            taskId,
-            updatedAt: stringValue(row.updated_at) ?? undefined,
-            payload: parseStoredJson(row.payload_json, `runtime/workspace overlay for task ${taskId}`),
-          }]
-        })
-    const evidenceCurrent = new Map<string, ProjectStateDatabaseTaskEvidenceCurrent>()
-    const evidenceRows = database.prepare(`
-      SELECT task_id, updated_at, payload_json
-      FROM task_evidence_current
-      ORDER BY task_id
-    `).all() as JsonRecord[]
-    for (const row of evidenceRows) {
-      const taskId = stringValue(row.task_id)
-      if (!taskId) continue
-      evidenceCurrent.set(taskId, normalizeCurrentEvidence(
-        taskId,
-        stringValue(row.updated_at) ?? '',
-        parseStoredJson<JsonRecord>(row.payload_json, `current evidence for task ${taskId}`),
-      ))
-    }
-    return {
-      runtime: read('task_execution'),
-      workspace: read('task_workspace'),
-      evidenceCurrent,
-    }
+    return readProjectStateDatabaseTaskOverlayStoresFromDatabase(database)
   } finally {
     if (inReadTransaction) {
       try {
@@ -6177,6 +6233,7 @@ export function readProjectStateDatabaseTaskPointWithRevision(
     const projectRevision = currentRevision(database)
     return {
       task: attachWorkItemDetails([task], database)[0] ?? task,
+      overlay: readProjectStateDatabaseTaskOverlayFromDatabase(database, taskId),
       revision,
       projectRevision,
     }

@@ -9,15 +9,13 @@ import {
   readProjectStateDatabaseInventory,
   readProjectStateDatabaseProjectionState,
   readProjectStateDatabaseTaskDetailState,
+  readProjectStateDatabaseTasks,
   readProjectStateDatabaseTaskPointWithRevision,
   readProjectStateDatabaseQueueDefinition,
   readProjectStateDatabaseQueueRevision,
+  readProjectStateDatabaseTaskEvidenceAuthority,
   readProjectTaskQueueSyncWithRevision,
   readProjectTaskQueueSync as readProjectTaskQueueSyncFromDatabase,
-  appendTaskEvidence,
-  reconcileProjectStateDatabaseTaskOverlays,
-  replaceProjectStateDatabaseTaskRuntimes,
-  replaceProjectStateDatabaseTaskWorkspaces,
   writeProjectStateDatabaseReleaseSelectionMutation,
   writeProjectStateDatabaseTaskBatchMutation,
   writeProjectStateDatabaseTaskMutation,
@@ -28,6 +26,8 @@ import {
   type ProjectStateDatabaseRepository,
   type ProjectStateDatabaseScopeRow,
   type ProjectStateDatabaseTask,
+  type ProjectStateDatabaseTaskOverlay,
+  type ProjectStateDatabaseTaskOverlayStores,
   type ProjectStateDatabaseTaskRelationships,
 } from '@guildhall/sessions'
 import type {
@@ -45,6 +45,7 @@ import {
 } from './project-summary-projection.js'
 import { executionScopeRows, taskScopeNodeId, type ProjectScope } from './project-scope-projection.js'
 import { buildEffectiveTasks } from './effective-task.js'
+import { appendTaskEvidence, TASK_EVIDENCE_RETENTION } from './task-state-store.js'
 
 export const FORBIDDEN_PROJECT_TASK_FIELDS = [
   'assignedTo',
@@ -120,6 +121,7 @@ export interface ProjectCurrentStateReadModel {
   scope: ProjectScope | null
   repositories: ProjectStateDatabaseRepository[]
   diagnostics: ProjectStateDatabaseDiagnosticProjection | null
+  taskOverlays: ProjectStateDatabaseTaskOverlayStores | null
   summary: ProjectSummaryProjection | null
   authority: 'database' | 'legacy'
   queueRevision: number | null
@@ -246,7 +248,10 @@ async function buildProjectCanonicalCurrentState(
       ? { lastUpdated: queueDefinition.lastUpdated }
       : {}),
   }
-  const tasks = await buildEffectiveTasks(projectRoot, rawQueue.tasks as Task[], { evidence: 'current' })
+  const tasks = await buildEffectiveTasks(projectRoot, rawQueue.tasks as Task[], {
+    evidence: 'current',
+    databaseStores: currentState.taskOverlays,
+  })
   return {
     rawQueue,
     tasks: tasks as Task[],
@@ -439,6 +444,8 @@ export function readProjectCompactStateModel(
 export interface ProjectTaskDetailReadModel {
   queue: ProjectStateDatabaseQueue
   task: ProjectStateDatabaseTask
+  /** Mutable task state captured by the same SQLite detail snapshot. */
+  overlay: ProjectStateDatabaseTaskOverlay | null
   relationships: ProjectStateDatabaseTaskRelationships
   scopeRows: ProjectStateDatabaseScopeRow[]
   /** Selected execution scope from this same task-detail snapshot. */
@@ -466,6 +473,7 @@ export function readProjectTaskDetailState(
   return {
     queue: current.queue as ProjectStateDatabaseQueue,
     task: current.task,
+    overlay: current.overlay,
     relationships: current.relationships,
     scopeRows: current.scopeRows,
     scope: projectScopeFromSavedState({
@@ -483,6 +491,58 @@ export function readProjectTaskDetailState(
   }
 }
 
+/**
+ * Convert one normalized database point into the task-shaped record expected
+ * by explicit detail helpers. This is intentionally a point read: promoted
+ * projects must not load the aggregate queue just to render one task tab.
+ */
+export function projectTaskRecordFromDatabasePoint(task: ProjectStateDatabaseTask): Record<string, unknown> {
+  return {
+    ...task.definition,
+    id: task.id,
+    title: task.title,
+    ...(task.description !== null ? { description: task.description } : {}),
+    ...(task.status !== null ? { status: task.status } : {}),
+    ...(task.domain !== null ? { domain: task.domain } : {}),
+    ...(task.priority !== null ? { priority: task.priority } : {}),
+    ...(task.workKind !== null ? { workKind: task.workKind } : {}),
+    ...(task.hierarchy ? { hierarchy: task.hierarchy } : {}),
+    ...(task.dependsOn.length > 0 ? { dependsOn: [...task.dependsOn] } : {}),
+    ...(task.releaseIds.length > 0 ? { releaseIds: [...task.releaseIds] } : {}),
+    ...(task.sourceRefs.length > 0 ? { sourceRefs: [...task.sourceRefs] } : {}),
+    ...(task.updatedAt !== null ? { updatedAt: task.updatedAt } : {}),
+    ...(task.completedAt !== null ? { completedAt: task.completedAt } : {}),
+  }
+}
+
+/** Read one task definition without opening the aggregate current queue. */
+export function readProjectTaskRecordAtBoundary(tasksPath: string, taskId: string): Record<string, unknown> | null {
+  const point = readProjectStateDatabaseTaskPointWithRevision(tasksPath, taskId)
+  return point ? projectTaskRecordFromDatabasePoint(point.task) : null
+}
+
+/** Read an explicit task set without scanning the aggregate queue. */
+export function readProjectTaskRecordsAtBoundary(
+  tasksPath: string,
+  taskIds: readonly string[],
+): Array<Record<string, unknown>> {
+  const ids = [...new Set(taskIds.filter(id => id.trim().length > 0))].slice(0, 100)
+  if (ids.length === 0) return []
+  if (readProjectStateAuthorityAtBoundary(tasksPath).authority === 'database') {
+    const points = readProjectStateDatabaseTasks(tasksPath, ids, { includeDefinitions: true })
+    return (points ?? []).map(projectTaskRecordFromDatabasePoint)
+  }
+  const queue = readProjectTaskQueueSync(tasksPath) as { tasks?: unknown[] }
+  const wanted = new Set(ids)
+  return (Array.isArray(queue.tasks) ? queue.tasks : [])
+    .filter((task): task is Record<string, unknown> => (
+      typeof task === 'object' && task !== null && !Array.isArray(task) &&
+      typeof (task as { id?: unknown }).id === 'string' &&
+      wanted.has((task as { id: string }).id)
+    ))
+    .map(task => ({ ...task }))
+}
+
 export function readProjectCurrentStateModel(tasksPath: string): ProjectCurrentStateReadModel {
   const current = readProjectStateDatabaseCurrentState<ProjectSummaryProjection>(tasksPath)
   if (!current) {
@@ -494,6 +554,7 @@ export function readProjectCurrentStateModel(tasksPath: string): ProjectCurrentS
         scope: null,
         repositories: [],
         diagnostics: null,
+        taskOverlays: null,
         summary: readProjectSummaryProjection(tasksPath),
         authority: 'legacy',
         queueRevision: null,
@@ -520,6 +581,7 @@ export function readProjectCurrentStateModel(tasksPath: string): ProjectCurrentS
     }),
     repositories: current.repositories,
     diagnostics: current.diagnostics,
+    taskOverlays: current.taskOverlays,
     summary,
     authority: 'database',
     queueRevision: current.queueRevision,
@@ -1127,27 +1189,24 @@ export async function writeProjectTaskQueueAtCurrentStateBoundary(
   } = {},
 ): Promise<void> {
   const wasDatabaseAuthority = readProjectStateAuthorityAtBoundary(tasksPath).authority === 'database'
-  if (!wasDatabaseAuthority) {
-    writeProjectTaskQueueWithSummary(tasksPath, queue, options)
-  }
   if (!options.projectRoot) {
     if (wasDatabaseAuthority) {
       throw new Error('Promoted rich task writes require projectRoot for normalized state stores')
     }
+    writeProjectTaskQueueWithSummary(tasksPath, queue, options)
     return
   }
 
   const originalTasks = queueTasks(queue).filter(isRecord)
   const sanitized = sanitizeTaskQueueForProjectWrite(queue)
-  if (wasDatabaseAuthority) {
-    writeProjectTaskQueueWithSummary(tasksPath, sanitized.queue, {
-      ...options,
-      taskDefinitionsAlreadySanitized: true,
-    })
-  }
+  const evidenceAuthority = readProjectStateDatabaseTaskEvidenceAuthority(options.projectRoot)
 
   const runtimeOverlays: Array<{ taskId: string; updatedAt: string; payload: Record<string, unknown> }> = []
   const workspaceOverlays: Array<{ taskId: string; updatedAt: string; payload: Record<string, unknown> }> = []
+  const evidence: Array<{
+    event: TaskEvidenceEventRecord
+    retention: ProjectStateDatabaseTaskEvidenceRetentionInput
+  }> = []
   for (const task of originalTasks) {
     const id = typeof task.id === 'string' ? task.id : ''
     if (!id) continue
@@ -1199,15 +1258,6 @@ export async function writeProjectTaskQueueAtCurrentStateBoundary(
 
   }
 
-  // Rebuild mutable overlays from the incoming rich queue. This is a replace,
-  // not a merge: omitted fields and removed tasks must stop projecting stale
-  // runtime/workspace state after re-intake.
-  replaceProjectStateDatabaseTaskRuntimes(options.projectRoot, runtimeOverlays)
-  replaceProjectStateDatabaseTaskWorkspaces(options.projectRoot, workspaceOverlays)
-  reconcileProjectStateDatabaseTaskOverlays(options.projectRoot, originalTasks
-    .map(task => typeof task.id === 'string' ? task.id : '')
-    .filter((id): id is string => id.length > 0))
-
   for (const task of originalTasks) {
     const id = typeof task.id === 'string' ? task.id : ''
     if (!id) continue
@@ -1224,13 +1274,35 @@ export async function writeProjectTaskQueueAtCurrentStateBoundary(
             ? record.recordedAt
             : updatedAt
         const rawId = typeof record.id === 'string' && record.id.length > 0 ? record.id : null
-        await appendTaskEvidence(options.projectRoot, id, {
-          id: rawId ?? `${id}-${kind}-${recordedAt.replace(/[^0-9A-Za-z]/g, '')}-${index + 1}`,
-          kind,
-          recordedAt,
-          payload: record,
+        evidence.push({
+          event: {
+            id: rawId ?? `${id}-${kind}-${recordedAt.replace(/[^0-9A-Za-z]/g, '')}-${index + 1}`,
+            taskId: id,
+            kind,
+            recordedAt,
+            payload: record,
+          },
+          retention: TASK_EVIDENCE_RETENTION[kind],
         })
       }
+    }
+  }
+  // Queue definitions, mutable overlays, and bounded evidence are one
+  // re-intake mutation. The state writer commits them together; a reader can
+  // never observe a new queue with old runtime/evidence rows.
+  writeProjectTaskQueueWithSummary(tasksPath, wasDatabaseAuthority ? sanitized.queue : queue, {
+    ...options,
+    ...(wasDatabaseAuthority ? { taskDefinitionsAlreadySanitized: true } : {}),
+    taskRuntimes: runtimeOverlays,
+    taskWorkspaces: workspaceOverlays,
+    ...(evidenceAuthority === 'compressed' ? {} : { taskEvidence: evidence }),
+  })
+  // Compressed evidence is a detail-only ledger and cannot participate in the
+  // SQLite queue transaction. It still has one owner: use its canonical writer
+  // after the current-state commit rather than leaving a second evidence shape.
+  if (evidenceAuthority === 'compressed') {
+    for (const entry of evidence) {
+      await appendTaskEvidence(options.projectRoot, entry.event.taskId, entry.event)
     }
   }
 }
@@ -1257,6 +1329,8 @@ export function writeProjectTaskQueueWithSummary(
       event: TaskEvidenceEventRecord
       retention: ProjectStateDatabaseTaskEvidenceRetentionInput
     }[]
+    taskRuntimes?: readonly { taskId: string; updatedAt?: string; payload: unknown }[]
+    taskWorkspaces?: readonly { taskId: string; updatedAt?: string; payload: unknown }[]
   } = {},
 ): void {
   const compatibilityExport = options.fullCompatibility === true
@@ -1265,7 +1339,8 @@ export function writeProjectTaskQueueWithSummary(
       ? 'compact' as const
       : undefined
   const databaseAuthority = readProjectStateAuthorityAtBoundary(tasksPath).authority === 'database'
-  if (databaseAuthority && compatibilityExport === undefined) {
+  const hasAtomicExtras = options.taskRuntimes !== undefined || options.taskWorkspaces !== undefined || options.taskEvidence !== undefined
+  if (databaseAuthority && compatibilityExport === undefined && !hasAtomicExtras) {
     // The public sanitizer calls this function with an explicit marker after
     // removing retired fields. Direct aggregate callers must be checked first
     // so a newly supplied runtime/evidence field cannot disappear silently.
@@ -1282,10 +1357,10 @@ export function writeProjectTaskQueueWithSummary(
   // for migration/bootstrap input, but it cannot resurrect retired fields in
   // a promoted project's current task definitions.
   const persistedQueue = preserveProjectQueueEnvelope(tasksPath, currentQueue, compatibilityExport !== undefined)
-  if (databaseAuthority && writeTargetedReleaseSelectionIfSafe(tasksPath, persistedQueue, options)) return
-  if (databaseAuthority && writeTargetedTaskBatchMutationIfSafe(tasksPath, persistedQueue, options)) return
-  if (databaseAuthority && writeTargetedTaskMutationIfSafe(tasksPath, persistedQueue, options)) return
-  if (databaseAuthority && compatibilityExport === undefined) {
+  if (databaseAuthority && !hasAtomicExtras && writeTargetedReleaseSelectionIfSafe(tasksPath, persistedQueue, options)) return
+  if (databaseAuthority && !hasAtomicExtras && writeTargetedTaskBatchMutationIfSafe(tasksPath, persistedQueue, options)) return
+  if (databaseAuthority && !hasAtomicExtras && writeTargetedTaskMutationIfSafe(tasksPath, persistedQueue, options)) return
+  if (databaseAuthority && compatibilityExport === undefined && !hasAtomicExtras) {
     const currentQueue = readProjectStateDatabaseQueueDefinition(tasksPath)
     if (currentQueue && sameCanonicalQueue(currentQueue, persistedQueue)) return
     throw new Error(
@@ -1317,7 +1392,9 @@ export function writeProjectTaskQueueWithSummary(
     ...(options.expectedQueueRevision !== undefined && options.expectedQueueRevision !== null
       ? { expectedQueueRevision: options.expectedQueueRevision }
       : {}),
-    ...(options.taskEvidence !== undefined ? { taskEvidence: options.taskEvidence } : {}),
+    ...(options.taskEvidence !== undefined ? { evidence: options.taskEvidence } : {}),
+    ...(options.taskRuntimes !== undefined ? { taskRuntimes: options.taskRuntimes } : {}),
+    ...(options.taskWorkspaces !== undefined ? { taskWorkspaces: options.taskWorkspaces } : {}),
     ...(options.taskDefinitionsAlreadySanitized ? { taskDefinitionsAlreadySanitized: true } : {}),
     ...(compatibilityExport ? { compatibilityExport } : {}),
   })

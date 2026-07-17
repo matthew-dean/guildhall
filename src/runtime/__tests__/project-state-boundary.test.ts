@@ -807,6 +807,9 @@ describe('project-state-boundary', () => {
         payload: { gateId: 'build', passed: false },
       })
 
+      const beforeReintake = readProjectStateDatabaseCurrentState(tasksPath)
+      expect(beforeReintake).not.toBeNull()
+
       await writeProjectTaskQueueAtCurrentStateBoundary(tasksPath, {
         ...initialQueue,
         lastUpdated: '2026-07-15T00:01:00.000Z',
@@ -816,6 +819,13 @@ describe('project-state-boundary', () => {
           status: 'ready',
           updatedAt: '2026-07-15T00:01:00.000Z',
           assignedTo: null,
+          notes: [{
+            id: 'reintake-note',
+            role: 'system',
+            agentId: 'reintake',
+            content: 'Re-intake evidence',
+            timestamp: '2026-07-15T00:01:00.000Z',
+          }],
         }],
       }, {
         projectRoot: root,
@@ -828,6 +838,13 @@ describe('project-state-boundary', () => {
       expect(readProjectStateDatabaseTaskOverlay(root, 'task-keep')?.runtime?.payload).not.toHaveProperty('revisionCount')
       expect(readProjectStateDatabaseTaskOverlay(root, 'task-keep')?.workspace).toBeUndefined()
       expect(readProjectStateDatabaseTaskOverlay(root, 'task-remove')).toEqual({})
+      const afterReintake = readProjectStateDatabaseCurrentState(tasksPath)
+      expect(afterReintake?.projectRevision).toBe((beforeReintake?.projectRevision ?? 0) + 1)
+      const canonical = await readProjectCanonicalCurrentState(root)
+      expect(canonical.tasks.find(task => task.id === 'task-keep')).toMatchObject({
+        assignedTo: null,
+        notes: [expect.objectContaining({ content: 'Re-intake evidence' })],
+      })
     } finally {
       await fs.rm(root, { recursive: true, force: true })
     }
