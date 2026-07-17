@@ -763,6 +763,33 @@ describe('GET route read boundaries', () => {
     expect(fullTaskReads).toHaveLength(0)
   })
 
+  it('keeps ordinary delivery reads on compact indexed task rows', async () => {
+    const aggregateRead = vi.spyOn(sessions, 'readProjectStateDatabaseQueue').mockImplementation(() => {
+      throw new Error('ordinary delivery reads must not rebuild the aggregate queue')
+    })
+    const prepare = vi.spyOn(DatabaseSync.prototype, 'prepare')
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    try {
+      for (const route of [
+        '/api/project/delivery-spine',
+        '/api/project/delivery-spine/queue',
+        '/api/project/task/task-boundary/relationships',
+        '/api/project/task/task-boundary/context-packet',
+      ]) {
+        const response = await app.fetch(new Request(projectUrl(route)))
+        expect(response.status, route).toBe(200)
+      }
+      const fullTaskReads = prepare.mock.calls.filter(([sql]) => (
+        typeof sql === 'string' && /FROM work_items[\s\S]*definition_json/.test(sql)
+      ))
+      expect(fullTaskReads).toHaveLength(0)
+      expect(aggregateRead).not.toHaveBeenCalled()
+    } finally {
+      prepare.mockRestore()
+      aggregateRead.mockRestore()
+    }
+  })
+
   it('reads current activity from the summary shell without queue detail', async () => {
     const tasksPath = projectStatePath(tmpDir, 'TASKS.json')
     const database = new DatabaseSync(projectStateDatabasePath(tmpDir))

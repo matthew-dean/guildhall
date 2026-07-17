@@ -543,6 +543,7 @@ export function readProjectTaskDetailState(
  * projects must not load the aggregate queue just to render one task tab.
  */
 export function projectTaskRecordFromDatabasePoint(task: ProjectStateDatabaseTask): Record<string, unknown> {
+  const indexed = task as unknown as Record<string, unknown>
   return {
     ...task.definition,
     id: task.id,
@@ -556,6 +557,9 @@ export function projectTaskRecordFromDatabasePoint(task: ProjectStateDatabaseTas
     ...(task.dependsOn.length > 0 ? { dependsOn: [...task.dependsOn] } : {}),
     ...(task.releaseIds.length > 0 ? { releaseIds: [...task.releaseIds] } : {}),
     ...(task.sourceRefs.length > 0 ? { sourceRefs: [...task.sourceRefs] } : {}),
+    ...(isRecord(indexed.delivery) ? { delivery: indexed.delivery } : {}),
+    ...(isRecord(indexed.currentSummary) ? { currentSummary: indexed.currentSummary } : {}),
+    ...(isRecord(indexed.taskReadiness) ? { taskReadiness: indexed.taskReadiness } : {}),
     ...(task.updatedAt !== null ? { updatedAt: task.updatedAt } : {}),
     ...(task.completedAt !== null ? { completedAt: task.completedAt } : {}),
   }

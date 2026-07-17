@@ -1071,6 +1071,22 @@ async function readProjectTasksForServe(tasksPath: string): Promise<Array<Record
 }
 
 /**
+ * Delivery reads need task identity, dependency, and compact delivery links,
+ * not full task definitions. Promoted projects get those rows from the same
+ * indexed project snapshot used by other compact surfaces; only legacy
+ * projects use the explicit compatibility reader.
+ */
+async function readProjectDeliveryTasks(projectRoot: string): Promise<Array<Record<string, unknown>>> {
+  const tasksPath = projectTasksPath(projectRoot)
+  if (readProjectStateAuthorityAtBoundary(tasksPath).authority === 'database') {
+    const snapshot = readProjectCompactStateModel(tasksPath, { includeDefinitions: false })
+    if (!snapshot) throw new Error(`Authoritative delivery projection is unavailable for ${tasksPath}; refresh the project state first.`)
+    return snapshot.inventory.tasks.map(projectTaskRecordFromDatabasePoint)
+  }
+  return readTasksFileNormalized(tasksPath)
+}
+
+/**
  * Explicit task tabs are point reads. Only an unpromoted compatibility
  * project may fall back to the aggregate helper; promoted state returns a
  * miss without reopening the full queue.
@@ -12767,7 +12783,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project/delivery-spine', async c => {
     try {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
-      const tasks = await readTasksFileNormalized(projectTasksPath(project.path))
+      const tasks = await readProjectDeliveryTasks(project.path)
       const model = await readProjectDeliveryModel(project.path)
       return c.json({
         model,
@@ -12783,7 +12799,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project/delivery-spine/queue', async c => {
     try {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
-      const tasks = await readTasksFileNormalized(projectTasksPath(project.path))
+      const tasks = await readProjectDeliveryTasks(project.path)
       const model = await readProjectDeliveryModel(project.path)
       return c.json(deriveQueueCandidates({ model, tasks: tasks as Task[] }))
     } catch (err) {
@@ -12861,7 +12877,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project/task/:id/relationships', async c => {
     try {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
-      const tasks = await readTasksFileNormalized(projectTasksPath(project.path))
+      const tasks = await readProjectDeliveryTasks(project.path)
       const model = await readProjectDeliveryModel(project.path)
       return c.json(deriveTaskRelationships({ model, tasks: tasks as Task[], taskId: c.req.param('id') }))
     } catch (err) {
@@ -12872,7 +12888,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project/task/:id/context-packet', async c => {
     try {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
-      const tasks = await readProjectTasksForServe(projectTasksPath(project.path))
+      const tasks = await readProjectDeliveryTasks(project.path)
       const model = await readProjectDeliveryModel(project.path)
       const taskId = c.req.param('id')
       const relationships = deriveTaskRelationships({ model, tasks: tasks as Task[], taskId })

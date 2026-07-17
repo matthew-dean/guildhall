@@ -5005,6 +5005,45 @@ release or its membership.
   current-state boundary regressions.
 - **Rollback/revert:** code-only revert; no data rollback.
 
+## 2026-07-17 - Delivery enters through the compact state boundary
+
+The first delivery step removes a direct source divergence. Promoted
+delivery-spine, queue, task-relationship, and context-packet routes now read
+compact indexed task rows from the same project-state boundary used by the
+graph. They no longer hydrate the full task-definition store or call the
+aggregate SQLite queue reader during ordinary requests.
+
+This is deliberately not being counted as the finished delivery migration.
+The routes still derive relationships and runnable ranking in request code.
+The next step is a saved delivery projection keyed by the same project-state
+revision, with explicit `current`, `stale`, and `missing` states. A normal GET
+will read that projection or tell the caller to refresh; it will not reconstruct
+delivery facts from another source.
+
+**Contract Touch Decision - `codex:delivery-compact-boundary-2026-07-17`**
+
+- **Touched contracts:** `readProjectDeliveryTasks`, compact indexed task rows
+  supplied to delivery routes, and delivery/context route boundaries.
+- **Considered but not touched:** delivery projection tables, runnable
+  ranking, normalized relationship projections, and legacy compatibility reads.
+- **Required follow-up:** implement the revisioned delivery projection and make
+  ordinary delivery routes consume it without request-time queue derivation.
+- **Proof provided:** 35 read-boundary tests, delivery endpoint coverage,
+  data-layer lint, and whitespace validation.
+- **Apply/revert:** code-only revert; no persisted data change.
+
+**Schema Migration Decision - `codex:delivery-compact-boundary-2026-07-17`**
+
+- **Persisted schema touched:** none; existing compact summaries are reused.
+- **Change class:** read-path and authority-boundary tightening.
+- **Existing data impact:** none; promoted delivery reads stop widening into
+  task definitions.
+- **Migration id:** not required for this intermediate step.
+- **Compatibility reader:** legacy task-file reads remain explicit and are
+  selected only before current-state promotion.
+- **Fixtures/tests:** compact delivery route boundary and task endpoint tests.
+- **Rollback/revert:** code-only revert; no data rollback.
+
 ## 2026-07-17 - Promoted reads fail closed on missing projections
 
 The saved Release boundary now checks authority before selecting a reader. A

@@ -41430,6 +41430,46 @@ accident while rendering an ordinary drawer.
   regression, and current-state boundary suite.
 - Rollback/revert: code-only revert; no data rollback.
 
+## 2026-07-17 - Delivery routes use compact indexed task rows
+
+- [x] Promoted delivery-spine, queue, task-relationship, and context-packet
+  reads now enter through the shared compact project-state boundary instead of
+  hydrating every task definition or rebuilding the aggregate SQLite queue.
+- [ ] This is an intermediate boundary only. Relationship and runnable-work
+  derivation still happens during the request and must move into a saved,
+  revisioned delivery projection before this area is considered complete.
+- [x] Boundary regression coverage proves the ordinary routes do not select
+  `definition_json` or call the aggregate queue reader.
+
+### Contract Touch Decision
+
+- Work id: `codex:delivery-compact-boundary-2026-07-17`.
+- Touched contracts: `readProjectDeliveryTasks`, compact indexed task rows
+  supplied to delivery routes, and delivery/context route read boundaries.
+- Considered but not touched: delivery projection tables, runnable ranking,
+  normalized relationship projections, and the explicit legacy compatibility
+  reader.
+- Required follow-up: add a revisioned delivery read projection with explicit
+  missing/stale behavior; ordinary delivery routes must consume that projection
+  rather than recomputing queue facts.
+- Proof provided: 35 `serve-read-boundary` tests, delivery endpoint tests,
+  `pnpm lint:data-layer`, and `git diff --check`.
+- Apply/revert behavior: code-only revert; no persisted schema change.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none. Existing compact task summaries are reused;
+  no new competing delivery authority was introduced by this boundary.
+- Change class: read-path boundary tightening.
+- Existing data impact: none; promoted projects stop widening ordinary delivery
+  reads into task definitions.
+- Migration id: not required for this intermediate step.
+- Compatibility reader: legacy task-file reads remain explicit and are selected
+  only before current-state promotion.
+- Fixtures/tests: compact delivery route boundary coverage and existing task
+  endpoint coverage.
+- Rollback/revert: code-only revert; no data rollback.
+
 ## 2026-07-17 - Graph reads use the compact indexed task projection
 
 - [x] Added `readProjectGraphStateModel` as a named shared boundary over the
