@@ -4950,3 +4950,57 @@ summary by joining a registry row to per-project detail responses.
 - **Compatibility reader:** `/api/service?projectId=...` remains available for
   explicit detail callers, never as the fleet-shell fallback.
 - **Rollback/revert:** restore the old client hydration loop; no data rollback.
+
+## 2026-07-17 - Saved Release is a read model over one snapshot
+
+The first saved-Release reader still had the wrong shape internally: it
+returned an object with no task array, but it reached that shape by loading the
+full aggregate task/detail model and then throwing most of it away. That was a
+performance optimization at the route boundary, not a real data-model fix.
+
+The sessions layer now exposes a purpose-built saved Release snapshot. It reads
+the compact queue envelope, normalized release/scope membership, saved summary,
+repositories, diagnostics, and revision watermarks in one transaction. It does
+not open task detail blobs, task overlays, evidence, or Git state. The runtime
+boundary converts the storage wrapper into the product read model once; the
+route only formats it.
+
+This is the DRY rule made concrete: read models may be different, but their
+facts come from one state-management layer and one revision snapshot. A route
+cannot decide to manufacture current work from intake, cannot choose a second
+release identity, and cannot silently upgrade a summary request into a detail
+read. Explicit live diagnostics and explicit intake remain separate operations.
+
+The release formatter now gets release identity from the durable queue/scopes
+envelope and counts/readiness from the saved summary projection. That handles
+older projections that omitted copied release metadata without inventing a
+release or its membership.
+
+**Contract Touch Decision - `codex:saved-release-single-snapshot-2026-07-17`**
+
+- **Touched contracts:** sessions saved-Release read model, project-state
+  boundary summary normalization, and saved Release response formatting.
+- **Considered but not touched:** rich task detail, intake drafts, live Git
+  diagnostics, delivery state, and public Release URL/field names.
+- **Required follow-up:** migrate remaining ordinary project/detail readers to
+  explicit summary, inventory, point-detail, or diagnostic readers. The next
+  architecture pass must remove request-time reconstruction from delivery and
+  Thread paths too.
+- **Proof provided:** 16 project-state-boundary tests, 32 read-boundary tests,
+  79 release-readiness tests, data-layer lint, and the regression that caught
+  the incomplete release projection.
+- **Apply/revert:** code-only revert; no persisted rows are rewritten.
+
+**Schema Migration Decision - `codex:saved-release-single-snapshot-2026-07-17`**
+
+- **Persisted schema touched:** none. Existing queue, scope, membership,
+  summary, repository, diagnostic, and revision tables are reused.
+- **Change class:** read-model consolidation; no migration required.
+- **Existing data impact:** none. Older summary rows remain readable because
+  release identity comes from the durable envelope.
+- **Migration id:** not required.
+- **Compatibility reader:** promoted projects use the saved snapshot reader;
+  legacy compatibility remains only before current-state cutover.
+- **Fixtures/tests:** saved Release no-expansion, release identity, and
+  current-state boundary regressions.
+- **Rollback/revert:** code-only revert; no data rollback.

@@ -4950,13 +4950,15 @@ function buildOverviewOrientationPreviewSpine(input: {
 }
 
 function releaseReadinessReleaseFromScope(input: {
-  rawQueue: { releases: ProjectRelease[] }
+  rawQueue: { releases: ProjectRelease[]; selectedReleaseId?: string }
   scope: ProjectScope | null
+  selectedReleaseId?: string
   releaseState: 'ready' | 'blocked' | 'active' | 'shaping' | 'unknown'
 }): OrientationRelease | null {
   const scope = input.scope
-  if (!scope) return null
-  const existing = input.rawQueue.releases.find(release => release.id === scope.id) ?? null
+  const releaseId = scope?.id ?? input.selectedReleaseId
+  if (!releaseId) return null
+  const existing = input.rawQueue.releases.find(release => release.id === releaseId) ?? null
   // A selected scope is not permission to invent a release definition. A
   // release is a persisted queue record; a proposed/current scope remains a
   // scope and must be rendered as one.
@@ -4970,10 +4972,10 @@ function releaseReadinessReleaseFromScope(input: {
       : input.releaseState === 'blocked'
         ? 'blocked'
         : existing.state ?? 'active',
-    source: existing.source ?? scope.source,
+    source: existing.source ?? scope?.source ?? 'inferred',
     description: existing.description ?? null,
-    nodeIds: scope.nodeIds,
-    deferredNodeIds: scope.deferredNodeIds,
+    nodeIds: scope?.nodeIds ?? existing.nodeIds ?? [],
+    deferredNodeIds: scope?.deferredNodeIds ?? existing.deferredNodeIds ?? [],
     proofStyle: existing.proofStyle ?? 'unspecified',
   }
 }
@@ -5064,7 +5066,7 @@ function overviewTaskIdsForSurface(input: {
 
 function compactReleaseReadinessFromProjection(input: {
   projection: ProjectSummaryProjection
-  rawQueue?: { releases: ProjectRelease[] }
+  rawQueue?: { releases: ProjectRelease[]; selectedReleaseId?: string }
   scope?: ProjectScope | null
 }): Record<string, unknown> {
   const summary = input.projection.releaseSummary
@@ -5079,11 +5081,12 @@ function compactReleaseReadinessFromProjection(input: {
     ownerBlocked: 0,
     proofBlocked: 0,
   }
-  const release = input.scope && input.rawQueue && summary?.release
+  const release = input.rawQueue
     ? releaseReadinessReleaseFromScope({
         rawQueue: input.rawQueue,
         scope: input.scope,
-        releaseState: summary.state,
+        selectedReleaseId: input.rawQueue.selectedReleaseId,
+        releaseState: summary?.state ?? 'unknown',
       })
     : summary?.release
       ? { ...summary.release, state: summary.state }
@@ -15895,7 +15898,15 @@ export function buildServeApp(opts: ServeOptions = {}): {
         }, 503)
       }
       return c.json({
-        ...compactReleaseReadinessFromProjection({ projection }),
+        // Release identity and selected-scope membership come from the same
+        // saved boundary snapshot as the projection. The summary remains the
+        // source of counts/readiness; the queue envelope supplies the durable
+        // release definition when an older projection omitted that field.
+        ...compactReleaseReadinessFromProjection({
+          projection,
+          rawQueue: state.rawQueue,
+          scope: state.scope,
+        }),
         summaryFreshness: projection.freshness,
         generatedAt: projection.generatedAt,
         queueRevision: state.queueRevision,

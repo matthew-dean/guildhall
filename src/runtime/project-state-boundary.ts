@@ -8,6 +8,7 @@ import {
   readProjectStateDatabaseCurrentState,
   readProjectStateDatabaseInventory,
   readProjectStateDatabaseProjectionState,
+  readProjectStateDatabaseSavedReleaseState,
   readProjectStateDatabaseTaskDetailState,
   readProjectStateDatabaseTasks,
   readProjectStateDatabaseTaskPointWithRevision,
@@ -328,15 +329,20 @@ export async function readProjectTaskQueueForRichMutation(
  * surface, while live task/evidence inspection remains explicit.
  */
 export function readProjectSavedReleaseState(projectRoot: string): ProjectSavedReleaseReadModel {
-  const current = readProjectCurrentStateModel(getProjectSystemStatePath(projectRoot, 'TASKS.json'))
+  const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+  const current = readProjectStateDatabaseSavedReleaseState<ProjectSummaryProjection>(tasksPath)
+    ?? readProjectCurrentStateModel(tasksPath)
   const queue = current.queue as Partial<ProjectStateDatabaseQueueDefinition>
   const releases = Array.isArray(queue.releases)
     ? queue.releases.map(release => persistableRelease(release as unknown as ProjectRelease))
     : []
+  const summary = current.summary
+    ? { ...current.summary.payload, freshness: current.summary.freshness }
+    : null
   const scope = projectScopeFromSavedState({
     releases,
     selectedReleaseId: typeof queue.selectedReleaseId === 'string' ? queue.selectedReleaseId : undefined,
-    summary: current.summary,
+    summary,
     scopeRows: current.scopeRows,
   })
   return {
@@ -349,8 +355,8 @@ export function readProjectSavedReleaseState(projectRoot: string): ProjectSavedR
     scope,
     repositories: current.repositories,
     diagnostics: current.diagnostics,
-    summary: current.summary,
-    authority: current.authority,
+    summary,
+    authority: 'authority' in current ? current.authority : 'database',
     queueRevision: current.queueRevision,
     projectRevision: current.projectRevision,
   }

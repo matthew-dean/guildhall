@@ -41379,3 +41379,53 @@ accident while rendering an ordinary drawer.
 - Compatibility reader: no new reader; `/api/service?projectId=...` remains a
   detail endpoint for explicit callers, not a fleet-shell fallback.
 - Rollback/revert: restore the old hydration loop if needed; no data rollback.
+
+## 2026-07-17 - Release summary uses one saved state snapshot
+
+- [x] Added a sessions-layer `readProjectStateDatabaseSavedReleaseState`
+  reader that reads the queue envelope, normalized scope rows, saved summary,
+  repositories, diagnostics, and revisions in one SQLite transaction without
+  opening aggregate task detail blobs.
+- [x] Changed `readProjectSavedReleaseState` to consume that reader and to
+  normalize the stored summary wrapper at the boundary. Routes receive one
+  saved Release read model rather than deciding whether to expand task state.
+- [x] Release summary formatting now takes release identity from the same
+  durable queue/scopes envelope when an older projection omitted its copied
+  release field. The projection remains authoritative for counts/readiness;
+  the route does not manufacture a release or task membership.
+- [x] Focused proof: 16 project-state-boundary tests, 32 read-boundary tests,
+  and 79 release-readiness tests pass. The saved Release test still proves
+  ordinary summary reads avoid task expansion and repository inspection.
+
+### Contract Touch Decision
+
+- Work id: `codex:saved-release-single-snapshot-2026-07-17`.
+- Touched contracts: sessions-layer saved Release read model, current-state
+  release identity/readiness response formatting, and project-state boundary
+  summary normalization.
+- Considered but not touched: rich task detail shape, intake drafts, live Git
+  diagnostics, delivery state, and public Release URL/field names.
+- Required follow-up: move remaining ordinary project/detail readers onto
+  explicit summary, inventory, point-detail, or diagnostic readers; no route
+  may reassemble a second current-state authority.
+- Proof provided: focused boundary/readiness suites, data-layer lint, and the
+  saved-summary regression that caught the missing release identity.
+- Apply/revert behavior: code-only revert; no persisted rows are added or
+  rewritten by this reader change.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none. The reader uses existing `queue_state`,
+  `scopes`, `release_membership`, `work_scope`, `project_summary`, repository,
+  and diagnostic tables.
+- Change class: read-model consolidation; no schema migration required.
+- Existing data impact: none. Older summary rows with incomplete copied
+  release metadata now remain readable because the queue/scopes envelope owns
+  release identity.
+- Migration id: not required.
+- Compatibility reader: promoted projects use the new saved snapshot reader;
+  the explicit legacy path remains only for projects that have not crossed the
+  current-state cutover.
+- Fixtures/tests: saved Release no-expansion regression, release identity
+  regression, and current-state boundary suite.
+- Rollback/revert: code-only revert; no data rollback.

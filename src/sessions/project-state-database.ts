@@ -489,6 +489,21 @@ export interface ProjectStateDatabaseProjectionState<T = unknown> {
   summary: ProjectStateDatabaseSummary<T> | null
 }
 
+/**
+ * One saved Release/readiness snapshot. It intentionally has no inventory,
+ * task definitions, or mutable task overlays: Release cards consume the
+ * queue envelope, normalized scope rows, and saved projections only.
+ */
+export interface ProjectStateDatabaseSavedReleaseState<T = unknown> {
+  queue: ProjectStateDatabaseQueue
+  queueRevision: number
+  projectRevision: number
+  scopeRows: ProjectStateDatabaseScopeRow[]
+  repositories: ProjectStateDatabaseRepository[]
+  diagnostics: ProjectStateDatabaseDiagnosticProjection | null
+  summary: ProjectStateDatabaseSummary<T> | null
+}
+
 /** One revisioned point/detail read for the task drawer and task APIs. */
 export interface ProjectStateDatabaseTaskDetailState<T = unknown> {
   queue: ProjectStateDatabaseQueue
@@ -3849,31 +3864,12 @@ export function readProjectStateDatabaseProjectionState<T = unknown>(
     if (!tableExists(database, 'queue_state')) return null
     database.exec('BEGIN')
     inReadTransaction = true
-    const queueState = database.prepare(`
-      SELECT ${queueStateReadColumns(database, [
-        'version', 'last_updated', 'selected_release_id',
-        'execution_plan_actions_json', 'scope_authority_requests_json',
-      ])}
-      FROM queue_state WHERE id = 1
-    `).get() as JsonRecord | undefined
-    if (!queueState) return null
+    const queue = readProjectStateDatabaseQueueEnvelopeFromDatabase(database)
+    if (!queue) return null
     const queueRevision = currentQueueRevision(database)
     const summary = readProjectStateDatabaseSummaryFromDatabase<T>(database, tasksPath, options)
-    // Selection belongs to the durable queue envelope. The summary is a
-    // projection of that envelope and must never supply a missing selection
-    // during a read, or it becomes a second release authority.
-    const selectedReleaseId = stringValue(queueState.selected_release_id)
-    const releases = releaseDefinitionsFromDatabase(database)
     return {
-      queue: {
-        version: Number(queueState.version ?? 1),
-        ...optionalLastUpdated(queueState.last_updated),
-        ...optionalSelectedReleaseId(selectedReleaseId),
-        tasks: [],
-        releases,
-        ...optionalJsonArray(queueState.execution_plan_actions_json, 'executionPlanActions'),
-        ...optionalJsonArray(queueState.scope_authority_requests_json, 'scopeAuthorityRequests'),
-      },
+      queue,
       queueRevision,
       projectRevision: currentRevision(database),
       scopeRows: readScopeRowsFromDatabase(database),
@@ -3884,6 +3880,50 @@ export function readProjectStateDatabaseProjectionState<T = unknown>(
       repositories: readProjectStateDatabaseRepositoriesFromDatabase(database),
       diagnostics: readProjectStateDatabaseDiagnosticProjectionFromDatabase(database),
       summary,
+    }
+  } finally {
+    if (inReadTransaction) {
+      try {
+        database.exec('COMMIT')
+      } catch {
+        try {
+          database.exec('ROLLBACK')
+        } catch {
+          // Preserve the original read result/error.
+        }
+      }
+    }
+    database.close()
+  }
+}
+
+/** Read the saved Release/readiness envelope without opening task detail rows. */
+export function readProjectStateDatabaseSavedReleaseState<T = unknown>(
+  tasksPath: string,
+  options: ProjectStateDatabaseSummaryReadOptions = {},
+): ProjectStateDatabaseSavedReleaseState<T> | null {
+  const databasePath = projectStateDatabasePathFromTasksPath(tasksPath)
+  try {
+    statSync(databasePath)
+  } catch {
+    return null
+  }
+  const database = openDatabase(databasePath, { readOnly: true })
+  let inReadTransaction = false
+  try {
+    if (!tableExists(database, 'queue_state')) return null
+    database.exec('BEGIN')
+    inReadTransaction = true
+    const queue = readProjectStateDatabaseQueueEnvelopeFromDatabase(database)
+    if (!queue) return null
+    return {
+      queue,
+      queueRevision: currentQueueRevision(database),
+      projectRevision: currentRevision(database),
+      scopeRows: readScopeRowsFromDatabase(database),
+      repositories: readProjectStateDatabaseRepositoriesFromDatabase(database),
+      diagnostics: readProjectStateDatabaseDiagnosticProjectionFromDatabase(database),
+      summary: readProjectStateDatabaseSummaryFromDatabase<T>(database, tasksPath, options),
     }
   } finally {
     if (inReadTransaction) {
@@ -6820,6 +6860,31 @@ function compactTaskFromRow(row: ProjectStateDatabaseTask): JsonRecord {
   }
 }
 
+function readProjectStateDatabaseQueueEnvelopeFromDatabase(
+  database: DatabaseSync,
+): ProjectStateDatabaseQueue | null {
+  const queueState = database.prepare(`
+    SELECT ${queueStateReadColumns(database, [
+      'version', 'last_updated', 'selected_release_id',
+      'execution_plan_actions_json', 'scope_authority_requests_json',
+    ])}
+    FROM queue_state WHERE id = 1
+  `).get() as JsonRecord | undefined
+  if (!queueState) return null
+  // Release identity and selection belong to the queue/scopes projection.
+  // A summary is derived state and cannot fill a missing selection during a
+  // read without becoming a second release authority.
+  return {
+    version: Number(queueState.version ?? 1),
+    ...optionalLastUpdated(queueState.last_updated),
+    tasks: [],
+    releases: releaseDefinitionsFromDatabase(database),
+    ...optionalSelectedReleaseId(stringValue(queueState.selected_release_id)),
+    ...optionalJsonArray(queueState.execution_plan_actions_json, 'executionPlanActions'),
+    ...optionalJsonArray(queueState.scope_authority_requests_json, 'scopeAuthorityRequests'),
+  }
+}
+
 function readTaskDetailQueueEnvelopeFromDatabase(
   database: DatabaseSync,
   includeAggregateTasks: boolean,
@@ -6828,23 +6893,11 @@ function readTaskDetailQueueEnvelopeFromDatabase(
     ? database.prepare(`SELECT ${COMPACT_WORK_ITEM_COLUMNS} FROM work_items ORDER BY rowid`).all() as JsonRecord[]
     : []
   if (includeAggregateTasks) applyReleaseMembershipToTaskRows(database, taskRows)
-  const releaseRows = releaseDefinitionsFromDatabase(database)
-  const queueState = database.prepare(`
-    SELECT ${queueStateReadColumns(database, [
-      'selected_release_id', 'execution_plan_actions_json', 'scope_authority_requests_json',
-    ])}
-    FROM queue_state WHERE id = 1
-  `).get() as JsonRecord | undefined
-  // Release identity and selection belong to the queue/scopes projection.
-  // A summary is derived state and cannot fill a missing selection during a
-  // read without becoming a second release authority.
-  const selected = stringValue(queueState?.selected_release_id)
+  const queue = readProjectStateDatabaseQueueEnvelopeFromDatabase(database)
+  if (!queue) throw new Error('Current project-state queue envelope is unavailable.')
   return {
+    ...queue,
     tasks: taskRows.map(row => compactTaskFromRow(taskFromRow(row, false))),
-    releases: releaseRows,
-    ...optionalSelectedReleaseId(selected),
-    ...optionalJsonArray(queueState?.execution_plan_actions_json, 'executionPlanActions'),
-    ...optionalJsonArray(queueState?.scope_authority_requests_json, 'scopeAuthorityRequests'),
   }
 }
 
