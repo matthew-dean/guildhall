@@ -41083,3 +41083,108 @@ surfaces may request different projections of that state, but they may not
 manufacture current task identities or silently repair data during GET. Raw
 files, live Git inspection, transcripts, and context-debug remain separate
 historical or diagnostic inputs and must be marked as such.
+
+## 2026-07-17 - Revision-carrying detail hydration and explicit Git diagnostics
+
+This continuation makes the “same data management layer” enforceable for the
+next two detail seams. A task-detail caller can request a bounded set of
+related task points and receive the revisions that contain them. Git Story’s
+ordinary route reads the saved diagnostic projection; live checkout inspection
+is now an explicit diagnostic operation.
+
+- [x] Added a bounded SQLite batch point reader that preserves requested ID
+  order, omits missing IDs, and returns queue/project revisions from the same
+  transaction.
+- [x] Kept the old task batch API as a compatibility-shaped wrapper over that
+  reader; it no longer opens a separate authority path.
+- [x] Ordinary `/api/project/git-story` returns saved project diagnostics with
+  source/freshness/revision metadata and does not inspect Git.
+- [x] Explicit `?diagnostic=true`/`?live=true` Git Story and task Git Story
+  routes retain live inspection and identify themselves as live diagnostics.
+- [x] Delivery context reuses the already-derived relationship projection in
+  task detail and context-packet routes.
+- [x] Focused proof passes: 114 tests across read-boundary, delivery, and
+  project-state database suites; session data-layer lint passes.
+- [ ] The rich task-detail route still needs to replace its aggregate compact
+  queue hydration with bounded related-task points. This is the next cut.
+
+### Contract Touch Decision
+
+- Work id: `codex:revision-carrying-detail-and-git-diagnostic-boundary-2026-07-17`.
+- Touched contracts: task point batch reader, delivery context helper,
+  ordinary Git Story response metadata, and explicit Git diagnostic metadata.
+- Considered but not touched: task definition fields, delivery model schema,
+  repository diagnostic table schema, Git write/action semantics, and task
+  detail response field names.
+- Required follow-up: migrate rich task detail to bounded related-task reads;
+  retain live Git inspection only behind explicit diagnostic actions.
+- Proof provided: 114-test focused suite, `pnpm lint:data-layer`, and the
+  saved-versus-live Git Story route regressions.
+- Apply/revert behavior: revert the read/helper changes; persisted task and
+  diagnostic rows remain valid and no migration rollback is required.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none. The batch point reader uses existing
+  `work_items`, normalized release membership, scope, and revision tables. Git
+  Story uses the existing diagnostic projection.
+- Change class: read-boundary consolidation and response-source labeling.
+- Existing data impact: none. Existing Git diagnostics remain last-known state;
+  ordinary reads no longer replace them with a live scan.
+- Migration id: not required.
+- Compatibility reader: the old task batch function delegates to the new
+  bounded reader; no historical queue fallback was added.
+- Fixtures/tests: batch ordering/missing-ID/revision fixtures, Git Story
+  ordinary-vs-diagnostic route fixtures, and delivery relationship reuse.
+- Owner-facing plan: a detail read either identifies the exact saved revision
+  it came from or clearly says that live diagnostic inspection is being used.
+- Rollback/revert: code revert only; no persisted rows are rewritten.
+
+### Authority invariant
+
+The database boundary owns current task points and saved Git diagnostics.
+Route code may format those records or opt into a clearly labeled live
+diagnostic operation, but it cannot silently substitute a second current-state
+answer from a raw queue or checkout scan.
+
+## 2026-07-16 - Git Story uses the saved project diagnostic boundary
+
+- [x] Ordinary `GET /api/project/git-story` reads the saved Git diagnostic
+  projection through `readProjectReleaseState`; it no longer reads the task
+  queue or runs repository inspection just to render the project Git Story.
+- [x] The ordinary response reports `source`, `freshness`, source/project
+  revisions, `generatedAt`, and `requiresRefresh`. A missing or stale saved
+  observation is visible instead of being silently replaced with live state.
+- [x] Live project Git Story inspection is available only through explicit
+  `?diagnostic=true` or `?live=true`. Task-specific Git Story tabs remain
+  explicitly marked as live diagnostics.
+- [x] Focused proof: 31 read-boundary tests, including spies proving ordinary
+  GET does not call `NodeGitDriver.statusSummary` and explicit diagnostic GET
+  does; release-readiness saved/live coverage remains green at 108 tests.
+
+### Contract Touch Decision
+
+- Work id: `codex:git-story-saved-read-boundary-2026-07-16`.
+- Touched contracts: project Git Story response source/freshness metadata and
+  explicit live-diagnostic routing; task Git Story response diagnostic marker.
+- Considered but not touched: Git Story snapshot storage, repository inspection
+  policy, release-readiness calculations, delivery state, and task Git Story
+  inspection semantics.
+- Required follow-up: refresh the bounded project diagnostic projection from
+  the projection worker when Git state changes; this route intentionally does
+  not perform that work during GET.
+- Proof provided: focused read-boundary and release-readiness suites plus the
+  production build.
+- Apply/revert behavior: code-only revert; no persisted state migration.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none. The route consumes the existing bounded
+  `project_diagnostics` row and does not add repository or snapshot payloads.
+- Change class: read-path authority and response metadata.
+- Existing data impact: none; absent or stale diagnostics remain readable and
+  are reported with `requiresRefresh: true`.
+- Migration id: not required.
+- Compatibility reader: existing project-state boundary remains the only
+  ordinary reader; live Git inspection is explicit diagnostic behavior.
+- Rollback/revert: code-only revert; saved diagnostic rows remain valid.

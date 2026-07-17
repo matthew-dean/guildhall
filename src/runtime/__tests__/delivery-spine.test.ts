@@ -542,6 +542,28 @@ describe('project-local delivery spine', () => {
     ]))
   })
 
+  it('reuses precomputed relationships without changing the context packet', () => {
+    const tasks = [
+      task({
+        id: 'task-component',
+        title: 'Component implementation',
+        workKind: 'component',
+        delivery: { driver: 'knit', provider: 'looma', supports: ['task-context-menu'], usesPrimitives: ['menu', 'menu-item'] },
+      }),
+    ]
+    const relationships = deriveTaskRelationships({ model, tasks, taskId: 'task-component' })
+    const expected = buildTaskContextPacket({ model, tasks, taskId: 'task-component', now })
+    const actual = buildTaskContextPacket({
+      model,
+      tasks: [],
+      taskId: 'task-component',
+      now,
+      relationships,
+    })
+
+    expect(actual).toEqual(expected)
+  })
+
   it('does not mark imported source-recovery tasks runnable before the brief is repaired', () => {
     const tasks = [
       task({

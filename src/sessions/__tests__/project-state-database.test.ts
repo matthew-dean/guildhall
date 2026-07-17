@@ -34,6 +34,7 @@ import {
   readProjectStateDatabaseThreadSurfaceState,
   readProjectStateDatabaseTask,
   readProjectStateDatabaseTaskPoint,
+  readProjectStateDatabaseTaskPointsWithRevision,
   readProjectStateDatabaseTaskRelationships,
   readProjectStateDatabaseTasks,
   readProjectStateDatabaseTaskOverlay,
@@ -1330,6 +1331,46 @@ describe('project-state database', () => {
     })
     expect(snapshot?.queueRevision).toEqual(readProjectStateDatabaseQueueRevision(tasksPath))
     expect(snapshot?.projectRevision).toEqual(readProjectStateDatabaseRevisionFromTasksPath(tasksPath))
+  })
+
+  it('hydrates explicit task points in caller order and captures matching revisions', () => {
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: {
+        tasks: [
+          { id: 'task-1', title: 'One', status: 'ready', spec: 'First definition.' },
+          { id: 'task-2', title: 'Two', status: 'working', spec: 'Second definition.' },
+          { id: 'task-3', title: 'Three', status: 'done', spec: 'Third definition.' },
+        ],
+      },
+      summary: { generatedAt: '2026-07-14T00:00:00.000Z', freshness: 'current' },
+    })
+
+    const read = readProjectStateDatabaseTaskPointsWithRevision(
+      tasksPath,
+      ['task-3', 'missing', 'task-1', 'task-3'],
+      { includeDefinitions: true },
+    )
+
+    expect(read?.tasks.map(task => task.id)).toEqual(['task-3', 'task-1'])
+    expect(read?.tasks).toMatchObject([
+      { id: 'task-3', definition: { spec: 'Third definition.' } },
+      { id: 'task-1', definition: { spec: 'First definition.' } },
+    ])
+    expect(read?.queueRevision).toBe(readProjectStateDatabaseQueueRevision(tasksPath))
+    expect(read?.projectRevision).toBe(readProjectStateDatabaseRevisionFromTasksPath(tasksPath))
+  })
+
+  it('returns revisions for an empty point selection without reconstructing queue data', () => {
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: { tasks: [{ id: 'task-1', title: 'Only task', status: 'ready' }] },
+      summary: { generatedAt: '2026-07-14T00:00:00.000Z', freshness: 'current' },
+    })
+
+    const read = readProjectStateDatabaseTaskPointsWithRevision(tasksPath, [])
+
+    expect(read?.tasks).toEqual([])
+    expect(read?.queueRevision).toBe(readProjectStateDatabaseQueueRevision(tasksPath))
+    expect(read?.projectRevision).toBe(readProjectStateDatabaseRevisionFromTasksPath(tasksPath))
   })
 
   it('materializes only the Work-card facts needed by a compact list read', () => {

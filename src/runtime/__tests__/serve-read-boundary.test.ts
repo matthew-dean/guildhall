@@ -18,6 +18,7 @@ import {
 } from '@guildhall/sessions'
 import * as sessions from '@guildhall/sessions'
 import { buildServeApp } from '../serve.js'
+import { NodeGitDriver } from '../git-driver.js'
 import { writeProjectSummaryProjection } from '../project-summary-projection.js'
 import { inferProjectOrientationSnapshot } from '../project-orientation-snapshot.js'
 
@@ -64,6 +65,10 @@ const readRoutes: ReadRoute[] = [
   {
     label: 'release readiness',
     route: '/api/project/release-readiness',
+  },
+  {
+    label: 'project Git Story',
+    route: '/api/project/git-story',
   },
   {
     label: 'project graph',
@@ -272,6 +277,103 @@ describe('GET route read boundaries', () => {
     }
     const after = await snapshotDurableState()
     expect(changedFiles(before, after), `${route} mutated durable project state`).toEqual([])
+  })
+
+  it('reads ordinary Git Story from the saved diagnostic projection without inspecting Git', async () => {
+    const projectRevision = sessions.readProjectStateDatabaseMetadata(tmpDir).revision
+    sessions.writeProjectStateDatabaseDiagnosticProjection(tmpDir, {
+      sourceRevision: projectRevision,
+      freshness: 'current',
+      generatedAt: '2026-07-16T00:02:00.000Z',
+      git: {
+        ready: false,
+        state: 'committed_local',
+        blockerCount: 1,
+        blockers: [{
+          id: 'repo:root',
+          label: 'Read Boundary Test',
+          state: 'committed_local',
+          reason: 'One local commit is not pushed.',
+          nextAction: 'Push the branch.',
+          repoId: 'root',
+        }],
+      },
+      readiness: null,
+    })
+    const inspection = vi.spyOn(NodeGitDriver.prototype, 'statusSummary').mockRejectedValue(
+      new Error('ordinary Git Story must not inspect the checkout'),
+    )
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const response = await app.fetch(new Request(projectUrl('/api/project/git-story')))
+    const body = await response.json() as any
+
+    expect(response.status).toBe(200)
+    expect(body).toMatchObject({
+      state: 'committed_local',
+      source: 'project-state',
+      diagnostic: false,
+      freshness: 'current',
+      requiresRefresh: false,
+      sourceRevision: projectRevision,
+      projectRevision,
+      generatedAt: '2026-07-16T00:02:00.000Z',
+      blockers: [expect.objectContaining({ id: 'repo:root', state: 'committed_local' })],
+      snapshots: [],
+    })
+    expect(inspection).not.toHaveBeenCalled()
+  })
+
+  it('inspects Git only for an explicit Git Story diagnostic read', async () => {
+    const inspection = vi.spyOn(NodeGitDriver.prototype, 'statusSummary').mockResolvedValue({
+      repository: false,
+      ahead: 0,
+      behind: 0,
+      changedCount: 0,
+      untrackedCount: 0,
+      samplePaths: [],
+      clean: true,
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const response = await app.fetch(new Request(projectUrl('/api/project/git-story?diagnostic=true')))
+    const body = await response.json() as any
+
+    expect(response.status).toBe(200)
+    expect(body).toMatchObject({
+      state: 'no_repository',
+      source: 'live-git-inspection',
+      diagnostic: true,
+      freshness: 'live',
+      requiresRefresh: false,
+      generatedAt: expect.any(String),
+    })
+    expect(inspection).toHaveBeenCalled()
+  })
+
+  it('marks task-specific Git Story tabs as live diagnostics', async () => {
+    vi.spyOn(NodeGitDriver.prototype, 'statusSummary').mockResolvedValue({
+      repository: false,
+      ahead: 0,
+      behind: 0,
+      changedCount: 0,
+      untrackedCount: 0,
+      samplePaths: [],
+      clean: true,
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const response = await app.fetch(new Request(projectUrl('/api/project/task/task-boundary/git-story')))
+    const body = await response.json() as any
+
+    expect(response.status).toBe(200)
+    expect(body).toMatchObject({
+      taskId: 'task-boundary',
+      source: 'live-git-inspection',
+      diagnostic: true,
+      freshness: 'live',
+      requiresRefresh: false,
+    })
   })
 
   it('uses the approved release scope consistently across compact and detail reads', async () => {

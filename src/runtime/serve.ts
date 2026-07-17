@@ -396,6 +396,7 @@ import {
 import { buildProjectActionModel, type ProjectActionModel } from './project-action-model.js'
 import { NodeGitDriver } from './git-driver.js'
 import {
+  GitStoryClosureState,
   GitStorySnapshot,
   inspectGitStory,
   summarizeGitStories,
@@ -3722,6 +3723,53 @@ async function buildProjectGitStorySummary(projectPath: string, tasks?: Array<Re
   return summarizeGitStories(snapshots)
 }
 
+function savedProjectGitStorySummary(state: ProjectReleaseReadModel): GitStorySummary & {
+  source: 'project-state'
+  diagnostic: false
+  freshness: 'current' | 'stale' | 'missing'
+  requiresRefresh: boolean
+  sourceRevision: number | null
+  projectRevision: number | null
+  generatedAt: string | null
+} {
+  const diagnostic = state.diagnostics
+  const git = diagnostic?.git
+  const parsedState = GitStoryClosureState.safeParse(git?.state)
+  const storyState = parsedState.success ? parsedState.data : 'unknown'
+  const freshness = diagnostic?.freshness ?? 'missing'
+  const aligned = freshness === 'current'
+    && diagnostic?.sourceRevision !== undefined
+    && diagnostic.sourceRevision === state.projectRevision
+    && state.projectRevision !== null
+  const blockers = (git?.blockers ?? []).map(blocker => {
+    const blockerState = GitStoryClosureState.safeParse(blocker.state)
+    return {
+      id: blocker.id,
+      label: blocker.label,
+      state: blockerState.success ? blockerState.data : 'unknown',
+      reason: blocker.reason ?? blocker.label,
+      nextAction: blocker.nextAction ?? 'Inspect repository diagnostics.',
+      ...(blocker.repoId ? { repoId: blocker.repoId } : {}),
+      ...(blocker.taskId ? { taskId: blocker.taskId } : {}),
+    }
+  })
+  return {
+    ready: git?.ready ?? false,
+    state: storyState,
+    blockers,
+    // The saved diagnostic projection is deliberately summary-only. Exact
+    // repository snapshots belong behind the explicit live diagnostic path.
+    snapshots: [],
+    source: 'project-state',
+    diagnostic: false,
+    freshness,
+    requiresRefresh: !aligned,
+    sourceRevision: diagnostic?.sourceRevision ?? null,
+    projectRevision: state.projectRevision,
+    generatedAt: diagnostic?.generatedAt ?? null,
+  }
+}
+
 function gitStoryAutomationFor(
   projectPath: string,
   workspaceConfig: ReturnType<typeof readWorkspaceConfig> | null,
@@ -6315,7 +6363,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
       ? readProjectStateDatabaseInventory(tasksPath, { offset: inventoryOffset, limit: inventoryLimit })
       : null)
     const promotedOrientationMissing = promotedState && !storedSpine
-    const projectionAvailable = compactProjection && compactProjection.freshness !== 'error' && !promotedOrientationMissing
+    // Work is a task projection, not an orientation projection. A missing
+    // spine must not make an otherwise readable work inventory unavailable;
+    // Overview/Map can report their own missing-orientation state.
+    const orientationRequired = input.surface !== 'work'
+    const projectionAvailable = compactProjection && compactProjection.freshness !== 'error' &&
+      (!orientationRequired || !promotedOrientationMissing)
     const inventoryRequired = input.surface !== 'overview' || (!promotedState && !storedSpine)
     const inventoryAvailable = !inventoryRequired || indexedInventory !== null
     if (!projectionAvailable || !inventoryAvailable) {
@@ -6359,7 +6412,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           freshness,
           unavailable: true,
           requiresRefresh: true,
-          message: promotedOrientationMissing
+          message: orientationRequired && promotedOrientationMissing
             ? 'The saved project orientation is unavailable. Refresh the project summary before loading work.'
             : freshness === 'stale'
             ? 'The saved project summary is stale. Refresh the project summary before loading work.'
@@ -12456,8 +12509,23 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project/git-story', async c => {
     try {
       if (project.initializationNeeded) return c.json({ initializationNeeded: true })
+      const liveDiagnostics = c.req.query('live') === 'true' || c.req.query('diagnostic') === 'true'
+      if (!liveDiagnostics) {
+        const state = await readProjectReleaseState(project.path)
+        return c.json(savedProjectGitStorySummary(state))
+      }
+
       const tasks = await readTasksFileNormalized(projectTasksPath(project.path)).catch(() => [])
-      return c.json(await buildProjectGitStorySummary(project.path, tasks as Array<Record<string, unknown>>))
+      return c.json({
+        ...(await buildProjectGitStorySummary(project.path, tasks as Array<Record<string, unknown>>)),
+        source: 'live-git-inspection',
+        diagnostic: true,
+        freshness: 'live',
+        requiresRefresh: false,
+        sourceRevision: null,
+        projectRevision: null,
+        generatedAt: new Date().toISOString(),
+      })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
@@ -12559,6 +12627,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         model: deliveryModel,
         tasks: tasks as unknown as Task[],
         taskId: id,
+        relationships: deliveryRelationships,
       })
       const runStatus = run?.status ?? 'stopped'
       const availability = await readProjectAvailability(project.path)
@@ -12793,7 +12862,14 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
       const tasks = await readProjectTasksForServe(projectTasksPath(project.path))
       const model = await readProjectDeliveryModel(project.path)
-      return c.json(buildTaskContextPacket({ model, tasks: tasks as Task[], taskId: c.req.param('id') }))
+      const taskId = c.req.param('id')
+      const relationships = deriveTaskRelationships({ model, tasks: tasks as Task[], taskId })
+      return c.json(buildTaskContextPacket({
+        model,
+        tasks: tasks as Task[],
+        taskId,
+        relationships,
+      }))
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
@@ -12933,7 +13009,14 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (!task) return c.json({ error: 'task not found' }, 404)
       const workspaceStore = await readTaskWorkspaceStore(project.path).catch(() => undefined)
       const snapshot = await gitStoryForTaskIfUseful(project.path, task, workspaceStore?.workspaces[id])
-      return c.json({ taskId: id, gitStory: snapshot })
+      return c.json({
+        taskId: id,
+        gitStory: snapshot,
+        source: 'live-git-inspection',
+        diagnostic: true,
+        freshness: 'live',
+        requiresRefresh: false,
+      })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }

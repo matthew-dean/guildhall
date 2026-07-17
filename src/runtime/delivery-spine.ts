@@ -1521,8 +1521,9 @@ export function buildTaskContextPacket(input: {
   tasks: Task[]
   taskId: string
   now?: string
+  relationships?: TaskRelationshipSummary
 }): TaskContextPacket {
-  const relationships = deriveTaskRelationships(input)
+  const relationships = input.relationships ?? deriveTaskRelationships(input)
   const task = relationships.task
   const driver = input.model.drivers.find(candidate => candidate.id === task.delivery?.driver)
   const provider = input.model.drivers.find(candidate => candidate.id === task.delivery?.provider)

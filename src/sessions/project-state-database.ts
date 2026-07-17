@@ -576,6 +576,17 @@ export interface ProjectStateDatabaseTaskPointRead {
   projectRevision: number
 }
 
+/**
+ * One bounded batch of explicit task points and the revisions that contain
+ * them. The task list is intentionally point-shaped: it never reconstructs
+ * the queue or consults a legacy source when an id is absent.
+ */
+export interface ProjectStateDatabaseTaskPointsRead {
+  tasks: ProjectStateDatabaseTask[]
+  queueRevision: number
+  projectRevision: number
+}
+
 export interface ProjectStateDatabaseTaskRelationships {
   taskId: string
   parentId: string | null
@@ -6627,14 +6638,19 @@ function readTaskFromDatabase(
   return includeDefinitions ? attachWorkItemDetails([task], database)[0] ?? task : task
 }
 
-/** Read a small, explicit set of task identities without scanning the queue. */
-export function readProjectStateDatabaseTasks(
+/**
+ * Read a bounded, explicit set of task points and its CAS revisions from one
+ * SQLite read transaction. This is for related-task hydration: callers name
+ * the ids they need, and the database returns only those rows in caller order.
+ * Missing ids are omitted. There is deliberately no aggregate queue or legacy
+ * fallback in this path.
+ */
+export function readProjectStateDatabaseTaskPointsWithRevision(
   tasksPath: string,
   taskIds: readonly string[],
   options: Pick<ProjectStateDatabaseInventoryOptions, 'includeDefinitions'> = {},
-): ProjectStateDatabaseTask[] | null {
+): ProjectStateDatabaseTaskPointsRead | null {
   const ids = [...new Set(taskIds.filter(id => id.trim().length > 0))].slice(0, 100)
-  if (ids.length === 0) return []
   const databasePath = projectStateDatabasePathFromTasksPath(tasksPath)
   try {
     statSync(databasePath)
@@ -6642,22 +6658,55 @@ export function readProjectStateDatabaseTasks(
     return null
   }
   const database = openDatabase(databasePath, { readOnly: true })
+  let inReadTransaction = false
   try {
-    const columns = options.includeDefinitions === true ? FULL_WORK_ITEM_SCOPED_COLUMNS : COMPACT_WORK_ITEM_SCOPED_COLUMNS
-    const taskRows = database.prepare(`${workItemsWithScopeSelect(columns, hasWorkScopeTable(database))} WHERE work_items.id IN (${ids.map(() => '?').join(', ')})`).all(...ids) as JsonRecord[]
-    applyReleaseMembershipToTaskRows(database, taskRows)
-    const rows = taskRows.map(row => taskFromRow(row, false))
-    const detailedRows = options.includeDefinitions === true
-      ? attachWorkItemDetails(rows, database)
-      : rows
-    const byId = new Map(detailedRows.map(row => [row.id, row]))
-    return ids.flatMap(id => {
-      const row = byId.get(id)
-      return row ? [row] : []
-    })
+    database.exec('BEGIN')
+    inReadTransaction = true
+    const tasks = ids.length === 0
+      ? []
+      : (() => {
+        const columns = options.includeDefinitions === true ? FULL_WORK_ITEM_SCOPED_COLUMNS : COMPACT_WORK_ITEM_SCOPED_COLUMNS
+        const taskRows = database.prepare(`${workItemsWithScopeSelect(columns, hasWorkScopeTable(database))} WHERE work_items.id IN (${ids.map(() => '?').join(', ')})`).all(...ids) as JsonRecord[]
+        applyReleaseMembershipToTaskRows(database, taskRows)
+        const rows = taskRows.map(row => taskFromRow(row, false))
+        const detailedRows = options.includeDefinitions === true
+          ? attachWorkItemDetails(rows, database)
+          : rows
+        const byId = new Map(detailedRows.map(row => [row.id, row]))
+        return ids.flatMap(id => {
+          const row = byId.get(id)
+          return row ? [row] : []
+        })
+      })()
+    return {
+      tasks,
+      queueRevision: currentQueueRevision(database),
+      projectRevision: currentRevision(database),
+    }
   } finally {
+    if (inReadTransaction) {
+      try {
+        database.exec('COMMIT')
+      } catch {
+        try {
+          database.exec('ROLLBACK')
+        } catch {
+          // Preserve the original read result/error.
+        }
+      }
+    }
     database.close()
   }
+}
+
+/** Read a small, explicit set of task identities without scanning the queue. */
+export function readProjectStateDatabaseTasks(
+  tasksPath: string,
+  taskIds: readonly string[],
+  options: Pick<ProjectStateDatabaseInventoryOptions, 'includeDefinitions'> = {},
+): ProjectStateDatabaseTask[] | null {
+  if (taskIds.length === 0) return []
+  return readProjectStateDatabaseTaskPointsWithRevision(tasksPath, taskIds, options)?.tasks ?? null
 }
 
 export interface ProjectStateDatabaseQueue {
