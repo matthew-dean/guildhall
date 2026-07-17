@@ -41642,3 +41642,58 @@ accident while rendering an ordinary drawer.
 - Compatibility reader: legacy-only, selected after the authority boundary
   proves the project has not been promoted.
 - Rollback/revert: code-only revert; no data rollback.
+
+## 2026-07-17 - Project detail uses one bounded saved snapshot
+
+- [x] Added `readProjectDetailReadProjection` as the named boundary for a
+  bounded project inventory plus an optional selected task point. It reads the
+  queue envelope, indexed inventory, selected task, scope, summary, and source
+  revisions from the same SQLite snapshot.
+- [x] Routed compact project surfaces through that boundary. The route no
+  longer reaches into the compact database reader independently, and it never
+  uses the legacy task file to fill a promoted projection miss.
+- [x] Kept stale and missing states explicit. A saved SQLite projection may be
+  displayed with `requiresRefresh`; an unavailable promoted projection is not
+  reconstructed at request time.
+- [x] Fixed the migration edge where the projector had created delivery tables
+  before the migration runner saw them. Schema presence is now idempotent
+  implementation detail; the migration ledger still records the transition.
+- [x] Proof: project-detail projection tests 5/5, read-boundary tests 35/35,
+  delivery/migration/read-boundary suite 83/83, installed server `stale:false`,
+  seven-project performance audit passing, and cross-surface agreement with
+  `mismatchCount: 0`.
+
+### Contract Touch Decision
+
+- Work id: `codex:project-detail-read-projection-2026-07-17`.
+- Touched contracts: bounded project detail read model, compact project
+  surface source selection, and saved/stale/missing projection states.
+- Considered but not touched: rich task definitions, live diagnostics, Thread
+  history, and legacy pre-promotion reads.
+- Required follow-up: migrate the remaining rich project detail, memory, and
+  context-debug readers to named projections; add a guard that rejects ordinary
+  full-definition reads outside explicit detail/diagnostic paths.
+- Proof provided: project-detail projection tests, 35 read-boundary tests,
+  performance and state-agreement audits, installed stale-server check.
+- Apply/revert behavior: derived read-model code can be reverted without
+  changing authoritative task, release, or evidence rows.
+
+### Schema Migration Decision
+
+- Persisted schema touched: no new authoritative schema; the reader consumes
+  existing SQLite queue, summary, scope, and indexed task rows. The delivery
+  migration ledger entry is recorded even when its idempotent table creation
+  already occurred during projection refresh.
+- Change class: named read-boundary consolidation plus migration-ledger
+  correctness.
+- Existing data impact: no task definitions, release membership, or history is
+  rewritten; Narrative Harness records `0.13.3/delivery-read-projection` as
+  applied after the installed migration command.
+- Migration id: `0.13.3/delivery-read-projection`.
+- Safety: ordinary reads fail closed or expose stale state; the projector can
+  rebuild derived rows from authoritative SQLite state.
+- Compatibility reader: legacy reads remain explicit and pre-promotion only.
+- Fixtures/tests: missing authority, missing summary, stale summary, bounded
+  task point, migration idempotence, and route boundary coverage.
+- Rollback/revert: drop/rebuild derived delivery tables or revert reader code;
+  authoritative project state remains intact.

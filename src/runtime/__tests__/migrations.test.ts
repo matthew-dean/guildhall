@@ -16,7 +16,7 @@ import { createOwnerInputRequest } from '../owner-input-store.js'
 import { readProjectSummaryProjection, writeProjectSummaryProjectionFromIndexedState } from '../project-summary-projection.js'
 import { projectTaskStateExistsSync, readProjectTaskQueueSync, writeProjectTaskQueueWithSummary } from '../project-state-boundary.js'
 import { appendTaskEvidence, compressedTaskEvidencePath, readTaskEvidence, readTaskRuntimeStore, runtimeStatePath, taskEvidencePath, upsertTaskRuntimeState, upsertTaskWorkspaceState } from '../task-state-store.js'
-import { deliveryReadProjectionSchemaPresent } from '../delivery-read-projection.js'
+import { deliveryReadProjectionSchemaPresent, ensureDeliveryReadProjectionSchema } from '../delivery-read-projection.js'
 
 let tmp: string
 let projectRoot: string
@@ -361,6 +361,30 @@ describe('applyProjectMigrations', () => {
       projectRoot,
       only: ['0.13.3/delivery-read-projection'],
     })).applied).toEqual([])
+  })
+
+  it('records the delivery projection migration when the projector created its tables first', async () => {
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: {
+        version: 1,
+        lastUpdated: '2026-07-16T12:00:00.000Z',
+        tasks: [{ id: 'task-delivery-ledger', title: 'Delivery task', status: 'ready' }],
+        releases: [],
+      },
+      summary: { projectId: 'migration-test', generatedAt: '2026-07-16T12:00:00.000Z', freshness: 'current' },
+      scopeRows: [],
+      projectRoot,
+    })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+    expect(ensureDeliveryReadProjectionSchema(projectRoot)).toBe(true)
+
+    const result = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.3/delivery-read-projection'],
+    })
+    expect(result.applied.map(item => item.id)).toEqual(['0.13.3/delivery-read-projection'])
+    expect(deliveryReadProjectionSchemaPresent(projectRoot)).toBe(true)
   })
 
   it('does not erase normalized membership when compatibility mirrors are empty', async () => {

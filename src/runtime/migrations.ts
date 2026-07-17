@@ -2791,10 +2791,17 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
     summary: 'Creates the revisioned delivery read-model tables so ordinary queue and relationship reads have one saved authority instead of rebuilding delivery state in a GET.',
     async detect(projectRoot) {
       if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') return { needed: false, affectedPaths: [] }
+      const ledger = await readProjectMigrationLedger(projectRoot)
+      const applied = ledger.records.some(record => record.id === DELIVERY_READ_PROJECTION_MIGRATION_ID && record.status === 'applied')
       const present = deliveryReadProjectionSchemaPresent(projectRoot)
       return {
-        needed: !present,
-        affectedPaths: !present ? [projectStateDatabasePath(projectRoot), 'delivery read projection tables'] : [],
+        // The projector may have created the tables before the migration
+        // runner observed them. The ledger still needs to record the schema
+        // transition; apply is intentionally idempotent in that case.
+        needed: !applied,
+        affectedPaths: !applied
+          ? [projectStateDatabasePath(projectRoot), present ? 'delivery read projection migration ledger' : 'delivery read projection tables']
+          : [],
       }
     },
     async apply(projectRoot) {

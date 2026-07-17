@@ -5214,3 +5214,33 @@ it does not pretend the saved task Git story already exists.
 - **Migration id:** not required.
 - **Compatibility reader:** `diagnostic=true` remains the explicit live path.
 - **Rollback/revert:** code-only revert; no data rollback.
+
+## Project detail is a named bounded read model
+
+The project detail boundary now owns the compact inventory contract: one saved
+SQLite snapshot supplies the queue envelope, indexed task page, selected task
+point, selected scope, summary, and revisions. Compact Overview, Work, and Map
+format that result instead of each assembling the same facts independently.
+
+This matters because “same data layer” does not mean one giant response object.
+It means one authoritative write boundary and named read models over the same
+revisioned state. A Release view, project graph, delivery queue, or detail page
+may ask for different fields, but none may manufacture a current task from an
+intake document when the authoritative task projection says otherwise.
+
+The boundary also makes failure honest: stale saved state is labeled stale;
+missing promoted state requests refresh/migration; only pre-promotion projects
+may use compatibility readers. There is no ordinary-read repair or fallback
+to a second source.
+
+The migration runner was tightened alongside this work. A projector may create
+derived tables idempotently before the migration command runs, but that cannot
+make the migration disappear. The ledger records the schema transition after
+an idempotent apply, so schema presence and migration history cannot drift into
+two competing notions of what happened.
+
+Proof currently includes 5 project-detail projection tests, 35 read-boundary
+tests, the combined migration/delivery/read-boundary suite, installed
+`stale:false` verification, all seven registered projects passing the payload
+and latency budgets, and zero project-state agreement mismatches. Rich task
+detail, memory, and context-debug still need the same treatment.

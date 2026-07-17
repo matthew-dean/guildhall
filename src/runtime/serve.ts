@@ -57,7 +57,7 @@ import { taskBlockerSummary } from './task-blocker-summary.js'
 import { buildProjectSummaryProjection, prepareProjectSummaryProjectionFromUnknownQueue, queueForProjectSummaryScope, readApprovedPlan, readProjectSummaryProjection, readProjectSummaryShellProjection, updateProjectSummaryProjection, writeProjectSummaryProjectionFromIndexedState, writeProjectSummaryProjectionFromUnknownQueue, type ProjectSummaryProjection } from './project-summary-projection.js'
 import { inferProjectOrientationSnapshot } from './project-orientation-snapshot.js'
 import { refreshCurrentThreadProjection } from './current-thread-refresh.js'
-import { projectTaskRecordFromDatabasePoint, projectTaskStateExistsSync, readProjectCanonicalCurrentState, readProjectCompactStateModel, readProjectCurrentStateModel, readProjectGraphStateModel, readProjectReleaseState, readProjectSavedReleaseState, readProjectStateAuthorityAtBoundary, readProjectSummaryAtBoundary, readProjectTaskDetailState, readProjectTaskQueue, readProjectTaskQueueForRichMutation, readProjectTaskQueueForMutationSync, readProjectTaskQueueSync, readProjectTaskRecordAtBoundary, readProjectTaskRecordsAtBoundary, writePromotedTaskDetailMutation, writeProjectTaskQueueAtCurrentStateBoundary, writeProjectTaskQueueWithSummary, type ProjectCanonicalCurrentState, type ProjectReleaseReadModel, type ProjectSavedReleaseReadModel } from './project-state-boundary.js'
+import { projectTaskRecordFromDatabasePoint, projectTaskStateExistsSync, readProjectCanonicalCurrentState, readProjectCompactStateModel, readProjectCurrentStateModel, readProjectGraphStateModel, readProjectReleaseState, readProjectSavedReleaseState, readProjectStateAuthorityAtBoundary, readProjectSummaryAtBoundary, readProjectTaskDetailState, readProjectTaskQueue, readProjectTaskQueueForRichMutation, readProjectTaskQueueForMutationSync, readProjectTaskQueueSync, readProjectTaskRecordAtBoundary, readProjectTaskRecordsAtBoundary, writePromotedTaskDetailMutation, writeProjectTaskQueueAtCurrentStateBoundary, writeProjectTaskQueueWithSummary, type ProjectCanonicalCurrentState, type ProjectCompactStateReadModel, type ProjectReleaseReadModel, type ProjectSavedReleaseReadModel } from './project-state-boundary.js'
 import { taskTitleOverlap } from './task-title-overlap.js'
 import {
   readWorkspaceConfig,
@@ -268,6 +268,7 @@ import {
   readProjectDeliveryTaskProjection,
   refreshProjectDeliveryReadProjection,
 } from './delivery-read-projection.js'
+import { readProjectDetailReadProjection } from './project-detail-read-projection.js'
 import {
   applyStructuralMapReviewAction,
   readAcceptedStructuralMap,
@@ -6389,12 +6390,26 @@ export function buildServeApp(opts: ServeOptions = {}): {
     const inventoryLimit = input.inventoryLimit && input.inventoryLimit > 0
       ? Math.min(100, input.inventoryLimit)
       : 100
-    const compactState = promotedState
-      ? readProjectCompactStateModel(tasksPath, {
+    const detailReadProjection = promotedState
+      ? readProjectDetailReadProjection(project.path, {
           offset: inventoryOffset,
           limit: inventoryLimit,
           ...(input.requestedTaskId ? { selectedTaskId: input.requestedTaskId } : {}),
         })
+      : null
+    const compactState: ProjectCompactStateReadModel | null = detailReadProjection && detailReadProjection.authority === 'database' && detailReadProjection.queue && detailReadProjection.inventory
+      ? {
+          queue: detailReadProjection.queue,
+          inventory: detailReadProjection.inventory,
+          selectedTask: detailReadProjection.selectedTask,
+          scope: detailReadProjection.scope,
+          repositories: [],
+          diagnostics: null,
+          summary: detailReadProjection.summary,
+          authority: 'database',
+          queueRevision: detailReadProjection.revisions.queue ?? 0,
+          projectRevision: detailReadProjection.revisions.project ?? 0,
+        }
       : null
     const savedProjection = compactState?.summary ?? (promotedState ? null : readProjectSummaryAtBoundary(tasksPath))
     const compactProjection = savedProjection
