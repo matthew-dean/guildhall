@@ -221,7 +221,6 @@ import {
 import { deriveProjectWorkProgress, type ProjectWorkProgress } from './work-progress.js'
 import { deriveTaskWorkVisibility } from './work-visibility.js'
 import {
-  augmentTasksWithWorkspaceImportDraft,
   buildProjectOrientationSpine,
   taskEligibleForSelectedScope,
   type BuildProjectOrientationSpineInput,
@@ -2723,7 +2722,7 @@ function scopeRequiresCommandProof(scope: { id?: string | null; label?: string |
 }
 
 function buildOrientationSpineWithScopedReleaseTruth(
-  input: BuildProjectOrientationSpineInput,
+  input: Omit<BuildProjectOrientationSpineInput, 'workspaceImportDraft'>,
 ): {
   orientationSpine: ReturnType<typeof buildProjectOrientationSpine>
   releaseTruth: ReturnType<typeof summarizeScopedReleaseWork>
@@ -2770,7 +2769,7 @@ function buildOrientationSpineWithScopedReleaseTruth(
     selectedReleaseId,
     releases: releaseProjectionInputs,
     scopeProjection,
-    workspaceImportDraft: undefined,
+    workspaceImportDraft: null,
     releaseReadiness: {
       verdict: input.releaseReadiness?.verdict ?? (releaseBlockers.length > 0 ? 'blocked' : 'clear'),
       blockers: releaseBlockers,
@@ -7216,7 +7215,6 @@ export function buildServeApp(opts: ServeOptions = {}): {
         tasks: tasksBeforeSelection as unknown as Task[],
         runStatus: supervisor.get(project.id)?.status ?? 'stopped',
         startReadiness,
-        workspaceImportDraft: await workspaceImportDraftForOrientation(project.path, startReadiness),
         sourceRefs: projectOrientationSourceRefs(project.path),
       })
       const result = await writeSelectedReleaseId(projectTasksPath(project.path), releaseId, selectableSpine.releases as ProjectRelease[])
@@ -7230,7 +7228,6 @@ export function buildServeApp(opts: ServeOptions = {}): {
         tasks: tasks as unknown as Task[],
         runStatus: supervisor.get(project.id)?.status ?? 'stopped',
         startReadiness,
-        workspaceImportDraft: await workspaceImportDraftForOrientation(project.path, startReadiness),
         sourceRefs: projectOrientationSourceRefs(project.path),
       })
       return c.json({ ...result, spine })
@@ -7265,7 +7262,6 @@ export function buildServeApp(opts: ServeOptions = {}): {
         tasks: tasks as unknown as Task[],
         runStatus: supervisor.get(project.id)?.status ?? 'stopped',
         startReadiness: startReadinessBefore,
-        workspaceImportDraft: await workspaceImportDraftForOrientation(project.path, startReadinessBefore),
         sourceRefs: projectOrientationSourceRefs(project.path),
       })
       const sourceConflictMatches = orientationSpine.gaps.some(gap => {
@@ -8519,7 +8515,6 @@ export function buildServeApp(opts: ServeOptions = {}): {
       releases: queue.releases,
       tasks: typedQueue.tasks,
       runStatus: 'stopped',
-      workspaceImportDraft: undefined,
       sourceRefs: projectOrientationSourceRefs(projectPath),
     })
     const selectedReleaseScope =
@@ -8574,7 +8569,6 @@ export function buildServeApp(opts: ServeOptions = {}): {
       releases: queue.releases,
       tasks: typedQueue.tasks,
       runStatus: 'stopped',
-      workspaceImportDraft: undefined,
       sourceRefs: projectOrientationSourceRefs(projectPath),
     })
     const selectedReleaseScope =
@@ -8806,7 +8800,6 @@ export function buildServeApp(opts: ServeOptions = {}): {
         releases: rawReleases,
         tasks: effectiveTasks,
         runStatus: 'stopped',
-        workspaceImportDraft: undefined,
         sourceRefs: projectOrientationSourceRefs(projectPath),
       })
       : null
@@ -9130,7 +9123,6 @@ export function buildServeApp(opts: ServeOptions = {}): {
       releases: queue.releases,
       tasks: effectiveTasks,
       runStatus: 'stopped',
-      workspaceImportDraft: undefined,
       sourceRefs: projectOrientationSourceRefs(projectPath),
     })
     const selectedReleaseScope =
@@ -9736,7 +9728,6 @@ export function buildServeApp(opts: ServeOptions = {}): {
       releases: queue.releases,
       tasks: effectiveTasks,
       runStatus: 'stopped',
-      workspaceImportDraft: undefined,
       sourceRefs: projectOrientationSourceRefs(projectPath),
     })
     const selectedReleaseScope =
@@ -10054,7 +10045,6 @@ export function buildServeApp(opts: ServeOptions = {}): {
       selectedReleaseId: rawQueue.selectedReleaseId,
       releases: rawQueue.releases,
       tasks: tasks as Task[],
-      workspaceImportDraft: undefined,
       sourceRefs: projectOrientationSourceRefs(projectPath),
     })
     const selectedReleaseScope =

@@ -4861,3 +4861,54 @@ blob.
   suite.
 - **Rollback/revert:** restore from the evacuation manifest or rerun the
   migration against an uncut project; do not reintroduce request-time fallback.
+
+## 2026-07-17 - Current orientation API excludes intake authority
+
+The Release mismatch exposed a narrower version of the same architectural
+failure: even after current work moved behind SQLite, the shared orientation
+builder still advertised an input shape that could combine materialized work
+with an intake draft. That made the forbidden combination look like a normal
+supported operation, even though the current-state wrapper discarded the draft
+at runtime.
+
+The wrapper now accepts `Omit<BuildProjectOrientationSpineInput,
+'workspaceImportDraft'>`. Current project, Release, Map, Work, and start-state
+calculations can only receive current task/release/scope data from the project
+state boundary. Explicit workspace import remains draft-aware, but it is a
+separate intake operation and cannot be passed through the current-state
+builder. The three route call sites that attempted to load a draft before
+release selection or source-conflict reconciliation were removed; they were
+dead request-time reconstruction, not a valid source of current truth.
+
+This is the intended DRY guarantee: one data-management layer owns current
+identity, membership, counts, and scope; views choose a read shape, not a data
+source. A route may still request a named live diagnostic, but it cannot merge
+diagnostic or intake candidates into current task identity. The existing
+intake-only Release regression proves the visible behavior, and the narrowed
+input type prevents this particular authority violation from returning through
+the shared wrapper.
+
+**Contract Touch Decision - `codex:current-orientation-boundary-excludes-intake-2026-07-17`**
+
+- **Touched contracts:** internal current-orientation builder input and route
+  callers for release selection and source-conflict reconciliation.
+- **Considered but not touched:** explicit workspace-import draft schema,
+  public Release response shape, and persisted task/release records.
+- **Required follow-up:** migrate remaining ordinary runtime readers to the
+  same project-state boundary and remove dead draft construction from runtime
+  modules once explicit intake owns it.
+- **Proof provided:** 180 focused orientation/read-boundary/release tests,
+  including the intake-only Release mismatch fixture.
+- **Apply/revert:** code-only revert; no persisted data changes.
+
+**Schema Migration Decision - `codex:current-orientation-boundary-excludes-intake-2026-07-17`**
+
+- **Persisted schema touched:** none.
+- **Change class:** type/API boundary tightening.
+- **Existing data impact:** none; intake drafts remain available to the explicit
+  import flow and current materialized records are unchanged.
+- **Migration id:** not required.
+- **Compatibility reader:** no new reader; current reads continue through the
+  existing project-state boundary.
+- **Rollback/revert:** restore the wider input type and removed arguments; no
+  database rollback is needed.

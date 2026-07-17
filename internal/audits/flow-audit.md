@@ -41295,3 +41295,47 @@ accident while rendering an ordinary drawer.
 - Compatibility reader: existing project-state boundary remains the only
   ordinary reader; live Git inspection is explicit diagnostic behavior.
 - Rollback/revert: code-only revert; saved diagnostic rows remain valid.
+
+## 2026-07-17 - Current-state orientation cannot accept intake drafts
+
+- [x] Narrowed `buildOrientationSpineWithScopedReleaseTruth` to a current-state
+  input type that omits `workspaceImportDraft`. Current project, Release, Map,
+  Work, and start-readiness calculations therefore cannot pass an intake draft
+  into the shared current-state builder.
+- [x] Removed the three route call sites that tried to hydrate an orientation
+  draft before release selection or source-conflict reconciliation. The shared
+  builder was already discarding that payload; retaining the call sites made a
+  second authority look supported and encouraged request-time source scans.
+- [x] Kept intake/draft composition in the explicit workspace-import flow and
+  kept `buildProjectOrientationSpine`'s draft-aware API for that separate
+  feature. Current-state reads now use the boundary's materialized task and
+  release records only.
+- [x] Existing regression `does not let an intake snapshot manufacture current
+  Release work` remains the behavioral proof: an intake-only
+  `workspace-import:*` row cannot appear in Release detail or scope counts.
+
+### Contract Touch Decision
+
+- Work id: `codex:current-orientation-boundary-excludes-intake-2026-07-17`.
+- Touched contracts: internal current-orientation builder input and the release
+  selection/source-conflict route call contract.
+- Considered but not touched: explicit workspace-import draft schema, public
+  Release response shape, and persisted task/release records.
+- Required follow-up: move any remaining current-state route readers behind the
+  same project-state boundary; this change closes the orientation/draft seam,
+  not every direct legacy reader in the runtime yet.
+- Proof provided: boundary and release-readiness regressions plus the existing
+  intake-only Release mismatch fixture.
+- Apply/revert behavior: code-only revert; no persisted rows or migration.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none.
+- Change class: type/API boundary tightening.
+- Existing data impact: none; draft data remains available through the explicit
+  intake path and current materialized task data is unchanged.
+- Migration id: not required.
+- Compatibility reader: no new reader; current-state code continues to use the
+  existing shared project-state boundary.
+- Rollback/revert: restore the wider input type and removed call arguments; no
+  database rollback is needed.
