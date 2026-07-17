@@ -5087,3 +5087,37 @@ a second packet authority.
   coverage.
 - **Rollback/revert:** code rollback is safe; additive compact fields can
   remain in existing rows.
+
+## 2026-07-17 - Thread extras are saved-state-only by default
+
+Thread was still making an ordinary request to inspect Git for every task
+mentioned in its turns. That violated the same data-management rule as the
+old Release mismatch: the visible surface silently chose a live external
+source instead of a saved projection. Ordinary Thread extras now returns an
+explicit saved envelope with `requiresRefresh: true` and a diagnostic link.
+Only `diagnostic=true` or `live=true` may inspect the checkout.
+
+This is intentionally a small cut while the task-level Git snapshot projection
+is still being designed. It removes the hidden cost and tells the UI the truth;
+it does not pretend the saved task Git story already exists.
+
+**Contract Touch Decision - `codex:thread-extras-saved-boundary-2026-07-17`**
+
+- **Touched contracts:** Thread extras freshness/diagnostic response and live
+  Git inspection gating.
+- **Considered but not touched:** current Thread, history, project Git Story,
+  and task Git Story diagnostic response.
+- **Required follow-up:** add a task-level saved Git snapshot projection if
+  Thread should show task stories without a refresh.
+- **Proof provided:** ordinary extras Git-spy regression and existing explicit
+  diagnostic Git Story tests.
+- **Apply/revert:** code-only revert; no persisted data changes.
+
+**Schema Migration Decision - `codex:thread-extras-saved-boundary-2026-07-17`**
+
+- **Persisted schema touched:** none.
+- **Change class:** read-path and freshness-contract tightening.
+- **Existing data impact:** none; the route stops doing implicit live work.
+- **Migration id:** not required.
+- **Compatibility reader:** `diagnostic=true` remains the explicit live path.
+- **Rollback/revert:** code-only revert; no data rollback.

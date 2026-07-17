@@ -376,6 +376,26 @@ describe('GET route read boundaries', () => {
     })
   })
 
+  it('keeps ordinary Thread extras from inspecting Git', async () => {
+    const inspection = vi.spyOn(NodeGitDriver.prototype, 'statusSummary').mockRejectedValue(
+      new Error('ordinary Thread extras must not inspect the checkout'),
+    )
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const response = await app.fetch(new Request(projectUrl('/api/project/thread/extras?taskIds=task-boundary')))
+    const body = await response.json() as any
+
+    expect(response.status).toBe(200)
+    expect(body).toMatchObject({
+      taskGitStories: {},
+      freshness: 'saved',
+      diagnostic: false,
+      requiresRefresh: true,
+      diagnosticHref: '/api/project/thread/extras?diagnostic=true',
+    })
+    expect(inspection).not.toHaveBeenCalled()
+  })
+
   it('uses the approved release scope consistently across compact and detail reads', async () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
 

@@ -12188,6 +12188,20 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (project.initializationNeeded) {
         return c.json({ taskGitStories: {} })
       }
+      const diagnostic = c.req.query('diagnostic') === 'true' || c.req.query('live') === 'true'
+      if (!diagnostic) {
+        return c.json({
+          taskGitStories: {},
+          freshness: 'saved',
+          diagnostic: false,
+          requiresRefresh: true,
+          diagnosticHref: '/api/project/thread/extras?diagnostic=true',
+          detailPayload: {
+            kind: 'thread-task-git-story',
+            omitted: 'Task Git Story is live checkout inspection and is available only from the explicit diagnostic route.',
+          },
+        })
+      }
       const timing: Array<{ name: string; startedAt: number; endedAt?: number }> = [{ name: 'thread-extras', startedAt: Date.now() }]
       const requestedTaskIds = new Set(
         (c.req.query('taskIds') ?? '')

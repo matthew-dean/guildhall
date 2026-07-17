@@ -41479,6 +41479,38 @@ accident while rendering an ordinary drawer.
 - Rollback/revert: code can be reverted; the compact summary fields are
   additive and may be left in place without changing task authority.
 
+## 2026-07-17 - Thread extras stop implicit Git inspection
+
+- [x] Ordinary `/api/project/thread/extras` now returns an honest saved-state
+  envelope and a diagnostic link instead of inspecting every task's checkout.
+- [x] Live task Git Story remains available only with the explicit
+  `diagnostic=true` or `live=true` query.
+- [x] Regression proof spies on `NodeGitDriver.statusSummary` and verifies the
+  ordinary Thread extras route never calls it; the existing explicit diagnostic
+  Git Story coverage remains green.
+
+### Contract Touch Decision
+
+- Work id: `codex:thread-extras-saved-boundary-2026-07-17`.
+- Touched contracts: Thread extras response freshness/diagnostic envelope and
+  the ordinary-versus-live Git inspection boundary.
+- Considered but not touched: current Thread turns, paged Thread history,
+  project Git Story summary, and task Git Story diagnostic response.
+- Required follow-up: materialize task-level saved Git snapshots if Thread
+  should show them without a refresh; do not re-enable implicit checkout scans.
+- Proof provided: `serve-read-boundary.test.ts` and existing Git Story tests.
+- Apply/revert behavior: code-only revert; no persisted data changes.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none.
+- Change class: read-path/freshness contract tightening.
+- Existing data impact: none; ordinary Thread extras now reports that live
+  task Git state requires explicit refresh.
+- Migration id: not required.
+- Compatibility reader: `diagnostic=true` remains the explicit live reader.
+- Rollback/revert: code-only revert; no data rollback.
+
 ## 2026-07-17 - Promoted projects fail closed when saved Release state is missing
 
 - [x] `readProjectSavedReleaseState` no longer falls through from a promoted
