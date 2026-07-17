@@ -1,4 +1,3 @@
----
 title: Web UI flow audit
 help_topic: web.flow_audit
 help_summary: |
@@ -6,7 +5,784 @@ help_summary: |
   workspace intake, task shaping, execution, and completion from the browser.
 ---
 
+2026-07-15T19:20:00Z - Ordinary current-state writes now have one durable
+representation.
+
+- Work id: `codex:current-state-single-writer-2026-07-15`.
+- Queue and summary writes commit SQLite normalized state; they no longer emit
+  `queue-details.json.gz` or `project-summary.json` as normal sidecars.
+- Explicit migration compatibility output is limited to the ordered migration
+  path and is covered by `0.13.0/project-state-finalize`; normal readers remain
+  database-only and fail closed when the detail index is unavailable.
+- Bootstrap intake prefers the database once a queue revision exists. A raw
+  source file is only read before the first current-state import.
+- Focused proof: 107 database/boundary/summary/migration tests passed, along
+  with `pnpm lint:data-layer`, `pnpm lint:contracts`, and `git diff --check`.
+- At the time of this entry, remaining live proof was the installed migration
+  and performance pass; that proof is recorded below.
+
+2026-07-15T18:42:00Z - The recorded-cutover cleanup correction is installed
+and verified across the registered fleet.
+
+- Work id: `codex:recorded-cutover-cleanup-2026-07-15`.
+- `pnpm migrate:project-state --all` applied
+  `0.13.0/project-state-legacy-live-file-cleanup` to all seven registered
+  projects with zero failures; the only remaining pending migration is the
+  manual runtime-backed-project choice.
+- After `guildhall stop` / `guildhall start`, every registered project still
+  has no retired `TASKS.json`, summary, queue-detail, availability, attention,
+  reconciliation, or task-runtime compatibility file.
+- Installed proof: `/api/stale-server` reports `stale:false`; the project-state
+  performance audit passes fleet, cold, warm, rich-task, and Thread budgets
+  with all seven projects current and no loading/errors.
+- Follow-up: the broad historical fixture suite still contains legacy-shaped
+  tests that need to be migrated to current-state fixtures; those failures are
+  test-fixture contract drift, not evidence that promoted production projects
+  read the retired files.
+
+2026-07-14T22:30:00Z - The first storage-format pass is now installed and
+measured across the four calibration projects.
+
+- Work id: `codex:data-size-and-data-layer-2026-07-14`.
+- Root fixes: read-only Mastra memory construction no longer creates durable
+  thread rows; migration `0.12.19/memory-empty-thread-shells` removed only
+  empty Guildhall-generated shells. The full revision-matched task detail store
+  now uses compressed JSON at `queue-details.json.gz`; migration
+  `0.12.20/project-state-detail-compression` converted the four registered
+  calibration projects.
+- Installed storage proof: Narrative Harness is 10,039,704 B total with a
+  118,684 B detail store; Looma + Knit is 18,656,919 B with a 51,912 B detail
+  store; Jess is 2,421,733 B; Fair Labor License is 2,707,483 B. Mastra thread
+  and message counts are zero in all four stores after the guarded cleanup.
+- Installed API proof: compact project responses are 45,491 B, 50,580 B,
+  6,521 B, and 6,867 B respectively; all returned 200. Explicit rich project
+  responses still return full content (1,911,546 B / 3.25 s for Narrative
+  Harness and 1,698,193 B / 6.43 s for Looma + Knit), proving the compact
+  route is not hiding missing task detail by deleting it. `/api/stale-server`
+  reported `stale:false`.
+- Remaining data-layer findings: codebase-map histories, old TASKS backups,
+  progress snapshots, review/evidence records, and the SQLite page/index floor
+  still dominate total storage. They require explicit ownership and retention
+  contracts; do not call generic deletion "cleanup." Task transition writers
+  also still need to converge on the current-state mutation boundary.
+- Remaining browser proof: run the same project overview/work/map geometry and
+  cross-surface state-agreement audit against the freshly installed compact
+  store after the remaining history/detail boundaries land.
+
+2026-07-14T22:35:00Z - The current-state database no longer stores a second
+full copy of every task definition, and diagnostic histories now have byte
+budgets rather than only line/per-task limits.
+
+- Work id: `codex:current-state-detail-store-and-byte-budgets-2026-07-14`.
+- Finding: SQLite held about 1.13 MB of full task definitions for Narrative
+  Harness and 1.16 MB for Looma + Knit, while the compatibility `TASKS.json`
+  held the same task detail. Looma's 18.6 MB recent-event file and 17.2 MB
+  context-debug ledger also exceeded their intended "recent" shape because
+  large payloads defeated line-count and per-task retention caps.
+- Root fix: schema version 8 writes normalized current work rows with an empty
+  legacy definition column and writes full current task/release detail once to
+  revision-matched `project-state/queue-details.json`. Explicit detail readers
+  use that sidecar; compatibility queue reads remain a migration fallback.
+  Persisted reconnect events omit tool inputs, output, snapshots, and other
+  transport payloads while the live in-memory stream remains complete. The
+  event stream and context-debug ledger each enforce a 512 KiB project-wide
+  byte budget.
+- Guardrail: this is not a blind cleanup. The writer was changed first, fresh
+  tests fail if prompt/context bodies or event output cross the diagnostic
+  boundary, and migration `0.12.16/project-state-detail-store` is the explicit
+  path that vacuums old SQLite definition duplication and materializes the
+  sidecar. The next required step is migrating direct queue readers so
+  `TASKS.json` can become a compact compatibility export instead of a third
+  full representation.
+- Proof so far: database, migration, context-observability, supervisor, and
+  summary-boundary suites pass after the expected schema-version update;
+  `git diff --check` remains clean. Installed-project byte measurements are
+  still pending until the fresh build and migration run.
+
+2026-07-14T21:05:00Z - A compact list row and compact spine are stored reads,
+not a reason to call the database the whole project authority.
+
+- Work id: `codex:projection-authority-correction-2026-07-14`.
+- User job: Moving among Overview, Work, Map, Structure, and Releases should
+  show one selected scope and one progress count without each route reopening
+  `TASKS.json` or silently recreating a task card from a full definition.
+- Root fix: compact `/api/project/spine` now consumes only the saved
+  orientation projection. SQLite version 6 adds `work_items.summary_json`, the
+  bounded Work-card row, so compact inventory reads do not open
+  `definition_json` merely to show acceptance/work-unit/spec signals.
+- Guardrail: a stale/missing projection is explicit unavailable/thin state;
+  GET does not rebuild from the queue. Migration `0.12.12` is the one
+  authorized rebuild for existing rows. This does **not** make SQLite the
+  authority for full task detail, effective state, Thread, or orchestration;
+  the architecture inventory now lists those unfinished authority transfers.
+- Proof: project-state database, migration, compact read-boundary, dashboard,
+  and release-readiness suites pass (97 tests in the focused boundary run); the card regression stores
+  large evidence in the full definition and proves the compact read has only
+  its bounded card facts. The compact-spine regression corrupts `TASKS.json`
+  after a current summary write and proves the route neither parses nor
+  replaces the saved scope.
+- Installed proof: built, dev-installed, restarted, and confirmed
+  `stale:false`. `0.12.12` materialized list rows across all seven registered
+  projects. Narrative Harness returns Overview 48,634 bytes / 26 ms (9 cards),
+  Work 121,740 bytes / 15 ms (100 rows), and Map 79,909 bytes / 7 ms (100
+  identities), all current and all with `selectedCounts.visibleTotal: 11`.
+  Looma + Knit reports 5 selected work items on all three surfaces; Jess and
+  Fair Labor License honestly report no selected release scope.
+- Remaining proof: the 100-row Work default remains a budget failure even
+  though its query is fast; it needs a tighter default/page interaction. The
+  four-project audit also found current full-versus-compact readiness
+  disagreement, which is a shared aggregate migration finding, not a UI polish
+  item.
+
+2026-07-14T21:30:00Z - Task detail begins its queue authority transfer.
+
+- Work id: `codex:database-queue-envelope-2026-07-14`.
+- User job: Opening a task should use the same current task/release aggregate
+  as the compact project views; it must not need to parse the compatibility
+  queue merely to find the selected task and its selected scope.
+- Root fix: SQLite version 7 adds `queue_state` with queue version, last
+  update, and selected release beside the existing normalized full task/release
+  definitions. Task detail prefers this explicit database queue when the
+  shared summary is current; a missing or stale database remains an honest
+  compatibility-reader case.
+- Guardrail: the task-detail regression writes a valid database queue, corrupts
+  `TASKS.json`, updates only the compatibility freshness marker, and proves the
+  endpoint still returns the stored task. This prevents a future “detail is
+  slow, just parse the file” regression.
+- Proof: database, migration, and task-endpoint suites pass (148 tests); data
+  layer and contract checks pass. Migration `0.12.13` is additive, leaves
+  compatibility files untouched, and does not claim queue mutation authority
+  has transferred yet.
+- Remaining proof: install/migrate the real projects; then move normal queue
+  mutations and Thread to the same transactional reader. Effective task
+  runtime/workspace/evidence and the full task-detail diagnostic payload are
+  still independent authority/performance work.
+
+2026-07-14T22:00:00Z - Task diagnostics are opt-in, not ordinary navigation
+payload.
+
+- Work id: `codex:task-detail-diagnostics-boundary-2026-07-14`.
+- User job: Opening a task should immediately show the work itself. It must not
+  silently load raw agent scrollback, debug material, or event history that the
+  user did not ask to inspect.
+- Root fix: `GET /api/project/task/:id` now omits those diagnostics and the
+  drawer fetches only the selected Action, Transcript, or Origin detail after
+  its tab is opened. The new extras endpoint accepts explicit `include` values.
+- Guardrail: the drawer isolates extra payload by task id and marks an
+  unavailable optional diagnostic loaded, preventing a response for a former
+  task or a failed fetch from causing repeated request churn.
+- Proof: the endpoint regression writes a deliberately large transcript,
+  proves the initial response excludes it and remains under 50 KB, then proves
+  the opt-in transcript route returns it. The drawer regression proves no
+  transcript or Thread request occurs until its tab is selected. Task-endpoint,
+  database, migration, drawer, data-layer, contract, and diff checks pass
+  (201 focused tests). After build/install/restart with `stale:false`, the
+  real initial detail payload dropped from 1.09 MB to 19 KB for Jess, 134 KB
+  to 6 KB for Fair Labor License, and 70 KB to 14 KB for Looma + Knit. The
+  deliberately explicit extras route contains those diagnostics instead. The
+  Narrative Harness initial task remains 83 KB because its selected task record
+  itself is about 62 KB; that is an open task-definition/detail-contract issue,
+  not a reason to reintroduce raw diagnostics.
+
+2026-07-14T20:35:00Z - Compact project surfaces read one synchronized model,
+not three request-time reconstructions.
+
+- Work id: `codex:project-summary-map-read-model-2026-07-14`.
+- User job: Opening Project Map should immediately show the documented project
+  skeleton, current scope, and proof/source context without loading every task
+  or creating a second interpretation from raw records.
+- Root fix: version-10 summaries store a bounded compact orientation tree at the
+  authoritative queue/summary write boundary. Version-4 SQLite stores selected
+  scope membership beside indexed work rows in that same transaction. Overview
+  reads a small explicit task-id set; Work and Map page indexed rows. None of
+  those compact routes rebuild scope or orientation when the projection is
+  current.
+- Guardrail: task proof, task runtime/workspace, execution, owner-input, and
+  repository writes may no longer patch a few fields into `project_summary` as
+  `current`. They retain their normalized current row and invalidate the shared
+  projection until a complete refresh owns the result.
+- Proof: focused project-summary, project-state-database, migration, and GET
+  read-boundary suites pass (68 tests). The snapshot test changes README after
+  the write and proves Overview, Work, and Map return saved orientation rather
+  than rereading it; Work pagination separately proves one returned page has
+  one scope row while the durable scope total remains three.
+- Installed proof: `0.12.8` through `0.12.11` ran across all seven registered
+  projects. `0.12.11` consolidates project availability, attention history,
+  and reconciliation acknowledgements into the current-state database; it
+  retains old files as read-only compatibility input and does not prune them.
+  After build, dev install, restart, and `stale:false`, Narrative Harness
+  returns Overview 45,938 bytes / 35 ms, Work (40 indexed items) 72,373 bytes
+  / 10 ms, and Map (24 identities) 65,084 bytes / 5 ms. Overview and Work
+  carry no Map roots and no project config blob; only Map carries its bounded
+  navigator hierarchy. Looma + Knit returns 32,257 / 65,242 / 57,574 bytes;
+  Jess 6,942 / 6,603 / 6,802; Fair Labor License 7,288 / 6,935 / 7,148.
+  Every compact read reported `current` freshness.
+- Remaining proof: Map still carries a bounded, contiguous navigator graph
+  (roughly 45 KB for Narrative Harness) because that screen needs the project
+  skeleton. It must not grow into a second task queue: the storage admission
+  gate in the architecture plan now requires an explicit owner, route job,
+  cap, and byte measurement for every new field. Project availability,
+  attention, and reconciliation facts have crossed the same boundary; their
+  fresh-project regression proves a read neither allocates a database nor
+  imports legacy data. Browser geometry/readability proof remains open.
+
+2026-07-14T19:00:00Z - Compact orientation is a stored project fact, not a
+repository scan disguised as a map request.
+
+- Work id: `codex:project-summary-orientation-snapshot-2026-07-14`.
+- User job: Opening Overview, Work, or Map should immediately show the same
+  last-known project charter, source trail, selected scope, and release state
+  without rereading documentation or constructing another interpretation.
+- Root fix: version-4 `project_summary` stores a small orientation snapshot.
+  Document inference now happens only at explicit summary/intake refresh or a
+  project-brief save; compact routes consume that snapshot and indexed SQL rows.
+- Guardrail: a source-file change outside Guildhall can make a source snapshot
+  outdated, but it may never silently rewrite orientation during a GET. The
+  next explicit refresh owns that reconciliation.
+- Proof: focused projection/migration/database/read-boundary suite has 57
+  passing tests. The map regression mutates README after snapshot creation and
+  proves the response retains the saved charter and source reference; the spine
+  regression proves a legacy queue edit cannot replace the last indexed release
+  on a compact read.
+- Installed proof: rebuilt, dev-installed, restarted, and verified
+  `/api/stale-server` as `stale:false`. The automatic snapshot migration ran
+  across all seven registered projects. Narrative Harness compact Map returned
+  `200`, `current`, the owner-approved headless-MVP charter, and the selected
+  `Stage 1: Headless Drafting And Evaluation MVP` release in 33 ms / 155,672
+  bytes. The source list is now the three physical sources
+  `project-brief.md`, `README.md`, and `docs/index.md`; the case-only README
+  alias no longer inflates provenance.
+- Remaining proof: browser geometry/readability proof is still open because the
+  in-app browser bridge failed before attaching (`Cannot redefine property:
+  process`), not because the installed route failed.
+
+2026-07-14T18:00:00Z - Storage cleanup is never accepted as the root fix for
+data growth.
+
+- Work id: `codex:anti-band-aid-storage-gate-2026-07-14`.
+- Rule: before retaining, pruning, compacting, or deleting data, reproduce the
+  writer and lifecycle from a fresh temporary project, classify the bytes, and
+  fix the allocation/read boundary first.
+- Required proof: path resolution is side-effect free; explicit writes still
+  allocate; the normal read path creates no database, WAL, project directory,
+  or raw transcript; and before/after measurements show the model itself got
+  cheaper.
+- Cleanup scope: only a one-time, explicit, allowlisted migration may remove
+  historical residue after the boundary fix. Guildhall must not ship a generic
+  orphan-pruning mechanism to compensate for future leaks.
+- Current proof: `getProjectLocalHistoryDir` is pure, `ensureProjectLocalHistoryDir`
+  is the explicit allocation boundary, and focused local-history/memory tests
+  cover both behaviors. Remaining provider-trace and old-history cleanup is
+  deferred until its writer and lifecycle are traced.
+- Installed proof: after `pnpm build`, `pnpm dev:install`, and a service restart,
+  `/api/stale-server` reported `stale:false`; `/api/service/projects` returned
+  34,469 bytes in 24 ms, and Narrative Harness compact overview/work/map reads
+  returned 79,307/186,462/154,004 bytes in 13/11/11 ms. None included
+  `contextDebug` or `memoryCore`, and all reported `projectStatusLoading:false`.
+  The pre-existing user-local history residue remains about 3.5 GB; it was not
+  deleted as part of this proof because its removal is not the root fix.
+
+2026-07-14T16:45:00Z - Exploring history must be semantic memory, not raw
+conversation storage.
+
+- Work id: `codex:essential-history-retention-2026-07-14`.
+- User job: An agent should be able to resume intake from durable facts,
+  decisions, constraints, open questions, and next actions without Guildhall
+  retaining or replaying an ever-growing conversation transcript.
+- Finding: Narrative Harness had about 288 KB of exploring transcript files,
+  including a legacy 50.8 KB workspace-import transcript. The larger local
+  diagnostic directories were about 32 MB of context-debug data and 15 MB of
+  persistence/events. These were separate from the 1.33 MB `TASKS.json` queue,
+  but all were symptoms of mixing current state, history, and diagnostics.
+- Change: `append-exploring-transcript` now rewrites a bounded essential-history
+  document. The live orchestrator supplies the existing `contextIndexer` model
+  as the semantic writer; a deterministic bounded compactor is the failure
+  path and never appends raw text. Existing legacy transcript files are cleaned
+  by `guildhall memory clean-project-state --apply`.
+- Proof provided: essential-history and transcript-boundary tests verify the
+  micro-model request, no-tools/precise settings, idempotency marker, bounded
+  fallback, and that raw transcript scaffolding is not retained.
+- Remaining follow-up: provider traces still need their own retention pass. The
+  context-debug pass is now complete: prompt/context bodies are omitted, the
+  duplicate persistence mirror is retired, and cleanup keeps only a tiny active
+  task window. Completed session snapshots are bounded at the storage boundary;
+  pending tool-result tails remain intact for crash recovery. A deeper audit
+  found that the default memory packet was instantiating Mastra/libSQL without
+  using its retrieval APIs, and local-history path reads created directories.
+  Deterministic memory is now the default; Mastra is explicit opt-in pending a
+  real retrieval/compaction proof, and path resolution is being made pure.
+- Contract Touch Decision:
+  - Touched contracts: local exploring-history file format and the agent tool's
+    persistence semantics; the compatible tool name remains unchanged.
+  - Contracts considered but not touched: task JSON shape, release shape,
+    project-state SQLite schema, public route names, and evidence JSONL.
+  - Apply/revert: compact files are rebuildable from current task/intake state;
+    legacy readers still accept old transcript files until cleanup runs.
+- Schema Migration Decision:
+  - Persisted schema touched: user-local exploring Markdown format only.
+  - Migration id: cleanup is explicit through the existing project-state
+    compaction command; it does not run during ordinary project reads.
+  - Existing data impact: legacy exploring files are rewritten in place to
+    essential history when `--apply` is used; context-debug bodies and
+    terminal-task diagnostics are removed by the separate retention pass.
+  - Rollback: restore from the local-history backup or legacy source copy; no
+    project task or current-state rows are changed.
+
+2026-07-14T17:05:00Z - Read-only memory construction must not create durable
+threads.
+
+- Work id: `codex:session-and-memory-retention-2026-07-14`.
+- Finding: the Mastra adapter called `createThread` during read-only memory
+  packet construction. Narrative Harness had 64,530 empty `mastra_threads`
+  rows and no messages, so ordinary reads were silently growing a database.
+- Change: read-only adapters no longer create threads. Session persistence now
+  compacts completed messages at the storage boundary, and project cleanup
+  rewrites existing completed snapshots while preserving pending recovery tails.
+- Proof provided: 104 focused tests pass across sessions, agents, compaction,
+  and memory-core, including a read-only SQLite thread-count assertion.
+- Remaining follow-up: compact the existing context-debug/provider ledgers and
+  delete only duplicate empty Mastra rows in an explicit guarded migration.
+- Contract Touch Decision:
+  - Touched contracts: session snapshot retention and Mastra read-only adapter
+    behavior.
+  - Considered but not touched: task/release/project-state tables, public
+    routes, and non-empty memory records.
+  - Apply/revert: completed session files are normalized in place; pending
+    recovery files are preserved; empty-thread cleanup is separately guarded.
+- Schema Migration Decision:
+  - Persisted schema touched: session JSON payload shape and read/write behavior
+    of the system-local Mastra database.
+  - Migration id: `0.12.2/session-essential-history-and-read-only-memory`.
+  - Existing data impact: completed sessions may shrink to one essential-history
+    message; no message-bearing memory rows are deleted.
+ - Rollback: restore session files or skip the empty-row cleanup; no project
+   task/current-state records are changed.
+
+2026-07-14T17:35:00Z - Context-debug must be a short-lived diagnostic cache,
+not project history.
+
+- Work id: `codex:context-debug-retention-2026-07-14`.
+- User job: A developer can inspect recent context health for live work without
+  making Guildhall load or retain every prompt, formatted context, and memory
+  packet ever assembled for a project.
+- Finding: Narrative Harness had about 32 MB of context-debug snapshots/ledger
+  data plus a separate 15.5 MB persistence mirror. Prompt previews, formatted
+  contexts, and repeated memory identifiers were being retained even though
+  project and fleet summaries do not need them.
+- Change: context-debug now stores a compact manifest with sizes, health,
+  reasons, and hashes only. It retains at most six manifest records and three
+  snapshots per non-terminal task; terminal-task diagnostics are removed during
+  cleanup. The local manifest is the only diagnostic stream; the duplicate
+  persistence event mirror is retired.
+- Proof provided: focused context-observability and compaction tests pass;
+  installed Narrative Harness cleanup removed the duplicate event files and
+  removed all diagnostics for its current terminal tasks. No context-debug
+  records are loaded into the project summary/read model.
+- Contract Touch Decision:
+  - Touched contracts: context-debug record/snapshot retention and diagnostic
+    persistence placement.
+  - Considered but not touched: task/release/project-state tables, summary
+    routes, essential history, and message-bearing memory records.
+  - Apply/revert: the pass is explicit and task-state-aware; a new active run
+    can regenerate diagnostics without changing project state.
+- Schema Migration Decision:
+  - Persisted schema touched: local context-debug JSONL and Markdown snapshots;
+    the duplicate persistence event stream is retired.
+  - Migration id: `0.12.3/context-debug-retention-boundary`.
+  - Existing data impact: prompt/context bodies, repeated memory IDs, and
+    terminal-task diagnostics are removed; current task/state records remain.
+  - Rollback: regenerate diagnostics from a new active run; no project-state
+    database rollback is required.
+
+2026-07-14T16:15:00Z - Project-state storage must be a real bounded read model,
+not a smaller request-time reconstruction.
+
+- Work id: `codex:project-state-database-technology-2026-07-14`.
+- User job: A user should be able to open the project/workspaces page and see
+  every project shell from durable current state without waiting for task
+  history, Git inspection, thread reconstruction, or provider work. A compact
+  project read must not copy or parse full task definitions just to count or
+  list work.
+- Model change: `project-state.db` is now the per-project current-state store.
+  SQLite typed/indexed rows own current work, scopes, execution, runtime,
+  latest proof, owner input, repositories, summary, and one project revision.
+  JSON/JSONL remain compatibility or append-only history formats. Compact SQL
+  explicitly selects only hot columns; task detail is the path allowed to load
+  one full definition. The duplicate `state_meta` table was removed so schema
+  and revision have one owner.
+- Technology decision: use built-in Node `node:sqlite` with SQLite's rollback
+  journal (`journal_mode=DELETE`), `synchronous=FULL`, `busy_timeout=5000`,
+  short `BEGIN IMMEDIATE` writes, and one database file per project.
+  `@mastra/libsql` remains memory-adapter
+  infrastructure and is not a second project-state authority. The package
+  runtime floor is Node `22.12.0`.
+- Proof provided: 39 focused database, migration, and read-boundary tests;
+  compact queue and paginated inventory tests prove full task definitions are
+  not returned at the compact boundary; `pnpm lint:data-layer`,
+  `pnpm lint:contracts`, and `git diff --check` pass.
+- Honest risk: Node `24.11.1` emits SQLite's official experimental warning.
+  This is recorded, not suppressed. CI and installed-app proof must verify the
+  declared runtime, rollback-journal mode, transaction behavior, restart persistence, and
+  real-project timings before this architecture slice is considered complete.
+- Contract Touch Decision:
+  - Touched contracts: the internal project-state database schema, package
+    runtime floor, compact project read boundary, and summary freshness/revision
+    semantics.
+  - Contracts considered but not touched: public task/release JSON shape,
+    evidence history format, memory storage, Git protocol, and browser route
+    names.
+  - Required follow-up: direct database summary reads, crash/concurrency proof,
+    four-project parity, and removal of remaining request-time reconstruction.
+  - Apply/revert: the database is rebuildable from compatibility records;
+    dropping the derived duplicate metadata table does not delete task or
+    history records.
+- Schema Migration Decision:
+  - Persisted schema touched: system-local `project-state.db` schema version 3
+    and the package runtime requirement needed to open it.
+  - Migration ids: `0.12.0/project-state-database` for the initial backfill and
+    `0.12.1/project-state-database-rollback-journal` for the journal upgrade.
+  - Existing data impact: normalized current rows and summary are backfilled;
+    `state_meta` is dropped as redundant derived metadata and old WAL files are
+    converted; JSON/JSONL task, evidence, and history records remain unchanged.
+  - Compatibility reader: legacy JSON is only a migration/compatibility input
+    when no current database exists; out-of-band edits mark the database stale.
+  - Rollback: delete the rebuildable database and use the prior compatibility
+    readers while preserving the source records.
+
+2026-07-14T14:35:00Z - Approved planning membership must not override an
+explicit queue release assignment.
+
+- Work id: `codex:release-membership-authority-2026-07-14`.
+- User job: A user should see the work actually assigned to the selected
+  release. An older approved-plan row may describe planning history, but it
+  must not silently make an unassigned task look executable or widen the
+  release shown by Overview, Map, Work, or Release readiness.
+- Finding: The first merge fix preserved queue membership when import release
+  records arrived, but `queueForProjectSummaryScope()` could still append
+  stale approved-plan task IDs to a release that already had explicit queue
+  assignments.
+- Change: Release membership is now owned per release by the queue once that
+  release has task assignments or node membership. Approved planning can seed
+  an empty release envelope, but it cannot widen an explicitly assigned one.
+  The queue remains unchanged during reads. Migration
+  `0.11.5/project-summary-release-membership-authority` rebuilds the compact
+  projection so stored release counts use the same rule.
+- Proof provided: project-summary, read-boundary, and release-readiness suites
+  pass with 96 tests, including a stale-plan membership regression. Installed
+  build and four-project parity proof remain required.
+- Contract Touch Decision:
+  - Touched contracts: the shared project-scope read-model rule that combines
+    queue release records with approved planning metadata.
+  - Contracts considered but not touched: task/release schemas, approved-plan
+    schema, summary projection schema, hierarchy, evidence, Git, and history.
+  - Apply/revert: code-only; persisted project data is unchanged.
+- Schema Migration Decision:
+  - Persisted schema touched: rebuildable system-local
+    `project-state/project-summary.json` contents only.
+  - Migration id: `0.11.5/project-summary-release-membership-authority`.
+  - Existing data impact: summaries are rebuilt; task, release, evidence, and
+    history records are not rewritten.
+  - Rollback: remove or ignore the projection and rebuild it from the queue
+    plus approved plan; authoritative records remain intact.
+
+2026-07-14T14:47:00Z - Installed project-state parity after the release
+membership migration.
+
+- User job: The fast fleet/project shell and deliberate release views should
+  report the same named scope without forcing every project through a deep
+  reconstruction. Projects without an approved release should remain visibly
+  unreleased and explain the setup work instead.
+- Installed proof: `pnpm build`, `pnpm dev:install`, service restart, and
+  `guildhall migrate apply --all` completed. `/api/stale-server` returned
+  `stale:false` for PID `35060`. Narrative Harness returned the same release ID
+  and 11 scoped nodes in compact Project, compact Spine, and Release readiness.
+  Looma + Knit returned the same release ID and 5 scoped nodes in all three.
+  Jess and Fair Labor License returned no release, `scopeMode:"unreleased"`,
+  `summaryFreshness:"current"`, and the honest `workspace_import_pending`
+  setup action.
+- Performance sample: warm `/api/service/projects` was 6 ms / 34,469 bytes;
+  NH compact Project was 19 ms / 85,526 bytes; NH compact Spine was 13 ms /
+  57,594 bytes. Explicit NH Release readiness remained detail work at 298 ms /
+  9,982 bytes. The fast shell is bounded enough to continue the next payload
+  reduction slice; Release readiness is not being mistaken for a fleet read.
+- Remaining finding: the selected scope now agrees, but compact payloads still
+  carry more orientation data than the fleet shell needs, and Work/Map/detail
+  routes still require bounded inventory and historical reads. The four-project
+  parity result is therefore a successful boundary proof, not completion of the
+  architecture pivot.
+- Contract Touch Decision:
+  - Touched contracts: none beyond the already recorded release-membership
+    projection and migration decisions.
+  - Proof provided: installed API parity matrix, stale-server check, and warm
+    route timings above.
+
+2026-07-14T14:22:00Z - Release membership must merge across authoritative
+queue state and approved import state.
+
+- Work id: `codex:release-membership-merge-2026-07-14`.
+- User job: A user should see the same current task population in compact
+  project/spine summaries and explicit Release readiness. Adding approved
+  import context must not make an already queued release task disappear.
+- Finding: Narrative Harness compact project/spine reported 12 current tasks,
+  while Release readiness reconstructed 11. The second release record from
+  import augmentation replaced the queue release's `nodeIds`, dropping a
+  completed DeepInfra model-selection task from the explicit scope.
+- Change: release projection assembly now merges records by release ID and
+  unions current/deferred node membership instead of replacing the earlier
+  record. No persisted task or release record was rewritten.
+- Proof provided: focused `serve-release-readiness` regression passed and the
+  resulting scope retained the queue-backed task. The broader four-project
+  parity matrix remains open because proof/runtime/repository state still has
+  independent reconstruction paths.
+- Contract Touch Decision:
+  - Touched contracts: internal release projection assembly used by project
+    scope and readiness responses.
+  - Contracts considered but not touched: task/release schemas, summary
+    projection schema, hierarchy, evidence, Git, and history.
+  - Apply/revert: code-only; persisted project data is unchanged.
+
+2026-07-14T13:56:00Z - Approved release scope now agrees across fast project
+summaries without changing the authoritative task queue.
+
+- Work id: `codex:project-summary-approved-scope-selection-2026-07-14`.
+- User job: A user should be able to see the currently approved release for a
+  project in the fleet, project, compact spine, explicit spine detail, and
+  Release readiness views, while projects with no named release remain
+  visibly unreleased.
+- Finding: The approved intake already recorded release membership, but the
+  compact projection had been refreshed before the read-model scope-selection
+  rule existed. NH and Looma + Knit therefore showed approved release IDs
+  beside an `unreleased` summary.
+- Change: Added the idempotent `0.11.4/project-summary-approved-scope-selection`
+  migration. `queueForProjectSummaryScope()` derives the named release
+  envelope in memory from the compact approved plan and queue assignments. It
+  does not create a release, mutate `TASKS.json`, or promote detector output.
+- Installed proof: `pnpm build`, `pnpm dev:install`, service restart, and
+  `/api/stale-server` all passed with `stale:false`. The migration applied to
+  all seven registered projects. Compact spine timings were NH 53 ms / 58,988
+  bytes with `Stage 1: Headless Drafting And Evaluation MVP`, Looma + Knit 20
+  ms / 81,297 bytes with `Stage 1: V1 Release Hardening`, Jess 6 ms / 4,474
+  bytes unreleased, and Fair Labor License 3 ms / 4,297 bytes unreleased.
+  The fleet endpoint returned all seven projects with matching scope modes and
+  selected release labels. A read-only fixture also proved compact spine,
+  explicit spine detail, and `/api/project/release-readiness` return the same
+  named release. On the installed service, explicit spine detail was NH 1,857
+  ms / 553,782 bytes and Looma + Knit 1,299 ms / 625,755 bytes; Release
+  readiness was 335 ms and 360 ms respectively.
+- Boundary evidence: the explicit non-compact spine remains detail by design
+  and was 1,857 ms / 553,782 bytes for NH and 1,299 ms / 625,755 bytes for
+  Looma + Knit. This is now the next bounded-read target rather than a reason
+  to inflate the compact projection.
+- Contract Touch Decision:
+  - Touched contracts: version 3 project-summary projection,
+    `releaseSummary.scopeMode`, compact fleet/project/spine response fields,
+    and migration `0.11.4/project-summary-approved-scope-selection`.
+  - Contracts considered but not touched: authoritative task/release records,
+    task hierarchy, release readiness checks, and historical event storage.
+  - Proof provided: migration selected-scope fixture, queue byte-preservation
+    assertion, project-summary/read-boundary tests, installed matrix, and
+    stale-server check.
+- Schema Migration Decision:
+  - Persisted schema touched: rebuildable system-local
+    `project-state/project-summary.json` only.
+  - Existing data impact: projections refreshed; task, release, evidence, and
+    history records unchanged.
+  - Rollback: delete or ignore the projection and rebuild it from the queue
+    plus approved plan.
+
+2026-07-14T13:43:00Z - Approved planning state must survive the compact read
+boundary without becoming fake executable scope.
+
+- Work id: `codex:project-summary-approved-plan-2026-07-14`.
+- User job: A user should be able to see that a project has an approved plan,
+  how much current versus later work it contains, and which optional releases
+  were recorded, without Guildhall loading the full intake documents or
+  inventing a user-visible release.
+- Finding: Approval persisted `TASKS.json` and `workspace-goals.json`, but the
+  fast `project-summary.json` projection only tracked the queue. Full Release
+  detail could therefore see approved scope that compact project/spine reads
+  could not explain.
+- Change: Added version 3 `approvedPlan` to the compact projection. It stores
+  source-backed counts, task IDs, current/later membership, and release
+  membership only; executable `scope` and `releaseSummary` remain queue facts.
+  Approval refreshes the projection once after both durable writes complete.
+  The reader records both source mtimes and marks out-of-band planning edits
+  stale instead of silently serving a mixed state.
+- Proof: 12 project-summary tests and 24 migration tests pass, including
+  approved-plan parsing, out-of-band freshness, and migration idempotence.
+  Build and installed four-project proof remain required after the next
+  projection refresh.
+- Contract Touch Decision:
+  - Touched contracts: version 3 project-summary projection, compact project
+    summary payload, and workspace-import approval write boundary.
+  - Contracts considered but not touched: task/release schemas, importer
+    document format, effective-task expansion, and full Release checks.
+  - Required follow-up: make compact spine and Release detail use the same
+    projected plan identity when they display scope labels.
+- Schema Migration Decision:
+  - Persisted schema touched: rebuildable system-local
+    `project-state/project-summary.json` only.
+  - Migration id: `0.11.3/project-summary-approved-plan`.
+  - Existing data impact: no authoritative task, release, evidence, or history
+    records are rewritten; projects without an approved plan expose `null`.
+  - Rollback: delete or ignore the projection and rebuild it from its sources.
+
+2026-07-14T21:50:00Z - Routine orientation reads must not load proof-rich
+detail state.
+
+- Work id: `codex:compact-project-spine-boundary-2026-07-14`.
+- User job: A user opening a project structure or release view should get the
+  current scope and next action quickly, while a deliberate release check may
+  still inspect repository and proof evidence.
+- Finding: `/api/project/spine` was doing both jobs. The UI used the full
+  spine route, so a simple orientation header could trigger Start preflight,
+  effective-task expansion, and Git Story work.
+- Change: Added the explicit `compact=true` spine contract. Release and the
+  project-structure panel use it. The unqualified route remains detail for
+  compatibility and proof-rich consumers. Compact responses declare
+  `completeness: scope` and `checksLoaded: false`, return no full roots/nodes,
+  and do not import detector candidates or approved intake as hidden scope.
+- Four-project proof: installed `stale:false`; compact spine was 54 ms NH,
+  25 ms Looma + Knit, 5 ms Jess, and 3 ms Fair Labor License. Jess and Fair
+  Labor License returned no phantom inferred work; their next action remained
+  `workspace_import_pending`. Explicit Release detail continued to expose its
+  own checks separately.
+- Proof: focused runtime suite 109/109 passed; build/install/restart and stale
+  server checks passed; the browser bridge remained unavailable for screenshot
+  proof because it previously failed while redefining `process`.
+- Contract Touch Decision:
+  - Touched contracts: `/api/project/spine?compact=true` and the Release/
+    Structure fetch URLs.
+  - Contracts considered but not touched: full spine detail, task/release
+    authority, and approved-intake persistence.
+  - Follow-up: add a first-class approved-intake scope projection, then make
+    compact and detail release labels agree from that shared field.
+- Schema Migration Decision:
+  - Persisted schema touched: none by this route boundary.
+  - Migration id: none required.
+  - Existing data impact: none; the full detail route and task records remain.
+  - Rollback: remove `compact=true` from the two UI consumers; no data revert.
+
 # Web UI flow audit
+
+2026-07-14T21:35:00Z - Project summaries now distinguish named releases from
+unreleased bounded work.
+
+- Work id: `codex:project-summary-scope-and-activity-2026-07-14`.
+- User job: A user should be able to tell whether a project has an explicit
+  release, how much of its current bounded work is done, and whether proof or
+  owner work blocks progress without Guildhall inventing an MVP or current
+  release label.
+- Change: `project-summary.json` now carries a durable release/progress
+  summary, status counts, and a bounded in-flight list. No-release projects
+  return `release: null` and `scopeMode: unreleased`; named releases use the
+  stored release record. Compact project surfaces consume this projection,
+  while full Release checks remain an explicit detail path.
+- Read boundary: Activity uses the projection when current and only parses the
+  task queue as a compatibility path for missing/stale projections. No GET
+  route repairs or writes durable state.
+- Change after audit: added the idempotent
+  `0.11.1/project-summary-projection-v2` migration for projections written by
+  the earlier migration, and made the compact fleet summary carry the same
+  `workProgress` and release summary used by Activity. Release now receives the
+  compact summary from the project shell while its repository/design/evidence
+  checks remain an explicit detail request.
+- Installed proof: rebuilt and installed the current artifact, restarted 7777,
+  and confirmed `stale:false`. The fleet returned 7/7 projects with
+  `summaryFreshness: current`; the representative real projects showed
+  Narrative Harness as unreleased 30 scoped / 27 done / 19 proof-blocked,
+  Looma + Knit as unreleased 10 scoped / 8 done, and Jess plus Fair Labor
+  License as unreleased with no scoped work beyond their setup task. Compact
+  API timings were service 6 ms, NH Overview 26 ms, Work 45 ms, Map 88 ms,
+  Activity 30 ms; explicit Release detail remained isolated at 2.02 s.
+- Proof: project-scope, project-summary, release-readiness, dashboard,
+  Activity, task-endpoint, migration, and read-boundary tests pass for this
+  slice; build and contract lint pass.
+- Contract Touch Decision:
+  - Touched contracts: project summary projection and compact Activity/readiness
+    response fields.
+  - Contracts considered but not touched: authoritative task/release records,
+    owner approval semantics, and historical event storage.
+  - Proof provided: focused tests and no-release/named-release fixtures.
+- Schema Migration Decision:
+  - Persisted schema touched: additive projection fields only.
+  - Migration id: `0.11.1/project-summary-projection-v2`.
+  - Existing data impact: seven registered projections were refreshed; task and
+    release records are unchanged.
+  - Rollback: ignore the additive fields and rebuild the projection from the
+    authoritative queue.
+
+2026-07-14T20:20:00Z - Superseded planning documents must not remain active
+context for the project-state pivot.
+
+- Work id: `codex:project-state-document-archive-2026-07-14`.
+- User job: An agent starting Guildhall work should find one current
+  project-state architecture and should not mistake old spine, map, release,
+  task-tree, closure, completed, or deferred plans for active instructions.
+- Finding: The pivot had already moved the main orientation/release/task
+  architecture documents to the archive, but several completed or deferred
+  plans and specs still lived in active `internal/plans` and `internal/specs`
+  folders. Their presence made the repository look like it had several
+  competing current models.
+- Change: Moved those historical lanes under `internal/plans/archive/`, added
+  an explicit active-vs-archive policy to the internal indexes, and repaired
+  current links. Independent capability plans with live owners remain active.
+- Proof: `rg --files internal/plans internal/specs` shows the active folders
+  contain only current lanes; stale references to the moved files are absent
+  outside the archive; the pivot and archive README name the single source of
+  truth.
+- Contract Touch Decision:
+  - Touched contracts: internal planning-document location and navigation
+    links only.
+  - Contracts considered but not touched: runtime APIs, persisted project
+    state, task/release schemas, and public documentation.
+  - Required follow-up: new project-state work must update the pivot and the
+    canonical flow-audit checklist before adding another implementation plan.
+  - Proof provided: repository path/reference audit and diff check.
+- Schema Migration Decision:
+  - Persisted schema touched: none.
+  - Migration id: none required.
+  - Existing data impact: none; files moved without deleting their contents.
+  - Rollback: move the archived files back to their original locations if the
+    archive boundary is rejected.
+
+2026-07-14T19:45:00Z - Work and Map inventory payloads must be bounded to the
+information their rows can display.
+
+- Work id: `codex:project-inventory-payload-boundary-2026-07-14`.
+- User job: A user opening Work or Map should see the project inventory quickly;
+  opening one task should be the action that loads its full criteria, work-unit
+  analysis, evidence, and other detail.
+- Finding: The projection-backed route had removed expensive readiness scans but
+  still serialized rich task arrays into every Work and Map response. The app
+  was faster while continuing to transport data the inventory views could not
+  display at once.
+- Root cause classification: data-model/read-contract problem. The views were
+  consuming a raw-task-shaped projection rather than a surface-specific
+  inventory projection over the same authoritative task records.
+- Change: Work now receives row-level identity, grounding, lifecycle/readiness,
+  compact brief/spec markers, criteria/work-unit counts, and its small proof
+  summary. Full criteria, work-unit analysis, size plans, and raw evidence stay
+  on task detail. Map receives only task identity, title, status, work kind,
+  and release membership because the orientation projection owns hierarchy and
+  provenance.
+- Contract Touch Decision:
+  - Touched contracts: compact `/api/project?surface=work|map` task payloads;
+    the shared Work/Map consumer fields that read the reduced shape.
+  - Contracts considered but not touched: authoritative task/release schemas,
+    task-detail response, orientation schema, and persistence format.
+  - Required follow-up: add explicit paging or bounded tree loading for very
+    large Work and Map inventories; keep full task detail on demand.
+  - Proof provided: focused runtime/UI tests, `pnpm build`,
+    `pnpm lint:contracts`, `git diff --check`, `pnpm dev:install`, restart,
+    `/api/stale-server` `stale:false`, and installed NH API measurements of
+    Work 18 ms warm / 272,694 bytes and Map 16 ms warm / 188,729 bytes.
+- Schema Migration Decision:
+  - Persisted schema touched: none; this is an additive read projection.
+  - Existing data impact: none; canonical task titles and full records remain
+    unchanged and task detail remains the compatibility path.
+  - Migration id: none required.
+  - Rollback: restore the prior compact surface mapper; no persisted rollback.
 
 2026-07-13T20:35:00Z - Compact task rows must inherit source-grounding from the orientation spine when raw task records are hollow.
 
@@ -6284,6 +7060,22 @@ against the live roster when doing a release-gating user test.
 These are the current user-test-plan gaps. Keep this list short; move closed
 items into the incident archive below with the evidence intact.
 
+### Project-state architecture pivot (2026-07-14)
+
+- [x] Archive superseded spine, map, release, task-tree, Closure, and release-era
+  intake plans/specs; keep the 2026-07-14 pivot as the active architecture.
+- [x] Serve fleet, activity, project shell, Overview, Work, Map, Thread, and
+  compact spine reads through the shared projection/action boundary where their
+  fast contracts apply.
+- [x] Add a bounded Work/Map inventory contract with `inventoryLimit`,
+  `inventoryOffset`, `hasMore`, and `nextOffset`; Work exposes a visible
+  load-more action instead of silently shipping an unbounded inventory.
+- [ ] Replace remaining queue/evidence/runtime/repository request-time
+  reconstruction in selected detail and historical routes with explicit,
+  independently loadable projections.
+- [ ] Complete installed four-project parity and performance proof before
+  resuming Narrative Harness MVP execution.
+
 ## 2026-06-04 Multi-Agent Audit Evidence
 
 Relaunch note: the first delegated batch failed because the model override used
@@ -6385,7 +7177,7 @@ coverage.
   src/runtime/__tests__/contract-governance.test.ts --reporter=dot`,
   `pnpm typecheck`, `pnpm lint:contracts`, and `git diff --check` passed.
 - [x] Finish the remaining logical-work delivery-step surfaces from
-  `internal/specs/2026-06-12-guildhall-logical-work-and-delivery-steps.md`.
+  `internal/plans/archive/specs/2026-06-12-guildhall-logical-work-and-delivery-steps.md`.
   Scope: Project Overview, WorkTreePreview, drawer header, Drawer Current,
   Drawer Journey, Thread shaping copy, and Inbox/Needs You owner-held step
   treatment. Keep the rule strict: logical work appears as the visible work
@@ -6867,9 +7659,9 @@ coverage.
   projects carry oversized state (`fair-labor-license` around 1.60 MB with
   `TASKS.json` around 568 KB and `PROGRESS.md` around 351 KB; `looma-knit`
   around 2.59 MB with `PROGRESS.md` over 1 MB). Corrective plan:
-  `internal/plans/2026-06-04-project-state-storage-governance-and-cleanup.md`.
+  `internal/plans/archive/2026-06-04-project-state-storage-governance-and-cleanup.md`.
   First run the OSS LLM memory/context evaluation spike at
-  `internal/plans/2026-06-04-llm-memory-context-evaluation-spike.md`, because
+  `internal/plans/archive/2026-06-04-llm-memory-context-evaluation-spike.md`, because
   context building and memory compaction may be better served by an existing
   memory system than by custom Guildhall storage. The evaluation should assume
   repo-local state is off by default, with any Git-visible manifest/export
@@ -6890,7 +7682,7 @@ coverage.
   must still reason from the active request and own what goes into context and
   why.
   Replacement audit plan:
-  `internal/plans/2026-06-04-guildhall-architecture-replacement-audit.md`
+  `internal/plans/archive/2026-06-04-guildhall-architecture-replacement-audit.md`
   ranks both storage-sprawl surfaces and architecture/substrate surfaces as
   Keep, Thin, Replace, Kill, or Defer. Run that audit before treating any memory
   substrate decision as final.
@@ -7789,7 +8581,7 @@ follow-up here with its evidence instead of deleting it.
   and no dependency-title chip labels.
 - [x] Reduce Guildhall cognitive overhead with hard conversions and clearer
   abstraction boundaries. Plan:
-  `internal/plans/2026-06-01-guildhall-cognitive-overhead-reduction.md`.
+  `internal/plans/archive/2026-06-01-guildhall-cognitive-overhead-reduction.md`.
   The accepted direction is to use required conversion scripts for wrong
   persisted shapes rather than preserving broad compatibility paths. In
   particular, `parent` must stop being a task status; containment belongs in
@@ -7867,7 +8659,7 @@ follow-up here with its evidence instead of deleting it.
   reviewer/worker context.
 - [x] Add contract surfaces and surface review packets as a project-graph
   extension. Spec:
-  `internal/specs/2026-06-02-guildhall-contract-surfaces-project-graph.md`.
+  `internal/plans/archive/specs/2026-06-02-guildhall-contract-surfaces-project-graph.md`.
   The accepted direction is that individual specs should inform and update, or
   be updated by, a central contract for the domain/capability they touch.
   Component libraries, APIs, event contracts, state machines, MCP resources,
@@ -7913,7 +8705,7 @@ follow-up here with its evidence instead of deleting it.
   `pnpm docs:check-help-sync`, and `pnpm docs:build`.
 - [x] Specify the 0.10 state-machine substrate and local project graph pivot.
   Spec:
-  `internal/specs/2026-06-01-guildhall-0-10-state-machines-project-graph.md`.
+  `internal/plans/archive/2026-06-01-guildhall-0-10-state-machines-project-graph.md`.
   The accepted direction is to stop adding lifecycle-heavy "status buckets" and
   introduce a small deterministic state-machine primitive with legal
   transitions, guards, required evidence, and append-only receipts. The pure
@@ -7960,7 +8752,7 @@ follow-up here with its evidence instead of deleting it.
   acceptance, context slices, provider request import, delivery, consumer
   verification, and return-for-revision.
 - [x] Continue structural/domain intelligence from the remaining-work ledger
-  in `internal/plans/2026-05-31-guildhall-0-10-implementation-tracker.md`.
+  in `internal/plans/archive/2026-05-31-guildhall-0-10-implementation-tracker.md`.
   The remaining-work ledger was reopened for the complete project graph product
   loop. Remaining count after graph API/UI/tests: 0 items. Next item: merge
   decision once the active bounded-chat worktree on `0.10.0` is clean enough
@@ -8015,7 +8807,7 @@ follow-up here with its evidence instead of deleting it.
   "related"; it summarizes the managed-project index and opens a searchable
   assignment picker only when the owner chooses `Assign to project`.
 - [x] Specify the 0.10 bounded-chat pivot for intake and New request flows.
-  Plan: `internal/plans/2026-05-31-guildhall-0-10-bounded-chat.md`.
+  Plan: `internal/plans/archive/2026-05-31-guildhall-0-10-bounded-chat.md`.
   The accepted direction is a two-role flow: a conversation agent handles the
   owner-facing exchange, while a coordinator owns objective fulfillment,
   structured memory, setting changes, task drafts, and completion decisions.
@@ -8079,7 +8871,7 @@ follow-up here with its evidence instead of deleting it.
   `.guildhall/tasks/index.json` for hot-path task counts instead of reparsing
   `TASKS.json` just to answer “how many current tasks exist?”.
 - [x] Complete the 0.9 release-hardening proof matrix before shipping 0.9.0.
-  Plan: `internal/plans/2026-05-31-guildhall-0-9-release-hardening-proof-matrix.md`.
+  Plan: `internal/plans/archive/2026-05-31-guildhall-0-9-release-hardening-proof-matrix.md`.
   This is the current release-readiness gate: first stabilize the orchestrator
   lifecycle failures, then prove component+consumer, frontend app, backend/API,
   CLI/tooling, docs-only, data/migration, bugfix, and single-edit scenarios
@@ -8239,7 +9031,7 @@ follow-up here with its evidence instead of deleting it.
   and spec-agent durable-progress failures remain the hard release blocker for
   autonomous project progress.
 - [x] Start 0.10 bounded-chat implementation with the runtime contract slice.
-  Tracker: `internal/plans/2026-05-31-guildhall-0-10-implementation-tracker.md`.
+  Tracker: `internal/plans/archive/2026-05-31-guildhall-0-10-implementation-tracker.md`.
   Begin with bounded-chat storage, session transitions, coordinator-action
   validation, and idempotent closure receipts before routing intake or New
   request through the new surface. This is the first active 0.10 code lane and
@@ -8325,7 +9117,7 @@ follow-up here with its evidence instead of deleting it.
   runtime image tag.
 - [x] Harden Guildhall against web/Node/Looma/Knit overfitting across runtime
   inference, task shaping, proof paths, and smoke tests. Plan:
-  `internal/plans/2026-05-31-guildhall-generalization-overfitting-hardening.md`.
+  `internal/plans/archive/2026-05-31-guildhall-generalization-overfitting-hardening.md`.
   The fix should land with red-to-green generalization coverage for Node web,
   Python CLI, Rust library, Go service, Java Gradle service, Swift package,
   native CLI, Terraform module, and docs-only work, plus negative vocabulary
@@ -8706,7 +9498,8 @@ follow-up here with its evidence instead of deleting it.
   adds all-lane review planning, quality/cost frontier testing, and centralized
   persistence so review plans, results, memory, logs, artifacts, and archives
   stay inspectable without copy-pasted file writes. The broader persistence
-  boundary is captured in `internal/design-notes/persistence-system-boundary.md`.
+  boundary is captured in
+  `internal/design-notes/archive/persistence-system-boundary.md`.
   The same design now treats plan completeness as a calibrated lane so agents
   are expected to surface missing governance, privacy, cost, drift, rollout,
   override, and feedback-loop concerns proactively instead of waiting for the
@@ -8798,7 +9591,7 @@ follow-up here with its evidence instead of deleting it.
   worker default pending deeper edit/verify bakeoffs.
 - [x] Add a zero-context user-testing script for Thread and task-card flows.
   The script lives at
-  `internal/plans/2026-05-24-zero-context-flow-user-testing.md` and treats the
+  `internal/plans/archive/2026-05-24-zero-context-flow-user-testing.md` and treats the
   recent malformed pressure-test question plus the `Guildhall next` incomplete
   task-brief card as `0/10` regressions. Future flow audits must ask a
   no-prior-context evaluator what the card means, whether anything is theirs to
@@ -8839,7 +9632,7 @@ follow-up here with its evidence instead of deleting it.
   escalation history, and remediation counters. This needs a 0.8.0
   schema/migration fix with compatibility projection for old task files. The
   implementation plan is
-  `internal/plans/2026-05-24-task-schema-runtime-evidence-split.md`. First
+  `internal/plans/archive/2026-05-24-task-schema-runtime-evidence-split.md`. First
   implementation slice is in place: system-local runtime/workspace/evidence
   stores, legacy effective-task projection, idempotent dry-run/apply migration,
   `guildhall migrate task-state`, task evidence/review/history/git-story
@@ -8953,7 +9746,7 @@ follow-up here with its evidence instead of deleting it.
   outside click/Escape, and the popover is layered above the drawer body so
   visible actions are actually clickable. A durable plan for the full
   four-part repair lives at
-  `internal/plans/2026-05-24-task-reframe-and-recovery-repair.md`; this slice
+  `internal/plans/archive/2026-05-24-task-reframe-and-recovery-repair.md`; this slice
   also teaches recovery copy to explain upstream workspace build failures
   without asking for an unnamed "recovery decision."
 - [x] Replace the misleading `Pause task` flow with an explicit hold/resume
@@ -8963,7 +9756,7 @@ follow-up here with its evidence instead of deleting it.
   `Resume task` action that restores the saved stage. `pause` remains only as a
   deprecated backend alias so old clients do not break.
 - [x] Build the first Guildhall MCP server bridge from
-  `internal/plans/2026-05-24-guildhall-mcp-server-bridge.md`. Keep the public
+  `internal/plans/archive/2026-05-24-guildhall-mcp-server-bridge.md`. Keep the public
   MCP contract host-owned and runtime-agnostic: external agents should read
   Guildhall context, resolve artifact IDs, append task evidence, and request
   capabilities without needing to know whether execution is host-native,
@@ -9034,7 +9827,7 @@ follow-up here with its evidence instead of deleting it.
   coordinators when to zoom out and ask whether repeated evidence should become
   a project-only or cross-project preference.
 - [x] Ship Git Story Closure as a 0.8.0 MVP blocker. The single release tracker
-  now lives at `internal/plans/2026-05-24-guildhall-0-8-mvp-tracker.md` and
+  now lives at `internal/plans/archive/2026-05-24-guildhall-0-8-mvp-tracker.md` and
   keeps Pressure-Test Intake as the top priority while making git closure the
   end-of-work trust contract: every project/task should expose whether work is
   dirty, committed-only, missing upstream, pushed, in PR, merged, local-only,
@@ -9047,7 +9840,7 @@ follow-up here with its evidence instead of deleting it.
   passed, `git diff --check` passed, and a local browser smoke on
   `http://localhost:7777` showed registered project cards with `GIT UNKNOWN`
   and `DIRTY` chips. The implementation plan lives at
-  `internal/plans/2026-05-24-guildhall-0-8-git-story-closure.md`.
+  `internal/plans/archive/2026-05-24-guildhall-0-8-git-story-closure.md`.
 - [x] Restore the machine default provider to DeepInfra/OpenAI-compatible and
   make provider/model-scope mismatches visible. The live global config had
   drifted from `preferredProvider: openai-api` to `preferredProvider: codex`
@@ -9059,7 +9852,7 @@ follow-up here with its evidence instead of deleting it.
   the machine-default provider/model chip and routes it to `/providers`, so the
   default model group is visible before opening a project.
 - [x] Build the 0.8.0 Pressure-Test Intake foundation from
-  `internal/plans/2026-05-23-guildhall-0-8-pressure-test-intake.md`. Keep this
+  `internal/plans/archive/2026-05-23-guildhall-0-8-pressure-test-intake.md`. Keep this
   as the top-priority 0.8.0 slice: New request routing, persisted domain-loop
   intake state, Thread cards, one-question-at-a-time answering, and browser
   proof on the active target project before moving on to broader practices,
@@ -13710,7 +14503,7 @@ local 0.7 release-candidate build at `http://localhost:7777/projects/narrative-h
   receipts or output promises; verify why one Fair Labor License header showed
   `connecting` while APIs were healthy; and restart the served bundle before
   the next release smoke so the stale-server banner is not part of the signal.
-  Implementation plan: `internal/plans/2026-05-23-flow-audit-followups.md`.
+  Implementation plan: `internal/plans/archive/2026-05-23-flow-audit-followups.md`.
   Task 1 is covered in code and focused tests: all-terminal projects now report
   `startReadiness.code: all_terminal`, `POST /api/project/start` returns a
   synchronous stopped no-op with an all-terminal stop summary, and ProjectView
@@ -13915,7 +14708,7 @@ local 0.7 release-candidate build at `http://localhost:7777/projects/narrative-h
   `/projects/fair-labor-license/thread`: clicking `This is done` removed the
   DB task from Current and persisted `task-db-bootstrap` as `done`.
 - [x] 2026-05-24 project rail IA and live Overview. Added
-  `internal/plans/2026-05-24-project-overview-and-nav-ia.md` as the working
+  `internal/plans/archive/2026-05-24-project-overview-and-nav-ia.md` as the historical
   implementation plan, made Overview the default project landing surface,
   removed project-level Needs You from the left rail, kept owner attention in
   the top bar and new Overview cards, and added Work queue/board subnav. The
@@ -14063,7 +14856,7 @@ local 0.7 release-candidate build at `http://localhost:7777/projects/narrative-h
   - [x] Start should preview what it will run, especially on large queues like
     Looma + Knit (`1 ready task; 32 need brief cleanup first`).
 - [x] 2026-05-24 zero-context cognitive-overhead audit loop.
-  Added the test plan at `internal/plans/2026-05-24-zero-context-flow-user-testing.md`
+  Added the test plan at `internal/plans/archive/2026-05-24-zero-context-flow-user-testing.md`
   and ran four low/no-context reviewer passes over Home, Needs You, Fair Labor
   License Thread, Commerce Thread, T minus T Thread, and Looma Work. The pass
   scored several cards below ship quality because the first action was still
@@ -14298,7 +15091,7 @@ local 0.7 release-candidate build at `http://localhost:7777/projects/narrative-h
   - [x] 0.9.0 now has an internal benchmark and Hermes-comparison planning
     lane, deliberately placed after the higher-priority runtime, persistence,
     proof-path, memory, MCP, task-shaping, and review-calibration work. The plan
-    lives at `internal/plans/2026-05-27-guildhall-0-9-benchmarks-and-hermes-comparison.md`
+    lives at `internal/plans/archive/2026-05-27-guildhall-0-9-benchmarks-and-hermes-comparison.md`
     and prioritizes a Guildhall-native lifecycle eval, TBLite/Terminal-Bench
     comparison, SWE-bench-style coding fixtures, and a careful Hermes comparison
     runbook without public leaderboard-style claims.
@@ -14802,20 +15595,20 @@ local 0.7 release-candidate build at `http://localhost:7777/projects/narrative-h
     be manually started and budgeted in isolation.
   - [ ] Add and browser-proof the 0.11.0 OpenRouter provider setup path. The
     implementation plan lives at
-    `internal/plans/2026-05-28-guildhall-0-11-openrouter-support.md` and should
+    `internal/plans/archive/2026-05-28-guildhall-0-11-openrouter-support.md` and should
     treat OpenRouter as guided setup with model-lane presets, attribution,
     privacy/cost routing, and listing-readiness proof rather than a generic
     OpenAI-compatible URL field. This is no longer a 0.10.0 release blocker.
   - [ ] Add the 0.10.0 structural/domain intelligence intake lane. The spec
     lives at
-    `internal/specs/2026-05-29-guildhall-0-10-structural-domain-intelligence.md`
+    `internal/plans/archive/specs/2026-05-29-guildhall-0-10-structural-domain-intelligence.md`
     and should keep project, workspace, monorepo, package graph, domain group,
     cross-cutting domain, executable unit, memory scope, and Git authority root
     separate while producing context packets with prioritized includes,
     summaries, handles, and auditable omissions.
   - [x] Defer the external task authority lane as future authority work rather
     than treating it as a current release closeout item. The spec lives at
-    `internal/specs/2026-05-29-guildhall-0-10-external-task-authority.md` and
+    `internal/plans/archive/specs/2026-05-29-guildhall-0-10-external-task-authority.md` and
     should treat Jira/Linear/GitHub Issues/Azure DevOps/Asana as planning
     authorities while Guildhall keeps a local execution mirror with proof,
     stale-state handling, safe proposed writes, and context-budget manifests.
@@ -15751,7 +16544,7 @@ source: codex:jess-structural-review-explicit-action
 
 2026-06-04T06:31:18Z - Shifted Jess ingestion value from visible taxonomy to
 task-start context. Added an implementation plan at
-`internal/plans/2026-06-03-project-intake-context-and-structure-simplification.md`
+`internal/plans/archive/2026-06-03-project-intake-context-and-structure-simplification.md`
 and implemented a shared runtime adapter,
 `src/runtime/structural-task-context.ts`, that translates the accepted
 structural map into user-facing task routing context: likely area, related work
@@ -16542,7 +17335,7 @@ passed.
 source: codex:looma-contextmenu-delivery-loop-unblockers
 
 2026-06-05T19:32:00Z - Implemented the default 0.10 project-local delivery
-spine from `internal/specs/2026-06-05-guildhall-0-10-primitives-and-delivery-spine.md`.
+spine from `internal/plans/archive/specs/2026-06-05-guildhall-0-10-primitives-and-delivery-spine.md`.
 Added durable delivery driver and primitive schemas, task delivery metadata for
 `usesPrimitives`, `provesPrimitives`, and `proofKind`, plus a shared runtime
 builder that validates driver/primitive references, derives task relationships,
@@ -16869,7 +17662,7 @@ section with persona, primitive blockers, proof expectations, and a correction
 action. Overview no longer exposes the default `Project graph` or `Structure`
 cards when the advanced Structure feature flag is off.
 
-Spec status: `internal/specs/2026-06-05-guildhall-0-10-primitives-and-delivery-spine.md`
+Spec status: `internal/plans/archive/specs/2026-06-05-guildhall-0-10-primitives-and-delivery-spine.md`
 is now marked `Implemented 0.10 delivery-spine slice with listed proof gaps`.
 Acceptance criteria are checked. Remaining unchecked implementation boxes are
 left visible for broader follow-up proof/product work: auto-suggested
@@ -16895,7 +17688,7 @@ in-app Browser rendered `/projects/looma-knit/overview` with `CONNECTED`,
 source: codex:0-10-delivery-spine-checkmarks
 
 2026-06-06T02:02:00Z - Finished the remaining checkboxes in
-`internal/specs/2026-06-05-guildhall-0-10-primitives-and-delivery-spine.md`.
+`internal/plans/archive/specs/2026-06-05-guildhall-0-10-primitives-and-delivery-spine.md`.
 Runtime delivery-spine planning now models suggested primitive-proof tasks when
 an unready primitive has no existing proving task, and split planning adds
 deterministic primitive-proof children for unready primitive blockers. Persona
@@ -16903,7 +17696,7 @@ selection now has explicit security, data, and runtime primitive personas in
 addition to component delivery, primitive hardening, and Storybook proof.
 
 Spec checklist status: `rg -n "\[ \]"
-internal/specs/2026-06-05-guildhall-0-10-primitives-and-delivery-spine.md`
+internal/plans/archive/specs/2026-06-05-guildhall-0-10-primitives-and-delivery-spine.md`
 returned no unchecked boxes. The remaining review, Structure, compatibility,
 and fixture-proof boxes were checked against existing implementation evidence:
 Needs You renders `contract_result_review` items with review buckets plus
@@ -16932,7 +17725,7 @@ source: codex:0-10-delivery-spine-all-checkboxes
 
 2026-06-06T03:02:00Z - Completed the 0.10 project contract governance
 implementation slice and marked
-`internal/specs/2026-06-05-guildhall-project-contract-governance.md` with
+`internal/plans/archive/specs/2026-06-05-guildhall-project-contract-governance.md` with
 actual checked implementation boxes. The project-graph spec is now explicitly
 superseded for default 0.10 delivery and retained only as an internal/
 feature-flagged substrate reference for cross-project authority, provider
@@ -21421,7 +22214,7 @@ spec-shaped current work is not communicated as owner brief cleanup.
     installed app state, rendered fixture state, and Playwright expectations to
     diverge while each looked locally plausible.
   - The retooling target is a canonical runtime projection documented in
-    `internal/plans/2026-07-04-release-scope-projection-retool.md`: one
+    `internal/plans/archive/2026-07-04-release-scope-projection-retool.md`: one
     project scope read model should own included/deferred rows, child rollups,
     runnable/paused/blocked state, release blockers, and Start/Resume
     messaging, then feed orientation, release readiness, orchestration
@@ -22813,7 +23606,7 @@ Project Map / Release readiness / former Closure framing.
     alpha`, migration phase work, launch hardening, or any arbitrary release
     label.
 - Tracker:
-  - [x] Added `internal/plans/2026-06-17-unified-releases-model.md`.
+  - [x] Added `internal/plans/archive/2026-06-17-unified-releases-model.md`.
   - [x] Add persisted release records and task release assignments.
   - [x] Add selected-release derivation to the orientation spine.
   - [x] Make release readiness consume the selected release.
@@ -35829,3 +36622,3858 @@ orientation proof projection as scope summary.
     state.
 - Schema Migration Decision:
   - Scope: none. No persisted schema or migration is introduced.
+
+## codex:signal-tile-content-sized-wrap-2026-07-14
+
+- User job:
+  - Scan Overview Signals without decoding empty panel area; short status items
+    should stay compact even when a neighboring repository message is longer.
+- Finding:
+  - The grid-based Signals layout made each row as tall as its longest tile.
+    `align-self: start` did not remove the row's reserved cross-axis space, so
+    short clickable status panels still looked like oversized empty boxes.
+- Fix:
+  - Keep the existing `UtilityPanel` and its shared tones/rails, but use a
+    content-sized wrapping flex layout for Signals. Each tile anchors to the
+    start and uses `block-size: fit-content`; the repository follow-up keeps
+    its deliberate full-row treatment, and the existing container-query
+    breakpoints remain 3, 2, and 1 columns.
+- Proof provided:
+  - `ProjectOverviewTab.svelte` focused tests pass (34 tests).
+  - `git diff --check` passes. Installed geometry proof is required after the
+    rebuild/restart below; the prior installed bundle is intentionally not
+    treated as proof for this new layout change.
+- Contract Touch Decision:
+  - Work id: `signal-tile-content-sized-wrap`.
+  - Touched contracts: none; only the composition/layout of existing
+    `UtilityPanel` instances changed.
+  - Contracts considered but not touched: signal payloads, shared summary and
+    action ownership, UtilityPanel props, API responses, and responsive
+    breakpoint semantics.
+  - Apply/revert behavior: presentation-only; reverting cannot alter project
+    or task state.
+- Schema Migration Decision:
+  - Scope: none. No persisted data or runtime state changes.
+
+## codex:imported-command-criterion-link-2026-07-14
+
+- User job:
+  - When an imported task names a documented command proof, Guildhall must run
+    that command as a hard acceptance gate and show the result on the same
+    task. A review narrative must not make a detached proof path look complete.
+- Finding:
+  - Narrative Harness task `task-import-1v2ehs` already had a documented
+    `pnpm run validate:story` proof path, but the imported automated
+    `deterministic-proof` criterion had no `command`. The gate runner therefore
+    found no command-backed criterion and the task could cycle through review
+    and gate check without executing the real proof. The task worktree's old
+    script also demonstrated a false green by reporting empty MVP/deferred
+    classifications and exiting zero.
+- Fix:
+  - New importer criteria preserve the documented command on the criterion.
+    Re-intake now retains imported criterion metadata instead of stripping
+    command fields, merges the deterministic proof criterion into the
+    source-shaped prototype criteria, and carries existing proof paths through
+    source-shaped refresh. Existing persisted tasks receive a compatibility
+    projection in `buildEffectiveTask`: a sole automated criterion is linked
+    to a sole documented command, and any documented command path without a
+    criterion gets its own stable command-derived criterion. Ambiguous
+    one-to-many matches are never guessed.
+- Proof provided:
+  - The active Narrative Harness task worktree now runs
+    `pnpm run validate:story` with 7 non-empty MVP schema surfaces, 9 deferred
+    fields, and 11 declared proof artifacts; `pnpm build` passes. The corrected
+    script fails on empty classifications instead of reporting a false green.
+  - `pnpm exec vitest run src/runtime/__tests__/proof-health.test.ts
+    src/runtime/__tests__/effective-task.test.ts
+    src/runtime/__tests__/workspace-importer.test.ts
+    src/runtime/__tests__/project-reintake.test.ts --run` passes 122 tests.
+  - The importer regression asserts that a documented command is present on
+    the automated criterion; proof-health tests cover linking, creating a
+    missing command criterion, and refusing to guess across two commands.
+  - Required live follow-up: after the installed rebuild, verify the served
+    task exposes the command, the gate runner executes it in the task worktree,
+    and release readiness consumes the observed gate rather than reviewer text.
+- Contract Touch Decision:
+  - Work id: `imported-command-criterion-link`.
+  - Touched contracts: the existing acceptance-criterion `command` field and
+    its relationship to documented command proof paths; re-intake preservation
+    of that existing field.
+  - Contracts considered but not touched: task status enums, release scope
+    membership, proof-path kinds, provider proof rules, owner approval
+    semantics, and API field names.
+  - Required follow-up: re-run the current Narrative Harness task through the
+    installed command gate and compare raw task state, served API state, Work,
+    and release readiness.
+  - Apply/revert behavior: the importer change affects future intake; the
+    compatibility projection is read-through and writes the same command only
+    when the relationship is unambiguous. Reverting does not delete evidence.
+- Schema Migration Decision:
+  - Scope: compatibility reader and preservation of an existing optional
+    field; no new top-level persisted field is introduced.
+  - Existing data impact: old tasks remain readable; an unambiguous command
+    relationship may be projected and persisted when the queue is next
+    written, but no task is marked complete by this change.
+  - Compatibility reader: tasks with multiple command paths remain unchanged
+    until a source-backed re-intake can shape the relationship explicitly.
+  - Fixtures/tests: importer, proof-health, effective-task, and re-intake
+    regressions cover new and legacy task shapes.
+- Rollback: code rollback leaves existing criteria and proof paths readable;
+    no field rename or destructive migration requires rollback.
+
+## codex:project-state-architecture-pivot-2026-07-14
+
+- User job:
+  - Open Guildhall and immediately understand the current state of every
+    project without waiting for unrelated project history, Git scans, thread
+    reconstruction, or request-time repairs.
+- Pivot decision:
+  - `internal/plans/2026-07-14-project-state-architecture-pivot.md` is the
+    active source of truth. Superseded orientation, release, task-state,
+    storage, and Git Story/Closure plans are preserved under
+    `internal/plans/archive/` and must not be resumed as parallel models.
+- Completed in this slice:
+  - Added the system-local `project-summary.json` projection schema and
+    rebuildable pure builder.
+  - Updated the canonical project-task write boundary to write a compact
+    summary containing task/scope counts, next action, blockers, recent work,
+    freshness, and explicit errors.
+  - Made `/api/service/projects` prefer the projection when present while
+    retaining a temporary compatibility read for projects that have not been
+    backfilled.
+  - Installed proof: `/api/service/projects` returned in roughly 110 ms;
+    `/api/stale-server` reported `stale:false`; the full `/api/service` still
+    exceeded the 8-second budget and remains an active pivot finding.
+- Post-migration installed proof:
+  - Applied only the additive `0.11.0/project-summary-projection` migration
+    across the seven registered projects; each applied once with no failures.
+  - With the installed build, `/api/stale-server` reports `stale:false`.
+    The installed projection-backed `/api/service` returns all 7 projects in
+    roughly `0.02s`, and the selected-project
+    `/api/service?projectId=narrative-harness` path returns in roughly
+    `0.07s`. Narrative Harness exposes 168 tasks, 37 done, 119 active, the
+    selected Stage 1 scope, and its authoritative no-runnable-work action.
+  - The old full reconstruction remains available only behind explicit
+    `/api/service?detail=true`; it is no longer on the fleet summary path.
+- Remaining checklist:
+  - [ ] Trace every writer for task, evidence, release, run, repository, and
+    owner-input state and classify synchronous projection update versus stale
+    rebuild versus detail-only history.
+  - [ ] Backfill existing NH, Looma + Knit, Jess, and Fair Labor summaries
+    through an explicit idempotent migration.
+  - [x] Remove the full-service request-time reconstruction path from fleet
+    summary reads and measure installed latency. Rich reconstruction remains
+    explicitly gated behind `/api/service?detail=true`.
+  - [ ] Prove API, Projects, Overview, Map, Work, Releases, Activity, and task
+    detail agree on the same summary/action state.
+
+## codex:project-state-writer-boundary-2026-07-14
+
+- User job:
+  - When project work changes through intake, import, re-intake, brief/spec
+    tooling, gate proof, repair, migration, compaction, or evacuation restore,
+    the next project summary must reflect that write without reconstructing the
+    whole project on a later read.
+- Finding:
+  - The first projection slice was refreshed by ordinary queue actions, but a
+    set of less-visible writers still wrote `TASKS.json` directly. That made a
+    projection claim current even when a legitimate Guildhall operation had
+    changed the queue behind it.
+- Fix:
+  - Routed workspace import, project re-intake, improvement review, product
+    brief, proposal, gate-result, owner-input repair, task-delivery migration,
+    work-decomposition migration, project-state compaction, and evacuated-task
+    restore through `writeProjectTaskQueueWithSummary`.
+  - Archived the directly superseded structural docs under
+    `internal/plans/archive/`, including old spine, map/graph, release/task
+    hierarchy, delivery-spine, logical-work, and child-work planning material.
+    `internal/plans/2026-07-14-project-state-architecture-pivot.md` is now the
+    active source of truth; the archive README explicitly says the older docs
+    are history, not parallel instructions.
+- Proof provided:
+  - `pnpm lint:contracts` passed.
+  - `pnpm build` passed.
+  - Focused writer/projection/migration suites passed 183 of 184 tests. The
+    two known residuals are documented rather than hidden: a re-intake fixture
+    expects the older imported acceptance-criteria shape, and a historical
+    approval test expects success while retaining `spec_review` after child
+    materialization fails. Neither failure is caused by projection refresh.
+- Remaining architectural work:
+  - Task-runtime, evidence, direct owner-input repair, and repository state
+    still need compact fields or invalidation hooks; execution, project-runtime,
+    and the normal owner-input create/response path now have compact snapshots,
+    but the full project state is not yet complete.
+  - The default `/api/service` response is now projection-backed and marked
+    `partial: true`; the old expensive full-project assembly path is available
+    only through explicit `/api/service?detail=true` diagnostics.
+- `codex:project-state-source-freshness-2026-07-14`
+  - Task runtime, workspace, evidence, and runtime-command evidence writes
+    still mark the sibling summary stale through one lower-level sessions
+    helper. Direct owner-input repair has the same remaining gap.
+  - Normal owner-input creation and response transitions update a compact
+    open-count/next-question snapshot in the existing projection.
+  - Project-runtime and supervisor lifecycle writes now update compact
+    snapshots in the existing projection. Queue writes still rebuild the
+    summary and preserve those snapshots.
+  - The remaining follow-up is compact projection of proof, task runtime, and
+    repository facts, plus direct owner-input repair. Bounded-chat save still lacks a reliable
+    project-root parameter and is recorded as an interface-design gap rather
+    than guessed from hashed local-history paths.
+- `codex:fleet-summary-read-boundary-2026-07-14`
+  - User job: opening the Projects page should show every registered project
+    from compact saved state without waiting for provider, Git, inbox, thread,
+    or history reconstruction across the fleet.
+  - Fix: `/api/service` and `/api/service/projects` use the same persisted
+    projection-backed summary path; selected-project hydration remains
+    independently available through `/api/service?projectId=...`.
+  - Detail-only contract: `/api/service?detail=true` is retained for explicit
+    diagnostic consumers that need the rich legacy payload. It is not used by
+    the Projects page and must not become a hidden dependency of compact cards.
+  - Focused proof: summary, migration, release-readiness, and projection tests
+    pass. Installed timing proof is refreshed after the next build/restart.
+- Contract Touch Decision:
+  - Work id: `project-state-writer-boundary-2026-07-14`.
+  - Touched contracts: internal projection write boundary and migration/task
+    persistence call sites.
+  - Contracts considered but not changed: public task fields, release schema,
+    runtime/evidence schema, action-model fields, and route names.
+  - Apply/revert behavior: the changes preserve the existing queue payload and
+    add/update only the rebuildable summary beside it; removing the hooks leaves
+    the authoritative queue intact but restores the known stale-read risk.
+- Schema Migration Decision:
+  - No additional persisted schema was introduced in this slice. It uses the
+    versioned `project-summary.json` and `0.11.0/project-summary-projection`
+    migration already recorded by the active pivot.
+
+## codex:project-summary-runtime-snapshots-2026-07-14
+
+- User job:
+  - When a project run or Guildhall runtime changes, the compact project
+    summary should show that current execution posture without reconstructing
+    project history on the next fleet read.
+- Fix:
+  - Added optional `execution`, `runtime`, and `ownerInput` snapshots to the
+    existing `project-summary.json` projection. Supervisor lifecycle transitions
+    update execution status/timestamps/errors; project runtime writes update
+    runtime status/health/last activity; normal owner-input creation and
+    response transitions update the open count and next question. Queue writes
+    preserve all three snapshots.
+- Proof provided:
+  - Projection tests cover update and queue-rebuild preservation.
+  - The runtime-store test covers runtime state reaching the compact
+    projection; supervisor tests cover lifecycle transitions.
+  - Focused projection/runtime/owner-input/supervisor/dashboard tests pass: 32
+    tests.
+  - `pnpm build` and `pnpm lint:contracts` pass.
+- Honest limitation:
+  - Task evidence, task-runtime, direct owner-input repair, bounded-chat, and
+    repository state are not yet compacted. Normal owner-input create/response
+    state is compacted; the remaining stale/detail behavior remains visible;
+    this slice does not claim cross-surface parity or full project-state
+    completion.
+- Contract Touch Decision:
+  - Work id: `project-summary-runtime-snapshots-2026-07-14`.
+  - Touched contracts: optional projection fields and existing runtime/run
+    write boundaries.
+  - Contracts considered but not touched: task, evidence, release, owner
+    approval, repository schemas, and route names.
+- Schema Migration Decision:
+  - Additive optional fields in projection version 2; no authoritative records
+    are rewritten and no new backfill migration is required.
+
+## codex:fleet-and-activity-summary-parity-2026-07-14
+
+- User job:
+  - When the Projects card says what should happen next, the live activity
+    chip must say the same thing. Polling it must never silently repair or
+    rewrite project state.
+- Fix:
+  - `/api/service`, `/api/service/projects`, and `/api/project/activity` now
+    consume the same `summarizeProjectFromProjection` action construction for
+    compact project state. The fleet shell exposes `summaryFreshness` so an
+    unavailable projection is visible instead of looking like a delayed
+    hydration spinner.
+  - Activity polling no longer invokes stopped-run repair or any other
+    request-time mutation. When the summary is current it reads projected
+    counts and the bounded list of in-flight task labels; stale or legacy
+    projects alone use the compatibility queue scan. The action, next task,
+    owner-input state, and readiness come from the saved projection.
+  - Projection actions include the selected next-task focus even when that
+    task is not among the five recent-work records.
+- Proof provided:
+  - Activity tests cover blocked next-action behavior and read-only behavior
+    for phantom worker/provider-recovery state.
+  - A parity regression compares activity `actionModel` and `topAction` with
+    the registered project's `/api/service` summary. The focused endpoint,
+    projection, owner-input, supervisor, runtime-store, and settings suites
+    pass: 271 tests.
+  - Installed proof after `pnpm dev:install` and service restart:
+    `/api/stale-server` reports `stale:false`; `/api/service` returns all 7
+    projects in about 61 ms, `/api/service/projects` in about 4 ms, and
+    Narrative Harness activity in about 14 ms. Activity and selected-project
+    service report `summaryFreshness: current` and identical action models.
+- Honest limitation:
+  - The full `/api/project` and task-detail routes still contain legacy
+    request-time repair and reconstruction. This slice narrows the high-
+    frequency fleet/activity path; it does not claim the entire project view
+    is projection-backed yet.
+- Contract Touch Decision:
+  - Work id: `fleet-and-activity-summary-parity-2026-07-14`.
+  - Touched contracts: optional `summaryFreshness` on compact service project
+    summaries and the existing activity response's action source.
+  - Contracts considered but not touched: task schema, release schema,
+    evidence schema, activity URL, and the historical detail payload.
+  - Required follow-up: migrate Overview, Map, Work, Releases, and task detail
+    to the same compact summary/action contract, then add cross-surface API
+    matrix assertions.
+  - Proof required: focused endpoint parity tests, installed stale-server
+    proof, and viewport-level agreement checks for the compact surfaces.
+  - Apply/revert behavior: presentation and read-path changes only; removing
+    the projection consumer restores the legacy activity behavior but does not
+    alter authoritative task or runtime records.
+- Schema Migration Decision:
+  - No authoritative persisted schema changed. `summaryFreshness` is an
+    additive response field; the existing version-2 projection is reused.
+
+## codex:fleet-detail-boundary-and-release-envelope-2026-07-14
+
+- User job:
+  - Opening the project list should not wait for every project's full history,
+    and viewing a selected scope must not lose its release assignments after a
+    repair runs.
+- Fix:
+  - Deleted the old unreachable `/api/service` fleet reconstruction instead of
+    retaining a second implementation behind an early return.
+  - Kept `detail=true` as a bounded diagnostic summary that reads the saved
+    projection plus provider, migration, availability, and check-in facts; it
+    no longer rebuilds effective tasks, Git Story, inbox, Thread, or history
+    for every project.
+  - Made the shared task-queue write boundary preserve an existing release
+    envelope when a task-only repair writes `TASKS.json`. Explicit release
+    payloads still replace the envelope normally.
+- API proof:
+  - Runtime parity suite: 3 files, 191 tests passed.
+  - The focused queue-boundary suite also covers direct release-envelope
+    preservation alongside the route-level regression.
+  - The release-readiness regression proves overview, work, map, and compact
+    service all retain the same selected-scope blocked counts after stopped
+    project repair.
+- Installed proof:
+  - `pnpm build`, `pnpm lint:contracts`, `pnpm dev:install`, and
+    `git diff --check` passed.
+  - `/api/stale-server` reported `stale:false`.
+  - Seven registered projects: `/api/service/projects` 16 ms,
+    `/api/service` 4 ms, `/api/service?detail=true` 79 ms, and Narrative
+    Harness activity 9 ms.
+  - Narrative Harness activity and selected-project service returned identical
+    action models and `summaryFreshness: current`.
+- Contract Touch Decision:
+  - Work id: `fleet-detail-boundary-and-release-envelope-2026-07-14`.
+  - Touched contracts: compact fleet/detail response behavior and the shared
+    task-queue write boundary's preservation of release metadata.
+  - Considered but not changed: task fields, release schema, route names,
+    evidence schema, and historical records.
+  - Required follow-up: migrate selected project surfaces and add the full
+    API/rendered cross-surface matrix.
+- Schema Migration Decision:
+  - No new persisted schema. The existing version-2 projection remains the
+    compact read model; the write-boundary fix preserves authoritative release
+    data already present in `TASKS.json`.
+- Honest limitation:
+  - Overview, Map, Work, Releases, and task detail still have request-time
+    detail dependencies. The fleet boundary is materially smaller, but the
+    project-state pivot is not complete.
+
+## codex:project-shell-projection-surfaces-2026-07-14
+
+- User job:
+  - Opening a project or Thread should immediately reveal the current project
+    identity, selected scope, progress, and next action. A slow Release or
+    history check must not blank the shell or make the user wait for unrelated
+    project data.
+- Fix:
+  - The project store now defaults to `/api/project?compact=true`; Overview,
+    Work, and Map use the same projection-backed endpoint with a surface.
+  - Compact Overview uses the selected-scope orientation preview and returns
+    action-relevant tasks instead of the full orientation tree and every task.
+  - Compact release data explicitly says `completeness: scope` and
+    `checksLoaded: false`; the full release verdict remains a detail concern.
+  - The normalized queue reader retains the existing `lastUpdated` marker so a
+    rebuilt in-memory projection can be matched to its source instead of being
+    treated as an untracked snapshot.
+- API proof:
+  - Compact endpoint regression verifies no `readiness` timing segment,
+    selected-scope labels/counts, omitted deep-data categories, and the absence
+    of a false full verdict.
+  - Focused runtime/UI/store suite: 4 files, 245 tests passed.
+  - `pnpm build` passed.
+- Installed proof:
+  - `pnpm dev:install`, service stop/start, and `/api/stale-server` all passed;
+    the installed artifact reports `stale:false`.
+  - Seven-project fleet reads remain 29 ms (`/api/service/projects`) and 26 ms
+    (`/api/service`). Narrative Harness compact shell is 106 ms; compact
+    Overview 81 ms, Work 152 ms, and Map 128 ms.
+  - Compact Overview returns 19 selected-scope tasks from 168 total. Work and
+    Map are still larger inventories and are explicitly the next paging/detail
+    slice.
+- Honest limitation:
+  - Browser visual proof is still required for the installed routes. The
+    compact API boundary does not by itself prove that every tab communicates
+    partial versus full readiness correctly. Release, activity history, and
+    task detail still need their own bounded read contracts.
+- Contract Touch Decision:
+  - Work id: `project-shell-projection-surfaces-2026-07-14`.
+  - Touched contracts: compact `/api/project` response, additive release
+    completeness metadata, and project-store hydration URL.
+  - Considered but not changed: authoritative task/release schemas, Thread
+    turn storage, route names, and rich diagnostic response.
+  - Required follow-up: paged Work/Map inventory, bounded Release/activity/task
+    detail, and rendered cross-surface agreement checks.
+  - Apply/revert behavior: removing the compact selector restores rich shell
+    hydration without changing project records.
+- Schema Migration Decision:
+  - No new persisted schema. Existing version-2 projection is reused; the
+    response metadata is additive and the queue timestamp is an existing source
+    field retained by the reader.
+
+## codex:current-state-authority-and-payload-audit-2026-07-14
+
+- User job:
+  - Opening any normal Guildhall project surface must transfer only the state
+    that surface needs. It must not reconstruct or serialize unrelated task,
+    activity, routing, Git, inbox, or diagnostic state.
+- Live counter-evidence:
+  - Before the boundary change, the installed `GET /api/project` default was
+    the legacy full contract: Narrative Harness was `1,952,752` bytes /
+    `3.66s`; Looma + Knit was `1,714,621` bytes / `8.71s`.
+  - After the default boundary and structural/dynamic freshness fix, the
+    installed UI contracts are bounded: Narrative Harness is `48,634` bytes /
+    `37ms` for Overview (9 cards), `81,383` / `17ms` for Work (40 of 168),
+    and `64,934` / `11ms` for Map (24 of 168). Looma + Knit is `32,627` /
+    `10ms` for Overview (4 cards), `66,549` / `12ms` for Work (40 of 334),
+    and `57,374` / `5ms` for Map (24 of 334).
+  - The explicit diagnostic route remains intentionally expensive:
+    Narrative Harness is `1,952,752` bytes / `3.48s`; Looma + Knit is
+    `1,714,918` bytes / `6.55s`. That cost is now isolated behind
+    `detail=true`, not paid by normal project hydration.
+  - The current project databases exist and contain the migrated current task
+    overlay. The rich effective-task reader now consumes point runtime and
+    workspace overlays, falling back per component only when that component is
+    absent; the fallback is covered by stale-proof and resolved-escalation
+    regressions. Full transition-writer transfer is still incomplete.
+- Current-state proof:
+  - `0.12.14/task-current-overlay` imported current runtime, workspace, and
+    latest-proof rows for every registered project without rewriting JSONL
+    history. `0.12.15/task-current-overlay-reconcile` then enforced that those
+    rows are a subset of the queue's current work IDs.
+  - After reconciliation: Narrative Harness has 168 work items / 168 runtime
+    rows / 35 workspace rows / 163 latest-proof rows; Looma + Knit has
+    334 / 334 / 39 / 333. Before the invariant, Narrative Harness had 175
+    runtime rows for 168 tasks. The fix removes only orphaned SQLite current
+    rows; no historical evidence is pruned.
+- Remaining checklist:
+  - [ ] Transfer every task transition writer to the authoritative current-state
+    mutation boundary and add parity regressions for assignment, recovery,
+    escalation, workspace, and latest-proof transitions.
+  - [x] Replace the default full `/api/project` response with a bounded summary
+    contract. Retain rich reconstruction only behind explicit `detail=true` or
+    compact surface requests. Read-boundary proof is 15/15 tests; installed
+    proof confirms 98%+ reduction for the two large default project payloads.
+  - [x] Keep the structural projection usable after dynamic runtime/evidence
+    writes without treating the whole summary as structurally missing. The
+    regression covers a dirty dynamic revision; remaining dynamic summary
+    parity is still tracked below.
+  - [ ] Split Overview, Work, Map, task drawer, and Thread responses into
+    materialized surface-owned summaries; shrink `orientationSpine` to the
+    actual surface contract and keep whole-task inventories behind explicit
+    paging/detail requests.
+  - [ ] Establish and enforce installed byte/latency budgets on Narrative
+    Harness, Looma + Knit, Jess, and Fair Labor before declaring the pivot
+    complete.
+
+## codex:thread-projection-boundary-2026-07-14
+
+- User job:
+  - Opening Thread should show the current interaction history and navigation
+    context immediately. It must not wait for repository or full release-gate
+    checks that are not needed to render the transcript.
+- Fix:
+  - Removed stopped-project repair, effective-task expansion, and full release
+    readiness from the initial Thread read.
+  - Thread now consumes the compact project projection for scope, next action,
+    start readiness, and orientation context, with explicit omitted-detail
+    metadata.
+  - Thread Git Story enrichment now receives task IDs from the first response
+    and no longer rebuilds the entire Thread projection to discover them.
+- API proof:
+  - The release-readiness regression now asserts Thread reports
+    `completeness: scope`, `checksLoaded: false`, no Git Story blockers, and
+    the omitted detail categories.
+  - Runtime release/dashboard tests passed after the contract update.
+- Installed proof:
+  - `pnpm build`, `pnpm dev:install`, and service restart completed; the
+    installed artifact reports `stale:false`.
+  - Narrative Harness `/api/project/thread` measured 70 ms and 98,315 bytes,
+    versus the earlier 4,118 ms and 630,440 bytes.
+  - `/api/project/thread/extras?taskIds=task-009` measured 73 ms / 794 bytes
+    and does not block the initial Thread shell.
+- Honest limitation:
+  - Work and Map still return large inventories; Release, activity history,
+    and task detail still need explicit bounded contracts. Browser geometry
+    proof remains required when the in-app browser bridge is available.
+- Contract Touch Decision:
+  - Work id: `thread-projection-boundary-2026-07-14`.
+  - Touched contracts: initial Thread response's compact release metadata,
+    orientation source, and optional `taskIds` query for extras.
+  - Considered but not changed: Thread turn storage, task schema, release
+    schema, Git Story records, and full release-readiness semantics.
+  - Required follow-up: add a shared rendered/API matrix for Thread versus the
+    compact project shell, then bound the remaining detail endpoints.
+  - Apply/revert behavior: removing the compact Thread read restores the old
+    rich request path without changing authoritative records.
+- Schema Migration Decision:
+  - No persisted schema changed. The endpoint metadata and extras query are
+    additive; existing Thread history and Git Story records remain untouched.
+
+## codex:overlay-authority-and-fleet-parity-2026-07-14
+
+- User job:
+  - The Projects page and every project shell must show the same current task,
+    release, and freshness state. A project without a release must remain a
+    valid project, not become a broken summary.
+- Finding:
+  - A SQLite file was not sufficient evidence that its runtime/workspace rows
+    were authoritative. The reader could silently prefer empty or partial DB
+    overlays over newer compatibility JSON. Separately, Jess and Fair Labor
+    serialized `selectedReleaseId: null`, which the optional-release queue
+    schema rejected and reduced their fleet cards to false zeroes.
+- Fix:
+  - Added `project_meta.task_overlay_authority` and migration
+    `0.12.21/task-overlay-authority`. Legacy current stores are imported through
+    explicit legacy readers, then the database is promoted transactionally;
+    stale JSON cannot override a promoted row.
+  - Normalized a null selected release to an omitted optional field.
+  - Added migration `0.12.22/current-summary-rebuild-after-authority` to rebuild
+    stale summaries after promotion. It was applied to Narrative Harness,
+    Looma + Knit, Jess, and Fair Labor License.
+- Installed proof:
+  - `/api/stale-server` reported `stale:false` after build/install/restart.
+  - All four projects now report `summaryFreshness: current` with no saved
+    summary error. NH reports 168 tasks and an 11-task named release; Looma
+    reports 334 tasks and a 5-task named release; Jess and Fair Labor each
+    report one import task with no release.
+  - Current DB metadata for all four is schema 10 with
+    `task_overlay_authority: database`; DB counts match the live imported task
+    rows (NH 168, Looma 334, Jess 1, Fair 1).
+  - Fresh compact API samples: fleet 31,201 bytes / 18 ms; NH Overview
+    48,634 / 6 ms and Work 121,740 / 6 ms; Looma Overview 32,627 / 4 ms and
+    Work 114,098 / 5 ms; Jess Overview 6,960 / 6 ms; Fair Overview 7,306 /
+    3 ms.
+- Tests:
+  - 57 focused database/overlay/effective-task/migration tests passed before
+    the optional-release repair; 46 queue-compatibility/summary/migration
+    tests passed after it. Data-layer guardrail, contract detector, diff check,
+    build, install, restart, and stale-server proof passed.
+- Remaining risk:
+  - Explicit rich detail remains expensive (roughly 1.7-1.9 MB and several
+    seconds for NH/Looma), and active project history directories include old
+    backups/evidence/map/progress payloads. No blind pruning was performed.
+    Queue authority, bounded task detail/history, and remaining control/domain
+    writers still need the deeper transfer described in the architecture pivot.
+
+## codex:single-project-state-authority-2026-07-14
+
+- **User job:** A project read must have one current-state source. Updating a
+  task must change the same queue, summary, action, and task-detail state that
+  Fleet, Overview, Map, Work, and Releases display. Old compatibility files
+  must not quietly become a second queue.
+- **Finding:** The database marker was named for task overlays even though it
+  was being used as the boundary for the whole current-state model. Promoted
+  projects still had duplicate `TASKS.json` and `project-summary.json` writes,
+  and compact surfaces rebuilt the primary action from different partial task
+  lists.
+- **Change:** Schema 11 uses `project_state_authority`; database-first queue
+  reads and writes now apply after promotion. Migration
+  `0.12.23/project-state-single-authority` removes duplicate current-state
+  files only after the database queue is readable. Summary version 11 stores a
+  canonical action model, and migration `0.12.24/project-summary-action-model`
+  backfills it.
+- **Proof:** 60 focused database, migration, summary, boundary, and overlay
+  tests pass. The new regressions prove an existing database is renamed in
+  place, compatibility files are removed safely, later writes do not recreate
+  them, and task rows remain readable after removal.
+- **Remaining:** The queue/detail writers and UI fallbacks that still read
+  legacy state remain the next authority-transfer work.
+
+## codex:single-project-state-authority-installed-proof-2026-07-14
+
+- **User job:** Open the project list or a project shell and immediately trust
+  that the counts, readiness, primary action, and selected work scope came from
+  one current project state, without waiting for every history or diagnostic
+  record to load.
+- **Installed proof:** Rebuilt and installed the current artifact, restarted
+  Guildhall, and confirmed `/api/stale-server` reported `stale:false`. Applied
+  `0.12.23/project-state-single-authority` and
+  `0.12.24/project-summary-action-model` to Narrative Harness, Looma + Knit,
+  Jess, and Fair Labor License. Each now has schema 11,
+  `project_state_authority: database`, no duplicate current `TASKS.json` or
+  `project-summary.json`, and a persisted canonical action model.
+- **API proof:** Compact project reads measured 48.5 KB NH, 32.5 KB Looma,
+  6.9 KB Jess, and 7.3 KB Fair Labor; the live `/api/service` response
+  returned current summaries for all four. NH and Looma Work reads were 121.6
+  KB and 114.0 KB respectively. These are shell/read-model measurements, not
+  claims that rich task detail is solved.
+- **Remaining:** Rich task detail still measured 462.8 KB for the tested NH
+  task and the history roots remain 11.2 MB NH, 19.4 MB Looma, 2.5 MB Jess,
+  and 2.9 MB Fair Labor. The next pass must give detail, transcript, backup,
+  diagnostic, and map-history stores explicit ownership and bounded retention;
+  no blind pruning is accepted as a fix.
+
+## codex:database-authority-rich-route-and-detail-boundary-2026-07-14
+
+- **User job:** Open a project, select a task, and inspect its history without
+  the app silently falling back to a deleted compatibility file or loading all
+  historical detail into the first response.
+- **Finding:** Promoted projects had no `TASKS.json`, but several rich routes
+  still gated reads on that file. The initial task drawer also serialized
+  notes, evidence, review verdicts, and adjudications even though each had a
+  dedicated detail endpoint.
+- **Change:** The normalized queue readers now consult the database authority
+  before legacy files. This makes rich project, activity, spine, release
+  readiness, project graph, Git Story, delivery spine, inbox, Thread, and task
+  detail inherit one source-aware boundary. Task detail returns current state
+  first; history and review records load through explicit on-demand endpoints.
+  Code-map history is now a bounded rebuildable diagnostic ring: 256 KB or 128
+  records, whichever is reached first.
+- **Proof:** 138 focused runtime tests pass, including a promoted-project
+  regression that removes `TASKS.json` and exercises the rich routes. The task
+  drawer suite passes 53 tests. The last installed artifact reports
+  `stale:false`; NH task detail is 41.6 KB for the sampled current task,
+  history 16.3 KB, review 7.0 KB, evidence 23.2 KB, and context packet 1.2
+  KB. Project shells remain 48.5 KB Overview, 121.6 KB Work, and 79.8 KB Map
+  at roughly 10-14 ms.
+- **Remaining:** The current history roots are still large because old
+  migration snapshots, progress, task evidence, and map history have not yet
+  been cleaned under the new ownership rules. Fleet-wide freshness for the
+  three non-calibration projects also remains open. Browser geometry proof and
+  final installed proof after the latest route changes are still required.
+
+## codex:data-layer-size-and-installed-boundary-2026-07-14
+
+- **User job:** Open the project list, a project shell, or a task without
+  waiting for every historical, diagnostic, or migration record in the project
+  to be assembled. The fast path must be a compact current-state read model;
+  rich history must be an explicit, bounded detail path.
+- **Installed proof:** Rebuilt, installed, restarted, and confirmed
+  `/api/stale-server` reports `stale:false` for the running artifact. The fleet
+  index is 30,950 bytes and returned in 24 ms; `/api/service` is 30,965 bytes
+  and returned in 5 ms. Narrative Harness Overview, Work, Map, and Activity
+  measured 48,521 bytes / 9 ms, 121,627 / 8 ms, 79,796 / 5 ms, and 5,521 / 7
+  ms. Inbox measured 27,724 / 94 ms.
+- **Boundary proof:** The rich detail endpoint still measured 1,917,818 bytes /
+  1,531 ms and the full spine 552,053 / 408 ms. Those numbers are explicitly
+  not being counted as solved by the compact shell work. The sampled task
+  detail remains 41.6 KB before its history/review/evidence tabs are opened.
+- **On-disk finding:** The four calibration project history roots currently
+  measure approximately 11.7 MB NH, 20.3 MB Looma + Knit, 2.6 MB Jess, and
+  3.0 MB Fair Labor License. Their largest files are old TASKS backups,
+  code-map history, progress/heartbeat records, task evidence, and SQLite
+  shell/current-state files. This confirms that the old bulk is not simply
+  current task text, and that compact API performance alone does not finish
+  the storage redesign.
+- **Change:** Database-authority activity now reads the authoritative queue so
+  live in-flight tasks are visible even after compatibility `TASKS.json` is
+  removed. Code-map history writes and explicit cleanup share a 256 KB / 128
+  record ring. The task drawer remains current-state-first and loads history,
+  review, and evidence through dedicated endpoints.
+- **Tests:** 191 focused runtime/UI tests passed. `pnpm lint:data-layer`,
+  `pnpm lint:contracts`, and `git diff --check` passed. No blind cleanup was
+  applied to the large history roots. The remaining work is to give each
+  remaining store an explicit owner, retention/restore contract, and migration
+  path, then compact existing data only under those contracts.
+
+## codex:heartbeat-retention-boundary-2026-07-14
+
+- **User job:** A live agent heartbeat may be available for reconnect/debugging
+  without becoming an ever-growing project payload or being copied into a
+  second full-history file during cleanup.
+- **Finding:** The heartbeat writer used append-only Markdown and the cleanup
+  path appended moved blocks without a bound. Cleanup also created a complete
+  `PROGRESS.before-compaction.md` snapshot, duplicating the source it was
+  compacting.
+- **Change:** Heartbeats now use an atomic 256 KB / 512-record ring at the
+  write boundary. Older files can be compacted with the same policy. Cleanup
+  no longer creates a new full pre-compaction copy; it retains the bounded
+  heartbeat stream and the current progress file instead.
+- **Proof:** The new local-history regression writes 700 large heartbeats,
+  verifies the writer stays within 256 KB, appends legacy oversized history,
+  and verifies the cleanup boundary returns to the same budget. The focused
+  local-history, memory-tool, and project-compaction suites pass 20 tests.
+- **Remaining:** Existing full progress snapshots and old heartbeat files are
+  still retained until an explicit, audited cleanup. The next retention class
+  must have the same writer-level boundary before old material is compacted.
+
+## codex:calibration-diagnostic-cleanup-proof-2026-07-14
+
+- **User job:** Reduce existing project-local diagnostic residue only after the
+  writer boundary is in place, while preserving current task/release state and
+  proving the application still agrees afterward.
+- **Applied scope:** Ran the explicit project-state cleanup for Narrative
+  Harness, Looma + Knit, Jess, and Fair Labor License. This touched only the
+  already-declared operational/diagnostic compaction paths; no task evidence,
+  migration backup, evacuation snapshot, or current SQLite row was selected
+  for deletion by this pass.
+- **Measured result:** History roots now measure approximately 11.0 MB NH,
+  18.9 MB Looma + Knit, 2.6 MB Jess, and 3.0 MB Fair Labor License. NH
+  heartbeat history is 176.8 KB and map history 261.1 KB; Looma map history
+  is 262.0 KB. Compared with the immediately preceding 37.65 MB combined
+  measurement, this removed about 2.1 MB, primarily from the declared
+  diagnostic/heartbeat rings.
+- **Installed proof:** Rebuilt, installed, restarted, and confirmed
+  `/api/stale-server` reports `stale:false`. Fleet is 30,950 bytes / 23 ms;
+  NH Overview, Work, Map, and Activity are 48,521 / 121,627 / 79,796 / 5,521
+  bytes, returning in 5–9 ms. The explicit rich detail route remains 1.92 MB
+  / 1.64 s, so the cleanup did not pretend rich detail was solved.
+- **Tests:** 205 focused runtime/UI tests pass; data-layer, contract, and diff
+  checks pass. This proves current-state behavior survived the cleanup, not
+  that the entire storage redesign is complete.
+- **Remaining:** The largest bytes are still migration/task backups,
+  evacuation snapshots, full diagnostic maps, progress snapshots, task
+  evidence, and SQLite file/page overhead. They need a manifest-backed
+  retention/restore contract before any further cleanup.
+
+## codex:migration-snapshot-provenance-2026-07-14
+
+- **User job:** When Guildhall migrates project state, it should preserve one
+  explainable rollback artifact rather than create anonymous JSON copies that
+  later inflate the project and cannot be safely classified.
+- **Finding:** Four migration writers created immutable-looking backups without
+  a migration id, source digest, snapshot digest, or restore status. A later
+  migration run could see a same-named file but had no structured way to prove
+  that it belonged to the same migration or captured the expected source.
+- **Change:** Added a shared migration snapshot writer that atomically creates
+  the backup and a `.manifest.json` sidecar. It records source/snapshot paths,
+  byte counts, SHA-256 digests, capture verification, restore status, and
+  rollback retention purpose. Existing snapshots are never overwritten; id or
+  digest mismatches fail loudly. Hierarchy, task-state, delivery-step, and
+  execution-planning migrations now report the manifest as an affected path.
+- **Contract Touch Decision:** `codex:migration-snapshot-provenance-2026-07-14`
+  touched migration backup creation and ledger affected paths. It considered
+  but did not change task/release records, SQLite current-state schema, public
+  routes, or restore behavior beyond explicit status metadata. Required follow-
+  up is to apply the same manifest to evacuation snapshots and verify restores.
+- **Schema Migration Decision:** `0.12.27/migration-snapshot-provenance` adds
+  only system-local rollback-evidence sidecars. Existing bytes remain intact;
+  compatibility manifests are additive and mark source drift honestly. Missing
+  manifests remain legacy/unverified and are not deletion permission.
+- **Proof:** `migration-snapshot.test.ts` and `migrations.test.ts` pass (29
+  tests). The focused suite proves immutable bytes, digest metadata, source
+  drift detection, and the migration code paths still execute.
+- **Remaining:** No existing migration or evacuation snapshot was compacted by
+  this change. Restore verification, retention windows, and the second rich
+  detail boundary are still open; a small manifest is not being counted as a
+  completed storage reduction.
+
+## codex:test-data-isolation-and-fleet-inventory-2026-07-14
+
+- **User job:** Open the fleet and project surfaces without the test suite
+  silently making future loads heavier, and trust that local project storage
+  belongs to a known project rather than an accidental temporary root.
+- **Finding:** The four calibration project roots contain 31.4 MB of exact
+  file bytes combined, but the whole local project cache is about 3.6 GB with
+  52,633 project directories. Most are ephemeral `guildhall-*` or `forge-*`
+  test roots. This is a data ownership/lifecycle failure, not merely a need
+  for more pruning. The active roots are also dominated by backups,
+  evacuation/progress copies, evidence, maps, event history, and SQLite
+  storage rather than just task text.
+- **Change:** Vitest now receives a temporary per-process data root through
+  `scripts/vitest-data-isolation.ts` unless a caller deliberately provides
+  `GUILDHALL_DATA_DIR`. Read-side directory creation is no longer needed;
+  stop-marker writes explicitly create their parent directory.
+- **Proof:** The focused stop-marker/storage suite passes 27/27 tests. The
+  focused decomposition/data-isolation suite passes 22/22 tests. The real
+  project directory count was exactly 52,633 before and after, and no
+  `guildhall-vitest-data-*` roots remained in `/tmp` after the run.
+- **Contract Touch Decision:** `codex:test-data-isolation-and-fleet-inventory-2026-07-14`
+  touches only the Vitest data-root setup and stop-marker write precondition.
+  It does not alter project/task/release/current-state API contracts. The
+  required follow-up is registry-owned project storage and manifest-backed
+  evacuation/restore.
+- **Schema Migration Decision:** `0.12.27/test-data-isolation-boundary`
+  touches no persisted project schema. Existing residue was intentionally not
+  deleted; cleanup waits for an ownership and retention contract.
+- **Remaining:** The rich project detail response is still a diagnostic
+  aggregate of about 1.92 MB / 1.96 s for Narrative Harness and 1.70 MB /
+  5.03 s for Looma + Knit. Task detail, history, inbox, Thread, and Git
+  diagnostics still need explicit bounded/paginated contracts. Evacuation
+  snapshots still need per-entry provenance and verified restore before any
+  old storage is removed.
+
+## codex:evacuation-ownership-and-bounded-detail-2026-07-14
+
+- **User job:** Move old project state without losing the ability to explain or
+  restore it, and open explicit project detail without accidentally paying the
+  cost of every historical diagnostic at once.
+- **Finding:** Evacuation previously copied arbitrary `.guildhall` entries and
+  deleted the source without a manifest. Restore was task-file-specific and
+  could never prove whether an evacuated file had been altered. Separately,
+  `detail=true` invoked the full queue/effective-task/readiness/Git/inbox/Thread
+  reconstruction even though no production UI caller needed that aggregate.
+- **Change:** Evacuation now hashes source and copy, verifies the source stayed
+  stable, persists a versioned `project-state-evacuation/manifest.json`, and
+  removes source only after the manifest is durable. Restore verifies
+  manifest-backed snapshots, records verified target digests, and refuses
+  tampered snapshots. Restore migrations are recheckable so later batches are
+  not hidden by an old applied ledger entry. `detail=true` now uses the durable
+  projection and exposes independent detail endpoint links; the old aggregate
+  is only `diagnostic=true`.
+- **Proof:** Evacuation manifest tests, compaction/restore tests, tamper
+  refusal, later-batch migration recheck, and bounded detail read-boundary
+  tests pass. The combined focused architecture suite passes **55 tests**.
+- **Contract Touch Decision:**
+  `codex:evacuation-ownership-and-bounded-detail-2026-07-14` covers the
+  evacuation/restore contract, recheckable migrations, and the explicit detail
+  route. It does not alter current task/release fields or dedicated detail
+  endpoints. Remaining follow-up is cursors and strict byte ceilings on those
+  historical endpoints.
+- **Schema Migration Decision:**
+  `0.12.28/evacuation-manifest-and-detail-boundary` adds only evacuation
+  manifest metadata. Existing unmanifested material remains readable and no
+  old bytes were deleted.
+- **Remaining:** The explicit `diagnostic=true` route is still intentionally
+  heavy and must not acquire production callers. Inbox, Thread, Git, task
+  history, and release diagnostics still need independent bounded/paginated
+  contracts and cross-surface summary revision checks.
+
+## codex:activity-history-boundary-2026-07-14
+
+- **User job:** Open Timeline and see retained project activity without making
+  the project overview load historical diagnostics, then move backward through
+  older activity when needed while live work continues to stream in.
+- **Finding:** The compact project payload correctly omitted `recentEvents`,
+  but Timeline still read that omitted field. The old rich aggregate was not a
+  valid replacement because it rebuilt unrelated project state just to get a
+  feed.
+- **Change:** Added `/api/project/activity/history` with a newest-first
+  cursor and a maximum 100-record page over the already bounded 512 KB / 1,000
+  record durable event ring. Timeline loads it on demand, merges live SSE,
+  and offers a real older-page action. The project payload links to the route
+  without embedding activity history.
+- **Proof:** `serve-supervisor.test.ts`, `serve-read-boundary.test.ts`, and
+  `TimelineTab.svelte.test.ts` pass together (31 tests). The history route is
+  included in GET non-mutation coverage.
+- **Contract Touch Decision:**
+  `codex:activity-history-boundary-2026-07-14` covers the additive history
+  route, Timeline behavior, and endpoint directory. It does not change the
+  event shape or durable current-state model.
+- **Schema Migration Decision:** `0.12.29/activity-history-boundary` touches
+  no persisted schema; it exposes an explicit bounded reader over existing
+  retained activity.
+- **Remaining:** Inbox, Thread, Git Story, task history, and release
+  diagnostics still need the same strict page/byte contracts. The 3.6 GB
+  local cache and active-project backup/evacuation files remain intentionally
+  untouched until registry ownership and retention/restore policy are proven.
+
+## codex:task-history-read-boundary-2026-07-15
+
+- **User job:** Open a task's history without loading the full evidence ledger
+  into memory, while retaining the existing chronological display and honest
+  pagination metadata.
+- **Finding:** The route filtered and sliced only after `readTaskEvidence`
+  had read and parsed every evidence file. HTTP pagination therefore did not
+  bound the underlying read.
+- **Change:** Added a streaming task-history reader with oldest/newest order,
+  cursor windows, a 200-record ceiling, and a 256 KiB page/read budget. The
+  task route uses the compatibility-preserving oldest-first order and exposes
+  `bytes` and `maxBytes` in pagination metadata.
+- **Proof:** `src/runtime/__tests__/task-state-store.test.ts` proves a 12-record
+  JSONL ledger is paged under a 512-byte test budget; the focused task endpoint
+  tests prove canonical note filtering and existing order remain stable.
+- **Contract Touch Decision:**
+  `codex:task-history-read-boundary-2026-07-15` touches only the task-history
+  read contract and drawer fetch. It does not change current task/proof rows.
+- **Schema Migration Decision:** `0.12.30/task-history-read-boundary` touches
+  no persisted schema and deliberately does not delete or rewrite old history.
+- **Remaining:** This bounds one detail read but does not yet remove the
+  unbounded task-history writer or stop rich current-state paths from replaying
+  evidence. Those are the next data-model changes, not a reason to claim the
+  data-size problem solved.
+
+## codex:task-evidence-current-2026-07-15
+
+- **User job:** Read current task/proof state without making a compact project
+  or release summary reopen every historical evidence ledger, while keeping
+  the full ledger available when the user explicitly asks for detail.
+- **Finding:** `task_proof` held only one latest event, so rich current-state
+  expansion still replayed all JSONL evidence. That made history both the
+  durable audit trail and an accidental current-state database.
+- **Change:** Schema 12 adds a bounded `task_evidence_current` projection,
+  written with each proof event and seeded by an explicit migration. Effective
+  task reads can opt into `evidence: 'current'`; raw history remains untouched.
+- **Proof:** Database tests cover current records, bounded replacement, and
+  schema upgrade. Effective-task tests remove the raw evidence directory after
+  writing and prove the current projection still builds the task.
+- **Contract Touch Decision:**
+  `codex:task-evidence-current-2026-07-15` records the schema, writer, and
+  current-reader boundary. Rich detail and historical event shape are not
+  changed yet.
+- **Schema Migration Decision:**
+  `0.12.31/task-evidence-current-projection` adds an additive table and
+  deterministic backfill; it does not prune history.
+- **Remaining:** Move release/readiness and other ordinary current-state
+  consumers to the projection or project summary, then run four-real-project
+  parity before compacting old evidence. The batch current-evidence reader is
+  in place, but the rich release route still has legacy proof-field parity
+  gaps and remains history-backed.
+
+## codex:task-evidence-batch-read-2026-07-15
+
+- **User job:** A current-state read over many tasks should use one bounded
+  database read, not one SQLite connection per task.
+- **Finding:** The first current-evidence API was correct but point-oriented;
+  `buildEffectiveTasks` would reopen the same database for every task.
+- **Change:** Added `readProjectStateDatabaseTaskEvidenceCurrentMany`, which
+  returns the requested rows from one read-only handle. The rich release route
+  is intentionally not switched yet because its current-row parity is not
+  complete; the primitive is ready for the next parity-gated consumer.
+- **Proof:** The database suite covers two-task batch reads; the full release
+  suite was run after the attempted consumer move and exposed 24 existing
+  contract mismatches, so the route move was reverted rather than accepted
+  without parity.
+- **Remaining:** Build parity fixtures for imported proof hints, completion
+  proof, selected-scope release membership, and repository follow-up before
+  switching the rich route.
+
+## codex:task-evidence-migration-order-2026-07-15
+
+- **User job:** After Guildhall upgrades a project, current task evidence must
+  actually be available to current-state reads; a higher schema number must
+  never make an unfinished backfill look complete.
+- **Finding:** A preceding writable database migration could advance the
+  physical schema to 12 before the evidence migration was detected. The
+  result was an empty `task_evidence_current` table with no pending migration
+  signal.
+- **Change:** `0.12.31/task-evidence-current-projection` now checks its own
+  applied migration ledger record. It runs once whenever that record is
+  absent, even if another migration has already opened the schema-12 database.
+- **Proof:** The regression test passes in the full 29-test migration suite.
+  The rebuilt installed artifact was applied to Narrative Harness, Looma +
+  Knit, Jess, and Fair Labor License; their current-evidence row counts are
+  7, 43, 1, and 1.
+- **Remaining:** The same ledger-vs-schema audit must be applied to future
+  projection migrations, and current-state consumers still need to move off
+  the default history-backed effective-task path.
+
+## codex:durable-memory-write-boundary-2026-07-15
+
+- **User job:** Durable memory should help Guildhall remember the essential
+  state of work without quietly storing another copy of raw task, prompt, or
+  diagnostic payloads.
+- **Finding:** `recordMemoryEvent` persisted the complete write-time
+  `content`, including optional `text` and `json`, even though deterministic
+  retrieval only needed `content.summary`. The memory stream had no write-side
+  byte ceiling.
+- **Change:** Memory event schema version 2 stores only bounded summaries and
+  provenance. New writes compact whitespace, cap summaries at 4,000
+  characters, and compact each stream at 256 KiB. The reader normalizes old
+  event lines without returning their raw fields.
+- **Proof:** `src/memory-core/__tests__/memory-core.test.ts` passes 17 tests,
+  including raw-field omission, summary bounds, and repeated-write byte
+  bounds.
+- **Remaining:** Existing old JSONL still contains raw fields and is
+  intentionally untouched. Before any historical rewrite, audit memory
+  consumers and decide whether a micro-LLM re-summary is required for old
+  records. This is a data-model migration boundary, not a cleanup command.
+
+## codex:durable-task-evidence-boundary-2026-07-15
+
+- **User job:** See the current result of work without loading command
+  transcripts into project state, while retaining a concise evidence trail for
+  explicit task-history views.
+- **Observed failure:** A single Looma + Knit gate-result record was 225 KB.
+  The same verbose output was written to JSONL history and SQLite's latest
+  proof row. Narrative Harness also had long note/reviewer records that were
+  replayed by rich effective-task readers.
+- **Root cause:** `appendTaskEvidence` treated the caller's payload as both
+  live diagnostic material and durable evidence. SQLite's `task_proof` writer
+  repeated the same mistake, so changing the read route could not solve the
+  storage duplication.
+- **Change:** `compactTaskEvidenceEvent` is now the shared write boundary for
+  JSONL and SQLite. It keeps identity/result/timestamps, bounded excerpts for
+  human-readable fields, and a 12 KiB payload ceiling. Existing evidence is
+  compacted only through the explicit project-state compaction command, which
+  reports record and byte deltas and leaves malformed lines untouched.
+- **Proof:** `src/runtime/__tests__/task-state-store.test.ts` proves a 20,000-
+  repetition gate output becomes a small JSONL record and the same bounded
+  payload is visible in SQLite. `src/runtime/__tests__/project-state-compaction.test.ts`
+  proves an old verbose record is transformed rather than dropped. Both
+  focused suites pass; data-layer and contract guardrails pass.
+- **Remaining:** Run the explicit migration against the four real projects
+  after reviewing its dry-run report. Then continue moving ordinary current
+  state off `buildEffectiveTask(..., evidence: 'full')`; bounded evidence is a
+  storage guard, not permission to keep replaying history in fleet reads.
+
+### Applied proof
+
+The dry run was reviewed and the migration was applied to Narrative Harness,
+Looma + Knit, Jess, and Fair Labor License. Narrative Harness reduced task
+evidence from 2,284,902 to 1,879,575 bytes across 342 compacted records;
+Looma + Knit reduced 1,769,037 to 1,504,282 bytes across 13 records; Fair
+Labor reduced 29,977 to 27,730 bytes; Jess had no oversized evidence records.
+The same operation compacted the duplicate SQLite proof/current payloads.
+
+The installed service was rebuilt and restarted with `stale:false`. Compact
+project API responses remained 13-24 KB and 8-41 ms; release summary remained
+934 bytes and 17 ms. The diagnostic route is still explicitly heavy at about
+639 KB and 0.61 s, so it is not allowed into initial project/fleet loading.
+
+The total project-history footprint did not collapse by the same amount,
+because the largest remaining files are migration backups, evacuation copies,
+full codebase-map snapshots, progress copies, and old task review/archive
+artifacts. That is a separate storage-lifecycle/model problem and remains
+open; deleting those files blindly would repeat the failure mode this audit is
+meant to prevent.
+
+2026-07-15T02:50:00Z - Physical SQLite reclamation and initial task drawer
+current-read proof.
+
+- Work ids: `codex:sqlite-physical-reclamation-2026-07-15`,
+  `codex:task-drawer-current-read-2026-07-15`.
+- Focused database/compaction suites passed: 26 tests. The database test
+  proves dry-run vacuum does not mutate the file and applied vacuum reclaims
+  pages after deleted rows. The initial task-detail/read-boundary subset
+  passed 3 tests after moving the drawer to the current evidence projection.
+- Installed proof: `pnpm build`, `pnpm dev:install`, service restart, and
+  `/api/stale-server` returned `stale:false`.
+- Four-project apply proof: Narrative Harness SQLite `778240 -> 335872`
+  bytes; Looma + Knit `905216 -> 716800`; Jess `159744 -> 155648`; Fair Labor
+  `155648 -> 151552`. These are physical file sizes after explicit
+  `clean-project-state --apply`, not logical payload estimates.
+- Current calibration project directories now measure about 9.6 MiB NH,
+  17.6 MiB Looma, 2.4 MiB Jess, and 2.8 MiB Fair Labor. The global cache is
+  still about 3.8 GiB because old recovery artifacts and thousands of
+  unregistered test/worktree histories remain intentionally untouched.
+- The initial task drawer no longer replays raw evidence history; explicit
+  history/review/evidence routes still own historical reads. The remaining
+  failure class is recovery-artifact lifecycle and ownership, not permission
+  to add a more aggressive orphan-prune command.
+
+2026-07-15T03:15:00Z - Current inbox projection boundary.
+
+- Work ids: `codex:task-current-inbox-summary-2026-07-15`,
+  `0.12.34/task-current-inbox-summary`.
+- Root cause fixed: the project shell fetched `/api/project/inbox`, whose
+  database-authoritative path still expanded every task through historical
+  `buildEffectiveTasks` before returning a small owner-action list.
+- Model change: `work_items.summary_json` now carries bounded current intake
+  facts (workspace-import provenance, brief shape/approval, acceptance count,
+  and task-readiness classification). It carries no task transcript or
+  evidence history.
+- Reader change: database-authoritative inbox reads use the compact SQLite
+  queue; only legacy projects without database authority use effective-task
+  expansion.
+- Migrations: schema 13 migration `0.12.34/task-current-inbox-summary`
+  backfills the summary from the revision-matched task detail store, and
+  schema 14 migration `0.12.35/task-essential-current-evidence` reduces the
+  current evidence digest without rewriting history.
+- Proof: database and migration suites pass after updating the schema contract;
+  data-layer and contract guardrails pass. One pre-existing inbox fixture still
+  reports a proof-reconciliation mismatch for an approved review verdict and
+  remains separately tracked rather than being hidden by this storage change.
+- Proof completed: installed build/restart is current (`stale:false`), both
+  migrations have been applied to Narrative Harness, Looma + Knit, Jess, and
+  Fair Labor License, and compact project/fleet timings have been measured.
+- Remaining: move ordinary Thread and fleet-attention advisory reads off their
+  remaining request-time history-backed paths; the fleet route no longer
+  reconstructs Thread, but still builds inbox advisories per project.
+## 2026-07-15 - Essential current evidence projection
+
+- **User job:** Open a project and see current task state without Guildhall
+  replaying old notes, escalations, or diagnostic history.
+- **Finding:** The first SQLite evidence projection was bounded per record but
+  still retained up to 16 records per kind and 64 KiB per task. Looma + Knit
+  had 43 current rows totaling about 319 KiB, mostly historical escalation and
+  note bodies.
+- **Model change:** Schema 14 treats `task_evidence_current` as an essential
+  digest, not a second ledger: newest records are deduplicated by current
+  identity, notes/events/merge records have small limits, proof/review/open
+  state records have bounded limits, each payload is capped at 2 KiB, and each
+  task row at 12 KiB.
+- **History boundary:** Historical JSONL remains the detail source and is not
+  rewritten or deleted. The migration only reduces the current read model.
+- **Migration:** `0.12.35/task-essential-current-evidence` is automatic,
+  idempotent, and runs an explicit vacuum only after the content conversion.
+- **Proof:** 48 project-state database and migration tests pass. The installed
+  migration applied successfully to Narrative Harness, Looma + Knit, Jess, and
+  Fair Labor License.
+- **Proof completed:** post-migration rows and installed route timings were
+  measured across the four calibration projects. Rich task/evidence views
+  remain explicit detail reads.
+- **Remaining:** move the remaining ordinary Thread and fleet-attention
+  advisory reads off request-time historical reconstruction.
+
+## 2026-07-15 - Fleet attention read boundary
+
+- **Finding:** `/api/fleet/attention` was rebuilding the inbox and a full
+  Thread projection for every registered project. The fleet UI only renders
+  inbox items, so Thread work was invisible cost and another route-specific
+  interpretation of project state.
+- **Change:** Fleet attention now uses the same projection-backed project shell
+  as `/api/service/projects` and reads durable open attention records. It does
+  not build inboxes, migrations, or Thread projections. Database-authoritative
+  projects are refreshed by an explicit service-start projector outside the
+  request path; ordinary project reads do not create a database as a side
+  effect.
+- **Proof target:** after the installed rebuild, compare fleet-attention timing
+  and payload with the four-project shell; verify the groups/items remain
+  unchanged after warmup, the route performs no per-project Thread/inbox
+  reconstruction, and stale/unmaterialized attention is represented honestly.
+
+## 2026-07-15 - Current scope identity boundary
+
+- **User job:** Open a project and trust that the selected release counts the
+  live work that actually exists, even after an intake refresh replaced task
+  identities.
+- **Finding:** Narrative Harness had seven live work items but its approved
+  workspace plan referenced an older task set. The projection imported those
+  stale IDs, deferred all seven real items, and labeled an empty release
+  complete. This was an authority/model failure, not a card-copy problem.
+- **Change:** Live work-item identity now wins. Approved plans can seed only
+  matching current IDs; stale IDs are ignored. When no plan IDs survive a
+  queue refresh, live non-terminal work is current by default, while later
+  work still needs an explicit matching later assignment.
+- **Migration:** `0.12.36/project-summary-current-scope-authority` rebuilds
+  the version-12 summary, release definitions, and `work_scope` rows without
+  rewriting task prose or history.
+- **Proof:** projection and migration-focused suites pass. Installed proof
+  still required: apply to NH, Looma + Knit, Jess, and Fair Labor License;
+  compare release counts and selected work across API, Overview, Map, Work,
+  and Releases; then confirm the migration is idempotent.
+
+## 2026-07-15 - Database-authority evacuation restore
+
+- **User job:** Run migrations or open a project after the database boundary
+  without Guildhall repeatedly rediscovering old recovery work.
+- **Finding:** The 0.10 evacuation migrations read the removed compatibility
+  `TASKS.json` file even when the 0.12 database was the current authority.
+  Retained evacuation evidence therefore looked like missing active state and
+  caused the same restore migrations to remain blocked and reapply.
+- **Change:** Restore detection now compares the evacuation copy with the
+  authoritative database queue when database authority is active, and keeps
+  the legacy JSON comparison for projects that have not crossed that boundary.
+  A real later evacuation batch still enters the normal queue write boundary;
+  retained evidence is not deleted.
+- **Proof:** `migrations.test.ts` covers a database-authoritative project with
+  no compatibility `TASKS.json`, imports a genuinely late evacuation task once,
+  and confirms the second status/apply pass is clean. The focused migration and
+  summary projection suite passes: 47 tests.
+- **Remaining:** split the shared restore detector into independent signals for
+  active task files, shaped active tasks, and shaped archive tasks. The current
+  three migration definitions still share one broad result and can report more
+  blocked migrations than the actual missing category warrants.
+
+## 2026-07-15 - Installed data-layer status refresh
+
+- **Installed proof:** rebuilt and dev-installed the current artifact, restarted
+  the service, and verified `/api/stale-server` as `stale:false`. After applying
+  the authority-aware restore repair to Narrative Harness and Looma + Knit,
+  both projects report zero blocked migrations; only the pre-existing manual
+  `0.9.0/runtime-backed-project` migration remains pending.
+- **Repair proof:** Narrative Harness `task-009` now stores the full title
+  `What commands should I run to smoke test this project without changing files?`
+  in the durable queue detail store. The visible truncation is now presentation
+  only, not persisted data.
+- **Fleet proof:** `/api/fleet/attention` dropped from 30 stale migration/setup
+  records to 14 real setup/import records across seven projects and now returns
+  in about 10 ms. `/api/service/projects` returns 34,895 bytes in about 14 ms;
+  the bounded Narrative Harness project response returns 23,996 bytes in about
+  24 ms.
+- **Storage proof:** current SQLite databases are 278,528 B (Narrative
+  Harness), 483,328 B (Looma + Knit), and 151,552 B each (Jess and Fair Labor
+  License). Current summary payloads are 23,539 B, 50,663 B, 5,006 B, and
+  6,136 B respectively. These are meaningful reductions for ordinary reads,
+  but they are not the whole storage story.
+- **Remaining data weight:** the registered Narrative Harness and Looma + Knit
+  directories are still about 9.6 MB and 17 MB. The global project cache is
+  about 3.6 GB, dominated by many unregistered/test/worktree histories and by
+  retained backups, evacuation copies, task-local artifacts, memory databases,
+  and event/progress histories. No deletion was performed; the lifecycle and
+  ownership model must be fixed before cleanup is safe.
+- **Remaining architecture work:** attention is currently refreshed by the
+  explicit service-start projector, so migration writes made after startup
+  require a restart before the fleet projection catches up. Every shared
+  current-state write boundary still needs to refresh or invalidate the same
+  projection. Historical JSONL still needs a real essential-history retention
+  model rather than field compaction alone, and the 23-50 KB orientation spine
+  still needs separation from the compact project shell.
+
+## 2026-07-15 - Orientation storage boundary installed proof
+
+- **Change:** schema 15 stores the compact project summary separately from the
+  orientation/map payload. The shell reader skips the orientation table
+  entirely; full project and Map readers reattach it from the same revisioned
+  transaction.
+- **Migration proof:** `0.12.37/project-summary-orientation-store` applied
+  successfully and idempotently to Narrative Harness, Looma + Knit, Jess, and
+  Fair Labor License. It is automatic and non-blocking; only the pre-existing
+  manual `0.9.0/runtime-backed-project` remains pending.
+- **Installed proof:** rebuilt and dev-installed the artifact, restarted the
+  service, and verified `/api/stale-server` as `stale:false`.
+- **Measured current-state bytes:** Narrative Harness compact summary 8,780 B
+  plus orientation 14,739 B; Looma + Knit 16,816 B plus 33,827 B; Jess 2,288 B
+  plus 2,698 B; Fair Labor License 2,800 B plus 3,292 B. The full NH route is
+  still about 23,996 B because it intentionally includes detail; the fleet
+  shell does not include orientation.
+- **Measured route timing:** five installed reads landed at roughly 3.1-3.7 ms
+  for `/api/service/projects`, 3.8-4.7 ms for `/api/fleet/attention`, and
+  3.7-4.2 ms for `/api/project?projectId=narrative-harness`.
+- **Interpretation:** this proves the first storage/read boundary, not the
+  whole data-layer pivot. Historical JSONL, debug/event/progress stores, and
+  retained migration/evacuation artifacts still account for most disk weight;
+  attention refresh remains startup-driven until write-boundary refresh is
+  implemented.
+
+## 2026-07-15 - Real-project history cleanup calibration
+
+- **Dry-run/apply proof:** ran the boundary-aware project-state compactor on
+  Narrative Harness, Looma + Knit, Jess, and Fair Labor License. All four
+  completed with no blocked migrations and no queue/history rewrite failures.
+- **Important result:** the compactor reduced essentially none of the current
+  bytes: the four local-history roots remain about 9.6 MB, 17 MB, 2.4 MB, and
+  2.8 MB. Existing stores were already within their local ring limits, while
+  the largest files are retained evidence, reconnect/event streams, backups,
+  and evacuation copies that the current compactor intentionally preserves.
+- **Conclusion:** this is evidence against “just prune harder.” The next data
+  change must define ownership and retention at write time, distinguish active
+  project state from durable evidence and ephemeral run state, and then offer a
+  manifest-backed cleanup for already-created stores. No unregistered cache
+  directories were deleted.
+
+## 2026-07-15 - Ephemeral storage placement guardrail
+
+- **Finding:** the durable user cache contains about 52,633 project
+  directories and 135,633 files, mostly from temporary benchmark/test/
+  worktree roots. The existing path hash made each temporary root look like a
+  durable project, so repeated runs accumulated state in the wrong store.
+- **Change:** when no explicit `GUILDHALL_DATA_DIR` is configured, project
+  roots under the OS temp directory now use an OS-temp `guildhall-projects`
+  root. Explicit data-dir configuration remains authoritative for tests,
+  containers, and deliberate deterministic persistence. The path helpers still
+  do not allocate directories on read.
+- **Proof:** focused local-history/database/migration tests pass: 56 tests.
+  A post-test census shows the durable project-directory count unchanged at
+  52,633; no new durable entries were created. Existing cache entries were not
+  deleted.
+- **Remaining:** add a durable-cache ownership/lease manifest and use it to
+  classify old entries before any cleanup. This is the required next step for
+  the 3.6 GB backlog; deleting by “unregistered” alone would be unsafe because
+  registration can be reconstructed or temporarily absent.
+
+## 2026-07-15 - Cache ownership census and installed write-boundary proof
+
+- **Installed proof:** rebuilt, dev-installed, restarted the service, and
+  verified `/api/stale-server` as `stale:false` for the current artifact.
+- **Cache census:** `guildhall cache census` is read-only and reports 52,633
+  entries: 7 durable registered workspaces, 0 active leases, 0 stale leases,
+  and 52,626 unregistered unknown entries. It deleted nothing and marked
+  nothing safe to delete. The durable cache remains about 3.6 GB and 135,633
+  files.
+- **Placement proof:** service startup registers known workspaces explicitly;
+  ordinary project/fleet reads do not perform cache registration. Unconfigured
+  temporary roots use the OS-temp history root, while explicit
+  `GUILDHALL_DATA_DIR` remains deterministic.
+- **Route proof:** installed `/api/service/projects` returned 34,894 bytes in
+  15.9 ms, `/api/fleet/attention` returned 41,057 bytes in 12.1 ms, and the
+  bounded Narrative Harness project response returned 23,996 bytes in 21.4
+  ms.
+- **Interpretation:** the live request path is now bounded and fast enough to
+  rule out “load every project’s complete state” as the current latency cause.
+  The 3.6 GB remains a lifecycle backlog, not a cleanup task. The next safe
+  step is lease integration with explicit run/benchmark lifecycles, followed
+  by an evidence-backed export and separately authorized cleanup path.
+
+## 2026-07-15 - Shared projection invalidation boundary
+
+- **Change:** current-state database writers now emit a post-transaction
+  summary invalidation event. Legacy runtime/evidence writers use the same
+  stale marker. The service coalesces events per project and refreshes the
+  durable summary plus attention projection in the background.
+- **Read-boundary invariant:** Projects, fleet attention, and project GETs do
+  not subscribe, repair, scan, or rebuild. Startup warmup calls the same
+  refresh function used by write-boundary events.
+- **Focused proof:** invalidation bus timing/unsubscribe, project-state DB,
+  local-history, attention, and serve read-boundary suites pass: 48 tests.
+- **Remaining proof:** install this change and mutate a real project through a
+  runtime/evidence/repository writer, then verify the stored summary freshness
+  returns to `current` without a GET-triggered repair. Measure refresh cost
+  under high-frequency agent events before expanding the listener’s scope.
+
+## 2026-07-15 - Revisioned mutation domains and installed scheduler proof
+
+- **Change:** the invalidation event now carries the committed project
+  revision and a closed mutation-domain list. Availability and reconciliation
+  writers advance `project_meta.revision`, mark the summary stale, and emit
+  after commit. The scheduler merges domains and keeps the highest revision
+  across coalesced writes instead of silently retaining only the last event.
+- **Focused proof:** 45 tests passed across the project-state database,
+  invalidation bus, projection scheduler, and serve read-boundary suites.
+  `pnpm lint:data-layer`, `pnpm lint:contracts`, and `git diff --check` pass.
+- **Installed proof:** rebuilt and dev-installed the exact artifact, restarted
+  the service, and verified `/api/stale-server` as `stale:false`. The 7-project
+  fleet returned with 0 loading projects and all 7 summaries `current`.
+  `/api/service/projects` was 34,894 B / 7.0 ms, `/api/fleet/attention` was
+  41,057 B / 10.2 ms, and the bounded Narrative Harness project response was
+  23,996 B / 10.6 ms in this probe.
+- **Cache proof:** the read-only census remains 52,633 entries: 7 durable
+  registered and 52,626 unregistered unknown. No cache entry was deleted or
+  marked safe to delete.
+- **Remaining:** the installed service has startup/warmup proof and source
+  writer proof, but not yet a non-destructive mutation made through the live
+  running service with a measured refresh completion. Domain dependencies also
+  still need to choose a summary-only versus attention-only refresh so every
+  write does not rebuild both projections.
+
+## 2026-07-15 - Reconciliation refresh dependency proof
+
+- **Change:** reconciliation is now modeled as an attention-only dependency.
+  Its database write advances the project revision and summary watermark but
+  does not mark the compact summary stale. The projection worker skips the
+  queue/orientation summary rebuild for a reconciliation-only event and
+  materializes attention directly.
+- **Focused proof:** project-state database, projection scheduler, and serve
+  read-boundary suites pass: 43 tests. Data-layer and contract guardrails
+  remain green.
+- **Remaining:** extend the same dependency table to execution/runtime,
+  owner-input, repository, proof, and queue changes, with a non-destructive
+  live-service mutation proof. The current service still uses the full summary
+  rebuild for those domains until their exact summary dependencies are
+  verified.
+
+## 2026-07-15 - Overlay-aware projection and installed performance proof
+
+- **Change:** projection refreshes now calculate compact counts, scope, and
+  readiness from bounded current task overlays and current evidence when a
+  database-authoritative project is refreshed. Raw task definitions remain in
+  the detail store; runtime/evidence payloads are not copied into them.
+- **Change:** MCP task reads and contract-result writes now use the canonical
+  database-aware queue boundary. A database-authoritative project no longer
+  depends on a literal `TASKS.json` read, and a write preserves the full detail
+  queue instead of rebuilding from the compact compatibility export.
+- **Change:** the refresh callback re-reads the durable revision after a
+  refresh and schedules one coalesced retry if another process committed while
+  the projection was being calculated.
+- **Focused proof:** 31 tests passed across projection, scheduler, watcher,
+  and MCP reader suites; the broader summary/read-boundary run passed 36 tests.
+  `pnpm lint:data-layer`, `pnpm lint:contracts`, and `git diff --check` pass.
+- **Installed proof:** rebuilt and dev-installed the exact artifact, restarted
+  the service, and verified `/api/stale-server` as `stale:false`. After warmup,
+  all 7 registered projects reported `summaryFreshness: current` and
+  `projectStatusLoading: false`. Five warm reads of `/api/service/projects`
+  were 3.1-4.5 ms after a 98.1 ms cold read, with a 34,954-byte payload.
+  `/api/fleet/attention` was 41,117 bytes and 3.9-6.4 ms across the same
+  probes, with `projectCount: 7` and `totalItems: 14`.
+- **Storage snapshot:** the four calibration projects' databases are about
+  274 KB (Narrative Harness), 496 KB (Looma + Knit), and 152 KB each (Jess and
+  Fair Labor License). Their compressed queue detail stores are about 15.9 KB,
+  17.3 KB, 492 B, and 502 B. The local-history roots remain about 9.6 MB,
+  17 MB, 2.4 MB, and 2.8 MB; the global cache remains 3.6 GB with 52,633
+  entries, so history ownership/retention is still the dominant unresolved
+  storage problem.
+- **Remaining:** this proves the current-state read model is materially
+  lighter and no longer blindly trusts raw task definitions after overlay
+  writes. It does not yet prove a separate live-process mutation, a complete
+  history retention policy, or a safe cleanup of the 52,626 unknown cache
+  entries. Those remain architecture work, not cleanup by heuristic.
+
+## 2026-07-15 - Write-boundary history limits and owner-input queue authority
+
+- **Change:** generic persistence event streams now deduplicate by event id and
+  enforce per-placement byte/count/age limits at append time. Compaction also
+  rewrites the bounded tail instead of merely writing a summary beside an
+  unbounded ledger. Callers can request a bounded latest-event page.
+- **Change:** task evidence streams now enforce per-kind limits at the write
+  boundary. Ordinary notes/events retain at most 64 records and 64 KB; proof,
+  review, gate, adjudication, escalation, and agent-issue streams retain at
+  most 32 records and 64 KB; merge/Git Story streams retain at most 16 records
+  and 32 KB. The current SQLite evidence projection remains available without
+  replaying the history file.
+- **Change:** owner-input SQLite rows now represent the compact open queue as
+  a replacement projection. Closed/cancelled JSON request records remain
+  detail/history, but they cannot linger as current queue rows. Repair now
+  writes through the task boundary and refreshes the same owner-input
+  projection rather than mutating a second queue directly.
+- **Focused proof:** 44 tests passed across project-state database, owner-input
+  projection/repair, and task evidence retention suites. `pnpm lint:data-layer`,
+  `pnpm lint:contracts`, `git diff --check`, and `pnpm build` pass.
+- **Installed proof:** `pnpm dev:install`, service restart, and
+  `/api/stale-server` returned `stale:false`. The live fleet returned 7
+  projects, 0 loading, and 0 non-current summaries. Warm
+  `/api/service/projects` reads were 3-8 ms for a 34,955-byte response; warm
+  `/api/fleet/attention` reads were 10-30 ms for a 41,117-byte response.
+- **Storage proof:** the global cache is still 3.6 GB across 52,633 entries:
+  7 durable registered and 52,626 unregistered unknown. Its largest current
+  files are event streams, codebase maps, context-debug, and old task
+  snapshots. No existing history or unknown cache entry was deleted. The new
+  limits prevent continued unbounded growth; a separately authorized,
+  manifest-backed migration is still required to reduce existing bytes.
+- **Remaining:** owner-input keeps a filesystem detail record plus a SQLite
+  current queue, so a crash can leave the recomputable projection stale; it
+  does not create two current authorities. No outbox is justified for task
+  evidence or overlays now that database-authoritative projects write one
+  durable SQLite model. The next proof is a second-process mutation and
+  API/UI agreement across all surfaces. No MVP execution claim is made until
+  those gates are met.
+
+## 2026-07-15 - SQLite task evidence history boundary
+
+- **Change:** database-authoritative projects now write compact task evidence
+  into a bounded `task_evidence_history` table in the same SQLite transaction
+  as the current proof/evidence projection. New database-authoritative writes
+  no longer create a second JSONL copy. The retention policy remains owned by
+  the task-state store and is passed into the database boundary; the database
+  does not invent another policy.
+- **Compatibility:** projects that already have JSONL evidence continue to
+  read it as legacy detail. When both stores contain an event, the SQLite row
+  wins by event id. This lets an existing project cross the authority boundary
+  without losing historical detail while new growth stops duplicating itself.
+- **Focused proof:** task-state and project-state database suites pass 32
+  tests, plus 3 attention projection tests. The proof covers absent JSONL after
+  a database-authoritative append, bounded newest-tail retention, duplicate-id
+  replacement, full history reads, paged reads, and summary invalidation.
+- **Schema decision:** project-state database schema version 16 adds one
+  additive history table and index. No existing rows or files are deleted by
+  opening the database. Existing JSONL remains a compatibility source until a
+  separate, manifest-backed history migration is authorized.
+- **Remaining:** existing cache/history mass still needs ownership evidence
+  before any deletion. Owner-input projection recovery, a separate-process
+  mutation proof, and the API/UI agreement proof are still outstanding. An
+  outbox remains a conditional option only if a future compatibility export is
+  made authoritative again.
+
+## 2026-07-15 - Overlay compatibility writers stop duplicating current state
+
+- **Change:** once a project is database-authoritative, runtime and workspace
+  overlay writes now stop emitting compatibility JSON. Reads already used the
+  SQLite rows; continuing to write the old files was a second current-state
+  authority waiting to drift. Legacy projects retain the JSON path until they
+  cross the authority boundary.
+- **Focused proof:** task-state authority coverage now proves runtime,
+  workspace, and evidence writes remain visible from SQLite while stale
+  compatibility files are not updated. The existing legacy tests still prove
+  first-run projects can use the JSON path.
+- **Interpretation:** this removes another source of growth and crash-window
+  confusion. It does not delete old overlay files; those are compatibility
+  artifacts and require an explicit migration/export decision.
+
+## 2026-07-15 - Installed proof after current-state writer cut
+
+- **Installed artifact:** rebuilt, ran `pnpm dev:install`, restarted the
+  service, and verified `/api/stale-server` returned `stale:false` with matching
+  build mtimes.
+- **Live fleet proof:** `/api/service/projects` returned 34,955 bytes for 7
+  projects; all 7 were present, 0 reported `projectStatusLoading`, and 0 had a
+  non-current summary. Five warm reads measured 2.8-7.1 ms in this probe.
+  `/api/fleet/attention` remained a bounded 41,117-byte response.
+- **Storage proof:** the global project cache is still 3.6 GB across 52,633
+  entries: 7 durable registered, 0 active/stale leases, and 52,626
+  unregistered unknown. The read-only census deleted nothing and marked
+  nothing safe to delete.
+- **Conclusion:** the compact current-state path is now an installed,
+  projection-backed system rather than a request-time reconstruction. The
+  remaining size problem is historical/cache ownership and migration, not the
+  fleet card read path. No claim is made that the total cache is healthy yet.
+
+## 2026-07-15 - Memory WAL recurrence cut and current-history default
+
+- **Finding:** the cache audit found approximately 1.25 GB in 1,418
+  `guildhall-memory.db-wal` sidecars, mostly around 900 KiB each. The packet
+  builder initialized Mastra LibSQL on configured Mastra reads but did not use
+  Mastra retrieval; it built the packet from the deterministic source index.
+- **Change:** packet reads no longer initialize Mastra storage. Explicit Mastra
+  adapter callers now have `close()`, which checkpoints and releases LibSQL
+  resources. Mastra remains available for a future real retrieval path, but it
+  is no longer reported as the active packet reader without retrieval proof.
+- **Change:** database-authoritative effective-task reads default to bounded
+  SQLite current evidence. Full retained evidence is explicit for history,
+  evidence, and review detail routes.
+- **Focused proof:** memory-core, effective-task, and project-state database
+  suites pass. Regressions prove no Mastra DB allocation for packet reads and
+  prove default current evidence differs from an explicit historical read.
+- **Storage proof:** existing cache remains untouched at about 3.6 GB; this
+  change prevents the identified WAL recurrence but does not claim the old
+  artifacts are safe to delete. Ownership/manifest migration remains open.
+- **Remaining:** verify recurrence after the fresh installed service build,
+  complete the direct-writer and second-process mutation audit, then create a
+  reversible cleanup manifest for legacy WALs/history. No heuristic pruning.
+
+## 2026-07-15 - Installed proof after memory boundary cut
+
+- **Installed artifact:** rebuilt and dev-installed the current artifact,
+  restarted Guildhall, and verified `/api/stale-server` as `stale:false` with
+  matching build mtimes.
+- **Live read proof:** `/api/service/projects` remained 34,955 bytes with 7
+  current projects, 0 loading projects, and 0 stale summaries. Five live probes
+  were 0.00-0.02 seconds. `/api/fleet/attention` probes were 0.01-0.06
+  seconds.
+- **Recurrence proof:** the global cache still has exactly 1,418
+  `guildhall-memory.db-wal` files after the fresh service and route reads.
+  The total remains 3.6 GB because no old artifact was deleted. This proves
+  the packet read path no longer creates new WAL sidecars; it does not yet
+  prove the legacy files are safe to remove.
+
+## 2026-07-15 - Migration writers use the queue authority boundary
+
+- **Finding:** task-state, open-question, and hierarchy migrations were still
+  able to write `TASKS.json` directly. That left the migration path with a
+  second current-state writer after SQLite had become authoritative.
+- **Change:** those migrations now call
+  `writeProjectTaskQueueWithSummary`, the existing authority boundary. A
+  database-authoritative project updates the current SQLite projection and
+  revision-matched detail store; an older project retains the legacy JSON
+  compatibility path.
+- **Focused proof:** six migration/boundary suites pass, 46 tests total. The
+  proof covers migration ordering, hierarchy updates, queue compatibility,
+  project-state authority, migrations, and projection freshness.
+- **Remaining:** recovery/evacuation restores and explicitly legacy-only
+  compatibility migrations still need individual authority classification.
+  They are not blanket-rewritten because restore operations have different
+  rollback semantics.
+
+## 2026-07-15 - Promoted detail reads fail closed
+
+- **Finding:** a promoted project with a missing revision-matched detail store
+  could previously fall back to compact index rows, and one summary rebuild
+  path could write an empty queue. That could erase rich task definitions.
+- **Change:** database-authoritative detail reads now return unavailable;
+  canonical queue mutation, release-envelope preservation, summary backfill,
+  and project compaction refuse to continue without the detail artifact.
+  Legacy projects keep their file compatibility path.
+- **Focused proof:** project-state database and summary-projection regressions
+  cover the promoted missing-detail case; the focused data-boundary group is
+  now 69 passing tests.
+- **Remaining:** add revision/full-detail preconditions to replacement writes,
+  then classify and convert the remaining raw-queue writers individually.
+
+## 2026-07-15 - Installed proof after fail-closed detail cut
+
+- **Installed artifact:** rebuilt, ran `pnpm dev:install`, restarted Guildhall,
+  and verified `/api/stale-server` returned `stale:false` with matching build
+  mtimes.
+- **Live fleet proof:** `/api/service/projects` returned 34,955 bytes for 7
+  projects; all 7 had `summaryFreshness: current`, 0 were loading. Five
+  projects were also checked through the compact shell path after restart.
+  `/api/fleet/attention` returned 41,117 bytes.
+- **Recurrence proof:** the cache still has 1,418 memory WAL files and the
+  total remains about 3.6 GB. The installed route reads did not increase that
+  count. Existing artifacts remain untouched pending ownership proof.
+- **Residual:** the broad repository typecheck still fails on pre-existing
+  dirty-branch schema/test drift; the focused suites, build, data-layer
+  guardrail, contract detector, and diff check pass.
+
+## 2026-07-15 - Installed compaction-path proof
+
+- **Finding:** the first installed fail-closed run correctly stopped, but for
+  the wrong reason: compaction was resolving the queue from repository
+  `.guildhall/TASKS.json` instead of the promoted system-local detail path.
+- **Change:** compaction now follows the same authority-owned path as API and
+  canonical queue reads. A stale repository copy cannot shadow the promoted
+  queue.
+- **Proof:** rebuilt/dev-installed/restarted artifact reports `stale:false`;
+  read-only dry runs complete for Narrative Harness, Looma + Knit, Jess, and
+  Fair Labor License. `/api/service/projects` remains 34,955 bytes with 7
+  current, 0 loading projects. The WAL count remains exactly 1,418.
+
+## 2026-07-15 - Mutation-boundary and size proof
+
+- Focused project-state, boundary, and compaction suites: 41 tests passed.
+- `pnpm lint:data-layer`, `pnpm lint:contracts`, and `git diff --check` pass.
+- The mutation reader returns full queue detail plus its revision from one
+  database read; stale replacement is rejected before current rows are erased.
+- Registered project hot state is 164-508 KB per SQLite database and compressed
+  queue detail is 0.5-17.3 KB; the remaining multi-megabyte project sizes are
+  historical backups, evidence, evacuation artifacts, and old memory WALs.
+- Remaining proof gap: serve mutation routes and historical writers must carry
+  the same token before unconditional replacement can be prohibited globally.
+## 2026-07-15 - SQLite detail authority and authority-owned presence
+
+- **Model change:** promoted projects now keep full queue detail in the
+  revision-matched SQLite `queue_detail` row. Compact rows and detail commit
+  together; the old compressed filesystem sidecar is legacy compatibility input
+  only.
+- **Bootstrap correction:** the queue migration now detects missing queue and
+  summary rows even when an earlier runtime overlay created the SQLite schema.
+- **Read-path correction:** project route gates and Thread presence checks use
+  the authority boundary. A promoted project without `TASKS.json` remains
+  present, while a promoted project without its queue envelope throws an
+  explicit unavailable-state error.
+- **Proof:** project-state database, migration, summary, and boundary suites
+  pass 79/79 plus 34/34 boundary/migration checks; data-layer and contract
+  guardrails pass. Installed proof is still required after the next build.
+- **Remaining:** convert the final non-route replacement writers, then prove
+  the installed service can read and mutate a promoted project with its
+  compatibility files removed.
+
+## 2026-07-15 - Promoted queue detail does not fall back to stale disk
+
+- **User job:** a project whose current state is owned by SQLite should either
+  show the committed queue detail or clearly show that the current state is
+  unavailable; it must not silently revive an older filesystem copy.
+- **Failure found:** `readQueueDetailsForRevision()` still consulted the
+  compressed queue-detail sidecar after a promoted database read missed. This
+  was a second current-state authority hidden behind a compatibility path.
+- **Change:** promoted projects now fail closed when their revision-matched
+  SQLite `queue_detail` row is absent or unreadable. The sidecar fallback is
+  retained only for projects that have not crossed the database authority
+  boundary.
+- **Proof:** a focused regression removes the SQLite detail row, writes a
+  stale compressed sidecar, and verifies that the promoted reader returns no
+  queue definition. Project-state and summary projection tests pass 51/51;
+  `pnpm lint:data-layer`, `pnpm lint:contracts`, and `git diff --check` pass.
+- **Remaining:** rebuild and verify the installed service, then continue with
+  rollback/evacuation ownership and rich-reader transfer. Installed proof is
+  now complete: `/api/stale-server` reports `stale:false`; the fleet shell
+  returns all seven registered projects with zero loading/errors; Narrative
+  Harness compact project state is 20,417 bytes, current Inbox is 2,193 bytes,
+  and Activity is 2,829 bytes. This does not claim the data-layer pivot is
+  complete.
+
+## 2026-07-15 - Terminal archive evidence must be compact
+
+- **Job:** when a task leaves the active project queue, Guildhall should
+  preserve enough durable evidence to explain the completed work without
+  retaining a second full task/transcript payload.
+- **Current failing seam:** project-state compaction writes the entire terminal
+  task into `tasks/<id>/archive-evidence.json`, while also writing a compact
+  archive task. The duplicate can include every historical note, verdict, and
+  agent issue.
+- **Intended authority:** the compact archived task is the durable project
+  record; `archive-evidence.json` is a bounded archival index/evidence summary,
+  not a hidden raw-task store.
+- **Proof required:** new archives omit old bulky entries, retain the latest
+  bounded evidence and identifying task fields, legacy full archive evidence
+  is compacted at the explicit project-state compaction boundary, and the
+  focused compaction suite plus measured project-size audit pass.
+- **Schema Migration Decision:** migration `0.12.39/compact-archive-evidence`
+  changes the persisted `tasks/<id>/archive-evidence.json` shape from a full
+  task duplicate to the existing bounded archive-task shape. The compatibility
+  reader is the compaction boundary itself: it accepts old JSON, derives the
+  bounded record, and rewrites only when the user explicitly applies project
+  state compaction. No active queue identity or SQLite schema changes.
+- **Status:** complete. New archive companions and the explicit migration
+  boundary retain bounded records; the registered-history census still tracks
+  remaining old artifacts separately.
+
+## 2026-07-15 - Durable cache ownership guard
+
+- **Finding:** the machine cache contains 52,633 project-shaped entries, but
+  only 7 are registered projects and 52,626 are unregistered test/fixture
+  entries. The active four-project stores are tens of megabytes, not 3.6 GB.
+- **Root cause boundary:** historical test/runtime processes could combine an
+  ephemeral project root with the default durable `GUILDHALL_DATA_DIR`,
+  allocating project history in the user cache. The current Vitest setup uses a
+  per-worker temporary data root, but storage should enforce the same rule.
+- **Change:** the local-history path resolver now keeps ephemeral project roots
+  in a temporary history root whenever the configured data directory is the
+  default durable cache. Explicit temporary data directories remain supported
+  for tests and isolated callers.
+- **Proof required:** a path-level regression test shows a leaked default data
+  directory cannot allocate durable history; registered project paths remain
+  durable; census continues to classify old unknown entries without deleting
+  them.
+- **Status:** complete for recurrence prevention. The path-level regression
+  passes and the census still reports old unregistered entries without
+  deleting them; ownership-based cleanup remains open.
+
+## 2026-07-15 - Nullable release selection must not invalidate fleet shells
+
+- **Job:** every registered project should produce its compact project shell,
+  including projects that do not define or select a release.
+- **Finding:** the SQLite reader returned `selectedReleaseId: null` from the
+  nullable `queue_state.selected_release_id` column. The domain `TaskQueue`
+  schema represents an unselected release by omitting the optional field, so
+  startup projection refreshes marked projects with no selected release as
+  `freshness: error` instead of producing their summary.
+- **Root cause:** the persistence reader exposed a storage-shaped nullable
+  value across the session/runtime boundary. A later runtime normalizer fixed
+  some mutation reads, but the summary projector read the session result
+  directly.
+- **Change:** keep SQL `NULL` inside the database and omit the optional field
+  at every session-layer queue read. Add a round-trip regression proving the
+  resulting queue is accepted by the domain schema.
+- **Contract Touch Decision:** work `0.12.39/nullable-release-read`; touched
+  contract is the session-to-runtime queue reader shape; the SQL column and
+  persisted schema remain unchanged; no release model or UI contract is
+  touched; proof is focused database/schema coverage plus the installed
+  seven-project fleet shell.
+- **Status:** complete. The focused database/schema regression passes and the
+  installed fleet proof is green for all 7 registered projects.
+
+## 2026-07-15 - Installed fleet proof after nullable queue boundary
+
+- **Installed artifact:** rebuilt, ran `pnpm dev:install`, restarted Guildhall,
+  and verified `/api/stale-server` as `stale:false` with matching build mtimes.
+- **Live read proof:** `/api/service/projects` returned 34,955 bytes in about
+  10 ms for all 7 registered projects. All 7 summaries are `current`; 0 are
+  loading and 0 are in an error state. `/api/fleet/attention` returned 44,637
+  bytes in about 7 ms.
+- **Data-size proof:** the 7 registered project caches total 46.18 MiB. Their
+  SQLite current-state databases are 164-512 KiB each and their revisioned
+  queue-detail blobs are under 18 KiB each. The larger project totals are
+  historical backups, evacuation records, event logs, codebase-map history,
+  context-debug, and bounded archive evidence rather than the project shell.
+- **Machine-cache boundary:** the cache root is still about 3.6 GB, but the
+  census classifies 52,626 entries as unregistered/unknown and only 7 as
+  durable registered workspaces. No old entry was deleted. This is an explicit
+  ownership problem still open for a reversible manifest-based cleanup, not a
+  success claim for pruning.
+- **Status:** the active fleet read model is proven fast and complete; history
+  ownership/retention and remaining direct-writer classification remain in
+  progress.
+
+## 2026-07-15 - Archive evidence cleanup is independent of queue storage mode
+
+- **Finding:** local `tasks/<id>/archive-evidence.json` belongs to the
+  historical evidence boundary, but its compaction was only reached when the
+  project queue was database-authoritative or opted into thin repo state.
+  Projects with repo state `off` could still retain a full archive companion.
+- **Change:** run bounded archive-evidence compaction as its own history
+  operation for every project; queue compaction only owns active/terminal queue
+  records. This keeps the retention boundary from depending on where current
+  queue state happens to live.
+- **Proof required:** the legacy archive-evidence regression passes for a
+  default repo-state-off fixture, and the installed project-state audit reports
+  the same bounded behavior across registered projects.
+- **Schema Migration Decision:** migration `0.12.39/archive-evidence-boundary`
+  changes execution ownership only; the persisted bounded archive shape and
+  compatibility reader are unchanged. No current queue or SQLite schema is
+  touched.
+- **Status:** complete. The repo-state-off regression passes; the remaining
+  registered-history retention work is still open below.
+
+## 2026-07-15 - Context diagnostics must be bounded before the write
+
+- **Job:** context diagnostics should explain how an agent's context was
+  selected without becoming a second prompt, transcript, or arbitrary JSON
+  archive.
+- **Finding:** the writer currently compacts the known record after building
+  it, but `compactContextDebugRecord` spreads the whole input object and the
+  ledger budget is enforced only after the line has been appended. A legacy or
+  future field can therefore re-enter durable history, and one oversized
+  record can temporarily exceed the project budget.
+- **Change:** construct context diagnostics from an explicit allowlist, bound
+  all diagnostic arrays and text handles, enforce a per-record byte ceiling
+  before writing the snapshot or ledger, and normalize legacy reads through
+  the same boundary. Prompt/context bodies remain hashes and size metadata;
+  they are not compatibility fields.
+- **Contract Touch Decision:** work
+  `0.12.40/context-diagnostic-write-boundary` touches the persisted
+  context-debug JSONL record and diagnostic extras reader. The existing
+  diagnostic fields used by the drawer remain; arbitrary legacy fields and
+  `promptPreview` bodies are removed. The SQLite/current-state contract is
+  not touched. Compatibility is an allowlisted reader that returns the new
+  bounded shape; malformed legacy records are skipped. Proof is the focused
+  context-observability suite plus a regression with oversized/unknown fields
+  and a measured registered-project audit.
+- **Schema Migration Decision:** persisted schema touched: local-history
+  `context-debug/context-debug.jsonl` record shape. Change class: bounded
+  compatibility normalization, no current-state schema change. Migration id:
+  `0.12.40/context-diagnostic-write-boundary`. Existing records are rewritten
+  only by the explicit project-state compaction command; new writes are
+  bounded immediately. Rollback is restoring the pre-migration local-history
+  file; no active task/release data is altered.
+- **Reader follow-up:** the context builder now uses the shared bounded
+  exploring-history reader instead of opening the transcript file directly.
+  The reader bounds the file read itself, and the builder has no raw fallback.
+  This closes the remaining path by which a legacy raw transcript could enter
+  an agent context packet; the regression covers an oversized legacy file.
+- **Status:** in progress.
+
+## 2026-07-15 - Installed proof for projection-backed Activity and ephemeral memory
+
+- **Job:** the fleet and Activity surfaces should load from compact current
+  state, while temporary agent runs must not create durable project databases.
+- **Proof:** after `pnpm build`, `pnpm dev:install`, and service restart,
+  `/api/stale-server` reports `stale:false`; the fleet has seven projects with
+  zero loading/errors. Current Narrative Harness Activity is 2,829 bytes and
+  about 10 ms. A focused regression proves the current Activity read succeeds
+  without `TASKS.json`, `queue_detail`, or `work_items`.
+- **Status:** complete for this slice. Release detail, Thread, Inbox, Git Story,
+  and old-cache ownership still require explicit follow-up; the repository-wide
+  typecheck remains red from unrelated task/release/import contract drift.
+
+## 2026-07-15 - Activity polling must not hydrate project detail
+
+- **User job:** while an agent is running, the user can glance at Activity and
+  see current counts, in-flight work, and the same next action as the project
+  shell without causing a full project read.
+- **Finding:** Activity was reading the full orientation projection and
+  scanning all task records even when a current summary already contained the
+  answer.
+- **Change:** Activity now reads the summary shell and uses projected counts
+  and in-flight rows. It merges only live event labels; stale/missing
+  projections use the bounded compatibility scan.
+- **Proof:** focused Activity tests and the read-boundary test pass; the latter
+  removes `TASKS.json`, `queue_detail`, and `work_items` while retaining the
+  current summary and still receives correct Activity state.
+- **Status:** complete.
+
+## 2026-07-15 - Temporary memory allocation must stay out of durable cache
+
+- **User job:** a test, benchmark, or short-lived project run must not create a
+  durable project database that later slows or bloats the Projects page.
+- **Finding:** old temporary Mastra adapter runs left approximately 1.58 GB of
+  empty LibSQL schemas across the machine cache.
+- **Change:** automatic Mastra adapters use in-memory LibSQL for temporary
+  roots; persistent storage requires a durable root or explicit opt-in.
+- **Proof:** memory-core and local-history tests pass, including no-db-on-temp
+  coverage. Old cache cleanup remains intentionally separate until ownership
+  classification is proven.
+- **Status:** complete for recurrence prevention.
+
+## 2026-07-15 - Promoted task evidence must have one durable history authority
+
+- **Job:** task detail and proof reads should retrieve one bounded evidence
+  history from the promoted project database instead of replaying a second
+  per-task JSONL ledger on every request.
+- **Finding:** Narrative Harness retains 1.61 MiB across 316 legacy evidence
+  files and Looma + Knit retains 1.50 MiB across 390 files, while both
+  promoted SQLite `task_evidence_history` tables are empty. SQLite owns current
+  proof, but legacy JSONL still participates in normal reads.
+- **Change:** import compact legacy evidence into the existing SQLite history
+  table, verify the imported ids, remove only the verified JSONL files, and
+  mark the database as the evidence-history authority. Until that marker is
+  set, compatibility reads continue to merge both sources; no partial
+  migration can hide history.
+- **Contract Touch Decision:** work
+  `0.12.41/task-evidence-history-authority` touches the SQLite project metadata
+  and the task-evidence reader boundary. The existing evidence event shape,
+  retention policy, current-proof projection, and public task evidence API are
+  retained. No task queue or release contract is touched. Proof is an
+  idempotent migration test, a crash-safe compatibility test, and measured
+  NH/Looma history-size audits.
+- **Schema Migration Decision:** persisted schema touched: project SQLite
+  `project_meta.task_evidence_authority` plus existing
+  `task_evidence_history`. Change class: authority marker and one-time import;
+  migration id `0.12.41/task-evidence-history-authority`. The compatibility
+  reader defaults to legacy merge behavior when the marker is absent. The
+  intermediate SQLite copy is retained only until the compact-ledger migration
+  verifies it; rollback before that boundary is marker reset to `legacy`, and
+  after it the SQLite copy is empty while the verified compact ledger is the
+  recovery source. The import is idempotent by evidence identity and does not
+  rewrite event ids.
+- **Status:** complete as an intermediate compatibility migration; the SQLite
+  history table is not the final storage owner.
+
+## 2026-07-15 - Historical task evidence must not inflate the aggregate database
+
+- **Finding:** the first real-project implementation exposed a deeper storage
+  mismatch. Narrative Harness had 1,871 retained evidence rows with 1.16 MiB
+  of payload, but putting them into SQLite grew its database from 303 KiB to
+  3.23 MiB because the table carried row and time indexes. That was a net size
+  regression even though the legacy JSONL files disappeared.
+- **Root fix:** SQLite remains authoritative for current proof/current evidence
+  and compact project summaries. Detail-only history now lives in bounded gzip
+  ledgers under `task-evidence-history/<task>/<kind>.jsonl.gz`; reads open that
+  ledger only for an explicit task-history request. New evidence writes follow
+  the authority marker and never recreate the legacy JSONL path.
+- **Migration:** `0.12.42/task-evidence-history-compression` verifies every
+  retained event identity in the compressed ledger, switches the authority and
+  empties/vacuums the transitional SQLite history table in one database
+  transaction. Projects written by older bundles with the literal
+  `minGuildhallVersion: unknown` sentinel are treated as compatible; that
+  sentinel is not a real upgrade requirement.
+- **Installed proof:** Narrative Harness is now 342,884 bytes of compressed
+  evidence plus a 569,344-byte current-state database, with zero legacy JSONL
+  files and zero SQLite history rows. Looma + Knit is 219,557 bytes plus a
+  761,856-byte database; Jess is 2,048 bytes plus 167,936 bytes; Fair Labor
+  License is 7,992 bytes plus 184,320 bytes. The two larger projects therefore
+  retain about half the combined evidence/database bytes of the pre-migration
+  state, while current task proof remains queryable from SQLite.
+- **Proof:** focused database/migration/task-store/runtime-compatibility suites
+  pass (75 tests); data-layer guardrails, contract detection, build, installed
+  artifact, service restart, and `/api/stale-server` (`stale:false`) pass.
+- **Route proof:** the installed Narrative Harness task drawer returned 11.8 KiB
+  for `task-009` and its explicit history request returned 1.2 KiB in about
+  8 ms; the history response came from the compressed authority without
+  recreating a legacy JSONL file.
+- **Status:** complete for the task-evidence boundary; broader context-debug,
+  event-ledger, codebase-map, and orphan-cache ownership work remains open.
+
+## 2026-07-15 - Evidence cutover must survive concurrent writers
+
+- **Job:** while an agent is running, task history and current proof must not
+  disagree because a migration or concurrent append crossed two stores.
+- **Finding:** the first compressed-ledger path could lose a history event
+  written during migration, and parallel gzip appends could overwrite each
+  other. A missing transitional table could also be mistaken for an empty
+  ledger.
+- **Change:** evidence appends and both evidence migrations now share a
+  project-scoped lock. Compressed history is written before current proof;
+  migration publishes a verified temporary ledger before clearing SQLite;
+  missing tables and unexpected records fail closed; legacy migration only
+  runs from the `legacy` authority state. History reads sort mixed kinds by
+  recorded time and id.
+- **Proof:** 43 focused migration/task-store tests pass, including concurrent
+  append preservation and missing-table failure. The rebuilt artifact was
+  installed and the restarted runtime reports `stale:false`; the fleet has
+  seven projects with zero loading/errors.
+- **Status:** complete for the evidence cutover; broader context-debug,
+  event-ledger, codebase-map, and orphan-cache ownership work remains open.
+
+## 2026-07-15 - Session latest alias must not duplicate the snapshot body
+
+- **Job:** an agent should be able to resume its latest bounded recovery
+  state, while older named snapshots remain available for explicit recovery
+  and diagnostics.
+- **Finding:** `saveSessionSnapshot` writes the same compact payload to both
+  `session-<id>.json` and `latest.json`. The latter is an alias, not a second
+  session record, so it doubles storage and gives two files responsibility for
+  one fact.
+- **Change:** write the named snapshot once and make `latest.json` a tiny
+  versioned pointer to its session id. Loaders accept both the pointer and
+  legacy full-payload `latest.json`, and compaction treats the pointer as
+  metadata rather than a snapshot.
+- **Contract Touch Decision:** work
+  `0.12.40/session-latest-pointer` touches the local session recovery file
+  format and the session loader contract. Named snapshot payloads and public
+  `SessionSnapshot` values remain unchanged; only the alias file changes. The
+  compatibility reader accepts old full-payload aliases. Proof is the storage
+  round-trip, latest/list/by-id compatibility, and compaction suites.
+- **Schema Migration Decision:** persisted schema touched: session recovery
+  files under the machine-local session directory. Change class: alias
+  deduplication, no project-state or SQLite schema change. Migration id:
+  `0.12.40/session-latest-pointer`. Existing full aliases are not rewritten by
+  ordinary reads; the next save replaces one with a pointer. Rollback is the
+  legacy reader plus the named snapshot body; no project task data changes.
+- **Status:** in progress.
+
+## 2026-07-15 - Inbox reads must use a revisioned attention projection
+
+- **User job:** opening a project should show current attention items without
+  rediscovering the entire task queue when the attention projection is fresh.
+- **Finding:** attention rows were durable but had no source-revision
+  watermark, so a GET could not distinguish current rows from stale rows.
+- **Change:** schema version 19 adds `projection_watermarks`; attention
+  materialization records the project revision it consumed, and `/api/project/inbox`
+  reads those rows directly. Missing or mismatched watermarks use the bounded
+  compatibility discovery path.
+- **Proof:** the database watermark test and read-boundary test pass; the
+  latter removes `TASKS.json`, `queue_detail`, and `work_items` while the
+  current Inbox response remains available.
+- **Status:** complete for current Inbox reads. The rich Release criteria,
+  Thread, and Git Story routes remain explicit detail work; old cache ownership
+  remains unresolved.
+
+## 2026-07-15 - Inbox history must not ride on project navigation
+
+- **User job:** the project shell should show what needs attention now without
+  loading the historical alert ledger; history should appear when the user
+  opens the Inbox view.
+- **Change:** `/api/project/inbox` has an explicit `includeHistory=true`
+  contract. Overview and Do This Next ask for current items only; Inbox asks
+  for history on entry.
+- **Proof:** the current Inbox projection remains available without task
+  detail tables, and Do This Next/Inbox UI tests pass.
+- **Status:** complete for the shell path; explicit historical Inbox reads
+  remain on demand.
+
+## 2026-07-15 - Cache size is now separated into current state, history, and residue
+
+- **User job:** a project or fleet read should pay only for current state; old
+  rollback, debug, and temporary-run material must have an explicit owner and
+  must not silently become project state.
+- **Proof:** the four registered project databases total about 1.64 MiB, while
+  their complete durable cache entries total about 29.7 MiB. Installed shell
+  responses remain bounded: fleet projects about 35 KiB, Activity about 2.8
+  KiB, current Inbox about 2.9 KiB, and explicit Inbox history about 45 KiB.
+- **Finding:** the machine-wide cache is still about 3.6 GiB across 52,633
+  directories. Historical `guildhall-memory.db` files account for about 1.62
+  GiB. Registered project caches also contain multi-megabyte migration
+  rollback and evacuation snapshots, especially Looma + Knit.
+- **Change:** temporary Mastra adapters now use in-memory LibSQL by default;
+  read-only Mastra construction does not create threads; project reads no
+  longer initialize the Mastra store; bounded essential-history and current
+  SQLite projections remain the active model. The cache census is explicitly
+  read-only and classifies unregistered entries as unknown rather than safe to
+  delete.
+- **Required follow-up:** add provenance at cache allocation and a separate
+  retention owner for migration rollback material before any allowlisted
+  reclamation. Do not add generic orphan pruning.
+- **Status:** current-state and recurrence-prevention work is materially
+  improved; historical cache ownership and migration-archive retention remain
+  open and block declaring the data-layer pivot complete.
+
+## 2026-07-15 - Intake plan is a source snapshot, not a second current plan
+
+- **User job:** a fleet or project shell should show current scope and progress
+  without loading the full accepted-intake task-id snapshot.
+- **Change:** schema version 20 stores `approvedPlan` in `project_plan`, a
+  dedicated source/intake row. Current execution scope remains in `scopes`,
+  `work_items`, and `work_scope`; the summary payload no longer repeats plan
+  membership.
+- **Compatibility:** explicit full summary readers still hydrate the plan;
+  shell readers opt out. Migration `0.12.39/project-plan-source-store` moves
+  existing embedded plans through the shared writer.
+- **Proof:** focused project-state, migration, and summary projection tests
+  pass. Installed migration and cross-surface proof are still required before
+  this architecture slice is marked complete.
+
+## 2026-07-15 - Project-state performance budgets are runnable
+
+- **User job:** opening the fleet should return a usable shell immediately;
+  one slow or broken project must not hold other project summaries hostage.
+- **Gate:** `pnpm audit:project-state-performance` fetches the fleet shell,
+  then all registered project shells in parallel for cold and warm passes. It
+  rejects loading/error states, oversized payloads, and latency over 250 ms for
+  the fleet or 500 ms for an individual project.
+- **Installed proof:** fleet 27.51 ms / 25,402 bytes for seven projects; cold
+  project reads 8.83-32.77 ms; warm reads 4.78-23.56 ms. All projects were
+  current with zero loading/errors, and the gate passed.
+- **Interpretation:** this proves the compact shell boundary, not task detail,
+  Thread, Release detail, Git Story, or rollback storage independence.
+
+## 2026-07-15 - Rich detail has one current representation
+
+- **User job:** opening one task or an explicit rich detail view should read
+  the requested detail without loading a duplicate full-project payload.
+- **Change:** schema 22 makes `work_item_detail` the revision-matched rich
+  task store. The old aggregate `queue_detail` row is now compatibility-only;
+  current queue writes clear it, and explicit rich queue reads reconstruct from
+  per-task detail plus normalized scope rows when needed.
+- **Guardrail:** migration `0.12.44/project-state-remove-aggregate-detail`
+  refuses to clear the aggregate unless every current task has detail for the
+  same queue revision. No generic cleanup or unverified deletion is involved.
+- **Proof:** database/migration focused tests pass 68/68, including point
+  detail surviving removal of both aggregate and filesystem compatibility
+  copies.
+- **Remaining proof:** rebuild/install the artifact, apply the migration to
+  registered projects, and measure rich task/detail routes separately from the
+  compact shell budget.
+
+## 2026-07-15 - Rich-detail migration is installed and measured
+
+- **Installed proof:** after `pnpm build`, `pnpm dev:install`, service restart,
+  and `/api/stale-server` reporting `stale:false`, migrations
+  `0.12.43/project-state-per-task-detail-index` and
+  `0.12.44/project-state-remove-aggregate-detail` applied successfully to all
+  seven registered projects.
+- **Database proof:** all seven current databases report `queue_detail = 0`.
+  Narrative Harness has 7 `work_item_detail` rows with 19,022 compressed
+  detail bytes; Looma + Knit has 43 rows with 72,515 compressed detail bytes.
+  Rich task reads remain available after the aggregate is removed.
+- **Performance proof:** the executable fleet/project/rich-read gate passes:
+  fleet 23 ms / 25.4 KB; project shells 5.5-47.9 KB and 7.8-26.9 ms cold;
+  rich task reads 4.4-33.6 KB and 37.8-318.4 ms; Thread reads 8.8-119.6 KB
+  and 23.7-59.1 ms. All seven projects are current with zero loading/errors.
+- **Interpretation:** the active read model is materially smaller and no
+  longer pays for a duplicate aggregate queue blob. This does not yet solve
+  historical storage: registered caches still contain old task backups,
+  evacuation snapshots, event ledgers, and some context-debug/transcript
+  residue. Those remain open until each has a retention owner and provenance.
+- **Status:** schema-22 rich-detail slice complete in source, installed
+  artifact, migration, and performance proof. Historical retention and the
+  remaining legacy whole-queue writer audit remain open.
+
+## 2026-07-15 - Queue writer graph audited against the current-state architecture
+
+- **User job:** when a task, scope, release, or task-shaping mutation is saved,
+  every project surface should receive one coherent current summary without
+  paying to replace unrelated task records or relying on a later request to
+  repair the state.
+- **Evidence:** `internal/audits/2026-07-15-project-state-writer-graph.md`
+  traces all 47 production callers of `writeProjectTaskQueueWithSummary`.
+  Every caller reaches the shared summary/action/scope/readiness/orientation
+  projection, but every caller still uses the full aggregate snapshot writer.
+  Inbox/attention is not refreshed by that boundary; evidence/runtime writes
+  generally only mark the summary stale; and the focused start-recovery path
+  can repair and rewrite the queue more than once in one request.
+- **Guard:** `src/runtime/__tests__/project-state-boundary.test.ts` now verifies
+  that the queue write boundary emits a current summary, selected scope, next
+  action, release summary, orientation spine, and action model together.
+  Focused result: 4/4 tests passed.
+- **Required follow-up:** introduce revision-guarded mutation transactions for
+  work-item facts, relationships/scope membership, and current summary/action
+  refresh. Keep full snapshots for imports, migrations, and explicit recovery;
+  do not add more request-time repair or more callers to the aggregate writer.
+- **Status:** audit and boundary guard complete; mutation-oriented writer
+  refactor remains open.
+
+## 2026-07-15 - Current Thread is bounded by work window
+
+- **User job:** opening Thread should show the live turn, the next small
+  amount of queued work, and recent completed context without serializing the
+  entire future queue or historical transcript.
+- **Finding:** the persisted current row was durable but still retained every
+  pending turn. Looma + Knit had 78 pending turns and an 82,127-byte row.
+- **Change:** the current Thread projection now retains the active turn, the
+  first 12 pending turns in queue order, and the latest 8 completed turns.
+  Older history is explicit at `/api/project/thread/history`; later pending
+  work remains in Work.
+- **Proof:** all seven registered projects refreshed successfully. Current row
+  sizes are 4,628-17,677 bytes; installed Thread responses are 8,393-53,426
+  bytes. The rerun `pnpm audit:project-state-performance` gate passed with
+  zero loading/error states.
+- **Status:** current Thread read model complete for this bounded slice; the
+  writer still calls `buildThread` during projection refresh, and the
+  mutation-oriented queue writer/retention ownership work remains open.
+
+## 2026-07-15 - First targeted current-state mutation transaction
+
+- **User job:** saving one task should update that task and the shared summary
+  coherently without rewriting unrelated task definitions.
+- **Change:** promoted projects now expose
+  `writeProjectStateDatabaseTaskMutation`, a mandatory-revision transaction
+  for one task detail/index row, an optional scope row, the queue watermark,
+  and the supplied summary/orientation state.
+- **Proof:** the database suite proves an unrelated task's compressed payload
+  is byte-identical, the summary and scope row land at the new revision, and a
+  stale writer is rejected before mutation. Data-layer and contract lint pass.
+- **Status:** boundary complete; caller migration remains open. The existing
+  47-call aggregate writer is still the normal path until one transition is
+  migrated and cross-surface proof covers it.
+
+## 2026-07-15 - First-write storage provenance guard
+
+- **User job:** when Guildhall creates durable project state, the resulting
+  directory should have an accountable project owner and should not silently
+  become another anonymous cache tree.
+- **Change:** `ensureProjectLocalHistoryDir` records durable workspace
+  provenance through the existing project-cache registry before allocation.
+  Persistent memory and first SQLite current-state writes share the boundary;
+  unconfigured temporary projects remain outside durable storage.
+- **Guard:** reads still use pure path functions and do not create directories.
+  Existing manifests are not rewritten on every write, so the guard does not
+  add registry churn to normal task updates.
+- **Proof:** the focused local-history, memory-core, cache-registry, and
+  project-state database suites pass (71 tests), including first-write manifest
+  creation and temporary-project exclusion.
+- **Status:** new residue prevention is in place; old unregistered residue is
+  intentionally untouched until provenance and retention classification exist.
+
+## 2026-07-15 - Shared boundary selects targeted task commits
+
+- **User job:** an ordinary one-task edit should update that task and every
+  shared current summary without rewriting unrelated task definitions.
+- **Change:** `writeProjectTaskQueueWithSummary` now proves a single changed
+  task, unchanged release envelope, and a scope delta limited to that task
+  before calling `writeProjectStateDatabaseTaskMutation`.
+- **Guard:** multi-task, structural, release, and multi-scope changes remain
+  on the full snapshot path; the fast path refuses to guess about neighbors.
+- **Proof:** the promoted-project boundary test exercises the real shared
+  writer and the six-file cross-layer suite passes (100 tests).
+- **Status:** first normal caller migrated; batch structural mutation and
+  historical retention ownership remain open.
+
+## 2026-07-15 - Project-wide memory event boundary
+
+- **User job:** a project should retain a small, source-backed memory index
+  regardless of how many task/thread/agent scopes have emitted observations.
+- **Finding:** the old layout bounded each scope independently, so the
+  project-level memory directory could grow by multiplying the per-scope cap.
+- **Change:** new writes use one `memory/events.jsonl` stream with a single
+  256 KiB project budget; scope remains in each event and reads filter by
+  scope. Legacy per-scope files are compatibility-only and write-dead.
+- **Guard:** the explicit consolidation writes the new stream before removing
+  old files, and dry runs do not alter legacy data. Normal reads do not create
+  directories or Mastra databases.
+- **Proof:** cross-scope bounding, legacy read compatibility, dry-run
+  preservation, and applied consolidation pass in the memory-core suite.
+- **Status:** new memory growth is bounded at the project ownership boundary;
+  existing legacy streams still require an explicit, evidence-backed apply.
+
+## 2026-07-15 - Promoted gate evidence boundary
+
+- **User job:** running a task's verification should leave one coherent proof
+  state: the task detail, current status, and evidence history must agree after
+  the command completes.
+- **Finding:** the promoted `run-gates` path previously wrote `gateResults`,
+  proof-path records, and task evidence independently. That allowed duplicate
+  state and a successful-looking task write with missing evidence.
+- **Change:** promoted gate runs now use the shared targeted SQLite mutation.
+  `gateResults` is not persisted in promoted task detail; proof paths remain
+  task detail, while current proof and bounded history use the existing evidence
+  tables in the same transaction.
+- **Proof:** `src/tools/__tests__/run-gates-tool.test.ts` and
+  `src/sessions/__tests__/project-state-database.test.ts` pass together (47
+  tests). The legacy file-backed test remains green.
+- **Status:** one high-value mutation class is migrated; runtime/evidence and
+  structural multi-row mutations remain open.
+
+## 2026-07-15 - Default MCP project excludes diagnostics
+
+- **User job:** the default project context should be compact project state,
+  not a hidden diagnostic transcript.
+- **Change:** `guildhall://project` no longer reads or renders latest
+  context-debug. The explicit `guildhall://project/context` resource retains
+  bounded diagnostic history.
+- **Proof:** MCP project-reader coverage asserts the default resource omits the
+  diagnostic record while the explicit context resource includes it.
+- **Status:** default MCP read boundary is corrected; diagnostic storage
+  retention remains a separate ownership/expiry slice.
+
+## 2026-07-15 - Migration snapshot bytes leave current state
+
+- **User job:** when Guildhall migrates a project, current project state should
+  contain only current records; rollback evidence should be separately owned,
+  inspectable, and excluded from ordinary reads.
+- **Finding:** the migration snapshot writer duplicated a full queue once as a
+  raw `TASKS.before-*` file and again as a rollback object. Several migration
+  writers also placed those raw files directly in `project-state`, where they
+  were easy to mistake for authoritative data.
+- **Change:** the four migration writers now use the shared local-history
+  `migration-snapshots/` boundary. New writes keep one content-addressed
+  rollback object plus a manifest and do not materialize a second raw file.
+  The manifest records `snapshot.materialized`; legacy raw snapshots remain
+  compatible and materialized until digest-verified cleanup.
+- **Guard:** unmanifested legacy files are explicitly unknown. This change
+  performs no deletion and does not infer that an old path is safe to remove.
+- **Proof:** migration snapshot, task-state, hierarchy, execution-planning,
+  migration, and local-history tests pass (61 focused tests); data-layer and
+  contract lint pass; touched paths are type-clean.
+- **Remaining:** add the allowlisted cleanup operation for manifest-backed raw
+  copies, add restore verification, and measure the real four-project cache
+  after that migration. The active data-layer goal remains open.
+
+## 2026-07-15 - Bounded cleanup applied without snapshot guessing
+
+- **User job:** reduce historical weight without changing the current task
+  graph or deleting rollback evidence that Guildhall cannot explain.
+- **Apply proof:** explicit cleanup ran on Narrative Harness, Looma + Knit,
+  Jess, and Fair Labor License. Memory event streams collapsed to one bounded
+  project stream; current task records lost forbidden bulky fields; Looma's
+  SQLite file vacuumed from 966,656 to 884,736 bytes.
+- **Storage proof:** registered cache size fell from about 46.9 MB to about
+  45.9 MB. Narrative Harness memory fell 891,004 -> 261,926 bytes and Looma
+  memory fell 507,193 -> 261,272 bytes.
+- **Safety proof:** 5 NH and 4 Looma old snapshot files remained explicitly
+  unverified (964,960 and 4,048,813 bytes); no raw snapshot was removed by
+  guesswork.
+- **Installed proof:** after restart, `/api/stale-server` was `stale:false`,
+  and the fleet/rich-read performance gate passed with all seven projects
+  current and no loading/error states.
+- **Remaining:** manifest-backed raw-copy cleanup has no real-project eligible
+  candidates yet; restore verification and the unknown-cache lifecycle remain
+  open.
+
+## 2026-07-15 - Release selection stops rewriting task detail
+
+- **User job:** changing the active release should immediately change the
+  visible scope and readiness while preserving the task definitions and proof
+  state that belong to every release.
+- **Finding:** `writeSelectedReleaseId` previously rebuilt the complete queue
+  for a one-field envelope change, deleting/reinserting every current task and
+  detail row.
+- **Change:** promoted projects now route unchanged-task release-envelope
+  changes through a CAS-protected SQLite transaction. It updates release
+  definitions only when they differ, selected-release state, changed scope
+  rows, summary/orientation auxiliary rows, and the shared revision watermark.
+  Unchanged compressed task payloads are preserved byte-for-byte.
+- **Proof:** `src/sessions/__tests__/project-state-database.test.ts` proves
+  selected-release state, scope movement, unchanged detail bytes, and revision
+  coherence; the shared boundary suite, data-layer lint, contract lint, and
+  diff check pass.
+- **Status:** release-selection mutation class migrated for promoted projects;
+  structural task batches, attention synchronization, and the remaining
+  aggregate callers remain open.
+
+## 2026-07-15 - Structural task deltas preserve unrelated detail
+
+- **User job:** adding split children or a newly proposed task should make the
+  new work visible immediately without rewriting unrelated task definitions or
+  proof payloads.
+- **Change:** promoted projects now route additions and multi-task structural
+  deltas through the indexed task-batch transaction when release membership
+  and selection are unchanged. The transaction upserts only changed/new task
+  records and details, changes only affected scope rows, and advances the
+  shared revision watermark.
+- **Guard:** release/relationship-envelope changes do not enter this generic
+  batch path; import, migration, recovery, and unsafe cases retain explicit
+  aggregate compatibility behavior.
+- **Proof:** database and shared-boundary tests pass the structural delta
+  cases, including byte-preservation for an untouched task; data-layer lint,
+  contract lint, and diff checks pass.
+- **Status:** task additions and safe multi-task batches have a targeted path;
+  dependency/release membership deltas and attention/evidence coordination
+  remain open.
+
+## 2026-07-15 - Reconnect history compaction keeps legacy meaning
+
+- **User job:** compact historical reconnect data without making an old event
+  unreadable or silently changing its meaning.
+- **Finding:** a legacy migration fixture stored `{"event":"recent"}`. The
+  structured-event compactor converted that scalar to `{}`, erasing the only
+  useful marker.
+- **Change:** scalar legacy event values remain bounded strings; structured
+  backend events still retain only their allowlisted summary fields and bounded
+  text.
+- **Proof:** memory migration and supervisor history suites pass together (14
+  tests), including the legacy scalar case and the 512 KiB reconnect-history
+  budget.
+- **Status:** compatibility guard complete; raw debug/transcript retention is
+  still governed by separate explicit history ownership work.
+
+## 2026-07-15 - Unused Mastra substrate is retired only when proven empty
+
+- **User job:** optional memory infrastructure should not create durable weight
+  merely because a read path inspected a project.
+- **Finding:** all seven registered project memory databases were present but
+  contained zero rows; deterministic memory packets were already the active
+  reader. The schema files were unused engine residue, not project memory.
+- **Change:** implicit read-only Mastra adapters now use in-memory storage. The
+  explicit migration `0.12.50/memory-empty-mastra-substrate` retires only a
+  known empty Mastra-only schema after a write-locked recheck. Unknown objects,
+  non-empty tables, and lock failures preserve the file.
+- **Proof:** memory-core tests cover empty retirement, data preservation, and
+  read-only non-allocation; migration and data-layer/contract checks pass.
+  Real-project apply and post-apply size proof are the next step.
+- **Status:** code boundary complete; calibration-project migration remains in
+  progress.
+
+### Real-project apply proof
+
+- The installed migration was dry-run first and then applied with the service
+  stopped. It applied to all seven registered projects with zero failures:
+  Narrative Harness, Looma + Knit, Jess, Fair Labor License, T-minus T, Font
+  Something, and Commerce Project.
+- Registered cache bytes fell from **45,897,373 B** to **42,824,872 B**,
+  reclaiming **3,072,501 B**. All seven optional Mastra databases are gone;
+  current project-state SQLite remains **2,609,152 B**.
+- After restart, `/api/stale-server` was `stale:false`. The installed fleet
+  performance audit passed at **35.83 ms / 25,412 B**, with all projects
+  current and no loading/error states; cold, warm, rich-task, and Thread reads
+  all remained within their budgets.
+- **Status:** substrate retirement complete for registered projects; old
+  unregistered global cache and other historical categories remain explicitly
+  unknown or separately owned.
+
+## 2026-07-15 - Post-cleanup data-size proof
+
+- **Registered durable state:** 27,982,508 B (26.69 MiB) across seven
+  projects, down 17,914,865 B (39.0%) from the 45,897,373-byte baseline.
+- **Current-state authority:** SQLite totals 2,609,152 B (2.49 MiB). The
+  project page does not need to load the historical payloads to render its
+  summary card.
+- **Cleanup applied:** T-minus T, Font Something, and Commerce Project had
+  bounded session/context-debug/reconnect/task-evidence cleanup applied;
+  forbidden task fields were sanitized and SQLite was vacuumed where useful.
+- **Safety boundary:** old unverified snapshots and evacuation copies remain;
+  no path was deleted merely because it was old or large.
+- **Quarantined residue:** the global project-cache root contains
+  3,463,239,374 B (3.30 GiB) across 52,633 directories; 52,626 are
+  unregistered and there are no active leases. This is ownership debt, not
+  project state, and remains untouched until a provenance-checked retirement
+  path exists.
+- **Installed proof:** `/api/stale-server` was `stale:false`; fleet was
+  34.27 ms / 25,412 B for seven projects, with no loading/errors. Cold reads
+  were 13.85–47.51 ms, rich reads 21.04–202.14 ms, and current Thread reads
+  4.55–20.61 ms; all passed their budgets.
+- **Status:** active registered data is now small and fast; storage ownership
+  and remaining compatibility/history duplication are still open architecture
+  work.
+
+## 2026-07-15 - Persistence boundary guardrail
+
+- File-backed event reads now tail only the selected retention budget instead
+  of loading an arbitrarily oversized JSONL stream and discarding most of it in
+  memory. Partial first lines are ignored before JSON parsing.
+- File-backed durable records now reject envelope-inclusive payloads over the
+  retention-class limit. The error directs callers to an artifact or compact
+  summary; no payload is silently truncated.
+- `src/persistence/__tests__/file-backed.test.ts` passes 8 tests, including
+  oversized-record rejection, oversized legacy-stream reads, event
+  deduplication, and artifact resolution.
+- `pnpm lint:data-layer`, `pnpm lint:contracts`, and `git diff --check` pass.
+- **Status:** future writes and reads have a hard weight boundary; existing
+  oversized history still needs an explicit, provenance-checked retirement
+  operation.
+
+### Installed proof after the boundary change
+
+- Fresh `pnpm build && pnpm dev:install` completed.
+- `guildhall stop && guildhall start` completed and `/api/stale-server`
+  reported `stale:false`.
+- Installed performance audit passed at **25.50 ms / 25,412 B** for the fleet
+  of seven projects. Cold reads were **8.42–29.79 ms**, rich reads
+  **32.37–359.96 ms**, and current Thread reads **5.40–25.70 ms**; all
+  projects were current with no loading/errors.
+
+## 2026-07-15 - Git Story is explicit detail, not task hydration
+
+- **User job:** opening a task should show its saved work immediately. A user
+  who needs live repository state can open Origin and see exactly when Guildhall
+  inspected it.
+- **Finding:** the task-detail route called live Git inspection even though
+  the drawer response omitted historical diagnostics. A cold read could spend
+  seconds inspecting a worktree; the existing SQLite `repositories` table was
+  not being read at all.
+- **Change:** task detail now reads a current `task:<id>` repository projection
+  when one exists, otherwise it uses a saved compatibility snapshot without
+  scanning Git. `/api/project/task/:id/git-story` remains the explicit live
+  refresh route and writes the result into the existing repository table. The
+  Origin tab loads that route lazily.
+- **Proof:** the focused database/runtime/drawer suites passed **114 tests**;
+  installed fleet audit passed with fleet **38.04 ms**, rich task reads
+  **27.15–31.41 ms**, and Threads **5.33–30.85 ms**. A live refresh took
+  **460 ms** and the following ordinary task read returned its persisted
+  snapshot.
+- **Remaining:** repository snapshots need explicit stale/invalidation wiring
+  for external changes, and release readiness must consume the same cached
+  projection rather than performing its own Git inspection path.
+
+## 2026-07-15 - Improvement review is evidence, not task definition
+
+- **Flow job:** recording an advisory review should leave the accepted task
+  definition stable and make the review available only through bounded task
+  evidence when a detail surface needs it.
+- **Before:** the improvement-review lane appended generated notes to
+  `task.notes` and rewrote the queue, duplicating runtime state in current task
+  detail. This was a data-layer failure, not merely a write-performance issue.
+- **After:** it appends a stable-id `note` evidence event and does not rewrite
+  the queue or task-detail payload. Existing legacy notes still prevent a
+  duplicate during migration.
+- **Proof:** `pnpm vitest run src/runtime/__tests__/improvement-review.test.ts`
+  passes 6 tests, including the promoted SQLite path; `pnpm lint:data-layer`,
+  `pnpm lint:contracts`, and
+  `git diff --check` pass.
+- **Remaining:** this is one writer class, not completion of the mutation
+  migration. The orchestrator, import/recovery paths, issue/escalation paths,
+  and other direct queue writers still need a shared mutation audit. The
+  installed end-to-end proof must be refreshed after the next build.
+
+### Installed proof after the improvement-review boundary
+
+- Fresh build/install/restart completed; `/api/stale-server` reported
+  `stale:false`.
+- Installed audit passed: fleet **27.58 ms / 25,412 B**, cold project reads
+  **10.22–36.58 ms**, rich task reads **25.60–80.63 ms**, and current Thread
+  reads **5.24–25.04 ms** across seven projects. No project reported loading
+  or error state.
+
+## 2026-07-15 - Strict current-state reads after migration
+
+- **User job:** after a project is migrated, every project surface should read
+  the same compact current state quickly. If that state is missing, Guildhall
+  should say that migration is required instead of quietly showing an older
+  file as if it were current.
+- **Change:** current queue/detail reads now use indexed SQLite rows only.
+  Current summary and shell reads use the SQLite summary only. The historical
+  queue normalizer, summary-sidecar parser, and pre-cutover detail sources are
+  isolated behind migration-only names. The task drawer no longer reopens an
+  aggregate detail blob when a point definition is missing.
+- **Migration path:** `pnpm migrate:project-state --dry-run` previews the
+  required conversion; `pnpm migrate:project-state --all` runs prerequisite
+  migrations and then the required `0.13.0/project-state-finalize` cutover.
+  The cutover verifies the database, queue envelope, per-task index, and
+  summary before deleting duplicate current-state files.
+- **Proof:** the strict summary-sidecar test proves a current read returns
+  `null` while the explicit migration reader can import the same sidecar;
+  strict queue-detail tests prove definitions are not resurrected from
+  `TASKS.json`; finalization tests prove deletion, post-deletion reads, and
+  idempotence. The focused suite passed **110 tests** across five files after
+  this boundary change.
+- **Installed proof:** all seven registered projects crossed the final
+  migration. The installed server reported `stale:false`; the fleet audit was
+  **27.64 ms / 25,411 B**, cold reads were **15.22–39.80 ms**, rich task reads
+  **36.02–40.06 ms**, and current Thread reads **6.40–27.79 ms**. Every
+  project was current with no loading or error state.
+- **Status:** normal runtime no longer supports retired current-state shapes.
+  Remaining historical readers are explicitly migration/repair code and must
+  not be imported into request handlers.
+
+## 2026-07-15 - Point mutation and detail revision boundary
+
+- **User job:** adding one acceptance criterion should update the task and the
+  project summary without loading or rewriting every other task.
+- **Change:** promoted `add-acceptance` uses the indexed point mutation. The
+  summary is rebuilt from compact task/scope/release rows, while the full
+  definition is written only for the selected task. `work_scope` now stores
+  proof-blocked and blocker-summary facts needed for this read model.
+- **Data-model correction:** queue revision is the CAS/read-model watermark;
+  `work_item_detail.revision` records the last revision that changed that task
+  payload. Release selection and point edits no longer update every detail row.
+- **Proof:** 43 SQLite database tests, 20 summary-projection tests including
+  indexed/full parity, 7 boundary tests, the acceptance endpoint slice, and
+  `pnpm lint:data-layer` pass. The untouched-task compressed payload remains
+  byte-identical in the point-mutation test.
+- **Status:** one ordinary task-detail writer is on the new path. Remaining
+  queue writers and attention/evidence synchronization remain open; installed
+  fleet proof must be refreshed after the next build.
+
+### Installed proof and current size baseline
+
+- Fresh `pnpm build`, `pnpm dev:install`, and `guildhall stop && guildhall
+  start` completed. `/api/stale-server` reported `stale:false`.
+- `pnpm audit:project-state-performance` passed for all seven registered
+  projects: fleet **24.89 ms / 25,411 B**; cold project reads
+  **7.81–33.91 ms**; rich task reads **25.51–29.52 ms**; and current Thread
+  reads **4.39–25.04 ms**. All projects were current with no loading/errors.
+- Durable registered cache size is **27,986,604 B (26.69 MiB)** and current
+  project-state SQLite size is **2,613,248 B (2.49 MiB)**.
+- The global cache root remains **3,463,243,470 B (3.23 GiB)** with **52,626
+  unregistered/unknown entries**. No deletion was performed because those
+  entries lack established provenance.
+- Full repository typecheck remains red in broad pre-existing importer,
+  task-contract, transition, and test-fixture surfaces. The touched
+  project-state paths have no filtered type errors; build, focused tests,
+  data-layer lint, contract lint, and installed runtime proof pass.
+
+## 2026-07-15 - Overlay snapshots synchronize by row diff
+
+- **Finding:** runtime/workspace snapshot writes deleted and reinserted every
+  overlay row whenever one task changed, creating unnecessary payload churn
+  and summary invalidations.
+- **Change:** `task_execution` and `task_workspace` replacement now compares
+  incoming rows with stored rows, writes only changed rows, removes only
+  missing rows, and does nothing for an identical snapshot.
+- **Proof:** the project-state database suite and task-state-store suite pass
+  (**55 tests**); the regression reads raw SQLite rows and proves an untouched
+  task payload is byte-identical while the revision advances exactly once.
+- **Remaining:** direct point-update APIs and synchronous summary refreshes
+  still need to replace more aggregate callers; this does not yet complete
+  the writer migration.
+
+## 2026-07-15 - Current-state migration cutover
+
+- **Flow job:** a project should have one current-state authority after its
+  migration completes, and a maintainer should be able to test that boundary
+  without manually guessing which old files are safe to delete.
+- **Change:** added required migration `0.13.0/project-state-finalize` and
+  `pnpm migrate:project-state`. It verifies SQLite authority, every indexed
+  task definition, and a current summary before removing duplicate current
+  queue/detail/summary files. `--dry-run` exposes the plan without mutating.
+- **Proof:** migration tests pass for verification, deletion, queue
+  readability after deletion, and idempotence. The earlier migration and
+  project-state suites remain green; data-layer lint, contract lint, and
+  `git diff --check` pass.
+- **Important boundary:** the pre-cutover readers are now migration-only and
+  are not reachable from normal current-state routes. Projects that have not
+  crossed the boundary must run the migration; normal reads fail closed rather
+  than reviving their old files.
+
+### Registered-project cutover proof
+
+- `node scripts/migrations/0.13.0-project-state-finalize.mjs --all` applied
+  the final migration to all seven registered projects; the follow-up status
+  reported `Pending: 0` and `Blocked: 0` for this migration on every project.
+- The dry-run path now reports the migration as already applied. The only
+  `TASKS.json` files found under registered cache roots are under
+  `project-state-evacuation/`, which are historical rollback snapshots rather
+  than active current-state inputs.
+- After `pnpm dev:install`, `guildhall stop && guildhall start`, and the stale
+  server check, the installed fleet audit passed: fleet **34.99 ms**, cold
+  project reads **10.48–39.39 ms**, rich reads **31.10–38.26 ms**, and current
+  Thread reads **6.47–30.48 ms**. All seven projects were current with no
+  loading or error states.
+## 2026-07-15 - Historical live-state readers removed from the current path
+
+The current-state cutover now has the same rule for project availability,
+attention, and reconciliation as it does for task/detail/summary state:
+ordinary reads consult SQLite only. A missing database, missing table, or empty
+current table no longer revives `project-availability.json`,
+`project-state/attention.json`, or `project-state/reconciliations.json`.
+Those files remain readable only by the explicit migration that imports them.
+
+The `0.13.0/project-state-finalize` migration now removes those duplicate live
+state files, plus the old runtime/workspace JSON stores, after verifying the
+SQLite queue, detail index, and current summary. This keeps a project from
+having a different answer depending on which historical file a route happens
+to discover.
+
+**Proof:** the project-state database suite proves pre-migration reads return no
+current live-state answer while explicit migration imports the files; the final
+migration suite proves the duplicate files are removed and SQLite remains
+readable. Focused migration/database tests: 79 passed.
+
+## 2026-07-15 - Queue envelope and strict overlay follow-through
+
+- **Change:** `queue_state` schema version 25 now owns execution-plan actions
+  and scope-authority requests. The structural task-batch transaction carries
+  those envelope fields when they change, preventing planning state from
+  disappearing during a task mutation.
+- **Change:** promoted effective-task reads no longer fall back to legacy
+  runtime/workspace JSON when a normalized overlay row is absent. The project
+  must complete migration instead of presenting a second current-state answer.
+- **Change:** pre-promotion thin-repo compaction has one explicit bootstrap
+  writer; after promotion, normal runtime writes remain SQLite-only.
+- **Proof:** 16 focused migration/database/boundary files passed **238/238
+  tests** after the final boundary fixes. The database/compaction/effective-task
+  slice passed **70/70 tests**. A fresh `pnpm build`, `pnpm dev:install`, and
+  `guildhall stop && guildhall start` left `/api/stale-server` at `stale:false`.
+  `pnpm audit:project-state-performance` passed with fleet **33.44 ms / 25,412
+  B**, cold project reads **10.91–37.85 ms**, rich reads **32.97–38.77 ms**,
+  and current Thread reads **6.73–30.30 ms**; all seven projects were current
+  with no loading/errors. `pnpm lint:data-layer`, `pnpm lint:contracts`, and
+  `git diff --check` also pass.
+- **Status:** this closes the queue-envelope loss and promoted overlay fallback
+  seams. Relationship/dependency/release membership now uses the shared
+  structural delta transaction for promoted projects. Remaining work is
+  coordinating owner-facing attention refreshes with those transactions and
+  moving explicit repair/import callers off the aggregate path, not adding
+  another compatibility reader.
+
+## 2026-07-15 - Structural relationship delta and row-diff follow-through
+
+- **Change:** the existing indexed task-batch transaction now owns hierarchy,
+  dependency, release membership, selected-release, execution-plan, and
+  scope-authority changes. It updates only changed task/detail rows and the
+  affected derived scope rows under the queue revision CAS.
+- **Change:** a structural mutation may change only the queue envelope and
+  derived scope without pretending a task definition changed; this keeps
+  planning state in `queue_state` instead of forcing a full queue rewrite.
+- **Change:** attention records and owner-input rows now use keyed upserts and
+  deletes. Unchanged rows are not deleted/reinserted, so projection refreshes
+  preserve row identity and reduce SQLite write churn.
+- **Proof:** the full focused migration/database/boundary suite is **239/239
+  tests**. The new database regression proves a relationship plus planning
+  envelope change preserves an untouched task detail payload byte-for-byte.
+  A fresh `pnpm build`, `pnpm dev:install`, and `guildhall stop && guildhall
+  start` left `/api/stale-server` at `stale:false`. The installed fleet audit
+  passed at **42.46 ms / 25,412 B**; cold project reads were **21.84–51.77
+  ms**, rich reads **34.67–41.14 ms**, and current Thread reads **5.64–29.86
+  ms**.
+  All seven projects were current with no loading/errors. `pnpm
+  lint:data-layer`, `pnpm lint:contracts`, and `git diff --check` pass.
+
+## 2026-07-15 - Promoted writer guard and bounded repair cleanup
+
+- **Change:** promoted aggregate queue callers now fail closed when they alter
+  or omit evidence/runtime-owned fields. This prevents sanitization from
+  silently deleting notes, proof, ownership, workspace, or escalation state.
+- **Change:** Git Story commit/defer decisions use normalized task points and
+  bounded `git_story` evidence. MCP contract apply/revert uses normalized
+  delivery deltas and refuses unpromoted writes. Dead repair routines with
+  aggregate writers were removed; promoted start-time repairs use point and
+  evidence boundaries.
+- **Change:** pre-promotion queue writes preserve the bootstrap release/envelope
+  file; after promotion, normal runtime does not read or write that file.
+- **Proof:** MCP and boundary suites pass **15/15** tests. `pnpm build`,
+  `pnpm lint:data-layer`, `pnpm lint:contracts`, and `git diff --check` pass.
+  A fresh installed fleet audit remains to be rerun after the bounded Thread
+  worker lands.
+- **Status:** aggregate replacement is now an explicit migration/structural
+  concern, not a hidden current-state escape hatch. The remaining open seam is
+  the bounded Current Thread refresh and final installed proof.
+
+## 2026-07-15 - Multi-lane migration and installed proof
+
+- **User job:** a project card, task route, current Thread, repair flow, or
+  automation run should read one current state, mutate only the smallest
+  owned projection, and never become slower or less trustworthy because old
+  queue/history formats still exist on disk.
+- **Change:** delegated the remaining writer graph into bounded execution,
+  repair/proof, memory/history, and database lanes. Promoted runtime writers
+  now use task-point/evidence/runtime boundaries; owner-input repair and proof
+  recovery use the same model. Session snapshots and memory events are
+  bounded at write time. Legacy per-scope memory files are migration inputs
+  only and are no longer read by normal memory retrieval.
+- **Proof:** focused changed-path runs passed: 9 runtime writer tests, 14
+  owner-input/proof tests, 22 memory-core tests, 20 session/history tests, and
+  106 database/migration/boundary/automation/MCP tests. `pnpm build`,
+  `pnpm lint:data-layer`, `pnpm lint:contracts`, and `git diff --check` passed.
+- **Installed proof:** after `pnpm dev:install`, `guildhall stop`, and
+  `guildhall start`, `/api/stale-server` reported `stale:false`. The live
+  performance audit passed: fleet **23.72 ms / 25,412 B** for seven projects,
+  cold project reads **8.17–28.85 ms**, rich reads **21.97–26.19 ms**, and
+  current Thread reads **4.48–23.87 ms**. Every project was current with no
+  loading or error state.
+- **Remaining boundary:** full repository typecheck still reports a broad
+  pre-existing type-shape backlog in unrelated task/import/runtime files; the
+  production build and changed-path tests are green. Historical readers that
+  remain are explicit migration code and must not be reintroduced into normal
+  runtime paths.
+
+## 2026-07-15 - Bootstrap CAS and strict historical boundaries
+
+- **User job:** when Guildhall has promoted a project, every project card,
+  task action, progress/evidence route, and repair path should use the same
+  normalized current state. A stale file on disk must not silently change what
+  the user sees or allow a write to be lost.
+- **Change:** the shared state boundary now omits empty CAS tokens and preserves
+  an existing bootstrap projection revision. Promoted task evidence/runtime
+  reads already fail closed or require an explicit migration read; remaining
+  queue/progress/MCP evidence readers are being moved to the same boundary.
+- **Change:** broad fixtures now explicitly seed normalized state and apply the
+  overlay migration before promoted reads. This makes tests prove the current
+  architecture rather than accidentally proving legacy-file compatibility.
+- **Proof:** focused boundary, migration, task-state, report-issue, and tool
+  CAS suites are green; the fixture regression is green. `pnpm lint:data-layer`,
+  `pnpm lint:contracts`, and `git diff --check` are green. The full suite still
+  has **34 failing files / 424 failing tests**, so the migration is not complete.
+- **Remaining:** remove the last promoted queue/progress/evidence historical
+  fallbacks, convert remaining old readiness/Thread fixtures to explicit
+  normalized setup, then rerun build, installed-server freshness, and the fleet
+  performance audit. Do not claim completion while those checks remain red.
+
+## 2026-07-15 - Current-state migration and history boundary follow-through
+
+- [x] Run the explicit project-state migration command against every registered
+  project. The command completed with zero failures; all seven projects report
+  the SQLite final cutover applied. The only remaining pending migration is the
+  manual runtime-backed transition, which is intentionally outside an
+  automatic data cutover.
+- [x] Stop ordinary exploring-history reads from opening the old repo-local
+  transcript path. New reads use only the bounded user-local essential-history
+  record.
+- [x] Make explicit legacy-memory migration compact copied exploring
+  transcripts immediately, rather than moving raw conversation into a new
+  directory and leaving the payload unchanged.
+- [x] Verify the history boundary with **23/23** focused tests, production
+  build, data-layer lint, contract lint, and diff checks.
+- [ ] Convert remaining broad endpoint and orchestrator fixtures from rich
+  aggregate queue assumptions to normalized SQLite point/detail setup. Current
+  production failures must be classified before being fixed; a stale test is
+  not permission to restore a historical reader.
+
+## 2026-07-15 - Cache ownership correction and residue remediation
+
+- [x] Fix the durable-cache predicate so ephemeral test project roots do not
+  register persistent user history/cache entries merely because a test uses a
+  temporary data directory.
+- [x] Remove the resulting unregistered cache residue once, after verifying
+  the registry as the source of truth. Seven registered workspaces and seven
+  allocation manifests remain; the cache is **31 MB**, down from **3.6 GB**.
+- [x] Add the local-history regression proving temporary custom-data-dir
+  projects allocate only at an explicit write boundary and never register a
+  durable cache entry (**7/7** focused tests).
+- [ ] Finish the remaining broad endpoint/orchestrator fixture migration and
+  rerun the full repository suite. This remains open until stale rich-row and
+  old readiness/Thread assumptions are either converted to canonical SQLite
+  setup or proven to expose a real production defect.
+
+**Evidence note:** `pnpm migrate:project-state --dry-run --all` and the real
+`pnpm migrate:project-state --all` both prove the migration command is
+executable against the registered fleet. The remaining red broad tests are
+fixture/model-contract work, not evidence that SQLite cutover failed.
+
+## 2026-07-15 - Deep migration remains active: no compatibility victory lap
+
+- **Current truth:** the normalized SQLite boundary is working for the ordinary
+  fleet/card path, but the deeper migration is not complete. The full suite
+  currently reports **349 passing files, 17 failing files, 4,887 passing
+  tests, and 91 failing tests**. Those failures are a mixed queue of stale
+  fixture assumptions and real boundary defects; they must be classified and
+  repaired rather than hidden behind compatibility readers.
+- **New audit findings:** promoted point mutations can preserve runtime-owned
+  fields already embedded in an old definition; re-intake can leave stale
+  runtime/workspace overlays behind; malformed or missing normalized overlays
+  can fail open as empty state; and the shelve/unshelve route still attempts a
+  definition write for runtime lifecycle data. These are model-boundary bugs,
+  not UI bugs.
+- **Delegated lanes:** state-boundary sanitization and overlay reconciliation;
+  bounded compact reads when a projection is missing or stale; and indexed,
+  page-bounded Timeline history reads. Each lane has a disjoint write set and
+  must return focused tests plus a measurable proof.
+- **Performance seams still under active work:** explicit detail fleet reads
+  remain task-count-sensitive, the compact projection-miss path must not
+  materialize the full queue, and retained Timeline history is bounded but is
+  still parsed before slicing. The latest installed audit proves the ordinary
+  fleet path at **23.92 ms / 25,412 B** for seven projects with
+  `stale:false`; it does not prove these worst-case paths yet.
+- **Schema Migration Decision:** migration id
+  `0.13.0-shelve-reason-runtime-overlay`; persisted schema touched is the
+  `TaskRuntimeState` runtime overlay. Existing promoted definitions must not
+  retain `shelveReason`; the migration/bridge preserves it only by moving it
+  into the runtime overlay, and ordinary readers have no historical fallback.
+  Proof required: shelve/unshelve endpoint tests, effective-task hydration
+  tests, migration fixtures, and installed freshness/performance checks.
+- **Status:** open. Do not claim the data-layer pivot complete until the
+  delegated lanes land, the red tests are classified, the migration script is
+  exercised against the registered fleet, and worst-case compact/detail/history
+  paths have explicit bounds.
+
+## 2026-07-15 - Task action and MCP contract lane
+
+- [x] Promoted `shelve` and `unshelve` mutate the normalized SQLite task
+  definition status while storing/removing `shelveReason` only in the SQLite
+  runtime overlay. Compatibility `TASKS.json` remains untouched.
+- [x] MCP contract apply/revert fixtures seed evidence through the normalized
+  evidence authority and assert that evidence-owned fields do not re-enter
+  task definitions or get lost during delivery-link changes.
+- **Proof:** `src/runtime/__tests__/serve-task-endpoints.test.ts` and
+  `src/mcp-server/__tests__/server.test.ts` pass **123/123** focused tests;
+  `pnpm lint:data-layer`, `pnpm lint:contracts`, and `git diff --check` pass.
+- **Scope note:** the full repository suite was intentionally not run for this
+  lane. The broader migration status above remains open.
+
+## 2026-07-15 - Normalized state migration integration closeout
+
+- [x] Integrate the delegated data-layer lanes: point mutations now sanitize
+  promoted state before persistence; re-intake replaces the current runtime and
+  workspace overlays instead of leaving orphan state; promoted reads fail
+  closed when normalized evidence is missing or malformed; and compact fleet
+  reads do not materialize the full task queue when their projection is absent.
+- [x] Bound the remaining durable evidence surface. Current evidence retains a
+  compact, identity-stable set of notes; raw transcript/debug payloads remain
+  outside the initial project projection; task evidence summaries suppress a
+  superseded worker self-critique after a newer reviewer result without deleting
+  the underlying evidence history.
+- [x] Replace full-scan Timeline reads with a stat-cached offset sidecar index
+  and a bounded event page. Append, trim, and compaction invalidate the index;
+  ordinary history reads now seek to the requested page instead of parsing the
+  whole ledger.
+- [x] Keep project summary, Thread, release readiness, and task detail on the
+  shared normalized state boundary. A saved spec remains visible and owner-held
+  when it is valid; an incomplete spec is dispatchable deterministic repair
+  work, rather than disappearing behind an approval-shaped blocker.
+- [x] Exercise the migration path with
+  `scripts/migrations/0.13.0-project-state-finalize.mjs` and the migration
+  idempotence registry. The script is the one-time bridge for existing state;
+  ordinary readers no longer accept historical task/runtime/evidence shapes as
+  an alternative storage model.
+- [x] Full verification is green with the diagnostic timeout needed for the
+  concurrent SQLite integration fleet: **366 test files passed, 4,989 tests
+  passed, 3 skipped, 11 todo**. The six tests that exceeded Vitest's default
+  five-second parallel-fleet budget also pass when isolated; no test timeout was
+  hidden by changing the repository test configuration.
+- [x] `pnpm lint:data-layer`, `pnpm lint:contracts`, `git diff --check`, and
+  `pnpm build` pass. The installed artifact was refreshed with `pnpm
+  dev:install`, restarted, and verified through `/api/stale-server` with
+  `stale:false`.
+- [x] The live performance audit passes all fleet, cold, warm, rich-task, and
+  Thread budgets: seven projects, **27.8 ms / 25,411 B** fleet response;
+  cold project reads **20.02–47.29 ms**; rich task reads **25.29–31.88 ms**;
+  Thread reads **21.11–44.86 ms**; no project is loading or errored.
+- [ ] `pnpm typecheck` remains a separate repository-wide schema-drift debt:
+  broad fixtures and acceptance/release shapes still need conversion to the
+  current normalized types. It does not invalidate the runtime build or the
+  migration/performance proof above, but completion of that type debt is still
+  required before calling the repository completely clean.
+
+**Schema Migration Decision:** migration id
+`0.13.0/project-state-finalize`. Persisted schemas touched: promoted task
+definitions, runtime/workspace overlays, current evidence, acceptance-proof
+projection fields, and the bounded event index. Change class: finalize the
+current normalized model and remove historical readers, while retaining a
+one-time migration script. Existing data is migrated in place with idempotence
+coverage; malformed promoted overlays fail closed; rollback is code/data
+snapshot restoration followed by rerunning the migration against the restored
+snapshot. Required proof is the migration suite, data-layer lint, full runtime
+suite, installed freshness check, and project-state performance audit above.
+
+**Status:** the deep runtime/data-layer migration is complete for the current
+normalized model and its registered fleet. The remaining work is repository
+type-shape cleanup, not another compatibility layer or another performance
+patch.
+
+## 2026-07-16 - One current-state projection, not parallel task authorities
+
+- **Root cause confirmed:** the Release detail GET had been able to assemble
+  synthetic `workspace-import:*` task identities from intake evidence while
+  the durable SQLite projection counted only materialized `work_items`. That
+  was not merely an endpoint bug. It proved that two code paths could invent
+  different current projects from different inputs.
+- **Architectural rule:** current task identity, effective status, hierarchy
+  visibility, selected-scope membership, proof blocking, release blockers, and
+  next action must be produced by one current-state projection boundary. A
+  GET may add expensive repository or proof diagnostics, but it may not invent
+  task rows, releases, statuses, or scope membership. Intake snapshots are
+  provenance only until a real task is materialized.
+- [x] `effectiveTaskStatus` is now the shared status rule for effective task
+  hydration, scope rows, proof-blocking, and durable summary refreshes.
+- [x] `buildProjectScopeProjection` now currentizes task status before applying
+  hierarchy, release, proof, or next-action rules. Its release and start
+  summaries are exported shared functions; indexed summary refreshes consume
+  those same functions instead of maintaining a second indexed-only rule set.
+- [x] Rich Release detail now derives scoped tasks from the shared scope rows,
+  including parent/child suppression, rather than re-running a separate scope
+  eligibility calculation.
+- [x] Migration `0.13.1/project-current-status-projection` was applied to all
+  seven registered projects, materializing the shared current status rule into
+  `work_items`, `work_scope`, and the saved project summary.
+- [x] Live agreement audit passes for Narrative Harness, Looma + Knit, Jess,
+  Fair Labor License, and the other registered projects: **7/7 projects,
+  mismatchCount 0** across project summary, release summary, rich release
+  detail, scope rows, and the selected next action.
+- [x] Installed runtime proof passes after `pnpm build`, `pnpm dev:install`,
+  service restart, and `/api/stale-server` reports `stale:false`. The current
+  performance audit passes the fleet, cold, warm, rich-task, and Thread
+  budgets: fleet **43.31 ms / 25,261 B**; cold project reads
+  **42.35–102.95 ms**; rich task reads **27.51–32.79 ms**; Thread reads
+  **23.57–40.29 ms**.
+- [ ] This does **not** close the whole data-model goal yet. The broad suite
+  currently has **9 failures across 5 files** among **4,988 passing tests**;
+  those failures include stale fixture assumptions, release-label parity
+  expectations, and migration/test contention. Repository-wide typecheck also
+  remains red from pre-existing schema drift. They must be classified and
+  resolved before the architecture goal is complete.
+
+**Schema Migration Decision:** migration id
+`0.13.1/project-current-status-projection`. Persisted schemas touched:
+`work_items.status`, `work_items.completed_at`, `work_scope` current-state
+flags, and the saved compact project summary. Change class: materialize one
+shared current-status projection into existing normalized rows. Existing data
+impact: all promoted projects are rebuilt from the authoritative current queue
+and current evidence; no intake snapshot rows are manufactured. Compatibility
+reader: none in ordinary runtime reads. Rollback: restore the project-state
+database snapshot and rerun the prior migration against that snapshot.
+
+## 2026-07-16 - Enforce the projection boundary
+
+- [x] The summary writer now treats task-status rows and scope rows as one
+  `currentProjection` bundle on normal refresh paths. The legacy split fields
+  remain only as migration/test input compatibility and pass through the same
+  validation boundary.
+- [x] SQLite rejects a current projection or full queue snapshot that names a
+  task not present in `work_items`. This makes `workspace-import:*` read-time
+  identities unpersistable rather than relying on caller discipline.
+- [x] Scope rows now preserve `countInProjectTotals` separately from release
+  gating. Hidden decomposition children can block a required spec review, but
+  do not inflate release progress or duplicate completion-proof blockers.
+- [x] Compact reads no longer relabel a stale project summary as current just
+  because SQLite is authoritative. The saved freshness state remains visible
+  until the asynchronous projection refresh succeeds.
+- [x] Intake-era tests now assert that document-only work stays outside the
+  current release until the user-approved materialization step writes real
+  task/release identities.
+- [x] Focused proof: projection/database/release tests passed, then the
+  hidden-child and intake-boundary cases passed in isolation.
+- [ ] Full suite and installed-runtime proof must be rerun after this schema
+  change. Repository-wide typecheck and the remaining write-side revision
+  discipline are still open architecture work.
+
+**Schema Migration Decision:** migration id
+`0.13.1/current-projection-identity-and-visibility`. Persisted schemas touched:
+`work_scope.count_in_project_totals` and the summary refresh write contract.
+Change class: additive normalized projection metadata plus a stricter write
+boundary; existing rows default to counted work and existing promoted task IDs
+are validated before any derived row is written. Migration idempotence is
+provided by the existing SQLite schema opener and the projection rebuild; no
+compatibility reader is added. Required proof is the projection/database test
+suite, full suite, data-layer/contract lint, installed stale-server proof, and
+live project agreement audit. Rollback is restoring the project-state database
+snapshot and rerunning the previous projection migration.
+
+## 2026-07-16 - Current-state boundary verification closeout
+
+- [x] The full repository suite passes after the projection-boundary fixes:
+  **367 test files passed, 5,000 tests passed, 3 skipped, 11 todo**. The
+  onboarding regression now verifies that the reserved workspace-import task
+  is materialized and visible on the explicit Work surface; Overview does not
+  widen its selected-scope cards with operational intake work.
+- [x] The two boundary regressions that exposed the remaining split authority
+  are fixed without weakening their behavioral guarantees: internal
+  decomposition children cannot become release membership merely because a
+  stored release row names them, and Overview uses the durable selected scope
+  even when optional action-model enrichment is absent.
+- [x] `pnpm build`, `pnpm lint:data-layer`, `pnpm lint:contracts`, and
+  `git diff --check` pass. The installed artifact was refreshed with
+  `pnpm dev:install`, the service was restarted, and `/api/stale-server`
+  reports `stale:false` from `/Users/matthew/.guildhall/app/0.10.1/app/dist/cli.js`.
+- [x] Live agreement proof passes for all seven registered projects, including
+  Narrative Harness, Looma + Knit, Jess, and Fair Labor License: **7/7,
+  mismatchCount 0** across summary, release detail, scope rows, and next
+  action.
+- [x] Live performance proof passes every budget: fleet **23.12 ms / 25,261 B**;
+  cold reads **36.18–84.81 ms**; warm reads **106.05–122.96 ms**; rich task
+  reads **26.66–30.29 ms**; Thread reads **21.28–38.76 ms**. No project was
+  loading or errored.
+- [ ] `pnpm typecheck` remains red from broad pre-existing type-shape drift in
+  fixtures and unrelated modules. The runtime build and behavior suite are
+  green, but repository-wide type cleanup is still required before claiming
+  the codebase is completely clean.
+
+**Current status:** the specific synthetic-identity mismatch is now blocked at
+the shared projection and SQLite persistence boundaries, not merely corrected
+in one endpoint. The remaining architecture work is the write-side revision
+and invalidation discipline identified above, plus repository-wide type debt;
+neither should be papered over with another read-time reconstruction path.
+
+## 2026-07-16 - Promoted current-state authority hardening
+
+- [x] Promoted projects now treat normalized queue, release, task, and scope
+  rows as the only current execution input. An approved workspace plan remains
+  available as provenance, but ordinary reads cannot use it to add, remove, or
+  relabel current work.
+- [x] `readCanonicalProjectCurrentState`, compact project surfaces, project
+  spine, and task detail all stop routing promoted queues through the plan-based
+  scope shaper. Legacy projects retain the explicit intake path until their
+  migration crosses the database authority boundary.
+- [x] Added a regression proving a stale imported plan cannot add a task to a
+  promoted release when the normalized release row does not contain it.
+- [x] Focused projection and Release tests pass: **102 tests passed**.
+- [x] Installed proof is fresh after build/install/restart:
+  `/api/stale-server` reports `stale:false`.
+- [x] Live agreement proof passes for **7/7 projects, mismatchCount 0**.
+- [x] Live performance proof passes: fleet **23.40 ms / 25,261 B**; cold
+  project reads **33.14–157.94 ms**; warm reads **17.61–36.88 ms**; rich task
+  reads **28.69–32.25 ms**; Thread reads **21.68–40.80 ms**. All projects
+  returned current, non-loading, non-error state within budget.
+- [ ] The remaining architecture boundary is write-side: evidence/runtime
+  writes can mark the durable summary stale while the asynchronous projector
+  catches up. That is now honest and revision-checked, but the next hardening
+  step is to make the durable invalidation/refresh contract explicit enough
+  that no read path can present a dynamically recomputed current answer beside
+  a stale saved projection.
+
+## 2026-07-16 - One current-state read boundary
+
+- [x] Added `readProjectCurrentStateModel` and `ensureProjectSummaryCurrent` to
+  the project-state boundary. Current reads now receive the normalized queue,
+  saved projection, authority, and persisted `work_scope` rows as one named
+  model. A stale derived summary may be synchronously refreshed from indexed
+  rows; a read never rebuilds a queue from an intake snapshot to make the
+  answer look current.
+- [x] Release detail uses persisted scope rows to seed selected-scope
+  membership for promoted projects. Task detail carries the same scope rows
+  into its readiness projection. Inbox no longer falls back to deriving a
+  release from task membership for promoted projects.
+- [x] Added a boundary regression proving a promoted project returns its
+  normalized queue and stale/current projection state together, rather than
+  treating a leftover compatibility shape as the authority.
+- [x] Fixed indexed execution-row suppression so hidden/decomposition rows do
+  not displace their visible parent in compact release summaries.
+- [x] Focused boundary, summary, and release tests pass: **115 tests passed**.
+- [x] Non-compact project and Spine reads now consume the same named current
+  state bundle as Release detail: normalized queue, effective tasks, persisted
+  scope rows, and saved summary. They no longer perform their own queue and
+  inventory assembly.
+- [ ] Current Thread and every direct writer/read pair still need the same
+  post-commit revision/invalidation discipline, followed by an immediate-read
+  parity test before the asynchronous projector runs.
+
+### Contract Touch Decision
+
+- Work id: `codex:current-state-read-boundary-2026-07-16`.
+- Touched contract: rich release-readiness payload now exposes
+  `summaryFreshness`, `currentStateAuthority`, and `stateConsistency` so the
+  UI can distinguish one canonical answer from a projection refresh state.
+- Contracts considered but not touched: task identity, release identity,
+  queue JSON, SQLite table shape, and owner-approval semantics.
+- Required follow-up: make Overview/Work/Map/Thread consume the same read-model
+  metadata and add immediate-read parity coverage around every current-state
+  writer family.
+- Proof provided: focused runtime tests, including promoted authority and
+  release-readiness regressions.
+- Apply/revert behavior: additive response metadata; consumers may ignore it,
+  and removal is safe after all surfaces use the shared boundary.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none. This change reads existing normalized queue,
+  `work_scope`, and `project_summary` rows and adds no table or stored payload
+  field.
+- Change class: runtime read-boundary and derived-projection behavior.
+- Existing data impact: promoted projects keep their current rows; stale
+  summaries may be refreshed from existing indexed rows with the existing CAS
+  guard. Legacy projects retain their explicit migration-only fallback.
+- Migration id: not required.
+- Compatibility reader: no new historical-shape reader; the boundary fails
+  closed when promoted detail is unavailable.
+- Rollback/revert: revert the runtime boundary changes; no data rollback is
+  needed.
+
+## 2026-07-16 - Rich reads consume the same current-state bundle
+
+### User job
+
+When a user opens Overview, Spine, Work, Map, a task drawer, or Release
+readiness, every surface must identify the same materialized work and selected
+release for the same project revision. A read may add explicitly requested
+repository or proof diagnostics, but it must not manufacture task identities,
+choose a different release label, or derive a competing scope from intake
+provenance.
+
+### Implemented
+
+- `readProjectCurrentStateModel` owns the current queue, persisted scope rows,
+  summary projection, and database-vs-uninitialized authority decision.
+- Rich `/api/project` reads and noncompact `/api/project/spine` reads consume
+  that bundle rather than independently reading the queue and inventory.
+- A selected release already recorded by the summary is carried through the
+  shared queue envelope when the normalized index has membership but no release
+  definition row. This preserves release metadata without creating task rows.
+- Indexed summary refresh preserves current release metadata while refreshing
+  counts, so a read cannot silently rename a release from an implementation
+  label.
+- Focused proof: `project-state-boundary`, `serve-read-boundary`, and
+  `serve-release-readiness` pass together: **136 tests**.
+
+### Contract Touch Decision
+
+- Work id: `codex:rich-read-current-state-bundle-2026-07-16`.
+- Touched contracts: runtime current-state read boundary, project-summary
+  release envelope, and rich project/Spine read surfaces.
+- Considered but not touched: task identity schema, release schema, migration
+  version, and raw intake/provenance formats.
+- Required proof: compact/detail release identity agreement, no synthetic task
+  creation during GET, and current-state queue/scope/summary agreement.
+- Proof provided: focused suite above; installed agreement and performance
+  audits are rerun after build/install below.
+
+### Schema Migration Decision
+
+- No persisted schema change. The existing normalized queue, scope rows, and
+  summary projection are now assembled through one read boundary. Release
+  envelope composition uses already persisted summary metadata and never adds
+  task identities or mutates project state.
+
+## 2026-07-16 - Atomic current-state read boundary
+
+The previous named reader reduced duplication but still opened the queue,
+inventory, and summary through separate database calls. That meant a concurrent
+writer could advance between reads and a caller could observe a queue from one
+revision with a summary or scope index from another.
+
+- [x] `readProjectStateDatabaseCurrentState` now reads the rich materialized
+  queue, normalized scope rows, saved summary, queue revision, and project
+  revision from one read-only SQLite transaction.
+- [x] `readProjectCurrentStateModel` is the runtime boundary over that snapshot;
+  release/detail callers cannot choose release identity from one read and task
+  membership from another.
+- [x] GET routes no longer synchronously refresh stale projections. Projection
+  refresh belongs to write/invalidation work; reads report the freshness they
+  actually observed.
+- [x] Boundary tests assert that the runtime model and lower-level snapshot
+  carry the same queue and project revision.
+- [x] Focused boundary/release/read-boundary proof passes: **110 tests**.
+- [x] `pnpm build`, `pnpm lint:data-layer`, `pnpm lint:contracts`, and
+  `git diff --check` pass.
+- [x] Installed real-project agreement and performance audits pass after the
+  latest read-boundary change: all 7 registered projects agree with
+  **0 mismatches**, and every measured surface remains within budget.
+
+### Contract Touch Decision
+
+- Work id: `codex:atomic-current-state-read-boundary-2026-07-16`.
+- Touched contracts: runtime current-state read boundary, SQLite read
+  transaction semantics, and GET freshness reporting.
+- Considered but not touched: task schema, release schema, persisted table
+  shape, migration format, and owner-facing response field names.
+- Required follow-up: move remaining bounded task/Thread reads onto explicit
+  revisioned read models and complete writer-side post-commit parity tests.
+- Proof required: no cross-surface release/task-count mismatches, no GET
+  mutation, and no compact fleet-latency regression.
+- Apply/revert behavior: runtime-only change; no data rollback is required.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none.
+- Change class: runtime read transaction and projection freshness behavior.
+- Existing data impact: none; the reader consumes existing normalized rows and
+  fails closed when a promoted rich detail store is unavailable.
+- Migration id: not required.
+- Compatibility reader: none added.
+- Rollback/revert: revert the reader implementation; no stored data changes
+  need to be undone.
+
+## 2026-07-16 - Bounded compact projection snapshot
+
+The compact project surfaces had the same architectural risk in a smaller
+form: summary, release envelope, and paged inventory were individually
+correct, but a route could still stitch them together from separate reads.
+That is how two correct answers become one contradictory response under a
+concurrent write. The compact path now has one bounded transaction over the
+same normalized SQLite authority.
+
+- [x] `readProjectStateDatabaseProjectionState` reads the queue envelope,
+  release definitions, saved summary, revisions, and one bounded inventory
+  page from one SQLite snapshot.
+- [x] `readProjectCompactStateModel` is the named runtime boundary for compact
+  Overview/Work/Map, compact Spine, and compact Release readiness reads.
+- [x] Promoted compact reads never fall back to intake snapshots or a second
+  independent inventory read when the bounded snapshot is unavailable; they
+  fail closed and report the saved projection as unavailable.
+- [x] Compact surfaces use release metadata from the same queue envelope as
+  their task inventory. The summary can enrich the envelope, but cannot
+  manufacture task rows.
+- [x] Focused proof covers the bounded snapshot and existing read-boundary
+  regressions: **160 tests** across the four relevant suites.
+- [x] Installed agreement audit passes across all 7 registered projects with
+  **0 mismatches**. The installed performance audit also passes: fleet
+  **26.85 ms / 25,261 bytes**, with all project, rich-task, and Thread reads
+  within budget and no loading/error responses.
+
+### Contract Touch Decision
+
+- Work id: `codex:bounded-compact-projection-snapshot-2026-07-16`.
+- Touched contracts: compact project read model, compact Spine/readiness
+  routes, and revision metadata exposed by the runtime boundary.
+- Considered but not touched: task identity schema, release schema, SQLite
+  table shape, intake/provenance formats, and write APIs.
+- Required follow-up: move remaining bounded task/Thread reads onto explicit
+  revisioned read models and add endpoint-level revision agreement assertions.
+- Proof required: compact/detail release identity agreement, no synthetic task
+  creation during GET, no mixed-revision compact response, and no compact
+  fleet-latency regression.
+- Apply/revert behavior: runtime-only; revert the boundary and route changes
+  without a data migration.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none. The change extracts a bounded read helper
+  over existing `queue_state`, `scopes`, `work_items`, and `project_summary`
+  rows.
+- Change class: read-model consolidation and transaction boundary.
+- Existing data impact: none; promoted projects continue to read only
+  materialized current-state rows.
+- Migration id: not required.
+- Compatibility reader: legacy projects retain their explicit legacy path;
+  promoted projects do not gain a historical-shape fallback.
+- Rollback/revert: runtime-only revert; no stored data rollback is needed.
+
+## 2026-07-16 - Revisioned non-queue invalidation
+
+The writer audit found one remaining cross-process synchronization hole. A
+file-backed runtime-command or legacy evidence write could mark the summary
+stale without advancing `project_meta.revision`. The local process received
+an invalidation event, but a second Guildhall process watching the metadata
+watermark had no revision change to observe.
+
+- [x] `markProjectStateDatabaseStale` now uses the existing writable database
+  transaction, advances the project revision, and stores that revision on the
+  stale summary row.
+- [x] `markProjectSummaryStale` forwards the committed revision through the
+  invalidation event, so the scheduler and cross-process watcher share the
+  same watermark.
+- [x] Normalized runtime/workspace/evidence writers no longer issue a second
+  generic stale write after their own revisioned database transaction.
+- [x] Regression proof asserts that an external stale mark advances the
+  project revision without rewriting the authoritative task row. The focused
+  data-boundary bundle passes **91 tests**.
+- [ ] The asynchronous refresh window remains explicit: reads report stale
+  until the projector commits a new summary. The next step is endpoint-level
+  coverage that every write domain reaches its owning projector and retries
+  safely after a concurrent commit.
+
+### Contract Touch Decision
+
+- Work id: `codex:revisioned-non-queue-invalidation-2026-07-16`.
+- Touched contracts: project revision watermark, stale-summary write behavior,
+  and invalidation event metadata.
+- Considered but not touched: task/release schema, history retention, and
+  current-state read payload shapes.
+- Required follow-up: prove repository, runtime-command, evidence, and owner
+  input writes all converge on the same projector without duplicate or lost
+  events.
+- Proof provided: session/runtime focused tests and targeted typechecking for
+  touched data-layer files.
+- Apply/revert behavior: no schema migration; revert the transaction change
+  only if the prior stale behavior is intentionally restored.
+
+### Schema Migration Decision
+
+- Persisted schema touched: no new columns or tables. The existing
+  `project_meta.revision` and `project_summary.revision` fields now participate
+  in this already-defined invalidation path.
+- Change class: write-boundary correctness.
+- Existing data impact: next non-queue invalidation advances the existing
+  monotonic revision; task rows and history are unchanged.
+- Migration id: not required.
+- Compatibility reader: none added.
+- Rollback/revert: runtime-only revert; no data migration is required.
+
+## 2026-07-16 - Task detail and release authority hardening
+
+The prior task drawer path read the task point, relationships, queue, summary,
+and inventory through separate database calls. Those calls were individually
+reasonable but allowed a response to combine revisions. The task-detail route
+now consumes `readProjectTaskDetailState`, which returns all of those current
+records from one SQLite transaction and carries both the queue and project
+revision. The route also preserves the normal `404` distinction for an unknown
+task in an available database.
+
+- [x] Task detail point, relationships, queue envelope, scope rows, summary,
+  and revision watermarks share one database snapshot.
+- [x] A direct boundary regression asserts task-detail and project snapshots
+  carry the same queue/project revisions.
+- [x] Missing task IDs remain `404`; unavailable promoted state remains a
+  `503` instead of being mistaken for an unknown task.
+- [x] Release metadata reads only durable `scopes` rows. The read boundary no
+  longer appends a release from summary metadata or invents a selected release;
+  it only aligns presentation fields on an existing durable row.
+- [x] Focused proof: **200 tests** across the task detail, read boundary,
+  project-state boundary, and database suites.
+- [ ] Remaining: remove the other route-level authority escape hatches found
+  by the architecture audit, especially rich GET reconstruction, project
+  graph/TASKS reads, Thread revision composition, and GET-side Git inspection.
+
+### Contract Touch Decision
+
+- Work id: `codex:task-detail-single-snapshot-2026-07-16`.
+- Touched contracts: task-detail read composition, release metadata read
+  behavior, and task-detail error classification.
+- Considered but not touched: task schema, release schema, persisted table
+  shape, and evidence/history payload shapes.
+- Required follow-up: unify authority selection and move remaining current
+  surfaces onto saved revisioned projections.
+- Proof provided: focused runtime/database tests and production build.
+- Apply/revert behavior: runtime-only read-boundary change; no data rollback.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none.
+- Change class: read-boundary consolidation and removal of read-time synthesis.
+- Existing data impact: inconsistent selected-release metadata is now exposed to
+  the owning repair/projector path instead of being silently changed in memory.
+- Migration id: not required.
+- Compatibility reader: no new historical-shape reader added.
+- Rollback/revert: runtime-only revert; no stored data migration is needed.
+
+## 2026-07-16 - Projection CAS watermark capture
+
+The writer audit found a subtler authority bug: a summary projection could be
+built from older rows and then capture a newer project revision after the build,
+allowing stale derived state to pass its own CAS check. Patch-style summary
+updates also built a complete `next` object before entering the serialized
+database transaction, so concurrent updates could be overwritten.
+
+- [x] Summary patch updates now apply against the transaction's current summary
+  rather than passing a precomputed stale object into the writer.
+- [x] Indexed and queue-based summary refreshes capture their project revision
+  before projection construction and compare that token at commit.
+- [x] Queue/task mutation APIs now carry and validate the full project-revision
+  token in addition to queue revision. A non-queue stale mark cannot be
+  overwritten by an older task mutation.
+- [x] Regression proof covers the non-queue CAS race; the focused boundary
+  bundle now passes **200 tests**.
+
+### Contract Touch Decision
+
+- Work id: `codex:projection-cas-watermark-2026-07-16`.
+- Touched contracts: summary patch semantics, projection refresh CAS timing,
+  and targeted task/release/batch mutation preconditions.
+- Considered but not touched: task/release schema, queue revision storage, and
+  owner-facing response shapes.
+- Required follow-up: add the same complete commit token to multi-step logical
+  transitions and durable projection jobs.
+- Proof required: concurrent patch preservation and stale projection rejection.
+- Apply/revert behavior: runtime writer change; no stored data rollback.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none.
+- Change class: serialized writer correctness and compare-and-swap timing.
+- Existing data impact: no row shape change; stale refreshes now fail earlier.
+- Migration id: not required.
+- Compatibility reader: none added.
+- Rollback/revert: runtime-only revert.
+
+## 2026-07-16 - One authority-selection boundary
+
+The Release mismatch exposed a more fundamental failure than synthetic task
+creation: runtime callers were independently reading an authority marker,
+queue revision, and queue contents, then deciding which source to use. That
+made it possible for one route to use durable indexed work while another route
+used a marker or compatibility path. The durable queue is now the effective
+authority as soon as it exists; the promotion marker is migration bookkeeping,
+not a competing read decision.
+
+- [x] Sessions exposes one revisioned authority snapshot containing effective
+  authority, queue revision, and project revision from one SQLite connection.
+- [x] Runtime source selection routes through `readProjectStateAuthorityAtBoundary`
+  instead of independently checking the old authority marker or queue table.
+- [x] Promoted state with a missing queue fails closed; it cannot fall back to
+  `TASKS.json`, an intake snapshot, or another compatibility representation.
+- [x] Task, release-selection, and structural batch writers use the same
+  effective authority boundary, including the bootstrap period where the
+  normalized queue exists before the historical marker is updated.
+- [x] Regression proof covers both normal authority agreement and a promoted
+  database whose queue row has disappeared. The focused bundle passes **201
+  tests**.
+- [ ] Remaining route-level work is still real: rich GET reconstruction,
+  project-graph direct reads, GET-side Git inspection, Thread history/extras,
+  and multi-step durable projection jobs must all move behind their owning
+  read/write boundaries.
+
+### Contract Touch Decision
+
+- Work id: `codex:single-authority-selection-boundary-2026-07-16`.
+- Touched contracts: effective current-state authority selection, authority
+  watermarks, and promoted-state failure behavior.
+- Considered but not touched: task/release schema, history retention, and the
+  compact response shape.
+- Required follow-up: finish migrating remaining runtime modules and add a
+  durable commit token/projection-job boundary for multi-step transitions.
+- Proof provided: 201 focused tests, data-layer/contract lint, production
+  build, installed-server freshness, agreement audit, and performance audit.
+- Apply/revert behavior: runtime/data-access refactor only; no stored data
+  migration or compatibility reader was added.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none. The change reads existing `project_meta`,
+  `queue_state`, and normalized detail rows through one boundary.
+- Change class: authority/read-model consolidation.
+- Existing data impact: no row shape change. A missing queue in promoted state
+  is now surfaced as unavailable instead of being masked by another source.
+- Migration id: not required.
+- Compatibility reader: no new reader; legacy remains explicit and limited to
+  projects without an effective normalized queue.
+- Rollback/revert: runtime-only revert; no data rollback is required.
+
+## 2026-07-16 - Full spine map snapshot
+
+- [x] Noncompact `/api/project/spine` now reads the normalized map snapshot;
+  it no longer rebuilds the current queue, effective tasks, start preflight,
+  intake draft, charter, or live release checks during a GET.
+- [x] The response carries `summaryFreshness`, `queueRevision`, and
+  `projectRevision`, and marks stale saved state with `requiresRefresh`.
+- [x] Owner-input projection writes no longer resurrect `current` freshness
+  from a pre-write summary read.
+- [x] Boundary/read-boundary regression proof passes 35 tests; build,
+  data-layer lint, and contract-touch lint pass.
+- [ ] Remaining: repository observations and rich Release readiness must be
+  written and refreshed through the shared projection boundary before any
+  surface treats live Git truth as current project state.
+
+### Contract Touch Decision
+
+- Work id: `codex:map-snapshot-freshness-2026-07-16`.
+- Touched contracts: `/api/project/spine` read provenance/freshness and owner
+  input summary freshness.
+- Considered but not touched: persisted task/release/repository schemas.
+- Required follow-up: durable repository/readiness projection convergence.
+- Proof provided: focused tests, build, and both advisory lints.
+- Apply/revert behavior: runtime-only; no persisted-data rollback.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none.
+- Change class: read-boundary consolidation.
+- Existing data impact: stale state is surfaced honestly; no compatibility
+  shape changes.
+- Migration id: not required.
+- Compatibility reader: none added.
+- Rollback/revert: runtime-only.
+
+2026-07-16T00:50:00Z - Current-state authority agreement is installed and
+verified.
+
+- Work id: `codex:one-current-state-authority-2026-07-16`.
+- The ordinary Release mismatch is fixed at the data boundary: release detail,
+  Start, compact summaries, Map/Overview, and Thread now consume normalized
+  current-state snapshots. Intake/import drafts, compatibility JSON, and live
+  Git diagnostics cannot manufacture current tasks or release membership on a
+  GET.
+- `pnpm audit:project-state-agreement` passes for all seven registered
+  projects with `mismatchCount: 0`.
+- `pnpm audit:project-state-performance` passes: 27.14 ms / 20,899 bytes for
+  the fleet, with all cold, warm, rich-task, and Thread reads current and free
+  of loading/errors.
+- `pnpm audit:project-spine` passes against the installed app.
+- Build, dev installation, restart, and `/api/stale-server` pass with
+  `stale:false`; focused authority tests pass 231/231.
+- The repository-wide typecheck remains noisy from a broad historical
+  contract backlog in tests and legacy adapters; this does not change the
+  installed production read boundary.
+
+2026-07-16T23:15:00Z - Release membership has one normalized authority.
+
+- Work id: `codex:normalized-release-membership-2026-07-16`.
+- The Release mismatch was caused by multiple membership mirrors: Release
+  detail could reconstruct intake tasks while SQLite summary counted only
+  materialized work. `release_membership` now stores the included/deferred
+  relationship once, and boundary/compact/detail reads consume it from their
+  one SQLite snapshot.
+- Release-envelope mutations update the relation in the same transaction.
+  Task-only mutations preserve it and reject attempts to change membership
+  without the release envelope. This prevents a task status edit from erasing
+  deferred membership.
+- Empty normalized membership no longer falls back to `scopes` or
+  `work_items` JSON arrays. Those mirrors are migration/write inputs only.
+- Added required migration `0.13.1/release-membership` and wired it into the
+  explicit `0.13.0-project-state-finalize.mjs` runner.
+- Focused proof: state database 55/55, migrations 40/40, boundary 15/15,
+  Release readiness 79/79, and read-boundary 39/39. Installed/fleet and full
+  suite proof remains outstanding.
+
+### Schema Migration Decision
+
+- Persisted schema touched: SQLite schema v28, `release_membership`.
+- Migration id: `0.13.1/release-membership`.
+- Compatibility reader: migration-only; ordinary reads fail closed or show
+  unavailable state rather than rebuilding membership from a second source.
+- Rollback: restore the pre-v28 database/build as a coordinated operation.
+
+## 2026-07-16 - Release and summary now share one execution envelope
+
+The final installed agreement check found and then closed a real split-parent
+disagreement in Looma + Knit. The saved summary correctly counted 16 execution
+units, but Release detail exposed 17 raw membership nodes because its scope
+reader could not see the normalized parent relationship. The fix is at the
+shared data boundary, not in a route-specific count adjustment.
+
+- [x] Scope rows are read from one SQLite transaction with `work_items.parent_id`.
+- [x] The shared `executionScopeRows` rule selects the same representative rows
+  for summary counts, release membership, and start/readiness calculations.
+- [x] Release identity and scope membership are emitted from the same canonical
+  execution envelope.
+- [x] Full hierarchy membership remains available to Map through normalized
+  scope rows; hidden structure is not deleted to make counts look correct.
+- [x] Installed proof: `stale:false`, 7 projects, required real projects
+  present, `mismatchCount: 0`.
+- [x] Installed performance proof: 25,261-byte fleet shell, 179.96 ms fleet
+  response, and all cold/warm/rich/Thread budgets passing with no loading or
+  error states.
+
+This is the guardrail we were missing: ordinary surfaces can select a
+presentation, but they cannot select a different authority or invent a second
+interpretation of parent/child scope.
+
+### Contract Touch Decision
+
+- Work id: `codex:canonical-release-execution-envelope-2026-07-16`.
+- Touched contracts: normalized scope rows expose `parentTaskId`; Release
+  detail scope and release membership now mean execution membership.
+- Considered but not touched: persisted SQLite schema and project task data.
+- Required follow-up: structural Map views must continue to use the full scope
+  row ledger rather than execution counts.
+- Proof provided: focused suites, build, installed freshness, agreement,
+  performance, and spine audits.
+- Apply/revert behavior: read-boundary correction only; no data rewrite.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none; the parent id is already stored on
+  `work_items` and is joined into the normalized read model.
+- Change class: DRY read-model enrichment.
+- Existing data impact: none; existing rows are interpreted consistently.
+- Migration id: not required.
+- Compatibility reader: none added.
+- Rollback/revert: runtime-only.
+
+## 2026-07-16 - One data-layer authority for queue, overlays, and evidence
+
+- [x] Removed the last ordinary source-selection split where a readable SQLite
+  queue could coexist with a stale historical promotion marker.
+- [x] Rich importer/intake reads use one named boundary that returns durable
+  task definitions plus current evidence; compact views retain the bounded
+  summary/index read model.
+- [x] Evidence writes and effective-task reads use the same current-authority
+  snapshot as queue reads.
+- [x] A stale-marker regression proves the durable title/spec/note win over a
+  deliberately stale compatibility `TASKS.json`.
+- [x] `workspace-importer.test.ts` passes 90/90 and
+  `project-state-boundary.test.ts` passes 15/15.
+- [x] The data-layer guardrail now rejects historical-authority readers outside
+  explicit migration/projection modules.
+- [ ] Full-suite cleanup remains: old fixture helpers outside the importer
+  lane still need to stop asserting retired compatibility exports.
+
+### Contract Touch Decision
+
+- Work id: `codex:current-authority-single-data-layer-2026-07-16`.
+- Touched contracts: current-state source selection and rich mutation reads.
+- Considered but not touched: persisted task/release/evidence schemas.
+- Required follow-up: migrate remaining historical-file fixture helpers.
+- Proof provided: stale-marker regression, importer/boundary suites, guardrail,
+  and installed agreement/performance proof.
+- Apply/revert behavior: runtime-only boundary correction.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none.
+- Change class: read/write authority consolidation.
+- Existing data impact: none; existing normalized rows are read consistently.
+- Migration id: not required.
+- Compatibility reader: explicit bootstrap/migration paths only.
+- Rollback/revert: runtime-only.
+
+## 2026-07-16 - Diagnostic blockers stay diagnostic
+
+- [x] Ordinary Release detail no longer merges repository follow-up blockers
+  into the saved release blocker list.
+- [x] Saved release task blockers, counts, completion, and verdict now come
+  from the saved summary only; Git/readiness observations stay under the
+  diagnostic namespace.
+- [x] Added a regression test for an unpublished commit: top-level Release
+  blockers remain empty while diagnostic blockers show the repository follow-up.
+- [x] Installed proof: `/api/stale-server` reports `stale:false`; agreement
+  audit passes for all 7 registered projects; performance audit passes all
+  fleet/project/rich/Thread budgets.
+- [ ] Full-suite cleanup remains: old fixture helpers still read retired
+  filesystem exports after database promotion and need migration to the shared
+  boundary.
+
+### Contract Touch Decision
+
+- Work id: `codex:diagnostic-blocker-authority-2026-07-16`.
+- Touched contracts: Release blocker list and diagnostic blocker list.
+- Considered but not touched: persisted task/release schemas.
+- Required follow-up: migrate legacy fixture readers and rerun the full suite.
+- Proof provided: focused runtime tests, build/install/restart, freshness,
+  agreement, performance, and lint checks.
+- Apply/revert behavior: runtime-only; no data rewrite.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none.
+- Change class: read-model separation.
+- Existing data impact: none.
+- Migration id: not required.
+- Compatibility reader: none added.
+- Rollback/revert: runtime-only.
+
+## 2026-07-16 - Current-state authority proof
+
+- [x] Full Release-readiness suite passes 76/76 under the saved-state contract.
+- [x] Installed agreement audit passes for 7 projects, including Narrative
+  Harness, Looma + Knit, Jess, and Fair Labor License, with zero mismatches.
+- [x] Installed performance audit passes: fleet 25.74 ms / 25,261 bytes;
+  all cold and warm project summaries, rich task reads, and Thread reads are
+  current, non-loading, and error-free.
+- [x] Build, contract-touch lint, and diff validation pass; installed server
+  reports `stale:false`.
+- [ ] Remaining: persist project-level Git/readiness observations through the
+  same projection-job writer. Until then, Release `diagnostics` remains an
+  explicitly labeled request-time observation and cannot overwrite saved
+  current-state fields.
+
+The original Release mismatch is therefore covered at the authority boundary:
+ordinary saved-state fields cannot be reconstructed from a second intake
+projection during a GET.
+
+## 2026-07-16 - Durable projection obligations
+
+- [x] Authoritative SQLite writes enqueue metadata-only projection jobs with
+  the committed project revision; repeated writes coalesce to the newest
+  revision instead of creating a second payload authority.
+- [x] The asynchronous projector claims jobs, refreshes the named read model,
+  and records bounded failure metadata when refresh throws.
+- [x] Projection watermarks complete jobs only after the owning read model is
+  committed, so a process restart cannot turn a dropped refresh into an
+  apparently current project.
+- [x] Focused job, refresh scheduler, Thread, boundary, and session tests pass;
+  `pnpm build` and both advisory lints pass.
+- [ ] Remaining: promote live project-level Git/readiness observations through
+  a named refresh writer instead of calculating them in Release detail.
+
+### Contract Touch Decision
+
+- Work id: `codex:durable-projection-obligations-2026-07-16`.
+- Touched contracts: projection freshness, refresh failure visibility, and
+  saved-vs-live Release detail semantics.
+- Considered but not touched: raw transcript/event payload retention and
+  task/release definition schemas.
+- Required follow-up: persist the bounded diagnostic observation owned by the
+  Release detail diagnostic surface.
+- Proof provided: projection-job tests, refresh tests, focused route tests,
+  build, and contract lint.
+- Apply/revert behavior: metadata-only; authoritative project rows survive a
+  job-table reset and can enqueue the next obligation again.
+
+### Schema Migration Decision
+
+- Persisted schema touched: additive `projection_jobs` table and index,
+  schema version `26`.
+- Change class: derived synchronization metadata; no authoritative rows are
+  rewritten and no transcript payload is copied into the table.
+- Existing data impact: existing databases open with an empty job queue; the
+  next write or explicit refresh records the current obligation.
+- Migration id: schema-open additive migration; no project-data migration.
+- Compatibility reader: none. A missing job is not permission for a GET to
+  rebuild current state.
+- Fixtures/tests: `project-projection-jobs.test.ts` plus scheduler/session
+  suites.
+- Owner-facing plan: stale saved state exposes its freshness and refresh
+  requirement rather than being replaced by a request-time interpretation.
+- Rollback/revert: drop only the derived job table/index; current-state rows
+  remain authoritative.
+
+## 2026-07-16 - Release identity cannot be reconstructed during reads
+
+- [x] Release/detail reads consume the persisted release envelope directly;
+  route helpers no longer union task `releaseIds` into release containers.
+- [x] A task carrying a release ID without a persisted release remains
+  unscoped current work rather than becoming a synthetic release.
+- [x] Compact queue reads no longer borrow release identity or selection from
+  `project_summary`.
+- [x] Regression tests cover both failure modes: task-membership manufacture
+  and summary-to-queue release drift.
+- [ ] Remaining: consolidate rich release readiness into a durable projection
+  so request-time Git/proof diagnostics are explicitly separate from saved
+  current state.
+
+### Contract Touch Decision
+
+- Work id: `codex:no-read-time-release-reconstruction-2026-07-16`.
+- Touched contracts: release identity/selection authority and current-state
+  read behavior.
+- Considered but not touched: persisted release schema and migration formats;
+  explicit intake/migration derivation remains a write concern.
+- Required follow-up: durable diagnostic refresh and projection retry state.
+- Proof provided: 162 focused tests, production build, data-layer lint,
+  contract-touch lint, installed `stale:false`, 7-project agreement with
+  `mismatchCount: 0`, and fleet performance at 26.3 ms / 25,260 bytes.
+- Apply/revert behavior: runtime/read-boundary behavior only; no data rewrite.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none.
+- Change class: read-authority consolidation.
+- Existing data impact: reads stop manufacturing or borrowing release state;
+  no rows were rewritten.
+- Migration id: not required.
+- Compatibility reader: none added; task-membership derivation remains only in
+  explicit intake/migration writers.
+- Rollback/revert: runtime-only.
+
+## 2026-07-16 - One current-state read transaction for repository facts
+
+- [x] Rich current-state reads now use the named
+  `readProjectCanonicalCurrentState` boundary beside the compact/map/task
+  boundaries; serve routes no longer own a second canonical queue wrapper.
+- [x] Promoted queue reads never derive release containers from task
+  membership. That derivation remains an explicit intake/migration write.
+- [x] Queue selection is read from `queue_state` only; the summary cannot
+  silently supply a missing selection.
+- [x] Queue, inventory, repositories, and summary are returned from one
+  SQLite projection snapshot, so repository blockers are projected from the
+  same revision as the task rows they qualify.
+- [x] Focused boundary, summary-projection, sessions, data-layer, and
+  contract-touch checks pass.
+- [ ] Remaining: add the explicit project-level diagnostic refresh writer and
+  move rich readiness diagnostics behind that writer or a clearly separate
+  live-diagnostics response.
+
+### Contract Touch Decision
+
+- Work id: `codex:single-current-state-read-2026-07-16`.
+- Touched contracts: canonical rich read ownership, release-selection source,
+  and normalized projection snapshot contents.
+- Considered but not touched: task/release/repository table schemas and
+  historical evidence retention.
+- Required follow-up: project-level diagnostic refresh and rich-detail
+  promotion semantics.
+- Proof provided: 91 focused session/boundary/summary tests, production
+  build, data-layer lint, and contract-touch lint.
+- Apply/revert behavior: read-boundary/runtime behavior only; no stored-data
+  rollback required.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none; the existing `repositories` table is now
+  included in an existing read transaction.
+- Change class: read-model consolidation.
+- Existing data impact: no rows rewritten; promoted reads stop deriving or
+  borrowing release state.
+- Migration id: not required.
+- Compatibility reader: no new compatibility reader.
+- Rollback/revert: runtime-only.
+
+Installed proof after this change: `/api/stale-server` reports `stale:false`;
+the agreement audit passes for 7 registered projects with `mismatchCount: 0`;
+the performance audit passes the fleet at 33.11 ms / 25,261 bytes and all
+cold, warm, rich-task, and Thread budgets.
+
+## 2026-07-16 - Saved state and live diagnostics are not interchangeable
+
+- [x] Release and task Git Story GETs no longer write repository observations
+  into the current project database as a side effect.
+- [x] Map/spine reads use the saved normalized snapshot and expose its
+  freshness/revision instead of importing live Git blockers into the response.
+- [x] Sessions repository reads from project root and `TASKS.json` share one
+  database-path implementation.
+- [x] Focused release-readiness/read-boundary/session tests, data-layer lint,
+  contract lint, and production build pass.
+- [ ] Remaining: explicit project diagnostic refresh plus asynchronous durable
+  projection convergence.
+
+Installed proof after the task-level change: `/api/stale-server` reports
+`stale:false`; the seven-project agreement audit has zero mismatches; fleet
+projection is 20.49 ms / 25,261 bytes with no loading or error responses.
+
+### Contract Touch Decision
+
+- Work id: `codex:no-second-current-state-authority-2026-07-16`.
+- Touched contracts: saved-vs-live diagnostic separation and targeted current
+  state writes.
+- Considered but not touched: persisted schema.
+- Required follow-up: make project-level diagnostic refresh a named writer.
+- Proof provided: focused tests and production build.
+- Apply/revert behavior: runtime-only.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none.
+- Change class: read/write boundary consolidation.
+- Existing data impact: GET no longer promotes live observations.
+- Migration id: not required.
+- Compatibility reader: none added.
+- Rollback/revert: runtime-only.
+
+## 2026-07-16 - Release diagnostics now use the same durable projection boundary
+
+The final diagnostic seam from this audit is now closed for ordinary reads.
+The Release detail response no longer runs Git Story/repository readiness work
+just because a user opened the page. The same canonical current-state snapshot
+feeds the saved release fields and the saved bounded diagnostic row. The live
+inspection path remains available only when explicitly requested with
+`?live=true`.
+
+- [x] Added revision-matched `project_diagnostics` storage and a coalesced
+  `diagnostics` projection job.
+- [x] Refresh diagnostics after Thread and Attention writes, so the saved row
+  describes the final revision produced by the projector.
+- [x] Added external repository-signature detection that schedules a bounded
+  refresh without making fleet reads inspect Git.
+- [x] Tested the ordinary/live split against the installed Narrative Harness
+  app: saved reads returned `diagnosticFreshness: current`, revision `43564`,
+  and zero Git snapshots; `live=true` returned request-time diagnostics with
+  one snapshot.
+- [x] Agreement audit: 7 registered projects, required Narrative Harness,
+  Looma + Knit, Jess, and Fair Labor License present, `mismatchCount: 0`.
+- [x] Performance audit: fleet 26.07 ms / 25,261 bytes; all cold, warm, rich
+  task, and Thread reads passed with no loading/error responses.
+
+Remaining audit boundary: explicit live diagnostics still perform the work by
+design. They are an inspection mode, not a second current-state authority.
+Any future product action that needs to force a refresh must call the named
+projection writer or enqueue its job; it must not add another route-local
+reconstruction.
+
+## 2026-07-16 - Read boundaries cannot disagree about release identity
+
+- [x] Ordinary Release reads now consume the saved queue/scope/summary/
+  diagnostics/revision snapshot from `readProjectSavedReleaseState`.
+- [x] Queue selection and release identity are queue facts; summary state can
+  project status but cannot select, rename, or manufacture a release.
+- [x] Saved scope identity follows the selected queue release when present,
+  while unnamed current work remains an explicit summary scope.
+- [x] Start blockers for imported work and meta-intake reads use the canonical
+  current-state boundary rather than a second queue reader and overlay build.
+- [x] Focused Release/boundary/progress/Thread suites, build, data-layer lint,
+  and contract-touch lint pass.
+- [ ] Full-suite cleanup remains: older fixture helpers still read retired
+  `TASKS.json` exports after promotion and must be moved to the canonical
+  boundary before the full suite is an honest architecture proof.
+
+### Contract Touch Decision
+
+- Work id: `codex:release-identity-at-current-state-boundary-2026-07-16`.
+- Touched contracts: Release identity/selection and ordinary project-state read
+  authority.
+- Considered but not touched: persisted release/task schemas and evidence
+  retention.
+- Required follow-up: update remaining historical-file fixture helpers and
+  rerun the full suite.
+- Proof provided: focused runtime tests, production build, and advisory lints.
+- Apply/revert behavior: runtime-only; no data rewrite.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none.
+- Change class: read-model consolidation.
+- Existing data impact: no rows rewritten; queue identity can no longer be
+  overridden by a summary projection during a read.
+- Migration id: not required.
+- Compatibility reader: none added.
+- Rollback/revert: runtime-only.
+
+2026-07-17T00:50:00Z - Full authority proof completed.
+
+- Work id: `codex:one-current-state-authority-2026-07-16`.
+- The ordinary Release mismatch is fixed at the data boundary: Release detail,
+  Start, compact summaries, Map/Overview, and Thread consume normalized
+  current-state snapshots. Intake/import drafts, compatibility JSON, and live
+  Git diagnostics cannot manufacture current tasks or release membership on a
+  GET.
+- The full serial suite passes: 369 files passed, 1 skipped; 5,038 tests
+  passed, 3 skipped, 11 todo.
+- Installed agreement passes for all seven registered projects with
+  `mismatchCount: 0`; performance passes at 27.14 ms / 20,899 bytes for the
+  fleet and all cold, warm, rich-task, and Thread budgets.
+- Build, dev installation, restart, and `/api/stale-server` pass with
+  `stale:false`; the project-spine audit also passes.
+- Historical fixture compatibility remains available only in explicit
+  bootstrap/migration paths. It is not an ordinary current-state reader.

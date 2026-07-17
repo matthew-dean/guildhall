@@ -44,13 +44,12 @@ describe('appendExploringTranscript', () => {
     expect(result.path).toContain(path.join(dataDir, 'projects'))
 
     const content = await fs.readFile(result.path!, 'utf-8')
-    expect(content).toContain('# Exploring transcript: task-001')
-    expect(content).toContain('## [')
-    expect(content).toContain('user')
+    expect(content).toContain('# Essential exploring history: task-001')
+    expect(content).toContain('<!-- last-entry: user:')
     expect(content).toContain('I want a ghost button variant')
   })
 
-  it('appends subsequent messages without recreating the file', async () => {
+  it('rewrites subsequent messages without retaining transcript scaffolding', async () => {
     await appendExploringTranscript({
       memoryDir,
       taskId: 'task-001',
@@ -69,9 +68,10 @@ describe('appendExploringTranscript', () => {
     const content = await fs.readFile(second.path!, 'utf-8')
     expect(content).toContain('first message')
     expect(content).toContain('second message')
-    // Header should only appear once.
-    const matches = content.match(/# Exploring transcript/g) ?? []
+    // The durable record is one compact document, not one block per message.
+    const matches = content.match(/# Essential exploring history/g) ?? []
     expect(matches).toHaveLength(1)
+    expect(content).not.toContain('## [')
   })
 
   it('creates the local transcript subdirectory automatically', async () => {
@@ -107,7 +107,7 @@ describe('appendExploringTranscript', () => {
     expect(b).not.toContain('alpha')
   })
 
-  it('stamps each entry with an ISO timestamp', async () => {
+  it('stores an idempotency marker instead of a raw timestamped entry', async () => {
     const result = await appendExploringTranscript({
       memoryDir,
       taskId: 'task-001',
@@ -115,8 +115,7 @@ describe('appendExploringTranscript', () => {
       content: 'x',
     })
     const content = await fs.readFile(result.path!, 'utf-8')
-    // ISO-8601 timestamp inside brackets
-    expect(content).toMatch(/## \[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/)
+    expect(content).toMatch(/<!-- last-entry: user:[a-f0-9]+ -->/)
   })
 
   it('accepts spec-agent, user, and system roles', async () => {
@@ -134,6 +133,24 @@ describe('appendExploringTranscript', () => {
     for (const role of roles) {
       expect(content).toContain(`msg from ${role}`)
     }
+  })
+
+  it('uses the supplied context summarizer and persists only its result', async () => {
+    const calls: Array<{ priorHistory: string; role: string; content: string }> = []
+    await appendExploringTranscript({
+      memoryDir,
+      taskId: 'task-compact',
+      role: 'user',
+      content: 'A very long conversational detail that should not survive as a transcript.',
+      summarizer: async (input) => {
+        calls.push(input)
+        return '- Durable decision: keep only the accepted scope.'
+      },
+    })
+    const content = (await readExploringTranscript({ memoryDir, taskId: 'task-compact' })).content ?? ''
+    expect(calls).toHaveLength(1)
+    expect(content).toContain('Durable decision: keep only the accepted scope.')
+    expect(content).not.toContain('A very long conversational detail')
   })
 })
 
@@ -160,15 +177,16 @@ describe('readExploringTranscript', () => {
     expect(read.path).toContain(path.basename(projectRoot))
   })
 
-  it('falls back to the legacy project memory transcript before migration', async () => {
+  it('does not read the legacy project memory transcript outside migration', async () => {
     const legacyPath = path.join(memoryDir, 'exploring', 'legacy-task.md')
     await fs.mkdir(path.dirname(legacyPath), { recursive: true })
     await fs.writeFile(legacyPath, '# Exploring transcript: legacy-task\n\nlegacy context\n', 'utf8')
 
     const result = await readExploringTranscript({ memoryDir, taskId: 'legacy-task' })
 
-    expect(result.content).toContain('legacy context')
-    expect(result.path).toBe(legacyPath)
+    expect(result.content).toBeNull()
+    expect(result.path).not.toBe(legacyPath)
+    expect(result.path).toContain(path.join('.guildhall', 'data', 'projects'))
   })
 
   it('returns content of an existing transcript', async () => {

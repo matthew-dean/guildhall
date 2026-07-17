@@ -13,7 +13,11 @@ import {
 import { logProgress } from './memory-tools.js'
 import { atomicWriteText, appendTaskEvidence, inferProjectRootFromMemoryDir, readTaskEvidence, upsertTaskRuntimeState } from '@guildhall/sessions'
 import { buildEffectiveTask } from '@guildhall/runtime/effective-task'
-import { writeProjectTaskQueue } from '@guildhall/runtime/project-state-boundary'
+import {
+  readProjectTaskQueueForMutationSync,
+  writePromotedTaskDetailMutation,
+  writeProjectTaskQueue,
+} from '@guildhall/runtime/project-state-boundary'
 import { providerCommandEnv } from '../config/global-providers.js'
 
 // ---------------------------------------------------------------------------
@@ -102,6 +106,38 @@ function blockTaskForEscalation(task: Task, input: Pick<RaiseEscalationInput, 'r
   task.updatedAt = now
 }
 
+function persistEscalationTaskState(input: {
+  tasksPath: string
+  projectRoot: string
+  task: Task
+  queue: z.infer<typeof TaskQueue>
+  expectedQueueRevision: number | null
+}): void {
+  const promotedMutation = writePromotedTaskDetailMutation(input.tasksPath, input.task.id, {
+    projectId: path.basename(input.projectRoot),
+    projectRoot: input.projectRoot,
+    mutate: (definition) => {
+      definition.status = input.task.status
+      if (typeof input.task.blockReason === 'string') definition.blockReason = input.task.blockReason
+      else delete definition.blockReason
+      if (Array.isArray((input.task as Task & { openEscalations?: unknown }).openEscalations)) {
+        definition.openEscalations = (input.task as Task & { openEscalations?: unknown }).openEscalations
+      } else {
+        delete definition.openEscalations
+      }
+      definition.updatedAt = input.task.updatedAt
+      return definition
+    },
+  })
+  if (!promotedMutation) {
+    writeProjectTaskQueue(input.tasksPath, input.queue, {
+      ...(input.expectedQueueRevision !== null
+        ? { expectedQueueRevision: input.expectedQueueRevision }
+        : {}),
+    })
+  }
+}
+
 function projectRootForTaskState(tasksPath: string, task: Task): string {
   const stateDir = path.dirname(tasksPath)
   if (path.basename(stateDir) === 'project-state' && path.isAbsolute(task.projectPath)) {
@@ -164,8 +200,8 @@ export async function raiseEscalation(
   input: RaiseEscalationInput,
 ): Promise<RaiseEscalationResult> {
   try {
-    const raw = await readManagedTextFile(input.tasksPath, 'utf-8')
-    const queue = TaskQueue.parse(JSON.parse(raw))
+    const queueRead = readProjectTaskQueueForMutationSync(input.tasksPath)
+    const queue = TaskQueue.parse(queueRead.queue)
     const task = queue.tasks.find((t) => t.id === input.taskId)
     if (!task) return { success: false, error: `Task ${input.taskId} not found` }
     const projectRoot = projectRootForTaskState(input.tasksPath, task)
@@ -220,7 +256,13 @@ export async function raiseEscalation(
           .map((candidate) => candidate.id),
         updatedAt: now,
       })
-      writeProjectTaskQueue(input.tasksPath, queue)
+      persistEscalationTaskState({
+        tasksPath: input.tasksPath,
+        projectRoot,
+        task,
+        queue,
+        expectedQueueRevision: queueRead.expectedQueueRevision,
+      })
       return { success: true, escalationId: existing.id }
     }
 
@@ -254,7 +296,13 @@ export async function raiseEscalation(
         .map((candidate) => candidate.id),
       updatedAt: now,
     })
-    writeProjectTaskQueue(input.tasksPath, queue)
+    persistEscalationTaskState({
+      tasksPath: input.tasksPath,
+      projectRoot,
+      task,
+      queue,
+      expectedQueueRevision: queueRead.expectedQueueRevision,
+    })
 
     if (input.progressPath) {
       const entry: ProgressEntry = {
@@ -411,8 +459,8 @@ export async function resolveEscalation(
   input: ResolveEscalationInput,
 ): Promise<ResolveEscalationResult> {
   try {
-    const raw = await readManagedTextFile(input.tasksPath, 'utf-8')
-    const queue = TaskQueue.parse(JSON.parse(raw))
+    const queueRead = readProjectTaskQueueForMutationSync(input.tasksPath)
+    const queue = TaskQueue.parse(queueRead.queue)
     const task = queue.tasks.find((t) => t.id === input.taskId)
     if (!task) return { success: false, error: `Task ${input.taskId} not found` }
     const projectRoot = projectRootForTaskState(input.tasksPath, task)
@@ -473,7 +521,13 @@ export async function resolveEscalation(
       ...(retryWindowPatch ?? task.retryWindow ? { retryWindow: retryWindowPatch ?? task.retryWindow } : {}),
       updatedAt: now,
     })
-    writeProjectTaskQueue(input.tasksPath, queue)
+    persistEscalationTaskState({
+      tasksPath: input.tasksPath,
+      projectRoot,
+      task,
+      queue,
+      expectedQueueRevision: queueRead.expectedQueueRevision,
+    })
 
     if (input.progressPath) {
       const entry: ProgressEntry = {

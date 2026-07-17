@@ -1,9 +1,94 @@
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync } from 'node:fs'
 import fs from 'node:fs/promises'
-import { basename, dirname, join, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { homedir, tmpdir } from 'node:os'
 
 import { getDataDir } from './paths.js'
+import { atomicWriteText } from './atomic.js'
+import {
+  getProjectCacheManifestPath,
+  registerProjectCacheWorkspace,
+} from './project-cache-registry.js'
+
+/** Heartbeats are operational liveness, not durable project memory. */
+export const PROJECT_HEARTBEAT_HISTORY_MAX_BYTES = 256 * 1024
+export const PROJECT_HEARTBEAT_HISTORY_MAX_RECORDS = 512
+
+export interface ProjectHeartbeatCompactionResult {
+  bytesBefore: number
+  bytesAfter: number
+  recordsBefore: number
+  recordsAfter: number
+  compacted: boolean
+}
+
+function heartbeatBlocks(content: string): string[] {
+  return content
+    .replace(/\r\n/g, '\n')
+    .split(/\n(?=###\s+)/)
+    .map(block => block.trim())
+    .filter(Boolean)
+}
+
+function boundedHeartbeatContent(content: string): string {
+  const kept = heartbeatBlocks(content).slice(-PROJECT_HEARTBEAT_HISTORY_MAX_RECORDS)
+  while (
+    kept.length > 1 &&
+    Buffer.byteLength(`${kept.join('\n\n')}\n`, 'utf8') > PROJECT_HEARTBEAT_HISTORY_MAX_BYTES
+  ) {
+    kept.shift()
+  }
+  if (
+    kept.length === 1 &&
+    Buffer.byteLength(kept[0]!, 'utf8') + 1 > PROJECT_HEARTBEAT_HISTORY_MAX_BYTES
+  ) {
+    kept[0] = Buffer.from(kept[0]!, 'utf8')
+      .subarray(0, PROJECT_HEARTBEAT_HISTORY_MAX_BYTES - 1)
+      .toString('utf8')
+  }
+  return kept.length > 0 ? `${kept.join('\n\n')}\n` : ''
+}
+
+/** Append one heartbeat without allowing the operational stream to grow forever. */
+export async function appendProjectProgressHeartbeat(filePath: string, block: string): Promise<void> {
+  await fs.mkdir(dirname(filePath), { recursive: true })
+  let existing = ''
+  try {
+    existing = await fs.readFile(filePath, 'utf8')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+  }
+  atomicWriteText(filePath, boundedHeartbeatContent(`${existing}\n${block}`))
+}
+
+/** Apply the same ring policy to history written by older Guildhall versions. */
+export async function compactProjectProgressHeartbeats(
+  filePath: string,
+  options: { dryRun?: boolean } = {},
+): Promise<ProjectHeartbeatCompactionResult> {
+  let existing = ''
+  try {
+    existing = await fs.readFile(filePath, 'utf8')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return { bytesBefore: 0, bytesAfter: 0, recordsBefore: 0, recordsAfter: 0, compacted: false }
+    }
+    throw error
+  }
+  const next = boundedHeartbeatContent(existing)
+  const recordsBefore = heartbeatBlocks(existing).length
+  const recordsAfter = heartbeatBlocks(next).length
+  const result = {
+    bytesBefore: Buffer.byteLength(existing, 'utf8'),
+    bytesAfter: Buffer.byteLength(next, 'utf8'),
+    recordsBefore,
+    recordsAfter,
+    compacted: next !== existing,
+  }
+  if (result.compacted && options.dryRun !== true) atomicWriteText(filePath, next)
+  return result
+}
 
 export interface LocalHistoryHealth {
   projectRoot: string
@@ -20,8 +105,48 @@ function projectSlug(projectRoot: string): string {
   return `${basename(resolved) || 'root'}-${digest}`
 }
 
+export function isEphemeralProjectRoot(projectRoot: string): boolean {
+  const root = resolve(projectRoot)
+  const temporaryRoot = resolve(tmpdir())
+  if (!isAbsolute(root) || !isAbsolute(temporaryRoot)) return false
+  const distance = relative(temporaryRoot, root)
+  return distance === '' || (!distance.startsWith(`..${pathSeparator}`) && distance !== '..')
+}
+
+const pathSeparator = process.platform === 'win32' ? '\\' : '/'
+
+function projectHistoryRoot(projectRoot: string): string {
+  // Explicit data dirs are used by tests, containers, and callers that want
+  // deterministic placement. Never promote a temporary fixture or benchmark
+  // project into the user's durable default cache, even if a parent process
+  // leaked GUILDHALL_DATA_DIR into the child environment.
+  const configuredDataDir = process.env.GUILDHALL_DATA_DIR
+  const defaultDataDir = join(homedir(), '.guildhall', 'data')
+  if (
+    isEphemeralProjectRoot(projectRoot) &&
+    (!configuredDataDir || resolve(configuredDataDir) === resolve(defaultDataDir))
+  ) {
+    return join(tmpdir(), 'guildhall-projects')
+  }
+  if (configuredDataDir && configuredDataDir.length > 0) return join(configuredDataDir, 'projects')
+  if (isEphemeralProjectRoot(projectRoot)) return join(tmpdir(), 'guildhall-projects')
+  return join(getDataDir(), 'projects')
+}
+
 export function getProjectLocalHistoryDir(projectRoot: string): string {
-  const dir = join(getDataDir(), 'projects', projectSlug(projectRoot))
+  return join(projectHistoryRoot(projectRoot), projectSlug(projectRoot))
+}
+
+/** Allocate a project history root at an explicit write boundary. */
+export function ensureProjectLocalHistoryDir(projectRoot: string): string {
+  const dir = getProjectLocalHistoryDir(projectRoot)
+  // Allocate provenance before the first durable directory write. Temporary
+  // projects use an intentionally separate, non-durable root and must not
+  // enter the user's project-cache registry.
+  const durableCache = !isEphemeralProjectRoot(projectRoot)
+  if (durableCache && (!existsSync(dir) || !existsSync(getProjectCacheManifestPath(projectRoot)))) {
+    registerProjectCacheWorkspace(projectRoot)
+  }
   mkdirSync(dir, { recursive: true })
   return dir
 }
@@ -71,6 +196,11 @@ export function getLegacyProjectTranscriptPath(
 
 export function getProjectRecentEventsPath(projectRoot: string): string {
   return join(getProjectLocalHistoryDir(projectRoot), 'events', 'recent-events.jsonl')
+}
+
+/** Migration snapshots are rollback evidence, never current project state. */
+export function getProjectMigrationSnapshotDir(projectRoot: string): string {
+  return join(getProjectLocalHistoryDir(projectRoot), 'migration-snapshots')
 }
 
 export function getProjectContextDebugLedgerPath(projectRoot: string): string {

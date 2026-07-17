@@ -12,7 +12,7 @@
   import { nav } from '../../lib/nav.svelte.js'
   import { currentProjectHref, currentTaskHref, projectFetch } from '../../lib/project-routes.js'
   import { releaseVerdictSummary } from '../../lib/release-readiness.js'
-  import type { ProjectOrientationSpine, ProjectReleaseReadiness } from '../../lib/types.js'
+  import type { ProjectOrientationSpine, ProjectReleaseReadiness, ProjectSummaryRelease } from '../../lib/types.js'
 
   interface ReleaseItem {
     id?: string
@@ -90,6 +90,7 @@
       tasks: number
       done: number
     }
+    checksLoaded?: boolean
   }
 
   type GitStoryBlocker = NonNullable<NonNullable<ReleasePayload['gitStory']>['blockers']>[number]
@@ -97,8 +98,9 @@
   interface Props {
     subView?: string | null
     activeProjectId?: string | null
+    projectSummary?: ProjectSummaryRelease | null
   }
-  let { subView = null, activeProjectId = null }: Props = $props()
+  let { subView = null, activeProjectId = null, projectSummary = null }: Props = $props()
   const section = $derived(subView ?? 'verdict')
 
   let data = $state<ReleasePayload | null>(null)
@@ -107,7 +109,10 @@
   let initNeeded = $state(false)
 
   $effect(() => {
-    projectFetch('/api/project/release-readiness', undefined, activeProjectId)
+    const endpoint = section === 'criteria'
+      ? '/api/project/release-readiness'
+      : '/api/project/release-readiness/summary'
+    projectFetch(endpoint, undefined, activeProjectId)
       .then(r => r.json())
       .then(j => {
         if (j?.initializationNeeded) {
@@ -118,7 +123,39 @@
           error = j.error
           return
         }
-        data = j as ReleasePayload
+        const payload = j as Partial<ReleasePayload>
+        const compatibilityDetailPayload = payload.designSystem !== undefined ||
+          payload.dirtyCheckout !== undefined || payload.gitStory !== undefined
+        data = {
+          ...payload,
+          checksLoaded: payload.checksLoaded === true || compatibilityDetailPayload,
+          openEscalations: Array.isArray(payload.openEscalations) ? payload.openEscalations : [],
+          incompleteBriefs: Array.isArray(payload.incompleteBriefs) ? payload.incompleteBriefs : [],
+          unapprovedBriefs: Array.isArray(payload.unapprovedBriefs) ? payload.unapprovedBriefs : [],
+          unapprovedSpecs: Array.isArray(payload.unapprovedSpecs) ? payload.unapprovedSpecs : [],
+          shelvedUnclaimed: Array.isArray(payload.shelvedUnclaimed) ? payload.shelvedUnclaimed : [],
+          blockedByAgent: Array.isArray(payload.blockedByAgent) ? payload.blockedByAgent : [],
+          proofMissingDoneTasks: Array.isArray(payload.proofMissingDoneTasks) ? payload.proofMissingDoneTasks : [],
+          releaseBlockers: Array.isArray(payload.releaseBlockers) ? payload.releaseBlockers : [],
+          statusCounts: payload.statusCounts && typeof payload.statusCounts === 'object' ? payload.statusCounts : {},
+          designSystem: payload.designSystem ?? {
+            drafted: false,
+            approved: false,
+            source: 'none',
+            label: 'Details not loaded',
+          },
+          totals: {
+            blockingCount: payload.totals?.blockingCount ?? 0,
+            humanBlockingCount: payload.totals?.humanBlockingCount ?? 0,
+            ...(payload.totals?.unfinishedCount !== undefined ? { unfinishedCount: payload.totals.unfinishedCount } : {}),
+            ...(payload.totals?.proofEvidenceBlockingCount !== undefined ? { proofEvidenceBlockingCount: payload.totals.proofEvidenceBlockingCount } : {}),
+            ...(payload.totals?.designSystemBlockingCount !== undefined ? { designSystemBlockingCount: payload.totals.designSystemBlockingCount } : {}),
+            ...(payload.totals?.dirtyCheckoutBlockingCount !== undefined ? { dirtyCheckoutBlockingCount: payload.totals.dirtyCheckoutBlockingCount } : {}),
+            ...(payload.totals?.gitStoryBlockingCount !== undefined ? { gitStoryBlockingCount: payload.totals.gitStoryBlockingCount } : {}),
+            tasks: payload.totals?.tasks ?? 0,
+            done: payload.totals?.done ?? 0,
+          },
+        } as ReleasePayload
       })
       .catch(err => {
         error = err instanceof Error ? err.message : String(err)
@@ -126,7 +163,7 @@
   })
 
   $effect(() => {
-    projectFetch('/api/project/spine', { cache: 'no-store' }, activeProjectId)
+    projectFetch('/api/project/spine?compact=true', { cache: 'no-store' }, activeProjectId)
       .then(r => r.json())
       .then(j => {
         spine = (j?.spine ?? null) as ProjectOrientationSpine | null
@@ -232,6 +269,7 @@
   )
 
   const dsLabel = $derived(() => {
+    if (!data?.checksLoaded) return { label: 'details not loaded', tone: 'neutral' as const, clear: true }
     const ds = data?.designSystem
     if (!ds) return { label: 'not captured', tone: 'warn' as const, clear: false }
     if (!ds.drafted) return { label: ds.label ?? 'not captured', tone: 'warn' as const, clear: false }
@@ -351,7 +389,7 @@
   const gitStoryBlockers = $derived(dedupeGitBlockers(data?.gitStory?.blockers ?? []))
   const visibleGitStoryBlockers = $derived(gitStoryBlockers.slice(0, 5))
   const designSystemBlockingCount = $derived(data?.totals.designSystemBlockingCount ?? (dsLabel().clear ? 0 : 1))
-  const hasNamedRelease = $derived(Boolean(data?.release?.label))
+  const hasNamedRelease = $derived(Boolean(data?.release?.label ?? projectSummary?.release?.label))
   const readinessNoun = $derived(hasNamedRelease ? 'release' : 'scope')
   const readinessTitle = $derived(hasNamedRelease ? 'Release readiness' : 'Scope readiness')
   const blockerNoun = $derived(hasNamedRelease ? 'release blocker' : 'scope blocker')
@@ -366,18 +404,18 @@
           title: hasNamedRelease ? 'Release checks' : 'Scope checks',
           description: hasNamedRelease
             ? 'Expand any row to inspect the tasks, approvals, checkout state, and repository follow-ups for the current release.'
-            : 'Expand any row to inspect the tasks, approvals, checkout state, and repository follow-ups for the current task scope.',
+            : 'Expand any row to inspect the tasks, approvals, checkout state, and repository follow-ups for the current project scope.',
         }
       : {
           title: readinessTitle,
           description: data?.release?.description ?? data?.scope?.description
             ?? (hasNamedRelease
               ? 'A quick read on whether the current release is ready to hand off, ship, or deliberately defer.'
-              : 'A quick read on whether the current task scope is ready to hand off, ship, or deliberately defer.'),
-        },
+              : 'A quick read on whether the current project scope is ready to hand off, ship, or deliberately defer.'),
+          },
   )
-  const releaseLabel = $derived(data?.release?.label ?? data?.scope?.label ?? spine?.summary?.selectedScopeLabel ?? spine?.selectedTaskScope?.label ?? spine?.scope?.label ?? spine?.summary?.selectedReleaseLabel ?? spine?.selectedRelease?.label ?? 'Current task scope')
-  const spineReleaseLabel = $derived(spine?.summary?.selectedScopeLabel ?? spine?.selectedTaskScope?.label ?? spine?.scope?.label ?? spine?.summary?.selectedReleaseLabel ?? spine?.selectedRelease?.label ?? 'Current task scope')
+  const releaseLabel = $derived(data?.release?.label ?? data?.scope?.label ?? projectSummary?.release?.label ?? spine?.summary?.selectedScopeLabel ?? spine?.selectedTaskScope?.label ?? spine?.scope?.label ?? spine?.summary?.selectedReleaseLabel ?? spine?.selectedRelease?.label ?? 'Unreleased work')
+  const spineReleaseLabel = $derived(spine?.summary?.selectedScopeLabel ?? spine?.selectedTaskScope?.label ?? spine?.scope?.label ?? spine?.summary?.selectedReleaseLabel ?? spine?.selectedRelease?.label ?? projectSummary?.release?.label ?? 'Unreleased work')
 
   const statusRows = $derived(
     data ? Object.entries(data.statusCounts).sort((a, b) => b[1] - a[1]) : [],
@@ -466,8 +504,8 @@
     <p>{error}</p>
   </NoticeBand>
 {:else if !data}
-  <NoticeBand tone="neutral" role="status" label="Release" title="Loading release checks">
-    <p>Collecting task status, approvals, repository follow-ups, and checkout state…</p>
+  <NoticeBand tone="neutral" role="status" label="Release" title={section === 'criteria' ? 'Loading release checks' : 'Loading release summary'}>
+    <p>{section === 'criteria' ? 'Collecting detailed task, approval, repository, and checkout checks…' : 'Loading the saved current release summary…'}</p>
   </NoticeBand>
 {:else}
   <div class="release-shell">

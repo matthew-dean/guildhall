@@ -13,6 +13,7 @@ function json(data: unknown): Response {
 }
 
 const readyPayload = {
+  scope: { id: 'current-work', label: 'Current task scope' },
   openEscalations: [],
   incompleteBriefs: [],
   unapprovedBriefs: [],
@@ -286,7 +287,7 @@ describe('ReleaseTab', () => {
 
     await screen.findByText('Current task scope')
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith('/api/project/release-readiness?projectId=t-minus-t')
+      expect(fetchMock).toHaveBeenCalledWith('/api/project/release-readiness/summary?projectId=t-minus-t')
     })
   })
 
@@ -300,8 +301,8 @@ describe('ReleaseTab', () => {
 
     await screen.findByText('Current task scope')
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith('/api/project/release-readiness?projectId=looma-knit')
-      expect(fetchMock).toHaveBeenCalledWith('/api/project/spine?projectId=looma-knit', { cache: 'no-store' })
+      expect(fetchMock).toHaveBeenCalledWith('/api/project/release-readiness/summary?projectId=looma-knit')
+      expect(fetchMock).toHaveBeenCalledWith('/api/project/spine?compact=true&projectId=looma-knit', { cache: 'no-store' })
     })
   })
 

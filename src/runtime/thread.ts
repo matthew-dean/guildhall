@@ -38,6 +38,7 @@ import { thresholdMs } from './liveness.js'
 import { listPressureTestIntakes, summarizeProjectCheckIn, type PressureTestIntake, type ProjectCheckInSummary } from './pressure-test-intake.js'
 import { listBoundedChatSessions, type BoundedChatSession } from './bounded-chat.js'
 import { getProjectStateDir, getProjectSystemStatePath } from '@guildhall/sessions'
+import { projectTaskStateExistsSync, readProjectTaskQueueSync } from './project-state-boundary.js'
 import type { GitStorySnapshot } from './git-story.js'
 import { userFacingText } from './user-facing-text.js'
 import { specReviewRequiresOwnerApproval } from './spec-review-ownership.js'
@@ -363,14 +364,6 @@ export interface BuildThreadOptions {
       is_error?: boolean | null | undefined
     } | undefined
   }>
-}
-
-function readJsonSafe(path: string): unknown {
-  try {
-    return JSON.parse(readFileSync(path, 'utf8'))
-  } catch {
-    return null
-  }
 }
 
 function tasksArray(raw: unknown): Task[] {
@@ -1677,7 +1670,7 @@ export function buildThread(opts: BuildThreadOptions): Thread {
   const snap = opts.snapshot ?? buildSnapshot({ projectPath: opts.projectPath })
   const turns: ThreadTurn[] = []
   const tasksPath = getProjectSystemStatePath(opts.projectPath, 'TASKS.json')
-  const tasks = opts.tasks ?? (existsSync(tasksPath) ? tasksArray(readJsonSafe(tasksPath)) : [])
+  const tasks = opts.tasks ?? (projectTaskStateExistsSync(tasksPath) ? tasksArray(readProjectTaskQueueSync(tasksPath)) : [])
   const boundedChats = opts.boundedChatSessions ?? listBoundedChatSessions(getProjectStateDir(opts.projectPath))
   const pressureTests = opts.pressureTestIntakes ?? listPressureTestIntakes(getProjectStateDir(opts.projectPath))
   turns.push(...boundedChatTurns(opts.projectPath, boundedChats))

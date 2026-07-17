@@ -169,6 +169,7 @@ function installBrowserFakes() {
 function installFetchFakes(projectPayload: ProjectDetail = detail()) {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input), 'http://localhost')
+    if (url.pathname === '/api/service') return json({ projects: [projectPayload] })
     if (url.pathname === '/api/project') return json(projectPayload)
     if (url.pathname === '/api/project/spine') return json({ spine: projectPayload.orientationSpine ?? null })
     if (url.pathname === '/api/project/inbox') {
@@ -279,7 +280,7 @@ function installFetchFakes(projectPayload: ProjectDetail = detail()) {
         learned: {},
       })
     }
-    if (url.pathname === '/api/project/release-readiness') {
+    if (url.pathname === '/api/project/release-readiness' || url.pathname === '/api/project/release-readiness/summary') {
       return json({
         openEscalations: [],
         unapprovedBriefs: [],
@@ -301,6 +302,18 @@ function installFetchFakesWithPendingProject(projectPayload: ProjectDetail = det
   const pendingProject = deferredResponse()
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input), 'http://localhost')
+    if (url.pathname === '/api/service') {
+      return json({
+        projects: [{
+          id: projectPayload.id,
+          name: projectPayload.name,
+          path: projectPayload.path,
+          summary: projectPayload.summary ?? 'Current project summary loaded.',
+          summaryFreshness: 'current',
+          actionModel: projectPayload.actionModel ?? null,
+        }],
+      })
+    }
     if (url.pathname === '/api/project') return pendingProject.promise
     if (url.pathname === '/api/project/spine') return json({ spine: projectPayload.orientationSpine ?? null })
     if (url.pathname === '/api/project/inbox') return json({ blockers: { bootstrap: false, workspaceImport: false }, items: [] })
@@ -476,7 +489,7 @@ describe('ProjectView', () => {
       const url = new URL(String(input), 'http://localhost')
       if (url.pathname === '/api/project') return pendingProject.promise
       if (url.pathname === '/api/project/inbox') return json({ blockers: { bootstrap: false, workspaceImport: false }, items: [] })
-      if (url.pathname === '/api/project/release-readiness') {
+      if (url.pathname === '/api/project/release-readiness' || url.pathname === '/api/project/release-readiness/summary') {
         return json({
           openEscalations: [],
           unapprovedBriefs: [],
@@ -1027,7 +1040,7 @@ describe('ProjectView', () => {
     expect(screen.getByText(/Run finished: 1 done\./i)).toBeInTheDocument()
   })
 
-  it('renders overview from the spine preview but map from the compact project payload', async () => {
+  it('renders a compact summary while the selected surface detail loads', async () => {
     const projectPayload = detail({
       startReadiness: { canStart: false, code: 'all_terminal', message: 'Stage 1 is complete.' },
       orientationSpine: {
@@ -1071,21 +1084,18 @@ describe('ProjectView', () => {
         sourceHealth: { inferred: 1, gaps: 0 },
       },
     } as Partial<ProjectDetail>)
-    const overviewFetch = installFetchFakesWithPendingProject(projectPayload).fetchMock
+    const { fetchMock: overviewFetch, pendingProject: pendingOverview } = installFetchFakesWithPendingProject(projectPayload)
     project.detail = null
     project.error = null
 
     render(ProjectView, { initialView: 'overview', initialSub: null, projectId: 'looma-knit' })
 
-    await waitFor(() => expect(screen.getByRole('region', { name: 'Project overview' })).toBeInTheDocument())
-    expect(overviewFetch).toHaveBeenCalledWith('/api/project/spine?surface=overview&projectId=looma-knit', { cache: 'no-store' })
-    expect(screen.getAllByText('Stage 1').length).toBeGreaterThan(0)
-    expect(screen.getByText('1 Current scope')).toBeInTheDocument()
-    expect(screen.getByText('1 Deferred')).toBeInTheDocument()
-    expect(screen.queryByRole('heading', { name: 'Ready to resume' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('heading', { name: 'Blocked work' })).not.toBeInTheDocument()
-    expect(screen.queryByText('Health unknown')).not.toBeInTheDocument()
+    await waitFor(() => expect(screen.getByText(/Current project summary loaded\./)).toBeInTheDocument())
+    expect(overviewFetch).toHaveBeenCalledWith('/api/service?projectId=looma-knit', { cache: 'no-store' })
+    expect(overviewFetch).not.toHaveBeenCalledWith('/api/project/spine?surface=overview&projectId=looma-knit', { cache: 'no-store' })
     expect(screen.queryByText('Loading project...')).toBeNull()
+    pendingOverview.resolve(json(projectPayload))
+    await waitFor(() => expect(screen.getByRole('region', { name: 'Project overview' })).toBeInTheDocument())
 
     cleanup()
     const { fetchMock: mapFetch, pendingProject: pendingMapProject } = installFetchFakesWithPendingProject(projectPayload)
@@ -1094,10 +1104,12 @@ describe('ProjectView', () => {
 
     render(ProjectView, { initialView: 'map', initialSub: null, projectId: 'looma-knit' })
 
+    await waitFor(() => expect(screen.getByText(/Current project summary loaded\./)).toBeInTheDocument())
+    expect(mapFetch).toHaveBeenCalledWith('/api/service?projectId=looma-knit', { cache: 'no-store' })
     expect(mapFetch).not.toHaveBeenCalledWith('/api/project/spine?projectId=looma-knit', { cache: 'no-store' })
     pendingMapProject.resolve(json(projectPayload))
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Project map' })).toBeInTheDocument())
-    expect(mapFetch).toHaveBeenCalledWith('/api/project?surface=map&projectId=looma-knit', { cache: 'no-store' })
+    expect(mapFetch).toHaveBeenCalledWith('/api/project?surface=map&compact=true&inventoryLimit=24&inventoryOffset=0&projectId=looma-knit', { cache: 'no-store' })
     expect(screen.getByRole('heading', { name: 'Release scope' })).toBeInTheDocument()
     expect(screen.getAllByText('Stage 1').length).toBeGreaterThan(0)
     expect(screen.getByText('1 assigned work item')).toBeInTheDocument()

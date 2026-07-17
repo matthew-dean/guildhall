@@ -405,6 +405,8 @@ export interface ProjectOrientationRelease {
 
 export interface ProjectReleaseReadiness {
   initializationNeeded?: boolean
+  completeness?: 'scope' | 'full' | string
+  checksLoaded?: boolean
   release?: ProjectOrientationRelease | null
   scope?: ProjectOrientationRelease | null
   ready?: boolean
@@ -439,6 +441,53 @@ export interface ProjectReleaseReadiness {
   }
 }
 
+export interface ProjectSummaryRelease {
+  scopeMode?: 'named_release' | 'unreleased' | 'unavailable' | string
+  release?: {
+    id?: string
+    label?: string
+    kind?: string
+    state?: string
+    source?: string
+  } | null
+  state?: string
+  counts?: {
+    total?: number
+    done?: number
+    unfinished?: number
+    ready?: number
+    active?: number
+    blocked?: number
+    deferred?: number
+    ownerBlocked?: number
+    proofBlocked?: number
+  }
+  blockers?: Array<{ id?: string; label?: string; owningTaskId?: string }>
+  updatedAt?: string
+}
+
+export interface ProjectSummaryApprovedPlan {
+  source?: 'workspace_import' | string
+  recordedAt?: string
+  goalCount?: number
+  taskCount?: number
+  milestoneCount?: number
+  currentTaskCount?: number
+  laterTaskCount?: number
+  currentTaskIds?: string[]
+  laterTaskIds?: string[]
+  currentReleaseId?: string | null
+  releases?: Array<{
+    id?: string
+    label?: string
+    kind?: string
+    state?: string
+    source?: string
+    currentTaskIds?: string[]
+    laterTaskIds?: string[]
+  }>
+}
+
 export interface Task {
   id: string
   displayKey?: string
@@ -468,6 +517,8 @@ export interface Task {
   structuredSpec?: StructuredSpec
   contractSurfaceReviewPackets?: ContractSurfaceReviewPacket[]
   acceptanceCriteria?: AcceptanceCriterion[]
+  acceptanceCriteriaCount?: number
+  acceptanceCriteriaFirstDescription?: string
   acceptanceCriteriaProofState?: {
     state?: 'blocked' | 'clear' | string
     reason?: string
@@ -603,6 +654,7 @@ export interface Task {
     createdAt?: string
     createdBy?: string
   }
+  workUnitCount?: number
   decomposition?: Record<string, unknown>
   coordinatorReflections?: Array<Record<string, unknown>>
   createdAt?: string
@@ -967,6 +1019,7 @@ export interface ContextDebugRecord {
   promptChars?: number
   contextChars?: number
   promptPreview?: string
+  promptHash?: string
   snapshotPath?: string
   sections?: ContextSectionStat[]
   health?: ContextHealthWarning[]
@@ -979,6 +1032,8 @@ export interface ContextDebugRecord {
   memoryPacket?: {
     included?: Array<{ id?: string; type?: string; scope?: string }>
     withheld?: Array<{ id?: string; reason?: string }>
+    includedCount?: number
+    withheldCount?: number
     evidenceRefs?: number
     memoryCore?: {
       adapter?: 'mastra' | 'deterministic'
@@ -1509,19 +1564,53 @@ export interface ProjectDetail {
   id?: string
   path?: string
   name?: string
+  summary?: string | null
+  projectStatusLoading?: boolean
+  projectStatusError?: string
+  summaryFreshness?: 'current' | 'stale' | 'error' | 'missing'
   tags?: string[]
+  /** Compact project surfaces receive this shell fact, not workspace config. */
+  coordinatorCount?: number
   config?: {
     coordinators?: CoordinatorConfig[]
     [k: string]: unknown
   }
   selectedTaskId?: string | null
   tasks?: Task[]
+  taskPayload?: {
+    surface?: 'overview' | 'work' | 'map' | string
+    kind?: string
+    offset?: number
+    limit?: number | null
+    count?: number
+    totalEffectiveCount?: number
+    hasMore?: boolean
+    nextOffset?: number
+    selectedScopeCount?: number | null
+    selectedScopeAndDeferredCount?: number | null
+  }
   workProgress?: ServiceProjectSummary['workProgress']
+  releaseSummary?: ProjectSummaryRelease | null
+  approvedPlan?: ProjectSummaryApprovedPlan | null
   inbox?: ProjectInbox
   run?: ProjectRun | null
+  execution?: {
+    status?: string
+    mode?: string
+    startedAt?: string | null
+    stoppedAt?: string | null
+    stopRequestedAt?: string | null
+    error?: string | null
+    updatedAt?: string
+  }
   availability?: ProjectAvailability | null
   providerStatus?: ProviderStatus | null
   runtime?: ProjectRuntimeSummary | null
+  ownerInput?: {
+    openCount?: number
+    next?: { id?: string; prompt?: string; taskId?: string; href?: string } | null
+    updatedAt?: string
+  }
   memoryHealth?: ProjectMemoryHealth | null
   structuralMapReview?: StructuralMapReviewSummary | null
   taskRoutingContexts?: Record<string, TaskRoutingContext>
@@ -1564,6 +1653,8 @@ export interface ServiceProjectSummary {
   name: string
   initializationNeeded?: boolean
   projectStatusLoading?: boolean
+  projectStatusError?: string
+  summaryFreshness?: 'current' | 'stale' | 'error' | 'missing'
   tags?: string[]
   summary?: string | null
   taskCounts?: {
@@ -1599,6 +1690,8 @@ export interface ServiceProjectSummary {
     }
     byTaskId: Record<string, unknown>
   }
+  releaseSummary?: ProjectSummaryRelease | null
+  approvedPlan?: ProjectSummaryApprovedPlan | null
   highlights?: {
     activeTaskTitle?: string | null
     blockedTaskTitle?: string | null
@@ -1613,6 +1706,21 @@ export interface ServiceProjectSummary {
     }>
   }
   run?: ProjectRun | null
+  execution?: {
+    status?: string
+    mode?: string
+    startedAt?: string | null
+    stoppedAt?: string | null
+    stopRequestedAt?: string | null
+    error?: string | null
+    updatedAt?: string
+  }
+  runtime?: ProjectRuntimeSummary | null
+  ownerInput?: {
+    openCount?: number
+    next?: { id?: string; prompt?: string; taskId?: string; href?: string } | null
+    updatedAt?: string
+  }
   availability?: ProjectAvailability | null
   providerStatus?: ProviderStatus | null
   gitStory?: GitStorySummary | null
@@ -1632,6 +1740,7 @@ export interface ServiceProjectSummary {
 
 export interface ServiceDetail {
   pid?: number
+  partial?: boolean
   defaultProviderStatus?: ProviderStatus | null
   projects?: ServiceProjectSummary[]
 }
@@ -1655,6 +1764,19 @@ export interface EventEnvelope {
   event?: EventInner
   type?: string
   [k: string]: unknown
+}
+
+export interface ProjectActivityHistoryPage {
+  events: EventEnvelope[]
+  cursor: number
+  limit: number
+  total: number
+  hasMore: boolean
+  nextCursor?: number
+  retention?: {
+    maxBytes?: number
+    maxRecords?: number
+  }
 }
 
 export type ProjectView =

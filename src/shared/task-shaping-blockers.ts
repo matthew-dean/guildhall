@@ -28,6 +28,18 @@ interface TaskLike {
   productBrief?: TaskBriefLike | null
   acceptanceCriteria?: unknown[]
   taskReadiness?: TaskReadinessLike
+  currentSummary?: {
+    imported?: boolean
+    brief?: {
+      present?: boolean
+      shaped?: boolean
+      userJob?: boolean
+      successMetric?: boolean
+      approvedAt?: string | null
+    }
+    acceptanceCriteriaCount?: number
+    taskReadiness?: TaskReadinessLike
+  }
   sourceClaims?: unknown[]
   requestIntake?: {
     createdBy?: string
@@ -44,10 +56,11 @@ export function taskShapingBlockers(task: TaskLike): TaskShapingBlocker[] {
       summary: 'Imported current work needs a real brief before Guildhall can build unattended.',
     })
   }
-  if (task.taskReadiness?.recommendation === 'needs_research_spike') {
+  const taskReadiness = task.taskReadiness ?? task.currentSummary?.taskReadiness
+  if (taskReadiness?.recommendation === 'needs_research_spike') {
     blockers.push({
       code: 'source_recovery',
-      summary: task.taskReadiness.summary ?? 'Guildhall needs source-backed recovery before worker handoff.',
+      summary: taskReadiness.summary ?? 'Guildhall needs source-backed recovery before worker handoff.',
     })
   }
   return blockers
@@ -58,7 +71,7 @@ export function taskNeedsImportedBriefShaping(task: TaskLike): boolean {
   if (task.status === 'import_draft') return true
   if (!hasWorkspaceImportProvenance(task)) return false
   if (task.status !== 'exploring') return false
-  return !taskHasBriefShape(task) || !task.acceptanceCriteria?.length
+  return !taskHasBriefShape(task) || acceptanceCriteriaCount(task) === 0
 }
 
 function isTerminalTaskStatus(status: string | undefined): boolean {
@@ -66,6 +79,7 @@ function isTerminalTaskStatus(status: string | undefined): boolean {
 }
 
 function hasWorkspaceImportProvenance(task: TaskLike): boolean {
+  if (task.currentSummary?.imported === true) return true
   if (task.requestIntake?.createdBy === 'workspace-importer') return true
   if (task.requestIntake?.evidenceRefs?.some(ref => typeof ref === 'string' && /^import:/.test(ref))) return true
   if ((task.sourceClaims?.length ?? 0) > 0) return true
@@ -77,6 +91,7 @@ function hasWorkspaceImportProvenance(task: TaskLike): boolean {
 }
 
 function taskHasBriefShape(task: TaskLike): boolean {
+  if (task.currentSummary?.brief) return task.currentSummary.brief.shaped === true
   const brief = task.productBrief
   if (!brief) return false
   return Boolean(
@@ -87,6 +102,13 @@ function taskHasBriefShape(task: TaskLike): boolean {
     (brief.nonGoals?.length ?? 0) > 0 ||
     (brief.antiPatterns?.length ?? 0) > 0,
   )
+}
+
+function acceptanceCriteriaCount(task: TaskLike): number {
+  if (typeof task.currentSummary?.acceptanceCriteriaCount === 'number') {
+    return Math.max(0, task.currentSummary.acceptanceCriteriaCount)
+  }
+  return Array.isArray(task.acceptanceCriteria) ? task.acceptanceCriteria.length : 0
 }
 
 export function taskShapingBlockerLabel(code: TaskShapingBlocker['code'] | string | undefined): string {

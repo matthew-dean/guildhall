@@ -491,7 +491,7 @@ describe('ProjectMapTab', () => {
 
     expect(screen.getAllByText('9 current work items · 21 later work items').length).toBeGreaterThanOrEqual(1)
     expect(screen.getByText('Define spatial/geographic continuity review lane')).toBeInTheDocument()
-    expect(screen.getByText('17 additional later rows summarized in the counts above.')).toBeInTheDocument()
+    expect(screen.getByText('17 additional work items are summarized here; open Work for the full ledger.')).toBeInTheDocument()
   })
 
   it('scopes proof contracts to the selected release instead of borrowing later work', () => {

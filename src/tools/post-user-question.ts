@@ -24,6 +24,7 @@ import { z } from 'zod'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { TaskQueue } from '@guildhall/core'
+import { readProjectTaskQueueSync } from '../runtime/project-state-boundary.js'
 import { createHash } from 'node:crypto'
 import { createOwnerInputRequest } from '@guildhall/runtime/owner-input-store'
 
@@ -502,8 +503,7 @@ export async function postUserQuestion(
   if (!input.taskId?.trim()) return { success: false, error: 'Missing taskId' }
   if (!input.askedBy?.trim()) return { success: false, error: 'Missing askedBy' }
   try {
-    const raw = await readManagedTextFile(input.tasksPath, 'utf-8')
-    const queue = TaskQueue.parse(JSON.parse(raw))
+    const queue = TaskQueue.parse(readProjectTaskQueueSync(input.tasksPath))
     const task = queue.tasks.find(t => t.id === input.taskId)
     if (!task) return { success: false, error: `Task ${input.taskId} not found` }
 

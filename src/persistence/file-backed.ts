@@ -26,7 +26,12 @@ import type {
   SaveArtifactInput,
   WriteRecordInput,
 } from './types.js'
-import { PersistedEvent as PersistedEventSchema, PersistedRecord as PersistedRecordSchema } from './types.js'
+import {
+  PERSISTENCE_EVENT_RETENTION,
+  PERSISTENCE_RECORD_MAX_BYTES,
+  PersistedEvent as PersistedEventSchema,
+  PersistedRecord as PersistedRecordSchema,
+} from './types.js'
 
 function nowIso(input?: () => Date): string {
   return (input?.() ?? new Date()).toISOString()
@@ -52,6 +57,71 @@ function hash(value: unknown): string {
     ? value
     : stableJson(value)
   return crypto.createHash('sha256').update(bytes).digest('hex')
+}
+
+async function readEventFile<T>(filePath: string, maxBytes: number): Promise<Array<PersistedEvent<T>>> {
+  let raw = ''
+  try {
+    const stat = await fs.stat(filePath)
+    if (stat.size <= maxBytes) {
+      raw = await fs.readFile(filePath, 'utf8')
+    } else {
+      const handle = await fs.open(filePath, 'r')
+      try {
+        const buffer = Buffer.alloc(maxBytes)
+        await handle.read(buffer, 0, maxBytes, stat.size - maxBytes)
+        raw = buffer.toString('utf8')
+      } finally {
+        await handle.close()
+      }
+      // A bounded tail can begin halfway through a JSONL record. The first
+      // complete line is the first durable event we can safely parse. A
+      // single oversized newest event is the one intentional exception in
+      // the retention policy, so preserve it when the tail has no complete
+      // record of its own.
+      const firstNewline = raw.indexOf('\n')
+      raw = firstNewline === -1 || firstNewline === raw.length - 1
+        ? await fs.readFile(filePath, 'utf8')
+        : raw.slice(firstNewline + 1)
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return []
+    throw err
+  }
+  return raw
+    .split('\n')
+    .filter((line) => line.trim().length > 0)
+    .map((line) => PersistedEventSchema.parse(JSON.parse(line)) as PersistedEvent<T>)
+}
+
+function boundedEvents(
+  events: readonly PersistedEvent[],
+  retention: keyof typeof PERSISTENCE_EVENT_RETENTION,
+  now: string,
+): PersistedEvent[] {
+  const policy = PERSISTENCE_EVENT_RETENTION[retention]
+  const cutoff = policy.maxAgeMs === undefined ? -Infinity : Date.parse(now) - policy.maxAgeMs
+  const eligible = events.filter((event) => {
+    const recordedAt = Date.parse(event.recordedAt)
+    return !Number.isFinite(recordedAt) || recordedAt >= cutoff
+  })
+  const retained: PersistedEvent[] = []
+  let bytes = 0
+  for (let index = eligible.length - 1; index >= 0; index -= 1) {
+    const event = eligible[index]!
+    const lineBytes = Buffer.byteLength(`${JSON.stringify(event)}\n`, 'utf8')
+    if (retained.length >= policy.maxEvents) break
+    // Keep one oversized event rather than silently losing the newest state;
+    // callers can see the policy miss in the returned retention metadata later.
+    if (retained.length > 0 && bytes + lineBytes > policy.maxBytes) break
+    retained.unshift(event)
+    bytes += lineBytes
+  }
+  return retained
+}
+
+function recordBytes(record: PersistedRecord): number {
+  return Buffer.byteLength(`${JSON.stringify(record, null, 2)}\n`, 'utf8')
 }
 
 function slug(value: string): string {
@@ -102,6 +172,15 @@ export class FileBackedGuildhallPersistence implements GuildhallPersistence {
         ? { compactedFrom: input.compactedFrom, fullEvidenceAvailable: true }
         : undefined,
     }
+    const bytes = recordBytes(record)
+    const maxBytes = PERSISTENCE_RECORD_MAX_BYTES[input.placement.retention]
+    if (bytes > maxBytes) {
+      throw new Error(
+        `Persistence record ${input.schemaName}/${id} is ${bytes} bytes; ` +
+        `${input.placement.retention} records are limited to ${maxBytes} bytes. ` +
+        'Store bulky evidence as an artifact or compact summary instead.',
+      )
+    }
     await fs.mkdir(path.dirname(filePath), { recursive: true })
     atomicWriteText(filePath, `${JSON.stringify(record, null, 2)}\n`)
     return record
@@ -124,7 +203,21 @@ export class FileBackedGuildhallPersistence implements GuildhallPersistence {
       payload: input.payload,
     }
     await fs.mkdir(path.dirname(filePath), { recursive: true })
-    await fs.appendFile(filePath, `${JSON.stringify(event)}\n`, 'utf8')
+    const policy = PERSISTENCE_EVENT_RETENTION[input.placement.retention]
+    const existing = await readEventFile<T>(filePath, policy.maxBytes)
+    const duplicate = existing.find((candidate) => candidate.eventId === eventId)
+    if (duplicate) return duplicate
+    const existingBytes = existing.reduce((total, candidate) => total + Buffer.byteLength(`${JSON.stringify(candidate)}\n`, 'utf8'), 0)
+    const eventBytes = Buffer.byteLength(`${JSON.stringify(event)}\n`, 'utf8')
+    const canAppend = policy.maxAgeMs === undefined &&
+      existing.length < policy.maxEvents &&
+      existingBytes + eventBytes <= policy.maxBytes
+    if (canAppend) {
+      await fs.appendFile(filePath, `${JSON.stringify(event)}\n`, 'utf8')
+    } else {
+      const retained = boundedEvents([...existing, event], input.placement.retention, at)
+      atomicWriteText(filePath, retained.map((candidate) => JSON.stringify(candidate)).join('\n') + '\n')
+    }
     return event
   }
 
@@ -150,17 +243,8 @@ export class FileBackedGuildhallPersistence implements GuildhallPersistence {
 
   async listEvents<T = unknown>(query: EventQuery): Promise<Array<PersistedEvent<T>>> {
     const filePath = this.eventPath(query.placement, query.collection, slug(query.streamId), query)
-    let raw = ''
-    try {
-      raw = await fs.readFile(filePath, 'utf8')
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return []
-      throw err
-    }
-    return raw
-      .split('\n')
-      .filter((line) => line.trim().length > 0)
-      .map((line) => PersistedEventSchema.parse(JSON.parse(line)) as PersistedEvent<T>)
+    const events = await readEventFile<T>(filePath, PERSISTENCE_EVENT_RETENTION[query.placement.retention].maxBytes)
+    return query.limit !== undefined && query.limit > 0 ? events.slice(-query.limit) : events
   }
 
   async saveArtifact(input: SaveArtifactInput): Promise<ArtifactRef> {
@@ -180,6 +264,13 @@ export class FileBackedGuildhallPersistence implements GuildhallPersistence {
   }
 
   async compact(scope: CompactionScope): Promise<CompactionSummary> {
+    const streamPath = this.eventPath(scope.placement, scope.collection, slug(scope.id), scope)
+    const existing = await readEventFile(streamPath, PERSISTENCE_EVENT_RETENTION[scope.placement.retention].maxBytes)
+    const compactedAt = nowIso(scope.now)
+    const retained = boundedEvents(existing, scope.placement.retention, compactedAt)
+    if (retained.length !== existing.length) {
+      atomicWriteText(streamPath, retained.map((event) => JSON.stringify(event)).join('\n') + (retained.length > 0 ? '\n' : ''))
+    }
     const summary: CompactionSummary = {
       ref: this.ref(
         scope.placement,
@@ -187,10 +278,10 @@ export class FileBackedGuildhallPersistence implements GuildhallPersistence {
         slug(scope.id),
         this.recordPath(scope.placement, scope.collection, slug(scope.id), scope),
       ),
-      compactedAt: nowIso(scope.now),
+      compactedAt,
       compactedBy: scope.createdBy,
       evidenceRefs: scope.evidenceRefs,
-      fullEvidenceAvailable: true,
+      fullEvidenceAvailable: retained.length === existing.length,
     }
     await this.writeRecord({
       ...scope,

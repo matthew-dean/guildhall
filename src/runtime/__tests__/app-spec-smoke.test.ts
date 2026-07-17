@@ -26,8 +26,21 @@ import {
   type OrchestratorAgentSet,
 } from '../orchestrator.js'
 import { InMemoryGitDriver } from '../git-driver.js'
-import { getProjectStateDir, projectStatePathFromMemoryDir, upsertTaskRuntimeState } from '@guildhall/sessions'
+import {
+  getProjectStateDir,
+  projectStatePathFromMemoryDir,
+  upsertTaskRuntimeState,
+} from '@guildhall/sessions'
 import { PermissionMode } from '@guildhall/engine'
+import { buildEffectiveTask } from '../effective-task.js'
+import { applyProjectMigrations } from '../migrations.js'
+import {
+  readProjectTaskQueueForMutationSync,
+  readProjectTaskQueueSync,
+  writePromotedTaskDetailMutation,
+  writeProjectTaskQueue,
+  writeProjectTaskQueueWithSummary,
+} from '../project-state-boundary.js'
 
 const fixtureDir = path.resolve('internal/fixtures/app-spec-smoke')
 const zeroInfoFixtureDir = path.resolve('internal/fixtures/zero-info-spec-intake')
@@ -230,6 +243,14 @@ describe('Pantry Pulse app-spec smoke fixture', () => {
     bootstrapWorkspace(projectPath, { name: 'Pantry Pulse Smoke' })
     updateProjectConfig(projectPath, { workerLaneConcurrency: 1 })
     const memoryDir = getProjectStateDir(projectPath)
+    const tasksPath = projectStatePathFromMemoryDir(memoryDir, 'TASKS.json')
+    await mkdir(path.dirname(tasksPath), { recursive: true })
+    writeProjectTaskQueueWithSummary(tasksPath, {
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      tasks: [],
+    }, { projectRoot: projectPath })
+    await applyCanonicalProjectMigrations(projectPath)
 
     const intake = await createExploringTask({
       memoryDir,
@@ -256,7 +277,13 @@ describe('Pantry Pulse app-spec smoke fixture', () => {
         await writePantryPulseApp(projectPath)
         await mutateTask(memoryDir, intake.taskId, {
           status: 'review',
-          proofPaths: [{ id: 'pantry-pulse-browser-proof' }],
+          proofPaths: [{
+            id: 'pantry-pulse-browser-proof',
+            verificationRecords: [{
+              evidenceId: 'pantry-pulse-browser-proof',
+              status: 'passed',
+            }],
+          }],
           notes: [
             ...(await taskById(memoryDir, intake.taskId)).notes,
             {
@@ -282,8 +309,13 @@ describe('Pantry Pulse app-spec smoke fixture', () => {
         })
       }),
       gateChecker: stubAgent('gate-checker-agent', async () => {
+        const current = await taskById(memoryDir, intake.taskId)
         await mutateTask(memoryDir, intake.taskId, {
           status: 'done',
+          acceptanceCriteria: current.acceptanceCriteria.map(criterion => ({
+            ...criterion,
+            met: true,
+          })),
           completedAt: '2026-05-28T16:10:00.000Z',
           gateResults: [{
             gateId: 'pantry-pulse-smoke',
@@ -324,7 +356,7 @@ describe('Pantry Pulse app-spec smoke fixture', () => {
       }
     }
 
-    expect(observedStatuses).toEqual(['review', 'gate_check', 'done'])
+    expect(observedStatuses).toEqual(['in_progress', 'review', 'gate_check', 'done'])
     await expect(readFile(path.join(projectPath, 'index.html'), 'utf-8')).resolves.toContain('Pantry Pulse')
     await expect(readFile(path.join(projectPath, 'src/main.js'), 'utf-8')).resolves.toContain('Mark used')
 
@@ -347,8 +379,11 @@ describe('Pantry Pulse app-spec smoke fixture', () => {
 
     const finalTask = await taskById(memoryDir, intake.taskId)
     expect(finalTask.status).toBe('done')
-    expect(finalTask.completionHandoff).toMatchObject({
-      summary: 'Pantry Pulse was created and verified through the browser flow.',
+    expect(finalTask.doneSummaryBundle).toMatchObject({
+      status: 'done',
+      summary: {
+        decision: expect.stringContaining('Task finished as done'),
+      },
     })
   }, 20_000)
 
@@ -811,18 +846,38 @@ async function recordFullyAutomatedResolution(
   })
 }
 
-async function readQueue(memoryDir: string): Promise<TaskQueue> {
-  const raw = await readFile(projectStatePathFromMemoryDir(memoryDir, 'TASKS.json'), 'utf-8')
-  const parsed = JSON.parse(raw)
-  return Array.isArray(parsed)
-    ? { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
-    : TaskQueue.parse(parsed)
+async function applyCanonicalProjectMigrations(projectRoot: string): Promise<void> {
+  const prerequisites = await applyProjectMigrations({ projectRoot, includePrompt: true })
+  expect(prerequisites.failed).toEqual([])
+  const finalize = await applyProjectMigrations({
+    projectRoot,
+    only: ['0.13.0/project-state-finalize'],
+  })
+  expect(finalize.failed).toEqual([])
+  const cleanup = await applyProjectMigrations({
+    projectRoot,
+    only: ['0.13.0/project-state-legacy-live-file-cleanup'],
+  })
+  expect(cleanup.failed).toEqual([])
 }
 
 async function writeQueue(memoryDir: string, queue: TaskQueue): Promise<void> {
   const tasksPath = projectStatePathFromMemoryDir(memoryDir, 'TASKS.json')
   await mkdir(path.dirname(tasksPath), { recursive: true })
-  await writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+  const current = readProjectTaskQueueForMutationSync(tasksPath)
+  writeProjectTaskQueue(tasksPath, queue, {
+    projectRoot: path.dirname(memoryDir),
+    expectedQueueRevision: current.expectedQueueRevision,
+  })
+}
+
+async function readQueue(memoryDir: string): Promise<TaskQueue> {
+  const tasksPath = projectStatePathFromMemoryDir(memoryDir, 'TASKS.json')
+  const queue = TaskQueue.parse(readProjectTaskQueueSync(tasksPath))
+  return {
+    ...queue,
+    tasks: await Promise.all(queue.tasks.map(async task => buildEffectiveTask(task.projectPath, task))) as unknown as Task[],
+  }
 }
 
 async function taskById(memoryDir: string, taskId: string): Promise<Task> {
@@ -833,12 +888,27 @@ async function taskById(memoryDir: string, taskId: string): Promise<Task> {
 }
 
 async function mutateTask(memoryDir: string, taskId: string, patch: Partial<Task>): Promise<void> {
-  const queue = await readQueue(memoryDir)
+  const tasksPath = projectStatePathFromMemoryDir(memoryDir, 'TASKS.json')
+  const projectRoot = path.dirname(memoryDir)
+  const promoted = writePromotedTaskDetailMutation(tasksPath, taskId, {
+    projectId: path.basename(projectRoot),
+    projectRoot,
+    mutate: (task) => ({ ...task, ...patch }),
+  })
+  if (promoted) return
+
+  const current = readProjectTaskQueueForMutationSync(tasksPath)
+  const queue = TaskQueue.parse(current.queue)
   const task = queue.tasks.find(candidate => candidate.id === taskId)
   if (!task) throw new Error(`Missing task ${taskId}`)
-  Object.assign(task, patch)
-  queue.lastUpdated = new Date().toISOString()
-  await writeQueue(memoryDir, queue)
+  writeProjectTaskQueue(tasksPath, {
+    ...queue,
+    lastUpdated: new Date().toISOString(),
+    tasks: queue.tasks.map(candidate => candidate.id === taskId ? { ...candidate, ...patch } : candidate),
+  }, {
+    projectRoot,
+    expectedQueueRevision: current.expectedQueueRevision,
+  })
 }
 
 async function setTaskForSpecReview(memoryDir: string, taskId: string, spec: string): Promise<void> {
@@ -857,7 +927,6 @@ async function setTaskForSpecReview(memoryDir: string, taskId: string, spec: str
       { id: 'AC-3', description: 'The expiring-soon filter changes the visible list.', verifiedBy: 'review', met: false },
       { id: 'AC-4', description: 'Mark used updates the visible count.', verifiedBy: 'review', met: false },
     ],
-    proofPaths: [{ id: 'pantry-pulse-browser-proof' }],
   })
 }
 

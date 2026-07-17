@@ -3,6 +3,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 import { execFileSync } from 'node:child_process'
+import { DatabaseSync } from 'node:sqlite'
 import {
   Orchestrator,
   pickNextTask,
@@ -38,9 +39,24 @@ import {
   getProjectTaskLocalHistoryDir,
   getProjectTranscriptPath,
   appendTaskEvidence,
+  promoteProjectStateDatabaseAuthority,
+  readProjectStateDatabaseAuthority,
+  projectStateDatabasePath,
+  readProjectStateDatabaseQueueRevision,
+  readProjectStateDatabaseTaskPointWithRevision,
+  writeProjectStateDatabaseSnapshot,
   readTaskEvidence,
   readTaskRuntimeStore,
+  upsertTaskRuntimeState,
+  upsertTaskWorkspaceState,
 } from '@guildhall/sessions'
+import {
+  sanitizeTaskQueueForProjectWrite,
+  readProjectTaskQueueSync as readProjectTaskQueueFromBoundary,
+  writeProjectTaskQueue,
+} from '../project-state-boundary.js'
+import { prepareProjectSummaryProjectionFromUnknownQueue } from '../project-summary-projection.js'
+import { applyProjectMigrations } from '../migrations.js'
 import { createOwnerInputRequest, listOwnerInputRequests } from '../owner-input-store.js'
 import { readMemoryEvents } from '@guildhall/memory-core'
 
@@ -213,31 +229,128 @@ async function writeQueueState(input: Partial<TaskQueue> & { tasks: Task[] }): P
     ...input,
     tasks: input.tasks,
   }
-  await fs.mkdir(path.dirname(tasksPath), { recursive: true })
-  const tmpPath = `${tasksPath}.tmp`
-  await fs.writeFile(tmpPath, JSON.stringify(queue, null, 2), 'utf-8')
-  await fs.rename(tmpPath, tasksPath)
+  if (readProjectStateDatabaseAuthority(tmpDir) === 'database') {
+    const sanitizedQueue = sanitizeTaskQueueForProjectWrite(queue).queue as TaskQueue
+    const prepared = prepareProjectSummaryProjectionFromUnknownQueue(tasksPath, {
+      projectId: 'test-ws',
+      projectRoot: tmpDir,
+      queue: sanitizedQueue,
+      taskDefinitionsAlreadySanitized: true,
+    })
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: prepared.detailQueue,
+      summary: prepared.projection,
+      scopeRows: prepared.scopeRows,
+      projectRoot: tmpDir,
+    })
+    await seedTaskOverlays(queue.tasks)
+    await seedTaskEvidence(queue.tasks)
+    return
+  }
+
+  const sanitizedQueue = sanitizeTaskQueueForProjectWrite(queue).queue as TaskQueue
+  writeProjectTaskQueue(tasksPath, sanitizedQueue, { projectRoot: tmpDir })
+  await applyProjectMigrations({
+    projectRoot: tmpDir,
+    only: ['0.12.21/task-overlay-authority'],
+  })
+  await seedTaskOverlays(queue.tasks)
+  await seedTaskEvidence(queue.tasks)
+}
+
+async function seedTaskOverlays(tasks: readonly Task[]): Promise<void> {
+  for (const task of tasks) {
+    await upsertTaskRuntimeState(tmpDir, task.id, {
+      ...(task.assignedTo !== undefined ? { assignedTo: task.assignedTo } : {}),
+      ...(task.revisionCount !== undefined ? { revisionCount: task.revisionCount } : {}),
+      ...(task.retryWindow !== undefined ? { retryWindow: task.retryWindow } : {}),
+      ...(task.proofRecovery !== undefined ? { proofRecovery: task.proofRecovery } : {}),
+      ...(task.remediationAttempts !== undefined ? { remediationAttempts: task.remediationAttempts } : {}),
+      ...(task.workerRecovery !== undefined ? { workerRecovery: task.workerRecovery } : {}),
+      ...(task.handoffStep !== undefined ? { handoffStep: task.handoffStep } : {}),
+      ...(task.shelveReason !== undefined ? { shelveReason: task.shelveReason } : {}),
+      ...(task.escalations !== undefined
+        ? { openEscalationIds: task.escalations.filter((item) => !item.resolvedAt).map((item) => item.id) }
+        : {}),
+      ...(task.agentIssues !== undefined
+        ? { openIssueIds: task.agentIssues.filter((item) => !item.resolvedAt).map((item) => item.id) }
+        : {}),
+      updatedAt: task.updatedAt,
+    })
+    if (task.worktreePath !== undefined || task.branchName !== undefined || task.baseBranch !== undefined) {
+      await upsertTaskWorkspaceState(tmpDir, task.id, {
+        ...(task.worktreePath !== undefined ? { worktreePath: task.worktreePath } : {}),
+        ...(task.branchName !== undefined ? { branchName: task.branchName } : {}),
+        ...(task.baseBranch !== undefined ? { baseBranch: task.baseBranch } : {}),
+        updatedAt: task.updatedAt,
+      })
+    }
+  }
+}
+
+async function seedTaskEvidence(tasks: readonly Task[]): Promise<void> {
+  for (const task of tasks) {
+    const evidence = [
+      ...(task.notes ?? []).map((payload, index) => ({
+        id: `note-${task.id}-${payload.timestamp.replace(/[^0-9A-Za-z]/g, '')}-${index + 1}`,
+        kind: 'note' as const,
+        recordedAt: payload.timestamp,
+        payload,
+      })),
+      ...(task.gateResults ?? []).map((payload, index) => ({
+        id: `gate-${task.id}-${payload.checkedAt.replace(/[^0-9A-Za-z]/g, '')}-${index + 1}`,
+        kind: 'gate_result' as const,
+        recordedAt: payload.checkedAt,
+        payload,
+      })),
+      ...(task.reviewVerdicts ?? []).map((payload, index) => ({
+        id: `review-${task.id}-${payload.recordedAt.replace(/[^0-9A-Za-z]/g, '')}-${index + 1}`,
+        kind: 'review_verdict' as const,
+        recordedAt: payload.recordedAt,
+        payload,
+      })),
+      ...(task.adjudications ?? []).map((payload, index) => ({
+        id: `adjudication-${task.id}-${payload.decidedAt.replace(/[^0-9A-Za-z]/g, '')}-${index + 1}`,
+        kind: 'adjudication' as const,
+        recordedAt: payload.decidedAt,
+        payload,
+      })),
+      ...(task.escalations ?? []).map((payload, index) => ({
+        id: payload.id || `escalation-${task.id}-${payload.raisedAt.replace(/[^0-9A-Za-z]/g, '')}-${index + 1}`,
+        kind: 'escalation' as const,
+        recordedAt: payload.resolvedAt ?? payload.raisedAt,
+        payload,
+      })),
+      ...(task.agentIssues ?? []).map((payload, index) => ({
+        id: payload.id || `issue-${task.id}-${payload.raisedAt.replace(/[^0-9A-Za-z]/g, '')}-${index + 1}`,
+        kind: 'agent_issue' as const,
+        recordedAt: payload.resolvedAt ?? payload.raisedAt,
+        payload,
+      })),
+      ...(task.mergeRecord ? [{
+        id: `merge-${task.id}-${(task.mergeRecord.mergedAt ?? task.updatedAt).replace(/[^0-9A-Za-z]/g, '')}`,
+        kind: 'merge_record' as const,
+        recordedAt: task.mergeRecord.mergedAt ?? task.updatedAt,
+        payload: task.mergeRecord,
+      }] : []),
+    ]
+    for (const event of evidence) {
+      await appendTaskEvidence(tmpDir, task.id, event)
+    }
+  }
 }
 
 async function writeManagedQueue(tasks: Task[]): Promise<void> {
-  const queue: TaskQueue = {
-    version: 1,
-    lastUpdated: '2026-04-01T00:00:00Z',
-    tasks,
-  }
-  const managedTasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
-  await fs.mkdir(path.dirname(managedTasksPath), { recursive: true })
-  await fs.writeFile(managedTasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+  await writeQueueState({ tasks })
 }
 
 async function readQueue(): Promise<TaskQueue> {
   const managedTasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
-  const raw = await fs.readFile(managedTasksPath, 'utf-8')
-  const queue = JSON.parse(raw) as TaskQueue
+  const queue = readProjectTaskQueueFromBoundary(managedTasksPath) as TaskQueue
   return {
     ...queue,
     tasks: await Promise.all(queue.tasks.map(async (task) => {
-      const effective = await buildEffectiveTask(tmpDir, task) as unknown as Task
+      const effective = await buildEffectiveTask(tmpDir, task, { evidence: 'full' }) as unknown as Task
       effective.notes ??= []
       effective.gateResults ??= []
       effective.reviewVerdicts ??= []
@@ -250,14 +363,13 @@ async function readQueue(): Promise<TaskQueue> {
 }
 
 async function readManagedQueue(): Promise<TaskQueue> {
-  const raw = await fs.readFile(getProjectSystemStatePath(tmpDir, 'TASKS.json'), 'utf-8')
-  return JSON.parse(raw)
+  return readProjectTaskQueueFromBoundary(getProjectSystemStatePath(tmpDir, 'TASKS.json')) as TaskQueue
 }
 
 async function readEffectiveTaskFromQueue(taskId: string): Promise<Task | undefined> {
   const queue = await readQueue()
   const task = queue.tasks.find((candidate) => candidate.id === taskId)
-  return task ? await buildEffectiveTask(tmpDir, task) as unknown as Task : undefined
+  return task ? await buildEffectiveTask(tmpDir, task, { evidence: 'full' }) as unknown as Task : undefined
 }
 
 async function seedTaskOwnerInput(input: {
@@ -319,8 +431,11 @@ async function mutateTask(id: string, patch: Partial<Task>): Promise<void> {
     assignedTo,
     revisionCount,
     retryWindow,
+    proofRecovery,
+    workerRecovery,
     remediationAttempts,
     handoffStep,
+    shelveReason,
     worktreePath,
     branchName,
     baseBranch,
@@ -333,6 +448,32 @@ async function mutateTask(id: string, patch: Partial<Task>): Promise<void> {
     mergeRecord,
     ...definitionPatch
   } = patch
+  // A real update-task completion carries durable proof. Keep callback
+  // fixtures honest so the orchestrator's proof-health gate does not reopen a
+  // bare status mutation and make these loop tests exercise the wrong state.
+  if (definitionPatch.status === 'done' && !definitionPatch.doneSummaryBundle) {
+    const completedAt = patch.updatedAt ?? t.updatedAt ?? '2026-04-01T00:00:00Z'
+    definitionPatch.doneSummaryBundle = {
+      taskId: id,
+      status: 'done',
+      completedAt,
+      summary: {
+        journey: 'Test worker completed the requested task.',
+        decision: 'The task is complete.',
+        evidence: 'Test harness completion proof recorded.',
+        learningCandidates: [],
+        openResidue: 'None recorded.',
+      },
+      retention: {
+        transcriptPrimaryArtifact: false,
+        compactedFullTranscript: false,
+        fullEvidenceAvailable: true,
+      },
+      evidenceRefs: [],
+      createdAt: completedAt,
+      createdBy: 'test-harness',
+    }
+  }
   Object.assign(t, definitionPatch)
 
   const updatedAt = patch.updatedAt ?? t.updatedAt ?? '2026-04-01T00:00:00Z'
@@ -340,8 +481,11 @@ async function mutateTask(id: string, patch: Partial<Task>): Promise<void> {
     ...(Object.prototype.hasOwnProperty.call(patch, 'assignedTo') ? { assignedTo } : {}),
     ...(Object.prototype.hasOwnProperty.call(patch, 'revisionCount') ? { revisionCount } : {}),
     ...(Object.prototype.hasOwnProperty.call(patch, 'retryWindow') ? { retryWindow } : {}),
+    ...(Object.prototype.hasOwnProperty.call(patch, 'proofRecovery') ? { proofRecovery } : {}),
+    ...(Object.prototype.hasOwnProperty.call(patch, 'workerRecovery') ? { workerRecovery } : {}),
     ...(Object.prototype.hasOwnProperty.call(patch, 'remediationAttempts') ? { remediationAttempts } : {}),
     ...(Object.prototype.hasOwnProperty.call(patch, 'handoffStep') ? { handoffStep } : {}),
+    ...(Object.prototype.hasOwnProperty.call(patch, 'shelveReason') ? { shelveReason } : {}),
   }
   if (Object.keys(runtimePatch).length > 0) {
     await upsertTaskRuntimeState(tmpDir, id, { ...runtimePatch, updatedAt })
@@ -404,12 +548,22 @@ async function mutateTask(id: string, patch: Partial<Task>): Promise<void> {
     await appendTaskEvidence(tmpDir, id, event)
   }
 
-  const tmpPath = `${tasksPath}.tmp`
-  await fs.writeFile(tmpPath, JSON.stringify(q, null, 2), 'utf-8')
-  await fs.rename(tmpPath, tasksPath)
-  const managedTasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
-  await fs.mkdir(path.dirname(managedTasksPath), { recursive: true })
-  await fs.writeFile(managedTasksPath, JSON.stringify(q, null, 2), 'utf-8')
+  // The public mutation carries mergeRecord through the same rich boundary as
+  // the other evidence-owned fields. The boundary strips it from the
+  // definition and records it in normalized evidence; appending it only to a
+  // side ledger would not exercise that contract.
+  if (mergeRecord !== undefined) t.mergeRecord = mergeRecord
+
+  // Simulate the public update-task boundary. The queue write must carry the
+  // same CAS token and envelope as a real tool mutation; a direct detail-row
+  // write would bypass summary/scope projection and make callbacks appear to
+  // succeed while the orchestrator still sees the old status.
+  q.lastUpdated = updatedAt
+  writeProjectTaskQueue(tasksPath, q, {
+    projectId: 'test-ws',
+    projectRoot: tmpDir,
+    expectedQueueRevision: readProjectStateDatabaseQueueRevision(tasksPath),
+  })
 }
 
 interface StubAgent {
@@ -450,6 +604,102 @@ function agentSet(partial: Partial<OrchestratorAgentSet> = {}): OrchestratorAgen
     coordinators: partial.coordinators ?? {},
   }
 }
+
+function readTaskDetailRevision(taskId: string): number {
+  const database = new DatabaseSync(projectStateDatabasePath(tmpDir), { readOnly: true })
+  try {
+    const row = database.prepare('SELECT revision FROM work_item_detail WHERE task_id = ?').get(taskId) as { revision?: number } | undefined
+    return Number(row?.revision ?? 0)
+  } finally {
+    database.close()
+  }
+}
+
+describe('Orchestrator queue writes', () => {
+  it('uses the promoted point mutation for one task while preserving runtime and evidence side effects', async () => {
+    const initialUpdatedAt = '2026-07-15T00:00:00.000Z'
+    const initialQueue: TaskQueue = {
+      version: 1,
+      lastUpdated: initialUpdatedAt,
+      tasks: [
+        mkTask({ id: 'task-one', status: 'ready', updatedAt: initialUpdatedAt }),
+        mkTask({ id: 'task-two', status: 'ready', updatedAt: initialUpdatedAt }),
+      ],
+    }
+    writeProjectTaskQueue(tasksPath, initialQueue, { projectRoot: tmpDir })
+    promoteProjectStateDatabaseAuthority(tmpDir)
+    await upsertTaskRuntimeState(tmpDir, 'task-one', {
+      assignedTo: 'worker-agent',
+      revisionCount: 2,
+      updatedAt: initialUpdatedAt,
+    })
+    await appendTaskEvidence(tmpDir, 'task-one', {
+      id: 'note-task-one',
+      kind: 'note',
+      recordedAt: initialUpdatedAt,
+      payload: {
+        agentId: 'worker-agent',
+        role: 'worker',
+        content: 'Keep this evidence.',
+        timestamp: initialUpdatedAt,
+      },
+    })
+
+    const beforeQueueRevision = readProjectStateDatabaseQueueRevision(tasksPath)
+    const beforeUntouchedRevision = readTaskDetailRevision('task-two')
+    const orch = new Orchestrator({ config: baseConfig(), agents: agentSet() })
+
+    await orch.updateQueueAtomically(queue => {
+      const task = queue.tasks.find(candidate => candidate.id === 'task-one')!
+      task.status = 'in_progress'
+      task.updatedAt = '2026-07-15T00:01:00.000Z'
+      queue.lastUpdated = task.updatedAt
+    })
+
+    expect(readProjectStateDatabaseQueueRevision(tasksPath)).toBeGreaterThan(beforeQueueRevision!)
+    expect(readTaskDetailRevision('task-two')).toBe(beforeUntouchedRevision)
+    expect(readProjectStateDatabaseTaskPointWithRevision(tasksPath, 'task-one')?.task.definition).toMatchObject({
+      id: 'task-one',
+      status: 'in_progress',
+    })
+    expect((await readTaskRuntimeStore(tmpDir)).tasks['task-one']).toMatchObject({
+      assignedTo: 'worker-agent',
+      revisionCount: 2,
+    })
+    expect((await readTaskEvidence(tmpDir, 'task-one')).some(event => event.id === 'note-task-one')).toBe(true)
+  })
+
+  it('keeps multi-task structural writes on the aggregate boundary', async () => {
+    const initialUpdatedAt = '2026-07-15T00:00:00.000Z'
+    const initialQueue: TaskQueue = {
+      version: 1,
+      lastUpdated: initialUpdatedAt,
+      tasks: [
+        mkTask({ id: 'task-one', status: 'ready', updatedAt: initialUpdatedAt }),
+        mkTask({ id: 'task-two', status: 'ready', updatedAt: initialUpdatedAt }),
+      ],
+    }
+    writeProjectTaskQueue(tasksPath, initialQueue, { projectRoot: tmpDir })
+    promoteProjectStateDatabaseAuthority(tmpDir)
+    const orch = new Orchestrator({ config: baseConfig(), agents: agentSet() })
+    const beforeQueueRevision = readProjectStateDatabaseQueueRevision(tasksPath)
+
+    await orch.updateQueueAtomically(queue => {
+      const first = queue.tasks.find(candidate => candidate.id === 'task-one')!
+      const second = queue.tasks.find(candidate => candidate.id === 'task-two')!
+      first.status = 'in_progress'
+      first.updatedAt = '2026-07-15T00:01:00.000Z'
+      second.title = 'Second task, clarified'
+      second.updatedAt = first.updatedAt
+      queue.lastUpdated = first.updatedAt
+    })
+
+    const afterQueueRevision = readProjectStateDatabaseQueueRevision(tasksPath)
+    expect(afterQueueRevision).toBeGreaterThan(beforeQueueRevision!)
+    expect(readTaskDetailRevision('task-one')).toBe(afterQueueRevision)
+    expect(readTaskDetailRevision('task-two')).toBe(afterQueueRevision)
+  })
+})
 
 describe('context debug records', () => {
   it('records meaningful task progress through memory-core system-local storage', async () => {
@@ -530,7 +780,7 @@ describe('context debug records', () => {
       .filter(Boolean)
       .map((line) => JSON.parse(line) as Record<string, any>)
     expect(records.some((record) => record.taskId === 'task-context')).toBe(true)
-    expect(records.some((record) => typeof record.promptPreview === 'string' && record.promptPreview.length > 0)).toBe(true)
+    expect(records.some((record) => record.taskId === 'task-context' && record.promptPreview === '' && typeof record.promptHash === 'string')).toBe(true)
   })
 
   it('refreshes the corpus map after a worker changes files', async () => {
@@ -984,7 +1234,7 @@ describe('pickNextTask', () => {
     expect(pickNextTask(q, 'knit')?.id).toBe('t-knit')
   })
 
-  it('dispatches drafted spec_review tasks for normal coordinator approval work', async () => {
+  it('selects malformed spec_review drafts for deterministic repair before owner approval', async () => {
     const q: TaskQueue = {
       version: 1,
       lastUpdated: 'now',
@@ -1601,11 +1851,26 @@ describe('Orchestrator.tick — routing', () => {
     expect(spec.calls).toHaveLength(0)
     const queue = await readQueue()
     const task = queue.tasks[0]!
+    const durableEvidence = await readTaskEvidence(tmpDir, 'a')
     expect(task.status).toBe('spec_review')
     expect(task.blockReason).toBeUndefined()
+    expect(durableEvidence.some(event =>
+      /failed to save a durable draft|preserved transcript notes/i.test(
+        typeof event.payload === 'object' && event.payload !== null && 'content' in event.payload
+          ? String(event.payload.content)
+          : '',
+      ),
+    )).toBe(true)
+    expect(task.notes.some(note =>
+      /wrote a deterministic recovery spec seed/i.test(note.content ?? ''),
+    )).toBe(true)
+    // Recovery reopens this task's bounded essential history so the new seed
+    // can preserve prior answers; the stale narration must stay out of the
+    // new spec, not disappear from the task's evidence trail.
     expect(task.notes.some(note =>
       /failed to save a durable draft|preserved transcript notes/i.test(note.content ?? ''),
     )).toBe(true)
+    expect(task.spec).not.toMatch(/failed to save a durable draft|preserved transcript notes/i)
     expect(task.escalations[0]).toMatchObject({
       resolvedBy: 'system',
     })
@@ -1960,9 +2225,8 @@ describe('Orchestrator.tick — routing', () => {
     const out = await orch.tick()
     expect(out.kind).toBe('processed')
     if (out.kind === 'processed') {
-      expect(out.afterStatus).toBe('gate_check')
-      expect(out.transitioned).toBe(true)
-      expect(out.revisionCount).toBeTypeOf('number')
+      expect(out.afterStatus).toBe('exploring')
+      expect(out.transitioned).toBe(false)
     }
 
     const queue = await readQueue()
@@ -4660,7 +4924,7 @@ describe('Orchestrator.tick — routing', () => {
     expect(q.tasks[0]!.notes.at(-1)?.content).toContain('revise_blueprint')
   })
 
-  it('dispatches drafted spec_review tasks to the owning coordinator and clears stale ownership', async () => {
+  it('holds valid drafted spec_review tasks for owner approval instead of coordinator dispatch', async () => {
     await writeQueue([
       mkTask({
         id: 'a',
@@ -4678,10 +4942,10 @@ describe('Orchestrator.tick — routing', () => {
       agents: agentSet({ coordinators: { looma: coord } }),
     })
     const out = await orch.tick()
-    expect(out.kind).toBe('processed')
-    expect(coord.calls).toHaveLength(1)
+    expect(out.kind).toBe('idle')
+    expect(coord.calls).toHaveLength(0)
     const queue = await readQueue()
-    expect(queue.tasks[0]!.status).toBe('ready')
+    expect(queue.tasks[0]!.status).toBe('spec_review')
     expect(queue.tasks[0]!.assignedTo).toBeNull()
   })
 
@@ -4742,7 +5006,7 @@ describe('Orchestrator.tick — routing', () => {
     )).toBe(true)
   })
 
-  it('approves valid deterministically repaired spec_review blueprints without coordinator dispatch', async () => {
+  it('holds valid deterministically repaired spec_review blueprints for owner approval', async () => {
     await writeQueue([
       mkTask({
         id: 'a',
@@ -4779,15 +5043,11 @@ describe('Orchestrator.tick — routing', () => {
 
     const out = await orch.tick()
 
-    expect(out.kind).toBe('processed')
-    if (out.kind === 'processed') {
-      expect(out.agent).toBe('blueprint-sanity-review')
-      expect(out.afterStatus).toBe('ready')
-    }
+    expect(out.kind).toBe('idle')
     expect(coord.calls).toHaveLength(0)
     const queue = await readQueue()
-    expect(queue.tasks[0]!.status).toBe('ready')
-    expect(queue.tasks[0]!.notes.at(-1)?.content).toContain('approve_blueprint')
+    expect(queue.tasks[0]!.status).toBe('spec_review')
+    expect(queue.tasks[0]!.notes.at(-1)?.content).toContain('repaired a malformed spec_review blueprint')
   })
 
   it('still leaves the reserved meta-intake draft idle for manual approval and clears stale ownership', async () => {
@@ -5313,7 +5573,7 @@ describe('Orchestrator.tick — routing', () => {
       }
     }
 
-    expect(checkpoint.nextPlannedAction).toContain('recorded bootstrap verification failure')
+    expect(checkpoint.nextPlannedAction).toContain('recorded verification evidence')
     expect(checkpoint.nextPlannedAction).toContain('rerun the focused verification commands')
     expect(checkpoint.resumeContext?.safeNextMutationSurface?.[0]).toBe('packages/converter/src/typescriptToJsdoc.ts')
     expect(checkpoint.resumeContext?.safeNextMutationSurface?.[1]).toBe('packages/converter/test/ts-to-jsdoc.test.ts')
@@ -5765,7 +6025,7 @@ describe('Orchestrator.tick — feedback loop', () => {
     if (out.kind === 'processed') {
       expect(out.afterStatus).toBe('in_progress')
       expect(out.transitioned).toBe(false)
-      expect(out.note).toContain('self-critique without project-file changes')
+      expect(out.note).toContain('no visible progress pass')
     }
   })
 
@@ -8455,7 +8715,7 @@ it('filters node_modules noise out of recovery checkpoints and falls back to met
     expect(checkpoint.filesTouched).toContain('frontend/app/pages/register.vue')
   })
 
-  it('stays silent across many no-op ticks (no PROGRESS.md churn)', async () => {
+  it('stops no-op churn with one recoverable escalation after the retry budget', async () => {
     await writeQueue([mkTask({ id: 'a', status: 'in_progress' })])
     const worker = stubAgent('worker-agent')
     const orch = new Orchestrator({
@@ -8466,7 +8726,8 @@ it('filters node_modules noise out of recovery checkpoints and falls back to met
     const progress = await fs
       .readFile(progressPath, 'utf-8')
       .catch(() => '')
-    expect(progress).toBe('')
+    expect(progress).toContain('ESCALATION')
+    expect(progress).toContain('Worker made no visible progress after 5 passes.')
   })
 
   it('writes an ESCALATION entry when max revisions is exceeded (FR-10 supersedes BLOCKED)', async () => {
@@ -8903,21 +9164,7 @@ describe('Orchestrator.run — full loops', () => {
 
     // Each agent transitions the task one step forward.
     const advance = (next: TaskStatus) => async () => {
-      await mutateTask('a', {
-        status: next,
-        ...(next === 'done'
-          ? {
-              mergeRecord: {
-                fromBranch: 'guildhall/task-a',
-                toBranch: 'main',
-                strategy: 'cherry_pick_local',
-                result: 'merged',
-                commitSha: 'abc123',
-                mergedAt: '2026-04-29T00:00:00.000Z',
-              },
-            }
-          : {}),
-      })
+      await mutateTask('a', { status: next })
     }
 
     const agents: OrchestratorAgentSet = {
@@ -8942,8 +9189,8 @@ describe('Orchestrator.run — full loops', () => {
     expect(packet).toContain('- Status: done')
     expect(packet).toContain('- [x] ac-1: Thing is done')
     expect(packet).toContain('## Merge')
-    expect(packet).toContain('- merged: guildhall/task-a -> main via cherry_pick_local (abc123); 2026-04-29T00:00:00.000Z')
-    expect(packet).toContain('Task is complete and merged.')
+    expect(packet).toContain('- skipped: <unknown> -> <unknown> via cherry_pick_local')
+    expect(packet).toContain('Task is complete.')
   })
 
   it('records a skipped merge when worktree isolation is disabled', async () => {
@@ -8990,7 +9237,7 @@ describe('Orchestrator.run — full loops', () => {
     })
   })
 
-  it('checkpoints shared-checkout work into a task branch when worktree isolation is disabled and the repo is dirty', async () => {
+  it('does not fabricate a shared-checkout checkpoint when worktree isolation is disabled', async () => {
     await writeQueue([
       mkTask({
         id: 'a',
@@ -9027,21 +9274,15 @@ describe('Orchestrator.run — full loops', () => {
 
     const q = await readQueue()
     expect(q.tasks[0]!.status).toBe('done')
-    expect(gitDriver.state.checkpoints).toHaveLength(1)
-    expect(gitDriver.state.checkpoints[0]?.branch).toBe('guildhall/task-a')
-    expect(q.tasks[0]!.branchName).toBe('guildhall/task-a')
-    expect(q.tasks[0]!.baseBranch).toBe('main')
+    expect(gitDriver.state.checkpoints).toHaveLength(0)
+    expect(q.tasks[0]!.branchName).toBeUndefined()
+    expect(q.tasks[0]!.baseBranch).toBeUndefined()
     expect(q.tasks[0]!.mergeRecord).toMatchObject({
       result: 'skipped',
-      detail: 'worktree isolation disabled — shared-checkout work checkpointed to task branch',
-      fromBranch: 'guildhall/task-a',
-      toBranch: 'main',
-      commitSha: 'checkpoint-1',
+      detail: 'worktree isolation disabled — merge skipped',
+      fromBranch: '<unknown>',
+      toBranch: '<unknown>',
     })
-    expect(q.tasks[0]!.notes.some((note) =>
-      note.role === 'checkpoint' &&
-      note.content.includes('Checkpointed shared-checkout work into guildhall/task-a'),
-    )).toBe(true)
   })
 
   it('uses the task project repo for worktree and merge operations in multi-repo workspaces', async () => {
@@ -10935,12 +11176,8 @@ describe('Orchestrator.run — full loops', () => {
 
     const out = await orch.tick()
 
-    expect(out.kind).toBe('processed')
-    if (out.kind === 'processed') {
-      expect(out.beforeStatus).toBe('spec_review')
-      expect(out.afterStatus).toBe('ready')
-    }
-    expect(coordinator.calls).toHaveLength(1)
+    expect(out.kind).toBe('idle')
+    expect(coordinator.calls).toHaveLength(0)
 
     const queue = await readQueue()
     const inspected = queue.tasks.find((candidate) => candidate.id === 'a')
@@ -11543,7 +11780,7 @@ describe('Orchestrator.run — full loops', () => {
     expect(task?.blockReason ?? null).toBeNull()
     expect(task?.notes.at(-1)?.role).toBe('bootstrap-verification')
     expect(task?.notes.at(-1)?.content).toContain('tail-token')
-    expect(task?.notes.at(-1)?.content).not.toContain('\n...')
+    expect(task?.notes.at(-1)?.content).toContain('[durable evidence excerpt bounded; raw diagnostic text is not retained]')
 
     const checkpoint = JSON.parse(
       await fs.readFile(taskHistoryPath('a', 'checkpoint.json'), 'utf8'),
@@ -12153,7 +12390,7 @@ describe('Orchestrator.run — full loops', () => {
     expect(q.tasks.find((t) => t.id === 'unrelated')?.status).toBe('ready')
   })
 
-  it('scoped one-task runs continue when selected child reaches spec review', async () => {
+  it('scoped one-task runs stop when selected child reaches spec review for owner approval', async () => {
     await writeQueue([
       mkTask({
         id: 'context-menu',
@@ -12204,10 +12441,10 @@ describe('Orchestrator.run — full loops', () => {
     })
 
     expect(result.stopReason).toBe('one_task')
-    expect(picked).toEqual(['context-menu-component', 'context-menu-component'])
+    expect(picked).toEqual([])
     const q = await readManagedQueue()
-    expect(q.tasks.find((t) => t.id === 'context-menu')?.status).toBe('done')
-    expect(q.tasks.find((t) => t.id === 'context-menu-component')?.status).toBe('done')
+    expect(q.tasks.find((t) => t.id === 'context-menu')?.status).toBe('ready')
+    expect(q.tasks.find((t) => t.id === 'context-menu-component')?.status).toBe('spec_review')
     expect(q.tasks.find((t) => t.id === 'unrelated')?.status).toBe('ready')
   })
 
@@ -12256,8 +12493,10 @@ describe('Orchestrator.run — full loops', () => {
 
     expect(result.stopReason).toBe('max_ticks')
     const q = await readManagedQueue()
+    const selected = await readEffectiveTaskFromQueue('selected')
     expect(q.tasks.find((t) => t.id === 'selected')?.status).toBe('in_progress')
-    expect(q.tasks.find((t) => t.id === 'selected')?.escalations).toHaveLength(0)
+    expect(selected?.status).toBe('in_progress')
+    expect(selected?.escalations).toHaveLength(0)
     expect(q.tasks.find((t) => t.id === 'unrelated')?.status).toBe('ready')
   })
 
@@ -14338,7 +14577,7 @@ describe('Orchestrator — FR-31 agent-issue channel', () => {
     expect(second).toEqual([])
 
     const q = await readManagedQueue()
-    expect(q.tasks[0]!.agentIssues.every((i) => i.broadcast === false)).toBe(true)
+    expect(q.tasks[0]).not.toHaveProperty('agentIssues')
     const evidence = await readTaskEvidence(tmpDir, 't-1', { kind: 'agent_issue' })
     const latestById = new Map(evidence.map((event) => [
       (event.payload as { id: string }).id,
@@ -14378,7 +14617,7 @@ describe('Orchestrator — FR-31 agent-issue channel', () => {
     expect(await orch.drainPendingIssues()).toEqual([])
 
     const q = await readManagedQueue()
-    expect(q.tasks[0]!.agentIssues).toEqual([])
+    expect(q.tasks[0]).not.toHaveProperty('agentIssues')
     const evidence = await readTaskEvidence(tmpDir, 't-1', { kind: 'agent_issue' })
     expect(evidence.map((event) => (event.payload as { broadcast?: boolean }).broadcast)).toEqual([false, true])
   })
@@ -15127,10 +15366,11 @@ describe('Orchestrator worker no-progress escalation', () => {
     const task = await readEffectiveTaskFromQueue('task-no-targets')
     expect(task?.status).toBe('blocked')
     expect(task?.escalations[0]?.summary).toContain('Worker made no visible progress after 5 passes')
-    expect(task?.notes.filter(note =>
-      note.role === 'worker-progress-review' &&
-      /Worker made no visible progress pass \d+/.test(note.content),
-    ).length).toBeGreaterThanOrEqual(4)
+    const history = await readTaskEvidence(tmpDir, 'task-no-targets', { kind: 'note' })
+    expect(history.filter(event => {
+      const content = typeof event.payload.content === 'string' ? event.payload.content : ''
+      return event.payload.role === 'worker-progress-review' && /Worker made no visible progress pass \d+/.test(content)
+    }).length).toBeGreaterThanOrEqual(4)
   })
 
   it('gives the worker five no-op passes before escalating likely-target no-progress', async () => {
@@ -15823,6 +16063,7 @@ describe('Orchestrator worker no-progress escalation', () => {
               timestamp: '2026-05-03T00:01:00.000Z',
             },
         ],
+        workerRecovery: { dirtyTimeoutRetries: 2 },
       }),
     ])
 
@@ -16651,13 +16892,14 @@ describe('Orchestrator.tick \u2014 AC-18 reviewer_mode dispatch', () => {
           },
         ],
       })
-    })
+    }, '**Review:** ac-1: Not met - the deliverable supplies only documentation and no concrete proof artifact or runnable test.')
     const orch = new Orchestrator({
       config: baseConfig(),
       agents: agentSet({ reviewer }),
     })
 
     const out = await orch.tick()
+
 
     expect(out.kind).toBe('processed')
     if (out.kind === 'processed') {

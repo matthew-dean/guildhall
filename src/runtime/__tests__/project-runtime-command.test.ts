@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
-import { getProjectRuntimeCommandEvidencePath } from '@guildhall/sessions'
+import { getProjectRuntimeCommandEvidencePath, promoteProjectStateDatabaseAuthority } from '@guildhall/sessions'
 import { FileBackedGuildhallPersistence } from '@guildhall/persistence'
 import { setProvider } from '../../config/global-providers.js'
 import {
@@ -179,6 +179,17 @@ describe('project runtime command execution', () => {
     await expect(readRuntimeCommandEvidence(projectRoot)).resolves.toMatchObject([
       { id: 'cmd-legacy', projectId: 'demo' },
     ])
+  })
+
+  it('does not reopen legacy command evidence after project-state promotion', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'guildhall-runtime-command-promoted-'))
+    const legacyFile = getProjectRuntimeCommandEvidencePath(projectRoot)
+    await mkdir(dirname(legacyFile), { recursive: true })
+    await writeFile(legacyFile, `${JSON.stringify({ id: 'cmd-stale' })}\n`, 'utf8')
+    promoteProjectStateDatabaseAuthority(projectRoot)
+
+    await expect(readRuntimeCommandEvidence(projectRoot))
+      .rejects.toThrow(/migration required before ordinary reads/i)
   })
 
   it('migrates legacy command evidence JSONL to persistence and removes the legacy file', async () => {

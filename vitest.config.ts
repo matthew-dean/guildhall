@@ -70,6 +70,7 @@ export default defineConfig({
     ],
   },
   test: {
+    setupFiles: ['./scripts/vitest-data-isolation.ts'],
     include: ['src/**/*.test.ts', 'scripts/**/*.test.ts'],
     coverage: {
       provider: 'v8',

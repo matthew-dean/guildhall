@@ -10,11 +10,23 @@ import {
   parseStackTraceTopFile,
 } from '../intake.js'
 import { registerContractSurface } from '../contract-surfaces.js'
+import { bootstrapWorkspace } from '@guildhall/config'
 import { TaskQueue } from '@guildhall/core'
 import { raiseEscalation } from '@guildhall/tools'
-import { getProjectStateDir, getProjectSystemStatePathFromMemoryDir, getProjectTranscriptPath } from '@guildhall/sessions'
+import {
+  getProjectStateDir,
+  getProjectSystemStatePathFromMemoryDir,
+  getProjectTranscriptPath,
+} from '@guildhall/sessions'
 import { listOwnerInputRequests } from '../owner-input-store.js'
 import { buildEffectiveTask } from '../effective-task.js'
+import { applyProjectMigrations } from '../migrations.js'
+import {
+  readProjectTaskQueueForMutationSync,
+  readProjectTaskQueueSync,
+  writeProjectTaskQueue,
+  writeProjectTaskQueueWithSummary,
+} from '../project-state-boundary.js'
 
 // ---------------------------------------------------------------------------
 // FR-12 exploratory task intake
@@ -33,12 +45,27 @@ beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-intake-'))
   dataDir = path.join(os.tmpdir(), `guildhall-data-${path.basename(tmpDir)}`)
   process.env.GUILDHALL_DATA_DIR = dataDir
+  bootstrapWorkspace(tmpDir, { name: 'Intake Test' })
   memoryDir = getProjectStateDir(tmpDir)
-  await fs.mkdir(memoryDir, { recursive: true })
   tasksPath = getProjectSystemStatePathFromMemoryDir(memoryDir, 'TASKS.json')
-  // Bootstrap seeds TASKS.json as a bare `[]`, so test that path directly too.
   await fs.mkdir(path.dirname(tasksPath), { recursive: true })
-  await fs.writeFile(tasksPath, '[]', 'utf-8')
+  writeProjectTaskQueueWithSummary(tasksPath, {
+    version: 1,
+    lastUpdated: new Date().toISOString(),
+    tasks: [],
+  }, { projectRoot: tmpDir })
+  const prerequisites = await applyProjectMigrations({ projectRoot: tmpDir, includePrompt: true })
+  expect(prerequisites.failed).toEqual([])
+  const finalize = await applyProjectMigrations({
+    projectRoot: tmpDir,
+    only: ['0.13.0/project-state-finalize'],
+  })
+  expect(finalize.failed).toEqual([])
+  const cleanup = await applyProjectMigrations({
+    projectRoot: tmpDir,
+    only: ['0.13.0/project-state-legacy-live-file-cleanup'],
+  })
+  expect(cleanup.failed).toEqual([])
 })
 
 afterEach(async () => {
@@ -48,15 +75,21 @@ afterEach(async () => {
 })
 
 async function readQueue(): Promise<TaskQueue> {
-  const raw = await fs.readFile(tasksPath, 'utf-8')
-  const queue = TaskQueue.parse(JSON.parse(raw))
+  const queue = TaskQueue.parse(readProjectTaskQueueSync(tasksPath))
   return {
     ...queue,
     tasks: await Promise.all(queue.tasks.map(async task => {
-      const projectRoot = path.isAbsolute(task.projectPath) ? task.projectPath : tmpDir
-      return buildEffectiveTask(projectRoot, task) as unknown as typeof task
+      return buildEffectiveTask(tmpDir, task, { evidence: 'full' }) as unknown as typeof task
     })),
   }
+}
+
+async function writeQueue(queue: TaskQueue): Promise<void> {
+  const current = readProjectTaskQueueForMutationSync(tasksPath)
+  writeProjectTaskQueue(tasksPath, queue, {
+    projectRoot: tmpDir,
+    expectedQueueRevision: current.expectedQueueRevision,
+  })
 }
 
 function buildableSpec(extra = ''): string {
@@ -162,19 +195,17 @@ describe('createExploringTask', () => {
     expect(task.requestIntake?.evidenceRefs).toEqual(['request:title', 'request:ask'])
   })
 
-  it('handles a bare-array TASKS.json (bootstrap legacy format)', async () => {
-    // Already seeded as '[]' in beforeEach — createExploringTask should cope.
+  it('writes the canonical queue after intake', async () => {
     const result = await createExploringTask({
       memoryDir,
-      ask: 'legacy format',
+      ask: 'canonical format',
       domain: 'looma',
       projectPath: '/projects/looma',
     })
     expect(result.taskId).toBe('task-001')
-    // After first intake, the file should be a full queue object
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
-    expect(raw.version).toBe(1)
-    expect(raw.tasks).toHaveLength(1)
+    expect(readProjectTaskQueueSync(tasksPath)).toMatchObject({
+      tasks: [expect.objectContaining({ id: 'task-001' })],
+    })
   })
 
   it('generates sequential ids when called multiple times', async () => {
@@ -328,8 +359,6 @@ describe('createExploringTask', () => {
 
 describe('approveSpec', () => {
   beforeEach(async () => {
-    await fs.mkdir(memoryDir, { recursive: true })
-    await fs.writeFile(tasksPath, '[]', 'utf-8')
     // Create and then attach a spec
     await createExploringTask({
       memoryDir,
@@ -350,7 +379,7 @@ describe('approveSpec', () => {
     queue.tasks[0]!.acceptanceCriteria = [
       { id: 'AC-1', description: 'Ghost button renders.', verifiedBy: 'review', met: false },
     ]
-    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+    await writeQueue(queue)
   })
 
   it('transitions spec_review → ready', async () => {
@@ -381,7 +410,7 @@ describe('approveSpec', () => {
       '## Acceptance Criteria',
       '1. The fixture loop exits 0.',
     ].join('\n')
-    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+    await writeQueue(queue)
 
     const result = await approveSpec({ memoryDir, taskId: 'task-001' })
 
@@ -431,7 +460,7 @@ describe('approveSpec', () => {
       '- What must be split or blocked: any newly discovered product decision that changes which contracts belong in Stage 1 versus a later stage.',
     ].join('\n')
     queue.tasks[0]!.acceptanceCriteria = []
-    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+    await writeQueue(queue)
 
     const result = await approveSpec({ memoryDir, taskId: 'task-001' })
 
@@ -446,7 +475,7 @@ describe('approveSpec', () => {
   it('persists task readiness and finishability artifacts when a spec is approved', async () => {
     const queue = await readQueue()
     queue.tasks[0]!.proofPaths = [{ id: 'proof-ghost-button' }]
-    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+    await writeQueue(queue)
 
     await approveSpec({ memoryDir, taskId: 'task-001' })
 
@@ -506,7 +535,7 @@ describe('approveSpec', () => {
         whatMustBeSplitOrBlocked: 'Nothing.',
       },
     }
-    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+    await writeQueue(queue)
 
     const result = await approveSpec({ memoryDir, taskId: task.id })
 
@@ -530,7 +559,7 @@ describe('approveSpec', () => {
   it('approves specs where Completion Boundary is the final section', async () => {
     const queue = await readQueue()
     queue.tasks[0]!.spec = buildableSpec()
-    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+    await writeQueue(queue)
 
     const result = await approveSpec({ memoryDir, taskId: 'task-001' })
 
@@ -554,7 +583,7 @@ describe('approveSpec', () => {
       '- **What counts as done**: The app renders in a browser.',
       '- **What must be split or blocked**: Nothing.',
     ].join('\n')
-    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+    await writeQueue(queue)
 
     const result = await approveSpec({ memoryDir, taskId: 'task-001' })
 
@@ -578,7 +607,7 @@ describe('approveSpec', () => {
       '- **What counts as done:** The file contains the requested note and only the intended file changed.',
       '- **What must be split or blocked:** Nothing. The task is self-contained.',
     ].join('\n')
-    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+    await writeQueue(queue)
 
     const result = await approveSpec({ memoryDir, taskId: 'task-001' })
 
@@ -604,7 +633,7 @@ describe('approveSpec', () => {
       '  2. The browser shows the expected page.',
       '- **What must be split or blocked**: Nothing — this is a single self-contained task.',
     ].join('\n')
-    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+    await writeQueue(queue)
 
     const result = await approveSpec({ memoryDir, taskId: 'task-001' })
 
@@ -628,7 +657,7 @@ describe('approveSpec', () => {
       '- **What counts as done**: The app renders and passes browser inspection.',
       '- **What must be split or blocked**: Nothing.',
     ].join('\n')
-    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+    await writeQueue(queue)
 
     const result = await approveSpec({ memoryDir, taskId: 'task-001' })
 
@@ -652,7 +681,7 @@ describe('approveSpec', () => {
       '- **What counts as done**: node scripts/test.js exits with code 0.',
       '- **What must be split or blocked**: Nothing.',
     ].join('\n')
-    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+    await writeQueue(queue)
 
     const result = await approveSpec({ memoryDir, taskId: 'task-001' })
 
@@ -689,7 +718,7 @@ describe('approveSpec', () => {
       createdAt: '2026-05-25T12:00:00.000Z',
       createdBy: 'task-sizing',
     }
-    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+    await writeQueue(queue)
 
     const result = await approveSpec({ memoryDir, taskId: 'task-001' })
 
@@ -748,7 +777,7 @@ describe('approveSpec', () => {
       createdAt: '2026-05-25T12:00:00.000Z',
       updatedAt: '2026-05-25T12:00:00.000Z',
     }
-    await fs.writeFile(tasksPath, JSON.stringify({
+    const queue: TaskQueue = {
       version: 1,
       lastUpdated: '2026-05-25T12:00:00.000Z',
       tasks: [
@@ -821,7 +850,8 @@ describe('approveSpec', () => {
           },
         },
       ],
-    }, null, 2), 'utf-8')
+    }
+    await writeQueue(queue)
 
     const result = await approveSpec({ memoryDir, taskId: 'child-audit' })
 
@@ -932,7 +962,7 @@ describe('approveSpec', () => {
         taskReadiness: undefined,
       },
     )
-    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+    await writeQueue(queue)
 
     const result = await approveSpec({ memoryDir, taskId: 'parent' })
 
@@ -975,7 +1005,7 @@ describe('approveSpec', () => {
       createdAt: '2026-06-05T12:00:00.000Z',
       createdBy: 'task-sizing',
     }
-    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+    await writeQueue(queue)
 
     const result = await approveSpec({ memoryDir, taskId: 'task-001' })
 
@@ -1060,7 +1090,7 @@ describe('approveSpec', () => {
       createdAt: '2026-07-05T18:54:18.292Z',
       createdBy: 'coordinator-recovery',
     }
-    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+    await writeQueue(queue)
 
     const result = await approveSpec({ memoryDir, taskId: 'task-001' })
 
@@ -1107,7 +1137,7 @@ describe('approveSpec', () => {
     ].join('\n')
     task.acceptanceCriteria = []
     delete task.workUnitAnalysis
-    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+    await writeQueue(queue)
 
     const result = await approveSpec({ memoryDir, taskId: 'task-001' })
 
@@ -1147,7 +1177,7 @@ describe('approveSpec', () => {
       antiPatterns: [],
     }
     task.acceptanceCriteria = []
-    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+    await writeQueue(queue)
 
     const approved = await approveSpec({ memoryDir, taskId: task.id })
 
@@ -1205,7 +1235,7 @@ describe('approveSpec', () => {
       createdAt: '2026-05-28T12:00:00.000Z',
       createdBy: 'task-sizing',
     }
-    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+    await writeQueue(queue)
 
     const approved = await approveSpec({ memoryDir, taskId: task.id })
 
@@ -1256,17 +1286,15 @@ describe('approveSpec', () => {
     ].join('\n')
     task.acceptanceCriteria = []
     delete task.sizePlan
-    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+    await writeQueue(queue)
 
     const approved = await approveSpec({ memoryDir, taskId: task.id })
 
-    expect(approved.success).toBe(true)
+    expect(approved.success).toBe(false)
+    expect(approved.error).toContain('still needs child work')
     const updated = await readQueue()
     const parent = updated.tasks.find(candidate => candidate.id === task.id)
     expect(parent?.status).toBe('spec_review')
-    expect(parent?.taskReadiness?.recommendation).toBe('requires_child_work')
-    expect(parent?.taskReadiness?.summary).toContain('planned as smaller child work before execution')
-    expect(parent?.sizePlan?.action).toBe('decompose_before_execution')
     expect(parent?.hierarchy?.childIds ?? []).toEqual([])
     expect(updated.tasks).toHaveLength(1)
   })
@@ -1322,7 +1350,7 @@ describe('approveSpec', () => {
       createdAt: '2026-05-25T12:00:00.000Z',
       createdBy: 'task-sizing',
     }
-    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+    await writeQueue(queue)
 
     await approveSpec({ memoryDir, taskId: 'task-001' })
 
@@ -1336,7 +1364,7 @@ describe('approveSpec', () => {
   it('refuses to approve a task that has no spec', async () => {
     const queue = await readQueue()
     delete queue.tasks[0]!.spec
-    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+    await writeQueue(queue)
     const result = await approveSpec({ memoryDir, taskId: 'task-001' })
     expect(result.success).toBe(false)
     expect(result.error).toContain('no spec')
@@ -1345,7 +1373,7 @@ describe('approveSpec', () => {
   it('refuses to approve a task not in spec_review status', async () => {
     const queue = await readQueue()
     queue.tasks[0]!.status = 'in_progress'
-    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+    await writeQueue(queue)
     const result = await approveSpec({ memoryDir, taskId: 'task-001' })
     expect(result.success).toBe(false)
     expect(result.error).toContain("'in_progress'")
@@ -1487,7 +1515,7 @@ describe('resumeExploring', () => {
   it('moves a non-terminal task back to exploring when the user replies', async () => {
     let queue = await readQueue()
     queue.tasks[0]!.status = 'ready'
-    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2))
+    await writeQueue(queue)
 
     const result = await resumeExploring({
       memoryDir,
@@ -1503,7 +1531,7 @@ describe('resumeExploring', () => {
   it('can add a human steering note without reopening spec intake', async () => {
     let queue = await readQueue()
     queue.tasks[0]!.status = 'in_progress'
-    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2))
+    await writeQueue(queue)
 
     const result = await resumeExploring({
       memoryDir,
@@ -1527,7 +1555,7 @@ describe('resumeExploring', () => {
     let queue = await readQueue()
     queue.tasks[0]!.status = 'blocked'
     queue.tasks[0]!.blockReason = 'human_judgment_required: choose a retry path'
-    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2))
+    await writeQueue(queue)
 
     const result = await resumeExploring({
       memoryDir,
@@ -1568,8 +1596,7 @@ describe('resumeExploring', () => {
 
     queue = await readQueue()
     expect(queue.tasks[0]!.status).toBe('exploring')
-    expect(queue.tasks[0]!.escalations[0]!.resolvedAt).toBeDefined()
-    expect(queue.tasks[0]!.escalations[0]!.resolution).toBe('yes, mobile too')
+    expect(queue.tasks[0]!.escalations).toEqual([])
   })
 
   it('returns error for unknown task id', async () => {

@@ -1,6 +1,7 @@
 import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
 import fs from 'node:fs/promises'
 import { existsSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 
@@ -10,13 +11,38 @@ import {
   getProjectProgressHeartbeatsPath,
   getProjectStateDir,
   getProjectSystemStatePath,
+  getProjectSystemStateDir,
   getProjectTaskLocalHistoryDir,
+  compactTaskEvidenceHistory,
+  compactProjectStateDatabaseEvidence,
+  vacuumProjectStateDatabase,
+  compactProjectSessionSnapshots,
+  compactProjectProgressHeartbeats,
+  readProjectStateDatabaseCurrentAuthority,
+  readProjectStateDatabaseQueueWithRevision,
 } from '@guildhall/sessions'
 import {
   findForbiddenProjectTaskFields,
   sanitizeTaskQueueForProjectWrite,
   type ForbiddenProjectTaskFieldFinding,
 } from './project-state-boundary.js'
+import {
+  writeProjectTaskQueueAtCurrentStateBoundary,
+  writeProjectTaskQueueWithSummary,
+} from './project-state-boundary.js'
+import { compactExploringTranscripts } from '@guildhall/tools'
+import { compactProjectContextDebug } from './context-observability.js'
+import { compactProjectRecentEvents } from './serve-supervisor.js'
+import { compactMaterializedMigrationSnapshot } from './migration-snapshot.js'
+import { compactCodebaseMapHistory } from '@guildhall/corpus-map'
+import { consolidateProjectMemoryEvents } from '@guildhall/memory-core'
+import {
+  describePath,
+  readEvacuationManifest,
+  writeEvacuationManifest,
+  type ProjectStateEvacuationEntry,
+  type ProjectStateEvacuationManifest,
+} from './evacuation-manifest.js'
 
 export interface ProjectStateCompactionOptions {
   projectRoot: string
@@ -30,16 +56,69 @@ export interface ProjectStateCompactionResult {
   dryRun: boolean
   repoStateMode: 'off' | 'thin'
   evacuatedProjectStatePaths: string[]
+  evacuationManifestPath: string | null
   activeTasksKept: number
   archivedTasks: number
   archivedTaskFilesCompacted: number
+  archiveEvidenceFilesCompacted: number
   activeTasksSanitized: number
   forbiddenTaskFieldsBefore: number
   forbiddenTaskFieldsAfter: number
   forbiddenTaskFieldFindings: ForbiddenProjectTaskFieldFinding[]
   removedEvidenceBytes: number
   codebaseMapCompacted: boolean
+  codebaseMapHistoryBytesBefore: number
+  codebaseMapHistoryBytesAfter: number
+  codebaseMapHistoryRecordsCompacted: number
   progressHeartbeatsMoved: number
+  progressHeartbeatBytesBefore: number
+  progressHeartbeatBytesAfter: number
+  progressHeartbeatRecordsCompacted: number
+  exploringHistoryFilesSeen: number
+  exploringHistoryFilesCompacted: number
+  exploringHistoryBytesBefore: number
+  exploringHistoryBytesAfter: number
+  sessionFilesSeen: number
+  sessionFilesCompacted: number
+  sessionPendingFilesPreserved: number
+  sessionBytesBefore: number
+  sessionBytesAfter: number
+  contextDebugLedgerBytesBefore: number
+  contextDebugLedgerBytesAfter: number
+  contextDebugLedgerRecordsCompacted: number
+  contextDebugSnapshotFilesCompacted: number
+  contextDebugSnapshotBytesBefore: number
+  contextDebugSnapshotBytesAfter: number
+  contextDebugDuplicateEventFilesRemoved: number
+  contextDebugDuplicateEventBytesBefore: number
+  contextDebugDuplicateEventBytesAfter: number
+  taskEvidenceFilesSeen: number
+  taskEvidenceFilesCompacted: number
+  taskEvidenceRecordsCompacted: number
+  taskEvidenceBytesBefore: number
+  taskEvidenceBytesAfter: number
+  taskProofRowsCompacted: number
+  currentEvidenceRowsCompacted: number
+  databaseEvidenceBytesBefore: number
+  databaseEvidenceBytesAfter: number
+  databaseBytesBefore: number
+  databaseBytesAfter: number
+  databaseVacuumed: boolean
+  recentEventBytesBefore: number
+  recentEventBytesAfter: number
+  recentEventRecordsCompacted: number
+  memoryEventFilesSeen: number
+  memoryEventFilesRemoved: number
+  memoryEventRecordsSeen: number
+  memoryEventRecordsRetained: number
+  memoryEventBytesBefore: number
+  memoryEventBytesAfter: number
+  migrationSnapshotFilesSeen: number
+  migrationSnapshotFilesCompacted: number
+  migrationSnapshotBytesBefore: number
+  migrationSnapshotBytesAfter: number
+  migrationSnapshotUnknownFiles: number
+  migrationSnapshotUnknownBytes: number
   bytesBefore: number
   bytesAfter: number
 }
@@ -67,6 +146,62 @@ async function fileSize(file: string): Promise<number> {
   } catch {
     return 0
   }
+}
+
+async function migrationSnapshotCandidates(projectRoot: string): Promise<string[]> {
+  const roots = [
+    getProjectStateDir(projectRoot),
+    getProjectSystemStateDir(projectRoot),
+    path.join(getProjectLocalHistoryDir(projectRoot), 'migration-snapshots'),
+    path.join(getProjectLocalHistoryDir(projectRoot), 'migrations'),
+  ]
+  const candidates: string[] = []
+  const visit = async (directory: string): Promise<void> => {
+    let entries: Array<{ name: string; isDirectory(): boolean; isFile(): boolean }>
+    try {
+      entries = await fs.readdir(directory, { withFileTypes: true })
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+      throw error
+    }
+    for (const entry of entries) {
+      const target = path.join(directory, entry.name)
+      if (entry.isDirectory()) await visit(target)
+      else if (entry.isFile() && /^TASKS\.(?:before|backup)-.*\.json$/i.test(entry.name)) candidates.push(target)
+    }
+  }
+  for (const root of roots) await visit(root)
+  return [...new Set(candidates)]
+}
+
+async function compactProjectMigrationSnapshots(
+  projectRoot: string,
+  options: { dryRun?: boolean } = {},
+): Promise<{
+  filesSeen: number
+  filesCompacted: number
+  bytesBefore: number
+  bytesAfter: number
+  unknownFiles: number
+  unknownBytes: number
+}> {
+  const files = await migrationSnapshotCandidates(projectRoot)
+  let filesCompacted = 0
+  let bytesBefore = 0
+  let bytesAfter = 0
+  let unknownFiles = 0
+  let unknownBytes = 0
+  for (const file of files) {
+    const result = await compactMaterializedMigrationSnapshot(file, options)
+    bytesBefore += result.bytesBefore
+    bytesAfter += result.bytesAfter
+    if (result.eligible) filesCompacted += 1
+    else if (result.reason !== 'already_compact') {
+      unknownFiles += 1
+      unknownBytes += result.bytesBefore
+    }
+  }
+  return { filesSeen: files.length, filesCompacted, bytesBefore, bytesAfter, unknownFiles, unknownBytes }
 }
 
 async function readJsonIfExists(file: string): Promise<unknown | null> {
@@ -123,6 +258,83 @@ async function copyProjectStatePathToLocalHistory(source: string, destination: s
   await fs.cp(source, destination, { recursive: true, force: true })
 }
 
+function evacuationBatchPath(evacuationDir: string, batchId: string, relativePath: string): string {
+  return path.join(evacuationDir, 'batches', batchId, relativePath)
+}
+
+function relativeStatePath(stateDir: string, sourcePath: string): string {
+  const relativePath = path.relative(stateDir, sourcePath)
+  if (!relativePath || relativePath === '..' || relativePath.startsWith(`..${path.sep}`) || path.isAbsolute(relativePath)) {
+    throw new Error(`Project-state evacuation source is outside ${stateDir}: ${sourcePath}`)
+  }
+  return relativePath
+}
+
+function pathDescriptionMatches(
+  expected: { kind?: string; bytes: number; sha256: string },
+  actual: { kind: string; bytes: number; sha256: string },
+): boolean {
+  return (expected.kind === undefined || expected.kind === actual.kind)
+    && expected.bytes === actual.bytes
+    && expected.sha256 === actual.sha256
+}
+
+async function copyImmutableProjectStatePath(source: string, destination: string): Promise<void> {
+  try {
+    const existing = await describePath(destination)
+    const sourceDescription = await describePath(source)
+    if (!pathDescriptionMatches(sourceDescription, existing)) {
+      throw new Error(`Project-state evacuation would overwrite immutable material at ${destination}`)
+    }
+    return
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+  }
+
+  await ensureDirFor(destination)
+  await fs.cp(source, destination, { recursive: true, force: false, errorOnExist: true })
+  const sourceDescription = await describePath(source)
+  const destinationDescription = await describePath(destination)
+  if (!pathDescriptionMatches(sourceDescription, destinationDescription)) {
+    throw new Error(`Project-state evacuation snapshot did not match its source: ${destination}`)
+  }
+}
+
+async function preserveImmutableEvacuationBatches(
+  manifest: ProjectStateEvacuationManifest,
+  stateDir: string,
+  evacuationDir: string,
+): Promise<void> {
+  for (const batch of manifest.batches) {
+    for (const entry of batch.entries) {
+      const relativePath = relativeStatePath(stateDir, entry.source.path)
+      const immutablePath = evacuationBatchPath(evacuationDir, batch.id, relativePath)
+      if (path.resolve(entry.snapshot.path) === path.resolve(immutablePath)) continue
+
+      const currentSnapshot = await describePath(entry.snapshot.path)
+      if (!pathDescriptionMatches(entry.snapshot, currentSnapshot)) {
+        throw new Error(`Project-state evacuation snapshot failed integrity verification: ${entry.snapshot.path}`)
+      }
+      await copyImmutableProjectStatePath(entry.snapshot.path, immutablePath)
+      const immutableSnapshot = await describePath(immutablePath)
+      entry.snapshot = {
+        path: immutablePath,
+        bytes: immutableSnapshot.bytes,
+        sha256: immutableSnapshot.sha256,
+      }
+    }
+  }
+}
+
+async function readEvacuationManifestIfPresent(manifestPath: string): Promise<ProjectStateEvacuationManifest> {
+  try {
+    return await readEvacuationManifest(manifestPath)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { version: 1, batches: [] }
+    throw error
+  }
+}
+
 async function evacuateProjectLocalState(
   projectRoot: string,
   stateDir: string,
@@ -136,6 +348,13 @@ async function evacuateProjectLocalState(
     throw err
   }
   const removed: string[] = []
+  const evacuationDir = path.join(getProjectLocalHistoryDir(projectRoot), 'project-state-evacuation')
+  const manifestPath = path.join(evacuationDir, 'manifest.json')
+  const manifest: ProjectStateEvacuationManifest = await readEvacuationManifestIfPresent(manifestPath)
+  if (!dryRun) await preserveImmutableEvacuationBatches(manifest, stateDir, evacuationDir)
+  const batchId = `evacuation-${randomUUID()}`
+  const evacuatedEntries: ProjectStateEvacuationEntry[] = []
+  const sourcesToRemove: string[] = []
   for (const relativePath of entries) {
     const source = path.join(stateDir, relativePath)
     try {
@@ -146,9 +365,46 @@ async function evacuateProjectLocalState(
     }
     removed.push(relativePath)
     if (dryRun) continue
-    const destination = path.join(getProjectLocalHistoryDir(projectRoot), 'project-state-evacuation', relativePath)
-    await copyProjectStatePathToLocalHistory(source, destination)
-    await fs.rm(source, { recursive: true, force: true })
+    const immutableDestination = evacuationBatchPath(evacuationDir, batchId, relativePath)
+    const destination = path.join(evacuationDir, relativePath)
+    const sourceBefore = await describePath(source)
+    await copyImmutableProjectStatePath(source, immutableDestination)
+    await fs.rm(destination, { recursive: true, force: true })
+    await copyProjectStatePathToLocalHistory(immutableDestination, destination)
+    const snapshot = await describePath(destination)
+    const sourceAfter = await describePath(source)
+    if (
+      sourceBefore.kind !== snapshot.kind ||
+      sourceBefore.bytes !== snapshot.bytes ||
+      sourceBefore.sha256 !== snapshot.sha256 ||
+      sourceAfter.kind !== sourceBefore.kind ||
+      sourceAfter.bytes !== sourceBefore.bytes ||
+      sourceAfter.sha256 !== sourceBefore.sha256
+    ) {
+      throw new Error(`Project-state evacuation changed while copying ${source}`)
+    }
+    const immutableSnapshot = await describePath(immutableDestination)
+    if (!pathDescriptionMatches(sourceBefore, immutableSnapshot)) {
+      throw new Error(`Project-state evacuation changed while writing ${immutableDestination}`)
+    }
+    evacuatedEntries.push({
+      kind: sourceBefore.kind,
+      source: { path: source, bytes: sourceBefore.bytes, sha256: sourceBefore.sha256 },
+      snapshot: { path: destination, bytes: snapshot.bytes, sha256: snapshot.sha256 },
+      restore: { status: 'not_verified' },
+    })
+    sourcesToRemove.push(source)
+  }
+  if (!dryRun && evacuatedEntries.length > 0) {
+    manifest.batches.push({
+      id: batchId,
+      createdAt: new Date().toISOString(),
+      entries: evacuatedEntries,
+    })
+    await writeEvacuationManifest(manifestPath, manifest)
+    for (const source of sourcesToRemove) {
+      await fs.rm(source, { recursive: true, force: true })
+    }
   }
   if (!dryRun) {
     try {
@@ -178,12 +434,20 @@ async function copyRepoLocalProjectStateToSystemState(projectRoot: string, state
   }
 }
 
-async function writeFullTaskEvidence(projectRoot: string, id: string, task: unknown, dryRun: boolean): Promise<void> {
+/**
+ * Keep one bounded archival explanation, not a second full task snapshot.
+ * Older versions called this file "full evidence" and copied every bulky
+ * task history field into it. The compact archived task is the project
+ * record; this file exists only as a local evidence companion.
+ */
+async function writeArchiveEvidence(projectRoot: string, id: string, task: unknown, dryRun: boolean): Promise<void> {
   if (dryRun) return
   const evidencePath = path.join(getProjectTaskLocalHistoryDir(projectRoot, id), 'archive-evidence.json')
   await ensureDirFor(evidencePath)
-  if (!existsSync(evidencePath)) {
-    await writeManagedTextFile(evidencePath, `${JSON.stringify(task, null, 2)}\n`, 'utf8')
+  const compact = compactTaskRecordForProjectArchive(task)
+  const existing = await readJsonIfExists(evidencePath)
+  if (JSON.stringify(existing) !== JSON.stringify(compact)) {
+    await writeManagedTextFile(evidencePath, `${JSON.stringify(compact, null, 2)}\n`, 'utf8')
   }
 }
 
@@ -249,7 +513,7 @@ async function compactArchiveFiles(projectRoot: string, stateDir: string, dryRun
     const parsed = await readJsonIfExists(file)
     const id = taskId(parsed) ?? entry.replace(/\.json$/i, '')
     if (isRecord(parsed) && isRecord(parsed.archivedEvidence)) continue
-    await writeFullTaskEvidence(projectRoot, id, parsed, dryRun)
+    await writeArchiveEvidence(projectRoot, id, parsed, dryRun)
     const compact = compactTaskRecordForProjectArchive(parsed)
     if (JSON.stringify(compact) === JSON.stringify(parsed)) continue
     compacted += 1
@@ -260,10 +524,37 @@ async function compactArchiveFiles(projectRoot: string, stateDir: string, dryRun
   return compacted
 }
 
+/** Migrate the current local-history archive companion out of full-task shape. */
+async function compactArchiveEvidenceFiles(projectRoot: string, dryRun: boolean): Promise<number> {
+  const tasksDir = path.join(getProjectLocalHistoryDir(projectRoot), 'tasks')
+  let entries: Array<{ name: string; isDirectory(): boolean }>
+  try {
+    entries = await fs.readdir(tasksDir, { withFileTypes: true })
+  } catch (err) {
+    if (String(err).includes('ENOENT')) return 0
+    throw err
+  }
+
+  let compacted = 0
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue
+    const evidencePath = path.join(tasksDir, entry.name, 'archive-evidence.json')
+    const parsed = await readJsonIfExists(evidencePath)
+    if (!isRecord(parsed)) continue
+    const compact = compactTaskRecordForProjectArchive(parsed)
+    if (JSON.stringify(compact) === JSON.stringify(parsed)) continue
+    compacted += 1
+    if (!dryRun) await writeManagedTextFile(evidencePath, `${JSON.stringify(compact, null, 2)}\n`, 'utf8')
+  }
+  return compacted
+}
+
 async function compactTasks(
   projectRoot: string,
-  stateDir: string,
+  tasksPath: string,
+  parsed: unknown | null,
   dryRun: boolean,
+  expectedQueueRevision?: number | null,
 ): Promise<{
   active: number
   archived: number
@@ -274,9 +565,8 @@ async function compactTasks(
   forbiddenFindings: ForbiddenProjectTaskFieldFinding[]
   removedEvidenceBytes: number
 }> {
-  const tasksPath = path.join(stateDir, 'TASKS.json')
-  const parsed = await readJsonIfExists(tasksPath)
-  const compactedArchives = await compactArchiveFiles(projectRoot, stateDir, dryRun)
+  const taskStateDir = path.dirname(tasksPath)
+  const compactedArchives = await compactArchiveFiles(projectRoot, taskStateDir, dryRun)
   if (parsed === null) {
     return {
       active: 0,
@@ -292,34 +582,44 @@ async function compactTasks(
 
   const forbiddenFindings = findForbiddenProjectTaskFields(parsed)
   const tasks = queueTasks(parsed)
+  const preserveCanonicalTasks = readProjectStateDatabaseCurrentAuthority(projectRoot) === 'database'
   const activeTasks: unknown[] = []
   const archivedTasks: Array<{ id: string; task: unknown }> = []
 
   for (const task of tasks) {
     const id = taskId(task)
     const status = taskStatus(task)
-    if (id && status && TERMINAL_STATUSES.has(status)) {
+    // A promoted database keeps completed work as current project state: it
+    // supplies release progress, proof history, and orientation. Only the
+    // repo-local compatibility shape may move terminal tasks to an archive.
+    if (!preserveCanonicalTasks && id && status && TERMINAL_STATUSES.has(status)) {
       archivedTasks.push({ id, task })
     } else {
       activeTasks.push(task)
     }
   }
 
-  const compactQueue = {
-    version: queueVersion(parsed),
-    lastUpdated: new Date().toISOString(),
-    tasks: activeTasks,
-  }
+  const compactQueue = isRecord(parsed)
+    ? {
+        ...parsed,
+        lastUpdated: new Date().toISOString(),
+        tasks: activeTasks,
+      }
+    : {
+        version: queueVersion(parsed),
+        lastUpdated: new Date().toISOString(),
+        tasks: activeTasks,
+      }
   const sanitized = sanitizeTaskQueueForProjectWrite(compactQueue)
   for (const item of sanitized.removedByTask) {
     await writeBoundaryEvidence(projectRoot, item.taskId, item.removedEvidence, dryRun)
   }
 
   if (!dryRun && (archivedTasks.length > 0 || sanitized.taskDefinitionsRewritten > 0 || forbiddenFindings.length > 0)) {
-    const archiveDir = path.join(stateDir, 'tasks', 'archive')
+    const archiveDir = path.join(taskStateDir, 'tasks', 'archive')
     await fs.mkdir(archiveDir, { recursive: true })
     for (const item of archivedTasks) {
-      await writeFullTaskEvidence(projectRoot, item.id, item.task, dryRun)
+      await writeArchiveEvidence(projectRoot, item.id, item.task, dryRun)
       await writeManagedTextFile(
         path.join(archiveDir, `${safeFileName(item.id)}.json`),
         `${JSON.stringify(compactTaskRecordForProjectArchive(item.task), null, 2)}\n`,
@@ -327,7 +627,7 @@ async function compactTasks(
       )
     }
 
-    const indexPath = path.join(stateDir, 'tasks', 'index.json')
+    const indexPath = path.join(taskStateDir, 'tasks', 'index.json')
     const index = {
       version: 1,
       updatedAt: new Date().toISOString(),
@@ -337,7 +637,19 @@ async function compactTasks(
     }
     await ensureDirFor(indexPath)
     await writeManagedTextFile(indexPath, `${JSON.stringify(index, null, 2)}\n`, 'utf8')
-    await writeManagedTextFile(tasksPath, `${JSON.stringify(sanitized.queue, null, 2)}\n`, 'utf8')
+    if (readProjectStateDatabaseCurrentAuthority(projectRoot) === 'database') {
+      await writeProjectTaskQueueAtCurrentStateBoundary(tasksPath, compactQueue, {
+        projectId: path.basename(projectRoot),
+        projectRoot,
+        ...(expectedQueueRevision !== undefined ? { expectedQueueRevision } : {}),
+      })
+    } else {
+      // A project that has not yet been promoted still has one current queue
+      // in its configured state directory. Keep this explicit bootstrap path
+      // separate from the promoted SQLite writer; normal runtime reads never
+      // use this file after promotion.
+      await writeManagedTextFile(tasksPath, `${JSON.stringify(sanitized.queue, null, 2)}\n`, 'utf8')
+    }
   }
 
   return {
@@ -396,12 +708,7 @@ async function compactProgress(projectRoot: string, stateDir: string, dryRun: bo
   if (heartbeats.length === 0) return 0
 
   if (!dryRun) {
-    const snapshotPath = path.join(getProjectLocalHistoryDir(projectRoot), 'progress', 'PROGRESS.before-compaction.md')
     const heartbeatPath = getProjectProgressHeartbeatsPath(projectRoot)
-    await ensureDirFor(snapshotPath)
-    if (!existsSync(snapshotPath)) {
-      await writeManagedTextFile(snapshotPath, content, 'utf8')
-    }
     await ensureDirFor(heartbeatPath)
     await appendManagedTextFile(
       heartbeatPath,
@@ -459,16 +766,62 @@ export async function compactProjectState(
   const localHistoryDir = getProjectLocalHistoryDir(projectRoot)
   const dryRun = opts.dryRun ?? true
   const repoStateMode = resolveRepoStateMode(projectRoot)
-  const tasksPath = path.join(stateDir, 'TASKS.json')
+  const databaseAuthority = readProjectStateDatabaseCurrentAuthority(projectRoot) === 'database'
+  // Promoted projects own queue/detail state in system-local storage. The
+  // repository .guildhall directory remains a source/evacuation boundary and
+  // must not be mistaken for the current queue.
+  const tasksPath = databaseAuthority
+    ? getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    : path.join(stateDir, 'TASKS.json')
   const progressPath = path.join(stateDir, 'PROGRESS.md')
   const codebaseMapPath = path.join(stateDir, 'codebase-map.yaml')
+  const databaseQueueRead = databaseAuthority
+    ? readProjectStateDatabaseQueueWithRevision(tasksPath)
+    : null
+  const parsedTasks = databaseQueueRead?.definition ?? await readJsonIfExists(tasksPath)
+  if (databaseAuthority && parsedTasks === null) {
+    throw new Error(`Cannot compact project state: authoritative detail store is unavailable for ${projectRoot}`)
+  }
+  const activeTaskIds = new Set(
+    queueTasks(parsedTasks)
+      .filter(task => {
+        const status = taskStatus(task)
+        return status !== null && !TERMINAL_STATUSES.has(status)
+      })
+      .map(taskId)
+      .filter((id): id is string => id !== null),
+  )
+  const exploringHistory = await compactExploringTranscripts({
+    projectRoot,
+    dryRun,
+  })
+  const sessionCompaction = compactProjectSessionSnapshots(projectRoot, {
+    dryRun,
+    activeTaskIds,
+  })
+  const contextDebugCompaction = await compactProjectContextDebug(projectRoot, { dryRun, activeTaskIds })
+  const taskEvidenceCompaction = await compactTaskEvidenceHistory(projectRoot, { dryRun })
+  const databaseEvidenceCompaction = compactProjectStateDatabaseEvidence(projectRoot, { dryRun })
+  const databaseVacuum = vacuumProjectStateDatabase(projectRoot, { dryRun })
+  const recentEventsCompaction = compactProjectRecentEvents(projectRoot, { dryRun })
+  const memoryEventsCompaction = await consolidateProjectMemoryEvents(projectRoot, { dryRun })
+  const migrationSnapshotCompaction = await compactProjectMigrationSnapshots(projectRoot, { dryRun })
+  const archiveEvidenceFilesCompacted = await compactArchiveEvidenceFiles(projectRoot, dryRun)
+  const codebaseMapHistoryCompaction = await compactCodebaseMapHistory(projectRoot, { dryRun })
+  const heartbeatPath = getProjectProgressHeartbeatsPath(projectRoot)
+  let progressHeartbeatCompaction = await compactProjectProgressHeartbeats(heartbeatPath, { dryRun })
   const bytesBefore = await fileSize(tasksPath) + await fileSize(progressPath) + await fileSize(codebaseMapPath)
+  const taskCompaction = databaseAuthority || repoStateMode === 'thin'
+    ? await compactTasks(projectRoot, tasksPath, parsedTasks, dryRun, databaseQueueRead?.revision)
+    : null
   if (repoStateMode === 'off') {
-    const parsedTasks = await readJsonIfExists(tasksPath)
     const tasks = queueTasks(parsedTasks)
     const forbiddenFindings = findForbiddenProjectTaskFields(parsedTasks)
     await copyRepoLocalProjectStateToSystemState(projectRoot, stateDir, dryRun)
     const evacuatedProjectStatePaths = await evacuateProjectLocalState(projectRoot, stateDir, dryRun)
+    const evacuationManifestPath = !dryRun && evacuatedProjectStatePaths.length > 0
+      ? path.join(localHistoryDir, 'project-state-evacuation', 'manifest.json')
+      : null
     const bytesAfter = dryRun
       ? bytesBefore
       : await fileSize(tasksPath) + await fileSize(progressPath) + await fileSize(codebaseMapPath)
@@ -479,25 +832,79 @@ export async function compactProjectState(
       dryRun,
       repoStateMode,
       evacuatedProjectStatePaths,
-      activeTasksKept: 0,
-      archivedTasks: tasks.filter(task => {
+      evacuationManifestPath,
+      activeTasksKept: taskCompaction?.active ?? 0,
+      archivedTasks: taskCompaction?.archived ?? tasks.filter(task => {
         const status = taskStatus(task)
         return status !== null && TERMINAL_STATUSES.has(status)
       }).length,
-      archivedTaskFilesCompacted: 0,
-      activeTasksSanitized: 0,
-      forbiddenTaskFieldsBefore: forbiddenFindings.length,
-      forbiddenTaskFieldsAfter: 0,
-      forbiddenTaskFieldFindings: forbiddenFindings,
-      removedEvidenceBytes: 0,
+      archivedTaskFilesCompacted: taskCompaction?.compactedArchives ?? 0,
+      archiveEvidenceFilesCompacted,
+      activeTasksSanitized: taskCompaction?.activeSanitized ?? 0,
+      forbiddenTaskFieldsBefore: taskCompaction?.forbiddenBefore ?? forbiddenFindings.length,
+      forbiddenTaskFieldsAfter: taskCompaction?.forbiddenAfter ?? 0,
+      forbiddenTaskFieldFindings: taskCompaction?.forbiddenFindings ?? forbiddenFindings,
+      removedEvidenceBytes: taskCompaction?.removedEvidenceBytes ?? 0,
       codebaseMapCompacted: false,
+      codebaseMapHistoryBytesBefore: codebaseMapHistoryCompaction.bytesBefore,
+      codebaseMapHistoryBytesAfter: codebaseMapHistoryCompaction.bytesAfter,
+      codebaseMapHistoryRecordsCompacted: Math.max(0, codebaseMapHistoryCompaction.recordsBefore - codebaseMapHistoryCompaction.recordsAfter),
       progressHeartbeatsMoved: 0,
+      progressHeartbeatBytesBefore: progressHeartbeatCompaction.bytesBefore,
+      progressHeartbeatBytesAfter: progressHeartbeatCompaction.bytesAfter,
+      progressHeartbeatRecordsCompacted: Math.max(0, progressHeartbeatCompaction.recordsBefore - progressHeartbeatCompaction.recordsAfter),
+      exploringHistoryFilesSeen: exploringHistory.filesSeen,
+      exploringHistoryFilesCompacted: exploringHistory.filesCompacted,
+      exploringHistoryBytesBefore: exploringHistory.bytesBefore,
+      exploringHistoryBytesAfter: exploringHistory.bytesAfter,
+      sessionFilesSeen: sessionCompaction.filesSeen,
+      sessionFilesCompacted: sessionCompaction.filesCompacted,
+      sessionPendingFilesPreserved: sessionCompaction.pendingFilesPreserved,
+      sessionBytesBefore: sessionCompaction.bytesBefore,
+      sessionBytesAfter: sessionCompaction.bytesAfter,
+      contextDebugLedgerBytesBefore: contextDebugCompaction.ledgerBytesBefore,
+      contextDebugLedgerBytesAfter: contextDebugCompaction.ledgerBytesAfter,
+      contextDebugLedgerRecordsCompacted: contextDebugCompaction.ledgerRecordsCompacted,
+      contextDebugSnapshotFilesCompacted: contextDebugCompaction.snapshotFilesCompacted,
+      contextDebugSnapshotBytesBefore: contextDebugCompaction.snapshotBytesBefore,
+      contextDebugSnapshotBytesAfter: contextDebugCompaction.snapshotBytesAfter,
+      contextDebugDuplicateEventFilesRemoved: contextDebugCompaction.duplicateEventFilesRemoved,
+      contextDebugDuplicateEventBytesBefore: contextDebugCompaction.duplicateEventBytesBefore,
+      contextDebugDuplicateEventBytesAfter: contextDebugCompaction.duplicateEventBytesAfter,
+      taskEvidenceFilesSeen: taskEvidenceCompaction.filesSeen,
+      taskEvidenceFilesCompacted: taskEvidenceCompaction.filesCompacted,
+      taskEvidenceRecordsCompacted: taskEvidenceCompaction.recordsCompacted,
+      taskEvidenceBytesBefore: taskEvidenceCompaction.bytesBefore,
+      taskEvidenceBytesAfter: taskEvidenceCompaction.bytesAfter,
+      taskProofRowsCompacted: databaseEvidenceCompaction.taskProofRowsCompacted,
+      currentEvidenceRowsCompacted: databaseEvidenceCompaction.currentRowsCompacted,
+      databaseEvidenceBytesBefore: databaseEvidenceCompaction.bytesBefore,
+      databaseEvidenceBytesAfter: databaseEvidenceCompaction.bytesAfter,
+      databaseBytesBefore: databaseVacuum.bytesBefore,
+      databaseBytesAfter: databaseVacuum.bytesAfter,
+      databaseVacuumed: databaseVacuum.vacuumed,
+      recentEventBytesBefore: recentEventsCompaction.bytesBefore,
+      recentEventBytesAfter: recentEventsCompaction.bytesAfter,
+      recentEventRecordsCompacted: recentEventsCompaction.recordsCompacted,
+      memoryEventFilesSeen: memoryEventsCompaction.filesSeen,
+      memoryEventFilesRemoved: memoryEventsCompaction.filesRemoved,
+      memoryEventRecordsSeen: memoryEventsCompaction.eventsSeen,
+      memoryEventRecordsRetained: memoryEventsCompaction.eventsRetained,
+      memoryEventBytesBefore: memoryEventsCompaction.bytesBefore,
+      memoryEventBytesAfter: memoryEventsCompaction.bytesAfter,
+      migrationSnapshotFilesSeen: migrationSnapshotCompaction.filesSeen,
+      migrationSnapshotFilesCompacted: migrationSnapshotCompaction.filesCompacted,
+      migrationSnapshotBytesBefore: migrationSnapshotCompaction.bytesBefore,
+      migrationSnapshotBytesAfter: migrationSnapshotCompaction.bytesAfter,
+      migrationSnapshotUnknownFiles: migrationSnapshotCompaction.unknownFiles,
+      migrationSnapshotUnknownBytes: migrationSnapshotCompaction.unknownBytes,
       bytesBefore,
       bytesAfter,
     }
   }
-  const tasks = await compactTasks(projectRoot, stateDir, dryRun)
+  const tasks = taskCompaction ?? await compactTasks(projectRoot, tasksPath, parsedTasks, dryRun)
   const progressHeartbeatsMoved = await compactProgress(projectRoot, stateDir, dryRun)
+  progressHeartbeatCompaction = await compactProjectProgressHeartbeats(heartbeatPath, { dryRun })
   const codebaseMapCompacted = await compactCodebaseMap(projectRoot, stateDir, dryRun)
   const bytesAfter = dryRun
     ? bytesBefore
@@ -510,16 +917,69 @@ export async function compactProjectState(
     dryRun,
     repoStateMode,
     evacuatedProjectStatePaths: [],
+    evacuationManifestPath: null,
     activeTasksKept: tasks.active,
     archivedTasks: tasks.archived,
     archivedTaskFilesCompacted: tasks.compactedArchives,
+    archiveEvidenceFilesCompacted,
     activeTasksSanitized: tasks.activeSanitized,
     forbiddenTaskFieldsBefore: tasks.forbiddenBefore,
     forbiddenTaskFieldsAfter: tasks.forbiddenAfter,
     forbiddenTaskFieldFindings: tasks.forbiddenFindings,
     removedEvidenceBytes: tasks.removedEvidenceBytes,
     codebaseMapCompacted,
+    codebaseMapHistoryBytesBefore: codebaseMapHistoryCompaction.bytesBefore,
+    codebaseMapHistoryBytesAfter: codebaseMapHistoryCompaction.bytesAfter,
+    codebaseMapHistoryRecordsCompacted: Math.max(0, codebaseMapHistoryCompaction.recordsBefore - codebaseMapHistoryCompaction.recordsAfter),
     progressHeartbeatsMoved,
+    progressHeartbeatBytesBefore: progressHeartbeatCompaction.bytesBefore,
+    progressHeartbeatBytesAfter: progressHeartbeatCompaction.bytesAfter,
+    progressHeartbeatRecordsCompacted: Math.max(0, progressHeartbeatCompaction.recordsBefore - progressHeartbeatCompaction.recordsAfter),
+    exploringHistoryFilesSeen: exploringHistory.filesSeen,
+    exploringHistoryFilesCompacted: exploringHistory.filesCompacted,
+    exploringHistoryBytesBefore: exploringHistory.bytesBefore,
+    exploringHistoryBytesAfter: exploringHistory.bytesAfter,
+    sessionFilesSeen: sessionCompaction.filesSeen,
+    sessionFilesCompacted: sessionCompaction.filesCompacted,
+    sessionPendingFilesPreserved: sessionCompaction.pendingFilesPreserved,
+    sessionBytesBefore: sessionCompaction.bytesBefore,
+    sessionBytesAfter: sessionCompaction.bytesAfter,
+    contextDebugLedgerBytesBefore: contextDebugCompaction.ledgerBytesBefore,
+    contextDebugLedgerBytesAfter: contextDebugCompaction.ledgerBytesAfter,
+    contextDebugLedgerRecordsCompacted: contextDebugCompaction.ledgerRecordsCompacted,
+    contextDebugSnapshotFilesCompacted: contextDebugCompaction.snapshotFilesCompacted,
+    contextDebugSnapshotBytesBefore: contextDebugCompaction.snapshotBytesBefore,
+    contextDebugSnapshotBytesAfter: contextDebugCompaction.snapshotBytesAfter,
+    contextDebugDuplicateEventFilesRemoved: contextDebugCompaction.duplicateEventFilesRemoved,
+    contextDebugDuplicateEventBytesBefore: contextDebugCompaction.duplicateEventBytesBefore,
+    contextDebugDuplicateEventBytesAfter: contextDebugCompaction.duplicateEventBytesAfter,
+    taskEvidenceFilesSeen: taskEvidenceCompaction.filesSeen,
+    taskEvidenceFilesCompacted: taskEvidenceCompaction.filesCompacted,
+    taskEvidenceRecordsCompacted: taskEvidenceCompaction.recordsCompacted,
+    taskEvidenceBytesBefore: taskEvidenceCompaction.bytesBefore,
+    taskEvidenceBytesAfter: taskEvidenceCompaction.bytesAfter,
+    taskProofRowsCompacted: databaseEvidenceCompaction.taskProofRowsCompacted,
+    currentEvidenceRowsCompacted: databaseEvidenceCompaction.currentRowsCompacted,
+    databaseEvidenceBytesBefore: databaseEvidenceCompaction.bytesBefore,
+    databaseEvidenceBytesAfter: databaseEvidenceCompaction.bytesAfter,
+    databaseBytesBefore: databaseVacuum.bytesBefore,
+    databaseBytesAfter: databaseVacuum.bytesAfter,
+    databaseVacuumed: databaseVacuum.vacuumed,
+    recentEventBytesBefore: recentEventsCompaction.bytesBefore,
+    recentEventBytesAfter: recentEventsCompaction.bytesAfter,
+    recentEventRecordsCompacted: recentEventsCompaction.recordsCompacted,
+    memoryEventFilesSeen: memoryEventsCompaction.filesSeen,
+    memoryEventFilesRemoved: memoryEventsCompaction.filesRemoved,
+    memoryEventRecordsSeen: memoryEventsCompaction.eventsSeen,
+    memoryEventRecordsRetained: memoryEventsCompaction.eventsRetained,
+    memoryEventBytesBefore: memoryEventsCompaction.bytesBefore,
+    memoryEventBytesAfter: memoryEventsCompaction.bytesAfter,
+    migrationSnapshotFilesSeen: migrationSnapshotCompaction.filesSeen,
+    migrationSnapshotFilesCompacted: migrationSnapshotCompaction.filesCompacted,
+    migrationSnapshotBytesBefore: migrationSnapshotCompaction.bytesBefore,
+    migrationSnapshotBytesAfter: migrationSnapshotCompaction.bytesAfter,
+    migrationSnapshotUnknownFiles: migrationSnapshotCompaction.unknownFiles,
+    migrationSnapshotUnknownBytes: migrationSnapshotCompaction.unknownBytes,
     bytesBefore,
     bytesAfter,
   }

@@ -10,7 +10,7 @@
   let spine = $state<ProjectOrientationSpine | null>(null)
 
   $effect(() => {
-    projectFetch('/api/project/spine', { cache: 'no-store' })
+    projectFetch('/api/project/spine?compact=true', { cache: 'no-store' })
       .then(r => r.json())
       .then(j => {
         spine = (j?.spine ?? null) as ProjectOrientationSpine | null

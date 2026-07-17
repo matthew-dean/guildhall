@@ -6,6 +6,7 @@ import {
   type GuildhallPersistence,
   type PersistencePlacement,
 } from '@guildhall/persistence'
+import { emitProjectSummaryInvalidation } from '@guildhall/sessions'
 import { taskShapingBlockers } from '../shared/task-shaping-blockers.js'
 
 const DELIVERY_SPINE_COLLECTION = 'delivery-spine'
@@ -496,6 +497,7 @@ export async function writeProjectDeliveryModel(
     createdBy: 'guildhall-runtime',
     payload: normalized,
   })
+  emitProjectSummaryInvalidation(projectRoot, 'delivery-spine-write', { domains: ['legacy'] })
   return normalized
 }
 

@@ -1,10 +1,13 @@
-import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync } from '@guildhall/persistence'
 import { defineTool } from '@guildhall/engine'
 import { z } from 'zod'
 import { runGates } from './gate-runner.js'
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { appendTaskEvidence, inferProjectRootFromMemoryDir } from '@guildhall/sessions'
+import {
+  appendTaskEvidence,
+  readProjectStateDatabaseCurrentAuthorityFromTasksPath,
+} from '@guildhall/sessions'
 import type { HardGate } from '@guildhall/core'
 import {
   parseAuthoritativeCommands,
@@ -12,6 +15,11 @@ import {
 } from '@guildhall/core'
 import { summarizeScopedHardGateDisposition } from './gate-scope-exceptions.js'
 import { stableProofPathId } from '../runtime/proof-paths.js'
+import {
+  readProjectTaskQueueForMutationSync,
+  writePromotedTaskDetailMutation,
+  writeProjectTaskQueueWithSummary,
+} from '../runtime/project-state-boundary.js'
 
 export { reconcileRequestedGatesWithAuthority } from '@guildhall/core'
 
@@ -86,6 +94,7 @@ const runGatesInputSchema = z.object({
 export type RunGatesToolInput = z.input<typeof runGatesInputSchema>
 
 async function persistGateResultsForCurrentTask(input: {
+  cwd: string
   metadata: Record<string, unknown>
   gates: Array<{ id: string; command: string }>
   results: Array<{ gateId: string; type: 'hard' | 'soft'; passed: boolean; output?: string; checkedAt: string }>
@@ -99,8 +108,8 @@ async function persistGateResultsForCurrentTask(input: {
   if (!taskId || !tasksPath) return false
 
   try {
-    const raw = await readManagedTextFile(tasksPath, 'utf8')
-    const queue = JSON.parse(raw) as {
+    const queueRead = readProjectTaskQueueForMutationSync(tasksPath)
+    const queue = queueRead.queue as {
       version: number
       lastUpdated: string
       tasks: Array<Record<string, unknown>>
@@ -108,36 +117,65 @@ async function persistGateResultsForCurrentTask(input: {
     const task = queue.tasks.find((candidate) => candidate['id'] === taskId)
     if (!task) return false
 
-    const resultIds = new Set(input.results.map((result) => result.gateId))
-    const existingGateResults = Array.isArray(task['gateResults'])
-      ? task['gateResults'].filter((result) =>
-          result &&
-          typeof result === 'object' &&
-          !(
-            (result as Record<string, unknown>)['type'] === 'hard' &&
-            resultIds.has(String((result as Record<string, unknown>)['gateId'] ?? ''))
-          ),
+    const projectRoot = typeof input.metadata['current_task_project_path'] === 'string'
+      ? input.metadata['current_task_project_path']
+      : typeof input.metadata['current_task_workspace_project_path'] === 'string'
+        ? input.metadata['current_task_workspace_project_path']
+        : input.cwd
+    const databaseAuthority = readProjectStateDatabaseCurrentAuthorityFromTasksPath(tasksPath) === 'database'
+    const nextTask = structuredClone(task)
+    if (!databaseAuthority) {
+      const resultIds = new Set(input.results.map((result) => result.gateId))
+      const existingGateResults = Array.isArray(nextTask['gateResults'])
+        ? nextTask['gateResults'].filter((result) =>
+            result &&
+            typeof result === 'object' &&
+            !(
+              (result as Record<string, unknown>)['type'] === 'hard' &&
+              resultIds.has(String((result as Record<string, unknown>)['gateId'] ?? ''))
+            ),
         )
-      : []
-    task['gateResults'] = [...existingGateResults, ...input.results]
-    recordCommandProofPaths(task, input.gates, input.results)
+        : []
+      nextTask['gateResults'] = [...existingGateResults, ...input.results]
+    }
+    recordCommandProofPaths(nextTask, input.gates, input.results)
     const now = new Date().toISOString()
-    task['updatedAt'] = now
-    queue.lastUpdated = now
-    await writeManagedTextFile(tasksPath, JSON.stringify(queue, null, 2))
+    nextTask['updatedAt'] = now
+    if (databaseAuthority) {
+      const proofPathsChanged = JSON.stringify(task['proofPaths']) !== JSON.stringify(nextTask['proofPaths'])
+      if (proofPathsChanged) {
+        const pointMutation = writePromotedTaskDetailMutation(tasksPath, taskId, {
+          projectId: path.basename(projectRoot),
+          projectRoot,
+          mutate: (current) => ({
+            ...current,
+            proofPaths: nextTask['proofPaths'],
+            updatedAt: now,
+          }),
+        })
+        if (!pointMutation) throw new Error(`Could not persist promoted gate proof paths for task ${taskId}`)
+      }
+    } else {
+      queue.tasks[queue.tasks.findIndex((candidate) => candidate['id'] === taskId)] = nextTask
+      queue.lastUpdated = now
+      writeProjectTaskQueueWithSummary(tasksPath, queue, {
+        ...(queueRead.expectedQueueRevision !== null
+          ? { expectedQueueRevision: queueRead.expectedQueueRevision }
+          : {}),
+      })
+    }
 
-    const projectRoot = inferProjectRootFromMemoryDir(path.dirname(tasksPath))
     await Promise.all(input.results.map((result) =>
       appendTaskEvidence(projectRoot, taskId, {
         id: `${taskId}-gate-${result.gateId}-${result.checkedAt.replace(/[^0-9A-Za-z]/g, '')}`,
         kind: 'gate_result',
         recordedAt: result.checkedAt,
         payload: result,
-      }).catch(() => undefined),
+      }),
     ))
     return true
-  } catch {
-    return false
+  } catch (error) {
+    throw error instanceof Error ? error : new Error(String(error))
   }
 }
 
@@ -267,6 +305,7 @@ export const runGatesTool = defineTool({
       summary.results,
     )
     const persistedTaskGateResults = await persistGateResultsForCurrentTask({
+      cwd: input.cwd,
       metadata: ctx.metadata,
       gates: effective.gates,
       results: summary.results,

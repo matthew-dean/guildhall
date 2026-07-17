@@ -6,7 +6,9 @@ import { z } from 'zod'
 import {
   atomicWriteText,
   getProjectSystemStateDir,
+  getProjectSystemStatePath,
   getProjectSystemStatePathFromMemoryDir,
+  replaceProjectStateDatabaseOwnerInputs,
 } from '@guildhall/sessions'
 import {
   createBoundedChatSession,
@@ -22,6 +24,7 @@ import {
   type OwnerInputRequest as OwnerInputRequestRecord,
 } from './owner-input.js'
 import { normalizeStructuredOwnerQuestion } from './owner-question-normalizer.js'
+import { updateProjectSummaryProjection } from './project-summary-projection.js'
 
 const OwnerQuestionInput = z.object({
   kind: z.string().optional(),
@@ -123,6 +126,7 @@ export async function createOwnerInputRequest(
     createdBy: input.actor,
   })
   await writeOwnerInputRequest(memoryDir, request)
+  refreshOwnerInputProjection(input.projectRoot, input.now)
   return { request, session, created: true }
 }
 
@@ -203,7 +207,40 @@ export async function markOwnerInputRequestForBoundedChatReview(input: {
     ],
   })
   await writeOwnerInputRequest(projectMemoryDir(input.projectRoot), next)
+  refreshOwnerInputProjection(input.projectRoot, now)
   return next
+}
+
+export function refreshOwnerInputProjection(projectRoot: string, updatedAt: string): void {
+  const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+  const openRequests = listOwnerInputRequestsSync(projectRoot)
+    .filter(request => request.status === 'waiting_for_owner' || request.status === 'coordinator_review')
+    .sort((left, right) => left.updatedAt.localeCompare(right.updatedAt) || left.id.localeCompare(right.id))
+  const next = openRequests[0]
+  replaceProjectStateDatabaseOwnerInputs(projectRoot, openRequests.map(request => ({
+    id: request.id,
+    status: request.status,
+    prompt: request.prompt,
+    taskId: request.source.kind === 'task' ? request.source.taskId : null,
+    updatedAt: request.updatedAt,
+    payload: request,
+  })))
+  updateProjectSummaryProjection(tasksPath, {
+    ownerInput: {
+      openCount: openRequests.length,
+      next: next
+        ? {
+            id: next.id,
+            prompt: next.prompt,
+            ...(next.source.kind === 'task' ? { taskId: next.source.taskId } : {}),
+            ...(next.target.kind === 'project_structure' || next.target.kind === 'structure' || next.target.kind === 'settings'
+              ? next.target.href ? { href: next.target.href } : {}
+              : {}),
+          }
+        : null,
+      updatedAt,
+    },
+  })
 }
 
 async function writeOwnerInputRequest(memoryDir: string, request: OwnerInputRequestRecord): Promise<void> {

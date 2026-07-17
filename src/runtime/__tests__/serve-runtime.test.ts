@@ -6,7 +6,7 @@ import path from 'node:path'
 import { promisify } from 'node:util'
 
 import { bootstrapWorkspace } from '@guildhall/config'
-import { getProjectStateDir } from '@guildhall/sessions'
+import { getProjectStateDir, getProjectSystemStatePath } from '@guildhall/sessions'
 import { buildServeApp } from '../serve.js'
 import {
   ProjectRuntimeSupervisor,
@@ -22,6 +22,7 @@ import { createCapabilityRequest, listCapabilityRequests } from '../capability-r
 import { readRuntimeCommandEvidence } from '../project-runtime-command.js'
 import type { DevServerRecord, StartDevServerRequest } from '../dev-server-manager.js'
 import { applyProjectMigrations } from '../migrations.js'
+import { writeProjectTaskQueueWithSummary } from '../project-state-boundary.js'
 
 const execFileP = promisify(execFile)
 const PROJECT_ID = 'runtime-test'
@@ -146,8 +147,12 @@ class FakeDevServerManager {
 }
 
 function scoped(pathname: string): string {
-  const separator = pathname.includes('?') ? '&' : '?'
-  return `http://localhost${pathname}${separator}projectId=${encodeURIComponent(PROJECT_ID)}`
+  const url = new URL(`http://localhost${pathname}`)
+  url.searchParams.set('projectId', PROJECT_ID)
+  if (url.pathname === '/api/project' && !url.searchParams.has('compact') && !url.searchParams.has('detail')) {
+    url.searchParams.set('detail', 'true')
+  }
+  return url.toString()
 }
 
 beforeEach(async () => {
@@ -163,7 +168,23 @@ beforeEach(async () => {
   await execFileP('git', ['config', 'user.email', 'guildhall@example.test'], { cwd: tmpDir })
   await execFileP('git', ['add', '.'], { cwd: tmpDir })
   await execFileP('git', ['commit', '-m', 'init'], { cwd: tmpDir })
-  await applyProjectMigrations({ projectRoot: tmpDir, only: ['0.10.0/project-state-storage-boundary'] })
+  writeProjectTaskQueueWithSummary(getProjectSystemStatePath(tmpDir, 'TASKS.json'), {
+    version: 1,
+    lastUpdated: new Date().toISOString(),
+    tasks: [],
+  }, { projectRoot: tmpDir })
+  const prerequisites = await applyProjectMigrations({ projectRoot: tmpDir, includePrompt: true })
+  expect(prerequisites.failed).toEqual([])
+  const finalize = await applyProjectMigrations({
+    projectRoot: tmpDir,
+    only: ['0.13.0/project-state-finalize'],
+  })
+  expect(finalize.failed).toEqual([])
+  const cleanup = await applyProjectMigrations({
+    projectRoot: tmpDir,
+    only: ['0.13.0/project-state-legacy-live-file-cleanup'],
+  })
+  expect(cleanup.failed).toEqual([])
 })
 
 afterEach(async () => {

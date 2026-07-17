@@ -20,7 +20,7 @@ describe('release artifact contract', () => {
     expect(workflow).toContain("node-version: '22'")
     expect(prWorkflow).toContain("node-version: '22'")
     expect(docsWorkflow).toContain("node-version: '22'")
-    expect(manifest.engines?.node).toBe('>=22')
+    expect(manifest.engines?.node).toBe('>=22.12.0')
     expect(workflow).toContain('pnpm model:bakeoff')
     expect(workflow).toContain('pnpm build:macos-package')
     expect(workflow).toContain('guildhall-macos.tar.gz')

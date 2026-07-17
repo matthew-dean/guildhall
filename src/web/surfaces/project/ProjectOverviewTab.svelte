@@ -1658,13 +1658,14 @@
     gap: var(--s-2);
   }
   .signals-grid {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    grid-auto-rows: max-content;
+    display: flex;
+    flex-wrap: wrap;
     gap: var(--s-2);
     align-items: start;
   }
   .signals-grid > :global(.signal-row) {
+    flex: 1 1 calc((100% - (2 * var(--s-2))) / 3);
+    block-size: fit-content;
     min-block-size: 0;
     align-self: start;
   }
@@ -1708,7 +1709,7 @@
     overflow-wrap: anywhere;
   }
   .signals-grid > :global(.signal-row--wide) {
-    grid-column: 1 / -1;
+    flex-basis: 100%;
   }
   :global(.signal-row--wide div) {
     max-inline-size: var(--gh-layout-measure-comfortable);
@@ -1802,18 +1803,14 @@
   }
 
   @container (max-width: 52rem) {
-    .signals-grid {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
     .signals-grid > :global(.signal-row) {
-      grid-column: auto;
+      flex-basis: calc((100% - var(--s-2)) / 2);
     }
-    .signals-grid > :global(.signal-row--wide) { grid-column: 1 / -1; }
+    .signals-grid > :global(.signal-row--wide) { flex-basis: 100%; }
   }
 
   @container (max-width: 36rem) {
-    .signals-grid { grid-template-columns: 1fr; }
     .signals-grid > :global(.signal-row),
-    .signals-grid > :global(.signal-row--wide) { grid-column: 1; }
+    .signals-grid > :global(.signal-row--wide) { flex-basis: 100%; }
   }
 </style>

@@ -60,7 +60,7 @@
         ? { actionModel: current.actionModel ?? null, startReadiness: current.startReadiness ?? null }
         : null
       if (!projectJson) {
-        const projectRes = await projectFetch('/api/project')
+        const projectRes = await projectFetch('/api/project?surface=overview&compact=true')
         projectJson = projectRes.ok
           ? await projectRes.json() as typeof projectJson
           : null
@@ -81,7 +81,7 @@
         threadTurn = null
         return
       }
-      const inboxRes = await projectFetch('/api/project/inbox')
+      const inboxRes = await projectFetch('/api/project/inbox?includeHistory=false')
       if (inboxRes.ok) {
         const j = (await inboxRes.json()) as { items?: InboxItem[] }
         items = j.items ?? []

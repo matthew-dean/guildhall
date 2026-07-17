@@ -18,19 +18,32 @@ import {
 import { defaultAgentSettingsPath, loadLeverSettings, makeDefaultSettings } from '@guildhall/levers'
 import { proposeProjectSkill } from '@guildhall/skills'
 import {
+  appendTaskEvidence,
+  ensureProjectLocalHistoryDir,
   getProjectLocalHistoryDir,
   getProjectSystemStatePath,
   getProjectTranscriptPath,
+  readProjectStateDatabaseQueueDefinition,
   readProjectStateJsonAsync,
+  promoteProjectStateDatabaseAuthority,
+  upsertTaskRuntimeState,
+  upsertTaskWorkspaceState,
   writeProjectStateJsonAsync,
   writeProjectStateTextAsync,
 } from '@guildhall/sessions'
 import { buildServeApp } from '../serve.js'
+import { buildEffectiveTask } from '../effective-task.js'
 import { persistLearningCandidates } from '../learning.js'
+import { applyProjectMigrations, getProjectMigrationStatus } from '../migrations.js'
 import { acceptStructuralMap, draftStructuralMap, submitStructuralMapForReview } from '../structural-map.js'
 import { createProjectDependencyRequest } from '../project-graph.js'
 import { createOwnerInputRequest } from '../owner-input-store.js'
+import { detectWorkspaceSignals } from '../workspace-import/detect.js'
+import { formWorkspaceHypothesis } from '../workspace-import/hypothesis.js'
+import { buildWorkspaceImportReview } from '../workspace-import/review.js'
 import { OrchestratorSupervisor } from '../serve-supervisor.js'
+import { sanitizeTaskQueueForProjectWrite } from '../project-state-boundary.js'
+import { writeProjectSummaryProjectionFromUnknownQueue } from '../project-summary-projection.js'
 import type { LearningCandidate } from '../policy.js'
 
 const execFileP = promisify(execFile)
@@ -46,46 +59,197 @@ let previousConfigDir: string | undefined
 let previousSemanticRecall: string | undefined
 let previousObservationalMemory: string | undefined
 let previousEngineGate: string | undefined
+let previousSubstrate: string | undefined
 let systemDir: string
 const PROJECT_ID = 'settings-test'
 
 function scoped(pathname: string): string {
-  const separator = pathname.includes('?') ? '&' : '?'
-  return `http://localhost${pathname}${separator}projectId=${encodeURIComponent(PROJECT_ID)}`
+  const url = new URL(`http://localhost${pathname}`)
+  url.searchParams.set('projectId', PROJECT_ID)
+  if (url.pathname === '/api/project' && !url.searchParams.has('compact') && !url.searchParams.has('detail')) {
+    url.searchParams.set('detail', 'true')
+  }
+  return url.toString()
 }
 
 async function readTasks(tmpPath: string): Promise<Array<Record<string, any>>> {
-  const raw = await readProjectStateJsonAsync<
-    | Array<Record<string, any>>
-    | { tasks?: Array<Record<string, any>> }
-  >(tmpPath, 'TASKS.json')
-  return Array.isArray(raw) ? raw : raw.tasks ?? []
+  const tasksPath = getProjectSystemStatePath(tmpPath, 'TASKS.json')
+  const queue = readProjectStateDatabaseQueueDefinition(tasksPath)
+  if (!queue) throw new Error('Missing canonical SQLite task queue')
+  return await Promise.all(queue.tasks.map(task => buildEffectiveTask(tmpPath, task as any))) as Array<Record<string, any>>
+}
+
+type TaskFixture = {
+  definition: Record<string, any>
+  runtime?: Record<string, any>
+  workspace?: Record<string, any>
+  evidence?: Array<Record<string, any>>
+}
+
+const runtimeFixtureFields = ['assignedTo', 'revisionCount', 'retryWindow', 'proofRecovery', 'remediationAttempts', 'handoffStep'] as const
+const workspaceFixtureFields = ['worktreePath', 'branchName', 'baseBranch'] as const
+
+function fixtureEvent(taskId: string, kind: string, value: Record<string, any>, index: number, recordedAt: string): Record<string, any> {
+  return {
+    id: String(value.id ?? `${taskId}-${kind}-${index + 1}`),
+    taskId,
+    kind,
+    recordedAt,
+    payload: value,
+  }
+}
+
+function normalizeTaskFixture(task: Record<string, any>, now: string): TaskFixture {
+  const taskId = String(task.id ?? task.definition?.id ?? '')
+  const definition = { ...task, ...(task.definition ?? {}) }
+  delete definition.definition
+  delete definition.runtime
+  delete definition.workspace
+  delete definition.evidence
+
+  const runtime: Record<string, any> = { ...(task.runtime ?? {}) }
+  const workspace: Record<string, any> = { ...(task.workspace ?? {}) }
+  const evidenceKinds = new Set(['event', 'note', 'gate_result', 'review_verdict', 'adjudication', 'escalation', 'agent_issue', 'merge_record', 'git_story'])
+  const evidence: Array<Record<string, any>> = (task.evidence ?? [])
+    .filter((event: Record<string, any>) => evidenceKinds.has(String(event.kind)))
+
+  for (const field of runtimeFixtureFields) {
+    if (!(field in definition)) continue
+    if ((field === 'revisionCount' || field === 'remediationAttempts') && definition[field] === 0) {
+      delete definition[field]
+      continue
+    }
+    runtime[field] = definition[field]
+    delete definition[field]
+  }
+  for (const field of workspaceFixtureFields) {
+    if (!(field in definition)) continue
+    workspace[field] = definition[field]
+    delete definition[field]
+  }
+
+  const evidenceCollections: Array<{ field: string; kind: string; timestamp: (value: Record<string, any>) => string | undefined }> = [
+    { field: 'notes', kind: 'note', timestamp: value => value.timestamp },
+    { field: 'gateResults', kind: 'gate_result', timestamp: value => value.checkedAt },
+    { field: 'reviewVerdicts', kind: 'review_verdict', timestamp: value => value.recordedAt },
+    { field: 'adjudications', kind: 'adjudication', timestamp: value => value.decidedAt },
+    { field: 'escalations', kind: 'escalation', timestamp: value => value.raisedAt },
+    { field: 'agentIssues', kind: 'agent_issue', timestamp: value => value.raisedAt },
+  ]
+  for (const collection of evidenceCollections) {
+    const values = definition[collection.field]
+    if (!Array.isArray(values)) continue
+    values.forEach((value: Record<string, any>, index: number) => {
+      evidence.push(fixtureEvent(taskId, collection.kind, value, index, collection.timestamp(value) ?? now))
+    })
+    delete definition[collection.field]
+  }
+  if ('mergeRecord' in definition) {
+    const value = definition.mergeRecord as Record<string, any>
+    evidence.push(fixtureEvent(taskId, 'merge_record', value, 0, value.mergedAt ?? now))
+    delete definition.mergeRecord
+  }
+
+  if (!Array.isArray(runtime.openEscalationIds) && Array.isArray(task.escalations)) {
+    runtime.openEscalationIds = task.escalations.filter((value: Record<string, any>) => !value.resolvedAt).map((value: Record<string, any>) => String(value.id))
+  }
+  if (!Array.isArray(runtime.openIssueIds) && Array.isArray(task.agentIssues)) {
+    runtime.openIssueIds = task.agentIssues.filter((value: Record<string, any>) => !value.resolvedAt).map((value: Record<string, any>) => String(value.id))
+  }
+  if (Object.keys(runtime).length > 0) runtime.updatedAt ??= definition.updatedAt ?? now
+  if (Object.keys(workspace).length > 0) workspace.updatedAt ??= definition.updatedAt ?? now
+
+  return {
+    definition,
+    ...(Object.keys(runtime).length > 0 ? { runtime } : {}),
+    ...(Object.keys(workspace).length > 0 ? { workspace } : {}),
+    ...(evidence.length > 0 ? { evidence } : {}),
+  }
+}
+
+async function refreshCanonicalSummary(): Promise<void> {
+  const tasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
+  const queue = readProjectStateDatabaseQueueDefinition(tasksPath)
+  if (!queue) throw new Error('Missing canonical SQLite task queue')
+  const projectionTasks = await Promise.all(queue.tasks.map(task => buildEffectiveTask(tmpDir, task as any)))
+  writeProjectSummaryProjectionFromUnknownQueue(tasksPath, {
+    projectId: PROJECT_ID,
+    projectRoot: tmpDir,
+    queue,
+    projectionTasks,
+    queueCommit: false,
+  })
+}
+
+async function applyCanonicalMigrations(): Promise<void> {
+  const status = await getProjectMigrationStatus({ projectRoot: tmpDir })
+  if (status.blocked.length === 0) return
+  const result = await applyProjectMigrations({
+    projectRoot: tmpDir,
+    only: status.blocked.map(item => item.id),
+    appVersion: 'serve-settings-test',
+  })
+  if (result.failed.length > 0) {
+    throw new Error(result.failed.map(item => `${item.id}: ${item.error}`).join('; '))
+  }
+  const remaining = await getProjectMigrationStatus({ projectRoot: tmpDir })
+  if (remaining.blocked.length > 0) {
+    throw new Error(`Required migrations remain blocked: ${remaining.blocked.map(item => item.id).join(', ')}`)
+  }
+}
+
+async function readLiveWorkspaceImportReview(): Promise<ReturnType<typeof buildWorkspaceImportReview>> {
+  const inventory = await detectWorkspaceSignals({ projectPath: tmpDir })
+  return buildWorkspaceImportReview(formWorkspaceHypothesis(inventory), [], tmpDir)
 }
 
 async function writeSystemTasks(queue: unknown): Promise<void> {
-  await writeProjectStateJsonAsync(tmpDir, 'TASKS.json', queue)
+  const tasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
+  const sourceQueue = queue as Record<string, any>
+  const now = typeof sourceQueue.lastUpdated === 'string' ? sourceQueue.lastUpdated : new Date().toISOString()
+  const fixtures = (Array.isArray(sourceQueue.tasks) ? sourceQueue.tasks : []).map(task => normalizeTaskFixture(task, now))
+  const definitionQueue = {
+    ...sourceQueue,
+    tasks: fixtures.map(fixture => fixture.definition),
+  }
+  const normalizedQueue = sanitizeTaskQueueForProjectWrite(definitionQueue).queue
+  writeProjectSummaryProjectionFromUnknownQueue(tasksPath, {
+    projectId: PROJECT_ID,
+    projectRoot: tmpDir,
+    queue: normalizedQueue,
+    taskDefinitionsAlreadySanitized: true,
+  })
+  promoteProjectStateDatabaseAuthority(tmpDir)
+  for (const [index, fixture] of fixtures.entries()) {
+    const taskId = String(fixture.definition.id ?? '')
+    if (!taskId) throw new Error(`Missing seeded task id at index ${index}`)
+    if (fixture.runtime) await upsertTaskRuntimeState(tmpDir, taskId, fixture.runtime)
+    if (fixture.workspace) await upsertTaskWorkspaceState(tmpDir, taskId, fixture.workspace)
+    for (const event of fixture.evidence ?? []) await appendTaskEvidence(tmpDir, taskId, event)
+  }
+  await refreshCanonicalSummary()
+  await applyCanonicalMigrations()
 }
 
 async function writeSystemText(relativePath: string, content: string): Promise<void> {
+  if (relativePath === 'TASKS.json') {
+    await writeSystemTasks(JSON.parse(content))
+    return
+  }
   await writeProjectStateTextAsync(tmpDir, relativePath, content)
 }
 
 async function writeSystemJson(relativePath: string, value: unknown): Promise<void> {
+  if (relativePath === 'TASKS.json') {
+    await writeSystemTasks(value)
+    return
+  }
   await writeProjectStateJsonAsync(tmpDir, relativePath, value)
+  await applyCanonicalMigrations()
 }
 
-async function applyStorageBoundaryMigration(app: ReturnType<typeof buildServeApp>['app']): Promise<void> {
-  const migration = await app.fetch(
-    new Request(scoped('/api/project/migrations/apply'), {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        includePrompt: true,
-        migrationId: '0.10.0/project-state-storage-boundary',
-      }),
-    }),
-  )
-  expect(migration.status).toBe(200)
+async function writeLegacySystemJson(relativePath: string, value: unknown): Promise<void> {
+  await writeProjectStateJsonAsync(tmpDir, relativePath, value)
 }
 
 async function readFirstOwnerInputRequest(): Promise<{ boundedChatSessionId: string }> {
@@ -132,6 +296,7 @@ beforeEach(async () => {
   previousSemanticRecall = process.env.GUILDHALL_MEMORY_SEMANTIC_RECALL
   previousObservationalMemory = process.env.GUILDHALL_MEMORY_OBSERVATIONAL
   previousEngineGate = process.env.GUILDHALL_MEMORY_ENGINE_GATE
+  previousSubstrate = process.env.GUILDHALL_MEMORY_SUBSTRATE
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-serve-settings-'))
   systemDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-serve-settings-system-'))
   process.env.HOME = tmpDir
@@ -155,6 +320,8 @@ afterEach(async () => {
   else process.env.GUILDHALL_MEMORY_OBSERVATIONAL = previousObservationalMemory
   if (previousEngineGate === undefined) delete process.env.GUILDHALL_MEMORY_ENGINE_GATE
   else process.env.GUILDHALL_MEMORY_ENGINE_GATE = previousEngineGate
+  if (previousSubstrate === undefined) delete process.env.GUILDHALL_MEMORY_SUBSTRATE
+  else process.env.GUILDHALL_MEMORY_SUBSTRATE = previousSubstrate
   await fs.rm(tmpDir, { recursive: true, force: true })
   await fs.rm(systemDir, { recursive: true, force: true })
 })
@@ -215,11 +382,7 @@ describe('project re-intake endpoints', () => {
       ].join('\n'),
       'utf8',
     )
-    const tasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
-    await fs.mkdir(path.dirname(tasksPath), { recursive: true })
-    await fs.writeFile(
-      tasksPath,
-      JSON.stringify({
+    await writeSystemTasks({
         version: 1,
         lastUpdated: '2026-05-30T20:00:00.000Z',
         tasks: [{
@@ -245,9 +408,7 @@ describe('project re-intake endpoints', () => {
           createdAt: '2026-05-30T20:00:00.000Z',
           updatedAt: '2026-05-30T20:00:00.000Z',
         }],
-      }, null, 2),
-      'utf8',
-    )
+        })
 
     const { app } = buildServeApp({ projectPath: tmpDir })
     const rerun = await app.fetch(new Request(scoped('/api/project/reintake/rerun'), { method: 'POST' }))
@@ -371,10 +532,10 @@ describe('general project status endpoints', () => {
     expect(initial.status).toBe(200)
     const initialBody = await initial.json() as Record<string, any>
     expect(initialBody).toMatchObject({
-      configured: true,
-      counts: { abstractions: 1 },
+      configured: false,
+      counts: { abstractions: 0 },
     })
-    expect(initialBody.generatedAt).toEqual(expect.any(String))
+    expect(initialBody.generatedAt).toBeNull()
 
     const refresh = await app.fetch(new Request(scoped('/api/project/codebase-map/refresh'), { method: 'POST' }))
     expect(refresh.status).toBe(200)
@@ -473,7 +634,7 @@ describe('general project status endpoints', () => {
       ignore: ['node_modules', 'dist', '.git', 'coverage'],
     })
     writeProjectConfig(tmpDir, { ...readProjectConfig(tmpDir), preferredProvider: 'openai-api' })
-    const { app } = buildServeApp({ projectPath: tmpDir })
+    const { app, refreshProjectProjections } = buildServeApp({ projectPath: tmpDir })
 
     const status = await app.fetch(new Request(scoped('/api/setup/status')))
     expect(status.status).toBe(200)
@@ -741,12 +902,11 @@ describe('POST /api/project/start', () => {
     expect(migrationsBody.blocked.map((item: { id: string }) => item.id)).toContain('0.8.0/project-state-layout')
 
     const project = await app.fetch(new Request(scoped('/api/project')))
-    expect(project.status).toBe(200)
-    const projectBody = await project.json() as { startReadiness?: Record<string, any> }
-    expect(projectBody.startReadiness).toMatchObject({
-      canStart: false,
-      code: 'required_migration_pending',
-      actionHref: '/migrations',
+    expect(project.status).toBe(503)
+    const projectBody = await project.json() as { detailPayload?: Record<string, any> }
+    expect(projectBody.detailPayload).toMatchObject({
+      unavailable: true,
+      requiresRefresh: true,
     })
 
     const start = await app.fetch(new Request(scoped('/api/project/start'), { method: 'POST', body: '{}' }))
@@ -771,10 +931,11 @@ describe('POST /api/project/start', () => {
     expect(afterBody.blocked).toEqual([])
   })
 
-  it('projects required migrations into durable inbox history without making them dismissible', async () => {
+  it('leaves the inbox empty until the saved attention projection is materialized', async () => {
     await fs.mkdir(path.join(tmpDir, 'memory'), { recursive: true })
     await fs.writeFile(path.join(tmpDir, 'memory', 'MEMORY.md'), '# Legacy\n', 'utf8')
-    const { app } = buildServeApp({ projectPath: tmpDir })
+    await writeSystemTasks({ version: 1, lastUpdated: new Date().toISOString(), tasks: [] })
+    const { app, refreshProjectProjections } = buildServeApp({ projectPath: tmpDir })
 
     const before = await app.fetch(new Request(scoped('/api/project/inbox')))
     expect(before.status).toBe(200)
@@ -782,14 +943,12 @@ describe('POST /api/project/start', () => {
       items?: Array<Record<string, any>>
       history?: Array<Record<string, any>>
     }
-    expect(beforeBody.items?.find(item => item.id === 'migration:0.8.0/project-state-layout')).toMatchObject({
-      kind: 'required_migration',
-      status: 'open',
-      blocking: true,
-      dismissible: false,
-      actionHref: '/migrations',
+    expect(beforeBody).toMatchObject({
+      items: [],
+      history: [],
+      freshness: 'missing',
+      requiresRefresh: true,
     })
-    expect(beforeBody.history?.find(item => item.id === 'migration:0.8.0/project-state-layout')?.dismissEndpoint).toBeUndefined()
 
     const apply = await app.fetch(new Request(scoped('/api/project/migrations/apply'), {
       method: 'POST',
@@ -798,19 +957,18 @@ describe('POST /api/project/start', () => {
     }))
     expect(apply.status).toBe(200)
 
+    await refreshProjectProjections(tmpDir)
+
     const after = await app.fetch(new Request(scoped('/api/project/inbox')))
     const afterBody = (await after.json()) as {
       items?: Array<Record<string, any>>
       history?: Array<Record<string, any>>
     }
     expect(afterBody.items?.some(item => item.id === 'migration:0.8.0/project-state-layout')).toBe(false)
-    expect(afterBody.history?.find(item => item.id === 'migration:0.8.0/project-state-layout')).toMatchObject({
-      status: 'resolved',
-      resolution: 'migrated',
-    })
+    expect(afterBody.history?.some(item => item.id === 'migration:0.8.0/project-state-layout')).toBe(false)
   })
 
-  it('keeps draft-shaping queues out of needs-you while a required migration owns the project blocker', async () => {
+  it('does not rebuild migration or draft alerts from legacy task files', async () => {
     const yamlPath = path.join(tmpDir, 'guildhall.yaml')
     const current = await fs.readFile(yamlPath, 'utf8')
     await fs.writeFile(
@@ -824,7 +982,7 @@ describe('POST /api/project/start', () => {
       'project-brief.md',
       'This project already has a scoped import outcome and a current stage.\n',
     )
-    await writeSystemJson(
+    await writeLegacySystemJson(
       'TASKS.json',
       {
         version: 1,
@@ -855,8 +1013,7 @@ describe('POST /api/project/start', () => {
       items?: Array<Record<string, any>>
     }
 
-    expect(body.items?.some(item => item.kind === 'required_migration')).toBe(true)
-    expect(body.items?.some(item => item.kind === 'import_draft_queue')).toBe(false)
+    expect(body.items).toEqual([])
   })
 
   it('includes project start readiness in service summaries so fleet cards inherit start blockers', async () => {
@@ -865,7 +1022,7 @@ describe('POST /api/project/start', () => {
     await fs.writeFile(path.join(tmpDir, 'memory', 'MEMORY.md'), '# Legacy\n', 'utf8')
     const { app } = buildServeApp({ projectPath: tmpDir })
 
-    const service = await app.fetch(new Request('http://localhost/api/service'))
+    const service = await app.fetch(new Request('http://localhost/api/service?detail=true'))
     expect(service.status).toBe(200)
     const body = (await service.json()) as {
       projects?: Array<{
@@ -895,12 +1052,11 @@ describe('POST /api/project/start', () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
 
     const project = await app.fetch(new Request(scoped('/api/project')))
-    expect(project.status).toBe(200)
-    const projectBody = await project.json() as { startReadiness?: Record<string, any> }
-    expect(projectBody.startReadiness).toMatchObject({
-      canStart: false,
-      code: 'runtime_too_old',
-      actionHref: '/settings/about',
+    expect(project.status).toBe(503)
+    const projectBody = await project.json() as { detailPayload?: Record<string, any> }
+    expect(projectBody.detailPayload).toMatchObject({
+      unavailable: true,
+      requiresRefresh: true,
     })
 
     const start = await app.fetch(new Request(scoped('/api/project/start'), { method: 'POST', body: '{}' }))
@@ -923,11 +1079,7 @@ describe('POST /api/project/start', () => {
 
   it('marks all-terminal projects as not startable', async () => {
     const now = new Date().toISOString()
-    const tasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
-    await fs.mkdir(path.dirname(tasksPath), { recursive: true })
-    await fs.writeFile(
-      tasksPath,
-      JSON.stringify({
+    await writeSystemTasks({
         version: 1,
         lastUpdated: now,
         tasks: [
@@ -974,19 +1126,9 @@ describe('POST /api/project/start', () => {
             updatedAt: now,
           },
         ],
-      }, null, 2),
-      'utf8',
-    )
+    })
 
     const { app } = buildServeApp({ projectPath: tmpDir })
-    await app.fetch(new Request(scoped('/api/project/migrations/apply'), {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        includePrompt: true,
-        migrationId: '0.10.0/project-state-storage-boundary',
-      }),
-    }))
     const res = await app.fetch(new Request(scoped('/api/project')))
 
     expect(res.status).toBe(200)
@@ -1000,11 +1142,7 @@ describe('POST /api/project/start', () => {
 
   it('returns a no-op start response when all tasks are terminal', async () => {
     const now = new Date().toISOString()
-    const tasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
-    await fs.mkdir(path.dirname(tasksPath), { recursive: true })
-    await fs.writeFile(
-      tasksPath,
-      JSON.stringify({
+    await writeSystemTasks({
         version: 1,
         lastUpdated: now,
         tasks: [
@@ -1051,19 +1189,9 @@ describe('POST /api/project/start', () => {
             updatedAt: now,
           },
         ],
-      }, null, 2),
-      'utf8',
-    )
+    })
 
     const { app } = buildServeApp({ projectPath: tmpDir })
-    await app.fetch(new Request(scoped('/api/project/migrations/apply'), {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        includePrompt: true,
-        migrationId: '0.10.0/project-state-storage-boundary',
-      }),
-    }))
     const res = await app.fetch(
       new Request(scoped('/api/project/start'), { method: 'POST', body: '{}' }),
     )
@@ -1145,7 +1273,6 @@ describe('POST /api/project/start', () => {
     updateGlobalConfig({ preferredProvider: 'anthropic-api' })
 
     const { app } = buildServeApp({ projectPath: tmpDir })
-    await applyStorageBoundaryMigration(app)
     const projectRes = await app.fetch(new Request(scoped('/api/project')))
     expect(projectRes.status).toBe(200)
     const projectBody = await projectRes.json() as {
@@ -1295,7 +1422,6 @@ describe('POST /api/project/start', () => {
     updateGlobalConfig({ preferredProvider: 'anthropic-api' })
 
     const { app } = buildServeApp({ projectPath: tmpDir })
-    await applyStorageBoundaryMigration(app)
     const projectRes = await app.fetch(new Request(scoped('/api/project')))
     expect(projectRes.status).toBe(200)
     const body = await projectRes.json() as {
@@ -1316,7 +1442,7 @@ describe('POST /api/project/start', () => {
     expect(body.orientationSpine?.summary?.topBlocker ?? '').not.toBe('Workspace import is under-scoped.')
   })
 
-  it('treats inferred release membership as consumed when only later work remains runnable', async () => {
+  it('materializes explicit task release membership before saved readiness reads', async () => {
     const now = new Date().toISOString()
     await writeSystemTasks({
       version: 1,
@@ -1372,7 +1498,6 @@ describe('POST /api/project/start', () => {
     updateGlobalConfig({ preferredProvider: 'anthropic-api' })
 
     const { app } = buildServeApp({ projectPath: tmpDir })
-    await applyStorageBoundaryMigration(app)
     const projectRes = await app.fetch(new Request(scoped('/api/project')))
     const projectBody = await projectRes.json() as {
       startReadiness?: { canStart?: boolean; code?: string; message?: string }
@@ -1383,23 +1508,19 @@ describe('POST /api/project/start', () => {
       canStart: false,
       code: 'all_terminal',
     })
-    expect(projectBody.startReadiness?.message).toContain('Headless MVP')
-    expect(projectBody.startReadiness?.message).toContain('outside this release')
+    expect(projectBody.startReadiness?.message).toContain('headless-mvp is complete')
+    expect(projectBody.startReadiness?.message).toContain('1 ready task remains outside this release')
     expect(projectBody.actionModel?.runControl?.startEnabled).toBe(false)
 
     const startRes = await app.fetch(
       new Request(scoped('/api/project/start'), { method: 'POST', body: '{}' }),
     )
     expect(startRes.status).toBe(200)
-    const startBody = await startRes.json() as { status?: string; code?: string; stopSummary?: { reason?: string } }
-    expect(startBody).toMatchObject({
-      status: 'stopped',
-      code: 'all_terminal',
-      stopSummary: { reason: 'all_terminal' },
-    })
+    const startBody = await startRes.json() as { code?: string }
+    expect(startBody.code).toBe('all_terminal')
   })
 
-  it('keeps inferred release child splits in start readiness even when they are hidden from project totals', async () => {
+  it('does not infer a release from task membership during saved readiness reads', async () => {
     const now = new Date().toISOString()
     await writeSystemTasks({
       version: 1,
@@ -1434,6 +1555,7 @@ describe('POST /api/project/start', () => {
           description: 'A generated child split under the selected release parent.',
           domain: 'core',
           status: 'spec_review',
+          workVisibility: { kind: 'primary', countInProjectTotals: true },
           hierarchy: { parentId: 'release-parent', childIds: [], relation: 'decomposes', order: 0 },
           spec: 'Spec that needs owner review.',
           priority: 'normal',
@@ -1457,7 +1579,6 @@ describe('POST /api/project/start', () => {
     updateGlobalConfig({ preferredProvider: 'anthropic-api' })
 
     const { app } = buildServeApp({ projectPath: tmpDir })
-    await applyStorageBoundaryMigration(app)
     const projectRes = await app.fetch(new Request(scoped('/api/project')))
     expect(projectRes.status).toBe(200)
     const projectBody = await projectRes.json() as {
@@ -1476,16 +1597,18 @@ describe('POST /api/project/start', () => {
     const readinessRes = await app.fetch(new Request(scoped('/api/project/release-readiness')))
     const readiness = await readinessRes.json() as {
       totals?: { tasks?: number; unfinishedCount?: number; humanBlockingCount?: number }
-      statusCounts?: Record<string, number>
-      unapprovedSpecs?: Array<{ id: string }>
+      diagnostics?: {
+        statusCounts?: Record<string, number>
+        unapprovedSpecs?: Array<{ id: string }>
+      }
     }
     expect(readiness.totals).toMatchObject({
       tasks: 1,
-      unfinishedCount: 0,
+      unfinishedCount: 1,
       humanBlockingCount: 1,
     })
     expect(readiness.statusCounts?.spec_review).toBeUndefined()
-    expect(readiness.unapprovedSpecs?.map(spec => spec.id)).toContain('release-parent-split-review-proof')
+    expect(readiness.diagnostics?.unapprovedSpecs).toBeUndefined()
   })
 
   it('does not call a selected release consumed when completed current work is still missing proof', async () => {
@@ -1557,9 +1680,9 @@ describe('POST /api/project/start', () => {
     setProvider('anthropic-api', { apiKey: 'sk-ant-test' })
     updateGlobalConfig({ preferredProvider: 'anthropic-api' })
     writeProjectConfig(tmpDir, { ...readProjectConfig(tmpDir), preferredProvider: 'anthropic-api' })
+    await applyCanonicalMigrations()
 
     const { app } = buildServeApp({ projectPath: tmpDir })
-    await applyStorageBoundaryMigration(app)
     const projectRes = await app.fetch(new Request(scoped('/api/project')))
     expect(projectRes.status).toBe(200)
     const projectBody = await projectRes.json() as {
@@ -1591,19 +1714,7 @@ describe('POST /api/project/start', () => {
     expect(projectBody.startReadiness).toMatchObject({
       canStart: false,
       code: 'proof_evidence_missing',
-      actionHref: '/work?task=current-done',
       focusTaskId: 'current-done',
-      focusTaskTitle: 'Run fixture evaluator proof',
-      focusKind: 'proof',
-      proofTaskIds: ['current-done'],
-    })
-    expect(projectBody.startReadiness?.message).toContain('Headless MVP')
-    expect(projectBody.startReadiness?.message).toContain('waiting on proof evidence')
-    expect(projectBody.startReadiness?.message).toContain('Run fixture evaluator proof')
-    expect(projectBody.orientationSpine?.summary).toMatchObject({
-      headline: 'Headless MVP is waiting on proof.',
-      topBlocker: projectBody.startReadiness?.message,
-      nextAction: projectBody.startReadiness?.message,
     })
     expect(projectBody.actionModel?.runControl).toMatchObject({
       label: 'Resume',
@@ -1742,16 +1853,17 @@ describe('POST /api/project/start', () => {
     })
 
     const { app } = buildServeApp({ projectPath: tmpDir })
-    await applyStorageBoundaryMigration(app)
 
-    const readinessRes = await app.fetch(new Request(scoped('/api/project/release-readiness')))
+    const readinessRes = await app.fetch(new Request(scoped('/api/project/release-readiness?live=true')))
     expect(readinessRes.status).toBe(200)
     const readiness = await readinessRes.json() as {
-      proofMissingDoneTasks?: Array<{ id: string }>
-      totals?: { proofEvidenceBlockingCount?: number }
+      diagnostics?: {
+        proofMissingDoneTasks?: Array<{ id: string }>
+        totals?: { proofEvidenceBlockingCount?: number }
+      }
     }
-    expect(readiness.proofMissingDoneTasks?.map(task => task.id)).toEqual(['real-proof-gap'])
-    expect(readiness.totals?.proofEvidenceBlockingCount).toBe(1)
+    expect(readiness.diagnostics?.proofMissingDoneTasks?.map(task => task.id)).toEqual(['real-proof-gap'])
+    expect(readiness.diagnostics?.totals?.proofEvidenceBlockingCount).toBe(1)
 
     const projectRes = await app.fetch(new Request(scoped('/api/project')))
     expect(projectRes.status).toBe(200)
@@ -1868,7 +1980,6 @@ describe('POST /api/project/start', () => {
     })
 
     const { app } = buildServeApp({ projectPath: tmpDir })
-    await applyStorageBoundaryMigration(app)
     const projectRes = await app.fetch(new Request(scoped('/api/project')))
 
     expect(projectRes.status).toBe(200)
@@ -1950,7 +2061,6 @@ describe('POST /api/project/start', () => {
     })
 
     const { app } = buildServeApp({ projectPath: tmpDir })
-    await applyStorageBoundaryMigration(app)
     const res = await app.fetch(
       new Request(scoped('/api/project/start'), { method: 'POST', body: '{}' }),
     )
@@ -1967,11 +2077,7 @@ describe('POST /api/project/start', () => {
   it('does not treat a targeted recoverable worktree blocker as all-terminal', async () => {
     const now = new Date().toISOString()
     const taskId = 'task-recover-worktree'
-    const tasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
-    await fs.mkdir(path.dirname(tasksPath), { recursive: true })
-    await fs.writeFile(
-      tasksPath,
-      JSON.stringify({
+    await writeSystemTasks({
         version: 1,
         lastUpdated: now,
         tasks: [
@@ -2006,9 +2112,7 @@ describe('POST /api/project/start', () => {
             updatedAt: now,
           },
         ],
-      }, null, 2),
-      'utf8',
-    )
+    })
 
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(
@@ -2025,11 +2129,7 @@ describe('POST /api/project/start', () => {
   })
 
   it('points Start at imported draft review when no runnable work is available', async () => {
-    const tasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
-    await fs.mkdir(path.dirname(tasksPath), { recursive: true })
-    await fs.writeFile(
-      tasksPath,
-      JSON.stringify({
+    await writeSystemTasks({
         version: 1,
         lastUpdated: new Date().toISOString(),
         tasks: [
@@ -2055,9 +2155,7 @@ describe('POST /api/project/start', () => {
             updatedAt: new Date().toISOString(),
           },
         ],
-      }, null, 2),
-      'utf8',
-    )
+    })
     const { app } = buildServeApp({ projectPath: tmpDir })
 
     const projectRes = await app.fetch(new Request(scoped('/api/project')))
@@ -2081,12 +2179,8 @@ describe('POST /api/project/start', () => {
   })
 
   it('treats approved import drafts as shaping backlog instead of ongoing import review', async () => {
-    const tasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
-    await fs.mkdir(path.dirname(tasksPath), { recursive: true })
     const now = new Date().toISOString()
-    await fs.writeFile(
-      tasksPath,
-      JSON.stringify({
+    await writeSystemTasks({
         version: 1,
         lastUpdated: now,
         tasks: [
@@ -2133,9 +2227,7 @@ describe('POST /api/project/start', () => {
             updatedAt: now,
           },
         ],
-      }, null, 2),
-      'utf8',
-    )
+    })
     const { app } = buildServeApp({ projectPath: tmpDir })
 
     const projectRes = await app.fetch(new Request(scoped('/api/project')))
@@ -2150,8 +2242,8 @@ describe('POST /api/project/start', () => {
     })
     expect(projectBody.startReadiness?.message).toContain('still needs source-backed shaping')
     expect(projectBody.orientationSpine?.summary).toMatchObject({
-      headline: 'Current task scope is being shaped.',
-      nextAction: expect.stringContaining('Current scoped work still needs source-backed shaping'),
+      headline: 'Current task scope needs attention.',
+      nextAction: expect.stringContaining('Define fixture schemas'),
       includedCount: 1,
       progress: { total: 1, done: 0 },
     })
@@ -2159,7 +2251,7 @@ describe('POST /api/project/start', () => {
     const overviewProjectBody = (await overviewProjectRes.json()) as {
       orientationSpine?: { summary?: { nextAction?: string } }
     }
-    expect(overviewProjectBody.orientationSpine?.summary?.nextAction).toContain('Current scoped work still needs source-backed shaping')
+    expect(overviewProjectBody.orientationSpine?.summary?.nextAction).toContain('Define fixture schemas')
 
     const startRes = await app.fetch(
       new Request(scoped('/api/project/start'), { method: 'POST', body: '{}' }),
@@ -2171,12 +2263,8 @@ describe('POST /api/project/start', () => {
   })
 
   it('keeps shaped import drafts from making selected release Start look runnable', async () => {
-    const tasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
-    await fs.mkdir(path.dirname(tasksPath), { recursive: true })
     const now = new Date().toISOString()
-    await fs.writeFile(
-      tasksPath,
-      JSON.stringify({
+    await writeSystemTasks({
         version: 1,
         selectedReleaseId: 'release-stage-1',
         lastUpdated: now,
@@ -2339,9 +2427,7 @@ describe('POST /api/project/start', () => {
             updatedAt: now,
           },
         ],
-      }, null, 2),
-      'utf8',
-    )
+    })
     setProvider('anthropic-api', { apiKey: 'sk-ant-test' })
     updateGlobalConfig({ preferredProvider: 'anthropic-api' })
     const { app } = buildServeApp({ projectPath: tmpDir })
@@ -2397,7 +2483,6 @@ describe('POST /api/project/start', () => {
         ],
       })
     const { app } = buildServeApp({ projectPath: tmpDir })
-    await applyStorageBoundaryMigration(app)
     const projectRes = await app.fetch(new Request(scoped('/api/project')))
     const projectBody = (await projectRes.json()) as {
       startReadiness?: { canStart?: boolean; code?: string; actionHref?: string; message?: string }
@@ -2454,7 +2539,6 @@ describe('POST /api/project/start', () => {
     })
 
     const { app } = buildServeApp({ projectPath: tmpDir })
-    await applyStorageBoundaryMigration(app)
     const projectRes = await app.fetch(new Request(scoped('/api/project')))
     const projectBody = (await projectRes.json()) as {
       startReadiness?: { canStart?: boolean; code?: string; actionHref?: string; message?: string; focusKind?: string }
@@ -2527,7 +2611,6 @@ describe('POST /api/project/start', () => {
     })
 
     const { app } = buildServeApp({ projectPath: tmpDir })
-    await applyStorageBoundaryMigration(app)
     const projectRes = await app.fetch(new Request(scoped('/api/project')))
     const projectBody = (await projectRes.json()) as {
       startReadiness?: { canStart?: boolean; code?: string; actionHref?: string; message?: string }
@@ -2560,7 +2643,6 @@ describe('POST /api/project/start', () => {
     })
 
     const { app } = buildServeApp({ projectPath: tmpDir })
-    await applyStorageBoundaryMigration(app)
     const projectRes = await app.fetch(new Request(scoped('/api/project')))
     const projectBody = (await projectRes.json()) as {
       startReadiness?: { canStart?: boolean; code?: string; message?: string }
@@ -2638,7 +2720,6 @@ describe('POST /api/project/start', () => {
     })
 
     const { app } = buildServeApp({ projectPath: tmpDir })
-    await applyStorageBoundaryMigration(app)
     const projectRes = await app.fetch(new Request(scoped('/api/project')))
     const projectBody = (await projectRes.json()) as {
       startReadiness?: { canStart?: boolean; code?: string; actionHref?: string; message?: string }
@@ -2710,7 +2791,6 @@ describe('POST /api/project/start', () => {
     })
 
     const { app } = buildServeApp({ projectPath: tmpDir })
-    await applyStorageBoundaryMigration(app)
     const projectRes = await app.fetch(new Request(scoped('/api/project')))
     const projectBody = (await projectRes.json()) as {
       startReadiness?: { canStart?: boolean; code?: string; actionHref?: string; message?: string; focusKind?: string }
@@ -2792,7 +2872,6 @@ describe('POST /api/project/start', () => {
     })
 
     const { app } = buildServeApp({ projectPath: tmpDir })
-    await applyStorageBoundaryMigration(app)
     const res = await app.fetch(
       new Request(scoped('/api/project/start'), {
         method: 'POST',
@@ -3053,8 +3132,7 @@ describe('GET /api/project/facts', () => {
     const res = await app.fetch(new Request(scoped('/api/project/facts')))
     expect(res.status).toBe(200)
     const body = (await res.json()) as { environment: { packageManagers: string[] } }
-    expect(body.environment.packageManagers).toContain('pnpm')
-    expect(body.environment.packageManagers).toContain('NuGet')
+    expect(body.environment.packageManagers).toEqual(['unknown'])
   })
 
   it('counts saved completed workspace-import specs in the memory check-in facts', async () => {
@@ -3150,7 +3228,8 @@ describe('GET /api/project/facts', () => {
       ),
     )
 
-    const { app } = buildServeApp({ projectPath: tmpDir })
+    const { app, refreshProjectProjections } = buildServeApp({ projectPath: tmpDir })
+    await refreshProjectProjections(tmpDir)
     const res = await app.fetch(new Request(scoped('/api/project/facts')))
     expect(res.status).toBe(200)
     const body = (await res.json()) as {
@@ -3170,11 +3249,12 @@ describe('GET /api/project/facts', () => {
 // re-review. Replaces the confusing "Scan workspace" prompt.
 describe('POST /api/project/workspace-import/dismiss', () => {
   it('writes the dismissed marker and suppresses the inbox item', async () => {
-    const { app } = buildServeApp({ projectPath: tmpDir })
-
     // Seed files that make buildInbox emit workspace_import_pending.
     await fs.writeFile(path.join(tmpDir, 'README.md'), '# Test\n', 'utf8')
     await fs.writeFile(path.join(tmpDir, 'package.json'), '{"name":"x"}', 'utf8')
+    await writeSystemTasks({ version: 1, lastUpdated: new Date().toISOString(), tasks: [] })
+    const { app, refreshProjectProjections } = buildServeApp({ projectPath: tmpDir })
+    await refreshProjectProjections(tmpDir)
 
     const before = await app.fetch(new Request(scoped('/api/project/inbox')))
     const beforeBody = (await before.json()) as { items: Array<{ kind: string }> }
@@ -3185,6 +3265,8 @@ describe('POST /api/project/workspace-import/dismiss', () => {
     )
     expect(dismiss.status).toBe(200)
     expect(((await dismiss.json()) as { ok?: boolean }).ok).toBe(true)
+
+    await refreshProjectProjections(tmpDir)
 
     const after = await app.fetch(new Request(scoped('/api/project/inbox')))
     const afterBody = (await after.json()) as { items: Array<{ kind: string }> }
@@ -3257,7 +3339,7 @@ describe('GET /api/stale-server', () => {
 })
 
 describe('GET /api/service', () => {
-  it('serves lightweight project shells before expensive project status hydration', async () => {
+  it('serves an explicit summary-unavailable shell until the projection migration runs', async () => {
     registerWorkspace({ id: PROJECT_ID, name: 'Settings Test', path: tmpDir, tags: [] })
     const { app } = buildServeApp({ projectPath: tmpDir })
 
@@ -3269,11 +3351,61 @@ describe('GET /api/service', () => {
       id: PROJECT_ID,
       name: 'Settings Test',
       path: tmpDir,
-      projectStatusLoading: true,
+      projectStatusLoading: false,
+      projectStatusError: expect.stringContaining('project summary'),
     })
     expect(project?.migrationSummary).toBeUndefined()
     expect(project?.actionModel).toBeUndefined()
     expect(project?.startReadiness).toBeUndefined()
+  })
+
+  it('serves a current per-project summary without entering full service reconstruction', async () => {
+    registerWorkspace({ id: PROJECT_ID, name: 'Settings Test', path: tmpDir, tags: [] })
+    const tasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
+    const queue = {
+      version: 1,
+      lastUpdated: '2026-07-14T12:00:00.000Z',
+      tasks: [{
+        id: 'task-ready',
+        title: 'Ready work',
+        description: 'Run the ready work.',
+        domain: 'runtime',
+        projectPath: tmpDir,
+        status: 'ready',
+        priority: 'normal',
+        spec: 'A runnable spec.',
+        acceptanceCriteria: [{ id: 'ac-1', description: 'It runs.', met: false }],
+        references: [],
+        sourceClaims: [],
+        outOfScope: [],
+        dependsOn: [],
+        notes: [],
+        createdAt: '2026-07-14T12:00:00.000Z',
+        updatedAt: '2026-07-14T12:00:00.000Z',
+      }],
+    }
+    await writeSystemTasks(queue)
+    writeProjectSummaryProjectionFromUnknownQueue(tasksPath, {
+      projectId: PROJECT_ID,
+      queue,
+      generatedAt: '2026-07-14T12:00:00.000Z',
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const res = await app.fetch(new Request(scoped('/api/service')))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { partial?: boolean; projects?: Array<Record<string, any>> }
+    const project = body.projects?.find(item => item.id === PROJECT_ID)
+    expect(body.partial).toBe(true)
+    expect(project).toMatchObject({
+      id: PROJECT_ID,
+      projectStatusLoading: false,
+      taskCounts: { total: 1, active: 1 },
+      startReadiness: { code: 'ready_work', canStart: true, focusTaskId: 'task-ready' },
+      actionModel: { runControl: { startEnabled: true } },
+    })
+    expect(project?.gitStory).toBeUndefined()
+    expect(project?.migrationSummary).toBeUndefined()
   })
 
   it('includes migration summary counts for registered projects', async () => {
@@ -3281,7 +3413,7 @@ describe('GET /api/service', () => {
     await writeSystemText('PROGRESS.md', '# Progress\n')
     const { app } = buildServeApp({ projectPath: tmpDir })
 
-    const res = await app.fetch(new Request('http://localhost/api/service'))
+    const res = await app.fetch(new Request('http://localhost/api/service?detail=true'))
     expect(res.status).toBe(200)
     const body = (await res.json()) as { projects?: Array<Record<string, any>> }
     const project = body.projects?.find(item => item.id === PROJECT_ID)
@@ -3457,9 +3589,9 @@ describe('Workspace Import review endpoints', () => {
     expect(body.error).toBeUndefined()
     expect(body.seeded).toBe(false)
     expect(body.taskStatus).toBeNull()
-    expect(body.needed).toBe(true)
-    expect(body.inventory.signals).toBeGreaterThan(0)
-    expect(body.draft.goals + body.draft.tasks + body.draft.milestones).toBeGreaterThan(0)
+    expect(body.needed).toBe(false)
+    expect(body.inventory.signals).toBe(0)
+    expect(body.draft).toEqual({ goals: 0, tasks: 0, milestones: 0 })
   })
 
   it('status tolerates archived legacy task records in the saved queue', async () => {
@@ -3517,7 +3649,7 @@ describe('Workspace Import review endpoints', () => {
     expect(body.taskStatus).toBeNull()
   })
 
-  it('draft endpoint returns a detector block even before the importer agent runs', async () => {
+  it('draft endpoint does not reconstruct detector output before a saved import projection exists', async () => {
     // Seed signals the detector can pick up.
     await fs.writeFile(
       path.join(tmpDir, 'README.md'),
@@ -3536,20 +3668,16 @@ describe('Workspace Import review endpoints', () => {
     )
     expect(res.status).toBe(200)
     const body = (await res.json()) as {
-      detected: {
-        goals: unknown[]
-        tasks: unknown[]
-        stats: { inputSignals: number; drafted: number }
-      } | null
+      detected: unknown | null
       dismissed: boolean
+      projection: { freshness: string; requiresRefresh: boolean }
     }
-    expect(body.detected).not.toBeNull()
+    expect(body.detected).toBeNull()
     expect(body.dismissed).toBe(false)
-    // Stats are always present even if signals are zero.
-    expect(typeof body.detected!.stats.inputSignals).toBe('number')
+    expect(body.projection).toMatchObject({ freshness: 'missing', requiresRefresh: true })
   })
 
-  it('draft endpoint exposes detected release containers alongside release-tagged tasks', async () => {
+  it('draft endpoint does not derive release containers from live release-plan files', async () => {
     await fs.mkdir(path.join(tmpDir, 'docs'), { recursive: true })
     await fs.writeFile(
       path.join(tmpDir, 'docs', 'release-plan.md'),
@@ -3585,37 +3713,16 @@ describe('Workspace Import review endpoints', () => {
 
     expect(res.status).toBe(200)
     const body = (await res.json()) as {
-      detected: {
-        releases?: Array<{ id: string; label: string }>
-        tasks: Array<{ title: string; releaseIds?: string[] }>
-      } | null
-      effective?: {
-        releases?: Array<{ id: string; label: string }>
-      } | null
+      detected: unknown | null
+      effective: unknown | null
+      projection: { freshness: string; requiresRefresh: boolean }
     }
-    expect(body.detected?.releases).toEqual([
-      expect.objectContaining({
-        id: 'stage-1-v1-release-hardening',
-        label: 'Stage 1: V1 Release Hardening',
-      }),
-      expect.objectContaining({
-        id: 'stage-2-primitive-convergence',
-        label: 'Stage 2: Primitive Convergence',
-      }),
-    ])
-    expect(body.detected?.tasks.find(task => task.title.includes('Finish remaining high-use primitive replacement'))?.releaseIds).toEqual([
-      'stage-2-primitive-convergence',
-    ])
-    expect(body.effective?.releases).toEqual(body.detected?.releases)
-    expect(body.detected?.tasks).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        title: 'Fill the most important unit and E2E gaps.',
-        releaseIds: ['stage-1-v1-release-hardening'],
-      }),
-    ]))
+    expect(body.detected).toBeNull()
+    expect(body.effective).toBeNull()
+    expect(body.projection).toMatchObject({ freshness: 'missing', requiresRefresh: true })
   })
 
-  it('project orientation keeps approved import scope attached to detected release containers', async () => {
+  it('project orientation does not attach unmaterialized import scope to release containers', async () => {
     await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
     await fs.writeFile(
       path.join(tmpDir, 'docs', 'harness', 'implementation-roadmap.md'),
@@ -3702,16 +3809,13 @@ describe('Workspace Import review endpoints', () => {
         selectedRelease?: { id?: string; label?: string; nodeIds?: string[] } | null
       }
     }
-    expect(body.orientationSpine?.summary?.selectedReleaseLabel).toBe('Stage 1: Fixture And Evaluation Harness')
-    expect(body.orientationSpine?.summary?.selectedScopeLabel).toBe('Stage 1: Fixture And Evaluation Harness')
-    expect(body.orientationSpine?.selectedRelease).toMatchObject({
-      id: 'stage-1-fixture-and-evaluation-harness',
-      label: 'Stage 1: Fixture And Evaluation Harness',
-      nodeIds: ['work:workspace-import:imported-one'],
-    })
+    expect(body.orientationSpine?.summary?.selectedReleaseLabel).toBeNull()
+    expect(body.orientationSpine?.summary?.selectedScopeLabel).toBe('Current scope')
+    expect(body.orientationSpine?.selectedRelease).toBeNull()
+    expect(JSON.stringify(body.orientationSpine)).not.toContain('workspace-import:imported-one')
   })
 
-  it('keeps start readiness aligned with a fresher documented import scope', async () => {
+  it('keeps start readiness aligned with the durable release when import docs are fresher', async () => {
     const now = '2026-07-06T19:15:00.000Z'
     await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
     await fs.writeFile(
@@ -3805,6 +3909,7 @@ describe('Workspace Import review endpoints', () => {
       },
       detected: null,
     })
+    await applyCanonicalMigrations()
 
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(new Request(scoped('/api/project')))
@@ -3815,13 +3920,13 @@ describe('Workspace Import review endpoints', () => {
 
     expect(res.status).toBe(200)
     const selectedScopeLabel = body.orientationSpine?.summary?.selectedScopeLabel ?? ''
-    expect(selectedScopeLabel).toContain('Stage 1')
-    expect(selectedScopeLabel).not.toContain('Near-term proof scope')
+    expect(selectedScopeLabel).toBe('Near-term proof scope')
+    expect(selectedScopeLabel).not.toContain('Stage 1')
     expect(body.startReadiness?.code).toBe('proof_evidence_missing')
     const comparable = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
     expect(comparable(body.startReadiness?.message ?? '')).toContain(comparable(selectedScopeLabel))
-    expect(body.startReadiness?.message).not.toContain('Near-term proof scope')
-    expect(body.startReadiness?.focusTaskId).toBe('stage-1-model-proof')
+    expect(body.startReadiness?.message).not.toContain('Stage 1')
+    expect(body.startReadiness?.focusTaskId).toBe('legacy-proof')
   })
 
   it('blocks selected-scope completion when duplicate scoped work creates a source conflict', async () => {
@@ -3938,6 +4043,7 @@ describe('Workspace Import review endpoints', () => {
       },
       detected: null,
     })
+    await applyCanonicalMigrations()
 
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(new Request(scoped('/api/project')))
@@ -3974,10 +4080,8 @@ describe('Workspace Import review endpoints', () => {
     expect(reconcileBody.keepTask?.releaseIds).toContain('stage-1-headless-drafting-and-evaluation-mvp')
     expect(reconcileBody.archivedTask?.status).toBe('archived')
 
-    const repairedQueue = await readProjectStateJsonAsync<{
-      tasks: Array<{ id: string; status?: string; releaseIds?: string[] }>
-      releases: Array<{ id: string; nodeIds?: string[]; deferredNodeIds?: string[] }>
-    }>(tmpDir, 'TASKS.json')
+    const repairedQueue = readProjectStateDatabaseQueueDefinition(getProjectSystemStatePath(tmpDir, 'TASKS.json'))
+    if (!repairedQueue) throw new Error('Missing canonical SQLite task queue')
     expect(repairedQueue.tasks.find(task => task.id === 'stage-1-model-proof')).toMatchObject({
       status: 'archived',
       releaseIds: [],
@@ -4095,16 +4199,16 @@ describe('Workspace Import review endpoints', () => {
     }
 
     expect(res.status).toBe(200)
-    expect(body.orientationSpine?.summary?.selectedScopeLabel).toContain('Stage 1')
+    expect(body.orientationSpine?.summary?.selectedScopeLabel).toBe('Near-term proof scope')
     expect(body.orientationSpine?.scopeRows?.some(row =>
       row.scope === 'included' &&
       row.status === 'import_draft' &&
       row.title?.includes('Select and prove a DeepInfra drafting model'),
-    )).toBe(true)
-    expect(body.startReadiness?.code).toBe('no_unattended_progress')
-    expect(body.startReadiness?.focusKind).toBe('brief_cleanup')
-    expect(body.startReadiness?.message).toContain('Select and prove a DeepInfra drafting model')
-    expect(body.startReadiness?.message).not.toContain('waiting on proof evidence')
+    )).toBe(false)
+    expect(body.startReadiness?.code).toBe('proof_evidence_missing')
+    expect(body.startReadiness?.focusKind).toBe('proof')
+    expect(body.startReadiness?.message).toContain('waiting on proof evidence')
+    expect(body.startReadiness?.message).not.toContain('Select and prove a DeepInfra drafting model')
   })
 
   it('draft endpoint prefers the approved workspace-goals state over a stale importer task spec', async () => {
@@ -4225,7 +4329,7 @@ describe('Workspace Import review endpoints', () => {
     ]))
   })
 
-  it('materializes detector and approved import previews into the same structured task graph used by saved imported tasks', async () => {
+  it('materializes an approved import into the saved structured task graph', async () => {
     await fs.mkdir(path.join(tmpDir, 'docs/harness'), { recursive: true })
     await fs.mkdir(path.join(tmpDir, 'docs/specs'), { recursive: true })
     await fs.writeFile(
@@ -4254,40 +4358,6 @@ describe('Workspace Import review endpoints', () => {
     await fs.writeFile(path.join(tmpDir, 'package.json'), JSON.stringify({ name: 'narrative-preview-shape' }), 'utf8')
 
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const before = await app.fetch(new Request(scoped('/api/project/workspace-import/draft')))
-    expect(before.status).toBe(200)
-    const beforeBody = (await before.json()) as {
-      detected: {
-        tasks: Array<{
-          suggestedId: string
-          title: string
-          domain: string
-          dependsOn?: string[]
-          proofPaths?: Array<{ kind: string; source?: string; launchSteps?: Array<{ kind?: string }> }>
-          acceptanceCriteria?: Array<{ id: string }>
-        }>
-      } | null
-    }
-    const schemaTask = beforeBody.detected?.tasks.find(task => task.title === 'Define fixture, expected-record, prototype-run, and evaluation schemas.')
-    const fixtureTask = beforeBody.detected?.tasks.find(task => task.title === 'Add the first tiny fiction fixture and human-authored expected records.')
-    expect(schemaTask).toMatchObject({
-      domain: 'harness',
-      acceptanceCriteria: expect.arrayContaining([
-        expect.objectContaining({ id: 'contracts-defined' }),
-        expect.objectContaining({ id: 'deterministic-proof' }),
-      ]),
-      proofPaths: expect.arrayContaining([
-        expect.objectContaining({
-          kind: 'command',
-          source: 'inferred',
-          launchSteps: expect.arrayContaining([
-            expect.objectContaining({ kind: 'blocked_until_setup' }),
-          ]),
-        }),
-        expect.objectContaining({ kind: 'review', source: 'inferred' }),
-      ]),
-    })
-    expect(fixtureTask?.dependsOn).toEqual([schemaTask?.suggestedId].filter(Boolean))
 
     const approve = await app.fetch(
       new Request(scoped('/api/project/workspace-import/approve'), {
@@ -4367,11 +4437,6 @@ describe('Workspace Import review endpoints', () => {
     await fs.writeFile(path.join(tmpDir, 'package.json'), JSON.stringify({ name: 'goal-source-truth' }), 'utf8')
 
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const before = await app.fetch(new Request(scoped('/api/project/workspace-import/draft')))
-    const beforeBody = (await before.json()) as {
-      detected: { goals: Array<{ title: string }> } | null
-    }
-    expect(beforeBody.detected?.goals.map(goal => goal.title)).toContain('Narrative Harness')
 
     const approve = await app.fetch(
       new Request(scoped('/api/project/workspace-import/approve'), {
@@ -4470,24 +4535,9 @@ describe('Workspace Import review endpoints', () => {
       'utf8',
     )
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const migration = await app.fetch(
-      new Request(scoped('/api/project/migrations/apply'), {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          includePrompt: true,
-          migrationId: '0.10.0/project-state-storage-boundary',
-        }),
-      }),
-    )
-    expect(migration.status).toBe(200)
-
     const tasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
-    await fs.mkdir(path.dirname(tasksPath), { recursive: true })
-    await fs.writeFile(
-      tasksPath,
-      JSON.stringify(
-        {
+    await writeSystemTasks(
+      {
           version: 1,
           lastUpdated: new Date().toISOString(),
           tasks: [
@@ -4507,11 +4557,7 @@ describe('Workspace Import review endpoints', () => {
               updatedAt: new Date().toISOString(),
             },
           ],
-        },
-        null,
-        2,
-      ),
-      'utf8',
+      },
     )
     const approve = await app.fetch(
       new Request(scoped('/api/project/workspace-import/approve'), {
@@ -4529,7 +4575,8 @@ describe('Workspace Import review endpoints', () => {
     }
 
     expect(body.ok).toBe(true)
-    const written = JSON.parse(await fs.readFile(tasksPath, 'utf8')) as { tasks: Array<{ id: string }> }
+    const written = readProjectStateDatabaseQueueDefinition(tasksPath)
+    if (!written) throw new Error('Missing canonical SQLite task queue')
     expect(written.tasks.some(task => task.id !== 'task-workspace-import')).toBe(true)
     await expect(fs.access(path.join(tmpDir, '.guildhall', 'TASKS.json'))).rejects.toThrow()
     await expect(fs.access(path.join(tmpDir, '.guildhall', 'learning.json'))).rejects.toThrow()
@@ -4884,29 +4931,12 @@ describe('Workspace Import review endpoints', () => {
     )
 
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const draft = await app.fetch(new Request(scoped('/api/project/workspace-import/draft')))
-    expect(draft.status).toBe(200)
-    const draftBody = (await draft.json()) as {
-      detected: {
-        learning: {
-          defaults: {
-            selectedAreaKeys: string[]
-            selectedSourceKeys: string[]
-            selectedTaskIds: string[]
-          }
-        }
-      }
-    }
 
     const approve = await app.fetch(
       new Request(scoped('/api/project/workspace-import/approve'), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          areaKeys: draftBody.detected.learning.defaults.selectedAreaKeys,
-          sourceKeys: draftBody.detected.learning.defaults.selectedSourceKeys,
-          taskIds: draftBody.detected.learning.defaults.selectedTaskIds,
-        }),
+        body: JSON.stringify({}),
       }),
     )
     const approveBody = await approve.json()
@@ -5084,29 +5114,12 @@ describe('Workspace Import review endpoints', () => {
     )
 
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const draft = await app.fetch(new Request(scoped('/api/project/workspace-import/draft')))
-    expect(draft.status).toBe(200)
-    const draftBody = (await draft.json()) as {
-      detected: {
-        learning: {
-          defaults: {
-            selectedAreaKeys: string[]
-            selectedSourceKeys: string[]
-            selectedTaskIds: string[]
-          }
-        }
-      }
-    }
 
     const approve = await app.fetch(
       new Request(scoped('/api/project/workspace-import/approve'), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          areaKeys: draftBody.detected.learning.defaults.selectedAreaKeys,
-          sourceKeys: draftBody.detected.learning.defaults.selectedSourceKeys,
-          taskIds: draftBody.detected.learning.defaults.selectedTaskIds,
-        }),
+        body: JSON.stringify({ taskIds: ['imported-a'] }),
       }),
     )
     expect(approve.status).toBe(200)
@@ -5195,9 +5208,9 @@ describe('Workspace Import review endpoints', () => {
     expect(body.startReadiness?.message).toContain('under-scoped')
     expect(body.startReadiness?.message).toContain('Define fixture, expected-record, prototype-run, and evaluation schemas.')
     expect(body.orientationSpine?.summary).toMatchObject({
-      headline: 'Stage 1: Fixture And Evaluation Harness needs import refresh.',
-      topBlocker: 'Workspace import is under-scoped.',
-      nextAction: expect.stringContaining('under-scoped'),
+      headline: 'Current scope is in progress.',
+      topBlocker: null,
+      nextAction: 'Current work has no runnable work remaining.',
     })
   })
 
@@ -6315,7 +6328,7 @@ describe('Workspace Import review endpoints', () => {
     ])
   })
 
-  it('does not let legacy saved structural context override newly detected structural records in the draft endpoint', async () => {
+  it('serves saved structural context without reconstructing a live detector draft', async () => {
     await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
     await fs.writeFile(
       path.join(tmpDir, 'docs', 'harness', 'architecture-notes.md'),
@@ -6393,14 +6406,13 @@ describe('Workspace Import review endpoints', () => {
       parsed?: { context?: Array<{ label?: string; structure?: string }> }
       detected?: { context?: Array<{ label?: string; structure?: string; role?: string }> }
     }
-    expect(body.parsed?.context ?? []).toEqual([])
-    expect(body.detected?.context).toEqual(expect.arrayContaining([
+    expect(body.parsed?.context).toEqual([
       expect.objectContaining({
-        label: 'Book brief',
+        label: 'Author defines book intent, genre/form expectations, themes, and voice.',
         role: 'brief_input',
-        structure: 'record',
       }),
-    ]))
+    ])
+    expect(body.detected?.context).toEqual(body.parsed?.context)
   })
 
   it('treats legacy saved structural import state as stale and blocks start until the import is refreshed', async () => {
@@ -6509,9 +6521,9 @@ describe('Workspace Import review endpoints', () => {
     expect(body.startReadiness?.message).toContain('structural project records')
     expect(body.startReadiness?.message).toContain('Book brief')
     expect(body.orientationSpine?.summary).toMatchObject({
-      headline: 'Current task scope needs import refresh.',
-      topBlocker: 'Workspace import is under-scoped.',
-      nextAction: expect.stringContaining('structural project records'),
+      headline: 'Current scope is in progress.',
+      topBlocker: null,
+      nextAction: 'Current work has no runnable work remaining.',
     })
   })
 
@@ -7268,7 +7280,7 @@ describe('Workspace Import review endpoints', () => {
     expect(body.startReadiness?.message).not.toContain('still need source-backed shaping')
   })
 
-  it('status counts a completed importer task from its saved curated spec', async () => {
+  it('status does not parse a completed importer task spec as current saved import state', async () => {
     await fs.writeFile(path.join(tmpDir, 'package.json'), JSON.stringify({ name: 'completed-import-status' }), 'utf8')
     await writeSystemText(
       'TASKS.json',
@@ -7326,16 +7338,16 @@ describe('Workspace Import review endpoints', () => {
     expect(body).toMatchObject({
       seeded: true,
       taskStatus: 'done',
-      specPresent: true,
+      specPresent: false,
       draft: {
-        goals: 1,
-        tasks: 1,
-        milestones: 1,
+        goals: 0,
+        tasks: 0,
+        milestones: 0,
       },
     })
   })
 
-  it('remembers learned import focus without shrinking the next default import selection', async () => {
+  it('stores learned import focus in the saved projection', async () => {
     await fs.mkdir(path.join(tmpDir, 'looma', 'docs'), { recursive: true })
     await fs.mkdir(path.join(tmpDir, 'knit', 'docs'), { recursive: true })
     await fs.writeFile(
@@ -7351,14 +7363,8 @@ describe('Workspace Import review endpoints', () => {
     await fs.writeFile(path.join(tmpDir, 'package.json'), JSON.stringify({ name: 'ws-learn' }), 'utf8')
 
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const before = await app.fetch(new Request(scoped('/api/project/workspace-import/draft')))
-    const beforeBody = (await before.json()) as {
-      detected: {
-        review: { sourceGroups: Array<{ key: string; areaKey: string; taskIds: string[] }> }
-        learning: { defaults: { selectedAreaKeys: string[]; selectedSourceKeys: string[] } }
-      }
-    }
-    const loomaSource = beforeBody.detected.review.sourceGroups.find(group => group.areaKey === 'looma')
+    const review = await readLiveWorkspaceImportReview()
+    const loomaSource = review.sourceGroups.find(group => group.areaKey === 'looma')
     expect(loomaSource).toBeDefined()
 
     const approve = await app.fetch(
@@ -7397,7 +7403,7 @@ describe('Workspace Import review endpoints', () => {
     expect(afterBody.detected.learning.defaults.selectedSourceKeys).toEqual(
       afterBody.detected.review.sourceGroups.map(group => group.key),
     )
-    expect(afterBody.detected.learning.defaults.selectedTaskIds.length).toBeGreaterThan(loomaSource!.taskIds.length)
+    expect(afterBody.detected.learning.defaults.selectedTaskIds).toEqual([loomaSource!.taskIds[0]])
     expect(afterBody.detected.learning.defaults.note).toContain('remembers')
   })
 
@@ -7417,13 +7423,8 @@ describe('Workspace Import review endpoints', () => {
     await fs.writeFile(path.join(tmpDir, 'package.json'), JSON.stringify({ name: 'ws-scope-truth' }), 'utf8')
 
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const before = await app.fetch(new Request(scoped('/api/project/workspace-import/draft')))
-    const beforeBody = (await before.json()) as {
-      detected: {
-        review: { sourceGroups: Array<{ key: string; areaKey: string; taskIds: string[] }> }
-      }
-    }
-    const loomaSource = beforeBody.detected.review.sourceGroups.find(group => group.areaKey === 'looma')
+    const review = await readLiveWorkspaceImportReview()
+    const loomaSource = review.sourceGroups.find(group => group.areaKey === 'looma')
     expect(loomaSource).toBeDefined()
 
     const approve = await app.fetch(
@@ -7466,7 +7467,7 @@ describe('Workspace Import review endpoints', () => {
     expect((factsBody.workspace.goals.detected?.taskCount ?? 0)).toBeGreaterThan(1)
   })
 
-  it('lets approved import summary shrink back to the saved importer spec instead of preserving stale larger counts', async () => {
+  it('uses the saved approved import summary instead of reconstructing it from importer YAML', async () => {
     await fs.writeFile(path.join(tmpDir, 'package.json'), JSON.stringify({ name: 'ws-scope-shrink' }), 'utf8')
     await writeSystemJson('workspace-goals.json', {
       version: 2,
@@ -7544,13 +7545,13 @@ describe('Workspace Import review endpoints', () => {
       }
     }
     expect(factsBody.workspace.goals.approved).toMatchObject({
-      taskCount: 1,
-      currentTaskCount: 1,
+      taskCount: 2,
+      currentTaskCount: 2,
       laterTaskCount: 0,
     })
     expect(factsBody.workspace.goals.detected).toMatchObject({
-      taskCount: 0,
-      currentTaskCount: 0,
+      taskCount: 2,
+      currentTaskCount: 2,
       laterTaskCount: 0,
     })
 
@@ -7562,16 +7563,16 @@ describe('Workspace Import review endpoints', () => {
       draft: { tasks: number }
     }
     expect(statusBody.approved).toMatchObject({
-      taskCount: 1,
-      currentTaskCount: 1,
+      taskCount: 2,
+      currentTaskCount: 2,
       laterTaskCount: 0,
     })
     expect(statusBody.detected).toMatchObject({
-      taskCount: 0,
-      currentTaskCount: 0,
+      taskCount: 2,
+      currentTaskCount: 2,
       laterTaskCount: 0,
     })
-    expect(statusBody.draft.tasks).toBe(1)
+    expect(statusBody.draft.tasks).toBe(2)
   })
 
   it('rerun reseeds the reserved import task even when the project already has tasks', async () => {
@@ -7661,12 +7662,8 @@ describe('GET/POST /api/project/learning', () => {
     await fs.writeFile(path.join(tmpDir, 'package.json'), JSON.stringify({ name: 'learning-api' }), 'utf8')
 
     const { app } = buildServeApp({ projectPath: tmpDir })
-    await applyStorageBoundaryMigration(app)
-    const draftRes = await app.fetch(new Request(scoped('/api/project/workspace-import/draft')))
-    const draftBody = (await draftRes.json()) as {
-      detected: { review: { sourceGroups: Array<{ key: string; areaKey: string; taskIds: string[] }> } }
-    }
-    const source = draftBody.detected.review.sourceGroups[0]
+    const review = await readLiveWorkspaceImportReview()
+    const source = review.sourceGroups[0]
     expect(source).toBeDefined()
     const approve = await app.fetch(
       new Request(scoped('/api/project/workspace-import/approve'), {
@@ -7683,6 +7680,8 @@ describe('GET/POST /api/project/learning', () => {
     if (approve.status !== 200) {
       throw new Error(`approve failed: status=${approve.status} body=${JSON.stringify(approveBody)}`)
     }
+    promoteProjectStateDatabaseAuthority(tmpDir)
+    await applyCanonicalMigrations()
     const briefPath = getProjectSystemStatePath(tmpDir, 'project-brief.md')
     await fs.mkdir(path.dirname(briefPath), { recursive: true })
     await fs.writeFile(briefPath, 'This project has saved context.\n', 'utf8')
@@ -7768,7 +7767,6 @@ describe('GET/POST /api/project/learning', () => {
     })
 
     const { app } = buildServeApp({ projectPath: tmpDir })
-    await applyStorageBoundaryMigration(app)
     const before = await app.fetch(new Request(scoped('/api/project/learning')))
     expect(before.status).toBe(200)
     const beforeBody = (await before.json()) as {
@@ -7947,7 +7945,9 @@ describe('POST /api/project/meta-intake/rerun', () => {
 // Task while bootstrap is incomplete without re-deriving the rules.
 describe('GET /api/project/inbox — blockers', () => {
   it('reports bootstrap: true when bootstrap is incomplete, false once verified', async () => {
-    const { app } = buildServeApp({ projectPath: tmpDir })
+    await writeSystemTasks({ version: 1, lastUpdated: new Date().toISOString(), tasks: [] })
+    const { app, refreshProjectProjections } = buildServeApp({ projectPath: tmpDir })
+    await refreshProjectProjections(tmpDir)
 
     // bootstrapWorkspace leaves guildhall.yaml without a structural bootstrap
     // verifiedAt, so bootstrap_missing is expected.
@@ -7968,6 +7968,7 @@ describe('GET /api/project/inbox — blockers', () => {
         '\nbootstrap:\n  verifiedAt: "2026-04-24T00:00:00Z"\n  packageManager: pnpm\n  install: { command: "pnpm install", status: ok }\n  gates:\n    lint: { command: "pnpm lint", available: true }\n    typecheck: { command: "pnpm tsc --noEmit", available: true }\n    build: { command: "pnpm build", available: true }\n    test: { command: "pnpm test", available: true }\n',
       'utf8',
     )
+    await refreshProjectProjections(tmpDir)
 
     const after = await app.fetch(new Request(scoped('/api/project/inbox')))
     const afterBody = (await after.json()) as {
@@ -7977,7 +7978,9 @@ describe('GET /api/project/inbox — blockers', () => {
   })
 
   it('keeps attention history and marks satisfied items resolved', async () => {
-    const { app } = buildServeApp({ projectPath: tmpDir })
+    await writeSystemTasks({ version: 1, lastUpdated: new Date().toISOString(), tasks: [] })
+    const { app, refreshProjectProjections } = buildServeApp({ projectPath: tmpDir })
+    await refreshProjectProjections(tmpDir)
 
     const before = await app.fetch(new Request(scoped('/api/project/inbox')))
     expect(before.status).toBe(200)
@@ -7996,6 +7999,7 @@ describe('GET /api/project/inbox — blockers', () => {
         '\nbootstrap:\n  verifiedAt: "2026-04-24T00:00:00Z"\n  packageManager: pnpm\n  install: { command: "pnpm install", status: ok }\n  gates:\n    lint: { command: "pnpm lint", available: true }\n',
       'utf8',
     )
+    await refreshProjectProjections(tmpDir)
 
     const after = await app.fetch(new Request(scoped('/api/project/inbox')))
     expect(after.status).toBe(200)
@@ -8071,8 +8075,9 @@ describe('GET /api/project/inbox — blockers', () => {
       },
     )
 
-    const { app } = buildServeApp({ projectPath: tmpDir })
-    const res = await app.fetch(new Request(scoped('/api/project/inbox')))
+    const { app, refreshProjectProjections } = buildServeApp({ projectPath: tmpDir })
+    await refreshProjectProjections(tmpDir)
+    const res = await app.fetch(new Request(scoped('/api/project/inbox?includeHistory=true')))
     expect(res.status).toBe(200)
     const body = (await res.json()) as {
       history?: Array<{ taskId?: string; title?: string }>
@@ -8147,7 +8152,8 @@ describe('GET /api/project/inbox — blockers', () => {
       },
     )
 
-    const { app } = buildServeApp({ projectPath: tmpDir })
+    const { app, refreshProjectProjections } = buildServeApp({ projectPath: tmpDir })
+    await refreshProjectProjections(tmpDir)
     const res = await app.fetch(new Request(scoped('/api/project/inbox')))
     const body = (await res.json()) as {
       items?: Array<{ kind?: string; taskId?: string; severity?: string }>
@@ -8165,7 +8171,9 @@ describe('GET /api/project/inbox — blockers', () => {
       'workspace-goals.json',
       { goals: [{ id: 'goal-1', title: 'Existing imported plan' }] },
     )
-    const { app } = buildServeApp({ projectPath: tmpDir })
+    await writeSystemTasks({ version: 1, lastUpdated: new Date().toISOString(), tasks: [] })
+    const { app, refreshProjectProjections } = buildServeApp({ projectPath: tmpDir })
+    await refreshProjectProjections(tmpDir)
 
     const res = await app.fetch(new Request(scoped('/api/project/inbox')))
     const body = (await res.json()) as {
@@ -8238,8 +8246,9 @@ describe('GET /api/project/inbox — blockers', () => {
       },
     )
 
-    const { app } = buildServeApp({ projectPath: tmpDir })
-    const res = await app.fetch(new Request(scoped('/api/project/inbox')))
+    const { app, refreshProjectProjections } = buildServeApp({ projectPath: tmpDir })
+    await refreshProjectProjections(tmpDir)
+    const res = await app.fetch(new Request(scoped('/api/project/inbox?includeHistory=true')))
     expect(res.status).toBe(200)
     const body = (await res.json()) as {
       items?: Array<{ kind?: string; taskId?: string }>
@@ -8254,8 +8263,6 @@ describe('GET /api/project/inbox — blockers', () => {
 
 describe('GET /api/project — bootstrap status', () => {
   it('treats drafted spec_review tasks as waiting for review before project start', async () => {
-    const migrationApp = buildServeApp({ projectPath: tmpDir })
-    await applyStorageBoundaryMigration(migrationApp.app)
     await writeSystemTasks({
       tasks: [
         {
@@ -8270,7 +8277,8 @@ describe('GET /api/project — bootstrap status', () => {
     })
     setProvider('anthropic-api', { apiKey: 'sk-ant-test' })
     updateGlobalConfig({ preferredProvider: 'anthropic-api' })
-    const { app } = buildServeApp({ projectPath: tmpDir })
+    const { app, refreshProjectProjections } = buildServeApp({ projectPath: tmpDir })
+    await refreshProjectProjections(tmpDir)
 
     const res = await app.fetch(new Request(scoped('/api/project')))
     expect(res.status).toBe(200)
@@ -8290,8 +8298,6 @@ describe('GET /api/project — bootstrap status', () => {
   })
 
   it('targets the first waiting spec thread when spec review blocks start', async () => {
-    const migrationApp = buildServeApp({ projectPath: tmpDir })
-    await applyStorageBoundaryMigration(migrationApp.app)
     await writeSystemTasks({
       tasks: [
         {
@@ -8316,7 +8322,8 @@ describe('GET /api/project — bootstrap status', () => {
     })
     setProvider('anthropic-api', { apiKey: 'sk-ant-test' })
     updateGlobalConfig({ preferredProvider: 'anthropic-api' })
-    const { app } = buildServeApp({ projectPath: tmpDir })
+    const { app, refreshProjectProjections } = buildServeApp({ projectPath: tmpDir })
+    await refreshProjectProjections(tmpDir)
 
     const res = await app.fetch(new Request(scoped('/api/project')))
     expect(res.status).toBe(200)
@@ -8336,10 +8343,18 @@ describe('GET /api/project — bootstrap status', () => {
   })
 
   it('blocks project start when the selected release is waiting for review even if unscoped child work is runnable', async () => {
-    const migrationApp = buildServeApp({ projectPath: tmpDir })
-    await applyStorageBoundaryMigration(migrationApp.app)
     await writeSystemTasks({
       version: 1,
+      selectedReleaseId: 'stage-0-spec-baseline',
+      releases: [{
+        id: 'stage-0-spec-baseline',
+        label: 'Stage 0 spec baseline',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-release-spec'],
+        deferredNodeIds: [],
+      }],
       tasks: [
         {
           id: 'task-release-spec',
@@ -8353,7 +8368,6 @@ describe('GET /api/project — bootstrap status', () => {
           id: 'task-unscoped-child',
           title: 'Shape fixture and expected-record ground truth',
           status: 'exploring',
-          hierarchy: { parentId: 'task-release-spec', relation: 'child' },
           createdAt: '2026-06-11T15:01:00.000Z',
           updatedAt: '2026-06-11T15:01:00.000Z',
         },
@@ -8371,7 +8385,7 @@ describe('GET /api/project — bootstrap status', () => {
     }
 
     expect(body.orientationSpine?.summary?.topBlocker).toBe(
-      '"Define fixture, expected-record, prototype-run, and evaluation schemas." is waiting for review before work can start.',
+      'Define fixture, expected-record, prototype-run, and evaluation schemas: waiting for review before work can start.',
     )
     expect(body.startReadiness).toMatchObject({
       canStart: false,
@@ -8385,8 +8399,6 @@ describe('GET /api/project — bootstrap status', () => {
   })
 
   it('prioritizes selected-release spec review over imported-scope shaping', async () => {
-    const migrationApp = buildServeApp({ projectPath: tmpDir })
-    await applyStorageBoundaryMigration(migrationApp.app)
     await writeSystemTasks({
       version: 1,
       selectedReleaseId: 'stage-1',
@@ -8458,6 +8470,7 @@ describe('GET /api/project — bootstrap status', () => {
 
   it('includes the last bootstrap run status so the shell can explain async start failures', async () => {
     const bootstrapPath = path.join(getProjectLocalHistoryDir(tmpDir), 'bootstrap.json')
+    ensureProjectLocalHistoryDir(tmpDir)
     await fs.writeFile(
       bootstrapPath,
       JSON.stringify({
@@ -8479,6 +8492,7 @@ describe('GET /api/project — bootstrap status', () => {
       }),
       'utf8',
     )
+    await writeSystemTasks({ version: 1, lastUpdated: new Date().toISOString(), tasks: [] })
     const { app } = buildServeApp({ projectPath: tmpDir })
 
     const res = await app.fetch(new Request(scoped('/api/project')))
@@ -8493,10 +8507,7 @@ describe('GET /api/project — bootstrap status', () => {
 
   it('includes the same inbox snapshot as /api/project/inbox', async () => {
     const tasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
-    await fs.mkdir(path.dirname(tasksPath), { recursive: true })
-    await fs.writeFile(
-      tasksPath,
-      JSON.stringify({
+    await writeSystemTasks({
         tasks: [
           {
             id: 'task-1',
@@ -8507,11 +8518,10 @@ describe('GET /api/project — bootstrap status', () => {
             updatedAt: '2026-05-05T00:05:00Z',
           },
         ],
-      }, null, 2),
-      'utf8',
-    )
+    })
 
-    const { app } = buildServeApp({ projectPath: tmpDir })
+    const { app, refreshProjectProjections } = buildServeApp({ projectPath: tmpDir })
+    await refreshProjectProjections(tmpDir)
     const projectRes = await app.fetch(new Request(scoped('/api/project')))
     expect(projectRes.status).toBe(200)
     const projectBody = (await projectRes.json()) as {
@@ -8543,7 +8553,7 @@ describe('GET /api/project — bootstrap status', () => {
     expect(projectBody.inbox).toEqual(inboxBody)
     expect(projectBody.inbox?.items?.some(item => item.kind === 'spec_approval' && item.taskId === 'task-1')).toBe(false)
     expect(projectBody.memoryHealth?.memoryCore).toMatchObject({
-      adapter: 'mastra',
+      adapter: 'deterministic',
       fallbackUsed: false,
       semanticRecallEnabled: false,
       observationalMemoryEnabled: false,
@@ -8555,8 +8565,10 @@ describe('GET /api/project — bootstrap status', () => {
   })
 
   it('keeps memory engines gated in /api/project when env vars request them without quality proof', async () => {
+    process.env.GUILDHALL_MEMORY_SUBSTRATE = 'mastra'
     process.env.GUILDHALL_MEMORY_SEMANTIC_RECALL = '1'
     process.env.GUILDHALL_MEMORY_OBSERVATIONAL = '1'
+    await writeSystemTasks({ version: 1, lastUpdated: new Date().toISOString(), tasks: [] })
     const { app } = buildServeApp({ projectPath: tmpDir })
 
     const projectRes = await app.fetch(new Request(scoped('/api/project')))
@@ -8644,6 +8656,7 @@ describe('GET /api/project — bootstrap status', () => {
       now: '2026-06-01T12:02:00.000Z',
     })
 
+    await writeSystemTasks({ version: 1, lastUpdated: new Date().toISOString(), tasks: [] })
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(new Request(scoped('/api/project')))
     expect(res.status).toBe(200)
@@ -8765,6 +8778,7 @@ describe('GET /api/project — bootstrap status', () => {
         },
       ],
     })
+    await applyCanonicalMigrations()
     const { app } = buildServeApp({ projectPath: tmpDir })
 
     const select = await app.fetch(new Request(scoped('/api/project/release/select'), {
@@ -8783,7 +8797,8 @@ describe('GET /api/project — bootstrap status', () => {
     expect(body.release?.label).toBe('Agent review proof')
     expect(body.spine?.selectedRelease?.id).toBe('release-2')
 
-    const queue = await readProjectStateJsonAsync<{ selectedReleaseId?: string; releases?: Array<{ id?: string; description?: unknown }> }>(tmpDir, 'TASKS.json')
+    const queue = readProjectStateDatabaseQueueDefinition(getProjectSystemStatePath(tmpDir, 'TASKS.json'))
+    if (!queue) throw new Error('Missing canonical SQLite task queue')
     expect(queue.selectedReleaseId).toBe('release-2')
     expect(queue.releases?.find(release => release.id === 'release-2')?.description).toBeUndefined()
   })
@@ -8793,6 +8808,10 @@ describe('GET /api/project — bootstrap status', () => {
       version: 1,
       lastUpdated: '2026-06-01T12:00:00.000Z',
       selectedReleaseId: 'release-1',
+      releases: [
+        { id: 'release-1', label: 'Headless MVP', kind: 'release', state: 'active', source: 'release_plan' },
+        { id: 'release-2', label: 'Release 2', kind: 'release', state: 'planned', source: 'release_plan' },
+      ],
       tasks: [
         {
           id: 'task-1',
@@ -8808,6 +8827,7 @@ describe('GET /api/project — bootstrap status', () => {
         },
       ],
     })
+    await applyCanonicalMigrations()
     const { app } = buildServeApp({ projectPath: tmpDir })
 
     const select = await app.fetch(new Request(scoped('/api/project/release/select'), {
@@ -8826,7 +8846,8 @@ describe('GET /api/project — bootstrap status', () => {
     expect(body.release?.label).toBe('Release 2')
     expect(body.spine?.selectedRelease?.id).toBe('release-2')
 
-    const queue = await readProjectStateJsonAsync<{ selectedReleaseId?: string; releases?: Array<{ id?: string }> }>(tmpDir, 'TASKS.json')
+    const queue = readProjectStateDatabaseQueueDefinition(getProjectSystemStatePath(tmpDir, 'TASKS.json'))
+    if (!queue) throw new Error('Missing canonical SQLite task queue')
     expect(queue.selectedReleaseId).toBe('release-2')
     expect(queue.releases?.map(release => release.id)).toEqual(['release-1', 'release-2'])
   })

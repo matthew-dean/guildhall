@@ -4,11 +4,12 @@ import path from 'node:path'
 import { TaskQueue, type RequestIntake, type Task, type TaskRequest, type TaskStatus } from '@guildhall/core'
 import {
   atomicWriteText,
+  appendTaskEvidence,
   inferProjectRootFromMemoryDir,
   projectStatePathFromMemoryDir,
-  readProjectStateTextFromMemoryDirAsync,
+  readProjectStateDatabaseQueueRevision,
   upsertTaskRuntimeState,
-  writeProjectStateJsonFromMemoryDirAsync,
+  upsertTaskWorkspaceState,
 } from '@guildhall/sessions'
 import {
   appendExploringTranscript,
@@ -41,9 +42,16 @@ import { taskShapingBlockers } from '../shared/task-shaping-blockers.js'
 import { applyTaskShaping } from './task-decomposition.js'
 import { transitionTaskStatus } from './task-transition.js'
 import { createOwnerInputRequest } from './owner-input-store.js'
-import { normalizeLegacyTaskQueueShape } from './task-queue-compat.js'
 import { buildSurfaceReviewPacketsForStructuredSpec } from './contract-surfaces.js'
 import { buildEffectiveTask } from './effective-task.js'
+import {
+  sanitizeTaskQueueForProjectWrite,
+  readProjectStateAuthorityAtBoundary,
+  writeProjectTaskQueueAtCurrentStateBoundary,
+  writePromotedTaskDetailMutation,
+  writeProjectTaskQueueWithSummary,
+  readProjectTaskQueueForRichMutation,
+} from './project-state-boundary.js'
 
 // ---------------------------------------------------------------------------
 // FR-12: exploratory task intake.
@@ -65,7 +73,8 @@ function progressPathFor(memoryDir: string): string {
 }
 
 async function readQueue(memoryDir: string): Promise<TaskQueue> {
-  const raw = await readProjectStateTextFromMemoryDirAsync(memoryDir, 'TASKS.json').catch((err: unknown) => {
+  const tasksPath = tasksPathFor(memoryDir)
+  const raw = await readProjectTaskQueueForRichMutation(inferProjectRootFromMemoryDir(memoryDir)).catch((err: unknown) => {
     if (
       err &&
       typeof err === 'object' &&
@@ -83,10 +92,10 @@ async function readQueue(memoryDir: string): Promise<TaskQueue> {
       tasks: [],
     })
   }
-  // The bootstrap seeds TASKS.json as a bare `[]` for legacy reasons, so be
-  // permissive on intake: if we see a bare array, promote it to a full queue.
+  // A bare array is the only supported bootstrap shorthand. Once persisted,
+  // all task state crosses the SQLite current-state boundary.
   const now = new Date().toISOString()
-  const parsed = normalizeLegacyTaskQueueShape(JSON.parse(raw), now)
+  const parsed = typeof raw === 'string' ? JSON.parse(raw) as unknown : raw
   const queue = TaskQueue.parse(Array.isArray(parsed)
     ? { version: 1, lastUpdated: now, tasks: parsed }
     : parsed)
@@ -95,7 +104,14 @@ async function readQueue(memoryDir: string): Promise<TaskQueue> {
 }
 
 async function writeQueue(memoryDir: string, queue: TaskQueue): Promise<void> {
-  await writeProjectStateJsonFromMemoryDirAsync(memoryDir, 'TASKS.json', queue)
+  const tasksPath = tasksPathFor(memoryDir)
+  const projectRoot = inferProjectRootFromMemoryDir(memoryDir)
+  const expectedQueueRevision = readProjectStateDatabaseQueueRevision(tasksPath)
+  await writeProjectTaskQueueAtCurrentStateBoundary(tasksPath, queue, {
+    projectId: path.basename(projectRoot),
+    projectRoot,
+    ...(expectedQueueRevision !== null ? { expectedQueueRevision } : {}),
+  })
 }
 
 function hasDurableImplementationProgress(task: Task): boolean {
@@ -850,7 +866,11 @@ export async function resumeExploring(input: ResumeExploringInput): Promise<{ su
     if (!task) return { success: false, error: `Task ${input.taskId} not found after escalation resolution` }
   }
 
-  if (input.message) {
+  const projectRoot = inferProjectRootFromMemoryDir(input.memoryDir)
+  const tasksPath = tasksPathFor(input.memoryDir)
+  const promotedAuthority = readProjectStateAuthorityAtBoundary(tasksPath).authority === 'database'
+
+  if (input.message && !promotedAuthority) {
     task.notes.push({
       agentId: 'human',
       role: 'human',
@@ -875,7 +895,30 @@ export async function resumeExploring(input: ResumeExploringInput): Promise<{ su
     })
   }
 
-  if (input.message && !input.preserveStatus && task.status !== 'blocked') {
+  if (input.message && promotedAuthority) {
+    const now = new Date().toISOString()
+    const promoted = writePromotedTaskDetailMutation(tasksPath, task.id, {
+      projectId: path.basename(projectRoot),
+      projectRoot,
+      mutate: current => {
+        if (!input.preserveStatus && current.status !== 'blocked') current.status = 'exploring'
+        current.updatedAt = now
+        return current
+      },
+    })
+    if (!promoted) return { success: false, error: `Task ${input.taskId} could not be updated in the current-state database` }
+    await appendTaskEvidence(projectRoot, task.id, {
+      id: `note-${task.id}-${now.replace(/[^0-9A-Za-z]/g, '')}-resume`,
+      kind: 'note',
+      recordedAt: now,
+      payload: {
+        agentId: 'human',
+        role: 'human',
+        content: input.message,
+        timestamp: now,
+      },
+    })
+  } else if (input.message && !input.preserveStatus && task.status !== 'blocked') {
     task.status = 'exploring'
     task.updatedAt = new Date().toISOString()
     queue.lastUpdated = task.updatedAt
@@ -895,6 +938,12 @@ export async function reframeTask(input: ReframeTaskInput): Promise<ReframeTaskR
   if (!task) return { success: false, error: `Task ${input.taskId} not found` }
   const projectRoot = inferProjectRootFromMemoryDir(input.memoryDir)
   const effectiveTask = await buildEffectiveTask(projectRoot, task) as unknown as Task
+  // Promoted reads keep resolved escalation history in the evidence detail
+  // store rather than on the compact task definition. Reframe must resolve
+  // that canonical history, not silently operate on an overlay-free row.
+  if (Array.isArray(effectiveTask.escalations)) {
+    task.escalations = [...effectiveTask.escalations]
+  }
   if (task.status === 'done' || task.status === 'shelved' || task.status === 'pending_pr') {
     return { success: false, error: `Task ${input.taskId} is ${task.status}` }
   }
@@ -1000,6 +1049,9 @@ export async function enrichTask(input: EnrichTaskInput): Promise<ReframeTaskRes
   const queue = await readQueue(input.memoryDir)
   const task = queue.tasks.find((t) => t.id === input.taskId)
   if (!task) return { success: false, error: `Task ${input.taskId} not found` }
+  const projectRoot = inferProjectRootFromMemoryDir(input.memoryDir)
+  const effectiveTask = await buildEffectiveTask(projectRoot, task) as unknown as Task
+  if (Array.isArray(effectiveTask.escalations)) task.escalations = [...effectiveTask.escalations]
   if (task.status === 'done' || task.status === 'shelved' || task.status === 'pending_pr') {
     return { success: false, error: `Task ${input.taskId} is ${task.status}` }
   }

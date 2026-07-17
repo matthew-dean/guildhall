@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
+import { DatabaseSync } from 'node:sqlite'
 import {
   raiseEscalation,
   resolveEscalation,
@@ -14,7 +15,20 @@ import {
 } from '../escalation.js'
 import { readTasks } from '../task-queue.js'
 import { buildEffectiveTask } from '../../runtime/effective-task.js'
-import { appendTaskEvidence, readTaskRuntimeStore, upsertTaskRuntimeState } from '@guildhall/sessions'
+import {
+  appendTaskEvidence,
+  getProjectSystemStatePath,
+  promoteProjectStateDatabaseAuthority,
+  projectStateDatabasePath,
+  readProjectTaskQueueSync,
+  readTaskEvidence,
+  readTaskRuntimeStore,
+  upsertTaskRuntimeState,
+} from '@guildhall/sessions'
+import {
+  writePromotedTaskDetailMutation,
+  writeProjectTaskQueue,
+} from '../../runtime/project-state-boundary.js'
 import type { Task } from '@guildhall/core'
 import { setProvider } from '../../config/global-providers.js'
 
@@ -61,7 +75,8 @@ async function writeSeed(tasks: Task[]): Promise<void> {
     lastUpdated: new Date().toISOString(),
     tasks,
   }
-  await fs.writeFile(tasksPath, JSON.stringify(queue), 'utf-8')
+  writeProjectTaskQueue(tasksPath, queue, { projectRoot: tmpDir })
+  promoteProjectStateDatabaseAuthority(tmpDir)
 }
 
 async function readEffectiveTask(): Promise<Task> {
@@ -72,14 +87,28 @@ async function readEffectiveTask(): Promise<Task> {
 }
 
 async function readRawQueue(): Promise<{ tasks: Array<Record<string, unknown>> }> {
-  return JSON.parse(await fs.readFile(tasksPath, 'utf-8')) as { tasks: Array<Record<string, unknown>> }
+  return readProjectTaskQueueSync(tasksPath) as { tasks: Array<Record<string, unknown>> }
+}
+
+function readTaskDetailBytes(taskId: string): Buffer {
+  const database = new DatabaseSync(projectStateDatabasePath(tmpDir), { readOnly: true })
+  try {
+    const row = database.prepare('SELECT payload_gzip FROM work_item_detail WHERE task_id = ?').get(taskId) as { payload_gzip: Uint8Array }
+    return Buffer.from(row.payload_gzip)
+  } finally {
+    database.close()
+  }
 }
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-esc-'))
-  tasksPath = path.join(tmpDir, 'TASKS.json')
+  tasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
+  await fs.mkdir(path.dirname(tasksPath), { recursive: true })
   progressPath = path.join(tmpDir, 'PROGRESS.md')
-  await writeSeed([seedTask()])
+  await writeSeed([
+    seedTask(),
+    seedTask({ id: 'task-002', title: 'Untouched task' }),
+  ])
 })
 
 afterEach(async () => {
@@ -211,13 +240,10 @@ describe('raiseEscalation', () => {
     })
     expect(first.success).toBe(true)
 
-    await writeSeed([
-      seedTask({
-        status: 'in_progress',
-        assignedTo: 'worker-agent',
-        blockReason: undefined,
-      }),
-    ])
+    writePromotedTaskDetailMutation(tasksPath, 'task-001', {
+      mutate: task => ({ ...task, status: 'in_progress', blockReason: undefined }),
+    })
+    await upsertTaskRuntimeState(tmpDir, 'task-001', { assignedTo: 'worker-agent' })
 
     const second = await raiseEscalation({
       tasksPath,
@@ -252,7 +278,7 @@ describe('raiseEscalation', () => {
 
     const raw = await readRawQueue()
     expect(raw.tasks[0]?.status).toBe('in_progress')
-    expect(raw.tasks[0]?.escalations).toEqual([])
+    expect(raw.tasks[0]).not.toHaveProperty('escalations')
   })
 
   it('writes a typed progress entry when progressPath is provided', async () => {
@@ -365,12 +391,6 @@ describe('resolveEscalation', () => {
       resolution: 'Clear setup blocker for retry-window test.',
       nextStatus: 'in_progress',
     })
-    await writeSeed([
-      seedTask({
-        revisionCount: 4,
-        escalations: [],
-      }),
-    ])
     await upsertTaskRuntimeState(tmpDir, 'task-001', {
       revisionCount: 4,
       updatedAt: '2026-05-01T00:00:00.000Z',
@@ -433,19 +453,17 @@ describe('resolveEscalation', () => {
 
   it('clears canonical blocker fields when resolving a sidecar-only escalation', async () => {
     const raisedAt = new Date().toISOString()
-    await writeSeed([
-      seedTask({
+    writePromotedTaskDetailMutation(tasksPath, 'task-001', {
+      mutate: task => ({
+        ...task,
         status: 'blocked',
         blockReason: 'decision_required: stale proof policy question',
-        escalations: [],
-        openEscalations: [
-          {
-            id: 'esc-task-001-stale',
-            summary: 'Stale compact escalation row',
-          },
-        ],
-      } as Partial<Task>),
-    ])
+        openEscalations: [{
+          id: 'esc-task-001-stale',
+          summary: 'Stale compact escalation row',
+        }],
+      }),
+    })
     await appendTaskEvidence(tmpDir, 'task-001', {
       id: 'esc-task-001-1',
       kind: 'escalation',
@@ -543,6 +561,78 @@ describe('resolveEscalation', () => {
     expect(progress).toContain('MILESTONE')
     expect(progress).toContain('esc-task-001-1')
     expect(progress).toContain('pick A')
+  })
+})
+
+describe('promoted escalation persistence', () => {
+  it('mutates only the target detail and keeps raise/resolve visible through evidence and effective task state', async () => {
+    tasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
+    await fs.mkdir(path.dirname(tasksPath), { recursive: true })
+
+    const before = readTaskDetailBytes('task-002')
+    const raised = await raiseEscalation({
+      tasksPath,
+      taskId: 'task-001',
+      agentId: 'worker-agent',
+      reason: 'decision_required',
+      summary: 'Choose the supported provider.',
+    })
+
+    expect(raised.success).toBe(true)
+    expect(readTaskDetailBytes('task-002')).toEqual(before)
+    const raisedTask = await readEffectiveTask()
+    expect(raisedTask).toMatchObject({
+      status: 'blocked',
+      blockReason: 'decision_required: Choose the supported provider.',
+    })
+    expect(raisedTask.escalations).toEqual([
+      expect.objectContaining({ id: raised.escalationId }),
+    ])
+    expect(raisedTask.escalations[0]?.resolvedAt).toBeUndefined()
+    expect(await readTaskEvidence(tmpDir, 'task-001', { kind: 'escalation' })).toEqual([
+      expect.objectContaining({
+        payload: expect.objectContaining({ id: raised.escalationId }),
+      }),
+    ])
+    expect((await readTaskRuntimeStore(tmpDir)).tasks['task-001']).toMatchObject({
+      assignedTo: null,
+      openEscalationIds: [raised.escalationId],
+    })
+
+    const resolved = await resolveEscalation({
+      tasksPath,
+      taskId: 'task-001',
+      escalationId: raised.escalationId!,
+      resolution: 'Use the supported provider.',
+      nextStatus: 'in_progress',
+    })
+
+    expect(resolved.success).toBe(true)
+    expect(readTaskDetailBytes('task-002')).toEqual(before)
+    const resolvedQueue = (await readTasks({ tasksPath })).queue
+    const resolvedTask = await buildEffectiveTask(tmpDir, resolvedQueue!.tasks[0]!, { evidence: 'full' }) as unknown as Task
+    expect(resolvedTask).toMatchObject({
+      status: 'in_progress',
+      assignedTo: 'worker-agent',
+      escalations: [expect.objectContaining({
+        id: raised.escalationId,
+        resolution: 'Use the supported provider.',
+        resolvedBy: 'human',
+      })],
+    })
+    expect(resolvedTask.blockReason).toBeUndefined()
+    expect((await readTaskRuntimeStore(tmpDir)).tasks['task-001']).toMatchObject({
+      assignedTo: 'worker-agent',
+      openEscalationIds: [],
+    })
+    expect(await readTaskEvidence(tmpDir, 'task-001', { kind: 'escalation' })).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          id: raised.escalationId,
+          resolution: 'Use the supported provider.',
+        }),
+      }),
+    ]))
   })
 })
 

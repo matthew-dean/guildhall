@@ -49,9 +49,11 @@ function hasAcceptanceCriteria(task: unknown): boolean {
 
 function latestApprovingReviewReasoning(task: unknown): string | null {
   if (!task || typeof task !== 'object') return null
-  const reviewVerdicts = Array.isArray((task as { reviewVerdicts?: unknown }).reviewVerdicts)
-    ? (task as { reviewVerdicts: unknown[] }).reviewVerdicts
-    : []
+  const reviewVerdicts = evidencePayloads(task, 'review_verdict') ?? (
+    Array.isArray((task as { reviewVerdicts?: unknown }).reviewVerdicts)
+      ? (task as { reviewVerdicts: unknown[] }).reviewVerdicts
+      : []
+  )
   for (let index = reviewVerdicts.length - 1; index >= 0; index -= 1) {
     const verdict = reviewVerdicts[index]
     if (!verdict || typeof verdict !== 'object') continue
@@ -67,58 +69,88 @@ function latestApprovingReviewReasoning(task: unknown): string | null {
   return null
 }
 
-export function hasActiveProofRecovery(task: unknown): boolean {
-  if (!task || typeof task !== 'object') return false
+function proofRecoveryForTask(task: unknown): Record<string, unknown> | null {
+  if (!task || typeof task !== 'object') return null
   const record = task as Record<string, unknown>
   const runtime = record.runtime && typeof record.runtime === 'object' && !Array.isArray(record.runtime)
     ? record.runtime as Record<string, unknown>
     : null
-  const proofRecovery = record.proofRecovery && typeof record.proofRecovery === 'object' && !Array.isArray(record.proofRecovery)
+  return record.proofRecovery && typeof record.proofRecovery === 'object' && !Array.isArray(record.proofRecovery)
     ? record.proofRecovery as Record<string, unknown>
     : runtime?.proofRecovery && typeof runtime.proofRecovery === 'object' && !Array.isArray(runtime.proofRecovery)
       ? runtime.proofRecovery as Record<string, unknown>
       : null
-  return typeof proofRecovery?.reopenedAt === 'string' && proofRecovery.reopenedAt.trim().length > 0
+}
+
+function proofEvidenceRecordedAfterRecovery(task: Record<string, unknown>, reopenedAt: number): boolean {
+  const proofPaths = Array.isArray(task.proofPaths) ? task.proofPaths : []
+  const documentedCommands = proofPaths
+    .filter((proof): proof is Record<string, unknown> => Boolean(proof) && typeof proof === 'object' && !Array.isArray(proof))
+    .filter(proof => proof.kind === 'command' && proof.source === 'documented')
+    .map(proof => typeof proof.command === 'string' ? proof.command.trim() : '')
+    .filter(Boolean)
+  const gateResults = evidencePayloads(task, 'gate_result') ?? (Array.isArray(task.gateResults) ? task.gateResults : [])
+  const passedCommandGate = gateResults.some((gate): gate is Record<string, unknown> => {
+    if (!gate || typeof gate !== 'object' || Array.isArray(gate)) return false
+    const record = gate as Record<string, unknown>
+    if (!(record.passed === true || record.status === 'pass' || record.status === 'passed')) return false
+    const checkedAt = Date.parse(String(record.checkedAt ?? record.recordedAt ?? ''))
+    if (!Number.isFinite(checkedAt) || checkedAt <= reopenedAt || documentedCommands.length === 0) return false
+    const candidates = [record.command, record.gateId, record.name, record.output]
+      .filter((value): value is string => typeof value === 'string')
+      .map(value => value.trim())
+      .filter(Boolean)
+    return documentedCommands.some(command => candidates.some(candidate => candidate === command || candidate.includes(command)))
+  })
+  if (passedCommandGate) return true
+
+  return proofPaths.some((proof): proof is Record<string, unknown> => {
+    if (!proof || typeof proof !== 'object' || Array.isArray(proof)) return false
+    const records = Array.isArray(proof.verificationRecords) ? proof.verificationRecords : []
+    return records.some((verification): boolean => {
+      if (!verification || typeof verification !== 'object' || Array.isArray(verification)) return false
+      const record = verification as Record<string, unknown>
+      if (record.status !== 'passed') return false
+      const recordedAt = Date.parse(String(record.recordedAt ?? record.updatedAt ?? ''))
+      return Number.isFinite(recordedAt) && recordedAt > reopenedAt
+    })
+  })
+}
+
+export function hasActiveProofRecovery(task: unknown): boolean {
+  const proofRecovery = proofRecoveryForTask(task)
+  const reopenedAt = typeof proofRecovery?.reopenedAt === 'string' ? Date.parse(proofRecovery.reopenedAt) : NaN
+  if (!Number.isFinite(reopenedAt)) return false
+  return !proofEvidenceRecordedAfterRecovery(task as Record<string, unknown>, reopenedAt)
 }
 
 function hasCurrentFailedHardGate(task: unknown): boolean {
-  if (!task || typeof task !== 'object') return false
-  const gateResults = Array.isArray((task as { gateResults?: unknown }).gateResults)
-    ? (task as { gateResults: unknown[] }).gateResults
-    : []
-  const hardGates = gateResults
-    .filter((gate): gate is Record<string, unknown> => Boolean(gate) && typeof gate === 'object' && !Array.isArray(gate))
-    .filter(gate => gate.type === 'hard')
-    .sort((left, right) => Date.parse(String(left.checkedAt ?? '')) - Date.parse(String(right.checkedAt ?? '')))
-  const latest = hardGates.at(-1)
-  return Boolean(latest && latest.passed === false)
+  return latestFailedHardGate(task as Record<string, unknown>) !== null
 }
 
 function activeProofRecoveryReason(task: Record<string, unknown>): string {
-  const runtime = task.runtime && typeof task.runtime === 'object' && !Array.isArray(task.runtime)
-    ? task.runtime as Record<string, unknown>
-    : null
-  const proofRecovery =
-    task.proofRecovery && typeof task.proofRecovery === 'object' && !Array.isArray(task.proofRecovery)
-      ? task.proofRecovery as Record<string, unknown>
-      : runtime?.proofRecovery && typeof runtime.proofRecovery === 'object' && !Array.isArray(runtime.proofRecovery)
-        ? runtime.proofRecovery as Record<string, unknown>
-        : null
-  if (!proofRecovery || typeof proofRecovery.reopenedAt !== 'string' || !proofRecovery.reopenedAt.trim()) return ''
+  const proofRecovery = proofRecoveryForTask(task)
+  if (!proofRecovery || !hasActiveProofRecovery(task)) return ''
   return typeof proofRecovery.reason === 'string' && proofRecovery.reason.trim()
     ? proofRecovery.reason.trim()
     : 'Required proof evidence is being recovered.'
 }
 
 function latestFailedHardGate(task: Record<string, unknown>): Record<string, unknown> | null {
-  const gates = Array.isArray(task.gateResults)
-    ? task.gateResults.filter((gate): gate is Record<string, unknown> => Boolean(gate) && typeof gate === 'object' && !Array.isArray(gate))
-    : []
-  for (let index = gates.length - 1; index >= 0; index -= 1) {
-    const gate = gates[index]
-    if (gate.type === 'hard' && gate.passed === false) return gate
+  const gates = (evidencePayloads(task, 'gate_result') ?? (Array.isArray(task.gateResults) ? task.gateResults : []))
+    .filter((gate): gate is Record<string, unknown> => Boolean(gate) && typeof gate === 'object' && !Array.isArray(gate))
+  const latestByGate = new Map<string, Record<string, unknown>>()
+  for (const gate of gates) {
+    if (gate.type !== 'hard') continue
+    const identity = String(gate.gateId ?? gate.command ?? gate.name ?? 'hard-gate')
+    const previous = latestByGate.get(identity)
+    const previousAt = Date.parse(String(previous?.checkedAt ?? previous?.recordedAt ?? ''))
+    const currentAt = Date.parse(String(gate.checkedAt ?? gate.recordedAt ?? ''))
+    if (!previous || currentAt >= previousAt) latestByGate.set(identity, gate)
   }
-  return null
+  return [...latestByGate.values()]
+    .filter(gate => gate.passed === false || gate.status === 'fail' || gate.status === 'failed')
+    .sort((left, right) => Date.parse(String(right.checkedAt ?? right.recordedAt ?? '')) - Date.parse(String(left.checkedAt ?? left.recordedAt ?? '')))[0] ?? null
 }
 
 function failedHardGateReason(gate: Record<string, unknown> | null): string {
@@ -129,6 +161,15 @@ function failedHardGateReason(gate: Record<string, unknown> | null): string {
   return gateId ? `${gateId} failed.` : 'A required hard gate failed.'
 }
 
+function commandCriterionId(command: string): string {
+  const slug = command
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 56)
+  return `proof-command-${slug || 'unnamed'}`
+}
+
 export function normalizeAcceptanceCriteriaForCurrentProof(task: Record<string, unknown>): Record<string, unknown> {
   const criteria = Array.isArray(task.acceptanceCriteria)
     ? task.acceptanceCriteria.filter((criterion): criterion is Record<string, unknown> =>
@@ -137,19 +178,77 @@ export function normalizeAcceptanceCriteriaForCurrentProof(task: Record<string, 
     : []
   if (criteria.length === 0) return task
 
-  const failedHardGate = latestFailedHardGate(task)
-  const proofReason = activeProofRecoveryReason(task) || failedHardGateReason(failedHardGate)
-  if (!proofReason) return task
-  const gateCheckedAt = typeof failedHardGate?.checkedAt === 'string' ? failedHardGate.checkedAt : undefined
-  const existingProofState = task.acceptanceCriteriaProofState &&
-    typeof task.acceptanceCriteriaProofState === 'object' &&
-    !Array.isArray(task.acceptanceCriteriaProofState)
-    ? task.acceptanceCriteriaProofState as Record<string, unknown>
+  // Older imported tasks stored the command on the proof path but dropped
+  // the relationship from the automated acceptance criterion. Recover that
+  // relationship only when the task has one unambiguous command pair; never
+  // guess when several criteria or proof paths could be matched.
+  const documentedCommands = Array.isArray(task.proofPaths)
+    ? [...new Set(task.proofPaths
+      .filter((proof): proof is Record<string, unknown> => Boolean(proof) && typeof proof === 'object' && !Array.isArray(proof))
+      .filter(proof => proof.kind === 'command' && proof.source === 'documented')
+      .map(proof => typeof proof.command === 'string' ? proof.command.trim() : '')
+      .filter(Boolean))]
+    : []
+  const unlinkedAutomatedCriteria = criteria.filter(criterion =>
+    criterion.verifiedBy === 'automated' &&
+    !(typeof criterion.command === 'string' && criterion.command.trim()),
+  )
+  const commandProjection = documentedCommands.length === 1 && unlinkedAutomatedCriteria.length === 1
+    ? documentedCommands[0]
     : null
-  const staleMetCriteria = criteria.filter(criterion => criterion.met === true)
+  const linkedCriteria = commandProjection
+    ? criteria.map(criterion => criterion === unlinkedAutomatedCriteria[0]
+      ? { ...criterion, command: commandProjection }
+      : criterion)
+    : criteria
+  const representedCommands = new Set(linkedCriteria
+    .map(criterion => typeof criterion.command === 'string' ? criterion.command.trim() : '')
+    .filter(Boolean))
+  const missingCommandCriteria = documentedCommands
+    .filter(command => !representedCommands.has(command))
+    .map(command => ({
+      id: commandCriterionId(command),
+      description: `The documented proof command \`${command}\` passes for this task.`,
+      scenario: 'Execute the documented local proof path for this task.',
+      expectation: `\`${command}\` exits successfully and records durable task evidence.`,
+      verifiedBy: 'automated',
+      source: 'documented',
+      command,
+      met: false,
+    }))
+  const projectedCriteria = missingCommandCriteria.length > 0
+    ? [...linkedCriteria, ...missingCommandCriteria]
+    : linkedCriteria
+  const projectedTask = commandProjection || missingCommandCriteria.length > 0
+    ? { ...task, acceptanceCriteria: projectedCriteria }
+    : task
+
+  const proofSettledCriteria = projectedCriteria.map(criterion => {
+    if (criterion.met !== false || !commandProofSatisfiedByTask(criterion, projectedTask)) return criterion
+    return {
+      ...criterion,
+      met: true,
+      verificationState: 'verified',
+      verificationSource: 'passed-command-proof',
+    }
+  })
+  const criteriaChanged = proofSettledCriteria.some((criterion, index) => criterion !== projectedCriteria[index])
+  const projectedWithProof = criteriaChanged
+    ? { ...projectedTask, acceptanceCriteria: proofSettledCriteria }
+    : projectedTask
+  const failedHardGate = latestFailedHardGate(projectedWithProof)
+  const proofReason = activeProofRecoveryReason(projectedWithProof) || failedHardGateReason(failedHardGate)
+  if (!proofReason) return projectedWithProof
+  const gateCheckedAt = typeof failedHardGate?.checkedAt === 'string' ? failedHardGate.checkedAt : undefined
+  const existingProofState = projectedWithProof.acceptanceCriteriaProofState &&
+    typeof projectedWithProof.acceptanceCriteriaProofState === 'object' &&
+    !Array.isArray(projectedWithProof.acceptanceCriteriaProofState)
+    ? projectedWithProof.acceptanceCriteriaProofState as Record<string, unknown>
+    : null
+  const staleMetCriteria = proofSettledCriteria.filter(criterion => criterion.met === true)
   if (staleMetCriteria.length === 0) {
     return {
-      ...task,
+      ...projectedWithProof,
       acceptanceCriteriaProofState: {
         state: 'blocked',
         reason: proofReason,
@@ -163,8 +262,8 @@ export function normalizeAcceptanceCriteriaForCurrentProof(task: Record<string, 
   }
 
   return {
-    ...task,
-    acceptanceCriteria: criteria.map(criterion => criterion.met === true
+    ...projectedWithProof,
+    acceptanceCriteria: proofSettledCriteria.map(criterion => criterion.met === true
       ? {
           ...criterion,
           met: false,
@@ -191,24 +290,25 @@ export function completionProofCanSettleUnmetAcceptanceCriteria(task: unknown): 
   const criteria = Array.isArray((task as { acceptanceCriteria?: unknown }).acceptanceCriteria)
     ? (task as { acceptanceCriteria: unknown[] }).acceptanceCriteria
     : []
-  const requiresObservedProof = criteria.some((criterion) => {
-    if (!criterion || typeof criterion !== 'object' || Array.isArray(criterion)) return false
-    const record = criterion as Record<string, unknown>
-    if (record.met !== false) return false
-    if (typeof record.command === 'string' && record.command.trim()) return true
-    if (record.verifiedBy === 'automated' || record.verifiedBy === 'provider') return true
-    return requiresCommandBackedProofText(
-      [record.description, record.scenario, record.expectation]
-        .filter((value): value is string => typeof value === 'string')
-        .join(' '),
-    )
+  const unmetCriteria = criteria.filter(criterion => {
+    const record = recordValue(criterion)
+    return record?.met === false
   })
+  const observedProofCriteria = unmetCriteria.filter(criterion => criterionRequiresObservedProof(criterion))
+  // A command pass cannot overrule a newer recovery boundary or failed hard
+  // gate. The current proof projection must settle those blockers first.
+  if (hasActiveProofRecovery(task) || hasCurrentFailedHardGate(task)) return false
   // Review narration can explain a result, but it cannot stand in for an
   // executable command or provider observation named by the criterion.
-  if (requiresObservedProof) return false
+  const observedCommandCriteria = observedProofCriteria.filter(criterion => {
+    const record = recordValue(criterion)
+    return typeof record?.command === 'string' && record.command.trim().length > 0
+  })
+  if (observedCommandCriteria.length !== observedProofCriteria.length ||
+    observedCommandCriteria.some(criterion => !commandProofSatisfiedByTask(recordValue(criterion)!, task))) return false
+  if (observedProofCriteria.length === unmetCriteria.length) return true
   // Historical approval cannot settle criteria after a newer proof recovery or
   // failed hard gate has reopened the task's completion claim.
-  if (hasActiveProofRecovery(task) || hasCurrentFailedHardGate(task)) return false
   const reviewText = latestApprovingReviewReasoning(task)
   if (!reviewText) return false
   return (
@@ -216,6 +316,22 @@ export function completionProofCanSettleUnmetAcceptanceCriteria(task: unknown): 
     /\ball acceptance criteria (?:are |were )?(?:met|satisfied)\b/i.test(reviewText) ||
     /\bacceptance criteria are satisfied\b/i.test(reviewText)
   )
+}
+
+function criterionRequiresObservedProof(criterion: unknown): boolean {
+  const record = recordValue(criterion)
+  if (!record || record.met !== false) return false
+  if (typeof record.command === 'string' && record.command.trim()) return true
+  // The criterion's declared verifier is authoritative. A review-owned
+  // criterion may mention voice, model, or another keyword that also appears
+  // in command-backed proofs; prose must not silently change its evidence
+  // contract.
+  if (record.verifiedBy === 'review' || record.verifiedBy === 'human') return false
+  if (record.verifiedBy === 'automated' || record.verifiedBy === 'provider') return true
+  // An untyped criterion is reviewable by default. Do not infer an evidence
+  // owner from prose; intake must persist `verifiedBy` or a command when the
+  // criterion truly requires executable/provider proof.
+  return false
 }
 
 export function reconcileAcceptanceCriteriaFromCompletionProof(task: Task, now: string): AcceptanceCriteriaReconciliation {
@@ -322,9 +438,11 @@ function expectedEvidenceSemanticallySatisfied(expected: string, evidenceText: s
 }
 
 function passedGateResultsForTask(task: unknown): Array<Record<string, unknown>> {
-  const gateResults = Array.isArray((task as { gateResults?: unknown } | null)?.gateResults)
-    ? (task as { gateResults: unknown[] }).gateResults
-    : []
+  const gateResults = evidencePayloads(task, 'gate_result') ?? (
+    Array.isArray((task as { gateResults?: unknown } | null)?.gateResults)
+      ? (task as { gateResults: unknown[] }).gateResults
+      : []
+  )
   return gateResults.filter((gate): gate is Record<string, unknown> =>
     Boolean(
       gate &&
@@ -354,6 +472,17 @@ function recordValue(value: unknown): Record<string, unknown> | null {
     : null
 }
 
+function evidencePayloads(task: unknown, kind: string): unknown[] | null {
+  const record = recordValue(task)
+  if (!record || !Array.isArray(record.evidence)) return null
+  return record.evidence.flatMap(event => {
+    const eventRecord = recordValue(event)
+    return eventRecord?.kind === kind && Object.prototype.hasOwnProperty.call(eventRecord, 'payload')
+      ? [eventRecord.payload]
+      : []
+  })
+}
+
 function completionEvidenceTextForTask(task: unknown): string {
   const record = recordValue(task)
   if (!record) return ''
@@ -363,7 +492,7 @@ function completionEvidenceTextForTask(task: unknown): string {
   for (const value of Object.values(doneSummarySummary ?? {})) {
     if (typeof value === 'string') chunks.push(value)
   }
-  for (const gate of Array.isArray(record.gateResults) ? record.gateResults : []) {
+  for (const gate of evidencePayloads(task, 'gate_result') ?? (Array.isArray(record.gateResults) ? record.gateResults : [])) {
     const gateRecord = recordValue(gate)
     if (!gateRecord) continue
     for (const key of ['command', 'gateId', 'name', 'output']) {
@@ -371,7 +500,7 @@ function completionEvidenceTextForTask(task: unknown): string {
       if (typeof value === 'string') chunks.push(value)
     }
   }
-  for (const verdict of Array.isArray(record.reviewVerdicts) ? record.reviewVerdicts : []) {
+  for (const verdict of evidencePayloads(task, 'review_verdict') ?? (Array.isArray(record.reviewVerdicts) ? record.reviewVerdicts : [])) {
     const verdictRecord = recordValue(verdict)
     if (!verdictRecord) continue
     for (const key of ['reason', 'reasoning', 'summary']) {

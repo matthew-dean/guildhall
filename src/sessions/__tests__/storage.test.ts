@@ -1,10 +1,10 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import type { ConversationMessage } from '@guildhall/protocol'
+import { messageText, type ConversationMessage } from '@guildhall/protocol'
 import {
   exportSessionMarkdown,
   getProjectSessionDir,
@@ -12,6 +12,7 @@ import {
   loadSessionById,
   loadSessionSnapshot,
   saveSessionSnapshot,
+  compactProjectSessionSnapshots,
 } from '../storage.js'
 
 let baseDir: string
@@ -53,6 +54,14 @@ describe('session storage', () => {
     expect(loaded?.summary).toBe('first user prompt')
     expect(loaded?.usage).toEqual({ input_tokens: 10, output_tokens: 20 })
     expect(loaded?.message_count).toBe(2)
+    const sessionDir = getProjectSessionDir('/tmp/project')
+    expect(JSON.parse(readFileSync(join(sessionDir, 'latest.json'), 'utf8'))).toEqual({
+      version: 1,
+      session_id: 'aaaaaaaa1111',
+    })
+    expect(statSync(join(sessionDir, 'latest.json')).size).toBeLessThan(
+      statSync(join(sessionDir, 'session-aaaaaaaa1111.json')).size,
+    )
   })
 
   it('getProjectSessionDir is deterministic per cwd', () => {
@@ -188,6 +197,52 @@ describe('session storage', () => {
         current: 'Symbol(task)',
       },
     })
+  })
+
+  it('compacts completed snapshots at the storage boundary', () => {
+    const raw = 'raw conversation '.repeat(900)
+    saveSessionSnapshot({
+      cwd: '/tmp/project',
+      model: 'm',
+      systemPrompt: '',
+      messages: [userMsg(raw), assistantMsg(raw)],
+      usage: { input_tokens: 0, output_tokens: 0 },
+      sessionId: 'large-session',
+    })
+    const loaded = loadSessionById('/tmp/project', 'large-session')
+    expect(loaded?.messages).toHaveLength(1)
+    expect(messageText(loaded!.messages[0]!)).toContain('Essential session history:')
+    expect(messageText(loaded!.messages[0]!)).not.toContain(raw)
+  })
+
+  it('cleans old completed snapshots but preserves pending recovery tails', () => {
+    const dir = getProjectSessionDir('/tmp/project')
+    require('node:fs').mkdirSync(dir, { recursive: true })
+    const raw = 'old raw session '.repeat(900)
+    const pendingRaw = 'pending tool output '.repeat(200)
+    const completed = {
+      session_id: 'old-completed', cwd: '/tmp/project', model: 'm', system_prompt: '',
+      messages: [userMsg(raw), assistantMsg(raw)], usage: { input_tokens: 0, output_tokens: 0 },
+      created_at: 1, summary: 'old', message_count: 2,
+    }
+    const pending = {
+      session_id: 'pending', cwd: '/tmp/project', model: 'm', system_prompt: '',
+      messages: [
+        userMsg('run it'),
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'tool-1', name: 'shell', input: {} }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tool-1', content: pendingRaw, is_error: false }] },
+      ], usage: { input_tokens: 0, output_tokens: 0 }, created_at: 1, summary: 'pending', message_count: 3,
+    }
+    writeFileSync(join(dir, 'session-old-completed.json'), JSON.stringify(completed, null, 2))
+    writeFileSync(join(dir, 'session-pending.json'), JSON.stringify(pending, null, 2))
+    const before = statSync(join(dir, 'session-old-completed.json')).size
+    const report = compactProjectSessionSnapshots('/tmp/project', { dryRun: false })
+    expect(report.filesCompacted).toBe(1)
+    expect(report.pendingFilesPreserved).toBe(1)
+    expect(statSync(join(dir, 'session-old-completed.json')).size).toBeLessThan(before)
+    expect(JSON.parse(readFileSync(join(dir, 'session-old-completed.json'), 'utf8')).system_prompt).toBe('')
+    expect(JSON.parse(readFileSync(join(dir, 'session-pending.json'), 'utf8')).messages).toHaveLength(3)
+    expect(loadSessionById('/tmp/project', 'old-completed')?.messages).toHaveLength(1)
   })
 
   it('revives malformed snapshots defensively and falls back to latest aliases', () => {

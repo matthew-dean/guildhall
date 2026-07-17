@@ -11,8 +11,8 @@ future spike.
 
 Memory module specs:
 
-- `internal/specs/2026-06-04-guildhall-independent-memory-module.md`
-- `internal/specs/2026-06-06-mastra-based-memory-improvements.md`
+- `internal/plans/archive/specs/2026-06-04-guildhall-independent-memory-module.md`
+- `internal/plans/archive/specs/2026-06-06-mastra-based-memory-improvements.md`
 
 Keep **repo-local Guildhall state off or very thin by default** regardless of
 the memory system. Any Git-visible manifest/export should be a small
@@ -87,7 +87,7 @@ Letta-style agent architecture.
 
 These scores came from `scripts/evaluate-memory-context-candidates.mjs`, using
 the rubric in
-`internal/plans/2026-06-04-llm-memory-context-evaluation-spike.md`.
+`internal/plans/archive/2026-06-04-llm-memory-context-evaluation-spike.md`.
 
 | Candidate | Total / 50 | Role |
 | --- | ---: | --- |
@@ -155,17 +155,18 @@ The control context packets were all under 1 KB because they used summaries and
 provenance references instead of raw histories. That is the shape Guildhall
 should preserve.
 
-## Next Implementation Step
+## Historical Implementation Lane
 
-Implement `internal/specs/2026-06-06-mastra-based-memory-improvements.md`:
+The following implementation lane was completed as historical evidence; do
+not reopen it as a current work instruction:
 
-1. Retire Graphiti prototype code and stale roadmap language.
-2. Create `src/memory-core/` with data-layer-only reads/writes.
-3. Move the Mastra value-gate behavior behind a Guildhall-owned adapter.
-4. Build deterministic and Mastra candidate packets with source refs.
-5. Add migration/audit proof that fixture `.guildhall` bloat is read without
-   project mutation and compacted into system-local memory.
-6. Add API/UI status that reports real memory/compaction/migration progress.
+1. Retired Graphiti prototype code and stale roadmap language.
+2. Created `src/memory-core/` with data-layer-only reads/writes.
+3. Moved the Mastra value-gate behavior behind a Guildhall-owned adapter.
+4. Built deterministic and Mastra candidate packets with source refs.
+5. Added migration/audit proof that fixture `.guildhall` bloat is read without
+  project mutation and compacted into system-local memory.
+6. Added API/UI status that reports real memory/compaction/migration progress.
 
 The writer-boundary fix remains mandatory regardless of the memory backend.
 

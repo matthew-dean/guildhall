@@ -2,7 +2,8 @@ import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, wr
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { basename, dirname, resolve } from 'node:path'
 
-import { getProjectRuntimeContainerHomeDir, getProjectRuntimeStatePath } from '@guildhall/sessions'
+import { getProjectRuntimeContainerHomeDir, getProjectRuntimeStatePath, getProjectSystemStatePath } from '@guildhall/sessions'
+import { updateProjectSummaryProjection } from './project-summary-projection.js'
 
 export type ProjectRuntimeBackendName = 'docker' | 'podman' | 'none'
 export type ProjectRuntimeStatus = 'stopped' | 'creating' | 'running' | 'failed'
@@ -213,5 +214,13 @@ export async function writeProjectRuntimeState(
   const next = normalizeProjectRuntimeState(projectRoot, state)
   await mkdir(dirname(path), { recursive: true })
   await writeManagedTextFile(path, `${JSON.stringify(next, null, 2)}\n`)
+  updateProjectSummaryProjection(getProjectSystemStatePath(projectRoot, 'TASKS.json'), {
+    runtime: {
+      status: next.status,
+      health: next.health.status,
+      lastActivityAt: next.lastActivityAt,
+      updatedAt: new Date().toISOString(),
+    },
+  })
   return next
 }

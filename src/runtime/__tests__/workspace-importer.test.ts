@@ -6,9 +6,10 @@ import { bootstrapWorkspace } from '@guildhall/config'
 import { TaskQueue } from '@guildhall/core'
 import {
   getProjectTaskLocalHistoryDir,
+  getProjectSystemStatePath,
+  promoteProjectStateDatabaseAuthority,
   readProjectStateJsonAsync,
   readProjectStateTextAsync,
-  writeProjectStateJsonFromMemoryDirAsync,
 } from '@guildhall/sessions'
 import {
   createWorkspaceImportTask,
@@ -29,6 +30,10 @@ import {
 } from '../workspace-importer.js'
 import { approveSpec } from '../intake.js'
 import { pickNextTask } from '../orchestrator-picker.js'
+import {
+  readProjectTaskQueueForRichMutation,
+  writeProjectTaskQueueAtCurrentStateBoundary,
+} from '../project-state-boundary.js'
 import { detectWorkspaceSignals } from '../workspace-import/index.js'
 import { formWorkspaceHypothesis } from '../workspace-import/hypothesis.js'
 import type { WorkspaceInventory } from '../workspace-import/detect.js'
@@ -45,6 +50,12 @@ beforeEach(async () => {
   process.env.GUILDHALL_DATA_DIR = dataDir
   bootstrapWorkspace(tmpDir, { name: 'Import Test' })
   memoryDir = path.join(tmpDir, '.guildhall')
+  await writeQueue({
+    version: 1,
+    lastUpdated: new Date().toISOString(),
+    tasks: [],
+  })
+  promoteProjectStateDatabaseAuthority(tmpDir)
 })
 
 afterEach(async () => {
@@ -54,29 +65,24 @@ afterEach(async () => {
 })
 
 async function readQueue(): Promise<TaskQueue> {
-  const parsed = await readProjectStateJsonAsync<unknown>(tmpDir, 'TASKS.json').catch((err: unknown) => {
-    if (
-      err &&
-      typeof err === 'object' &&
-      'code' in err &&
-      (err as { code?: unknown }).code === 'ENOENT'
-    ) {
-      return {
-        version: 1,
-        lastUpdated: new Date().toISOString(),
-        tasks: [],
-      }
+  const queue = await readProjectTaskQueueForRichMutation(tmpDir).catch((error: unknown) => {
+    if (error && typeof error === 'object' && 'code' in error && (error as { code?: unknown }).code === 'ENOENT') {
+      return null
     }
-    throw err
+    throw error
   })
-  if (Array.isArray(parsed)) {
-    return { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
+  if (queue === null) {
+    return { version: 1, lastUpdated: new Date().toISOString(), tasks: [] }
   }
-  return TaskQueue.parse(parsed)
+  return TaskQueue.parse(queue)
 }
 
 async function writeQueue(queue: TaskQueue): Promise<void> {
-  await writeProjectStateJsonFromMemoryDirAsync(memoryDir, 'TASKS.json', queue)
+  await writeProjectTaskQueueAtCurrentStateBoundary(
+    getProjectSystemStatePath(tmpDir, 'TASKS.json'),
+    queue,
+    { projectRoot: tmpDir },
+  )
 }
 
 function invWith(signals: WorkspaceSignal[]): WorkspaceInventory {
@@ -1597,7 +1603,7 @@ tasks:
     })
     expect(refreshedQueue.tasks.find((t) => t.id === 'task-stale-schema-echo')).toMatchObject({
       status: 'archived',
-      releaseIds: ['stage-1-fixture-and-evaluation-harness'],
+      releaseIds: [],
     })
     expect(refreshedQueue.releases?.find(release => release.id === 'stage-1-fixture-and-evaluation-harness')).toMatchObject({
       nodeIds: ['work:task-current-schema'],
@@ -5790,6 +5796,7 @@ tasks:
     expect(task?.acceptanceCriteria?.find(criterion => criterion.id === 'deterministic-proof')).toMatchObject({
       verifiedBy: 'automated',
       source: 'documented',
+      command: 'pnpm run prove:generation',
     })
     const worldStateTask = (await readQueue()).tasks.find(candidate => candidate.id === 'task-world-state')
     expect(worldStateTask?.proofPaths).toEqual(expect.arrayContaining([

@@ -1,13 +1,26 @@
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { describe, expect, it } from 'vitest'
-import { getProjectSystemStateDir, getProjectSystemStatePath } from '@guildhall/sessions'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import {
+  getProjectSystemStateDir,
+  getProjectSystemStatePath,
+  promoteProjectStateDatabaseAuthority,
+  readProjectStateDatabaseSummary,
+  readProjectStateDatabaseTaskPoint,
+  readTaskEvidence,
+  writeProjectStateDatabaseSnapshot,
+} from '@guildhall/sessions'
 import { createOwnerInputRequest, listOwnerInputRequests } from '../owner-input-store.js'
 import { listBoundedChatSessions } from '../bounded-chat.js'
 import { repairOwnerInputState } from '../owner-input-state-repair.js'
+import * as projectStateBoundary from '../project-state-boundary.js'
 
 const now = '2026-06-03T18:10:00.000Z'
+
+afterEach(() => {
+  vi.restoreAllMocks()
+})
 
 describe('repairOwnerInputState', () => {
   it('cancels malformed narration owner-input records and records the repair on the task', async () => {
@@ -157,6 +170,66 @@ describe('repairOwnerInputState', () => {
     const queue = await readQueue(root)
     expect(JSON.stringify(queue.tasks[0]?.notes)).toContain('agent narration or evidence summary')
   })
+
+  it('stores promoted-project repair notes as bounded evidence without reading or writing the aggregate queue', async () => {
+    const root = await promotedProjectWithTasks([taskWithoutNotes('task-promoted', 'Promoted task')])
+    const created = await createOwnerInputRequest({
+      projectRoot: root,
+      projectId: 'demo',
+      commandId: 'test:promoted-bad-question',
+      now,
+      actor: 'test',
+      source: { kind: 'task', taskId: 'task-promoted', questionId: 'q-promoted-bad' },
+      target: { kind: 'thread' },
+      question: {
+        prompt: 'Which proof should verify the promoted task?',
+        choices: ['pnpm test', 'pnpm build'],
+      },
+      objective: {
+        kind: 'task_shaping',
+        label: 'Clarify promoted task proof',
+        successCriteria: ['Owner answers the linked bounded-chat session.'],
+      },
+    })
+    await rewriteOwnerInputPrompt(root, created.request.id, {
+      prompt: 'I have enough from the glob results. Let me piece together what I know:',
+      choices: ['The promoted task is already covered by the current test suite.'],
+    })
+
+    const aggregateRead = vi.spyOn(projectStateBoundary, 'readProjectTaskQueueForMutationSync')
+    const aggregateWriter = vi.spyOn(projectStateBoundary, 'writeProjectTaskQueueWithSummary')
+    const result = await repairOwnerInputState({ projectRoot: root, apply: true, now })
+
+    expect(result.cancelledInvalid).toEqual([created.request.id])
+    expect(result.affectedPaths).toContain('project-state/task-evidence')
+    expect(result.affectedPaths).not.toContain('project-state/TASKS.json')
+    expect(aggregateRead).not.toHaveBeenCalled()
+    expect(aggregateWriter).not.toHaveBeenCalled()
+    await expect(readTaskEvidence(root, 'task-promoted', { kind: 'note' })).resolves.toEqual([
+      expect.objectContaining({
+        kind: 'note',
+        payload: expect.objectContaining({
+          role: 'state-repair',
+          content: expect.stringContaining('agent narration or evidence summary'),
+        }),
+      }),
+    ])
+    expect(readProjectStateDatabaseTaskPoint(getProjectSystemStatePath(root, 'TASKS.json'), 'task-promoted')?.definition)
+      .not.toHaveProperty('notes')
+    expect(await listOwnerInputRequests(root)).toEqual([
+      expect.objectContaining({ id: created.request.id, status: 'cancelled' }),
+    ])
+    expect(listBoundedChatSessions(getProjectSystemStateDir(root))).toEqual([
+      expect.objectContaining({
+        id: created.session.id,
+        status: 'cancelled',
+        closure: expect.objectContaining({ outcome: 'cancelled' }),
+      }),
+    ])
+    expect(readProjectStateDatabaseSummary(getProjectSystemStatePath(root, 'TASKS.json'))).toMatchObject({
+      payload: { ownerInput: { openCount: 0 } },
+    })
+  })
 })
 
 async function createPlanningNoteQuestion(root: string, questionId: string) {
@@ -212,6 +285,19 @@ async function projectWithTasks(tasks: unknown[]): Promise<string> {
   return root
 }
 
+async function promotedProjectWithTasks(tasks: unknown[]): Promise<string> {
+  const root = await mkdtemp(path.join(tmpdir(), 'guildhall-owner-repair-promoted-'))
+  const tasksPath = getProjectSystemStatePath(root, 'TASKS.json')
+  const queue = { version: 1, lastUpdated: now, tasks }
+  writeProjectStateDatabaseSnapshot(tasksPath, {
+    projectRoot: root,
+    queue,
+    summary: { projectId: 'demo', generatedAt: now, freshness: 'current', counts: { total: tasks.length } },
+  })
+  promoteProjectStateDatabaseAuthority(root)
+  return root
+}
+
 function task(id: string, title: string): Record<string, unknown> {
   return {
     id,
@@ -224,6 +310,12 @@ function task(id: string, title: string): Record<string, unknown> {
     notes: [],
     dependsOn: [],
   }
+}
+
+function taskWithoutNotes(id: string, title: string): Record<string, unknown> {
+  const value = task(id, title)
+  delete value.notes
+  return value
 }
 
 async function readQueue(root: string): Promise<{ tasks: Array<{ notes?: unknown[] }> }> {

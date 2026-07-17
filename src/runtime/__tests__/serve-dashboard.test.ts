@@ -6,8 +6,10 @@ import os from 'node:os'
 
 import { bootstrapWorkspace, writeWorkspaceConfig } from '@guildhall/config'
 import type { Task, TaskQueue } from '@guildhall/core'
-import { writeProjectStateJsonAsync } from '@guildhall/sessions'
+import { getProjectSystemStatePath } from '@guildhall/sessions'
 import { buildServeApp, dashboardHtml } from '../serve.js'
+import { writeProjectTaskQueueWithSummary } from '../project-state-boundary.js'
+import { applyProjectMigrations } from '../migrations.js'
 
 const tempDirs: string[] = []
 
@@ -43,14 +45,25 @@ function makeTask(projectPath: string, overrides: Partial<Task>): Task {
   }
 }
 
-async function seedTasks(projectPath: string, tasks: Task[]): Promise<void> {
-  const queue: TaskQueue = { version: 1, lastUpdated: new Date().toISOString(), tasks }
-  await writeProjectStateJsonAsync(projectPath, 'TASKS.json', queue)
+async function seedTasks(projectPath: string, tasks: Task[], envelope: Partial<TaskQueue> = {}): Promise<void> {
+  const queue: TaskQueue = { version: 1, lastUpdated: new Date().toISOString(), ...envelope, tasks }
+  writeProjectTaskQueueWithSummary(getProjectSystemStatePath(projectPath, 'TASKS.json'), queue, {
+    projectRoot: projectPath,
+  })
+  const prerequisites = await applyProjectMigrations({ projectRoot: projectPath, includePrompt: true })
+  if (prerequisites.failed.length > 0) throw new Error(`dashboard prerequisite migration failed: ${JSON.stringify(prerequisites.failed)}`)
+  const finalize = await applyProjectMigrations({ projectRoot: projectPath, only: ['0.13.0/project-state-finalize'] })
+  if (finalize.failed.length > 0) throw new Error(`dashboard final migration failed: ${JSON.stringify(finalize.failed)}`)
+  const cleanup = await applyProjectMigrations({ projectRoot: projectPath, only: ['0.13.0/project-state-legacy-live-file-cleanup'] })
+  if (cleanup.failed.length > 0) throw new Error(`dashboard cleanup migration failed: ${JSON.stringify(cleanup.failed)}`)
 }
 
 function projectUrl(projectId: string, route: string): string {
   const url = new URL(`http://localhost${route}`)
   url.searchParams.set('projectId', projectId)
+  if (url.pathname === '/api/project' && !url.searchParams.has('compact') && !url.searchParams.has('detail')) {
+    url.searchParams.set('detail', 'true')
+  }
   return url.toString()
 }
 
@@ -214,11 +227,12 @@ describe('GET /api/project/spine', () => {
       orientationSpine?: { release?: { state?: string; blockers?: Array<{ id?: string; label?: string }> } }
     }
 
-    for (const payload of [
-      projectBody.orientationSpine,
-      spineBody.spine,
-      threadBody.orientationSpine,
-    ]) {
+    const blockerPayloads = [
+      ['project', projectBody.orientationSpine],
+      ['spine', spineBody.spine],
+      ['thread', threadBody.orientationSpine],
+    ] as const
+    for (const [name, payload] of blockerPayloads) {
       expect(payload?.release?.state).toBe('blocked')
       expect(payload?.release?.blockers).toEqual(expect.arrayContaining([
         expect.objectContaining({
@@ -233,7 +247,9 @@ describe('GET /api/project/spine', () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-spine-node-release-blockers-'))
     tempDirs.push(tmpDir)
     const projectId = bootstrapWorkspace(tmpDir, { name: `Spine Node Blockers ${path.basename(tmpDir)}` }).id ?? path.basename(tmpDir)
-    await writeProjectStateJsonAsync(tmpDir, 'workspace-goals.json', {
+    const workspaceGoalsPath = path.join(tmpDir, '.guildhall', 'workspace-goals.json')
+    await fs.mkdir(path.dirname(workspaceGoalsPath), { recursive: true })
+    await fs.writeFile(workspaceGoalsPath, JSON.stringify({
       version: 3,
       recordedAt: new Date().toISOString(),
       goals: [],
@@ -282,34 +298,42 @@ describe('GET /api/project/spine', () => {
         laterTaskIds: [],
       },
       detected: null,
+    }, null, 2))
+    await seedTasks(tmpDir, [
+      makeTask(tmpDir, {
+        id: 'task-done',
+        title: 'Completed release task',
+        status: 'done',
+        releaseIds: ['stage-1'],
+      }),
+      makeTask(tmpDir, {
+        id: 'task-blocked',
+        title: 'Blocked release task',
+        status: 'blocked',
+        releaseIds: ['stage-1'],
+        blockReason: 'Needs recovery.',
+      }),
+      makeTask(tmpDir, {
+        id: 'task-spec-review',
+        title: 'Review release spec',
+        status: 'spec_review',
+        releaseIds: ['stage-1'],
+        spec: 'Review the release spec.',
+        acceptanceCriteria: [{ id: 'AC-1', description: 'Spec is reviewed.', verifiedBy: 'review', met: false }],
+      }),
+    ], {
+      selectedReleaseId: 'stage-1',
+      releases: [{
+        id: 'stage-1',
+        label: 'Stage 1',
+        kind: 'release',
+        state: 'active',
+        source: 'owner_approved',
+        nodeIds: ['work:task-done', 'work:task-blocked', 'work:task-spec-review'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
     })
-    await writeProjectStateJsonAsync(tmpDir, 'TASKS.json', {
-      version: 1,
-      lastUpdated: new Date().toISOString(),
-      tasks: [
-        makeTask(tmpDir, {
-          id: 'task-done',
-          title: 'Completed release task',
-          status: 'done',
-          releaseIds: ['stage-1'],
-        }),
-        makeTask(tmpDir, {
-          id: 'task-blocked',
-          title: 'Blocked release task',
-          status: 'blocked',
-          releaseIds: [],
-          blockReason: 'Needs recovery.',
-        }),
-        makeTask(tmpDir, {
-          id: 'task-spec-review',
-          title: 'Review release spec',
-          status: 'spec_review',
-          releaseIds: [],
-          spec: 'Review the release spec.',
-          acceptanceCriteria: [{ id: 'AC-1', description: 'Spec is reviewed.', verifiedBy: 'review', met: false }],
-        }),
-      ],
-    } satisfies TaskQueue)
     const { app } = buildServeApp({ projectPath: tmpDir })
 
     const res = await app.fetch(new Request(projectUrl(projectId, '/api/project')))

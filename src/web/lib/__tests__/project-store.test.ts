@@ -15,18 +15,27 @@ describe('project store', () => {
   })
 
   it('coalesces duplicate project refreshes while one request is in flight', async () => {
-    let resolveFetch: ((response: Response) => void) | undefined
+    const resolveFetches: Array<(response: Response) => void> = []
     const fetchMock = vi.fn(() => new Promise<Response>(resolve => {
-      resolveFetch = resolve
+      resolveFetches.push(resolve)
     }))
     vi.stubGlobal('fetch', fetchMock)
 
     const first = project.refresh('font-something')
     const second = project.refresh('font-something')
 
-    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
 
-    resolveFetch?.(json({
+    resolveFetches[0]?.(json({
+      projects: [{
+        id: 'font-something',
+        name: 'Font Something',
+        path: '/repo/font-something',
+        summaryFreshness: 'current',
+        actionModel: { primaryAction: null },
+      }],
+    }))
+    resolveFetches[1]?.(json({
       id: 'font-something',
       name: 'Font Something',
       path: '/repo/font-something',
@@ -50,10 +59,14 @@ describe('project store', () => {
 
     await project.refresh('looma-knit', 'work')
 
-    const requested = new URL(String(fetchMock.mock.calls[0]?.[0]), 'http://localhost')
+    const requested = new URL(
+      String(fetchMock.mock.calls.find(([input]) => String(input).startsWith('/api/project'))?.[0]),
+      'http://localhost',
+    )
     expect(requested.pathname).toBe('/api/project')
     expect(requested.searchParams.get('projectId')).toBe('looma-knit')
     expect(requested.searchParams.get('surface')).toBe('work')
+    expect(requested.searchParams.get('compact')).toBe('true')
   })
 
   it('requests a Map-scoped project payload when the active surface is map', async () => {
@@ -67,10 +80,34 @@ describe('project store', () => {
 
     await project.refresh('narrative-harness', 'map')
 
-    const requested = new URL(String(fetchMock.mock.calls[0]?.[0]), 'http://localhost')
+    const requested = new URL(
+      String(fetchMock.mock.calls.find(([input]) => String(input).startsWith('/api/project'))?.[0]),
+      'http://localhost',
+    )
     expect(requested.pathname).toBe('/api/project')
     expect(requested.searchParams.get('projectId')).toBe('narrative-harness')
     expect(requested.searchParams.get('surface')).toBe('map')
+    expect(requested.searchParams.get('compact')).toBe('true')
+  })
+
+  it('uses the compact project shell when no surface is selected', async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(json({
+      id: 'narrative-harness',
+      name: 'Narrative Harness',
+      path: '/repo/narrative-harness',
+      tasks: [],
+    })))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await project.refresh('narrative-harness')
+
+    const requested = new URL(
+      String(fetchMock.mock.calls.find(([input]) => String(input).startsWith('/api/project'))?.[0]),
+      'http://localhost',
+    )
+    expect(requested.pathname).toBe('/api/project')
+    expect(requested.searchParams.get('projectId')).toBe('narrative-harness')
+    expect(requested.searchParams.get('compact')).toBe('true')
   })
 
   it('passes the route-focused work item through Work-scoped project refreshes', async () => {
@@ -86,7 +123,10 @@ describe('project store', () => {
 
     await project.refresh('looma-knit', 'work', 'task-storybook')
 
-    const requested = new URL(String(fetchMock.mock.calls[0]?.[0]), 'http://localhost')
+    const requested = new URL(
+      String(fetchMock.mock.calls.find(([input]) => String(input).startsWith('/api/project'))?.[0]),
+      'http://localhost',
+    )
     expect(requested.pathname).toBe('/api/project')
     expect(requested.searchParams.get('projectId')).toBe('looma-knit')
     expect(requested.searchParams.get('surface')).toBe('work')

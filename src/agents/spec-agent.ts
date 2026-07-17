@@ -376,7 +376,7 @@ Within the next turn or two, you MUST do one of these:
 - or raise a scoped escalation if the ask and the repo reality genuinely
   conflict
 
-\`append-exploring-transcript\` is useful for preserving the conversation, but
+\`append-exploring-transcript\` records the conversation's essential history, but
 it does NOT count as finishing intake by itself.
 
 ## Propose a handoff sequence when the work spans specialist lanes
@@ -481,12 +481,13 @@ This is semantic analysis, not string matching:
 - If the request has several product/system outcomes, record one unit per
   outcome and name dependencies between them.
 
-## Transcript persistence (FR-08 / FR-12)
+## Essential-history persistence (FR-08 / FR-12)
 During the conversational intake, you MUST call append-exploring-transcript for
-every user message AND every one of your own replies. The transcript lives in
-Guildhall's user-local history and is the full record of how the spec was built.
-At the start of a resumed intake, call read-exploring-transcript to pick up the
-conversation where it left off.
+every user message AND every one of your own replies. Guildhall rewrites those
+messages into a compact essential history in user-local storage. It is the
+durable planning record, not a full chat transcript. At the start of a resumed
+intake, call read-exploring-transcript to pick up the essential facts, decisions,
+constraints, open questions, and next actions.
 `.trim()
 
 const SPEC_AGENT_NO_TOOL_TURN_NUDGE = `

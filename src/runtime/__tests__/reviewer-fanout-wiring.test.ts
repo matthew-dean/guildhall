@@ -27,13 +27,14 @@ import {
   appendTaskEvidence,
   getProjectContextDebugSnapshotDir,
   projectStatePathFromMemoryDir,
-  readProjectStateJsonFromMemoryDirAsync,
+  promoteProjectStateDatabaseAuthority,
   writeProjectStateJsonFromMemoryDirAsync,
 } from '@guildhall/sessions'
 import type { ConversationMessage, UsageSnapshot } from '@guildhall/protocol'
 import { z } from 'zod'
 import { InMemoryGitDriver } from '../git-driver.js'
 import { buildEffectiveTask } from '../effective-task.js'
+import { readProjectCanonicalCurrentState, writeProjectTaskQueueAtCurrentStateBoundary } from '../project-state-boundary.js'
 
 // ---------------------------------------------------------------------------
 // Integration test: reviewer fan-out at `review`. The Orchestrator, when
@@ -120,15 +121,23 @@ async function writeQueue(tasks: Task[]): Promise<void> {
 }
 
 async function readQueue(): Promise<TaskQueue> {
-  const queue = await readProjectStateJsonFromMemoryDirAsync<TaskQueue>(memoryDir, 'TASKS.json')
+  const current = await readProjectCanonicalCurrentState(tmpDir)
   return {
-    ...queue,
-    tasks: await Promise.all(queue.tasks.map(async (task) => buildEffectiveTask(tmpDir, task))) as unknown as Task[],
+    version: 1,
+    ...current.rawQueue,
+    tasks: await Promise.all(current.rawQueue.tasks.map(task =>
+      buildEffectiveTask(tmpDir, task as Task, { evidence: 'full' }),
+    )) as unknown as Task[],
   }
 }
 
 async function readTaskDefinitionQueue(): Promise<TaskQueue> {
-  return readProjectStateJsonFromMemoryDirAsync<TaskQueue>(memoryDir, 'TASKS.json')
+  const current = await readProjectCanonicalCurrentState(tmpDir)
+  return {
+    version: 1,
+    ...current.rawQueue,
+    tasks: current.rawQueue.tasks as Task[],
+  }
 }
 
 function statePath(relativePath: string): string {
@@ -262,6 +271,16 @@ describe('Orchestrator — reviewer fan-out at review', () => {
       notes: [],
     })
     await writeQueue([task])
+    await writeProjectTaskQueueAtCurrentStateBoundary(
+      statePath('TASKS.json'),
+      {
+        version: 1,
+        lastUpdated: task.updatedAt,
+        tasks: [task],
+      },
+      { projectRoot: tmpDir },
+    )
+    promoteProjectStateDatabaseAuthority(tmpDir)
     await appendTaskEvidence(tmpDir, task.id, {
       id: 'task-evidence-note-self-critique',
       kind: 'note',
@@ -434,7 +453,7 @@ describe('Orchestrator — reviewer fan-out at review', () => {
     expect(requestText).toContain('pitfall')
   })
 
-  it('default fanout context debug snapshots include the reviewer persona prompt', async () => {
+  it('default fanout context debug snapshots record reviewer persona prompt metadata without persisting the body', async () => {
     const client = new ScriptedApiClient([
       {
         message: assistantMsg(
@@ -482,9 +501,9 @@ describe('Orchestrator — reviewer fan-out at review', () => {
     const reviewerSnapshot = snapshots.find((name) => name.includes('reviewer-persona-project-manager'))
     expect(reviewerSnapshot).toBeTruthy()
     const snapshot = await fs.readFile(path.join(snapshotDir, reviewerSnapshot!), 'utf-8')
-    expect(snapshot).not.toContain('Persona prompt: 0 chars (empty)')
-    expect(snapshot).toContain('## Reviewer Persona')
-    expect(snapshot).toContain('You are The Project Manager')
+    expect(snapshot).toMatch(/Persona prompt: [1-9]\d* chars/)
+    expect(snapshot).not.toContain('## Reviewer Persona')
+    expect(snapshot).not.toContain('You are The Project Manager')
   })
 
   it('times out a hanging persona call instead of stalling review forever', async () => {
@@ -1064,7 +1083,11 @@ describe('Orchestrator — reviewer fan-out at review', () => {
       q.tasks[0]!.status = 'gate_check'
       q.tasks[0]!.updatedAt = '2026-04-01T00:00:02Z'
       q.lastUpdated = '2026-04-01T00:00:02Z'
-      await writeProjectStateJsonFromMemoryDirAsync(memoryDir, 'TASKS.json', q)
+      await writeProjectTaskQueueAtCurrentStateBoundary(
+        statePath('TASKS.json'),
+        q,
+        { projectRoot: tmpDir },
+      )
       return { text: 'ok' }
     }
     const agents = {

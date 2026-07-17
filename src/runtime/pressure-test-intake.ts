@@ -5,6 +5,7 @@ import path from 'node:path'
 import { z } from 'zod'
 import {
   atomicWriteText,
+  emitProjectSummaryInvalidation,
   listProjectStateDirFromMemoryDir,
   listProjectStateDirFromMemoryDirAsync,
   projectRootFromMemoryDir,
@@ -167,6 +168,7 @@ export async function savePressureTestIntake(
   const filePath = pressureTestPath(memoryDir, intake.id)
   await fsp.mkdir(path.dirname(filePath), { recursive: true })
   atomicWriteText(filePath, JSON.stringify(intake, null, 2) + '\n')
+  emitProjectSummaryInvalidation(projectRootFromMemoryDir(memoryDir), 'pressure-test-write', { domains: ['thread'] })
 }
 
 export async function answerPressureTestQuestion(input: {

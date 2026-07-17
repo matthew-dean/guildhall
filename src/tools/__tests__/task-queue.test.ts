@@ -12,9 +12,21 @@ import {
   materializeSplitChildren,
   settleMaterializedSplitReadiness,
 } from '../task-queue.js'
-import { getProjectSystemStatePath, readTaskEvidence } from '@guildhall/sessions'
+import {
+  getProjectSystemStatePath,
+  promoteProjectStateDatabaseAuthority,
+  readProjectStateDatabaseQueueRevision,
+  readProjectStateDatabaseTask,
+  readProjectTaskQueueSync,
+  readTaskEvidence,
+  appendTaskEvidence,
+} from '@guildhall/sessions'
 import { TaskQueue } from '@guildhall/core'
-import { FORBIDDEN_PROJECT_TASK_FIELDS } from '../../runtime/project-state-boundary.js'
+import {
+  FORBIDDEN_PROJECT_TASK_FIELDS,
+  writeProjectTaskQueue,
+  writeProjectTaskQueueWithSummary,
+} from '../../runtime/project-state-boundary.js'
 import { buildEffectiveTask } from '../../runtime/effective-task.js'
 
 // ---------------------------------------------------------------------------
@@ -55,13 +67,23 @@ function makeSeedQueue() {
   }
 }
 
+async function seedSystemStateQueue(stateTasksPath: string): Promise<void> {
+  // The root TASKS fixture and the system-local fixture map to different
+  // SQLite paths. Remove the empty system database created by the shared
+  // beforeEach so this test can exercise the real bootstrap path.
+  await fs.rm(path.join(path.dirname(stateTasksPath), 'project-state.db'), { force: true })
+  writeProjectTaskQueue(stateTasksPath, seedQueue, { projectRoot: tmpDir })
+  promoteProjectStateDatabaseAuthority(tmpDir)
+}
+
 const ctx = { cwd: '/tmp', metadata: {} }
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'forge-test-'))
   tasksPath = path.join(tmpDir, 'TASKS.json')
   seedQueue = makeSeedQueue()
-  await fs.writeFile(tasksPath, JSON.stringify(seedQueue), 'utf-8')
+  writeProjectTaskQueue(tasksPath, seedQueue, { projectRoot: tmpDir })
+  promoteProjectStateDatabaseAuthority(tmpDir)
 })
 
 afterEach(async () => {
@@ -77,14 +99,16 @@ describe('readTasks', () => {
   })
 
   it('returns null queue with error for missing file', async () => {
-    const result = await readTasks({ tasksPath: path.join(tmpDir, 'nonexistent.json') })
+    const result = await readTasks({ tasksPath: path.join(tmpDir, 'missing', 'TASKS.json') })
     expect(result.queue).toBeNull()
     expect(result.error).toBeDefined()
   })
 
   it('returns null queue with error for malformed JSON', async () => {
-    await fs.writeFile(tasksPath, '{ invalid json', 'utf-8')
-    const result = await readTasks({ tasksPath })
+    const malformedPath = path.join(tmpDir, 'malformed', 'TASKS.json')
+    await fs.mkdir(path.dirname(malformedPath), { recursive: true })
+    await fs.writeFile(malformedPath, '{ invalid json', 'utf-8')
+    const result = await readTasks({ tasksPath: malformedPath })
     expect(result.queue).toBeNull()
     expect(result.error).toBeDefined()
   })
@@ -93,7 +117,7 @@ describe('readTasks', () => {
 describe('updateTask', () => {
   it('updates task status', async () => {
     await updateTask({ tasksPath, taskId: 'task-001', status: 'spec_review' })
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    const raw = readProjectTaskQueueSync(tasksPath)
     expect(raw.tasks[0].status).toBe('spec_review')
   })
 
@@ -103,24 +127,54 @@ describe('updateTask', () => {
 
     expect(result.success).toBe(true)
 
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    const raw = readProjectTaskQueueSync(tasksPath)
     expect(raw.tasks[0].status).toBe('exploring')
   })
 
   it('updates task domain for lane repair', async () => {
     await updateTask({ tasksPath, taskId: 'task-001', domain: 'harness' })
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    const raw = readProjectTaskQueueSync(tasksPath)
     expect(raw.tasks[0].domain).toBe('harness')
   })
 
   it('persists updates through the project-state boundary', async () => {
     await updateTask({ tasksPath, taskId: 'task-001', title: 'Boundary-safe title' })
 
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    const raw = readProjectTaskQueueSync(tasksPath)
     expect(raw.tasks[0].title).toBe('Boundary-safe title')
     for (const field of FORBIDDEN_PROJECT_TASK_FIELDS) {
       expect(raw.tasks[0]).not.toHaveProperty(field)
     }
+  })
+
+  it('uses the promoted point writer while keeping runtime and note evidence separate', async () => {
+    const stateDir = path.join(tmpDir, '.guildhall', 'project-state')
+    const promotedTasksPath = path.join(stateDir, 'TASKS.json')
+    await fs.mkdir(stateDir, { recursive: true })
+    await fs.writeFile(promotedTasksPath, '{}', 'utf-8')
+    writeProjectTaskQueue(promotedTasksPath, seedQueue, { projectRoot: tmpDir })
+    promoteProjectStateDatabaseAuthority(tmpDir)
+    const before = readProjectStateDatabaseQueueRevision(promotedTasksPath)
+    const result = await updateTask(
+      {
+        tasksPath: promotedTasksPath,
+        taskId: 'task-001',
+        title: 'Point-written title',
+        assignedTo: 'worker-agent',
+        note: { agentId: 'worker-agent', role: 'worker', content: 'Updated the definition.' },
+      },
+      { current_task_project_path: tmpDir },
+    )
+
+    expect(result.success).toBe(true)
+    expect(readProjectStateDatabaseQueueRevision(promotedTasksPath)).toBeGreaterThan(before!)
+    expect(readProjectStateDatabaseTask(promotedTasksPath, 'task-001')?.definition).toMatchObject({
+      title: 'Point-written title',
+    })
+    expect(readProjectStateDatabaseTask(tasksPath, 'task-001')?.definition).not.toHaveProperty('assignedTo')
+    expect((await readTaskEvidence(tmpDir, 'task-001', { kind: 'note' }))[0]?.payload).toMatchObject({
+      content: 'Updated the definition.',
+    })
   })
 
   it('normalizes reviewer ownership when a task moves into review', async () => {
@@ -128,7 +182,7 @@ describe('updateTask', () => {
     await updateTask({ tasksPath, taskId: 'task-001', status: 'ready' })
     await updateTask({ tasksPath, taskId: 'task-001', status: 'in_progress' })
     await updateTask({ tasksPath, taskId: 'task-001', status: 'review' })
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    const raw = readProjectTaskQueueSync(tasksPath)
     const effective = await buildEffectiveTask(tmpDir, TaskQueue.parse(raw).tasks[0]!)
     expect(raw.tasks[0].status).toBe('review')
     expect(effective.assignedTo).toBe('reviewer-agent')
@@ -140,7 +194,7 @@ describe('updateTask', () => {
     await updateTask({ tasksPath, taskId: 'task-001', status: 'in_progress' })
     await updateTask({ tasksPath, taskId: 'task-001', status: 'review' })
     await updateTask({ tasksPath, taskId: 'task-001', status: 'gate_check' })
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    const raw = readProjectTaskQueueSync(tasksPath)
     const effective = await buildEffectiveTask(tmpDir, TaskQueue.parse(raw).tasks[0]!)
     expect(raw.tasks[0].status).toBe('gate_check')
     expect(effective.assignedTo).toBe('gate-checker-agent')
@@ -156,7 +210,7 @@ describe('updateTask', () => {
       status: 'review',
       assignedTo: 'custom-review-owner',
     })
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    const raw = readProjectTaskQueueSync(tasksPath)
     const effective = await buildEffectiveTask(tmpDir, TaskQueue.parse(raw).tasks[0]!)
     expect(effective.assignedTo).toBe('custom-review-owner')
   })
@@ -167,13 +221,13 @@ describe('updateTask', () => {
     expect(result.success).toBe(false)
     expect(result.error).toContain('cannot request review from exploring')
 
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    const raw = readProjectTaskQueueSync(tasksPath)
     expect(raw.tasks[0].status).toBe('exploring')
   })
 
   it('updates task title', async () => {
     await updateTask({ tasksPath, taskId: 'task-001', title: 'Write a clear implementation spec' })
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    const raw = readProjectTaskQueueSync(tasksPath)
     expect(raw.tasks[0].title).toBe('Write a clear implementation spec')
   })
 
@@ -183,7 +237,7 @@ describe('updateTask', () => {
       taskId: 'task-001',
       note: { agentId: 'spec-agent', role: 'spec', content: 'Spec complete.' },
     })
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    const raw = readProjectTaskQueueSync(tasksPath)
     expect(raw.tasks[0]).not.toHaveProperty('notes')
 
     const evidence = await readTaskEvidence(tmpDir, 'task-001', { kind: 'note' })
@@ -201,7 +255,7 @@ describe('updateTask', () => {
     const stateTasksPath = path.join(stateDir, 'TASKS.json')
     await fs.mkdir(stateDir, { recursive: true })
     seedQueue.tasks[0]!.status = 'in_progress'
-    await fs.writeFile(stateTasksPath, JSON.stringify(seedQueue, null, 2), 'utf-8')
+    await seedSystemStateQueue(stateTasksPath)
 
     const result = await updateTask({
       tasksPath: stateTasksPath,
@@ -230,7 +284,7 @@ describe('updateTask', () => {
     await fs.mkdir(path.dirname(stateTasksPath), { recursive: true })
     seedQueue.tasks[0]!.projectPath = '.'
     seedQueue.tasks[0]!.status = 'in_progress'
-    await fs.writeFile(stateTasksPath, JSON.stringify(seedQueue, null, 2), 'utf-8')
+    await seedSystemStateQueue(stateTasksPath)
 
     const result = await updateTask({
       tasksPath: stateTasksPath,
@@ -247,7 +301,7 @@ describe('updateTask', () => {
     })
     expect(result.success).toBe(true)
 
-    const raw = JSON.parse(await fs.readFile(stateTasksPath, 'utf-8'))
+    const raw = readProjectTaskQueueSync(stateTasksPath)
     const effective = await buildEffectiveTask(tmpDir, TaskQueue.parse(raw).tasks[0]!)
     expect(Array.isArray(effective.notes)).toBe(true)
     const effectiveNotes = effective.notes as Array<{ agentId: string; role: string; content: string }>
@@ -267,7 +321,7 @@ describe('updateTask', () => {
     const docsTarget = path.join(tmpDir, 'docs', 'harness')
     seedQueue.tasks[0]!.projectPath = docsTarget
     seedQueue.tasks[0]!.status = 'in_progress'
-    await fs.writeFile(stateTasksPath, JSON.stringify(seedQueue, null, 2), 'utf-8')
+    await seedSystemStateQueue(stateTasksPath)
 
     const result = await updateTask({
       tasksPath: stateTasksPath,
@@ -285,7 +339,7 @@ describe('updateTask', () => {
     })
     expect(result.success).toBe(true)
 
-    const raw = JSON.parse(await fs.readFile(stateTasksPath, 'utf-8'))
+    const raw = readProjectTaskQueueSync(stateTasksPath)
     const effective = await buildEffectiveTask(tmpDir, TaskQueue.parse(raw).tasks[0]!)
     const effectiveNotes = effective.notes as Array<{ agentId: string; role: string; content: string }> | undefined
     expect(effectiveNotes?.at(-1)).toMatchObject({
@@ -302,7 +356,7 @@ describe('updateTask', () => {
     const stateTasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
     await fs.mkdir(path.dirname(stateTasksPath), { recursive: true })
     seedQueue.tasks[0]!.status = 'in_progress'
-    await fs.writeFile(stateTasksPath, JSON.stringify(seedQueue, null, 2), 'utf-8')
+    await seedSystemStateQueue(stateTasksPath)
 
     const result = await updateTask({
       tasksPath: stateTasksPath,
@@ -315,7 +369,7 @@ describe('updateTask', () => {
     })
 
     expect(result.success).toBe(true)
-    const raw = JSON.parse(await fs.readFile(stateTasksPath, 'utf-8'))
+    const raw = readProjectTaskQueueSync(stateTasksPath)
     const effective = await buildEffectiveTask(tmpDir, TaskQueue.parse(raw).tasks[0]!)
     const effectiveNotes = effective.notes as Array<{ agentId: string; role: string; content: string }>
     expect(effectiveNotes.at(-1)).toMatchObject({
@@ -415,7 +469,7 @@ describe('updateTask', () => {
         },
       ],
     })
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    const raw = readProjectTaskQueueSync(tasksPath)
     expect(raw.tasks[0].spec).toContain('Build the thing')
     expect(raw.tasks[0].acceptanceCriteria).toEqual([
       {
@@ -426,6 +480,7 @@ describe('updateTask', () => {
         verifiedBy: 'automated',
         command: 'pnpm test',
         met: false,
+        source: 'documented',
       },
     ])
     expect(raw.tasks[0].sizePlan).toMatchObject({
@@ -467,7 +522,7 @@ describe('updateTask', () => {
       },
     })
 
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    const raw = readProjectTaskQueueSync(tasksPath)
     expect(raw.tasks[0].structuredSpec.whatThisIs).toBe('A block menu for Looma selection actions.')
     expect(raw.tasks[0].spec).toContain('## What this is')
     expect(raw.tasks[0].spec).toContain('## User-facing behavior')
@@ -479,6 +534,7 @@ describe('updateTask', () => {
         expectation: 'Then the approved actions appear.',
         verifiedBy: 'review',
         met: false,
+        source: 'documented',
       },
     ])
   })
@@ -536,7 +592,7 @@ describe('updateTask', () => {
       ],
     })
 
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    const raw = readProjectTaskQueueSync(tasksPath)
     expect(raw.tasks[0].sizePlan).toMatchObject({
       taskId: 'task-001',
       score: 8,
@@ -614,7 +670,7 @@ describe('updateTask', () => {
     await updateTask({ tasksPath, taskId: 'task-001', status: 'ready', spec, acceptanceCriteria, workUnitAnalysis })
     await updateTask({ tasksPath, taskId: 'task-001', status: 'ready', spec, acceptanceCriteria, workUnitAnalysis })
 
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    const raw = readProjectTaskQueueSync(tasksPath)
     const parent = raw.tasks.find((task: { id: string }) => task.id === 'task-001')
     const children = raw.tasks.filter((task: { id: string; hierarchy?: { parentId?: string } }) =>
       task.id !== 'task-001' && task.hierarchy?.parentId === 'task-001',
@@ -701,7 +757,7 @@ describe('updateTask', () => {
     })
     await updateTask({ tasksPath, taskId: 'task-001', status: 'ready', workUnitAnalysis })
 
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    const raw = readProjectTaskQueueSync(tasksPath)
     const parent = raw.tasks.find((task: { id: string }) => task.id === 'task-001')
     const children = raw.tasks.filter((task: { id: string; hierarchy?: { parentId?: string } }) =>
       task.id !== 'task-001' && task.hierarchy?.parentId === 'task-001',
@@ -1227,7 +1283,7 @@ describe('updateTask', () => {
       },
     })
 
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    const raw = readProjectTaskQueueSync(tasksPath)
     expect(raw.tasks[0].sizePlan.action).toBe('proceed_with_warning')
     expect(raw.tasks[0].taskReadiness.recommendation).toBe('ready')
     expect(raw.tasks[0].taskReadiness.summary).toContain('continue through the child tasks')
@@ -1243,7 +1299,7 @@ describe('updateTask', () => {
       taskId: 'task-001',
       spec: '## Summary\nBuild the thing.',
     })
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    const raw = readProjectTaskQueueSync(tasksPath)
     expect(raw.tasks[0].status).toBe('spec_review')
     expect(raw.tasks[0].spec).toContain('Build the thing')
   })
@@ -1293,7 +1349,7 @@ describe('updateTask', () => {
       },
     })
 
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    const raw = readProjectTaskQueueSync(tasksPath)
     expect(raw.tasks[0].sizePlan).toMatchObject({
       taskId: 'task-001',
       score: 1,
@@ -1363,7 +1419,7 @@ describe('updateTask', () => {
     expect(result.success).toBe(false)
     expect(result.error).toMatch(/post-user-question/i)
 
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    const raw = readProjectTaskQueueSync(tasksPath)
     expect(raw.tasks[0].status).toBe('exploring')
     expect(raw.tasks[0].spec).toBeUndefined()
   })
@@ -1378,7 +1434,7 @@ describe('updateTask', () => {
         },
       ],
     }
-    await fs.writeFile(tasksPath, JSON.stringify(queue), 'utf-8')
+    writeProjectTaskQueue(tasksPath, queue, { projectRoot: tmpDir })
 
     await updateTask({
       tasksPath,
@@ -1407,7 +1463,7 @@ describe('updateTask', () => {
       ],
     })
 
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    const raw = readProjectTaskQueueSync(tasksPath)
     expect(raw.tasks[0].spec).toContain('`web`')
     expect(raw.tasks[0].spec).not.toContain('knit/web')
     expect(raw.tasks[0].acceptanceCriteria).toMatchObject([
@@ -1440,7 +1496,13 @@ describe('updateTask', () => {
         },
       ],
     }
-    await fs.writeFile(tasksPath, JSON.stringify(importedQueue), 'utf-8')
+    writeProjectTaskQueue(tasksPath, importedQueue, { projectRoot: tmpDir })
+    await appendTaskEvidence(tmpDir, 'task-001', {
+      id: 'imported-note-001',
+      kind: 'note',
+      recordedAt: importedQueue.tasks[0]!.notes[0]!.timestamp,
+      payload: importedQueue.tasks[0]!.notes[0]!,
+    })
 
     await updateTask({
       tasksPath,
@@ -1448,7 +1510,7 @@ describe('updateTask', () => {
       spec: '## Summary\nAdd a version diff view to page history.',
     })
 
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    const raw = readProjectTaskQueueSync(tasksPath)
     expect(raw.tasks[0].title).toBe('Knit: add a version diff view to page history')
   })
 
@@ -1466,7 +1528,7 @@ describe('updateTask', () => {
       ].join('\n'),
     })
 
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    const raw = readProjectTaskQueueSync(tasksPath)
     expect(raw.tasks[0].acceptanceCriteria).toEqual([
       {
         id: 'ac-1',
@@ -1475,6 +1537,7 @@ describe('updateTask', () => {
         expectation: 'The table menu renders.',
         verifiedBy: 'review',
         met: false,
+        source: 'documented',
       },
       {
         id: 'ac-2',
@@ -1483,6 +1546,7 @@ describe('updateTask', () => {
         expectation: '`pnpm -F web build` passes.',
         verifiedBy: 'review',
         met: false,
+        source: 'documented',
       },
     ])
   })
@@ -1511,7 +1575,7 @@ describe('updateTask', () => {
       assignedTo: '',
     })
 
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    const raw = readProjectTaskQueueSync(tasksPath)
     expect(raw.tasks[0].status).toBe('review')
     expect(raw.tasks[0].spec).toBe('Existing spec')
     expect(raw.tasks[0].blockReason).toBe('Existing block reason')
@@ -1524,7 +1588,7 @@ describe('updateTask', () => {
     const before = seedQueue.tasks[0]!.updatedAt
     await new Promise((r) => setTimeout(r, 5))
     await updateTask({ tasksPath, taskId: 'task-001', status: 'ready' })
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    const raw = readProjectTaskQueueSync(tasksPath)
     expect(raw.tasks[0].updatedAt).not.toBe(before)
   })
 
@@ -1547,7 +1611,7 @@ describe('updateTask', () => {
       status: 'blocked',
       blockReason: 'Spec ambiguous — awaiting human input',
     })
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    const raw = readProjectTaskQueueSync(tasksPath)
     expect(raw.tasks[0].status).toBe('blocked')
     expect(raw.tasks[0].blockReason).toBe('Spec ambiguous — awaiting human input')
   })
@@ -1567,7 +1631,7 @@ describe('updateTask', () => {
       ],
     })
 
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    const raw = readProjectTaskQueueSync(tasksPath)
     expect(raw.tasks[0]).not.toHaveProperty('gateResults')
 
     const evidence = await readTaskEvidence(tmpDir, 'task-001', { kind: 'gate_result' })
@@ -1614,7 +1678,7 @@ describe('updateTask', () => {
       gateResults: [],
     })
 
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    const raw = readProjectTaskQueueSync(tasksPath)
     expect(raw.tasks[0].status).toBe('in_progress')
     expect(raw.tasks[0].acceptanceCriteria).toEqual([
       {
@@ -1625,6 +1689,7 @@ describe('updateTask', () => {
         verifiedBy: 'automated',
         command: 'pnpm test',
         met: false,
+        source: 'documented',
       },
     ])
     expect(raw.tasks[0]).not.toHaveProperty('gateResults')
@@ -1654,7 +1719,7 @@ describe('updateTask', () => {
     expect(result.success).toBe(true)
     expect(result.taskId).toBe('task-001')
 
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    const raw = readProjectTaskQueueSync(tasksPath)
     expect(raw.tasks[0].status).toBe('spec_review')
   })
 })
@@ -1679,7 +1744,7 @@ describe('addTask', () => {
     expect(result.success).toBe(true)
     expect(result.taskId).toBe('task-002')
 
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    const raw = readProjectTaskQueueSync(tasksPath)
     expect(raw.tasks).toHaveLength(2)
     expect(raw.tasks[1].id).toBe('task-002')
     expect(raw.tasks[1]).not.toHaveProperty('notes')
@@ -1698,7 +1763,7 @@ describe('engine tool wrappers', () => {
 
   it('readTasksTool marks missing file as error', async () => {
     const result = await readTasksTool.execute(
-      { tasksPath: path.join(tmpDir, 'nope.json') },
+      { tasksPath: path.join(tmpDir, 'missing', 'nope.json') },
       ctx,
     )
     expect(result.is_error).toBe(true)
@@ -1741,7 +1806,7 @@ describe('engine tool wrappers', () => {
     )
     expect(result.is_error).toBe(false)
     expect(result.metadata?.taskId).toBe('task-001')
-    const raw = JSON.parse(await fs.readFile(tasksPath, 'utf-8'))
+    const raw = readProjectTaskQueueSync(tasksPath)
     expect(raw.tasks[0].status).toBe('review')
     expect(raw.tasks[0]).not.toHaveProperty('notes')
     const evidence = await readTaskEvidence(tmpDir, 'task-001', { kind: 'note' })

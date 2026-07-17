@@ -1,10 +1,11 @@
-import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
+import { appendManagedTextFile } from '@guildhall/persistence'
 import { defineTool } from '@guildhall/engine'
 import { z } from 'zod'
 import fs from 'node:fs/promises'
 import { DecisionEntry, ProgressEntry } from '@guildhall/core'
 import { basename, dirname, join } from 'node:path'
 import {
+  appendProjectProgressHeartbeat,
   getProjectProgressHeartbeatsPath,
   inferProjectRootFromMemoryDir,
 } from '@guildhall/sessions'
@@ -106,8 +107,12 @@ export async function logProgress(input: LogProgressInput): Promise<LogProgressR
         ? join(dirname(progressDir), 'progress', 'heartbeats.md')
         : getProjectProgressHeartbeatsPath(projectRoot)
       : input.progressPath
-    await fs.mkdir(dirname(outputPath), { recursive: true })
-    await appendManagedTextFile(outputPath, block, 'utf-8')
+    if (entry.type === 'heartbeat') {
+      await appendProjectProgressHeartbeat(outputPath, block)
+    } else {
+      await fs.mkdir(dirname(outputPath), { recursive: true })
+      await appendManagedTextFile(outputPath, block, 'utf-8')
+    }
     return { success: true, path: outputPath }
   } catch (err) {
     return { success: false, error: String(err) }

@@ -23,6 +23,7 @@ const dataLayerModules = new Set([
   'src/runtime/thin-project-state-manifest.ts',
   'src/sessions/atomic.ts',
   'src/sessions/local-history.ts',
+  'src/sessions/project-state-database.ts',
   'src/sessions/project-state-store.ts',
   'src/sessions/storage.ts',
   'src/sessions/task-state-store.ts',
@@ -31,6 +32,12 @@ const dataLayerModules = new Set([
 const ioPattern = /\b(?:fs|fsp)?\.?(?:readFile|readFileSync|writeFile|writeFileSync|appendFile|appendFileSync|createReadStream|createWriteStream)\b|\b(?:atomicWriteText|readManagedTextFile|readManagedTextFileSync|writeManagedTextFile|writeManagedTextFileSync|appendManagedTextFile)\s*\(/g
 const forbiddenManagedPathPattern = /getProjectStateDir|getProjectLocalHistoryDir|getProjectTaskLocalHistoryDir|getProjectRuntime|getDataDir|\.guildhall|guildhall-persistence|\bpath\.join\s*\(\s*(?:memoryDir|projectStateDir|localHistoryDir|stateDir)/
 const allowedStorageBoundaryPattern = /getProjectSystemStatePath|getProjectSystemStatePathFromMemoryDir|getLegacyProjectStatePath|getProjectRuntimeDevServersPath|getProjectTaskReviewPacketPath|projectTasksPath|projectBriefPath|workspaceImportTasksPath|projectLearningPath|projectSkillProposalsPath/
+const historicalAuthorityPattern = /\breadProjectStateDatabaseAuthority(?:FromTasksPath)?\s*\(/g
+const historicalAuthorityAllowedModules = new Set([
+  'src/runtime/migrations.ts',
+  'src/runtime/project-summary-projection.ts',
+  'src/sessions/project-state-database.ts',
+])
 
 export function analyzeDataLayerGuardrails(input = {}) {
   const root = input.repoRoot ? resolve(input.repoRoot) : repoRoot
@@ -44,6 +51,12 @@ export function analyzeDataLayerGuardrails(input = {}) {
     if (rel.includes('/__tests__/')) continue
     if (dataLayerModules.has(rel)) continue
     const text = readFileSync(file, 'utf8')
+    if (!historicalAuthorityAllowedModules.has(rel)) {
+      historicalAuthorityPattern.lastIndex = 0
+      if (historicalAuthorityPattern.test(text)) {
+        offenders.push(`${rel}:historical-authority-reader`)
+      }
+    }
     const lines = text.split('\n')
     for (let index = 0; index < lines.length; index += 1) {
       const line = lines[index]

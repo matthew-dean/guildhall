@@ -26,6 +26,17 @@ function recordValue(value: unknown): Record<string, unknown> | null {
     : null
 }
 
+function evidencePayloads(task: unknown, kind: string): unknown[] | null {
+  const record = recordValue(task)
+  if (!record || !Array.isArray(record.evidence)) return null
+  return record.evidence.flatMap(event => {
+    const eventRecord = recordValue(event)
+    return eventRecord?.kind === kind && Object.prototype.hasOwnProperty.call(eventRecord, 'payload')
+      ? [eventRecord.payload]
+      : []
+  })
+}
+
 function approvedReviewerProofSummary(value: unknown): string | null {
   const text = stringValue(value)
   if (!text) return null
@@ -92,7 +103,7 @@ export function recordedCompletionProofForTask(task: unknown): RecordedCompletio
     addProofDate(doneSummary.createdAt)
   }
 
-  const gateResults = Array.isArray(record.gateResults) ? record.gateResults : []
+  const gateResults = evidencePayloads(task, 'gate_result') ?? (Array.isArray(record.gateResults) ? record.gateResults : [])
   for (const item of gateResults) {
     const gate = recordValue(item)
     if (!gate) continue
@@ -103,7 +114,7 @@ export function recordedCompletionProofForTask(task: unknown): RecordedCompletio
     addProofDate(gate.recordedAt)
   }
 
-  const reviewVerdicts = Array.isArray(record.reviewVerdicts) ? record.reviewVerdicts : []
+  const reviewVerdicts = evidencePayloads(task, 'review_verdict') ?? (Array.isArray(record.reviewVerdicts) ? record.reviewVerdicts : [])
   for (const item of reviewVerdicts) {
     const verdict = recordValue(item)
     if (!verdict) continue
@@ -114,7 +125,7 @@ export function recordedCompletionProofForTask(task: unknown): RecordedCompletio
     addProofDate(verdict.recordedAt)
   }
 
-  const notes = Array.isArray(record.notes) ? record.notes : []
+  const notes = evidencePayloads(task, 'note') ?? (Array.isArray(record.notes) ? record.notes : [])
   for (const item of notes) {
     const note = recordValue(item)
     if (!note) continue

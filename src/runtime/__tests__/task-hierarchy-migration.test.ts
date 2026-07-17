@@ -2,6 +2,12 @@ import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
+import {
+  getProjectMigrationSnapshotDir,
+  getProjectSystemStatePath,
+  promoteProjectStateDatabaseAuthority,
+  writeProjectStateDatabaseSnapshot,
+} from '@guildhall/sessions'
 import { migrateTaskHierarchyState } from '../task-hierarchy-migration.js'
 
 const now = '2026-06-01T12:00:00.000Z'
@@ -28,7 +34,9 @@ describe('task hierarchy migration', () => {
 
     const applied = await migrateTaskHierarchyState({ projectRoot: root, apply: true, now })
     expect(applied.changedTasks).toEqual(['feature-shell', 'child-a', 'child-b'])
-    expect(applied.backupPath).toBe(path.join(root, '.guildhall', 'TASKS.before-0.10.0-task-hierarchy-links.json'))
+    expect(applied.backupPath).toBe(path.join(getProjectMigrationSnapshotDir(root), 'task-hierarchy-links', 'TASKS.before-0.10.0-task-hierarchy-links.json'))
+    expect(applied.manifestPath).toBe(`${applied.backupPath}.manifest.json`)
+    await expect(readFile(applied.manifestPath!, 'utf8')).resolves.toContain('0.10.0/task-hierarchy-links')
 
     const raw = JSON.parse(await readFile(path.join(root, '.guildhall', 'TASKS.json'), 'utf8'))
     const feature = raw.tasks.find((task: { id: string }) => task.id === 'feature-shell')
@@ -78,6 +86,34 @@ describe('task hierarchy migration', () => {
     await expect(migrateTaskHierarchyState({ projectRoot: root, apply: true, now }))
       .rejects
       .toThrow(/cycle/i)
+  })
+
+  it('does not inspect or apply legacy hierarchy state after SQLite promotion', async () => {
+    const root = await projectWithTasks([taskRecord({ id: 'legacy-task' })])
+    const tasksPath = getProjectSystemStatePath(root, 'TASKS.json')
+    await writeProjectStateDatabaseSnapshot(tasksPath, {
+      projectRoot: root,
+      queue: {
+        version: 1,
+        lastUpdated: now,
+        tasks: [{ id: 'canonical-task', title: 'Canonical task', status: 'ready' }],
+      },
+      summary: { projectId: 'hierarchy-test', generatedAt: now },
+    })
+    promoteProjectStateDatabaseAuthority(root)
+
+    await expect(migrateTaskHierarchyState({ projectRoot: root, apply: false, now }))
+      .resolves.toEqual({ changedTasks: [], affectedPaths: [] })
+    await expect(migrateTaskHierarchyState({ projectRoot: root, apply: true, now }))
+      .rejects.toThrow(/SQLite already owns current project state/)
+  })
+
+  it('rejects malformed legacy queue data instead of treating it as empty', async () => {
+    const root = await projectWithTasks([])
+    await writeFile(path.join(root, '.guildhall', 'TASKS.json'), '{"tasks": "not-a-list"}')
+
+    await expect(migrateTaskHierarchyState({ projectRoot: root, apply: false, now }))
+      .rejects.toThrow(/does not contain a task queue/)
   })
 })
 

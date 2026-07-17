@@ -8,7 +8,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { getProjectLocalHistoryDir, getProjectSystemStatePath } from '@guildhall/sessions'
+import { ensureProjectLocalHistoryDir, getProjectLocalHistoryDir, getProjectSystemStatePath } from '@guildhall/sessions'
 import {
   onboardWizard,
   progressFor,
@@ -288,6 +288,7 @@ describe('buildSnapshot', () => {
     expect(snap.workspaceImportReviewed).toBe(false)
 
     // Dismiss marker → reviewed true.
+    ensureProjectLocalHistoryDir(tmp)
     writeFileSync(join(getProjectLocalHistoryDir(tmp), 'workspace-import-dismissed'), '')
     snap = buildSnapshot({
       projectPath: tmp,
@@ -401,6 +402,7 @@ describe('buildSnapshot', () => {
       join(tmp, 'guildhall.yaml'),
       'id: demo\nname: Demo\nbootstrap: {}\n',
     )
+    ensureProjectLocalHistoryDir(tmp)
     writeFileSync(
       join(getProjectLocalHistoryDir(tmp), 'bootstrap.json'),
       JSON.stringify({

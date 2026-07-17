@@ -1,14 +1,32 @@
 import { describe, expect, it } from 'vitest'
+import { existsSync, readFileSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { projectStatePath } from '@guildhall/sessions'
+import { projectStatePath, promoteProjectStateDatabaseAuthority } from '@guildhall/sessions'
 
-import { buildThread } from '../thread.js'
+import { buildThread as buildCurrentThread, type BuildThreadOptions, type Thread } from '../thread.js'
+import { writeProjectSummaryProjection } from '../project-summary-projection.js'
 import { emptyWizardsState, type ProjectSnapshot } from '../wizards.js'
 
 function statePath(projectPath: string, ...parts: string[]): string {
   return projectStatePath(projectPath, path.join(...parts))
+}
+
+function buildThread(options: BuildThreadOptions): Thread {
+  const tasksPath = statePath(options.projectPath, 'TASKS.json')
+  if (!options.tasks && existsSync(tasksPath)) {
+    writeProjectSummaryProjection(
+      tasksPath,
+      {
+        queue: JSON.parse(readFileSync(tasksPath, 'utf8')),
+        projectId: options.snapshot?.config.id,
+        projectRoot: options.projectPath,
+      },
+    )
+    promoteProjectStateDatabaseAuthority(options.projectPath)
+  }
+  return buildCurrentThread(options)
 }
 
 describe('buildThread', () => {

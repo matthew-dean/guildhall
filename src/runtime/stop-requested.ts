@@ -59,6 +59,7 @@ export async function writeStopRequested(
   const tmp = target + '.tmp'
   const payload = JSON.stringify(detail, null, 2) + '\n'
   try {
+    await fs.mkdir(path.dirname(target), { recursive: true })
     await fs.writeFile(tmp, payload, 'utf-8')
     await fs.rename(tmp, target)
   } catch {

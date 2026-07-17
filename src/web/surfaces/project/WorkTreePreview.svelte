@@ -63,7 +63,7 @@
   }
 
   function semanticUnitCount(task: Task): number {
-    return task.workUnitAnalysis?.units?.length ?? 0
+    return task.workUnitCount ?? task.workUnitAnalysis?.units?.length ?? 0
   }
 
   function deliveryStepsFor(task: Task): NonNullable<ProjectDetail['workProgress']>['byTaskId'][string]['deliverySteps'] {
@@ -132,12 +132,14 @@
       return `${done} / ${required} delivery steps done${blocked ? ` · ${blocked} blocked` : ''}`
     }
     if (needsBreakdownReview(task)) {
-      const count = task.acceptanceCriteria?.length ?? 0
+      const count = task.acceptanceCriteriaCount ?? task.acceptanceCriteria?.length ?? 0
       return `${count} requirements; no contained work or decomposition proposal yet.`
     }
     if (task.blockReason) return task.blockReason
     if (task.latestCheckpoint?.nextPlannedAction) return task.latestCheckpoint.nextPlannedAction
-    if (task.acceptanceCriteria?.[0]?.description) return task.acceptanceCriteria[0].description
+    if (task.acceptanceCriteriaFirstDescription ?? task.acceptanceCriteria?.[0]?.description) {
+      return task.acceptanceCriteriaFirstDescription ?? task.acceptanceCriteria?.[0]?.description
+    }
     if (taskSourceQuestion(task)) return taskSourceQuestion(task)!
     return task.description ?? friendlyTaskId(task.id)
   }
@@ -154,7 +156,7 @@
     return task.status === 'ready'
       && childTasksFor(task).length === 0
       && !hasDecompositionProposal(task)
-      && (task.acceptanceCriteria?.length ?? 0) >= 6
+      && (task.acceptanceCriteriaCount ?? task.acceptanceCriteria?.length ?? 0) >= 6
   }
 
   function hasDecompositionProposal(task: Task): boolean {

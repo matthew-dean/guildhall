@@ -21,7 +21,9 @@ interface ChecklistLike {
   totalSteps?: unknown
 }
 
-type TaskSpecLike = Pick<Task, 'spec' | 'acceptanceCriteria' | 'productBrief'>
+type TaskSpecLike = Pick<Task, 'spec' | 'acceptanceCriteria' | 'productBrief'> & {
+  acceptanceCriteriaCount?: number
+}
 
 export function hasFailureActivity(turn: Pick<TaskStateLike, 'activity'>): boolean {
   return (turn.activity ?? []).some(item =>
@@ -113,12 +115,13 @@ function hasCompleteProductBrief(task: Pick<TaskSpecLike, 'productBrief'>): bool
   )
 }
 
-export function hasSpecDraftContent(task: Pick<TaskSpecLike, 'spec' | 'acceptanceCriteria'>): boolean {
+export function hasSpecDraftContent(task: Pick<TaskSpecLike, 'spec' | 'acceptanceCriteria' | 'acceptanceCriteriaCount'>): boolean {
   return (
     typeof task.spec === 'string' &&
     task.spec.trim().length > 0 &&
-    Array.isArray(task.acceptanceCriteria) &&
-    task.acceptanceCriteria.length > 0
+    (Array.isArray(task.acceptanceCriteria)
+      ? task.acceptanceCriteria.length > 0
+      : Number(task.acceptanceCriteriaCount ?? 0) > 0)
   )
 }
 

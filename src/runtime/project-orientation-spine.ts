@@ -255,10 +255,69 @@ export interface ProjectOrientationSpine {
   nodes: Record<string, OrientationNode>
   activePins: OrientationPin[]
   scopeRows: OrientationScopeRow[]
+  scopeRowCounts: { included: number; deferred: number }
   gaps: OrientationGap[]
   release: OrientationReleaseSummary
   sourceHealth: OrientationSourceHealth
   sourceTrail: OrientationSourceTrailRow[]
+}
+
+/** The durable Map read model omits the duplicate node lookup table. */
+export function compactProjectOrientationSpineForMap(
+  spine: ProjectOrientationSpine,
+): ProjectOrientationSpine {
+  const currentScopeRows = spine.scopeRows.filter(row => row.scope !== 'deferred').slice(0, 12)
+  const laterScopeRows = spine.scopeRows.filter(row => row.scope === 'deferred').slice(0, 4)
+  return {
+    ...spine,
+    roots: spine.roots.map(compactOrientationMapNode),
+    nodes: {},
+    scopeRows: [...currentScopeRows, ...laterScopeRows].map(compactOrientationMapScopeRow),
+    proofContracts: spine.proofContracts.map(compactOrientationMapProofContract),
+    gaps: spine.gaps.slice(0, 5).map(gap => ({ ...gap, refs: gap.refs.slice(0, 2) })),
+    activePins: spine.activePins.slice(0, 3),
+    sourceTrail: spine.sourceTrail.slice(0, 5),
+    // Map is a navigator. The full scope ledger belongs to Work, where it is
+    // explicitly paged instead of inflating the project skeleton.
+    scope: null,
+  }
+}
+
+function compactOrientationMapNode(node: OrientationNode): OrientationNode {
+  const progress: Record<string, number> = { total: node.progress.total }
+  for (const key of ['specced', 'active', 'proven', 'done', 'blocked', 'deferred'] as const) {
+    if (node.progress[key] > 0) progress[key] = node.progress[key]
+  }
+  const hasProgress = Object.keys(progress).length > 1 || progress.total > 0
+  const visibility = node.visibility.kind ? { kind: node.visibility.kind } : undefined
+  const taskIds = node.refs.taskIds.slice(0, 1)
+  return {
+    id: node.id,
+    kind: node.kind,
+    title: node.title,
+    maturity: node.maturity,
+    ...(hasProgress ? { progress } : {}),
+    ...(taskIds.length > 0 ? { refs: { taskIds } } : {}),
+    ...(visibility ? { visibility } : {}),
+    children: node.children.map(compactOrientationMapNode),
+  } as OrientationNode
+}
+
+function compactOrientationMapScopeRow(row: OrientationScopeRow): OrientationScopeRow {
+  return {
+    ...row,
+    sourceRefs: row.sourceRefs.slice(0, 2),
+  }
+}
+
+function compactOrientationMapProofContract(contract: OrientationProofContract): OrientationProofContract {
+  return {
+    ...contract,
+    required: contract.required.slice(0, 1),
+    verified: contract.verified.slice(0, 1),
+    missing: contract.missing.slice(0, 1),
+    refs: contract.refs.slice(0, 2),
+  }
 }
 
 export interface OrientationTaskInput {
@@ -2220,7 +2279,7 @@ function buildSummary(input: {
         blocker.id === taskScopeNodeId(input.startReadiness.focusTaskId ?? ''),
       )?.label ?? input.blockers[0]?.label ?? null
     : null
-  const topBlocker = readinessSummary?.topBlocker ?? focusedShapingBlocker ?? input.blockers[0]?.label ?? null
+  const topBlocker = focusedShapingBlocker ?? readinessSummary?.topBlocker ?? input.blockers[0]?.label ?? null
   const hasActionableWork =
     input.progress.ready > 0 ||
     input.progress.active > 0 ||
@@ -2540,6 +2599,10 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
     nodes: Object.fromEntries(byId.entries()),
     activePins: activePinsForSummary,
     scopeRows: projectionScopeRows,
+    scopeRowCounts: {
+      included: projectionScopeRows.filter(row => row.scope === 'included').length,
+      deferred: projectionScopeRows.filter(row => row.scope === 'deferred').length,
+    },
     gaps,
     release: {
       state: releaseState,

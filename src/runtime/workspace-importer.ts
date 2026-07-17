@@ -3,8 +3,8 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { load as yamlLoad } from 'js-yaml'
 import { ProjectReleaseState, TaskQueue, TERMINAL_TASK_STATUSES, buildDecompositionChildDrafts, type ProjectRelease, type Task, type TaskPriority } from '@guildhall/core'
-import { getProjectLocalHistoryDir, getProjectSystemStatePathFromMemoryDir, inferProjectRootFromMemoryDir } from '@guildhall/sessions'
-import { appendExploringTranscript } from '@guildhall/tools'
+import { getProjectLocalHistoryDir, getProjectSystemStatePathFromMemoryDir, inferProjectRootFromMemoryDir, readProjectStateDatabaseQueueRevision } from '@guildhall/sessions'
+import { appendExploringTranscript, replaceExploringTranscript } from '@guildhall/tools'
 import { loadLeverSettings, defaultAgentSettingsPath } from '@guildhall/levers'
 import {
   detectWorkspaceSignals,
@@ -42,6 +42,8 @@ import {
   contractShapedImportHasNoConcreteContracts,
   titleLooksContractShaped,
 } from './imported-work-integrity.js'
+import { readProjectTaskQueueForRichMutation, writeProjectTaskQueueAtCurrentStateBoundary } from './project-state-boundary.js'
+import { writeProjectSummaryProjectionFromUnknownQueue } from './project-summary-projection.js'
 
 // ---------------------------------------------------------------------------
 // FR-34: reserved workspace-importer task.
@@ -71,8 +73,7 @@ function workspaceImportStatePath(memoryDir: string, relativePath: string): stri
 }
 
 async function readQueue(memoryDir: string): Promise<TaskQueue> {
-  const tasksPath = workspaceImportTasksPath(memoryDir)
-  const raw = await readManagedTextFile(tasksPath, 'utf-8').catch((err: unknown) => {
+  const raw = await readProjectTaskQueueForRichMutation(inferProjectRootFromMemoryDir(memoryDir)).catch((err: unknown) => {
     if (
       err &&
       typeof err === 'object' &&
@@ -90,7 +91,7 @@ async function readQueue(memoryDir: string): Promise<TaskQueue> {
       tasks: [],
     })
   }
-  const parsed = JSON.parse(raw)
+  const parsed = typeof raw === 'string' ? JSON.parse(raw) as unknown : raw
   const queue = Array.isArray(parsed)
     ? { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
     : TaskQueue.parse(parsed)
@@ -101,7 +102,12 @@ async function readQueue(memoryDir: string): Promise<TaskQueue> {
 async function writeQueue(memoryDir: string, queue: TaskQueue): Promise<void> {
   const tasksPath = workspaceImportTasksPath(memoryDir)
   await fs.mkdir(path.dirname(tasksPath), { recursive: true })
-  await writeManagedTextFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+  const expectedQueueRevision = readProjectStateDatabaseQueueRevision(tasksPath)
+  await writeProjectTaskQueueAtCurrentStateBoundary(tasksPath, queue, {
+    projectId: path.basename(inferProjectRootFromMemoryDir(memoryDir)),
+    projectRoot: inferProjectRootFromMemoryDir(memoryDir),
+    ...(expectedQueueRevision !== null ? { expectedQueueRevision } : {}),
+  })
 }
 
 export const WORKSPACE_IMPORT_SEED_PREAMBLE = `You are the Workspace Importer Agent.
@@ -286,12 +292,6 @@ async function writeWorkspaceImportTranscript(
   draft: WorkspaceImportDraft,
   seedMessage?: string,
 ): Promise<string> {
-  const transcriptPath = path.join(
-    memoryDir,
-    'exploring',
-    `${WORKSPACE_IMPORT_TASK_ID}.md`,
-  )
-  await fs.mkdir(path.dirname(transcriptPath), { recursive: true })
   const seed =
     seedMessage ??
     [
@@ -299,8 +299,14 @@ async function writeWorkspaceImportTranscript(
       formatDraftForTranscript(inventory, draft),
       WORKSPACE_IMPORT_SEED_FORMAT,
     ].join('\n')
-  await writeManagedTextFile(transcriptPath, `${seed}\n`, 'utf-8')
-  return transcriptPath
+  const result = await replaceExploringTranscript({
+    memoryDir,
+    taskId: WORKSPACE_IMPORT_TASK_ID,
+    role: 'system',
+    content: seed,
+  })
+  if (!result.success || !result.path) throw new Error(`Failed to write workspace-import history: ${result.error ?? 'unknown'}`)
+  return result.path
 }
 
 /**
@@ -470,6 +476,13 @@ export async function rerunWorkspaceImportTask(
         delete raw.dismissedAt
         raw.recordedAt = now
         await writeManagedTextFile(goalsPath, JSON.stringify(raw, null, 2), 'utf-8')
+        const currentTasksPath = workspaceImportTasksPath(input.memoryDir)
+        const expectedQueueRevision = readProjectStateDatabaseQueueRevision(currentTasksPath)
+        writeProjectSummaryProjectionFromUnknownQueue(currentTasksPath, {
+          queue,
+          queueCommit: false,
+          ...(expectedQueueRevision !== null ? { expectedQueueRevision } : {}),
+        })
       }
     } catch {
       // Ignore malformed dismissed-state files; the rerun task/transcript are the source of truth.
@@ -2289,7 +2302,7 @@ export async function readWorkspaceImportSummary(input: {
   let importerTaskSpec = ''
 
   try {
-    const raw = JSON.parse(await readManagedTextFile(tasksPath, 'utf-8')) as
+    const raw = await readProjectTaskQueueForRichMutation(inferProjectRootFromMemoryDir(input.memoryDir)) as
       | { tasks?: Array<Record<string, unknown>> }
       | Array<Record<string, unknown>>
     const list = Array.isArray(raw) ? raw : raw.tasks ?? []
@@ -4052,6 +4065,7 @@ function deterministicImportedCriterion(
       : 'A real local proof path exists, passes, and is recorded with the task.',
     verifiedBy: command ? 'automated' : 'review',
     source: command ? 'documented' : 'inferred',
+    ...(command ? { command } : {}),
     met: false,
   }
 }
@@ -6159,6 +6173,15 @@ export async function approveWorkspaceImport(
       ),
       'utf-8',
     )
+    // The queue write happens before this durable plan write. Refresh once at
+    // the combined boundary so fast reads never observe a half-updated plan.
+    const currentTasksPath = workspaceImportTasksPath(input.memoryDir)
+    const expectedQueueRevision = readProjectStateDatabaseQueueRevision(currentTasksPath)
+    writeProjectSummaryProjectionFromUnknownQueue(currentTasksPath, {
+      queue,
+      queueCommit: false,
+      ...(expectedQueueRevision !== null ? { expectedQueueRevision } : {}),
+    })
   }
 
   // Append milestones to PROGRESS.md.

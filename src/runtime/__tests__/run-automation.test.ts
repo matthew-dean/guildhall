@@ -1,14 +1,26 @@
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  readProjectStateJsonFromMemoryDirAsync,
-  writeProjectStateJsonFromMemoryDirAsync,
+  getProjectSystemStatePath,
+  getProjectSystemStatePathFromMemoryDir,
+  inferProjectRootFromMemoryDir,
+  promoteProjectStateDatabaseAuthority,
+  projectStateDatabasePath,
+  readTaskEvidence,
+  readProjectStateDatabaseTaskPointWithRevision,
+  readProjectTaskQueueSync,
 } from '@guildhall/sessions'
 
 import { applyRunAutomationPolicy } from '../run-automation.js'
+import * as projectStateBoundary from '../project-state-boundary.js'
+
+afterEach(() => {
+  vi.restoreAllMocks()
+})
 
 const VALID_SPEC = [
   '## Summary',
@@ -36,11 +48,16 @@ async function makeMemoryDir(): Promise<string> {
 }
 
 async function writeQueue(memoryDir: string, queue: unknown): Promise<void> {
-  await writeProjectStateJsonFromMemoryDirAsync(memoryDir, 'TASKS.json', queue)
+  const projectRoot = inferProjectRootFromMemoryDir(memoryDir)
+  const tasksPath = getProjectSystemStatePathFromMemoryDir(memoryDir, 'TASKS.json')
+  await fs.mkdir(path.dirname(tasksPath), { recursive: true })
+  projectStateBoundary.writeProjectTaskQueueWithSummary(tasksPath, queue, { projectRoot })
+  promoteProjectStateDatabaseAuthority(projectRoot)
 }
 
 async function readQueue(memoryDir: string): Promise<{ tasks: Array<Record<string, any>> }> {
-  return readProjectStateJsonFromMemoryDirAsync<{ tasks: Array<Record<string, any>> }>(memoryDir, 'TASKS.json')
+  const tasksPath = getProjectSystemStatePathFromMemoryDir(memoryDir, 'TASKS.json')
+  return readProjectTaskQueueSync(tasksPath) as { tasks: Array<Record<string, any>> }
 }
 
 describe('run automation policy', () => {
@@ -67,6 +84,7 @@ describe('run automation policy', () => {
         }),
       ],
     })
+    const aggregateWriter = vi.spyOn(projectStateBoundary, 'writeProjectTaskQueueWithSummary')
 
     const result = await applyRunAutomationPolicy({
       memoryDir,
@@ -81,6 +99,8 @@ describe('run automation policy', () => {
     ])
     const queue = await readQueue(memoryDir)
     expect(queue.tasks.find((candidate) => candidate.id === 'task-child')!.status).toBe('ready')
+    expect(aggregateWriter).not.toHaveBeenCalled()
+    await expect(fs.access(path.join(memoryDir, 'transcripts', 'exploring', 'task-child.md'))).rejects.toThrow()
   })
 
   it('fully automated runs repair an obvious product brief gap before approving a tiny deterministic task', async () => {
@@ -230,6 +250,7 @@ describe('run automation policy', () => {
         }),
       ],
     })
+    const aggregateWriter = vi.spyOn(projectStateBoundary, 'writeProjectTaskQueueWithSummary')
 
     const result = await applyRunAutomationPolicy({
       memoryDir,
@@ -239,8 +260,56 @@ describe('run automation policy', () => {
     })
 
     expect(result.changed).toBe(false)
-    const queue = await readQueue(memoryDir)
-    expect(queue.tasks[0]!.openQuestions[0]!.answeredAt).toBeUndefined()
+    expect(result.resolutions).toEqual([])
+    expect(aggregateWriter).not.toHaveBeenCalled()
+    expect(await readTaskEvidence(path.dirname(memoryDir), 'task-root', { kind: 'note' })).toEqual([])
+  })
+
+  it('uses the promoted task point mutation for one definition-only automation update', async () => {
+    const memoryDir = await makeMemoryDir()
+    const projectRoot = path.dirname(memoryDir)
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    const queue = {
+      version: 1,
+      lastUpdated: '2026-05-29T10:00:00.000Z',
+      tasks: [
+        task({
+          id: 'task-root',
+          status: 'blocked',
+          blockReason: 'Human approval is required before the task can continue.',
+        }),
+        task({ id: 'task-other', title: 'Untouched task' }),
+      ],
+    }
+    projectStateBoundary.writeProjectTaskQueueWithSummary(tasksPath, queue, { projectRoot })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+    const beforeDatabase = new DatabaseSync(projectStateDatabasePath(projectRoot), { readOnly: true })
+    const untouchedBefore = beforeDatabase.prepare('SELECT payload_gzip FROM work_item_detail WHERE task_id = ?').get('task-other') as { payload_gzip: Uint8Array }
+    beforeDatabase.close()
+
+    const result = await applyRunAutomationPolicy({
+      memoryDir,
+      policy: 'fully_automated',
+      rootTaskId: 'task-root',
+      ownerIntent: 'Continue the requested work.',
+    })
+
+    expect(result.resolutions.map(resolution => resolution.kind)).toContain('resolve_automation_blocker')
+    const promotedTask = readProjectStateDatabaseTaskPointWithRevision(tasksPath, 'task-root')?.task.definition
+    expect(promotedTask).toMatchObject({ status: 'exploring' })
+    expect(promotedTask).not.toHaveProperty('blockReason')
+    expect(await readTaskEvidence(projectRoot, 'task-root', { kind: 'note' })).toEqual([
+      expect.objectContaining({
+        kind: 'note',
+        payload: expect.objectContaining({
+          content: expect.stringContaining('Resolved retryable blocker'),
+        }),
+      }),
+    ])
+    const afterDatabase = new DatabaseSync(projectStateDatabasePath(projectRoot), { readOnly: true })
+    const untouchedAfter = afterDatabase.prepare('SELECT payload_gzip FROM work_item_detail WHERE task_id = ?').get('task-other') as { payload_gzip: Uint8Array }
+    expect(Buffer.from(untouchedAfter.payload_gzip)).toEqual(Buffer.from(untouchedBefore.payload_gzip))
+    afterDatabase.close()
   })
 })
 

@@ -423,7 +423,7 @@ describe('buildInbox', () => {
           title: 'Draft chapter in author voice',
           status: 'done',
           acceptanceCriteria: [
-            { id: 'voice', description: 'Author voice proof is attached.', met: false },
+            { id: 'voice', description: 'Reviewer confirms the chapter is complete.', met: false },
             { id: 'outline', description: 'Outline was generated.', met: true },
           ],
         },
@@ -484,13 +484,19 @@ describe('buildInbox', () => {
           acceptanceCriteria: [
             { id: 'voice', description: 'Author voice proof is attached.', met: false },
           ],
-          reviewVerdicts: [{
-            verdict: 'approve',
-            reviewerPath: 'llm',
-            reason: 'Reviewer approved.',
-            reasoning: 'code-review:acceptance-criteria-met: yes — all acceptance criteria are satisfied.',
-            failingSignals: [],
+          evidence: [{
+            id: 'review-task-stale-proof',
+            taskId: 'task-stale-proof',
+            kind: 'review_verdict',
             recordedAt: '2026-07-04T10:07:21.557Z',
+            payload: {
+              verdict: 'approve',
+              reviewerPath: 'llm',
+              reason: 'Reviewer approved.',
+              reasoning: 'code-review:acceptance-criteria-met: yes — all acceptance criteria are satisfied.',
+              failingSignals: [],
+              recordedAt: '2026-07-04T10:07:21.557Z',
+            },
           }],
         },
       ],
@@ -562,6 +568,47 @@ describe('buildInbox', () => {
     const items = buildInboxWithProviderSetup()
 
     expect(items.some(i => i.kind === 'proof_reconciliation')).toBe(false)
+  })
+
+  it('uses compact current task facts without requiring a full task definition', async () => {
+    await writeCompleteBootstrap()
+    await writeYaml('guildhall.yaml', {
+      name: 'Inbox Test',
+      id: 'inbox-test',
+      coordinators: [{ id: 'coordinator' }],
+      bootstrap: { verifiedAt: '2026-07-14T00:00:00.000Z', install: ['pnpm install'], gates: ['pnpm typecheck'] },
+    })
+    await writeJson('.guildhall/workspace-goals.json', { goals: [] })
+    await writeFile('.guildhall/project-brief.md', 'This project has a direction long enough for the onboarding wizard to continue.')
+    await writeJson('.guildhall/TASKS.json', { version: 1, tasks: [{ id: 'task-compact-import', status: 'exploring' }] })
+
+    const items = buildInbox({
+      projectPath: tmpDir,
+      projectStateDir,
+      taskStateOverride: {
+        version: 1,
+        tasks: [{
+          id: 'task-compact-import',
+          title: 'Imported work',
+          description: 'Current task summary only.',
+          status: 'exploring',
+          currentSummary: {
+            imported: true,
+            brief: { present: false, shaped: false, userJob: false, successMetric: false, approvedAt: null },
+            acceptanceCriteriaCount: 0,
+          },
+        }],
+      },
+      snapshotOptions: {
+        readProviders: () => ({ providers: { 'openai-api': { apiKey: 'sk-test' } } }),
+        detectOauthProviders: () => ({ claude: false, codex: false }),
+      },
+    })
+
+    expect(items.find(item => item.kind === 'import_draft_queue')).toMatchObject({
+      taskId: 'task-compact-import',
+      title: '1 imported task needs shaping',
+    })
   })
 
   it('proof_reconciliation: uses effective task state override instead of stale raw task proof', async () => {

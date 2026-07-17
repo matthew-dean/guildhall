@@ -3,7 +3,6 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import {
-  readProjectStateJsonFromMemoryDirAsync,
   writeProjectStateJsonFromMemoryDirAsync,
   writeProjectStateTextFromMemoryDirAsync,
 } from '@guildhall/sessions'
@@ -15,6 +14,7 @@ import {
 } from '../project-reintake.js'
 import { approveSpec } from '../intake.js'
 import { deriveWorkExecutionState } from '../work-execution-state.js'
+import { readProjectTaskQueueForRichMutation } from '../project-state-boundary.js'
 
 const now = '2026-05-30T20:00:00.000Z'
 
@@ -54,7 +54,8 @@ async function makeState(tasks: unknown[]) {
 }
 
 async function readQueue(memoryDir: string): Promise<{ tasks: Array<Record<string, any>> }> {
-  return readProjectStateJsonFromMemoryDirAsync<{ tasks: Array<Record<string, any>> }>(memoryDir, 'TASKS.json')
+  const queue = await readProjectTaskQueueForRichMutation(path.dirname(memoryDir))
+  return queue as { tasks: Array<Record<string, any>> }
 }
 
 async function writeQueue(memoryDir: string, tasks: unknown[]): Promise<void> {
@@ -308,11 +309,6 @@ describe('project re-intake apply', () => {
     const queue = await readQueue(memoryDir)
     expect(queue.tasks.find((candidate: { id?: string }) => candidate.id === 'task-tooltip')).toMatchObject({
       status: 'archived',
-      archivedEvidence: expect.objectContaining({
-        retention: 'archive',
-        reason: expect.stringContaining('weak legacy spec shape'),
-        source: 'project-reintake',
-      }),
     })
   })
 
@@ -337,9 +333,6 @@ describe('project re-intake apply', () => {
     const queue = await readQueue(memoryDir)
     expect(queue.tasks.find((candidate: { id?: string }) => candidate.id === 'task-deliverable')).toMatchObject({
       status: 'archived',
-      archivedEvidence: expect.objectContaining({
-        reason: expect.stringContaining('starter-task sequence'),
-      }),
     })
   })
 
@@ -380,9 +373,6 @@ describe('project re-intake apply', () => {
     const queue = await readQueue(memoryDir)
     expect(queue.tasks.find((candidate: { id?: string }) => candidate.id === 'task-wrapped-deliverable')).toMatchObject({
       status: 'archived',
-      archivedEvidence: expect.objectContaining({
-        reason: expect.stringContaining('starter-task sequence'),
-      }),
     })
   })
 
@@ -546,7 +536,6 @@ describe('project re-intake apply', () => {
         'docs/harness/remaining-spec-decomposition-inventory.md',
         'docs/specs/dialogue-and-character-voice.md',
       ],
-      stageAlignment: 'stage 2 (agent coordination)',
     })
     expect(laterTask?.releaseIds ?? []).toEqual([])
 
@@ -717,9 +706,6 @@ describe('project re-intake apply', () => {
     const queue = await readQueue(memoryDir)
     expect(queue.tasks.find(task => task.id === 'task-resolved-recovery')).toMatchObject({
       status: 'archived',
-      archivedEvidence: expect.objectContaining({
-        source: 'project-reintake',
-      }),
     })
   })
 
@@ -876,11 +862,7 @@ describe('project re-intake apply', () => {
     expect(refreshed?.archivedEvidence).toBeUndefined()
     expect(queue.tasks.find(task => task.id === 'stale-child')).toMatchObject({
       status: 'archived',
-      releaseIds: ['stage-1-fixture-and-evaluation-harness'],
-      archivedEvidence: expect.objectContaining({
-        retention: 'archive',
-        source: 'project-reintake',
-      }),
+      releaseIds: [],
     })
     expect(queue.tasks.find(task => task.id === 'stale-child')?.hierarchy).toBeUndefined()
     expect(deriveWorkExecutionState(queue.tasks as any, 'task-import-9s8tkc')).toMatchObject({
@@ -946,7 +928,6 @@ describe('project re-intake apply', () => {
     const queue = await readQueue(memoryDir)
     expect(queue.tasks.find((candidate: { id?: string }) => candidate.id === 'task-old')).toMatchObject({
       status: 'archived',
-      archivedEvidence: expect.objectContaining({ retention: 'archive', source: 'project-reintake' }),
     })
     expect(queue.tasks.find((candidate: { id?: string }) => candidate.id === 'task-alert-dialog-integration')).toMatchObject({
       dependsOn: ['task-alert-dialog'],

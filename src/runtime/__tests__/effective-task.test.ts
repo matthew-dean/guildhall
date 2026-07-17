@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import type { Task } from '@guildhall/core'
-import { buildEffectiveTask, legacyEvidenceFromTask, legacyRuntimeFromTask, legacyWorkspaceFromTask, stripLegacyRuntimeFields } from '../effective-task.js'
-import { appendTaskEvidence, upsertTaskRuntimeState, upsertTaskWorkspaceState } from '../task-state-store.js'
+import { buildEffectiveTask, effectiveTaskStatus, legacyEvidenceFromTask, legacyRuntimeFromTask, legacyWorkspaceFromTask, stripLegacyRuntimeFields } from '../effective-task.js'
+import { appendTaskEvidence, taskEvidencePath, upsertTaskRuntimeState, upsertTaskWorkspaceState } from '../task-state-store.js'
+import { promoteProjectStateDatabaseAuthority, projectStateDatabasePath } from '@guildhall/sessions'
 
 function legacyTask(overrides: Partial<Task> = {}): Task {
   const now = '2026-05-24T20:00:00.000Z'
@@ -98,6 +100,8 @@ describe('effective task projection', () => {
     expect(stripped).not.toHaveProperty('worktreePath')
     expect(stripped).not.toHaveProperty('branchName')
     expect(stripped).not.toHaveProperty('revisionCount')
+    expect(stripped).not.toHaveProperty('shelveReason')
+    expect(stripped).not.toHaveProperty('proofRecovery')
     expect(stripped).toMatchObject({
       id: 'task-auth-complete',
       title: 'Complete auth',
@@ -135,11 +139,144 @@ describe('effective task projection', () => {
       branchName: 'guildhall/task-task-auth-complete-v2',
     })
     expect(effective.evidence.map((event) => event.id)).toEqual(['note-new'])
-    expect(effective.notes).toEqual([{ content: 'New evidence store note.' }])
+    expect(effective.notes).toEqual([expect.objectContaining({ content: 'New evidence store note.' })])
     expect(effective.worktreePath).toBe('/Users/matthew/.guildhall/worktrees/fair-labor-license/task-auth-complete')
     expect(effective.branchName).toBe('guildhall/task-task-auth-complete-v2')
     expect(effective.assignedTo).toBe('reviewer-agent')
     expect(effective.revisionCount).toBe(8)
+  })
+
+  it('does not resurrect legacy task overlays after the database boundary', async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-effective-task-authority-'))
+    await upsertTaskRuntimeState(projectRoot, 'task-auth-complete', {
+      assignedTo: 'database-worker',
+      updatedAt: '2026-05-24T21:00:00.000Z',
+    })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+
+    const effective = await buildEffectiveTask(projectRoot, legacyTask({
+      assignedTo: 'stale-task-field',
+      worktreePath: '/stale/task/worktree',
+      branchName: 'stale-task-branch',
+    }))
+
+    expect(effective.assignedTo).toBe('database-worker')
+    expect(effective.worktreePath).toBeUndefined()
+    expect(effective.branchName).toBeUndefined()
+  })
+
+  it('accepts a valid promoted project with empty normalized overlays', async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-effective-task-empty-overlay-'))
+    try {
+      promoteProjectStateDatabaseAuthority(projectRoot)
+
+      const effective = await buildEffectiveTask(projectRoot, legacyTask())
+
+      expect(effective.runtime).toBeUndefined()
+      expect(effective.workspace).toBeUndefined()
+    } finally {
+      await fs.rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('fails closed when a promoted normalized overlay table is missing', async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-effective-task-missing-overlay-'))
+    try {
+      promoteProjectStateDatabaseAuthority(projectRoot)
+      const database = new DatabaseSync(projectStateDatabasePath(projectRoot))
+      database.exec('DROP TABLE task_execution')
+      database.close()
+
+      await expect(buildEffectiveTask(projectRoot, legacyTask()))
+        .rejects.toThrow(/Normalized task state is unavailable/)
+    } finally {
+      await fs.rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('fails closed when a promoted normalized current-evidence table is missing', async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-effective-task-missing-current-evidence-'))
+    try {
+      promoteProjectStateDatabaseAuthority(projectRoot)
+      const database = new DatabaseSync(projectStateDatabasePath(projectRoot))
+      database.exec('DROP TABLE task_evidence_current')
+      database.close()
+
+      await expect(buildEffectiveTask(projectRoot, legacyTask()))
+        .rejects.toThrow(/Normalized task state is unavailable/)
+    } finally {
+      await fs.rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('fails closed when a promoted normalized overlay payload is malformed', async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-effective-task-malformed-overlay-'))
+    try {
+      promoteProjectStateDatabaseAuthority(projectRoot)
+      await upsertTaskRuntimeState(projectRoot, 'task-auth-complete', {
+        assignedTo: 'worker-agent',
+        updatedAt: '2026-07-15T00:00:00.000Z',
+      })
+      const database = new DatabaseSync(projectStateDatabasePath(projectRoot))
+      database.prepare('UPDATE task_execution SET payload_json = ? WHERE task_id = ?')
+        .run('{malformed', 'task-auth-complete')
+      database.close()
+
+      await expect(buildEffectiveTask(projectRoot, legacyTask()))
+        .rejects.toThrow(/Corrupt normalized runtime overlay/)
+    } finally {
+      await fs.rm(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('can build current task state without reopening historical evidence files', async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-effective-task-current-'))
+    await appendTaskEvidence(projectRoot, 'task-auth-complete', {
+      id: 'note-current',
+      kind: 'note',
+      recordedAt: '2026-05-24T21:00:00.000Z',
+      payload: { content: 'Current projection note.' },
+    })
+    await appendTaskEvidence(projectRoot, 'task-auth-complete', {
+      id: 'gate-current',
+      kind: 'gate_result',
+      recordedAt: '2026-05-24T21:01:00.000Z',
+      payload: { gateId: 'build', passed: true },
+    })
+    await fs.rm(path.dirname(taskEvidencePath(projectRoot, 'task-auth-complete', 'note')), { recursive: true, force: true })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+
+    const effective = await buildEffectiveTask(projectRoot, legacyTask(), { evidence: 'current' })
+
+    expect(effective.evidence.map(event => event.kind)).toEqual(['note', 'gate_result'])
+    expect(effective.notes).toEqual([expect.objectContaining({ content: 'Current projection note.' })])
+    expect(effective.gateResults).toEqual([{ gateId: 'build', passed: true }])
+  })
+
+  it('uses bounded current evidence by default after the database boundary', async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-effective-task-current-default-'))
+    promoteProjectStateDatabaseAuthority(projectRoot)
+    await appendTaskEvidence(projectRoot, 'task-auth-complete', {
+      id: 'note-old',
+      kind: 'note',
+      recordedAt: '2026-05-24T21:00:00.000Z',
+      payload: { content: 'Older operational note.' },
+    })
+    await appendTaskEvidence(projectRoot, 'task-auth-complete', {
+      id: 'note-new',
+      kind: 'note',
+      recordedAt: '2026-05-24T21:01:00.000Z',
+      payload: { content: 'Latest operational note.' },
+    })
+
+    const current = await buildEffectiveTask(projectRoot, legacyTask())
+    const historical = await buildEffectiveTask(projectRoot, legacyTask(), { evidence: 'full' })
+
+    expect(current.notes).toEqual([expect.objectContaining({ content: 'Latest operational note.' })])
+    expect(historical.notes).toEqual([
+      expect.objectContaining({ content: 'Older operational note.' }),
+      expect.objectContaining({ content: 'Latest operational note.' }),
+    ])
   })
 
   it('repairs older Guildhall bootstrap verification ellipses in effective evidence', async () => {
@@ -209,6 +346,28 @@ describe('effective task projection', () => {
     expect(effective.status).toBe('done')
     expect(effective.assignedTo).toBeNull()
     expect(effective.completedAt).toBe('2026-07-04T09:16:20.780Z')
+  })
+
+  it('uses one current-status rule when completion proof settles or fails to settle a block', () => {
+    const settled = {
+      id: 'task-settled-block',
+      status: 'blocked',
+      escalations: [{ id: 'esc-1', reason: 'human_judgment_required', raisedAt: '2026-07-01T10:00:00.000Z' }],
+      evidence: [{
+        id: 'gate-1',
+        taskId: 'task-settled-block',
+        kind: 'gate_result',
+        recordedAt: '2026-07-02T10:00:00.000Z',
+        payload: { gateId: 'build', passed: true, checkedAt: '2026-07-02T10:00:00.000Z' },
+      }],
+    }
+    const reopened = {
+      ...settled,
+      escalations: [{ id: 'esc-2', reason: 'human_judgment_required', raisedAt: '2026-07-03T10:00:00.000Z' }],
+    }
+
+    expect(effectiveTaskStatus(settled)).toBe('done')
+    expect(effectiveTaskStatus(reopened)).toBe('blocked')
   })
 
   it('does not treat a merge record alone as completed proof for a ready task', async () => {

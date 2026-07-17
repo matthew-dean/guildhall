@@ -2,7 +2,7 @@ import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, wr
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import type { Task } from '@guildhall/core'
-import { getProjectSystemStatePathFromMemoryDir } from '@guildhall/sessions'
+import { getProjectSystemStatePathFromMemoryDir, inferProjectRootFromMemoryDir } from '@guildhall/sessions'
 import {
   planEvidenceWorkGraph,
   type EvidenceSource,
@@ -24,6 +24,7 @@ import {
   importedContractWorkIsStructurallyIncomplete,
 } from './imported-work-integrity.js'
 import { taskDoneButProofMissing } from './proof-health.js'
+import { readProjectTaskQueueForMutationSync, writeProjectTaskQueueAtCurrentStateBoundary } from './project-state-boundary.js'
 
 export type ProjectReintakeSource = EvidenceSource
 
@@ -395,7 +396,8 @@ export async function applyProjectReintakeDraft(input: {
   if (!draft) return { success: false, error: 'No re-intake draft found.' }
 
   const queuePath = getProjectSystemStatePathFromMemoryDir(input.memoryDir, 'TASKS.json')
-  const queue = await readQueueFile(queuePath)
+  const queueRead = readQueueFile(queuePath)
+  const queue = queueRead.queue
   if (fingerprint(queue.tasks) !== draft.taskQueueFingerprint) {
     return {
       success: false,
@@ -425,7 +427,11 @@ export async function applyProjectReintakeDraft(input: {
   applyReleaseDrafts(queue, draft)
 
   queue.lastUpdated = now
-  await writeManagedTextFile(queuePath, JSON.stringify(queue, null, 2), 'utf-8')
+  await writeProjectTaskQueueAtCurrentStateBoundary(queuePath, queue, {
+    projectId: path.basename(inferProjectRootFromMemoryDir(input.memoryDir)),
+    projectRoot: inferProjectRootFromMemoryDir(input.memoryDir),
+    expectedQueueRevision: queueRead.expectedQueueRevision,
+  })
   await appendReintakeProgress(input.memoryDir, draft, groups.length, now)
   await writeProjectReintakeDraft(input.memoryDir, { ...draft, status: 'applied' })
   return { success: true, appliedGroups: groups.length }
@@ -659,16 +665,26 @@ function reintakeDraftPath(memoryDir: string): string {
   return getProjectSystemStatePathFromMemoryDir(memoryDir, 'reintake-drafts/current.json')
 }
 
-async function readQueueFile(queuePath: string): Promise<{ version: number; lastUpdated: string; tasks: Array<Record<string, unknown>> }> {
-  const parsed = JSON.parse(await readManagedTextFile(queuePath, 'utf-8')) as unknown
+function readQueueFile(queuePath: string): {
+  queue: { version: number; lastUpdated: string; tasks: Array<Record<string, unknown>> }
+  expectedQueueRevision: number | null
+} {
+  const result = readProjectTaskQueueForMutationSync(queuePath)
+  const parsed = result.queue
   if (Array.isArray(parsed)) {
-    return { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed as Array<Record<string, unknown>> }
+    return {
+      queue: { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed as Array<Record<string, unknown>> },
+      expectedQueueRevision: result.expectedQueueRevision,
+    }
   }
   const record = parsed as { version?: number; lastUpdated?: string; tasks?: Array<Record<string, unknown>> }
   return {
-    version: record.version ?? 1,
-    lastUpdated: record.lastUpdated ?? new Date().toISOString(),
-    tasks: record.tasks ?? [],
+    queue: {
+      version: record.version ?? 1,
+      lastUpdated: record.lastUpdated ?? new Date().toISOString(),
+      tasks: record.tasks ?? [],
+    },
+    expectedQueueRevision: result.expectedQueueRevision,
   }
 }
 
@@ -843,6 +859,7 @@ function evidenceTaskToDraft(
     ? sourceShapedCriteria
     : importedBlueprint?.acceptanceCriteria ?? sourceShapedCriteria
   const acceptanceCriteria = acceptanceCriteriaSource.map(criterion => ({
+    ...criterion,
     id: criterion.id,
     description: criterion.description,
     verifiedBy: criterion.verifiedBy ?? (criterion.id.includes('automated') || criterion.id.includes('regression') ? 'automated' : 'review'),
@@ -1641,7 +1658,7 @@ function refreshSourceShapedPrototypeTasks(
       dependsOn: arrayStringField(task.dependsOn),
       acceptanceCriteria: [],
       sourceRefs: [],
-      proofPaths: [],
+      proofPaths: Array.isArray(task.proofPaths) ? task.proofPaths as EvidenceTask['proofPaths'] : [],
     } as EvidenceTask, [])
     const existingCriteria = Array.isArray(task.acceptanceCriteria) ? task.acceptanceCriteria as Task['acceptanceCriteria'] : []
     if (sameCriteriaIds(existingCriteria, refreshedCriteria)) continue

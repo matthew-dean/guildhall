@@ -177,10 +177,10 @@ describe('learning loop for workspace import', () => {
     expect(snapshot.project.workspaceImport.preferredAreaKeys).toEqual(['looma'])
     expect(snapshot.project.workspaceImport.preferredSourceKeys).toEqual(['component-roadmap'])
     expect(snapshot.project.workspaceImport.preferredTaskIds).toEqual([])
-    expect(snapshot.effective.defaults.selectedAreaKeys).toEqual(['looma'])
-    expect(snapshot.effective.defaults.selectedSourceKeys).toEqual(['component-roadmap'])
-    expect(snapshot.effective.defaults.selectedTaskIds).toEqual(['task-1', 'task-2'])
-    expect(snapshot.effective.defaults.note).toContain('approved last time')
+    expect(snapshot.effective.defaults.selectedAreaKeys).toEqual(['looma', 'knit'])
+    expect(snapshot.effective.defaults.selectedSourceKeys).toEqual(['component-roadmap', 'feature-roadmap'])
+    expect(snapshot.effective.defaults.selectedTaskIds).toEqual(['task-1', 'task-2', 'task-3', 'task-4'])
+    expect(snapshot.effective.defaults.note).toContain('full current import')
   })
 
   it('switches to tighter task defaults when the user repeatedly trims broad imports', async () => {
@@ -237,8 +237,8 @@ describe('learning loop for workspace import', () => {
       draft: sampleDraft(),
     })
 
-    expect(snapshot.effective.defaults.selectedSourceKeys).toEqual(['component-roadmap'])
-    expect(snapshot.effective.defaults.selectedTaskIds).toEqual(['task-1', 'task-2'])
+    expect(snapshot.effective.defaults.selectedSourceKeys).toEqual(['component-roadmap', 'feature-roadmap'])
+    expect(snapshot.effective.defaults.selectedTaskIds).toEqual(['task-1', 'task-2', 'task-3', 'task-4'])
   })
 
   it('tracks dismissals in both project and user learning', async () => {

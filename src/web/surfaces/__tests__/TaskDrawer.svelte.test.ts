@@ -1253,6 +1253,35 @@ describe('TaskDrawer', () => {
     expect(screen.getByText('Please build it.')).toBeInTheDocument()
   })
 
+  it('loads the transcript only after its tab is opened', async () => {
+    const { exploringTranscript: _transcript, contextDebug: _context, recentEvents: _events, ...detail } = drawerPayload()
+    const transcript = {
+      content: '# Exploring Transcript\n\n## user\n\nPlease build it.\n',
+      path: '/history/transcripts/exploring/task-link-editor.md',
+    }
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/api/project/task/task-link-editor/extras?include=transcript')) return json({ exploringTranscript: transcript })
+      if (url.includes('/api/project/task/task-link-editor/extras?include=context')) return json({ contextDebug: [] })
+      if (url.startsWith('/api/project/task/task-link-editor')) return json(detail)
+      if (url.startsWith('/api/project')) return json(projectDetail())
+      return json({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(TaskDrawer, {
+      taskId: 'task-link-editor',
+      projectId: 'looma-knit',
+      onClose: vi.fn(),
+    })
+
+    await screen.findByRole('tab', { name: 'Overview' })
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('extras?include=transcript'))).toBe(false)
+
+    await userEvent.click(screen.getByRole('tab', { name: 'Transcript' }))
+    await waitFor(() => expect(fetchMock.mock.calls.some(([input]) => String(input).includes('extras?include=transcript'))).toBe(true))
+  })
+
   it('opens the Action tab when a question notification deep-links to the current surface', async () => {
     window.history.replaceState({}, '', '/projects/looma-knit/task/task-link-editor?tab=current')
     path.value = '/projects/looma-knit/task/task-link-editor'

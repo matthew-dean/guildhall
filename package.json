@@ -40,6 +40,8 @@
     "lint:data-layer": "node scripts/data-layer-guardrails.mjs",
     "lint:reductions": "node scripts/reduction-guardrails.mjs",
     "audit:project-spine": "node scripts/project-orientation-spine-audit.mjs",
+    "audit:project-state-performance": "node scripts/project-state-performance-audit.mjs",
+    "audit:project-state-agreement": "node scripts/project-state-agreement-audit.mjs",
     "clean": "rm -rf dist",
     "release": "node scripts/publish.mjs 0.10.0",
     "release:dry": "node scripts/publish.mjs 0.10.0 --dry-run --allow-branch",
@@ -60,6 +62,7 @@
     "docs:build": "npm run docs:check-copy && npm run docs:extract-help && vitepress build docs",
     "docs:preview": "vitepress preview docs",
     "memory:migrate": "node scripts/migrations/0.8.0-project-state.mjs",
+    "migrate:project-state": "node scripts/migrations/0.13.0-project-state-finalize.mjs",
     "memory:mastra:audit": "pnpm build && node dist/cli.js memory mastra-audit",
     "memory:mastra:value-gate": "node scripts/prototype-mastra-memory-value-gate.mjs",
     "service:install": "node ./scripts/install-launch-agent.mjs",
@@ -103,7 +106,7 @@
     "vitest": "^3.1.1"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.12.0"
   },
   "keywords": [
     "agents",

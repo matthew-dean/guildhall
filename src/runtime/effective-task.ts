@@ -1,3 +1,7 @@
+import {
+  TaskRuntimeState as TaskRuntimeStateSchema,
+  TaskWorkspaceState as TaskWorkspaceStateSchema,
+} from '@guildhall/core'
 import type {
   AgentIssue,
   AgentNote,
@@ -11,13 +15,25 @@ import type {
   TaskWorkspaceState,
 } from '@guildhall/core'
 import {
+  readProjectStateDatabaseTaskOverlay,
+  readProjectStateDatabaseTaskOverlayStores,
+  readProjectStateDatabaseCurrentAuthority,
+  readProjectStateDatabaseTaskEvidenceCurrent,
+  type ProjectStateDatabaseTaskEvidenceCurrent,
+  type ProjectStateDatabaseTaskRuntime,
+} from '@guildhall/sessions'
+import {
   readTaskEvidence,
   readTaskRuntimeStore,
   readTaskWorkspaceStore,
 } from './task-state-store.js'
 import { effectiveTaskTitle } from '../shared/task-display-label.js'
-import { normalizeAcceptanceCriteriaForCurrentProof, taskDoneButProofMissing } from './proof-health.js'
-import { taskHasRecordedCompletionProof } from './task-completion-proof.js'
+import { hasActiveProofRecovery, normalizeAcceptanceCriteriaForCurrentProof, taskDoneButProofMissing } from './proof-health.js'
+import {
+  latestRecordedCompletionProofAt,
+  recordedCompletionProofCanSettleTaskStatus,
+  taskHasRecordedCompletionProof,
+} from './task-completion-proof.js'
 
 type LegacyTask = Task & Record<string, unknown>
 
@@ -26,6 +42,67 @@ export interface EffectiveTask extends Record<string, unknown> {
   runtime?: TaskRuntimeState
   workspace?: TaskWorkspaceState
   evidence: TaskEvidenceEvent[]
+}
+
+/**
+ * The one current-status rule shared by rich and indexed projections.
+ * Completion evidence can settle a stale blocked/pending task, but not when
+ * a newer unresolved escalation still owns the task's current state.
+ */
+export function effectiveTaskStatus(task: unknown): string | undefined {
+  if (!task || typeof task !== 'object' || Array.isArray(task)) return undefined
+  const record = task as Record<string, unknown>
+  const status = typeof record.status === 'string' ? record.status : undefined
+  if (hasActiveProofRecovery(record)) return status
+  if (!recordedCompletionProofCanSettleTaskStatus(record) || taskDoneButProofMissing(record)) return status
+  if (status === 'blocked') {
+    const proofAt = latestRecordedCompletionProofAt(record)
+    const proofTime = proofAt ? Date.parse(proofAt) : Number.NaN
+    const activeEscalations = Array.isArray(record.escalations)
+      ? record.escalations.filter((entry): entry is Record<string, unknown> => Boolean(
+          entry && typeof entry === 'object' && !Array.isArray(entry) && !entry.resolvedAt,
+        ))
+      : []
+    if (activeEscalations.some(escalation => {
+      const raisedAt = Date.parse(String(escalation.raisedAt ?? ''))
+      return !Number.isFinite(proofTime) || !Number.isFinite(raisedAt) || proofTime <= raisedAt
+    })) return status
+  }
+  return 'done'
+}
+
+function runtimeStoreFromOverlay(
+  taskId: string,
+  overlay: ReturnType<typeof readProjectStateDatabaseTaskOverlay>,
+): Awaited<ReturnType<typeof readTaskRuntimeStore>> {
+  const parsed = overlay?.runtime
+    ? TaskRuntimeStateSchema.safeParse(overlay.runtime.payload)
+    : null
+  if (overlay?.runtime && !parsed?.success) {
+    throw new Error(`Corrupt normalized runtime overlay for task ${taskId}`)
+  }
+  return {
+    version: 1,
+    lastUpdated: overlay?.runtime?.updatedAt ?? new Date(0).toISOString(),
+    tasks: parsed?.success ? { [taskId]: parsed.data } : {},
+  }
+}
+
+function workspaceStoreFromOverlay(
+  taskId: string,
+  overlay: ReturnType<typeof readProjectStateDatabaseTaskOverlay>,
+): Awaited<ReturnType<typeof readTaskWorkspaceStore>> {
+  const parsed = overlay?.workspace
+    ? TaskWorkspaceStateSchema.safeParse(overlay.workspace.payload)
+    : null
+  if (overlay?.workspace && !parsed?.success) {
+    throw new Error(`Corrupt normalized workspace overlay for task ${taskId}`)
+  }
+  return {
+    version: 1,
+    lastUpdated: overlay?.workspace?.updatedAt ?? new Date(0).toISOString(),
+    workspaces: parsed?.success ? { [taskId]: parsed.data } : {},
+  }
 }
 
 function eventId(taskId: string, kind: string, index: number, fallbackTimestamp?: string): string {
@@ -38,9 +115,11 @@ export function legacyRuntimeFromTask(task: LegacyTask): TaskRuntimeState | unde
     Object.prototype.hasOwnProperty.call(task, 'assignedTo') ||
     typeof task.revisionCount === 'number' ||
     typeof task.remediationAttempts === 'number' ||
+    (task.workerRecovery && typeof task.workerRecovery === 'object') ||
     task.retryWindow !== undefined ||
     task.proofRecovery !== undefined ||
     typeof task.handoffStep === 'number' ||
+    task.shelveReason !== undefined ||
     (task.escalations ?? []).some((escalation) => !escalation.resolvedAt) ||
     (task.agentIssues ?? []).some((issue) => !issue.resolvedAt)
   if (!hasRuntime) return undefined
@@ -51,7 +130,11 @@ export function legacyRuntimeFromTask(task: LegacyTask): TaskRuntimeState | unde
     ...(task.retryWindow ? { retryWindow: task.retryWindow } : {}),
     ...(task.proofRecovery ? { proofRecovery: task.proofRecovery as TaskRuntimeState['proofRecovery'] } : {}),
     ...(typeof task.remediationAttempts === 'number' ? { remediationAttempts: task.remediationAttempts } : {}),
+    ...(task.workerRecovery && typeof task.workerRecovery === 'object'
+      ? { workerRecovery: task.workerRecovery as TaskRuntimeState['workerRecovery'] }
+      : {}),
     ...(typeof task.handoffStep === 'number' ? { handoffStep: task.handoffStep } : {}),
+    ...(task.shelveReason !== undefined ? { shelveReason: task.shelveReason } : {}),
     openEscalationIds: (task.escalations ?? [])
       .filter((escalation) => !escalation.resolvedAt)
       .map((escalation) => escalation.id),
@@ -166,6 +249,20 @@ function normalizeEvidenceProjection(events: TaskEvidenceEvent[]): TaskEvidenceE
   }))
 }
 
+function currentEvidenceProjectionToEvents(
+  taskId: string,
+  current: ProjectStateDatabaseTaskEvidenceCurrent | null | undefined,
+): TaskEvidenceEvent[] {
+  if (!current) return []
+  return Object.entries(current.byKind).flatMap(([kind, records]) => records.map(record => ({
+    id: `${taskId}-current-${kind}-${record.id}`,
+    taskId,
+    kind: kind as TaskEvidenceEvent['kind'],
+    recordedAt: record.recordedAt,
+    payload: record.payload as TaskEvidenceEvent['payload'],
+  }))).sort((left, right) => left.recordedAt.localeCompare(right.recordedAt))
+}
+
 export function stripLegacyRuntimeFields<T extends Record<string, unknown>>(task: T): Record<string, unknown> {
   const {
     assignedTo: _assignedTo,
@@ -178,7 +275,10 @@ export function stripLegacyRuntimeFields<T extends Record<string, unknown>>(task
     revisionCount: _revisionCount,
     retryWindow: _retryWindow,
     remediationAttempts: _remediationAttempts,
+    workerRecovery: _workerRecovery,
     handoffStep: _handoffStep,
+    shelveReason: _shelveReason,
+    proofRecovery: _proofRecovery,
     worktreePath: _worktreePath,
     branchName: _branchName,
     baseBranch: _baseBranch,
@@ -191,29 +291,98 @@ export function stripLegacyRuntimeFields<T extends Record<string, unknown>>(task
 export async function buildEffectiveTask(
   projectRoot: string,
   task: Task,
+  options: { evidence?: 'full' | 'current' | 'none' } = {},
 ): Promise<EffectiveTask> {
+  const overlay = readProjectStateDatabaseTaskOverlay(projectRoot, task.id)
+  const databaseAuthority = readProjectStateDatabaseCurrentAuthority(projectRoot) === 'database'
+  if (databaseAuthority && overlay === null) {
+    throw new Error(`Normalized task state is unavailable for promoted task ${task.id}`)
+  }
+  // Database-authoritative projects have a bounded current projection. Reopen
+  // history only when a caller explicitly asks for a historical/detail view.
+  const evidenceMode = options.evidence ?? (databaseAuthority ? 'current' : 'full')
   const [runtimeStore, workspaceStore, storedEvidence] = await Promise.all([
-    readTaskRuntimeStore(projectRoot),
-    readTaskWorkspaceStore(projectRoot),
-    readTaskEvidence(projectRoot, task.id),
+    overlay?.runtime === undefined
+      ? databaseAuthority
+        ? Promise.resolve({ version: 1, lastUpdated: new Date(0).toISOString(), tasks: {} })
+        : readTaskRuntimeStore(projectRoot)
+      : Promise.resolve(runtimeStoreFromOverlay(task.id, overlay)),
+    overlay?.workspace === undefined
+      ? databaseAuthority
+        ? Promise.resolve({ version: 1, lastUpdated: new Date(0).toISOString(), workspaces: {} })
+        : readTaskWorkspaceStore(projectRoot)
+      : Promise.resolve(workspaceStoreFromOverlay(task.id, overlay)),
+    evidenceMode === 'full'
+      ? readTaskEvidence(projectRoot, task.id)
+      : evidenceMode === 'current'
+        ? Promise.resolve(currentEvidenceProjectionToEvents(task.id, overlay?.evidenceCurrent ?? readProjectStateDatabaseTaskEvidenceCurrent(projectRoot, task.id)))
+        : Promise.resolve([]),
   ])
-  return buildEffectiveTaskFromState(task, runtimeStore, workspaceStore, storedEvidence)
+  return buildEffectiveTaskFromState(task, runtimeStore, workspaceStore, storedEvidence, {
+    allowLegacyState: !databaseAuthority,
+    includeLegacyEvidence: !databaseAuthority,
+  })
 }
 
 export async function buildEffectiveTasks(
   projectRoot: string,
   tasks: Task[],
+  options: { evidence?: 'full' | 'current' | 'none' } = {},
 ): Promise<EffectiveTask[]> {
-  const [runtimeStore, workspaceStore] = await Promise.all([
-    readTaskRuntimeStore(projectRoot),
-    readTaskWorkspaceStore(projectRoot),
-  ])
+  const databaseStores = readProjectStateDatabaseTaskOverlayStores(projectRoot)
+  const databaseAuthority = readProjectStateDatabaseCurrentAuthority(projectRoot) === 'database'
+  if (databaseAuthority && databaseStores === null) {
+    throw new Error('Normalized task state is unavailable for promoted project')
+  }
+  const [runtimeStore, workspaceStore] = databaseStores
+    ? [
+        runtimeStoreFromOverlayStores(databaseStores.runtime),
+        workspaceStoreFromOverlayStores(databaseStores.workspace),
+      ]
+    : await Promise.all([
+        readTaskRuntimeStore(projectRoot),
+        readTaskWorkspaceStore(projectRoot),
+      ])
+  const evidenceMode = options.evidence ?? (databaseStores ? 'current' : 'full')
   return await Promise.all(tasks.map(async task => buildEffectiveTaskFromState(
     task,
     runtimeStore,
     workspaceStore,
-    await readTaskEvidence(projectRoot, task.id),
+    evidenceMode === 'full'
+      ? await readTaskEvidence(projectRoot, task.id)
+      : evidenceMode === 'current'
+        ? currentEvidenceProjectionToEvents(task.id, databaseStores?.evidenceCurrent.get(task.id) ?? null)
+        : [],
+    { allowLegacyState: databaseStores === null, includeLegacyEvidence: databaseStores === null && evidenceMode === 'full' },
   )))
+}
+
+function runtimeStoreFromOverlayStores(
+  states: ProjectStateDatabaseTaskRuntime[],
+): Awaited<ReturnType<typeof readTaskRuntimeStore>> {
+  return {
+    version: 1,
+    lastUpdated: states.at(-1)?.updatedAt ?? new Date(0).toISOString(),
+    tasks: Object.fromEntries(states.map(state => {
+      const parsed = TaskRuntimeStateSchema.safeParse(state.payload)
+      if (!parsed.success) throw new Error(`Corrupt normalized runtime overlay for task ${state.taskId}`)
+      return [state.taskId, parsed.data] as const
+    })),
+  } as Awaited<ReturnType<typeof readTaskRuntimeStore>>
+}
+
+function workspaceStoreFromOverlayStores(
+  states: ProjectStateDatabaseTaskRuntime[],
+): Awaited<ReturnType<typeof readTaskWorkspaceStore>> {
+  return {
+    version: 1,
+    lastUpdated: states.at(-1)?.updatedAt ?? new Date(0).toISOString(),
+    workspaces: Object.fromEntries(states.map(state => {
+      const parsed = TaskWorkspaceStateSchema.safeParse(state.payload)
+      if (!parsed.success) throw new Error(`Corrupt normalized workspace overlay for task ${state.taskId}`)
+      return [state.taskId, parsed.data] as const
+    })),
+  } as Awaited<ReturnType<typeof readTaskWorkspaceStore>>
 }
 
 function buildEffectiveTaskFromState(
@@ -221,54 +390,85 @@ function buildEffectiveTaskFromState(
   runtimeStore: Awaited<ReturnType<typeof readTaskRuntimeStore>>,
   workspaceStore: Awaited<ReturnType<typeof readTaskWorkspaceStore>>,
   storedEvidence: TaskEvidenceEvent[],
+  options: { allowLegacyState?: boolean; includeLegacyEvidence?: boolean } = {},
 ): EffectiveTask {
-  const runtime = runtimeStore.tasks[task.id] ?? legacyRuntimeFromTask(task)
-  const workspace = workspaceStore.workspaces[task.id] ?? legacyWorkspaceFromTask(task)
-  const evidence = normalizeEvidenceProjection(storedEvidence.length > 0 ? storedEvidence : legacyEvidenceFromTask(task))
+  const definitionTask = (options.allowLegacyState === false ? stripLegacyRuntimeFields(task) : task) as LegacyTask
+  const runtime = runtimeStore.tasks[task.id] ?? (options.allowLegacyState === false ? undefined : legacyRuntimeFromTask(task))
+  const workspace = workspaceStore.workspaces[task.id] ?? (options.allowLegacyState === false ? undefined : legacyWorkspaceFromTask(task))
+  const evidence = normalizeEvidenceProjection(storedEvidence.length > 0
+    ? storedEvidence
+    : options.includeLegacyEvidence === false ? [] : legacyEvidenceFromTask(task))
   const projected = legacyFieldsFromEvidence(evidence)
+  const proofRecoveryInput = runtime?.proofRecovery
+    ? {
+        ...definitionTask,
+        ...projected,
+        proofRecovery: runtime.proofRecovery,
+      }
+    : definitionTask
+  const effectiveRuntime = runtime?.proofRecovery && !hasActiveProofRecovery(proofRecoveryInput)
+    ? { ...runtime, proofRecovery: undefined }
+    : runtime
   const normalized = normalizeTerminalCompletionEvidence({
-    ...task,
+    ...definitionTask,
     ...projected,
-    ...(runtime?.proofRecovery ? { proofRecovery: runtime.proofRecovery } : {}),
+    ...(effectiveRuntime?.proofRecovery ? { proofRecovery: effectiveRuntime.proofRecovery } : {}),
   })
   const effectiveDefinition = {
-    ...task,
+    ...definitionTask,
     ...projected,
-    ...(runtime?.proofRecovery ? { proofRecovery: runtime.proofRecovery } : {}),
+    ...(effectiveRuntime?.proofRecovery ? { proofRecovery: effectiveRuntime.proofRecovery } : {}),
     ...normalized,
   }
   const proofAware = normalizeAcceptanceCriteriaForCurrentProof(effectiveDefinition)
+  const proofAwareRecord = proofAware as Record<string, unknown>
+  const effectiveDefinitionRecord = effectiveDefinition as Record<string, unknown>
   const proofAwarenessProjection = {
     ...(proofAware.acceptanceCriteria !== effectiveDefinition.acceptanceCriteria
       ? { acceptanceCriteria: proofAware.acceptanceCriteria }
       : {}),
-    ...(proofAware.acceptanceCriteriaProofState !== effectiveDefinition.acceptanceCriteriaProofState
-      ? { acceptanceCriteriaProofState: proofAware.acceptanceCriteriaProofState }
+    ...(proofAwareRecord.acceptanceCriteriaProofState !== effectiveDefinitionRecord.acceptanceCriteriaProofState
+      ? { acceptanceCriteriaProofState: proofAwareRecord.acceptanceCriteriaProofState }
       : {}),
   }
   const proofPathStatusProjection = normalizeProofPathStatuses({
     ...effectiveDefinition,
     ...proofAwarenessProjection,
   })
-  return {
-    ...task,
-    title: effectiveTaskTitle(task) ?? task.title,
+  const effectiveTask = {
+    ...definitionTask,
+    title: effectiveTaskTitle(definitionTask) ?? task.title,
     ...projected,
-    ...(runtime?.assignedTo !== undefined ? { assignedTo: runtime.assignedTo } : {}),
-    ...(runtime?.revisionCount !== undefined ? { revisionCount: runtime.revisionCount } : {}),
-    ...(runtime?.retryWindow !== undefined ? { retryWindow: runtime.retryWindow } : {}),
-    ...(runtime?.remediationAttempts !== undefined ? { remediationAttempts: runtime.remediationAttempts } : {}),
-    ...(runtime?.handoffStep !== undefined ? { handoffStep: runtime.handoffStep } : {}),
+    ...(effectiveRuntime?.assignedTo !== undefined ? { assignedTo: effectiveRuntime.assignedTo } : {}),
+    ...(effectiveRuntime?.revisionCount !== undefined ? { revisionCount: effectiveRuntime.revisionCount } : {}),
+    ...(effectiveRuntime?.retryWindow !== undefined ? { retryWindow: effectiveRuntime.retryWindow } : {}),
+    ...(effectiveRuntime?.remediationAttempts !== undefined ? { remediationAttempts: effectiveRuntime.remediationAttempts } : {}),
+    ...(effectiveRuntime?.workerRecovery !== undefined ? { workerRecovery: effectiveRuntime.workerRecovery } : {}),
+    ...(effectiveRuntime?.handoffStep !== undefined ? { handoffStep: effectiveRuntime.handoffStep } : {}),
+    ...(effectiveRuntime?.shelveReason !== undefined ? { shelveReason: effectiveRuntime.shelveReason } : {}),
     ...(workspace?.worktreePath !== undefined ? { worktreePath: workspace.worktreePath } : {}),
     ...(workspace?.branchName !== undefined ? { branchName: workspace.branchName } : {}),
     ...(workspace?.baseBranch !== undefined ? { baseBranch: workspace.baseBranch } : {}),
-    ...(runtime ? { runtime } : {}),
+    ...(effectiveRuntime ? { runtime: effectiveRuntime } : {}),
     ...(workspace ? { workspace } : {}),
     ...normalized,
     ...proofAwarenessProjection,
     ...proofPathStatusProjection,
+    // EffectiveTask is the runtime contract. Current SQLite definitions omit
+    // evidence-owned collections by design, so every consumer gets explicit
+    // empty collections when the bounded projection has no entries.
+    notes: Array.isArray(effectiveDefinition.notes) ? effectiveDefinition.notes : [],
+    gateResults: Array.isArray(effectiveDefinition.gateResults) ? effectiveDefinition.gateResults : [],
+    reviewVerdicts: Array.isArray(effectiveDefinition.reviewVerdicts) ? effectiveDefinition.reviewVerdicts : [],
+    adjudications: Array.isArray(effectiveDefinition.adjudications) ? effectiveDefinition.adjudications : [],
+    escalations: Array.isArray(effectiveDefinition.escalations) ? effectiveDefinition.escalations : [],
+    agentIssues: Array.isArray(effectiveDefinition.agentIssues) ? effectiveDefinition.agentIssues : [],
     evidence,
   }
+  const status = effectiveTaskStatus(effectiveTask)
+  return status && status !== effectiveTask.status
+    ? { ...effectiveTask, status }
+    : effectiveTask
 }
 
 function normalizeProofPathStatuses(task: Record<string, unknown>): Record<string, unknown> {
@@ -325,7 +525,22 @@ function normalizeTerminalCompletionEvidence(task: Record<string, unknown>): Rec
 function legacyFieldsFromEvidence(evidence: TaskEvidenceEvent[]): Record<string, unknown> {
   const notes = evidence
     .filter((event) => event.kind === 'note')
-    .map((event) => event.payload)
+    .map((event) => {
+      const payload = event.payload as Record<string, unknown>
+      // Evidence is the durable record; the task-shaped projection still has
+      // to satisfy the current Task schema when an older or external writer
+      // stored a partial note payload. Keep the evidence intact and make the
+      // projection deterministic instead of letting one malformed event take
+      // down every current-state read.
+      return {
+        agentId: typeof payload.agentId === 'string' && payload.agentId.length > 0
+          ? payload.agentId
+          : `evidence:${event.id}`,
+        role: typeof payload.role === 'string' && payload.role.length > 0 ? payload.role : 'system',
+        content: typeof payload.content === 'string' ? payload.content : JSON.stringify(payload),
+        timestamp: typeof payload.timestamp === 'string' ? payload.timestamp : event.recordedAt,
+      }
+    })
   const gateResults = evidence
     .filter((event) => event.kind === 'gate_result')
     .map((event) => event.payload)
@@ -337,7 +552,11 @@ function legacyFieldsFromEvidence(evidence: TaskEvidenceEvent[]): Record<string,
     .map((event) => event.payload)
   const escalations = coalescePayloadsById(
     evidence.filter((event) => event.kind === 'escalation'),
-  )
+  ).sort((left, right) => {
+    const leftRaisedAt = typeof left.raisedAt === 'string' ? left.raisedAt : ''
+    const rightRaisedAt = typeof right.raisedAt === 'string' ? right.raisedAt : ''
+    return leftRaisedAt.localeCompare(rightRaisedAt)
+  })
   const agentIssues = coalescePayloadsById(
     evidence.filter((event) => event.kind === 'agent_issue'),
   )

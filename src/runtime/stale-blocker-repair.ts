@@ -1,9 +1,10 @@
-import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
-import { existsSync, readFileSync } from 'node:fs'
+import { readManagedTextFileSync } from '@guildhall/persistence'
+import { existsSync } from 'node:fs'
 import {
   appendTaskEvidence,
-  atomicWriteText,
   getProjectSystemStatePath,
+  readProjectStateDatabaseCurrentAuthorityFromTasksPath,
+  readProjectStateDatabaseQueueRevision,
   readTaskEvidence,
   readTaskRuntimeStore,
   upsertTaskRuntimeState,
@@ -11,9 +12,8 @@ import {
 import type { Task, TaskQueue } from '@guildhall/core'
 import { TaskQueue as TaskQueueSchema } from '@guildhall/core'
 import { buildEffectiveTask } from './effective-task.js'
-import { writeProjectTaskQueue } from './project-state-boundary.js'
+import { readProjectTaskQueueForMutationSync, writeProjectTaskQueue } from './project-state-boundary.js'
 import { reconcileAcceptanceCriteriaFromCompletionProof } from './proof-health.js'
-import { normalizeLegacyTaskQueueShape } from './task-queue-compat.js'
 
 export interface StaleBlockerRepair {
   taskId: string
@@ -228,13 +228,13 @@ export function repairStaleBlockersInQueue(
 
 export function repairStaleBlockersForProject(projectPath: string): StaleBlockerRepairResult {
   const tasksPath = getProjectSystemStatePath(projectPath, 'TASKS.json')
-  if (!existsSync(tasksPath)) return { changed: false, repairs: [] }
-
-  const rawQueue = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8'))
-  const queue = TaskQueueSchema.parse(normalizeLegacyTaskQueueShape(rawQueue))
+  const queueRead = readQueueForRepair(tasksPath)
+  if (!queueRead) return { changed: false, repairs: [] }
+  const rawQueue = queueRead.queue
+  const queue = TaskQueueSchema.parse(rawQueue)
   const result = repairStaleBlockersInQueue(queue)
   if (result.changed) {
-    writeProjectTaskQueue(tasksPath, queue)
+    writeProjectTaskQueue(tasksPath, queue, { expectedQueueRevision: queueRead.expectedQueueRevision })
   }
   return result
 }
@@ -256,30 +256,31 @@ export function repairCompletionProofCriteriaInQueue(queue: TaskQueue, now = new
 
 export function repairCompletionProofCriteriaForProject(projectPath: string): CompletionProofCriteriaRepairResult {
   const tasksPath = getProjectSystemStatePath(projectPath, 'TASKS.json')
-  if (!existsSync(tasksPath)) return { changed: false, repairs: [] }
-
-  const rawQueue = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8'))
-  const queue = TaskQueueSchema.parse(normalizeLegacyTaskQueueShape(rawQueue))
+  const queueRead = readQueueForRepair(tasksPath)
+  if (!queueRead) return { changed: false, repairs: [] }
+  const rawQueue = queueRead.queue
+  const queue = TaskQueueSchema.parse(rawQueue)
   const result = repairCompletionProofCriteriaInQueue(queue)
   if (result.changed) {
-    writeProjectTaskQueue(tasksPath, queue)
+    writeProjectTaskQueue(tasksPath, queue, { expectedQueueRevision: queueRead.expectedQueueRevision })
   }
   return result
 }
 
 export async function repairCompletionProofCriteriaForProjectWithEvidence(projectPath: string): Promise<CompletionProofCriteriaRepairResult> {
   const tasksPath = getProjectSystemStatePath(projectPath, 'TASKS.json')
-  if (!existsSync(tasksPath)) return { changed: false, repairs: [] }
-
   const now = new Date().toISOString()
-  const rawQueue = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8'))
-  const queue = TaskQueueSchema.parse(normalizeLegacyTaskQueueShape(rawQueue))
+  const queueRead = readQueueForRepair(tasksPath)
+  if (!queueRead) return { changed: false, repairs: [] }
+  const rawQueue = queueRead.queue
+  const queue = TaskQueueSchema.parse(rawQueue)
   const repairs: CompletionProofCriteriaRepair[] = []
 
   for (const task of queue.tasks) {
-    const effectiveTask = await buildEffectiveTask(projectPath, task)
-    const candidate = {
-      ...task,
+  const effectiveTask = await buildEffectiveTask(projectPath, task, { evidence: 'full' })
+  const candidate = {
+    ...task,
+    evidence: effectiveTask.evidence,
       ...(Array.isArray(effectiveTask.reviewVerdicts) ? { reviewVerdicts: effectiveTask.reviewVerdicts } : {}),
       ...(Array.isArray(effectiveTask.notes) ? { notes: effectiveTask.notes } : {}),
       ...(Array.isArray(effectiveTask.gateResults) ? { gateResults: effectiveTask.gateResults } : {}),
@@ -298,7 +299,7 @@ export async function repairCompletionProofCriteriaForProjectWithEvidence(projec
 
   if (repairs.length > 0) {
     queue.lastUpdated = now
-    writeProjectTaskQueue(tasksPath, queue)
+    writeProjectTaskQueue(tasksPath, queue, { expectedQueueRevision: queueRead.expectedQueueRevision })
   }
   return { changed: repairs.length > 0, repairs }
 }
@@ -346,10 +347,10 @@ async function appendStateRepairEvidence(
 
 async function reconcileAlreadyRepairedRuntimeState(projectPath: string): Promise<void> {
   const tasksPath = getProjectSystemStatePath(projectPath, 'TASKS.json')
-  if (!existsSync(tasksPath)) return
-
-  const rawQueue = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8'))
-  const queue = TaskQueueSchema.parse(normalizeLegacyTaskQueueShape(rawQueue))
+  const queueRead = readQueueForRepair(tasksPath)
+  if (!queueRead) return
+  const rawQueue = queueRead.queue
+  const queue = TaskQueueSchema.parse(rawQueue)
   const runtimeStore = await readTaskRuntimeStore(projectPath)
 
   for (const task of queue.tasks) {
@@ -363,4 +364,40 @@ async function reconcileAlreadyRepairedRuntimeState(projectPath: string): Promis
     })
     await appendStateRepairEvidence(projectPath, task.id, task.status, new Date().toISOString())
   }
+}
+
+function readQueueForRepair(tasksPath: string): {
+  queue: unknown
+  expectedQueueRevision: number | null
+} | null {
+  try {
+    return readProjectTaskQueueForMutationSync(tasksPath)
+  } catch (error) {
+    let authority: 'legacy' | 'database' | null
+    try {
+      authority = readProjectStateDatabaseCurrentAuthorityFromTasksPath(tasksPath)
+    } catch {
+      throw projectStateMigrationRequiredError(tasksPath, error)
+    }
+    if (authority === 'database') throw projectStateMigrationRequiredError(tasksPath, error)
+    let queueRevision: number | null
+    try {
+      queueRevision = readProjectStateDatabaseQueueRevision(tasksPath)
+    } catch {
+      throw projectStateMigrationRequiredError(tasksPath, error)
+    }
+    if (queueRevision !== null) throw projectStateMigrationRequiredError(tasksPath, error)
+    if (!existsSync(tasksPath)) return null
+    // This is an explicit repair/migration boundary, not a normal runtime
+    // reader. Import the pre-database queue only to seed the current store.
+    return {
+      queue: JSON.parse(readManagedTextFileSync(tasksPath, 'utf8')) as unknown,
+      expectedQueueRevision: null,
+    }
+  }
+}
+
+function projectStateMigrationRequiredError(tasksPath: string, cause: unknown): Error {
+  const detail = cause instanceof Error ? cause.message : String(cause)
+  return new Error(`Project-state migration required before repairing current task state for ${tasksPath}. ${detail}`)
 }

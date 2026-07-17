@@ -70,7 +70,7 @@ describe('DoThisNext', () => {
   it('does not resurrect stale Thread prompts after the selected scope is complete', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
-      if (url === '/api/project?projectId=looma-knit') {
+      if (url === '/api/project?surface=overview&compact=true&projectId=looma-knit') {
         return json({
           startReadiness: {
             canStart: false,
@@ -117,8 +117,8 @@ describe('DoThisNext', () => {
   it('prescribes the highest-priority non-current action and keeps project routing', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
-      if (url === '/api/project?projectId=looma-knit') return json({ startReadiness: { canStart: true } })
-      expect(url).toBe('/api/project/inbox?projectId=looma-knit')
+      if (url === '/api/project?surface=overview&compact=true&projectId=looma-knit') return json({ startReadiness: { canStart: true } })
+      expect(url).toBe('/api/project/inbox?includeHistory=false&projectId=looma-knit')
       return json({
         items: [
           {
@@ -205,7 +205,7 @@ describe('DoThisNext', () => {
       'fetch',
       vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input)
-        if (url === '/api/project/inbox?projectId=looma-knit') {
+        if (url === '/api/project/inbox?includeHistory=false&projectId=looma-knit') {
           return json({
             items: [{
               kind: 'lever_questions',
@@ -318,7 +318,7 @@ describe('DoThisNext', () => {
       'fetch',
       vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input)
-        if (url === '/api/project?projectId=looma-knit') return json({ startReadiness: { canStart: true } })
+        if (url === '/api/project?surface=overview&compact=true&projectId=looma-knit') return json({ startReadiness: { canStart: true } })
         return json({
           items: [
             {

@@ -9,8 +9,13 @@ import {
   getProjectStateDir,
   getProjectSystemStatePath,
   getProjectTaskLocalHistoryDir,
+  promoteProjectStateDatabaseAuthority,
+  readProjectStateDatabaseQueueDefinition,
+  writeProjectStateDatabaseSnapshot,
 } from '@guildhall/sessions'
 import { compactProjectState } from '../project-state-compaction.js'
+import { readEvacuationManifest, verifySnapshotEntry } from '../evacuation-manifest.js'
+import { restoreEvacuatedTaskState } from '../evacuated-task-state-restore.js'
 
 let tmp: string
 let projectRoot: string
@@ -87,6 +92,266 @@ describe('compactProjectState', () => {
       'utf8',
     )
     expect(evacuatedTaskQueue).toContain('must leave the repo when not opted in')
+    const evacuationManifest = await readEvacuationManifest(
+      path.join(getProjectLocalHistoryDir(projectRoot), 'project-state-evacuation', 'manifest.json'),
+    )
+    expect(evacuationManifest.batches).toHaveLength(1)
+    expect(evacuationManifest.batches[0]?.entries).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        source: expect.objectContaining({ path: path.join(stateDir, 'TASKS.json') }),
+        snapshot: expect.objectContaining({ path: path.join(getProjectLocalHistoryDir(projectRoot), 'project-state-evacuation', 'TASKS.json') }),
+        restore: { status: 'not_verified' },
+      }),
+    ]))
+    const taskEntry = evacuationManifest.batches[0]!.entries.find(entry => entry.snapshot.path.endsWith('/TASKS.json'))!
+    await expect(verifySnapshotEntry(taskEntry)).resolves.toBe(true)
+  })
+
+  it('keeps earlier evacuation material immutable while the compatibility view advances', async () => {
+    await fs.writeFile(path.join(projectRoot, 'guildhall.yaml'), [
+      'name: Boundary Test',
+      'id: boundary-test',
+      'storage:',
+      '  repoState: off',
+      '',
+    ].join('\n'), 'utf8')
+    await fs.writeFile(path.join(stateDir, 'TASKS.json'), JSON.stringify({
+      version: 1,
+      tasks: [{ id: 'first-batch', status: 'ready', title: 'First evacuation' }],
+    }, null, 2), 'utf8')
+
+    await compactProjectState({ projectRoot, dryRun: false })
+
+    await fs.mkdir(stateDir, { recursive: true })
+    await fs.writeFile(path.join(stateDir, 'TASKS.json'), JSON.stringify({
+      version: 1,
+      tasks: [{ id: 'second-batch', status: 'ready', title: 'Second evacuation' }],
+    }, null, 2), 'utf8')
+    await compactProjectState({ projectRoot, dryRun: false })
+
+    const manifestPath = path.join(getProjectLocalHistoryDir(projectRoot), 'project-state-evacuation', 'manifest.json')
+    const manifest = await readEvacuationManifest(manifestPath)
+    expect(manifest.batches).toHaveLength(2)
+    const firstEntry = manifest.batches[0]!.entries.find(entry => entry.source.path.endsWith('/TASKS.json'))!
+    const secondEntry = manifest.batches[1]!.entries.find(entry => entry.source.path.endsWith('/TASKS.json'))!
+    const currentPath = path.join(getProjectLocalHistoryDir(projectRoot), 'project-state-evacuation', 'TASKS.json')
+    const firstImmutablePath = path.join(
+      getProjectLocalHistoryDir(projectRoot),
+      'project-state-evacuation',
+      'batches',
+      manifest.batches[0]!.id,
+      'TASKS.json',
+    )
+
+    expect(firstEntry.snapshot.path).toBe(firstImmutablePath)
+    expect(secondEntry.snapshot.path).toBe(currentPath)
+    expect(firstEntry.snapshot.path).not.toBe(secondEntry.snapshot.path)
+    await expect(fs.readFile(firstImmutablePath, 'utf8')).resolves.toContain('First evacuation')
+    await expect(fs.readFile(currentPath, 'utf8')).resolves.toContain('Second evacuation')
+    await expect(verifySnapshotEntry(firstEntry)).resolves.toBe(true)
+    await expect(verifySnapshotEntry(secondEntry)).resolves.toBe(true)
+
+    await fs.rm(getProjectSystemStatePath(projectRoot, 'TASKS.json'))
+    await expect(restoreEvacuatedTaskState(projectRoot, true)).resolves.toMatchObject({ restored: 1 })
+    const restoredManifest = await readEvacuationManifest(manifestPath)
+    expect(restoredManifest.batches[0]!.entries.find(entry => entry.source.path.endsWith('/TASKS.json'))?.restore)
+      .toMatchObject({ status: 'not_verified' })
+    expect(restoredManifest.batches[1]!.entries.find(entry => entry.source.path.endsWith('/TASKS.json'))?.restore)
+      .toMatchObject({
+        status: 'verified',
+        target: { path: getProjectSystemStatePath(projectRoot, 'TASKS.json') },
+      })
+  })
+
+  it('uses the system-local detail store for a promoted project audit', async () => {
+    await fs.writeFile(path.join(projectRoot, 'guildhall.yaml'), [
+      'name: Boundary Test',
+      'id: boundary-test',
+      'storage:',
+      '  repoState: off',
+      '',
+    ].join('\n'), 'utf8')
+    await fs.writeFile(path.join(stateDir, 'TASKS.json'), JSON.stringify({
+      version: 1,
+      tasks: [{ id: 'stale-repo-task', title: 'Stale repository copy' }],
+    }), 'utf8')
+    const systemTasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    await fs.mkdir(path.dirname(systemTasksPath), { recursive: true })
+    writeProjectStateDatabaseSnapshot(systemTasksPath, {
+      queue: { version: 1, tasks: [{ id: 'authoritative-task', title: 'Authoritative task', spec: 'Rich detail' }] },
+      summary: { generatedAt: '2026-07-15T00:00:00.000Z', freshness: 'current' },
+    })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+
+    await expect(compactProjectState({ projectRoot, dryRun: true })).resolves.toMatchObject({
+      projectRoot,
+      repoStateMode: 'off',
+    })
+  })
+
+  it('keeps terminal task definitions in the promoted current-state queue', async () => {
+    const systemTasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    const queue = {
+      version: 1,
+      lastUpdated: '2026-07-15T00:00:00.000Z',
+      selectedReleaseId: 'release-1',
+      releases: [{
+        id: 'release-1',
+        label: 'Release 1',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-done', 'work:task-active'],
+        deferredNodeIds: [],
+      }],
+      tasks: [
+        { id: 'task-done', title: 'Finished task', status: 'done', releaseIds: ['release-1'], updatedAt: '2026-07-15T00:00:00.000Z' },
+        { id: 'task-active', title: 'Remaining task', status: 'ready', releaseIds: ['release-1'], updatedAt: '2026-07-15T00:00:00.000Z' },
+      ],
+    }
+    writeProjectStateDatabaseSnapshot(systemTasksPath, {
+      queue,
+      summary: { generatedAt: queue.lastUpdated, freshness: 'current' },
+      projectRoot,
+    })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+
+    await compactProjectState({ projectRoot, dryRun: false })
+
+    const current = readProjectStateDatabaseQueueDefinition(systemTasksPath)
+    expect(current?.tasks.map(task => task.id)).toEqual(['task-done', 'task-active'])
+    expect(current?.tasks.find(task => task.id === 'task-done')).toMatchObject({ status: 'done' })
+    expect(current?.releases).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'release-1',
+        nodeIds: ['work:task-done', 'work:task-active'],
+      }),
+    ]))
+  })
+
+  it('bounds rebuildable codebase-map history during cleanup', async () => {
+    const historyPath = path.join(getProjectLocalHistoryDir(projectRoot), 'codebase-map.history.jsonl')
+    await fs.mkdir(path.dirname(historyPath), { recursive: true })
+    await fs.writeFile(historyPath, Array.from({ length: 220 }, (_, index) => JSON.stringify({
+      at: `2026-07-14T00:${String(index % 60).padStart(2, '0')}:00.000Z`,
+      reason: 'refresh',
+      changedFiles: [`src/file-${index}.ts`],
+      detail: 'x'.repeat(3_000),
+    })).join('\n') + '\n', 'utf8')
+
+    const result = await compactProjectState({ projectRoot, dryRun: false })
+    const bounded = await fs.readFile(historyPath, 'utf8')
+
+    expect(result.codebaseMapHistoryRecordsCompacted).toBeGreaterThan(0)
+    expect(result.codebaseMapHistoryBytesAfter).toBeLessThanOrEqual(256 * 1024)
+    expect(Buffer.byteLength(bounded)).toBeLessThanOrEqual(256 * 1024)
+    expect(bounded).toContain('file-219.ts')
+    expect(bounded).not.toContain('file-0.ts')
+  })
+
+  it('compacts legacy verbose task evidence without treating it as a prune', async () => {
+    const evidencePath = path.join(
+      getProjectTaskLocalHistoryDir(projectRoot, 'task-evidence'),
+      'gate-results.jsonl',
+    )
+    await fs.mkdir(path.dirname(evidencePath), { recursive: true })
+    await fs.writeFile(evidencePath, `${JSON.stringify({
+      id: 'gate-1',
+      taskId: 'task-evidence',
+      kind: 'gate_result',
+      recordedAt: '2026-07-14T00:00:00.000Z',
+      payload: {
+        gateId: 'test',
+        type: 'hard',
+        passed: false,
+        checkedAt: '2026-07-14T00:00:00.000Z',
+        output: 'raw failure output '.repeat(20_000),
+      },
+    })}\n`, 'utf8')
+
+    const result = await compactProjectState({ projectRoot, dryRun: false })
+    const compacted = JSON.parse(await fs.readFile(evidencePath, 'utf8')) as {
+      payload: { gateId: string; passed: boolean; output: string }
+    }
+
+    expect(result.taskEvidenceFilesCompacted).toBe(1)
+    expect(result.taskEvidenceRecordsCompacted).toBe(1)
+    expect(result.taskEvidenceBytesAfter).toBeLessThan(result.taskEvidenceBytesBefore)
+    expect(compacted.payload).toMatchObject({ gateId: 'test', passed: false })
+    expect(compacted.payload.output.length).toBeLessThan(2_500)
+    expect(compacted.payload.output).toContain('durable evidence excerpt bounded')
+  })
+
+  it('compacts legacy full archive evidence into the bounded archive record', async () => {
+    const evidencePath = path.join(
+      getProjectTaskLocalHistoryDir(projectRoot, 'task-archived'),
+      'archive-evidence.json',
+    )
+    await fs.mkdir(path.dirname(evidencePath), { recursive: true })
+    await fs.writeFile(evidencePath, JSON.stringify({
+      id: 'task-archived',
+      title: 'Archived task',
+      status: 'done',
+      notes: Array.from({ length: 50 }, (_, index) => ({ content: `note ${index}` })),
+    }, null, 2), 'utf8')
+
+    const result = await compactProjectState({ projectRoot, dryRun: false })
+    const compacted = await fs.readFile(evidencePath, 'utf8')
+
+    expect(result.archiveEvidenceFilesCompacted).toBe(1)
+    expect(compacted).not.toContain('note 0')
+    expect(compacted).toContain('note 49')
+  })
+
+  it('verifies and records a manifest-backed restore target', async () => {
+    await fs.writeFile(path.join(projectRoot, 'guildhall.yaml'), [
+      'name: Boundary Test',
+      'id: boundary-test',
+      'storage:',
+      '  repoState: off',
+      '',
+    ].join('\n'), 'utf8')
+    await fs.writeFile(path.join(stateDir, 'TASKS.json'), JSON.stringify({
+      version: 1,
+      tasks: [{ id: 'task-restore', status: 'ready', title: 'Restore from the verified snapshot' }],
+    }, null, 2), 'utf8')
+
+    await compactProjectState({ projectRoot, dryRun: false })
+    await fs.rm(getProjectSystemStatePath(projectRoot, 'TASKS.json'))
+
+    const result = await restoreEvacuatedTaskState(projectRoot, true)
+    expect(result.restored).toBe(1)
+    const manifestPath = path.join(getProjectLocalHistoryDir(projectRoot), 'project-state-evacuation', 'manifest.json')
+    const manifest = await readEvacuationManifest(manifestPath)
+    const taskEntry = manifest.batches.flatMap(batch => batch.entries).find(entry => entry.snapshot.path.endsWith('/TASKS.json'))
+    expect(taskEntry?.restore).toMatchObject({
+      status: 'verified',
+      target: { path: getProjectSystemStatePath(projectRoot, 'TASKS.json') },
+    })
+  })
+
+  it('refuses to restore a tampered manifest snapshot', async () => {
+    await fs.writeFile(path.join(projectRoot, 'guildhall.yaml'), [
+      'name: Boundary Test',
+      'id: boundary-test',
+      'storage:',
+      '  repoState: off',
+      '',
+    ].join('\n'), 'utf8')
+    await fs.writeFile(path.join(stateDir, 'TASKS.json'), JSON.stringify({
+      version: 1,
+      tasks: [{ id: 'task-tamper', status: 'ready', title: 'Do not restore tampered state' }],
+    }, null, 2), 'utf8')
+
+    await compactProjectState({ projectRoot, dryRun: false })
+    const evacuatedTasksPath = path.join(getProjectLocalHistoryDir(projectRoot), 'project-state-evacuation', 'TASKS.json')
+    await fs.writeFile(evacuatedTasksPath, '{"tasks":[{"id":"tampered"}]}\n', 'utf8')
+    await fs.rm(getProjectSystemStatePath(projectRoot, 'TASKS.json'))
+
+    const dryRun = await restoreEvacuatedTaskState(projectRoot, false)
+    expect(dryRun.unverifiedEvacuationPaths).toContain(evacuatedTasksPath)
+    await expect(restoreEvacuatedTaskState(projectRoot, true)).rejects.toThrow(/integrity verification/)
+    await expect(fs.access(getProjectSystemStatePath(projectRoot, 'TASKS.json'))).rejects.toThrow()
   })
 
   it('copies repo-local TASKS.json as-is into system-local project state before evacuation', async () => {
@@ -230,12 +495,12 @@ describe('compactProjectState', () => {
     expect(archived).toContain('note 49')
     expect(archived).toContain('archivedEvidence')
     expect(archived).not.toContain('note 0')
-    const fullEvidence = await fs.readFile(
+    const archiveEvidence = await fs.readFile(
       path.join(getProjectTaskLocalHistoryDir(projectRoot, 'task-done'), 'archive-evidence.json'),
       'utf8',
     )
-    expect(fullEvidence).toContain('note 0')
-    expect(fullEvidence).toContain('note 49')
+    expect(archiveEvidence).not.toContain('note 0')
+    expect(archiveEvidence).toContain('note 49')
 
     const index = await fs.readFile(path.join(stateDir, 'tasks', 'index.json'), 'utf8')
     expect(index).toContain('task-active')

@@ -13,13 +13,18 @@ import {
   type Task,
 } from '@guildhall/core'
 import { logProgress } from './memory-tools.js'
+import { readProjectTaskQueueForMutationSync } from '../runtime/project-state-boundary.js'
 import {
   appendTaskEvidence,
   inferProjectRootFromMemoryDir,
+  readProjectStateDatabaseCurrentAuthorityFromTasksPath,
   readTaskEvidence,
   upsertTaskRuntimeState,
 } from '@guildhall/sessions'
-import { writeProjectTaskQueue } from '@guildhall/runtime/project-state-boundary'
+import {
+  writePromotedTaskDetailMutation,
+  writeProjectTaskQueue,
+} from '@guildhall/runtime/project-state-boundary'
 
 // ---------------------------------------------------------------------------
 // FR-31 Agent-issue channel
@@ -104,8 +109,8 @@ function openIssueIds(task: Task, evidence: TaskEvidenceEvent[]): string[] {
 export async function reportIssue(input: ReportIssueInput): Promise<ReportIssueResult> {
   try {
     const parsed = reportIssueInputSchema.parse(input)
-    const raw = await readManagedTextFile(parsed.tasksPath, 'utf-8')
-    const queue = TaskQueue.parse(JSON.parse(raw))
+    const queueRead = readProjectTaskQueueForMutationSync(parsed.tasksPath)
+    const queue = TaskQueue.parse(queueRead.queue)
     const task = queue.tasks.find((t) => t.id === parsed.taskId)
     if (!task) return { success: false, error: `Task ${parsed.taskId} not found` }
 
@@ -133,7 +138,16 @@ export async function reportIssue(input: ReportIssueInput): Promise<ReportIssueR
     task.updatedAt = now
     queue.lastUpdated = now
 
-    writeProjectTaskQueue(parsed.tasksPath, queue)
+    if (readProjectStateDatabaseCurrentAuthorityFromTasksPath(parsed.tasksPath) === 'database') {
+      const promoted = writePromotedTaskDetailMutation(parsed.tasksPath, task.id, {
+        projectId: path.basename(projectRoot),
+        projectRoot,
+        mutate: current => ({ ...current, updatedAt: now }),
+      })
+      if (!promoted) throw new Error(`Could not update promoted task ${task.id} for agent issue evidence`)
+    } else {
+      writeProjectTaskQueue(parsed.tasksPath, queue, { expectedQueueRevision: queueRead.expectedQueueRevision })
+    }
     await appendTaskEvidence(
       projectRoot,
       task.id,
@@ -220,8 +234,8 @@ export interface ResolveIssueResult {
 export async function resolveIssue(input: ResolveIssueInput): Promise<ResolveIssueResult> {
   try {
     const parsed = resolveIssueInputSchema.parse(input)
-    const raw = await readManagedTextFile(parsed.tasksPath, 'utf-8')
-    const queue = TaskQueue.parse(JSON.parse(raw))
+    const queueRead = readProjectTaskQueueForMutationSync(parsed.tasksPath)
+    const queue = TaskQueue.parse(queueRead.queue)
     const task = queue.tasks.find((t) => t.id === parsed.taskId)
     if (!task) return { success: false, error: `Task ${parsed.taskId} not found` }
 
@@ -251,7 +265,16 @@ export async function resolveIssue(input: ResolveIssueInput): Promise<ResolveIss
     task.updatedAt = now
     queue.lastUpdated = now
 
-    writeProjectTaskQueue(parsed.tasksPath, queue)
+    if (readProjectStateDatabaseCurrentAuthorityFromTasksPath(parsed.tasksPath) === 'database') {
+      const promoted = writePromotedTaskDetailMutation(parsed.tasksPath, task.id, {
+        projectId: path.basename(projectRoot),
+        projectRoot,
+        mutate: current => ({ ...current, updatedAt: now }),
+      })
+      if (!promoted) throw new Error(`Could not update promoted task ${task.id} for issue resolution`)
+    } else {
+      writeProjectTaskQueue(parsed.tasksPath, queue, { expectedQueueRevision: queueRead.expectedQueueRevision })
+    }
     await appendTaskEvidence(projectRoot, task.id, {
       id: `${resolvedIssue.id}-resolved-${now.replace(/[^0-9A-Za-z]/g, '')}`,
       kind: 'agent_issue',

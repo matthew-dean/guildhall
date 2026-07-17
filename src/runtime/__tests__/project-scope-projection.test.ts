@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Task, TaskQueue } from '@guildhall/core'
-import { buildProjectScopeProjection, deriveReleaseContainersFromTaskMembership } from '../project-scope-projection.js'
+import { buildProjectScopeProjection, deriveReleaseContainersFromTaskMembership, selectedProjectScopeForQueue } from '../project-scope-projection.js'
 
 const now = '2026-07-04T12:00:00.000Z'
 
@@ -51,6 +51,15 @@ function queue(tasks: Task[]): TaskQueue {
 }
 
 describe('buildProjectScopeProjection', () => {
+  it('does not manufacture a release from task membership during a current-state read', () => {
+    const selected = selectedProjectScopeForQueue({
+      tasks: [task({ id: 'task-unreleased', releaseIds: ['release-in-task-only'] })],
+      releases: [],
+    })
+
+    expect(selected).toBeNull()
+  })
+
   it('derives visible release containers from task membership and selects unfinished scoped work', () => {
     const derived = deriveReleaseContainersFromTaskMembership([
       task({

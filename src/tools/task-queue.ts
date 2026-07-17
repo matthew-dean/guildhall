@@ -25,8 +25,21 @@ import {
   parseAcceptanceCriteriaFromSpec,
   renderStructuredSpecMarkdown,
 } from '@guildhall/core'
-import { appendTaskEvidence, atomicWriteText, inferProjectRootFromMemoryDir, upsertTaskRuntimeState } from '@guildhall/sessions'
-import { writeProjectTaskQueue } from '@guildhall/runtime/project-state-boundary'
+import {
+  appendTaskEvidence,
+  atomicWriteText,
+  inferProjectRootFromMemoryDir,
+  readProjectStateDatabaseCurrentAuthorityFromTasksPath,
+  upsertTaskRuntimeState,
+} from '@guildhall/sessions'
+import {
+  FORBIDDEN_PROJECT_TASK_FIELDS,
+  readProjectTaskQueueForMutationSync,
+  readProjectTaskQueueSync,
+  writePromotedTaskDetailMutation,
+  writeProjectTaskQueue,
+} from '@guildhall/runtime/project-state-boundary'
+import { buildEffectiveTask } from '../runtime/effective-task.js'
 
 const TASKS_PATH_SCHEMA = z.string().describe('Absolute path to the TASKS.json file')
 
@@ -39,8 +52,7 @@ export interface ReadTasksResult {
 
 export async function readTasks(input: ReadTasksInput): Promise<ReadTasksResult> {
   try {
-    const raw = await readManagedTextFile(input.tasksPath, 'utf-8')
-    return { queue: TaskQueue.parse(JSON.parse(raw)) }
+    return { queue: TaskQueue.parse(readProjectTaskQueueSync(input.tasksPath)) }
   } catch (err) {
     return { queue: null, error: String(err) }
   }
@@ -177,8 +189,11 @@ export async function updateTask(
 ): Promise<UpdateTaskResult> {
   try {
     const input = updateTaskInputSchema.parse(rawInput)
-    const raw = await readManagedTextFile(input.tasksPath, 'utf-8')
-    const queue = TaskQueue.parse(JSON.parse(raw))
+    const queueRead = readProjectTaskQueueForMutationSync(input.tasksPath)
+    const queue = TaskQueue.parse(queueRead.queue)
+    const originalTaskIds = new Set(queue.tasks.map(candidate => candidate.id))
+    const originalReleases = JSON.stringify(queue.releases ?? [])
+    const originalSelectedReleaseId = queue.selectedReleaseId
     const taskId = input.taskId ?? inferMetadataTaskId(metadata) ?? inferSingleActiveTaskId(queue)
     if (!taskId) {
       return {
@@ -188,6 +203,7 @@ export async function updateTask(
     }
     const task = queue.tasks.find((t) => t.id === taskId)
     if (!task) return { success: false, taskId, error: `Task ${taskId} not found` }
+    const originalTask = structuredClone(task)
 
     if (!hasTaskMutation(input)) {
       return {
@@ -309,7 +325,12 @@ export async function updateTask(
     if (nextSpec !== undefined && nextSpec.trim() !== '') {
       task.spec = nextSpec
       if (input.title === undefined) {
-        const derivedTitle = deriveImportedTaskTitle(task)
+        const effectiveTask = await buildEffectiveTask(
+          projectRootForTaskState(input.tasksPath, task, metadata),
+          task,
+          { evidence: 'current' },
+        )
+        const derivedTitle = deriveImportedTaskTitle(effectiveTask as unknown as TaskRecord)
         if (derivedTitle) task.title = derivedTitle
       }
       if (normalizedStructuredSpec && normalizedAcceptanceCriteria === undefined) {
@@ -369,8 +390,34 @@ export async function updateTask(
     task.updatedAt = new Date().toISOString()
     queue.lastUpdated = new Date().toISOString()
 
+    const taskProjectRoot = projectRootForTaskState(input.tasksPath, task, metadata)
+    const taskIdsUnchanged = queue.tasks.length === originalTaskIds.size &&
+      queue.tasks.every(candidate => originalTaskIds.has(candidate.id))
+    const queueEnvelopeUnchanged = JSON.stringify(queue.releases ?? []) === originalReleases &&
+      queue.selectedReleaseId === originalSelectedReleaseId
+    const databaseAuthority = readProjectStateDatabaseCurrentAuthorityFromTasksPath(input.tasksPath) === 'database'
+    const isPointMutation = taskIdsUnchanged && queueEnvelopeUnchanged
+    if (databaseAuthority && isPointMutation) {
+      const promotedMutation = writePromotedTaskDetailMutation(input.tasksPath, taskId, {
+        projectId: path.basename(taskProjectRoot),
+        projectRoot: taskProjectRoot,
+        mutate: (current) => applyDefinitionDelta(
+          current,
+          originalTask as unknown as Record<string, unknown>,
+          task as unknown as Record<string, unknown>,
+        ),
+      })
+      if (!promotedMutation) {
+        throw new Error(`Could not persist promoted task definition for task ${taskId}`)
+      }
+    } else if (!databaseAuthority || !isPointMutation) {
+      writeProjectTaskQueue(input.tasksPath, queue, {
+        ...(queueRead.expectedQueueRevision !== null
+          ? { expectedQueueRevision: queueRead.expectedQueueRevision }
+        : {}),
+      })
+    }
     await persistUpdateTaskRuntimeState(input.tasksPath, task, metadata)
-    writeProjectTaskQueue(input.tasksPath, queue)
     await appendUpdateTaskEvidence({
       tasksPath: input.tasksPath,
       task,
@@ -383,6 +430,32 @@ export async function updateTask(
   } catch (err) {
     return { success: false, error: String(err) }
   }
+}
+
+function sameJson(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right)
+}
+
+function applyDefinitionDelta(
+  currentTask: Record<string, unknown>,
+  baselineTask: Record<string, unknown>,
+  nextTask: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const changedKeys = new Set([
+    ...Object.keys(baselineTask),
+    ...Object.keys(nextTask),
+  ].filter((key) => !FORBIDDEN_PROJECT_TASK_FIELDS.includes(key as typeof FORBIDDEN_PROJECT_TASK_FIELDS[number])))
+  const next = { ...currentTask }
+  for (const key of changedKeys) {
+    const baselineValue = baselineTask[key]
+    const nextValue = nextTask[key]
+    if (sameJson(baselineValue, nextValue)) continue
+    if (!sameJson(currentTask[key], baselineValue)) return null
+    if (nextValue === undefined) delete next[key]
+    else next[key] = nextValue
+  }
+  next.id = String(nextTask.id ?? currentTask.id)
+  return next
 }
 
 function projectRootForTaskState(
@@ -1408,8 +1481,8 @@ export interface AddTaskResult {
 
 export async function addTask(input: AddTaskInput): Promise<AddTaskResult> {
   try {
-    const raw = await readManagedTextFile(input.tasksPath, 'utf-8')
-    const queue = TaskQueue.parse(JSON.parse(raw))
+    const queueRead = readProjectTaskQueueForMutationSync(input.tasksPath)
+    const queue = TaskQueue.parse(queueRead.queue)
     const newTask = Task.parse({
       ...input.task,
       notes: [],
@@ -1418,7 +1491,11 @@ export async function addTask(input: AddTaskInput): Promise<AddTaskResult> {
     })
     queue.tasks.push(newTask)
     queue.lastUpdated = new Date().toISOString()
-    writeProjectTaskQueue(input.tasksPath, queue)
+    writeProjectTaskQueue(input.tasksPath, queue, {
+      ...(queueRead.expectedQueueRevision !== null
+        ? { expectedQueueRevision: queueRead.expectedQueueRevision }
+        : {}),
+    })
     return { success: true, taskId: newTask.id }
   } catch (err) {
     return { success: false, error: String(err) }

@@ -19,12 +19,16 @@ import {
   type Compactor,
   type HookExecutor,
 } from '@guildhall/engine'
-import type { ConversationMessage, StreamEvent, UsageSnapshot } from '@guildhall/protocol'
+import { messageText, type ConversationMessage, type StreamEvent, type UsageSnapshot } from '@guildhall/protocol'
 import type { SkillDefinition } from '@guildhall/skills'
 import {
+  boundedSessionText,
+  compactSessionMessages,
   loadSessionById,
   loadSessionSnapshot,
   saveSessionSnapshot,
+  sessionPayloadCharacterCount,
+  SESSION_COMPACTION_THRESHOLD,
 } from '@guildhall/sessions'
 import {
   composeSystemPromptWithDefaults,
@@ -32,6 +36,7 @@ import {
 } from '@guildhall/engineering-defaults'
 export type { StreamEvent }
 import type { AgentLLM } from './llm.js'
+import type { ExploringHistorySummarizer } from '@guildhall/tools'
 
 export interface GuildhallAgentOptions {
   name: string
@@ -66,6 +71,8 @@ export interface GuildhallAgentOptions {
    * instead of failing the whole conversation.
    */
   compactor?: Compactor
+  /** Rewrite exploring messages into compact durable essential history. */
+  transcriptSummarizer?: ExploringHistorySummarizer
   noToolTurnNudge?: string | undefined
   noToolTurnNudgeLimit?: number | undefined
   noProgressToolNames?: readonly string[] | undefined
@@ -107,6 +114,7 @@ export class GuildhallAgent {
   private currentMode: PermissionMode
   /** FR-20: where (and under what id) to persist snapshots after each turn. */
   private readonly sessionPersistence: GuildhallAgentOptions['sessionPersistence']
+  private readonly transcriptSummarizer: GuildhallAgentOptions['transcriptSummarizer']
 
   constructor(options: GuildhallAgentOptions) {
     this.name = options.name
@@ -116,6 +124,7 @@ export class GuildhallAgent {
     this.baselineMode = options.baselinePermissionMode ?? PermissionMode.FULL_AUTO;
     this.currentMode = this.baselineMode
     this.sessionPersistence = options.sessionPersistence
+    this.transcriptSummarizer = options.transcriptSummarizer
 
     const withSkills = options.skills && options.skills.length > 0
       ? composeSystemPromptWithSkills(options.systemPrompt, options.skills)
@@ -139,6 +148,9 @@ export class GuildhallAgent {
         : {}),
       ...(options.hookExecutor ? { hookExecutor: options.hookExecutor } : {}),
       ...(options.compactor ? { compactor: options.compactor } : {}),
+      ...(options.transcriptSummarizer
+        ? { toolMetadata: { summarize_exploring_history: options.transcriptSummarizer } }
+        : {}),
       ...(options.noToolTurnNudge !== undefined
         ? { noToolTurnNudge: options.noToolTurnNudge }
         : {}),
@@ -220,7 +232,7 @@ export class GuildhallAgent {
       // Persist even on max-turn/API/tool failures. runQuery mutates the
       // engine history as it goes, so a crash or restart can still recover
       // the last coherent turn rather than silently dropping progress.
-      this.persistSession()
+      await this.persistSession()
     }
     if (streamError) throw new Error(streamError)
     const messages = this.engine.messages
@@ -247,7 +259,7 @@ export class GuildhallAgent {
         cwd: cfg.cwd,
         model: this.engine.getModel(),
         systemPrompt: this.engine.getSystemPrompt(),
-        messages: this.engine.messages,
+        messages: this.messagesForSnapshotSync(),
         usage: this.engine.totalUsage,
         toolMetadata: this.engine.getToolMetadata(),
         ...(cfg.sessionId ? { sessionId: cfg.sessionId } : {}),
@@ -299,7 +311,7 @@ export class GuildhallAgent {
    */
   async continue(): Promise<GenerateResult> {
     for await (const _event of this.engine.continuePending()) void _event
-    this.persistSession()
+    await this.persistSession()
     const messages = this.engine.messages
     const text = extractLatestAssistantText(messages)
     return { text, messages, usage: this.engine.totalUsage }
@@ -311,17 +323,33 @@ export class GuildhallAgent {
    */
   resetConversation(): void {
     this.engine.clear()
-    this.persistSession()
-  }
-
-  private persistSession(): void {
     if (!this.sessionPersistence) return
     try {
       saveSessionSnapshot({
         cwd: this.sessionPersistence.cwd,
         model: this.engine.getModel(),
         systemPrompt: this.engine.getSystemPrompt(),
-        messages: this.engine.messages,
+        messages: [],
+        usage: this.engine.totalUsage,
+        toolMetadata: this.engine.getToolMetadata(),
+        ...(this.sessionPersistence.sessionId
+          ? { sessionId: this.sessionPersistence.sessionId }
+          : {}),
+      })
+    } catch {
+      // Snapshot IO failure is non-fatal; the in-memory conversation is clear.
+    }
+  }
+
+  private async persistSession(): Promise<void> {
+    if (!this.sessionPersistence) return
+    try {
+      const messages = await this.messagesForSnapshot()
+      saveSessionSnapshot({
+        cwd: this.sessionPersistence.cwd,
+        model: this.engine.getModel(),
+        systemPrompt: this.engine.getSystemPrompt(),
+        messages,
         usage: this.engine.totalUsage,
         toolMetadata: this.engine.getToolMetadata(),
         ...(this.sessionPersistence.sessionId
@@ -331,6 +359,28 @@ export class GuildhallAgent {
     } catch {
       // Snapshot IO failure is non-fatal. The conversation is still in memory.
     }
+  }
+
+  private messagesForSnapshotSync(): ConversationMessage[] {
+    const messages = this.engine.messages
+    return compactSessionMessages(messages)
+  }
+
+  private async messagesForSnapshot(): Promise<ConversationMessage[]> {
+    const messages = this.engine.messages
+    if (sessionPayloadCharacterCount(messages) <= SESSION_COMPACTION_THRESHOLD) {
+      return messages
+    }
+    const source = boundedSessionText(messages)
+    const summary = this.transcriptSummarizer
+      ? await this.transcriptSummarizer({
+          taskId: String(this.engine.getToolMetadata()['current_task_id'] ?? 'session'),
+          priorHistory: '',
+          role: 'system',
+          content: source,
+        })
+      : null
+    return compactSessionMessages(messages, summary)
   }
 
   /**

@@ -17,37 +17,26 @@ If a note belongs in public docs, move or rewrite it deliberately under
 `docs/`. Do not assume a planning note is publishable just because it is
 written in Markdown.
 
-The current 0.8.0 MVP tracker is
-`internal/plans/2026-05-24-guildhall-0-8-mvp-tracker.md`. Broader 0.8.0
-design sources live in `internal/specs/`.
-The proposed 0.9.0 task-shaping direction is
-`internal/plans/2026-05-24-guildhall-0-9-task-shaping-and-finishability.md`.
-The 0.9.0 implementation tracker is
-`internal/plans/2026-05-27-guildhall-0-9-implementation-tracker.md`.
-The 0.10.0 implementation tracker is
-`internal/plans/2026-05-31-guildhall-0-10-implementation-tracker.md`.
-The 0.9.0 trust and completeness proposal is
-`internal/plans/2026-05-27-guildhall-0-9-trust-and-completeness-proposal.md`.
-The late 0.9.0 internal benchmark and Hermes comparison lane is
-`internal/plans/2026-05-27-guildhall-0-9-benchmarks-and-hermes-comparison.md`.
-The 0.11.0 implementation tracker is
-`internal/plans/2026-06-02-guildhall-0-11-implementation-tracker.md`.
-The proposed 0.11.0 OpenRouter support plan is
-`internal/plans/2026-05-28-guildhall-0-11-openrouter-support.md`.
-The proposed 0.11.0 deterministic code-quality implementation plan is
-`internal/plans/2026-06-03-guildhall-0-11-deterministic-code-quality-implementation-plan.md`.
-The proposed 0.11.0 deterministic code-quality signal spec is
-`internal/specs/2026-06-03-guildhall-0-11-deterministic-code-quality-signals.md`.
-The proposed 0.10.0 external agent memory bridge spec is
-`internal/specs/2026-05-28-guildhall-0-10-agent-memory-bridge.md`.
-The proposed 0.10.0 structural/domain intelligence spec is
-`internal/specs/2026-05-29-guildhall-0-10-structural-domain-intelligence.md`.
-The proposed 0.10.0 external task authority spec is
-`internal/specs/2026-05-29-guildhall-0-10-external-task-authority.md`.
-The proposed 0.10.0 state-machine substrate and local project graph spec is
-`internal/specs/2026-06-01-guildhall-0-10-state-machines-project-graph.md`.
+The active product pivot is
+`internal/plans/2026-07-14-project-state-architecture-pivot.md`. It supersedes
+the older orientation, map, structural-domain, release, re-intake,
+task-shaping, execution-history, and closure plans rather than adding another
+parallel planning vocabulary. The
+historical material remains available under `internal/plans/archive/`, with
+the archive policy and index in `internal/plans/archive/README.md`.
+
+Only plans and specs with a current implementation or research owner remain in
+the active folders. Completed, deferred, superseded, and release-era planning
+material belongs under `internal/plans/archive/`; it is historical evidence,
+not a second backlog. Independent active specs remain under `internal/specs/`
+and `internal/plans/`; release-era and completed specs live under
+`internal/specs/archive/`. All active specs must be interpreted through the project-state
+pivot whenever they describe project summaries, releases, task hierarchies,
+execution, or user orientation.
 Live product/runtime audit checklists live in `internal/audits/`.
 Older exploratory design notes live in `internal/design-notes/`.
+Superseded architectural notes are explicitly marked under
+`internal/design-notes/archive/` and are historical context only.
 Source-backed research notes live in `internal/research/`.
 
 ## Release state

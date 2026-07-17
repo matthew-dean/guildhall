@@ -1279,7 +1279,9 @@ describe('ThreadTab', () => {
       ))).toBe(true)
     })
     expect(calls.filter(call => call.url.startsWith('/api/project/thread')).length).toBeGreaterThan(1)
-    expect(calls.some(call => call.url.startsWith('/api/project?projectId=looma-knit'))).toBe(true)
+    expect(calls.some(call => (
+      call.url.startsWith('/api/project?') && call.url.includes('projectId=looma-knit')
+    ))).toBe(true)
     await waitFor(() => expect((answer as HTMLTextAreaElement).value).toBe(''))
   })
 

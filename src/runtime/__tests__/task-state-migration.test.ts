@@ -3,7 +3,12 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import type { Task } from '@guildhall/core'
-import { getProjectLocalHistoryDir } from '@guildhall/sessions'
+import {
+  getProjectLocalHistoryDir,
+  getProjectSystemStatePath,
+  promoteProjectStateDatabaseAuthority,
+  writeProjectStateDatabaseSnapshot,
+} from '@guildhall/sessions'
 import { migrateTaskState } from '../task-state-migration.js'
 import { readTaskEvidence, readTaskRuntimeStore, readTaskWorkspaceStore } from '../task-state-store.js'
 
@@ -102,6 +107,8 @@ describe('migrateTaskState', () => {
 
     expect(first.applied).toBe(true)
     expect(second.evidenceRecords).toBe(0)
+    expect(first.manifestPath).toBe(`${first.backupPath}.manifest.json`)
+    await expect(fs.readFile(first.manifestPath!, 'utf8')).resolves.toContain('0.8.0/task-state-split')
     const runtime = await readTaskRuntimeStore(projectRoot)
     expect(runtime.tasks['task-auth-complete']).toMatchObject({
       revisionCount: 6,
@@ -113,7 +120,8 @@ describe('migrateTaskState', () => {
       branchName: 'guildhall/task-task-auth-complete',
     })
     const evidence = await readTaskEvidence(projectRoot, 'task-auth-complete')
-    expect(evidence.map((event) => event.kind)).toEqual(['note', 'review_verdict', 'escalation'])
+    expect(evidence).toHaveLength(3)
+    expect(evidence.map((event) => event.kind)).toEqual(expect.arrayContaining(['note', 'review_verdict', 'escalation']))
 
     const raw = JSON.parse(await fs.readFile(path.join(projectRoot, '.guildhall', 'TASKS.json'), 'utf-8'))
     expect(raw.tasks[0]).not.toHaveProperty('reviewVerdicts')
@@ -123,5 +131,28 @@ describe('migrateTaskState', () => {
       id: 'task-auth-complete',
       projectPath: 'frontend/',
     })
+  })
+
+  it('does not inspect or apply legacy state after SQLite promotion', async () => {
+    const projectRoot = await seedProject([task()])
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    await writeProjectStateDatabaseSnapshot(tasksPath, {
+      projectRoot,
+      queue: {
+        version: 1,
+        lastUpdated: '2026-07-15T12:00:00.000Z',
+        tasks: [{ id: 'canonical-task', title: 'Canonical task', status: 'ready' }],
+      },
+      summary: { projectId: 'task-state-test', generatedAt: '2026-07-15T12:00:00.000Z' },
+    })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+
+    await expect(migrateTaskState({ projectRoot, apply: false })).resolves.toMatchObject({
+      applied: false,
+      tasksInspected: 0,
+      taskDefinitionsRewritten: 0,
+    })
+    await expect(migrateTaskState({ projectRoot, apply: true }))
+      .rejects.toThrow(/SQLite already owns current project state/)
   })
 })

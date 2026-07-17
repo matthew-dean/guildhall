@@ -266,9 +266,8 @@ describe('effective memory packet', () => {
     })
 
     expect(packet.memoryCorePacket?.health).toMatchObject({
-      adapter: 'mastra',
+      adapter: 'deterministic',
       fallbackUsed: false,
-      semanticRecallEnabled: false,
     })
     expect(packet.rendered).toContain('## Memory-Core Candidate Packet')
     expect(packet.rendered).toContain('Memory-core says Journey proof')
@@ -316,7 +315,7 @@ describe('effective memory packet', () => {
 
     expect(packet.memoryCorePacket?.health).toMatchObject({
       adapter: 'deterministic',
-      fallbackUsed: true,
+      fallbackUsed: false,
     })
     expect(packet.rendered).toContain('Deterministic substrate should remain available')
   })
@@ -442,10 +441,12 @@ describe('effective memory packet', () => {
     })
 
     expect(debug.memoryPacket).toMatchObject({
-      included: [{ id: 'used-memory', type: 'project_habit', scope: 'project' }],
+      included: [],
       withheld: [],
+      includedCount: 1,
+      withheldCount: 0,
       memoryCore: {
-        adapter: 'mastra',
+        adapter: 'deterministic',
         fallbackUsed: false,
         candidates: [
           expect.objectContaining({

@@ -204,7 +204,7 @@ describe('project config local state guard', () => {
     const project = join(TMP, 'memory-policy')
     mkdirSync(project, { recursive: true })
 
-    expect(readProjectConfig(project).memory?.substrate).toBe('mastra')
+    expect(readProjectConfig(project).memory?.substrate).toBe('deterministic')
     expect(readProjectConfig(project).memory?.semanticRecall).toBe(false)
     expect(readProjectConfig(project).memory?.observationalMemory).toBe(false)
 

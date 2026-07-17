@@ -122,9 +122,14 @@
   const tasksById = $derived(new Map((detail.tasks ?? []).map(task => [task.id, task])))
   const currentScopeRows = $derived(scopeRows.filter(row => row.scope !== 'deferred'))
   const laterScopeRows = $derived(scopeRows.filter(row => row.scope === 'deferred'))
+  const totalCurrentScopeRows = $derived(spine?.scopeRowCounts?.included ?? currentScopeRows.length)
+  const totalLaterScopeRows = $derived(spine?.scopeRowCounts?.deferred ?? laterScopeRows.length)
   const visibleLaterScopeRows = $derived(laterScopeRows.slice(0, 4))
   const visibleScopeRows = $derived([...currentScopeRows, ...visibleLaterScopeRows])
   const hiddenLaterScopeRowCount = $derived(Math.max(0, laterScopeRows.length - visibleLaterScopeRows.length))
+  const omittedCurrentScopeRowCount = $derived(Math.max(0, totalCurrentScopeRows - currentScopeRows.length))
+  const omittedLaterScopeRowCount = $derived(Math.max(0, totalLaterScopeRows - laterScopeRows.length))
+  const omittedScopeWorkCount = $derived(omittedCurrentScopeRowCount + omittedLaterScopeRowCount + hiddenLaterScopeRowCount)
   const mapGaps = $derived.by(() => {
     return (spine?.gaps ?? []).slice(0, 5).map(gap => ({
       ...gap,
@@ -580,7 +585,7 @@
     {#if scopeRows.length > 0}
       <Card title="Scope ledger" titleTag="h2" padding="compact" density="dense" className="scope-ledger-card">
         <div class="lane-meta">
-          <span>{countLabel(currentScopeRows.length, 'current work item')} · {countLabel(laterScopeRows.length, 'later work item')}</span>
+          <span>{countLabel(totalCurrentScopeRows, 'current work item')} · {countLabel(totalLaterScopeRows, 'later work item')}</span>
         </div>
         <CardList className="scope-ledger-list">
           {#each visibleScopeRows as row (`${row.scope}:${row.taskId}`)}
@@ -607,8 +612,8 @@
             </CardListItem>
           {/each}
         </CardList>
-        {#if hiddenLaterScopeRowCount > 0}
-          <p class="overflow-summary">{countLabel(hiddenLaterScopeRowCount, 'additional later row')} summarized in the counts above.</p>
+        {#if omittedScopeWorkCount > 0}
+          <p class="overflow-summary">{countLabel(omittedScopeWorkCount, 'additional work item')} {omittedScopeWorkCount === 1 ? 'is' : 'are'} summarized here; open Work for the full ledger.</p>
         {/if}
       </Card>
     {/if}

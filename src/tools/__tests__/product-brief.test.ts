@@ -3,7 +3,15 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 import { TaskQueue, type Task } from '@guildhall/core'
+import {
+  getProjectSystemStatePath,
+  promoteProjectStateDatabaseAuthority,
+  readProjectStateDatabaseAuthorityFromTasksPath,
+  readProjectStateDatabaseQueueRevision,
+  readProjectStateDatabaseTask,
+} from '@guildhall/sessions'
 import { updateProductBrief, updateProductBriefTool } from '../product-brief.js'
+import { writeProjectTaskQueue } from '../../runtime/project-state-boundary.js'
 
 let tmpDir: string
 let tasksPath: string
@@ -48,6 +56,53 @@ afterEach(async () => {
 })
 
 describe('updateProductBrief', () => {
+  it('writes through a bootstrap projection without treating its revision as a CAS token', async () => {
+    const queue = TaskQueue.parse(JSON.parse(await fs.readFile(tasksPath, 'utf-8')))
+    writeProjectTaskQueue(tasksPath, queue, { projectRoot: tmpDir })
+
+    expect(readProjectStateDatabaseAuthorityFromTasksPath(tasksPath)).toBe('legacy')
+    expect(readProjectStateDatabaseQueueRevision(tasksPath)).not.toBeNull()
+
+    const result = await updateProductBrief({
+      tasksPath,
+      taskId: 'task-1',
+      userJob: 'As a new user I want to set up the project quickly',
+      successMetric: '90% of new users reach first task in <5 minutes',
+      antiPatterns: ['no jargon in first three screens'],
+      authoredBy: 'agent:spec-agent',
+    })
+
+    expect(result.success).toBe(true)
+    expect(readProjectStateDatabaseTask(tasksPath, 'task-1')?.definition).toMatchObject({
+      productBrief: { userJob: expect.stringMatching(/new user/) },
+    })
+  })
+
+  it('uses the promoted point writer for a brief update', async () => {
+    const queue = TaskQueue.parse(JSON.parse(await fs.readFile(tasksPath, 'utf-8')))
+    const promotedTasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
+    await fs.mkdir(path.dirname(promotedTasksPath), { recursive: true })
+    await fs.writeFile(promotedTasksPath, '{}', 'utf-8')
+    writeProjectTaskQueue(promotedTasksPath, queue, { projectRoot: tmpDir })
+    promoteProjectStateDatabaseAuthority(tmpDir)
+    const before = readProjectStateDatabaseQueueRevision(promotedTasksPath)
+
+    const result = await updateProductBrief({
+      tasksPath: promotedTasksPath,
+      taskId: 'task-1',
+      userJob: 'As a new user I want to set up the project quickly',
+      successMetric: '90% of new users reach first task in <5 minutes',
+      antiPatterns: ['no jargon in first three screens'],
+      authoredBy: 'agent:spec-agent',
+    })
+
+    expect(result.success).toBe(true)
+    expect(readProjectStateDatabaseQueueRevision(promotedTasksPath)).toBeGreaterThan(before!)
+    expect(readProjectStateDatabaseTask(promotedTasksPath, 'task-1')?.definition).toMatchObject({
+      productBrief: { userJob: 'As a new user I want to set up the project quickly' },
+    })
+  })
+
   it('authors a new brief on a task that has none', async () => {
     const result = await updateProductBrief({
       tasksPath,

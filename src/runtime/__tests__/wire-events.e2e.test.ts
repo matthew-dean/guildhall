@@ -19,13 +19,20 @@ import {
 } from '@guildhall/levers'
 import {
   projectStatePathFromMemoryDir,
-  readProjectStateJsonFromMemoryDirAsync,
-  writeProjectStateJsonFromMemoryDirAsync,
+  readProjectStateDatabaseAuthority,
+  readProjectTaskQueueSync,
+  upsertTaskRuntimeState,
 } from '@guildhall/sessions'
 
 import { InMemoryGitDriver } from '../git-driver.js'
 import { Orchestrator, type OrchestratorAgentSet } from '../orchestrator.js'
 import { tickOutcomeToBackendEvent } from '../wire-events.js'
+import {
+  sanitizeTaskQueueForProjectWrite,
+  writePromotedTaskDetailMutation,
+  writeProjectTaskQueue,
+} from '../project-state-boundary.js'
+import { applyProjectMigrations } from '../migrations.js'
 
 // ---------------------------------------------------------------------------
 // FR-16: drive the orchestrator through a full task lifecycle and assert
@@ -106,15 +113,34 @@ async function writeQueue(tasks: Task[]): Promise<void> {
     lastUpdated: '2026-04-01T00:00:00Z',
     tasks,
   }
-  await writeProjectStateJsonFromMemoryDirAsync(memoryDir, 'TASKS.json', queue)
+  const tasksPath = projectStatePathFromMemoryDir(memoryDir, 'TASKS.json')
+  // Seed only canonical definition rows. Runtime/evidence fields belong in
+  // their normalized stores even during bootstrap, so promotion exercises the
+  // same boundary production data uses instead of preserving rich fixtures.
+  const normalized = sanitizeTaskQueueForProjectWrite(queue).queue as TaskQueue
+  writeProjectTaskQueue(tasksPath, normalized, { projectRoot: tmpDir })
+  for (const task of tasks) {
+    await upsertTaskRuntimeState(tmpDir, task.id, {
+      ...(task.assignedTo !== undefined ? { assignedTo: task.assignedTo } : {}),
+      revisionCount: task.revisionCount,
+      ...(task.remediationAttempts !== undefined ? { remediationAttempts: task.remediationAttempts } : {}),
+      updatedAt: task.updatedAt,
+    })
+  }
+  await applyProjectMigrations({
+    projectRoot: tmpDir,
+    only: ['0.12.21/task-overlay-authority'],
+  })
 }
 
 async function mutateTask(id: string, patch: Partial<Task>): Promise<void> {
-  const q = await readProjectStateJsonFromMemoryDirAsync<TaskQueue>(memoryDir, 'TASKS.json')
-  const t = q.tasks.find((x) => x.id === id)
-  if (!t) throw new Error(`No task ${id}`)
-  Object.assign(t, patch)
-  await writeProjectStateJsonFromMemoryDirAsync(memoryDir, 'TASKS.json', q)
+  const tasksPath = projectStatePathFromMemoryDir(memoryDir, 'TASKS.json')
+  const promoted = writePromotedTaskDetailMutation(tasksPath, id, {
+    projectId: 'e2e-ws',
+    projectRoot: tmpDir,
+    mutate: (task) => ({ ...task, ...patch }),
+  })
+  if (!promoted) throw new Error(`Task ${id} is not in promoted fixture state`)
 }
 
 function statePath(relativePath: string): string {
@@ -149,6 +175,14 @@ function decode(line: string): BackendEvent {
 }
 
 describe('FR-16 end-to-end: orchestrator → OHJSON stream', () => {
+  it('seeds TASKS.json through the named migration before promoted reads', async () => {
+    await writeQueue([mkTask({ id: 'migrated', status: 'ready' })])
+
+    expect(readProjectStateDatabaseAuthority(tmpDir)).toBe('database')
+    expect((readProjectTaskQueueSync(statePath('TASKS.json')) as TaskQueue).tasks)
+      .toEqual([expect.objectContaining({ id: 'migrated', status: 'ready' })])
+  })
+
   it('emits a task_transition event for every status change through a happy-path run', async () => {
     await writeQueue([mkTask({ id: 'a', status: 'in_progress' })])
 
@@ -198,7 +232,7 @@ describe('FR-16 end-to-end: orchestrator → OHJSON stream', () => {
       type: 'task_transition',
       from_status: 'gate_check',
       to_status: 'done',
-      agent_name: 'gate-checker-agent',
+      agent_name: 'approved-review-gates',
     })
   })
 

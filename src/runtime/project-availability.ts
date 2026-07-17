@@ -1,6 +1,7 @@
-import { mkdir, readFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
-import { atomicWriteText, getProjectLocalHistoryDir } from '@guildhall/sessions'
+import {
+  readProjectStateDatabaseAvailability,
+  writeProjectStateDatabaseAvailability,
+} from '@guildhall/sessions'
 
 export interface ProjectAvailabilityState {
   status: 'active' | 'paused'
@@ -17,23 +18,8 @@ export function defaultProjectAvailabilityState(): ProjectAvailabilityState {
   }
 }
 
-function projectAvailabilityPath(projectPath: string): string {
-  return join(getProjectLocalHistoryDir(projectPath), 'project-availability.json')
-}
-
 export async function readProjectAvailability(projectPath: string): Promise<ProjectAvailabilityState> {
-  try {
-    const parsed = JSON.parse(await readFile(projectAvailabilityPath(projectPath), 'utf8')) as Partial<ProjectAvailabilityState>
-    return {
-      ...defaultProjectAvailabilityState(),
-      status: parsed.status === 'paused' ? 'paused' : 'active',
-      pausedAt: typeof parsed.pausedAt === 'string' ? parsed.pausedAt : null,
-      resumedAt: typeof parsed.resumedAt === 'string' ? parsed.resumedAt : null,
-      ...(typeof parsed.reason === 'string' && parsed.reason.trim() ? { reason: parsed.reason } : {}),
-    }
-  } catch {
-    return defaultProjectAvailabilityState()
-  }
+  return readProjectStateDatabaseAvailability(projectPath) ?? defaultProjectAvailabilityState()
 }
 
 export async function pauseProjectAvailability(
@@ -46,9 +32,7 @@ export async function pauseProjectAvailability(
     resumedAt: null,
     ...(options.reason ? { reason: options.reason } : {}),
   }
-  const target = projectAvailabilityPath(projectPath)
-  await mkdir(dirname(target), { recursive: true })
-  await atomicWriteText(target, `${JSON.stringify(next, null, 2)}\n`)
+  writeProjectStateDatabaseAvailability(projectPath, next, next.pausedAt ?? new Date().toISOString())
   return next
 }
 
@@ -61,8 +45,6 @@ export async function resumeProjectAvailability(
     pausedAt: null,
     resumedAt: options.now?.() ?? new Date().toISOString(),
   }
-  const target = projectAvailabilityPath(projectPath)
-  await mkdir(dirname(target), { recursive: true })
-  await atomicWriteText(target, `${JSON.stringify(next, null, 2)}\n`)
+  writeProjectStateDatabaseAvailability(projectPath, next, next.resumedAt ?? new Date().toISOString())
   return next
 }

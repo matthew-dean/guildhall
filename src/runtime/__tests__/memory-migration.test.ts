@@ -108,7 +108,13 @@ describe('migrateLegacyMemoryToLocalHistory', () => {
 
     expect(result.copied).toBe(result.filesToCopy.length)
     expect(await fs.readFile(getProjectTranscriptPath(projectRoot, 'exploring', 'task-1'), 'utf8'))
+      .toContain('# Essential exploring history: task-1')
+    expect(await fs.readFile(getProjectTranscriptPath(projectRoot, 'exploring', 'task-1'), 'utf8'))
       .toContain('legacy exploring transcript')
+    expect(result.transcriptCompaction).toEqual(expect.objectContaining({
+      filesSeen: 1,
+      filesCompacted: 1,
+    }))
     expect(result.compaction?.repoStateMode).toBe('off')
     expect(result.compaction?.evacuatedProjectStatePaths).toEqual(expect.arrayContaining([
       'TASKS.json',
@@ -125,12 +131,13 @@ describe('migrateLegacyMemoryToLocalHistory', () => {
       .toContain('Decisions')
     expect(await fs.readFile(path.join(getProjectLocalHistoryDir(projectRoot), 'project-state-evacuation', 'PROGRESS.md'), 'utf8'))
       .toContain('Progress')
-    expect(await fs.readFile(getProjectContextDebugLedgerPath(projectRoot), 'utf8'))
-      .toContain('task-1')
-    expect(await fs.readFile(
+    // Legacy context diagnostics are disposable evidence. Migration may copy
+    // them as an intermediate step, but compaction must not leave raw debug
+    // bodies in the durable history.
+    expect(await fs.readFile(getProjectContextDebugLedgerPath(projectRoot), 'utf8')).toBe('')
+    await expect(fs.access(
       path.join(getProjectLocalHistoryDir(projectRoot), 'context-debug', 'snapshots', 'task-1', 'snapshot.md'),
-      'utf8',
-    )).toContain('Snapshot')
+    )).rejects.toThrow()
     expect(await fs.readFile(getProjectRecentEventsPath(projectRoot), 'utf8')).toContain('recent')
     expect(await fs.readFile(
       path.join(path.dirname(getProjectRecentEventsPath(projectRoot)), 'events.ndjson'),

@@ -7,7 +7,7 @@ userGoal: Scan project health quickly and distinguish compact facts from work th
 scenario: A Signals grid stretches short provider, setup, and runtime facts to the height of a long repository alert, leaving large empty areas and making every item look equally urgent.
 artifacts:
   - id: signal-grid
-    kind: layout_evidence
+    kind: screenshot
     description: A grid containing compact status facts and a long repository follow-up.
     content: "Signals: Provider healthy, Repository follow-up, Setup checks passed, Runtime stopped, Verification, Recent changes. Short cards inherit the long alert's row height."
 reviewLanes:

@@ -2,7 +2,11 @@ import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { getProjectSystemStatePath } from '@guildhall/sessions'
+import {
+  getProjectSystemStatePath,
+  promoteProjectStateDatabaseAuthority,
+  writeProjectStateDatabaseSnapshot,
+} from '@guildhall/sessions'
 import { listOwnerInputRequests } from '../owner-input-store.js'
 import { migrateTaskQuestionsToBoundedChat } from '../task-question-migration.js'
 
@@ -131,6 +135,38 @@ describe('task question migration', () => {
       prompt: 'What variants does AlertDialog need?',
       helperText: 'The roadmap lists AlertDialog as missing (P0 gap). The existing `ui-dialog` uses `<dialog>`.',
     })
+  })
+
+  it('does not inspect or apply legacy questions after SQLite promotion', async () => {
+    const root = await projectWithTasks([{
+      id: 'legacy-task',
+      title: 'Legacy task',
+      openQuestions: [{ id: 'q1', prompt: 'Legacy question?' }],
+    }])
+    const tasksPath = getProjectSystemStatePath(root, 'TASKS.json')
+    await writeProjectStateDatabaseSnapshot(tasksPath, {
+      projectRoot: root,
+      queue: {
+        version: 1,
+        lastUpdated: now,
+        tasks: [{ id: 'canonical-task', title: 'Canonical task', status: 'ready' }],
+      },
+      summary: { projectId: 'questions-test', generatedAt: now },
+    })
+    promoteProjectStateDatabaseAuthority(root)
+
+    await expect(migrateTaskQuestionsToBoundedChat({ projectRoot: root, projectId: 'demo', apply: false, now }))
+      .resolves.toEqual({ changedTasks: [], createdOwnerInputRequests: [], createdSessions: [], affectedPaths: [] })
+    await expect(migrateTaskQuestionsToBoundedChat({ projectRoot: root, projectId: 'demo', apply: true, now }))
+      .rejects.toThrow(/SQLite already owns current project state/)
+  })
+
+  it('rejects malformed legacy queue data instead of treating it as empty', async () => {
+    const root = await projectWithTasks([])
+    await writeFile(path.join(root, '.guildhall', 'TASKS.json'), '{"tasks": "not-a-list"}')
+
+    await expect(migrateTaskQuestionsToBoundedChat({ projectRoot: root, projectId: 'demo', apply: false, now }))
+      .rejects.toThrow(/does not contain a task queue/)
   })
 })
 

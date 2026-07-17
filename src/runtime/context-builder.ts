@@ -13,7 +13,7 @@ import {
   selectApplicableReviewRubrics,
   renderRubricSelection,
 } from '@guildhall/core'
-import { checkpointIsFreshForTask, readCheckpoint } from '@guildhall/tools'
+import { checkpointIsFreshForTask, readCheckpoint, readExploringTranscript } from '@guildhall/tools'
 import { latestResolvedRetryEscalationAt } from '@guildhall/tools'
 import {
   selectApplicableGuilds,
@@ -29,7 +29,6 @@ import {
   getProjectSystemStatePath,
   getProjectSystemStatePathFromMemoryDir,
   getProjectTaskReviewPacketPath,
-  getProjectTranscriptPath,
   inferProjectRootFromMemoryDir,
 } from '@guildhall/sessions'
 import { loadGoalForTask } from './business-envelope.js'
@@ -990,7 +989,9 @@ export async function buildContext(
     readSafe('design-system.yaml'),
     // Only bother with the transcript when we're actually in the exploring phase.
     task.status === 'exploring'
-      ? readManagedTextFile(getProjectTranscriptPath(projectRoot, 'exploring', task.id), 'utf-8').catch(() => readSafe(path.join('exploring', `${task.id}.md`)))
+      ? readExploringTranscript({ memoryDir, taskId: task.id })
+          .then((result) => result.content ?? '')
+          .catch(() => '')
       : Promise.resolve(''),
     // FR-23: resolve the task's parent goal. Missing-goal cases become
     // `undefined` — the summary renderer omits the envelope block.

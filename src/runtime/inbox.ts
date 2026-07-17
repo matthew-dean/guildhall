@@ -60,6 +60,9 @@ export interface BuildInboxOptions {
   projectStateDir?: string
   snapshotOptions?: Omit<BuildSnapshotOptions, 'projectPath'>
   taskStateOverride?: unknown
+  /** Promoted projects must use persisted scope rows, never membership fallback. */
+  selectedScope?: OrientationScope | null
+  allowMembershipScopeFallback?: boolean
 }
 
 /**
@@ -253,7 +256,8 @@ function tasksArray(raw: unknown): Task[] {
   return []
 }
 
-function selectedInboxScope(raw: unknown, tasks: Task[]): OrientationScope | null {
+function selectedInboxScope(raw: unknown, tasks: Task[], options: Pick<BuildInboxOptions, 'selectedScope' | 'allowMembershipScopeFallback'> = {}): OrientationScope | null {
+  if (options.selectedScope !== undefined) return options.selectedScope
   if (raw && typeof raw === 'object' && Array.isArray((raw as { releases?: unknown }).releases)) {
     const queueScope = selectedReleaseScopeForQueue({
       version: 1,
@@ -266,6 +270,7 @@ function selectedInboxScope(raw: unknown, tasks: Task[]): OrientationScope | nul
     })
     if (queueScope) return queueScope as OrientationScope
   }
+  if (options.allowMembershipScopeFallback === false) return null
   const { releases, selectedReleaseId } = deriveReleaseContainersFromTaskMembership(tasks)
   const release = releases.find(candidate => candidate.id === selectedReleaseId)
   if (!release || !selectedReleaseId) return null
@@ -283,6 +288,52 @@ function scopeTasks(tasks: Task[], scope: OrientationScope | null): Task[] {
   if (!scope) return tasks
   const tasksById = new Map(tasks.map(task => [task.id, task]))
   return tasks.filter(task => taskEligibleForSelectedScope(task, scope as ProjectScope, { tasksById }).eligible)
+}
+
+function currentSummaryForTask(task: Task): {
+  brief?: {
+    present?: boolean
+    shaped?: boolean
+    userJob?: boolean
+    successMetric?: boolean
+    approvedAt?: string | null
+  }
+  acceptanceCriteriaCount?: number
+} | null {
+  const value = (task as Task & { currentSummary?: unknown }).currentSummary
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as {
+        brief?: {
+          present?: boolean
+          shaped?: boolean
+          userJob?: boolean
+          successMetric?: boolean
+          approvedAt?: string | null
+        }
+        acceptanceCriteriaCount?: number
+      }
+    : null
+}
+
+function taskForInboxWizard(task: Task): Task {
+  const current = currentSummaryForTask(task)
+  if (!current) return task
+  const brief = current.brief
+  return {
+    ...task,
+    ...(brief
+      ? {
+          productBrief: {
+            userJob: brief.userJob ? 'current brief' : '',
+            successMetric: brief.successMetric ? 'current success target' : '',
+            ...(brief.approvedAt ? { approvedAt: brief.approvedAt } : {}),
+          },
+        }
+      : {}),
+    ...(typeof current.acceptanceCriteriaCount === 'number'
+      ? { acceptanceCriteria: Array.from({ length: current.acceptanceCriteriaCount }, () => ({})) }
+      : {}),
+  }
 }
 
 function contractResultReviewItems(projectPath: string): InboxItem[] {
@@ -392,7 +443,10 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
   const tasksPath = projectStatePathWithRoot(projectPath, 'TASKS.json', projectStateDir)
   const rawTaskState = opts.taskStateOverride ?? readJsonSafe(tasksPath)
   const tasks = tasksArray(rawTaskState)
-  const executionTasks = scopeTasks(tasks, selectedInboxScope(rawTaskState, tasks))
+  const executionTasks = scopeTasks(tasks, selectedInboxScope(rawTaskState, tasks, {
+    selectedScope: opts.selectedScope,
+    allowMembershipScopeFallback: opts.allowMembershipScopeFallback,
+  }))
   const workspaceImportTask = tasks.find(t => t?.id === 'task-workspace-import')
   const workspaceImportTaskStatus =
     workspaceImportTask && typeof workspaceImportTask.status === 'string'
@@ -520,6 +574,7 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
     const title = typeof t.title === 'string' ? t.title : id
     if (!id) continue
 
+    const currentSummary = currentSummaryForTask(t)
     const brief = t.productBrief as { approvedAt?: unknown } | undefined
 
     // spec-fill gap: only for tasks where the wizard is applicable and
@@ -528,7 +583,9 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
     // We emit the LIVE missing-step list so DoThisNext can say "missing
     // acceptance criteria" rather than the vague "spec incomplete".
     const briefDraftPending =
-      brief && typeof brief === 'object' && !brief.approvedAt
+      currentSummary?.brief
+        ? currentSummary.brief.present === true && !currentSummary.brief.approvedAt
+        : brief && typeof brief === 'object' && !brief.approvedAt
     const specInReview = t.status === 'spec_review'
     if (
       id !== 'task-workspace-import' &&
@@ -538,7 +595,7 @@ export function buildInbox(opts: BuildInboxOptions): InboxItem[] {
     ) {
       const snap = buildTaskSnapshot({
         projectPath,
-        task: t as Parameters<typeof buildTaskSnapshot>[0]['task'],
+        task: taskForInboxWizard(t) as Parameters<typeof buildTaskSnapshot>[0]['task'],
         readWizardsState: () => emptyWizardsState(),
       })
       if (specFillWizard.applicable(snap)) {

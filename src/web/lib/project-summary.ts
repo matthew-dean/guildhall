@@ -159,6 +159,7 @@ function statusLabel(project: ServiceProjectSummary, counts: ProjectCardSummary[
 }
 
 function activityLabel(project: ServiceProjectSummary, counts: ProjectCardSummary['counts']): string {
+  if (project.projectStatusError) return project.projectStatusError
   if (project.initializationNeeded) return 'Needs first-time Guildhall setup.'
   if (project.startReadiness?.canStart === false && project.startReadiness.message) {
     return project.startReadiness.message
@@ -219,6 +220,7 @@ function completedLabel(project: ServiceProjectSummary, counts: ProjectCardSumma
 }
 
 function nextLabel(project: ServiceProjectSummary, counts: ProjectCardSummary['counts']): string | null {
+  if (project.projectStatusError) return 'Open the project for a fresh status check'
   const primary = project.actionModel?.primaryAction
   if (primary) {
     return primary.detail ?? primary.label
@@ -418,7 +420,7 @@ export function summarizeProjectCard(
     id: project.id,
     name: humanizeProjectName(project.name?.trim() || project.id),
     path: formatUserPath(project.path),
-    statusLabel: statusLabel(project, counts),
+    statusLabel: project.projectStatusError ? 'Status unavailable' : statusLabel(project, counts),
     tone:
       projectCheckIn?.needed || initializationNeeded || startBlocked || project.run?.status === 'error'
         ? 'warn'
@@ -431,13 +433,14 @@ export function summarizeProjectCard(
             : counts.done > 0 && counts.active === 0 && counts.blocked === 0
               ? 'success'
               : statusFromRun(project.run),
-    stageLabel: stageLabel(project, counts),
+    stageLabel: project.projectStatusError ? 'Status unavailable' : stageLabel(project, counts),
     activityLabel: activityLabel(project, counts),
     recentLabel: recentLabel(project, counts),
     completedLabel: completedLabel(project, counts),
     nextLabel: nextLabel(project, counts),
-    maturityLabel: maturityState.maturityLabel,
-    maturityDescription: maturityState.maturityDescription,
+    maturityLabel: project.projectStatusError ? 'Open project' : maturityState.maturityLabel,
+    maturityDescription: project.projectStatusError
+      ?? maturityState.maturityDescription,
     ...(projectCheckIn ? { projectCheckIn } : {}),
     ...(provider ? { provider } : {}),
     blurb: project.summary ?? null,
@@ -496,7 +499,8 @@ function projectSummarySignature(
     providerStatus: project.providerStatus,
     gitStory: project.gitStory,
     projectCheckIn: project.projectCheckIn,
-    projectStatusLoading: project.projectStatusLoading,
+      projectStatusLoading: project.projectStatusLoading,
+    projectStatusError: project.projectStatusError,
   })
 }
 
@@ -519,6 +523,27 @@ export function mergeServiceProjectSummaries(
   const previousProjects = previous.projects ?? []
   const incomingProjects = incoming.projects ?? []
   const previousByProjectId = new Map(previousProjects.map(project => [project.id, project]))
+  const isPartial = Boolean(incoming.partial) || (
+    previousProjects.length > incomingProjects.length &&
+    incomingProjects.length > 0 &&
+    incomingProjects.every(project => previousByProjectId.has(project.id))
+  )
+  if (isPartial) {
+    let changed = false
+    const incomingByProjectId = new Map(incomingProjects.map(project => [project.id, project]))
+    const projects = previousProjects.map(project => {
+      const next = incomingByProjectId.get(project.id)
+      if (!next) return project
+      if (projectSummarySignature(project, incoming.defaultProviderStatus) === projectSummarySignature(next, incoming.defaultProviderStatus)) {
+        return project
+      }
+      changed = true
+      return next
+    })
+    return changed
+      ? { ...previous, ...incoming, partial: undefined, projects }
+      : previous
+  }
   let changed = previousProjects.length !== incomingProjects.length
 
   const projects = incomingProjects.map((project, index) => {

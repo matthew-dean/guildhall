@@ -140,6 +140,7 @@ export interface ProjectActionModel {
 
 export interface BuildProjectActionModelInput {
   startReadiness?: ProjectActionStartReadiness | null
+  ownerInput?: ProjectOwnerInputModel | null
   inbox?: { items?: ProjectActionInboxItem[] } | null
   tasks?: ProjectActionTask[]
   thread?: ProjectActionThread | null
@@ -515,7 +516,7 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
   const availabilityPaused = input.availability?.status === 'paused'
   const activeTurn = activeThreadTurn(input.thread)
   const scopeOwnerInput = scopeAuthorityOwnerInput(input.scopeAuthorityRequests ?? [])
-  const ownerInput = scopeOwnerInput ?? ownerInputFrom(startReadiness, activeTurn)
+  const ownerInput = scopeOwnerInput ?? input.ownerInput ?? ownerInputFrom(startReadiness, activeTurn)
   const setup = setupModel(startReadiness, tasks, activeTurn)
   const setupBlocksStart = setup.state === 'blocked' && tasks.length === 0
   const inboxActions = (input.inbox?.items ?? [])

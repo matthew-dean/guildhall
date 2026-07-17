@@ -610,8 +610,25 @@ export const AcceptanceCriteria = z.preprocess(normalizeAcceptanceCriteria, z.ob
   evidenceHint: z.string().optional(),
   negativeCase: z.string().optional(),
   met: z.boolean().default(false),
+  // Runtime proof projection fields. They remain on the parsed contract so a
+  // bounded effective-task read can carry a stale/settled proof state without
+  // losing the persisted acceptance claim during a point mutation.
+  persistedMet: z.boolean().optional(),
+  verificationState: z.enum(['verified', 'stale']).optional(),
+  verificationSource: z.string().optional(),
+  staleReason: z.string().optional(),
+  staleGateId: z.string().optional(),
 }))
 export type AcceptanceCriteria = z.infer<typeof AcceptanceCriteria>
+
+export const AcceptanceCriteriaProofState = z.object({
+  state: z.string(),
+  reason: z.string().optional(),
+  staleMetCount: z.number().int().nonnegative().optional(),
+  gateId: z.string().optional(),
+  checkedAt: z.string().optional(),
+})
+export type AcceptanceCriteriaProofState = z.infer<typeof AcceptanceCriteriaProofState>
 
 export const TaskRequestKind = z.enum([
   'task_spec',
@@ -1138,6 +1155,7 @@ export const Task = z.object({
   structuredSpec: StructuredSpec.optional(),
   contractSurfaceReviewPackets: z.array(ContractSurfaceReviewPacket).optional(),
   acceptanceCriteria: z.array(AcceptanceCriteria).default([]),
+  acceptanceCriteriaProofState: AcceptanceCriteriaProofState.optional(),
 
   // Product brief: the *why* layer of a task — user job, success metric,
   // anti-patterns, rollout plan. Authored by the Spec Agent alongside the

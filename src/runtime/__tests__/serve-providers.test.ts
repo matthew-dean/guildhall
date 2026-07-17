@@ -17,7 +17,8 @@ const { bootstrapWorkspace, setProvider, readGlobalProviders, globalProvidersPat
   await import('@guildhall/config')
 const { buildServeApp } = await import('../serve.js')
 const { clearProviderClientPool } = await import('../provider-client-pool.js')
-const { applyProjectMigrations } = await import('../migrations.js')
+const { applyProjectMigrations, getProjectMigrationStatus } = await import('../migrations.js')
+const { writeProjectStateJsonAsync } = await import('@guildhall/sessions')
 
 let tmpProject: string
 const PROJECT_ID = 'provider-test'
@@ -30,6 +31,19 @@ function scoped(pathname: string): string {
 
 async function applyStorageBoundaryMigration(): Promise<void> {
   await applyProjectMigrations({ projectRoot: tmpProject, only: ['0.10.0/project-state-storage-boundary'] })
+}
+
+async function applyCanonicalProjectStateMigrations(): Promise<void> {
+  const status = await getProjectMigrationStatus({ projectRoot: tmpProject })
+  if (status.blocked.length === 0) return
+  const result = await applyProjectMigrations({
+    projectRoot: tmpProject,
+    only: status.blocked.map(item => item.id),
+    appVersion: 'serve-providers-test',
+  })
+  if (result.failed.length > 0) {
+    throw new Error(result.failed.map(item => `${item.id}: ${item.error}`).join('; '))
+  }
 }
 
 function sseResponse(frames: string[]): Response {
@@ -63,7 +77,12 @@ beforeEach(async () => {
   mkdirSync(path.join(TMP_HOME, '.guildhall'), { recursive: true })
   tmpProject = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-serve-providers-proj-'))
   bootstrapWorkspace(tmpProject, { name: 'Provider Test' })
-  await applyProjectMigrations({ projectRoot: tmpProject, only: ['0.10.0/project-state-storage-boundary'] })
+  await writeProjectStateJsonAsync(tmpProject, 'TASKS.json', {
+    version: 1,
+    lastUpdated: new Date().toISOString(),
+    tasks: [],
+  })
+  await applyCanonicalProjectStateMigrations()
 })
 
 afterEach(async () => {
@@ -164,7 +183,7 @@ describe('GET /api/setup/providers', () => {
   it('reports service metadata without a current selected project when the service starts at the fleet level', async () => {
     registerWorkspace({ id: 'provider-test', name: 'Provider Test', path: tmpProject, tags: [] })
     const { app } = buildServeApp({})
-    const res = await app.fetch(new Request('http://localhost/api/service'))
+    const res = await app.fetch(new Request('http://localhost/api/service?detail=true'))
     expect(res.status).toBe(200)
     const body = (await res.json()) as {
       selectedProject?: unknown
@@ -179,7 +198,7 @@ describe('GET /api/setup/providers', () => {
   it('keeps a project hint out of service-wide selection metadata', async () => {
     registerWorkspace({ id: 'provider-test', name: 'Provider Test', path: tmpProject, tags: [] })
     const { app } = buildServeApp({ preferredProjectPath: tmpProject })
-    const res = await app.fetch(new Request('http://localhost/api/service'))
+    const res = await app.fetch(new Request('http://localhost/api/service?detail=true'))
     expect(res.status).toBe(200)
     const body = (await res.json()) as {
       selectedProject?: unknown
@@ -857,7 +876,7 @@ describe('POST /api/project/start preflight', () => {
     })
     await applyStorageBoundaryMigration()
     updateGlobalConfig({ preferredProvider: 'llama-cpp', allowPaidProviderFallback: true })
-    const { app, supervisor } = buildServeApp({ projectPath: tmpProject })
+    const { app, supervisor, refreshProjectProjections } = buildServeApp({ projectPath: tmpProject })
     try {
       const res = await app.fetch(
         new Request('http://localhost/api/project/start?projectId=provider-test', { method: 'POST' }),
@@ -894,7 +913,8 @@ describe('POST /api/project/start preflight', () => {
         activeModel: 'claude-sonnet-4-6',
       })
 
-      const projectRes = await app.fetch(new Request('http://localhost/api/project?projectId=provider-test'))
+      await refreshProjectProjections(tmpProject)
+      const projectRes = await app.fetch(new Request('http://localhost/api/project?projectId=provider-test&detail=true'))
       const projectBody = (await projectRes.json()) as {
         providerStatus?: {
           preferredProvider?: string
@@ -985,8 +1005,9 @@ describe('POST /api/project/start preflight', () => {
       preferredProvider: 'openai-api',
       allowPaidProviderFallback: true,
     })
-    const { app } = buildServeApp({ projectPath: tmpProject })
-    const res = await app.fetch(new Request('http://localhost/api/project?projectId=provider-test'))
+    const { app, refreshProjectProjections } = buildServeApp({ projectPath: tmpProject })
+    await refreshProjectProjections(tmpProject)
+    const res = await app.fetch(new Request('http://localhost/api/project?projectId=provider-test&detail=true'))
     expect(res.status).toBe(200)
     const body = (await res.json()) as {
       providerStatus?: {
@@ -1021,7 +1042,7 @@ describe('POST /api/project/start preflight', () => {
     })
     registerWorkspace({ id: 'provider-test', name: 'Provider Test', path: tmpProject, tags: [] })
     const { app } = buildServeApp({})
-    const res = await app.fetch(new Request('http://localhost/api/service'))
+    const res = await app.fetch(new Request('http://localhost/api/service?detail=true'))
     expect(res.status).toBe(200)
     const body = (await res.json()) as {
       defaultProviderStatus?: {
@@ -1056,7 +1077,7 @@ describe('POST /api/project/start preflight', () => {
     registerWorkspace({ id: 'provider-test', name: 'Provider Test', path: tmpProject, tags: [] })
 
     const { app } = buildServeApp({})
-    const res = await app.fetch(new Request('http://localhost/api/service'))
+    const res = await app.fetch(new Request('http://localhost/api/service?detail=true'))
     expect(res.status).toBe(200)
     const body = (await res.json()) as {
       projects: Array<{
@@ -1095,8 +1116,9 @@ describe('POST /api/project/start preflight', () => {
         },
       },
     })
-    const { app } = buildServeApp({ projectPath: tmpProject })
-    const res = await app.fetch(new Request('http://localhost/api/project?projectId=provider-test'))
+    const { app, refreshProjectProjections } = buildServeApp({ projectPath: tmpProject })
+    await refreshProjectProjections(tmpProject)
+    const res = await app.fetch(new Request('http://localhost/api/project?projectId=provider-test&detail=true'))
     expect(res.status).toBe(200)
     const body = (await res.json()) as {
       providerStatus?: {
@@ -1117,8 +1139,9 @@ describe('POST /api/project/start preflight', () => {
       workerLaneConcurrency: 5,
       reviewerFanoutConcurrency: 3,
     })
-    const { app } = buildServeApp({ projectPath: tmpProject })
-    const res = await app.fetch(new Request('http://localhost/api/project?projectId=provider-test'))
+    const { app, refreshProjectProjections } = buildServeApp({ projectPath: tmpProject })
+    await refreshProjectProjections(tmpProject)
+    const res = await app.fetch(new Request('http://localhost/api/project?projectId=provider-test&detail=true'))
     expect(res.status).toBe(200)
     const body = (await res.json()) as {
       providerStatus?: {
@@ -1279,11 +1302,12 @@ describe('POST /api/project/stop', () => {
       expect(stopRes.status).toBe(200)
       const body = (await stopRes.json()) as { ok?: boolean }
       expect(body.ok).toBe(true)
-      // Supervisor state reflects the stop (or is in a terminal state).
-      const runs = supervisor.list()
-      const run = runs[0]
-      expect(run).toBeDefined()
-      expect(['stopped', 'error']).toContain(run!.status)
+      // Supervisor state settles asynchronously after the stop response.
+      await vi.waitFor(() => {
+        const run = supervisor.list()[0]
+        expect(run).toBeDefined()
+        expect(['stopped', 'error']).toContain(run!.status)
+      }, { timeout: 1_000, interval: 20 })
     } finally {
       await supervisor.stopAll({ reason: 'test-teardown' }).catch(() => {})
     }

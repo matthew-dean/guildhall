@@ -92,6 +92,7 @@ export function releaseVerdictSummary(
     releaseReadiness.designSystem?.approved === false ? 1 : 0
   )
   const blockingCount = totals?.blockingCount ?? 0
+  const humanBlockingCount = totals?.humanBlockingCount ?? 0
   const effectiveReady = releaseReadiness.ready ?? (
     taskCount > 0 &&
     blockingCount === 0 &&
@@ -107,7 +108,7 @@ export function releaseVerdictSummary(
       tasks: taskCount,
       done: doneCount,
       blockingCount,
-      humanBlockingCount: humanBlocking,
+      humanBlockingCount,
       proofEvidenceBlockingCount: totals?.proofEvidenceBlockingCount ?? 0,
       unfinishedCount,
       designSystemBlockingCount,

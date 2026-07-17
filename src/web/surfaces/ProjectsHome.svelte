@@ -37,9 +37,12 @@
   let refreshInFlight = false
   let refreshQueued = false
   let lastRefreshAt = 0
+  let shellNeedsHydration = false
+  const hydratingProjectIds = new Set<string>()
 
   const SERVICE_REFRESH_MIN_INTERVAL_MS = 1500
   const SERVICE_REFRESH_POLL_MS = 30000
+  const SERVICE_PROJECT_TIMEOUT_MS = 12000
   const projectSummaryCache = createProjectSummaryCache()
 
   function isMeaningfulProjectListEvent(type: string): boolean {
@@ -64,6 +67,50 @@
     return typeof document !== 'undefined' && document.visibilityState === 'hidden'
   }
 
+  function updateService(incoming: ServiceDetail): void {
+    const merged = mergeServiceProjectSummaries(service, incoming)
+    if (merged !== service) {
+      service = merged
+      setCachedService(merged)
+    }
+  }
+
+  function markProjectStatusUnavailable(projectId: string): void {
+    if (!service) return
+    const project = service.projects.find(candidate => candidate.id === projectId)
+    if (!project) return
+    updateService({
+      partial: true,
+      defaultProviderStatus: service.defaultProviderStatus,
+      projects: [{
+        ...project,
+        projectStatusLoading: false,
+        projectStatusError: 'Live status is taking longer than expected. Open the project for a fresh status check.',
+      }],
+    })
+  }
+
+  async function refreshProject(projectId: string): Promise<void> {
+    if (hydratingProjectIds.has(projectId)) return
+    hydratingProjectIds.add(projectId)
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), SERVICE_PROJECT_TIMEOUT_MS)
+    try {
+      const response = await fetch(`/api/service?projectId=${encodeURIComponent(projectId)}`, {
+        cache: 'no-store',
+        signal: controller.signal,
+      })
+      if (!response.ok) throw new Error(`Project status request failed (${response.status})`)
+      updateService(await response.json() as ServiceDetail)
+    } catch (err) {
+      if (controller.signal.aborted) markProjectStatusUnavailable(projectId)
+      else error = requestErrorMessage(err)
+    } finally {
+      clearTimeout(timeout)
+      hydratingProjectIds.delete(projectId)
+    }
+  }
+
   async function refresh(background = false): Promise<void> {
     if (background && pageIsHidden()) return
     if (refreshInFlight) {
@@ -73,12 +120,19 @@
     refreshInFlight = true
     if (!background || service == null) loading = true
     try {
-      const response = await fetch('/api/service', { cache: 'no-store' })
-      const payload = (await response.json()) as ServiceDetail
-      const merged = mergeServiceProjectSummaries(service, payload)
-      if (merged !== service) {
-        service = merged
-        setCachedService(merged)
+      const projectIds = service?.projects.map(project => project.id) ?? []
+      if (projectIds.length === 0) {
+        const response = await fetch('/api/service', { cache: 'no-store' })
+        updateService(await response.json() as ServiceDetail)
+      } else {
+        let nextIndex = 0
+        const worker = async () => {
+          while (nextIndex < projectIds.length) {
+            const projectId = projectIds[nextIndex++]
+            await refreshProject(projectId)
+          }
+        }
+        await Promise.all(Array.from({ length: Math.min(2, projectIds.length) }, () => worker()))
       }
       error = null
       lastRefreshAt = Date.now()
@@ -98,10 +152,8 @@
     try {
       const response = await fetch('/api/service/projects', { cache: 'no-store' })
       const payload = (await response.json()) as ServiceDetail
-      const merged = mergeServiceProjectSummaries(service, payload)
-      if (merged !== service) {
-        service = merged
-      }
+      shellNeedsHydration = (payload.projects ?? []).some(project => project.projectStatusLoading === true)
+      updateService(payload)
       error = null
       loading = false
       return true
@@ -122,8 +174,9 @@
     }
     statusHydrating = true
     await loadProjectShell()
-    await refresh(true)
     statusHydrating = false
+    if (shellNeedsHydration) void refresh(true)
+    else await refresh(true)
   }
 
   function scheduleRefresh(): void {

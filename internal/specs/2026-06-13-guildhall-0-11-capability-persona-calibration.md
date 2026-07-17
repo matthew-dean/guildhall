@@ -5,11 +5,11 @@
 **Audience:** Guildhall runtime, review, memory, external-agent bridge,
 capability-boundary, and UI implementation work
 **Related:** `internal/specs/2026-06-03-guildhall-0-11-deterministic-code-quality-signals.md`,
-`internal/specs/2026-06-06-guildhall-0-11-iterative-work-campaigns.md`,
-`internal/specs/2026-05-22-guildhall-0-8-practices-deep-intake-worker-modes-and-personas.md`,
-`internal/specs/2026-05-28-guildhall-0-10-agent-memory-bridge.md`,
+`internal/plans/archive/specs/2026-06-06-guildhall-0-11-iterative-work-campaigns.md`,
+`internal/specs/archive/2026-05-22-guildhall-0-8-practices-deep-intake-worker-modes-and-personas.md`,
+`internal/plans/archive/specs/2026-05-28-guildhall-0-10-agent-memory-bridge.md`,
 `internal/evals/2026-06-04-llm-memory-context-evaluation.md`,
-`internal/plans/2026-06-02-guildhall-0-11-implementation-tracker.md`
+`internal/plans/archive/2026-06-02-guildhall-0-11-implementation-tracker.md`
 
 **Source reference:** Microsoft's SkillOpt project treats natural-language
 agent guidance as trainable external state through rollout evidence, bounded

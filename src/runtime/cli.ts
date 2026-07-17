@@ -49,7 +49,7 @@ import {
 import { exec, spawn } from 'node:child_process'
 import { platform } from 'node:os'
 import { buildSemanticIndexPrompt, codebaseMapPath, refreshCodebaseMap, type CorpusSemanticIndexer } from '@guildhall/corpus-map'
-import { getProjectStateDir } from '@guildhall/sessions'
+import { censusProjectCache, getProjectStateDir } from '@guildhall/sessions'
 import type { ConsumerReturnPacket, DeliveryReceipt } from './project-graph.js'
 import { detectWorkspaceSignals, formWorkspaceHypothesis, type WorkspaceImportDraft, type WorkspaceSignal } from './workspace-import/index.js'
 import { buildWorkspaceImportReview, type WorkspaceImportReview } from './workspace-import/review.js'
@@ -443,6 +443,8 @@ Usage:
     --apply                      Write files. Without this, prints a dry run
     --delete-source              Remove migrated old memory/ files after copying
     --update-gitignore           Write/refresh Guildhall's managed .gitignore block
+  guildhall cache census          Read-only cache ownership census
+    --json                        Print the full census as JSON
   guildhall migrate status [id|path]
                                   Show pending, blocked, and applied project migrations
   guildhall migrate plan [id|path]
@@ -955,6 +957,31 @@ async function cmdCorpusMap() {
   console.log(`[guildhall] Written: ${codebaseMapPath(getProjectStateDir(projectPath))}`)
 }
 
+function cmdCache() {
+  const [subcommand = 'census'] = positionals()
+  if (subcommand !== 'census') {
+    console.error('[guildhall] Usage: guildhall cache census [--json]')
+    process.exit(1)
+  }
+  const census = censusProjectCache()
+  if (args.includes('--json')) {
+    console.log(JSON.stringify(census, null, 2))
+    return
+  }
+  const counts = new Map<string, number>()
+  for (const entry of census.entries) {
+    counts.set(entry.classification, (counts.get(entry.classification) ?? 0) + 1)
+  }
+  console.log('[guildhall] Project cache census (read-only)')
+  console.log(`[guildhall] Cache root: ${census.cacheRoot}`)
+  console.log(`[guildhall] Registry: ${census.registryAvailable ? census.registryPath : `unavailable (${census.registryError})`}`)
+  console.log(`[guildhall] Cache entries: ${census.entries.length}`)
+  for (const classification of ['durable-registered', 'ephemeral-active', 'ephemeral-stale', 'unregistered-unknown']) {
+    console.log(`[guildhall] ${classification}: ${counts.get(classification) ?? 0}`)
+  }
+  console.log('[guildhall] No entries were deleted or marked safe to delete.')
+}
+
 async function cmdMemory() {
   const pos = positionals()
   const subcommand = pos[0] ?? 'migrate-0.8.0'
@@ -1029,10 +1056,22 @@ async function cmdMemory() {
     console.log(`[guildhall] Active tasks sanitized: ${result.activeTasksSanitized}`)
     console.log(`[guildhall] Terminal tasks archived: ${result.archivedTasks}`)
     console.log(`[guildhall] Archived task files compacted: ${result.archivedTaskFilesCompacted}`)
+    console.log(`[guildhall] Archive evidence files compacted: ${result.archiveEvidenceFilesCompacted}`)
     console.log(`[guildhall] Forbidden task fields: ${result.forbiddenTaskFieldsBefore} -> ${result.forbiddenTaskFieldsAfter}`)
     console.log(`[guildhall] Removed evidence bytes: ${result.removedEvidenceBytes}`)
     console.log(`[guildhall] Codebase map compacted: ${result.codebaseMapCompacted ? 'yes' : 'no'}`)
     console.log(`[guildhall] Heartbeat blocks moved: ${result.progressHeartbeatsMoved}`)
+    console.log(`[guildhall] Heartbeat ring: ${result.progressHeartbeatBytesBefore} -> ${result.progressHeartbeatBytesAfter} bytes; ${result.progressHeartbeatRecordsCompacted} records compacted`)
+    console.log(`[guildhall] Essential history files: ${result.exploringHistoryFilesCompacted}/${result.exploringHistoryFilesSeen} compacted (${result.exploringHistoryBytesBefore} -> ${result.exploringHistoryBytesAfter} bytes)`)
+    console.log(`[guildhall] Completed session snapshots: ${result.sessionFilesCompacted}/${result.sessionFilesSeen} compacted (${result.sessionBytesBefore} -> ${result.sessionBytesAfter} bytes); ${result.sessionPendingFilesPreserved} pending recovery files preserved`)
+    console.log(`[guildhall] Context diagnostics: ${result.contextDebugLedgerRecordsCompacted} ledger records compacted (${result.contextDebugLedgerBytesBefore} -> ${result.contextDebugLedgerBytesAfter} bytes); ${result.contextDebugSnapshotFilesCompacted} snapshots compacted (${result.contextDebugSnapshotBytesBefore} -> ${result.contextDebugSnapshotBytesAfter} bytes)`)
+    console.log(`[guildhall] Duplicate context-debug events removed: ${result.contextDebugDuplicateEventFilesRemoved} files (${result.contextDebugDuplicateEventBytesBefore} -> ${result.contextDebugDuplicateEventBytesAfter} bytes)`)
+    console.log(`[guildhall] Durable task evidence: ${result.taskEvidenceRecordsCompacted} records compacted across ${result.taskEvidenceFilesCompacted}/${result.taskEvidenceFilesSeen} files (${result.taskEvidenceBytesBefore} -> ${result.taskEvidenceBytesAfter} bytes)`)
+    console.log(`[guildhall] SQLite evidence: ${result.taskProofRowsCompacted} latest-proof rows and ${result.currentEvidenceRowsCompacted} current rows compacted (${result.databaseEvidenceBytesBefore} -> ${result.databaseEvidenceBytesAfter} bytes)`)
+    console.log(`[guildhall] SQLite database: ${result.databaseBytesBefore} -> ${result.databaseBytesAfter} bytes${result.databaseVacuumed ? ' (vacuumed)' : ''}`)
+    console.log(`[guildhall] Recent reconnect events: ${result.recentEventRecordsCompacted} records compacted (${result.recentEventBytesBefore} -> ${result.recentEventBytesAfter} bytes)`)
+    console.log(`[guildhall] Memory event index: ${result.memoryEventRecordsSeen} records across ${result.memoryEventFilesSeen} files -> ${result.memoryEventRecordsRetained} records in one project stream (${result.memoryEventBytesBefore} -> ${result.memoryEventBytesAfter} bytes)`)
+    console.log(`[guildhall] Migration snapshots: ${result.migrationSnapshotFilesCompacted}/${result.migrationSnapshotFilesSeen} redundant copies compacted (${result.migrationSnapshotBytesBefore} -> ${result.migrationSnapshotBytesAfter} bytes); ${result.migrationSnapshotUnknownFiles} unverified files (${result.migrationSnapshotUnknownBytes} bytes) left untouched`)
     console.log(`[guildhall] Shared TASKS/PROGRESS bytes: ${result.bytesBefore} -> ${result.bytesAfter}`)
     if (result.forbiddenTaskFieldFindings.length > 0) {
       console.log('[guildhall] Forbidden field findings:')
@@ -2318,6 +2357,7 @@ async function main() {
     case 'serve-internal': return cmdServeInternal()
     case 'config':  return cmdConfig()
     case 'corpus-map': return cmdCorpusMap()
+    case 'cache': return cmdCache()
     case 'memory': return cmdMemory()
     case 'migrate': return cmdMigrate()
     case 'workspace-import': return cmdWorkspaceImport()

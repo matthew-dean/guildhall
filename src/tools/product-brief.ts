@@ -1,10 +1,16 @@
-import { writeManagedTextFileSync } from '@guildhall/persistence'
-import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
+import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync } from '@guildhall/persistence'
 import { defineTool } from '@guildhall/engine'
 import { z } from 'zod'
 import fs from 'node:fs/promises'
+import path from 'node:path'
 import { TaskQueue, type ProductBrief } from '@guildhall/core'
-import { atomicWriteText } from '@guildhall/sessions'
+import {
+  readProjectTaskQueueForMutationSync,
+  readProjectStateAuthorityAtBoundary,
+  readProjectTaskQueueSync,
+  writePromotedTaskDetailMutation,
+  writeProjectTaskQueueWithSummary,
+} from '../runtime/project-state-boundary.js'
 
 // ---------------------------------------------------------------------------
 // update-product-brief: the Spec Agent's authoring surface for the product
@@ -348,8 +354,8 @@ export async function updateProductBrief(
   if (!input.taskId?.trim()) return { success: false, error: 'Missing taskId' }
   if (!input.authoredBy?.trim()) return { success: false, error: 'Missing authoredBy' }
   try {
-    const raw = await readManagedTextFile(input.tasksPath, 'utf-8')
-    const queue = TaskQueue.parse(JSON.parse(raw))
+    const queueRead = readProjectTaskQueueForMutationSync(input.tasksPath)
+    const queue = TaskQueue.parse(queueRead.queue)
     const task = queue.tasks.find((t) => t.id === input.taskId)
     if (!task) return { success: false, error: `Task ${input.taskId} not found` }
     if (!input.userJob?.trim()) return { success: false, error: 'Missing userJob' }
@@ -398,7 +404,27 @@ export async function updateProductBrief(
     task.updatedAt = now
     queue.lastUpdated = now
 
-    writeManagedTextFileSync(input.tasksPath, JSON.stringify(queue, null, 2) + '\n')
+    if (readProjectStateAuthorityAtBoundary(input.tasksPath).authority === 'database') {
+      const projectRoot = path.isAbsolute(task.projectPath) ? task.projectPath : path.dirname(input.tasksPath)
+      const pointMutation = writePromotedTaskDetailMutation(input.tasksPath, task.id, {
+        projectId: path.basename(projectRoot),
+        projectRoot,
+        mutate: (current) => ({
+          ...current,
+          productBrief: brief,
+          updatedAt: now,
+        }),
+      })
+      if (!pointMutation) {
+        throw new Error(`Could not persist promoted product brief for task ${task.id}`)
+      }
+    } else {
+      writeProjectTaskQueueWithSummary(input.tasksPath, queue, {
+        ...(queueRead.expectedQueueRevision !== null
+          ? { expectedQueueRevision: queueRead.expectedQueueRevision }
+          : {}),
+      })
+    }
     return { success: true }
   } catch (err) {
     return { success: false, error: String(err) }
@@ -423,8 +449,7 @@ export const updateProductBriefTool = defineTool({
     }
     let taskTitle = target.taskId
     try {
-      const raw = await readManagedTextFile(target.tasksPath, 'utf-8')
-      const queue = TaskQueue.parse(JSON.parse(raw))
+      const queue = TaskQueue.parse(readProjectTaskQueueSync(target.tasksPath))
       const task = queue.tasks.find((t) => t.id === target.taskId)
       if (task?.title?.trim()) taskTitle = task.title
     } catch {

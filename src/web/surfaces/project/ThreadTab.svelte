@@ -673,7 +673,13 @@
 
   async function loadThreadExtras(requestId: number): Promise<void> {
     try {
-      const r = await scopedProjectFetch('/api/project/thread/extras', { cache: 'no-store' })
+      const taskIds = [...new Set(
+        turns
+          .map(turn => ('taskId' in turn ? turn.taskId : null))
+          .filter((id): id is string => Boolean(id)),
+      )]
+      const query = taskIds.length > 0 ? `?taskIds=${encodeURIComponent(taskIds.join(','))}` : ''
+      const r = await scopedProjectFetch(`/api/project/thread/extras${query}`, { cache: 'no-store' })
       if (!r.ok) return
       const j = (await r.json()) as { taskGitStories?: Record<string, unknown> }
       if (requestId !== threadLoadRequestId) return

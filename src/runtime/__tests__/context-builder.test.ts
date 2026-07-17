@@ -1528,6 +1528,19 @@ describe('buildContext — exploring transcript', () => {
     // The tail marker should survive the truncation (it's near the end).
     expect(ctx.exploringTranscript).toContain('TAIL-MARKER')
   })
+
+  it('does not read legacy transcript files outside explicit migration', async () => {
+    const exploringTask: Task = { ...baseTask, status: 'exploring' }
+    const legacyFile = path.join(tmpDir, 'exploring', `${exploringTask.id}.md`)
+    await fs.mkdir(path.dirname(legacyFile), { recursive: true })
+    await fs.writeFile(legacyFile, `# Exploring transcript: ${exploringTask.id}\n\nlegacy context`, 'utf-8')
+
+    const ctx = await buildContext(exploringTask, tmpDir)
+
+    expect(ctx.exploringTranscript).toBe('')
+    expect(ctx.formatted).not.toContain('Exploring Transcript')
+    expect(ctx.formatted).not.toContain('legacy context')
+  })
 })
 
 

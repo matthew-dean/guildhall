@@ -17,9 +17,10 @@
   interface Props {
     task: Task
     contextDebug?: ContextDebugRecord[]
+    gitStoryLoaded?: boolean
   }
 
-  let { task, contextDebug = [] }: Props = $props()
+  let { task, contextDebug = [], gitStoryLoaded = false }: Props = $props()
 
   const lines = $derived<Array<readonly [string, string | null]>>([
     ['Origination', task.origination ? labelForIdentifier('agent', task.origination).label : 'Human'],
@@ -116,6 +117,12 @@
           </div>
         {/if}
       </Stack>
+    </Card>
+  {/if}
+
+  {#if gitStoryLoaded && !task.gitStory}
+    <Card title="Repository state">
+      <p>No repository snapshot is recorded for this task.</p>
     </Card>
   {/if}
 

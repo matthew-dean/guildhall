@@ -198,8 +198,9 @@ Settings:
 Project graph and structural map:
 
 - `src/runtime/project-graph.ts`, `src/runtime/structural-map.ts`, and
-  `src/runtime/state-machine.ts` are product-core concepts, not chopping-block
-  candidates by default.
+  `src/runtime/state-machine.ts` provide projections or relations over the
+  shared project-state model; they are not independent authorities or
+  chopping-block candidates by default.
 - Their UI must be focused. Project graph assignment/review belongs in a project
   structure/graph panel, not as another long branch inside `SettingsTab.svelte`.
 - Structural-map owner questions route through the owner-input surface when they

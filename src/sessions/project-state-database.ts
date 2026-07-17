@@ -1,0 +1,6483 @@
+import { DatabaseSync } from 'node:sqlite'
+import { gzipSync, gunzipSync } from 'node:zlib'
+import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+
+import { compactTaskEvidenceEvent, compactTaskEvidencePayload, TaskEvidenceEvent } from '@guildhall/core'
+import type { TaskEvidenceEvent as TaskEvidenceEventRecord } from '@guildhall/core'
+import { ensureProjectLocalHistoryDir, getProjectLocalHistoryDir, getProjectSystemStatePath } from './local-history.js'
+import { atomicWriteBytes, atomicWriteText } from './atomic.js'
+import { emitProjectSummaryInvalidation, type ProjectStateDomain } from './project-summary-invalidation.js'
+
+export const PROJECT_STATE_DATABASE_FILE = 'project-state.db'
+/**
+ * Schema Migration Decision - `0.13.0/project-projection-jobs`,
+ * `0.13.0/project-diagnostics`, and `0.13.1/release-membership`:
+ * add compact, coalesced job metadata plus one bounded diagnostic row. The
+ * diagnostic row stores only the latest Git/readiness observation, its source
+ * revision, and freshness metadata; it has no history or authority over
+ * current project state. The release-membership migration adds the single
+ * normalized release-to-task relation that replaces JSON membership mirrors.
+ * It backfills from the last authoritative release envelope exactly once;
+ * ordinary reads never union or choose between the old mirrors.
+ */
+export const PROJECT_STATE_DATABASE_SCHEMA_VERSION = 28
+export const PROJECT_STATE_DATABASE_DIAGNOSTIC_PROJECTION_DOMAIN = 'diagnostics'
+export const PROJECT_STATE_DATABASE_DIAGNOSTIC_MAX_BLOCKERS = 12
+export const PROJECT_STATE_DATABASE_DIAGNOSTIC_MAX_TEXT_LENGTH = 240
+export const PROJECT_STATE_DATABASE_DIAGNOSTIC_MAX_BYTES = 32 * 1024
+export const PROJECT_STATE_DETAIL_FILE = 'queue-details.json'
+export const PROJECT_STATE_COMPRESSED_DETAIL_FILE = 'queue-details.json.gz'
+
+type JsonRecord = Record<string, unknown>
+
+export type ProjectStateDatabaseAuthority = 'legacy' | 'database'
+
+/**
+ * The source-selection token for current project state. Authority and its
+ * revision belong together: callers must not decide which store to read from
+ * using a marker read that is unrelated to the queue they then consume.
+ */
+export interface ProjectStateDatabaseAuthoritySnapshot {
+  authority: ProjectStateDatabaseAuthority
+  projectRevision: number
+  queueRevision: number | null
+}
+export type ProjectStateDatabaseTaskEvidenceAuthority = 'legacy' | 'database' | 'compressed'
+
+export interface ProjectStateDatabaseSnapshot {
+  queue: unknown
+  summary: unknown
+  scopeRows?: ProjectStateDatabaseScopeRow[]
+  /** Workspace root for first-write cache provenance; omitted by low-level migration callers. */
+  projectRoot?: string
+  /**
+   * Explicit migration-only request to retain the retired compressed queue
+   * sidecar while older conversion steps are still running. Normal writes
+   * never create a second queue representation.
+   */
+  compatibilityExport?: 'full' | 'compact'
+  /**
+   * Queue replacement precondition. A value of null means the queue must not
+   * exist yet; an omitted value preserves the legacy unconditional writer for
+   * migration/bootstrap callers until they opt into compare-and-swap.
+   */
+  expectedQueueRevision?: number | null
+  /** Derived domains to enqueue with this authoritative queue revision. */
+  projectionDomains?: readonly string[]
+}
+
+/**
+ * One current work-item mutation for a promoted project. The summary is
+ * required because a task revision and its compact answer must commit
+ * together; callers may not leave the database with a silently stale summary.
+ */
+export interface ProjectStateDatabaseTaskMutation {
+  task: Record<string, unknown>
+  summary: Record<string, unknown>
+  expectedQueueRevision: number
+  expectedProjectRevision: number
+  lastUpdated?: string | null
+  /** Omit to preserve the existing scope row; null removes it. */
+  scopeRow?: ProjectStateDatabaseScopeRow | null
+  /**
+   * Evidence written with the task mutation. This keeps current task detail,
+   * proof, and bounded evidence history under one SQLite transaction.
+   */
+  evidence?: readonly {
+    event: TaskEvidenceEventRecord
+    retention: ProjectStateDatabaseTaskEvidenceRetentionInput
+  }[]
+  /** Derived domains to enqueue with this authoritative project revision. */
+  projectionDomains?: readonly string[]
+}
+
+/**
+ * Change the selected release without replacing unrelated task definitions.
+ * The summary and affected scope rows are supplied by the shared projection
+ * builder so this transaction cannot invent a second release interpretation.
+ */
+export interface ProjectStateDatabaseReleaseSelectionMutation {
+  releases: readonly JsonRecord[]
+  selectedReleaseId: string
+  summary: JsonRecord
+  scopeRows: readonly ProjectStateDatabaseScopeRow[]
+  expectedQueueRevision: number
+  expectedProjectRevision: number
+  lastUpdated?: string | null
+  /** Derived domains to enqueue with this authoritative project revision. */
+  projectionDomains?: readonly string[]
+}
+
+/**
+ * Commit one structural current-state delta. The caller supplies only
+ * changed/new task definitions, the affected relationship/scope rows, and an
+ * optional queue envelope. Untouched task/detail rows remain in place. This
+ * is the one normalized write boundary for hierarchy, dependency, release,
+ * and planning-envelope changes.
+ */
+export interface ProjectStateDatabaseTaskBatchMutation {
+  tasks: readonly JsonRecord[]
+  removeTaskIds?: readonly string[]
+  scopeRows?: readonly ProjectStateDatabaseScopeRow[]
+  removeScopeRowTaskIds?: readonly string[]
+  releases?: readonly JsonRecord[]
+  selectedReleaseId?: string | null
+  executionPlanActions?: readonly JsonRecord[]
+  scopeAuthorityRequests?: readonly JsonRecord[]
+  evidence?: readonly {
+    event: TaskEvidenceEventRecord
+    retention: ProjectStateDatabaseTaskEvidenceRetentionInput
+  }[]
+  summary: JsonRecord
+  expectedQueueRevision: number
+  expectedProjectRevision: number
+  lastUpdated?: string | null
+  /** Derived domains to enqueue with this authoritative project revision. */
+  projectionDomains?: readonly string[]
+}
+
+/**
+ * Refresh derived summary/scope rows without pretending the queue changed.
+ * Queue replacement owns queue_state, indexed task detail, and the queue revision;
+ * projection refresh owns only these read-model tables.
+ */
+export interface ProjectStateDatabaseSummarySnapshot {
+  summary: unknown
+  /**
+   * The task-status and scope rows produced by one current projection pass.
+   * Keeping them in one value makes it explicit that compact status and scope
+   * are a pair, not independently authored summaries.
+   */
+  currentProjection?: ProjectStateDatabaseCurrentProjection
+  /** @deprecated Use currentProjection for runtime projection writes. */
+  scopeRows?: ProjectStateDatabaseScopeRow[]
+  /**
+   * Current status facts derived by the shared projection builder. These are
+   * indexed beside scope rows so compact and rich reads share one current
+   * status without copying evidence/detail payloads into the summary.
+   */
+  taskStatusRows?: readonly ProjectStateDatabaseTaskStatusRow[]
+  /** Compare-and-swap guard for evidence/runtime writes that do not change the queue revision. */
+  expectedProjectRevision?: number | null
+  expectedQueueRevision?: number | null
+}
+
+export interface ProjectStateDatabaseCurrentProjection {
+  taskStatusRows: readonly ProjectStateDatabaseTaskStatusRow[]
+  scopeRows: readonly ProjectStateDatabaseScopeRow[]
+}
+
+export interface ProjectStateDatabaseTaskStatusRow {
+  taskId: string
+  status: string | null
+  completedAt?: string | null
+}
+
+export interface ProjectStateDatabaseQueueRead {
+  definition: ProjectStateDatabaseQueueDefinition
+  revision: number
+  projectRevision: number
+}
+
+/**
+ * Derived membership for the selected project scope. It is written with the
+ * queue snapshot so compact Work reads can annotate one indexed task page
+ * without rebuilding scope from every work item.
+ */
+export interface ProjectStateDatabaseScopeRow {
+  taskId: string
+  /** Parent identity comes from the normalized work_items row, not a queue re-read. */
+  parentTaskId?: string
+  scope: 'included' | 'deferred'
+  eligibilityReason: string
+  hierarchyRole: string
+  handoffState: string
+  blocksStart: boolean
+  blocksRelease: boolean
+  humanBlocking: boolean
+  /** Hidden child work can gate a release without inflating progress totals. */
+  countInProjectTotals?: boolean
+  proofBlocked?: boolean
+  blockerSummary?: string
+  sourceRefs: string[]
+}
+
+export type ProjectStateDatabaseReleaseDisposition = 'included' | 'deferred'
+
+export interface ProjectStateDatabaseReleaseMembership {
+  releaseId: string
+  taskId: string
+  disposition: ProjectStateDatabaseReleaseDisposition
+}
+
+export interface ProjectStateDatabaseTaskRuntime {
+  taskId: string
+  updatedAt?: string
+  payload: unknown
+}
+
+export interface ProjectStateDatabaseTaskProof {
+  taskId: string
+  kind: string
+  recordedAt: string
+  id?: string
+  payload: unknown
+}
+
+/**
+ * Structural input accepted from the existing task evidence retention policy.
+ * The SQLite boundary owns no default policy, so callers cannot accidentally
+ * create a second retention source.
+ */
+export interface ProjectStateDatabaseTaskEvidenceRetentionInput {
+  maxRecords: number
+  maxBytes: number
+}
+
+export interface ProjectStateDatabaseTaskEvidenceCurrentRecord {
+  id: string
+  recordedAt: string
+  payload: JsonRecord
+}
+
+/**
+ * Bounded current evidence facts for one task. This is not the evidence
+ * ledger: it is the small projection ordinary status reads can use without
+ * replaying JSONL. The ledger remains the historical/detail source.
+ */
+export interface ProjectStateDatabaseTaskEvidenceCurrent {
+  taskId: string
+  updatedAt: string
+  version: 1
+  byKind: Record<string, ProjectStateDatabaseTaskEvidenceCurrentRecord[]>
+}
+
+/**
+ * The small mutable part of a task. Task definitions and historical evidence
+ * deliberately live outside this read: callers that need either must opt in.
+ */
+export interface ProjectStateDatabaseTaskOverlay {
+  runtime?: ProjectStateDatabaseTaskRuntime
+  workspace?: ProjectStateDatabaseTaskRuntime
+  latestProof?: ProjectStateDatabaseTaskProof & { result: string | null }
+  evidenceCurrent?: ProjectStateDatabaseTaskEvidenceCurrent
+}
+
+export interface ProjectStateDatabaseTaskOverlayStores {
+  runtime: ProjectStateDatabaseTaskRuntime[]
+  workspace: ProjectStateDatabaseTaskRuntime[]
+  /** Bounded current evidence keyed by task; history is intentionally absent. */
+  evidenceCurrent: Map<string, ProjectStateDatabaseTaskEvidenceCurrent>
+}
+
+export interface ProjectStateDatabaseExecution {
+  status: string
+  mode?: string | null
+  startedAt?: string | null
+  stoppedAt?: string | null
+  stopRequestedAt?: string | null
+  error?: string | null
+  updatedAt: string
+  payload?: unknown
+}
+
+export interface ProjectStateDatabaseRuntime {
+  status: string
+  health?: string | null
+  lastActivityAt?: string | null
+  updatedAt: string
+  payload?: unknown
+}
+
+export interface ProjectStateDatabaseOwnerInput {
+  id: string
+  status: string
+  prompt: string
+  taskId?: string | null
+  updatedAt: string
+  payload?: unknown
+}
+
+export interface ProjectStateDatabaseRepository {
+  id: string
+  root: string
+  branch?: string | null
+  head?: string | null
+  status?: string | null
+  freshness: 'current' | 'stale' | 'unknown'
+  inspectedAt?: string | null
+  payload?: unknown
+}
+
+export interface ProjectStateDatabaseDiagnosticBlocker {
+  id: string
+  label: string
+  state?: string
+  reason?: string
+  nextAction?: string
+  repoId?: string
+  taskId?: string
+}
+
+export interface ProjectStateDatabaseGitDiagnosticObservation {
+  ready: boolean
+  state: string
+  blockerCount: number
+  blockers: ProjectStateDatabaseDiagnosticBlocker[]
+}
+
+export interface ProjectStateDatabaseReadinessDiagnosticObservation {
+  ready: boolean
+  code: string | null
+  message: string | null
+  blockerCount: number
+  unfinishedCount: number
+  /** Bounded union of saved task, proof, repository, and checkout blockers. */
+  blockers?: ProjectStateDatabaseDiagnosticBlocker[]
+}
+
+export type ProjectStateDatabaseDiagnosticFreshness = 'current' | 'stale'
+
+export interface ProjectStateDatabaseDiagnosticProjectionSnapshot {
+  sourceRevision: number
+  freshness: ProjectStateDatabaseDiagnosticFreshness
+  generatedAt: string
+  git: ProjectStateDatabaseGitDiagnosticObservation | null
+  readiness: ProjectStateDatabaseReadinessDiagnosticObservation | null
+}
+
+export interface ProjectStateDatabaseDiagnosticProjection extends ProjectStateDatabaseDiagnosticProjectionSnapshot {
+  updatedAt: string
+}
+
+export interface ProjectStateDatabaseDiagnosticProjectionWriteOptions {
+  updatedAt?: string
+}
+
+export interface ProjectStateDatabaseMetadata {
+  schemaVersion: number
+  revision: number
+  updatedAt: string
+  projectStateAuthority?: ProjectStateDatabaseAuthority
+  taskEvidenceAuthority?: ProjectStateDatabaseTaskEvidenceAuthority
+  summaryRevision?: number | null
+  summaryFreshness?: 'current' | 'stale' | 'missing'
+}
+
+export interface ProjectStateDatabaseAvailability {
+  status: 'active' | 'paused'
+  pausedAt: string | null
+  resumedAt: string | null
+  reason?: string
+}
+
+export interface ProjectStateDatabaseAttentionRecord<T = unknown> {
+  id: string
+  status: string
+  updatedAt: string
+  payload: T
+}
+
+export interface ProjectStateDatabaseProjectionWatermark {
+  domain: string
+  sourceRevision: number
+  refreshedAt: string
+}
+
+export type ProjectStateDatabaseProjectionJobStatus = 'pending' | 'running' | 'failed' | 'succeeded'
+
+export interface ProjectStateDatabaseProjectionJob {
+  id: number
+  domain: string
+  sourceRevision: number
+  status: ProjectStateDatabaseProjectionJobStatus
+  error: string | null
+  attempts: number
+  claimedAt: string | null
+  lastAttemptAt: string | null
+  completedAt: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface ProjectStateDatabaseProjectionJobReadOptions {
+  status?: ProjectStateDatabaseProjectionJobStatus | readonly ProjectStateDatabaseProjectionJobStatus[]
+  limit?: number
+}
+
+export interface ProjectStateDatabaseProjectionJobWriteOptions {
+  now?: string
+  sourceRevision?: number
+  error?: string | null
+}
+
+export interface ProjectStateDatabaseReconciliation<T = unknown> {
+  capabilityId: string
+  status: string
+  resolvedAt: string
+  payload: T
+}
+
+export interface ProjectStateDatabaseSummary<T = unknown> {
+  payload: T
+  freshness: 'current' | 'stale'
+  generatedAt: string
+  sourceQueueLastUpdated: string | null
+}
+
+/**
+ * One read snapshot for current project state. Queue identity, scope
+ * membership, and the saved summary are deliberately returned together so a
+ * caller cannot mix projections from different database revisions.
+ */
+export interface ProjectStateDatabaseCurrentState<T = unknown> {
+  queue: ProjectStateDatabaseQueueDefinition
+  queueRevision: number
+  projectRevision: number
+  scopeRows: ProjectStateDatabaseScopeRow[]
+  repositories: ProjectStateDatabaseRepository[]
+  diagnostics: ProjectStateDatabaseDiagnosticProjection | null
+  summary: ProjectStateDatabaseSummary<T> | null
+}
+
+/**
+ * One bounded snapshot for compact project surfaces. The queue is only its
+ * envelope; the paged inventory owns task rows so a list read never expands
+ * into the full detail store.
+ */
+export interface ProjectStateDatabaseProjectionState<T = unknown> {
+  queue: ProjectStateDatabaseQueue
+  queueRevision: number
+  projectRevision: number
+  scopeRows: ProjectStateDatabaseScopeRow[]
+  inventory: ProjectStateDatabaseInventory
+  repositories: ProjectStateDatabaseRepository[]
+  diagnostics: ProjectStateDatabaseDiagnosticProjection | null
+  summary: ProjectStateDatabaseSummary<T> | null
+}
+
+/** One revisioned point/detail read for the task drawer and task APIs. */
+export interface ProjectStateDatabaseTaskDetailState<T = unknown> {
+  queue: ProjectStateDatabaseQueue
+  task: ProjectStateDatabaseTask
+  relationships: ProjectStateDatabaseTaskRelationships
+  scopeRows: ProjectStateDatabaseScopeRow[]
+  queueRevision: number
+  projectRevision: number
+  summary: ProjectStateDatabaseSummary<T> | null
+}
+
+/**
+ * The bounded, durable read model for the ordinary Thread route. The payload
+ * is intentionally opaque here: runtime owns Thread's shape, while SQLite
+ * owns its current-state lifecycle and revision boundary.
+ */
+export interface ProjectStateDatabaseCurrentThread<T = unknown> {
+  payload: T
+  generatedAt: string
+  sourceRevision: string | number
+  sourceQueueRevision: number | null
+}
+
+/** One atomic read for Thread's current projection and freshness watermark. */
+export interface ProjectStateDatabaseThreadSurfaceState<T = unknown> {
+  thread: ProjectStateDatabaseCurrentThread<T> | null
+  queueRevision: number | null
+  projectRevision: number | null
+}
+
+export interface ProjectStateDatabaseSummaryReadOptions {
+  /** Include the project map/orientation projection in the result. */
+  includeOrientation?: boolean
+  /** Include the imported planning snapshot; fleet shells do not need it. */
+  includeApprovedPlan?: boolean
+}
+
+export interface ProjectStateDatabaseTask {
+  id: string
+  title: string
+  description: string | null
+  status: string | null
+  domain: string | null
+  priority: string | null
+  workKind: string | null
+  parentId: string | null
+  hierarchy: JsonRecord | null
+  dependsOn: string[]
+  releaseIds: string[]
+  sourceRefs: string[]
+  updatedAt: string | null
+  completedAt: string | null
+  definition: JsonRecord
+  scopeRow: ProjectStateDatabaseScopeRow | null
+}
+
+export interface ProjectStateDatabaseTaskPointRead {
+  task: ProjectStateDatabaseTask
+  revision: number
+  projectRevision: number
+}
+
+export interface ProjectStateDatabaseTaskRelationships {
+  taskId: string
+  parentId: string | null
+  childIds: string[]
+  scopeRow: ProjectStateDatabaseScopeRow | null
+}
+
+export interface ProjectStateDatabaseInventoryOptions {
+  offset?: number
+  limit?: number
+  includeDefinitions?: boolean
+}
+
+export interface ProjectStateDatabaseInventory {
+  tasks: ProjectStateDatabaseTask[]
+  total: number
+  offset: number
+  limit: number | null
+  hasMore: boolean
+}
+
+/**
+ * Full current queue shape for detail readers. Unlike an inventory page, this
+ * deliberately includes task definitions, but it is still a point read from
+ * the database rather than a compatibility-file parse.
+ */
+export interface ProjectStateDatabaseQueueDefinition {
+  version: number
+  lastUpdated?: string
+  selectedReleaseId?: string
+  executionPlanActions?: JsonRecord[]
+  scopeAuthorityRequests?: JsonRecord[]
+  tasks: JsonRecord[]
+  releases: JsonRecord[]
+}
+
+interface ProjectStateDatabaseDetailStore extends ProjectStateDatabaseQueueDefinition {
+  detailStoreVersion: 1
+  revision: number
+}
+
+function isRecord(value: unknown): value is JsonRecord {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+function json(value: unknown): string {
+  return JSON.stringify(value ?? null)
+}
+
+function summaryStorageParts(summary: JsonRecord): {
+  compact: JsonRecord
+  orientation: unknown | null
+  /** undefined means preserve an existing source snapshot on a summary patch. */
+  approvedPlan: unknown | null | undefined
+} {
+  const compact = { ...summary }
+  const orientation = compact.orientationSpine ?? null
+  delete compact.orientationSpine
+  const approvedPlan = 'approvedPlan' in compact ? compact.approvedPlan : undefined
+  delete compact.approvedPlan
+  // These mutable facts have dedicated current-state tables. Keeping them in
+  // the summary payload created two plausible truths after an overlay write.
+  delete compact.execution
+  delete compact.runtime
+  // Owner-input migration is deliberately separate: older snapshots may only
+  // have the compact summary queue, but current reads use owner_inputs once
+  // the database schema is present. Migration code imports the old records.
+  return { compact, orientation, approvedPlan }
+}
+
+function compactOwnerInputPayload(payload: unknown): JsonRecord {
+  const record = isRecord(payload) ? payload : {}
+  const target = isRecord(record.target) ? record.target : null
+  const href = stringValue(target?.href)
+  return href ? { target: { href } } : {}
+}
+
+function serializedBytes(value: unknown): number {
+  return Buffer.byteLength(json(value), 'utf8')
+}
+
+function parseJson<T>(value: unknown, fallback: T): T {
+  if (typeof value !== 'string') return fallback
+  try {
+    return JSON.parse(value) as T
+  } catch {
+    return fallback
+  }
+}
+
+function parseStoredJson<T>(value: unknown, label: string): T {
+  if (typeof value !== 'string') throw new Error(`Corrupt normalized ${label}: payload is not JSON text`)
+  try {
+    return JSON.parse(value) as T
+  } catch {
+    throw new Error(`Corrupt normalized ${label}: invalid JSON payload`)
+  }
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === 'string' && value.trim().length > 0 ? value : null
+}
+
+function optionalSelectedReleaseId(value: unknown): { selectedReleaseId?: string } {
+  const selectedReleaseId = stringValue(value)
+  return selectedReleaseId ? { selectedReleaseId } : {}
+}
+
+function optionalJsonArray(value: unknown, key: 'executionPlanActions' | 'scopeAuthorityRequests'): Record<string, JsonRecord[]> {
+  const parsed = parseJson<unknown>(value, [])
+  return Array.isArray(parsed) && parsed.every(isRecord) && parsed.length > 0
+    ? { [key]: parsed }
+    : {}
+}
+
+function optionalLastUpdated(value: unknown): { lastUpdated?: string } {
+  const lastUpdated = stringValue(value)
+  return lastUpdated ? { lastUpdated } : {}
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    : []
+}
+
+function taskIdFromReleaseNodeId(value: string): string {
+  return value.replace(/^work:/, '').trim()
+}
+
+function releaseMembershipFromDefinitions(releases: readonly JsonRecord[]): ProjectStateDatabaseReleaseMembership[] {
+  const rows = new Map<string, ProjectStateDatabaseReleaseMembership>()
+  for (const release of releases) {
+    const releaseId = stringValue(release.id)
+    if (!releaseId) continue
+    for (const nodeId of stringArray(release.nodeIds)) {
+      const taskId = taskIdFromReleaseNodeId(nodeId)
+      if (!taskId) continue
+      rows.set(`${releaseId}\0${taskId}`, { releaseId, taskId, disposition: 'included' })
+    }
+    for (const nodeId of stringArray(release.deferredNodeIds)) {
+      const taskId = taskIdFromReleaseNodeId(nodeId)
+      if (!taskId) continue
+      const key = `${releaseId}\0${taskId}`
+      if (!rows.has(key)) rows.set(key, { releaseId, taskId, disposition: 'deferred' })
+    }
+  }
+  return [...rows.values()]
+}
+
+/**
+ * Normalize an intake envelope before it becomes current state. A task-level
+ * release ID is an explicit assignment even when an older intake writer did
+ * not emit a release envelope. Materialize that assignment here, in the same
+ * write transaction, so no later reader has to guess or discard it.
+ */
+function releaseDefinitionsWithTaskMembership(
+  releases: readonly JsonRecord[],
+  tasks: readonly JsonRecord[],
+  options: { clearUnlistedTaskMembership?: boolean } = {},
+): JsonRecord[] {
+  const byId = new Map<string, JsonRecord>()
+  for (const release of releases) {
+    const id = stringValue(release.id)
+    if (!id) continue
+    byId.set(id, {
+      ...release,
+      nodeIds: stringArray(release.nodeIds),
+      deferredNodeIds: stringArray(release.deferredNodeIds),
+    })
+  }
+
+  for (const task of tasks) {
+    const taskId = stringValue(task.id)
+    if (!taskId) continue
+    const nodeId = `work:${taskId}`
+    const status = stringValue(task.status)
+    const terminal = status === 'archived' || status === 'cancelled'
+    const deferred = status === 'shelved'
+    const releaseIds = stringArray(task.releaseIds)
+    // The supplied task definition is the complete membership statement for
+    // this task when the caller is applying a task edit. A full intake
+    // envelope may intentionally keep deferred membership in its release
+    // definition while the task's legacy releaseIds array is empty.
+    if (options.clearUnlistedTaskMembership === true) {
+      for (const release of byId.values()) {
+        release.nodeIds = stringArray(release.nodeIds).filter(value => value !== nodeId)
+        release.deferredNodeIds = stringArray(release.deferredNodeIds).filter(value => value !== nodeId)
+      }
+    } else if (releaseIds.length > 0) {
+      for (const release of byId.values()) {
+        if (releaseIds.includes(String(release.id))) continue
+        release.nodeIds = stringArray(release.nodeIds).filter(value => value !== nodeId)
+        release.deferredNodeIds = stringArray(release.deferredNodeIds).filter(value => value !== nodeId)
+      }
+    }
+    for (const releaseId of releaseIds) {
+      let release = byId.get(releaseId)
+      if (!release) {
+        release = {
+          id: releaseId,
+          label: releaseId,
+          kind: 'release',
+          state: 'active',
+          source: 'inferred',
+          proofStyle: 'unspecified',
+          nodeIds: [],
+          deferredNodeIds: [],
+        }
+        byId.set(releaseId, release)
+      }
+      const nodeIds = stringArray(release.nodeIds)
+      const deferredNodeIds = stringArray(release.deferredNodeIds)
+      if (!terminal) {
+        const preserveDeferredDisposition = options.clearUnlistedTaskMembership !== true && deferredNodeIds.includes(nodeId)
+        ;(deferred || preserveDeferredDisposition ? deferredNodeIds : nodeIds).push(nodeId)
+      }
+      release.nodeIds = [...new Set(nodeIds)]
+      release.deferredNodeIds = [...new Set(deferredNodeIds)]
+    }
+  }
+
+  return [...byId.values()]
+}
+
+function syncReleaseMembershipFromDefinitions(
+  database: DatabaseSync,
+  releases: readonly JsonRecord[],
+): void {
+  if (!tableExists(database, 'release_membership')) return
+  database.prepare('DELETE FROM release_membership').run()
+  const insert = database.prepare(`
+    INSERT INTO release_membership (release_id, task_id, disposition)
+    VALUES (?, ?, ?)
+  `)
+  for (const row of releaseMembershipFromDefinitions(releases)) {
+    insert.run(row.releaseId, row.taskId, row.disposition)
+  }
+}
+
+function upsertReleaseDefinitions(database: DatabaseSync, releases: readonly JsonRecord[]): void {
+  const upsert = database.prepare(`
+    INSERT INTO scopes (
+      id, label, kind, state, source, proof_style,
+      node_ids_json, deferred_node_ids_json, definition_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      label = excluded.label,
+      kind = excluded.kind,
+      state = excluded.state,
+      source = excluded.source,
+      proof_style = excluded.proof_style,
+      node_ids_json = excluded.node_ids_json,
+      deferred_node_ids_json = excluded.deferred_node_ids_json,
+      definition_json = excluded.definition_json
+  `)
+  for (const release of releases) {
+    const id = stringValue(release.id)
+    if (!id) continue
+    upsert.run(
+      id,
+      String(release.label ?? id),
+      stringValue(release.kind),
+      stringValue(release.state),
+      stringValue(release.source),
+      stringValue(release.proofStyle),
+      json(stringArray(release.nodeIds)),
+      json(stringArray(release.deferredNodeIds)),
+      json(release),
+    )
+  }
+}
+
+function readReleaseMembershipByRelease(database: DatabaseSync): Map<string, { included: string[]; deferred: string[] }> {
+  const result = new Map<string, { included: string[]; deferred: string[] }>()
+  if (!tableExists(database, 'release_membership')) return result
+  const rows = database.prepare(`
+    SELECT release_id, task_id, disposition
+    FROM release_membership
+    ORDER BY release_id, rowid
+  `).all() as JsonRecord[]
+  for (const row of rows) {
+    const releaseId = stringValue(row.release_id)
+    const taskId = stringValue(row.task_id)
+    if (!releaseId || !taskId) continue
+    const membership = result.get(releaseId) ?? { included: [], deferred: [] }
+    if (row.disposition === 'deferred') membership.deferred.push(`work:${taskId}`)
+    else membership.included.push(`work:${taskId}`)
+    result.set(releaseId, membership)
+  }
+  return result
+}
+
+function readReleaseMembershipByTask(database: DatabaseSync): Map<string, string[]> {
+  const result = new Map<string, string[]>()
+  if (!tableExists(database, 'release_membership')) return result
+  const rows = database.prepare(`
+    SELECT release_id, task_id
+    FROM release_membership
+    ORDER BY task_id, release_id
+  `).all() as JsonRecord[]
+  for (const row of rows) {
+    const releaseId = stringValue(row.release_id)
+    const taskId = stringValue(row.task_id)
+    if (!releaseId || !taskId) continue
+    const releaseIds = result.get(taskId) ?? []
+    releaseIds.push(releaseId)
+    result.set(taskId, releaseIds)
+  }
+  return result
+}
+
+function applyReleaseMembershipToTaskRows(database: DatabaseSync, rows: JsonRecord[]): void {
+  if (!tableExists(database, 'release_membership')) return
+  const releaseIdsByTask = readReleaseMembershipByTask(database)
+  for (const row of rows) {
+    const taskId = stringValue(row.id)
+    if (!taskId) continue
+    // The work-item JSON array is retained only as a compact compatibility
+    // field. Once the normalized table exists, an empty relation is still a
+    // fact and must not fall back to the old array.
+    row.release_ids_json = json(releaseIdsByTask.get(taskId) ?? [])
+  }
+}
+
+function releaseDefinitionsFromDatabase(database: DatabaseSync): JsonRecord[] {
+  const membershipByRelease = readReleaseMembershipByRelease(database)
+  return (database.prepare('SELECT definition_json FROM scopes ORDER BY id').all() as JsonRecord[])
+    .map(row => parseJson<JsonRecord>(row.definition_json, {}))
+    .filter(release => typeof release.id === 'string')
+    .map(release => {
+      const membership = membershipByRelease.get(String(release.id))
+      return {
+        ...release,
+        nodeIds: membership?.included ?? [],
+        deferredNodeIds: membership?.deferred ?? [],
+      }
+    })
+}
+
+function queueRecord(queue: unknown): JsonRecord {
+  return isRecord(queue) ? queue : { tasks: queue }
+}
+
+function queueTasks(queue: unknown): JsonRecord[] {
+  const tasks = queueRecord(queue).tasks
+  return Array.isArray(tasks) ? tasks.filter(isRecord) : []
+}
+
+function queueReleases(queue: unknown): JsonRecord[] {
+  const releases = queueRecord(queue).releases
+  return Array.isArray(releases) ? releases.filter(isRecord) : []
+}
+
+function sourceQueueLastUpdated(queue: unknown): string | null {
+  return stringValue(queueRecord(queue).lastUpdated)
+}
+
+function sourceQueueMtimeMs(tasksPath: string): number | null {
+  try {
+    return statSync(tasksPath).mtimeMs
+  } catch {
+    return null
+  }
+}
+
+function sourceWorkspaceGoalsMtimeMs(tasksPath: string): number | null {
+  try {
+    return statSync(join(dirname(tasksPath), 'workspace-goals.json')).mtimeMs
+  } catch {
+    return null
+  }
+}
+
+function serializeProjectStateDetailStore(queue: unknown, revision: number): Buffer {
+  const record = queueRecord(queue)
+  const detailStore: ProjectStateDatabaseDetailStore = {
+    detailStoreVersion: 1,
+    revision,
+    version: Number.isFinite(Number(record.version)) ? Number(record.version) : 1,
+    ...optionalLastUpdated(sourceQueueLastUpdated(queue)),
+    ...optionalSelectedReleaseId(record.selectedReleaseId),
+    ...optionalJsonArray(record.executionPlanActions, 'executionPlanActions'),
+    ...optionalJsonArray(record.scopeAuthorityRequests, 'scopeAuthorityRequests'),
+    tasks: queueTasks(queue),
+    releases: queueReleases(queue),
+  }
+  return gzipSync(Buffer.from(`${JSON.stringify(detailStore)}\n`, 'utf8'), { level: 9 })
+}
+
+function parseProjectStateDetailStore(bytes: Uint8Array, expectedRevision: number): ProjectStateDatabaseQueueDefinition | null {
+  try {
+    const parsed = JSON.parse(gunzipSync(Buffer.from(bytes)).toString('utf8')) as Partial<ProjectStateDatabaseDetailStore>
+    if (
+      parsed.detailStoreVersion !== 1 ||
+      parsed.revision !== expectedRevision ||
+      !Array.isArray(parsed.tasks) ||
+      !Array.isArray(parsed.releases)
+    ) return null
+    return {
+      version: typeof parsed.version === 'number' ? parsed.version : 1,
+      ...optionalLastUpdated(parsed.lastUpdated),
+      ...optionalSelectedReleaseId(parsed.selectedReleaseId),
+      ...optionalJsonArray(parsed.executionPlanActions, 'executionPlanActions'),
+      ...optionalJsonArray(parsed.scopeAuthorityRequests, 'scopeAuthorityRequests'),
+      tasks: parsed.tasks.filter(isRecord),
+      releases: parsed.releases.filter(isRecord),
+    }
+  } catch {
+    return null
+  }
+}
+
+function serializeWorkItemDetail(task: JsonRecord): Buffer {
+  return gzipSync(Buffer.from(`${JSON.stringify(task)}\n`, 'utf8'), { level: 9 })
+}
+
+function parseWorkItemDetail(value: unknown): JsonRecord | null {
+  if (!(value instanceof Uint8Array)) return null
+  try {
+    const parsed = JSON.parse(gunzipSync(Buffer.from(value)).toString('utf8'))
+    return isRecord(parsed) ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+export function projectStateDatabasePath(projectRoot: string): string {
+  return getProjectSystemStatePath(projectRoot, PROJECT_STATE_DATABASE_FILE)
+}
+
+export function projectStateDatabasePathFromTasksPath(tasksPath: string): string {
+  return join(dirname(tasksPath), PROJECT_STATE_DATABASE_FILE)
+}
+
+export function projectStateDatabaseDetailPathFromTasksPath(tasksPath: string): string {
+  return join(dirname(tasksPath), PROJECT_STATE_DETAIL_FILE)
+}
+
+export function projectStateDatabaseCompressedDetailPathFromTasksPath(tasksPath: string): string {
+  return join(dirname(tasksPath), PROJECT_STATE_COMPRESSED_DETAIL_FILE)
+}
+
+const COMPACT_WORK_ITEM_COLUMNS = `
+  id, title, description, status, domain, priority, work_kind, parent_id,
+  hierarchy_json, depends_on_json, release_ids_json, source_refs_json,
+  summary_json, updated_at, completed_at
+`
+
+const FULL_WORK_ITEM_COLUMNS = `${COMPACT_WORK_ITEM_COLUMNS}, definition_json`
+const COMPACT_WORK_ITEM_SCOPED_COLUMNS = `
+  work_items.id, work_items.title, work_items.status,
+  work_items.domain, work_items.priority, work_items.work_kind, work_items.parent_id,
+  work_items.hierarchy_json, work_items.depends_on_json, work_items.release_ids_json,
+  work_items.source_refs_json, work_items.summary_json, work_items.updated_at, work_items.completed_at
+`
+const FULL_WORK_ITEM_SCOPED_COLUMNS = `${COMPACT_WORK_ITEM_SCOPED_COLUMNS}, work_items.definition_json`
+
+function hasWorkScopeTable(database: DatabaseSync): boolean {
+  return Boolean(database.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'work_scope'").get())
+}
+
+function workItemsWithScopeSelect(columns: string, includeScope: boolean): string {
+  if (!includeScope) return `SELECT ${columns} FROM work_items`
+  return `
+    SELECT ${columns}, work_scope.scope AS scope_row_scope,
+      work_scope.eligibility_reason AS scope_row_eligibility_reason,
+      work_scope.hierarchy_role AS scope_row_hierarchy_role,
+      work_scope.handoff_state AS scope_row_handoff_state,
+      work_scope.blocks_start AS scope_row_blocks_start,
+      work_scope.blocks_release AS scope_row_blocks_release,
+      work_scope.human_blocking AS scope_row_human_blocking,
+      work_scope.count_in_project_totals AS scope_row_count_in_project_totals,
+      work_scope.proof_blocked AS scope_row_proof_blocked,
+      work_scope.blocker_summary AS scope_row_blocker_summary,
+      work_scope.source_refs_json AS scope_row_source_refs_json
+    FROM work_items LEFT JOIN work_scope ON work_scope.task_id = work_items.id
+  `
+}
+
+function openDatabase(databasePath: string, options: { readOnly?: boolean } = {}): DatabaseSync {
+  const readOnly = options.readOnly === true
+  if (!readOnly) mkdirSync(dirname(databasePath), { recursive: true })
+  const database = new DatabaseSync(databasePath, { readOnly })
+  database.exec('PRAGMA busy_timeout = 5000;')
+  if (readOnly) return database
+  // DELETE avoids read-created -wal/-shm sidecars. Project writes are short,
+  // and FULL synchronous durability is more valuable here than WAL's
+  // throughput profile.
+  database.exec('PRAGMA journal_mode = DELETE; PRAGMA synchronous = FULL;')
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS project_meta (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      project_id TEXT,
+      schema_version INTEGER NOT NULL,
+      revision INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL,
+      project_state_authority TEXT NOT NULL DEFAULT 'legacy',
+      task_evidence_authority TEXT NOT NULL DEFAULT 'legacy'
+      );
+    CREATE TABLE IF NOT EXISTS work_items (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      description TEXT,
+      status TEXT,
+      domain TEXT,
+      priority TEXT,
+      work_kind TEXT,
+      parent_id TEXT,
+      hierarchy_json TEXT,
+      depends_on_json TEXT NOT NULL,
+      release_ids_json TEXT NOT NULL,
+      source_refs_json TEXT NOT NULL,
+      summary_json TEXT NOT NULL DEFAULT '{}',
+      definition_json TEXT NOT NULL,
+      updated_at TEXT,
+      completed_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS work_items_status_idx ON work_items(status);
+    CREATE INDEX IF NOT EXISTS work_items_parent_idx ON work_items(parent_id);
+    -- Per-task detail keeps point reads independent from the compressed
+    -- whole-queue compatibility/detail blob.
+    CREATE TABLE IF NOT EXISTS work_item_detail (
+      task_id TEXT PRIMARY KEY,
+      revision INTEGER NOT NULL,
+      payload_gzip BLOB NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS work_scope (
+      task_id TEXT PRIMARY KEY,
+      scope TEXT NOT NULL,
+      eligibility_reason TEXT NOT NULL,
+      hierarchy_role TEXT NOT NULL,
+      handoff_state TEXT NOT NULL,
+      blocks_start INTEGER NOT NULL,
+      blocks_release INTEGER NOT NULL,
+      human_blocking INTEGER NOT NULL,
+      count_in_project_totals INTEGER NOT NULL DEFAULT 1,
+      proof_blocked INTEGER NOT NULL DEFAULT 0,
+      blocker_summary TEXT,
+      source_refs_json TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS work_scope_scope_idx ON work_scope(scope);
+    CREATE TABLE IF NOT EXISTS queue_state (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      version INTEGER NOT NULL,
+      last_updated TEXT,
+      selected_release_id TEXT,
+      execution_plan_actions_json TEXT NOT NULL DEFAULT '[]',
+      scope_authority_requests_json TEXT NOT NULL DEFAULT '[]',
+      revision INTEGER NOT NULL DEFAULT 0
+    );
+    -- Retained only so an explicit migration can import older databases. The
+    -- current model stores rich detail per work item and never reads or writes
+    -- this aggregate row on a normal runtime path.
+    CREATE TABLE IF NOT EXISTS queue_detail (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      revision INTEGER NOT NULL,
+      payload_gzip BLOB NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS scopes (
+      id TEXT PRIMARY KEY,
+      label TEXT NOT NULL,
+      kind TEXT,
+      state TEXT,
+      source TEXT,
+      proof_style TEXT,
+      node_ids_json TEXT NOT NULL,
+      deferred_node_ids_json TEXT NOT NULL,
+      definition_json TEXT NOT NULL
+    );
+    -- The only authoritative release-to-work membership relation. The node-id
+    -- arrays on scopes and task JSON remain migration/presentation fields.
+    CREATE TABLE IF NOT EXISTS release_membership (
+      release_id TEXT NOT NULL,
+      task_id TEXT NOT NULL,
+      disposition TEXT NOT NULL CHECK (disposition IN ('included', 'deferred')),
+      PRIMARY KEY (release_id, task_id)
+    );
+    CREATE INDEX IF NOT EXISTS release_membership_task_idx ON release_membership(task_id);
+    CREATE TABLE IF NOT EXISTS project_summary (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      payload_json TEXT NOT NULL,
+      freshness TEXT NOT NULL,
+      generated_at TEXT NOT NULL,
+      revision INTEGER NOT NULL DEFAULT 0,
+      source_queue_last_updated TEXT,
+      source_queue_mtime_ms REAL,
+      source_workspace_goals_mtime_ms REAL
+    );
+    CREATE TABLE IF NOT EXISTS project_orientation (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      payload_json TEXT NOT NULL,
+      generated_at TEXT NOT NULL,
+      revision INTEGER NOT NULL DEFAULT 0
+    );
+    -- One bounded current Thread projection. Historical turns remain in the
+    -- existing source stores and are reconstructed only by the explicit
+    -- history route.
+    CREATE TABLE IF NOT EXISTS current_thread (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      payload_json TEXT NOT NULL,
+      generated_at TEXT NOT NULL,
+      source_revision TEXT NOT NULL,
+      source_queue_revision INTEGER,
+      updated_at TEXT NOT NULL
+    );
+    -- Imported planning is provenance, not current execution state. Keep the
+    -- latest accepted snapshot available for explicit detail views without
+    -- embedding its task-id arrays in every compact summary read.
+    CREATE TABLE IF NOT EXISTS project_plan (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      payload_json TEXT NOT NULL,
+      recorded_at TEXT NOT NULL,
+      revision INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE IF NOT EXISTS task_execution (
+      task_id TEXT PRIMARY KEY,
+      updated_at TEXT NOT NULL,
+      payload_json TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS task_workspace (
+      task_id TEXT PRIMARY KEY,
+      updated_at TEXT NOT NULL,
+      payload_json TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS task_proof (
+      task_id TEXT PRIMARY KEY,
+      latest_kind TEXT NOT NULL,
+      latest_recorded_at TEXT NOT NULL,
+      result TEXT,
+      payload_json TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS task_evidence_current (
+      task_id TEXT PRIMARY KEY,
+      updated_at TEXT NOT NULL,
+      payload_json TEXT NOT NULL
+    );
+    -- Additive detail history. Existing schema readers remain valid; writable
+    -- opens create this table before the next transaction that uses it.
+    CREATE TABLE IF NOT EXISTS task_evidence_history (
+      task_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      evidence_id TEXT NOT NULL,
+      recorded_at TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      PRIMARY KEY (task_id, kind, evidence_id)
+    );
+    CREATE INDEX IF NOT EXISTS task_evidence_history_task_kind_time_idx
+      ON task_evidence_history(task_id, kind, recorded_at DESC, evidence_id DESC);
+    CREATE TABLE IF NOT EXISTS current_execution (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      status TEXT NOT NULL,
+      mode TEXT,
+      started_at TEXT,
+      stopped_at TEXT,
+      stop_requested_at TEXT,
+      error TEXT,
+      updated_at TEXT NOT NULL,
+      payload_json TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS current_runtime (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      status TEXT NOT NULL,
+      health TEXT,
+      last_activity_at TEXT,
+      updated_at TEXT NOT NULL,
+      payload_json TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS owner_inputs (
+      id TEXT PRIMARY KEY,
+      status TEXT NOT NULL,
+      task_id TEXT,
+      prompt TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      payload_json TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS owner_inputs_status_idx ON owner_inputs(status);
+    CREATE TABLE IF NOT EXISTS repositories (
+      id TEXT PRIMARY KEY,
+      root TEXT NOT NULL,
+      branch TEXT,
+      head TEXT,
+      status TEXT,
+      freshness TEXT NOT NULL,
+      inspected_at TEXT,
+      payload_json TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS project_diagnostics (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      source_revision INTEGER NOT NULL,
+      freshness TEXT NOT NULL CHECK (freshness IN ('current', 'stale')),
+      generated_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      git_json TEXT,
+      readiness_json TEXT
+    );
+    CREATE TABLE IF NOT EXISTS project_availability (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      status TEXT NOT NULL,
+      paused_at TEXT,
+      resumed_at TEXT,
+      reason TEXT,
+      updated_at TEXT NOT NULL,
+      payload_json TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS attention_records (
+      id TEXT PRIMARY KEY,
+      status TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      payload_json TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS attention_records_status_idx ON attention_records(status);
+    CREATE TABLE IF NOT EXISTS projection_watermarks (
+      domain TEXT PRIMARY KEY,
+      source_revision INTEGER NOT NULL,
+      refreshed_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS projection_jobs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      domain TEXT NOT NULL UNIQUE,
+      source_revision INTEGER NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('pending', 'running', 'failed', 'succeeded')),
+      error TEXT,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      claimed_at TEXT,
+      last_attempt_at TEXT,
+      completed_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS projection_jobs_status_idx
+      ON projection_jobs(status, source_revision, id);
+    CREATE TABLE IF NOT EXISTS project_reconciliations (
+      capability_id TEXT PRIMARY KEY,
+      status TEXT NOT NULL,
+      resolved_at TEXT NOT NULL,
+      payload_json TEXT NOT NULL
+    );
+  `)
+  const previousSchemaVersion = Number((database.prepare('SELECT schema_version FROM project_meta WHERE id = 1').get() as JsonRecord | undefined)?.schema_version ?? 0)
+  // Schema v2 briefly wrote duplicate derived metadata into state_meta. It
+  // never owned a fact, so remove it when opening older local databases.
+  database.exec('DROP TABLE IF EXISTS state_meta')
+  const summaryColumns = database.prepare('PRAGMA table_info(project_summary)').all() as JsonRecord[]
+  if (!summaryColumns.some(column => column.name === 'source_workspace_goals_mtime_ms')) {
+    database.exec('ALTER TABLE project_summary ADD COLUMN source_workspace_goals_mtime_ms REAL')
+  }
+  if (!summaryColumns.some(column => column.name === 'revision')) {
+    database.exec('ALTER TABLE project_summary ADD COLUMN revision INTEGER NOT NULL DEFAULT 0')
+  }
+  const workItemColumns = database.prepare('PRAGMA table_info(work_items)').all() as JsonRecord[]
+  if (!workItemColumns.some(column => column.name === 'summary_json')) {
+    database.exec("ALTER TABLE work_items ADD COLUMN summary_json TEXT NOT NULL DEFAULT '{}'")
+  }
+  const queueStateColumns = database.prepare('PRAGMA table_info(queue_state)').all() as JsonRecord[]
+  if (!queueStateColumns.some(column => column.name === 'execution_plan_actions_json')) {
+    database.exec("ALTER TABLE queue_state ADD COLUMN execution_plan_actions_json TEXT NOT NULL DEFAULT '[]'")
+  }
+  if (!queueStateColumns.some(column => column.name === 'scope_authority_requests_json')) {
+    database.exec("ALTER TABLE queue_state ADD COLUMN scope_authority_requests_json TEXT NOT NULL DEFAULT '[]'")
+  }
+  if (!queueStateColumns.some(column => column.name === 'revision')) {
+    database.exec('ALTER TABLE queue_state ADD COLUMN revision INTEGER NOT NULL DEFAULT 0')
+  }
+  const scopeColumns = database.prepare('PRAGMA table_info(work_scope)').all() as JsonRecord[]
+  if (!scopeColumns.some(column => column.name === 'proof_blocked')) {
+    database.exec('ALTER TABLE work_scope ADD COLUMN proof_blocked INTEGER NOT NULL DEFAULT 0')
+  }
+  if (!scopeColumns.some(column => column.name === 'count_in_project_totals')) {
+    database.exec('ALTER TABLE work_scope ADD COLUMN count_in_project_totals INTEGER NOT NULL DEFAULT 1')
+  }
+  if (!scopeColumns.some(column => column.name === 'blocker_summary')) {
+    database.exec('ALTER TABLE work_scope ADD COLUMN blocker_summary TEXT')
+  }
+  const projectMetaColumns = database.prepare('PRAGMA table_info(project_meta)').all() as JsonRecord[]
+  if (!projectMetaColumns.some(column => column.name === 'project_state_authority')) {
+    if (projectMetaColumns.some(column => column.name === 'task_overlay_authority')) {
+      database.exec('ALTER TABLE project_meta RENAME COLUMN task_overlay_authority TO project_state_authority')
+    } else {
+      database.exec("ALTER TABLE project_meta ADD COLUMN project_state_authority TEXT NOT NULL DEFAULT 'legacy'")
+    }
+  }
+  const refreshedProjectMetaColumns = database.prepare('PRAGMA table_info(project_meta)').all() as JsonRecord[]
+  if (!refreshedProjectMetaColumns.some(column => column.name === 'task_evidence_authority')) {
+    database.exec("ALTER TABLE project_meta ADD COLUMN task_evidence_authority TEXT NOT NULL DEFAULT 'legacy'")
+  }
+  if (previousSchemaVersion > 0 && previousSchemaVersion < 8) {
+    // Full task definitions were duplicated in SQLite while the compatibility
+    // queue already carried the same detail. Clear only that duplicate; the
+    // explicit queue-details sidecar is written by the snapshot boundary.
+    database.prepare("UPDATE work_items SET definition_json = '{}'").run()
+    database.exec('VACUUM')
+  }
+  database.prepare(`
+    INSERT INTO project_meta (id, schema_version, revision, updated_at)
+    VALUES (1, ?, 0, ?)
+    ON CONFLICT(id) DO UPDATE SET schema_version = excluded.schema_version
+  `).run(PROJECT_STATE_DATABASE_SCHEMA_VERSION, new Date().toISOString())
+  return database
+}
+
+function transaction(database: DatabaseSync, work: () => void): void {
+  database.exec('BEGIN IMMEDIATE')
+  try {
+    work()
+    database.exec('COMMIT')
+  } catch (error) {
+    try {
+      database.exec('ROLLBACK')
+    } catch {
+      // Preserve the original error if rollback itself cannot run.
+    }
+    throw error
+  }
+}
+
+function bumpRevision(database: DatabaseSync, updatedAt: string): number {
+  const current = database.prepare('SELECT revision FROM project_meta WHERE id = 1').get() as JsonRecord | undefined
+  const revision = Number(current?.revision ?? 0) + 1
+  database.prepare('UPDATE project_meta SET revision = ?, updated_at = ? WHERE id = 1').run(revision, updatedAt)
+  return revision
+}
+
+function currentRevision(database: DatabaseSync): number {
+  return Number((database.prepare('SELECT revision FROM project_meta WHERE id = 1').get() as JsonRecord | undefined)?.revision ?? 0)
+}
+
+const DEFAULT_AUTHORITATIVE_PROJECTION_DOMAINS = ['summary', 'attention', PROJECT_STATE_DATABASE_DIAGNOSTIC_PROJECTION_DOMAIN] as const
+const MAX_PROJECTION_JOB_ERROR_LENGTH = 500
+
+interface ProjectStateDatabaseAuthoritativeMutationOptions {
+  updatedAt: string
+  domains: readonly ProjectStateDomain[]
+  projectionDomains?: readonly string[]
+  projectRoot?: string
+  /** Queue/task mutations publish their summary in the same transaction. */
+  summaryFreshness?: 'stale' | 'preserve'
+}
+
+function boundedProjectionJobError(error: string | null | undefined): string | null {
+  if (error === null || error === undefined) return null
+  const trimmed = error.trim()
+  return trimmed.length <= MAX_PROJECTION_JOB_ERROR_LENGTH
+    ? trimmed
+    : `${trimmed.slice(0, MAX_PROJECTION_JOB_ERROR_LENGTH - 3)}...`
+}
+
+function normalizeProjectionDomains(domains: readonly string[]): string[] {
+  const normalized = [...new Set(domains.map(domain => domain.trim()).filter(Boolean))]
+  if (normalized.some(domain => domain.length > 128)) {
+    throw new RangeError('Projection domains must be 128 characters or fewer')
+  }
+  return normalized
+}
+
+function projectionJobFromRow(row: JsonRecord): ProjectStateDatabaseProjectionJob {
+  const status: ProjectStateDatabaseProjectionJobStatus =
+    row.status === 'running' || row.status === 'failed' || row.status === 'succeeded'
+      ? row.status
+      : 'pending'
+  return {
+    id: Number(row.id),
+    domain: String(row.domain),
+    sourceRevision: Number(row.source_revision),
+    status,
+    error: row.error === null || row.error === undefined ? null : String(row.error),
+    attempts: Number(row.attempts ?? 0),
+    claimedAt: row.claimed_at === null || row.claimed_at === undefined ? null : String(row.claimed_at),
+    lastAttemptAt: row.last_attempt_at === null || row.last_attempt_at === undefined ? null : String(row.last_attempt_at),
+    completedAt: row.completed_at === null || row.completed_at === undefined ? null : String(row.completed_at),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  }
+}
+
+/** Queue only revision metadata; the projection payload stays in its owner. */
+function recordProjectionJobs(
+  database: DatabaseSync,
+  domains: readonly string[],
+  sourceRevision: number,
+  now: string,
+): void {
+  if (!Number.isInteger(sourceRevision) || sourceRevision < 0) {
+    throw new RangeError('Projection jobs require a non-negative integer source revision')
+  }
+  const normalizedDomains = normalizeProjectionDomains(domains)
+  for (const domain of normalizedDomains) {
+    const watermark = database.prepare(`
+      SELECT source_revision
+      FROM projection_watermarks
+      WHERE domain = ?
+    `).get(domain) as JsonRecord | undefined
+    if (watermark && Number(watermark.source_revision) >= sourceRevision) continue
+
+    const existing = database.prepare(`
+      SELECT source_revision, status
+      FROM projection_jobs
+      WHERE domain = ?
+    `).get(domain) as JsonRecord | undefined
+    const existingRevision = existing ? Number(existing.source_revision) : null
+    if (existingRevision !== null && existingRevision > sourceRevision) continue
+    if (
+      existingRevision === sourceRevision &&
+      existing?.status === 'succeeded' &&
+      watermark &&
+      Number(watermark.source_revision) >= sourceRevision
+    ) continue
+    if (existingRevision === sourceRevision && existing?.status === 'pending') continue
+    if (existingRevision === sourceRevision && existing?.status === 'running') continue
+
+    database.prepare(`
+      INSERT INTO projection_jobs (
+        domain, source_revision, status, error, attempts, claimed_at,
+        last_attempt_at, completed_at, created_at, updated_at
+      ) VALUES (?, ?, 'pending', NULL, 0, NULL, NULL, NULL, ?, ?)
+      ON CONFLICT(domain) DO UPDATE SET
+        source_revision = excluded.source_revision,
+        status = 'pending',
+        error = NULL,
+        attempts = 0,
+        claimed_at = NULL,
+        last_attempt_at = NULL,
+        completed_at = NULL,
+        updated_at = excluded.updated_at
+    `).run(domain, sourceRevision, now, now)
+  }
+}
+
+function commitAuthoritativeMutation(
+  database: DatabaseSync,
+  options: ProjectStateDatabaseAuthoritativeMutationOptions,
+): number {
+  const revision = bumpRevision(database, options.updatedAt)
+  if (options.summaryFreshness !== 'preserve') {
+    database.prepare("UPDATE project_summary SET freshness = 'stale', revision = ? WHERE id = 1").run(revision)
+  }
+  recordProjectionJobs(
+    database,
+    options.projectionDomains ?? DEFAULT_AUTHORITATIVE_PROJECTION_DOMAINS,
+    revision,
+    options.updatedAt,
+  )
+  if (options.projectRoot) {
+    emitProjectSummaryInvalidation(options.projectRoot, 'database-current-state-write', {
+      revision,
+      domains: options.domains,
+    })
+  }
+  return revision
+}
+
+function invalidateDerivedProjection(
+  database: DatabaseSync,
+  projectRoot: string,
+  domains: readonly ProjectStateDomain[],
+  projectionDomains: readonly string[],
+  updatedAt: string,
+): void {
+  const revision = currentRevision(database)
+  for (const domain of normalizeProjectionDomains(projectionDomains)) {
+    database.prepare('DELETE FROM projection_watermarks WHERE domain = ?').run(domain)
+    recordProjectionJobs(database, [domain], revision, updatedAt)
+  }
+  emitProjectSummaryInvalidation(projectRoot, 'database-derived-projection-write', {
+    revision,
+    domains,
+  })
+}
+
+function markProjectionCurrent(
+  database: DatabaseSync,
+  domain: string,
+  sourceRevision: number,
+  refreshedAt: string,
+): void {
+  if (!Number.isInteger(sourceRevision) || sourceRevision < 0) {
+    throw new RangeError('Projection watermarks require a non-negative integer source revision')
+  }
+  database.prepare(`
+    INSERT INTO projection_watermarks (domain, source_revision, refreshed_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT(domain) DO UPDATE SET
+      source_revision = excluded.source_revision,
+      refreshed_at = excluded.refreshed_at
+    WHERE excluded.source_revision >= projection_watermarks.source_revision
+  `).run(domain, sourceRevision, refreshedAt)
+  database.prepare(`
+    UPDATE projection_jobs
+    SET status = 'succeeded',
+        error = NULL,
+        claimed_at = NULL,
+        completed_at = ?,
+        updated_at = ?
+    WHERE domain = ? AND source_revision <= ?
+  `).run(refreshedAt, refreshedAt, domain, sourceRevision)
+}
+
+function syncSummaryAuxiliaryRows(database: DatabaseSync, summary: JsonRecord): void {
+  const execution = isRecord(summary.execution) ? summary.execution : null
+  if (execution && typeof execution.status === 'string' && typeof execution.updatedAt === 'string') {
+    database.prepare(`
+      INSERT INTO current_execution (
+        id, status, mode, started_at, stopped_at, stop_requested_at, error,
+        updated_at, payload_json
+      ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        status = excluded.status,
+        mode = excluded.mode,
+        started_at = excluded.started_at,
+        stopped_at = excluded.stopped_at,
+        stop_requested_at = excluded.stop_requested_at,
+        error = excluded.error,
+        updated_at = excluded.updated_at,
+        payload_json = excluded.payload_json
+    `).run(
+      execution.status,
+      stringValue(execution.mode),
+      stringValue(execution.startedAt),
+      stringValue(execution.stoppedAt),
+      stringValue(execution.stopRequestedAt),
+      stringValue(execution.error),
+      execution.updatedAt,
+      json(execution),
+    )
+  }
+
+  const runtime = isRecord(summary.runtime) ? summary.runtime : null
+  if (runtime && typeof runtime.status === 'string' && typeof runtime.updatedAt === 'string') {
+    database.prepare(`
+      INSERT INTO current_runtime (
+        id, status, health, last_activity_at, updated_at, payload_json
+      ) VALUES (1, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        status = excluded.status,
+        health = excluded.health,
+        last_activity_at = excluded.last_activity_at,
+        updated_at = excluded.updated_at,
+        payload_json = excluded.payload_json
+    `).run(
+      runtime.status,
+      stringValue(runtime.health),
+      stringValue(runtime.lastActivityAt),
+      runtime.updatedAt,
+      json(runtime),
+    )
+  }
+}
+
+function hydrateSummaryFromAuxiliaryRows(database: DatabaseSync, summary: JsonRecord): JsonRecord {
+  const next = { ...summary }
+
+  if (tableExists(database, 'current_execution')) {
+    const row = database.prepare(`
+      SELECT status, mode, started_at, stopped_at, stop_requested_at, error,
+        updated_at
+      FROM current_execution WHERE id = 1
+    `).get() as JsonRecord | undefined
+    if (row) {
+      next.execution = {
+        status: String(row.status ?? 'stopped'),
+        ...(stringValue(row.mode) ? { mode: stringValue(row.mode) } : {}),
+        ...(stringValue(row.started_at) ? { startedAt: stringValue(row.started_at) } : {}),
+        ...(stringValue(row.stopped_at) ? { stoppedAt: stringValue(row.stopped_at) } : {}),
+        ...(stringValue(row.stop_requested_at) ? { stopRequestedAt: stringValue(row.stop_requested_at) } : {}),
+        ...(stringValue(row.error) ? { error: stringValue(row.error) } : {}),
+        updatedAt: stringValue(row.updated_at) ?? '',
+      }
+    }
+  }
+
+  if (tableExists(database, 'current_runtime')) {
+    const row = database.prepare(`
+      SELECT status, health, last_activity_at, updated_at
+      FROM current_runtime WHERE id = 1
+    `).get() as JsonRecord | undefined
+    if (row) {
+      next.runtime = {
+        status: String(row.status ?? 'unknown'),
+        ...(stringValue(row.health) ? { health: stringValue(row.health) } : {}),
+        ...(stringValue(row.last_activity_at) ? { lastActivityAt: stringValue(row.last_activity_at) } : {}),
+        updatedAt: stringValue(row.updated_at) ?? '',
+      }
+    }
+  }
+
+  if (tableExists(database, 'owner_inputs')) {
+    const rows = database.prepare(`
+      SELECT id, status, task_id, prompt, updated_at, payload_json
+      FROM owner_inputs
+      WHERE status IN ('waiting_for_owner', 'coordinator_review')
+      ORDER BY updated_at ASC, id ASC
+    `).all() as JsonRecord[]
+    const first = rows[0]
+    const firstPayload = first ? parseJson<JsonRecord>(first.payload_json, {}) : null
+    const target = firstPayload && isRecord(firstPayload.target) ? firstPayload.target : null
+    const updatedAt = rows.reduce(
+      (latest, row) => stringValue(row.updated_at) && stringValue(row.updated_at)! > latest
+        ? stringValue(row.updated_at)!
+        : latest,
+      stringValue((isRecord(next.ownerInput) ? next.ownerInput.updatedAt : null)) ?? '',
+    )
+    if (rows.length > 0 || isRecord(next.ownerInput)) {
+      next.ownerInput = {
+        openCount: rows.length,
+        next: first
+          ? {
+              id: String(first.id),
+              prompt: String(first.prompt ?? ''),
+              ...(stringValue(first.task_id) ? { taskId: stringValue(first.task_id) } : {}),
+              ...(stringValue(target?.href) ? { href: stringValue(target?.href) } : {}),
+            }
+          : null,
+        updatedAt,
+      }
+    }
+  }
+
+  return next
+}
+
+function readProjectPlanSnapshot(database: DatabaseSync): unknown | null {
+  if (!tableExists(database, 'project_plan')) return null
+  const row = database.prepare('SELECT payload_json FROM project_plan WHERE id = 1').get() as JsonRecord | undefined
+  return row?.payload_json === undefined ? null : parseJson<unknown>(row.payload_json, null)
+}
+
+function syncProjectPlanSnapshot(
+  database: DatabaseSync,
+  approvedPlan: unknown | null | undefined,
+  recordedAt: string,
+  revision: number,
+): void {
+  if (approvedPlan === undefined) return
+  if (approvedPlan === null) {
+    database.prepare('DELETE FROM project_plan').run()
+    return
+  }
+  database.prepare(`
+    INSERT INTO project_plan (id, payload_json, recorded_at, revision)
+    VALUES (1, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      payload_json = excluded.payload_json,
+      recorded_at = excluded.recorded_at,
+      revision = excluded.revision
+  `).run(json(approvedPlan), stringValue((approvedPlan as JsonRecord)?.recordedAt) ?? recordedAt, revision)
+}
+
+function taskFromRow(row: JsonRecord, includeDefinition = true): ProjectStateDatabaseTask {
+  const summary = parseJson<JsonRecord>(row.summary_json, {})
+  return {
+    ...summary,
+    id: String(row.id),
+    title: String(row.title ?? ''),
+    description: typeof row.description === 'string' ? row.description : null,
+    status: typeof row.status === 'string' ? row.status : null,
+    domain: typeof row.domain === 'string' ? row.domain : null,
+    priority: typeof row.priority === 'string' ? row.priority : null,
+    workKind: typeof row.work_kind === 'string' ? row.work_kind : null,
+    parentId: typeof row.parent_id === 'string' ? row.parent_id : null,
+    hierarchy: parseJson<JsonRecord | null>(row.hierarchy_json, null),
+    dependsOn: parseJson<string[]>(row.depends_on_json, []),
+    releaseIds: parseJson<string[]>(row.release_ids_json, []),
+    sourceRefs: parseJson<string[]>(row.source_refs_json, []),
+    updatedAt: typeof row.updated_at === 'string' ? row.updated_at : null,
+    completedAt: typeof row.completed_at === 'string' ? row.completed_at : null,
+    definition: includeDefinition ? parseJson<JsonRecord>(row.definition_json, {}) : {},
+    scopeRow: scopeRowFromRow(row),
+  }
+}
+
+function scopeRowFromRow(row: JsonRecord): ProjectStateDatabaseScopeRow | null {
+  const scope = stringValue(row.scope_row_scope)
+  if (scope !== 'included' && scope !== 'deferred') return null
+  return {
+    taskId: String(row.id),
+    ...(typeof row.parent_id === 'string' && row.parent_id.length > 0 ? { parentTaskId: row.parent_id } : {}),
+    scope,
+    eligibilityReason: String(row.scope_row_eligibility_reason ?? ''),
+    hierarchyRole: String(row.scope_row_hierarchy_role ?? ''),
+    handoffState: String(row.scope_row_handoff_state ?? ''),
+    blocksStart: Number(row.scope_row_blocks_start ?? 0) === 1,
+    blocksRelease: Number(row.scope_row_blocks_release ?? 0) === 1,
+    humanBlocking: Number(row.scope_row_human_blocking ?? 0) === 1,
+    ...(Number(row.scope_row_count_in_project_totals ?? 1) === 0 ? { countInProjectTotals: false } : {}),
+    proofBlocked: Number(row.scope_row_proof_blocked ?? 0) === 1,
+    ...(typeof row.scope_row_blocker_summary === 'string' && row.scope_row_blocker_summary.trim()
+      ? { blockerSummary: row.scope_row_blocker_summary }
+      : {}),
+    sourceRefs: parseJson<string[]>(row.scope_row_source_refs_json, []),
+  }
+}
+
+function readScopeRowsFromDatabase(database: DatabaseSync): ProjectStateDatabaseScopeRow[] {
+  if (!hasWorkScopeTable(database)) return []
+  const rows = database.prepare(`
+    SELECT work_scope.task_id, work_items.parent_id,
+      work_scope.scope, work_scope.eligibility_reason, work_scope.hierarchy_role,
+      work_scope.handoff_state, work_scope.blocks_start, work_scope.blocks_release,
+      work_scope.human_blocking, work_scope.count_in_project_totals,
+      work_scope.proof_blocked, work_scope.blocker_summary, work_scope.source_refs_json
+    FROM work_scope
+    LEFT JOIN work_items ON work_items.id = work_scope.task_id
+    ORDER BY work_scope.task_id
+  `).all() as JsonRecord[]
+  return rows.flatMap(row => {
+    const parsed = scopeRowFromRow({
+      id: row.task_id,
+      parent_id: row.parent_id,
+      scope_row_scope: row.scope,
+      scope_row_eligibility_reason: row.eligibility_reason,
+      scope_row_hierarchy_role: row.hierarchy_role,
+      scope_row_handoff_state: row.handoff_state,
+      scope_row_blocks_start: row.blocks_start,
+      scope_row_blocks_release: row.blocks_release,
+      scope_row_human_blocking: row.human_blocking,
+      scope_row_count_in_project_totals: row.count_in_project_totals,
+      scope_row_proof_blocked: row.proof_blocked,
+      scope_row_blocker_summary: row.blocker_summary,
+      scope_row_source_refs_json: row.source_refs_json,
+    })
+    return parsed ? [parsed] : []
+  })
+}
+
+function scopeRowKey(row: ProjectStateDatabaseScopeRow): string {
+  return JSON.stringify({
+    taskId: row.taskId,
+    scope: row.scope,
+    eligibilityReason: row.eligibilityReason,
+    hierarchyRole: row.hierarchyRole,
+    handoffState: row.handoffState,
+    blocksStart: row.blocksStart,
+    blocksRelease: row.blocksRelease,
+    humanBlocking: row.humanBlocking,
+    countInProjectTotals: row.countInProjectTotals ?? true,
+    proofBlocked: row.proofBlocked ?? false,
+    blockerSummary: row.blockerSummary ?? null,
+    sourceRefs: row.sourceRefs,
+  })
+}
+
+/** Diff the derived scope index instead of churning unrelated rows. */
+function syncProjectStateDatabaseScopeRows(
+  database: DatabaseSync,
+  rows: readonly ProjectStateDatabaseScopeRow[],
+): void {
+  const nextByTaskId = new Map(rows.map(row => [row.taskId, row]))
+  const existingRows = database.prepare(`
+    SELECT task_id, scope, eligibility_reason, hierarchy_role, handoff_state,
+      blocks_start, blocks_release, human_blocking, count_in_project_totals, proof_blocked,
+      blocker_summary, source_refs_json
+    FROM work_scope
+    ORDER BY task_id
+  `).all() as JsonRecord[]
+  const existingByTaskId = new Map(existingRows.flatMap(row => {
+    const parsed = scopeRowFromRow({
+      id: row.task_id,
+      scope_row_scope: row.scope,
+      scope_row_eligibility_reason: row.eligibility_reason,
+      scope_row_hierarchy_role: row.hierarchy_role,
+      scope_row_handoff_state: row.handoff_state,
+      scope_row_blocks_start: row.blocks_start,
+      scope_row_blocks_release: row.blocks_release,
+      scope_row_human_blocking: row.human_blocking,
+      scope_row_count_in_project_totals: row.count_in_project_totals,
+      scope_row_proof_blocked: row.proof_blocked,
+      scope_row_blocker_summary: row.blocker_summary,
+      scope_row_source_refs_json: row.source_refs_json,
+    })
+    return parsed ? [[parsed.taskId, parsed] as const] : []
+  }))
+  for (const taskId of existingByTaskId.keys()) {
+    if (!nextByTaskId.has(taskId)) database.prepare('DELETE FROM work_scope WHERE task_id = ?').run(taskId)
+  }
+  const upsert = database.prepare(`
+    INSERT INTO work_scope (
+      task_id, scope, eligibility_reason, hierarchy_role, handoff_state,
+      blocks_start, blocks_release, human_blocking, count_in_project_totals, proof_blocked,
+      blocker_summary, source_refs_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(task_id) DO UPDATE SET
+      scope = excluded.scope,
+      eligibility_reason = excluded.eligibility_reason,
+      hierarchy_role = excluded.hierarchy_role,
+      handoff_state = excluded.handoff_state,
+      blocks_start = excluded.blocks_start,
+      blocks_release = excluded.blocks_release,
+      human_blocking = excluded.human_blocking,
+      count_in_project_totals = excluded.count_in_project_totals,
+      proof_blocked = excluded.proof_blocked,
+      blocker_summary = excluded.blocker_summary,
+      source_refs_json = excluded.source_refs_json
+  `)
+  for (const row of nextByTaskId.values()) {
+    const existing = existingByTaskId.get(row.taskId)
+    if (existing && scopeRowKey(existing) === scopeRowKey(row)) continue
+    upsert.run(
+      row.taskId,
+      row.scope,
+      row.eligibilityReason,
+      row.hierarchyRole,
+      row.handoffState,
+      row.blocksStart ? 1 : 0,
+      row.blocksRelease ? 1 : 0,
+      row.humanBlocking ? 1 : 0,
+      row.countInProjectTotals === false ? 0 : 1,
+      row.proofBlocked ? 1 : 0,
+      row.blockerSummary ?? null,
+      json(row.sourceRefs),
+    )
+  }
+}
+
+function readQueueDetailsForRevision(
+  tasksPath: string,
+  revision: number,
+  database?: DatabaseSync,
+  options: { migration?: boolean } = {},
+): ProjectStateDatabaseQueueDefinition | null {
+  if (options.migration && database && tableExists(database, 'queue_detail')) {
+    try {
+      const row = database.prepare('SELECT revision, payload_gzip FROM queue_detail WHERE id = 1').get() as JsonRecord | undefined
+      if (row && Number(row.revision) === revision && row.payload_gzip instanceof Uint8Array) {
+        const details = parseProjectStateDetailStore(row.payload_gzip, revision)
+        if (details) return details
+      }
+    } catch {
+      // A migration may still import an older detail representation below.
+    }
+  }
+  if (database) {
+    const indexed = readQueueDefinitionFromWorkItemDetails(database, revision)
+    if (indexed) return indexed
+  }
+  if (!options.migration) return null
+  // Once the database is the project-state authority, a stale filesystem
+  // detail file is not a compatibility source; it is a second mutable truth.
+  // Fail closed and let the caller surface unavailable detail instead of
+  // silently resurrecting an older queue from disk.
+  if (database && tableExists(database, 'project_meta')) {
+    const authority = database.prepare('SELECT project_state_authority FROM project_meta WHERE id = 1').get() as JsonRecord | undefined
+    if (authority?.project_state_authority === 'database') return null
+  }
+  try {
+    const compressedPath = projectStateDatabaseCompressedDetailPathFromTasksPath(tasksPath)
+    const rawPath = projectStateDatabaseDetailPathFromTasksPath(tasksPath)
+    const detailBytes = existsSync(compressedPath)
+      ? gunzipSync(readFileSync(compressedPath))
+      : readFileSync(rawPath)
+    const parsed = JSON.parse(detailBytes.toString('utf8')) as Partial<ProjectStateDatabaseDetailStore>
+    if (
+      parsed.detailStoreVersion === 1 &&
+      parsed.revision === revision &&
+      Array.isArray(parsed.tasks) &&
+      Array.isArray(parsed.releases)
+    ) {
+      return {
+        version: typeof parsed.version === 'number' ? parsed.version : 1,
+        ...optionalLastUpdated(parsed.lastUpdated),
+        ...optionalSelectedReleaseId(parsed.selectedReleaseId),
+        tasks: parsed.tasks.filter(isRecord),
+        releases: parsed.releases.filter(isRecord),
+      }
+    }
+  } catch {
+    // Only an explicit migration import may inspect the old queue file.
+  }
+
+  try {
+    const parsed = queueRecord(JSON.parse(readFileSync(tasksPath, 'utf8')))
+    if (!Array.isArray(parsed.tasks) && !Array.isArray(parsed.releases)) return null
+    return {
+      version: Number.isFinite(Number(parsed.version)) ? Number(parsed.version) : 1,
+      ...optionalLastUpdated(sourceQueueLastUpdated(parsed)),
+      ...optionalSelectedReleaseId(parsed.selectedReleaseId),
+      tasks: queueTasks(parsed),
+      releases: queueReleases(parsed),
+    }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Reconstruct an explicit rich queue read from the normalized current rows.
+ * This is intentionally not used by compact surfaces: point and inventory
+ * reads stay indexed. It exists so the old aggregate blob can be removed
+ * without making rich mutation/detail readers depend on a second payload.
+ */
+function readQueueDefinitionFromWorkItemDetails(
+  database: DatabaseSync,
+  _revision: number,
+): ProjectStateDatabaseQueueDefinition | null {
+  if (!tableExists(database, 'work_item_detail') || !tableExists(database, 'queue_state') || !tableExists(database, 'scopes')) return null
+  const queueState = database.prepare(`
+    SELECT ${queueStateReadColumns(database, [
+      'version', 'last_updated', 'selected_release_id',
+      'execution_plan_actions_json', 'scope_authority_requests_json',
+    ])}
+    FROM queue_state WHERE id = 1
+  `).get() as JsonRecord | undefined
+  if (!queueState) return null
+  // Queue order is semantic: hierarchy.childIds and callers that read the
+  // rich queue expect the materialized insertion order, not “most recently
+  // edited first”. The compact inventory may sort by freshness separately.
+  const taskRows = database.prepare('SELECT id, updated_at FROM work_items ORDER BY rowid').all() as JsonRecord[]
+  const detailRows = database.prepare('SELECT task_id, revision, payload_gzip FROM work_item_detail').all() as JsonRecord[]
+  if (detailRows.length !== taskRows.length) return null
+  const byId = new Map<string, JsonRecord>()
+  for (const row of detailRows) {
+    const taskId = stringValue(row.task_id)
+    // A queue revision can advance for a summary, scope, or release-selection
+    // change. The detail row's revision is the last revision that changed
+    // that task payload, so untouched rows are valid at the current queue
+    // revision without a table-wide metadata rewrite.
+    const detail = taskId ? parseWorkItemDetail(row.payload_gzip) : null
+    if (!taskId || !detail) return null
+    byId.set(taskId, detail)
+  }
+  if (byId.size !== taskRows.length || taskRows.some(row => !byId.has(String(row.id)))) return null
+  const releaseIdsByTask = readReleaseMembershipByTask(database)
+  for (const [taskId, task] of byId) {
+    if (tableExists(database, 'release_membership')) task.releaseIds = releaseIdsByTask.get(taskId) ?? []
+  }
+  const releaseRows = releaseDefinitionsFromDatabase(database)
+  return {
+    version: Number.isFinite(Number(queueState.version)) ? Number(queueState.version) : 1,
+    ...optionalLastUpdated(queueState.last_updated),
+    ...optionalSelectedReleaseId(queueState.selected_release_id),
+    ...optionalJsonArray(queueState.execution_plan_actions_json, 'executionPlanActions'),
+    ...optionalJsonArray(queueState.scope_authority_requests_json, 'scopeAuthorityRequests'),
+    tasks: taskRows.flatMap(row => {
+      const taskId = String(row.id)
+      const task = byId.get(taskId)
+      return task ? [task] : []
+    }),
+    releases: releaseRows,
+  }
+}
+
+function currentQueueRevision(database: DatabaseSync): number {
+  const row = database.prepare('SELECT revision FROM queue_state WHERE id = 1').get() as JsonRecord | undefined
+  return typeof row?.revision === 'number' ? row.revision : currentRevision(database)
+}
+
+function readWorkItemDetails(
+  database: DatabaseSync,
+  taskIds: readonly string[],
+): Map<string, JsonRecord> {
+  if (taskIds.length === 0 || !tableExists(database, 'work_item_detail')) return new Map()
+  const rows = database.prepare(`
+    SELECT task_id, revision, payload_gzip
+    FROM work_item_detail
+    WHERE task_id IN (${taskIds.map(() => '?').join(', ')})
+  `).all(...taskIds) as JsonRecord[]
+  return new Map(rows.flatMap(row => {
+    const taskId = stringValue(row.task_id)
+    const detail = taskId ? parseWorkItemDetail(row.payload_gzip) : null
+    return taskId && detail ? [[taskId, detail] as const] : []
+  }))
+}
+
+function attachWorkItemDetails(
+  tasks: ProjectStateDatabaseTask[],
+  database: DatabaseSync,
+): ProjectStateDatabaseTask[] {
+  const definitions = readWorkItemDetails(database, tasks.map(task => task.id))
+  return tasks.map(task => ({
+    ...task,
+    definition: definitions.get(task.id) ?? {},
+  }))
+}
+
+/**
+ * The Work list needs a small, stable task card, not the complete task
+ * definition. Keep this projection intentionally shallow: detail-only prose,
+ * evidence, transcripts, and acceptance records stay behind the task route.
+ */
+function workItemSummary(task: JsonRecord): JsonRecord {
+  const summary: JsonRecord = {}
+  const scalarKeys = [
+    'id', 'title', 'description', 'orientationSummary', 'domain', 'status',
+    'priority', 'revisionCount', 'updatedAt', 'completedAt', 'assignedTo',
+    'importedDraft', 'requestKind', 'requestStage', 'workKind', 'workVisibility',
+    'dependsOn', 'hierarchy', 'releaseIds', 'sourceRefs', 'blockReason',
+    'persistedBlockReason', 'shelveReason', 'latestReviewerSummary',
+    'terminalSummary', 'openQuestions', 'workerHandoff',
+  ]
+  for (const key of scalarKeys) {
+    if (key in task) summary[key] = task[key]
+  }
+  const acceptanceCriteria = Array.isArray(task.acceptanceCriteria) ? task.acceptanceCriteria : []
+  const acceptanceCriteriaCount = acceptanceCriteria.length
+  if (acceptanceCriteria.length > 0) {
+    summary.acceptanceCriteriaCount = acceptanceCriteria.length
+    const first = acceptanceCriteria.find(item => isRecord(item) && typeof item.description === 'string')
+    if (isRecord(first) && typeof first.description === 'string' && first.description.trim()) {
+      summary.acceptanceCriteriaFirstDescription = first.description.trim()
+    }
+  }
+  const units = isRecord(task.workUnitAnalysis) && Array.isArray(task.workUnitAnalysis.units)
+    ? task.workUnitAnalysis.units
+    : null
+  if (units) summary.workUnitCount = units.length
+  const delivery = isRecord(task.delivery) ? task.delivery : null
+  if (delivery) {
+    const compactDelivery: JsonRecord = {}
+    for (const key of ['driver', 'provider']) {
+      if (typeof delivery[key] === 'string' && delivery[key].trim()) compactDelivery[key] = delivery[key]
+    }
+    for (const key of ['usesPrimitives', 'provesPrimitives', 'supports']) {
+      if (Array.isArray(delivery[key])) {
+        const values = delivery[key].filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+        if (values.length > 0) compactDelivery[key] = values
+      }
+    }
+    if (Object.keys(compactDelivery).length > 0) summary.delivery = compactDelivery
+  }
+  if (typeof task.spec === 'string' && task.spec.trim()) summary.spec = 'present'
+  const brief = isRecord(task.productBrief) ? task.productBrief : null
+  const userJob = typeof brief?.userJob === 'string' && brief.userJob.trim().length > 0
+  const successMetric = (
+    (typeof brief?.successMetric === 'string' && brief.successMetric.trim().length > 0) ||
+    (typeof brief?.successCriteria === 'string' && brief.successCriteria.trim().length > 0)
+  )
+  const briefShape = Boolean(
+    userJob ||
+    successMetric ||
+    (typeof brief?.whyItMattersNow === 'string' && brief.whyItMattersNow.trim().length > 0) ||
+    (typeof brief?.rolloutPlan === 'string' && brief.rolloutPlan.trim().length > 0) ||
+    (Array.isArray(brief?.nonGoals) && brief.nonGoals.length > 0) ||
+    (Array.isArray(brief?.antiPatterns) && brief.antiPatterns.length > 0),
+  )
+  const imported = task.importedDraft === true ||
+    (isRecord(task.requestIntake) && task.requestIntake.createdBy === 'workspace-importer') ||
+    (isRecord(task.requestIntake) && Array.isArray(task.requestIntake.evidenceRefs) && task.requestIntake.evidenceRefs.some(ref => typeof ref === 'string' && /^import:/.test(ref))) ||
+    (Array.isArray(task.sourceClaims) && task.sourceClaims.length > 0) ||
+    (Array.isArray(task.notes) && task.notes.some(note => isRecord(note) && (
+      note.role === 'importer' ||
+      note.agentId === 'workspace-importer' ||
+      note.agentId === 'workspace-importer-agent'
+    )))
+  const taskReadiness = isRecord(task.taskReadiness) && typeof task.taskReadiness.recommendation === 'string'
+    ? {
+        recommendation: task.taskReadiness.recommendation,
+        ...(typeof task.taskReadiness.summary === 'string' ? { summary: task.taskReadiness.summary } : {}),
+      }
+    : null
+  summary.currentSummary = {
+    imported,
+    brief: {
+      present: brief !== null,
+      shaped: briefShape,
+      userJob,
+      successMetric,
+      approvedAt: typeof brief?.approvedAt === 'string' ? brief.approvedAt : null,
+    },
+    acceptanceCriteriaCount,
+    ...(taskReadiness ? { taskReadiness } : {}),
+  }
+  return summary
+}
+
+/** Build the compact indexed row for a task without persisting it. */
+export function projectStateDatabaseTaskSummary(task: Record<string, unknown>): Record<string, unknown> {
+  return workItemSummary(task)
+}
+
+/**
+ * The compatibility TASKS file is an index, not a second task database. Full
+ * definitions live in per-task work_item_detail rows for promoted projects;
+ * each row records the last queue revision that changed its own payload.
+ * queue_detail and queue-details.json are migration compatibility stores only
+ * and are not written by the current schema.
+ */
+export function compactProjectStateQueueForCompatibility(queue: unknown): unknown {
+  const record = queueRecord(queue)
+  const compactReleases = queueReleases(queue).map(release => {
+    const compact: JsonRecord = {}
+    for (const key of ['id', 'label', 'kind', 'state', 'source', 'proofStyle', 'nodeIds', 'deferredNodeIds']) {
+      if (key in release) compact[key] = release[key]
+    }
+    return compact
+  })
+  return {
+    detailStoreVersion: 1,
+    ...(typeof record.version === 'number' ? { version: record.version } : { version: 1 }),
+    ...(typeof record.lastUpdated === 'string' ? { lastUpdated: record.lastUpdated } : {}),
+    ...(typeof record.selectedReleaseId === 'string' ? { selectedReleaseId: record.selectedReleaseId } : {}),
+    tasks: queueTasks(queue).map(workItemSummary),
+    releases: compactReleases,
+  }
+}
+
+function writeSnapshotToDatabase(
+  database: DatabaseSync,
+  tasksPath: string,
+  snapshot: ProjectStateDatabaseSnapshot,
+): number {
+  const tasks = queueTasks(snapshot.queue)
+  const releases = releaseDefinitionsWithTaskMembership(queueReleases(snapshot.queue), tasks)
+  const scopeRows = snapshot.scopeRows ?? []
+  validateScopeRowsAgainstTaskIds(scopeRows, tasks.map(task => String(task.id ?? '')))
+  const summary = isRecord(snapshot.summary) ? snapshot.summary : {}
+  const { compact: compactSummary, orientation, approvedPlan } = summaryStorageParts(summary)
+  const lastUpdated = sourceQueueLastUpdated(snapshot.queue)
+  const mtimeMs = sourceQueueMtimeMs(tasksPath)
+  const goalsMtimeMs = sourceWorkspaceGoalsMtimeMs(tasksPath)
+  const generatedAt = stringValue(summary.generatedAt) ?? new Date().toISOString()
+  const projectId = stringValue(summary.projectId)
+  let committedRevision = 0
+
+  transaction(database, () => {
+    if (snapshot.expectedQueueRevision !== undefined) {
+      const currentQueue = database.prepare('SELECT revision FROM queue_state WHERE id = 1').get() as JsonRecord | undefined
+      const actualRevision = currentQueue ? Number(currentQueue.revision ?? 0) : null
+      if (actualRevision !== snapshot.expectedQueueRevision) {
+        throw new Error(
+          `Stale project queue replacement: expected revision ${snapshot.expectedQueueRevision ?? 'none'}, found ${actualRevision ?? 'none'}. Read the current queue and retry.`,
+        )
+      }
+    }
+    database.prepare('DELETE FROM work_items').run()
+    database.prepare('DELETE FROM scopes').run()
+    database.prepare('DELETE FROM work_scope').run()
+
+    const insertTask = database.prepare(`
+      INSERT INTO work_items (
+        id, title, description, status, domain, priority, work_kind, parent_id,
+        hierarchy_json, depends_on_json, release_ids_json, source_refs_json,
+        summary_json, definition_json, updated_at, completed_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `)
+    for (const task of tasks) {
+      const hierarchy = isRecord(task.hierarchy) ? task.hierarchy : null
+      insertTask.run(
+        String(task.id ?? ''),
+        String(task.title ?? ''),
+        stringValue(task.description),
+        stringValue(task.status),
+        stringValue(task.domain),
+        stringValue(task.priority),
+        stringValue(task.workKind),
+        stringValue(hierarchy?.parentId),
+        json(hierarchy),
+        json(stringArray(task.dependsOn)),
+        json(stringArray(task.releaseIds)),
+        json(stringArray(task.sourceRefs ?? task.references)),
+        json(workItemSummary(task)),
+        '{}',
+        stringValue(task.updatedAt),
+        stringValue(task.completedAt),
+      )
+    }
+    deleteOrphanTaskOverlays(database, tasks.map(task => String(task.id ?? '')).filter(Boolean))
+
+    const insertScope = database.prepare(`
+      INSERT INTO scopes (
+        id, label, kind, state, source, proof_style,
+        node_ids_json, deferred_node_ids_json, definition_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `)
+    for (const release of releases) {
+      insertScope.run(
+        String(release.id ?? ''),
+        String(release.label ?? release.id ?? ''),
+        stringValue(release.kind),
+        stringValue(release.state),
+        stringValue(release.source),
+        stringValue(release.proofStyle),
+        json(stringArray(release.nodeIds)),
+        json(stringArray(release.deferredNodeIds)),
+        json(release),
+      )
+    }
+    syncReleaseMembershipFromDefinitions(database, releases)
+
+    database.prepare(`
+      INSERT INTO queue_state (
+        id, version, last_updated, selected_release_id,
+        execution_plan_actions_json, scope_authority_requests_json, revision
+      )
+      VALUES (1, ?, ?, ?, ?, ?, 0)
+      ON CONFLICT(id) DO UPDATE SET
+        version = excluded.version,
+        last_updated = excluded.last_updated,
+        selected_release_id = excluded.selected_release_id,
+        execution_plan_actions_json = excluded.execution_plan_actions_json,
+        scope_authority_requests_json = excluded.scope_authority_requests_json
+    `).run(
+      Number.isFinite(Number(queueRecord(snapshot.queue).version)) ? Number(queueRecord(snapshot.queue).version) : 1,
+      lastUpdated,
+      stringValue(queueRecord(snapshot.queue).selectedReleaseId),
+      json(Array.isArray(queueRecord(snapshot.queue).executionPlanActions) ? queueRecord(snapshot.queue).executionPlanActions : []),
+      json(Array.isArray(queueRecord(snapshot.queue).scopeAuthorityRequests) ? queueRecord(snapshot.queue).scopeAuthorityRequests : []),
+    )
+
+    const insertScopeRow = database.prepare(`
+      INSERT INTO work_scope (
+        task_id, scope, eligibility_reason, hierarchy_role, handoff_state,
+        blocks_start, blocks_release, human_blocking, count_in_project_totals, proof_blocked,
+        blocker_summary, source_refs_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `)
+    for (const row of scopeRows) {
+      insertScopeRow.run(
+        row.taskId,
+        row.scope,
+        row.eligibilityReason,
+        row.hierarchyRole,
+        row.handoffState,
+        row.blocksStart ? 1 : 0,
+        row.blocksRelease ? 1 : 0,
+        row.humanBlocking ? 1 : 0,
+        row.countInProjectTotals === false ? 0 : 1,
+        row.proofBlocked ? 1 : 0,
+        row.blockerSummary ?? null,
+        json(row.sourceRefs),
+      )
+    }
+
+    database.prepare(`
+      INSERT INTO project_summary (
+        id, payload_json, freshness, generated_at,
+        revision, source_queue_last_updated, source_queue_mtime_ms
+        , source_workspace_goals_mtime_ms
+      ) VALUES (1, ?, 'current', ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        payload_json = excluded.payload_json,
+        freshness = excluded.freshness,
+        generated_at = excluded.generated_at,
+        revision = excluded.revision,
+        source_queue_last_updated = excluded.source_queue_last_updated,
+        source_queue_mtime_ms = excluded.source_queue_mtime_ms,
+        source_workspace_goals_mtime_ms = excluded.source_workspace_goals_mtime_ms
+    `).run(json(compactSummary), generatedAt, currentRevision(database) + 1, lastUpdated, mtimeMs, goalsMtimeMs)
+
+    const revision = commitAuthoritativeMutation(database, {
+      updatedAt: generatedAt,
+      domains: ['queue'],
+      projectionDomains: snapshot.projectionDomains,
+      summaryFreshness: 'preserve',
+    })
+    database.prepare('UPDATE queue_state SET revision = ? WHERE id = 1').run(revision)
+    replaceWorkItemDetails(database, tasks, revision)
+    database.prepare('UPDATE project_meta SET project_id = ? WHERE id = 1').run(projectId)
+    syncProjectPlanSnapshot(database, approvedPlan, generatedAt, revision)
+    if (orientation === null || orientation === undefined) {
+      database.prepare('DELETE FROM project_orientation').run()
+    } else {
+      database.prepare(`
+        INSERT INTO project_orientation (id, payload_json, generated_at, revision)
+        VALUES (1, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          payload_json = excluded.payload_json,
+          generated_at = excluded.generated_at,
+          revision = excluded.revision
+      `).run(json(orientation), generatedAt, revision)
+    }
+    syncSummaryAuxiliaryRows(database, summary)
+    // Per-task detail rows are the only current rich-detail authority now.
+    // Keep the table name readable for compatibility with older databases,
+    // but never write another full-queue payload after schema 22.
+    database.prepare('DELETE FROM queue_detail').run()
+    markProjectionCurrent(database, 'summary', revision, generatedAt)
+    committedRevision = revision
+  })
+  return committedRevision
+}
+
+function deleteOrphanTaskOverlays(database: DatabaseSync, taskIds: readonly string[]): void {
+  const ids = [...new Set(taskIds)]
+  for (const table of ['task_execution', 'task_workspace', 'task_proof', 'task_evidence_current']) {
+    if (!tableExists(database, table)) continue
+    if (ids.length === 0) database.prepare(`DELETE FROM ${table}`).run()
+    else database.prepare(`DELETE FROM ${table} WHERE task_id NOT IN (${ids.map(() => '?').join(', ')})`).run(...ids)
+  }
+}
+
+function replaceWorkItemDetails(
+  database: DatabaseSync,
+  tasks: readonly JsonRecord[],
+  revision: number,
+): void {
+  database.prepare('DELETE FROM work_item_detail').run()
+  const insert = database.prepare(`
+    INSERT INTO work_item_detail (task_id, revision, payload_gzip)
+    VALUES (?, ?, ?)
+  `)
+  for (const task of tasks) {
+    const taskId = stringValue(task.id)
+    if (taskId) insert.run(taskId, revision, serializeWorkItemDetail(task))
+  }
+}
+
+export interface ProjectStateDatabaseWorkItemDetailMigrationResult {
+  migrated: boolean
+  revision: number | null
+  taskCount: number
+}
+
+/**
+ * Backfill the per-task detail index from the authoritative aggregate once.
+ * This is a representation migration: queue identity, revisions, and
+ * historical evidence remain unchanged.
+ */
+export function migrateProjectStateDatabaseWorkItemDetails(
+  projectRoot: string,
+): ProjectStateDatabaseWorkItemDetailMigrationResult {
+  const result: ProjectStateDatabaseWorkItemDetailMigrationResult = {
+    migrated: false,
+    revision: null,
+    taskCount: 0,
+  }
+  withWritableDatabase(projectRoot, database => {
+    if (!tableExists(database, 'work_item_detail')) return
+    const revision = currentQueueRevision(database)
+    result.revision = revision
+    const detail = readQueueDetailsForRevision(
+      getProjectSystemStatePath(projectRoot, 'TASKS.json'),
+      revision,
+      database,
+      { migration: true },
+    )
+    if (!detail) return
+    const tasks = queueTasks(detail)
+    const existingTotal = Number((database.prepare('SELECT COUNT(*) AS count FROM work_item_detail').get() as JsonRecord | undefined)?.count ?? 0)
+    if (existingTotal === tasks.length) {
+      result.taskCount = existingTotal
+      return
+    }
+    replaceWorkItemDetails(database, tasks, revision)
+    result.migrated = true
+    result.taskCount = tasks.length
+  })
+  return result
+}
+
+export interface ProjectStateDatabaseReleaseMembershipMigrationResult {
+  migrated: boolean
+  membershipCount: number
+  revision: number | null
+}
+
+/**
+ * Promote release membership from the last queue envelope into its one
+ * normalized relation. This is the only migration that is allowed to inspect
+ * the old node-id mirrors; ordinary readers use release_membership only.
+ */
+export function migrateProjectStateDatabaseReleaseMembership(
+  projectRoot: string,
+): ProjectStateDatabaseReleaseMembershipMigrationResult {
+  const result: ProjectStateDatabaseReleaseMembershipMigrationResult = {
+    migrated: false,
+    membershipCount: 0,
+    revision: null,
+  }
+  withWritableDatabase(projectRoot, database => {
+    if (!tableExists(database, 'release_membership')) return
+    const releaseRows = database.prepare('SELECT definition_json FROM scopes ORDER BY id').all() as JsonRecord[]
+    const releases = releaseRows
+      .map(row => parseJson<JsonRecord>(row.definition_json, {}))
+      .filter(release => typeof release.id === 'string')
+    const desired = releaseMembershipFromDefinitions(releases)
+    if (desired.length === 0) {
+      const taskRows = database.prepare('SELECT id, status, release_ids_json FROM work_items').all() as JsonRecord[]
+      for (const task of taskRows) {
+        const taskId = stringValue(task.id)
+        if (!taskId) continue
+        const disposition = task.status === 'shelved' ? 'deferred' : 'included'
+        for (const releaseId of parseJson<string[]>(task.release_ids_json, [])) {
+          if (typeof releaseId === 'string' && releaseId.trim()) {
+            desired.push({ releaseId, taskId, disposition })
+          }
+        }
+      }
+    }
+    const existing = database.prepare('SELECT release_id, task_id, disposition FROM release_membership').all() as JsonRecord[]
+    const existingKey = new Set(existing.map(row => `${row.release_id}\0${row.task_id}\0${row.disposition}`))
+    const desiredKey = new Set(desired.map(row => `${row.releaseId}\0${row.taskId}\0${row.disposition}`))
+    result.membershipCount = desired.length
+    if (existingKey.size === desiredKey.size && [...existingKey].every(key => desiredKey.has(key))) return
+    database.prepare('DELETE FROM release_membership').run()
+    const insert = database.prepare(`
+      INSERT INTO release_membership (release_id, task_id, disposition)
+      VALUES (?, ?, ?)
+    `)
+    for (const row of desired) insert.run(row.releaseId, row.taskId, row.disposition)
+    const updatedAt = new Date().toISOString()
+    result.revision = commitAuthoritativeMutation(database, {
+      updatedAt,
+      domains: ['queue'],
+      projectionDomains: ['summary'],
+      summaryFreshness: 'stale',
+    })
+    result.migrated = true
+  })
+  return result
+}
+
+export function writeProjectStateDatabaseSnapshot(
+  tasksPath: string,
+  snapshot: ProjectStateDatabaseSnapshot,
+): void {
+  if (snapshot.projectRoot && !existsSync(projectStateDatabasePath(snapshot.projectRoot))) {
+    ensureProjectLocalHistoryDir(snapshot.projectRoot)
+  }
+  const database = openDatabase(projectStateDatabasePathFromTasksPath(tasksPath))
+  let revision = 0
+  try {
+    revision = writeSnapshotToDatabase(database, tasksPath, snapshot)
+  } finally {
+    database.close()
+  }
+  // Historical sidecars are an explicit migration bridge only. The normal
+  // writer has one current-state representation: SQLite's indexed detail.
+  if (snapshot.compatibilityExport) {
+    atomicWriteBytes(
+      projectStateDatabaseCompressedDetailPathFromTasksPath(tasksPath),
+      snapshot.compatibilityExport === 'compact'
+        ? serializeProjectStateDetailStore(compactProjectStateQueueForCompatibility(snapshot.queue), revision)
+        : serializeProjectStateDetailStore(snapshot.queue, revision),
+    )
+  }
+}
+
+/**
+ * Commit one task against the promoted SQLite current-state authority.
+ *
+ * This is intentionally narrower than writeProjectStateDatabaseSnapshot: it
+ * updates one work item/detail payload and at most one scope row. Existing
+ * detail rows receive the new queue watermark without being decompressed or
+ * rewritten so an explicit rich queue read still observes one coherent
+ * revision after the transaction commits.
+ */
+export function writeProjectStateDatabaseTaskMutation(
+  tasksPath: string,
+  mutation: ProjectStateDatabaseTaskMutation,
+): number {
+  if (readProjectStateDatabaseAuthoritySnapshotFromTasksPath(tasksPath)?.authority !== 'database') {
+    throw new Error('Targeted current-state mutations require database project-state authority')
+  }
+  const taskId = stringValue(mutation.task.id)
+  if (!taskId) throw new Error('Targeted current-state mutations require a task id')
+  if (!Number.isInteger(mutation.expectedQueueRevision) || mutation.expectedQueueRevision < 0) {
+    throw new Error('Targeted current-state mutations require a non-negative integer queue revision')
+  }
+  if (!Number.isInteger(mutation.expectedProjectRevision) || mutation.expectedProjectRevision < 0) {
+    throw new Error('Targeted current-state mutations require a non-negative integer project revision')
+  }
+  if (mutation.scopeRow !== undefined && mutation.scopeRow !== null && mutation.scopeRow.taskId !== taskId) {
+    throw new Error(`Targeted current-state mutation scope row must belong to ${taskId}`)
+  }
+  const database = openDatabase(projectStateDatabasePathFromTasksPath(tasksPath))
+  let committedRevision = 0
+  try {
+    transaction(database, () => {
+      const queueRow = database.prepare('SELECT revision, last_updated FROM queue_state WHERE id = 1').get() as JsonRecord | undefined
+      const actualRevision = queueRow ? Number(queueRow.revision ?? 0) : null
+      if (actualRevision !== mutation.expectedQueueRevision) {
+        throw new Error(
+          `Stale targeted project mutation: expected revision ${mutation.expectedQueueRevision}, found ${actualRevision ?? 'none'}. Read the current task and retry.`,
+        )
+      }
+      const actualProjectRevision = currentRevision(database)
+      if (actualProjectRevision !== mutation.expectedProjectRevision) {
+        throw new Error(
+          `Stale targeted project mutation: expected project revision ${mutation.expectedProjectRevision}, found ${actualProjectRevision}. Read the current project and retry.`,
+        )
+      }
+      if (!tableExists(database, 'work_item_detail')) {
+        throw new Error('Targeted current-state mutations require the per-task detail index')
+      }
+      const itemCount = Number((database.prepare('SELECT COUNT(*) AS count FROM work_items').get() as JsonRecord | undefined)?.count ?? 0)
+      const detailCount = Number((database.prepare('SELECT COUNT(*) AS count FROM work_item_detail').get() as JsonRecord | undefined)?.count ?? 0)
+      const missingDetail = database.prepare(`
+        SELECT work_items.id
+        FROM work_items
+        LEFT JOIN work_item_detail ON work_item_detail.task_id = work_items.id
+        WHERE work_item_detail.task_id IS NULL
+        LIMIT 1
+      `).get() as JsonRecord | undefined
+      if (itemCount !== detailCount || missingDetail) {
+        throw new Error(`Targeted current-state mutation refused: detail index is incomplete (${detailCount}/${itemCount})`)
+      }
+      if (!database.prepare('SELECT 1 FROM work_items WHERE id = ?').get(taskId)) {
+        throw new Error(`Cannot mutate current work item ${taskId}: item not found`)
+      }
+      const generatedAt = stringValue(mutation.summary.generatedAt) ?? new Date().toISOString()
+      const lastUpdated = mutation.lastUpdated ?? stringValue(mutation.task.updatedAt) ?? stringValue(queueRow?.last_updated)
+      const { compact: compactSummary, orientation, approvedPlan } = summaryStorageParts(mutation.summary)
+      const source = isRecord(mutation.summary.source) ? mutation.summary.source : null
+    const revision = commitAuthoritativeMutation(database, {
+      updatedAt: generatedAt,
+      domains: ['queue'],
+      projectionDomains: mutation.projectionDomains,
+      summaryFreshness: 'preserve',
+    })
+
+      const updated = database.prepare(`
+        UPDATE work_items SET
+          title = ?, description = ?, status = ?, domain = ?, priority = ?,
+          work_kind = ?, parent_id = ?, hierarchy_json = ?, depends_on_json = ?,
+          release_ids_json = ?, source_refs_json = ?, summary_json = ?,
+          definition_json = ?, updated_at = ?, completed_at = ?
+        WHERE id = ?
+      `).run(
+        String(mutation.task.title ?? taskId),
+        stringValue(mutation.task.description),
+        stringValue(mutation.task.status),
+        stringValue(mutation.task.domain),
+        stringValue(mutation.task.priority),
+        stringValue(mutation.task.workKind),
+        stringValue(isRecord(mutation.task.hierarchy) ? mutation.task.hierarchy.parentId : undefined),
+        json(isRecord(mutation.task.hierarchy) ? mutation.task.hierarchy : null),
+        json(stringArray(mutation.task.dependsOn)),
+        json(stringArray(mutation.task.releaseIds)),
+        json(stringArray(mutation.task.sourceRefs ?? mutation.task.references)),
+        json(workItemSummary(mutation.task)),
+        '{}',
+        stringValue(mutation.task.updatedAt),
+        stringValue(mutation.task.completedAt),
+        taskId,
+      )
+      if (Number(updated.changes ?? 0) !== 1) {
+        throw new Error(`Cannot mutate current work item ${taskId}: item not found`)
+      }
+
+      // A task edit may legitimately assign or unassign the task from a
+      // release. Normalize that relationship in this same transaction. The
+      // task definition is the input; release_membership remains the only
+      // persisted authority used by later reads.
+      const normalizedReleases = releaseDefinitionsWithTaskMembership(
+        releaseDefinitionsFromDatabase(database),
+        [mutation.task],
+        { clearUnlistedTaskMembership: true },
+      )
+      upsertReleaseDefinitions(database, normalizedReleases)
+      syncReleaseMembershipFromDefinitions(database, normalizedReleases)
+
+      /*
+       * Keep the existing snapshot-revision invariant for rich queue reads.
+       * This changes only the small integer watermark for untouched rows; it
+       * does not decompress or rewrite their detail payloads.
+       */
+      database.prepare(`
+        INSERT INTO work_item_detail (
+          task_id, revision, payload_gzip
+        ) VALUES (?, ?, ?)
+        ON CONFLICT(task_id) DO UPDATE SET
+          revision = excluded.revision,
+          payload_gzip = excluded.payload_gzip
+      `).run(taskId, revision, serializeWorkItemDetail(mutation.task))
+
+      /*
+       * The work-item index stores parent/dependency indexes and compact task
+       * fields. Release membership is normalized in release_membership and is
+       * updated in this same transaction; scope is separate because it is a
+       * derived selected-scope projection.
+       */
+      if (mutation.scopeRow !== undefined) {
+        if (mutation.scopeRow === null) {
+          database.prepare('DELETE FROM work_scope WHERE task_id = ?').run(taskId)
+        } else {
+          const row = mutation.scopeRow
+          database.prepare(`
+            INSERT INTO work_scope (
+              task_id, scope, eligibility_reason, hierarchy_role, handoff_state,
+              blocks_start, blocks_release, human_blocking, count_in_project_totals, proof_blocked,
+              blocker_summary, source_refs_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(task_id) DO UPDATE SET
+              scope = excluded.scope,
+              eligibility_reason = excluded.eligibility_reason,
+              hierarchy_role = excluded.hierarchy_role,
+              handoff_state = excluded.handoff_state,
+              blocks_start = excluded.blocks_start,
+              blocks_release = excluded.blocks_release,
+              human_blocking = excluded.human_blocking,
+              count_in_project_totals = excluded.count_in_project_totals,
+              proof_blocked = excluded.proof_blocked,
+              blocker_summary = excluded.blocker_summary,
+              source_refs_json = excluded.source_refs_json
+          `).run(
+            row.taskId,
+            row.scope,
+            row.eligibilityReason,
+            row.hierarchyRole,
+            row.handoffState,
+            row.blocksStart ? 1 : 0,
+            row.blocksRelease ? 1 : 0,
+            row.humanBlocking ? 1 : 0,
+            row.countInProjectTotals === false ? 0 : 1,
+            row.proofBlocked ? 1 : 0,
+            row.blockerSummary ?? null,
+            json(row.sourceRefs),
+          )
+        }
+      }
+
+      database.prepare('UPDATE queue_state SET last_updated = ?, revision = ? WHERE id = 1').run(lastUpdated, revision)
+      const mtimeMs = sourceQueueMtimeMs(tasksPath)
+      const goalsMtimeMs = sourceWorkspaceGoalsMtimeMs(tasksPath)
+      database.prepare(`
+        INSERT INTO project_summary (
+          id, payload_json, freshness, generated_at,
+          revision, source_queue_last_updated, source_queue_mtime_ms
+          , source_workspace_goals_mtime_ms
+        ) VALUES (1, ?, 'current', ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          payload_json = excluded.payload_json,
+          freshness = excluded.freshness,
+          generated_at = excluded.generated_at,
+          revision = excluded.revision,
+          source_queue_last_updated = excluded.source_queue_last_updated,
+          source_queue_mtime_ms = excluded.source_queue_mtime_ms,
+          source_workspace_goals_mtime_ms = excluded.source_workspace_goals_mtime_ms
+      `).run(
+        json(compactSummary),
+        generatedAt,
+        revision,
+        stringValue(source?.taskQueueLastUpdated) ?? stringValue(mutation.summary.sourceQueueLastUpdated) ?? lastUpdated,
+        mtimeMs,
+        goalsMtimeMs,
+      )
+      syncProjectPlanSnapshot(database, approvedPlan, generatedAt, revision)
+      if (orientation === null || orientation === undefined) {
+        database.prepare('DELETE FROM project_orientation').run()
+      } else {
+        database.prepare(`
+          INSERT INTO project_orientation (id, payload_json, generated_at, revision)
+          VALUES (1, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET
+            payload_json = excluded.payload_json,
+            generated_at = excluded.generated_at,
+            revision = excluded.revision
+        `).run(json(orientation), generatedAt, revision)
+      }
+      syncSummaryAuxiliaryRows(database, mutation.summary)
+      for (const entry of mutation.evidence ?? []) {
+        const durable = compactTaskEvidenceEvent(TaskEvidenceEvent.parse({ ...entry.event }))
+        const retention = validateTaskEvidenceRetention(entry.retention)
+        upsertTaskProofAndCurrentEvidence(database, {
+          id: durable.id,
+          taskId: durable.taskId,
+          kind: durable.kind,
+          recordedAt: durable.recordedAt,
+          payload: durable.payload,
+        })
+        appendTaskEvidenceHistory(database, durable, retention)
+      }
+      markProjectionCurrent(database, 'summary', revision, generatedAt)
+      committedRevision = revision
+    })
+  } finally {
+    database.close()
+  }
+  return committedRevision
+}
+
+/**
+ * Commit a release-envelope selection without rewriting task definitions.
+ *
+ * Release selection changes the project scope projection, so this advances
+ * the same queue revision as a task mutation. Unchanged task detail payloads
+ * keep their own content revision; they are not rewritten just because the
+ * queue's summary or scope revision advanced.
+ */
+export function writeProjectStateDatabaseReleaseSelectionMutation(
+  tasksPath: string,
+  mutation: ProjectStateDatabaseReleaseSelectionMutation,
+): number {
+  if (readProjectStateDatabaseAuthoritySnapshotFromTasksPath(tasksPath)?.authority !== 'database') {
+    throw new Error('Targeted release selection mutations require database project-state authority')
+  }
+  if (!Number.isInteger(mutation.expectedQueueRevision) || mutation.expectedQueueRevision < 0) {
+    throw new Error('Targeted release selection mutations require a non-negative integer queue revision')
+  }
+  if (!Number.isInteger(mutation.expectedProjectRevision) || mutation.expectedProjectRevision < 0) {
+    throw new Error('Targeted release selection mutations require a non-negative integer project revision')
+  }
+  if (!mutation.selectedReleaseId) throw new Error('Targeted release selection mutations require a selected release')
+
+  const releases = mutation.releases.map(release => ({ ...release }))
+  const releasesById = new Map<string, JsonRecord>()
+  for (const release of releases) {
+    const id = stringValue(release.id)
+    if (!id) throw new Error('Targeted release selection mutations require release ids')
+    if (releasesById.has(id)) throw new Error(`Targeted release selection mutations received duplicate release ${id}`)
+    releasesById.set(id, release)
+  }
+  if (!releasesById.has(mutation.selectedReleaseId)) {
+    throw new Error(`Cannot select release ${mutation.selectedReleaseId}: release not found in the current envelope`)
+  }
+
+  const scopeRowKey = (row: ProjectStateDatabaseScopeRow): string => JSON.stringify({
+    taskId: row.taskId,
+    scope: row.scope,
+    eligibilityReason: row.eligibilityReason,
+    hierarchyRole: row.hierarchyRole,
+    handoffState: row.handoffState,
+    blocksStart: row.blocksStart,
+    blocksRelease: row.blocksRelease,
+    humanBlocking: row.humanBlocking,
+    proofBlocked: row.proofBlocked ?? false,
+    blockerSummary: row.blockerSummary ?? null,
+    sourceRefs: row.sourceRefs,
+  })
+  const scopeRowsByTaskId = new Map<string, ProjectStateDatabaseScopeRow>()
+  for (const row of mutation.scopeRows) {
+    if (scopeRowsByTaskId.has(row.taskId)) throw new Error(`Targeted release selection mutations received duplicate scope row ${row.taskId}`)
+    scopeRowsByTaskId.set(row.taskId, row)
+  }
+
+  const database = openDatabase(projectStateDatabasePathFromTasksPath(tasksPath))
+  let committedRevision = 0
+  try {
+    transaction(database, () => {
+      const queueRow = database.prepare('SELECT revision, last_updated FROM queue_state WHERE id = 1').get() as JsonRecord | undefined
+      const actualRevision = queueRow ? Number(queueRow.revision ?? 0) : null
+      if (actualRevision !== mutation.expectedQueueRevision) {
+        throw new Error(
+          `Stale targeted release selection: expected revision ${mutation.expectedQueueRevision}, found ${actualRevision ?? 'none'}. Read the current project and retry.`,
+        )
+      }
+      const actualProjectRevision = currentRevision(database)
+      if (actualProjectRevision !== mutation.expectedProjectRevision) {
+        throw new Error(
+          `Stale targeted release selection: expected project revision ${mutation.expectedProjectRevision}, found ${actualProjectRevision}. Read the current project and retry.`,
+        )
+      }
+      if (!tableExists(database, 'work_item_detail')) {
+        throw new Error('Targeted release selection mutations require the per-task detail index')
+      }
+
+      const existingReleases = database.prepare('SELECT id, label, kind, state, source, proof_style, node_ids_json, deferred_node_ids_json, definition_json FROM scopes').all() as JsonRecord[]
+      const existingReleasesById = new Map(existingReleases.map(row => [String(row.id), row]))
+      for (const [id, release] of releasesById) {
+        const existing = existingReleasesById.get(id)
+        const definitionJson = json(release)
+        if (existing && existing.definition_json === definitionJson) continue
+        database.prepare(`
+          INSERT INTO scopes (
+            id, label, kind, state, source, proof_style,
+            node_ids_json, deferred_node_ids_json, definition_json
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET
+            label = excluded.label,
+            kind = excluded.kind,
+            state = excluded.state,
+            source = excluded.source,
+            proof_style = excluded.proof_style,
+            node_ids_json = excluded.node_ids_json,
+            deferred_node_ids_json = excluded.deferred_node_ids_json,
+            definition_json = excluded.definition_json
+        `).run(
+          id,
+          String(release.label ?? id),
+          stringValue(release.kind),
+          stringValue(release.state),
+          stringValue(release.source),
+          stringValue(release.proofStyle),
+          json(stringArray(release.nodeIds)),
+          json(stringArray(release.deferredNodeIds)),
+          definitionJson,
+        )
+      }
+      syncReleaseMembershipFromDefinitions(database, releases)
+      for (const id of existingReleasesById.keys()) {
+        if (!releasesById.has(id)) database.prepare('DELETE FROM scopes WHERE id = ?').run(id)
+      }
+
+      const existingScopeRows = database.prepare(`
+        SELECT task_id, scope, eligibility_reason, hierarchy_role, handoff_state,
+          blocks_start, blocks_release, human_blocking, count_in_project_totals, proof_blocked,
+          blocker_summary, source_refs_json
+        FROM work_scope
+      `).all() as JsonRecord[]
+      const existingScopeRowsByTaskId = new Map(existingScopeRows.map(row => [String(row.task_id), {
+        taskId: String(row.task_id),
+        scope: row.scope,
+        eligibilityReason: String(row.eligibility_reason ?? ''),
+        hierarchyRole: String(row.hierarchy_role ?? ''),
+        handoffState: String(row.handoff_state ?? ''),
+        blocksStart: Number(row.blocks_start ?? 0) === 1,
+        blocksRelease: Number(row.blocks_release ?? 0) === 1,
+        humanBlocking: Number(row.human_blocking ?? 0) === 1,
+        ...(Number(row.count_in_project_totals ?? 1) === 0 ? { countInProjectTotals: false } : {}),
+        proofBlocked: Number(row.proof_blocked ?? 0) === 1,
+        ...(typeof row.blocker_summary === 'string' && row.blocker_summary.trim()
+          ? { blockerSummary: row.blocker_summary }
+          : {}),
+        sourceRefs: parseJson<string[]>(row.source_refs_json, []),
+      } as ProjectStateDatabaseScopeRow]))
+      for (const taskId of existingScopeRowsByTaskId.keys()) {
+        if (!scopeRowsByTaskId.has(taskId)) database.prepare('DELETE FROM work_scope WHERE task_id = ?').run(taskId)
+      }
+      const upsertScopeRow = database.prepare(`
+        INSERT INTO work_scope (
+          task_id, scope, eligibility_reason, hierarchy_role, handoff_state,
+          blocks_start, blocks_release, human_blocking, count_in_project_totals, proof_blocked,
+          blocker_summary, source_refs_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(task_id) DO UPDATE SET
+          scope = excluded.scope,
+          eligibility_reason = excluded.eligibility_reason,
+          hierarchy_role = excluded.hierarchy_role,
+          handoff_state = excluded.handoff_state,
+          blocks_start = excluded.blocks_start,
+          blocks_release = excluded.blocks_release,
+          human_blocking = excluded.human_blocking,
+          count_in_project_totals = excluded.count_in_project_totals,
+          proof_blocked = excluded.proof_blocked,
+          blocker_summary = excluded.blocker_summary,
+          source_refs_json = excluded.source_refs_json
+      `)
+      for (const row of scopeRowsByTaskId.values()) {
+        if (existingScopeRowsByTaskId.get(row.taskId) && scopeRowKey(existingScopeRowsByTaskId.get(row.taskId)!) === scopeRowKey(row)) continue
+        upsertScopeRow.run(
+          row.taskId,
+          row.scope,
+          row.eligibilityReason,
+          row.hierarchyRole,
+          row.handoffState,
+          row.blocksStart ? 1 : 0,
+          row.blocksRelease ? 1 : 0,
+          row.humanBlocking ? 1 : 0,
+          row.countInProjectTotals === false ? 0 : 1,
+          row.proofBlocked ? 1 : 0,
+          row.blockerSummary ?? null,
+          json(row.sourceRefs),
+        )
+      }
+
+      const generatedAt = stringValue(mutation.summary.generatedAt) ?? new Date().toISOString()
+      const lastUpdated = mutation.lastUpdated ?? stringValue(queueRow?.last_updated)
+      const { compact: compactSummary, orientation, approvedPlan } = summaryStorageParts(mutation.summary)
+      const source = isRecord(mutation.summary.source) ? mutation.summary.source : null
+      const revision = commitAuthoritativeMutation(database, {
+        updatedAt: generatedAt,
+        domains: ['release'],
+        projectionDomains: mutation.projectionDomains,
+        summaryFreshness: 'preserve',
+      })
+      database.prepare(`
+        UPDATE queue_state
+        SET selected_release_id = ?, last_updated = ?, revision = ?
+        WHERE id = 1
+      `).run(mutation.selectedReleaseId, lastUpdated, revision)
+      database.prepare(`
+        INSERT INTO project_summary (
+          id, payload_json, freshness, generated_at,
+          revision, source_queue_last_updated, source_queue_mtime_ms,
+          source_workspace_goals_mtime_ms
+        ) VALUES (1, ?, 'current', ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          payload_json = excluded.payload_json,
+          freshness = excluded.freshness,
+          generated_at = excluded.generated_at,
+          revision = excluded.revision,
+          source_queue_last_updated = excluded.source_queue_last_updated,
+          source_queue_mtime_ms = excluded.source_queue_mtime_ms,
+          source_workspace_goals_mtime_ms = excluded.source_workspace_goals_mtime_ms
+      `).run(
+        json(compactSummary),
+        generatedAt,
+        revision,
+        stringValue(source?.taskQueueLastUpdated) ?? stringValue(mutation.summary.sourceQueueLastUpdated) ?? lastUpdated,
+        sourceQueueMtimeMs(tasksPath),
+        sourceWorkspaceGoalsMtimeMs(tasksPath),
+      )
+      syncProjectPlanSnapshot(database, approvedPlan, generatedAt, revision)
+      if (orientation === null || orientation === undefined) {
+        database.prepare('DELETE FROM project_orientation').run()
+      } else {
+        database.prepare(`
+          INSERT INTO project_orientation (id, payload_json, generated_at, revision)
+          VALUES (1, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET
+            payload_json = excluded.payload_json,
+            generated_at = excluded.generated_at,
+            revision = excluded.revision
+        `).run(json(orientation), generatedAt, revision)
+      }
+      syncSummaryAuxiliaryRows(database, mutation.summary)
+      markProjectionCurrent(database, 'summary', revision, generatedAt)
+      committedRevision = revision
+    })
+  } finally {
+    database.close()
+  }
+  return committedRevision
+}
+
+/** Commit a structural task delta without replacing unrelated current rows. */
+export function writeProjectStateDatabaseTaskBatchMutation(
+  tasksPath: string,
+  mutation: ProjectStateDatabaseTaskBatchMutation,
+): number {
+  if (readProjectStateDatabaseAuthoritySnapshotFromTasksPath(tasksPath)?.authority !== 'database') {
+    throw new Error('Targeted task batch mutations require database project-state authority')
+  }
+  if (!Number.isInteger(mutation.expectedQueueRevision) || mutation.expectedQueueRevision < 0) {
+    throw new Error('Targeted task batch mutations require a non-negative integer queue revision')
+  }
+  if (!Number.isInteger(mutation.expectedProjectRevision) || mutation.expectedProjectRevision < 0) {
+    throw new Error('Targeted task batch mutations require a non-negative integer project revision')
+  }
+  const changedTasks = mutation.tasks.map(task => ({ ...task }))
+  const changedTaskIds = new Set<string>()
+  for (const task of changedTasks) {
+    const id = stringValue(task.id)
+    if (!id) throw new Error('Targeted task batch mutations require task ids')
+    if (changedTaskIds.has(id)) throw new Error(`Targeted task batch mutations received duplicate task ${id}`)
+    changedTaskIds.add(id)
+  }
+  const removedTaskIds = [...new Set((mutation.removeTaskIds ?? []).filter(Boolean))]
+  if (removedTaskIds.some(id => changedTaskIds.has(id))) {
+    throw new Error('Targeted task batch mutations cannot update and remove the same task')
+  }
+  const hasEnvelopeMutation =
+    mutation.releases !== undefined ||
+    'selectedReleaseId' in mutation ||
+    mutation.executionPlanActions !== undefined ||
+    mutation.scopeAuthorityRequests !== undefined
+  if (changedTaskIds.size === 0 && removedTaskIds.length === 0 && !hasEnvelopeMutation) {
+    throw new Error('Targeted task batch mutations require a task or queue-envelope change')
+  }
+
+  const database = openDatabase(projectStateDatabasePathFromTasksPath(tasksPath))
+  let committedRevision = 0
+  try {
+    transaction(database, () => {
+      const queueRow = database.prepare('SELECT revision, last_updated FROM queue_state WHERE id = 1').get() as JsonRecord | undefined
+      const actualRevision = queueRow ? Number(queueRow.revision ?? 0) : null
+      if (actualRevision !== mutation.expectedQueueRevision) {
+        throw new Error(
+          `Stale targeted task batch: expected revision ${mutation.expectedQueueRevision}, found ${actualRevision ?? 'none'}. Read the current project and retry.`,
+        )
+      }
+      const actualProjectRevision = currentRevision(database)
+      if (actualProjectRevision !== mutation.expectedProjectRevision) {
+        throw new Error(
+          `Stale targeted task batch: expected project revision ${mutation.expectedProjectRevision}, found ${actualProjectRevision}. Read the current project and retry.`,
+        )
+      }
+      if (!tableExists(database, 'work_item_detail')) {
+        throw new Error('Targeted task batch mutations require the per-task detail index')
+      }
+      const itemCount = Number((database.prepare('SELECT COUNT(*) AS count FROM work_items').get() as JsonRecord | undefined)?.count ?? 0)
+      const detailCount = Number((database.prepare('SELECT COUNT(*) AS count FROM work_item_detail').get() as JsonRecord | undefined)?.count ?? 0)
+      if (itemCount !== detailCount) {
+        throw new Error(`Targeted task batch mutation refused: detail index is incomplete (${detailCount}/${itemCount})`)
+      }
+      let normalizedReleaseDefinitions: JsonRecord[] | null = null
+      if (mutation.releases !== undefined) {
+        normalizedReleaseDefinitions = releaseDefinitionsWithTaskMembership(mutation.releases, changedTasks)
+        const releasesById = new Map<string, JsonRecord>()
+        for (const release of normalizedReleaseDefinitions) {
+          const id = stringValue(release.id)
+          if (!id) throw new Error('Targeted task batch mutations require release ids')
+          if (releasesById.has(id)) throw new Error(`Targeted task batch mutations received duplicate release ${id}`)
+          releasesById.set(id, { ...release })
+        }
+        const existingReleases = database.prepare('SELECT id, definition_json FROM scopes').all() as JsonRecord[]
+        const existingReleaseIds = new Set(existingReleases.map(row => String(row.id)))
+        const upsertRelease = database.prepare(`
+          INSERT INTO scopes (
+            id, label, kind, state, source, proof_style,
+            node_ids_json, deferred_node_ids_json, definition_json
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET
+            label = excluded.label,
+            kind = excluded.kind,
+            state = excluded.state,
+            source = excluded.source,
+            proof_style = excluded.proof_style,
+            node_ids_json = excluded.node_ids_json,
+            deferred_node_ids_json = excluded.deferred_node_ids_json,
+            definition_json = excluded.definition_json
+        `)
+        for (const release of releasesById.values()) {
+          upsertRelease.run(
+            String(release.id),
+            String(release.label ?? release.id),
+            stringValue(release.kind),
+            stringValue(release.state),
+            stringValue(release.source),
+            stringValue(release.proofStyle),
+            json(stringArray(release.nodeIds)),
+            json(stringArray(release.deferredNodeIds)),
+            json(release),
+          )
+        }
+        for (const id of existingReleaseIds) {
+          if (!releasesById.has(id)) database.prepare('DELETE FROM scopes WHERE id = ?').run(id)
+        }
+      }
+      for (const taskId of removedTaskIds) {
+        if (!database.prepare('SELECT 1 FROM work_items WHERE id = ?').get(taskId)) {
+          throw new Error(`Cannot remove current work item ${taskId}: item not found`)
+        }
+      }
+
+      const upsertTask = database.prepare(`
+        INSERT INTO work_items (
+          id, title, description, status, domain, priority, work_kind, parent_id,
+          hierarchy_json, depends_on_json, release_ids_json, source_refs_json,
+          summary_json, definition_json, updated_at, completed_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          title = excluded.title,
+          description = excluded.description,
+          status = excluded.status,
+          domain = excluded.domain,
+          priority = excluded.priority,
+          work_kind = excluded.work_kind,
+          parent_id = excluded.parent_id,
+          hierarchy_json = excluded.hierarchy_json,
+          depends_on_json = excluded.depends_on_json,
+          release_ids_json = excluded.release_ids_json,
+          source_refs_json = excluded.source_refs_json,
+          summary_json = excluded.summary_json,
+          definition_json = excluded.definition_json,
+          updated_at = excluded.updated_at,
+          completed_at = excluded.completed_at
+      `)
+      for (const task of changedTasks) {
+        const hierarchy = isRecord(task.hierarchy) ? task.hierarchy : null
+        upsertTask.run(
+          String(task.id),
+          String(task.title ?? task.id),
+          stringValue(task.description),
+          stringValue(task.status),
+          stringValue(task.domain),
+          stringValue(task.priority),
+          stringValue(task.workKind),
+          stringValue(hierarchy?.parentId),
+          json(hierarchy),
+          json(stringArray(task.dependsOn)),
+          json(stringArray(task.releaseIds)),
+          json(stringArray(task.sourceRefs ?? task.references)),
+          json(workItemSummary(task)),
+          '{}',
+          stringValue(task.updatedAt),
+          stringValue(task.completedAt),
+        )
+      }
+      normalizedReleaseDefinitions ??= releaseDefinitionsWithTaskMembership(
+        releaseDefinitionsFromDatabase(database),
+        changedTasks,
+        { clearUnlistedTaskMembership: true },
+      )
+      upsertReleaseDefinitions(database, normalizedReleaseDefinitions)
+      syncReleaseMembershipFromDefinitions(database, normalizedReleaseDefinitions)
+
+      for (const taskId of removedTaskIds) {
+        database.prepare('DELETE FROM release_membership WHERE task_id = ?').run(taskId)
+        database.prepare('DELETE FROM work_scope WHERE task_id = ?').run(taskId)
+        database.prepare('DELETE FROM work_item_detail WHERE task_id = ?').run(taskId)
+        for (const table of ['task_execution', 'task_workspace', 'task_proof', 'task_evidence_current']) {
+          if (tableExists(database, table)) database.prepare(`DELETE FROM ${table} WHERE task_id = ?`).run(taskId)
+        }
+        database.prepare('DELETE FROM work_items WHERE id = ?').run(taskId)
+      }
+
+      const scopeRows = mutation.scopeRows ?? []
+      const scopeRowsByTaskId = new Map<string, ProjectStateDatabaseScopeRow>()
+      for (const row of scopeRows) {
+        if (scopeRowsByTaskId.has(row.taskId)) throw new Error(`Targeted task batch mutations received duplicate scope row ${row.taskId}`)
+        scopeRowsByTaskId.set(row.taskId, row)
+        if (removedTaskIds.includes(row.taskId)) throw new Error(`Cannot scope removed work item ${row.taskId}`)
+        if (!database.prepare('SELECT 1 FROM work_items WHERE id = ?').get(row.taskId)) {
+          throw new Error(`Cannot scope unknown work item ${row.taskId}`)
+        }
+      }
+      for (const taskId of mutation.removeScopeRowTaskIds ?? []) {
+        if (removedTaskIds.includes(taskId)) continue
+        database.prepare('DELETE FROM work_scope WHERE task_id = ?').run(taskId)
+      }
+      const upsertScopeRow = database.prepare(`
+        INSERT INTO work_scope (
+          task_id, scope, eligibility_reason, hierarchy_role, handoff_state,
+          blocks_start, blocks_release, human_blocking, count_in_project_totals, proof_blocked,
+          blocker_summary, source_refs_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(task_id) DO UPDATE SET
+          scope = excluded.scope,
+          eligibility_reason = excluded.eligibility_reason,
+          hierarchy_role = excluded.hierarchy_role,
+          handoff_state = excluded.handoff_state,
+          blocks_start = excluded.blocks_start,
+          blocks_release = excluded.blocks_release,
+          human_blocking = excluded.human_blocking,
+          count_in_project_totals = excluded.count_in_project_totals,
+          proof_blocked = excluded.proof_blocked,
+          blocker_summary = excluded.blocker_summary,
+          source_refs_json = excluded.source_refs_json
+      `)
+      for (const row of scopeRowsByTaskId.values()) {
+        upsertScopeRow.run(
+          row.taskId,
+          row.scope,
+          row.eligibilityReason,
+          row.hierarchyRole,
+          row.handoffState,
+          row.blocksStart ? 1 : 0,
+          row.blocksRelease ? 1 : 0,
+          row.humanBlocking ? 1 : 0,
+          row.countInProjectTotals === false ? 0 : 1,
+          row.proofBlocked ? 1 : 0,
+          row.blockerSummary ?? null,
+          json(row.sourceRefs),
+        )
+      }
+
+      const generatedAt = stringValue(mutation.summary.generatedAt) ?? new Date().toISOString()
+      const lastUpdated = mutation.lastUpdated ?? stringValue(queueRow?.last_updated)
+      const { compact: compactSummary, orientation, approvedPlan } = summaryStorageParts(mutation.summary)
+      const source = isRecord(mutation.summary.source) ? mutation.summary.source : null
+      const revision = commitAuthoritativeMutation(database, {
+        updatedAt: generatedAt,
+        domains: ['queue'],
+        projectionDomains: mutation.projectionDomains,
+        summaryFreshness: 'preserve',
+      })
+      const upsertDetail = database.prepare(`
+        INSERT INTO work_item_detail (task_id, revision, payload_gzip)
+        VALUES (?, ?, ?)
+        ON CONFLICT(task_id) DO UPDATE SET
+          revision = excluded.revision,
+          payload_gzip = excluded.payload_gzip
+      `)
+      for (const task of changedTasks) {
+        upsertDetail.run(String(task.id), revision, serializeWorkItemDetail(task))
+      }
+      const queueUpdates = ['last_updated = ?', 'revision = ?']
+      const queueUpdateValues: (string | number | null)[] = [lastUpdated, revision]
+      if ('selectedReleaseId' in mutation) {
+        queueUpdates.push('selected_release_id = ?')
+        queueUpdateValues.push(mutation.selectedReleaseId ?? null)
+      }
+      if (mutation.executionPlanActions !== undefined) {
+        queueUpdates.push('execution_plan_actions_json = ?')
+        queueUpdateValues.push(json(mutation.executionPlanActions))
+      }
+      if (mutation.scopeAuthorityRequests !== undefined) {
+        queueUpdates.push('scope_authority_requests_json = ?')
+        queueUpdateValues.push(json(mutation.scopeAuthorityRequests))
+      }
+      database.prepare(`UPDATE queue_state SET ${queueUpdates.join(', ')} WHERE id = 1`).run(...queueUpdateValues)
+      database.prepare(`
+        INSERT INTO project_summary (
+          id, payload_json, freshness, generated_at,
+          revision, source_queue_last_updated, source_queue_mtime_ms,
+          source_workspace_goals_mtime_ms
+        ) VALUES (1, ?, 'current', ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          payload_json = excluded.payload_json,
+          freshness = excluded.freshness,
+          generated_at = excluded.generated_at,
+          revision = excluded.revision,
+          source_queue_last_updated = excluded.source_queue_last_updated,
+          source_queue_mtime_ms = excluded.source_queue_mtime_ms,
+          source_workspace_goals_mtime_ms = excluded.source_workspace_goals_mtime_ms
+      `).run(
+        json(compactSummary),
+        generatedAt,
+        revision,
+        stringValue(source?.taskQueueLastUpdated) ?? stringValue(mutation.summary.sourceQueueLastUpdated) ?? lastUpdated,
+        sourceQueueMtimeMs(tasksPath),
+        sourceWorkspaceGoalsMtimeMs(tasksPath),
+      )
+      syncProjectPlanSnapshot(database, approvedPlan, generatedAt, revision)
+      if (orientation === null || orientation === undefined) {
+        database.prepare('DELETE FROM project_orientation').run()
+      } else {
+        database.prepare(`
+          INSERT INTO project_orientation (id, payload_json, generated_at, revision)
+          VALUES (1, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET
+            payload_json = excluded.payload_json,
+            generated_at = excluded.generated_at,
+            revision = excluded.revision
+        `).run(json(orientation), generatedAt, revision)
+      }
+      syncSummaryAuxiliaryRows(database, mutation.summary)
+      for (const entry of mutation.evidence ?? []) {
+        const durable = compactTaskEvidenceEvent(TaskEvidenceEvent.parse({ ...entry.event }))
+        const retention = validateTaskEvidenceRetention(entry.retention)
+        upsertTaskProofAndCurrentEvidence(database, {
+          id: durable.id,
+          taskId: durable.taskId,
+          kind: durable.kind,
+          recordedAt: durable.recordedAt,
+          payload: durable.payload,
+        })
+        appendTaskEvidenceHistory(database, durable, retention)
+      }
+      markProjectionCurrent(database, 'summary', revision, generatedAt)
+      committedRevision = revision
+    })
+  } finally {
+    database.close()
+  }
+  return committedRevision
+}
+
+/**
+ * Commit a derived project projection against the queue revision it read.
+ * This is intentionally separate from writeProjectStateDatabaseSnapshot:
+ * rebuilding a projection must never rewrite task definitions or advance the
+ * queue watermark, especially while a compaction or worker mutation is in
+ * flight.
+ */
+export function writeProjectStateDatabaseSummarySnapshot(
+  tasksPath: string,
+  snapshot: ProjectStateDatabaseSummarySnapshot,
+): void {
+  const databasePath = projectStateDatabasePathFromTasksPath(tasksPath)
+  try {
+    statSync(databasePath)
+  } catch {
+    return
+  }
+  const database = openDatabase(databasePath)
+  try {
+    transaction(database, () => {
+      const queueRow = database.prepare('SELECT revision FROM queue_state WHERE id = 1').get() as JsonRecord | undefined
+      const actualRevision = queueRow ? Number(queueRow.revision ?? 0) : null
+      if (snapshot.expectedQueueRevision !== undefined && actualRevision !== snapshot.expectedQueueRevision) {
+        throw new Error(
+          `Stale project summary refresh: expected queue revision ${snapshot.expectedQueueRevision ?? 'none'}, found ${actualRevision ?? 'none'}.`,
+        )
+      }
+      const actualProjectRevision = currentRevision(database)
+      if (snapshot.expectedProjectRevision !== undefined && actualProjectRevision !== snapshot.expectedProjectRevision) {
+        throw new Error(
+          `Stale project summary refresh: expected project revision ${snapshot.expectedProjectRevision ?? 'none'}, found ${actualProjectRevision}.`,
+        )
+      }
+
+      const summary = isRecord(snapshot.summary) ? snapshot.summary : {}
+      const { compact: compactSummary, orientation, approvedPlan } = summaryStorageParts(summary)
+      const source = isRecord(summary.source) ? summary.source : null
+      const lastUpdated = stringValue(source?.taskQueueLastUpdated) ?? stringValue(summary.sourceQueueLastUpdated)
+      const generatedAt = stringValue(summary.generatedAt) ?? new Date().toISOString()
+      const revision = actualProjectRevision
+      const mtimeMs = sourceQueueMtimeMs(tasksPath)
+      const goalsMtimeMs = sourceWorkspaceGoalsMtimeMs(tasksPath)
+      const currentProjection = snapshot.currentProjection ?? (
+        snapshot.scopeRows || snapshot.taskStatusRows
+          ? {
+              scopeRows: snapshot.scopeRows ?? [],
+              taskStatusRows: snapshot.taskStatusRows ?? [],
+            }
+          : null
+      )
+      if (currentProjection) validateCurrentProjectionRows(database, currentProjection)
+      database.prepare(`
+        INSERT INTO project_summary (
+          id, payload_json, freshness, generated_at,
+          revision, source_queue_last_updated, source_queue_mtime_ms,
+          source_workspace_goals_mtime_ms
+        ) VALUES (1, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          payload_json = excluded.payload_json,
+          freshness = excluded.freshness,
+          generated_at = excluded.generated_at,
+          revision = excluded.revision,
+          source_queue_last_updated = excluded.source_queue_last_updated,
+          source_queue_mtime_ms = excluded.source_queue_mtime_ms,
+          source_workspace_goals_mtime_ms = excluded.source_workspace_goals_mtime_ms
+      `).run(
+        json(compactSummary),
+        stringValue(summary.freshness) ?? 'current',
+        generatedAt,
+        revision,
+        lastUpdated,
+        mtimeMs,
+        goalsMtimeMs,
+      )
+
+      syncProjectPlanSnapshot(database, approvedPlan, generatedAt, revision)
+
+      if (currentProjection) {
+        syncProjectStateDatabaseScopeRows(database, currentProjection.scopeRows)
+      }
+
+      if (currentProjection) {
+        const updateStatus = database.prepare(`
+          UPDATE work_items
+          SET status = ?, completed_at = ?
+          WHERE id = ?
+        `)
+        for (const row of currentProjection.taskStatusRows) {
+          if (!row.taskId.trim()) continue
+          updateStatus.run(row.status, row.completedAt ?? null, row.taskId)
+        }
+      }
+
+      if (orientation === null || orientation === undefined) {
+        database.prepare('DELETE FROM project_orientation').run()
+      } else {
+        database.prepare(`
+          INSERT INTO project_orientation (id, payload_json, generated_at, revision)
+          VALUES (1, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET
+            payload_json = excluded.payload_json,
+            generated_at = excluded.generated_at,
+            revision = excluded.revision
+        `).run(json(orientation), generatedAt, revision)
+      }
+      syncSummaryAuxiliaryRows(database, summary)
+      markProjectionCurrent(database, 'summary', revision, generatedAt)
+    })
+  } finally {
+    database.close()
+  }
+}
+
+function validateCurrentProjectionRows(
+  database: DatabaseSync,
+  projection: ProjectStateDatabaseCurrentProjection,
+): void {
+  const taskIds = new Set<string>()
+  const scopeIds = new Set<string>()
+  const taskExists = database.prepare('SELECT 1 FROM work_items WHERE id = ?')
+  for (const row of projection.taskStatusRows) {
+    const taskId = row.taskId.trim()
+    if (!taskId) throw new Error('Current projection contains an empty task status id.')
+    if (taskIds.has(taskId)) throw new Error(`Current projection contains duplicate task status id ${taskId}.`)
+    taskIds.add(taskId)
+    if (!taskExists.get(taskId)) throw new Error(`Current projection references unknown task ${taskId}.`)
+  }
+  for (const row of projection.scopeRows) {
+    const taskId = row.taskId.trim()
+    if (!taskId) throw new Error('Current projection contains an empty scope row id.')
+    if (scopeIds.has(taskId)) throw new Error(`Current projection contains duplicate scope row id ${taskId}.`)
+    scopeIds.add(taskId)
+    if (!taskExists.get(taskId)) throw new Error(`Current projection references unknown scope task ${taskId}.`)
+  }
+}
+
+function validateScopeRowsAgainstTaskIds(
+  rows: readonly ProjectStateDatabaseScopeRow[],
+  taskIds: readonly string[],
+): void {
+  const knownTaskIds = new Set(taskIds.map(taskId => taskId.trim()).filter(Boolean))
+  const seen = new Set<string>()
+  for (const row of rows) {
+    const taskId = row.taskId.trim()
+    if (!taskId) throw new Error('Project scope contains an empty task id.')
+    if (seen.has(taskId)) throw new Error(`Project scope contains duplicate task id ${taskId}.`)
+    seen.add(taskId)
+    if (!knownTaskIds.has(taskId)) {
+      throw new Error(`Project scope references unknown task ${taskId}.`)
+    }
+  }
+}
+
+export interface ProjectStateDatabaseQueueDetailMigrationResult {
+  migrated: boolean
+  revision: number | null
+  bytes: number
+}
+
+/** Remove the retired aggregate detail payload after indexed task detail is complete. */
+export function clearProjectStateDatabaseQueueDetail(projectRoot: string): boolean {
+  let cleared = false
+  withWritableDatabase(projectRoot, database => {
+    if (!tableExists(database, 'queue_detail')) return
+    const existing = database.prepare('SELECT 1 FROM queue_detail WHERE id = 1').get()
+    if (!existing) return
+    if (!readQueueDefinitionFromWorkItemDetails(database, currentQueueRevision(database))) {
+      throw new Error('Cannot remove aggregate queue detail before the per-task detail index is complete')
+    }
+    database.prepare('DELETE FROM queue_detail').run()
+    cleared = true
+  })
+  if (cleared) vacuumProjectStateDatabase(projectRoot)
+  return cleared
+}
+
+/**
+ * Move an existing revision-matched sidecar into the transactional database
+ * detail row. This is representation-only migration: it does not bump the
+ * logical queue revision or rewrite task/history records.
+ */
+export function migrateProjectStateDatabaseQueueDetail(
+  projectRoot: string,
+): ProjectStateDatabaseQueueDetailMigrationResult {
+  const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+  const result: ProjectStateDatabaseQueueDetailMigrationResult = {
+    migrated: false,
+    revision: null,
+    bytes: 0,
+  }
+  withWritableDatabase(projectRoot, database => {
+    if (!tableExists(database, 'queue_detail')) return
+    if (database.prepare('SELECT 1 FROM queue_detail WHERE id = 1').get()) {
+      result.revision = currentQueueRevision(database)
+      return
+    }
+    const revision = currentQueueRevision(database)
+    const details = readQueueDetailsForRevision(tasksPath, revision, database, { migration: true })
+    if (!details) return
+    const payload = serializeProjectStateDetailStore(details, revision)
+    database.prepare('INSERT INTO queue_detail (id, revision, payload_gzip) VALUES (1, ?, ?)').run(revision, payload)
+    result.migrated = true
+    result.revision = revision
+    result.bytes = payload.byteLength
+  })
+  return result
+}
+
+/** Read the current queue watermark without allocating or repairing storage. */
+export function readProjectStateDatabaseQueueRevision(tasksPath: string): number | null {
+  const databasePath = projectStateDatabasePathFromTasksPath(tasksPath)
+  try {
+    statSync(databasePath)
+  } catch {
+    return null
+  }
+  const database = openDatabase(databasePath, { readOnly: true })
+  try {
+    if (!tableExists(database, 'queue_state')) return null
+    const row = database.prepare('SELECT revision FROM queue_state WHERE id = 1').get() as JsonRecord | undefined
+    return row ? Number(row.revision ?? 0) : null
+  } finally {
+    database.close()
+  }
+}
+
+export interface ProjectStateDetailCompressionResult {
+  sourcePath: string
+  compressedPath: string
+  bytesBefore: number
+  bytesAfter: number
+  removedSource: boolean
+}
+
+/** Convert the legacy plain-text detail sidecar without changing its JSON. */
+export function compressProjectStateDetailStore(tasksPath: string): ProjectStateDetailCompressionResult | null {
+  const sourcePath = projectStateDatabaseDetailPathFromTasksPath(tasksPath)
+  const compressedPath = projectStateDatabaseCompressedDetailPathFromTasksPath(tasksPath)
+  if (!existsSync(sourcePath)) return null
+  const source = readFileSync(sourcePath)
+  let parsed: Partial<ProjectStateDatabaseDetailStore>
+  try {
+    parsed = JSON.parse(source.toString('utf8')) as Partial<ProjectStateDatabaseDetailStore>
+  } catch (error) {
+    throw new Error(`Cannot compress invalid project detail store ${sourcePath}: ${error instanceof Error ? error.message : String(error)}`)
+  }
+  if (parsed.detailStoreVersion !== 1 || !Array.isArray(parsed.tasks) || !Array.isArray(parsed.releases)) {
+    throw new Error(`Cannot compress unrecognized project detail store ${sourcePath}.`)
+  }
+  const compressed = gzipSync(source, { level: 9 })
+  atomicWriteBytes(compressedPath, compressed)
+  // The compressed copy is written and fsynced before the compatibility copy
+  // is removed, so an interrupted migration still leaves a readable source.
+  unlinkSync(sourcePath)
+  return {
+    sourcePath,
+    compressedPath,
+    bytesBefore: source.byteLength,
+    bytesAfter: compressed.byteLength,
+    removedSource: true,
+  }
+}
+
+export function readProjectStateDatabaseSummary<T = unknown>(
+  tasksPath: string,
+  options: ProjectStateDatabaseSummaryReadOptions = {},
+): ProjectStateDatabaseSummary<T> | null {
+  const databasePath = projectStateDatabasePathFromTasksPath(tasksPath)
+  try {
+    statSync(databasePath)
+  } catch {
+    return null
+  }
+  const database = openDatabase(databasePath, { readOnly: true })
+  try {
+    return readProjectStateDatabaseSummaryFromDatabase(database, tasksPath, options)
+  } finally {
+    database.close()
+  }
+}
+
+function readProjectStateDatabaseSummaryFromDatabase<T = unknown>(
+  database: DatabaseSync,
+  tasksPath: string,
+  options: ProjectStateDatabaseSummaryReadOptions = {},
+): ProjectStateDatabaseSummary<T> | null {
+  const row = database.prepare('SELECT payload_json, freshness, generated_at, revision, source_queue_last_updated, source_queue_mtime_ms, source_workspace_goals_mtime_ms FROM project_summary WHERE id = 1').get() as JsonRecord | undefined
+  if (!row) return null
+  const storedMtime = typeof row.source_queue_mtime_ms === 'number' ? row.source_queue_mtime_ms : null
+  const currentMtime = sourceQueueMtimeMs(tasksPath)
+  const storedGoalsMtime = typeof row.source_workspace_goals_mtime_ms === 'number' ? row.source_workspace_goals_mtime_ms : null
+  const currentGoalsMtime = sourceWorkspaceGoalsMtimeMs(tasksPath)
+  let authority: ProjectStateDatabaseAuthority = 'legacy'
+  try {
+    const authorityRow = database.prepare('SELECT project_state_authority FROM project_meta WHERE id = 1').get() as JsonRecord | undefined
+    authority = authorityRow?.project_state_authority === 'database' ? 'database' : 'legacy'
+  } catch {
+    // Pre-authority databases remain compatible with file freshness checks.
+  }
+  const sourceChanged = authority === 'database'
+    ? false
+    : storedMtime !== currentMtime || storedGoalsMtime !== currentGoalsMtime
+  const summaryRevision = Number(row.revision ?? 0)
+  const databaseRevision = currentRevision(database)
+  const storedSummary = hydrateSummaryFromAuxiliaryRows(
+    database,
+    parseJson<JsonRecord>(row.payload_json, {}),
+  )
+  if (options.includeApprovedPlan !== false && storedSummary.approvedPlan === undefined && tableExists(database, 'project_plan')) {
+    storedSummary.approvedPlan = readProjectPlanSnapshot(database)
+  }
+  if (options.includeOrientation === false) {
+    delete storedSummary.orientationSpine
+  } else if (storedSummary.orientationSpine === undefined && tableExists(database, 'project_orientation')) {
+    const orientationRow = database.prepare('SELECT payload_json FROM project_orientation WHERE id = 1').get() as JsonRecord | undefined
+    if (orientationRow?.payload_json !== undefined) {
+      storedSummary.orientationSpine = parseJson<unknown>(orientationRow.payload_json, null)
+    }
+  }
+  return {
+    payload: storedSummary as T,
+    freshness: row.freshness === 'current' && !sourceChanged && summaryRevision === databaseRevision ? 'current' : 'stale',
+    generatedAt: String(row.generated_at ?? ''),
+    sourceQueueLastUpdated: typeof row.source_queue_last_updated === 'string' && row.source_queue_last_updated.length > 0
+      ? row.source_queue_last_updated
+      : null,
+  }
+}
+
+/**
+ * Read the current queue, scope rows, and summary from one SQLite snapshot.
+ * This is the only aggregate read boundary for promoted project state.
+ */
+export function readProjectStateDatabaseCurrentState<T = unknown>(
+  tasksPath: string,
+  options: ProjectStateDatabaseSummaryReadOptions = {},
+): ProjectStateDatabaseCurrentState<T> | null {
+  const databasePath = projectStateDatabasePathFromTasksPath(tasksPath)
+  try {
+    statSync(databasePath)
+  } catch {
+    return null
+  }
+  const database = openDatabase(databasePath, { readOnly: true })
+  let inReadTransaction = false
+  try {
+    if (!tableExists(database, 'queue_state')) return null
+    database.exec('BEGIN')
+    inReadTransaction = true
+    const queueRevision = currentQueueRevision(database)
+    const queue = readQueueDetailsForRevision(tasksPath, queueRevision, database)
+    if (!queue) return null
+    return {
+      queue,
+      queueRevision,
+      projectRevision: currentRevision(database),
+      scopeRows: readScopeRowsFromDatabase(database),
+      repositories: readProjectStateDatabaseRepositoriesFromDatabase(database),
+      diagnostics: readProjectStateDatabaseDiagnosticProjectionFromDatabase(database),
+      summary: readProjectStateDatabaseSummaryFromDatabase<T>(database, tasksPath, options),
+    }
+  } finally {
+    if (inReadTransaction) {
+      try {
+        database.exec('COMMIT')
+      } catch {
+        try {
+          database.exec('ROLLBACK')
+        } catch {
+          // Preserve the original read result/error.
+        }
+      }
+    }
+    database.close()
+  }
+}
+
+/**
+ * Read the compact queue envelope, saved summary, and one bounded inventory
+ * page from the same SQLite transaction. Compact surfaces must use this
+ * instead of combining independent queue, summary, and inventory reads.
+ */
+export function readProjectStateDatabaseProjectionState<T = unknown>(
+  tasksPath: string,
+  options: ProjectStateDatabaseInventoryOptions & ProjectStateDatabaseSummaryReadOptions = {},
+): ProjectStateDatabaseProjectionState<T> | null {
+  const databasePath = projectStateDatabasePathFromTasksPath(tasksPath)
+  try {
+    statSync(databasePath)
+  } catch {
+    return null
+  }
+  const database = openDatabase(databasePath, { readOnly: true })
+  let inReadTransaction = false
+  try {
+    if (!tableExists(database, 'queue_state')) return null
+    database.exec('BEGIN')
+    inReadTransaction = true
+    const queueState = database.prepare(`
+      SELECT ${queueStateReadColumns(database, [
+        'version', 'last_updated', 'selected_release_id',
+        'execution_plan_actions_json', 'scope_authority_requests_json',
+      ])}
+      FROM queue_state WHERE id = 1
+    `).get() as JsonRecord | undefined
+    if (!queueState) return null
+    const queueRevision = currentQueueRevision(database)
+    const summary = readProjectStateDatabaseSummaryFromDatabase<T>(database, tasksPath, options)
+    // Selection belongs to the durable queue envelope. The summary is a
+    // projection of that envelope and must never supply a missing selection
+    // during a read, or it becomes a second release authority.
+    const selectedReleaseId = stringValue(queueState.selected_release_id)
+    const releases = releaseDefinitionsFromDatabase(database)
+    return {
+      queue: {
+        version: Number(queueState.version ?? 1),
+        ...optionalLastUpdated(queueState.last_updated),
+        ...optionalSelectedReleaseId(selectedReleaseId),
+        tasks: [],
+        releases,
+        ...optionalJsonArray(queueState.execution_plan_actions_json, 'executionPlanActions'),
+        ...optionalJsonArray(queueState.scope_authority_requests_json, 'scopeAuthorityRequests'),
+      },
+      queueRevision,
+      projectRevision: currentRevision(database),
+      scopeRows: readScopeRowsFromDatabase(database),
+      inventory: readInventoryFromDatabase(database, options),
+      repositories: readProjectStateDatabaseRepositoriesFromDatabase(database),
+      diagnostics: readProjectStateDatabaseDiagnosticProjectionFromDatabase(database),
+      summary,
+    }
+  } finally {
+    if (inReadTransaction) {
+      try {
+        database.exec('COMMIT')
+      } catch {
+        try {
+          database.exec('ROLLBACK')
+        } catch {
+          // Preserve the original read result/error.
+        }
+      }
+    }
+    database.close()
+  }
+}
+
+/**
+ * Read one task, its relationships, compact queue envelope, scope rows, and
+ * saved summary from one bounded SQLite snapshot. The task definition is
+ * loaded only for this explicit detail request; the queue remains compact.
+ */
+export function readProjectStateDatabaseTaskDetailState<T = unknown>(
+  tasksPath: string,
+  taskId: string,
+  options: ProjectStateDatabaseSummaryReadOptions = {},
+): ProjectStateDatabaseTaskDetailState<T> | null {
+  const databasePath = projectStateDatabasePathFromTasksPath(tasksPath)
+  try {
+    statSync(databasePath)
+  } catch {
+    return null
+  }
+  const database = openDatabase(databasePath, { readOnly: true })
+  let inReadTransaction = false
+  try {
+    if (!tableExists(database, 'queue_state')) return null
+    database.exec('BEGIN')
+    inReadTransaction = true
+    const includeScope = hasWorkScopeTable(database)
+    const row = database.prepare(`${workItemsWithScopeSelect('work_items.*', includeScope)} WHERE work_items.id = ?`)
+      .get(taskId) as JsonRecord | undefined
+    if (!row) return null
+    applyReleaseMembershipToTaskRows(database, [row])
+    const task = attachWorkItemDetails([taskFromRow(row, false)], database)[0]
+    if (!task) return null
+    const childRows = database.prepare('SELECT id FROM work_items WHERE parent_id = ? ORDER BY rowid').all(taskId) as JsonRecord[]
+    const relationships: ProjectStateDatabaseTaskRelationships = {
+      taskId,
+      parentId: typeof row.parent_id === 'string' ? row.parent_id : null,
+      childIds: childRows.flatMap(child => typeof child.id === 'string' ? [child.id] : []),
+      scopeRow: scopeRowFromRow(row),
+    }
+    const queueRevision = currentQueueRevision(database)
+    return {
+      queue: readCompactQueueFromDatabase(database),
+      task,
+      relationships,
+      scopeRows: readScopeRowsFromDatabase(database),
+      queueRevision,
+      projectRevision: currentRevision(database),
+      summary: readProjectStateDatabaseSummaryFromDatabase<T>(database, tasksPath, options),
+    }
+  } finally {
+    if (inReadTransaction) {
+      try {
+        database.exec('COMMIT')
+      } catch {
+        try {
+          database.exec('ROLLBACK')
+        } catch {
+          // Preserve the original read result/error.
+        }
+      }
+    }
+    database.close()
+  }
+}
+
+/**
+ * Read only the persisted current Thread projection. This is deliberately a
+ * read-only probe: missing or stale state is reported as null/stale instead
+ * of reconstructing Thread or creating a database as a side effect.
+ */
+export function readProjectStateDatabaseCurrentThread<T = unknown>(
+  projectRoot: string,
+): ProjectStateDatabaseCurrentThread<T> | null {
+  const databasePath = projectStateDatabasePath(projectRoot)
+  try {
+    statSync(databasePath)
+  } catch {
+    return null
+  }
+  const database = openDatabase(databasePath, { readOnly: true })
+  try {
+    if (!tableExists(database, 'current_thread')) return null
+    const row = database.prepare(`
+      SELECT payload_json, generated_at, source_revision, source_queue_revision
+      FROM current_thread
+      WHERE id = 1
+    `).get() as JsonRecord | undefined
+    if (!row || typeof row.generated_at !== 'string' || typeof row.source_revision !== 'string') return null
+    return {
+      payload: parseJson<T>(row.payload_json, null as T),
+      generatedAt: row.generated_at,
+      sourceRevision: row.source_revision,
+      sourceQueueRevision: Number.isFinite(Number(row.source_queue_revision))
+        ? Number(row.source_queue_revision)
+        : null,
+    }
+  } finally {
+    database.close()
+  }
+}
+
+/**
+ * Read Thread's current projection and both project watermarks together.
+ * Thread navigation must not compare a saved row from one revision with a
+ * separately opened queue connection from another revision.
+ */
+export function readProjectStateDatabaseThreadSurfaceState<T = unknown>(
+  projectRoot: string,
+): ProjectStateDatabaseThreadSurfaceState<T> | null {
+  const databasePath = projectStateDatabasePath(projectRoot)
+  try {
+    statSync(databasePath)
+  } catch {
+    return null
+  }
+  const database = openDatabase(databasePath, { readOnly: true })
+  let inReadTransaction = false
+  try {
+    database.exec('BEGIN')
+    inReadTransaction = true
+    const queueRevision = tableExists(database, 'queue_state') ? currentQueueRevision(database) : null
+    const projectRevision = tableExists(database, 'project_meta') ? currentRevision(database) : null
+    let thread: ProjectStateDatabaseCurrentThread<T> | null = null
+    if (tableExists(database, 'current_thread')) {
+      const row = database.prepare(`
+        SELECT payload_json, generated_at, source_revision, source_queue_revision
+        FROM current_thread
+        WHERE id = 1
+      `).get() as JsonRecord | undefined
+      if (row && typeof row.generated_at === 'string' && typeof row.source_revision === 'string') {
+        thread = {
+          payload: parseJson<T>(row.payload_json, null as T),
+          generatedAt: row.generated_at,
+          sourceRevision: row.source_revision,
+          sourceQueueRevision: Number.isFinite(Number(row.source_queue_revision))
+            ? Number(row.source_queue_revision)
+            : null,
+        }
+      }
+    }
+    return { thread, queueRevision, projectRevision }
+  } finally {
+    if (inReadTransaction) {
+      try {
+        database.exec('COMMIT')
+      } catch {
+        try {
+          database.exec('ROLLBACK')
+        } catch {
+          // Preserve the original read result/error.
+        }
+      }
+    }
+    database.close()
+  }
+}
+
+/** Persist the bounded current Thread projection at an explicit write boundary. */
+export function writeProjectStateDatabaseCurrentThread<T>(
+  projectRoot: string,
+  input: ProjectStateDatabaseCurrentThread<T>,
+): void {
+  withWritableDatabase(projectRoot, database => {
+    const sourceRevision = Number(input.sourceRevision)
+    if (!Number.isInteger(sourceRevision) || sourceRevision < 0) {
+      throw new Error('Current Thread writes require a numeric source project revision')
+    }
+    const actualProjectRevision = currentRevision(database)
+    if (sourceRevision !== actualProjectRevision) {
+      throw new Error(
+        `Stale current Thread write: expected project revision ${sourceRevision}, found ${actualProjectRevision}. Read the current project and retry.`,
+      )
+    }
+    const actualQueueRevision = tableExists(database, 'queue_state') ? currentQueueRevision(database) : null
+    if (input.sourceQueueRevision !== null && input.sourceQueueRevision !== actualQueueRevision) {
+      throw new Error(
+        `Stale current Thread write: expected queue revision ${input.sourceQueueRevision}, found ${actualQueueRevision ?? 'none'}. Read the current queue and retry.`,
+      )
+    }
+    const updatedAt = new Date().toISOString()
+    database.prepare(`
+      INSERT INTO current_thread (
+        id, payload_json, generated_at, source_revision,
+        source_queue_revision, updated_at
+      ) VALUES (1, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        payload_json = excluded.payload_json,
+        generated_at = excluded.generated_at,
+        source_revision = excluded.source_revision,
+        source_queue_revision = excluded.source_queue_revision,
+        updated_at = excluded.updated_at
+    `).run(
+      json(input.payload),
+      input.generatedAt,
+      String(input.sourceRevision),
+      input.sourceQueueRevision,
+      updatedAt,
+    )
+  })
+}
+
+/** Create the current-thread table for an existing database during migration. */
+export function ensureProjectStateDatabaseCurrentThreadStore(projectRoot: string): void {
+  withWritableDatabase(projectRoot, () => {})
+}
+
+export function updateProjectStateDatabaseSummary(
+  tasksPath: string,
+  patch: (summary: JsonRecord) => JsonRecord,
+): void {
+  const databasePath = projectStateDatabasePathFromTasksPath(tasksPath)
+  try {
+    statSync(databasePath)
+  } catch {
+    return
+  }
+  const database = openDatabase(databasePath)
+  try {
+    transaction(database, () => {
+      const current = database.prepare('SELECT payload_json FROM project_summary WHERE id = 1').get() as JsonRecord | undefined
+      if (!current) return
+      const currentSummary = parseJson<JsonRecord>(current.payload_json, {})
+      if (currentSummary.orientationSpine === undefined && tableExists(database, 'project_orientation')) {
+        const orientationRow = database.prepare('SELECT payload_json FROM project_orientation WHERE id = 1').get() as JsonRecord | undefined
+        if (orientationRow?.payload_json !== undefined) {
+          currentSummary.orientationSpine = parseJson<unknown>(orientationRow.payload_json, null)
+        }
+      }
+      const next = patch(currentSummary)
+      const { compact: compactSummary, orientation, approvedPlan } = summaryStorageParts(next)
+      const updatedAt = stringValue(next.generatedAt) ?? new Date().toISOString()
+      const revision = commitAuthoritativeMutation(database, {
+        updatedAt,
+        domains: ['summary'],
+        summaryFreshness: 'preserve',
+      })
+      database.prepare('UPDATE project_summary SET payload_json = ?, generated_at = ?, freshness = ?, revision = ? WHERE id = 1')
+        .run(json(compactSummary), updatedAt, stringValue(next.freshness) ?? 'current', revision)
+      syncProjectPlanSnapshot(database, approvedPlan, updatedAt, revision)
+      if (orientation === null || orientation === undefined) {
+        database.prepare('DELETE FROM project_orientation').run()
+      } else {
+        database.prepare(`
+          INSERT INTO project_orientation (id, payload_json, generated_at, revision)
+          VALUES (1, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET
+            payload_json = excluded.payload_json,
+            generated_at = excluded.generated_at,
+            revision = excluded.revision
+        `).run(json(orientation), updatedAt, revision)
+      }
+      syncSummaryAuxiliaryRows(database, next)
+      markProjectionCurrent(database, 'summary', revision, updatedAt)
+    })
+  } finally {
+    database.close()
+  }
+}
+
+function withDatabase(projectRoot: string, work: (database: DatabaseSync) => void): void {
+  const databasePath = projectStateDatabasePath(projectRoot)
+  try {
+    statSync(databasePath)
+  } catch {
+    return
+  }
+  const database = openDatabase(databasePath)
+  try {
+    transaction(database, () => work(database))
+  } finally {
+    database.close()
+  }
+}
+
+/** Explicit writers may allocate the current-state database; readers may not. */
+function withWritableDatabase(projectRoot: string, work: (database: DatabaseSync) => void): void {
+  const databasePath = projectStateDatabasePath(projectRoot)
+  if (!existsSync(databasePath)) ensureProjectLocalHistoryDir(projectRoot)
+  const database = openDatabase(databasePath)
+  try {
+    transaction(database, () => work(database))
+  } finally {
+    database.close()
+  }
+}
+
+function tableExists(database: DatabaseSync, table: string): boolean {
+  return Boolean(database.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(table))
+}
+
+function tableHasColumn(database: DatabaseSync, table: string, column: string): boolean {
+  return (database.prepare(`PRAGMA table_info(${table})`).all() as JsonRecord[])
+    .some(entry => entry.name === column)
+}
+
+function queueStateReadColumns(database: DatabaseSync, columns: readonly string[]): string {
+  return columns.map(column =>
+    tableHasColumn(database, 'queue_state', column)
+      ? column
+      : `NULL AS ${column}`,
+  ).join(', ')
+}
+
+function legacyJson(projectRoot: string, filename: string): JsonRecord | null {
+  try {
+    const parsed = JSON.parse(readFileSync(join(getProjectLocalHistoryDir(projectRoot), filename), 'utf8'))
+    return isRecord(parsed) ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+/** Compatibility probe for source intake that has not crossed the snapshot writer yet. */
+export function hasProjectWorkspaceGoals(projectRoot: string): boolean {
+  return legacyJson(projectRoot, 'project-state/workspace-goals.json') !== null
+}
+
+export function readProjectStateDatabaseAvailability(projectRoot: string): ProjectStateDatabaseAvailability | null {
+  const databasePath = projectStateDatabasePath(projectRoot)
+  try {
+    statSync(databasePath)
+  } catch {
+    return null
+  }
+  const database = openDatabase(databasePath, { readOnly: true })
+  try {
+    if (!tableExists(database, 'project_availability')) return null
+    const row = database.prepare('SELECT status, paused_at, resumed_at, reason, payload_json FROM project_availability WHERE id = 1').get() as JsonRecord | undefined
+    if (!row) return null
+    return {
+      status: row.status === 'paused' ? 'paused' : 'active',
+      pausedAt: stringValue(row.paused_at) ?? null,
+      resumedAt: stringValue(row.resumed_at) ?? null,
+      ...(stringValue(row.reason) ? { reason: stringValue(row.reason)! } : {}),
+    }
+  } finally {
+    database.close()
+  }
+}
+
+function availabilityFromLegacy(projectRoot: string): ProjectStateDatabaseAvailability | null {
+  const legacy = legacyJson(projectRoot, 'project-availability.json')
+  if (!legacy) return null
+  return {
+    status: legacy.status === 'paused' ? 'paused' : 'active',
+    pausedAt: stringValue(legacy.pausedAt) ?? null,
+    resumedAt: stringValue(legacy.resumedAt) ?? null,
+    ...(stringValue(legacy.reason) ? { reason: stringValue(legacy.reason)! } : {}),
+  }
+}
+
+export function writeProjectStateDatabaseAvailability(
+  projectRoot: string,
+  input: ProjectStateDatabaseAvailability,
+  updatedAt = new Date().toISOString(),
+): void {
+  withWritableDatabase(projectRoot, database => {
+    database.prepare(`
+      INSERT INTO project_availability (id, status, paused_at, resumed_at, reason, updated_at, payload_json)
+      VALUES (1, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET status = excluded.status, paused_at = excluded.paused_at,
+        resumed_at = excluded.resumed_at, reason = excluded.reason, updated_at = excluded.updated_at,
+        payload_json = excluded.payload_json
+    `).run(input.status, input.pausedAt, input.resumedAt, input.reason ?? null, updatedAt, json(input))
+    commitAuthoritativeMutation(database, {
+      updatedAt,
+      domains: ['availability'],
+      projectRoot,
+    })
+  })
+}
+
+export function readProjectStateDatabaseAttentionRecords<T = unknown>(projectRoot: string): ProjectStateDatabaseAttentionRecord<T>[] | null {
+  const databasePath = projectStateDatabasePath(projectRoot)
+  try {
+    statSync(databasePath)
+  } catch {
+    return null
+  }
+  const database = openDatabase(databasePath, { readOnly: true })
+  try {
+    if (!tableExists(database, 'attention_records')) return null
+    const rows = database.prepare('SELECT id, status, updated_at, payload_json FROM attention_records ORDER BY updated_at DESC, id').all() as JsonRecord[]
+    return rows.map(row => ({
+      id: String(row.id),
+      status: String(row.status),
+      updatedAt: String(row.updated_at),
+      payload: parseJson<T>(row.payload_json, {} as T),
+    }))
+  } finally {
+    database.close()
+  }
+}
+
+export function readProjectStateDatabaseProjectionWatermark(
+  projectRoot: string,
+  domain: string,
+): ProjectStateDatabaseProjectionWatermark | null {
+  const databasePath = projectStateDatabasePath(projectRoot)
+  try {
+    statSync(databasePath)
+  } catch {
+    return null
+  }
+  const database = openDatabase(databasePath, { readOnly: true })
+  try {
+    if (!tableExists(database, 'projection_watermarks')) return null
+    const row = database.prepare(`
+      SELECT domain, source_revision, refreshed_at
+      FROM projection_watermarks
+      WHERE domain = ?
+    `).get(domain) as JsonRecord | undefined
+    if (!row || !Number.isFinite(Number(row.source_revision)) || typeof row.refreshed_at !== 'string') return null
+    return {
+      domain: String(row.domain ?? domain),
+      sourceRevision: Number(row.source_revision),
+      refreshedAt: row.refreshed_at,
+    }
+  } finally {
+    database.close()
+  }
+}
+
+function projectionJobStatuses(
+  status: ProjectStateDatabaseProjectionJobReadOptions['status'],
+): ProjectStateDatabaseProjectionJobStatus[] {
+  const statuses = status === undefined ? ['pending'] : Array.isArray(status) ? [...status] : [status]
+  return [...new Set(statuses)]
+}
+
+function projectionJobLimit(limit: number | undefined): number {
+  if (limit === undefined) return 100
+  if (!Number.isInteger(limit) || limit < 1) throw new RangeError('Projection job limits must be positive integers')
+  return limit
+}
+
+function readProjectionJobsFromDatabase(
+  database: DatabaseSync,
+  options: ProjectStateDatabaseProjectionJobReadOptions = {},
+): ProjectStateDatabaseProjectionJob[] {
+  if (!tableExists(database, 'projection_jobs')) return []
+  const statuses = projectionJobStatuses(options.status)
+  if (statuses.length === 0) return []
+  const placeholders = statuses.map(() => '?').join(', ')
+  const rows = database.prepare(`
+    SELECT id, domain, source_revision, status, error, attempts, claimed_at,
+      last_attempt_at, completed_at, created_at, updated_at
+    FROM projection_jobs
+    WHERE status IN (${placeholders})
+      AND (
+        status = 'succeeded' OR source_revision > COALESCE(
+          (SELECT source_revision FROM projection_watermarks
+           WHERE projection_watermarks.domain = projection_jobs.domain), -1
+        )
+      )
+    ORDER BY source_revision ASC, id ASC
+    LIMIT ?
+  `).all(...statuses, projectionJobLimit(options.limit)) as JsonRecord[]
+  return rows.map(projectionJobFromRow)
+}
+
+/** List pending projection metadata without allocating a missing database. */
+export function listProjectStateDatabaseProjectionJobs(
+  projectRoot: string,
+  options: ProjectStateDatabaseProjectionJobReadOptions = {},
+): ProjectStateDatabaseProjectionJob[] {
+  const databasePath = projectStateDatabasePath(projectRoot)
+  try {
+    statSync(databasePath)
+  } catch {
+    return []
+  }
+  const database = openDatabase(databasePath, { readOnly: true })
+  try {
+    return readProjectionJobsFromDatabase(database, options)
+  } finally {
+    database.close()
+  }
+}
+
+/**
+ * Record only revision obligations. The caller can supply the committed
+ * revision from a larger write; omitted revisions use the current database
+ * revision for standalone callers.
+ */
+export function recordProjectStateDatabaseProjectionObligations(
+  projectRoot: string,
+  domains: readonly string[],
+  options: ProjectStateDatabaseProjectionJobWriteOptions = {},
+): void {
+  withWritableDatabase(projectRoot, database => {
+    const current = currentRevision(database)
+    const sourceRevision = options.sourceRevision ?? current
+    if (sourceRevision > current) {
+      throw new RangeError('Projection obligation cannot be ahead of the current project revision')
+    }
+    recordProjectionJobs(
+      database,
+      domains,
+      sourceRevision,
+      options.now ?? new Date().toISOString(),
+    )
+  })
+}
+
+/** Claim pending jobs atomically; attempts count claims, not retries. */
+export function claimProjectStateDatabaseProjectionJobs(
+  projectRoot: string,
+  options: { limit?: number; now?: string } = {},
+): ProjectStateDatabaseProjectionJob[] {
+  const claimed: ProjectStateDatabaseProjectionJob[] = []
+  withDatabase(projectRoot, database => {
+    if (!tableExists(database, 'projection_jobs')) return
+    const now = options.now ?? new Date().toISOString()
+    const pending = readProjectionJobsFromDatabase(database, { status: 'pending', limit: options.limit })
+    const update = database.prepare(`
+      UPDATE projection_jobs
+      SET status = 'running',
+          attempts = attempts + 1,
+          claimed_at = ?,
+          last_attempt_at = ?,
+          updated_at = ?
+      WHERE id = ? AND status = 'pending'
+    `)
+    for (const job of pending) {
+      const result = update.run(now, now, now, job.id)
+      if (Number(result.changes ?? 0) !== 1) continue
+      const row = database.prepare(`
+        SELECT id, domain, source_revision, status, error, attempts, claimed_at,
+          last_attempt_at, completed_at, created_at, updated_at
+        FROM projection_jobs WHERE id = ?
+      `).get(job.id) as JsonRecord | undefined
+      if (row) claimed.push(projectionJobFromRow(row))
+    }
+  })
+  return claimed
+}
+
+/** Mark a claimed job failed while retaining its attempt and error metadata. */
+export function failProjectStateDatabaseProjectionJob(
+  projectRoot: string,
+  job: number | string,
+  error: string,
+  now = new Date().toISOString(),
+): ProjectStateDatabaseProjectionJob | null {
+  let failed: ProjectStateDatabaseProjectionJob | null = null
+  withDatabase(projectRoot, database => {
+    if (!tableExists(database, 'projection_jobs')) return
+    const column = typeof job === 'number' ? 'id' : 'domain'
+    const result = database.prepare(`
+      UPDATE projection_jobs
+      SET status = 'failed', error = ?, claimed_at = NULL, updated_at = ?
+      WHERE ${column} = ? AND status = 'running'
+    `).run(boundedProjectionJobError(error), now, job)
+    if (Number(result.changes ?? 0) !== 1) return
+    const row = database.prepare(`
+      SELECT id, domain, source_revision, status, error, attempts, claimed_at,
+        last_attempt_at, completed_at, created_at, updated_at
+      FROM projection_jobs WHERE ${column} = ?
+    `).get(job) as JsonRecord | undefined
+    failed = row ? projectionJobFromRow(row) : null
+  })
+  return failed
+}
+
+/** Put a failed or claimed job back in the pending queue. */
+export function retryProjectStateDatabaseProjectionJob(
+  projectRoot: string,
+  job: number | string,
+  options: ProjectStateDatabaseProjectionJobWriteOptions = {},
+): ProjectStateDatabaseProjectionJob | null {
+  let retried: ProjectStateDatabaseProjectionJob | null = null
+  withDatabase(projectRoot, database => {
+    if (!tableExists(database, 'projection_jobs')) return
+    const column = typeof job === 'number' ? 'id' : 'domain'
+    const result = database.prepare(`
+      UPDATE projection_jobs
+      SET status = 'pending',
+          error = COALESCE(?, error),
+          claimed_at = NULL,
+          completed_at = NULL,
+          updated_at = ?
+      WHERE ${column} = ? AND status IN ('running', 'failed', 'pending')
+    `).run(boundedProjectionJobError(options.error), options.now ?? new Date().toISOString(), job)
+    if (Number(result.changes ?? 0) !== 1) return
+    const row = database.prepare(`
+      SELECT id, domain, source_revision, status, error, attempts, claimed_at,
+        last_attempt_at, completed_at, created_at, updated_at
+      FROM projection_jobs WHERE ${column} = ?
+    `).get(job) as JsonRecord | undefined
+    retried = row ? projectionJobFromRow(row) : null
+  })
+  return retried
+}
+
+/** Publish a projection watermark and complete any older obligation. */
+export function markProjectStateDatabaseProjectionCurrent(
+  projectRoot: string,
+  domain: string,
+  sourceRevision: number,
+  refreshedAt = new Date().toISOString(),
+): void {
+  withWritableDatabase(projectRoot, database => {
+    if (sourceRevision > currentRevision(database)) {
+      throw new RangeError('Projection watermark cannot be ahead of the current project revision')
+    }
+    markProjectionCurrent(database, domain, sourceRevision, refreshedAt)
+  })
+}
+
+function attentionFromLegacy<T>(projectRoot: string): ProjectStateDatabaseAttentionRecord<T>[] | null {
+  const legacy = legacyJson(projectRoot, 'project-state/attention.json')
+  const records = legacy?.records
+  if (!Array.isArray(records)) return null
+  return records.flatMap(record => {
+    if (!isRecord(record) || typeof record.id !== 'string') return []
+    return [{
+      id: record.id,
+      status: stringValue(record.status) ?? 'open',
+      updatedAt: stringValue(record.updatedAt) ?? '',
+      payload: record as T,
+    }]
+  })
+}
+
+export function replaceProjectStateDatabaseAttentionRecords<T extends { id: string; status: string; updatedAt?: string }>(
+  projectRoot: string,
+  records: readonly T[],
+): void {
+  withWritableDatabase(projectRoot, database => {
+    const next = [...records]
+      .sort((left, right) => left.id.localeCompare(right.id))
+      .map(record => ({
+        id: record.id,
+        status: record.status,
+        updatedAt: record.updatedAt ?? new Date().toISOString(),
+        payloadJson: json(record),
+      }))
+    const existing = (database.prepare('SELECT id, status, updated_at, payload_json FROM attention_records ORDER BY id').all() as JsonRecord[])
+      .map(row => ({
+        id: String(row.id),
+        status: String(row.status),
+        updatedAt: String(row.updated_at),
+        payloadJson: String(row.payload_json),
+      }))
+    if (JSON.stringify(existing) === JSON.stringify(next)) {
+      markProjectionCurrent(database, 'attention', currentRevision(database), new Date().toISOString())
+      return
+    }
+    const nextById = new Map(next.map(record => [record.id, record]))
+    const existingById = new Map(existing.map(record => [record.id, record]))
+    for (const record of existing) {
+      if (!nextById.has(record.id)) database.prepare('DELETE FROM attention_records WHERE id = ?').run(record.id)
+    }
+    const upsert = database.prepare(`
+      INSERT INTO attention_records (id, status, updated_at, payload_json)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        status = excluded.status,
+        updated_at = excluded.updated_at,
+        payload_json = excluded.payload_json
+    `)
+    for (const record of next) {
+      const prior = existingById.get(record.id)
+      if (prior &&
+        prior.status === record.status &&
+        prior.updatedAt === record.updatedAt &&
+        prior.payloadJson === record.payloadJson) continue
+      upsert.run(record.id, record.status, record.updatedAt, record.payloadJson)
+    }
+    const updatedAt = next.reduce((latest, record) => record.updatedAt > latest ? record.updatedAt : latest, new Date().toISOString())
+    // Attention is itself a derived projection; materializing it must not
+    // enqueue another attention refresh.
+    emitProjectSummaryInvalidation(projectRoot, 'database-derived-projection-write', {
+      revision: currentRevision(database),
+      domains: ['attention'],
+    })
+    markProjectionCurrent(database, 'attention', currentRevision(database), updatedAt)
+  })
+}
+
+export function readProjectStateDatabaseReconciliations<T = unknown>(projectRoot: string): ProjectStateDatabaseReconciliation<T>[] | null {
+  const databasePath = projectStateDatabasePath(projectRoot)
+  try {
+    statSync(databasePath)
+  } catch {
+    return null
+  }
+  const database = openDatabase(databasePath, { readOnly: true })
+  try {
+    if (!tableExists(database, 'project_reconciliations')) return null
+    const rows = database.prepare('SELECT capability_id, status, resolved_at, payload_json FROM project_reconciliations ORDER BY resolved_at DESC, capability_id').all() as JsonRecord[]
+    return rows.map(row => ({
+      capabilityId: String(row.capability_id),
+      status: String(row.status),
+      resolvedAt: String(row.resolved_at),
+      payload: parseJson<T>(row.payload_json, {} as T),
+    }))
+  } finally {
+    database.close()
+  }
+}
+
+function reconciliationsFromLegacy<T>(projectRoot: string): ProjectStateDatabaseReconciliation<T>[] | null {
+  const legacy = legacyJson(projectRoot, 'project-state/reconciliations.json')
+  const records = legacy?.records
+  if (!Array.isArray(records)) return null
+  return records.flatMap(record => {
+    if (!isRecord(record) || typeof record.capabilityId !== 'string') return []
+    return [{
+      capabilityId: record.capabilityId,
+      status: stringValue(record.status) ?? 'resolved',
+      resolvedAt: stringValue(record.resolvedAt) ?? '',
+      payload: record as T,
+    }]
+  })
+}
+
+export function upsertProjectStateDatabaseReconciliations<T extends { capabilityId: string; status: string; resolvedAt: string }>(
+  projectRoot: string,
+  records: readonly T[],
+): void {
+  if (records.length === 0) return
+  withWritableDatabase(projectRoot, database => {
+    const upsert = database.prepare(`
+      INSERT INTO project_reconciliations (capability_id, status, resolved_at, payload_json)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(capability_id) DO UPDATE SET status = excluded.status,
+        resolved_at = excluded.resolved_at, payload_json = excluded.payload_json
+    `)
+    for (const record of records) upsert.run(record.capabilityId, record.status, record.resolvedAt, json(record))
+    const updatedAt = records.reduce((latest, record) => record.resolvedAt > latest ? record.resolvedAt : latest, new Date().toISOString())
+    invalidateDerivedProjection(database, projectRoot, ['reconciliation'], ['attention'], updatedAt)
+    markProjectionCurrent(database, 'reconciliation', currentRevision(database), updatedAt)
+  })
+}
+
+/** Explicit migration only. Normal live-state readers are database-only. */
+export function migrateLegacyProjectLiveState(projectRoot: string): string[] {
+  const availability = availabilityFromLegacy(projectRoot)
+  const attention = attentionFromLegacy<JsonRecord>(projectRoot)
+  const reconciliations = reconciliationsFromLegacy<JsonRecord>(projectRoot)
+  if (!availability && attention === null && reconciliations === null) return []
+
+  const migrated: string[] = []
+  withWritableDatabase(projectRoot, database => {
+    if (availability && !database.prepare('SELECT 1 FROM project_availability WHERE id = 1').get()) {
+      database.prepare(`
+        INSERT INTO project_availability (id, status, paused_at, resumed_at, reason, updated_at, payload_json)
+        VALUES (1, ?, ?, ?, ?, ?, ?)
+      `).run(
+        availability.status,
+        availability.pausedAt,
+        availability.resumedAt,
+        availability.reason ?? null,
+        availability.pausedAt ?? availability.resumedAt ?? new Date().toISOString(),
+        json(availability),
+      )
+      migrated.push('project-availability.json')
+    }
+    if (attention !== null && Number((database.prepare('SELECT COUNT(*) AS count FROM attention_records').get() as JsonRecord).count ?? 0) === 0) {
+      const insert = database.prepare('INSERT INTO attention_records (id, status, updated_at, payload_json) VALUES (?, ?, ?, ?)')
+      for (const record of attention) insert.run(record.id, record.status, record.updatedAt, json(record.payload))
+      migrated.push('project-state/attention.json')
+    }
+    if (reconciliations !== null && Number((database.prepare('SELECT COUNT(*) AS count FROM project_reconciliations').get() as JsonRecord).count ?? 0) === 0) {
+      const insert = database.prepare('INSERT INTO project_reconciliations (capability_id, status, resolved_at, payload_json) VALUES (?, ?, ?, ?)')
+      for (const record of reconciliations) insert.run(record.capabilityId, record.status, record.resolvedAt, json(record.payload))
+      migrated.push('project-state/reconciliations.json')
+    }
+    const domains: ProjectStateDomain[] = []
+    if (migrated.includes('project-availability.json')) domains.push('availability')
+    if (migrated.includes('project-state/attention.json')) domains.push('attention')
+    if (migrated.includes('project-state/reconciliations.json')) domains.push('reconciliation')
+    if (domains.length > 0) {
+      const updatedAt = new Date().toISOString()
+      if (domains.every(domain => domain === 'reconciliation' || domain === 'attention')) {
+        if (domains.includes('reconciliation')) {
+          invalidateDerivedProjection(database, projectRoot, domains, ['attention'], updatedAt)
+          markProjectionCurrent(database, 'reconciliation', currentRevision(database), updatedAt)
+        } else {
+          emitProjectSummaryInvalidation(projectRoot, 'database-derived-projection-write', {
+            revision: currentRevision(database),
+            domains,
+          })
+        }
+      } else {
+        commitAuthoritativeMutation(database, {
+          updatedAt,
+          domains,
+          projectRoot,
+        })
+      }
+      if (domains.includes('attention')) {
+        markProjectionCurrent(database, 'attention', currentRevision(database), updatedAt)
+      }
+    }
+  })
+  return migrated
+}
+
+export function hasLegacyProjectLiveState(projectRoot: string): boolean {
+  return Boolean(
+    availabilityFromLegacy(projectRoot) ||
+    attentionFromLegacy(projectRoot) !== null ||
+    reconciliationsFromLegacy(projectRoot) !== null,
+  )
+}
+
+export function readProjectStateDatabaseMetadata(projectRoot: string): ProjectStateDatabaseMetadata | null {
+  const databasePath = projectStateDatabasePath(projectRoot)
+  try {
+    statSync(databasePath)
+  } catch {
+    return null
+  }
+  const database = openDatabase(databasePath, { readOnly: true })
+  try {
+    const row = database.prepare('SELECT schema_version, revision, updated_at FROM project_meta WHERE id = 1').get() as JsonRecord | undefined
+    if (!row) return null
+    const projectMetaColumns = database.prepare('PRAGMA table_info(project_meta)').all() as JsonRecord[]
+    const evidenceAuthority = projectMetaColumns.some(column => column.name === 'task_evidence_authority')
+      ? (database.prepare('SELECT task_evidence_authority FROM project_meta WHERE id = 1').get() as JsonRecord | undefined)?.task_evidence_authority
+      : undefined
+    let projectStateAuthority: ProjectStateDatabaseAuthority | undefined
+    try {
+      const authorityRow = database.prepare('SELECT project_state_authority FROM project_meta WHERE id = 1').get() as JsonRecord | undefined
+      projectStateAuthority = authorityRow?.project_state_authority === 'database' ? 'database' : 'legacy'
+    } catch {
+      // Schema 10 used the same fact under its transitional column name. Read
+      // it for migration discovery; writable opens rename it to schema 12.
+      try {
+        const legacyRow = database.prepare('SELECT task_overlay_authority FROM project_meta WHERE id = 1').get() as JsonRecord | undefined
+        projectStateAuthority = legacyRow?.task_overlay_authority === 'database' ? 'database' : 'legacy'
+      } catch {
+        projectStateAuthority = 'legacy'
+      }
+    }
+    let summaryRevision: number | null = null
+    let summaryFreshness: ProjectStateDatabaseMetadata['summaryFreshness'] = 'missing'
+    if (tableExists(database, 'project_summary')) {
+      const summaryRow = database.prepare('SELECT revision, freshness FROM project_summary WHERE id = 1').get() as JsonRecord | undefined
+      if (summaryRow) {
+        summaryRevision = Number(summaryRow.revision ?? 0)
+        summaryFreshness = summaryRow.freshness === 'current' ? 'current' : 'stale'
+      }
+    }
+    return {
+      schemaVersion: Number(row.schema_version ?? 0),
+      revision: Number(row.revision ?? 0),
+      updatedAt: String(row.updated_at ?? ''),
+      projectStateAuthority,
+      taskEvidenceAuthority: evidenceAuthority === 'database'
+        ? 'database'
+        : evidenceAuthority === 'compressed'
+          ? 'compressed'
+          : 'legacy',
+      summaryRevision,
+      summaryFreshness,
+    }
+  } finally {
+    database.close()
+  }
+}
+
+export function readProjectStateDatabaseRevisionFromTasksPath(tasksPath: string): number | null {
+  const databasePath = projectStateDatabasePathFromTasksPath(tasksPath)
+  try {
+    statSync(databasePath)
+  } catch {
+    return null
+  }
+  const database = openDatabase(databasePath, { readOnly: true })
+  try {
+    const row = database.prepare('SELECT revision FROM project_meta WHERE id = 1').get() as JsonRecord | undefined
+    return row ? Number(row.revision ?? 0) : null
+  } finally {
+    database.close()
+  }
+}
+
+function readProjectStateDatabaseAuthorityFromDatabase(database: DatabaseSync): ProjectStateDatabaseAuthority {
+  try {
+    const row = database.prepare('SELECT project_state_authority FROM project_meta WHERE id = 1').get() as JsonRecord | undefined
+    return row?.project_state_authority === 'database' ? 'database' : 'legacy'
+  } catch {
+    // Schema 10 used the same fact under its transitional column name. Read
+    // it for migration discovery; writable opens rename it to schema 12.
+    try {
+      const row = database.prepare('SELECT task_overlay_authority FROM project_meta WHERE id = 1').get() as JsonRecord | undefined
+      return row?.task_overlay_authority === 'database' ? 'database' : 'legacy'
+    } catch {
+      return 'legacy'
+    }
+  }
+}
+
+function readProjectStateDatabaseAuthorityAtPath(databasePath: string): ProjectStateDatabaseAuthority | null {
+  try {
+    statSync(databasePath)
+  } catch {
+    return null
+  }
+  const database = openDatabase(databasePath, { readOnly: true })
+  try {
+    return readProjectStateDatabaseAuthorityFromDatabase(database)
+  } finally {
+    database.close()
+  }
+}
+
+/**
+ * Read source authority and both current-state watermarks from one SQLite
+ * connection. This is the only runtime source-selection boundary. A caller
+ * may still observe legacy state for an unpromoted project, but it cannot
+ * combine a marker from one read with a queue revision from another.
+ */
+function readProjectStateDatabaseAuthoritySnapshotAtPath(
+  databasePath: string,
+): ProjectStateDatabaseAuthoritySnapshot | null {
+  try {
+    statSync(databasePath)
+  } catch {
+    return null
+  }
+  const database = openDatabase(databasePath, { readOnly: true })
+  try {
+    const meta = database.prepare('SELECT revision FROM project_meta WHERE id = 1').get() as JsonRecord | undefined
+    if (!meta) return null
+    const queueRevision = tableExists(database, 'queue_state')
+      ? (database.prepare('SELECT revision FROM queue_state WHERE id = 1').get() as JsonRecord | undefined)?.revision
+      : undefined
+    // A populated normalized queue is the effective current-state authority.
+    // The marker is migration bookkeeping; allowing it to override a
+    // readable queue would reintroduce two competing source-selection paths.
+    return {
+      authority: queueRevision === undefined
+        ? readProjectStateDatabaseAuthorityFromDatabase(database)
+        : 'database',
+      projectRevision: Number(meta.revision ?? 0),
+      queueRevision: queueRevision === undefined ? null : Number(queueRevision ?? 0),
+    }
+  } finally {
+    database.close()
+  }
+}
+
+export function readProjectStateDatabaseAuthoritySnapshotFromTasksPath(
+  tasksPath: string,
+): ProjectStateDatabaseAuthoritySnapshot | null {
+  return readProjectStateDatabaseAuthoritySnapshotAtPath(projectStateDatabasePathFromTasksPath(tasksPath))
+}
+
+export function readProjectStateDatabaseAuthoritySnapshot(
+  projectRoot: string,
+): ProjectStateDatabaseAuthoritySnapshot | null {
+  return readProjectStateDatabaseAuthoritySnapshotAtPath(projectStateDatabasePath(projectRoot))
+}
+
+/**
+ * Migration-only access to the historical promotion marker. Runtime callers
+ * must use the current-authority snapshot, whose populated queue is the
+ * source-selection fact and cannot disagree with the detail read.
+ */
+export function readProjectStateDatabaseAuthorityFromTasksPath(
+  tasksPath: string,
+): ProjectStateDatabaseAuthority | null {
+  return readProjectStateDatabaseAuthorityAtPath(projectStateDatabasePathFromTasksPath(tasksPath))
+}
+
+export function readProjectStateDatabaseAuthority(
+  projectRoot: string,
+): ProjectStateDatabaseAuthority | null {
+  return readProjectStateDatabaseAuthorityAtPath(projectStateDatabasePath(projectRoot))
+}
+
+/**
+ * Read the authority that owns current project state. A readable normalized
+ * queue is authoritative even while the historical promotion marker is being
+ * finalized; ordinary runtime stores must not split on that bookkeeping flag.
+ */
+export function readProjectStateDatabaseCurrentAuthorityFromTasksPath(
+  tasksPath: string,
+): ProjectStateDatabaseAuthority | null {
+  return readProjectStateDatabaseAuthoritySnapshotFromTasksPath(tasksPath)?.authority ?? null
+}
+
+export function readProjectStateDatabaseCurrentAuthority(
+  projectRoot: string,
+): ProjectStateDatabaseAuthority | null {
+  return readProjectStateDatabaseAuthoritySnapshot(projectRoot)?.authority ?? null
+}
+
+export function readProjectStateDatabaseTaskEvidenceAuthority(
+  projectRoot: string,
+): ProjectStateDatabaseTaskEvidenceAuthority | null {
+  const databasePath = projectStateDatabasePath(projectRoot)
+  try {
+    statSync(databasePath)
+  } catch {
+    return null
+  }
+  const database = openDatabase(databasePath, { readOnly: true })
+  try {
+    const columns = database.prepare('PRAGMA table_info(project_meta)').all() as JsonRecord[]
+    if (!columns.some(column => column.name === 'task_evidence_authority')) return 'legacy'
+    const row = database.prepare('SELECT task_evidence_authority FROM project_meta WHERE id = 1').get() as JsonRecord | undefined
+    if (row?.task_evidence_authority === 'database') return 'database'
+    if (row?.task_evidence_authority === 'compressed') return 'compressed'
+    return 'legacy'
+  } finally {
+    database.close()
+  }
+}
+
+export function setProjectStateDatabaseTaskEvidenceAuthority(
+  projectRoot: string,
+  authority: ProjectStateDatabaseTaskEvidenceAuthority,
+): void {
+  withWritableDatabase(projectRoot, database => {
+    database.prepare('UPDATE project_meta SET task_evidence_authority = ?, updated_at = ? WHERE id = 1')
+      .run(authority, new Date().toISOString())
+  })
+}
+
+/**
+ * Switch historical evidence to its compact filesystem ledger and empty the
+ * transitional SQLite copy in one transaction. The caller must verify the
+ * compact ledger before invoking this boundary.
+ */
+export function compactProjectStateDatabaseTaskEvidenceHistory(projectRoot: string): void {
+  const database = openDatabase(projectStateDatabasePath(projectRoot))
+  try {
+    transaction(database, () => {
+      if (!tableExists(database, 'task_evidence_history')) {
+        throw new Error('Cannot compact task evidence: SQLite history table is missing')
+      }
+      database.exec('DELETE FROM task_evidence_history')
+      database.prepare('UPDATE project_meta SET task_evidence_authority = ?, updated_at = ? WHERE id = 1')
+        .run('compressed', new Date().toISOString())
+    })
+    database.exec('VACUUM')
+  } finally {
+    database.close()
+  }
+}
+
+/** Promote imported task overlays to the current-state read authority. */
+export function promoteProjectStateDatabaseAuthority(projectRoot: string): void {
+  withWritableDatabase(projectRoot, database => {
+    const updatedAt = new Date().toISOString()
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    const queueRevision = currentQueueRevision(database)
+    const existingDetail = readQueueDetailsForRevision(tasksPath, queueRevision, database, { migration: true })
+    if (existingDetail && tableExists(database, 'work_item_detail')) {
+      const existingDetailCount = Number((database.prepare('SELECT COUNT(*) AS count FROM work_item_detail').get() as JsonRecord | undefined)?.count ?? 0)
+      const existingTaskCount = queueTasks(existingDetail).length
+      if (existingDetailCount !== existingTaskCount) {
+        replaceWorkItemDetails(database, queueTasks(existingDetail), queueRevision)
+      }
+    }
+    database.prepare("UPDATE project_meta SET project_state_authority = 'database', updated_at = ? WHERE id = 1").run(updatedAt)
+    commitAuthoritativeMutation(database, {
+      updatedAt,
+      domains: ['config'],
+      projectRoot,
+    })
+  })
+}
+
+export function upsertProjectStateDatabaseTaskRuntime(
+  projectRoot: string,
+  input: ProjectStateDatabaseTaskRuntime,
+): void {
+  upsertProjectStateDatabaseTaskRuntimes(projectRoot, [input])
+}
+
+export function upsertProjectStateDatabaseTaskRuntimes(
+  projectRoot: string,
+  inputs: ProjectStateDatabaseTaskRuntime[],
+): void {
+  if (inputs.length === 0) return
+  withWritableDatabase(projectRoot, database => {
+    const upsert = database.prepare(`
+      INSERT INTO task_execution (task_id, updated_at, payload_json)
+      VALUES (?, ?, ?)
+      ON CONFLICT(task_id) DO UPDATE SET
+        updated_at = excluded.updated_at,
+        payload_json = excluded.payload_json
+    `)
+    for (const input of inputs) {
+      upsert.run(input.taskId, input.updatedAt ?? new Date().toISOString(), json(input.payload))
+    }
+    const updatedAt = inputs.reduce((latest, input) => {
+      const value = input.updatedAt ?? latest
+      return value > latest ? value : latest
+    }, new Date().toISOString())
+    commitAuthoritativeMutation(database, {
+      updatedAt,
+      domains: ['task-runtime'],
+      projectRoot,
+    })
+  })
+}
+
+type ProjectStateDatabaseTaskOverlayTable = 'task_execution' | 'task_workspace'
+
+/**
+ * Synchronize one mutable overlay without rewriting unchanged rows. The
+ * public store API still accepts a complete snapshot, but the database write
+ * is a row diff so a one-task runtime update does not churn every task's
+ * payload or revision metadata.
+ */
+function syncProjectStateDatabaseTaskOverlay(
+  projectRoot: string,
+  table: ProjectStateDatabaseTaskOverlayTable,
+  inputs: readonly ProjectStateDatabaseTaskRuntime[],
+  domain: ProjectStateDomain,
+): void {
+  withWritableDatabase(projectRoot, database => {
+    const now = new Date().toISOString()
+    const next = new Map(inputs.map(input => [input.taskId, {
+      taskId: input.taskId,
+      updatedAt: input.updatedAt ?? now,
+      payloadJson: json(input.payload),
+    }]))
+    const existing = (database.prepare(`
+      SELECT task_id, updated_at, payload_json
+      FROM ${table}
+    `).all() as JsonRecord[]).map(row => ({
+      taskId: String(row.task_id),
+      updatedAt: String(row.updated_at),
+      payloadJson: String(row.payload_json),
+    }))
+    const existingById = new Map(existing.map(row => [row.taskId, row]))
+    let changed = false
+
+    for (const row of existing) {
+      if (next.has(row.taskId)) continue
+      database.prepare(`DELETE FROM ${table} WHERE task_id = ?`).run(row.taskId)
+      changed = true
+    }
+
+    const upsert = database.prepare(`
+      INSERT INTO ${table} (task_id, updated_at, payload_json)
+      VALUES (?, ?, ?)
+      ON CONFLICT(task_id) DO UPDATE SET
+        updated_at = excluded.updated_at,
+        payload_json = excluded.payload_json
+    `)
+    for (const input of next.values()) {
+      const prior = existingById.get(input.taskId)
+      if (prior && prior.updatedAt === input.updatedAt && prior.payloadJson === input.payloadJson) continue
+      upsert.run(input.taskId, input.updatedAt, input.payloadJson)
+      changed = true
+    }
+    if (!changed) return
+    const updatedAt = [...next.values()].reduce(
+      (latest, input) => input.updatedAt > latest ? input.updatedAt : latest,
+      now,
+    )
+    commitAuthoritativeMutation(database, {
+      updatedAt,
+      domains: [domain],
+      projectRoot,
+    })
+  })
+}
+
+/** Replace the mutable runtime overlay; missing rows mean the state was cleared. */
+export function replaceProjectStateDatabaseTaskRuntimes(
+  projectRoot: string,
+  inputs: readonly ProjectStateDatabaseTaskRuntime[],
+): void {
+  syncProjectStateDatabaseTaskOverlay(projectRoot, 'task_execution', inputs, 'task-runtime')
+}
+
+export function upsertProjectStateDatabaseTaskWorkspace(
+  projectRoot: string,
+  input: ProjectStateDatabaseTaskRuntime,
+): void {
+  upsertProjectStateDatabaseTaskWorkspaces(projectRoot, [input])
+}
+
+export function upsertProjectStateDatabaseTaskWorkspaces(
+  projectRoot: string,
+  inputs: ProjectStateDatabaseTaskRuntime[],
+): void {
+  if (inputs.length === 0) return
+  withWritableDatabase(projectRoot, database => {
+    const upsert = database.prepare(`
+      INSERT INTO task_workspace (task_id, updated_at, payload_json)
+      VALUES (?, ?, ?)
+      ON CONFLICT(task_id) DO UPDATE SET
+        updated_at = excluded.updated_at,
+        payload_json = excluded.payload_json
+    `)
+    for (const input of inputs) {
+      upsert.run(input.taskId, input.updatedAt ?? new Date().toISOString(), json(input.payload))
+    }
+    const updatedAt = inputs.reduce((latest, input) => {
+      const value = input.updatedAt ?? latest
+      return value > latest ? value : latest
+    }, new Date().toISOString())
+    commitAuthoritativeMutation(database, {
+      updatedAt,
+      domains: ['workspace'],
+      projectRoot,
+    })
+  })
+}
+
+/** Replace the mutable workspace overlay; missing rows mean the state was cleared. */
+export function replaceProjectStateDatabaseTaskWorkspaces(
+  projectRoot: string,
+  inputs: readonly ProjectStateDatabaseTaskRuntime[],
+): void {
+  syncProjectStateDatabaseTaskOverlay(projectRoot, 'task_workspace', inputs, 'workspace')
+}
+
+export function upsertProjectStateDatabaseTaskProof(
+  projectRoot: string,
+  input: ProjectStateDatabaseTaskProof,
+): void {
+  upsertProjectStateDatabaseTaskProofs(projectRoot, [input])
+}
+
+function upsertTaskProofAndCurrentEvidence(
+  database: DatabaseSync,
+  input: ProjectStateDatabaseTaskProof,
+): void {
+  const payload = compactTaskEvidencePayload(
+    input.kind as Parameters<typeof compactTaskEvidencePayload>[0],
+    isRecord(input.payload) ? input.payload : {},
+  )
+  const result = typeof payload.passed === 'boolean' ? (payload.passed ? 'passed' : 'failed') : null
+  database.prepare(`
+    INSERT INTO task_proof (task_id, latest_kind, latest_recorded_at, result, payload_json)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(task_id) DO UPDATE SET
+      latest_kind = excluded.latest_kind,
+      latest_recorded_at = excluded.latest_recorded_at,
+      result = excluded.result,
+      payload_json = excluded.payload_json
+    WHERE excluded.latest_recorded_at >= task_proof.latest_recorded_at
+  `).run(input.taskId, input.kind, input.recordedAt, result, json(payload))
+  upsertCurrentTaskEvidence(database, { ...input, payload })
+}
+
+export function upsertProjectStateDatabaseTaskProofs(
+  projectRoot: string,
+  inputs: readonly ProjectStateDatabaseTaskProof[],
+): void {
+  if (inputs.length === 0) return
+  withWritableDatabase(projectRoot, database => {
+    const compactedInputs = inputs.map(input => ({
+      ...input,
+      payload: compactTaskEvidencePayload(
+        input.kind as Parameters<typeof compactTaskEvidencePayload>[0],
+        isRecord(input.payload) ? input.payload : {},
+      ),
+    }))
+    for (const input of compactedInputs) upsertTaskProofAndCurrentEvidence(database, input)
+    // A proof row alone cannot recompute scoped readiness, blockers, or the
+    // map. The runtime projection writer owns those facts; do not publish a
+    // partial payload as if it were current.
+    const updatedAt = compactedInputs.reduce((latest, input) => input.recordedAt > latest ? input.recordedAt : latest, new Date().toISOString())
+    commitAuthoritativeMutation(database, {
+      updatedAt,
+      domains: ['evidence'],
+      projectRoot,
+    })
+  })
+}
+
+// The task-state policy is the normal owner of these values. Keep an absolute
+// ceiling here too so migration/repair callers cannot create an unbounded
+// SQLite history that ordinary reads must materialize.
+const MAX_TASK_EVIDENCE_HISTORY_RECORDS = 64
+const MAX_TASK_EVIDENCE_HISTORY_BYTES = 64 * 1024
+
+function validateTaskEvidenceRetention(
+  retention: ProjectStateDatabaseTaskEvidenceRetentionInput,
+): ProjectStateDatabaseTaskEvidenceRetentionInput {
+  const maxRecords = Math.min(Math.trunc(retention.maxRecords), MAX_TASK_EVIDENCE_HISTORY_RECORDS)
+  const maxBytes = Math.min(Math.trunc(retention.maxBytes), MAX_TASK_EVIDENCE_HISTORY_BYTES)
+  if (!Number.isFinite(maxRecords) || maxRecords < 1 || !Number.isFinite(maxBytes) || maxBytes < 1) {
+    throw new RangeError('Task evidence retention must have positive maxRecords and maxBytes')
+  }
+  return { maxRecords, maxBytes }
+}
+
+function historyRecordBytes(event: TaskEvidenceEventRecord): number {
+  return Buffer.byteLength(`${JSON.stringify(event)}\n`, 'utf8')
+}
+
+function trimTaskEvidenceHistory(
+  database: DatabaseSync,
+  event: TaskEvidenceEventRecord,
+  retention: ProjectStateDatabaseTaskEvidenceRetentionInput,
+): void {
+  const rows = database.prepare(`
+    SELECT evidence_id, recorded_at, payload_json
+    FROM task_evidence_history
+    WHERE task_id = ? AND kind = ?
+    ORDER BY recorded_at DESC, evidence_id DESC
+  `).all(event.taskId, event.kind) as JsonRecord[]
+  const retainedIds: string[] = []
+  let bytes = 0
+  for (const row of rows) {
+    const evidenceId = stringValue(row.evidence_id)
+    const recordedAt = stringValue(row.recorded_at)
+    if (!evidenceId || !recordedAt) continue
+    const candidate: TaskEvidenceEventRecord = {
+      id: evidenceId,
+      taskId: event.taskId,
+      kind: event.kind,
+      recordedAt,
+      payload: parseJson<JsonRecord>(row.payload_json, {}),
+    }
+    const candidateBytes = historyRecordBytes(candidate)
+    if (retainedIds.length >= retention.maxRecords) break
+    // Keep one newest record even when a caller supplies a smaller byte budget;
+    // this matches the existing bounded JSONL policy and preserves current proof.
+    if (retainedIds.length > 0 && bytes + candidateBytes > retention.maxBytes) break
+    retainedIds.push(evidenceId)
+    bytes += candidateBytes
+  }
+  if (retainedIds.length === rows.length) return
+  const placeholders = retainedIds.map(() => '?').join(', ')
+  database.prepare(`
+    DELETE FROM task_evidence_history
+    WHERE task_id = ? AND kind = ? AND evidence_id NOT IN (${placeholders})
+  `).run(event.taskId, event.kind, ...retainedIds)
+}
+
+function appendTaskEvidenceHistory(
+  database: DatabaseSync,
+  event: TaskEvidenceEventRecord,
+  retention: ProjectStateDatabaseTaskEvidenceRetentionInput,
+): void {
+  database.prepare(`
+    INSERT INTO task_evidence_history (task_id, kind, evidence_id, recorded_at, payload_json)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(task_id, kind, evidence_id) DO UPDATE SET
+      recorded_at = excluded.recorded_at,
+      payload_json = excluded.payload_json
+  `).run(event.taskId, event.kind, event.id, event.recordedAt, json(event.payload))
+  trimTaskEvidenceHistory(database, event, retention)
+}
+
+/**
+ * Append one compact evidence record to proof, current evidence, and bounded
+ * detail history in the same SQLite transaction. The retention argument is
+ * intentionally supplied by the existing task evidence policy owner.
+ */
+export function appendProjectStateDatabaseTaskEvidence(
+  projectRoot: string,
+  event: TaskEvidenceEventRecord,
+  retention: ProjectStateDatabaseTaskEvidenceRetentionInput,
+): TaskEvidenceEventRecord {
+  const durable = compactTaskEvidenceEvent(TaskEvidenceEvent.parse({ ...event }))
+  const bounded = validateTaskEvidenceRetention(retention)
+  withWritableDatabase(projectRoot, database => {
+    upsertTaskProofAndCurrentEvidence(database, {
+      id: durable.id,
+      taskId: durable.taskId,
+      kind: durable.kind,
+      recordedAt: durable.recordedAt,
+      payload: durable.payload,
+    })
+    appendTaskEvidenceHistory(database, durable, bounded)
+    commitAuthoritativeMutation(database, {
+      updatedAt: durable.recordedAt,
+      domains: ['evidence'],
+      projectRoot,
+    })
+  })
+  return durable
+}
+
+/**
+ * Import legacy evidence in one database transaction. The caller owns the
+ * filesystem compatibility boundary; this function only establishes the
+ * durable SQLite copy and leaves the authority marker unchanged.
+ */
+export function importProjectStateDatabaseTaskEvidence(
+  projectRoot: string,
+  events: readonly TaskEvidenceEventRecord[],
+  retentionByKind: Readonly<Record<string, ProjectStateDatabaseTaskEvidenceRetentionInput>>,
+): number {
+  if (events.length === 0) return 0
+  const compacted = events.map(event => {
+    const durable = compactTaskEvidenceEvent(TaskEvidenceEvent.parse({ ...event }))
+    const retention = retentionByKind[durable.kind]
+    if (!retention) throw new Error(`Missing evidence retention policy for ${durable.kind}`)
+    return { durable, retention: validateTaskEvidenceRetention(retention) }
+  })
+  withWritableDatabase(projectRoot, database => {
+    for (const { durable, retention } of compacted) {
+      upsertTaskProofAndCurrentEvidence(database, {
+        id: durable.id,
+        taskId: durable.taskId,
+        kind: durable.kind,
+        recordedAt: durable.recordedAt,
+        payload: durable.payload,
+      })
+      appendTaskEvidenceHistory(database, durable, retention)
+    }
+    const updatedAt = compacted.reduce(
+      (latest, { durable }) => durable.recordedAt > latest ? durable.recordedAt : latest,
+      new Date().toISOString(),
+    )
+    commitAuthoritativeMutation(database, {
+      updatedAt,
+      domains: ['evidence'],
+      projectRoot,
+    })
+  })
+  return compacted.length
+}
+
+/**
+ * Read bounded task evidence history without opening the legacy JSONL store.
+ * A null result means this database predates the history table; an empty array
+ * is a valid database-authoritative task with no retained history.
+ */
+export function readProjectStateDatabaseTaskEvidenceHistory(
+  projectRoot: string,
+  taskId: string,
+  kind?: string,
+): TaskEvidenceEventRecord[] | null {
+  const databasePath = projectStateDatabasePath(projectRoot)
+  try {
+    statSync(databasePath)
+  } catch {
+    return null
+  }
+  const database = openDatabase(databasePath, { readOnly: true })
+  try {
+    if (!tableExists(database, 'task_evidence_history')) return null
+    const rows = database.prepare(kind
+      ? `
+        SELECT task_id, kind, evidence_id, recorded_at, payload_json
+        FROM task_evidence_history
+        WHERE task_id = ? AND kind = ?
+        ORDER BY recorded_at DESC, evidence_id DESC
+        LIMIT ?
+      `
+      : `
+        SELECT task_id, kind, evidence_id, recorded_at, payload_json
+        FROM (
+          SELECT task_id, kind, evidence_id, recorded_at, payload_json,
+            ROW_NUMBER() OVER (
+              PARTITION BY kind
+              ORDER BY recorded_at DESC, evidence_id DESC
+            ) AS kind_rank
+          FROM task_evidence_history
+          WHERE task_id = ?
+        )
+        WHERE kind_rank <= ?
+        ORDER BY recorded_at DESC, evidence_id DESC
+      `).all(...(kind
+      ? [taskId, kind, MAX_TASK_EVIDENCE_HISTORY_RECORDS]
+      : [taskId, MAX_TASK_EVIDENCE_HISTORY_RECORDS])) as JsonRecord[]
+    return rows.flatMap(row => {
+      const rowTaskId = stringValue(row.task_id)
+      const rowKind = stringValue(row.kind)
+      const id = stringValue(row.evidence_id)
+      const recordedAt = stringValue(row.recorded_at)
+      if (!rowTaskId || !rowKind || !id || !recordedAt) return []
+      try {
+        return [TaskEvidenceEvent.parse({
+          id,
+          taskId: rowTaskId,
+          kind: rowKind,
+          recordedAt,
+          payload: parseJson<JsonRecord>(row.payload_json, {}),
+        })]
+      } catch {
+        return []
+      }
+    }).sort((left, right) => left.recordedAt.localeCompare(right.recordedAt) || left.id.localeCompare(right.id))
+  } finally {
+    database.close()
+  }
+}
+
+/** Read the complete bounded SQLite evidence ledger for a one-time migration. */
+export function readProjectStateDatabaseTaskEvidenceHistoryAll(
+  projectRoot: string,
+): TaskEvidenceEventRecord[] | null {
+  const databasePath = projectStateDatabasePath(projectRoot)
+  try {
+    statSync(databasePath)
+  } catch {
+    return null
+  }
+  const database = openDatabase(databasePath, { readOnly: true })
+  try {
+    if (!tableExists(database, 'task_evidence_history')) return null
+    const rows = database.prepare(`
+      SELECT task_id, kind, evidence_id, recorded_at, payload_json
+      FROM task_evidence_history
+      ORDER BY task_id ASC, kind ASC, recorded_at ASC, evidence_id ASC
+    `).all() as JsonRecord[]
+    return rows.flatMap(row => {
+      const taskId = stringValue(row.task_id)
+      const kind = stringValue(row.kind)
+      const id = stringValue(row.evidence_id)
+      const recordedAt = stringValue(row.recorded_at)
+      if (!taskId || !kind || !id || !recordedAt) return []
+      try {
+        return [TaskEvidenceEvent.parse({
+          id,
+          taskId,
+          kind,
+          recordedAt,
+          payload: parseJson<JsonRecord>(row.payload_json, {}),
+        })]
+      } catch {
+        return []
+      }
+    })
+  } finally {
+    database.close()
+  }
+}
+
+// Current state answers "what is true now?". It is not a miniaturized event
+// ledger. Keep the latest useful facts per kind and leave the full sequence in
+// the historical evidence files.
+const CURRENT_EVIDENCE_MAX_BYTES = 12 * 1024
+const CURRENT_EVIDENCE_PAYLOAD_MAX_BYTES = 2 * 1024
+
+const CURRENT_EVIDENCE_KIND_LIMITS: Record<string, number> = {
+  event: 1,
+  // Keep the latest compact note for each operational source (worker,
+  // reviewer, coordinator, ...). A single global latest note can hide the
+  // reviewer decision behind a newer coordinator receipt and misroute work.
+  note: 6,
+  gate_result: 8,
+  review_verdict: 8,
+  adjudication: 4,
+  escalation: 8,
+  agent_issue: 8,
+  merge_record: 1,
+  git_story: 2,
+}
+
+function currentEvidenceKindLimit(kind: string): number {
+  return CURRENT_EVIDENCE_KIND_LIMITS[kind] ?? 2
+}
+
+function currentEvidenceIdentity(
+  kind: string,
+  payload: JsonRecord,
+  recordedAt: string,
+  fallbackId?: string,
+): string {
+  const identityKeys = kind === 'gate_result'
+    ? ['gateId', 'command', 'name', 'id']
+    : kind === 'review_verdict'
+      ? ['reviewerId', 'reviewer', 'agentId', 'id']
+      : kind === 'note'
+        ? ['agentId', 'role']
+      : ['id']
+  for (const key of identityKeys) {
+    const value = stringValue(payload[key])
+    if (value) return `${kind}:${key}:${value}`
+  }
+  // Untagged notes have no reliable source identity. Collapse them to one
+  // current note rather than allowing generic prose to grow the projection.
+  if (kind === 'note') return 'note:unattributed'
+  if (fallbackId) return `${kind}:event:${fallbackId}`
+  return `${kind}:${recordedAt}`
+}
+
+function currentEvidenceRecord(input: ProjectStateDatabaseTaskProof): ProjectStateDatabaseTaskEvidenceCurrentRecord {
+  const payload = isRecord(input.payload) ? input.payload : {}
+  return {
+    id: currentEvidenceIdentity(input.kind, payload, input.recordedAt, input.id),
+    recordedAt: input.recordedAt,
+    payload: compactCurrentEvidencePayload(input.kind, payload),
+  }
+}
+
+function compactCurrentEvidencePayload(kind: string, payload: JsonRecord): JsonRecord {
+  const source = compactTaskEvidencePayload('event', payload)
+  const keys = new Set([
+    'id', 'taskId', 'kind', 'type', 'gateId', 'command', 'name', 'checkedAt',
+    'reviewerId', 'reviewer', 'reviewerPath', 'decision', 'verdict', 'passed',
+    'recordedAt', 'timestamp', 'raisedAt', 'resolvedAt', 'status', 'reason', 'summary',
+    'content', 'role', 'agentId', 'output', 'reasoning', 'score', 'failingSignals',
+    'source', 'llmError', 'policyVersion', 'round', 'trigger', 'dissenters',
+    'winningConcerns', 'supersededConcerns', 'rationale', 'scopeInstructions',
+    'decidedBy', 'resolvedBy', 'resolution', 'mergedAt', 'branch',
+    'fromBranch', 'toBranch', 'strategy', 'result', 'commit', 'commitSha',
+    'prUrl', 'error', 'details', 'externalChecklist',
+    // Agent-issue evidence is current operational state, not a task
+    // definition. Keep the fields needed to route and display it.
+    'code', 'severity', 'detail', 'suggestedAction', 'broadcast',
+  ])
+  const selected = Object.fromEntries(Object.entries(source)
+    .filter(([key, value]) => keys.has(key) && !(
+      key === 'details' && typeof value === 'string' && value.length > 320
+    ))
+    .map(([key, value]) => [
+      key,
+      typeof value === 'string' && value.length > 640
+        ? `${value.slice(0, 620)} [current evidence detail omitted]`
+        : value,
+    ]))
+  if (serializedBytes(selected) <= CURRENT_EVIDENCE_PAYLOAD_MAX_BYTES) return selected
+
+  const identityKeys = new Set([
+    'id', 'taskId', 'kind', 'gateId', 'reviewerId', 'reviewer', 'decision',
+    'verdict', 'passed', 'recordedAt', 'raisedAt', 'resolvedAt', 'status',
+    'reason', 'summary', 'mergedAt', 'branch', 'commit', 'error',
+  ])
+  const compact = Object.fromEntries(Object.entries(selected)
+    .filter(([key]) => identityKeys.has(key))
+    .map(([key, value]) => [
+      key,
+      typeof value === 'string' && value.length > 256
+        ? `${value.slice(0, 236)} [detail omitted]`
+        : value,
+    ]))
+  if (serializedBytes(compact) <= CURRENT_EVIDENCE_PAYLOAD_MAX_BYTES) return compact
+  return {
+    ...Object.fromEntries(Object.entries(compact).filter(([key]) => [
+      'id', 'taskId', 'gateId', 'reviewerId', 'decision', 'verdict',
+      'passed', 'recordedAt', 'raisedAt', 'resolvedAt', 'status', 'summary',
+    ].includes(key))),
+    compacted: true,
+    compactedKind: kind,
+  }
+}
+
+export interface ProjectStateDatabaseEvidenceCompactionResult {
+  taskProofRowsSeen: number
+  taskProofRowsCompacted: number
+  currentRowsSeen: number
+  currentRowsCompacted: number
+  bytesBefore: number
+  bytesAfter: number
+}
+
+export interface ProjectStateDatabaseVacuumResult {
+  databasePath: string
+  bytesBefore: number
+  bytesAfter: number
+  vacuumed: boolean
+}
+
+/** Reclaim SQLite pages after an explicit content migration or compaction. */
+export function vacuumProjectStateDatabase(
+  projectRoot: string,
+  options: { dryRun?: boolean } = {},
+): ProjectStateDatabaseVacuumResult {
+  const databasePath = projectStateDatabasePath(projectRoot)
+  let bytesBefore = 0
+  try {
+    bytesBefore = statSync(databasePath).size
+  } catch {
+    return { databasePath, bytesBefore: 0, bytesAfter: 0, vacuumed: false }
+  }
+  if (options.dryRun === true) {
+    return { databasePath, bytesBefore, bytesAfter: bytesBefore, vacuumed: false }
+  }
+
+  const database = openDatabase(databasePath)
+  try {
+    // VACUUM must run outside the transaction used by ordinary project-state
+    // writes. This is an explicit maintenance boundary, never a read effect.
+    database.exec('VACUUM')
+  } finally {
+    database.close()
+  }
+  let bytesAfter = bytesBefore
+  try {
+    bytesAfter = statSync(databasePath).size
+  } catch {
+    // Preserve the precondition evidence if another process removes the file
+    // before the postcondition check.
+  }
+  return { databasePath, bytesBefore, bytesAfter, vacuumed: true }
+}
+
+/** Compact legacy proof payloads already copied into SQLite. */
+export function compactProjectStateDatabaseEvidence(
+  projectRoot: string,
+  options: { dryRun?: boolean } = {},
+): ProjectStateDatabaseEvidenceCompactionResult {
+  const result: ProjectStateDatabaseEvidenceCompactionResult = {
+    taskProofRowsSeen: 0,
+    taskProofRowsCompacted: 0,
+    currentRowsSeen: 0,
+    currentRowsCompacted: 0,
+    bytesBefore: 0,
+    bytesAfter: 0,
+  }
+  withDatabase(projectRoot, database => {
+    if (tableExists(database, 'task_proof')) {
+      const rows = database.prepare(`
+        SELECT task_id, latest_kind, payload_json
+        FROM task_proof
+      `).all() as JsonRecord[]
+      const update = database.prepare('UPDATE task_proof SET payload_json = ? WHERE task_id = ?')
+      for (const row of rows) {
+        const taskId = stringValue(row.task_id)
+        if (!taskId) continue
+        const before = typeof row.payload_json === 'string' ? row.payload_json : '{}'
+        const kind = stringValue(row.latest_kind) ?? 'event'
+        const payload = compactTaskEvidencePayload(
+          kind as Parameters<typeof compactTaskEvidencePayload>[0],
+          parseJson<JsonRecord>(before, {}),
+        )
+        const after = json(payload)
+        result.taskProofRowsSeen += 1
+        result.bytesBefore += Buffer.byteLength(before, 'utf8')
+        result.bytesAfter += Buffer.byteLength(after, 'utf8')
+        if (after !== before) {
+          result.taskProofRowsCompacted += 1
+          if (options.dryRun !== true) update.run(after, taskId)
+        }
+      }
+    }
+    if (tableExists(database, 'task_evidence_current')) {
+      const rows = database.prepare(`
+        SELECT task_id, updated_at, payload_json
+        FROM task_evidence_current
+      `).all() as JsonRecord[]
+      const update = database.prepare('UPDATE task_evidence_current SET payload_json = ? WHERE task_id = ?')
+      for (const row of rows) {
+        const taskId = stringValue(row.task_id)
+        if (!taskId) continue
+        const before = typeof row.payload_json === 'string' ? row.payload_json : '{}'
+        const next = normalizeCurrentEvidence(
+          taskId,
+          stringValue(row.updated_at) ?? '',
+          parseJson<JsonRecord>(before, {}),
+        )
+        const after = json(next)
+        result.currentRowsSeen += 1
+        result.bytesBefore += Buffer.byteLength(before, 'utf8')
+        result.bytesAfter += Buffer.byteLength(after, 'utf8')
+        if (after !== before) {
+          result.currentRowsCompacted += 1
+          if (options.dryRun !== true) update.run(after, taskId)
+        }
+      }
+    }
+  })
+  return result
+}
+
+function normalizeCurrentEvidence(
+  taskId: string,
+  updatedAt: string,
+  value: unknown,
+): ProjectStateDatabaseTaskEvidenceCurrent {
+  const record = isRecord(value) ? value : {}
+  const rawByKind = isRecord(record.byKind) ? record.byKind : {}
+  const byKind: Record<string, ProjectStateDatabaseTaskEvidenceCurrentRecord[]> = {}
+  for (const [kind, entries] of Object.entries(rawByKind)) {
+    if (!Array.isArray(entries)) continue
+    const valid = entries.flatMap(entry => {
+      if (!isRecord(entry) || typeof entry.recordedAt !== 'string' || !isRecord(entry.payload)) return []
+      return [{
+        id: typeof entry.id === 'string' && entry.id.startsWith(`${kind}:event:`)
+          ? entry.id
+          : currentEvidenceIdentity(kind, entry.payload, entry.recordedAt),
+        recordedAt: entry.recordedAt,
+        payload: compactCurrentEvidencePayload(kind, entry.payload),
+      }]
+    })
+    const newestById = new Map(valid.map(entry => [entry.id, entry]))
+    const newest = [...newestById.values()].sort((left, right) => right.recordedAt.localeCompare(left.recordedAt))
+    if (newest.length > 0) byKind[kind] = newest.slice(0, currentEvidenceKindLimit(kind))
+  }
+  return trimCurrentEvidence({ taskId, updatedAt, version: 1, byKind })
+}
+
+function trimCurrentEvidence(value: ProjectStateDatabaseTaskEvidenceCurrent): ProjectStateDatabaseTaskEvidenceCurrent {
+  let next: ProjectStateDatabaseTaskEvidenceCurrent = {
+    ...value,
+    byKind: Object.fromEntries(Object.entries(value.byKind).map(([kind, records]) => [
+      kind,
+      records
+        .map(record => ({ ...record, payload: compactCurrentEvidencePayload(kind, record.payload) }))
+        .slice(0, currentEvidenceKindLimit(kind)),
+    ])),
+  }
+  if (Buffer.byteLength(json(next), 'utf8') <= CURRENT_EVIDENCE_MAX_BYTES) return next
+  const byKind = Object.fromEntries(Object.entries(next.byKind).map(([kind, records]) => [kind, [...records]]))
+  while (Buffer.byteLength(json({ ...next, byKind }), 'utf8') > CURRENT_EVIDENCE_MAX_BYTES) {
+    const candidate = Object.entries(byKind)
+      .filter(([, records]) => records.length > 1)
+      .sort((left, right) => right[1].length - left[1].length)[0]
+    if (!candidate) break
+    candidate[1].pop()
+  }
+  return { ...next, byKind }
+}
+
+function upsertCurrentTaskEvidence(
+  database: DatabaseSync,
+  input: ProjectStateDatabaseTaskProof,
+): void {
+  const existing = tableExists(database, 'task_evidence_current')
+    ? database.prepare('SELECT updated_at, payload_json FROM task_evidence_current WHERE task_id = ?').get(input.taskId) as JsonRecord | undefined
+    : undefined
+  const current = normalizeCurrentEvidence(input.taskId, input.recordedAt, parseJson(existing?.payload_json, {}))
+  const record = currentEvidenceRecord(input)
+  const entries = [...(current.byKind[input.kind] ?? []), record]
+  const byId = new Map(entries.map(entry => [entry.id, entry]))
+  const next = trimCurrentEvidence({
+    taskId: input.taskId,
+    updatedAt: input.recordedAt > current.updatedAt ? input.recordedAt : current.updatedAt,
+    version: 1,
+    byKind: {
+      ...current.byKind,
+      [input.kind]: [...byId.values()]
+        .sort((left, right) => right.recordedAt.localeCompare(left.recordedAt))
+        .slice(0, currentEvidenceKindLimit(input.kind)),
+    },
+  })
+  database.prepare(`
+    INSERT INTO task_evidence_current (task_id, updated_at, payload_json)
+    VALUES (?, ?, ?)
+    ON CONFLICT(task_id) DO UPDATE SET
+      updated_at = excluded.updated_at,
+      payload_json = excluded.payload_json
+  `).run(input.taskId, next.updatedAt, json(next))
+}
+
+export function upsertProjectStateDatabaseExecution(
+  projectRoot: string,
+  input: ProjectStateDatabaseExecution,
+): void {
+  withDatabase(projectRoot, database => {
+    database.prepare(`
+      INSERT INTO current_execution (
+        id, status, mode, started_at, stopped_at, stop_requested_at, error,
+        updated_at, payload_json
+      ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        status = excluded.status, mode = excluded.mode, started_at = excluded.started_at,
+        stopped_at = excluded.stopped_at, stop_requested_at = excluded.stop_requested_at,
+        error = excluded.error, updated_at = excluded.updated_at,
+        payload_json = excluded.payload_json
+    `).run(input.status, input.mode ?? null, input.startedAt ?? null, input.stoppedAt ?? null, input.stopRequestedAt ?? null, input.error ?? null, input.updatedAt, json(input.payload ?? input))
+    commitAuthoritativeMutation(database, {
+      updatedAt: input.updatedAt,
+      domains: ['execution'],
+      projectRoot,
+    })
+  })
+}
+
+export function upsertProjectStateDatabaseRuntime(
+  projectRoot: string,
+  input: ProjectStateDatabaseRuntime,
+): void {
+  withDatabase(projectRoot, database => {
+    database.prepare(`
+      INSERT INTO current_runtime (id, status, health, last_activity_at, updated_at, payload_json)
+      VALUES (1, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET status = excluded.status, health = excluded.health,
+        last_activity_at = excluded.last_activity_at, updated_at = excluded.updated_at,
+        payload_json = excluded.payload_json
+    `).run(input.status, input.health ?? null, input.lastActivityAt ?? null, input.updatedAt, json(input.payload ?? input))
+    commitAuthoritativeMutation(database, {
+      updatedAt: input.updatedAt,
+      domains: ['runtime'],
+      projectRoot,
+    })
+  })
+}
+
+export function upsertProjectStateDatabaseOwnerInput(
+  projectRoot: string,
+  input: ProjectStateDatabaseOwnerInput,
+): void {
+  withDatabase(projectRoot, database => {
+    database.prepare(`
+      INSERT INTO owner_inputs (id, status, task_id, prompt, updated_at, payload_json)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET status = excluded.status, task_id = excluded.task_id,
+        prompt = excluded.prompt, updated_at = excluded.updated_at, payload_json = excluded.payload_json
+    `).run(input.id, input.status, input.taskId ?? null, input.prompt, input.updatedAt, json(compactOwnerInputPayload(input.payload ?? input)))
+    commitAuthoritativeMutation(database, {
+      updatedAt: input.updatedAt,
+      domains: ['owner-input'],
+      projectRoot,
+    })
+  })
+}
+
+/**
+ * Replace the compact open owner-input queue in one transaction. The JSON
+ * request files remain the detail/history source; this table is only the
+ * current queue used by summaries and readiness reads.
+ */
+export function replaceProjectStateDatabaseOwnerInputs(
+  projectRoot: string,
+  inputs: readonly ProjectStateDatabaseOwnerInput[],
+): void {
+  withDatabase(projectRoot, database => {
+    const next = [...inputs]
+      .sort((left, right) => left.id.localeCompare(right.id))
+      .map(input => ({
+        id: input.id,
+        status: input.status,
+        taskId: input.taskId ?? null,
+        prompt: input.prompt,
+        updatedAt: input.updatedAt,
+        payloadJson: json(compactOwnerInputPayload(input.payload ?? input)),
+      }))
+    const existing = (database.prepare('SELECT id, status, task_id, prompt, updated_at, payload_json FROM owner_inputs ORDER BY id').all() as JsonRecord[])
+      .map(row => ({
+        id: String(row.id),
+        status: String(row.status),
+        taskId: row.task_id === null ? null : String(row.task_id),
+        prompt: String(row.prompt),
+        updatedAt: String(row.updated_at),
+        payloadJson: String(row.payload_json),
+      }))
+    if (JSON.stringify(existing) === JSON.stringify(next)) return
+
+    const nextById = new Map(next.map(input => [input.id, input]))
+    const existingById = new Map(existing.map(input => [input.id, input]))
+    for (const input of existing) {
+      if (!nextById.has(input.id)) database.prepare('DELETE FROM owner_inputs WHERE id = ?').run(input.id)
+    }
+    const upsert = database.prepare(`
+      INSERT INTO owner_inputs (id, status, task_id, prompt, updated_at, payload_json)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        status = excluded.status,
+        task_id = excluded.task_id,
+        prompt = excluded.prompt,
+        updated_at = excluded.updated_at,
+        payload_json = excluded.payload_json
+    `)
+    for (const input of next) {
+      const prior = existingById.get(input.id)
+      if (prior &&
+        prior.status === input.status &&
+        prior.taskId === input.taskId &&
+        prior.prompt === input.prompt &&
+        prior.updatedAt === input.updatedAt &&
+        prior.payloadJson === input.payloadJson) continue
+      upsert.run(input.id, input.status, input.taskId, input.prompt, input.updatedAt, input.payloadJson)
+    }
+    const updatedAt = next.reduce((latest, input) => input.updatedAt > latest ? input.updatedAt : latest, new Date().toISOString())
+    commitAuthoritativeMutation(database, {
+      updatedAt,
+      domains: ['owner-input'],
+      projectRoot,
+    })
+  })
+}
+
+export function upsertProjectStateDatabaseRepository(
+  projectRoot: string,
+  input: ProjectStateDatabaseRepository,
+): void {
+  withDatabase(projectRoot, database => {
+    database.prepare(`
+      INSERT INTO repositories (id, root, branch, head, status, freshness, inspected_at, payload_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET root = excluded.root, branch = excluded.branch,
+        head = excluded.head, status = excluded.status, freshness = excluded.freshness,
+        inspected_at = excluded.inspected_at, payload_json = excluded.payload_json
+    `).run(input.id, input.root, input.branch ?? null, input.head ?? null, input.status ?? null, input.freshness, input.inspectedAt ?? null, json(input.payload ?? input))
+    commitAuthoritativeMutation(database, {
+      updatedAt: input.inspectedAt ?? new Date().toISOString(),
+      domains: ['repository'],
+      projectRoot,
+    })
+  })
+}
+
+function projectStateDatabaseRepositoryFromRow(row: JsonRecord): ProjectStateDatabaseRepository {
+  return {
+    id: String(row.id),
+    root: String(row.root),
+    ...(row.branch === null ? {} : { branch: String(row.branch) }),
+    ...(row.head === null ? {} : { head: String(row.head) }),
+    ...(row.status === null ? {} : { status: String(row.status) }),
+    freshness: row.freshness === 'current' || row.freshness === 'stale' ? row.freshness : 'unknown',
+    ...(row.inspected_at === null ? {} : { inspectedAt: String(row.inspected_at) }),
+    payload: parseJson(row.payload_json, {}),
+  }
+}
+
+function readProjectStateDatabaseRepositoriesFromDatabase(
+  database: DatabaseSync,
+): ProjectStateDatabaseRepository[] {
+  if (!tableExists(database, 'repositories')) return []
+  return (database.prepare(`
+    SELECT id, root, branch, head, status, freshness, inspected_at, payload_json
+    FROM repositories
+    ORDER BY id
+  `).all() as JsonRecord[]).map(projectStateDatabaseRepositoryFromRow)
+}
+
+/**
+ * Read the bounded current repository snapshots without inspecting Git.
+ * Missing tables are a normal compatibility state for pre-projection
+ * databases, so the reader returns an empty list instead of creating state.
+ */
+function readProjectStateDatabaseRepositoriesAtPath(databasePath: string): ProjectStateDatabaseRepository[] {
+  try {
+    statSync(databasePath)
+  } catch {
+    return []
+  }
+  const database = openDatabase(databasePath, { readOnly: true })
+  try {
+    return readProjectStateDatabaseRepositoriesFromDatabase(database)
+  } finally {
+    database.close()
+  }
+}
+
+export function readProjectStateDatabaseRepositories(projectRoot: string): ProjectStateDatabaseRepository[] {
+  return readProjectStateDatabaseRepositoriesAtPath(projectStateDatabasePath(projectRoot))
+}
+
+export function readProjectStateDatabaseRepositoriesFromTasksPath(tasksPath: string): ProjectStateDatabaseRepository[] {
+  return readProjectStateDatabaseRepositoriesAtPath(projectStateDatabasePathFromTasksPath(tasksPath))
+}
+
+/** Read one current repository snapshot by its stable projection id. */
+export function readProjectStateDatabaseRepository(
+  projectRoot: string,
+  repositoryId: string,
+): ProjectStateDatabaseRepository | null {
+  const databasePath = projectStateDatabasePath(projectRoot)
+  try {
+    statSync(databasePath)
+  } catch {
+    return null
+  }
+  const database = openDatabase(databasePath, { readOnly: true })
+  try {
+    if (!tableExists(database, 'repositories')) return null
+    const row = database.prepare(`
+      SELECT id, root, branch, head, status, freshness, inspected_at, payload_json
+      FROM repositories
+      WHERE id = ?
+    `).get(repositoryId) as JsonRecord | undefined
+    return row ? projectStateDatabaseRepositoryFromRow(row) : null
+  } finally {
+    database.close()
+  }
+}
+
+function boundedDiagnosticText(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const trimmed = value.trim()
+  return trimmed ? trimmed.slice(0, PROJECT_STATE_DATABASE_DIAGNOSTIC_MAX_TEXT_LENGTH) : undefined
+}
+
+function boundedDiagnosticCount(value: unknown): number {
+  const count = Number(value)
+  if (!Number.isFinite(count) || count < 0) return 0
+  return Math.min(Math.trunc(count), 1_000_000)
+}
+
+function normalizeDiagnosticBlocker(value: unknown): ProjectStateDatabaseDiagnosticBlocker | null {
+  if (!isRecord(value)) return null
+  const id = boundedDiagnosticText(value.id)
+  const label = boundedDiagnosticText(value.label)
+  if (!id || !label) return null
+  const blocker: ProjectStateDatabaseDiagnosticBlocker = { id, label }
+  const optionalFields = ['state', 'reason', 'nextAction', 'repoId', 'taskId'] as const
+  for (const field of optionalFields) {
+    const text = boundedDiagnosticText(value[field])
+    if (text) blocker[field] = text
+  }
+  return blocker
+}
+
+function normalizeGitDiagnosticObservation(value: unknown): ProjectStateDatabaseGitDiagnosticObservation | null {
+  if (!isRecord(value)) return null
+  const blockers = Array.isArray(value.blockers)
+    ? value.blockers.flatMap(item => {
+        const blocker = normalizeDiagnosticBlocker(item)
+        return blocker ? [blocker] : []
+      }).slice(0, PROJECT_STATE_DATABASE_DIAGNOSTIC_MAX_BLOCKERS)
+    : []
+  return {
+    ready: value.ready === true,
+    state: boundedDiagnosticText(value.state) ?? 'unknown',
+    blockerCount: boundedDiagnosticCount(value.blockerCount),
+    blockers,
+  }
+}
+
+function normalizeReadinessDiagnosticObservation(value: unknown): ProjectStateDatabaseReadinessDiagnosticObservation | null {
+  if (!isRecord(value)) return null
+  const blockers = Array.isArray(value.blockers)
+    ? value.blockers.flatMap(item => {
+        const blocker = normalizeDiagnosticBlocker(item)
+        return blocker ? [blocker] : []
+      }).slice(0, PROJECT_STATE_DATABASE_DIAGNOSTIC_MAX_BLOCKERS)
+    : null
+  return {
+    ready: value.ready === true,
+    code: boundedDiagnosticText(value.code) ?? null,
+    message: boundedDiagnosticText(value.message) ?? null,
+    blockerCount: boundedDiagnosticCount(value.blockerCount),
+    unfinishedCount: boundedDiagnosticCount(value.unfinishedCount),
+    ...(blockers !== null ? { blockers } : {}),
+  }
+}
+
+function normalizeDiagnosticProjectionSnapshot(
+  snapshot: ProjectStateDatabaseDiagnosticProjectionSnapshot,
+): ProjectStateDatabaseDiagnosticProjectionSnapshot {
+  if (!Number.isInteger(snapshot.sourceRevision) || snapshot.sourceRevision < 0) {
+    throw new RangeError('Diagnostic projections require a non-negative integer source revision')
+  }
+  if (snapshot.freshness !== 'current' && snapshot.freshness !== 'stale') {
+    throw new RangeError('Diagnostic projections require current or stale freshness')
+  }
+  const generatedAt = boundedDiagnosticText(snapshot.generatedAt)
+  if (!generatedAt) throw new Error('Diagnostic projections require a generatedAt timestamp')
+  const normalized: ProjectStateDatabaseDiagnosticProjectionSnapshot = {
+    sourceRevision: snapshot.sourceRevision,
+    freshness: snapshot.freshness,
+    generatedAt,
+    git: normalizeGitDiagnosticObservation(snapshot.git),
+    readiness: normalizeReadinessDiagnosticObservation(snapshot.readiness),
+  }
+  if (serializedBytes(normalized) > PROJECT_STATE_DATABASE_DIAGNOSTIC_MAX_BYTES) {
+    throw new RangeError('Diagnostic projection exceeds its bounded storage budget')
+  }
+  return normalized
+}
+
+function diagnosticProjectionFromRow(row: JsonRecord): ProjectStateDatabaseDiagnosticProjection | null {
+  const sourceRevision = Number(row.source_revision)
+  const updatedAt = boundedDiagnosticText(row.updated_at)
+  const generatedAt = boundedDiagnosticText(row.generated_at)
+  if (!Number.isInteger(sourceRevision) || sourceRevision < 0 || !updatedAt || !generatedAt) return null
+  const freshness = row.freshness === 'current' || row.freshness === 'stale' ? row.freshness : null
+  if (!freshness) return null
+  const snapshot = normalizeDiagnosticProjectionSnapshot({
+    sourceRevision,
+    freshness,
+    generatedAt,
+    git: normalizeGitDiagnosticObservation(row.git_json === null ? null : parseJson<unknown>(row.git_json, null)),
+    readiness: normalizeReadinessDiagnosticObservation(row.readiness_json === null ? null : parseJson<unknown>(row.readiness_json, null)),
+  })
+  return { ...snapshot, updatedAt }
+}
+
+/** Read the latest bounded Git/readiness diagnostic without inspecting the project. */
+function readProjectStateDatabaseDiagnosticProjectionFromDatabase(
+  database: DatabaseSync,
+): ProjectStateDatabaseDiagnosticProjection | null {
+  if (!tableExists(database, 'project_diagnostics')) return null
+  const row = database.prepare(`
+      SELECT source_revision, freshness, generated_at, updated_at, git_json, readiness_json
+      FROM project_diagnostics
+      WHERE id = 1
+    `).get() as JsonRecord | undefined
+  const projection = row ? diagnosticProjectionFromRow(row) : null
+  if (!projection || projection.sourceRevision >= currentRevision(database)) return projection
+  return { ...projection, freshness: 'stale' }
+}
+
+export function readProjectStateDatabaseDiagnosticProjection(
+  projectRoot: string,
+): ProjectStateDatabaseDiagnosticProjection | null {
+  const databasePath = projectStateDatabasePath(projectRoot)
+  try {
+    statSync(databasePath)
+  } catch {
+    return null
+  }
+  const database = openDatabase(databasePath, { readOnly: true })
+  try {
+    return readProjectStateDatabaseDiagnosticProjectionFromDatabase(database)
+  } finally {
+    database.close()
+  }
+}
+
+/** Persist one revision-matched diagnostic observation and its freshness. */
+export function writeProjectStateDatabaseDiagnosticProjection(
+  projectRoot: string,
+  input: ProjectStateDatabaseDiagnosticProjectionSnapshot,
+  options: ProjectStateDatabaseDiagnosticProjectionWriteOptions = {},
+): boolean {
+  const snapshot = normalizeDiagnosticProjectionSnapshot(input)
+  let written = false
+  withWritableDatabase(projectRoot, database => {
+    const projectRevision = currentRevision(database)
+    if (snapshot.sourceRevision > projectRevision) {
+      throw new RangeError('Diagnostic projection cannot be ahead of the current project revision')
+    }
+    if (snapshot.freshness === 'current' && snapshot.sourceRevision !== projectRevision) {
+      throw new RangeError('Current diagnostic projections must match the current project revision')
+    }
+    const existing = database.prepare(`
+      SELECT source_revision, freshness
+      FROM project_diagnostics
+      WHERE id = 1
+    `).get() as JsonRecord | undefined
+    const existingRevision = existing ? Number(existing.source_revision) : null
+    if (
+      existingRevision !== null && (
+        existingRevision > snapshot.sourceRevision ||
+        (existingRevision === snapshot.sourceRevision && existing?.freshness === 'current' && snapshot.freshness === 'stale')
+      )
+    ) return
+
+    const updatedAt = boundedDiagnosticText(options.updatedAt) ?? new Date().toISOString()
+    database.prepare(`
+      INSERT INTO project_diagnostics (
+        id, source_revision, freshness, generated_at, updated_at, git_json, readiness_json
+      ) VALUES (1, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        source_revision = excluded.source_revision,
+        freshness = excluded.freshness,
+        generated_at = excluded.generated_at,
+        updated_at = excluded.updated_at,
+        git_json = excluded.git_json,
+        readiness_json = excluded.readiness_json
+    `).run(
+      snapshot.sourceRevision,
+      snapshot.freshness,
+      snapshot.generatedAt,
+      updatedAt,
+      snapshot.git === null ? null : json(snapshot.git),
+      snapshot.readiness === null ? null : json(snapshot.readiness),
+    )
+    markProjectionCurrent(
+      database,
+      PROJECT_STATE_DATABASE_DIAGNOSTIC_PROJECTION_DOMAIN,
+      snapshot.sourceRevision,
+      updatedAt,
+    )
+    written = true
+  })
+  return written
+}
+
+export function markProjectStateDatabaseStale(projectRoot: string): number | null {
+  let revision: number | null = null
+  withDatabase(projectRoot, database => {
+    if (!tableExists(database, 'project_meta') || !tableExists(database, 'project_summary')) return
+    const now = new Date().toISOString()
+    revision = bumpRevision(database, now)
+    database.prepare("UPDATE project_summary SET freshness = 'stale', revision = ? WHERE id = 1").run(revision)
+  })
+  return revision
+}
+
+/**
+ * Point-read the current task overlay without opening a compatibility JSON
+ * store or replaying evidence history. `null` means this project has not
+ * reached the database boundary yet; an empty object means it has no overlay.
+ */
+export function readProjectStateDatabaseTaskOverlay(
+  projectRoot: string,
+  taskId: string,
+): ProjectStateDatabaseTaskOverlay | null {
+  const databasePath = projectStateDatabasePath(projectRoot)
+  try {
+    statSync(databasePath)
+  } catch {
+    return null
+  }
+  const database = openDatabase(databasePath, { readOnly: true })
+  try {
+    if (!['task_execution', 'task_workspace', 'task_proof', 'task_evidence_current'].every(table => tableExists(database, table))) return null
+    const runtime = database.prepare('SELECT updated_at, payload_json FROM task_execution WHERE task_id = ?').get(taskId) as JsonRecord | undefined
+    const workspace = database.prepare('SELECT updated_at, payload_json FROM task_workspace WHERE task_id = ?').get(taskId) as JsonRecord | undefined
+    const proof = database.prepare('SELECT latest_kind, latest_recorded_at, result, payload_json FROM task_proof WHERE task_id = ?').get(taskId) as JsonRecord | undefined
+    const current = tableExists(database, 'task_evidence_current')
+      ? database.prepare('SELECT updated_at, payload_json FROM task_evidence_current WHERE task_id = ?').get(taskId) as JsonRecord | undefined
+      : undefined
+    return {
+      ...(runtime ? {
+        runtime: {
+          taskId,
+          updatedAt: stringValue(runtime.updated_at) ?? undefined,
+          payload: parseStoredJson(runtime.payload_json, `runtime overlay for task ${taskId}`),
+        },
+      } : {}),
+      ...(workspace ? {
+        workspace: {
+          taskId,
+          updatedAt: stringValue(workspace.updated_at) ?? undefined,
+          payload: parseStoredJson(workspace.payload_json, `workspace overlay for task ${taskId}`),
+        },
+      } : {}),
+      ...(proof ? {
+        latestProof: {
+          taskId,
+          kind: stringValue(proof.latest_kind) ?? 'event',
+          recordedAt: stringValue(proof.latest_recorded_at) ?? '',
+          result: stringValue(proof.result),
+          payload: parseStoredJson(proof.payload_json, `proof overlay for task ${taskId}`),
+        },
+      } : {}),
+      ...(current ? {
+        evidenceCurrent: normalizeCurrentEvidence(
+          taskId,
+          stringValue(current.updated_at) ?? '',
+          parseStoredJson(current.payload_json, `current evidence for task ${taskId}`),
+        ),
+      } : {}),
+    }
+  } finally {
+    database.close()
+  }
+}
+
+export function readProjectStateDatabaseTaskEvidenceCurrent(
+  projectRoot: string,
+  taskId: string,
+): ProjectStateDatabaseTaskEvidenceCurrent | null {
+  const databasePath = projectStateDatabasePath(projectRoot)
+  try {
+    statSync(databasePath)
+  } catch {
+    return null
+  }
+  const database = openDatabase(databasePath, { readOnly: true })
+  try {
+    if (!tableExists(database, 'task_evidence_current')) {
+      if (readProjectStateDatabaseAuthorityFromDatabase(database) === 'database') {
+        throw new Error('Normalized current task evidence is unavailable for promoted project')
+      }
+      return null
+    }
+    const row = database.prepare('SELECT updated_at, payload_json FROM task_evidence_current WHERE task_id = ?').get(taskId) as JsonRecord | undefined
+    if (!row) return null
+    return normalizeCurrentEvidence(
+      taskId,
+      stringValue(row.updated_at) ?? '',
+      parseStoredJson(row.payload_json, `current evidence for task ${taskId}`),
+    )
+  } finally {
+    database.close()
+  }
+}
+
+/** Read current evidence for many tasks with one read-only database handle. */
+export function readProjectStateDatabaseTaskEvidenceCurrentMany(
+  projectRoot: string,
+  taskIds: readonly string[],
+): Map<string, ProjectStateDatabaseTaskEvidenceCurrent> | null {
+  const ids = [...new Set(taskIds.filter(id => id.trim().length > 0))]
+  if (ids.length === 0) return new Map()
+  const databasePath = projectStateDatabasePath(projectRoot)
+  try {
+    statSync(databasePath)
+  } catch {
+    return null
+  }
+  const database = openDatabase(databasePath, { readOnly: true })
+  try {
+    if (!tableExists(database, 'task_evidence_current')) {
+      if (readProjectStateDatabaseAuthorityFromDatabase(database) === 'database') {
+        throw new Error('Normalized current task evidence is unavailable for promoted project')
+      }
+      return null
+    }
+    const placeholders = ids.map(() => '?').join(', ')
+    const rows = database.prepare(`
+      SELECT task_id, updated_at, payload_json
+      FROM task_evidence_current
+      WHERE task_id IN (${placeholders})
+    `).all(...ids) as JsonRecord[]
+    return new Map(rows.flatMap(row => {
+      const taskId = stringValue(row.task_id)
+      if (!taskId) return []
+      return [[taskId, normalizeCurrentEvidence(
+        taskId,
+        stringValue(row.updated_at) ?? '',
+        parseStoredJson<JsonRecord>(row.payload_json, `current evidence for task ${taskId}`),
+      )] as const]
+    }))
+  } finally {
+    database.close()
+  }
+}
+
+/**
+ * Read all mutable task overlays from one database connection. A non-null
+ * result means the project crossed the current-state database boundary, even
+ * when either store is legitimately empty. Legacy JSON is then compatibility
+ * output, not a competing current-state reader.
+ */
+export function readProjectStateDatabaseTaskOverlayStores(
+  projectRoot: string,
+): ProjectStateDatabaseTaskOverlayStores | null {
+  const databasePath = projectStateDatabasePath(projectRoot)
+  try {
+    statSync(databasePath)
+  } catch {
+    return null
+  }
+  const database = openDatabase(databasePath, { readOnly: true })
+  let inReadTransaction = false
+  try {
+    // A normalized queue is the current-state authority. Do not gate the
+    // overlay read on the historical promotion marker: during finalization it
+    // may still say legacy even though every current row is already indexed.
+    if (!tableExists(database, 'queue_state')) return null
+    if (!['task_execution', 'task_workspace', 'task_evidence_current'].every(table => tableExists(database, table))) return null
+    database.exec('BEGIN')
+    inReadTransaction = true
+    const read = (table: 'task_execution' | 'task_workspace'): ProjectStateDatabaseTaskRuntime[] =>
+      (database.prepare(`SELECT task_id, updated_at, payload_json FROM ${table} ORDER BY task_id`).all() as JsonRecord[])
+        .flatMap(row => {
+          const taskId = stringValue(row.task_id)
+          if (!taskId) return []
+          return [{
+            taskId,
+            updatedAt: stringValue(row.updated_at) ?? undefined,
+            payload: parseStoredJson(row.payload_json, `runtime/workspace overlay for task ${taskId}`),
+          }]
+        })
+    const evidenceCurrent = new Map<string, ProjectStateDatabaseTaskEvidenceCurrent>()
+    const evidenceRows = database.prepare(`
+      SELECT task_id, updated_at, payload_json
+      FROM task_evidence_current
+      ORDER BY task_id
+    `).all() as JsonRecord[]
+    for (const row of evidenceRows) {
+      const taskId = stringValue(row.task_id)
+      if (!taskId) continue
+      evidenceCurrent.set(taskId, normalizeCurrentEvidence(
+        taskId,
+        stringValue(row.updated_at) ?? '',
+        parseStoredJson<JsonRecord>(row.payload_json, `current evidence for task ${taskId}`),
+      ))
+    }
+    return {
+      runtime: read('task_execution'),
+      workspace: read('task_workspace'),
+      evidenceCurrent,
+    }
+  } finally {
+    if (inReadTransaction) {
+      try {
+        database.exec('COMMIT')
+      } catch {
+        try {
+          database.exec('ROLLBACK')
+        } catch {
+          // Preserve the original read result/error.
+        }
+      }
+    }
+    database.close()
+  }
+}
+
+/** Keep mutable current rows aligned with the queue; historical JSONL is untouched. */
+export function reconcileProjectStateDatabaseTaskOverlays(
+  projectRoot: string,
+  taskIds: readonly string[],
+): void {
+  withDatabase(projectRoot, database => deleteOrphanTaskOverlays(database, taskIds))
+}
+
+export function readProjectStateDatabaseTaskPoint(
+  tasksPath: string,
+  taskId: string,
+): ProjectStateDatabaseTask | null {
+  return readProjectStateDatabaseTaskPointWithRevision(tasksPath, taskId)?.task ?? null
+}
+
+/** Read one rich task and its CAS revision from the same SQLite connection. */
+export function readProjectStateDatabaseTaskPointWithRevision(
+  tasksPath: string,
+  taskId: string,
+): ProjectStateDatabaseTaskPointRead | null {
+  const databasePath = projectStateDatabasePathFromTasksPath(tasksPath)
+  try {
+    statSync(databasePath)
+  } catch {
+    return null
+  }
+  const database = openDatabase(databasePath, { readOnly: true })
+  try {
+    const row = database.prepare(`${workItemsWithScopeSelect('work_items.*', hasWorkScopeTable(database))} WHERE work_items.id = ?`)
+      .get(taskId) as JsonRecord | undefined
+    if (!row) return null
+    applyReleaseMembershipToTaskRows(database, [row])
+    const task = taskFromRow(row, false)
+    const revision = currentQueueRevision(database)
+    const projectRevision = currentRevision(database)
+    return {
+      task: attachWorkItemDetails([task], database)[0] ?? task,
+      revision,
+      projectRevision,
+    }
+  } finally {
+    database.close()
+  }
+}
+
+/** Backwards-compatible name for the bounded one-task point read. */
+export function readProjectStateDatabaseTask(
+  tasksPath: string,
+  taskId: string,
+): ProjectStateDatabaseTask | null {
+  return readProjectStateDatabaseTaskPoint(tasksPath, taskId)
+}
+
+export function readProjectStateDatabaseTaskRelationships(
+  tasksPath: string,
+  taskId: string,
+): ProjectStateDatabaseTaskRelationships | null {
+  const databasePath = projectStateDatabasePathFromTasksPath(tasksPath)
+  try {
+    statSync(databasePath)
+  } catch {
+    return null
+  }
+  const database = openDatabase(databasePath, { readOnly: true })
+  try {
+    const includeScope = hasWorkScopeTable(database)
+    const row = database.prepare(`${workItemsWithScopeSelect('work_items.id, work_items.parent_id', includeScope)} WHERE work_items.id = ?`)
+      .get(taskId) as JsonRecord | undefined
+    if (!row) return null
+    const childRows = database.prepare('SELECT id FROM work_items WHERE parent_id = ? ORDER BY rowid').all(taskId) as JsonRecord[]
+    return {
+      taskId,
+      parentId: typeof row.parent_id === 'string' ? row.parent_id : null,
+      childIds: childRows.flatMap(child => typeof child.id === 'string' ? [child.id] : []),
+      scopeRow: scopeRowFromRow(row),
+    }
+  } finally {
+    database.close()
+  }
+}
+
+export function readProjectStateDatabaseInventory(
+  tasksPath: string,
+  options: ProjectStateDatabaseInventoryOptions = {},
+): ProjectStateDatabaseInventory | null {
+  const databasePath = projectStateDatabasePathFromTasksPath(tasksPath)
+  try {
+    statSync(databasePath)
+  } catch {
+    return null
+  }
+  const offset = Math.max(0, options.offset ?? 0)
+  const limit = options.limit && options.limit > 0 ? Math.min(100, options.limit) : null
+  const database = openDatabase(databasePath, { readOnly: true })
+  try {
+    return readInventoryFromDatabase(database, options)
+  } finally {
+    database.close()
+  }
+}
+
+function readInventoryFromDatabase(
+  database: DatabaseSync,
+  options: ProjectStateDatabaseInventoryOptions = {},
+): ProjectStateDatabaseInventory {
+  const offset = Math.max(0, options.offset ?? 0)
+  const limit = options.limit && options.limit > 0 ? Math.min(100, options.limit) : null
+  const total = Number((database.prepare('SELECT COUNT(*) AS count FROM work_items').get() as JsonRecord)?.count ?? 0)
+  const columns = options.includeDefinitions === true ? FULL_WORK_ITEM_SCOPED_COLUMNS : COMPACT_WORK_ITEM_SCOPED_COLUMNS
+  const scopeTableExists = hasWorkScopeTable(database)
+  const scopeOrder = scopeTableExists
+    ? "CASE work_scope.scope WHEN 'included' THEN 0 WHEN 'deferred' THEN 1 ELSE 2 END, "
+    : ''
+  const select = `${workItemsWithScopeSelect(columns, scopeTableExists)} ORDER BY ${scopeOrder}work_items.rowid`
+  const rows = limit === null
+    ? database.prepare(`${select} LIMIT -1 OFFSET ?`).all(offset)
+    : database.prepare(`${select} LIMIT ? OFFSET ?`).all(limit, offset)
+  const taskRows = rows as JsonRecord[]
+  applyReleaseMembershipToTaskRows(database, taskRows)
+  const tasks = taskRows.map(row => taskFromRow(row, false))
+  const detailedTasks = options.includeDefinitions === true
+    ? attachWorkItemDetails(tasks, database)
+    : tasks
+  return {
+    tasks: detailedTasks,
+    total,
+    offset,
+    limit,
+    hasMore: limit !== null && offset + tasks.length < total,
+  }
+}
+
+/** Read a small, explicit set of task identities without scanning the queue. */
+export function readProjectStateDatabaseTasks(
+  tasksPath: string,
+  taskIds: readonly string[],
+  options: Pick<ProjectStateDatabaseInventoryOptions, 'includeDefinitions'> = {},
+): ProjectStateDatabaseTask[] | null {
+  const ids = [...new Set(taskIds.filter(id => id.trim().length > 0))].slice(0, 100)
+  if (ids.length === 0) return []
+  const databasePath = projectStateDatabasePathFromTasksPath(tasksPath)
+  try {
+    statSync(databasePath)
+  } catch {
+    return null
+  }
+  const database = openDatabase(databasePath, { readOnly: true })
+  try {
+    const columns = options.includeDefinitions === true ? FULL_WORK_ITEM_SCOPED_COLUMNS : COMPACT_WORK_ITEM_SCOPED_COLUMNS
+    const taskRows = database.prepare(`${workItemsWithScopeSelect(columns, hasWorkScopeTable(database))} WHERE work_items.id IN (${ids.map(() => '?').join(', ')})`).all(...ids) as JsonRecord[]
+    applyReleaseMembershipToTaskRows(database, taskRows)
+    const rows = taskRows.map(row => taskFromRow(row, false))
+    const detailedRows = options.includeDefinitions === true
+      ? attachWorkItemDetails(rows, database)
+      : rows
+    const byId = new Map(detailedRows.map(row => [row.id, row]))
+    return ids.flatMap(id => {
+      const row = byId.get(id)
+      return row ? [row] : []
+    })
+  } finally {
+    database.close()
+  }
+}
+
+export interface ProjectStateDatabaseQueue {
+  version?: number
+  lastUpdated?: string
+  tasks: JsonRecord[]
+  releases: JsonRecord[]
+  selectedReleaseId?: string
+  executionPlanActions?: JsonRecord[]
+  scopeAuthorityRequests?: JsonRecord[]
+}
+
+function compactTaskFromRow(row: ProjectStateDatabaseTask): JsonRecord {
+  const rowRecord = row as unknown as JsonRecord
+  return {
+    id: row.id,
+    title: row.title,
+    ...(row.description ? { description: row.description } : {}),
+    ...(row.status ? { status: row.status } : {}),
+    ...(row.domain ? { domain: row.domain } : {}),
+    ...(row.priority ? { priority: row.priority } : {}),
+    ...(row.workKind ? { workKind: row.workKind } : {}),
+    ...(row.parentId || row.hierarchy ? { hierarchy: { ...(row.hierarchy ?? {}), ...(row.parentId ? { parentId: row.parentId } : {}) } } : {}),
+    ...(row.dependsOn.length > 0 ? { dependsOn: row.dependsOn } : {}),
+    ...(row.releaseIds.length > 0 ? { releaseIds: row.releaseIds } : {}),
+    ...(row.sourceRefs.length > 0 ? { sourceRefs: row.sourceRefs } : {}),
+    ...(isRecord(rowRecord.delivery) ? { delivery: rowRecord.delivery } : {}),
+    ...(isRecord(rowRecord.currentSummary) ? { currentSummary: rowRecord.currentSummary } : {}),
+    ...(row.updatedAt ? { updatedAt: row.updatedAt } : {}),
+    ...(row.completedAt ? { completedAt: row.completedAt } : {}),
+  }
+}
+
+function readCompactQueueFromDatabase(database: DatabaseSync): ProjectStateDatabaseQueue {
+  const taskRows = database.prepare(`SELECT ${COMPACT_WORK_ITEM_COLUMNS} FROM work_items ORDER BY rowid`).all() as JsonRecord[]
+  applyReleaseMembershipToTaskRows(database, taskRows)
+  const releaseRows = releaseDefinitionsFromDatabase(database)
+  const queueState = database.prepare(`
+    SELECT ${queueStateReadColumns(database, [
+      'selected_release_id', 'execution_plan_actions_json', 'scope_authority_requests_json',
+    ])}
+    FROM queue_state WHERE id = 1
+  `).get() as JsonRecord | undefined
+  // Release identity and selection belong to the queue/scopes projection.
+  // A summary is derived state and cannot fill a missing selection during a
+  // read without becoming a second release authority.
+  const selected = stringValue(queueState?.selected_release_id)
+  return {
+    tasks: taskRows.map(row => compactTaskFromRow(taskFromRow(row, false))),
+    releases: releaseRows,
+    ...optionalSelectedReleaseId(selected),
+    ...optionalJsonArray(queueState?.execution_plan_actions_json, 'executionPlanActions'),
+    ...optionalJsonArray(queueState?.scope_authority_requests_json, 'scopeAuthorityRequests'),
+  }
+}
+
+export function readProjectStateDatabaseQueue(tasksPath: string): ProjectStateDatabaseQueue | null {
+  const databasePath = projectStateDatabasePathFromTasksPath(tasksPath)
+  try {
+    statSync(databasePath)
+  } catch {
+    return null
+  }
+  const database = openDatabase(databasePath, { readOnly: true })
+  try {
+    return readCompactQueueFromDatabase(database)
+  } finally {
+    database.close()
+  }
+}
+
+/**
+ * Explicit detail-reader boundary for the current task/release aggregate.
+ * Callers must opt into this richer read; compact lists continue to use the
+ * inventory functions above.
+ */
+export function readProjectStateDatabaseQueueDefinition(
+  tasksPath: string,
+): ProjectStateDatabaseQueueDefinition | null {
+  return readProjectStateDatabaseQueueWithRevision(tasksPath)?.definition ?? null
+}
+
+/**
+ * Read a pre-cutover queue only while an explicit migration is importing it.
+ * Runtime callers must use readProjectStateDatabaseQueueDefinition, which
+ * intentionally refuses aggregate blobs, sidecars, and TASKS.json.
+ */
+export function readProjectStateDatabaseQueueDefinitionForMigration(
+  tasksPath: string,
+): ProjectStateDatabaseQueueDefinition | null {
+  return readProjectStateDatabaseQueueWithRevision(tasksPath, { migration: true })?.definition ?? null
+}
+
+/**
+ * Read the writable queue and its compare-and-swap token from one database
+ * connection. Callers that replace the whole queue must carry this token into
+ * the write; a second read after queue construction would make the guard
+ * meaningless.
+ */
+export function readProjectStateDatabaseQueueWithRevision(
+  tasksPath: string,
+  options: { migration?: boolean } = {},
+): ProjectStateDatabaseQueueRead | null {
+  const databasePath = projectStateDatabasePathFromTasksPath(tasksPath)
+  try {
+    statSync(databasePath)
+  } catch {
+    return null
+  }
+  const database = openDatabase(databasePath, { readOnly: true })
+  try {
+    if (!tableExists(database, 'queue_state')) return null
+    const queue = database.prepare(`
+      SELECT ${queueStateReadColumns(database, [
+        'version', 'last_updated', 'selected_release_id',
+        'execution_plan_actions_json', 'scope_authority_requests_json',
+      ])}
+      FROM queue_state WHERE id = 1
+    `).get() as JsonRecord | undefined
+    if (!queue) return null
+    const revision = currentQueueRevision(database)
+    const projectRevision = currentRevision(database)
+    const details = readQueueDetailsForRevision(tasksPath, revision, database, options)
+    if (details) return { definition: details, revision, projectRevision }
+    if (!options.migration) return null
+    const authority = database.prepare('SELECT project_state_authority FROM project_meta WHERE id = 1').get() as JsonRecord | undefined
+    if (authority?.project_state_authority === 'database') {
+      // A promoted project cannot safely reconstruct a writable queue from
+      // compact index rows. Callers must surface the missing detail store and
+      // repair it explicitly rather than silently dropping task fields.
+      return null
+    }
+    const taskRows = database.prepare(`SELECT ${COMPACT_WORK_ITEM_COLUMNS} FROM work_items ORDER BY rowid`).all() as JsonRecord[]
+    const releaseRows = releaseDefinitionsFromDatabase(database)
+    return {
+      definition: {
+        version: Number(queue.version ?? 1),
+        ...optionalLastUpdated(queue.last_updated),
+        ...optionalSelectedReleaseId(queue.selected_release_id),
+        ...optionalJsonArray(queue.execution_plan_actions_json, 'executionPlanActions'),
+        ...optionalJsonArray(queue.scope_authority_requests_json, 'scopeAuthorityRequests'),
+        tasks: taskRows.map(row => compactTaskFromRow(taskFromRow(row, false))).filter(task => typeof task.id === 'string'),
+        releases: releaseRows,
+      },
+      revision,
+      projectRevision,
+    }
+  } finally {
+    database.close()
+  }
+}
+
+/**
+ * Canonical queue reader for runtime and tool mutations. The current
+ * application has one source of truth: the indexed SQLite detail store.
+ * Historical queue formats are available only through the explicitly named
+ * migration reader above.
+ */
+export function readProjectTaskQueueSync(tasksPath: string): unknown {
+  const queue = readProjectStateDatabaseQueueDefinition(tasksPath)
+  if (queue) return queue
+  throw new Error(`Current project-state detail store is unavailable for ${tasksPath}; run the project-state migration before reading work.`)
+}
+
+/**
+ * Queue read for callers that will replace the aggregate. A missing indexed
+ * current-state database is a migration/corruption error, never a reason to
+ * fall back to a historical file shape.
+ */
+export function readProjectTaskQueueSyncWithRevision(tasksPath: string): {
+  queue: unknown
+  revision: number | null
+  projectRevision: number | null
+} {
+  const result = readProjectStateDatabaseQueueWithRevision(tasksPath)
+  if (result) return { queue: result.definition, revision: result.revision, projectRevision: result.projectRevision }
+  throw new Error(`Current project-state detail store is unavailable for ${tasksPath}; run the project-state migration before mutating work.`)
+}

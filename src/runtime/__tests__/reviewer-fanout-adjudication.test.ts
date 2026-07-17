@@ -17,6 +17,7 @@ import {
 } from '@guildhall/levers'
 import { projectStatePathFromMemoryDir } from '@guildhall/sessions'
 import { buildEffectiveTask } from '../effective-task.js'
+import { readProjectCanonicalCurrentState } from '../project-state-boundary.js'
 
 // ---------------------------------------------------------------------------
 // End-to-end: when reviewer_fanout_policy = coordinator_adjudicates_on_conflict
@@ -96,10 +97,13 @@ async function writeTask(task: Task): Promise<void> {
 }
 
 async function readQueue(): Promise<TaskQueue> {
-  const queue = TaskQueue.parse(JSON.parse(await fs.readFile(tasksPath, 'utf-8')))
+  const current = await readProjectCanonicalCurrentState(tmpDir)
   return {
-    ...queue,
-    tasks: await Promise.all(queue.tasks.map(async task => buildEffectiveTask(task.projectPath, task))) as unknown as Task[],
+    version: 1,
+    ...current.rawQueue,
+    tasks: await Promise.all(current.rawQueue.tasks.map(task =>
+      buildEffectiveTask(tmpDir, task as Task, { evidence: 'full' }),
+    )) as unknown as Task[],
   }
 }
 

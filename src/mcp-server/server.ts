@@ -1,5 +1,3 @@
-import fs from 'node:fs/promises'
-import path from 'node:path'
 import { getProjectSystemStatePathFromMemoryDir } from '@guildhall/sessions'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
@@ -9,6 +7,7 @@ import {
   createMcpCapabilityRequest,
   listMcpCapabilityRequests,
 } from './evidence.js'
+import { writePromotedTaskDetailMutation } from '../runtime/project-state-boundary.js'
 import {
   buildGuildhallResourceIndex,
   importMcpExternalMemoryBridgeRecord,
@@ -413,7 +412,7 @@ export async function createGuildhallMcpServer(ctx: GuildhallMcpContext): Promis
         ownerOverrideReason,
       })
       await writeProjectDeliveryModel(ctx.projectRoot, applied.model)
-      await writeTasks(ctx.projectStateDir, applied.tasks)
+      writeTasks(ctx.projectRoot, ctx.projectStateDir, tasks, applied.tasks)
       return { content: [{ type: 'text', text: JSON.stringify({ ...validation, applied: applied.applied }, null, 2) }] }
     },
   )
@@ -478,7 +477,7 @@ export async function createGuildhallMcpServer(ctx: GuildhallMcpContext): Promis
         actor,
       })
       await writeProjectDeliveryModel(ctx.projectRoot, reverted.model)
-      await writeTasks(ctx.projectStateDir, reverted.tasks)
+      writeTasks(ctx.projectRoot, ctx.projectStateDir, tasks, reverted.tasks)
       return { content: [{ type: 'text', text: JSON.stringify(reverted, null, 2) }] }
     },
   )
@@ -733,17 +732,69 @@ export async function createGuildhallMcpServer(ctx: GuildhallMcpContext): Promis
   return server
 }
 
-async function writeTasks(projectStateDir: string, tasks: Task[]): Promise<void> {
+function sameJson(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right)
+}
+
+function changedTaskFields(before: Task, after: Task): string[] {
+  const beforeRecord = before as unknown as Record<string, unknown>
+  const afterRecord = after as unknown as Record<string, unknown>
+  return [...new Set([...Object.keys(beforeRecord), ...Object.keys(afterRecord)])]
+    .filter(key => !sameJson(beforeRecord[key], afterRecord[key]))
+}
+
+/**
+ * Contract results only change task delivery links. Promoted projects must
+ * apply that delta to the normalized task point so runtime/evidence-owned
+ * fields in the detail row cannot be lost by queue reconstruction.
+ */
+export function writeTasks(
+  projectRoot: string,
+  projectStateDir: string,
+  beforeTasks: Task[],
+  tasks: Task[],
+): void {
   const file = getProjectSystemStatePathFromMemoryDir(projectStateDir, 'TASKS.json')
-  let existing: unknown = null
-  try {
-    existing = JSON.parse(await fs.readFile(file, 'utf8')) as unknown
-  } catch {
-    existing = null
+  const beforeById = new Map(beforeTasks.map(task => [task.id, task]))
+  const afterIds = new Set(tasks.map(task => task.id))
+  if (
+    beforeById.size !== beforeTasks.length ||
+    afterIds.size !== tasks.length ||
+    beforeById.size !== afterIds.size ||
+    [...beforeById.keys()].some(id => !afterIds.has(id))
+  ) {
+    throw new Error('MCP contract task writer only supports delivery changes to existing tasks')
   }
-  const next = existing && typeof existing === 'object' && !Array.isArray(existing)
-    ? { ...existing, tasks, lastUpdated: new Date().toISOString() }
-    : { tasks, lastUpdated: new Date().toISOString() }
-  await fs.mkdir(path.dirname(file), { recursive: true })
-  await fs.writeFile(file, JSON.stringify(next, null, 2) + '\n', 'utf8')
+  const changedTasks = tasks.filter(task => {
+    const before = beforeById.get(task.id)
+    return before !== undefined && changedTaskFields(before, task).length > 0
+  })
+
+  if (changedTasks.length === 0) return
+
+  for (const nextTask of changedTasks) {
+    const beforeTask = beforeById.get(nextTask.id)
+    if (!beforeTask) continue
+    const changedFields = changedTaskFields(beforeTask, nextTask)
+    if (changedFields.some(field => field !== 'delivery')) {
+      throw new Error(`MCP contract task writer only supports delivery changes for ${nextTask.id}`)
+    }
+
+    const beforeDelivery = (beforeTask as unknown as Record<string, unknown>).delivery
+    const nextRecord = nextTask as unknown as Record<string, unknown>
+    const committed = writePromotedTaskDetailMutation(file, nextTask.id, {
+      projectRoot,
+      mutate: current => {
+        if (!sameJson(current.delivery, beforeDelivery)) {
+          throw new Error(`Stale MCP contract task update for ${nextTask.id}; read the current task and retry.`)
+        }
+        if ('delivery' in nextRecord) current.delivery = nextRecord.delivery
+        else delete current.delivery
+        return current
+      },
+    })
+    if (!committed) {
+      throw new Error(`MCP contract task updates require a promoted project-state database; run the project-state migration before applying or reverting ${nextTask.id}.`)
+    }
+  }
 }

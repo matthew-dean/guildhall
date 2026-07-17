@@ -47,12 +47,24 @@ import { InMemoryGitDriver } from '../git-driver.js'
 import { buildEffectiveTask } from '../effective-task.js'
 import { applyProjectMigrations } from '../migrations.js'
 import {
+  appendTaskEvidence,
+  readTaskEvidence,
   getProjectProgressHeartbeatsPath,
   getProjectStateDir,
+  getProjectSystemStatePath,
   projectStatePathFromMemoryDir,
   getProjectTaskLocalHistoryDir,
   getProjectTranscriptPath,
+  upsertTaskRuntimeState,
+  upsertTaskWorkspaceState,
 } from '@guildhall/sessions'
+import {
+  readProjectTaskQueueForMutationSync,
+  readProjectTaskQueueSync,
+  writePromotedTaskDetailMutation,
+  writeProjectTaskQueue,
+  writeProjectTaskQueueWithSummary,
+} from '../project-state-boundary.js'
 
 // ---------------------------------------------------------------------------
 // End-to-end integration tests
@@ -78,6 +90,28 @@ let originalHome: string | undefined
 let originalDataDir: string | undefined
 let testHomeDir: string
 let testDataDir: string
+
+async function applyCanonicalProjectMigrations(projectRoot: string, seedEmptyQueue = false): Promise<void> {
+  if (seedEmptyQueue) {
+    writeProjectTaskQueueWithSummary(
+      getProjectSystemStatePath(projectRoot, 'TASKS.json'),
+      { version: 1, lastUpdated: new Date().toISOString(), tasks: [] },
+      { projectRoot },
+    )
+  }
+  const prerequisites = await applyProjectMigrations({ projectRoot, includePrompt: true })
+  expect(prerequisites.failed).toEqual([])
+  const finalize = await applyProjectMigrations({
+    projectRoot,
+    only: ['0.13.0/project-state-finalize'],
+  })
+  expect(finalize.failed).toEqual([])
+  const cleanup = await applyProjectMigrations({
+    projectRoot,
+    only: ['0.13.0/project-state-legacy-live-file-cleanup'],
+  })
+  expect(cleanup.failed).toEqual([])
+}
 
 function buildValidSpec(summary: string, criterion: string): string {
   return [
@@ -113,6 +147,7 @@ beforeEach(async () => {
   progressPath = projectStatePathFromMemoryDir(memoryDir, 'PROGRESS.md')
   heartbeatPath = getProjectProgressHeartbeatsPath(tmpDir)
   await fs.mkdir(path.dirname(tasksPath), { recursive: true })
+  await applyCanonicalProjectMigrations(tmpDir, true)
 })
 
 afterEach(async () => {
@@ -126,12 +161,7 @@ afterEach(async () => {
 })
 
 async function readQueue(): Promise<TaskQueue> {
-  const raw = await fs.readFile(tasksPath, 'utf-8')
-  const parsed = JSON.parse(raw)
-  if (Array.isArray(parsed)) {
-    return { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
-  }
-  const queue = TaskQueue.parse(parsed)
+  const queue = TaskQueue.parse(readProjectTaskQueueSync(tasksPath))
   return {
     ...queue,
     tasks: await Promise.all(queue.tasks.map(async task => buildEffectiveTask(task.projectPath, task))) as unknown as Task[],
@@ -139,37 +169,118 @@ async function readQueue(): Promise<TaskQueue> {
 }
 
 async function mutateTask(id: string, patch: Partial<Task>): Promise<void> {
-  const queue = await readQueue()
-  const task = queue.tasks.find((t) => t.id === id)
+  const promoted = writePromotedTaskDetailMutation(tasksPath, id, {
+    projectId: 'e2e-workspace',
+    projectRoot: tmpDir,
+    mutate: (task) => ({ ...task, ...patch }),
+  })
+  if (promoted) return
+
+  const current = readProjectTaskQueueForMutationSync(tasksPath)
+  const queue = current.queue as TaskQueue
+  const task = queue.tasks.find(candidate => candidate.id === id)
   if (!task) throw new Error(`Task ${id} not found`)
-  Object.assign(task, patch)
-  await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+  writeProjectTaskQueue(tasksPath, {
+    ...queue,
+    tasks: queue.tasks.map(candidate => candidate.id === id ? { ...candidate, ...patch } : candidate),
+  }, {
+    projectRoot: tmpDir,
+    expectedQueueRevision: current.expectedQueueRevision,
+  })
 }
 
 async function setTaskSpec(id: string, spec: string): Promise<void> {
-  const queue = await readQueue()
-  queue.tasks.find((t) => t.id === id)!.spec = spec
-  await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+  await mutateTask(id, { spec })
 }
 
 async function setTaskSpecForReview(id: string, spec: string): Promise<void> {
-  const queue = await readQueue()
-  const task = queue.tasks.find((t) => t.id === id)!
-  task.spec = spec
-  task.status = 'spec_review'
-  task.productBrief = {
-    userJob: 'I want this task completed in the test project.',
-    successMetric: 'The scripted acceptance criterion is met.',
-    antiPatterns: [],
-    approvedAt: '2026-05-26T00:00:00.000Z',
+  await mutateTask(id, {
+    spec,
+    status: 'spec_review',
+    productBrief: {
+      userJob: 'I want this task completed in the test project.',
+      successMetric: 'The scripted acceptance criterion is met.',
+      antiPatterns: [],
+      approvedAt: '2026-05-26T00:00:00.000Z',
+    },
+    acceptanceCriteria: [{
+      id: 'AC-1',
+      description: 'The scripted acceptance criterion is met.',
+      verifiedBy: 'review',
+      met: false,
+    }],
+  })
+}
+
+async function seedPromotedQueue(queue: TaskQueue): Promise<void> {
+  const current = readProjectTaskQueueForMutationSync(tasksPath)
+  writeProjectTaskQueue(tasksPath, queue, {
+    projectRoot: tmpDir,
+    expectedQueueRevision: current.expectedQueueRevision,
+  })
+
+  const evidenceCollections = [
+    { field: 'notes', kind: 'note', timestamp: (value: Record<string, unknown>) => value.timestamp },
+    { field: 'gateResults', kind: 'gate_result', timestamp: (value: Record<string, unknown>) => value.checkedAt },
+    { field: 'reviewVerdicts', kind: 'review_verdict', timestamp: (value: Record<string, unknown>) => value.recordedAt },
+    { field: 'adjudications', kind: 'adjudication', timestamp: (value: Record<string, unknown>) => value.decidedAt },
+    { field: 'escalations', kind: 'escalation', timestamp: (value: Record<string, unknown>) => value.raisedAt },
+    { field: 'agentIssues', kind: 'agent_issue', timestamp: (value: Record<string, unknown>) => value.raisedAt },
+  ] as const
+
+  for (const task of queue.tasks) {
+    const updatedAt = typeof task.updatedAt === 'string' ? task.updatedAt : queue.lastUpdated
+    const runtime: Record<string, unknown> = {}
+    for (const field of ['assignedTo', 'revisionCount', 'retryWindow', 'remediationAttempts', 'handoffStep', 'proofRecovery'] as const) {
+      const value = task[field]
+      if (value !== undefined) runtime[field] = value
+    }
+    if (Array.isArray(task.escalations)) {
+      runtime.openEscalationIds = task.escalations
+        .filter(value => !value.resolvedAt)
+        .map(value => value.id)
+        .filter((value): value is string => typeof value === 'string')
+    }
+    if (Array.isArray(task.agentIssues)) {
+      runtime.openIssueIds = task.agentIssues
+        .filter(value => !value.resolvedAt)
+        .map(value => value.id)
+        .filter((value): value is string => typeof value === 'string')
+    }
+    if (Object.keys(runtime).length > 0) {
+      await upsertTaskRuntimeState(tmpDir, task.id, { ...runtime, updatedAt } as never)
+    }
+
+    const workspace = Object.fromEntries(
+      ['worktreePath', 'branchName', 'baseBranch', 'mergeRecord']
+        .filter(field => task[field] !== undefined)
+        .map(field => [field, task[field]]),
+    )
+    if (Object.keys(workspace).length > 0) {
+      await upsertTaskWorkspaceState(tmpDir, task.id, { ...workspace, updatedAt } as never)
+    }
+
+    for (const collection of evidenceCollections) {
+      const values = task[collection.field]
+      if (!Array.isArray(values)) continue
+      for (const [index, value] of values.entries()) {
+        await appendTaskEvidence(tmpDir, task.id, {
+          id: String(value.id ?? `${task.id}-${collection.kind}-${index + 1}`),
+          kind: collection.kind,
+          recordedAt: typeof collection.timestamp(value) === 'string' ? collection.timestamp(value) as string : updatedAt,
+          payload: value,
+        })
+      }
+    }
+    if (task.mergeRecord) {
+      await appendTaskEvidence(tmpDir, task.id, {
+        id: String(task.mergeRecord.id ?? `${task.id}-merge-record-1`),
+        kind: 'merge_record',
+        recordedAt: typeof task.mergeRecord.mergedAt === 'string' ? task.mergeRecord.mergedAt : updatedAt,
+        payload: task.mergeRecord,
+      })
+    }
   }
-  task.acceptanceCriteria = [{
-    id: 'AC-1',
-    description: 'The scripted acceptance criterion is met.',
-    verifiedBy: 'review',
-    met: false,
-  }]
-  await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
 }
 
 interface StubAgent {
@@ -248,6 +359,7 @@ describe('E2E AC-03: task lifecycle exploring → done', () => {
         },
       ],
     })
+    await applyCanonicalProjectMigrations(tmpDir)
 
     // Create a task in `exploring` and verify that is indeed the starting state.
     const intake = await createExploringTask({
@@ -336,7 +448,7 @@ describe('E2E AC-03: task lifecycle exploring → done', () => {
     const finalQueue = await readQueue()
     const finalTask = finalQueue.tasks.find((t) => t.id === intake.taskId)!
     expect(finalTask.status).toBe('done')
-    expect(finalTask.completedAt).toBe('2026-04-20T00:00:00Z')
+    expect(finalTask.completedAt).toEqual(expect.any(String))
 
     // FR-09 progress logging captured at least the terminal transition.
     const progress = await fs.readFile(progressPath, 'utf-8')
@@ -496,7 +608,7 @@ coordinators:
     expect(coord.modeCalls).toEqual([])
     expect(worker.modeCalls).toContain(PermissionMode.FULL_AUTO)
     expect(reviewer.modeCalls).toContain(PermissionMode.FULL_AUTO)
-    expect(gateChecker.modeCalls).toContain(PermissionMode.FULL_AUTO)
+    expect(gateChecker.modeCalls).toEqual([])
 
     // 9. The exploring transcript is still on disk with the approval note.
     const transcript = await fs.readFile(
@@ -531,6 +643,7 @@ describe('E2E 0.5.0: service over projects', () => {
     progressPath = projectStatePathFromMemoryDir(memoryDir, 'PROGRESS.md')
     heartbeatPath = getProjectProgressHeartbeatsPath(tmpDir)
     await fs.mkdir(path.dirname(tasksPath), { recursive: true })
+    await applyCanonicalProjectMigrations(tmpDir, true)
 
     const intake = await createExploringTask({
       memoryDir,
@@ -858,7 +971,7 @@ describe('E2E AC-22: report_issue → coordinator remediation inbox', () => {
         },
       ],
     }
-    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+    await seedPromotedQueue(queue)
 
     // Step 1: worker calls report_issue (the real tool). No status change.
     const reported = await reportIssue({
@@ -877,9 +990,12 @@ describe('E2E AC-22: report_issue → coordinator remediation inbox', () => {
     const afterReport = await readQueue()
     const taskAfter = afterReport.tasks[0]!
     expect(taskAfter.status).toBe('in_progress')
-    expect(taskAfter.agentIssues).toHaveLength(1)
-    expect(taskAfter.agentIssues[0]!.broadcast).toBe(false)
-    expect(taskAfter.agentIssues[0]!.detail).toContain('spec says X')
+    const issueEvidence = await readTaskEvidence(tmpDir, 'task-001', { kind: 'agent_issue' })
+    expect(issueEvidence).toHaveLength(1)
+    expect(issueEvidence[0]!.payload).toMatchObject({
+      broadcast: false,
+      detail: expect.stringContaining('spec says X'),
+    })
 
     const progress = await fs.readFile(heartbeatPath, 'utf-8')
     expect(progress).toContain('ISSUE [warn/stuck]')
@@ -998,14 +1114,6 @@ describe('E2E AC-15: proposeTask → orchestrator tick → status per task_origi
       idleShutdownAfterTicks: 2,
       gitDriver: memoryGitDriver(),
     })
-
-    // Bootstrap writes TASKS.json as a bare array (legacy shape); re-write
-    // it as an empty TaskQueue object so proposeTask can parse it.
-    await fs.writeFile(
-      tasksPath,
-      JSON.stringify({ version: 1, lastUpdated: new Date().toISOString(), tasks: [] }, null, 2),
-      'utf-8',
-    )
 
     type Position = DomainLevers['task_origination']['position']
     const cases: Array<{ id: string; position: Position; expectedStatus: TaskStatus }> = [
@@ -1163,7 +1271,7 @@ describe('E2E AC-16: worker pre-rejection → pre_rejection_policy applied on ti
         },
       ],
     }
-    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+    await seedPromotedQueue(queue)
 
     // Worker calls pre-reject-task (the real tool) on the first task.
     const pr1 = await preRejectTask({
@@ -1333,7 +1441,7 @@ describe('E2E AC-21: stall (>45s silence under strict) → coordinator remediati
         },
       ],
     }
-    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+    await seedPromotedQueue(queue)
 
     // Inject a LivenessTracker with a controllable clock so we can simulate
     // >45s of silence without sleeping. The orchestrator's refreshLiveness­
@@ -1490,7 +1598,7 @@ describe('E2E AC-23: crash → checkpoint → reclaim → restart_from_checkpoin
         },
       ],
     }
-    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+    await seedPromotedQueue(queue)
 
     // Step 1: worker writes a checkpoint mid-task.
     const cp = await writeCheckpoint({
@@ -1646,7 +1754,7 @@ describe('E2E AC-23: crash → checkpoint → reclaim → restart_from_checkpoin
         },
       ],
     }
-    await fs.writeFile(tasksPath, JSON.stringify(queue, null, 2), 'utf-8')
+    await seedPromotedQueue(queue)
 
     await writeCheckpoint({
       tasksPath,

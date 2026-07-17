@@ -101,6 +101,7 @@
   let runWorkBusyId = $state<string | null>(null)
   let runWorkActiveId = $state<string | null>(null)
   let runWorkError = $state<string | null>(null)
+  let inventoryLoadBusy = $state(false)
   let pendingRouteScrollTaskId = $state<string | null>(null)
   const workRowEls = new Map<string, HTMLElement>()
 
@@ -262,6 +263,7 @@
   const visibleImportDraftCount = $derived(showsPlanningArtifacts ? visibleImportDrafts.length : 0)
   const nextImportDraft = $derived(visibleImportDrafts[0] ?? null)
   const selectedWork = $derived(selectedWorkId ? allWorkItems.find(task => task.id === selectedWorkId) ?? null : null)
+  const inventoryPage = $derived(detail.taskPayload?.surface === 'work' ? detail.taskPayload : null)
   const effectiveRunActiveId = $derived(runWorkActiveId ?? (
     projectRunActive && selectedWork && isActiveWorkTask(selectedWork) ? selectedWork.id : null
   ))
@@ -456,6 +458,18 @@
     }
   }
 
+  async function loadMoreWork(): Promise<void> {
+    const projectId = detail.id
+    const nextOffset = inventoryPage?.nextOffset
+    if (!projectId || !inventoryPage?.hasMore || typeof nextOffset !== 'number' || inventoryLoadBusy) return
+    inventoryLoadBusy = true
+    try {
+      await project.refresh(projectId, 'work', selectedWorkId, { inventoryOffset: nextOffset })
+    } finally {
+      inventoryLoadBusy = false
+    }
+  }
+
   function setWorkRowElement(taskId: string, node: HTMLElement | null): void {
     if (node) {
       workRowEls.set(taskId, node)
@@ -484,7 +498,7 @@
   }
 
   function semanticUnitCount(task: Task): number {
-    return task.workUnitAnalysis?.units?.length ?? 0
+    return task.workUnitCount ?? task.workUnitAnalysis?.units?.length ?? 0
   }
 
   function dependencyLabel(taskId: string): string {
@@ -660,7 +674,7 @@
     const childCount = node?.childIds.length ?? 0
     if (childCount > 0) return nestedWorkCountLabel(childCount)
     if (needsBreakdownReview(task)) {
-      const count = task.acceptanceCriteria?.length ?? 0
+      const count = task.acceptanceCriteriaCount ?? task.acceptanceCriteria?.length ?? 0
       return `${count} requirements; no contained work or decomposition proposal yet.`
     }
     const blockers = unmetDependencyIds(task, tasks)
@@ -705,7 +719,7 @@
     return task.status === 'ready' &&
       childCount === 0 &&
       !hasDecompositionProposal(task) &&
-      (task.acceptanceCriteria?.length ?? 0) >= 6
+      (task.acceptanceCriteriaCount ?? task.acceptanceCriteria?.length ?? 0) >= 6
   }
 
   function hasDecompositionProposal(task: Task): boolean {
@@ -1010,6 +1024,14 @@
               {/each}
             </CardList>
           </div>
+          {#if inventoryPage?.hasMore}
+            <div class="inventory-more">
+              <Button variant="secondary" size="sm" disabled={inventoryLoadBusy} onclick={() => void loadMoreWork()}>
+                {inventoryLoadBusy ? 'Loading more work' : 'Load more work'}
+              </Button>
+              <span class="muted">Showing {allWorkItems.length} of {inventoryPage.totalEffectiveCount ?? allWorkItems.length} work items.</span>
+            </div>
+          {/if}
         {/if}
       </Card>
 
@@ -1196,6 +1218,14 @@
   .work-list-scroll:focus-visible {
     outline: var(--gh-layout-focus-ring-width) solid var(--gh-color-border-focus);
     outline-offset: var(--gh-space-1);
+  }
+
+  .inventory-more {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--gh-space-2);
+    margin-top: var(--gh-space-3);
   }
   :global(.work-list-stack) {
     --work-list-columns:

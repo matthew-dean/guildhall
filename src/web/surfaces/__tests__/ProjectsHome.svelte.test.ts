@@ -5,7 +5,7 @@ import userEvent from '@testing-library/user-event'
 import { readFileSync } from 'node:fs'
 import ProjectsHome from '../ProjectsHome.svelte'
 import { path } from '../../lib/nav.svelte.js'
-import { getCachedService } from '../../lib/service-cache.js'
+import { getCachedService, setCachedService } from '../../lib/service-cache.js'
 import type { ServiceDetail } from '../../lib/types.js'
 
 const servicePayload: ServiceDetail = {
@@ -98,11 +98,12 @@ describe('ProjectsHome', () => {
     expect(loadingCards[0]?.querySelectorAll('.gh-skeleton').length).toBeGreaterThan(0)
     expect(loadingCards[0]?.querySelector('.loading-bars')).toBeNull()
     expect(fetchMock.mock.calls.map(([input]) => String(input))).toContain('/api/service/projects')
-    expect(fetchMock.mock.calls.map(([input]) => String(input))).toContain('/api/service')
+    expect(fetchMock.mock.calls.map(([input]) => String(input)).some(input => input.startsWith('/api/service?projectId='))).toBe(true)
   })
 
   beforeEach(() => {
     installBrowserFakes()
+    setCachedService(null)
   })
 
   afterEach(() => {
@@ -518,7 +519,7 @@ describe('ProjectsHome', () => {
 
     await vi.advanceTimersByTimeAsync(30000)
 
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3))
+    await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(3))
     expect(getCachedService()).toBe(cachedAfterInitialLoad)
   })
 

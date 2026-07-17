@@ -2,8 +2,21 @@ import fs from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 
-import { getProjectLocalHistoryDir, getProjectSystemStatePath } from '@guildhall/sessions'
+import {
+  getProjectLocalHistoryDir,
+  getProjectSystemStatePath,
+  readProjectStateDatabaseQueueDefinitionForMigration,
+} from '@guildhall/sessions'
 import { effectiveTaskTitle } from '../shared/task-display-label.js'
+import { writeProjectTaskQueueWithSummary } from './project-state-boundary.js'
+import {
+  describePath,
+  readEvacuationManifest,
+  verifySnapshotEntry,
+  writeEvacuationManifest,
+  type ProjectStateEvacuationEntry,
+  type ProjectStateEvacuationManifest,
+} from './evacuation-manifest.js'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -122,7 +135,49 @@ export interface RestoreEvacuatedTaskStateResult {
   restoredTaskStateFiles: number
   systemTaskCount: number
   evacuatedTaskCount: number
+  unverifiedEvacuationPaths: string[]
   affectedPaths: string[]
+}
+
+interface EvacuationIntegrity {
+  manifestPath: string
+  manifest: ProjectStateEvacuationManifest | null
+  invalidEntries: ProjectStateEvacuationEntry[]
+}
+
+async function readEvacuationIntegrity(projectRoot: string): Promise<EvacuationIntegrity> {
+  const manifestPath = path.join(getProjectLocalHistoryDir(projectRoot), 'project-state-evacuation', 'manifest.json')
+  let manifest: ProjectStateEvacuationManifest | null = null
+  try {
+    manifest = await readEvacuationManifest(manifestPath)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+  }
+  if (!manifest) return { manifestPath, manifest: null, invalidEntries: [] }
+  const entries = manifest.batches.flatMap(batch => batch.entries)
+  const checks = await Promise.all(entries.map(async entry => ({
+    entry,
+    valid: await verifySnapshotEntry(entry),
+  })))
+  return {
+    manifestPath,
+    manifest,
+    invalidEntries: checks.filter(check => !check.valid).map(check => check.entry),
+  }
+}
+
+function evacuationPathIsTrusted(
+  integrity: EvacuationIntegrity,
+  snapshotPath: string,
+): boolean {
+  if (!integrity.manifest) return true
+  const entry = integrity.manifest.batches
+    .flatMap(batch => batch.entries)
+    .find(candidate => candidate.snapshot.path === snapshotPath)
+  // A manifest can coexist with older unmanifested evacuation material. Keep
+  // that compatibility path readable, but never trust a manifest entry whose
+  // digest failed verification.
+  return !entry || !integrity.invalidEntries.includes(entry)
 }
 
 async function fileExists(file: string): Promise<boolean> {
@@ -135,7 +190,11 @@ async function fileExists(file: string): Promise<boolean> {
   }
 }
 
-async function collectMissingTaskStateFiles(projectRoot: string): Promise<Array<{ source: string; destination: string; affectedPath: string }>> {
+async function collectMissingTaskStateFiles(
+  projectRoot: string,
+  isTrustedPath: (snapshotPath: string) => boolean = () => true,
+  usedSnapshotPaths?: Set<string>,
+): Promise<Array<{ source: string; destination: string; affectedPath: string }>> {
   const evacuatedTasksDir = path.join(getProjectLocalHistoryDir(projectRoot), 'project-state-evacuation', 'tasks')
   const candidates = [
     { relativePath: 'tasks/index.json' },
@@ -157,14 +216,20 @@ async function collectMissingTaskStateFiles(projectRoot: string): Promise<Array<
   for (const candidate of candidates) {
     const source = path.join(getProjectLocalHistoryDir(projectRoot), 'project-state-evacuation', candidate.relativePath)
     const destination = getProjectSystemStatePath(projectRoot, candidate.relativePath)
+    if (!isTrustedPath(source)) continue
     if (await fileExists(source) && !await fileExists(destination)) {
+      usedSnapshotPaths?.add(source)
       missing.push({ source, destination, affectedPath: `project-state/${candidate.relativePath}` })
     }
   }
   return missing
 }
 
-async function readEvacuatedArchiveTasks(projectRoot: string): Promise<unknown[]> {
+async function readEvacuatedArchiveTasks(
+  projectRoot: string,
+  isTrustedPath: (snapshotPath: string) => boolean = () => true,
+  usedSnapshotPaths?: Set<string>,
+): Promise<unknown[]> {
   const archiveDir = path.join(getProjectLocalHistoryDir(projectRoot), 'project-state-evacuation', 'tasks', 'archive')
   let entries: string[]
   try {
@@ -176,7 +241,10 @@ async function readEvacuatedArchiveTasks(projectRoot: string): Promise<unknown[]
   const tasks: unknown[] = []
   for (const entry of entries) {
     if (!entry.endsWith('.json')) continue
-    const task = await readJsonIfExists(path.join(archiveDir, entry))
+    const source = path.join(archiveDir, entry)
+    if (!isTrustedPath(source)) continue
+    const task = await readJsonIfExists(source)
+    if (task !== null) usedSnapshotPaths?.add(source)
     if (taskId(task)) tasks.push(task)
   }
   return tasks
@@ -193,6 +261,38 @@ function isHollowImportedDraft(task: unknown): boolean {
   return isRecord(task)
     && task.status === 'import_draft'
     && !hasTaskShape(task)
+}
+
+async function markRestoredEvacuationEntries(input: {
+  integrity: EvacuationIntegrity
+  usedSnapshotPaths: Set<string>
+  projectRoot: string
+  systemTasksPath: string
+  missingTaskStateFiles: Array<{ source: string; destination: string }>
+}): Promise<void> {
+  if (!input.integrity.manifest || input.usedSnapshotPaths.size === 0) return
+  const targetBySnapshotPath = new Map<string, string>([
+    [path.join(getProjectLocalHistoryDir(input.projectRoot), 'project-state-evacuation', 'TASKS.json'), input.systemTasksPath],
+    ...input.missingTaskStateFiles.map(file => [file.source, file.destination] as const),
+  ])
+  const verifiedAt = new Date().toISOString()
+  for (const batch of input.integrity.manifest.batches) {
+    for (const entry of batch.entries) {
+      if (!input.usedSnapshotPaths.has(entry.snapshot.path)) continue
+      const targetPath = targetBySnapshotPath.get(entry.snapshot.path) ?? input.systemTasksPath
+      try {
+        const target = await describePath(targetPath)
+        entry.restore = {
+          status: 'verified',
+          verifiedAt,
+          target: { path: targetPath, bytes: target.bytes, sha256: target.sha256 },
+        }
+      } catch {
+        entry.restore = { status: 'failed' }
+      }
+    }
+  }
+  await writeEvacuationManifest(input.integrity.manifestPath, input.integrity.manifest)
 }
 
 function mergeTaskStringArray(existing: unknown, restored: unknown): string[] | undefined {
@@ -246,10 +346,28 @@ function repairEffectiveTaskTitle(task: Record<string, unknown>): boolean {
 export async function restoreEvacuatedTaskState(projectRoot: string, apply: boolean): Promise<RestoreEvacuatedTaskStateResult> {
   const systemTasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
   const evacuatedTasksPath = path.join(getProjectLocalHistoryDir(projectRoot), 'project-state-evacuation', 'TASKS.json')
-  const evacuatedQueue = await readJsonIfExists(evacuatedTasksPath)
-  const systemQueue = await readJsonIfExists(systemTasksPath)
+  const integrity = await readEvacuationIntegrity(projectRoot)
+  if (apply && integrity.invalidEntries.length > 0) {
+    throw new Error(
+      `Evacuated project state failed integrity verification: ${integrity.invalidEntries.map(entry => entry.snapshot.path).join(', ')}`,
+    )
+  }
+  const usedSnapshotPaths = new Set<string>()
+  const taskQueueTrusted = evacuationPathIsTrusted(integrity, evacuatedTasksPath)
+  const evacuatedQueue = taskQueueTrusted ? await readJsonIfExists(evacuatedTasksPath) : null
+  if (evacuatedQueue !== null) usedSnapshotPaths.add(evacuatedTasksPath)
+  // Once the database authority migration has removed TASKS.json, the
+  // database queue is the system state that evacuation must compare against.
+  // Reading the absent compatibility file here made every historical
+  // evacuation look like a fresh restore on every migration run.
+  const systemQueue = readProjectStateDatabaseQueueDefinitionForMigration(systemTasksPath)
+    ?? await readJsonIfExists(systemTasksPath)
   const evacuatedTasks = readTasks(evacuatedQueue)
-  const evacuatedArchiveTasks = await readEvacuatedArchiveTasks(projectRoot)
+  const evacuatedArchiveTasks = await readEvacuatedArchiveTasks(
+    projectRoot,
+    snapshotPath => evacuationPathIsTrusted(integrity, snapshotPath),
+    usedSnapshotPaths,
+  )
   const systemTasks = readTasks(systemQueue)
   const systemIds = new Set(systemTasks.map(taskId).filter((id): id is string => id !== null))
   const evacuatedById = new Map([...evacuatedArchiveTasks, ...evacuatedTasks].map(task => [taskId(task), task]).filter((entry): entry is [string, unknown] => entry[0] !== null))
@@ -277,9 +395,13 @@ export async function restoreEvacuatedTaskState(projectRoot: string, apply: bool
     })
     .map(task => taskId(task))
     .filter((id): id is string => id !== null)
-  const missingTaskStateFiles = await collectMissingTaskStateFiles(projectRoot)
+  const missingTaskStateFiles = await collectMissingTaskStateFiles(
+    projectRoot,
+    snapshotPath => evacuationPathIsTrusted(integrity, snapshotPath),
+    usedSnapshotPaths,
+  )
   const releaseMetadataNeeded = needsReleaseMetadataRestore(systemQueue, evacuatedQueue)
-  const needed = missing.length > 0 || enrichmentIds.length > 0 || titleRepairIds.length > 0 || missingTaskStateFiles.length > 0 || releaseMetadataNeeded
+  const needed = integrity.invalidEntries.length > 0 || missing.length > 0 || enrichmentIds.length > 0 || titleRepairIds.length > 0 || missingTaskStateFiles.length > 0 || releaseMetadataNeeded
   if (apply && needed) {
     if (missing.length > 0 || enrichmentIds.length > 0 || titleRepairIds.length > 0 || releaseMetadataNeeded) {
       await fs.mkdir(path.dirname(systemTasksPath), { recursive: true })
@@ -321,17 +443,30 @@ export async function restoreEvacuatedTaskState(projectRoot: string, apply: bool
         priorSystemTaskCount: systemTasks.length,
         evacuatedLastUpdated: queueLastUpdated(evacuatedQueue),
       }
-      await fs.writeFile(systemTasksPath, `${JSON.stringify(next, null, 2)}\n`, 'utf8')
+      writeProjectTaskQueueWithSummary(systemTasksPath, next, {
+        projectId: path.basename(projectRoot),
+        fullCompatibility: true,
+      })
     }
     for (const file of missingTaskStateFiles) {
       await fs.mkdir(path.dirname(file.destination), { recursive: true })
       await fs.copyFile(file.source, file.destination)
     }
+    await markRestoredEvacuationEntries({
+      integrity,
+      usedSnapshotPaths,
+      projectRoot,
+      systemTasksPath,
+      missingTaskStateFiles,
+    })
   }
   const affectedPaths = new Set<string>()
   if (existsSync(evacuatedTasksPath)) {
     affectedPaths.add('project-state/TASKS.json')
     affectedPaths.add('project-state-evacuation/TASKS.json')
+  }
+  if (integrity.manifest && existsSync(integrity.manifestPath)) {
+    affectedPaths.add('project-state-evacuation/manifest.json')
   }
   for (const file of missingTaskStateFiles) {
     affectedPaths.add(file.affectedPath)
@@ -344,6 +479,7 @@ export async function restoreEvacuatedTaskState(projectRoot: string, apply: bool
     restoredTaskStateFiles: apply && needed ? missingTaskStateFiles.length : 0,
     systemTaskCount: systemTasks.length,
     evacuatedTaskCount: evacuatedTasks.length,
+    unverifiedEvacuationPaths: integrity.invalidEntries.map(entry => entry.snapshot.path),
     affectedPaths: Array.from(affectedPaths),
   }
 }
