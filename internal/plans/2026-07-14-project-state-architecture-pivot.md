@@ -5005,6 +5005,60 @@ release or its membership.
   current-state boundary regressions.
 - **Rollback/revert:** code-only revert; no data rollback.
 
+## 2026-07-17 - Delivery becomes a saved revisioned read model
+
+The compact delivery boundary was necessary but insufficient: it made routes
+share indexed task rows while still deriving queue ranking and relationship
+facts in each request. The delivery read projection finishes that boundary.
+
+Promoted projects now have one saved delivery projection in the same SQLite
+database as current project state. It stores queue candidate ranks, bounded
+task summaries, primitive relations, and relationship edges. Every projection
+records the queue revision, project revision, delivery-model timestamp, and
+refresh time that produced it. The route layer reads this typed projection;
+it does not choose between SQLite, an intake snapshot, and a task file.
+
+Projection refresh runs in the asynchronous projector after task, release,
+delivery, evidence, runtime, workspace, reconciliation, or diagnostic changes.
+GET routes return a clear missing/stale response while refresh is pending.
+That makes the old Release failure structurally unrepresentable on ordinary
+paths: a route can use a different named view, but it cannot invent a second
+current-state source.
+
+**Contract Touch Decision - `codex:delivery-read-projection-2026-07-17`**
+
+- **Touched contracts:** delivery-spine/queue freshness, task relationship and
+  context-packet reads, projection refresh, and source revision watermarks.
+- **Considered but not touched:** rich task detail, Release readiness counts,
+  live Git diagnostics, and pre-promotion task-file reads.
+- **Required follow-up:** remove remaining compatibility-file reads from
+  delivery mutation helpers and include projection freshness in the project
+  delivery summary.
+- **Proof provided:** projection tests, 35 read-boundary tests, lints, and
+  whitespace validation.
+- **Apply/revert:** derived tables can be dropped and rebuilt; ordinary reads
+  fail closed while they are unavailable.
+
+**Schema Migration Decision - `codex:delivery-read-projection-2026-07-17`**
+
+- **Persisted schema touched:** additive SQLite delivery projection tables for
+  metadata, candidates, edges, and primitive relations.
+- **Change class:** additive derived projection with internal schema version;
+  refresh creates tables idempotently and replaces one complete snapshot in a
+  transaction.
+- **Existing data impact:** authoritative task, release, and evidence rows are
+  unchanged.
+- **Migration id:** `0.13.3/delivery-read-projection` creates the derived
+  tables idempotently before the asynchronous projector populates their rows.
+- **Safety:** missing/stale reads are explicit and the async projector rebuilds
+  from authoritative state.
+- **Compatibility reader:** legacy delivery calculation is allowed only for
+  unpromoted projects.
+- **Fixtures/tests:** bounded projection pages, stale revision, relationship
+  point read, and promoted route boundary fixtures.
+- **Rollback/revert:** remove derived tables or revert the reader; source state
+  is unaffected.
+
 ## 2026-07-17 - Delivery enters through the compact state boundary
 
 The first delivery step removes a direct source divergence. Promoted

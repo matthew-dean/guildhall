@@ -16,6 +16,7 @@ import { createOwnerInputRequest } from '../owner-input-store.js'
 import { readProjectSummaryProjection, writeProjectSummaryProjectionFromIndexedState } from '../project-summary-projection.js'
 import { projectTaskStateExistsSync, readProjectTaskQueueSync, writeProjectTaskQueueWithSummary } from '../project-state-boundary.js'
 import { appendTaskEvidence, compressedTaskEvidencePath, readTaskEvidence, readTaskRuntimeStore, runtimeStatePath, taskEvidencePath, upsertTaskRuntimeState, upsertTaskWorkspaceState } from '../task-state-store.js'
+import { deliveryReadProjectionSchemaPresent } from '../delivery-read-projection.js'
 
 let tmp: string
 let projectRoot: string
@@ -331,6 +332,34 @@ describe('applyProjectMigrations', () => {
     expect((await applyProjectMigrations({
       projectRoot,
       only: ['0.13.2/compact-task-read-models'],
+    })).applied).toEqual([])
+  })
+
+  it('creates the delivery read projection schema and is idempotent', async () => {
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: {
+        version: 1,
+        lastUpdated: '2026-07-16T12:00:00.000Z',
+        tasks: [{ id: 'task-delivery', title: 'Delivery task', status: 'ready' }],
+        releases: [],
+      },
+      summary: { projectId: 'migration-test', generatedAt: '2026-07-16T12:00:00.000Z', freshness: 'current' },
+      scopeRows: [],
+      projectRoot,
+    })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+
+    expect(deliveryReadProjectionSchemaPresent(projectRoot)).toBe(false)
+    const result = await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.3/delivery-read-projection'],
+    })
+    expect(result.applied.map(item => item.id)).toEqual(['0.13.3/delivery-read-projection'])
+    expect(deliveryReadProjectionSchemaPresent(projectRoot)).toBe(true)
+    expect((await applyProjectMigrations({
+      projectRoot,
+      only: ['0.13.3/delivery-read-projection'],
     })).applied).toEqual([])
   })
 

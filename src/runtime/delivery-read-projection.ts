@@ -15,7 +15,9 @@ import {
   type ProjectDeliveryModel as ProjectDeliveryModelRecord,
   type QueueCandidate,
   type TaskRelationshipSummary,
+  type TaskContextPacket,
 } from './delivery-spine.js'
+import { buildTaskContextPacket } from './delivery-spine.js'
 
 export const DELIVERY_READ_PROJECTION_SCHEMA_VERSION = 1
 
@@ -202,6 +204,95 @@ export interface DeliveryReadProjectionReadOptions {
   taskId?: string
   primitiveLimit?: number
   primitiveAfter?: string
+}
+
+function taskForContextPacket(task: DeliveryTaskSummary, projectRoot: string): Task {
+  return {
+    id: task.id,
+    title: task.title,
+    description: task.description ?? '',
+    domain: task.domain ?? 'general',
+    projectPath: projectRoot,
+    references: [...task.sourceRefs],
+    sourceClaims: [],
+    status: (task.status ?? 'unknown') as Task['status'],
+    priority: task.priority ?? 'normal',
+    acceptanceCriteria: [],
+    outOfScope: [],
+    dependsOn: [...task.dependsOn],
+    notes: [],
+    gateResults: [],
+    reviewVerdicts: [],
+    adjudications: [],
+    revisionCount: 0,
+    remediationAttempts: 0,
+    escalations: [],
+    agentIssues: [],
+    origination: 'agent_discovery',
+    createdAt: task.updatedAt ?? new Date(0).toISOString(),
+    updatedAt: task.updatedAt ?? new Date(0).toISOString(),
+    ...(task.workKind ? { workKind: task.workKind } : {}),
+    ...(task.hierarchy ? { hierarchy: task.hierarchy as Task['hierarchy'] } : {}),
+    ...(task.releaseIds.length > 0 ? { releaseIds: [...task.releaseIds] } : {}),
+    ...(task.sourceRefs.length > 0 ? { sourceRefs: [...task.sourceRefs] } : {}),
+    ...(task.delivery ? { delivery: task.delivery as Task['delivery'] } : {}),
+  } as unknown as Task
+}
+
+/**
+ * Adapt the saved delivery projection into the existing context-packet
+ * contract. The adapter is intentionally bounded: it uses only the selected
+ * task, saved relationship edges, and saved primitive page. It never calls a
+ * delivery derivation function or loads task definitions.
+ */
+export function contextPacketFromDeliveryReadProjection(
+  projection: DeliveryReadProjectionCurrent,
+  projectRoot: string,
+): TaskContextPacket | null {
+  if (!projection.task || !projection.relationships) return null
+  const primitiveById = new Map(projection.primitives.primitives.map(primitive => [primitive.id, primitive]))
+  const primitiveRefs = (ids: readonly string[]): PrimitiveWithRelations[] => ids.flatMap(id => {
+    const primitive = primitiveById.get(id)
+    return primitive ? [primitive] : []
+  })
+  const task = taskForContextPacket(projection.task, projectRoot)
+  const relationships: TaskRelationshipSummary = {
+    task,
+    hierarchy: {
+      ...(projection.relationships.hierarchy.parent
+        ? { parent: projection.relationships.hierarchy.parent as Pick<Task, 'id' | 'title' | 'status'> }
+        : {}),
+      children: projection.relationships.hierarchy.children as Array<Pick<Task, 'id' | 'title' | 'status'>>,
+      breadcrumbs: projection.relationships.hierarchy.breadcrumbs as Array<Pick<Task, 'id' | 'title'>>,
+    },
+    dependencies: projection.relationships.dependencies as {
+      directBlockers: Array<Pick<Task, 'id' | 'title' | 'status'>>
+      recursiveBlockers: Array<Pick<Task, 'id' | 'title' | 'status'>>
+      blocks: Array<Pick<Task, 'id' | 'title' | 'status'>>
+    },
+    supports: [...projection.relationships.supports],
+    primitiveUse: {
+      direct: primitiveRefs(projection.relationships.primitiveUse.direct),
+      ancestors: primitiveRefs(projection.relationships.primitiveUse.ancestors),
+      blockers: primitiveRefs([
+        ...projection.relationships.primitiveUse.direct,
+        ...projection.relationships.primitiveUse.ancestors,
+      ]).filter(primitive => primitive.status !== 'ready' && primitive.status !== 'deprecated'),
+    },
+    primitiveProof: {
+      proves: primitiveRefs(projection.relationships.primitiveProof.proves),
+      provingTasksByPrimitive: Object.fromEntries(
+        Object.entries(projection.relationships.primitiveProof.provingTasksByPrimitive)
+        .map(([primitiveId, tasks]) => [primitiveId, tasks as Array<Pick<Task, 'id' | 'title' | 'status'>>]),
+      ),
+    },
+  }
+  return buildTaskContextPacket({
+    model: projection.model,
+    tasks: [task],
+    taskId: task.id,
+    relationships,
+  })
 }
 
 export interface DeliveryReadProjectionRefreshResult {
@@ -611,6 +702,27 @@ function createProjectionTables(database: DatabaseSync): void {
       payload_json TEXT NOT NULL
     );
   `)
+}
+
+export function deliveryReadProjectionSchemaPresent(projectRoot: string): boolean {
+  const database = openDatabase(projectRoot, true)
+  if (!database) return false
+  try {
+    return [META_TABLE, CANDIDATE_TABLE, EDGE_TABLE, PRIMITIVE_TABLE].every(table => tableExists(database, table))
+  } finally {
+    database.close()
+  }
+}
+
+export function ensureDeliveryReadProjectionSchema(projectRoot: string): boolean {
+  const database = openDatabase(projectRoot, false)
+  if (!database) return false
+  try {
+    createProjectionTables(database)
+    return true
+  } finally {
+    database.close()
+  }
 }
 
 function readMeta(database: DatabaseSync): DeliveryMeta | null {

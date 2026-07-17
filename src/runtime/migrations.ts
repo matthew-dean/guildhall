@@ -77,6 +77,7 @@ import {
   writeProjectSummaryProjectionFromIndexedState,
 } from './project-summary-projection.js'
 import { writeProjectTaskQueueWithSummary } from './project-state-boundary.js'
+import { deliveryReadProjectionSchemaPresent, ensureDeliveryReadProjectionSchema } from './delivery-read-projection.js'
 import { effectiveTaskTitle } from '../shared/task-display-label.js'
 import type { Task } from '@guildhall/core'
 import {
@@ -178,6 +179,7 @@ const EFFECTIVE_STATE_REALIGNMENT_MIGRATION_ID = '0.13.0/project-summary-effecti
 const CURRENT_STATUS_PROJECTION_MIGRATION_ID = '0.13.1/project-current-status-projection'
 const RELEASE_MEMBERSHIP_MIGRATION_ID = '0.13.1/release-membership'
 const COMPACT_READ_MODEL_MIGRATION_ID = '0.13.2/compact-task-read-models'
+const DELIVERY_READ_PROJECTION_MIGRATION_ID = '0.13.3/delivery-read-projection'
 const THREAD_HISTORY_PROJECTION_MIGRATION_ID = '0.12.47/project-thread-history-read-model'
 
 interface FinalProjectStateMigrationResult {
@@ -2779,6 +2781,31 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
       }
     },
   },
+  {
+    id: DELIVERY_READ_PROJECTION_MIGRATION_ID,
+    title: 'Create the delivery read projection',
+    introducedIn: '0.13.3',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Creates the revisioned delivery read-model tables so ordinary queue and relationship reads have one saved authority instead of rebuilding delivery state in a GET.',
+    async detect(projectRoot) {
+      if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') return { needed: false, affectedPaths: [] }
+      const present = deliveryReadProjectionSchemaPresent(projectRoot)
+      return {
+        needed: !present,
+        affectedPaths: !present ? [projectStateDatabasePath(projectRoot), 'delivery read projection tables'] : [],
+      }
+    },
+    async apply(projectRoot) {
+      const created = ensureDeliveryReadProjectionSchema(projectRoot)
+      if (!created) throw new Error('The current project-state database is unavailable for delivery projection migration.')
+      return {
+        summary: 'Created the delivery read projection schema; the asynchronous projector will populate its revisioned rows.',
+        affectedPaths: [projectStateDatabasePath(projectRoot)],
+      }
+    },
+  },
 ]
 
 const BUILT_IN_PROJECT_MIGRATION_IDEMPOTENCE_TESTS: Record<string, string> = {
@@ -2844,6 +2871,7 @@ const BUILT_IN_PROJECT_MIGRATION_IDEMPOTENCE_TESTS: Record<string, string> = {
   [CURRENT_STATUS_PROJECTION_MIGRATION_ID]: 'migrations.test.ts: materializes the shared current task status rule into indexed rows',
   [RELEASE_MEMBERSHIP_MIGRATION_ID]: 'migrations.test.ts: normalizes release membership into one relation',
   [COMPACT_READ_MODEL_MIGRATION_ID]: 'migrations.test.ts: backfills compact graph read models from per-task detail without making ordinary reads hydrate definitions',
+  [DELIVERY_READ_PROJECTION_MIGRATION_ID]: 'migrations.test.ts: creates the revisioned delivery read projection schema before the async projector populates it',
   '0.11.0/project-summary-projection': 'migrations.test.ts: project summary backfill is idempotent and preserves task history',
   '0.11.1/project-summary-projection-v2': 'migrations.test.ts: project summary shape refresh is idempotent and preserves task history',
   '0.11.2/project-summary-projection-setup-state': 'migrations.test.ts: project summary setup-state refresh is idempotent and preserves task history',

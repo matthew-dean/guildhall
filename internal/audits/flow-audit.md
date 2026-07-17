@@ -41551,6 +41551,64 @@ accident while rendering an ordinary drawer.
 - Compatibility reader: `diagnostic=true` remains the explicit live reader.
 - Rollback/revert: code-only revert; no data rollback.
 
+## 2026-07-17 - Delivery reads consume one revisioned projection
+
+- [x] Promoted delivery-spine, queue, task-relationship, and context-packet
+  routes now read the saved delivery projection rather than deriving queue
+  candidates or relationship edges during GET.
+- [x] The projection stores candidate ranks, bounded task summaries, primitive
+  relations, and relationship edges in the project SQLite database with the
+  source queue/project revisions and delivery-model timestamp.
+- [x] The asynchronous project projector refreshes delivery state after queue,
+  scope, release, delivery, evidence, runtime, workspace, reconciliation, or
+  diagnostic writes.
+- [x] Missing, schema-mismatched, or stale delivery state returns an explicit
+  `requiresRefresh` response. Ordinary routes never fall back to a different
+  task source or silently recompute current facts.
+- [x] Focused proof covers bounded projection pages, revision staleness,
+  relationship reads without aggregate task selects, route read boundaries,
+  and projector refresh integration.
+
+### Contract Touch Decision
+
+- Work id: `codex:delivery-read-projection-2026-07-17`.
+- Touched contracts: delivery-spine/queue response freshness, task
+  relationship and context-packet reads, delivery projection refresh, and
+  the source revision watermark shared with project state.
+- Considered but not touched: rich task-detail payloads, Release readiness
+  counts, live Git diagnostics, and legacy pre-promotion task-file reads.
+- Required follow-up: migrate any remaining delivery mutation helpers that
+  still inspect compatibility task files, and expose projection freshness in
+  the project-level delivery summary.
+- Proof provided: delivery projection tests, 35 read-boundary tests, data-layer
+  lint, contract lint, and whitespace validation.
+- Apply/revert behavior: projection tables are derived and can be dropped and
+  rebuilt from the authoritative task/release/model state; route code fails
+  closed while they are unavailable.
+
+### Schema Migration Decision
+
+- Persisted schema touched: SQLite delivery read projection tables
+  `delivery_read_projection_meta`, `delivery_read_projection_candidates`,
+  `delivery_read_projection_edges`, and `delivery_read_projection_primitives`.
+- Change class: additive derived projection with an internal schema version;
+  the refresh writer creates the tables idempotently and replaces one complete
+  projection in a transaction.
+- Existing data impact: no authoritative task, release, or evidence rows are
+  rewritten; old delivery model files remain readable by the explicit legacy
+  path.
+- Migration id: `0.13.3/delivery-read-projection` creates the derived tables
+  idempotently before the asynchronous projector populates their rows.
+- Safety: ordinary reads fail closed as missing/stale; the asynchronous
+  projector can rebuild the derived rows from the authoritative source.
+- Compatibility reader: only unpromoted projects may use the legacy
+  delivery-spine calculation; promoted projects never use it for ordinary
+  reads.
+- Fixtures/tests: delivery projection fixture, bounded queue/primitive pages,
+  stale-revision case, and promoted route boundary cases.
+- Rollback/revert: drop derived delivery projection tables or revert the
+  projection reader; authoritative project state is unaffected.
+
 ## 2026-07-17 - Promoted projects fail closed when saved Release state is missing
 
 - [x] `readProjectSavedReleaseState` no longer falls through from a promoted

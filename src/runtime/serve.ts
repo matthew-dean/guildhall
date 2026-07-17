@@ -263,6 +263,12 @@ import {
   type ContractChangeSet,
 } from './delivery-spine.js'
 import {
+  contextPacketFromDeliveryReadProjection,
+  readProjectDeliveryReadProjection,
+  readProjectDeliveryTaskProjection,
+  refreshProjectDeliveryReadProjection,
+} from './delivery-read-projection.js'
+import {
   applyStructuralMapReviewAction,
   readAcceptedStructuralMap,
   summarizeStructuralMapForReview,
@@ -1872,6 +1878,20 @@ async function refreshProjectProjections(
           })
         }
       }
+      }
+      if (databaseAuthority) {
+        const deliveryProjectionDomains = new Set([
+          'queue', 'scope', 'release', 'delivery', 'evidence', 'task-runtime',
+          'workspace', 'reconciliation', 'legacy', 'diagnostics',
+        ])
+        const needsDeliveryProjection = domains.size === 0 ||
+          [...domains].some(domain => deliveryProjectionDomains.has(domain))
+        if (needsDeliveryProjection) {
+          const deliveryProjection = await refreshProjectDeliveryReadProjection(resolved.path)
+          if (deliveryProjection.status !== 'current') {
+            throw new Error(`Delivery projection refresh did not produce current state: ${deliveryProjection.reason ?? 'unknown error'}`)
+          }
+        }
       }
       const diagnosticDomains = new Set([
         PROJECT_STATE_DATABASE_DIAGNOSTIC_PROJECTION_DOMAIN, 'queue', 'scope', 'release', 'task-runtime',
@@ -12783,6 +12803,27 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project/delivery-spine', async c => {
     try {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      if (readProjectStateAuthorityAtBoundary(projectTasksPath(project.path)).authority === 'database') {
+        const projection = await readProjectDeliveryReadProjection(project.path, { queue: { limit: 100 } })
+        if (projection.status !== 'current') {
+          return c.json({
+            error: 'The saved delivery projection is unavailable or stale.',
+            deliveryProjection: projection,
+            requiresRefresh: true,
+          }, 503)
+        }
+        return c.json({
+          model: projection.model,
+          validation: projection.validation,
+          primitives: projection.primitives.primitives,
+          queue: projection.queue,
+          deliveryProjection: {
+            status: projection.status,
+            freshness: projection.freshness,
+            source: projection.source,
+          },
+        })
+      }
       const tasks = await readProjectDeliveryTasks(project.path)
       const model = await readProjectDeliveryModel(project.path)
       return c.json({
@@ -12799,6 +12840,17 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project/delivery-spine/queue', async c => {
     try {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      if (readProjectStateAuthorityAtBoundary(projectTasksPath(project.path)).authority === 'database') {
+        const projection = await readProjectDeliveryReadProjection(project.path, { queue: { limit: 100 } })
+        if (projection.status !== 'current') {
+          return c.json({
+            error: 'The saved delivery queue projection is unavailable or stale.',
+            deliveryProjection: projection,
+            requiresRefresh: true,
+          }, 503)
+        }
+        return c.json(projection.queue ?? { runnable: [], blocked: [], hasMore: false })
+      }
       const tasks = await readProjectDeliveryTasks(project.path)
       const model = await readProjectDeliveryModel(project.path)
       return c.json(deriveQueueCandidates({ model, tasks: tasks as Task[] }))
@@ -12877,6 +12929,18 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project/task/:id/relationships', async c => {
     try {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      if (readProjectStateAuthorityAtBoundary(projectTasksPath(project.path)).authority === 'database') {
+        const projection = await readProjectDeliveryTaskProjection(project.path, c.req.param('id'))
+        if (projection.status !== 'current') {
+          return c.json({
+            error: 'The saved task relationships projection is unavailable or stale.',
+            deliveryProjection: projection,
+            requiresRefresh: true,
+          }, projection.status === 'missing' && projection.reason === 'projection_missing' ? 503 : 409)
+        }
+        if (projection.taskState === 'missing' || !projection.relationships) return c.json({ error: 'task not found' }, 404)
+        return c.json(projection.relationships)
+      }
       const tasks = await readProjectDeliveryTasks(project.path)
       const model = await readProjectDeliveryModel(project.path)
       return c.json(deriveTaskRelationships({ model, tasks: tasks as Task[], taskId: c.req.param('id') }))
@@ -12888,6 +12952,20 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project/task/:id/context-packet', async c => {
     try {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      if (readProjectStateAuthorityAtBoundary(projectTasksPath(project.path)).authority === 'database') {
+        const projection = await readProjectDeliveryTaskProjection(project.path, c.req.param('id'))
+        if (projection.status !== 'current') {
+          return c.json({
+            error: 'The saved task context projection is unavailable or stale.',
+            deliveryProjection: projection,
+            requiresRefresh: true,
+          }, projection.status === 'missing' && projection.reason === 'projection_missing' ? 503 : 409)
+        }
+        if (projection.taskState === 'missing') return c.json({ error: 'task not found' }, 404)
+        const packet = contextPacketFromDeliveryReadProjection(projection, project.path)
+        if (!packet) return c.json({ error: 'task context projection is incomplete', requiresRefresh: true }, 503)
+        return c.json(packet)
+      }
       const tasks = await readProjectDeliveryTasks(project.path)
       const model = await readProjectDeliveryModel(project.path)
       const taskId = c.req.param('id')

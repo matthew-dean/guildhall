@@ -21,6 +21,7 @@ import { buildServeApp } from '../serve.js'
 import { NodeGitDriver } from '../git-driver.js'
 import { writeProjectSummaryProjection } from '../project-summary-projection.js'
 import { inferProjectOrientationSnapshot } from '../project-orientation-snapshot.js'
+import { refreshProjectDeliveryReadProjection } from '../delivery-read-projection.js'
 
 /**
  * These are deliberately integration-level write-boundary tests. A GET must
@@ -174,6 +175,10 @@ async function seedDurableState(): Promise<void> {
     detected: null,
   })
   writeProjectSummaryProjection(tasksPath, { projectId, queue })
+  const deliveryProjection = await refreshProjectDeliveryReadProjection(tmpDir)
+  if (deliveryProjection.status !== 'current') {
+    throw new Error(`Unable to seed delivery projection: ${deliveryProjection.reason ?? 'unknown error'}`)
+  }
 
   // Keep an existing attention store and a real Thread input on disk. This
   // makes accidental reconciliation or Thread-state persistence observable.
