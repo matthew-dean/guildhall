@@ -47051,3 +47051,59 @@ User job:
 - Owner-facing plan text: no owner action; malformed generated list encoding is
   a Guildhall defect.
 - Rollback/revert: revert the normalizer and prompt/test changes together.
+
+## 2026-07-18 live model bake-off: provider availability and benchmark truth
+
+User job:
+
+> When Guildhall compares a drafting/worker model, the result must be a real
+> provider-backed run with a reproducible fixture, usable token/cost evidence,
+> and an explicit distinction between a model that is available through the
+> configured provider and one that requires another provider.
+
+### Contract Touch Decision
+
+- Work id: `codex:live-model-bakeoff-provider-availability-2026-07-18`.
+- Touched contracts: none. This was a live validation pass over the existing
+  benchmark and provider/model surfaces.
+- Considered but not touched: benchmark result schema, provider catalog, and
+  published package contents. The run exposed follow-up defects in all three,
+  but no contract change was made in this pass.
+- Required follow-up: make installed benchmark fixtures runnable, attribute
+  provider cost or explicitly record cost as unavailable, and add a Narrative
+  Harness writing/evaluation fixture rather than relying on the coding smoke.
+- Proof required: provider catalog check, real live runs, report inspection,
+  and a later NH-specific bake-off with voice, genre, refusal, repetition,
+  world-state, and spatial review signals.
+- Apply/revert: no code was applied; retain the evidence and resolve the
+  follow-ups before calling a model lane proven.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none. Reports were written to `/tmp` only.
+- Scope/change class: external-provider and benchmark validation; no task,
+  release, or durable project-state mutation.
+- Existing data impact: none.
+- Migration id: none.
+- Compatibility reader: not applicable.
+- Fixtures/tests: existing `swe-local` smoke fixture and three provider-backed
+  runs recorded under `/tmp/guildhall-bakeoff-{deepseek,k2-7,qwen35}`.
+- Owner-facing plan text: Kimi K3 is not available in the DeepInfra catalog;
+  K3 requires the official Kimi API/provider path. The existing
+  `guildhall model-bakeoff` report is replay-only and is not live model proof.
+- Rollback/revert: remove only the temporary `/tmp` reports; no repository
+  rollback is needed.
+
+### Live evidence
+
+- `GET https://api.deepinfra.com/models/list` returned Kimi K2.5, K2.6, and
+  K2.7 Code but no K3.
+- DeepSeek V4 Flash, Kimi K2.7 Code, and Qwen 3.5 35B each completed the
+  live one-fixture `swe-local --subset smoke` run with `1/1` passed,
+  `0` false successes, and `0` policy blocks.
+- The reports recorded real token counts and latency, but every `Cost USD`
+  value was `$0.000000`; cost comparison is therefore not yet trustworthy.
+- The installed `guildhall` command failed before running the benchmark
+  because its published artifact could not locate `internal/benchmarks/fixtures`.
+  The repository build could run the same benchmark, so this is a packaging
+  defect, not evidence that the benchmark itself is unavailable.
