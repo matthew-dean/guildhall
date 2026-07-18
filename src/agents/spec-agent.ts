@@ -413,6 +413,14 @@ when the work doesn't span specialist lanes.
   and recorded its result through Guildhall. If neither is true, use
   verificationMode=review with a concrete evidenceHint and leave the command
   field absent; do not save guesses such as "pnpm test theme-analysis".
+- Treat the visible task/source packet as the complete fact boundary for the
+  blueprint. Do not promote a plausible model family, script name, fixture,
+  interface, output file, or implementation path merely because it would be a
+  sensible design. If the packet says "evaluate candidates," keep the model
+  candidate open. If it names a capability but not its proof path, describe
+  the observable outcome and use review/provider verification until Guildhall
+  has an exact registered command or creates a clearly bounded proof-setup
+  task. Unsupported details are rejected at the durable update boundary.
 - Proof-setup tasks are discovery work, not permission to invent implementation.
   Do not create or propose a new script, fixture path, test target, or command
   just because it would be a plausible proof. Use only an exact command and

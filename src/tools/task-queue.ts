@@ -41,7 +41,7 @@ import {
   writeProjectTaskQueue,
 } from '@guildhall/runtime/project-state-boundary'
 import { buildEffectiveTask } from '../runtime/effective-task.js'
-import { currentPlanProcessLeakage } from '../runtime/spec-quality.js'
+import { currentPlanProcessLeakage, validateSpecGrounding } from '../runtime/spec-quality.js'
 import { isConcreteProjectProofCommand } from '../runtime/proof-paths.js'
 
 const TASKS_PATH_SCHEMA = z.string().describe('Absolute path to the TASKS.json file')
@@ -293,6 +293,18 @@ async function updateTaskUnlocked(
         taskId,
         error:
           'Current task specs may only contain the product boundary. Keep recovery attempts, revision history, and worktree diagnostics in task notes or evidence, then save a clean spec.',
+      }
+    }
+    if (nextSpec) {
+      const grounding = validateSpecGrounding({ ...task, spec: nextSpec })
+      if (!grounding.ok) {
+        return {
+          success: false,
+          taskId,
+          error:
+            `Spec is not grounded in the visible task/source context. ${grounding.errors.join(' ')}` +
+            ' Remove unsupported implementation details or preserve the missing fact as a review/open-question boundary before saving the spec.',
+        }
       }
     }
     const normalizedAcceptanceCriteria = input.acceptanceCriteria !== undefined

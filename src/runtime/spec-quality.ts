@@ -5,6 +5,11 @@ export interface SpecQualityResult {
   errors: string[]
 }
 
+export interface SpecGroundingResult {
+  ok: boolean
+  errors: string[]
+}
+
 const REQUIRED_COMPLETION_BOUNDARY_FIELDS = [
   'product outcome',
   'what guildhall can complete in code',
@@ -33,6 +38,11 @@ const CONFIGURED_DEPENDENCY_PATTERN =
 const LIVE_VERIFICATION_PATTERN =
   /\b(end[- ]to[- ]end|e2e|live|staging|production|configured|configuration|provider|credential|callback|webhook|verified|works|can actually|real user|target environment)\b/i
 
+const EXECUTABLE_DETAIL_PATTERN = /\b(?:pnpm|npm|node|npx|yarn|bun|python(?:3)?|pytest|vitest|playwright|git)\s+[^\n.;,)]+/gi
+const PROJECT_PATH_PATTERN = /(?:^|[\s`"'(])((?:scripts|src|test|tests|fixtures|docs|internal|dist|output|package\.json|expected-records\.json)[A-Za-z0-9_./:@=-]*)/g
+const MODEL_FAMILY_PATTERN = /\b(?:mixtral|mistral|qwen|deepseek|kimi|glm|nemotron|llama|gemma|phi|command-r|gpt)(?:[A-Za-z0-9./:_-]*)\b/gi
+const INVENTED_SYMBOL_PATTERN = /\b[A-Z][A-Za-z0-9]*(?:Run|Fixture|Agent|Interface|Schema|Harness)\b/g
+
 const CURRENT_PLAN_PROCESS_LEAKAGE_PATTERNS = [
   /\bexceeded maxrevisions\b/i,
   /\bdeterministic reviewer bounced\b/i,
@@ -52,6 +62,63 @@ const CURRENT_PLAN_PROCESS_LEAKAGE_PATTERNS = [
 export function currentPlanProcessLeakage(text: string): string | null {
   const match = CURRENT_PLAN_PROCESS_LEAKAGE_PATTERNS.find((pattern) => pattern.test(text))
   return match ? match.source : null
+}
+
+function groundingContext(task: Pick<Task, 'title' | 'description' | 'references' | 'sourceClaims' | 'request' | 'requestIntake' | 'productBrief'>): string {
+  return JSON.stringify({
+    title: task.title,
+    description: task.description,
+    references: task.references,
+    sourceClaims: task.sourceClaims,
+    request: task.request,
+    requestIntake: task.requestIntake,
+    productBrief: task.productBrief,
+  }).toLowerCase()
+}
+
+function unsupportedMatches(text: string, context: string, pattern: RegExp): string[] {
+  const matches = new Set<string>()
+  for (const match of text.matchAll(pattern)) {
+    const value = match[0]?.trim().replace(/[.,;:)]+$/, '')
+    if (value && !context.includes(value.toLowerCase())) matches.add(value)
+  }
+  return [...matches]
+}
+
+/**
+ * Specs are executable planning contracts, so plausible detail is dangerous
+ * when it was not present in the visible task/source packet. Keep the
+ * admission rule deterministic: a spec may elaborate documented intent, but
+ * it may not manufacture commands, paths, model families, or named artifacts.
+ */
+export function validateSpecGrounding(task: Pick<Task,
+  'title' | 'description' | 'references' | 'sourceClaims' | 'request' | 'requestIntake' | 'productBrief' | 'spec'
+>): SpecGroundingResult {
+  const text = task.spec?.trim() ?? ''
+  if (!text) return { ok: true, errors: [] }
+  const imported = (task.sourceClaims?.length ?? 0) > 0 ||
+    task.requestIntake?.createdBy === 'workspace-importer' ||
+    task.requestIntake?.evidenceRefs?.some(ref => /^import:/.test(ref)) === true
+  if (!imported) return { ok: true, errors: [] }
+  const context = groundingContext(task)
+  const errors: string[] = []
+  const executable = unsupportedMatches(text, context, EXECUTABLE_DETAIL_PATTERN)
+  if (executable.length > 0) {
+    errors.push(`Spec contains executable detail not present in the visible task/source context: ${executable.join(', ')}.`)
+  }
+  const paths = unsupportedMatches(text, context, PROJECT_PATH_PATTERN)
+  if (paths.length > 0) {
+    errors.push(`Spec names project paths or files not present in the visible task/source context: ${paths.join(', ')}.`)
+  }
+  const models = unsupportedMatches(text, context, MODEL_FAMILY_PATTERN)
+  if (models.length > 0) {
+    errors.push(`Spec names model families not present in the visible task/source context: ${models.join(', ')}.`)
+  }
+  const symbols = unsupportedMatches(text, context, INVENTED_SYMBOL_PATTERN)
+  if (symbols.length > 0) {
+    errors.push(`Spec names artifacts or interfaces not present in the visible task/source context: ${symbols.join(', ')}.`)
+  }
+  return { ok: errors.length === 0, errors }
 }
 
 export function stripCurrentPlanProcessLeakage(text: string): string {

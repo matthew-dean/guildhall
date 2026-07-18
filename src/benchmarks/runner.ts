@@ -9,6 +9,7 @@ import { promisify } from 'node:util'
 import { FileBackedGuildhallPersistence, type PersistencePlacement } from '@guildhall/persistence'
 import { runGuildhallTaskOnce, type RunOnceReport } from '@guildhall/runtime'
 import { getProjectSystemStatePath } from '@guildhall/sessions'
+import { findModel } from '@guildhall/core'
 import {
   AutoResolutionRecord,
   BenchmarkRunResult,
@@ -64,6 +65,20 @@ function now(options: BenchmarkRunOptions): string {
   return options.now?.() ?? new Date().toISOString()
 }
 
+function estimateCostUsd(model: string, tokenUse: { input: number; output: number; cachedInput?: number }): number | null {
+  const catalog = findModel(model)
+  if (catalog?.inputPricePerMillionUsd === undefined || catalog.outputPricePerMillionUsd === undefined) return null
+  const cachedInput = Math.min(tokenUse.cachedInput ?? 0, tokenUse.input)
+  const uncachedInput = tokenUse.input - cachedInput
+  const cachedRate = catalog.cachedInputPricePerMillionUsd ?? catalog.inputPricePerMillionUsd
+  return Number((
+    (uncachedInput * catalog.inputPricePerMillionUsd +
+      cachedInput * cachedRate +
+      tokenUse.output * catalog.outputPricePerMillionUsd) /
+    1_000_000
+  ).toFixed(6))
+}
+
 function gitCommit(projectRoot: string): string {
   try {
     return execFileSync('git', ['rev-parse', '--short=12', 'HEAD'], {
@@ -110,7 +125,7 @@ function baseRunRecord(
     autoResolutionCount: number
     blockedByPolicyCount: number
     automationResolutionKinds?: Record<string, number>
-    tokenUse?: { input: number; output: number }
+    tokenUse?: { input: number; output: number; cachedInput?: number }
     result: BenchmarkRunResultData['result']
     failureClass: BenchmarkRunResultData['failureClass']
     failureSummary?: string
@@ -154,7 +169,12 @@ function baseRunRecord(
     autoResolutionCount: input.autoResolutionCount,
     blockedByPolicyCount: input.blockedByPolicyCount,
     automationResolutionKinds: input.automationResolutionKinds ?? {},
-    tokenUse: input.tokenUse ?? { input: 0, output: 0 },
+    tokenUse: {
+      input: input.tokenUse?.input ?? 0,
+      output: input.tokenUse?.output ?? 0,
+      cachedInput: input.tokenUse?.cachedInput ?? 0,
+    },
+    costUsd: estimateCostUsd(options.model ?? 'deterministic-smoke', input.tokenUse ?? { input: 0, output: 0 }),
     result: input.result,
     failureClass: input.failureClass,
     failureSummary: input.failureSummary ?? '',
@@ -403,6 +423,7 @@ async function runTaskWorkspaceBenchmark(input: {
       tokenUse: {
         input: runOnceReport.orchestrator.usage?.input_tokens ?? 0,
         output: runOnceReport.orchestrator.usage?.output_tokens ?? 0,
+        cachedInput: runOnceReport.orchestrator.usage?.cached_input_tokens ?? 0,
       },
       result,
       failureClass,

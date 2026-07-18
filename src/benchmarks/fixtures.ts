@@ -162,14 +162,20 @@ export const lifecycleSmokeFixtures: LifecycleFixture[] = [
 ]
 
 export function resolveBenchmarkFixtureRoot(baseDir = path.dirname(fileURLToPath(import.meta.url))): string {
+  const internal = findUpward(baseDir, path.join('internal', 'benchmarks', 'fixtures'))
+  if (internal) return internal
+  const bundled = findUpward(baseDir, path.join('benchmarks', 'fixtures'))
+  if (bundled) return bundled
+  throw new Error(`Could not resolve benchmark fixture root from ${baseDir}`)
+}
+
+function findUpward(baseDir: string, relativePath: string): string | null {
   let cursor = path.resolve(baseDir)
   while (true) {
-    const candidate = path.join(cursor, 'internal', 'benchmarks', 'fixtures')
+    const candidate = path.join(cursor, relativePath)
     if (existsSync(candidate)) return candidate
     const parent = path.dirname(cursor)
-    if (parent === cursor) {
-      throw new Error(`Could not resolve benchmark fixture root from ${baseDir}`)
-    }
+    if (parent === cursor) return null
     cursor = parent
   }
 }

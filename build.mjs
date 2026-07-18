@@ -50,6 +50,11 @@ const copyAssetsPlugin = {
           filter: (path) => !path.endsWith('.ts') && !path.includes('__tests__'),
         })
       }
+      const benchmarkFixturesSrc = resolve(ROOT, 'internal/benchmarks/fixtures')
+      const benchmarkFixturesDst = join(OUT_DIR, 'benchmarks/fixtures')
+      if (existsSync(benchmarkFixturesSrc)) {
+        cpSync(benchmarkFixturesSrc, benchmarkFixturesDst, { recursive: true })
+      }
     })
   },
 }

@@ -47107,3 +47107,60 @@ User job:
   because its published artifact could not locate `internal/benchmarks/fixtures`.
   The repository build could run the same benchmark, so this is a packaging
   defect, not evidence that the benchmark itself is unavailable.
+
+## 2026-07-18 source-grounded spec admission and installed benchmark follow-up
+
+User job:
+
+> Imported project work must not become executable-looking specs by guessing
+> commands, paths, model families, fixtures, or artifact names that Guildhall
+> has not shown the owner.
+
+### Contract Touch Decision
+
+- Work id: `codex:source-grounded-spec-admission-2026-07-18`.
+- Touched contracts: the Spec Agent blueprint boundary and the `update-task`
+  durable spec write boundary for imported tasks.
+- Considered but not touched: task schema, source-claim schema, release
+  membership, and provider selection. The guard consumes existing provenance;
+  it does not add a second source-of-truth field.
+- Required follow-up: reframe the Narrative Harness tasks whose previous specs
+  invented implementation paths, then inspect the saved specs and approve only
+  source-grounded boundaries as delegated operator.
+- Proof required: focused grounding tests, task-queue regression tests, live
+  re-intake inspection, and installed-app/API verification.
+- Apply/revert: keep the prompt rule, deterministic admission check, and tests
+  together; reverting the admission check would restore plausible but
+  unsupported executable plans.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none. Existing imported task fields are read to
+  form a visible fact boundary; no new persisted field or compatibility reader
+  was added.
+- Scope/change class: write-boundary validation and prompt correction.
+- Existing data impact: existing malformed specs remain historical evidence;
+  reframing an active task clears and regenerates its planning fields through
+  the new boundary.
+- Migration id: none; no stored shape changed.
+- Compatibility reader: existing non-imported tasks retain their prior write
+  behavior; imported tasks fail closed when unsupported executable details are
+  proposed.
+- Fixtures/tests: `src/runtime/__tests__/spec-quality.test.ts`,
+  `src/tools/__tests__/task-queue.test.ts`, and
+  `src/agents/__tests__/guildhall-agent.test.ts`.
+- Owner-facing plan text: unsupported details remain a review/open-question
+  boundary until Guildhall has an exact visible proof path.
+- Rollback/revert: revert the validator and prompt/test changes together.
+
+### Live evidence
+
+- A targeted run of `task-broad-genre-drafting-model-proof` selected that task
+  as requested, but the generated spec still invented `mixtral`, a new proof
+  script, and guessed commands. This is the live failure the new admission
+  boundary is intended to prevent.
+- The installed benchmark fixture now materializes correctly, but the first
+  installed DeepSeek V4 Flash run failed `0/1` with the task untouched and
+  `idle_limit`; it recorded `123112/3140/76544` input/output/cache tokens and
+  `$0.006816`. This remains a failed installed-artifact proof, not a model
+  success claim.
