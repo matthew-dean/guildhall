@@ -1016,6 +1016,8 @@ describe('buildProjectOrientationSpine', () => {
         projectPath: '/tmp/narrative-harness/docs/harness',
         status: 'done',
         priority: 'normal',
+        proofPaths: [{ kind: 'command', command: 'pnpm test -- narrative-harness-current-model' }],
+        gateResults: [{ gateId: 'pnpm test -- narrative-harness-current-model', command: 'pnpm test -- narrative-harness-current-model', type: 'hard', passed: true }],
         releaseIds: ['stage-1-headless-mvp'],
         references: ['/tmp/narrative-harness/docs/harness/implementation-roadmap.md'],
       },
@@ -1038,6 +1040,8 @@ describe('buildProjectOrientationSpine', () => {
         projectPath: '/tmp/narrative-harness/docs/coherence',
         status: 'done',
         priority: 'normal',
+        proofPaths: [{ kind: 'command', command: 'pnpm test -- narrative-harness-current-world' }],
+        gateResults: [{ gateId: 'pnpm test -- narrative-harness-current-world', command: 'pnpm test -- narrative-harness-current-world', type: 'hard', passed: true }],
         releaseIds: ['stage-1-headless-mvp'],
         references: ['/tmp/narrative-harness/docs/specs/world-and-object-continuity.md'],
       },
@@ -1758,7 +1762,7 @@ describe('buildProjectOrientationSpine', () => {
 
     expect(spine.nodes['work:task-imported']?.proof).toMatchObject({
       state: 'needed',
-      missing: ['Planned proof exists, but no proof evidence has been attached yet.'],
+      missing: ['Required proof evidence is missing for pnpm test -- imported-harness-task.'],
     })
     expect(spine.proofContracts[0]?.state).toBe('needed')
   })
@@ -1885,7 +1889,7 @@ describe('buildProjectOrientationSpine', () => {
     expect(spine.proofContracts[0]).toMatchObject({
       title: 'Prove world-state continuity review over elapsed-time object and property changes.',
       state: 'needed',
-      missing: ['Required proof evidence has not been attached yet.'],
+      missing: ['Required proof evidence is missing for review evidence.'],
     })
   })
 
@@ -2608,6 +2612,8 @@ describe('buildProjectOrientationSpine', () => {
         status: 'done',
         priority: 'normal',
         releaseIds: ['stage-1-headless-mvp'],
+        proofPaths: [{ kind: 'command', command: 'pnpm test -- stage-one' }],
+        gateResults: [{ gateId: 'pnpm test -- stage-one', command: 'pnpm test -- stage-one', type: 'hard', passed: true }],
         completionHandoff: {
           summary: 'Stage one is proven.',
           whatChanged: ['Added CLI proof.'],
@@ -2667,6 +2673,8 @@ describe('buildProjectOrientationSpine', () => {
         status: 'done',
         priority: 'normal',
         releaseIds: ['stage-1-headless-mvp'],
+        proofPaths: [{ kind: 'command', command: 'pnpm test -- stage-one' }],
+        gateResults: [{ gateId: 'pnpm test -- stage-one', command: 'pnpm test -- stage-one', type: 'hard', passed: true }],
         completionHandoff: {
           summary: 'Stage one is proven.',
           whatChanged: ['Added CLI proof.'],

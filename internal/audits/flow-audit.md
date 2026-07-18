@@ -39,10 +39,10 @@ User job:
   A `ready` row that is still unshaped remains an owner checkpoint, preserving
   the existing distinction between a candidate that Guildhall can shape and a
   plan item that needs an owner decision.
-- Focused proof: project-scope, indexed-summary, and release-readiness suites
-  pass with 134 tests. The broader orientation suite currently retains 7
-  failures around older proof/fixture expectations; those are kept as an
-  explicit follow-up and are not included in the release-readiness claim.
+- Focused proof: project-scope, indexed-summary, release-readiness, shared
+  current-proof, and orientation suites pass with 208 tests. Current command
+  gates and approved reviewer evidence now settle the matching current proof
+  path; historical top-level evidence still cannot prove a reopened task.
 - Installed proof after rebuilding and restarting Guildhall: `/api/stale-server`
   reports `stale:false`; all 7 registered projects refreshed through the
   bounded projector with 0 errors in about 0.43 seconds. Narrative Harness
@@ -54,6 +54,51 @@ User job:
   13 blocking items, 9 proof-evidence blockers, and 0 owner blockers. This is
   proof that the shared state and owner-action semantics are coherent; it is
   explicitly not proof that the Narrative Harness release is complete.
+
+## 2026-07-18 current proof uses one evidence contract
+
+User job:
+
+> When Guildhall says a task is done or proven, the proof shown in orientation,
+> release readiness, and task-facing surfaces must come from the task's current
+> proof paths and the same current gate/reviewer evidence. A stale approval or
+> unrelated passed gate must not make a reopened or differently scoped task
+> look complete.
+
+### Contract Touch Decision
+
+- Work id: `codex:current-proof-authority-2026-07-18`.
+- Touched contracts: shared current-proof read model, orientation proof
+  summaries, and release proof interpretation for current command/review paths.
+- Considered but not touched: persisted task/release schema, gate identity,
+  reviewer event schema, task status values, and execution behavior.
+- Required follow-up: rerun the installed Narrative Harness release proof after
+  this shared read-model change and keep remaining proof blockers visible.
+- Proof required: shared proof tests, orientation and release-readiness tests,
+  installed artifact freshness, and cross-surface project-state agreement.
+- Apply/revert: keep the shared current-proof evidence matching and its tests
+  together; reverting either recreates surfaces that disagree about whether a
+  completed task is actually proven.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none. This is a derived read-model correction over
+  existing proof paths, gate results, reviewer evidence, and completion handoff.
+- Scope/change class: shared proof interpretation; no migration or historical
+  shape reader was added.
+- Existing data impact: current command paths can consume their matching passed
+  gate, and review paths can consume approved evidence text; an unscoped or
+  reopened task still cannot inherit unrelated historical proof.
+- Rollback/revert: revert the shared current-proof implementation and its
+  focused regression tests together.
+
+### Proof
+
+- `src/shared/__tests__/current-proof.test.ts`, orientation, scope, indexed
+  summary, and release-readiness suites pass with 208 tests.
+- The orientation fixtures now declare the command proof they claim to have
+  passed; the tests no longer use a bare `done` status as a substitute for
+  script-only proof.
 
 ## 2026-07-18 named release completion preserves later work
 

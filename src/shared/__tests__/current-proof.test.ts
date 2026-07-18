@@ -43,4 +43,34 @@ describe('summarizeCurrentProof', () => {
       missing: ['Current proof contract has not been attached yet.'],
     })
   })
+
+  it('settles a current command path from its matching passed gate', () => {
+    expect(summarizeCurrentProof({
+      status: 'done',
+      proofPaths: [{ kind: 'command', command: 'pnpm test -- current' }],
+      gateResults: [{ gateId: 'pnpm test -- current', command: 'pnpm test -- current', passed: true }],
+    })).toMatchObject({
+      state: 'proven',
+      verified: ['Proof passed: pnpm test -- current'],
+      missing: [],
+    })
+  })
+
+  it('settles a current review path from approved reviewer evidence', () => {
+    expect(summarizeCurrentProof({
+      status: 'done',
+      proofPaths: [{
+        kind: 'review',
+        expectedEvidence: ['The reviewer catches elapsed-time changes.'],
+      }],
+      latestReviewerSummary: [
+        '**Verdict:** Approved',
+        'The reviewer catches elapsed-time changes.',
+      ].join('\n'),
+    })).toMatchObject({
+      state: 'proven',
+      verified: ['Reviewer proof: The reviewer catches elapsed-time changes.'],
+      missing: [],
+    })
+  })
 })
