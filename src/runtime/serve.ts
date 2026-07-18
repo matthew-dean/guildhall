@@ -358,7 +358,7 @@ import {
   type AttentionRecord,
 } from './attention.js'
 import { materializeAttentionProjection, previewAttentionProjection, readSavedAttentionSurface, readSavedAttentionSurfaceFromBoundary } from './attention-projection.js'
-import { createProjectProjectionRefreshScheduler, type ProjectProjectionInvalidation, type ProjectProjectionRefreshScheduler } from './project-projection-refresh.js'
+import { createProjectProjectionRefreshScheduler, shouldRefreshProjectAtStartup, type ProjectProjectionInvalidation, type ProjectProjectionRefreshScheduler } from './project-projection-refresh.js'
 import { createProjectProjectionFreshnessWatcher } from './project-projection-freshness-watcher.js'
 import { projectRuntimeCompatibilityBlocker } from './runtime-compatibility.js'
 import { ProjectRuntimeSupervisor } from './project-runtime-supervisor.js'
@@ -18148,7 +18148,22 @@ export async function runServe(opts: ServeOptions = {}): Promise<void> {
         // Refresh in a small number of workers. Full Promise.all made startup
         // compete with itself for SQLite locks, filesystem reads, Git, and
         // memory even though no project depended on another project's refresh.
-        const pending = [...entries]
+        const pending = entries.filter(entry => {
+          try {
+            const resolved = resolveProject(entry.path)
+            if (resolved.initializationNeeded) return false
+            const authority = readProjectStateAuthorityAtBoundary(projectTasksPath(entry.path))
+            const summary = readProjectSummaryShellAtBoundary(entry.path).summary
+            return shouldRefreshProjectAtStartup({
+              authority: authority.authority,
+              summaryFreshness: summary?.freshness,
+            })
+          } catch {
+            // An unreadable boundary is itself a repair candidate. Keep the
+            // existing refresh path responsible for surfacing the error.
+            return true
+          }
+        })
         const workerCount = Math.min(2, pending.length)
         await Promise.all(Array.from({ length: workerCount }, async () => {
           while (pending.length > 0) {

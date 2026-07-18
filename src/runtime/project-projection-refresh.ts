@@ -20,6 +20,18 @@ export interface ProjectProjectionRefreshSchedulerOptions {
   onResult?: (result: ProjectProjectionRefreshResult) => void
 }
 
+/**
+ * Startup should repair missing or stale projections, not rebuild current
+ * ones. Current saved summaries are already the fleet read boundary; making
+ * service availability wait for every project detail refresh defeats it.
+ */
+export function shouldRefreshProjectAtStartup(input: {
+  authority: 'database' | 'legacy'
+  summaryFreshness: 'current' | 'stale' | 'missing' | 'error' | undefined
+}): boolean {
+  return input.authority !== 'database' || input.summaryFreshness !== 'current'
+}
+
 export interface ProjectProjectionRefreshScheduler {
   schedule(event: ProjectProjectionInvalidation): void
   getStatus(projectRoot: string): ProjectProjectionRefreshResult | null

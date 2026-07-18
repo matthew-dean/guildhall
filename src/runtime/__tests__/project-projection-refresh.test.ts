@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
   createProjectProjectionRefreshScheduler,
+  shouldRefreshProjectAtStartup,
   type ProjectProjectionInvalidation,
   type ProjectProjectionRefreshResult,
 } from '../project-projection-refresh.js'
@@ -15,6 +16,15 @@ afterEach(() => {
 
 describe('project projection refresh scheduler', () => {
   beforeEach(() => vi.useFakeTimers())
+
+  it.each([
+    [{ authority: 'database', summaryFreshness: 'current' }, false],
+    [{ authority: 'database', summaryFreshness: 'stale' }, true],
+    [{ authority: 'database', summaryFreshness: 'missing' }, true],
+    [{ authority: 'legacy', summaryFreshness: 'current' }, true],
+  ] as const)('refreshes startup only when the saved boundary needs it', (input, expected) => {
+    expect(shouldRefreshProjectAtStartup(input)).toBe(expected)
+  })
 
   it('coalesces a burst of writes for one project', async () => {
     const refresh = vi.fn(async () => {})

@@ -47108,6 +47108,92 @@ User job:
   The repository build could run the same benchmark, so this is a packaging
   defect, not evidence that the benchmark itself is unavailable.
 
+### 2026-07-18 bakeoff re-run correction
+
+The live rerun after the fixture-packaging fix supersedes the broad success
+summary above for model comparison. It used the installed `guildhall`
+command, the same configured DeepInfra-compatible provider, and the same
+one-case `swe-local --subset smoke` fixture, with reports written only under
+`/tmp`:
+
+- `deepseek-ai/DeepSeek-V4-Flash`: completed `1/1`, `0` false successes, and
+  `0` policy blocks. The run reached `all_terminal` after six ticks.
+- `moonshotai/Kimi-K2.7-Code`: did not complete. The spec lane made no
+  progress for three passes, then recovery repeated `spec_review` no-change
+  ticks through tick 16; the run was interrupted and is inconclusive.
+- `Qwen/Qwen3.5-35B-A3B`: did not complete. It repeatedly cycled
+  `gate_check -> in_progress -> review -> gate_check` through tick 15; the
+  run was interrupted and is inconclusive.
+
+These are orchestration/tool-use smoke results only, not Narrative Harness
+writing-quality evidence. The current live provider catalog was also queried
+directly: it lists Kimi K2.7 Code, DeepSeek V4 Flash/Pro, Qwen 3.5 35B,
+Qwen 3.6 35B, and Qwen Coder 480B, but no K3. Direct model-info requests for
+`moonshotai/Kimi-K3` and `moonshotai/Kimi-K3-Base` returned HTTP 404. The
+official Moonshot site identifies Kimi K3 as a current Moonshot product, so a
+K3 comparison requires the official Kimi/Moonshot provider path rather than
+DeepInfra.
+
+The current rerun still cannot establish fiction-drafting quality: Guildhall
+has no provider-backed Narrative Harness writing fixture, no expected-story
+anchors, no genre-balanced corpus, and no reviewer scorecard run against
+generated prose. The next valid claim requires that purpose-built evaluation.
+
+## 2026-07-18 startup uses current saved summaries without fleet-wide rebuild
+
+User job:
+
+> After restarting Guildhall, the Projects page should become usable from
+> saved bounded summaries immediately. Startup must repair missing or stale
+> projections without rebuilding every current project's detail state.
+
+### Contract Touch Decision
+
+- Work id: `codex:startup-summary-boundary-2026-07-18`.
+- Touched contracts: startup projection scheduling and the saved-summary fleet
+  read boundary.
+- Considered but not touched: project task, release, evidence, Thread, and
+  fleet-summary schemas; current saved projections remain authoritative.
+- Required follow-up: measure the same behavior with a deliberately stale or
+  missing project to prove repair remains scheduled while current projects are
+  skipped.
+- Proof required: startup-boundary unit tests, build/install/restart, stale
+  server check, and measured listener/refresh timing.
+- Apply/revert: keep the startup predicate, its test, and this evidence
+  together; reverting the predicate restores the fleet-wide refresh tax.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none. The change only chooses which existing
+  projections require startup repair.
+- Scope/change class: read/startup scheduling correction; no task, release,
+  history, or projection payload is rewritten.
+- Existing data impact: current saved summaries are served as-is; stale,
+  missing, and legacy boundaries remain eligible for the existing repair path.
+- Migration id: none.
+- Compatibility reader: none added.
+- Fixtures/tests: `project-projection-refresh.test.ts` covers current,
+  stale, missing, and legacy startup decisions.
+- Owner-facing plan text: no owner action; startup repair is internal and
+  current summaries are not presented as loading merely because the service
+  restarted.
+- Rollback/revert: revert the predicate and startup filtering together.
+
+### Installed evidence
+
+- `pnpm build` and `pnpm dev:install` passed.
+- After `guildhall stop` and `guildhall start`, `/api/stale-server` returned
+  `stale:false` for the installed `0.10.1` artifact.
+- The service contained seven registered projects. The listener responded in
+  approximately `85ms`; startup projection refresh completed in approximately
+  `20ms`, with `refreshedProjectCount:0` and `errorCount:0` because all seven
+  projects already had current database-backed summaries.
+- Before this change, the same installed service reported approximately
+  `12.6s` from refresh start to completion while refreshing all seven projects.
+- This proves the startup boundary is now summary-first for current projects;
+  it does not yet prove the stale/missing repair branch, which remains the
+  required follow-up.
+
 ## 2026-07-18 source-grounded spec admission and installed benchmark follow-up
 
 User job:
