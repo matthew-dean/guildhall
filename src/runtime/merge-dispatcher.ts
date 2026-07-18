@@ -284,6 +284,8 @@ function buildFixupTask(opts: {
       `\`\`\`\n${opts.detail}\n\`\`\``,
     domain: parent.domain,
     projectPath: parent.projectPath,
+    references: [],
+    sourceClaims: [],
     status: 'ready',
     priority: 'high',
     acceptanceCriteria: [],

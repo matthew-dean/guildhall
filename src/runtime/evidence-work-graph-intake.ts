@@ -563,6 +563,7 @@ function dependenciesFor(
 ): Pick<EvidenceTask, 'dependsOn' | 'relatedTasks'> & { taskIds: string[] } {
   const taskIds: string[] = []
   const relatedTasks: EvidenceTask['relatedTasks'] = []
+  const currentTaskId = implementationByDeliverable.get(unit.name)?.id
 
   for (const foundation of unit.buildsOn) {
     const normalizedFoundation = normalizeDeliverableName(foundation)
@@ -578,6 +579,7 @@ function dependenciesFor(
     }
 
     const existingTask = findExistingTaskByDeliverable(foundation, existingTasks)
+    if (existingTask?.id === currentTaskId) continue
     if (existingTask && !isExistingDone(existingTask) && !isExistingNonBlockingDependency(existingTask)) {
       taskIds.push(existingTask.id)
       relatedTasks.push({
@@ -764,14 +766,19 @@ function inferTargetArea(seed: UnitSeed): string {
   if (releaseFixture?.[1]) {
     return releaseFixture[1]
   }
-  const firstPathSegment = path.split('/').find(Boolean)
+  const pathSegments = path.split('/').filter(Boolean)
+  const firstPathSegment = pathSegments[0]
   if (firstPathSegment && !['docs', 'internal'].includes(firstPathSegment)) {
     return firstPathSegment
+  }
+  const documentArea = pathSegments[1]
+  if (documentArea && !['docs', 'internal'].includes(documentArea)) {
+    return documentArea
   }
   if (/dashboard integration/i.test(deliverable)) {
     return 'Admin settings page'
   }
-  return firstPathSegment ?? 'project'
+  return documentArea ?? firstPathSegment ?? 'project'
 }
 
 function normalizeTargetArea(value: string): string {

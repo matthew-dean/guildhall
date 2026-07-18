@@ -390,6 +390,31 @@ describe('buildReviewPlan', () => {
       blocking: 'advisory',
     })
   })
+
+  it('recognizes a script-only proof from the product brief and excludes UI review scope', () => {
+    const plan = buildReviewPlan({
+      task: task({
+        title: 'Build broad-genre drafting model proof',
+        description: 'Evaluate the configured provider across declared genres.',
+        productBrief: {
+          userJob: 'Validate the model with a script-only proof.',
+          whyItMattersNow: 'The CLI proof must pass before drafting work continues.',
+          successMetric: 'The proof command produces output for every declared genre.',
+          nonGoals: ["Don't implement UI for this proof."],
+          antiPatterns: ['Do not add a product screen for this task.'],
+          authoredBy: 'spec-agent',
+          authoredAt: '2026-05-25T12:00:00.000Z',
+        },
+      }),
+      changedFiles: ['scripts/proof-broad-genre-drafting.mjs'],
+      createdAt: '2026-05-25T12:00:00.000Z',
+    })
+
+    expect(plan.selectedLanes).not.toContain('ux_comprehension')
+    expect(plan.selectedLanes).not.toContain('visual_design')
+    expect(plan.selectedLanes).not.toContain('accessibility')
+    expect(plan.requiredArtifacts).not.toContain('visual-evidence')
+  })
 })
 
 describe('ensureTaskReviewPlanRecorded', () => {
@@ -471,6 +496,60 @@ describe('ensureTaskReviewPlanRecorded', () => {
     expect(result.recorded).toBe(false)
     expect(result.plan.createdAt).toBe('2026-05-25T11:00:00.000Z')
     expect(writes).toBe(0)
+  })
+
+  it('refreshes persisted proof checks when the task proof contract changes', async () => {
+    const existing = buildReviewPlan({
+      task: task({ title: 'Build broad-genre drafting model proof' }),
+      createdAt: '2026-05-25T11:00:00.000Z',
+    })
+    const savedPlans: ReviewPlanRecord[] = []
+    const savedEvents: ReviewPlanEvent[] = []
+    const store: Pick<ReviewAuditStore, 'readTaskReviewAudit' | 'saveReviewPlan' | 'appendReviewPlanEvent'> = {
+      async readTaskReviewAudit() {
+        return {
+          plan: persistedPlan(existing),
+          events: [],
+          reviewerRuns: [],
+          escapedMisses: [],
+        }
+      },
+      async saveReviewPlan(plan) {
+        savedPlans.push(plan as ReviewPlanRecord)
+        return persistedPlan(plan as ReviewPlanRecord)
+      },
+      async appendReviewPlanEvent(event) {
+        savedEvents.push(event as ReviewPlanEvent)
+        return persistedPlanEvent(event as ReviewPlanEvent)
+      },
+    }
+
+    const result = await ensureTaskReviewPlanRecorded({
+      store,
+      task: task({
+        title: 'Build broad-genre drafting model proof',
+        description: 'Run a script-only provider proof.',
+        productBrief: {
+          userJob: 'Validate the model with a script-only proof.',
+          whyItMattersNow: 'The proof must pass before drafting work continues.',
+          successMetric: 'The proof command produces output.',
+          nonGoals: ["Don't implement UI for this proof."],
+          antiPatterns: [],
+          authoredBy: 'spec-agent',
+          authoredAt: '2026-05-25T12:00:00.000Z',
+        },
+      }),
+      deterministicChecks: ['pnpm proof-broad-genre-drafting'],
+      changedFiles: ['scripts/proof-broad-genre-drafting.mjs'],
+      createdBy: 'coordinator:test',
+      now: () => new Date('2026-05-25T12:00:00.000Z'),
+    })
+
+    expect(result.recorded).toBe(true)
+    expect(result.plan.deterministicChecks).toEqual(['pnpm proof-broad-genre-drafting'])
+    expect(result.plan.requiredArtifacts).not.toContain('visual-evidence')
+    expect(savedPlans).toHaveLength(1)
+    expect(savedEvents[0]?.summary).toContain('current task proof contract')
   })
 
   it('repairs stored visual artifact gates when the task resolves to headless no-UI proof', async () => {

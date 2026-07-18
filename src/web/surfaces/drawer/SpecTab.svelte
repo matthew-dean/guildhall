@@ -41,6 +41,7 @@
     onRunEscalationAction: (escalation: Escalation) => void
     onSendFollowUp: (message: string) => Promise<void>
     onAddAcceptance: (description: string) => Promise<void>
+    onSetAcceptanceCommand: (criterionId: string, command: string) => Promise<void>
   }
 
   let {
@@ -55,10 +56,13 @@
     onRunEscalationAction,
     onSendFollowUp,
     onAddAcceptance,
+    onSetAcceptanceCommand,
   }: Props = $props()
 
   let followup = $state('')
   let acceptanceDraft = $state('')
+  let commandEditorOpen = $state<string | null>(null)
+  let commandDrafts = $state<Record<string, string>>({})
   const openEscalations = $derived(
     activeEscalations(task),
   )
@@ -146,6 +150,22 @@
     if (!description) return
     await onAddAcceptance(description)
     acceptanceDraft = ''
+  }
+
+  function openCommandEditor(criterion: Record<string, unknown>) {
+    const id = typeof criterion.id === 'string' ? criterion.id : ''
+    if (!id) return
+    commandDrafts[id] = typeof criterion.command === 'string' ? criterion.command : ''
+    commandEditorOpen = id
+  }
+
+  async function bindAcceptanceCommand(criterion: Record<string, unknown>) {
+    const id = typeof criterion.id === 'string' ? criterion.id : ''
+    const command = id ? (commandDrafts[id] ?? '').trim() : ''
+    if (!id || !command) return
+    await onSetAcceptanceCommand(id, command)
+    delete commandDrafts[id]
+    commandEditorOpen = null
   }
 
   type ChipTone = 'neutral' | 'ok' | 'warn' | 'danger' | 'accent' | 'running'
@@ -460,14 +480,45 @@
             <div class="acceptance-row">
               <span class="acceptance-text">
                 <Markdown source={escapeAngleBracketPlaceholders(a.description ?? a.text ?? JSON.stringify(a))} inline />
+                {#if typeof a.command === 'string' && a.command.trim().length > 0}
+                  <code class="acceptance-command">{a.command}</code>
+                {/if}
               </span>
-              <Chip
-                label={acceptanceStatusLabel(a)}
-                tone={acceptanceStatusTone(a)}
-                size="compact"
-                title={typeof a.staleReason === 'string' ? a.staleReason : acceptanceStatusLabel(a)}
-              />
+              <span class="acceptance-actions">
+                <Chip
+                  label={acceptanceStatusLabel(a)}
+                  tone={acceptanceStatusTone(a)}
+                  size="compact"
+                  title={typeof a.staleReason === 'string' ? a.staleReason : acceptanceStatusLabel(a)}
+                />
+                <Button variant="ghost" size="sm" onclick={() => openCommandEditor(a)}>
+                  {typeof a.command === 'string' && a.command.trim().length > 0 ? 'Change command' : 'Bind command'}
+                </Button>
+              </span>
             </div>
+            {#if commandEditorOpen === a.id}
+              <div class="acceptance-command-editor">
+                <Field label="Executable proof command">
+                  <Textarea
+                    value={commandDrafts[a.id] ?? ''}
+                    rows={1}
+                    mono
+                    placeholder="pnpm test"
+                    oninput={(value) => (commandDrafts[a.id] = value)}
+                  />
+                </Field>
+                <Row justify="end">
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    disabled={busy || (commandDrafts[a.id] ?? '').trim().length === 0}
+                    onclick={() => void bindAcceptanceCommand(a)}
+                  >
+                    Bind
+                  </Button>
+                </Row>
+              </div>
+            {/if}
           </li>
         {/each}
       </ul>
@@ -571,6 +622,28 @@
   }
   .acceptance-text {
     min-width: 0;
+  }
+  .acceptance-command {
+    display: block;
+    margin-top: var(--s-1);
+    color: var(--text-muted);
+    font-family: 'SF Mono', ui-monospace, monospace;
+    font-size: var(--gh-type-size-meta);
+    line-height: var(--gh-type-line-height-body);
+    overflow-wrap: anywhere;
+  }
+  .acceptance-actions {
+    display: inline-flex;
+    align-items: center;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: var(--s-2);
+    flex: none;
+  }
+  .acceptance-command-editor {
+    display: grid;
+    gap: var(--s-2);
+    margin: var(--s-2) 0 0 var(--s-4);
   }
   .lede {
     color: var(--text-muted);

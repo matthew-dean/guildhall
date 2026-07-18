@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises'
-import { createReadStream } from 'node:fs'
+import { createReadStream, statSync } from 'node:fs'
+import { DatabaseSync } from 'node:sqlite'
 import { gzipSync, gunzipSync } from 'node:zlib'
 import path from 'node:path'
 import { createInterface } from 'node:readline'
@@ -28,9 +29,11 @@ import {
   compactProjectStateDatabaseTaskEvidenceHistory,
   importProjectStateDatabaseTaskEvidence,
   readProjectStateDatabaseCurrentAuthority,
+  readProjectStateDatabaseTaskEvidenceBoundary,
   readProjectStateDatabaseTaskEvidenceAuthority,
   readProjectStateDatabaseTaskEvidenceHistory,
   readProjectStateDatabaseTaskEvidenceHistoryAll,
+  projectStateDatabasePath,
   setProjectStateDatabaseTaskEvidenceAuthority,
 } from './project-state-database.js'
 import { markProjectSummaryStale } from './project-summary-staleness.js'
@@ -44,6 +47,7 @@ const EVIDENCE_FILE_BY_KIND: Record<TaskEvidenceKind, string> = {
   escalation: 'escalations.jsonl',
   agent_issue: 'agent-issues.jsonl',
   merge_record: 'merge-records.jsonl',
+  completion_summary: 'completion-summaries.jsonl',
   git_story: 'git-story.jsonl',
 }
 
@@ -68,6 +72,7 @@ export const TASK_EVIDENCE_RETENTION: Record<TaskEvidenceKind, { maxRecords: num
   escalation: { maxRecords: 32, maxBytes: 64 * 1024 },
   agent_issue: { maxRecords: 32, maxBytes: 64 * 1024 },
   merge_record: { maxRecords: 16, maxBytes: 32 * 1024 },
+  completion_summary: { maxRecords: 8, maxBytes: 64 * 1024 },
   git_story: { maxRecords: 16, maxBytes: 32 * 1024 },
 }
 
@@ -400,13 +405,15 @@ export async function appendTaskEvidence(
   })
   const durable = compactTaskEvidenceEvent(parsed)
   return withTaskEvidenceLock(projectRoot, async () => {
-    const evidenceAuthority = readProjectStateDatabaseTaskEvidenceAuthority(projectRoot)
-    if (readProjectStateDatabaseCurrentAuthority(projectRoot) === 'database' &&
+    const evidenceBoundary = readProjectStateDatabaseTaskEvidenceBoundary(projectRoot)
+    const projectAuthority = evidenceBoundary?.projectAuthority ?? 'legacy'
+    const evidenceAuthority = evidenceBoundary?.evidenceAuthority ?? null
+    if (projectAuthority === 'database' &&
         (evidenceAuthority === 'database' || evidenceAuthority === 'legacy')) {
       appendProjectStateDatabaseTaskEvidence(projectRoot, durable, TASK_EVIDENCE_RETENTION[durable.kind])
       return parsed
     }
-    if (readProjectStateDatabaseCurrentAuthority(projectRoot) === 'database' && evidenceAuthority === 'compressed') {
+    if (projectAuthority === 'database' && evidenceAuthority === 'compressed') {
       // Detail history is the durable first write. If the projection update
       // fails, a later repair can derive current proof from the retained event.
       await appendCompressedTaskEvidence(projectRoot, durable)
@@ -773,17 +780,19 @@ export async function readTaskEvidence(
   opts: { kind?: TaskEvidenceKind; allowLegacy?: boolean } = {},
 ): Promise<TaskEvidenceEvent[]> {
   const kinds = opts.kind ? [opts.kind] : Object.keys(EVIDENCE_FILE_BY_KIND) as TaskEvidenceKind[]
-  const evidenceAuthority = readProjectStateDatabaseTaskEvidenceAuthority(projectRoot)
-  if (readProjectStateDatabaseCurrentAuthority(projectRoot) === 'database' && evidenceAuthority === 'database') {
+  const evidenceBoundary = readProjectStateDatabaseTaskEvidenceBoundary(projectRoot)
+  const currentAuthority = evidenceBoundary?.projectAuthority ?? 'legacy'
+  const evidenceAuthority = evidenceBoundary?.evidenceAuthority ?? null
+  if (currentAuthority === 'database' && evidenceAuthority === 'database') {
     const history = readProjectStateDatabaseTaskEvidenceHistory(projectRoot, taskId, opts.kind)
     if (history === null) throw new Error(`Normalized task evidence history is unavailable for promoted project ${taskId}`)
     return history
   }
-  if (readProjectStateDatabaseCurrentAuthority(projectRoot) === 'database' && evidenceAuthority === 'compressed') {
+  if (currentAuthority === 'database' && evidenceAuthority === 'compressed') {
     return (await readCompressedTaskEvidence(projectRoot, taskId, kinds))
       .sort((a, b) => a.recordedAt.localeCompare(b.recordedAt) || a.id.localeCompare(b.id))
   }
-  if (readProjectStateDatabaseCurrentAuthority(projectRoot) === 'database' && opts.allowLegacy !== true) {
+  if (currentAuthority === 'database' && opts.allowLegacy !== true) {
     const legacyFiles: string[] = []
     for (const kind of kinds) {
       const file = taskEvidencePath(projectRoot, taskId, kind)
@@ -817,6 +826,166 @@ export interface TaskEvidencePage {
   bytes: number
   maxBytes: number
   nextCursor?: number
+  authority?: 'database' | 'compressed' | 'legacy'
+  projectAuthority?: 'database' | 'legacy'
+  revision?: number
+}
+
+const DATABASE_TASK_EVIDENCE_MAX_RECORDS_PER_KIND = 64
+
+interface DatabaseTaskEvidenceRow {
+  task_id?: unknown
+  kind?: unknown
+  evidence_id?: unknown
+  recorded_at?: unknown
+  payload_json?: unknown
+}
+
+function databaseTaskEvidenceQuery(
+  taskId: string,
+  kind: TaskEvidenceKind | undefined,
+  order: 'newest' | 'oldest',
+): { sql: string; params: string[] } {
+  const direction = order === 'oldest' ? 'ASC' : 'DESC'
+  return {
+    sql: `
+      SELECT task_id, kind, evidence_id, recorded_at, payload_json
+      FROM (
+        SELECT task_id, kind, evidence_id, recorded_at, payload_json,
+          ROW_NUMBER() OVER (
+            PARTITION BY kind
+            ORDER BY recorded_at DESC, evidence_id DESC
+          ) AS kind_rank
+        FROM task_evidence_history
+        WHERE task_id = ?${kind ? ' AND kind = ?' : ''}
+      )
+      WHERE kind_rank <= ${DATABASE_TASK_EVIDENCE_MAX_RECORDS_PER_KIND}
+      ORDER BY recorded_at ${direction}, evidence_id ${direction}
+    `,
+    params: kind ? [taskId, kind] : [taskId],
+  }
+}
+
+function parseDatabaseTaskEvidenceRow(row: DatabaseTaskEvidenceRow): TaskEvidenceEvent | null {
+  const taskId = typeof row.task_id === 'string' ? row.task_id : ''
+  const kind = typeof row.kind === 'string' ? row.kind : ''
+  const id = typeof row.evidence_id === 'string' ? row.evidence_id : ''
+  const recordedAt = typeof row.recorded_at === 'string' ? row.recorded_at : ''
+  if (!taskId || !kind || !id || !recordedAt || typeof row.payload_json !== 'string') return null
+  try {
+    return TaskEvidenceEvent.parse({
+      id,
+      taskId,
+      kind,
+      recordedAt,
+      payload: JSON.parse(row.payload_json),
+    })
+  } catch {
+    return null
+  }
+}
+
+function hasLegacyTaskEvidenceFiles(
+  projectRoot: string,
+  taskId: string,
+  kinds: readonly TaskEvidenceKind[],
+): boolean {
+  return kinds.some(kind => {
+    try {
+      statSync(taskEvidencePath(projectRoot, taskId, kind))
+      return true
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      return false
+    }
+  })
+}
+
+function readDatabaseTaskEvidencePage(
+  projectRoot: string,
+  taskId: string,
+  opts: {
+    kind?: TaskEvidenceKind
+    cursor: number
+    limit: number
+    order: 'newest' | 'oldest'
+    maxBytes: number
+    filter?: (event: TaskEvidenceEvent) => boolean
+  },
+): TaskEvidencePage | null {
+  const databasePath = projectStateDatabasePath(projectRoot)
+  try {
+    statSync(databasePath)
+  } catch {
+    return null
+  }
+
+  const database = new DatabaseSync(databasePath, { readOnly: true })
+  try {
+    const historyTable = database.prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'task_evidence_history'",
+    ).get()
+    if (!historyTable) return null
+
+    const { sql, params } = databaseTaskEvidenceQuery(taskId, opts.kind, opts.order)
+    const queryParams = params
+    const revisionRow = database.prepare('SELECT revision FROM project_meta WHERE id = 1').get() as { revision?: unknown } | undefined
+    const revision = typeof revisionRow?.revision === 'number'
+      ? revisionRow.revision
+      : Number(revisionRow?.revision ?? 0)
+    const page: TaskEvidenceEvent[] = []
+    let bytes = 0
+    let total = 0
+    let rowOffset = opts.filter ? 0 : opts.cursor
+    const rowAt = database.prepare(`${sql} LIMIT 1 OFFSET ?`)
+    let byteLimitReached = false
+
+    // A callback filter cannot be compiled into SQL. Stream one bounded row at
+    // a time so filtering preserves the public API without rebuilding history.
+    // The unfiltered path gets its total directly from SQLite instead.
+    const filtered = Boolean(opts.filter)
+    if (!filtered) {
+      const countRow = database.prepare(`SELECT COUNT(*) AS count FROM (${sql})`).get(...queryParams) as { count?: unknown } | undefined
+      total = Number(countRow?.count ?? 0)
+    }
+
+    while (true) {
+      const row = rowAt.get(...queryParams, rowOffset) as DatabaseTaskEvidenceRow | undefined
+      if (!row) break
+      rowOffset += 1
+      const event = parseDatabaseTaskEvidenceRow(row)
+      if (!event || (opts.filter && !opts.filter(event))) continue
+      total += filtered ? 1 : 0
+      if (filtered && total <= opts.cursor) continue
+      if (page.length >= opts.limit || byteLimitReached) continue
+      const eventBytes = Buffer.byteLength(JSON.stringify(event), 'utf8')
+      if (page.length > 0 && bytes + eventBytes > opts.maxBytes) {
+        if (!filtered) break
+        byteLimitReached = true
+        continue
+      }
+      page.push(event)
+      bytes += eventBytes
+      if (!filtered && page.length >= opts.limit) break
+    }
+
+    const hasMore = opts.cursor + page.length < total
+    return {
+      events: page,
+      cursor: opts.cursor,
+      limit: opts.limit,
+      total,
+      hasMore,
+      bytes,
+      maxBytes: opts.maxBytes,
+      ...(hasMore ? { nextCursor: opts.cursor + page.length } : {}),
+      authority: 'database',
+      projectAuthority: 'database',
+      ...(Number.isFinite(revision) ? { revision } : {}),
+    }
+  } finally {
+    database.close()
+  }
 }
 
 /**
@@ -841,7 +1010,24 @@ export async function readTaskEvidencePage(
   const cursor = Math.min(Math.max(Math.trunc(opts.cursor ?? 0), 0), 1_000)
   const order = opts.order ?? 'newest'
   const maxBytes = Math.min(Math.max(Math.trunc(opts.maxBytes ?? TASK_EVIDENCE_PAGE_MAX_BYTES), 1), TASK_EVIDENCE_PAGE_MAX_BYTES)
-  if (readProjectStateDatabaseCurrentAuthority(projectRoot) === 'database') {
+  const evidenceBoundary = readProjectStateDatabaseTaskEvidenceBoundary(projectRoot)
+  const currentAuthority = evidenceBoundary?.projectAuthority ?? 'legacy'
+  const evidenceAuthority = evidenceBoundary?.evidenceAuthority ?? null
+  const legacyEvidenceRemains = evidenceAuthority !== 'database' &&
+    evidenceAuthority !== 'compressed' &&
+    hasLegacyTaskEvidenceFiles(projectRoot, taskId, kinds)
+  if (currentAuthority === 'database' && evidenceAuthority !== 'compressed' && !legacyEvidenceRemains) {
+    const databasePage = readDatabaseTaskEvidencePage(projectRoot, taskId, {
+      kind: opts.kind,
+      cursor,
+      limit,
+      order,
+      maxBytes,
+      filter: opts.filter,
+    })
+    if (databasePage) return databasePage
+  }
+  if (currentAuthority === 'database') {
     const all = await readTaskEvidence(projectRoot, taskId, opts)
     const filtered = opts.filter ? all.filter(opts.filter) : all
     const ordered = opts.order === 'oldest'
@@ -866,6 +1052,11 @@ export async function readTaskEvidencePage(
       bytes,
       maxBytes,
       ...(hasMore ? { nextCursor: cursor + page.length } : {}),
+      authority: evidenceAuthority === 'compressed' ? 'compressed' : 'database',
+      projectAuthority: currentAuthority,
+      ...(evidenceBoundary?.projectRevision !== null && evidenceBoundary?.projectRevision !== undefined
+        ? { revision: evidenceBoundary.projectRevision }
+        : {}),
     }
   }
   const windowSize = cursor + limit
@@ -940,6 +1131,8 @@ export async function readTaskEvidencePage(
     bytes,
     maxBytes,
     ...(hasMore ? { nextCursor: cursor + events.length } : {}),
+    authority: 'legacy',
+    projectAuthority: currentAuthority,
   }
 }
 

@@ -38,7 +38,12 @@ import {
   readTaskWorkspaceStore,
 } from './task-state-store.js'
 import { effectiveTaskTitle } from '../shared/task-display-label.js'
-import { hasActiveProofRecovery, normalizeAcceptanceCriteriaForCurrentProof, taskDoneButProofMissing } from './proof-health.js'
+import {
+  hasActiveProofRecovery,
+  latestFallbackApprovalHasUnresolvedSubstantiveRevision,
+  normalizeAcceptanceCriteriaForCurrentProof,
+  taskDoneButProofMissing,
+} from './proof-health.js'
 import {
   latestRecordedCompletionProofAt,
   recordedCompletionProofCanSettleTaskStatus,
@@ -64,6 +69,9 @@ export function effectiveTaskStatus(task: unknown): string | undefined {
   const record = task as Record<string, unknown>
   const status = typeof record.status === 'string' ? record.status : undefined
   if (hasActiveProofRecovery(record)) return status
+  // Reopening a falsely completed task must not be immediately re-promoted by
+  // older completion proof while the substantive review finding is unresolved.
+  if (latestFallbackApprovalHasUnresolvedSubstantiveRevision(record)) return status
   if (!recordedCompletionProofCanSettleTaskStatus(record) || taskDoneButProofMissing(record)) return status
   if (status === 'blocked') {
     const proofAt = latestRecordedCompletionProofAt(record)
@@ -232,6 +240,16 @@ export function legacyEvidenceFromTask(task: LegacyTask): TaskEvidenceEvent[] {
       payload: task.mergeRecord as Record<string, unknown>,
     })
   }
+  if (task.doneSummaryBundle) {
+    const summary = task.doneSummaryBundle as { createdAt?: string }
+    events.push({
+      id: eventId(task.id, 'completion-summary', 0, summary.createdAt ?? task.updatedAt),
+      taskId: task.id,
+      kind: 'completion_summary',
+      recordedAt: summary.createdAt ?? task.updatedAt,
+      payload: task.doneSummaryBundle as Record<string, unknown>,
+    })
+  }
   return events.sort((a, b) => a.recordedAt.localeCompare(b.recordedAt))
 }
 
@@ -289,6 +307,7 @@ export function stripLegacyRuntimeFields<T extends Record<string, unknown>>(task
     handoffStep: _handoffStep,
     shelveReason: _shelveReason,
     proofRecovery: _proofRecovery,
+    doneSummaryBundle: _doneSummaryBundle,
     worktreePath: _worktreePath,
     branchName: _branchName,
     baseBranch: _baseBranch,
@@ -305,12 +324,14 @@ export async function buildEffectiveTask(
     evidence?: 'full' | 'current' | 'none'
     /** Use an overlay captured by the caller's authoritative read snapshot. */
     overlay?: ProjectStateDatabaseTaskOverlay | null
+    /** Use the authority captured by the caller's authoritative read snapshot. */
+    authority?: 'database' | 'legacy'
   } = {},
 ): Promise<EffectiveTask> {
   const overlay = options.overlay !== undefined
     ? options.overlay
     : readProjectStateDatabaseTaskOverlay(projectRoot, task.id)
-  const databaseAuthority = readProjectStateDatabaseCurrentAuthority(projectRoot) === 'database'
+  const databaseAuthority = (options.authority ?? readProjectStateDatabaseCurrentAuthority(projectRoot)) === 'database'
   if (databaseAuthority && overlay === null) {
     throw new Error(`Normalized task state is unavailable for promoted task ${task.id}`)
   }
@@ -347,12 +368,14 @@ export async function buildEffectiveTasks(
     evidence?: 'full' | 'current' | 'none'
     /** Use overlays captured by the caller's authoritative read snapshot. */
     databaseStores?: ProjectStateDatabaseTaskOverlayStores | null
+    /** Use the authority captured by the caller's authoritative read snapshot. */
+    authority?: 'database' | 'legacy'
   } = {},
 ): Promise<EffectiveTask[]> {
   const databaseStores = options.databaseStores !== undefined
     ? options.databaseStores
     : readProjectStateDatabaseTaskOverlayStores(projectRoot)
-  const databaseAuthority = readProjectStateDatabaseCurrentAuthority(projectRoot) === 'database'
+  const databaseAuthority = (options.authority ?? readProjectStateDatabaseCurrentAuthority(projectRoot)) === 'database'
   if (databaseAuthority && databaseStores === null) {
     throw new Error('Normalized task state is unavailable for promoted project')
   }
@@ -468,6 +491,7 @@ function buildEffectiveTaskFromState(
     ...(effectiveRuntime?.workerRecovery !== undefined ? { workerRecovery: effectiveRuntime.workerRecovery } : {}),
     ...(effectiveRuntime?.handoffStep !== undefined ? { handoffStep: effectiveRuntime.handoffStep } : {}),
     ...(effectiveRuntime?.shelveReason !== undefined ? { shelveReason: effectiveRuntime.shelveReason } : {}),
+    ...(effectiveRuntime?.proofRecovery ? { proofRecovery: effectiveRuntime.proofRecovery } : {}),
     ...(workspace?.worktreePath !== undefined ? { worktreePath: workspace.worktreePath } : {}),
     ...(workspace?.branchName !== undefined ? { branchName: workspace.branchName } : {}),
     ...(workspace?.baseBranch !== undefined ? { baseBranch: workspace.baseBranch } : {}),
@@ -511,12 +535,17 @@ function normalizeProofPathStatuses(task: Record<string, unknown>): Record<strin
 
 function normalizeTerminalCompletionEvidence(task: Record<string, unknown>): Record<string, unknown> {
   if (task.status === 'done' || task.status === 'shelved' || task.status === 'archived' || task.status === 'cancelled') return {}
+  if (latestFallbackApprovalHasUnresolvedSubstantiveRevision(task)) return {}
   const completedAt = typeof task.completedAt === 'string' && task.completedAt.trim().length > 0
     ? task.completedAt.trim()
     : null
   const doneSummary = task.doneSummaryBundle && typeof task.doneSummaryBundle === 'object' && !Array.isArray(task.doneSummaryBundle)
     ? task.doneSummaryBundle as Record<string, unknown>
     : null
+  // A fresh spec pass supersedes older merge/proof evidence for the current
+  // lifecycle. Keep that evidence in history, but do not re-promote the task
+  // to done while the reopened summary is the latest completion record.
+  if (doneSummary?.status === 'reopened') return {}
   const mergeRecord = task.mergeRecord && typeof task.mergeRecord === 'object' && !Array.isArray(task.mergeRecord)
     ? task.mergeRecord as Record<string, unknown>
     : null
@@ -589,6 +618,9 @@ function legacyFieldsFromEvidence(evidence: TaskEvidenceEvent[]): Record<string,
   const mergeRecords = evidence
     .filter((event) => event.kind === 'merge_record')
     .flatMap((event) => parseEvidencePayload(TaskSchema.shape.mergeRecord, event.payload))
+  const completionSummaries = evidence
+    .filter((event) => event.kind === 'completion_summary')
+    .flatMap((event) => parseEvidencePayload(TaskSchema.shape.doneSummaryBundle, event.payload))
   return {
     ...(notes.length > 0 ? { notes } : {}),
     ...(gateResults.length > 0 ? { gateResults } : {}),
@@ -597,6 +629,7 @@ function legacyFieldsFromEvidence(evidence: TaskEvidenceEvent[]): Record<string,
     ...(escalations.length > 0 ? { escalations } : {}),
     ...(agentIssues.length > 0 ? { agentIssues } : {}),
     ...(mergeRecords.length > 0 ? { mergeRecord: mergeRecords[mergeRecords.length - 1] } : {}),
+    ...(completionSummaries.length > 0 ? { doneSummaryBundle: completionSummaries[completionSummaries.length - 1] } : {}),
   }
 }
 
@@ -605,9 +638,15 @@ function parseEvidencePayload(
   payload: unknown,
 ): Record<string, unknown>[] {
   const parsed = schema.safeParse(payload)
-  return parsed.success && parsed.data && typeof parsed.data === 'object' && !Array.isArray(parsed.data)
-    ? [parsed.data as Record<string, unknown>]
-    : []
+  if (parsed.success && parsed.data && typeof parsed.data === 'object' && !Array.isArray(parsed.data)) {
+    return [parsed.data as Record<string, unknown>]
+  }
+  // A malformed historical payload remains available in the raw evidence
+  // stream, but it cannot cross into the current Task projection. Emitting it
+  // here makes every strict consumer re-parse old history and turns one stale
+  // record into a project-wide read failure. Current state must be schema-clean;
+  // history is where incompatible legacy evidence belongs.
+  return []
 }
 
 function coalescePayloadsById(payloads: Record<string, unknown>[]): Record<string, unknown>[] {

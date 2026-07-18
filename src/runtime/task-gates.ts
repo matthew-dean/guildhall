@@ -108,6 +108,54 @@ function isSelfReferentialGuildhallTaskCommand(command: string): boolean {
   return /\b(?:npx\s+)?guildhall\s+run\b/i.test(normalized) && /\s--task(?:=|\s)/i.test(normalized)
 }
 
+function packageScriptBodyForCommand(command: string, projectPath: string): string | null {
+  const normalized = normalizeCommand(command)
+  const dirMatch = /^pnpm\s+--dir\s+(\S+)\s+(.+)$/i.exec(normalized)
+  const targetPath = dirMatch ? path.resolve(projectPath, dirMatch[1]!) : projectPath
+  const scriptCommand = dirMatch?.[2] ?? normalized.replace(/^pnpm\s+/i, '')
+  const scriptMatch = /^(?:run\s+)?([a-z0-9:_-]+)(?:\s|$)/i.exec(scriptCommand)
+  if (!scriptMatch) return null
+  const script = scriptMatch[1]!
+  if (['exec', 'install', 'add', 'remove', 'update', 'dlx'].includes(script.toLowerCase())) return null
+  return readPackageScripts(targetPath)?.scriptBodies[script]?.trim() ?? null
+}
+
+export type InvalidAutomatedAcceptanceCommand = {
+  criterionId: string
+  command: string
+  reason: string
+}
+
+/** Keep acceptance gates on the project side of the Guildhall boundary. */
+export function findInvalidAutomatedAcceptanceCommands(input: {
+  task: Pick<Task, 'acceptanceCriteria'>
+  projectPath: string
+}): readonly InvalidAutomatedAcceptanceCommand[] {
+  const invalid: InvalidAutomatedAcceptanceCommand[] = []
+  for (const criterion of input.task.acceptanceCriteria ?? []) {
+    if (criterion.verifiedBy !== 'automated') continue
+    const command = typeof criterion.command === 'string' ? normalizeCommand(criterion.command) : ''
+    if (!command) continue
+    if (isSelfReferentialGuildhallTaskCommand(command)) {
+      invalid.push({
+        criterionId: criterion.id,
+        command,
+        reason: 'The command invokes Guildhall task orchestration instead of proving the project locally.',
+      })
+      continue
+    }
+    const scriptBody = packageScriptBodyForCommand(command, input.projectPath)
+    if (scriptBody && isSelfReferentialGuildhallTaskCommand(scriptBody)) {
+      invalid.push({
+        criterionId: criterion.id,
+        command,
+        reason: 'The command resolves to a package script that invokes Guildhall task orchestration instead of proving the project locally.',
+      })
+    }
+  }
+  return invalid
+}
+
 function isValidPackageScriptProofCommand(
   parsed: { scriptBodies: Record<string, string> } | null | undefined,
   script: string,
@@ -683,6 +731,13 @@ function validateOrNormalizePnpmCommand(command: string, projectPath: string): s
   const rootScripts = rootPackage?.scripts ?? new Set<string>()
   const packages = readWorkspacePackages(projectPath)
 
+  // A project proof may use Node directly, but the project package manager is
+  // still the execution boundary. Keep the command reproducible through the
+  // workspace's PNPM environment instead of persisting a bare `node` call.
+  if (/^node(?:\s|$)/i.test(normalized)) {
+    return normalizeCommand(`pnpm exec ${normalized}`)
+  }
+
   const cdCommand = /^cd\s+(\S+)\s*&&\s*(.+)$/i.exec(normalized)
   if (cdCommand) {
     const [, relDir, rest] = cdCommand
@@ -942,46 +997,6 @@ export function reconcileAutomatedAcceptanceCommandsFromVerifiedWork(input: {
   return changed
 }
 
-function mergeAcceptanceAndProjectGates(
-  acceptanceBuckets: Map<GateCommandKind, string[]>,
-  projectCommands: readonly string[] | undefined,
-): readonly string[] | undefined {
-  if (acceptanceBuckets.size === 0) return projectCommands
-
-  const merged: string[] = []
-  const seen = new Set<string>()
-  const pushAll = (commands: readonly string[]) => {
-    for (const command of commands) {
-      const normalized = normalizeCommand(command)
-      if (normalized.length === 0 || seen.has(normalized)) continue
-      seen.add(normalized)
-      merged.push(command.trim())
-    }
-  }
-
-  for (const kind of ['typecheck', 'build', 'test', 'lint'] as const) {
-    const acceptance = acceptanceBuckets.get(kind)
-    if (acceptance && acceptance.length > 0) {
-      pushAll(acceptance)
-      continue
-    }
-    const fallback = (projectCommands ?? []).filter((command) => classifyGateCommand(command) === kind)
-    pushAll(fallback)
-  }
-
-  for (const [kind, commands] of acceptanceBuckets) {
-    if (kind === 'typecheck' || kind === 'build' || kind === 'test' || kind === 'lint') continue
-    pushAll(commands)
-  }
-
-  if (projectCommands) {
-    const remaining = projectCommands.filter((command) => classifyGateCommand(command) === 'other')
-    pushAll(remaining)
-  }
-
-  return merged
-}
-
 function deriveFocusedVerificationBuckets(
   projectPath: string,
   likelyTargetFiles: readonly string[],
@@ -1024,14 +1039,6 @@ function mergeVerificationCommands(
   projectCommands: readonly string[] | undefined,
   narrowTaskHint: boolean,
 ): readonly string[] | undefined {
-  if (
-    acceptanceBuckets.size === 0 &&
-    focusedBuckets.size === 0 &&
-    !narrowTaskHint
-  ) {
-    return projectCommands
-  }
-
   const merged: string[] = []
   const seen = new Set<string>()
   const pushAll = (commands: readonly string[]) => {
@@ -1042,6 +1049,33 @@ function mergeVerificationCommands(
       merged.push(command.trim())
     }
   }
+
+  // Explicit automated acceptance commands are the task's proof contract.
+  // They already express the scope the planner approved, so adding missing
+  // categories from workspace bootstrap would turn an intentionally narrow
+  // task into an unrelated project-wide gate (for example, adding `pnpm
+  // build` to a script-only proof). When a task has a broad test command but
+  // Guildhall can derive a focused target from its changed files, the focused
+  // command is the more concrete form of that same proof. Bootstrap commands
+  // remain the inference path only when the task has no concrete automated
+  // proof of its own.
+  if (acceptanceBuckets.size > 0) {
+    for (const kind of ['typecheck', 'build', 'test', 'lint'] as const) {
+      const focused = focusedBuckets.get(kind)
+      if (kind === 'test' && focused && focused.length > 0) {
+        pushAll(focused)
+        continue
+      }
+      pushAll(acceptanceBuckets.get(kind) ?? [])
+    }
+    for (const [kind, commands] of acceptanceBuckets) {
+      if (kind === 'typecheck' || kind === 'build' || kind === 'test' || kind === 'lint') continue
+      pushAll(commands)
+    }
+    return merged.length > 0 ? merged : undefined
+  }
+
+  if (focusedBuckets.size === 0 && !narrowTaskHint) return projectCommands
 
   for (const kind of ['typecheck', 'build', 'test', 'lint'] as const) {
     const acceptance = acceptanceBuckets.get(kind)

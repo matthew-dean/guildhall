@@ -10,6 +10,7 @@ import {
   updateTaskTool,
   addTaskTool,
   materializeSplitChildren,
+  materializeProofSetupTask,
   settleMaterializedSplitReadiness,
 } from '../task-queue.js'
 import {
@@ -19,6 +20,7 @@ import {
   readProjectStateDatabaseTask,
   readProjectTaskQueueSync,
   readTaskEvidence,
+  upsertTaskRuntimeState,
   appendTaskEvidence,
 } from '@guildhall/sessions'
 import { TaskQueue } from '@guildhall/core'
@@ -115,6 +117,80 @@ describe('readTasks', () => {
 })
 
 describe('updateTask', () => {
+  it('does not let the spec agent enter spec_review without a durable spec', async () => {
+    const result = await updateTask(
+      { tasksPath, taskId: 'task-001', status: 'spec_review' },
+      { current_agent_id: 'spec-agent' },
+    )
+
+    expect(result).toMatchObject({
+      success: false,
+      error: expect.stringContaining('without a durable spec'),
+    })
+    expect(readProjectTaskQueueSync(tasksPath).tasks[0].status).toBe('exploring')
+  })
+
+  it('rejects recovery/process history inside the current task spec', async () => {
+    const result = await updateTask(
+      {
+        tasksPath,
+        taskId: 'task-001',
+        spec: [
+          '## Summary',
+          'Build the current task.',
+          '',
+          'Resolved owner decisions:',
+          '- Exceeded maxRevisions (3). Requires human judgment.',
+        ].join('\n'),
+      },
+      { current_agent_id: 'spec-agent' },
+    )
+
+    expect(result).toMatchObject({
+      success: false,
+      error: expect.stringContaining('Current task specs may only contain the product boundary'),
+    })
+    expect(readProjectTaskQueueSync(tasksPath).tasks[0]?.spec).toBeUndefined()
+  })
+
+  it('rejects bare workspace proof commands in a selected script-only release', async () => {
+    const queue = TaskQueue.parse({
+      ...seedQueue,
+      selectedReleaseId: 'release-1',
+      releases: [{
+        id: 'release-1',
+        label: 'Stage 1',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: [],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [{
+        ...seedQueue.tasks[0],
+        releaseIds: ['release-1'],
+      }],
+    })
+    writeProjectTaskQueue(tasksPath, queue, { projectRoot: tmpDir })
+
+    const result = await updateTask({
+      tasksPath,
+      taskId: 'task-001',
+      acceptanceCriteria: [{
+        id: 'ac-1',
+        description: 'The focused proof passes.',
+        verifiedBy: 'pnpm test',
+      }],
+    }, { current_agent_id: 'spec-agent' })
+
+    expect(result).toMatchObject({
+      success: false,
+      error: expect.stringContaining('Bare workspace test/build commands'),
+    })
+    expect(readProjectTaskQueueSync(tasksPath).tasks[0]?.acceptanceCriteria).toEqual([])
+  })
+
   it('updates task status', async () => {
     await updateTask({ tasksPath, taskId: 'task-001', status: 'spec_review' })
     const raw = readProjectTaskQueueSync(tasksPath)
@@ -175,6 +251,38 @@ describe('updateTask', () => {
     expect((await readTaskEvidence(tmpDir, 'task-001', { kind: 'note' }))[0]?.payload).toMatchObject({
       content: 'Updated the definition.',
     })
+  })
+
+  it('preserves runtime counters when a promoted definition mutation writes status or evidence', async () => {
+    const stateDir = path.join(tmpDir, '.guildhall', 'project-state')
+    const promotedTasksPath = path.join(stateDir, 'TASKS.json')
+    await fs.mkdir(stateDir, { recursive: true })
+    seedQueue.tasks[0]!.status = 'in_progress'
+    await fs.writeFile(promotedTasksPath, '{}', 'utf-8')
+    writeProjectTaskQueue(promotedTasksPath, seedQueue, { projectRoot: tmpDir })
+    promoteProjectStateDatabaseAuthority(tmpDir)
+    await upsertTaskRuntimeState(tmpDir, 'task-001', {
+      assignedTo: 'worker-agent',
+      revisionCount: 2,
+      remediationAttempts: 1,
+    })
+
+    const result = await updateTask({
+      tasksPath: promotedTasksPath,
+      taskId: 'task-001',
+      status: 'review',
+      note: { agentId: 'worker-agent', role: 'self-critique', content: 'Handed off for review.' },
+    }, { current_task_project_path: tmpDir })
+
+    expect(result.success).toBe(true)
+    const effective = await buildEffectiveTask(
+      tmpDir,
+      TaskQueue.parse(readProjectTaskQueueSync(promotedTasksPath)).tasks[0]!,
+    )
+    expect(effective.status).toBe('review')
+    expect(effective.revisionCount).toBe(2)
+    expect(effective.remediationAttempts).toBe(1)
+    expect(effective.assignedTo).toBe('reviewer-agent')
   })
 
   it('normalizes reviewer ownership when a task moves into review', async () => {
@@ -1721,6 +1829,55 @@ describe('updateTask', () => {
 
     const raw = readProjectTaskQueueSync(tasksPath)
     expect(raw.tasks[0].status).toBe('spec_review')
+  })
+})
+
+describe('materializeProofSetupTask', () => {
+  it('creates one linked internal verification child and inherits release scope', async () => {
+    const queue = TaskQueue.parse({
+      ...seedQueue,
+      selectedReleaseId: 'release-1',
+      releases: [{
+        id: 'release-1',
+        label: 'Stage 1',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: [],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [{
+        ...seedQueue.tasks[0],
+        releaseIds: ['release-1'],
+        references: ['docs/release-plan.md'],
+      }],
+    })
+    const timestamp = '2026-07-18T20:00:00.000Z'
+
+    const first = materializeProofSetupTask(queue, queue.tasks[0]!, timestamp)
+    const second = materializeProofSetupTask(queue, queue.tasks[0]!, timestamp)
+    const child = queue.tasks.find(task => task.id === first.childTaskId)
+
+    expect(first.status).toBe('materialized')
+    expect(second).toEqual({ status: 'already_represented', childTaskId: first.childTaskId })
+    expect(child).toMatchObject({
+      title: 'Establish concrete proof for Test task',
+      status: 'exploring',
+      workKind: 'verification',
+      releaseIds: ['release-1'],
+      references: ['docs/release-plan.md'],
+      workVisibility: { kind: 'internal_step', countInProjectTotals: false },
+      hierarchy: { parentId: 'task-001', relation: 'decomposes' },
+    })
+    expect(queue.tasks[0]!.hierarchy?.childIds).toContain(first.childTaskId)
+    expect(queue.tasks[0]!.deliverySteps).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        sourceTaskId: first.childTaskId,
+        kind: 'verify',
+        blocksCompletion: true,
+      }),
+    ]))
   })
 })
 

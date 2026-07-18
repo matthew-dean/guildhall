@@ -4,8 +4,9 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 
 import type { ResolvedConfig } from '@guildhall/config'
-import { getProjectRecentEventsPath } from '@guildhall/sessions'
-import { OrchestratorSupervisor, compactProjectRecentEvents, readPersistedEventPage } from '../serve-supervisor.js'
+import { getProjectRecentEventsPath, getProjectSystemStatePath, promoteProjectStateDatabaseAuthority } from '@guildhall/sessions'
+import { OrchestratorSupervisor, compactProjectRecentEvents, readPersistedEventPage, recoverOrphanedExecutionProjection } from '../serve-supervisor.js'
+import { readProjectSummaryProjection, updateProjectSummaryProjection, writeProjectSummaryProjectionFromUnknownQueue } from '../project-summary-projection.js'
 import { clearProviderClientPool, getOrCreateProviderClient, openAiCompatiblePoolKey } from '../provider-client-pool.js'
 import type { ApiMessageRequest, ApiStreamEvent, SupportsStreamingMessages } from '@guildhall/engine'
 import type { OrchestratorRunResult } from '../orchestrator.js'
@@ -36,6 +37,38 @@ async function drain(client: SupportsStreamingMessages): Promise<void> {
 }
 
 describe('OrchestratorSupervisor', () => {
+  it('recovers a durable run left behind by a crashed service process', async () => {
+    const workspacePath = await mkdtemp(path.join(tmpdir(), 'guildhall-supervisor-recovery-'))
+    try {
+      const tasksPath = getProjectSystemStatePath(workspacePath, 'TASKS.json')
+      writeProjectSummaryProjectionFromUnknownQueue(tasksPath, {
+        projectId: 'recovery-project',
+        queue: { version: 1, lastUpdated: '2026-07-17T00:00:00.000Z', tasks: [] },
+      })
+      promoteProjectStateDatabaseAuthority(workspacePath)
+      updateProjectSummaryProjection(tasksPath, {
+        execution: {
+          status: 'running',
+          mode: 'continuous',
+          startedAt: '2026-07-17T00:00:00.000Z',
+          updatedAt: '2026-07-17T00:01:00.000Z',
+        },
+      })
+
+      expect(recoverOrphanedExecutionProjection(workspacePath, '2026-07-17T00:02:00.000Z')).toBe(true)
+      expect(recoverOrphanedExecutionProjection(workspacePath, '2026-07-17T00:03:00.000Z')).toBe(false)
+
+      expect(readProjectSummaryProjection(tasksPath)?.execution).toMatchObject({
+        status: 'error',
+        startedAt: '2026-07-17T00:00:00.000Z',
+        stoppedAt: '2026-07-17T00:02:00.000Z',
+        error: 'Guildhall recovered an interrupted run from a previous service process.',
+      })
+    } finally {
+      await rm(workspacePath, { recursive: true, force: true })
+    }
+  })
+
   it('pages bounded durable activity newest-first', async () => {
     const workspacePath = await mkdtemp(path.join(tmpdir(), 'guildhall-supervisor-history-'))
     try {
@@ -180,10 +213,13 @@ describe('OrchestratorSupervisor', () => {
   it('passes one-task mode through to the orchestrator', async () => {
     const workspacePath = await mkdtemp(path.join(tmpdir(), 'guildhall-supervisor-'))
     let seenStopAfterOneTask: boolean | undefined
+    let seenWorkerTurnBudget: number | undefined
     const supervisor = new OrchestratorSupervisor({
       resolveConfig: () => ({ workspaceId: 'w', projectPath: workspacePath } as ResolvedConfig),
       runOrchestrator: async (_config, opts) => {
         seenStopAfterOneTask = opts?.stopAfterOneTask
+        const budget = opts?.agentGenerateWallClockTimeoutMs
+        if (budget && typeof budget === 'object') seenWorkerTurnBudget = budget.worker
         return { ...STOP_SUMMARY, stopReason: 'one_task', stopMessage: 'stopAfterOneTask reached task.' }
       },
     })
@@ -198,7 +234,51 @@ describe('OrchestratorSupervisor', () => {
 
       expect(run.mode).toBe('one_task')
       expect(seenStopAfterOneTask).toBe(true)
+      expect(seenWorkerTurnBudget).toBe(2 * 60 * 1000)
       expect(run.stopSummary?.stopReason).toBe('one_task')
+    } finally {
+      await rm(workspacePath, { recursive: true, force: true })
+    }
+  })
+
+  it('clears prior execution residue when a new run starts', async () => {
+    const workspacePath = await mkdtemp(path.join(tmpdir(), 'guildhall-supervisor-'))
+    try {
+      const tasksPath = getProjectSystemStatePath(workspacePath, 'TASKS.json')
+      writeProjectSummaryProjectionFromUnknownQueue(tasksPath, {
+        projectId: 'w',
+        queue: { version: 1, lastUpdated: '2026-07-17T00:00:00.000Z', tasks: [] },
+      })
+      promoteProjectStateDatabaseAuthority(workspacePath)
+      updateProjectSummaryProjection(tasksPath, {
+        execution: {
+          status: 'error',
+          mode: 'one_task',
+          startedAt: '2026-07-17T00:00:00.000Z',
+          stoppedAt: '2026-07-17T00:01:00.000Z',
+          stopRequestedAt: '2026-07-17T00:00:30.000Z',
+          error: 'stale execution error',
+          updatedAt: '2026-07-17T00:01:00.000Z',
+        },
+      })
+      const supervisor = new OrchestratorSupervisor({
+        resolveConfig: () => ({ workspaceId: 'w', projectPath: workspacePath } as ResolvedConfig),
+        runOrchestrator: async (_config, opts) => {
+          await new Promise<void>((resolve) => opts?.abortSignal?.addEventListener('abort', () => resolve(), { once: true }))
+          return { ...STOP_SUMMARY, stopReason: 'stop_requested', stopMessage: 'Stop requested.' }
+        },
+      })
+
+      const run = supervisor.start({ workspaceId: 'w', workspacePath })
+      await vi.waitFor(() => {
+        const execution = readProjectSummaryProjection(tasksPath)?.execution
+        expect(execution?.status).toBe('running')
+        expect(execution?.error).toBeUndefined()
+        expect(execution?.stoppedAt).toBeUndefined()
+        expect(execution?.stopRequestedAt).toBeUndefined()
+      })
+      await supervisor.stop('w', { waitMs: 500 })
+      await run.runPromise
     } finally {
       await rm(workspacePath, { recursive: true, force: true })
     }

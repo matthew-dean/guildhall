@@ -14,6 +14,7 @@ export type ProjectStateDomain =
   | 'reconciliation'
   | 'config'
   | 'delivery'
+  | 'memory'
   | 'thread'
   | 'legacy'
 

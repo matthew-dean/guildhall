@@ -12,7 +12,7 @@ import {
   readProjectStateDatabaseRevisionFromTasksPath,
   readProjectStateDatabaseQueueDefinitionForMigration,
   writeProjectStateDatabaseSummarySnapshot,
-  updateProjectStateDatabaseSummary,
+  updateProjectStateDatabaseSummaryAndCurrentState,
   writeProjectStateDatabaseSnapshot,
   type ProjectStateDatabaseScopeRow,
   type ProjectStateDatabaseTask,
@@ -28,6 +28,7 @@ import {
   executionScopeRows,
   summarizeProjectScopeRelease,
   summarizeProjectScopeStart,
+  type ProjectScopeProjection,
   type ProjectScopeRow,
 } from './project-scope-projection.js'
 import { inferProjectOrientationSnapshot, type ProjectOrientationSnapshot } from './project-orientation-snapshot.js'
@@ -36,9 +37,9 @@ import { buildProjectActionModel, type ProjectActionModel } from './project-acti
 import { normalizeLegacyTaskQueueForMigration } from './task-queue-migration.js'
 import { stripLegacyRuntimeFields } from './effective-task.js'
 
-export const PROJECT_SUMMARY_PROJECTION_VERSION = 12 as const
+export const PROJECT_SUMMARY_PROJECTION_VERSION = 13 as const
 export const PROJECT_SUMMARY_PROJECTION_FILE = 'project-summary.json'
-const LEGACY_PROJECT_SUMMARY_PROJECTION_VERSIONS = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9])
+const LEGACY_PROJECT_SUMMARY_PROJECTION_VERSIONS = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])
 
 export interface ProjectSummaryApprovedPlanRelease {
   id: string
@@ -120,6 +121,7 @@ export interface ProjectSummaryProjection {
     openCount: number
     next?: {
       id: string
+      label?: string
       prompt: string
       taskId?: string
       href?: string
@@ -128,8 +130,9 @@ export interface ProjectSummaryProjection {
   }
   nextAction: {
     code?: string
-    label: string
+    label: ProjectScopeProjection['start']['label'] | 'Review project state'
     message: string
+    count?: number
     focusTaskId?: string
     focusTaskTitle?: string
     focusKind?: string
@@ -177,13 +180,43 @@ export interface ProjectSummaryReleaseSummary {
     ownerBlocked: number
     proofBlocked: number
   }
-  /** Raw task statuses for this selected scope. */
+  /** Mutually partitioned raw task statuses for the selected execution rows. */
+  taskStatusCounts: Record<string, number>
   blockers: Array<{
     id: string
     label: string
     owningTaskId?: string
   }>
   updatedAt: string
+}
+
+type IndexedCurrentProof = {
+  state: 'none' | 'needed' | 'partial' | 'proven'
+  expectationCount: number
+  verified: string[]
+  missing: string[]
+}
+
+export function applyOwnerInputToStartReadiness(
+  start: ReturnType<typeof summarizeProjectScopeStart>,
+  ownerInput: ProjectSummaryProjection['ownerInput'] | null | undefined,
+): ReturnType<typeof summarizeProjectScopeStart> {
+  if (!ownerInput || ownerInput.openCount <= 0) return start
+  const label = ownerInput.next?.label?.trim() || ownerInput.next?.taskId || 'This decision'
+  const count = ownerInput.openCount
+  return {
+    ...start,
+    canStart: false,
+    code: 'owner_input_required',
+    label: 'Answer in Thread',
+    message: count === 1
+      ? `${label} needs your answer before work can continue`
+      : `${count} owner decisions need your answer before work can continue`,
+    actionHref: ownerInput.next?.href ?? '/thread',
+    ...(ownerInput.next?.taskId ? { focusTaskId: ownerInput.next.taskId } : {}),
+    focusKind: 'owner_input',
+    count,
+  } as ReturnType<typeof summarizeProjectScopeStart>
 }
 
 export interface ProjectSummaryProjectionInput {
@@ -375,6 +408,7 @@ export function buildProjectSummaryProjection(
     scopeProjection,
     generatedAt,
   })
+  const start = applyOwnerInputToStartReadiness(scopeProjection.start, input.ownerInput)
   const orientationSpine = compactProjectOrientationSpineForMap(buildProjectOrientationSpine({
     projectId: input.projectId ?? '',
     now: generatedAt,
@@ -383,27 +417,30 @@ export function buildProjectSummaryProjection(
     releases: scopeQueue.releases,
     tasks: scopeQueue.tasks,
     scopeProjection,
-    startReadiness: scopeProjection.start,
+    startReadiness: start,
     releaseReadiness: { blockers: scopeProjection.release.blockers },
     runStatus: input.execution?.status ?? 'stopped',
+    runMode: input.execution?.mode,
     sourceRefs: input.orientation?.sourceRefs ?? [],
   }))
   const recentWork = recentWorkForTasks(tasks)
   const nextAction = {
-    ...(scopeProjection.start.code ? { code: scopeProjection.start.code } : {}),
-    label: scopeProjection.start.label,
-    message: scopeProjection.start.message,
-    ...(scopeProjection.start.focusTaskId ? { focusTaskId: scopeProjection.start.focusTaskId } : {}),
-    ...(scopeProjection.start.focusTaskTitle ? { focusTaskTitle: scopeProjection.start.focusTaskTitle } : {}),
-    ...(scopeProjection.start.focusKind ? { focusKind: scopeProjection.start.focusKind } : {}),
+    ...(start.code ? { code: start.code } : {}),
+    label: start.label,
+    message: start.message,
+    ...(typeof start.count === 'number' ? { count: start.count } : {}),
+    ...(start.focusTaskId ? { focusTaskId: start.focusTaskId } : {}),
+    ...(start.focusTaskTitle ? { focusTaskTitle: start.focusTaskTitle } : {}),
+    ...(start.focusKind ? { focusKind: start.focusKind } : {}),
   }
   const startReadiness = {
-    canStart: nextAction.code === 'ready_work' || nextAction.code === 'paused_live_work',
+    canStart: start.canStart,
     ...(nextAction.code ? { code: nextAction.code } : {}),
     message: nextAction.message,
-    ...(nextAction.focusTaskId ? { focusTaskId: nextAction.focusTaskId } : {}),
-    ...(nextAction.focusTaskTitle ? { focusTaskTitle: nextAction.focusTaskTitle } : {}),
-    ...(nextAction.focusKind ? { focusKind: nextAction.focusKind } : {}),
+    ...(start.focusTaskId ? { focusTaskId: start.focusTaskId } : {}),
+    ...(start.focusTaskTitle ? { focusTaskTitle: start.focusTaskTitle } : {}),
+    ...(start.focusKind ? { focusKind: start.focusKind } : {}),
+    ...(typeof start.count === 'number' ? { count: start.count } : {}),
     executionScope: selectedScope
       ? {
           id: selectedScope.id,
@@ -426,6 +463,7 @@ export function buildProjectSummaryProjection(
         }
       : null,
     runStatus: input.execution?.status ?? 'stopped',
+    runMode: input.execution?.mode,
     tasks: [
       ...(nextAction.focusTaskId
         ? [{
@@ -482,10 +520,18 @@ export function buildProjectSummaryProjection(
   }
 }
 
-type IndexedSummaryScopeRow = ProjectStateDatabaseScopeRow & {
+type IndexedSummaryScopeRow = Omit<ProjectStateDatabaseScopeRow, 'parentTaskId'> & {
   title: string
   parentTaskId: string | null
   status: string
+}
+
+function taskStatusCounts(rows: readonly { status?: unknown }[]): Record<string, number> {
+  return rows.reduce<Record<string, number>>((counts, row) => {
+    const status = typeof row.status === 'string' && row.status.trim() ? row.status : 'unknown'
+    counts[status] = (counts[status] ?? 0) + 1
+    return counts
+  }, {})
 }
 
 function indexedExecutionRows(rows: readonly IndexedSummaryScopeRow[]): IndexedSummaryScopeRow[] {
@@ -510,7 +556,7 @@ function indexedStartReadiness(
   releases: readonly Record<string, unknown>[],
   selectedReleaseId: string | null,
   tasks: readonly ProjectStateDatabaseTask[],
-): ProjectSummaryProjection['nextAction'] & { canStart: boolean; count?: number; actionHref?: string } {
+): ProjectScopeProjection['start'] {
   const setupTask = tasks.find(task =>
     ['task-meta-intake', 'task-workspace-import'].includes(task.id) &&
     !['done', 'pending_pr', 'archived', 'cancelled'].includes(String(task.status ?? '')),
@@ -598,10 +644,11 @@ export function buildProjectSummaryProjectionFromIndexedState(
   const selectedReleaseId = queue.selectedReleaseId ?? null
   const taskOverrides = new Map((input.taskOverrides ?? []).map(task => [task.id, task]))
   const tasks = inventory.tasks.map(task => taskOverrides.get(task.id) ?? task)
+  const tasksById = new Map(tasks.map(task => [task.id, task]))
   const scopeRowOverrides = new Map(
     (input.scopeRowOverrides ?? []).map(row => [row?.taskId ?? '', row]),
   )
-  const rows: IndexedSummaryScopeRow[] = tasks.flatMap(task => {
+  const indexedRows: IndexedSummaryScopeRow[] = tasks.flatMap<IndexedSummaryScopeRow>(task => {
     const row = scopeRowOverrides.has(task.id) ? scopeRowOverrides.get(task.id) ?? null : task.scopeRow
     return row
       ? [{
@@ -609,18 +656,55 @@ export function buildProjectSummaryProjectionFromIndexedState(
           title: task.title,
           parentTaskId: task.parentId,
           status: task.status ?? 'unknown',
-        }]
+        } satisfies IndexedSummaryScopeRow]
       : []
+  })
+  const currentProofByTaskId = new Map<string, IndexedCurrentProof>(
+    tasks.flatMap(task => {
+      const proof = task.currentSummary?.proof
+      if (!proof || typeof proof !== 'object' || Array.isArray(proof)) return []
+      const state = proof.state
+      if (state !== 'none' && state !== 'needed' && state !== 'partial' && state !== 'proven') return []
+      return [[task.id, {
+        state,
+        expectationCount: typeof proof.expectationCount === 'number' ? proof.expectationCount : 0,
+        verified: Array.isArray(proof.verified) ? proof.verified.filter((value): value is string => typeof value === 'string') : [],
+        missing: Array.isArray(proof.missing) ? proof.missing.filter((value): value is string => typeof value === 'string') : [],
+      }] as const]
+    }),
+  )
+  // Indexed task points carry the compact proof summary, not the rich
+  // completion payload. Apply that summary to the same scope-row authority
+  // used by Release/Overview so a task detail read cannot say "proof needed"
+  // while the saved release projection counts the task as releasable.
+  const rows = indexedRows.map(row => {
+    const task = tasksById.get(row.taskId)
+    const proof = currentProofByTaskId.get(row.taskId)
+    const proofBlocked = Boolean(
+      task && proof &&
+      ['done', 'pending_pr'].includes(String(task.status ?? '')) &&
+      ['needed', 'partial'].includes(proof.state),
+    )
+    return {
+      ...row,
+      proofBlocked: proofBlocked || row.proofBlocked,
+      blocksRelease: row.blocksRelease || proofBlocked,
+      ...(proofBlocked ? { blockerSummary: 'Completion proof is missing or stale.' } : {}),
+    }
   })
   const rowsByTaskId = new Map(rows.map(row => [row.taskId, row]))
   const executionRows = indexedExecutionRows(rows)
   const includedRows = executionRows.filter(row => row.scope === 'included')
   const deferredRows = executionRows.filter(row => row.scope === 'deferred')
-  const start = indexedStartReadiness(rows, releases, selectedReleaseId, tasks)
+  const start = applyOwnerInputToStartReadiness(
+    indexedStartReadiness(rows, releases, selectedReleaseId, tasks),
+    base.ownerInput,
+  )
   const nextAction: ProjectSummaryProjection['nextAction'] = {
     ...(start.code ? { code: start.code } : {}),
     label: start.label,
     message: start.message,
+    ...(typeof start.count === 'number' ? { count: start.count } : {}),
     ...(start.focusTaskId ? { focusTaskId: start.focusTaskId } : {}),
     ...(start.focusTaskTitle ? { focusTaskTitle: start.focusTaskTitle } : {}),
     ...(start.focusKind ? { focusKind: start.focusKind } : {}),
@@ -661,6 +745,7 @@ export function buildProjectSummaryProjectionFromIndexedState(
       ownerBlocked: releaseExecutionRows.filter(row => row.humanBlocking).length,
       proofBlocked: releaseExecutionRows.filter(row => row.proofBlocked).length,
     },
+    taskStatusCounts: taskStatusCounts(releaseExecutionRows),
     blockers: taskReleaseBlockers,
     updatedAt: generatedAt,
   }
@@ -711,6 +796,7 @@ export function buildProjectSummaryProjectionFromIndexedState(
     releaseSummary,
     rows,
     nextAction,
+    currentProofByTaskId,
   })
   return {
     ...base,
@@ -766,6 +852,7 @@ function synchronizeIndexedOrientationSpine(
     releaseSummary: ProjectSummaryReleaseSummary
     rows: readonly IndexedSummaryScopeRow[]
     nextAction: ProjectSummaryProjection['nextAction']
+    currentProofByTaskId: ReadonlyMap<string, IndexedCurrentProof>
   },
 ): ProjectSummaryProjection['orientationSpine'] {
   if (!spine) return null
@@ -836,6 +923,38 @@ function synchronizeIndexedOrientationSpine(
     : input.releaseSummary.state === 'blocked'
       ? `${label} needs attention.`
       : `${label} is in progress.`
+  const patchNode = (node: ProjectOrientationSpine['roots'][number]): ProjectOrientationSpine['roots'][number] => {
+    const taskId = node.id.startsWith('work:') ? node.id.slice('work:'.length) : null
+    const currentProof = taskId ? input.currentProofByTaskId.get(taskId) : undefined
+    return {
+      ...node,
+      ...(currentProof
+        ? {
+            proof: {
+              ...node.proof,
+              state: currentProof.state,
+              expectationCount: currentProof.expectationCount,
+              verified: currentProof.verified,
+              missing: currentProof.missing,
+            },
+          }
+        : {}),
+      children: node.children.map(patchNode),
+    }
+  }
+  const proofContracts = spine.proofContracts.map(contract => {
+    const taskId = contract.nodeId.startsWith('work:') ? contract.nodeId.slice('work:'.length) : null
+    const currentProof = taskId ? input.currentProofByTaskId.get(taskId) : undefined
+    if (!currentProof) return contract
+    return {
+      ...contract,
+      state: currentProof.state,
+      verified: currentProof.verified,
+      missing: currentProof.missing.length > 0
+        ? currentProof.missing
+        : currentProof.state === 'proven' ? [] : contract.missing,
+    }
+  })
   return {
     ...spine,
     updatedAt: input.generatedAt,
@@ -863,6 +982,8 @@ function synchronizeIndexedOrientationSpine(
       state: input.releaseSummary.state,
       blockers,
     },
+    proofContracts,
+    roots: spine.roots.map(patchNode),
   }
 }
 
@@ -982,6 +1103,7 @@ export function buildProjectSummaryProjectionError(input: {
         ownerBlocked: 0,
         proofBlocked: 0,
       },
+      taskStatusCounts: {},
       blockers: [],
       updatedAt: input.generatedAt ?? new Date().toISOString(),
     },
@@ -1017,6 +1139,8 @@ export function writeProjectSummaryProjection(
   writeProjectStateDatabaseSnapshot(tasksPath, {
     queue: input.queue,
     summary: projection,
+    ...(input.execution ? { execution: input.execution } : {}),
+    ...(input.runtime ? { runtime: input.runtime } : {}),
     ...(input.projectRoot ? { projectRoot: input.projectRoot } : {}),
     scopeRows: projectSummaryScopeRowsForQueue(input.queue, projection.approvedPlan, input.projectionTasks, {
       currentStateAuthority,
@@ -1057,11 +1181,21 @@ export function prepareProjectSummaryProjectionFromUnknownQueue(
     taskDefinitionsAlreadySanitized?: boolean
   },
 ): PreparedProjectSummaryProjection {
-  const parsed = TaskQueue.safeParse(input.queue)
+  // This writer is the single compatibility boundary for queue-shaped input.
+  // Normalize legacy records before validation so one old evidence/runtime
+  // field cannot make the entire current scope disappear from SQLite.
+  const normalizedQueue = normalizeLegacyTaskQueueForMigration(input.queue)
+  const databaseAuthority = readProjectStateDatabaseCurrentAuthorityFromTasksPath(tasksPath) === 'database'
+  const validationQueue = databaseAuthority && isRecord(normalizedQueue) && Array.isArray(normalizedQueue.tasks)
+    ? {
+        ...normalizedQueue,
+        tasks: normalizedQueue.tasks.map(task => isRecord(task) ? stripLegacyRuntimeFields(task) : task),
+      }
+    : normalizedQueue
+  const parsed = TaskQueue.safeParse(validationQueue)
   const sourceMtimeMs = taskQueueMtimeMs(tasksPath)
   const goalsMtimeMs = workspaceGoalsMtimeMs(tasksPath)
   const approvedPlan = readApprovedPlan(tasksPath)
-  const databaseAuthority = readProjectStateDatabaseCurrentAuthorityFromTasksPath(tasksPath) === 'database'
   const existingSummary = input.existingSummary ?? readProjectSummaryProjection(tasksPath)
   const supplemental = existingProjectionFields(tasksPath, input.existingSummary)
   const orientation = input.projectRoot
@@ -1182,6 +1316,8 @@ export function writeProjectSummaryProjectionFromUnknownQueue(
     writeProjectStateDatabaseSnapshot(tasksPath, {
       queue: detailQueue,
       summary: projection,
+      ...(projection.execution ? { execution: projection.execution } : {}),
+      ...(projection.runtime ? { runtime: projection.runtime } : {}),
       ...(input.projectRoot ? { projectRoot: input.projectRoot } : {}),
       ...(scopeRows ? { scopeRows } : {}),
       ...(input.compatibilityExport ? { compatibilityExport: input.compatibilityExport } : {}),
@@ -1214,7 +1350,7 @@ export function updateProjectSummaryProjection(
 ): ProjectSummaryProjection | null {
   const now = new Date().toISOString()
   let next: ProjectSummaryProjection | null = null
-  updateProjectStateDatabaseSummary(tasksPath, currentSummary => {
+  updateProjectStateDatabaseSummaryAndCurrentState(tasksPath, currentSummary => {
     const current = currentSummary as unknown as ProjectSummaryProjection
     next = {
       ...current,
@@ -1249,7 +1385,17 @@ export function updateProjectSummaryProjection(
         : {}),
       ...(patch.orientation !== undefined ? { orientation: patch.orientation } : {}),
     }
-    return next as unknown as Record<string, unknown>
+    return {
+      summary: next as unknown as Record<string, unknown>,
+      currentState: {
+        ...(patch.execution && next.execution
+          ? { execution: next.execution }
+          : {}),
+        ...(patch.runtime && next.runtime
+          ? { runtime: next.runtime }
+          : {}),
+      },
+    }
   })
   return next
 }
@@ -1313,7 +1459,11 @@ export function readProjectSummaryProjectionForMigration(tasksPath: string): Pro
     const hasCurrentCompactState = Boolean(parsed.counts && typeof parsed.counts === 'object' && !Array.isArray(parsed.counts) &&
       'byStatus' in parsed.counts && Array.isArray(parsed.inFlight) &&
       parsed.releaseSummary && typeof parsed.releaseSummary === 'object' && !Array.isArray(parsed.releaseSummary) &&
-      'approvedPlan' in parsed)
+      'approvedPlan' in parsed &&
+      'taskStatusCounts' in parsed.releaseSummary &&
+      parsed.releaseSummary.taskStatusCounts &&
+      typeof parsed.releaseSummary.taskStatusCounts === 'object' &&
+      !Array.isArray(parsed.releaseSummary.taskStatusCounts))
     if (!hasCurrentCompactState) {
       return { ...parsed, freshness: 'stale' } as unknown as ProjectSummaryProjection
     }
@@ -1332,18 +1482,22 @@ export function readProjectSummaryProjectionForMigration(tasksPath: string): Pro
  * just to show counts, scope, and the next action.
  */
 export function readProjectSummaryShellProjection(tasksPath: string): ProjectSummaryProjection | null {
-  const databaseSummary = readProjectStateDatabaseSummary<ProjectSummaryProjection>(tasksPath, {
-    includeOrientation: false,
-    includeApprovedPlan: false,
-  })
-  if (databaseSummary) {
-    return {
-      ...databaseSummary.payload,
-      orientationSpine: null,
-      freshness: databaseSummary.payload.version === PROJECT_SUMMARY_PROJECTION_VERSION
-        ? databaseSummary.freshness
-        : 'stale',
+  try {
+    const databaseSummary = readProjectStateDatabaseSummary<ProjectSummaryProjection>(tasksPath, {
+      includeOrientation: false,
+      includeApprovedPlan: false,
+    })
+    if (databaseSummary) {
+      return {
+        ...databaseSummary.payload,
+        orientationSpine: null,
+        freshness: databaseSummary.payload.version === PROJECT_SUMMARY_PROJECTION_VERSION
+          ? databaseSummary.freshness
+          : 'stale',
+      }
     }
+  } catch {
+    // A corrupt or locked project stays visible as unavailable; it cannot fail the fleet shell.
   }
   return null
 }
@@ -1483,6 +1637,7 @@ function buildReleaseSummary(input: {
       ownerBlocked: input.scopeProjection.counts.ownerBlocked,
       proofBlocked: input.scopeProjection.counts.proofBlocked,
     },
+    taskStatusCounts: taskStatusCounts(executionRows),
     blockers: input.scopeProjection.release.blockers,
     updatedAt: input.generatedAt,
   }

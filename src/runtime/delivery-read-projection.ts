@@ -1,12 +1,27 @@
 import { existsSync } from 'node:fs'
-import { DatabaseSync } from 'node:sqlite'
-import { projectStateDatabasePath } from '@guildhall/sessions'
 import type { Task } from '@guildhall/core'
 import {
+  DELIVERY_READ_PROJECTION_SCHEMA_VERSION as SESSION_DELIVERY_READ_PROJECTION_SCHEMA_VERSION,
+  deliveryReadProjectionSchemaPresent,
+  ensureDeliveryReadProjectionSchema,
+  getProjectSystemStatePath,
+  readProjectDeliveryProjectionRefreshSource,
+  readProjectDeliveryReadProjectionWithSavedModel,
+  writeProjectDeliveryReadProjection,
+  type DeliveryReadProjectionCandidateRow,
+  type DeliveryReadProjectionEdgeRow,
+  type DeliveryReadProjectionPage,
+  type DeliveryReadProjectionPrimitiveRow,
+  type DeliveryReadProjectionReadOptions as SessionDeliveryReadProjectionReadOptions,
+  type DeliveryReadProjectionSnapshot,
+  type DeliveryReadProjectionTaskRow,
+} from '@guildhall/sessions'
+import { readProjectTaskQueue } from './project-state-boundary.js'
+import {
+  buildTaskContextPacket,
   deriveQueueCandidates,
   deriveTaskRelationships,
   listPrimitivesWithRelations,
-  ProjectDeliveryModel,
   projectDeliveryModelPath,
   readProjectDeliveryModel,
   validateProjectDeliveryModel,
@@ -14,38 +29,22 @@ import {
   type PrimitiveWithRelations,
   type ProjectDeliveryModel as ProjectDeliveryModelRecord,
   type QueueCandidate,
-  type TaskRelationshipSummary,
   type TaskContextPacket,
+  type TaskRelationshipSummary,
 } from './delivery-spine.js'
-import { buildTaskContextPacket } from './delivery-spine.js'
 
-export const DELIVERY_READ_PROJECTION_SCHEMA_VERSION = 1
-
-const META_TABLE = 'delivery_read_projection_meta'
-const CANDIDATE_TABLE = 'delivery_read_projection_candidates'
-const EDGE_TABLE = 'delivery_read_projection_edges'
-const PRIMITIVE_TABLE = 'delivery_read_projection_primitives'
-
-const ACTIVE_CANDIDATE_STATUSES = [
-  'ready',
-  'in_progress',
-  'review',
-  'gate_check',
-  'spec_review',
-  'exploring',
-  'blocked',
-] as const
+export const DELIVERY_READ_PROJECTION_SCHEMA_VERSION = SESSION_DELIVERY_READ_PROJECTION_SCHEMA_VERSION
 
 type JsonRecord = Record<string, unknown>
 
-export interface DeliveryReadRevision {
+export type DeliveryReadRevision = {
   queueRevision: number
   projectRevision: number
   deliveryUpdatedAt: string | null
   refreshedAt: string
 }
 
-export interface DeliveryReadCurrentRevision {
+export type DeliveryReadCurrentRevision = {
   queueRevision: number
   projectRevision: number
   deliveryUpdatedAt: string | null
@@ -206,163 +205,8 @@ export interface DeliveryReadProjectionReadOptions {
   primitiveAfter?: string
 }
 
-function taskForContextPacket(task: DeliveryTaskSummary, projectRoot: string): Task {
-  return {
-    id: task.id,
-    title: task.title,
-    description: task.description ?? '',
-    domain: task.domain ?? 'general',
-    projectPath: projectRoot,
-    references: [...task.sourceRefs],
-    sourceClaims: [],
-    status: (task.status ?? 'unknown') as Task['status'],
-    priority: task.priority ?? 'normal',
-    acceptanceCriteria: [],
-    outOfScope: [],
-    dependsOn: [...task.dependsOn],
-    notes: [],
-    gateResults: [],
-    reviewVerdicts: [],
-    adjudications: [],
-    revisionCount: 0,
-    remediationAttempts: 0,
-    escalations: [],
-    agentIssues: [],
-    origination: 'agent_discovery',
-    createdAt: task.updatedAt ?? new Date(0).toISOString(),
-    updatedAt: task.updatedAt ?? new Date(0).toISOString(),
-    ...(task.workKind ? { workKind: task.workKind } : {}),
-    ...(task.hierarchy ? { hierarchy: task.hierarchy as Task['hierarchy'] } : {}),
-    ...(task.releaseIds.length > 0 ? { releaseIds: [...task.releaseIds] } : {}),
-    ...(task.sourceRefs.length > 0 ? { sourceRefs: [...task.sourceRefs] } : {}),
-    ...(task.delivery ? { delivery: task.delivery as Task['delivery'] } : {}),
-  } as unknown as Task
-}
-
-/**
- * Adapt the saved delivery projection into the existing context-packet
- * contract. The adapter is intentionally bounded: it uses only the selected
- * task, saved relationship edges, and saved primitive page. It never calls a
- * delivery derivation function or loads task definitions.
- */
-export function contextPacketFromDeliveryReadProjection(
-  projection: DeliveryReadProjectionCurrent,
-  projectRoot: string,
-): TaskContextPacket | null {
-  if (!projection.task || !projection.relationships) return null
-  const primitiveById = new Map(projection.primitives.primitives.map(primitive => [primitive.id, primitive]))
-  const primitiveRefs = (ids: readonly string[]): PrimitiveWithRelations[] => ids.flatMap(id => {
-    const primitive = primitiveById.get(id)
-    return primitive ? [primitive] : []
-  })
-  const task = taskForContextPacket(projection.task, projectRoot)
-  const relationships: TaskRelationshipSummary = {
-    task,
-    hierarchy: {
-      ...(projection.relationships.hierarchy.parent
-        ? { parent: projection.relationships.hierarchy.parent as Pick<Task, 'id' | 'title' | 'status'> }
-        : {}),
-      children: projection.relationships.hierarchy.children as Array<Pick<Task, 'id' | 'title' | 'status'>>,
-      breadcrumbs: projection.relationships.hierarchy.breadcrumbs as Array<Pick<Task, 'id' | 'title'>>,
-    },
-    dependencies: projection.relationships.dependencies as {
-      directBlockers: Array<Pick<Task, 'id' | 'title' | 'status'>>
-      recursiveBlockers: Array<Pick<Task, 'id' | 'title' | 'status'>>
-      blocks: Array<Pick<Task, 'id' | 'title' | 'status'>>
-    },
-    supports: [...projection.relationships.supports],
-    primitiveUse: {
-      direct: primitiveRefs(projection.relationships.primitiveUse.direct),
-      ancestors: primitiveRefs(projection.relationships.primitiveUse.ancestors),
-      blockers: primitiveRefs([
-        ...projection.relationships.primitiveUse.direct,
-        ...projection.relationships.primitiveUse.ancestors,
-      ]).filter(primitive => primitive.status !== 'ready' && primitive.status !== 'deprecated'),
-    },
-    primitiveProof: {
-      proves: primitiveRefs(projection.relationships.primitiveProof.proves),
-      provingTasksByPrimitive: Object.fromEntries(
-        Object.entries(projection.relationships.primitiveProof.provingTasksByPrimitive)
-        .map(([primitiveId, tasks]) => [primitiveId, tasks as Array<Pick<Task, 'id' | 'title' | 'status'>>]),
-      ),
-    },
-  }
-  return buildTaskContextPacket({
-    model: projection.model,
-    tasks: [task],
-    taskId: task.id,
-    relationships,
-  })
-}
-
-export interface DeliveryReadProjectionRefreshResult {
-  status: 'current' | 'missing'
-  source?: DeliveryReadRevision
-  taskCount?: number
-  candidateCount?: number
-  edgeCount?: number
-  primitiveCount?: number
-  reason?: DeliveryReadMissingReason
-}
-
-type DeliveryEdgeRelation =
-  | 'parent'
-  | 'child'
-  | 'direct_blocker'
-  | 'recursive_blocker'
-  | 'blocks'
-  | 'breadcrumb'
-  | 'supports'
-  | 'primitive_use'
-  | 'primitive_ancestor'
-  | 'primitive_proof'
-  | 'proving_task'
-
-interface DeliveryEdge {
-  sourceTaskId: string
-  relation: DeliveryEdgeRelation
-  targetId: string
-  contextId: string | null
-}
-
-interface DeliveryMeta {
-  schemaVersion: number
-  source: DeliveryReadRevision
-  selectedReleaseId: string | null
-  validation: DeliveryModelValidation
-}
-
-interface CompactTaskRow extends JsonRecord {
-  id: string
-  title: string
-  description: string | null
-  status: string | null
-  domain: string | null
-  priority: string | null
-  workKind: string | null
-  parentId: string | null
-  hierarchy: JsonRecord | null
-  updatedAt: string | null
-  completedAt: string | null
-  summary: JsonRecord
-}
-
 function isRecord(value: unknown): value is JsonRecord {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value))
-}
-
-function parseJson(value: unknown, fallback: unknown): unknown {
-  if (typeof value !== 'string') return fallback
-  try {
-    return JSON.parse(value)
-  } catch {
-    return fallback
-  }
-}
-
-function parseRecord(value: unknown): JsonRecord {
-  const parsed = parseJson(value, {})
-  return isRecord(parsed) ? parsed : {}
 }
 
 function stringValue(value: unknown): string | null {
@@ -370,55 +214,8 @@ function stringValue(value: unknown): string | null {
 }
 
 function stringArray(value: unknown): string[] {
-  const parsed = typeof value === 'string' ? parseJson(value, []) : value
-  if (!Array.isArray(parsed)) return []
-  return [...new Set(parsed.filter((item): item is string => typeof item === 'string' && item.trim().length > 0))]
-}
-
-function json(value: unknown): string {
-  return JSON.stringify(value)
-}
-
-function clampLimit(value: number | undefined, fallback: number): number {
-  if (!Number.isFinite(value)) return fallback
-  return Math.min(100, Math.max(1, Math.trunc(value as number)))
-}
-
-function tableExists(database: DatabaseSync, table: string): boolean {
-  return Boolean(database.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(table))
-}
-
-function openDatabase(projectRoot: string, readOnly: boolean): DatabaseSync | null {
-  const databasePath = projectStateDatabasePath(projectRoot)
-  if (!existsSync(databasePath)) return null
-  try {
-    const database = new DatabaseSync(databasePath, { readOnly })
-    database.exec('PRAGMA busy_timeout = 5000')
-    return database
-  } catch {
-    return null
-  }
-}
-
-function deliveryModelToken(projectRoot: string, model: ProjectDeliveryModelRecord): string | null {
-  return existsSync(projectDeliveryModelPath(projectRoot)) ? model.updatedAt : null
-}
-
-function readDatabaseSource(database: DatabaseSync): DeliveryReadCurrentRevision | null {
-  if (!tableExists(database, 'project_meta') || !tableExists(database, 'queue_state')) return null
-  const project = database.prepare('SELECT revision FROM project_meta WHERE id = 1').get() as JsonRecord | undefined
-  const queue = database.prepare('SELECT revision FROM queue_state WHERE id = 1').get() as JsonRecord | undefined
-  if (!project || !queue) return null
-  return {
-    projectRevision: Number(project.revision ?? 0),
-    queueRevision: Number(queue.revision ?? 0),
-    deliveryUpdatedAt: null,
-  }
-}
-
-function readSelectedReleaseId(database: DatabaseSync): string | null {
-  const row = database.prepare('SELECT selected_release_id FROM queue_state WHERE id = 1').get() as JsonRecord | undefined
-  return stringValue(row?.selected_release_id)
+  if (!Array.isArray(value)) return []
+  return [...new Set(value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0))]
 }
 
 function compactDelivery(summary: JsonRecord): DeliveryTaskSummary['delivery'] | undefined {
@@ -438,29 +235,7 @@ function compactDelivery(summary: JsonRecord): DeliveryTaskSummary['delivery'] |
   return delivery
 }
 
-function compactRow(row: JsonRecord): CompactTaskRow {
-  return {
-    ...row,
-    id: String(row.id ?? ''),
-    title: String(row.title ?? ''),
-    description: stringValue(row.description),
-    status: stringValue(row.status),
-    domain: stringValue(row.domain),
-    priority: stringValue(row.priority),
-    workKind: stringValue(row.work_kind),
-    parentId: stringValue(row.parent_id),
-    hierarchy: parseRecord(row.hierarchy_json),
-    updatedAt: stringValue(row.updated_at),
-    completedAt: stringValue(row.completed_at),
-    summary: parseRecord(row.summary_json),
-  }
-}
-
-function taskSummary(
-  row: CompactTaskRow,
-  dependsOn: string[],
-  releaseIds: string[],
-): DeliveryTaskSummary {
+function taskSummary(row: DeliveryReadProjectionTaskRow): DeliveryTaskSummary {
   const delivery = compactDelivery(row.summary)
   return {
     id: row.id,
@@ -471,23 +246,18 @@ function taskSummary(
     priority: row.priority,
     workKind: row.workKind,
     parentId: row.parentId,
-    hierarchy: Object.keys(row.hierarchy ?? {}).length > 0 ? row.hierarchy : null,
-    dependsOn,
-    releaseIds,
-    sourceRefs: stringArray(row.source_refs_json),
+    hierarchy: Object.keys(row.hierarchy).length > 0 ? row.hierarchy : null,
+    dependsOn: [...row.dependsOn],
+    releaseIds: [...row.releaseIds],
+    sourceRefs: [...row.sourceRefs],
     updatedAt: row.updatedAt,
     completedAt: row.completedAt,
     ...(delivery ? { delivery } : {}),
   }
 }
 
-function taskForDerivation(
-  projectRoot: string,
-  row: CompactTaskRow,
-  dependsOn: string[],
-  releaseIds: string[],
-): Task {
-  const summary = taskSummary(row, dependsOn, releaseIds)
+function taskForDerivation(projectRoot: string, row: DeliveryReadProjectionTaskRow): Task {
+  const summary = taskSummary(row)
   return {
     id: summary.id,
     title: summary.title,
@@ -512,135 +282,33 @@ function taskForDerivation(
     updatedAt: summary.updatedAt ?? new Date(0).toISOString(),
     ...(summary.workKind ? { workKind: summary.workKind } : {}),
     ...(summary.parentId || summary.hierarchy ? {
-      hierarchy: {
-        ...(summary.hierarchy ?? {}),
-        ...(summary.parentId ? { parentId: summary.parentId } : {}),
-      },
+      hierarchy: { ...(summary.hierarchy ?? {}), ...(summary.parentId ? { parentId: summary.parentId } : {}) },
     } : {}),
-    ...(summary.releaseIds.length > 0 ? { releaseIds: summary.releaseIds } : {}),
-    ...(summary.sourceRefs.length > 0 ? { sourceRefs: summary.sourceRefs } : {}),
+    ...(summary.releaseIds.length > 0 ? { releaseIds: [...summary.releaseIds] } : {}),
+    ...(summary.sourceRefs.length > 0 ? { sourceRefs: [...summary.sourceRefs] } : {}),
     ...(summary.delivery ? { delivery: summary.delivery } : {}),
   } as unknown as Task
 }
 
-function readCompactRows(database: DatabaseSync, taskIds?: readonly string[]): CompactTaskRow[] {
-  const columns = `
-    id, title, description, status, domain, priority, work_kind, parent_id,
-    hierarchy_json, depends_on_json, release_ids_json, source_refs_json,
-    summary_json, updated_at, completed_at
-  `
-  const rows = taskIds
-    ? taskIds.length === 0
-      ? []
-      : database.prepare(`SELECT ${columns} FROM work_items WHERE id IN (${taskIds.map(() => '?').join(', ')})`).all(...taskIds)
-    : database.prepare(`SELECT ${columns} FROM work_items ORDER BY rowid`).all()
-  return (rows as JsonRecord[]).map(compactRow)
-}
-
-function readDependencyMap(database: DatabaseSync, taskIds?: readonly string[]): Map<string, string[]> {
-  const dependencies = new Map<string, string[]>()
-  if (!tableExists(database, 'task_dependencies')) return dependencies
-  const rows = taskIds
-    ? taskIds.length === 0
-      ? []
-      : database.prepare(`
-          SELECT task_id, depends_on_task_id
-          FROM task_dependencies
-          WHERE task_id IN (${taskIds.map(() => '?').join(', ')})
-          ORDER BY task_id, rowid
-        `).all(...taskIds)
-    : database.prepare('SELECT task_id, depends_on_task_id FROM task_dependencies ORDER BY task_id, rowid').all()
-  for (const row of rows as JsonRecord[]) {
-    const taskId = stringValue(row.task_id)
-    const dependencyId = stringValue(row.depends_on_task_id)
-    if (!taskId || !dependencyId) continue
-    const values = dependencies.get(taskId) ?? []
-    values.push(dependencyId)
-    dependencies.set(taskId, [...new Set(values)])
-  }
-  return dependencies
-}
-
-function readReleaseMap(database: DatabaseSync, taskIds?: readonly string[]): Map<string, string[]> {
-  const releases = new Map<string, string[]>()
-  if (!tableExists(database, 'release_membership')) return releases
-  const rows = taskIds
-    ? taskIds.length === 0
-      ? []
-      : database.prepare(`
-          SELECT task_id, release_id
-          FROM release_membership
-          WHERE task_id IN (${taskIds.map(() => '?').join(', ')})
-          ORDER BY task_id, rowid
-        `).all(...taskIds)
-    : database.prepare('SELECT task_id, release_id FROM release_membership ORDER BY task_id, rowid').all()
-  for (const row of rows as JsonRecord[]) {
-    const taskId = stringValue(row.task_id)
-    const releaseId = stringValue(row.release_id)
-    if (!taskId || !releaseId) continue
-    const values = releases.get(taskId) ?? []
-    values.push(releaseId)
-    releases.set(taskId, [...new Set(values)])
-  }
-  return releases
-}
-
-function taskSummariesFromRows(
-  database: DatabaseSync,
-  rows: readonly CompactTaskRow[],
-): Map<string, DeliveryTaskSummary> {
-  const ids = rows.map(row => row.id)
-  const dependencies = readDependencyMap(database, ids)
-  const releases = readReleaseMap(database, ids)
-  return new Map(rows.map(row => [
-    row.id,
-    taskSummary(
-      row,
-      dependencies.get(row.id) ?? stringArray(row.depends_on_json),
-      releases.get(row.id) ?? stringArray(row.release_ids_json),
-    ),
-  ]))
-}
-
-function taskMapForDerivation(
-  projectRoot: string,
-  database: DatabaseSync,
-  rows: readonly CompactTaskRow[],
-): Task[] {
-  const dependencies = readDependencyMap(database)
-  const releases = readReleaseMap(database)
-  return rows.map(row => taskForDerivation(
-    projectRoot,
-    row,
-    dependencies.get(row.id) ?? stringArray(row.depends_on_json),
-    releases.get(row.id) ?? stringArray(row.release_ids_json),
-  ))
-}
-
-function compactPrimitiveRef(primitive: PrimitiveWithRelations): DeliveryPrimitiveRef {
-  return { id: primitive.id, label: primitive.label, status: primitive.status }
-}
-
-function compactCandidate(candidate: QueueCandidate): Omit<DeliveryReadCandidate, 'task'> {
+function compactCandidate(candidate: QueueCandidate): JsonRecord {
   return {
     runnable: candidate.runnable,
-    executionBlockers: candidate.executionBlockers.map(blocker => ({
-      id: blocker.id,
-      title: blocker.title,
-      status: blocker.status ?? null,
-    })),
-    structuralBlockers: candidate.structuralBlockers.map(compactPrimitiveRef),
+    executionBlockers: candidate.executionBlockers.map(blocker => ({ id: blocker.id, title: blocker.title, status: blocker.status ?? null })),
+    structuralBlockers: candidate.structuralBlockers.map(primitive => ({ id: primitive.id, label: primitive.label, status: primitive.status })),
     suggestedPrimitiveProofTasks: candidate.suggestedPrimitiveProofTasks.map(suggested => ({
       primitiveId: suggested.primitiveId,
       primitiveLabel: suggested.primitiveLabel,
       title: suggested.title,
       reason: suggested.reason,
-      delivery: suggested.delivery as unknown as JsonRecord,
+      delivery: suggested.delivery,
     })),
     rank: candidate.rank,
     why: candidate.why,
   }
 }
+
+type DeliveryEdgeRelation = import('@guildhall/sessions').DeliveryReadProjectionEdgeRelation
+type DeliveryEdge = DeliveryReadProjectionEdgeRow
 
 function edgeKey(edge: DeliveryEdge): string {
   return `${edge.sourceTaskId}\0${edge.relation}\0${edge.targetId}\0${edge.contextId ?? ''}`
@@ -649,8 +317,7 @@ function edgeKey(edge: DeliveryEdge): string {
 function edgesForRelationship(relationship: TaskRelationshipSummary): DeliveryEdge[] {
   const edges: DeliveryEdge[] = []
   const add = (relation: DeliveryEdgeRelation, targetId: string, contextId: string | null = null): void => {
-    if (!targetId) return
-    edges.push({ sourceTaskId: relationship.task.id, relation, targetId, contextId })
+    if (targetId) edges.push({ sourceTaskId: relationship.task.id, relation, targetId, contextId })
   }
   if (relationship.hierarchy.parent) add('parent', relationship.hierarchy.parent.id)
   for (const child of relationship.hierarchy.children) add('child', child.id)
@@ -665,448 +332,281 @@ function edgesForRelationship(relationship: TaskRelationshipSummary): DeliveryEd
   for (const [primitiveId, provingTasks] of Object.entries(relationship.primitiveProof.provingTasksByPrimitive)) {
     for (const provingTask of provingTasks) add('proving_task', provingTask.id, primitiveId)
   }
-  const unique = new Map(edges.map(edge => [edgeKey(edge), edge]))
-  return [...unique.values()]
+  return [...new Map(edges.map(edge => [edgeKey(edge), edge])).values()]
 }
 
-function createProjectionTables(database: DatabaseSync): void {
-  database.exec(`
-    CREATE TABLE IF NOT EXISTS ${META_TABLE} (
-      id INTEGER PRIMARY KEY CHECK (id = 1),
-      schema_version INTEGER NOT NULL,
-      source_queue_revision INTEGER NOT NULL,
-      source_project_revision INTEGER NOT NULL,
-      source_delivery_updated_at TEXT,
-      selected_release_id TEXT,
-      validation_json TEXT NOT NULL,
-      refreshed_at TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS ${CANDIDATE_TABLE} (
-      task_id TEXT PRIMARY KEY,
-      rank INTEGER NOT NULL,
-      candidate_json TEXT NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS delivery_read_projection_candidates_rank_idx
-      ON ${CANDIDATE_TABLE}(rank, task_id);
-    CREATE TABLE IF NOT EXISTS ${EDGE_TABLE} (
-      source_task_id TEXT NOT NULL,
-      relation TEXT NOT NULL,
-      target_id TEXT NOT NULL,
-      context_id TEXT,
-      PRIMARY KEY (source_task_id, relation, target_id, context_id)
-    );
-    CREATE INDEX IF NOT EXISTS delivery_read_projection_edges_target_idx
-      ON ${EDGE_TABLE}(target_id, relation);
-    CREATE TABLE IF NOT EXISTS ${PRIMITIVE_TABLE} (
-      primitive_id TEXT PRIMARY KEY,
-      payload_json TEXT NOT NULL
-    );
-  `)
-}
-
-export function deliveryReadProjectionSchemaPresent(projectRoot: string): boolean {
-  const database = openDatabase(projectRoot, true)
-  if (!database) return false
-  try {
-    return [META_TABLE, CANDIDATE_TABLE, EDGE_TABLE, PRIMITIVE_TABLE].every(table => tableExists(database, table))
-  } finally {
-    database.close()
-  }
-}
-
-export function ensureDeliveryReadProjectionSchema(projectRoot: string): boolean {
-  const database = openDatabase(projectRoot, false)
-  if (!database) return false
-  try {
-    createProjectionTables(database)
-    return true
-  } finally {
-    database.close()
-  }
-}
-
-function readMeta(database: DatabaseSync): DeliveryMeta | null {
-  if (!tableExists(database, META_TABLE)) return null
-  const row = database.prepare(`
-    SELECT schema_version, source_queue_revision, source_project_revision,
-      source_delivery_updated_at, selected_release_id, validation_json, refreshed_at
-    FROM ${META_TABLE}
-    WHERE id = 1
-  `).get() as JsonRecord | undefined
-  if (!row) return null
-  return {
-    schemaVersion: Number(row.schema_version ?? 0),
-    source: {
-      queueRevision: Number(row.source_queue_revision ?? 0),
-      projectRevision: Number(row.source_project_revision ?? 0),
-      deliveryUpdatedAt: stringValue(row.source_delivery_updated_at),
-      refreshedAt: String(row.refreshed_at ?? ''),
-    },
-    selectedReleaseId: stringValue(row.selected_release_id),
-    validation: parseJson(row.validation_json, { valid: false, errors: [], warnings: [] }) as DeliveryModelValidation,
-  }
-}
-
-function staleReason(
-  source: DeliveryReadRevision,
-  current: DeliveryReadCurrentRevision,
-): DeliveryReadStaleReason | null {
-  if (source.queueRevision !== current.queueRevision) return 'queue_revision_changed'
-  if (source.projectRevision !== current.projectRevision) return 'project_revision_changed'
-  if (source.deliveryUpdatedAt !== current.deliveryUpdatedAt) return 'delivery_model_changed'
-  return null
-}
-
-function readTaskRowsByIds(
-  database: DatabaseSync,
-  taskIds: readonly string[],
-): Map<string, DeliveryTaskSummary> {
-  const rows = readCompactRows(database, taskIds)
-  return taskSummariesFromRows(database, rows)
-}
-
-function taskRefMap(
-  rows: ReadonlyMap<string, DeliveryTaskSummary>,
-  ids: readonly string[],
-): DeliveryTaskRef[] {
+function refMap(rows: ReadonlyMap<string, DeliveryTaskSummary>, ids: readonly string[]): DeliveryTaskRef[] {
   return ids.flatMap(id => {
-    const task = rows.get(id)
-    return task ? [{ id: task.id, title: task.title, status: task.status }] : []
+    const row = rows.get(id)
+    return row ? [{ id: row.id, title: row.title, status: row.status }] : []
   })
 }
 
-function readEdges(database: DatabaseSync, taskId: string): DeliveryEdge[] {
-  if (!tableExists(database, EDGE_TABLE)) return []
-  const rows = database.prepare(`
-    SELECT source_task_id, relation, target_id, context_id
-    FROM ${EDGE_TABLE}
-    WHERE source_task_id = ?
-    ORDER BY relation, rowid
-  `).all(taskId) as JsonRecord[]
-  return rows.flatMap(row => {
-    const relation = stringValue(row.relation)
-    const sourceTaskId = stringValue(row.source_task_id)
-    const targetId = stringValue(row.target_id)
-    if (!sourceTaskId || !targetId || !relation) return []
-    return [{
-      sourceTaskId,
-      relation: relation as DeliveryEdgeRelation,
-      targetId,
-      contextId: stringValue(row.context_id),
-    }]
-  })
-}
-
-function buildTaskRelationships(
-  database: DatabaseSync,
+function taskRelationships(
+  edges: readonly DeliveryEdge[],
+  rows: ReadonlyMap<string, DeliveryTaskSummary>,
   task: DeliveryTaskSummary,
 ): DeliveryReadTaskRelationships {
-  const edges = readEdges(database, task.id)
-  const taskIds = edges
-    .filter(edge => !edge.relation.startsWith('primitive_') && edge.relation !== 'proving_task')
-    .map(edge => edge.targetId)
-  const taskRows = readTaskRowsByIds(database, [...new Set(taskIds)])
-  const refs = (relation: DeliveryEdgeRelation): DeliveryTaskRef[] => taskRefMap(
-    taskRows,
-    edges.filter(edge => edge.relation === relation).map(edge => edge.targetId),
-  )
-  const primitiveIds = (relation: DeliveryEdgeRelation): string[] => [...new Set(
-    edges.filter(edge => edge.relation === relation).map(edge => edge.targetId),
-  )]
+  const forRelation = (relation: DeliveryEdgeRelation) => edges.filter(edge => edge.relation === relation).map(edge => edge.targetId)
   const provingTasksByPrimitive: Record<string, DeliveryTaskRef[]> = {}
   for (const edge of edges.filter(edge => edge.relation === 'proving_task')) {
-    const provingTask = taskRows.get(edge.targetId)
-    if (!provingTask || !edge.contextId) continue
-    ;(provingTasksByPrimitive[edge.contextId] ??= []).push({
-      id: provingTask.id,
-      title: provingTask.title,
-      status: provingTask.status,
-    })
+    const provingTask = rows.get(edge.targetId)
+    if (provingTask && edge.contextId) (provingTasksByPrimitive[edge.contextId] ??= []).push({ id: provingTask.id, title: provingTask.title, status: provingTask.status })
   }
-  const parent = refs('parent')[0]
+  const parent = refMap(rows, forRelation('parent'))[0]
   return {
-    hierarchy: {
-      ...(parent ? { parent } : {}),
-      children: refs('child'),
-      breadcrumbs: refs('breadcrumb'),
-    },
+    hierarchy: { ...(parent ? { parent } : {}), children: refMap(rows, forRelation('child')), breadcrumbs: refMap(rows, forRelation('breadcrumb')) },
     dependencies: {
-      directBlockers: refs('direct_blocker'),
-      recursiveBlockers: refs('recursive_blocker'),
-      blocks: refs('blocks'),
+      directBlockers: refMap(rows, forRelation('direct_blocker')),
+      recursiveBlockers: refMap(rows, forRelation('recursive_blocker')),
+      blocks: refMap(rows, forRelation('blocks')),
     },
-    supports: [...new Set(edges.filter(edge => edge.relation === 'supports').map(edge => edge.targetId))],
-    primitiveUse: {
-      direct: primitiveIds('primitive_use'),
-      ancestors: primitiveIds('primitive_ancestor'),
-    },
-    primitiveProof: {
-      proves: primitiveIds('primitive_proof'),
-      provingTasksByPrimitive,
-    },
+    supports: [...new Set(forRelation('supports'))],
+    primitiveUse: { direct: [...new Set(forRelation('primitive_use'))], ancestors: [...new Set(forRelation('primitive_ancestor'))] },
+    primitiveProof: { proves: [...new Set(forRelation('primitive_proof'))], provingTasksByPrimitive },
   }
 }
 
-function readQueuePage(
-  database: DatabaseSync,
-  options: DeliveryQueuePageOptions = {},
-): DeliveryQueuePage {
-  const limit = clampLimit(options.limit, 50)
-  const after = options.after
-  const rows = after
-    ? database.prepare(`
-        SELECT task_id, rank, candidate_json
-        FROM ${CANDIDATE_TABLE}
-        WHERE rank > ? OR (rank = ? AND task_id > ?)
-        ORDER BY rank, task_id
-        LIMIT ?
-      `).all(after.rank, after.rank, after.taskId, limit + 1)
-    : database.prepare(`
-        SELECT task_id, rank, candidate_json
-        FROM ${CANDIDATE_TABLE}
-        ORDER BY rank, task_id
-        LIMIT ?
-      `).all(limit + 1)
-  const selected = (rows as JsonRecord[]).slice(0, limit)
-  const taskIds = selected.flatMap(row => stringValue(row.task_id) ? [String(row.task_id)] : [])
-  const tasks = readTaskRowsByIds(database, taskIds)
-  const candidates = selected.flatMap(row => {
-    const taskId = stringValue(row.task_id)
-    const task = taskId ? tasks.get(taskId) : null
-    const payload = parseJson(row.candidate_json, null)
-    if (!taskId || !task || !isRecord(payload)) return []
+function queuePage(
+  page: DeliveryReadProjectionPage<DeliveryReadProjectionCandidateRow> | null,
+  rows: ReadonlyMap<string, DeliveryTaskSummary>,
+): DeliveryQueuePage | null {
+  if (!page) return null
+  const candidates = page.rows.flatMap(row => {
+    const task = rows.get(row.taskId)
+    if (!task) return []
+    const payload = row.payload
     return [{ task, ...payload } as DeliveryReadCandidate]
   })
   const runnable = candidates.filter(candidate => candidate.runnable)
   const blocked = candidates.filter(candidate => !candidate.runnable)
-  const last = selected.at(-1)
   return {
     runnable,
     blocked,
     ...(runnable[0] ? { firstRunnable: runnable[0] } : {}),
-    hasMore: rows.length > limit,
-    ...(rows.length > limit && last
-      ? { nextCursor: { rank: Number(last.rank), taskId: String(last.task_id) } }
-      : {}),
+    hasMore: page.hasMore,
+    ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
   }
 }
 
-function readPrimitivePage(
-  database: DatabaseSync,
-  limitValue: number | undefined,
-  after: string | undefined,
-): DeliveryPrimitivePage {
-  const limit = clampLimit(limitValue, 100)
-  const rows = after
-    ? database.prepare(`
-        SELECT primitive_id, payload_json
-        FROM ${PRIMITIVE_TABLE}
-        WHERE primitive_id > ?
-        ORDER BY primitive_id
-        LIMIT ?
-      `).all(after, limit + 1)
-    : database.prepare(`
-        SELECT primitive_id, payload_json
-        FROM ${PRIMITIVE_TABLE}
-        ORDER BY primitive_id
-        LIMIT ?
-      `).all(limit + 1)
-  const selected = (rows as JsonRecord[]).slice(0, limit)
-  const primitives = selected.flatMap(row => {
-    const payload = parseJson(row.payload_json, null)
-    return isRecord(payload) ? [payload as unknown as PrimitiveWithRelations] : []
-  })
-  const hasMore = rows.length > limit
-  const last = selected.at(-1)
+function primitivePage(page: DeliveryReadProjectionPage<DeliveryReadProjectionPrimitiveRow, string>): DeliveryPrimitivePage {
   return {
-    primitives,
-    hasMore,
-    ...(hasMore && last?.primitive_id ? { nextCursor: String(last.primitive_id) } : {}),
+    primitives: page.rows.flatMap(row => isRecord(row.payload) ? [row.payload as unknown as PrimitiveWithRelations] : []),
+    hasMore: page.hasMore,
+    ...(page.nextCursor ? { nextCursor: String(page.nextCursor) } : {}),
   }
 }
 
-function currentProjection(
-  database: DatabaseSync,
-  projectRoot: string,
-  options: DeliveryReadProjectionReadOptions,
+function projectSnapshot(
+  snapshot: DeliveryReadProjectionSnapshot,
   model: ProjectDeliveryModelRecord,
-  currentSource: DeliveryReadCurrentRevision,
-): DeliveryReadProjectionCurrent | DeliveryReadProjectionStale | DeliveryReadProjectionMissing {
-  const meta = readMeta(database)
-  if (!meta) return { status: 'missing', freshness: 'missing', reason: 'projection_missing' }
-  if (meta.schemaVersion !== DELIVERY_READ_PROJECTION_SCHEMA_VERSION) {
-    return { status: 'missing', freshness: 'missing', reason: 'projection_schema_mismatch' }
-  }
-  const source: DeliveryReadRevision = {
-    ...meta.source,
-    deliveryUpdatedAt: meta.source.deliveryUpdatedAt,
-  }
-  const current = {
-    ...currentSource,
-    deliveryUpdatedAt: deliveryModelToken(projectRoot, model),
-  }
-  const reason = staleReason(source, current)
-  if (reason) {
-    return {
-      status: 'stale',
-      freshness: 'stale',
-      reason,
-      source,
-      current,
-    }
-  }
-  const taskRequested = options.taskId !== undefined
-  const taskRows = taskRequested && options.taskId
-    ? readTaskRowsByIds(database, [options.taskId])
-    : new Map<string, DeliveryTaskSummary>()
-  const task = options.taskId ? taskRows.get(options.taskId) ?? null : null
-  const queue = options.queue === false ? null : readQueuePage(database, options.queue)
+  options: DeliveryReadProjectionReadOptions,
+): DeliveryReadProjection {
+  if (snapshot.status !== 'current') return snapshot
+  const summaries = new Map(snapshot.taskRows.map(row => [row.id, taskSummary(row)]))
+  const task = options.taskId ? summaries.get(options.taskId) ?? null : null
   return {
     status: 'current',
     freshness: 'current',
-    source,
+    source: snapshot.source,
     model,
-    validation: meta.validation,
-    selectedReleaseId: meta.selectedReleaseId,
-    queue,
-    primitives: readPrimitivePage(database, options.primitiveLimit, options.primitiveAfter),
+    validation: snapshot.meta.validation as unknown as DeliveryModelValidation,
+    selectedReleaseId: snapshot.meta.selectedReleaseId,
+    queue: queuePage(snapshot.queue, summaries),
+    primitives: primitivePage(snapshot.primitives),
     task,
-    taskState: !taskRequested ? 'not_requested' : task ? 'present' : 'missing',
-    relationships: task ? buildTaskRelationships(database, task) : null,
+    taskState: !options.taskId ? 'not_requested' : task ? 'present' : 'missing',
+    relationships: task ? taskRelationships(snapshot.edges, summaries, task) : null,
   }
+}
+
+function modelToken(projectRoot: string, model: ProjectDeliveryModelRecord): string | null {
+  return existsSync(projectDeliveryModelPath(projectRoot)) ? model.updatedAt : null
+}
+
+/**
+ * The saved delivery model is an explicit source input to the sessions DB
+ * snapshot. Runtime does not merge it with arbitrary task state; sessions
+ * compares its revision token with the persisted delivery projection.
+ */
+async function readSavedDeliveryModel(projectRoot: string): Promise<{ model: ProjectDeliveryModelRecord; updatedAt: string | null }> {
+  const model = await readProjectDeliveryModel(projectRoot)
+  return { model, updatedAt: modelToken(projectRoot, model) }
+}
+
+export function contextPacketFromDeliveryReadProjection(
+  projection: DeliveryReadProjectionCurrent,
+  projectRoot: string,
+): TaskContextPacket | null {
+  if (!projection.task || !projection.relationships) return null
+  const primitiveById = new Map(projection.primitives.primitives.map(primitive => [primitive.id, primitive]))
+  const primitiveRefs = (ids: readonly string[]): PrimitiveWithRelations[] => ids.flatMap(id => {
+    const primitive = primitiveById.get(id)
+    return primitive ? [primitive] : []
+  })
+  const task = {
+    ...taskForDerivation(projectRoot, {
+      ...projection.task,
+      hierarchy: projection.task.hierarchy ?? {},
+      dependsOn: projection.task.dependsOn,
+      releaseIds: projection.task.releaseIds,
+      sourceRefs: projection.task.sourceRefs,
+      summary: projection.task.delivery ? { delivery: projection.task.delivery } : {},
+      workKind: projection.task.workKind,
+      parentId: projection.task.parentId,
+    }),
+  }
+  const relationships: TaskRelationshipSummary = {
+    task,
+    hierarchy: {
+      ...(projection.relationships.hierarchy.parent ? { parent: projection.relationships.hierarchy.parent as Pick<Task, 'id' | 'title' | 'status'> } : {}),
+      children: projection.relationships.hierarchy.children as Array<Pick<Task, 'id' | 'title' | 'status'>>,
+      breadcrumbs: projection.relationships.hierarchy.breadcrumbs as Array<Pick<Task, 'id' | 'title'>>,
+    },
+    dependencies: projection.relationships.dependencies as TaskRelationshipSummary['dependencies'],
+    supports: [...projection.relationships.supports],
+    primitiveUse: {
+      direct: primitiveRefs(projection.relationships.primitiveUse.direct),
+      ancestors: primitiveRefs(projection.relationships.primitiveUse.ancestors),
+      blockers: primitiveRefs([...projection.relationships.primitiveUse.direct, ...projection.relationships.primitiveUse.ancestors])
+        .filter(primitive => primitive.status !== 'ready' && primitive.status !== 'deprecated'),
+    },
+    primitiveProof: {
+      proves: primitiveRefs(projection.relationships.primitiveProof.proves),
+      provingTasksByPrimitive: Object.fromEntries(Object.entries(projection.relationships.primitiveProof.provingTasksByPrimitive)
+        .map(([primitiveId, tasks]) => [primitiveId, tasks as Array<Pick<Task, 'id' | 'title' | 'status'>>])),
+    },
+  }
+  return buildTaskContextPacket({ model: projection.model, tasks: [task], taskId: task.id, relationships })
+}
+
+export interface DeliveryReadProjectionRefreshResult {
+  status: 'current' | 'missing'
+  source?: DeliveryReadRevision
+  taskCount?: number
+  candidateCount?: number
+  edgeCount?: number
+  primitiveCount?: number
+  reason?: DeliveryReadMissingReason
 }
 
 export async function readProjectDeliveryReadProjection(
   projectRoot: string,
   options: DeliveryReadProjectionReadOptions = {},
 ): Promise<DeliveryReadProjection> {
-  const database = openDatabase(projectRoot, true)
-  if (!database) {
-    return {
-      status: 'missing',
-      freshness: 'missing',
-      reason: existsSync(projectStateDatabasePath(projectRoot)) ? 'database_unavailable' : 'database_missing',
-    }
+  const result = await readProjectDeliveryReadProjectionWithSource(projectRoot, options)
+  return result.projection
+}
+
+export async function readProjectDeliveryReadProjectionWithSource(
+  projectRoot: string,
+  options: DeliveryReadProjectionReadOptions = {},
+): Promise<{ model: ProjectDeliveryModelRecord | null; projection: DeliveryReadProjection }> {
+  const sessionOptions: Omit<SessionDeliveryReadProjectionReadOptions, 'deliveryModelUpdatedAt'> = {
+    ...(options.queue !== undefined ? { queue: options.queue } : {}),
+    ...(options.taskId ? { taskId: options.taskId } : {}),
+    ...(options.primitiveLimit !== undefined ? { primitiveLimit: options.primitiveLimit } : {}),
+    ...(options.primitiveAfter ? { primitiveAfter: options.primitiveAfter } : {}),
   }
-  try {
-    const currentSource = readDatabaseSource(database)
-    if (!currentSource) return { status: 'missing', freshness: 'missing', reason: 'source_state_missing' }
-    let model: ProjectDeliveryModelRecord
-    try {
-      model = await readProjectDeliveryModel(projectRoot)
-    } catch (error) {
-      return {
-        status: 'missing',
-        freshness: 'missing',
-        reason: 'delivery_model_unavailable',
-        detail: error instanceof Error ? error.message : String(error),
-      }
-    }
-    currentSource.deliveryUpdatedAt = deliveryModelToken(projectRoot, model)
-    return currentProjection(database, projectRoot, options, model, currentSource)
-  } finally {
-    database.close()
+  const result = await readProjectDeliveryReadProjectionWithSavedModel(
+    projectRoot,
+    sessionOptions,
+    readSavedDeliveryModel,
+  )
+  return {
+    model: result.model,
+    projection: result.model === null ? result.snapshot : projectSnapshot(result.snapshot, result.model, options),
   }
 }
 
-export function readProjectDeliveryTaskProjection(
+export interface DeliveryReadProjectionWithAuthority {
+  authority: 'database' | 'legacy'
+  model: ProjectDeliveryModelRecord | null
+  projection: DeliveryReadProjection | null
+}
+
+/**
+ * Explicit pre-promotion compatibility read for delivery-only routes. The
+ * route must not parse TASKS.json itself or choose a second queue authority;
+ * promoted projects never call this because the saved delivery projection is
+ * authoritative there.
+ */
+export async function readProjectDeliveryLegacyTasks(
+  projectRoot: string,
+): Promise<Array<Record<string, unknown>>> {
+  const queue = await readProjectTaskQueue(getProjectSystemStatePath(projectRoot, 'TASKS.json'))
+  if (!isRecord(queue) || !Array.isArray(queue.tasks)) return []
+  return queue.tasks.filter(isRecord).map(task => ({ ...task }))
+}
+
+/**
+ * Resolve delivery authority inside the named read boundary. A missing
+ * project database is the only legacy case; a promoted database with a
+ * missing, stale, or unavailable delivery projection stays authoritative and
+ * must be reported to the caller instead of falling back to task files.
+ */
+export async function readProjectDeliveryReadProjectionWithAuthority(
+  projectRoot: string,
+  options: DeliveryReadProjectionReadOptions = {},
+): Promise<DeliveryReadProjectionWithAuthority> {
+  const result = await readProjectDeliveryReadProjectionWithSource(projectRoot, options)
+  const isLegacy = result.projection.status === 'missing' && result.projection.reason === 'database_missing'
+  return {
+    authority: isLegacy ? 'legacy' : 'database',
+    model: result.model,
+    projection: isLegacy ? null : result.projection,
+  }
+}
+
+/**
+ * Task detail sometimes needs to distinguish an empty, not-yet-shaped
+ * delivery model from a shaped model whose saved projection is missing. Keep
+ * that distinction inside this boundary so serve never reads the model file
+ * separately from the projection revision.
+ */
+export async function readProjectDeliveryTaskProjectionWithSource(
   projectRoot: string,
   taskId: string,
-): Promise<DeliveryReadProjection> {
+): Promise<{ model: ProjectDeliveryModelRecord | null; projection: DeliveryReadProjection }> {
+  return readProjectDeliveryReadProjectionWithSource(projectRoot, { queue: false, taskId })
+}
+
+export function readProjectDeliveryTaskProjection(projectRoot: string, taskId: string): Promise<DeliveryReadProjection> {
   return readProjectDeliveryReadProjection(projectRoot, { queue: false, taskId })
 }
 
-export function readProjectDeliveryQueuePage(
-  projectRoot: string,
-  options: DeliveryQueuePageOptions = {},
-): Promise<DeliveryReadProjection> {
+export function readProjectDeliveryQueuePage(projectRoot: string, options: DeliveryQueuePageOptions = {}): Promise<DeliveryReadProjection> {
   return readProjectDeliveryReadProjection(projectRoot, { queue: options })
 }
 
-export async function refreshProjectDeliveryReadProjection(
-  projectRoot: string,
-): Promise<DeliveryReadProjectionRefreshResult> {
-  const database = openDatabase(projectRoot, false)
-  if (!database) {
-    return {
-      status: 'missing',
-      reason: existsSync(projectStateDatabasePath(projectRoot)) ? 'database_unavailable' : 'database_missing',
-    }
-  }
-  try {
-    const currentSource = readDatabaseSource(database)
-    if (!currentSource) return { status: 'missing', reason: 'source_state_missing' }
-    const model = await readProjectDeliveryModel(projectRoot)
-    const source: DeliveryReadRevision = {
-      ...currentSource,
-      deliveryUpdatedAt: deliveryModelToken(projectRoot, model),
-      refreshedAt: new Date().toISOString(),
-    }
-    const rows = readCompactRows(database)
-    const tasks = taskMapForDerivation(projectRoot, database, rows)
-    const candidateSummary = deriveQueueCandidates({ model, tasks })
-    const candidates = [...candidateSummary.runnable, ...candidateSummary.blocked]
-    const validation = validateProjectDeliveryModel({ model, tasks, projectRoot })
-    const primitiveRelations = listPrimitivesWithRelations(model, tasks)
-    const relationships = tasks.map(task => deriveTaskRelationships({ model, tasks, taskId: task.id }))
-    const edges = relationships.flatMap(edgesForRelationship)
-
-    createProjectionTables(database)
-    database.exec('BEGIN')
-    try {
-      database.prepare(`DELETE FROM ${META_TABLE}`).run()
-      database.prepare(`DELETE FROM ${CANDIDATE_TABLE}`).run()
-      database.prepare(`DELETE FROM ${EDGE_TABLE}`).run()
-      database.prepare(`DELETE FROM ${PRIMITIVE_TABLE}`).run()
-      const insertCandidate = database.prepare(`
-        INSERT INTO ${CANDIDATE_TABLE} (task_id, rank, candidate_json)
-        VALUES (?, ?, ?)
-      `)
-      for (const candidate of candidates) {
-        insertCandidate.run(candidate.task.id, candidate.rank, json(compactCandidate(candidate)))
-      }
-      const insertEdge = database.prepare(`
-        INSERT OR IGNORE INTO ${EDGE_TABLE} (source_task_id, relation, target_id, context_id)
-        VALUES (?, ?, ?, ?)
-      `)
-      for (const edge of edges) insertEdge.run(edge.sourceTaskId, edge.relation, edge.targetId, edge.contextId)
-      const insertPrimitive = database.prepare(`
-        INSERT INTO ${PRIMITIVE_TABLE} (primitive_id, payload_json)
-        VALUES (?, ?)
-      `)
-      for (const primitive of primitiveRelations) insertPrimitive.run(primitive.id, json(primitive))
-      database.prepare(`
-        INSERT INTO ${META_TABLE} (
-          id, schema_version, source_queue_revision, source_project_revision,
-          source_delivery_updated_at, selected_release_id, validation_json, refreshed_at
-        ) VALUES (1, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        DELIVERY_READ_PROJECTION_SCHEMA_VERSION,
-        source.queueRevision,
-        source.projectRevision,
-        source.deliveryUpdatedAt,
-        readSelectedReleaseId(database),
-        json({ valid: validation.valid, errors: validation.errors, warnings: validation.warnings }),
-        source.refreshedAt,
-      )
-      database.exec('COMMIT')
-    } catch (error) {
-      try {
-        database.exec('ROLLBACK')
-      } catch {
-        // Preserve the original projection failure.
-      }
-      throw error
-    }
-    return {
-      status: 'current',
-      source,
-      taskCount: rows.length,
-      candidateCount: candidates.length,
-      edgeCount: edges.length,
-      primitiveCount: primitiveRelations.length,
-    }
-  } finally {
-    database.close()
+export async function refreshProjectDeliveryReadProjection(projectRoot: string): Promise<DeliveryReadProjectionRefreshResult> {
+  const input = await readProjectDeliveryProjectionRefreshSource(projectRoot, readSavedDeliveryModel)
+  if (input.status !== 'current') return { status: 'missing', reason: input.reason }
+  if (!input.source || !input.taskRows || !input.model) return { status: 'missing', reason: 'source_state_missing' }
+  const source: DeliveryReadRevision = { ...input.source, deliveryUpdatedAt: modelToken(projectRoot, input.model), refreshedAt: new Date().toISOString() }
+  const tasks = input.taskRows.map(row => taskForDerivation(projectRoot, row))
+  const candidateSummary = deriveQueueCandidates({ model: input.model, tasks })
+  const candidates = [...candidateSummary.runnable, ...candidateSummary.blocked]
+  const validation = validateProjectDeliveryModel({ model: input.model, tasks, projectRoot })
+  const primitiveRelations = listPrimitivesWithRelations(input.model, tasks)
+  const edges = tasks.flatMap(task => edgesForRelationship(deriveTaskRelationships({ model: input.model, tasks, taskId: task.id })))
+  const written = writeProjectDeliveryReadProjection(projectRoot, {
+    source,
+    selectedReleaseId: input.selectedReleaseId ?? null,
+    validation: { valid: validation.valid, errors: validation.errors, warnings: validation.warnings },
+    candidates: candidates.map(candidate => ({ taskId: candidate.task.id, rank: candidate.rank, payload: compactCandidate(candidate) })),
+    edges,
+    primitives: primitiveRelations.map(primitive => ({ id: primitive.id, payload: primitive })),
+  })
+  if (written.status !== 'current') return { status: 'missing', reason: written.reason }
+  return {
+    status: 'current',
+    source,
+    taskCount: input.taskRows.length,
+    candidateCount: candidates.length,
+    edgeCount: edges.length,
+    primitiveCount: primitiveRelations.length,
   }
 }
+
+export { deliveryReadProjectionSchemaPresent, ensureDeliveryReadProjectionSchema }

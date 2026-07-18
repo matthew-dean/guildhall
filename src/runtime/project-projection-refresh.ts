@@ -46,6 +46,11 @@ export function createProjectProjectionRefreshScheduler(
     event: ProjectProjectionInvalidation
     retryCount: number
   }>()
+  const inFlight = new Set<string>()
+  const deferred = new Map<string, {
+    event: ProjectProjectionInvalidation
+    retryCount: number
+  }>()
   const lastResults = new Map<string, ProjectProjectionRefreshResult>()
   let disposed = false
 
@@ -64,6 +69,11 @@ export function createProjectProjectionRefreshScheduler(
     if (existing) clearTimeout(existing.timer)
     const timer = setTimeout(() => {
       pending.delete(event.projectRoot)
+      if (inFlight.has(event.projectRoot)) {
+        deferred.set(event.projectRoot, { event, retryCount })
+        return
+      }
+      inFlight.add(event.projectRoot)
       void Promise.resolve().then(() => refresh(event.projectRoot, event)).then(
         () => report({
           projectRoot: event.projectRoot,
@@ -85,9 +95,29 @@ export function createProjectProjectionRefreshScheduler(
             retryScheduled,
             error: refreshErrorMessage(error),
           })
-          if (retryScheduled && !pending.has(event.projectRoot)) scheduleAttempt(event, retryCount + 1)
+          if (retryScheduled) {
+            const existingDeferred = deferred.get(event.projectRoot)
+            if (existingDeferred) {
+              deferred.set(event.projectRoot, {
+                event: existingDeferred.event,
+                retryCount: 0,
+              })
+            } else {
+              deferred.set(event.projectRoot, {
+                event,
+                retryCount: retryCount + 1,
+              })
+            }
+          }
         },
-      )
+      ).finally(() => {
+        inFlight.delete(event.projectRoot)
+        if (disposed) return
+        const next = deferred.get(event.projectRoot)
+        if (!next) return
+        deferred.delete(event.projectRoot)
+        scheduleAttempt(next.event, next.retryCount)
+      })
     }, delayMs)
     timer.unref?.()
     pending.set(event.projectRoot, { timer, event, retryCount })
@@ -96,11 +126,16 @@ export function createProjectProjectionRefreshScheduler(
   return {
     schedule(event) {
       const existing = pending.get(event.projectRoot)
-      if (existing) clearTimeout(existing.timer)
+      const deferredEvent = deferred.get(event.projectRoot)
+      const baseEvent = existing?.event ?? deferredEvent?.event
       const mergedEvent: ProjectProjectionInvalidation = {
         projectRoot: event.projectRoot,
-        revision: Math.max(existing?.event.revision ?? 0, event.revision ?? 0) || null,
-        domains: [...new Set([...(existing?.event.domains ?? []), ...(event.domains ?? [])])],
+        revision: Math.max(baseEvent?.revision ?? 0, event.revision ?? 0) || null,
+        domains: [...new Set([...(baseEvent?.domains ?? []), ...(event.domains ?? [])])],
+      }
+      if (deferredEvent) {
+        deferred.set(event.projectRoot, { event: mergedEvent, retryCount: 0 })
+        return
       }
       scheduleAttempt(mergedEvent, 0)
     },
@@ -111,6 +146,7 @@ export function createProjectProjectionRefreshScheduler(
       disposed = true
       for (const entry of pending.values()) clearTimeout(entry.timer)
       pending.clear()
+      deferred.clear()
       lastResults.clear()
     },
   }

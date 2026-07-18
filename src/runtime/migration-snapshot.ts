@@ -1,8 +1,14 @@
 import { createHash } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { gzipSync, gunzipSync } from 'node:zlib'
 
-import { getProjectLocalHistoryDir, atomicWriteText } from '@guildhall/sessions'
+import {
+  atomicWriteText,
+  atomicWriteBytes,
+  getProjectLocalHistoryDir,
+  registerProjectHistoricalArtifactIfCurrent,
+} from '@guildhall/sessions'
 import { RollbackStore } from './rollback-store.js'
 
 const ROLLBACK_PRODUCER = 'guildhall.migration-snapshot'
@@ -200,6 +206,19 @@ export async function writeMigrationSnapshot(input: {
     },
   }
   atomicWriteText(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
+  registerProjectHistoricalArtifactIfCurrent(input.projectRoot, {
+    artifactId: `migration-snapshot:${input.migrationId}:${snapshotDigest}`,
+    kind: 'migration_snapshot',
+    owner: ROLLBACK_PRODUCER,
+    logicalRef: relativeOrAbsolute(input.projectRoot, input.snapshotPath).replaceAll(path.sep, '/'),
+    createdAt: manifest.createdAt,
+    lastVerifiedAt: now,
+    bytes: snapshotBytes.byteLength,
+    sha256: snapshotDigest,
+    retentionClass: 'rollback',
+    state: 'active',
+    sourceRevision,
+  })
   return {
     snapshotPath: input.snapshotPath,
     manifestPath,
@@ -222,6 +241,138 @@ export async function readMigrationSnapshotManifest(
   } catch {
     throw new Error(`Invalid migration snapshot manifest: ${snapshotPath}.manifest.json`)
   }
+}
+
+/**
+ * Backfill one migration payload into the metadata-only historical registry.
+ * Manifest-backed payloads are classified as rollback only when the retained
+ * bytes match the manifest digest. Older files without that proof remain
+ * explicitly unclassified, so cleanup can report them without pretending
+ * that a filename is provenance.
+ */
+export async function registerMigrationSnapshotArtifactIfCurrent(input: {
+  projectRoot: string
+  snapshotPath: string
+  now?: string
+}): Promise<ReturnType<typeof registerProjectHistoricalArtifactIfCurrent>> {
+  const manifest = await readMigrationSnapshotManifest(input.snapshotPath)
+  const snapshot = await readIfExists(input.snapshotPath)
+  const rollback = manifest ? await readIfExists(manifest.rollback.objectPath) : null
+  const retained = snapshot ?? rollback
+  if (!retained) return null
+
+  const actualSha256 = sha256(retained)
+  const manifestVerified = manifest !== null && rollback !== null &&
+    actualSha256 === manifest.snapshot.sha256 &&
+    sha256(rollback) === manifest.snapshot.sha256
+  const logicalRef = relativeOrAbsolute(input.projectRoot, input.snapshotPath).replaceAll(path.sep, '/')
+  const artifactId = manifest
+    ? `migration-snapshot:${manifest.migrationId}:${manifest.snapshot.sha256}`
+    : `migration-snapshot:legacy:${sha256(Buffer.from(`${logicalRef}:${actualSha256}`, 'utf8'))}`
+  let createdAt = input.now ?? new Date().toISOString()
+  if (manifest?.createdAt) createdAt = manifest.createdAt
+  else {
+    try {
+      createdAt = (await fs.stat(snapshot ? input.snapshotPath : manifest?.rollback.objectPath ?? input.snapshotPath)).birthtime.toISOString()
+    } catch {
+      // The registry still has a valid verification timestamp if filesystem
+      // birth time is unavailable on the host.
+    }
+  }
+  return registerProjectHistoricalArtifactIfCurrent(input.projectRoot, {
+    artifactId,
+    kind: 'migration_snapshot',
+    owner: ROLLBACK_PRODUCER,
+    logicalRef,
+    createdAt,
+    lastVerifiedAt: input.now ?? new Date().toISOString(),
+    bytes: retained.byteLength,
+    sha256: actualSha256,
+    retentionClass: manifestVerified ? 'rollback' : 'unclassified',
+    state: manifestVerified ? 'active' : 'unclassified',
+    sourceRevision: manifest?.provenance.sourceRevision ?? actualSha256,
+  })
+}
+
+export interface LegacyMigrationSnapshotArchiveResult {
+  eligible: boolean
+  archived: boolean
+  reason: 'archived' | 'already_archived' | 'missing' | 'not_current'
+  sourceBytes: number
+  archiveBytes: number
+}
+
+/**
+ * Move an unmanifested legacy snapshot into a deterministic gzip archive only
+ * after decompression reproduces the source bytes exactly. The registry write
+ * is the deletion guard: if the project is not promoted or SQLite cannot
+ * record the archive, the original remains untouched.
+ */
+export async function archiveLegacyMigrationSnapshotIfCurrent(input: {
+  projectRoot: string
+  snapshotPath: string
+  dryRun?: boolean
+  now?: string
+}): Promise<LegacyMigrationSnapshotArchiveResult> {
+  const source = await readIfExists(input.snapshotPath)
+  if (!source) return { eligible: false, archived: false, reason: 'missing', sourceBytes: 0, archiveBytes: 0 }
+  const sourceSha256 = sha256(source)
+  const logicalSourceRef = relativeOrAbsolute(input.projectRoot, input.snapshotPath).replaceAll(path.sep, '/')
+  const artifactId = `migration-snapshot:legacy:${sha256(Buffer.from(`${logicalSourceRef}:${sourceSha256}`, 'utf8'))}`
+  if (input.dryRun !== true) {
+    const sourceArtifact = registerProjectHistoricalArtifactIfCurrent(input.projectRoot, {
+      artifactId,
+      kind: 'migration_snapshot',
+      owner: ROLLBACK_PRODUCER,
+      logicalRef: logicalSourceRef,
+      bytes: source.byteLength,
+      sha256: sourceSha256,
+      retentionClass: 'unclassified',
+      state: 'unclassified',
+      sourceRevision: sourceSha256,
+    })
+    if (!sourceArtifact) {
+      return { eligible: false, archived: false, reason: 'not_current', sourceBytes: source.byteLength, archiveBytes: 0 }
+    }
+  }
+  const archivePath = `${input.snapshotPath}.gz`
+  const compressed = gzipSync(source, { level: 9 })
+  let archiveBytes = compressed.byteLength
+  const existingArchive = await readIfExists(archivePath)
+  if (existingArchive) {
+    const restored = gunzipSync(existingArchive)
+    if (sha256(restored) !== sourceSha256) {
+      throw new Error(`Legacy migration archive digest mismatch: ${archivePath}`)
+    }
+    archiveBytes = existingArchive.byteLength
+  } else if (input.dryRun !== true) {
+    atomicWriteBytes(archivePath, compressed)
+    const written = await fs.readFile(archivePath)
+    if (sha256(gunzipSync(written)) !== sourceSha256) {
+      throw new Error(`Legacy migration archive verification failed: ${archivePath}`)
+    }
+    archiveBytes = written.byteLength
+  }
+  if (input.dryRun === true) {
+    return { eligible: true, archived: false, reason: 'archived', sourceBytes: source.byteLength, archiveBytes }
+  }
+
+  const artifact = registerProjectHistoricalArtifactIfCurrent(input.projectRoot, {
+    artifactId,
+    kind: 'migration_snapshot',
+    owner: `${ROLLBACK_PRODUCER}.archive`,
+    logicalRef: relativeOrAbsolute(input.projectRoot, archivePath).replaceAll(path.sep, '/'),
+    createdAt: input.now ?? new Date().toISOString(),
+    lastVerifiedAt: input.now ?? new Date().toISOString(),
+    bytes: archiveBytes,
+    sha256: sha256(existingArchive ?? compressed),
+    retentionClass: 'archive',
+    state: 'active',
+    sourceRevision: sourceSha256,
+  })
+  if (!artifact) return { eligible: false, archived: false, reason: 'not_current', sourceBytes: source.byteLength, archiveBytes }
+  await fs.rm(input.snapshotPath)
+  return { eligible: true, archived: true, reason: existingArchive ? 'already_archived' : 'archived', sourceBytes: source.byteLength, archiveBytes }
 }
 
 /** Remove only a redundant raw copy whose manifest and rollback object agree. */

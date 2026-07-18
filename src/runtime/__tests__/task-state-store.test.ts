@@ -19,11 +19,14 @@ import {
 import {
   getProjectLocalHistoryDir,
   getProjectTaskLocalHistoryDir,
+  getProjectSystemStatePath,
   promoteProjectStateDatabaseAuthority,
   projectStateDatabasePath,
+  readProjectStateDatabaseTaskEvidenceBoundary,
   readProjectStateDatabaseTaskEvidenceHistory,
   readProjectStateDatabaseTaskOverlay,
   setProjectStateDatabaseTaskEvidenceAuthority,
+  writeProjectStateDatabaseSnapshot,
 } from '@guildhall/sessions'
 
 describe('task state store', () => {
@@ -43,6 +46,35 @@ describe('task state store', () => {
       assignedTo: 'worker-agent',
       revisionCount: 2,
     })
+  })
+
+  it('uses the materialized queue as evidence authority before the promotion marker is finalized', async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-task-evidence-authority-boundary-'))
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    await fs.mkdir(path.dirname(tasksPath), { recursive: true })
+    await fs.writeFile(tasksPath, JSON.stringify({ lastUpdated: '2026-05-24T20:00:00.000Z' }), 'utf8')
+
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: { tasks: [{ id: 'task-1', title: 'Materialized task' }] },
+      summary: {},
+      projectRoot,
+    })
+
+    expect(readProjectStateDatabaseTaskEvidenceBoundary(projectRoot)).toMatchObject({
+      projectAuthority: 'database',
+      evidenceAuthority: 'legacy',
+    })
+    await fs.mkdir(path.dirname(taskEvidencePath(projectRoot, 'task-1', 'note')), { recursive: true })
+    await fs.writeFile(taskEvidencePath(projectRoot, 'task-1', 'note'), `${JSON.stringify({
+      id: 'legacy-note-1',
+      taskId: 'task-1',
+      kind: 'note',
+      recordedAt: '2026-05-24T20:00:00.000Z',
+      payload: { content: 'Legacy detail awaiting migration.' },
+    })}\n`, 'utf8')
+
+    await expect(readTaskEvidence(projectRoot, 'task-1', { kind: 'note' }))
+      .rejects.toThrow(/migration required/i)
   })
 
   it('stores task workspaces separately from task definitions', async () => {
@@ -253,6 +285,72 @@ describe('task state store', () => {
     })
   })
 
+  it('pages SQLite history in order without materializing the retained ledger', async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-task-evidence-database-page-'))
+    promoteProjectStateDatabaseAuthority(projectRoot)
+
+    for (let index = 0; index < 10; index += 1) {
+      await appendTaskEvidence(projectRoot, 'task-1', {
+        id: `note-database-${index}`,
+        kind: 'note',
+        recordedAt: new Date(Date.parse('2026-05-24T20:00:00.000Z') + index * 1000).toISOString(),
+        payload: { content: `Database note ${index}` },
+      })
+    }
+
+    const first = await readTaskEvidencePage(projectRoot, 'task-1', {
+      kind: 'note',
+      order: 'oldest',
+      limit: 3,
+      maxBytes: 1_024,
+    })
+    expect(first.events.map(event => event.id)).toEqual([
+      'note-database-0',
+      'note-database-1',
+      'note-database-2',
+    ])
+    expect(first).toMatchObject({
+      cursor: 0,
+      total: 10,
+      hasMore: true,
+      nextCursor: 3,
+      authority: 'database',
+    })
+    expect(first.revision).toEqual(expect.any(Number))
+
+    const next = await readTaskEvidencePage(projectRoot, 'task-1', {
+      kind: 'note',
+      order: 'oldest',
+      cursor: first.nextCursor,
+      limit: 3,
+      maxBytes: 1_024,
+    })
+    expect(next.events.map(event => event.id)).toEqual([
+      'note-database-3',
+      'note-database-4',
+      'note-database-5',
+    ])
+
+    const filtered = await readTaskEvidencePage(projectRoot, 'task-1', {
+      kind: 'note',
+      order: 'oldest',
+      limit: 10,
+      filter: event => Number(event.id.split('-').at(-1)) % 2 === 0,
+    })
+    expect(filtered.events.map(event => event.id)).toEqual([
+      'note-database-0',
+      'note-database-2',
+      'note-database-4',
+      'note-database-6',
+      'note-database-8',
+    ])
+    expect(filtered).toMatchObject({
+      total: 5,
+      hasMore: false,
+      authority: 'database',
+    })
+  })
+
   it('requires an explicit migration read when promoted state still has legacy evidence files', async () => {
     const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-task-evidence-migration-boundary-'))
     const file = taskEvidencePath(projectRoot, 'task-1', 'note')
@@ -267,6 +365,8 @@ describe('task state store', () => {
     promoteProjectStateDatabaseAuthority(projectRoot)
 
     await expect(readTaskEvidence(projectRoot, 'task-1', { kind: 'note' }))
+      .rejects.toThrow(/migration required/i)
+    await expect(readTaskEvidencePage(projectRoot, 'task-1', { kind: 'note' }))
       .rejects.toThrow(/migration required/i)
     await expect(readTaskEvidence(projectRoot, 'task-1', { kind: 'note', allowLegacy: true }))
       .resolves.toMatchObject([{ id: 'legacy-note-1' }])
@@ -288,6 +388,11 @@ describe('task state store', () => {
     await expect(fs.stat(compressedTaskEvidencePath(projectRoot, 'task-1', 'note'))).resolves.toBeDefined()
     await expect(readTaskEvidence(projectRoot, 'task-1', { kind: 'note' })).resolves.toMatchObject([{ id: 'note-compressed-1' }])
     expect(readProjectStateDatabaseTaskEvidenceHistory(projectRoot, 'task-1', 'note')).toEqual([])
+    await expect(readTaskEvidencePage(projectRoot, 'task-1', { kind: 'note' })).resolves.toMatchObject({
+      authority: 'compressed',
+      projectAuthority: 'database',
+      revision: expect.any(Number),
+    })
   })
 
   it('fails closed when normalized evidence history is unavailable', async () => {

@@ -63,6 +63,11 @@ const PROMPT_TOO_LONG_SIGNATURES = [
   'maximum context length',
 ]
 
+// A repeated failed tool call gets a few chances to change course, then the
+// turn ends so the orchestrator can recover instead of spinning in one model
+// session forever.
+const REPEATED_UNPRODUCTIVE_TOOL_LIMIT = 4
+
 function invalidToolInputMessage(toolName: string, error: { message: string; issues?: Array<{ path?: Array<string | number>; message?: string }> }): string {
   if (toolName === 'edit-file') {
     const missingOldString = error.issues?.some((issue) => issue.path?.includes('oldString')) ?? false
@@ -2172,6 +2177,20 @@ export async function* runQuery(
           },
           usage: null,
         }
+        if (
+          (repeatedToolCallCounts.get(repeatedToolCallSignature(context.cwd, tc)) ?? 0) >=
+          REPEATED_UNPRODUCTIVE_TOOL_LIMIT
+        ) {
+          yield {
+            event: {
+              type: 'status',
+              message:
+                'The same tool call kept failing; ending this turn so Guildhall can recover the task.',
+            },
+            usage: null,
+          }
+          return
+        }
       }
     } else {
       for (const tc of toolCalls) {
@@ -2241,6 +2260,20 @@ export async function* runQuery(
           },
           usage: null,
         }
+      }
+      if (toolCalls.some((tc) =>
+        (repeatedToolCallCounts.get(repeatedToolCallSignature(context.cwd, tc)) ?? 0) >=
+        REPEATED_UNPRODUCTIVE_TOOL_LIMIT
+      )) {
+        yield {
+          event: {
+            type: 'status',
+            message:
+              'The same tool call kept failing; ending this turn so Guildhall can recover the task.',
+          },
+          usage: null,
+        }
+        return
       }
     }
 
@@ -2337,14 +2370,18 @@ function stableToolInput(input: Record<string, unknown>): string {
   )
 }
 
+function repeatedToolCallSignature(cwd: string, toolCall: ToolUseBlock): string {
+  const hydratedInput = hydrateProjectToolInput(toolCall.name, cwd, toolCall.input)
+  return `${toolCall.name}:${stableToolInput(hydratedInput)}`
+}
+
 function repeatedToolResultNudge(
   repeatedToolCallCounts: Map<string, number>,
   cwd: string,
   toolCall: ToolUseBlock,
   result: ToolResultBlock,
 ): string | null {
-  const hydratedInput = hydrateProjectToolInput(toolCall.name, cwd, toolCall.input)
-  const signature = `${toolCall.name}:${stableToolInput(hydratedInput)}`
+  const signature = repeatedToolCallSignature(cwd, toolCall)
   const unproductive = result.is_error || /^\s*\(no matches\)\s*$/i.test(result.content)
   if (!unproductive) {
     repeatedToolCallCounts.delete(signature)

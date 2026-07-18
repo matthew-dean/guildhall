@@ -51,6 +51,18 @@ function approvedReviewerProofSummary(value: unknown): string | null {
   return proofLine ? `Reviewer proof: ${proofLine}` : 'Reviewer proof: approved completion evidence.'
 }
 
+function reviewerProofFromVerdict(value: Record<string, unknown>): string | null {
+  const reasoning = stringValue(value.reasoning)
+  if (!reasoning) return null
+  const lines = reasoning
+    .split(/\r?\n/)
+    .map(line => line.replace(/^\s*[-*]\s*/, '').trim())
+  const proofLine = lines.find(line => /\b(?:tests?\/|fixtures?\/)/i.test(line)) ??
+    lines.find(line => /\b(?:pnpm|npm|node)\b/i.test(line)) ??
+    lines.find(line => /\b(?:model|chapter|synopsis|outline|character|voice)\b/i.test(line))
+  return proofLine ? `Reviewer proof: ${proofLine}` : null
+}
+
 function proofEvidenceRank(value: string): number {
   if (value.startsWith('Reviewer proof:')) return 0
   if (/^Gate passed: (?!content\.no-truncated-data\b)/i.test(value)) return 1
@@ -121,7 +133,10 @@ export function recordedCompletionProofForTask(task: unknown): RecordedCompletio
     const approved = verdict.verdict === 'approve' || verdict.verdict === 'approved' ||
       verdict.decision === 'approve' || verdict.decision === 'approved'
     if (!approved) continue
-    addEntry(`Review approved: ${stringValue(verdict.reviewerPath) ?? stringValue(verdict.reviewer) ?? 'recorded review'}`, 'review')
+    addEntry(
+      reviewerProofFromVerdict(verdict) ?? `Review approved: ${stringValue(verdict.reviewerPath) ?? stringValue(verdict.reviewer) ?? 'recorded review'}`,
+      'review',
+    )
     addProofDate(verdict.recordedAt)
   }
 

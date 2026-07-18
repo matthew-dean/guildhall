@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { AcceptanceCriteria, RequestIntake, Task, TaskQueue, TaskStatus } from '../task.js'
+import { parseAcceptanceCriteriaFromSpec } from '../spec-acceptance.js'
 
 describe('TaskStatus', () => {
   it('accepts all valid statuses', () => {
@@ -15,6 +16,25 @@ describe('TaskStatus', () => {
 
   it('normalizes legacy pending status to ready', () => {
     expect(TaskStatus.parse('pending')).toBe('ready')
+  })
+})
+
+describe('acceptance proof expectations', () => {
+  it('preserves explicit non-zero exit and output requirements from a spec', () => {
+    const criteria = parseAcceptanceCriteriaFromSpec(`
+## Acceptance Criteria
+1. Scenario: An invalid fixture is rejected.
+   Expectation: The validator rejects the fixture.
+   Verification: automated
+   Command: pnpm exec node scripts/validate-fixture.mjs fixtures/invalid
+   Expected exit: non-zero
+   Expected output includes: invalid fixture
+`)
+
+    expect(criteria[0]).toMatchObject({
+      expectedExit: 'non_zero',
+      expectedOutputIncludes: ['invalid fixture'],
+    })
   })
 })
 

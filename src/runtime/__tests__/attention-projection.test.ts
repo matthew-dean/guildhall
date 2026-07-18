@@ -1,12 +1,14 @@
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { projectStateDatabasePath } from '@guildhall/sessions'
 import { readAttentionRecords } from '../attention.js'
 import {
   materializeAttentionProjection,
   previewAttentionProjection,
+  readSavedAttentionSurface,
+  readSavedAttentionSurfaceFromBoundary,
   type AttentionProjectionInput,
 } from '../attention-projection.js'
 import type { InboxItem } from '../inbox.js'
@@ -83,5 +85,61 @@ describe('attention projection', () => {
 
     expect(readAttentionRecords(root)).toEqual(beforeReadOnlyPreview)
     expect(materialized.history).toEqual(beforeReadOnlyPreview)
+  })
+
+  it('reports an unreadable saved projection as a local cache miss', () => {
+    const root = projectRoot()
+    const databasePath = projectStateDatabasePath(root)
+    mkdirSync(dirname(databasePath), { recursive: true })
+    writeFileSync(databasePath, 'not a sqlite database')
+
+    expect(() => readSavedAttentionSurface(root, false)).not.toThrow()
+    expect(readSavedAttentionSurface(root, false)).toMatchObject({
+      items: [],
+      history: [],
+      freshness: 'missing',
+      requiresRefresh: true,
+    })
+    expect(existsSync(databasePath)).toBe(true)
+  })
+
+  it('formats only the supplied saved records at a matching revision', () => {
+    const surface = readSavedAttentionSurfaceFromBoundary({
+      initializationNeeded: false,
+      records: [
+        {
+          payload: {
+            id: 'attention-open',
+            status: 'open',
+            kind: 'setup_pending',
+            severity: 'medium',
+            title: 'Open saved attention',
+            detail: 'The saved projection is current.',
+            actionHref: '/providers',
+          },
+        },
+        {
+          payload: {
+            id: 'attention-resolved',
+            status: 'resolved',
+            kind: 'setup_pending',
+            severity: 'medium',
+            title: 'Resolved saved attention',
+            detail: 'This should not appear in the open fleet items.',
+            actionHref: '/providers',
+          },
+        },
+      ],
+      watermarkSourceRevision: 7,
+      projectRevision: 7,
+    })
+
+    expect(surface).toMatchObject({
+      items: [expect.objectContaining({ id: 'attention-open' })],
+      freshness: 'current',
+    })
+    expect(surface.items).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'attention-resolved' }),
+    ]))
   })
 })

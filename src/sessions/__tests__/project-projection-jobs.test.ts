@@ -10,6 +10,7 @@ import {
   failProjectStateDatabaseProjectionJob,
   listProjectStateDatabaseProjectionJobs,
   markProjectStateDatabaseProjectionCurrent,
+  markProjectStateDatabaseStale,
   projectStateDatabasePath,
   recordProjectStateDatabaseProjectionObligations,
   retryProjectStateDatabaseProjectionJob,
@@ -151,6 +152,18 @@ describe('durable projection jobs', () => {
     expect(listProjectStateDatabaseProjectionJobs(projectRoot)).toEqual(expect.arrayContaining([
       expect.objectContaining({ domain: 'summary', sourceRevision: revision, status: 'pending' }),
       expect.objectContaining({ domain: 'attention', sourceRevision: revision, status: 'pending' }),
+      expect.objectContaining({ domain: 'memory', sourceRevision: revision, status: 'pending' }),
+    ]))
+  })
+
+  it('turns a stale-state invalidation into revisioned projection obligations', () => {
+    writeQueue()
+    const firstRevision = readProjectStateDatabaseMetadata(projectRoot)?.revision
+    const staleRevision = markProjectStateDatabaseStale(projectRoot)
+    expect(staleRevision).toBeGreaterThan(firstRevision ?? 0)
+    expect(listProjectStateDatabaseProjectionJobs(projectRoot)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ domain: 'summary', sourceRevision: staleRevision, status: 'pending' }),
+      expect.objectContaining({ domain: 'attention', sourceRevision: staleRevision, status: 'pending' }),
     ]))
   })
 })

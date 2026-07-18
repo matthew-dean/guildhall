@@ -263,6 +263,25 @@ describe('effective task projection', () => {
     }])
   })
 
+  it('keeps malformed historical evidence out of the current task projection', async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-effective-task-invalid-evidence-'))
+    await promoteProjectStateDatabaseAuthority(projectRoot)
+    await appendTaskEvidence(projectRoot, 'task-auth-complete', {
+      id: 'gate-legacy-invalid',
+      kind: 'gate_result',
+      recordedAt: '2026-05-24T21:02:00.000Z',
+      payload: {
+        gateId: 'build',
+        passed: true,
+        checkedAt: '2026-05-24T21:02:00.000Z',
+      },
+    })
+
+    const effective = await buildEffectiveTask(projectRoot, legacyTask(), { evidence: 'current' })
+
+    expect(effective.gateResults).toEqual([])
+  })
+
   it('uses bounded current evidence by default after the database boundary', async () => {
     const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-effective-task-current-default-'))
     promoteProjectStateDatabaseAuthority(projectRoot)
@@ -287,6 +306,60 @@ describe('effective task projection', () => {
       expect.objectContaining({ content: 'Older operational note.' }),
       expect.objectContaining({ content: 'Latest operational note.' }),
     ])
+  })
+
+  it('preserves active proof recovery from the normalized runtime overlay', async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-effective-task-proof-recovery-'))
+    const reopenedAt = '2026-05-24T22:00:00.000Z'
+    await promoteProjectStateDatabaseAuthority(projectRoot)
+    await upsertTaskRuntimeState(projectRoot, 'task-auth-complete', {
+      proofRecovery: {
+        reopenedAt,
+        reason: 'Run the documented acceptance command and record its durable proof.',
+      },
+      updatedAt: reopenedAt,
+    })
+    await appendTaskEvidence(projectRoot, 'task-auth-complete', {
+      id: 'gate-before-proof-recovery',
+      kind: 'gate_result',
+      recordedAt: '2026-05-24T21:59:00.000Z',
+      payload: {
+        gateId: 'build',
+        type: 'hard',
+        passed: true,
+        command: 'pnpm test',
+        checkedAt: '2026-05-24T21:59:00.000Z',
+      },
+    })
+
+    const effective = await buildEffectiveTask(projectRoot, legacyTask({
+      status: 'in_progress',
+      proofPaths: [{
+        id: 'proof-build',
+        title: 'Run build',
+        summary: 'Run the documented acceptance command.',
+        kind: 'command',
+        command: 'pnpm test',
+        source: 'documented',
+        status: 'planned',
+        verificationRecords: [],
+      }],
+      acceptanceCriteria: [{
+        id: 'build',
+        description: 'Build passes.',
+        command: 'pnpm test',
+        met: true,
+      }],
+    }))
+
+    expect(effective.runtime?.proofRecovery).toEqual({
+      reopenedAt,
+      reason: 'Run the documented acceptance command and record its durable proof.',
+    })
+    expect(effective.proofRecovery).toEqual({
+      reopenedAt,
+      reason: 'Run the documented acceptance command and record its durable proof.',
+    })
   })
 
   it('repairs older Guildhall bootstrap verification ellipses in effective evidence', async () => {
@@ -378,6 +451,81 @@ describe('effective task projection', () => {
 
     expect(effectiveTaskStatus(settled)).toBe('done')
     expect(effectiveTaskStatus(reopened)).toBe('blocked')
+  })
+
+  it('keeps a retry active while a substantive review finding is unresolved', () => {
+    const reopenedAfterFallback = {
+      id: 'task-review-recovery',
+      status: 'in_progress',
+      completedAt: '2026-07-18T04:28:59.233Z',
+      doneSummaryBundle: {
+        status: 'done',
+        completedAt: '2026-07-18T04:28:59.233Z',
+        summary: { evidence: 'The prior completion was recorded.' },
+      },
+      evidence: [
+        {
+          id: 'review-1',
+          taskId: 'task-review-recovery',
+          kind: 'review_verdict',
+          recordedAt: '2026-07-18T04:17:58.507Z',
+          payload: { verdict: 'approve', reviewerPath: 'llm', reason: 'Initial pass.' },
+        },
+        {
+          id: 'review-2',
+          taskId: 'task-review-recovery',
+          kind: 'review_verdict',
+          recordedAt: '2026-07-18T04:20:54.206Z',
+          payload: { verdict: 'revise', reviewerPath: 'llm', reason: 'Concrete bugs.', reasoning: 'The implementation has a syntax error.' },
+        },
+        {
+          id: 'review-3',
+          taskId: 'task-review-recovery',
+          kind: 'review_verdict',
+          recordedAt: '2026-07-18T04:28:59.233Z',
+          payload: { verdict: 'approve', reviewerPath: 'deterministic', reason: 'Fallback.', llmError: 'provider timeout' },
+        },
+      ],
+    }
+
+    expect(effectiveTaskStatus(reopenedAfterFallback)).toBe('in_progress')
+  })
+
+  it('does not synthesize terminal completion while normalizing a review recovery', async () => {
+    const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-effective-task-'))
+    const effective = await buildEffectiveTask(projectRoot, legacyTask({
+      status: 'in_progress',
+      completedAt: '2026-07-18T04:28:59.233Z',
+      doneSummaryBundle: {
+        status: 'done',
+        completedAt: '2026-07-18T04:28:59.233Z',
+        summary: { evidence: 'The prior completion was recorded.' },
+      },
+      reviewVerdicts: [
+        {
+          verdict: 'approve',
+          reviewerPath: 'deterministic',
+          reason: 'Fallback.',
+          llmError: 'provider timeout',
+          recordedAt: '2026-07-18T04:28:59.233Z',
+        },
+        {
+          verdict: 'revise',
+          reviewerPath: 'llm',
+          reason: 'Concrete bugs.',
+          reasoning: 'The implementation has a syntax error.',
+          recordedAt: '2026-07-18T04:20:54.206Z',
+        },
+        {
+          verdict: 'approve',
+          reviewerPath: 'llm',
+          reason: 'Initial pass.',
+          recordedAt: '2026-07-18T04:17:58.507Z',
+        },
+      ],
+    }))
+
+    expect(effective.status).toBe('in_progress')
   })
 
   it('does not treat a merge record alone as completed proof for a ready task', async () => {

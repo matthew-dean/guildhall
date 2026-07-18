@@ -4,8 +4,15 @@ import {
   completionProofCanSettleUnmetAcceptanceCriteria,
   hasActiveProofRecovery,
   normalizeAcceptanceCriteriaForCurrentProof,
+  taskDoneButReviewConflict,
   taskDoneButProofMissing,
+  taskDoneButProofMissingForScope,
 } from '../proof-health.js'
+import {
+  ensureCommandProofPathsFromAcceptanceCriteria,
+  isConcreteProjectProofCommand,
+  recordCommandProofPathResults,
+} from '../proof-paths.js'
 
 function reviewedTask(criterion: Record<string, unknown>) {
   return {
@@ -22,6 +29,69 @@ function reviewedTask(criterion: Record<string, unknown>) {
 }
 
 describe('proof health', () => {
+  it('materializes one durable command proof path per explicit acceptance command', () => {
+    const task = {
+      id: 'task-command-proof',
+      title: 'Run the focused proof',
+      acceptanceCriteria: [{
+        id: 'AC-1',
+        description: 'The focused proof passes.',
+        verifiedBy: 'automated',
+        command: 'pnpm test',
+        met: false,
+      }],
+      proofPaths: [{
+        id: 'existing-review-path',
+        kind: 'review',
+        title: 'Review the result',
+        summary: 'Review evidence.',
+      }],
+    } as any
+
+    task.proofPaths = ensureCommandProofPathsFromAcceptanceCriteria(task, '2026-07-18T04:00:00.000Z')
+    expect(task.proofPaths).toHaveLength(2)
+    expect(task.proofPaths?.[1]).toMatchObject({
+      kind: 'command',
+      command: 'pnpm test',
+      source: 'documented',
+      status: 'planned',
+      expectedEvidence: [{ id: 'AC-1', kind: 'automated' }],
+    })
+
+    recordCommandProofPathResults(task, [{ id: 'AC-1', command: 'pnpm test' }], [{
+      gateId: 'AC-1',
+      type: 'hard',
+      passed: true,
+      checkedAt: '2026-07-18T04:01:00.000Z',
+    }], 'acceptance-command-gates')
+    expect(task.proofPaths?.[1]).toMatchObject({
+      status: 'verified',
+      verificationRecords: [{
+        evidenceId: 'AC-1',
+        status: 'passed',
+        command: 'pnpm test',
+        recordedBy: 'acceptance-command-gates',
+      }],
+    })
+  })
+
+  it('treats a completed task without a runnable path as incomplete in a script-only release', () => {
+    const task = {
+      id: 'task-script-proof',
+      title: 'Run the script proof',
+      status: 'done',
+    }
+
+    expect(taskDoneButProofMissingForScope(task, 'script_only')).toBe(true)
+    expect(taskDoneButProofMissingForScope(task, 'manual')).toBe(false)
+  })
+
+  it('does not treat a bare workspace convention as task-specific proof during recovery', () => {
+    expect(isConcreteProjectProofCommand('pnpm test')).toBe(false)
+    expect(isConcreteProjectProofCommand('pnpm run proof:story-records')).toBe(true)
+    expect(isConcreteProjectProofCommand('pnpm test -- story-records')).toBe(true)
+  })
+
   it('does not let review narration settle a command-backed criterion', () => {
     const task = reviewedTask({
       id: 'live-provider-proof',
@@ -224,6 +294,52 @@ describe('proof health', () => {
     expect(taskDoneButProofMissing(normalizeAcceptanceCriteriaForCurrentProof(task))).toBe(false)
   })
 
+  it('clears stale criterion state when the current gate pass is authoritative', () => {
+    const normalized = normalizeAcceptanceCriteriaForCurrentProof({
+      id: 'task-clears-stale-proof',
+      status: 'done',
+      acceptanceCriteria: [{
+        id: 'command-proof',
+        description: 'Run the bounded proof command.',
+        verifiedBy: 'automated',
+        command: 'pnpm run validate:story',
+        met: true,
+        persistedMet: true,
+        verificationState: 'stale',
+        staleReason: 'The previous proof run failed.',
+        staleGateId: 'command-proof',
+      }],
+      acceptanceCriteriaProofState: {
+        state: 'blocked',
+        reason: 'The previous proof run failed.',
+        gateId: 'command-proof',
+        checkedAt: '2026-07-14T07:38:00.000Z',
+        staleMetCount: 1,
+      },
+      proofPaths: [{
+        kind: 'command',
+        source: 'documented',
+        command: 'pnpm run validate:story',
+      }],
+      gateResults: [{
+        type: 'hard',
+        gateId: 'command-proof',
+        command: 'pnpm run validate:story',
+        passed: true,
+        checkedAt: '2026-07-14T07:39:00.000Z',
+      }],
+    })
+
+    expect(normalized.acceptanceCriteria).toEqual([expect.objectContaining({
+      met: true,
+      verificationState: 'verified',
+    })])
+    expect(normalized.acceptanceCriteria?.[0]).not.toHaveProperty('persistedMet')
+    expect(normalized.acceptanceCriteria?.[0]).not.toHaveProperty('staleReason')
+    expect(normalized.acceptanceCriteria?.[0]).not.toHaveProperty('staleGateId')
+    expect(normalized.acceptanceCriteriaProofState).toEqual({ state: 'verified' })
+  })
+
   it('retires proof recovery after newer evidence for the documented proof path', () => {
     const task = {
       id: 'task-recovered-proof',
@@ -272,5 +388,94 @@ describe('proof health', () => {
     }
 
     expect(hasActiveProofRecovery(task)).toBe(true)
+  })
+
+  it('keeps recovery active when an unrelated proof path passes', () => {
+    const task = {
+      status: 'spec_review',
+      runtime: {
+        proofRecovery: {
+          reopenedAt: '2026-07-18T10:00:00.000Z',
+        },
+      },
+      proofPaths: [
+        {
+          kind: 'review',
+          status: 'verified',
+          expectedEvidence: [{ id: 'review', required: true }],
+          verificationRecords: [{
+            evidenceId: 'review',
+            status: 'passed',
+            recordedAt: '2026-07-18T11:00:00.000Z',
+          }],
+        },
+        {
+          kind: 'command',
+          source: 'documented',
+          command: 'pnpm run proof:release',
+          expectedEvidence: [{ id: 'release', required: true }],
+          verificationRecords: [],
+        },
+      ],
+    }
+
+    expect(hasActiveProofRecovery(task)).toBe(true)
+  })
+
+  it('prefers a newer normalized recovery marker over a stale task-shaped copy', () => {
+    const task = {
+      proofRecovery: {
+        reopenedAt: '2026-07-18T10:00:00.000Z',
+        reason: 'stale recovery',
+      },
+      runtime: {
+        proofRecovery: {
+          reopenedAt: '2026-07-18T12:00:00.000Z',
+          reason: 'current recovery',
+        },
+      },
+      proofPaths: [{
+        kind: 'command',
+        source: 'documented',
+        command: 'pnpm run proof:release',
+        expectedEvidence: [{ id: 'release', required: true }],
+        verificationRecords: [{
+          evidenceId: 'release',
+          status: 'passed',
+          recordedAt: '2026-07-18T11:00:00.000Z',
+        }],
+      }],
+    }
+
+    expect(hasActiveProofRecovery(task)).toBe(true)
+  })
+
+  it('treats a timeout fallback after substantive review feedback as an incomplete done task', () => {
+    const task = {
+      status: 'done',
+      reviewVerdicts: [
+        {
+          verdict: 'approve',
+          reviewerPath: 'deterministic',
+          reasoning: 'Acceptance criteria are met.',
+          llmError: 'reviewer-agent timed out after 60000ms of inactivity',
+          recordedAt: '2026-07-18T04:28:59.233Z',
+        },
+        {
+          verdict: 'revise',
+          reviewerPath: 'llm',
+          reasoning: 'The implementation has a syntax error and emits findings with an empty character.',
+          recordedAt: '2026-07-18T04:20:54.206Z',
+        },
+        {
+          verdict: 'approve',
+          reviewerPath: 'llm',
+          reasoning: 'The initial pass was clear.',
+          recordedAt: '2026-07-18T04:17:58.507Z',
+        },
+      ],
+    }
+
+    expect(taskDoneButReviewConflict(task)).toBe(true)
   })
 })

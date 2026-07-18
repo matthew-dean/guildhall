@@ -278,6 +278,31 @@ describe('updateProductBrief', () => {
     })
   })
 
+  it('decodes JSON-encoded list values instead of persisting nested strings', async () => {
+    const result = await updateProductBriefTool.execute(
+      {
+        userJob: 'You want a bounded narrative review contract.',
+        successMetric: 'The review contract is stored with readable boundaries.',
+        nonGoals: '["Do not add a UI.", "Do not widen the release."]',
+      },
+      {
+        cwd: '/tmp',
+        metadata: {
+          tasks_path: tasksPath,
+          current_task_id: 'task-1',
+          current_agent_id: 'spec-agent',
+        },
+      },
+    )
+    expect(result.is_error).toBe(false)
+
+    const q = TaskQueue.parse(JSON.parse(await fs.readFile(tasksPath, 'utf-8')))
+    expect(q.tasks[0]?.productBrief?.nonGoals).toEqual([
+      'Do not add a UI.',
+      'Do not widen the release.',
+    ])
+  })
+
   it('rejects product briefs that describe the agent research process instead of the task outcome', async () => {
     const result = await updateProductBriefTool.execute(
       {
@@ -297,6 +322,29 @@ describe('updateProductBrief', () => {
     expect(result.is_error).toBe(true)
     expect(result.output).toMatch(/product outcome/i)
 
+    const q = TaskQueue.parse(JSON.parse(await fs.readFile(tasksPath, 'utf-8')))
+    expect(q.tasks[0]?.productBrief).toBeUndefined()
+  })
+
+  it('rejects recovery and worktree diagnostics inside the current brief boundary', async () => {
+    const result = await updateProductBriefTool.execute(
+      {
+        userJob: 'I want the current story record slice implemented.',
+        successMetric: 'The local proof passes.',
+        nonGoals: ['Target directory structure does not match expected paths.'],
+      },
+      {
+        cwd: '/tmp',
+        metadata: {
+          tasks_path: tasksPath,
+          current_task_id: 'task-1',
+          current_agent_id: 'spec-agent',
+        },
+      },
+    )
+
+    expect(result.is_error).toBe(true)
+    expect(result.output).toMatch(/product outcome and boundary/i)
     const q = TaskQueue.parse(JSON.parse(await fs.readFile(tasksPath, 'utf-8')))
     expect(q.tasks[0]?.productBrief).toBeUndefined()
   })

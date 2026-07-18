@@ -5,7 +5,7 @@ import type { ProjectProjectionInvalidation } from './project-projection-refresh
 export interface ProjectProjectionFreshnessWatcherInput {
   projectRoots: () => readonly string[]
   readMetadata: (projectRoot: string) => ProjectStateDatabaseMetadata | null
-  /** Read a cheap repository/worktree token without Git Story scans. */
+  /** Optional repository token for explicit repository-watch deployments. */
   readRepositorySignature?: (projectRoot: string) => string | null | undefined
   schedule: (event: ProjectProjectionInvalidation) => void
 }

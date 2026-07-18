@@ -69,6 +69,15 @@ ln -s "$RELEASE_DIR" "$CURRENT_DIR"
 ln -sf "$CURRENT_DIR/bin/guildhall" "$BIN_DIR/guildhall"
 ln -sf "$BIN_DIR/guildhall" "$LOCAL_BIN_DIR/guildhall"
 
+# Versioned installs contain a full embedded runtime. Keep the active install
+# only; the source checkout and project state are the durable rollback surface.
+for installed_dir in "$APP_DIR"/*; do
+  [ "$installed_dir" = "$RELEASE_DIR" ] && continue
+  [ "$installed_dir" = "$CURRENT_DIR" ] && continue
+  [ -f "$installed_dir/manifest.json" ] || continue
+  rm -rf "$installed_dir"
+done
+
 "$CURRENT_DIR/runtime/node" "$CURRENT_DIR/install/install-launch-agent.mjs" \
   --home "$HOME_DIR" \
   --install-dir "$CURRENT_DIR" \

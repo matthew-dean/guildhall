@@ -211,12 +211,12 @@ const UI_REVIEW_CHECKS = new Set([
 ])
 
 const FRONTEND_FILE_RE = /\.(svelte|tsx?|jsx?|css|scss|html)$/
-const HEADLESS_ONLY_RE = /\b(no-ui|no ui|without (?:a )?(?:completed )?(?:product )?ui|without ui|no frontend|without a frontend|do not add ui|do not add .*?\bui\b|headless only|script-only|script only|cli-first|command-line only)\b/i
+const HEADLESS_ONLY_RE = /\b(no-ui|no ui|without (?:a )?(?:completed )?(?:product )?ui|without ui|no frontend|without a frontend|do not (?:add|implement|create|build|ship) (?:a |the )?(?:product )?ui|don't (?:add|implement|create|build|ship) (?:a |the )?(?:product )?ui|headless only|script-only|script only|cli-first|command-line only)\b/i
 const HEADLESS_PROOF_RE = /\b(headless|script-only|script only|cli|command-line|no-ui|no ui)\b/i
 const POSITIVE_UI_RE = /\b(ui|ux|screen|flow|journey|wizard|drawer|modal|button|split button|menu button|form|control|combobox|typeahead|autocomplete|select|dropdown|long list|empty state|onboarding|dashboard|browser|viewport)\b/i
 
 export interface BuildReviewPlanInput {
-  task: Pick<Task, 'id' | 'title' | 'description' | 'priority' | 'spec' | 'acceptanceCriteria' | 'outOfScope' | 'notes'> & Partial<Pick<Task, 'status'>>
+  task: Pick<Task, 'id' | 'title' | 'description' | 'priority' | 'spec' | 'acceptanceCriteria' | 'outOfScope' | 'notes'> & Partial<Pick<Task, 'status' | 'productBrief'>>
   changedFiles?: readonly string[]
   requestedEffort?: ReviewEffort
   requiredArtifacts?: readonly string[]
@@ -296,10 +296,14 @@ export async function ensureTaskReviewPlanRecorded(
     const normalized = normalizeReviewPlanForTask(input, existing.plan.payload)
     if (normalized.changed) {
       await input.store.saveReviewPlan(normalized.plan)
+      const checksChanged = input.deterministicChecks !== undefined &&
+        JSON.stringify(existing.plan.payload.deterministicChecks) !== JSON.stringify(normalized.plan.deterministicChecks)
       await input.store.appendReviewPlanEvent({
         taskId: normalized.plan.taskId,
         kind: 'override',
-        summary: 'Removed UI review artifacts from a stored plan after the task resolved to headless/no-UI proof.',
+        summary: checksChanged
+          ? 'Refreshed stored review checks to the current task proof contract and removed any inapplicable review scope.'
+          : 'Removed UI review artifacts from a stored plan after the task resolved to headless/no-UI proof.',
         lanes: normalized.plan.selectedLanes,
         recordedBy: input.createdBy ?? 'review-planner',
         recordedAt: (input.now?.() ?? new Date()).toISOString(),
@@ -452,6 +456,10 @@ function reviewSignalText(input: BuildReviewPlanInput): string {
     input.task.title,
     input.task.description,
     input.task.spec ?? '',
+    input.task.productBrief?.userJob ?? '',
+    input.task.productBrief?.whyItMattersNow ?? '',
+    ...(input.task.productBrief?.nonGoals ?? []),
+    ...(input.task.productBrief?.antiPatterns ?? []),
     ...(input.task.acceptanceCriteria ?? []).map((criterion) => criterion.description),
     ...(input.task.outOfScope ?? []),
     ...(input.task.notes ?? []).map((note) => note.content),
@@ -481,33 +489,51 @@ export function normalizeReviewPlanForTask(
   input: BuildReviewPlanInput,
   plan: ReviewPlanRecord,
 ): { changed: boolean; plan: ReviewPlanRecord } {
-  if (!isHeadlessOnlyTask(input)) return { changed: false, plan }
-  const selectedLanes = plan.selectedLanes.filter((lane) => !UI_REVIEW_LANES.has(lane))
-  const changed = selectedLanes.length !== plan.selectedLanes.length || plan.requiredArtifacts.includes('visual-evidence')
+  const headless = isHeadlessOnlyTask(input)
+  const selectedLanes = headless
+    ? plan.selectedLanes.filter((lane) => !UI_REVIEW_LANES.has(lane))
+    : plan.selectedLanes
+  const deterministicChecks = input.deterministicChecks
+    ? [...input.deterministicChecks]
+    : plan.deterministicChecks
+  const changed =
+    selectedLanes.length !== plan.selectedLanes.length ||
+    (headless && plan.requiredArtifacts.includes('visual-evidence')) ||
+    JSON.stringify(deterministicChecks) !== JSON.stringify(plan.deterministicChecks)
   if (!changed) return { changed: false, plan }
-  const aggregation = Object.fromEntries(
-    Object.entries(plan.aggregation).filter(([lane]) => !UI_REVIEW_LANES.has(lane as ReviewRiskLane)),
-  ) as ReviewPlanRecord['aggregation']
+  const aggregation = headless
+    ? Object.fromEntries(
+        Object.entries(plan.aggregation).filter(([lane]) => !UI_REVIEW_LANES.has(lane as ReviewRiskLane)),
+      ) as ReviewPlanRecord['aggregation']
+    : plan.aggregation
   return {
     changed: true,
     plan: {
       ...plan,
       selectedLanes,
-      skippedLanes: [
-        ...plan.skippedLanes.filter((entry) => !UI_REVIEW_LANES.has(entry.lane)),
-        ...[...UI_REVIEW_LANES].map((lane) => ({
-          lane,
-          reason: 'Task declares headless/no-UI proof and has no frontend changed-file hint.',
-        })),
-      ],
-      requiredRecipes: plan.requiredRecipes
-        .map((recipe) => ({
-          ...recipe,
-          lanes: recipe.lanes.filter((lane) => !UI_REVIEW_LANES.has(lane)),
-        }))
-        .filter((recipe) => recipe.lanes.length > 0),
-      deterministicChecks: plan.deterministicChecks.filter((check) => !UI_REVIEW_CHECKS.has(check)),
-      requiredArtifacts: plan.requiredArtifacts.filter((artifact) => artifact !== 'visual-evidence'),
+      skippedLanes: headless
+        ? [
+            ...plan.skippedLanes.filter((entry) => !UI_REVIEW_LANES.has(entry.lane)),
+            ...[...UI_REVIEW_LANES].map((lane) => ({
+              lane,
+              reason: 'Task declares headless/no-UI proof and has no frontend changed-file hint.',
+            })),
+          ]
+        : plan.skippedLanes,
+      requiredRecipes: headless
+        ? plan.requiredRecipes
+            .map((recipe) => ({
+              ...recipe,
+              lanes: recipe.lanes.filter((lane) => !UI_REVIEW_LANES.has(lane)),
+            }))
+            .filter((recipe) => recipe.lanes.length > 0)
+        : plan.requiredRecipes,
+      deterministicChecks: headless
+        ? deterministicChecks.filter((check) => !UI_REVIEW_CHECKS.has(check))
+        : deterministicChecks,
+      requiredArtifacts: headless
+        ? plan.requiredArtifacts.filter((artifact) => artifact !== 'visual-evidence')
+        : plan.requiredArtifacts,
       aggregation,
       reasons: [
         ...plan.reasons,

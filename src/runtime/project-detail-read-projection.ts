@@ -5,8 +5,7 @@ import type {
   ProjectStateDatabaseTask,
 } from '@guildhall/sessions'
 import {
-  readProjectCompactStateModel,
-  readProjectStateAuthorityAtBoundary,
+  readProjectCompactStateAtBoundary,
   type ProjectCompactStateReadModel,
 } from './project-state-boundary.js'
 import type { ProjectScope } from './project-scope-projection.js'
@@ -31,6 +30,8 @@ export interface ProjectDetailReadProjectionOptions {
   limit?: number
   /** Read one compact task point from the same SQLite snapshot. */
   selectedTaskId?: string
+  /** Explicit detail may load definitions for only this bounded page. */
+  includeDefinitions?: boolean
 }
 
 export interface ProjectDetailReadProjectionRevisions {
@@ -165,19 +166,16 @@ export function readProjectDetailReadProjection(
   options: ProjectDetailReadProjectionOptions = {},
 ): ProjectDetailReadProjection {
   const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
-  const authority = readProjectStateAuthorityAtBoundary(tasksPath)
   const selectedTaskId = requestedTaskId(options.selectedTaskId)
-  const revisions = {
-    queue: authority.queueRevision,
-    project: authority.projectRevision,
-  }
+  const revisions = { queue: null, project: null }
 
-  let state: ProjectCompactStateReadModel | null
+  let boundary: ReturnType<typeof readProjectCompactStateAtBoundary>
   try {
-    state = readProjectCompactStateModel(tasksPath, {
+    boundary = readProjectCompactStateAtBoundary(tasksPath, {
       offset: boundedOffset(options.offset),
       limit: boundedLimit(options.limit),
       ...(selectedTaskId ? { selectedTaskId } : {}),
+      ...(options.includeDefinitions === true ? { includeDefinitions: true } : {}),
     })
   } catch {
     return missingProjection({
@@ -188,11 +186,17 @@ export function readProjectDetailReadProjection(
     })
   }
 
+  const { authority, state } = boundary
+  const boundaryRevisions = {
+    queue: boundary.queueRevision,
+    project: boundary.projectRevision,
+  }
+
   if (!state) {
     return missingProjection({
-      authority: authority.authority,
-      reason: authority.authority === 'database' ? 'database_unavailable' : 'project_state_not_promoted',
-      revisions,
+      authority,
+      reason: authority === 'database' ? 'database_unavailable' : 'project_state_not_promoted',
+      revisions: boundaryRevisions,
       selectedTaskId,
     })
   }
@@ -201,7 +205,7 @@ export function readProjectDetailReadProjection(
     return missingProjection({
       authority: 'database',
       reason: 'summary_missing',
-      revisions: { queue: state.queueRevision, project: state.projectRevision },
+      revisions: boundaryRevisions,
       selectedTaskId,
       state,
     })

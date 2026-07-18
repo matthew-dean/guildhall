@@ -58,6 +58,33 @@ describe('project projection refresh scheduler', () => {
     })
   })
 
+  it('does not overlap refreshes for one project when a new invalidation arrives mid-refresh', async () => {
+    let releaseFirst!: () => void
+    const firstRefresh = new Promise<void>(resolve => { releaseFirst = resolve })
+    const refresh = vi.fn()
+      .mockImplementationOnce(async () => firstRefresh)
+      .mockResolvedValueOnce(undefined)
+    const scheduler = createProjectProjectionRefreshScheduler(refresh, 5)
+    schedulers.push(scheduler)
+
+    scheduler.schedule({ projectRoot: '/tmp/project', revision: 1, domains: ['queue'] })
+    await vi.advanceTimersByTimeAsync(5)
+    expect(refresh).toHaveBeenCalledTimes(1)
+
+    scheduler.schedule({ projectRoot: '/tmp/project', revision: 2, domains: ['attention'] })
+    await vi.advanceTimersByTimeAsync(10)
+    expect(refresh).toHaveBeenCalledTimes(1)
+
+    releaseFirst()
+    await vi.advanceTimersByTimeAsync(5)
+    expect(refresh).toHaveBeenCalledTimes(2)
+    expect(refresh).toHaveBeenLastCalledWith('/tmp/project', {
+      projectRoot: '/tmp/project',
+      revision: 2,
+      domains: ['attention'],
+    })
+  })
+
   it('cancels pending refreshes on dispose', async () => {
     const refresh = vi.fn(async () => {})
     const scheduler = createProjectProjectionRefreshScheduler(refresh, 10)

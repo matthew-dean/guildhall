@@ -6,6 +6,7 @@ import {
   resolveEffectiveTaskBootstrapBlock,
   resolveEffectiveTaskSuccessGates,
   resolveEffectiveTaskVerificationCommands,
+  findInvalidAutomatedAcceptanceCommands,
   resolveEffectiveTaskProjectPath,
   normalizeAutomatedAcceptanceCriterionCommands,
   reconcileAutomatedAcceptanceCommandsFromVerifiedWork,
@@ -164,6 +165,30 @@ describe('resolveEffectiveTaskProjectPath', () => {
 })
 
 describe('normalizeAutomatedAcceptanceCriterionCommands', () => {
+  it('runs direct Node proof through the project PNPM boundary', () => {
+    const task = {
+      projectPath: tmpDir,
+      acceptanceCriteria: [
+        {
+          id: 'ac-node',
+          description: 'fixture validation reports the expected result',
+          verifiedBy: 'automated',
+          command: 'node scripts/validate-fixture.mjs fixtures/example',
+        },
+      ],
+    } as any
+
+    const changed = normalizeAutomatedAcceptanceCriterionCommands({
+      workspaceProjectPath: tmpDir,
+      task,
+    })
+
+    expect(changed).toBe(true)
+    expect(task.acceptanceCriteria[0].command).toBe(
+      'pnpm exec node scripts/validate-fixture.mjs fixtures/example',
+    )
+  })
+
   it('keeps explicit Python pytest commands instead of rewriting through pnpm', async () => {
     await fs.writeFile(path.join(tmpDir, 'pyproject.toml'), '[project]\nname = "demo"\n', 'utf8')
     await fs.mkdir(path.join(tmpDir, 'tests'), { recursive: true })
@@ -240,7 +265,7 @@ describe('normalizeAutomatedAcceptanceCriterionCommands', () => {
 
     expect(changed).toBe(true)
     expect(task.acceptanceCriteria[0].command).toBe(
-      'node -e "const r=require(\'./runs/\'+require(\'fs\').readdirSync(\'runs\').find(f=>f.startsWith(\'run-fixture-the-last-lighthouse\')&&f.endsWith(\'.json\'))); console.log(JSON.stringify(r.reviewerFinding))"',
+      'pnpm exec node -e "const r=require(\'./runs/\'+require(\'fs\').readdirSync(\'runs\').find(f=>f.startsWith(\'run-fixture-the-last-lighthouse\')&&f.endsWith(\'.json\'))); console.log(JSON.stringify(r.reviewerFinding))"',
     )
   })
 })
@@ -511,10 +536,46 @@ describe('resolveEffectiveTaskSuccessGates', () => {
 
     expect(result).toEqual([
       'pnpm --dir web typecheck',
-      'pnpm build',
       'cd web && pnpm vitest --run tests/unit/pages/login-callback-index.flow.test.ts',
-      'pnpm lint',
     ])
+  })
+
+  it('does not inherit a workspace build for a script-only acceptance proof', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, 'package.json'),
+      JSON.stringify({
+        scripts: {
+          build: 'docusaurus build',
+          'proof-broad-genre-drafting': 'node scripts/proof-broad-genre-drafting.mjs',
+        },
+      }),
+      'utf8',
+    )
+
+    const result = resolveEffectiveTaskVerificationCommands({
+      task: {
+        projectPath: tmpDir,
+        acceptanceCriteria: [
+          {
+            id: 'ac-proof',
+            description: 'the broad genre proof passes',
+            verifiedBy: 'automated',
+            command: 'pnpm proof-broad-genre-drafting',
+          },
+        ],
+      } as any,
+      workspaceProjectPath: tmpDir,
+      workspaceBootstrap: {
+        commands: [],
+        successGates: ['pnpm build'],
+        timeoutMs: 300_000,
+        verifiedAt: '2026-05-03T00:00:00Z',
+        packageManager: 'pnpm',
+        install: { command: 'pnpm install', status: 'ok' },
+      } as any,
+    })
+
+    expect(result).toEqual(['pnpm proof-broad-genre-drafting'])
   })
 
   it('rejects self-referential Guildhall task scripts as automated proof commands', async () => {
@@ -544,6 +605,34 @@ describe('resolveEffectiveTaskSuccessGates', () => {
     })
 
     expect(result).toBeUndefined()
+  })
+
+  it('reports self-referential acceptance scripts before the gate runner can execute them', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, 'package.json'),
+      JSON.stringify({
+        scripts: {
+          proof: 'pnpm exec guildhall run --task=task-import-9s8tkc-split-define-fixture',
+        },
+      }),
+      'utf8',
+    )
+
+    expect(findInvalidAutomatedAcceptanceCommands({
+      projectPath: tmpDir,
+      task: {
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          description: 'local proof command runs',
+          verifiedBy: 'automated',
+          command: 'pnpm proof',
+        }],
+      } as any,
+    })).toEqual([{
+      criterionId: 'ac-1',
+      command: 'pnpm proof',
+      reason: 'The command resolves to a package script that invokes Guildhall task orchestration instead of proving the project locally.',
+    }])
   })
 
   it('rewrites pnpm test -- <file> vitest commands into direct single-file runs', async () => {
@@ -597,10 +686,7 @@ describe('resolveEffectiveTaskSuccessGates', () => {
     })
 
     expect(result).toEqual([
-      'pnpm typecheck',
-      'pnpm build',
       'cd web && pnpm vitest --run tests/unit/shared/subdomain.test.ts',
-      'pnpm lint',
     ])
   })
 
@@ -660,10 +746,7 @@ describe('resolveEffectiveTaskSuccessGates', () => {
     })
 
     expect(result).toEqual([
-      'pnpm typecheck',
-      'pnpm build',
       'cd web && pnpm vitest --run tests/unit/composables/use-collections-auth.test.ts tests/unit/composables/use-collections.test.ts',
-      'pnpm lint',
     ])
   })
 
@@ -849,9 +932,7 @@ describe('resolveEffectiveTaskSuccessGates', () => {
 
     expect(result).toEqual([
       'pnpm --dir web typecheck',
-      'pnpm build',
       'pnpm --dir web exec playwright test tests/e2e/authoring-flow.spec.ts',
-      'pnpm lint',
     ])
   })
 })
@@ -981,7 +1062,6 @@ describe('resolveEffectiveTaskVerificationCommands', () => {
 
     expect(result).toEqual([
       'pnpm --dir frontend exec tsc --noEmit',
-      'pnpm --dir frontend build',
     ])
   })
 
@@ -1141,9 +1221,7 @@ describe('resolveEffectiveTaskVerificationCommands', () => {
     })
 
     expect(result).toEqual([
-      'pnpm run build',
       'cd packages/converter && pnpm vitest --run test/ts-to-jsdoc.test.ts',
-      'pnpm run lint',
     ])
   })
 

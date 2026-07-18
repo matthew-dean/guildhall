@@ -97,21 +97,6 @@
     }
   }
 
-  async function loadProjectShell(): Promise<boolean> {
-    try {
-      const response = await fetch('/api/service/projects', { cache: 'no-store' })
-      const payload = (await response.json()) as ServiceDetail
-      updateService(payload)
-      error = null
-      loading = false
-      return true
-    } catch (err) {
-      error = requestErrorMessage(err)
-      loading = false
-      return false
-    }
-  }
-
   async function initialLoad(): Promise<void> {
     const cached = getCachedService()
     if (cached) {
@@ -120,7 +105,7 @@
       void refresh(true)
       return
     }
-    await loadProjectShell()
+    await refresh()
   }
 
   function scheduleRefresh(): void {

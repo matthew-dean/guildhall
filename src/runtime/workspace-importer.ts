@@ -2,7 +2,7 @@ import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, wr
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { load as yamlLoad } from 'js-yaml'
-import { ProjectReleaseState, TaskQueue, TERMINAL_TASK_STATUSES, buildDecompositionChildDrafts, type ProjectRelease, type Task, type TaskPriority } from '@guildhall/core'
+import { AcceptanceCriteria, ProjectReleaseState, TaskQueue, TERMINAL_TASK_STATUSES, buildDecompositionChildDrafts, type ProjectRelease, type Task, type TaskPriority } from '@guildhall/core'
 import { getProjectLocalHistoryDir, getProjectSystemStatePathFromMemoryDir, inferProjectRootFromMemoryDir, readProjectStateDatabaseQueueRevision } from '@guildhall/sessions'
 import { appendExploringTranscript, replaceExploringTranscript } from '@guildhall/tools'
 import { loadLeverSettings, defaultAgentSettingsPath } from '@guildhall/levers'
@@ -38,6 +38,7 @@ import { deriveReleaseContainersFromTaskMembership, releaseLabelFromId, taskScop
 import { applyTaskShaping } from './task-decomposition.js'
 import { isMaterializableSplitAction, materializeSplitChildren } from '../tools/task-queue.js'
 import { effectiveTaskTitle } from '../shared/task-display-label.js'
+import { isConcreteProjectProofCommand, replaceGenericProjectProofPathsWithSetup } from './proof-paths.js'
 import {
   contractShapedImportHasNoConcreteContracts,
   titleLooksContractShaped,
@@ -355,6 +356,8 @@ export async function createWorkspaceImportTask(
       'Refine the detector-produced draft of goals, tasks, and milestones with the user, then emit YAML fences for the merge step.',
     domain: WORKSPACE_IMPORT_DOMAIN,
     projectPath: input.projectPath,
+    references: [],
+    sourceClaims: [],
     status: 'exploring',
     priority: 'high',
     dependsOn: [],
@@ -434,6 +437,8 @@ export async function rerunWorkspaceImportTask(
       'Refine the detector-produced draft of goals, tasks, and milestones with the user, then emit YAML fences for the merge step.',
     domain: WORKSPACE_IMPORT_DOMAIN,
     projectPath: input.projectPath,
+    references: [],
+    sourceClaims: [],
     status: 'exploring',
     priority: 'high',
     dependsOn: [],
@@ -552,6 +557,20 @@ export interface ParsedGoal {
   rationale: string
 }
 
+export interface ParsedAcceptanceCriterion {
+  id: string
+  description: string
+  scenario?: string
+  expectation?: string
+  verifiedBy?: string
+  source?: 'documented' | 'inferred'
+  command?: string
+  expectedExit?: 'zero' | 'non_zero'
+  expectedOutputIncludes?: string[]
+  evidenceHint?: string
+  negativeCase?: string
+}
+
 export interface ParsedTask {
   id: string
   title: string
@@ -563,17 +582,17 @@ export interface ParsedTask {
   scope?: 'current' | 'later'
   priority: TaskPriority
   references: readonly string[]
-  acceptanceCriteria?: Array<{ id: string; description: string; verifiedBy?: string; source?: 'documented' | 'inferred' }>
+  acceptanceCriteria?: ParsedAcceptanceCriterion[]
   dependsOn?: readonly string[]
-  proofPaths?: Task['proofPaths']
+  proofPaths?: readonly Record<string, unknown>[]
   releaseIds?: readonly string[]
   sourceClaims?: Task['sourceClaims']
 }
 
 export interface MaterializedImportTask extends ParsedTask {
-  acceptanceCriteria?: Array<{ id: string; description: string; verifiedBy?: string; source?: 'documented' | 'inferred' }>
+  acceptanceCriteria?: ParsedAcceptanceCriterion[]
   dependsOn?: readonly string[]
-  proofPaths?: Task['proofPaths']
+  proofPaths?: readonly Record<string, unknown>[]
   evidenceGraphTask?: boolean
 }
 
@@ -584,7 +603,7 @@ type SimpleImportedProofPath = {
   source?: 'documented' | 'inferred'
 }
 
-function simpleImportedProofPaths(paths: Task['proofPaths'] | undefined): SimpleImportedProofPath[] {
+function simpleImportedProofPaths(paths: readonly unknown[] | undefined): SimpleImportedProofPath[] {
   return (paths ?? []).filter((path): path is SimpleImportedProofPath => {
     if (!path || typeof path !== 'object' || Array.isArray(path)) return false
     const kind = (path as { kind?: unknown }).kind
@@ -663,7 +682,7 @@ type ImportedBlueprintSeed = {
   requestIntake: Task['requestIntake']
   sourceClaims: Task['sourceClaims']
   acceptanceCriteria?: Task['acceptanceCriteria']
-  proofPaths?: Task['proofPaths']
+  proofPaths?: readonly Record<string, unknown>[]
   productBrief?: Task['productBrief']
   spec?: Task['spec']
   outOfScope: Task['outOfScope']
@@ -739,24 +758,46 @@ function parseProjectReleaseState(value: unknown): ProjectRelease['state'] | und
 
 function parseImportedAcceptanceCriteria(
   value: unknown,
-): Array<{ id: string; description: string; verifiedBy?: string; source?: 'documented' | 'inferred' }> | null {
+): ParsedAcceptanceCriterion[] | null {
   if (!Array.isArray(value)) return null
   const parsed = value
     .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === 'object' && !Array.isArray(entry))
     .map((entry) => {
       const id = typeof entry.id === 'string' ? entry.id.trim() : ''
       const description = typeof entry.description === 'string' ? entry.description.trim() : ''
+      const scenario = typeof entry.scenario === 'string' ? entry.scenario.trim() : ''
+      const expectation = typeof entry.expectation === 'string' ? entry.expectation.trim() : ''
       const verifiedBy = typeof entry.verifiedBy === 'string' ? entry.verifiedBy.trim() : ''
       const source = entry.source === 'inferred' ? 'inferred' : entry.source === 'documented' ? 'documented' : ''
+      const command = typeof entry.command === 'string' ? entry.command.trim() : ''
+      const expectedExit = entry.expectedExit === 'zero' || entry.expectedExit === 'non_zero'
+        ? entry.expectedExit
+        : undefined
+      const expectedOutputIncludes = Array.isArray(entry.expectedOutputIncludes)
+        ? entry.expectedOutputIncludes
+          .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+          .map(item => item.trim())
+        : typeof entry.expectedOutputIncludes === 'string' && entry.expectedOutputIncludes.trim()
+          ? [entry.expectedOutputIncludes.trim()]
+          : undefined
+      const evidenceHint = typeof entry.evidenceHint === 'string' ? entry.evidenceHint.trim() : ''
+      const negativeCase = typeof entry.negativeCase === 'string' ? entry.negativeCase.trim() : ''
       if (!id || !description) return null
       return {
         id,
         description,
+        ...(scenario ? { scenario } : {}),
+        ...(expectation ? { expectation } : {}),
         ...(verifiedBy ? { verifiedBy } : {}),
         ...(source ? { source } : {}),
+        ...(command ? { command } : {}),
+        ...(expectedExit ? { expectedExit } : {}),
+        ...(expectedOutputIncludes ? { expectedOutputIncludes } : {}),
+        ...(evidenceHint ? { evidenceHint } : {}),
+        ...(negativeCase ? { negativeCase } : {}),
       }
     })
-    .filter((entry): entry is { id: string; description: string; verifiedBy?: string; source?: 'documented' | 'inferred' } => Boolean(entry))
+    .filter((entry): entry is ParsedAcceptanceCriterion => Boolean(entry))
   return parsed.length > 0 ? parsed : null
 }
 
@@ -800,7 +841,7 @@ function importedCommandId(command: string): string {
 function finalizeDraftTaskProofPaths(task: {
   suggestedId: string
   title: string
-  proofPaths?: Task['proofPaths']
+  proofPaths?: readonly Record<string, unknown>[]
 }): Task['proofPaths'] | undefined {
   const proofPaths = task.proofPaths?.map(path =>
     path && typeof path === 'object' && !Array.isArray(path)
@@ -814,11 +855,15 @@ function finalizeDraftTaskProofPaths(task: {
     domain: '',
     priority: 'normal',
     references: [],
-  })) return proofPaths
+  })) return proofPaths as unknown as Task['proofPaths']
   const withoutGenericCommand = (proofPaths ?? []).filter(path => {
     if (!path || typeof path !== 'object' || Array.isArray(path)) return true
     const record = path as Record<string, unknown>
-    return !(record.kind === 'command' && record.source === 'inferred' && typeof record.command === 'string')
+    return !(
+      record.kind === 'command' &&
+      typeof record.command === 'string' &&
+      !isConcreteProjectProofCommand(record.command)
+    )
   })
   const hasModeledCommandNeed = withoutGenericCommand.some(path => {
     if (!path || typeof path !== 'object' || Array.isArray(path)) return false
@@ -832,10 +877,10 @@ function finalizeDraftTaskProofPaths(task: {
     )
   })
   return hasModeledCommandNeed
-    ? withoutGenericCommand
+    ? withoutGenericCommand as unknown as Task['proofPaths']
     : [importedMissingCommandProofPath({ id: task.suggestedId, title: task.title }, [
         `Add a repo-local pnpm script or CLI proof command for ${task.title}.`,
-      ]), ...withoutGenericCommand]
+      ]), ...withoutGenericCommand] as unknown as Task['proofPaths']
 }
 
 function normalizeImportText(value: string): string {
@@ -1359,7 +1404,7 @@ export function mergeWorkspaceImportDraft(
         ...(resolvedAcceptanceCriteria ? { acceptanceCriteria: resolvedAcceptanceCriteria } : {}),
         ...(resolvedDependsOn ? { dependsOn: [...resolvedDependsOn] } : {}),
         ...(mergedProofPaths ? { proofPaths: mergedProofPaths } : {}),
-        ...(resolvedSourceClaims.length > 0 ? { sourceClaims: dedupeImportSourceClaims(resolvedSourceClaims) } : {}),
+        ...(resolvedSourceClaims.length > 0 ? { sourceClaims: dedupeImportSourceClaims(resolvedSourceClaims as unknown as NonNullable<Task['sourceClaims']>) } : {}),
       })
       continue
     }
@@ -1583,7 +1628,7 @@ export function parseWorkspaceImport(spec: string): ParsedImport {
           ...(parseImportedProofPaths(t['proofPaths']).length > 0
             ? { proofPaths: parseImportedProofPaths(t['proofPaths']) }
             : {}),
-        })
+        } as unknown as ParsedTask)
       }
       continue
     }
@@ -1661,7 +1706,7 @@ export function parseWorkspaceImport(spec: string): ParsedImport {
           ...(parseImportedProofPaths(t['proofPaths']).length > 0
             ? { proofPaths: parseImportedProofPaths(t['proofPaths']) }
             : {}),
-        })
+        } as unknown as ParsedTask)
       }
     }
     if (Array.isArray(obj['milestones'])) {
@@ -1787,7 +1832,16 @@ export function formatDetectedDraftAsSpec(draft: WorkspaceImportDraft): string {
         for (const criterion of t.acceptanceCriteria) {
           lines.push(`      - id: ${escape(criterion.id)}`)
           lines.push(`        description: ${escape(criterion.description)}`)
+          if (criterion.scenario) lines.push(`        scenario: ${escape(criterion.scenario)}`)
+          if (criterion.expectation) lines.push(`        expectation: ${escape(criterion.expectation)}`)
           if (criterion.verifiedBy) lines.push(`        verifiedBy: ${escape(criterion.verifiedBy)}`)
+          if (criterion.command) lines.push(`        command: ${escape(criterion.command)}`)
+          if (criterion.expectedExit) lines.push(`        expectedExit: ${criterion.expectedExit}`)
+          if (criterion.expectedOutputIncludes?.length) {
+            lines.push(`        expectedOutputIncludes: ${escape(JSON.stringify(criterion.expectedOutputIncludes))}`)
+          }
+          if (criterion.evidenceHint) lines.push(`        evidenceHint: ${escape(criterion.evidenceHint)}`)
+          if (criterion.negativeCase) lines.push(`        negativeCase: ${escape(criterion.negativeCase)}`)
         }
       }
       if (t.dependsOn && t.dependsOn.length > 0) {
@@ -2043,8 +2097,15 @@ export async function materializeParsedWorkspaceImport(input: {
       acceptanceCriteria: materializedAcceptanceCriteria(proofTask, evidenceDetail).map((criterion) => ({
         id: criterion.id,
         description: criterion.description,
+        ...(criterion.scenario ? { scenario: criterion.scenario } : {}),
+        ...(criterion.expectation ? { expectation: criterion.expectation } : {}),
         verifiedBy: criterion.verifiedBy,
         source: criterion.source,
+        ...(criterion.command ? { command: criterion.command } : {}),
+        ...(criterion.expectedExit ? { expectedExit: criterion.expectedExit } : {}),
+        ...(criterion.expectedOutputIncludes?.length ? { expectedOutputIncludes: criterion.expectedOutputIncludes } : {}),
+        ...(criterion.evidenceHint ? { evidenceHint: criterion.evidenceHint } : {}),
+        ...(criterion.negativeCase ? { negativeCase: criterion.negativeCase } : {}),
       })),
       proofPaths: materializedProofPaths(proofTask, evidenceDetail),
     }
@@ -2195,7 +2256,7 @@ export function parseWorkspaceGoalsState(raw: unknown): WorkspaceGoalsState | nu
     tasks,
     milestones,
     context,
-    approved,
+    approved: approved ?? parsedSnapshot,
     detected,
     ...(scopeMembershipHydrated ? { scopeMembershipHydrated: true } : {}),
     ...(dismissed ? { dismissed: true } : {}),
@@ -2476,9 +2537,9 @@ const IMPORT_DOCUMENT_RE = /\.(?:md|markdown|txt)$/i
 async function listProjectDocumentationFiles(projectPath: string): Promise<string[]> {
   const files: string[] = []
   const visit = async (directory: string): Promise<void> => {
-    let entries: Awaited<ReturnType<typeof fs.readdir>>
+    let entries: Array<{ name: string; isDirectory(): boolean; isFile(): boolean }>
     try {
-      entries = await fs.readdir(directory, { withFileTypes: true })
+      entries = await fs.readdir(directory, { withFileTypes: true, encoding: 'utf8' }) as unknown as Array<{ name: string; isDirectory(): boolean; isFile(): boolean }>
     } catch {
       return
     }
@@ -2555,7 +2616,7 @@ async function attachDocumentedProofReferences(
       if (!commands.some(command => discoveredProofCommandMatchesTask(command, task.title))) continue
       referencesByTask.set(
         task.id,
-        mergeImportReferences(referencesByTask.get(task.id), [absolute]),
+        mergeImportReferences(referencesByTask.get(task.id), [absolute]) ?? [],
       )
     }
   }
@@ -2565,7 +2626,7 @@ async function attachDocumentedProofReferences(
     if (!relatedReferences?.length) return task
     return {
       ...task,
-      references: mergeImportReferences(task.references, relatedReferences),
+      references: mergeImportReferences(task.references, relatedReferences) ?? task.references,
     }
   })
 }
@@ -2633,7 +2694,7 @@ async function materializeEvidenceWorkGraphTasks(
     for (const key of keys) {
       inventoryReferencesByTitle.set(
         key,
-        mergeImportReferences(inventoryReferencesByTitle.get(key), refs),
+        mergeImportReferences(inventoryReferencesByTitle.get(key), refs) ?? [],
       )
       const existingScope = inventoryScopeByTitle.get(key)
       inventoryScopeByTitle.set(
@@ -2690,7 +2751,7 @@ async function materializeEvidenceWorkGraphTasks(
       detectedScope,
       Boolean(matchedBySemantic),
     )
-  }).filter((task): task is MaterializedImportTask => Boolean(task) && !isFormattingDebris({ title: task.title }))
+  }).filter((task): task is MaterializedImportTask => task !== null && !isFormattingDebris({ title: task.title }))
   const shadowedImports = detectShadowedCurrentMilestoneDeliverableImports(sources)
   const shadowedStageAlignedDeliverables = detectShadowedStageAlignedRoadmapDeliverables(sources)
   const untouchedParsedTasks = input.parsedTasks.filter(task =>
@@ -2772,7 +2833,7 @@ function graphTaskToParsedTask(
     domain: graphTaskDomain(task, parsedTask),
     scope: detectedScope ?? (parsedTask?.scope === 'later' ? 'later' : 'current'),
     priority: evidenceTaskPriority(task),
-    references,
+    references: references ?? [],
     acceptanceCriteria: task.acceptanceCriteria,
     dependsOn: task.dependsOn,
     proofPaths: task.proofPaths,
@@ -2887,8 +2948,8 @@ function taskHasVerifiedCompletionEvidence(task: Task): boolean {
     taskHasDurableCompletionEvidence(task) ||
     completionHandoffHasVerifiedEvidence(task.completionHandoff) ||
     (task.proofPaths ?? []).some(proofPathHasPassedEvidence) ||
-    (task.gateResults ?? []).some(result => result.status === 'pass') ||
-    (task.reviewVerdicts ?? []).some(verdict => verdict.decision === 'approved')
+    (task.gateResults ?? []).some(result => result.passed === true) ||
+    (task.reviewVerdicts ?? []).some(verdict => verdict.verdict === 'approve')
   )
 }
 
@@ -2968,19 +3029,24 @@ function materializedAcceptanceCriteria(
   task: MaterializedImportTask,
   evidenceDetail?: ImportedEvidenceDetail,
 ): Task['acceptanceCriteria'] {
-  const normalized = (task.acceptanceCriteria ?? []).map(criterion => ({
+  const normalized = AcceptanceCriteria.array().parse((task.acceptanceCriteria ?? []).map(criterion => ({
     id: criterion.id,
     description: criterion.description,
-    scenario: criterion.description,
-    expectation: criterion.description,
+    scenario: criterion.scenario ?? criterion.description,
+    expectation: criterion.expectation ?? criterion.description,
     verifiedBy: criterion.verifiedBy === 'automated' || criterion.verifiedBy === 'review'
       ? criterion.verifiedBy
       : criterion.id.includes('automated') || criterion.id.includes('regression')
         ? 'automated'
         : 'review',
     source: criterion.source === 'inferred' ? 'inferred' : 'documented',
+    ...(criterion.command ? { command: criterion.command } : {}),
+    ...(criterion.expectedExit ? { expectedExit: criterion.expectedExit } : {}),
+    ...(criterion.expectedOutputIncludes?.length ? { expectedOutputIncludes: criterion.expectedOutputIncludes } : {}),
+    ...(criterion.evidenceHint ? { evidenceHint: criterion.evidenceHint } : {}),
+    ...(criterion.negativeCase ? { negativeCase: criterion.negativeCase } : {}),
     met: false,
-  }))
+  })))
   if (shouldDeriveImportedAcceptanceCriteria(task, normalized, evidenceDetail)) {
     return deriveImportedAcceptanceCriteria(task, evidenceDetail!)
   }
@@ -3870,7 +3936,8 @@ function firstImportedProofCommand(task: MaterializedImportTask): string | null 
       proof.kind === 'command' &&
       proof.source !== 'inferred' &&
       typeof proof.command === 'string' &&
-      proof.command.trim(),
+      proof.command.trim() &&
+      isConcreteProjectProofCommand(proof.command),
   )
   if (proofCommand?.command?.trim()) return proofCommand.command.trim()
 
@@ -3944,6 +4011,7 @@ function documentedImportedProofCommands(task: Pick<MaterializedImportTask, 'tit
         if (!script) continue
         const command = `pnpm${match[1] ? ' run' : ''} ${script}`
         if (
+          isConcreteProjectProofCommand(command) &&
           (!requireTaskMatch || commandMatchesTask(command)) &&
           (/\b(prove|test|check|validate|verify|verification|proof|executable)\b/i.test(trimmed) || /\b(prove|test|check|validate|verify)\b/i.test(script))
         ) {
@@ -3973,7 +4041,7 @@ function documentedImportedProofCommands(task: Pick<MaterializedImportTask, 'tit
 
     const scriptReferences = [...scopedContent.matchAll(/\b(scripts\/[A-Za-z0-9._/-]+)/g)]
       .map(match => match[1])
-      .filter((value): value is string => Boolean(value) && /\b(prove|test|check|validate|verify)\b/i.test(value))
+      .filter((value): value is string => typeof value === 'string' && /\b(prove|test|check|validate|verify)\b/i.test(value))
 
     let directory = path.dirname(absoluteReference)
     while (directory !== path.dirname(directory)) {
@@ -3986,8 +4054,11 @@ function documentedImportedProofCommands(task: Pick<MaterializedImportTask, 'tit
           const command = `pnpm run ${name}`
           const isProofScript = /\b(prove|test|check|validate|verify|verification)\b/i.test(name)
           if (
-            (isProofScript && packageScriptMatchesTask(command)) ||
-            (scriptReferences.length > 0 && scriptReferences.some(script => value.includes(script)))
+            isConcreteProjectProofCommand(command) &&
+            (
+              (isProofScript && packageScriptMatchesTask(command)) ||
+              (scriptReferences.length > 0 && scriptReferences.some(script => value.includes(script)))
+            )
           ) add(command)
         }
         break
@@ -4176,7 +4247,11 @@ function materializedProofPaths(
   task: MaterializedImportTask,
   evidenceDetail?: ImportedEvidenceDetail,
 ): Task['proofPaths'] {
-  const current = task.proofPaths ? [...task.proofPaths].map(normalizeImportedProofPath) : []
+  const current = replaceGenericProjectProofPathsWithSetup({
+    id: task.id,
+    title: task.title,
+    proofPaths: task.proofPaths?.map(normalizeImportedProofPath),
+  })
   const fallback = importedAcceptanceProofPath(task, evidenceDetail)
   if (!evidenceDetail) return current.length > 0 && !importedProofPathsLookGeneric(current) ? current : fallback
   const prototypeTaskKind = importedPrototypeTaskKind(task)
@@ -4352,6 +4427,13 @@ function materializedProofPaths(
         ]
       }
       if (current.length > 0 && !importedProofPathsLookGeneric(current)) return current
+      if (evidenceDetail.verificationBullets.length > 0) {
+        return [{
+          kind: 'review',
+          source: 'documented',
+          expectedEvidence: evidenceDetail.verificationBullets.slice(0, 6),
+        }]
+      }
       return fallback
   }
 }
@@ -4874,7 +4956,7 @@ function importedTaskProposedDesignBullets(
     if (bullets.length > 0) return bullets
   }
   if ((task.acceptanceCriteria?.length ?? 0) > 0) {
-    return task.acceptanceCriteria
+    return (task.acceptanceCriteria ?? [])
       .map(criterion => criterion.description.trim())
       .filter(Boolean)
       .slice(0, 6)
@@ -5682,7 +5764,10 @@ export function buildImportedBlueprintSeed(
         createdBy: 'workspace-importer',
       },
       sourceClaims,
-      proofPaths: materializedProofPaths(normalizedTask, evidenceDetail),
+      // No blueprint means there is not enough source-backed proof to hand
+      // this task to execution. Keep proof empty so the shaping lane, not a
+      // generic review placeholder, owns the next step.
+      proofPaths: [],
     }
   }
 
@@ -6078,7 +6163,7 @@ export async function approveWorkspaceImport(
     const seededBlueprint = buildImportedBlueprintSeed(t, normalizedReferences, input.projectPath, now)
     const importedProofPaths = materializedProofPaths(t, evidenceDetail) ?? []
     const importedTitle = effectiveTaskTitle({ title: t.title, description: normalizedDescription }) ?? t.title
-    const importedTaskRecord: Task = {
+    const importedTaskRecord = {
       id,
       title: importedTitle,
       description: normalizedDescription,
@@ -6116,7 +6201,7 @@ export async function approveWorkspaceImport(
       origination: 'human',
       createdAt: now,
       updatedAt: now,
-    }
+    } as unknown as Task
     queue.tasks.push(importedTaskRecord)
     materializeImportedSplitChildren(queue, importedTaskRecord, t.scope, now)
     tasksAdded++

@@ -64,7 +64,14 @@ export interface DraftTask {
   acceptanceCriteria?: ReadonlyArray<{
     id: string
     description: string
+    scenario?: string
+    expectation?: string
     verifiedBy?: string
+    command?: string
+    expectedExit?: 'zero' | 'non_zero'
+    expectedOutputIncludes?: string[]
+    evidenceHint?: string
+    negativeCase?: string
   }>
   dependsOn?: readonly string[]
   proofPaths?: ReadonlyArray<Record<string, unknown>>

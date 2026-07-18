@@ -19,6 +19,30 @@ export interface ProjectActionStartReadiness {
   }
 }
 
+/**
+ * A saved next-action can still describe the last paused task after a run
+ * starts. Keep the user-facing readiness contract aligned with the live
+ * supervisor observation without rebuilding the project task projection.
+ */
+export function applyRunStatusToStartReadiness(
+  readiness: ProjectActionStartReadiness,
+  runStatus: string | undefined,
+): ProjectActionStartReadiness {
+  if (runStatus !== 'running' && runStatus !== 'stopping') return readiness
+  const focus = readiness.focusTaskTitle?.trim()
+  const action = runStatus === 'stopping' ? 'stopping' : 'running'
+  return {
+    ...readiness,
+    canStart: true,
+    code: action,
+    message: runStatus === 'stopping'
+      ? 'Guildhall is stopping the selected work.'
+      : focus
+        ? `Guildhall is running "${focus}".`
+        : 'Guildhall is running the selected work.',
+  }
+}
+
 export interface ProjectActionInboxItem {
   kind?: string
   severity?: 'high' | 'medium' | 'low' | string
@@ -146,6 +170,7 @@ export interface BuildProjectActionModelInput {
   thread?: ProjectActionThread | null
   scopeAuthorityRequests?: ProjectActionScopeAuthorityRequest[]
   runStatus?: string | null
+  runMode?: string | null
   availability?: ProjectAvailabilityModel | null
 }
 
@@ -316,7 +341,7 @@ function ownerInputFrom(readiness: ProjectActionStartReadiness | null | undefine
       href: readiness.actionHref ?? (turn ? threadHref(turn) : '/thread'),
     }
   }
-  if (!isOwnerQuestionTurn(turn)) {
+  if (!turn || !isOwnerQuestionTurn(turn)) {
     return { active: false }
   }
   return {
@@ -523,7 +548,12 @@ export function buildProjectActionModel(input: BuildProjectActionModelInput): Pr
     .filter(item => item.severity !== 'low')
     .map(inboxAction)
   const scopeAction = scopeAuthorityAction(input.scopeAuthorityRequests ?? [])
-  const taskAction = startReadiness?.code === 'all_terminal' ? null : bestTaskAction(tasks, running)
+  const focusedRunTaskId = input.runMode === 'one_task' ? startReadiness?.focusTaskId : undefined
+  const taskAction = startReadiness?.code === 'all_terminal'
+    ? null
+    : focusedRunTaskId
+      ? bestTaskAction(tasks.filter(task => task.id === focusedRunTaskId), running)
+      : bestTaskAction(tasks, running)
   const candidates: ProjectAction[] = []
 
   if (startReadiness && !startReadiness.canStart && startReadiness.code !== 'all_terminal') {

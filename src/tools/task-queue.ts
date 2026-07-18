@@ -31,6 +31,7 @@ import {
   inferProjectRootFromMemoryDir,
   readProjectStateDatabaseCurrentAuthorityFromTasksPath,
   upsertTaskRuntimeState,
+  withProjectStateWriteLock,
 } from '@guildhall/sessions'
 import {
   FORBIDDEN_PROJECT_TASK_FIELDS,
@@ -40,6 +41,8 @@ import {
   writeProjectTaskQueue,
 } from '@guildhall/runtime/project-state-boundary'
 import { buildEffectiveTask } from '../runtime/effective-task.js'
+import { currentPlanProcessLeakage } from '../runtime/spec-quality.js'
+import { isConcreteProjectProofCommand } from '../runtime/proof-paths.js'
 
 const TASKS_PATH_SCHEMA = z.string().describe('Absolute path to the TASKS.json file')
 
@@ -187,6 +190,22 @@ export async function updateTask(
   rawInput: UpdateTaskInput,
   metadata: Record<string, unknown> = {},
 ): Promise<UpdateTaskResult> {
+  let tasksPath: string | null = null
+  try {
+    tasksPath = updateTaskInputSchema.parse(rawInput).tasksPath
+  } catch {
+    // Preserve the existing validation error shape in the normal path.
+  }
+  if (tasksPath) {
+    return withProjectStateWriteLock(tasksPath, () => updateTaskUnlocked(rawInput, metadata))
+  }
+  return updateTaskUnlocked(rawInput, metadata)
+}
+
+async function updateTaskUnlocked(
+  rawInput: UpdateTaskInput,
+  metadata: Record<string, unknown> = {},
+): Promise<UpdateTaskResult> {
   try {
     const input = updateTaskInputSchema.parse(rawInput)
     const queueRead = readProjectTaskQueueForMutationSync(input.tasksPath)
@@ -266,10 +285,37 @@ export async function updateTask(
     const renderedStructuredSpec = normalizedStructuredSpec
       ? normalizeSpecForTaskProjectPath(renderStructuredSpecMarkdown(normalizedStructuredSpec), task.projectPath)
       : undefined
+    const nextSpec = renderedStructuredSpec ?? normalizedSpec
+    const planLeakage = nextSpec ? currentPlanProcessLeakage(nextSpec) : null
+    if (planLeakage) {
+      return {
+        success: false,
+        taskId,
+        error:
+          'Current task specs may only contain the product boundary. Keep recovery attempts, revision history, and worktree diagnostics in task notes or evidence, then save a clean spec.',
+      }
+    }
     const normalizedAcceptanceCriteria = input.acceptanceCriteria !== undefined
       ? z.array(AcceptanceCriteria).parse(input.acceptanceCriteria)
         .map((criterion) => normalizeAcceptanceCriterionForTaskProjectPath(criterion, task.projectPath))
       : undefined
+    const selectedRelease = queue.selectedReleaseId
+      ? queue.releases?.find((release) => release.id === queue.selectedReleaseId)
+      : undefined
+    const taskIsInSelectedScriptOnlyRelease = selectedRelease?.proofStyle === 'script_only' &&
+      task.releaseIds?.includes(selectedRelease.id) === true
+    const hasBareScriptProofCriterion = taskIsInSelectedScriptOnlyRelease &&
+      normalizedAcceptanceCriteria?.some((criterion) =>
+        typeof criterion.command === 'string' && !isConcreteProjectProofCommand(criterion.command),
+      ) === true
+    if (hasBareScriptProofCriterion) {
+      return {
+        success: false,
+        taskId,
+        error:
+          'Script-only release criteria must name a task-specific proof command or omit the command until Guildhall creates proof-setup work. Bare workspace test/build commands cannot become current proof contracts.',
+      }
+    }
     if (
       currentAgentId === 'worker-agent' &&
       normalizedAcceptanceCriteria?.some((criterion) =>
@@ -287,6 +333,20 @@ export async function updateTask(
     }
 
     const explicitStatus = nextStatus
+    if (
+      currentAgentId === 'spec-agent' &&
+      explicitStatus === 'spec_review' &&
+      !task.spec?.trim() &&
+      !(input.spec?.trim()) &&
+      input.structuredSpec === undefined
+    ) {
+      return {
+        success: false,
+        taskId,
+        error:
+          'A task cannot enter spec_review without a durable spec. Save the product brief and spec first, then move it to spec_review.',
+      }
+    }
     const statusTransition = explicitStatus && explicitStatus !== task.status
       ? applyTaskTransition({
         task,
@@ -316,7 +376,6 @@ export async function updateTask(
     }
     if (input.blockReason !== undefined && input.blockReason.trim() !== '') task.blockReason = input.blockReason
     if (input.humanJudgment !== undefined && input.humanJudgment.trim() !== '') task.humanJudgment = input.humanJudgment
-    const nextSpec = renderedStructuredSpec ?? normalizedSpec
     if (normalizedStructuredSpec !== undefined) {
       task.structuredSpec = normalizedStructuredSpec
     } else if (normalizedSpec !== undefined) {
@@ -483,11 +542,13 @@ async function persistUpdateTaskRuntimeState(
   task: z.infer<typeof Task>,
   metadata: Record<string, unknown> = {},
 ): Promise<void> {
+  // Promoted task definitions intentionally omit runtime-owned fields. A
+  // schema default such as revisionCount=0 must not overwrite the existing
+  // runtime overlay when update-task only changes definition/evidence state.
+  // Status ownership is the one runtime field this mutation is allowed to
+  // update; the orchestrator owns revision/recovery counters.
   await upsertTaskRuntimeState(projectRootForTaskState(tasksPath, task, metadata), task.id, {
     assignedTo: Object.prototype.hasOwnProperty.call(task, 'assignedTo') ? task.assignedTo ?? null : null,
-    ...(typeof task.revisionCount === 'number' ? { revisionCount: task.revisionCount } : {}),
-    ...(task.retryWindow ? { retryWindow: task.retryWindow } : {}),
-    ...(typeof task.remediationAttempts === 'number' ? { remediationAttempts: task.remediationAttempts } : {}),
     updatedAt: task.updatedAt,
   })
 }
@@ -573,7 +634,7 @@ export function materializeSplitChildren(
     })
     if (!queue.tasks.some((candidate) => candidate.id === task.id)) queue.tasks.push(task)
     if (usesSavedChildPlans) childPlan.createdTaskId = task.id
-    if (task.releaseIds.length === 0 && parent.releaseIds.length > 0) task.releaseIds = [...parent.releaseIds]
+    if ((task.releaseIds ?? []).length === 0 && (parent.releaseIds ?? []).length > 0) task.releaseIds = [...(parent.releaseIds ?? [])]
     if (task.references.length === 0 && parent.references.length > 0) task.references = [...parent.references]
     task.hierarchy = {
       ...(task.hierarchy ?? {}),
@@ -655,6 +716,118 @@ export function materializeSplitChildren(
 }
 
 export const materializeRequiredSplitChildren = materializeSplitChildren
+
+export const PROOF_SETUP_RATIONALE = 'proof-recovery: establish a concrete project-backed proof command for the containing task'
+
+export function isProofSetupTask(
+  task: Pick<TaskRecord, 'workKind' | 'proposalRationale'>,
+): boolean {
+  return task.workKind === 'verification' && task.proposalRationale === PROOF_SETUP_RATIONALE
+}
+
+/**
+ * A script-only release still needs executable proof when the source-backed
+ * spec does not name a command. Keep the accepted task contract intact and
+ * materialize the missing verification work as an internal child. This is a
+ * real work item in the same hierarchy, not a read-time blocker or a second
+ * proof model.
+ */
+export function materializeProofSetupTask(
+  queue: TaskQueueRecord,
+  parent: TaskRecord,
+  timestamp: string,
+): { status: 'materialized' | 'already_represented'; childTaskId: string } {
+  const existing = queue.tasks.find((candidate) =>
+    candidate.hierarchy?.parentId === parent.id &&
+    isProofSetupTask(candidate) &&
+    !['archived', 'cancelled'].includes(candidate.status),
+  )
+  if (existing) {
+    return { status: 'already_represented', childTaskId: existing.id }
+  }
+
+  const baseId = `${parent.id}-proof-setup`
+  let id = baseId
+  let suffix = 2
+  while (queue.tasks.some((task) => task.id === id)) {
+    id = `${baseId}-${suffix}`
+    suffix += 1
+  }
+
+  const child = Task.parse({
+    id,
+    title: `Establish concrete proof for ${parent.title}`,
+    description: [
+      `Establish the exact project-backed command that proves ${parent.title}.`,
+      'Use registered project evidence and the selected release proof contract.',
+      'Do not use a bare workspace convention such as pnpm test or pnpm build.',
+      `This verification work supports containing task ${parent.id}.`,
+    ].join('\n'),
+    domain: parent.domain,
+    projectPath: parent.projectPath,
+    status: 'exploring',
+    priority: parent.priority,
+    dependsOn: [],
+    outOfScope: [],
+    acceptanceCriteria: [{
+      id: 'proof-command-recorded',
+      description: `A concrete project-backed command is attached to ${parent.title}, and a passing result is recorded for the selected release.`,
+      verifiedBy: 'review',
+      source: 'inferred',
+    }],
+    notes: [{
+      agentId: 'proof-recovery',
+      role: 'coordinator',
+      content: `Created because ${parent.id} was approved without a concrete project-backed proof command.`,
+      timestamp,
+    }],
+    gateResults: [],
+    reviewVerdicts: [],
+    adjudications: [],
+    escalations: [],
+    revisionCount: 0,
+    origination: 'system',
+    proposedBy: 'proof-recovery',
+    proposalRationale: PROOF_SETUP_RATIONALE,
+    workKind: 'verification',
+    workVisibility: {
+      kind: 'internal_step',
+      countInProjectTotals: false,
+    },
+    releaseIds: [...(parent.releaseIds ?? [])],
+    references: [...parent.references],
+    delivery: {
+      ...(parent.delivery ?? {}),
+      supports: [parent.id, ...(parent.delivery?.supports ?? [])]
+        .filter((supportId, index, all) => all.indexOf(supportId) === index),
+    },
+    hierarchy: {
+      parentId: parent.id,
+      order: parent.hierarchy?.childIds?.length ?? 0,
+      childIds: [],
+      relation: 'decomposes',
+    },
+    businessEnvelope: parent.businessEnvelope,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  })
+
+  queue.tasks.push(child)
+  parent.hierarchy = {
+    ...(parent.hierarchy ?? {}),
+    order: parent.hierarchy?.order ?? 0,
+    childIds: [...new Set([...(parent.hierarchy?.childIds ?? []), child.id])],
+    relation: parent.hierarchy?.relation ?? 'contains',
+  }
+  attachInternalDeliveryStep(parent, child)
+  parent.notes.push({
+    agentId: 'proof-recovery',
+    role: 'coordinator',
+    content: `Added linked verification work ${child.id} to establish the missing concrete project proof command.`,
+    timestamp,
+  })
+  return { status: 'materialized', childTaskId: child.id }
+}
 
 export function isMaterializableSplitAction(action: string | undefined): boolean {
   return action === 'split_required' || action === 'split_recommended' || action === 'decompose_before_execution'
@@ -1066,7 +1239,7 @@ function createSplitChildTask(input: {
     proposedBy: 'task-sizing',
     proposalRationale: input.reason,
     workKind,
-    releaseIds: [...input.parent.releaseIds],
+    releaseIds: [...(input.parent.releaseIds ?? [])],
     references: [...input.parent.references],
     delivery: {
       ...(input.parent.delivery ?? {}),
@@ -1185,6 +1358,9 @@ function eventForExplicitStatus(from: z.infer<typeof TaskStatus>, to: z.infer<ty
       return 'shelve'
     case 'proposed':
       return 'recover_to_exploring'
+    case 'archived':
+    case 'cancelled':
+      throw new Error(`Task status ${to} is terminal and has no lifecycle transition event.`)
   }
 }
 
@@ -1298,7 +1474,7 @@ function stripDuplicatedPathPrefix(value: string, prefix: string): string {
   return value.replace(new RegExp(`\\b${escaped}/`, 'g'), '')
 }
 
-function deriveImportedTaskTitle(task: z.infer<typeof Task>): string | null {
+function deriveImportedTaskTitle(task: TaskRecord): string | null {
   const currentTitle = typeof task.title === 'string' ? task.title.trim() : ''
   if (!looksLikeImportedFragmentTitle(currentTitle)) return null
   const area = importedAreaLabel(task)
@@ -1312,7 +1488,7 @@ function looksLikeImportedFragmentTitle(title: string): boolean {
   return /\(deferred\)/i.test(title) || /^version diff view$/i.test(title.trim())
 }
 
-function importedAreaLabel(task: z.infer<typeof Task>): string | null {
+function importedAreaLabel(task: TaskRecord): string | null {
   const notes = Array.isArray(task.notes) ? task.notes : []
   const importerNote = notes.find((note) =>
     note?.role === 'importer' &&
@@ -1397,6 +1573,8 @@ export const updateTaskTool = defineTool({
             expectation: { type: 'string' },
             verifiedBy: { type: 'string', enum: ['automated', 'review', 'human'] },
             command: { type: 'string' },
+            expectedExit: { type: 'string', enum: ['zero', 'non_zero'] },
+            expectedOutputIncludes: { type: 'array', items: { type: 'string' } },
             evidenceHint: { type: 'string' },
             negativeCase: { type: 'string' },
             met: { type: 'boolean' },

@@ -40,10 +40,11 @@ stopped work or reconstruct historical state while polling.
 The selected project shell now follows the same rule. The browser's default
 project refresh uses `/api/project?compact=true`; Overview, Work, and Map use
 the same endpoint with an explicit surface. The API now also makes that
-projection the default for an unqualified `/api/project` request. The old rich
-response remains available only through the explicit `detail=true` diagnostic
-contract; a forgotten query parameter can no longer trigger a full project
-reconstruction.
+projection the default for an unqualified `/api/project` request. `detail=true`
+adds bounded saved inbox, memory-health, activity, and config sections to that
+same projection; it does not select a second full-state reader. Only the
+explicit `diagnostic=true` contract may reconstruct rich state or inspect live
+repositories.
 
 Existing installations are refreshed by the idempotent
 `0.11.3/project-summary-approved-plan` and
@@ -102,6 +103,57 @@ are not active planning input:
   not the source of current project status.
 
 The rule is simple: one fact, one owner; many projections, one interpretation.
+
+Migration metadata follows the same rule. The migration ledger is historical
+evidence about what the runner recorded, not the authority for whether a
+physical read-model shape exists. Sessions-owned migration probes reconcile
+the ledger against SQLite tables, columns, and derived-row completeness. A
+missing ledger entry can be shown as reconciled; it cannot become a current
+project blocker when the read model itself is present and valid.
+
+The implementation rule is equally strict: one ordinary read boundary, many
+thin presentation adapters. Runtime and UI code may format a sessions-owned
+snapshot, but may not open SQLite, parse an intake artifact, expand effective
+tasks, or manufacture synthetic work to fill a response. A static data-layer
+guard rejects direct `node:sqlite`/`DatabaseSync` use outside the sessions
+boundary and migration code. This makes the Release mismatch structurally
+unrepresentable in ordinary reads rather than merely unlikely by convention.
+
+### Contract Touch Decision
+
+- Work id: `codex:single-current-state-read-boundary-2026-07-17`.
+- Touched contracts: ordinary `/api/project` detail semantics, Release/map
+  bounded read projection, delivery read projection ownership, and the
+  runtime data-layer guardrail.
+- Considered but not touched: explicit diagnostic routes, mutation/import
+  writers, and the public shape of historical Thread/evidence endpoints.
+- Required follow-up: migrate task-detail joins and remaining ordinary
+  Thread/graph reads to revisioned sessions snapshots; add route tests that
+  reject canonical reconstruction in ordinary GETs.
+- Proof required: focused projection tests, route boundary tests, static
+  direct-SQL guard, build/install stale-server proof, and cross-surface
+  revision/agreement checks on real projects.
+- Apply/revert behavior: code-only read-path changes plus rebuildable derived
+  projections; no authoritative task/release/history rows are rewritten.
+
+### Schema Migration Decision
+
+- Persisted schema touched: existing SQLite `delivery_read_projection_*`
+  derived tables and the existing compact project-state tables; no new
+  authoritative entity schema in this slice.
+- Change class: read-boundary consolidation and derived projection ownership.
+- Existing data impact: none to task, release, evidence, or history facts;
+  delivery rows remain rebuildable from the sessions-owned current state.
+- Migration id: `0.13.3/delivery-read-projection` for the existing delivery
+  tables; no additional migration for the adapter/guardrail changes.
+- Safety: missing or stale derived reads fail closed with `requiresRefresh`;
+  pre-promotion compatibility readers remain explicit and legacy-only.
+- Compatibility reader: no ordinary runtime fallback from promoted SQLite to
+  intake/TASKS/effective-task reconstruction.
+- Fixtures/tests: phantom release-membership, bounded page, stale revision,
+  detail-without-canonical-expansion, and direct-SQL guard cases.
+- Rollback/revert: drop/rebuild derived delivery tables or revert adapters;
+  current project facts remain intact.
 
 ## Target State Model
 
@@ -210,7 +262,7 @@ technology choice, not a rename for the existing JSON cache:
 | Current project facts | SQLite tables with typed columns and indexes | Transactions, point reads, bounded scans, and one revision boundary are the core problem. JSON files cannot provide those without rebuilding a database in application code. |
 | Irregular task/detail payloads | JSON text in the selected detail row | The full task shape is still flexible, but compact reads select only typed columns and never load `definition_json`. This keeps flexibility at the edge instead of making every list read pay for it. |
 | Evidence and history | Existing JSONL/event records | Append-only, inspectable history is a good format for audit and export. It is not a good request-time current-state database, so latest proof/current execution rows are indexed in SQLite. |
-| Project isolation | One local database per project | A broken or locked project cannot hold the fleet hostage; each project can be backed up, migrated, or rebuilt independently. A single fleet database would recreate the cross-project contention and failure domain we are removing. |
+| Project isolation | One local database per project | A broken or locked project cannot hold the fleet hostage; each project can be backed up, migrated, or rebuilt independently. The machine fleet database is a write-only, rebuildable acceleration artifact and is never a normal current-state read authority. |
 | Git and provider state | Last-known repository rows plus operation results | Git, containers, and providers are external systems. A request must not scan them to render a card; their observations are recorded when an operation or inspection completes. |
 | Intake conversation | Essential-history Markdown rewritten by `contextIndexer`; bounded local diagnostics only when explicitly requested | A full transcript grows forever, repeats itself, and forces agents and users to perform transcript archaeology. The existing context-indexer lane is the right cheap model boundary. |
 
@@ -5233,6 +5285,23 @@ missing promoted state requests refresh/migration; only pre-promotion projects
 may use compatibility readers. There is no ordinary-read repair or fallback
 to a second source.
 
+That is an invariant, not a style preference. An ordinary route is not allowed
+to select a queue, intake snapshot, task file, or derived projection itself.
+It asks a named boundary for a read model carrying its source revision. If a
+bounded follow-up point read is unavoidable, the boundary returns its revision
+too and the route must reject a mismatch rather than join the rows. The route
+module is statically barred from the aggregate task reader. This is what makes
+the old Release failure impossible to recreate through a promoted project’s
+ordinary route: a different current-state source is no longer an available
+input to that route, and a different revision is not an acceptable response.
+
+The Release mismatch is now a permanent route-level calibration case, not just
+a unit test for a projection helper. It puts an intake-only task into the
+saved workspace-goals snapshot and verifies that the actual Release readiness
+endpoint reports only the materialized task count, scope, and blockers. The
+unused parallel Release adapter was removed so a future route cannot quietly
+adopt a second Release read model that the product does not use.
+
 The migration runner was tightened alongside this work. A projector may create
 derived tables idempotently before the migration command runs, but that cannot
 make the migration disappear. The ledger records the schema transition after
@@ -5244,3 +5313,676 @@ tests, the combined migration/delivery/read-boundary suite, installed
 `stale:false` verification, all seven registered projects passing the payload
 and latency budgets, and zero project-state agreement mismatches. Rich task
 detail, memory, and context-debug still need the same treatment.
+
+## The architectural test is one data boundary
+
+The answer to “should the Release mismatch have been possible?” is yes: in a
+finished design, an ordinary route cannot make that mistake. DRY is not merely
+sharing helper names. It means the sessions layer owns source selection,
+revision capture, normalized membership, and read-model joins. A route receives
+a named bounded snapshot and cannot choose between an intake document, a
+compatibility queue, and SQLite rows.
+
+This turn closes that rule for task detail as well. The task drawer now asks
+the sessions boundary for authority, task detail, relationships, overlays,
+availability, summary, and revisions together. It no longer probes authority,
+opens a second task reader, and probes authority again to classify a missing
+task. The remaining delivery projection is intentionally a separate derived
+read model, but it is sessions-owned and revisioned against the same current
+SQLite source. Its joins are the next explicit boundary to finish before the
+architecture can be called complete.
+
+The test for success is therefore stronger than “the counts match today”:
+writers update the authoritative tables and enqueue projection work in one
+transaction; readers enter through one sessions boundary; response shapes may
+differ, but they carry the source revision and cannot manufacture current work
+from an unrelated artifact. A new route that bypasses this boundary should be
+a guardrail failure, not a code-review convention.
+
+## Persisted labels are part of the same authority
+
+The same rule applies below the route boundary. A task detail payload is not a
+second place where a display label may quietly become a different fact. The
+`0.13.4/stored-request-title-integrity` migration repairs the one provable
+historical violation found in Narrative Harness: a nested request title ending
+in `...` while its complete first line remains in `request.raw`. It updates
+that nested value inside `work_item_detail` through the sessions writer,
+advances the authoritative revision, and enqueues the normal projection work.
+It does not overwrite the canonical task title, raw request, or history. When
+the raw text cannot prove the missing suffix, it leaves the row untouched and
+counts it as ambiguous. This is the correct shape of a repair: a bounded
+write in the authoritative data layer, not a UI recovery trick.
+
+## Delivery projections follow the same rule
+
+Delivery is a derived read model, so it may have a different bounded payload,
+but it is not a second authority. The delivery boundary now returns its
+authority, saved delivery model, and projection together. An absent project
+database is the only legacy case. Once SQLite is promoted, a missing or stale
+delivery projection is an honest refresh/unavailable state; the route cannot
+quietly re-derive delivery facts from task files. Task detail also rejects a
+delivery projection captured at a different project revision. This is the
+practical meaning of DRY here: one source decision, one revision contract, and
+named projections behind sessions-owned readers.
+
+## Current Status And Remaining Work - 2026-07-17
+
+The latest delivery/task-boundary slice is complete as a read-boundary cut,
+not as completion of the whole architecture pivot. The historical entries
+above remain the detailed evidence record.
+
+- [x] Ordinary project surfaces, Thread navigation, Inbox/fleet attention,
+  Release, graph, task detail, and delivery routes now enter named
+  sessions/runtime boundaries over revisioned saved state.
+- [x] Promoted Release, delivery, and task-detail paths fail closed on missing
+  or stale projections instead of falling through to retired current-state
+  readers.
+- [x] Delivery authority and task-detail/delivery revision agreement are
+  checked inside the read boundary.
+- [x] Installed proof includes `stale:false`, seven-project agreement with
+  zero mismatches, performance budgets, and 159 focused delivery/read/task
+  tests. The latest audit record still reports six unrelated failures in the
+  full Release fixture file, so this is not a clean full-suite closeout.
+- [ ] Finish the remaining ordinary-route source audit, especially rich
+  diagnostic/history joins, memory/context-debug reads, and any task-level
+  Git Story join that would need a saved projection.
+- [ ] Keep Thread task Git stories behind an explicit saved snapshot or
+  refresh/diagnostic path; the current saved-state-only behavior is an honest
+  intermediate boundary, not the finished task Git Story model.
+- [ ] Re-run browser Overview/Work/Map geometry and cross-surface proof after
+  the remaining history/detail boundaries land. API agreement and performance
+  proof do not establish UI proof.
+- [ ] Do not call the pivot complete until ordinary routes have named,
+  revision-carrying boundaries and the remaining verification debt is either
+  resolved or explicitly classified.
+
+### Contract Touch Decision
+
+- Work id: `codex:project-state-architecture-status-rollup-2026-07-17`.
+- Touched contracts: none. This is a documentation-only status reconciliation.
+- Considered but not touched: runtime routes, read-model payloads, task/release
+  entities, delivery projections, and diagnostic/history contracts.
+- Required follow-up: keep the implementation and proof obligations in the
+  owning historical entries above; do not treat this roll-up as implementation
+  proof.
+- Proof required: none for this documentation update; existing installed and
+  focused proof remains the source evidence, with the open gaps listed above.
+- Apply/revert behavior: append-only documentation change; remove this section
+  without changing source or persisted project state.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none.
+- Change class: documentation/status reconciliation only.
+- Existing data impact: none.
+- Migration id: not required.
+- Compatibility reader: unchanged.
+- Fixtures/tests: unchanged; the cited verification debt remains explicit.
+- Rollback/revert: remove this appended section only.
+
+## 2026-07-17 - One authority means one source-selection boundary
+
+The Release mismatch is now treated as an architectural impossibility for
+promoted ordinary reads, not as a bug to catch after the fact. The sessions
+layer owns the source decision, normalized release membership, scope rows,
+summary projection, and revision token. Runtime routes request named read
+models from that boundary and may format them, but may not select among
+`TASKS.json`, intake snapshots, compatibility queues, or SQLite rows.
+
+- [x] Release detail and Release summary consume the same saved surface
+  transaction and the same project/queue revisions.
+- [x] Intake-only `workspace-import:*` identities remain provenance and cannot
+  become current Release membership during a GET.
+- [x] Task detail, bounded task evidence/history/review, activity, progress,
+  and fleet shell reads carry the same authority/revision discipline.
+- [x] Runtime guardrails reject direct route access to aggregate task,
+  summary, history, attention, and SQLite readers.
+- [x] Release ghost-task regression proves divergent intake data cannot change
+  materialized Release totals or scope nodes.
+- [ ] Finish the remaining explicit diagnostic joins: context-debug bounds,
+  retained-memory reads, task-level Git Story snapshots, and browser proof.
+
+This is the DRY rule that matters: different UI payloads are allowed, but
+different current-state authorities are not. A named projection is a view over
+one revisioned state model, not a new interpretation of the project.
+
+### Contract Touch Decision
+
+- Work id: `codex:single-authority-read-boundary-2026-07-17`.
+- Touched contracts: sessions surface/task-detail boundaries, Release read
+  model authority and revisions, bounded task evidence/history/review payloads,
+  and route data-layer guardrails.
+- Considered but not touched: persisted task/release entity shape, normalized
+  `release_membership` schema, delivery table shape, and explicit live
+  diagnostic payloads.
+- Required follow-up: move the remaining rich diagnostic joins behind named
+  bounded session readers and retain revision checks at every cross-projection
+  join.
+- Proof required: focused boundary/route suites, data-layer and contract
+  lint, production build, installed stale-server proof, fleet agreement, and
+  performance audits.
+- Proof provided: those checks pass for the current slice; browser and rich
+  diagnostic coverage remain explicitly open above.
+- Apply/revert behavior: runtime/read-boundary code can be reverted without a
+  persisted-state rollback; the existing release-membership migration remains
+  the authoritative data-shape transition.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none by this read-boundary slice.
+- Change class: source-selection and revision-contract consolidation.
+- Existing data impact: none; reads stop manufacturing current task rows from
+  intake evidence.
+- Migration id: not required.
+- Compatibility reader: pre-promotion bootstrap reads remain explicit; no new
+  historical-shape reader is permitted for promoted ordinary routes.
+- Fixtures/tests: Release ghost membership, promoted task detail, bounded task
+  history/review, shell boundary, and route guardrail fixtures.
+- Owner-facing plan text: missing promoted projections report refresh or
+  unavailable state instead of silently choosing another source.
+- Rollback/revert: code-only revert for the reader changes; no data rollback.
+
+## 2026-07-17 - Effective authority is shared by current and detail reads
+
+The evidence-history refinement exposed a useful test of the architecture. A
+database can have a materialized `queue_state` row before the historical
+promotion marker is finalized. That is not a second project state; it is a
+partially completed promotion. Therefore the same effective-authority helper
+now reads the queue row and marker on one SQLite connection, and both current
+project reads and task-history reads use that result. The marker is migration
+bookkeeping, not an alternate runtime authority.
+
+Task history may still be stored in a bounded compressed ledger for size
+reasons. That is a detail-storage choice, not a source of current task or
+Release identity. The history response carries `projectAuthority` and the
+project revision so a caller cannot join compressed detail to an unrelated
+current-state snapshot.
+
+- [x] Queue-present / marker-legacy regression proves evidence reads fail closed
+  for legacy files instead of silently selecting them.
+- [x] Compressed evidence responses identify both detail storage and project
+  authority, with the project revision attached.
+- [x] Evidence writes select their destination from one boundary read rather
+  than independently probing current and evidence authorities.
+- [x] Release summary and detail expose the same authority, revisions,
+  materialized membership, and readiness state; raw Release lifecycle metadata
+  is no longer confused with saved scope readiness in one route.
+- [ ] Apply the same single-boundary pattern to remaining rich diagnostic and
+  task Git Story readers before calling the model migration complete.
+
+### Contract Touch Decision
+
+- Work id: `codex:effective-authority-boundary-2026-07-17`.
+- Touched contracts: `TaskEvidencePage` now exposes project authority and
+  project revision when a database boundary exists; the sessions evidence
+  boundary owns source selection for the page and write paths.
+- Considered but not touched: persisted task/release entities and the
+  compressed history file format. Compression remains detail retention, not
+  current-state modeling.
+- Required follow-up: carry the same authority/revision contract through the
+  remaining diagnostic detail readers.
+- Proof provided: task-state boundary regression, 15 task-state tests, 129
+  task endpoint/state tests, data-layer lint, and contract lint.
+- Apply/revert behavior: code-only reader contract change; no persisted
+  rollback is required.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none.
+- Change class: read/write source-selection consolidation.
+- Existing data impact: promoted ordinary reads stop treating legacy evidence
+  files as a current source when a normalized queue already exists.
+- Migration id: not required; existing evidence migration and compression
+  migrations remain the only writers of history-shape transitions.
+- Compatibility reader: legacy evidence remains available only to explicit
+  pre-promotion/bootstrap or migration paths; ordinary promoted reads fail
+  closed when migration is incomplete.
+- Fixtures/tests: queue-present / marker-legacy evidence boundary fixture and
+  compressed-history authority/revision assertions.
+- Rollback/revert: code-only revert; no data rollback.
+
+## 2026-07-17 - Diagnostic overlays cannot choose current-state identity
+
+The project Git Story diagnostic had a smaller version of the Release bug: it
+was explicitly allowed to inspect Git, but it also reopened `TASKS.json` to
+discover which task records to inspect. That made “diagnostic” an accidental
+second data-management path. The route now starts from the same canonical
+current-state boundary as Release and uses Git only as an overlay. The task
+Git Story tab uses the bounded task-point boundary and carries its source
+revision as well.
+
+The rule is intentionally simple:
+
+> A diagnostic read may add observations; it may not select, invent, or
+> replace current project entities.
+
+- [x] Project Git Story diagnostics use the canonical current-state queue.
+- [x] Task Git Story diagnostics use the bounded task-point boundary.
+- [x] Both payloads identify the project revision they inspected.
+- [x] Regression tests prove the live diagnostic contract has revision data.
+- [ ] Apply the same rule to context-debug, retained-memory health, and the
+  remaining rich task-detail joins.
+
+### Contract Touch Decision
+
+- Work id: `codex:diagnostic-overlay-boundary-2026-07-17`.
+- Touched contracts: project/task Git Story diagnostic payloads now expose
+  `sourceRevision` and `projectRevision` when current state is revisioned.
+- Considered but not touched: Git Story snapshot schema and persisted task or
+  repository records.
+- Required follow-up: retain the diagnostic label and keep live Git separate
+  from saved project state; move remaining diagnostic sources behind named
+  bounded readers.
+- Proof provided: `serve-read-boundary.test.ts` live Git Story assertions and
+  data-layer/contract lint.
+- Apply/revert behavior: code-only read-contract change; no data rollback.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none.
+- Change class: read-boundary consolidation.
+- Existing data impact: none; diagnostic reads inspect the same task identity
+  that ordinary current-state reads expose.
+- Migration id: not required.
+- Compatibility reader: pre-promotion current-state compatibility remains
+  inside the project read boundary only.
+- Fixtures/tests: project and task live Git Story boundary fixtures.
+- Rollback/revert: code-only revert.
+
+## 2026-07-17 - Start readiness consumes one snapshot
+
+The Release mismatch exposed a broader DRY failure: `projectStartReadiness`
+had already loaded the canonical queue, effective task overlays, and selected
+scope, but several subordinate blockers reopened project state and rebuilt
+scope selection. That allowed one Start request to make multiple answers from
+one project revision, even when each individual reader looked reasonable.
+
+The start path now passes a `StartStateSnapshot` through terminal detection,
+materialized-work detection, paused-work detection, workspace coverage,
+orientation shaping, selected-Release review, import-draft review, task
+readiness, and ready-status checks. The snapshot is queue definition + current
+effective tasks + selected scope; `null` scope is preserved as an intentional
+answer. A helper may still perform an explicit external workspace-document
+check, but it cannot replace the project state with an intake snapshot.
+
+- [x] Start blockers consume the caller's canonical state when it is present.
+- [x] Promoted-project helpers load the canonical boundary only when called
+  independently, never after receiving the complete snapshot.
+- [x] Legacy compatibility remains isolated to unpromoted projects.
+- [x] Start/Release regression suites remain green after consolidation.
+- [ ] Add a direct call-count regression proving one promoted Start request
+  does not reopen the queue for each blocker.
+
+### Contract Touch Decision
+
+- Work id: `codex:start-readiness-one-snapshot-2026-07-17`.
+- Touched contracts: internal start-readiness composition; no public response
+  field was renamed or removed.
+- Considered but not touched: task/release persistence, workspace import
+  detection, and provider readiness semantics.
+- Required follow-up: add instrumentation-backed call-count proof and finish
+  the remaining rich diagnostic readers.
+- Proof provided: `serve-release-readiness.test.ts` 80/80,
+  `serve-read-boundary.test.ts` 39/39, `pnpm lint:data-layer`,
+  `pnpm lint:contracts`, and `git diff --check`.
+- Apply/revert behavior: code-only read-path change; no persisted rewrite.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none.
+- Change class: in-memory read composition and authority consolidation.
+- Existing data impact: none; the same durable queue, overlays, and scope are
+  used, with fewer request-time rereads.
+- Migration id: not required.
+- Compatibility reader: unchanged and confined to the legacy branch.
+- Fixtures/tests: start readiness, Release lifecycle/readiness, and boundary
+  agreement suites.
+- Rollback/revert: code-only revert.
+
+## 2026-07-17 - Read models may differ; current-state authority may not
+
+The Release/Map failure made the boundary rule concrete. “DRY” does not mean
+every endpoint returns one giant object. It means every endpoint gets its
+entities, relationships, and revision from the same sessions-owned snapshot,
+then projects only the fields its surface needs. A route may omit delivery
+detail, task evidence, Git observations, or map nodes; omission is not
+permission to reopen an intake file or manufacture a replacement entity.
+
+The model now makes two related distinctions explicit:
+
+- **Release lifecycle** is the persisted Release record (`active`, `ready`,
+  and so on). A request-time Git observation cannot rewrite it.
+- **Release readiness** is the derived current-state verdict and diagnostics.
+  It can say a lifecycle-active Release is not ready because repository proof
+  is missing, without changing the Release record.
+
+This prevents a different kind of two-authority bug: one route treating a
+derived readiness verdict as lifecycle state while another route reads the
+durable Release definition. Both now read the same Release definition and
+expose readiness separately.
+
+The Map crash was the corresponding optional-detail bug. Map deliberately
+does not load the delivery model, but the rich diagnostic branch still passed
+`null` into a validator that requires a model. Optional detail is now modeled
+as absent at the boundary and skipped by its validator; it cannot make the
+authoritative project spine unavailable.
+
+- [x] Release summary and detail use the same named saved read boundary.
+- [x] Release identity/lifecycle comes from the persisted queue definition;
+  readiness comes from the summary/diagnostic projection.
+- [x] Rich Map diagnostics can omit delivery detail without throwing.
+- [x] Regression coverage proves Overview, Work, and Map share the same
+  current spine and blocker, and Release summary/detail agree on membership,
+  revisions, and lifecycle identity.
+- [ ] Finish the remaining rich diagnostic joins behind equivalent named
+  session readers, then repeat installed browser proof.
+
+### Contract Touch Decision
+
+- Work id: `codex:read-model-shape-over-one-authority-2026-07-17`.
+- Touched contracts: Release detail/summary response semantics for lifecycle
+  versus readiness; rich project Map behavior when delivery detail is omitted;
+  compact Map task identity omission of empty provenance arrays.
+- Considered but not touched: persisted Release/task schema, delivery schema,
+  and readiness calculation rules.
+- Required follow-up: make all remaining rich diagnostic inputs explicit
+  optional bounded projections and retain revision checks for every join.
+- Proof provided: `serve-release-readiness.test.ts` 80/80, focused boundary
+  suite, `pnpm lint:data-layer`, `pnpm lint:contracts`, and `git diff --check`.
+- Apply/revert behavior: code-only read/response contract change; no data
+  rollback.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none.
+- Change class: response-shape and source-boundary consolidation.
+- Existing data impact: none; existing Release lifecycle values remain
+  unchanged and readiness remains derived from saved projections.
+- Migration id: not required.
+- Compatibility reader: unchanged; pre-promotion reads remain inside the
+  shared boundary and promoted reads still fail closed when projections are
+  unavailable.
+- Fixtures/tests: Release summary/detail agreement, diagnostic Git follow-up,
+  Map/Work bounded inventory, and Overview/Work/Map blocker agreement.
+- Owner-facing plan text: a Release may be lifecycle-active while its
+  readiness verdict is blocked; the UI must show the readiness explanation,
+  not silently rewrite the lifecycle record.
+- Rollback/revert: code-only revert; no persisted-state rewrite.
+
+## 2026-07-17 - Task detail no longer has a second current-state read
+
+The remaining task-detail exception was not harmless duplication. The drawer
+read the selected task and its relationship IDs from one transaction, then
+reopened the database to fetch parent/child/dependency task records. That was
+revision-checked, but it still made two reads the normal architecture and
+left room for a future caller to forget the check. The detail boundary now has
+an explicit `includeRelatedTasks` option. When requested, the sessions layer
+loads bounded related task points, normalized Release membership, normalized
+dependencies, and detail payloads in the same read transaction as the
+selected task and returns them with the same revision.
+
+The task-detail relationship payload also now uses `task.dependsOn` after the
+normalized dependency table has been applied. It never parses
+`depends_on_json` for the relationship view. An old JSON mirror can therefore
+be present for migration purposes without changing the current relationship
+answer.
+
+This is the stronger DRY rule:
+
+> One data-layer snapshot may expose many bounded shapes. A route may omit or
+> format fields, but it may not reopen current entities to complete a shape.
+
+That does not require one giant response or one query for history, Git, and
+diagnostics. Those are explicit bounded projections with their own source
+revision. It does require every ordinary current-state entity and relation to
+come from the named sessions boundary, never from an intake artifact or
+compatibility mirror.
+
+- [x] Promoted task detail gets related task points from its selected-task
+  snapshot when the drawer requests them.
+- [x] Task-detail relationships use normalized dependencies, including an
+  explicitly empty relation.
+- [x] Existing task endpoint and boundary suites prove the drawer contract.
+- [ ] Move current evidence into the same optional bundle field for the
+  Progress route; its current secondary read remains revision-guarded.
+
+### Contract Touch Decision
+
+- Work id: `codex:task-detail-one-snapshot-2026-07-17`.
+- Touched contracts: task-detail boundary option and related-task response
+  assembly; normalized dependency relation semantics.
+- Considered but not touched: task IDs, Release membership schema, evidence
+  retention, and delivery projection storage.
+- Required follow-up: bundle current evidence for Progress and finish the
+  remaining bounded diagnostic joins.
+- Proof provided: project-state database 64/64, boundary 16/16, task endpoint
+  115/115, read-boundary 40/40, data-layer lint, contract lint, and diff check.
+- Apply/revert behavior: code-only read-boundary change; no persisted rewrite.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none.
+- Change class: read transaction composition and normalized relation authority.
+- Existing data impact: none; promoted reads stop consulting the dependency
+  JSON mirror for task-detail relationships.
+- Migration id: not required.
+- Compatibility reader: legacy JSON remains migration/bootstrap input only.
+- Fixtures/tests: normalized dependency regression and promoted task-detail
+  related-task response.
+- Rollback/revert: code-only; do not restore JSON fallback without a new
+  authority decision and parity proof.
+
+## 2026-07-17 - One sessions snapshot is the only aggregate read primitive
+
+The earlier boundary work removed the Release ghost-task symptom, but the
+implementation still exposed four independent aggregate readers inside the
+sessions package: shell, projection, surface, and full current state. They all
+used SQLite, but that was not enough. A future caller could still add another
+reader and accidentally join a queue envelope from one snapshot to a summary
+or relationship from another.
+
+The sessions layer now has one `readProjectStateDatabaseReadBundle` primitive.
+It opens one read transaction, selects the effective current-state authority,
+captures the queue/project revisions, and fills only the explicitly requested
+bounded views. The existing reader names remain as compatibility adapters for
+their payload shapes, but they are projections of that bundle rather than
+separate data authorities. A shell is therefore a small view over the same
+model, not a different model.
+
+This is the DRY rule in implementation form:
+
+> Routes may narrow or format one revisioned bundle. They may not choose a
+> queue, intake snapshot, relationship table, summary file, or JSON mirror.
+
+The bundle also fixed two smaller forms of the same problem. Summary
+freshness now uses the effective queue authority rather than migration-marker
+state, and ordinary dependency/release reads treat normalized relations as
+authoritative even when the relation is empty. A stale `depends_on_json` or
+`release_ids_json` mirror can no longer resurrect an edge that the normalized
+model removed. JSON remains available only to explicit migration/write paths.
+
+Progress now carries the project/evidence revision pair and returns a refresh
+response on a mismatch instead of combining an old summary with new evidence.
+Queue and task point CAS readers now use an explicit SQLite read transaction,
+so their revision token actually describes the rows they returned.
+
+- [x] Shell, projection, surface, and full current-state reads are thin views
+  over one sessions-owned read bundle.
+- [x] Effective authority and summary freshness share the same source rule.
+- [x] Normalized dependency/release relations suppress stale JSON mirrors.
+- [x] Progress compares summary and current-evidence project revisions.
+- [x] Queue/task point revision readers are transaction-backed.
+- [x] Move task-detail related-task hydration into the same optional bundle
+  fields for ordinary routes that previously used a secondary read.
+- [x] Move current evidence into the same optional bundle field for the
+  Progress route; its current secondary read is removed.
+
+### Contract Touch Decision
+
+- Work id: `codex:aggregate-read-bundle-2026-07-17`.
+- Touched contracts: sessions aggregate read boundary, authority/revision
+  selection, normalized relationship read semantics, Progress revision
+  metadata and mismatch response.
+- Considered but not touched: task/release entity IDs, persisted relation
+  tables, delivery projection schema, and historical evidence retention.
+- Required follow-up: add current-evidence fields to the bundle, then finish
+  the remaining bounded diagnostic joins.
+- Proof required: sessions/boundary/Release suites, normalized-edge regression,
+  data-layer and contract lint, production build, and installed service proof.
+- Proof provided: sessions 64/64, boundary 16/16, read-boundary 40/40,
+  Release 80/80, and delivery 6/6; `pnpm build`,
+  `pnpm lint:data-layer`, `pnpm lint:contracts`, and diff check.
+- Apply/revert behavior: code-only read-contract change; no persisted rollback.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none; existing normalized dependency and Release
+  membership tables become stricter ordinary-read authorities.
+- Change class: read-authority consolidation and transaction boundary repair.
+- Existing data impact: promoted reads stop using stale JSON relationship
+  mirrors; migration readers continue to parse those mirrors when backfilling.
+- Migration id: not required for this code-only read change.
+- Compatibility reader: JSON relationship fields remain explicit migration
+  input only; no promoted ordinary route may use them as a fallback.
+- Fixtures/tests: one-bundle revision agreement, Release ghost membership,
+  normalized empty-dependency regression, Progress mismatch contract, and the
+  existing migration suite.
+- Owner-facing plan text: a relationship removed from the normalized plan is
+  removed, even if an old compatibility copy still mentions it.
+- Rollback/revert: code-only revert; do not restore JSON fallback behavior
+  without a migration decision and parity proof.
+
+## 2026-07-17 - Release and Start cannot select a second current-state authority
+
+The Release mismatch was the concrete proof that “all readers use SQLite” was
+not yet a strong enough rule. Release detail was selecting a projection-shaped
+queue envelope while another path reconstructed synthetic `workspace-import:*`
+tasks from an intake snapshot. The durable SQLite projection counted only
+materialized work. Those paths could disagree because the boundary still
+allowed a route to choose which wrapper it wanted before formatting the answer.
+
+The rule is now structural:
+
+> A current-state read starts with one sessions-owned bundle. Every route-facing
+> view is a narrowing of that bundle. No route may create current task identity,
+> membership, status, owner-input state, or scope from intake, legacy JSON, or
+> a second point read.
+
+Release saved reads now request the durable queue definition directly from
+`readProjectStateDatabaseReadBundle`, rather than starting from the compact
+projection queue envelope. The rich canonical reader and the saved Release
+reader therefore both derive Release identity, normalized membership, scope
+rows, summary, diagnostics, and revision metadata from the same data-layer
+primitive. Intake remains provenance; it cannot manufacture a task on GET.
+
+Start readiness receives the same captured effective tasks, authority, scope,
+and owner-input summary. Effective-task projection no longer reopens the
+authority decision when a caller already supplied it. The recoverable blocked
+task check also uses the captured effective task instead of rebuilding it.
+The old workspace-import coverage checker is now explicitly limited to legacy
+compatibility reads. Promoted projects do not reread `workspace-goals`, scan
+docs, or materialize an import draft during a Start/readiness decision; that
+information must be produced by the asynchronous projection refresh that
+creates the saved summary.
+
+This is why the fix is more than a Release patch: a future Release, Overview,
+Map, Work, or Start route cannot reproduce the original mismatch without
+deliberately bypassing the sessions bundle contract. The compatibility readers
+remain for pre-promotion migration only and fail closed when a promoted
+project's durable queue detail is unavailable.
+
+- [x] Release saved reads use the canonical queue definition from the bundle.
+- [x] Release intake-ghost regression remains green at both boundary and HTTP
+  route levels.
+- [x] Canonical effective-task callers pass captured authority and overlays.
+- [x] Promoted Start readiness uses owner-input state from the captured summary.
+- [x] Promoted Start readiness does not run the legacy workspace-import scan or
+  write an import draft during a read.
+- [x] Promoted task detail receives its effective current task from the named
+  task-state boundary; route code no longer assembles point plus overlay.
+- [ ] Move the legacy workspace-import coverage algorithm into the asynchronous
+  projection refresh and persist a bounded coverage result for explicit
+  diagnostics.
+
+### DRY authority invariant
+
+The release mismatch exposed a class of bug that should be impossible in the
+finished architecture, not merely unlikely. A route must never be able to ask
+for a queue from one source, a task overlay from another, and intake-derived
+work from a third source. That is now enforced at two levels:
+
+1. The sessions layer owns the SQLite read bundle and its revision boundary.
+2. The runtime boundary owns route-facing adapters such as the saved Release
+   read and the current task read. These adapters return complete, named read
+   models, rather than exposing raw pieces for routes to recombine.
+
+The new `readProjectTaskCurrentStateAtBoundary` adapter applies a promoted
+task's normalized overlay with the authority captured by the same detail read.
+The task route can still use the explicit legacy compatibility branch, but it
+cannot accidentally reopen promoted task authority while formatting a drawer.
+Static data-layer guardrails also reject direct SQLite reads, aggregate task
+reads, raw history/attention reads, and intake-only task records in ordinary
+route code. This is the intended failure mode: a future bypass should fail a
+guardrail test before it becomes another UI mismatch.
+
+### Contract Touch Decision
+
+- Work id: `codex:single-current-state-authority-2026-07-17`.
+- Touched contracts: saved Release read source, Start readiness source
+  provenance, effective-task authority options, and promoted-project behavior
+  when workspace-import coverage is not yet projected.
+- Considered but not touched: task/release IDs, intake schema, normalized
+  membership tables, and historical evidence retention.
+- Required follow-up: project workspace-import coverage asynchronously and expose
+  its freshness/revision in the saved diagnostic projection.
+- Proof provided: project-state boundary 16/16, read-boundary 40/40, Release
+  readiness 80/80, effective-task 19/19, build, data-layer lint, contract lint,
+  and diff check.
+- Apply/revert behavior: code-only read-boundary change; compatibility data is
+  not rewritten by a GET or Start decision.
+
+### Schema Migration Decision
+
+- Persisted schema touched: none.
+- Change class: current-read authority consolidation and compatibility-path
+  narrowing.
+- Existing data impact: promoted reads stop consulting intake and legacy
+  workspace-import state as a source of current task identity; legacy data is
+  retained for the migration/projection worker.
+- Migration id: not required for this read-only change.
+- Compatibility reader: legacy workspace-import coverage remains only for
+  pre-promotion projects; promoted projects fail closed or use the saved
+  projection state.
+- Fixtures/tests: Release ghost-task membership, missing promoted detail,
+  current authority, effective-task overlay, and Start/read-boundary suites.
+- Owner-facing plan text: Release counts and Start decisions describe the
+  materialized current plan, not an uncommitted intake hypothesis.
+- Rollback/revert: code-only revert; do not restore request-time intake scans
+  for promoted projects without a new authority decision and projection proof.
+
+### Bounded current-task batch boundary
+
+The Release mismatch principle now applies to rich project cards too. A
+promoted surface cannot read an indexed task point and then independently
+reopen its runtime/workspace/evidence state. The sessions layer provides one
+bounded task-point-plus-overlay snapshot, and the runtime boundary applies it
+in one batch with one captured revision pair. The legacy adapter is selected
+only when the normalized current queue is absent.
+
+This is intentionally a read-model change, not another task schema. It makes
+the route incapable of manufacturing a second promoted interpretation of a
+task while keeping the existing compact and historical payload boundaries.
+
+### 2026-07-17 atomic read-boundary follow-up
+
+The authority inventory found one remaining way to assemble a mixed answer:
+the bounded project-detail adapter probed authority and then opened a second
+compact read. `readProjectCompactStateAtBoundary` now returns authority,
+revisions, and the compact payload from the same sessions bundle. The static
+guard also rejects any new `readProjectStateDatabase*` call in ordinary route
+code and rejects legacy queue readers inside the ordinary Release builder.
+
+This is the architectural standard going forward: route code may narrow a
+named read model for presentation, but it may not select, probe, or recombine
+its sources. Import, migration, history, and live diagnostics remain explicit
+source lanes; they are not alternate current-state readers.

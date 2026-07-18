@@ -376,6 +376,16 @@ describe('agent factories', () => {
     expect(a.name).toBe('spec-agent')
   })
 
+  it('spec guidance forbids guessed executable proof commands', () => {
+    const agent = createSpecAgent(llm)
+    const prompt = (agent as unknown as { engine: { getSystemPrompt(): string } }).engine.getSystemPrompt()
+    expect(prompt).toContain('Never invent an executable command')
+    expect(prompt).toContain('Proof-setup tasks are discovery work')
+    expect(prompt).toContain('Do not create or propose a new script')
+    expect(prompt).toContain('leave')
+    expect(prompt).toContain('command')
+  })
+
   it('createSpecAgent tells imported-draft shaping to draft from evidence instead of authoring research-process briefs', () => {
     const a = createSpecAgent(llm)
     const prompt = (a as unknown as { engine: { getSystemPrompt(): string } }).engine.getSystemPrompt()

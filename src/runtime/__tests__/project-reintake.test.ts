@@ -91,6 +91,20 @@ const knitReleasePlanWithoutCurrentMarker = [
   'Goal: finish the practical replacement wave.',
 ].join('\n')
 
+const scopedNarrativeRelease = [
+  '# Narrative Harness release plan',
+  '',
+  '## Current Next Milestone',
+  '',
+  'The next milestone is Stage 1: Headless Drafting And Evaluation MVP.',
+  '',
+  '## Deliverables',
+  '',
+  '| Deliverable | Need | Foundation | Consumer |',
+  '| --- | --- | --- | --- |',
+  '| Character voice and dialogue review | Review character voice and dialogue. | Character specs | Draft review |',
+].join('\n')
+
 describe('project re-intake planner', () => {
   it('treats stale task state as evidence instead of gospel by proposing a reframe', () => {
     const draft = planProjectReintake({
@@ -258,6 +272,169 @@ describe('project re-intake planner', () => {
       },
     })
     expect(created.kind === 'create' ? created.task.releaseIds : undefined).toBeUndefined()
+  })
+
+  it('lets an explicit current release scope override a stale later-stage inventory label', () => {
+    const inventory = [
+      '# Remaining Spec Decomposition Inventory',
+      '',
+      '### `dialogue-and-character-voice.md`',
+      '',
+      '- **Recommended first task title:** Implement dialogue-and-character-voice reviewer lane',
+      '- **Recommended domain:** coherence',
+      '- **Stage alignment:** Stage 2 (Agent Coordination)',
+    ].join('\n')
+    const draft = planProjectReintake({
+      now,
+      sources: [
+        { path: 'docs/harness/headless-mvp-release-plan.md', content: scopedNarrativeRelease },
+        { path: 'docs/harness/remaining-spec-decomposition-inventory.md', content: inventory },
+      ],
+      tasks: [],
+    })
+
+    const changes = draft.groups.flatMap(group => group.changes)
+    const change = changes.find(change =>
+      change.kind === 'create' && change.task.title === 'Build Character voice and dialogue review',
+    )
+    expect(change).toMatchObject({
+      kind: 'create',
+      task: {
+        releaseIds: ['stage-1-headless-drafting-and-evaluation-mvp'],
+        status: 'spec_review',
+      },
+    })
+    expect(changes).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'create',
+        task: expect.objectContaining({ title: 'Implement dialogue-and-character-voice reviewer lane' }),
+      }),
+    ]))
+  })
+
+  it('keeps a broad release-table row in shaping until it has concrete proof evidence', () => {
+    const draft = planProjectReintake({
+      now,
+      projectPath: '/workspace',
+      sources: [{
+        path: 'docs/harness/headless-mvp-release-plan.md',
+        content: [
+          '# Narrative Harness release plan',
+          '',
+          '## Current Next Milestone',
+          '',
+          'The next milestone is Stage 1: Headless Drafting And Evaluation MVP.',
+          '',
+          '## Deliverables',
+          '',
+          '| Deliverable | Need | Foundation | Consumer |',
+          '| --- | --- | --- | --- |',
+          '| Synopsis expansion into story records | Expand synopsis into outline, characters, voices, world facts, and constraints. | Story-memory specs | Draft context |',
+        ].join('\n'),
+      }],
+      tasks: [],
+    })
+
+    const change = draft.groups.flatMap(group => group.changes).find(candidate =>
+      candidate.kind === 'create' && candidate.task.title === 'Build Synopsis expansion into story records',
+    )
+    expect(change).toMatchObject({
+      kind: 'create',
+      task: {
+        domain: 'harness',
+        status: 'import_draft',
+        proofPaths: [],
+      },
+    })
+    if (change.kind === 'create') {
+      expect(change.task).not.toHaveProperty('productBrief')
+    }
+  })
+
+  it('does not plan the same source-backed task for creation and archival', () => {
+    const source = {
+      path: 'docs/harness/headless-mvp-release-plan.md',
+      content: [
+        '# Narrative Harness release plan',
+        '',
+        '## Current Next Milestone',
+        '',
+        'The next milestone is Stage 1: Headless Drafting And Evaluation MVP.',
+        '',
+        '## Deliverables',
+        '',
+        '| Deliverable | Need | Foundation | Consumer |',
+        '| --- | --- | --- | --- |',
+        '| Broad-genre drafting model proof | Evaluate a DeepInfra-accessible model across genres. | Provider direction | Chapter drafting |',
+      ].join('\n'),
+    }
+    const firstDraft = planProjectReintake({
+      now,
+      sources: [source],
+      tasks: [],
+    })
+    const created = firstDraft.groups.flatMap(group => group.changes).find(change => (
+      change.kind === 'create' && change.task.title === 'Build Broad-genre drafting model proof'
+    ))
+    expect(created?.kind).toBe('create')
+    if (created?.kind !== 'create') return
+
+    const draft = planProjectReintake({
+      now,
+      sources: [source],
+      tasks: [task({
+        id: created.task.id,
+        title: created.task.title,
+        status: 'blocked',
+      })],
+    })
+
+    const changes = draft.groups.flatMap(group => group.changes)
+    expect(changes.filter(change => (
+      (change.kind === 'create' && change.task.id === created.task.id) ||
+      (change.kind === 'reframe' && change.taskId === created.task.id) ||
+      (change.kind === 'archive' && change.taskId === created.task.id)
+    ))).toHaveLength(1)
+    expect(changes).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'archive', taskId: created.task.id }),
+    ]))
+  })
+
+  it('moves open work from a renamed same-stage release instead of archiving it', () => {
+    const draft = planProjectReintake({
+      now,
+      sources: [{ path: 'docs/harness/headless-mvp-release-plan.md', content: scopedNarrativeRelease }],
+      tasks: [
+        task({
+          id: 'task-old-stage-one',
+          title: 'Shape fixture and expected-record ground truth',
+          status: 'exploring',
+          releaseIds: ['stage-1-fixture-and-evaluation-harness'],
+          spec: '## What this is\nShape the fixture and expected records.',
+        }),
+      ],
+    })
+
+    const changes = draft.groups.flatMap(group => group.changes)
+    expect(changes).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'reframe',
+        taskId: 'task-old-stage-one',
+        after: expect.objectContaining({
+          releaseIds: ['stage-1-headless-drafting-and-evaluation-mvp'],
+          stageAlignment: 'Stage 1: Headless Drafting And Evaluation MVP',
+        }),
+      }),
+    ]))
+    expect(changes).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'archive', taskId: 'task-old-stage-one' }),
+    ]))
+    expect(draft.releases).toEqual([
+      expect.objectContaining({
+        id: 'stage-1-headless-drafting-and-evaluation-mvp',
+        proofStyle: 'script_only',
+      }),
+    ])
   })
 
   it('keeps selected-release import drafts out of stale weak-spec archival', () => {

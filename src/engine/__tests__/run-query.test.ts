@@ -6954,6 +6954,48 @@ Uncertainties: none`,
       ),
     )).toBe(true)
   })
+
+  it('ends a turn after the same unproductive tool call keeps repeating', async () => {
+    const registry = new ToolRegistry()
+    registry.register(
+      defineTool({
+        name: 'tool-search',
+        description: '',
+        inputSchema: z.object({ query: z.string() }),
+        isReadOnly: () => true,
+        execute: async () => ({ output: '(no matches)', is_error: false }),
+      }),
+    )
+    const client = new ScriptedApiClient([
+      { message: assistantToolUse('tool-search', { query: '[agent]' }, 'toolu_1') },
+      { message: assistantToolUse('tool-search', { query: '[agent]' }, 'toolu_2') },
+      { message: assistantToolUse('tool-search', { query: '[agent]' }, 'toolu_3') },
+      { message: assistantToolUse('tool-search', { query: '[agent]' }, 'toolu_4') },
+      { message: assistantText('should not be reached') },
+    ])
+
+    const events = await drain(
+      runQuery(
+        {
+          apiClient: client,
+          toolRegistry: registry,
+          permissionChecker: autoChecker(),
+          cwd: '/workspace/project',
+          model: 'test',
+          systemPrompt: '',
+          maxTokens: 256,
+          maxTurns: 8,
+        },
+        [{ role: 'user', content: [{ type: 'text', text: 'go' }] }],
+      ),
+    )
+
+    expect(events.filter((event) => event.type === 'tool_execution_started')).toHaveLength(4)
+    expect(events.some(event =>
+      event.type === 'status' &&
+      event.message.includes('ending this turn so Guildhall can recover the task'),
+    )).toBe(true)
+  })
 })
 
 describe('runQuery — permission mode default', () => {

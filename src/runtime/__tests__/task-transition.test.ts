@@ -151,6 +151,18 @@ describe('task transitions', () => {
     expect(ready).toMatchObject({ kind: 'applied', nextState: 'ready' })
   })
 
+  it('can return active work to shaping when its proof contract is invalid', () => {
+    for (const status of ['ready', 'in_progress', 'review', 'gate_check'] as const) {
+      expect(applyTaskTransition({
+        task: { id: `task-${status}`, status },
+        event: 'recover_to_exploring',
+        actor: 'acceptance-command-recovery',
+        now,
+        evidenceRefs: ['criterion:ac-1'],
+      })).toMatchObject({ kind: 'applied', nextState: 'exploring' })
+    }
+  })
+
   it('normalizes imported drafts through explicit intake events', () => {
     const draft = transitionTaskStatus({
       task: { id: 'task-1', status: 'exploring' },

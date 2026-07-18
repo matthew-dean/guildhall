@@ -5,7 +5,7 @@
  */
 
 import type { ProjectDetail } from './types.js'
-import { currentProjectId, projectFetch } from './project-routes.js'
+import { projectFetch } from './project-routes.js'
 
 class ProjectStore {
   detail: ProjectDetail | null = $state(null)
@@ -43,7 +43,6 @@ class ProjectStore {
     this.loading = true
     this.surfaceLoading = true
     this.#inFlight = (async () => {
-      let summaryApplied = false
       let detailApplied = false
       const applyPayload = (payload: ProjectDetail): void => {
         if (requestSeq < this.#appliedSeq) return
@@ -58,31 +57,12 @@ class ProjectStore {
         const endpoint = normalizedSurface
           ? `/api/project?surface=${normalizedSurface}&compact=true&inventoryLimit=${inventoryLimit ?? ''}&inventoryOffset=${inventoryOffset}${normalizedSelectedTaskId ? `&task=${encodeURIComponent(normalizedSelectedTaskId)}` : ''}`
           : '/api/project?compact=true'
-        const summaryProjectId = normalizedProjectId ?? currentProjectId()
-        const summaryPromise = summaryProjectId
-          ? fetch(`/api/service?projectId=${encodeURIComponent(summaryProjectId)}`, { cache: 'no-store' })
-              .then(async response => {
-                if (!response.ok) throw new Error(`HTTP ${response.status}`)
-                const payload = await response.json() as { projects?: ProjectDetail[] }
-                const summary = payload.projects?.find(candidate => candidate.id === summaryProjectId)
-                if (!summary) throw new Error('Project summary was not returned.')
-                return summary
-              })
-          : Promise.resolve(null)
         const detailPromise = projectFetch(endpoint, { cache: 'no-store' }, normalizedProjectId)
           .then(async response => {
             if (!response.ok) throw new Error(`HTTP ${response.status}`)
             return await response.json() as ProjectDetail
           })
 
-        const summaryResult = summaryPromise
-          .then(summary => {
-            if (!summary || summary.error) return
-            applyPayload(summary)
-            summaryApplied = true
-            this.loading = false
-          })
-          .catch(() => undefined)
         const detailResult = detailPromise
           .then(payload => {
             if (payload.error) throw new Error(payload.error)
@@ -102,11 +82,10 @@ class ProjectStore {
             detailApplied = true
             return payload
           })
-        await Promise.all([summaryResult, detailResult])
-        if (summaryApplied) this.loading = false
+        await detailResult
         return this.detail
       } catch (err) {
-        if (!summaryApplied && !detailApplied && requestSeq >= this.#appliedSeq) {
+        if (!detailApplied && requestSeq >= this.#appliedSeq) {
           this.#appliedSeq = requestSeq
           this.error = err instanceof Error ? err.message : String(err)
         }

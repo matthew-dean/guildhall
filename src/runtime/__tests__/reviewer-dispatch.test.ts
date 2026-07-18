@@ -488,6 +488,33 @@ describe('recordLlmVerdict', () => {
     ])
   })
 
+  it('materializes review proof for concise approval text', () => {
+    const q = baseQueue()
+    q.tasks[0]!.proofPaths = [{
+      kind: 'review',
+      expectedEvidence: [
+        { id: 'boundary', kind: 'artifact', description: 'The scoped boundary is explicit', required: true },
+        { id: 'runtime', kind: 'artifact', description: 'The runtime slice exists', required: true },
+      ],
+      verificationRecords: [],
+      status: 'planned',
+    }] as NonNullable<Task['proofPaths']>
+
+    recordLlmVerdict({
+      queue: q,
+      taskId: 'task-001',
+      beforeStatus: 'review',
+      afterStatus: 'gate_check',
+      now: '2026-07-14T00:00:00.000Z',
+      reasoning: 'Approved. The acceptance criteria are met.',
+    })
+
+    expect(q.tasks[0]!.proofPaths?.[0]?.verificationRecords).toEqual([
+      expect.objectContaining({ evidenceId: 'boundary', status: 'passed', kind: 'manual' }),
+      expect.objectContaining({ evidenceId: 'runtime', status: 'passed', kind: 'manual' }),
+    ])
+  })
+
   it('does not infer approval when the review body contains a revision phrase', () => {
     const q = baseQueue()
     q.tasks[0]!.notes.push({

@@ -16,6 +16,7 @@ import {
 } from '../delivery-spine.js'
 import {
   readProjectDeliveryReadProjection,
+  readProjectDeliveryReadProjectionWithAuthority,
   refreshProjectDeliveryReadProjection,
 } from '../delivery-read-projection.js'
 
@@ -139,6 +140,21 @@ describe('delivery read projection', () => {
     expect(await fs.readdir(projectRoot)).toEqual([])
   })
 
+  it('resolves legacy versus promoted authority inside the delivery boundary', async () => {
+    projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-delivery-authority-'))
+
+    await expect(readProjectDeliveryReadProjectionWithAuthority(projectRoot)).resolves.toMatchObject({
+      authority: 'legacy',
+      projection: null,
+    })
+
+    await seed()
+    await expect(readProjectDeliveryReadProjectionWithAuthority(projectRoot!)).resolves.toMatchObject({
+      authority: 'database',
+      projection: { status: 'missing', reason: 'projection_missing' },
+    })
+  })
+
   it('refreshes compact rows into a revisioned projection and reads bounded pages', async () => {
     await seed()
 
@@ -211,5 +227,18 @@ describe('delivery read projection', () => {
     const result = await readProjectDeliveryReadProjection(projectRoot!)
 
     expect(result).toMatchObject({ status: 'stale', freshness: 'stale', reason: 'queue_revision_changed' })
+  })
+
+  it('marks the projection stale when the saved delivery model revision advances', async () => {
+    await seed()
+    await refreshProjectDeliveryReadProjection(projectRoot!)
+    await writeProjectDeliveryModel(projectRoot!, {
+      ...deliveryModel(),
+      updatedAt: '2026-07-16T12:01:00.000Z',
+    })
+
+    const result = await readProjectDeliveryReadProjection(projectRoot!)
+
+    expect(result).toMatchObject({ status: 'stale', freshness: 'stale', reason: 'delivery_model_changed' })
   })
 })

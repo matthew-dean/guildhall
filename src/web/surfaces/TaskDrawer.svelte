@@ -505,6 +505,10 @@
     await post('add-acceptance', { description })
   }
 
+  async function handleSetAcceptanceCommand(criterionId: string, command: string) {
+    await post('set-acceptance-command', { criterionId, command })
+  }
+
   function handleOpenReframe() {
     moreActionsOpen = false
     reframeNote = ''
@@ -1174,6 +1178,7 @@
           onRunEscalationAction={handleRunEscalationAction}
           onSendFollowUp={handleSendFollowUp}
           onAddAcceptance={handleAddAcceptance}
+          onSetAcceptanceCommand={handleSetAcceptanceCommand}
         />
       {:else if activeTab === 'journey'}
         <JourneyTab {task} projectId={scopedProjectId()} workProgress={currentWorkProgress} />

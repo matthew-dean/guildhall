@@ -8,7 +8,9 @@ import {
   getProjectContextDebugLedgerPath,
   getProjectContextDebugSnapshotDir,
   getProjectLocalHistoryDir,
+  emitProjectSummaryInvalidation,
   inferProjectRootFromMemoryDir,
+  registerProjectHistoricalArtifactIfCurrent,
 } from '@guildhall/sessions'
 
 export interface ContextSectionStat {
@@ -98,12 +100,43 @@ const CONTEXT_DEBUG_RECORD_MAX_BYTES = 32 * 1024
 const CONTEXT_DEBUG_TEXT_MAX_CHARS = 1200
 const CONTEXT_DEBUG_LIST_LIMIT = 32
 
+function boundedContextDebugReadLimit(limit: number): number {
+  if (!Number.isFinite(limit)) return LEDGER_RETENTION_PER_TASK
+  return Math.max(0, Math.min(LEDGER_RETENTION_PER_TASK, Math.floor(limit)))
+}
+
 function sanitize(text: string): string {
   return text.replace(/[^a-z0-9_-]+/gi, '-').replace(/-+/g, '-').replace(/^-|-$/g, '')
 }
 
 function hashText(text: string): string {
   return createHash('sha256').update(text).digest('hex')
+}
+
+async function registerContextDebugArtifact(input: {
+  projectRoot: string
+  filePath: string
+  artifactId: string
+  content?: string
+}): Promise<void> {
+  try {
+    const bytes = input.content === undefined
+      ? (await fs.stat(input.filePath)).size
+      : Buffer.byteLength(input.content, 'utf8')
+    registerProjectHistoricalArtifactIfCurrent(input.projectRoot, {
+      artifactId: input.artifactId,
+      kind: 'context_debug',
+      owner: 'context-observability',
+      logicalRef: path.relative(input.projectRoot, input.filePath).replaceAll(path.sep, '/'),
+      bytes,
+      ...(input.content !== undefined ? { sha256: hashText(input.content) } : {}),
+      retentionClass: 'diagnostic',
+      state: 'active',
+      lastVerifiedAt: new Date().toISOString(),
+    })
+  } catch {
+    // Diagnostics remain best-effort; a registry outage must not interrupt work.
+  }
 }
 
 function sectionStats(ctx: BuiltContext): ContextSectionStat[] {
@@ -616,10 +649,23 @@ export async function writeContextDebugRecord(input: {
       : {}),
   })
 
-  await writeManagedTextFile(snapshotPath, renderDiagnosticSnapshot(record), 'utf8')
+  const renderedSnapshot = renderDiagnosticSnapshot(record)
+  await writeManagedTextFile(snapshotPath, renderedSnapshot, 'utf8')
+  await registerContextDebugArtifact({
+    projectRoot,
+    filePath: snapshotPath,
+    artifactId: `context-debug:${input.task.id}:${id}`,
+    content: renderedSnapshot,
+  })
 
   const ledgerPath = getProjectContextDebugLedgerPath(projectRoot)
   await appendManagedTextFile(ledgerPath, `${JSON.stringify(record)}\n`, 'utf8')
+  await registerContextDebugArtifact({
+    projectRoot,
+    filePath: ledgerPath,
+    artifactId: 'context-debug:ledger',
+  })
+  emitProjectSummaryInvalidation(projectRoot, 'context-debug-write', { domains: ['memory'] })
   try {
     if ((await fs.stat(ledgerPath)).size > LEDGER_COMPACTION_THRESHOLD_BYTES) {
       await compactProjectContextDebug(projectRoot, { dryRun: false })
@@ -837,27 +883,63 @@ export async function compactProjectContextDebug(
   }
 }
 
-export async function readContextDebugForTask(
+/**
+ * Read the bounded diagnostic ledger once and index only the requested tasks.
+ * The index stores compact records, never prompt/context bodies or unknown
+ * legacy fields, and retains the same per-task limit as ledger compaction.
+ */
+export async function readContextDebugIndex(
   memoryDir: string,
-  taskId: string,
-  limit = 6,
-): Promise<ContextDebugRecord[]> {
+  taskIds?: Iterable<string>,
+  limit = LEDGER_RETENTION_PER_TASK,
+): Promise<Map<string, ContextDebugRecord[]>> {
+  const requestedTaskIds = taskIds === undefined
+    ? undefined
+    : new Set([...taskIds].filter(taskId => typeof taskId === 'string' && taskId.length > 0))
+  const readLimit = boundedContextDebugReadLimit(limit)
+  const index = new Map<string, ContextDebugRecord[]>()
+  if (requestedTaskIds) {
+    for (const taskId of requestedTaskIds) index.set(taskId, [])
+  }
+  if (readLimit === 0 || requestedTaskIds?.size === 0) return index
+
   const projectRoot = inferProjectRootFromMemoryDir(memoryDir)
   const ledgerPath = getProjectContextDebugLedgerPath(projectRoot)
   try {
     const raw = await readManagedTextFile(ledgerPath, 'utf8')
-    const matches: ContextDebugRecord[] = []
     for (const line of raw.split('\n')) {
       if (!line.trim()) continue
       try {
         const record = JSON.parse(line) as ContextDebugRecord
-        if (record.taskId === taskId) matches.push(compactContextDebugRecord(record))
+        if (typeof record.taskId !== 'string' || requestedTaskIds && !requestedTaskIds.has(record.taskId)) continue
+        const records = index.get(record.taskId) ?? []
+        records.push(compactContextDebugRecord(record))
+        if (records.length > readLimit) records.splice(0, records.length - readLimit)
+        index.set(record.taskId, records)
       } catch {
         // ignore malformed lines
       }
     }
-    return matches.slice(-limit).reverse()
   } catch {
-    return []
+    return index
   }
+
+  for (const records of index.values()) records.reverse()
+  return index
+}
+
+export async function readContextDebugForTasks(
+  memoryDir: string,
+  taskIds: Iterable<string>,
+  limit = LEDGER_RETENTION_PER_TASK,
+): Promise<Map<string, ContextDebugRecord[]>> {
+  return readContextDebugIndex(memoryDir, taskIds, limit)
+}
+
+export async function readContextDebugForTask(
+  memoryDir: string,
+  taskId: string,
+  limit = LEDGER_RETENTION_PER_TASK,
+): Promise<ContextDebugRecord[]> {
+  return (await readContextDebugIndex(memoryDir, [taskId], limit)).get(taskId) ?? []
 }

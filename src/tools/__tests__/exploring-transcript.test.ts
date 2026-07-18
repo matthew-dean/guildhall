@@ -9,6 +9,12 @@ import {
   readExploringTranscriptTool,
   exploringTranscriptPath,
 } from '../exploring-transcript.js'
+import { getProjectSystemStatePath } from '@guildhall/sessions'
+import {
+  readProjectHistoricalArtifact,
+  readProjectHistoricalArtifacts,
+  writeProjectStateDatabaseSnapshot,
+} from '../../sessions/project-state-database.js'
 
 // ---------------------------------------------------------------------------
 // FR-08 / FR-12: exploring transcript persistence tests.
@@ -47,6 +53,36 @@ describe('appendExploringTranscript', () => {
     expect(content).toContain('# Essential exploring history: task-001')
     expect(content).toContain('<!-- last-entry: user:')
     expect(content).toContain('I want a ghost button variant')
+  })
+
+  it('registers essential history in an existing promoted database without creating one for legacy history', async () => {
+    const projectRoot = path.dirname(memoryDir)
+    expect(readProjectHistoricalArtifacts(projectRoot)).toBeNull()
+
+    const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    await fs.mkdir(path.dirname(tasksPath), { recursive: true })
+    await fs.writeFile(tasksPath, '{}', 'utf8')
+    writeProjectStateDatabaseSnapshot(tasksPath, {
+      queue: { tasks: [] },
+      summary: { generatedAt: '2026-07-17T00:00:00.000Z', freshness: 'current' },
+      projectRoot,
+    })
+
+    const result = await appendExploringTranscript({
+      memoryDir,
+      taskId: 'task-registered',
+      role: 'user',
+      content: 'Keep only the durable decision.',
+    })
+    expect(result.success).toBe(true)
+    expect(readProjectHistoricalArtifact(projectRoot, 'essential-history:task-registered')).toMatchObject({
+      kind: 'essential_history',
+      owner: 'exploring-transcript',
+      retentionClass: 'essential',
+      state: 'active',
+      bytes: expect.any(Number),
+      sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+    })
   })
 
   it('rewrites subsequent messages without retaining transcript scaffolding', async () => {

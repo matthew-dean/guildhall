@@ -5,7 +5,7 @@ import { META_INTAKE_TASK_ID } from './meta-intake.js'
 import { WORKSPACE_IMPORT_TASK_ID } from './workspace-importer.js'
 import { specReviewRequiresOwnerApproval } from './spec-review-ownership.js'
 import { effectiveTaskStatus } from './effective-task.js'
-import { taskDoneButProofMissing } from './proof-health.js'
+import { taskDoneButProofMissingForScope } from './proof-health.js'
 import { taskBlockerSummary } from './task-blocker-summary.js'
 import { explicitMarkdownSourceRefsFromTask } from './task-source-refs.js'
 import { taskTitleOverlap } from './task-title-overlap.js'
@@ -32,6 +32,7 @@ export interface ProjectScope {
   source: ProjectScopeSource
   nodeIds: string[]
   deferredNodeIds: string[]
+  proofStyle?: 'script_only' | 'manual' | 'mixed' | 'unspecified'
 }
 
 export interface ProjectScopeRow {
@@ -69,13 +70,21 @@ export interface ProjectScopeProjection {
   start: {
     canStart: boolean
     code?: string
-    label: 'Start' | 'Resume' | 'Review' | 'Configure'
+    label: 'Start' | 'Resume' | 'Review' | 'Configure' | 'Answer in Thread'
     focusTaskId?: string
       focusTaskTitle?: string
-      focusKind?: 'paused_work' | 'ready_work' | 'spec_review' | 'brief_cleanup' | 'blocked_work' | 'proof' | 'provider' | 'terminal' | 'setup'
+      focusKind?: 'paused_work' | 'ready_work' | 'spec_review' | 'brief_cleanup' | 'blocked_work' | 'proof' | 'provider' | 'terminal' | 'setup' | 'owner_input'
     count?: number
     message: string
     actionHref: string
+    executionScope?: {
+      id: string
+      label: string
+      kind: ProjectScopeKind
+      source: ProjectScopeSource
+      taskCount: number
+      deferredTaskCount: number
+    }
   }
   release: {
     state: 'ready' | 'blocked' | 'active' | 'shaping' | 'unknown'
@@ -320,6 +329,7 @@ export function releaseToProjectScope(release: ProjectRelease, tasks: readonly T
     source: release.source,
     nodeIds: [...nodeIds],
     deferredNodeIds: [...deferredNodeIds],
+    ...(release.proofStyle ? { proofStyle: release.proofStyle } : {}),
   }
 }
 
@@ -370,13 +380,15 @@ export function buildProjectScopeProjection(
   )
   const tasksById = new Map(currentTasks.map(task => [task.id, task] as const))
   const childIdsByParent = buildChildMap(currentTasks)
-  const suppressedProofTaskIds = duplicateProofMissingTaskIds(currentTasks, selectedScope, tasksById)
+  const requiresScriptProof = selectedScope?.proofStyle === 'script_only'
+  const suppressedProofTaskIds = duplicateProofMissingTaskIds(currentTasks, selectedScope, tasksById, requiresScriptProof)
   const rows = currentTasks
     .map(task => buildScopeRow(task, {
       selectedScope,
       tasksById,
       childIdsByParent,
       suppressedProofTaskIds,
+      requiresScriptProof,
       includedDependencyIds: options.includedDependencyIds,
     }))
     .filter((row): row is ProjectScopeRow => Boolean(row))
@@ -476,6 +488,7 @@ function buildScopeRow(
     tasksById: ReadonlyMap<string, Task>
     childIdsByParent: ReadonlyMap<string, string[]>
     suppressedProofTaskIds: ReadonlySet<string>
+    requiresScriptProof: boolean
     includedDependencyIds?: ReadonlySet<string>
   },
 ): ProjectScopeRow | null {
@@ -495,7 +508,7 @@ function buildScopeRow(
     childIdsByParent: input.childIdsByParent,
     selectedScope: input.selectedScope,
   })
-  const proofBlocked = completionProofBlockedForTask(task, input.suppressedProofTaskIds)
+  const proofBlocked = completionProofBlockedForTask(task, input.suppressedProofTaskIds, input.requiresScriptProof)
   const humanBlocking = proofBlocked ? false : humanBlockingFor(task, handoffState, scope)
   return {
     taskId: task.id,
@@ -567,20 +580,25 @@ function handoffStateForTask(
   return 'not_shaped'
 }
 
-function completionProofBlockedForTask(task: Task, suppressedProofTaskIds: ReadonlySet<string>): boolean {
+function completionProofBlockedForTask(task: Task, suppressedProofTaskIds: ReadonlySet<string>, requiresScriptProof: boolean): boolean {
   const status = effectiveTaskStatus(task) ?? task.status
   return !suppressedProofTaskIds.has(task.id) &&
     (status === 'done' || status === 'pending_pr') &&
-    taskDoneButProofMissing(task)
+    taskDoneButProofMissingForScope(task, requiresScriptProof ? 'script_only' : undefined)
 }
 
-function duplicateProofMissingTaskIds(tasks: readonly Task[], selectedScope: ProjectScope | null, tasksById: ReadonlyMap<string, Task>): Set<string> {
+function duplicateProofMissingTaskIds(
+  tasks: readonly Task[],
+  selectedScope: ProjectScope | null,
+  tasksById: ReadonlyMap<string, Task>,
+  requiresScriptProof: boolean,
+): Set<string> {
   const scopedTasks = tasks.filter(task => taskScopeEligibility(task, selectedScope, { tasksById }).eligible)
   const blockedScopedTasks = scopedTasks.filter(task => (effectiveTaskStatus(task) ?? task.status) === 'blocked')
   const result = new Set<string>()
   for (const task of scopedTasks) {
     const status = effectiveTaskStatus(task) ?? task.status
-    if (status !== 'done' || !taskDoneButProofMissing(task)) continue
+    if (status !== 'done' || !taskDoneButProofMissingForScope(task, requiresScriptProof ? 'script_only' : undefined)) continue
     const duplicateOwner = blockedScopedTasks.find(blocked =>
       blocked.id !== task.id &&
       taskTitleOverlap(taskDisplayLabel(blocked, blocked.id), taskDisplayLabel(task, task.id)) >= 0.8 &&
@@ -672,6 +690,7 @@ function summarizeRows(rows: readonly ProjectScopeRow[]): ProjectScopeProjection
 }
 
 type ExecutionScopeRowLike = {
+  taskId: string
   scope: 'included' | 'deferred'
   countInProjectTotals?: boolean
   parentTaskId?: string
@@ -748,6 +767,22 @@ export function summarizeProjectScopeStart(
       focusKind: 'ready_work',
       message: `"${specWork.title}" is ready for spec work.`,
       actionHref: `/work?task=${encodeURIComponent(specWork.taskId)}`,
+    }
+  }
+  // An exploring task is already in Guildhall's shaping lane. Let Start run
+  // that agent work; only raw import drafts, thin ready tasks, and owner-gated
+  // reviews should stop the selected scope before execution can begin.
+  const shapingWork = included.find(row => row.status === 'exploring' && row.handoffState === 'not_shaped')
+  if (shapingWork) {
+    return {
+      canStart: true,
+      code: 'ready_work',
+      label: 'Start',
+      focusTaskId: shapingWork.taskId,
+      focusTaskTitle: shapingWork.title,
+      focusKind: 'ready_work',
+      message: `Guildhall is shaping "${shapingWork.title}" from the visible project sources.`,
+      actionHref: `/work?task=${encodeURIComponent(shapingWork.taskId)}`,
     }
   }
   const blocked = included.find(row => row.handoffState === 'blocked')

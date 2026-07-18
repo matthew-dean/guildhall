@@ -45,6 +45,16 @@ export function parseAcceptanceCriteriaFromSpec(spec: string | undefined): Accep
       current.command = commandMatch[1]!.trim()
       continue
     }
+    const expectedExitMatch = /^expected\s+exit(?:\s+code)?:\s*(.+)$/i.exec(line)
+    if (expectedExitMatch) {
+      current.expectedExit = expectedExitMatch[1]!.trim().toLowerCase().replace(/[ -]+/g, '_')
+      continue
+    }
+    const expectedOutputMatch = /^(?:expected\s+output\s+includes|output\s+includes):\s*(.+)$/i.exec(line)
+    if (expectedOutputMatch) {
+      current.expectedOutputIncludes = expectedOutputMatch[1]!.trim()
+      continue
+    }
     const evidenceMatch = /^evidence hint:\s*(.+)$/i.exec(line)
     if (evidenceMatch) {
       current.evidenceHint = evidenceMatch[1]!.trim()
@@ -70,6 +80,12 @@ export function parseAcceptanceCriteriaFromSpec(spec: string | undefined): Accep
       ...(criterion.expectation ? { expectation: criterion.expectation } : {}),
       verifiedBy: criterion.verifiedBy ?? 'review',
       ...(criterion.command ? { command: criterion.command } : {}),
+      ...(criterion.expectedExit === 'zero' || criterion.expectedExit === 'non_zero'
+        ? { expectedExit: criterion.expectedExit }
+        : {}),
+      ...(criterion.expectedOutputIncludes
+        ? { expectedOutputIncludes: [criterion.expectedOutputIncludes] }
+        : {}),
       ...(criterion.evidenceHint ? { evidenceHint: criterion.evidenceHint } : {}),
       ...(criterion.negativeCase ? { negativeCase: criterion.negativeCase } : {}),
       met: false,

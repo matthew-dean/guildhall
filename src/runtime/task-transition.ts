@@ -100,6 +100,7 @@ const taskLifecycleStates: StateMachineStates<TaskTransitionState, TaskTransitio
   ready: {
     on: {
       start_worker: { to: 'in_progress', guard: requireRunnableWork },
+      recover_to_exploring: { to: 'exploring' },
       block,
       shelve: { to: 'shelved' },
     },
@@ -107,6 +108,7 @@ const taskLifecycleStates: StateMachineStates<TaskTransitionState, TaskTransitio
   in_progress: {
     on: {
       request_review: { to: 'review' },
+      recover_to_exploring: { to: 'exploring' },
       block,
       shelve: { to: 'shelved' },
     },
@@ -114,6 +116,7 @@ const taskLifecycleStates: StateMachineStates<TaskTransitionState, TaskTransitio
   review: {
     on: {
       restart_review: { to: 'review' },
+      recover_to_exploring: { to: 'exploring' },
       revise: { to: 'in_progress' },
       start_gate_check: { to: 'gate_check' },
       complete: { to: 'done', guard: requireCompletionEvidence },
@@ -123,6 +126,7 @@ const taskLifecycleStates: StateMachineStates<TaskTransitionState, TaskTransitio
   gate_check: {
     on: {
       restart_review: { to: 'review' },
+      recover_to_exploring: { to: 'exploring' },
       revise: { to: 'in_progress' },
       complete: { to: 'done', guard: requireCompletionEvidence },
       block,
@@ -143,6 +147,8 @@ const taskLifecycleStates: StateMachineStates<TaskTransitionState, TaskTransitio
       recover_to_review: { to: 'review' },
     },
   },
+  archived: { on: {} },
+  cancelled: { on: {} },
   shelved: { on: {} },
   done: {
     on: {

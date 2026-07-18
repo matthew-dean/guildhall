@@ -24,18 +24,9 @@ describe('project store', () => {
     const first = project.refresh('font-something')
     const second = project.refresh('font-something')
 
-    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
 
     resolveFetches[0]?.(json({
-      projects: [{
-        id: 'font-something',
-        name: 'Font Something',
-        path: '/repo/font-something',
-        summaryFreshness: 'current',
-        actionModel: { primaryAction: null },
-      }],
-    }))
-    resolveFetches[1]?.(json({
       id: 'font-something',
       name: 'Font Something',
       path: '/repo/font-something',

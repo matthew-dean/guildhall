@@ -28,8 +28,40 @@ const EXTERNAL_SETUP_RESOLUTION_PATTERN =
   /\b(owner|user|admin|operator|human|create|configure|set up|setup|provision|dashboard|credential|secret|key|callback|webhook|env|environment|supabase|provider)\b/i
 const SPLIT_OR_BLOCK_RESOLUTION_PATTERN =
   /\b(split|block|blocked|setup task|follow-?up|separate task|dependency|shelv|owner|human|configure|configuration|credential|secret|key)\b/i
+const CONFIGURED_DEPENDENCY_PATTERN =
+  /\b(?:already\s+(?:set\s+up|configured|available)|configured\s+(?:provider|service|endpoint|environment)|available\s+(?:provider|service|endpoint|environment))\b/i
 const LIVE_VERIFICATION_PATTERN =
   /\b(end[- ]to[- ]end|e2e|live|staging|production|configured|configuration|provider|credential|callback|webhook|verified|works|can actually|real user|target environment)\b/i
+
+const CURRENT_PLAN_PROCESS_LEAKAGE_PATTERNS = [
+  /\bexceeded maxrevisions\b/i,
+  /\bdeterministic reviewer bounced\b/i,
+  /\bretrying worker pass\b/i,
+  /\btarget directory structure does not match expected paths\b/i,
+  /\bexpected file path .*\.guildhall[\\/]worktrees\b/i,
+  /\bparent directories do not exist\b/i,
+  /\bsuperseded after\b/i,
+  /\brequires human judgment\b/i,
+] as const
+
+/**
+ * Current briefs/specs describe the product boundary. Recovery attempts,
+ * revision counters, and internal worktree diagnostics belong in notes and
+ * evidence, where they remain useful without becoming executable scope.
+ */
+export function currentPlanProcessLeakage(text: string): string | null {
+  const match = CURRENT_PLAN_PROCESS_LEAKAGE_PATTERNS.find((pattern) => pattern.test(text))
+  return match ? match.source : null
+}
+
+export function stripCurrentPlanProcessLeakage(text: string): string {
+  return text
+    .split(/\r?\n/)
+    .filter((line) => currentPlanProcessLeakage(line) === null)
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
 
 export function specSectionBody(markdown: string, heading: string): string {
   const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -100,6 +132,10 @@ export function validateSpecCompletionBoundary(task: Pick<Task,
     return { ok: false, errors: ['Spec is missing.'] }
   }
 
+  if (currentPlanProcessLeakage(spec)) {
+    errors.push('Spec contains internal recovery/process history. Keep that evidence in task notes or history, and write only the current product boundary here.')
+  }
+
   const brief = task.productBrief
   if (!brief?.userJob?.trim() || !brief?.successMetric?.trim()) {
     errors.push('Product brief must name the user/project job and observable success metric.')
@@ -146,7 +182,10 @@ export function validateSpecCompletionBoundary(task: Pick<Task,
       isFilled(splitOrBlocked) &&
       !NO_SPLIT_OR_BLOCK_PATTERN.test(splitOrBlocked.trim()) &&
       SPLIT_OR_BLOCK_RESOLUTION_PATTERN.test(splitOrBlocked)
-    if (!ownerSetupResolved && !splitOrBlockResolved) {
+    const dependencyAlreadyConfigured =
+      CONFIGURED_DEPENDENCY_PATTERN.test(externalDependencies) &&
+      LIVE_VERIFICATION_PATTERN.test(`${verificationEnvironment}\n${done}`)
+    if (!ownerSetupResolved && !splitOrBlockResolved && !dependencyAlreadyConfigured) {
       errors.push(
         'External dependencies must name the owner/setup action or be split/blocked before implementation.',
       )
@@ -176,6 +215,7 @@ export function extractAcceptanceCriteriaFromSpec(spec: string): Task['acceptanc
       id: `AC-${criteria.length + 1}`,
       description,
       verifiedBy: inferVerificationKind(description),
+      source: 'documented',
       met: false,
     })
   }

@@ -1,6 +1,7 @@
 import type { Task } from '@guildhall/core'
 
-type TaskLike = Pick<Task, 'blockReason' | 'proofRecovery'> & {
+type TaskLike = Pick<Task, 'blockReason'> & {
+  proofRecovery?: { reason?: string }
   runtime?: { proofRecovery?: { reason?: string } }
 }
 

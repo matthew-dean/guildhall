@@ -1,5 +1,23 @@
 import { describe, expect, it } from 'vitest'
-import { buildProjectActionModel } from '../project-action-model.js'
+import { applyRunStatusToStartReadiness, buildProjectActionModel } from '../project-action-model.js'
+
+describe('applyRunStatusToStartReadiness', () => {
+  it('does not leave a saved paused action visible while a run is active', () => {
+    const readiness = applyRunStatusToStartReadiness({
+      canStart: true,
+      code: 'paused_live_work',
+      message: 'The task is paused.',
+      focusTaskId: 'task-1',
+      focusTaskTitle: 'Build Synopsis generation pipeline',
+    }, 'running')
+
+    expect(readiness).toMatchObject({
+      canStart: true,
+      code: 'running',
+      message: 'Guildhall is running "Build Synopsis generation pipeline".',
+    })
+  })
+})
 
 describe('buildProjectActionModel', () => {
   it('normalizes risky start blockers into terse shared actions', () => {
@@ -950,6 +968,42 @@ describe('buildProjectActionModel', () => {
       label: 'Resume',
       startEnabled: true,
       href: '/work?task=contract-task',
+    })
+  })
+
+  it('pins the primary action to the requested task during a one-task run', () => {
+    const model = buildProjectActionModel({
+      startReadiness: {
+        canStart: true,
+        focusTaskId: 'task-broad-genre',
+        focusTaskTitle: 'Build Broad-genre drafting model proof',
+      },
+      tasks: [
+        {
+          id: 'task-synopsis',
+          title: 'Build Synopsis expansion into story records',
+          status: 'in_progress',
+          assignedTo: 'worker-agent',
+          updatedAt: '2026-07-18T14:25:00.000Z',
+        },
+        {
+          id: 'task-broad-genre',
+          title: 'Build Broad-genre drafting model proof',
+          status: 'in_progress',
+          assignedTo: 'worker-agent',
+          updatedAt: '2026-07-18T14:20:00.000Z',
+        },
+      ],
+      runStatus: 'running',
+      runMode: 'one_task',
+    })
+
+    expect(model.primaryAction).toMatchObject({
+      source: 'task',
+      taskId: 'task-broad-genre',
+      label: 'Build Broad-genre drafting model proof',
+      href: '/work?task=task-broad-genre',
+      tone: 'running',
     })
   })
 

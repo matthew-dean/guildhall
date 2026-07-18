@@ -104,7 +104,10 @@ describe('owner input requests', () => {
     })
 
     expect(readProjectSummaryProjection(tasksPath)).toMatchObject({
-      freshness: 'current',
+      // The normalized current queue is committed immediately; the derived
+      // start/next-action projection is refreshed asynchronously from the
+      // owner-input invalidation rather than by a second summary write.
+      freshness: 'stale',
       ownerInput: {
         openCount: 1,
         next: {

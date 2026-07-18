@@ -99,6 +99,52 @@ describe('ProjectsHome', () => {
     expect(fetchMock.mock.calls.map(([input]) => String(input)).some(input => input.startsWith('/api/service?'))).toBe(false)
   })
 
+  it('keeps project loading and unavailable states independent within the fleet response', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      expect(String(input)).toBe('/api/service/projects')
+      return json({
+        pid: 1234,
+        projects: [
+          {
+            id: 'looma-knit',
+            path: '/repo/looma-knit',
+            name: 'Looma + Knit',
+            summary: 'The compact project shell is ready.',
+            projectStatusLoading: true,
+            run: { status: 'running', mode: 'continuous' },
+          },
+          {
+            id: 'fair-labor-license',
+            path: '/repo/fair-labor-license',
+            name: 'Fair Labor License',
+            summary: 'A saved summary exists, but the current projection is unavailable.',
+            projectStatusError: 'The saved project summary is not available yet.',
+            taskCounts: { total: 4, active: 1, draftReview: 0, blocked: 1, done: 1, shelved: 0 },
+            run: { status: 'stopped', mode: 'continuous' },
+          },
+          {
+            id: 'font-something',
+            path: '/repo/font-something',
+            name: 'Font Something',
+            taskCounts: { total: 2, active: 0, draftReview: 0, blocked: 0, done: 2, shelved: 0 },
+            run: { status: 'stopped', mode: 'continuous' },
+          },
+        ],
+      } satisfies ServiceDetail)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(ProjectsHome)
+
+    await screen.findByText('Looma + Knit')
+    expect(screen.getByRole('button', { name: /Looma \+ Knit, still loading project state/i })).toBeTruthy()
+    expect(screen.getByText('Status unavailable')).toBeTruthy()
+    expect(screen.getByText('Stable')).toBeTruthy()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock.mock.calls.map(([input]) => String(input))).not.toContain('/api/service')
+    expect(fetchMock.mock.calls.map(([input]) => String(input)).some(input => input.startsWith('/api/service?projectId='))).toBe(false)
+  })
+
   beforeEach(() => {
     installBrowserFakes()
     setCachedService(null)

@@ -212,8 +212,9 @@ export async function writeProjectRuntimeState(
 ): Promise<ProjectRuntimeState> {
   const path = getProjectRuntimeStatePath(projectRoot)
   const next = normalizeProjectRuntimeState(projectRoot, state)
-  await mkdir(dirname(path), { recursive: true })
-  await writeManagedTextFile(path, `${JSON.stringify(next, null, 2)}\n`)
+  // The compact operational projection is authoritative for status reads.
+  // Publish it before the verbose runtime detail file so a crash cannot leave
+  // the status authority behind an older runtime state.
   updateProjectSummaryProjection(getProjectSystemStatePath(projectRoot, 'TASKS.json'), {
     runtime: {
       status: next.status,
@@ -222,5 +223,7 @@ export async function writeProjectRuntimeState(
       updatedAt: new Date().toISOString(),
     },
   })
+  await mkdir(dirname(path), { recursive: true })
+  await writeManagedTextFile(path, `${JSON.stringify(next, null, 2)}\n`)
   return next
 }

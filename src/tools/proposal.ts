@@ -23,7 +23,7 @@ import { defineTool } from '@guildhall/engine'
 import { z } from 'zod'
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { Task, TaskQueue, PreRejectionCode } from '@guildhall/core'
+import { Task, TaskQueue, PreRejectionCode, type Task as TaskModel } from '@guildhall/core'
 import {
   readProjectStateDatabaseCurrentAuthorityFromTasksPath,
   upsertTaskRuntimeState,
@@ -204,7 +204,7 @@ export async function preRejectTask(input: PreRejectTaskInput): Promise<PreRejec
     }
 
     const now = new Date().toISOString()
-    const nextTask = {
+    const nextTask: TaskModel = {
       ...task,
       status: 'shelved',
       shelveReason: {
@@ -212,14 +212,14 @@ export async function preRejectTask(input: PreRejectTaskInput): Promise<PreRejec
         detail: parsed.detail,
         rejectedBy: parsed.rejectedBy,
         rejectedAt: now,
-        source: 'worker_pre_rejection',
+        source: 'worker_pre_rejection' as const,
         policyApplied: false,
         requeueCount: task.shelveReason?.requeueCount ?? 0,
       },
       updatedAt: now,
       completedAt: now,
     }
-    queue.tasks[idx] = nextTask
+    queue.tasks[idx] = nextTask as typeof queue.tasks[number]
     queue.lastUpdated = now
     if (readProjectStateDatabaseCurrentAuthorityFromTasksPath(parsed.tasksPath) === 'database') {
       const projectRoot = path.isAbsolute(task.projectPath) ? task.projectPath : path.dirname(parsed.tasksPath)

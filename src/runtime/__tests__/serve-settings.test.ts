@@ -9,6 +9,7 @@ import {
   readProjectConfig,
   readWorkspaceConfig,
   registerWorkspace,
+  unregisterWorkspace,
   setProvider,
   updateGlobalConfig,
   writeProjectConfig,
@@ -69,6 +70,12 @@ function scoped(pathname: string): string {
   if (url.pathname === '/api/project' && !url.searchParams.has('compact') && !url.searchParams.has('detail')) {
     url.searchParams.set('detail', 'true')
   }
+  return url.toString()
+}
+
+function scopedDiagnostic(pathname = '/api/project'): string {
+  const url = new URL(scoped(pathname))
+  url.searchParams.set('diagnostic', 'true')
   return url.toString()
 }
 
@@ -229,6 +236,10 @@ async function writeSystemTasks(queue: unknown): Promise<void> {
   }
   await refreshCanonicalSummary()
   await applyCanonicalMigrations()
+  // Migrations are authoritative writes too. Leave the fixture at the same
+  // current-summary boundary that the async projector establishes in a live
+  // service instead of making GETs repair it.
+  await refreshCanonicalSummary()
 }
 
 async function writeSystemText(relativePath: string, content: string): Promise<void> {
@@ -902,11 +913,15 @@ describe('POST /api/project/start', () => {
     expect(migrationsBody.blocked.map((item: { id: string }) => item.id)).toContain('0.8.0/project-state-layout')
 
     const project = await app.fetch(new Request(scoped('/api/project')))
-    expect(project.status).toBe(503)
-    const projectBody = await project.json() as { detailPayload?: Record<string, any> }
-    expect(projectBody.detailPayload).toMatchObject({
-      unavailable: true,
-      requiresRefresh: true,
+    expect(project.status).toBe(200)
+    const projectBody = await project.json() as {
+      id?: string
+      summaryFreshness?: string
+      requiresRefresh?: boolean
+    }
+    expect(projectBody).toMatchObject({
+      id: PROJECT_ID,
+      summaryFreshness: 'missing',
     })
 
     const start = await app.fetch(new Request(scoped('/api/project/start'), { method: 'POST', body: '{}' }))
@@ -1016,10 +1031,11 @@ describe('POST /api/project/start', () => {
     expect(body.items).toEqual([])
   })
 
-  it('includes project start readiness in service summaries so fleet cards inherit start blockers', async () => {
+  it('uses the durable projected readiness in service summaries', async () => {
     registerWorkspace({ id: PROJECT_ID, name: 'Settings Test', path: tmpDir, tags: [] })
     await fs.mkdir(path.join(tmpDir, 'memory'), { recursive: true })
     await fs.writeFile(path.join(tmpDir, 'memory', 'MEMORY.md'), '# Legacy\n', 'utf8')
+    await writeSystemTasks({ version: 1, lastUpdated: new Date().toISOString(), tasks: [] })
     const { app } = buildServeApp({ projectPath: tmpDir })
 
     const service = await app.fetch(new Request('http://localhost/api/service?detail=true'))
@@ -1033,8 +1049,8 @@ describe('POST /api/project/start', () => {
     const project = body.projects?.find(entry => entry.id === PROJECT_ID)
     expect(project?.startReadiness).toMatchObject({
       canStart: false,
-      code: 'required_migration_pending',
-      actionHref: '/migrations',
+      code: 'all_terminal',
+      actionHref: '/work',
     })
   })
 
@@ -1052,11 +1068,15 @@ describe('POST /api/project/start', () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
 
     const project = await app.fetch(new Request(scoped('/api/project')))
-    expect(project.status).toBe(503)
-    const projectBody = await project.json() as { detailPayload?: Record<string, any> }
-    expect(projectBody.detailPayload).toMatchObject({
-      unavailable: true,
-      requiresRefresh: true,
+    expect(project.status).toBe(200)
+    const projectBody = await project.json() as {
+      id?: string
+      summaryFreshness?: string
+      requiresRefresh?: boolean
+    }
+    expect(projectBody).toMatchObject({
+      id: PROJECT_ID,
+      summaryFreshness: 'missing',
     })
 
     const start = await app.fetch(new Request(scoped('/api/project/start'), { method: 'POST', body: '{}' }))
@@ -1136,8 +1156,8 @@ describe('POST /api/project/start', () => {
     expect(body.startReadiness).toMatchObject({
       canStart: false,
       code: 'all_terminal',
-      message: 'All tasks are already finished.',
     })
+    expect(body.startReadiness?.message).toBe('Current work has no runnable work remaining.')
   })
 
   it('returns a no-op start response when all tasks are terminal', async () => {
@@ -1272,7 +1292,8 @@ describe('POST /api/project/start', () => {
     setProvider('anthropic-api', { apiKey: 'sk-ant-test' })
     updateGlobalConfig({ preferredProvider: 'anthropic-api' })
 
-    const { app } = buildServeApp({ projectPath: tmpDir })
+    const { app, refreshProjectProjections } = buildServeApp({ projectPath: tmpDir })
+    await refreshProjectProjections(tmpDir)
     const projectRes = await app.fetch(new Request(scoped('/api/project')))
     expect(projectRes.status).toBe(200)
     const projectBody = await projectRes.json() as {
@@ -1305,10 +1326,7 @@ describe('POST /api/project/start', () => {
         deferredTaskCount: 1,
       },
     })
-    expect(projectBody.startReadiness?.message).toContain('Headless MVP')
-    expect(projectBody.startReadiness?.message).toContain('complete')
-    expect(projectBody.startReadiness?.message).toContain('1 ready')
-    expect(projectBody.startReadiness?.message).toContain('outside this release')
+    expect(projectBody.startReadiness?.message).toBe('Headless MVP has no runnable work remaining.')
     expect(projectBody.actionModel?.primaryAction?.taskId).not.toBe('later-ready')
     expect(projectBody.actionModel?.primaryAction?.label ?? '').not.toContain('Start next release feature')
     expect(projectBody.actionModel?.runControl).toMatchObject({
@@ -1442,16 +1460,28 @@ describe('POST /api/project/start', () => {
     expect(body.orientationSpine?.summary?.topBlocker ?? '').not.toBe('Workspace import is under-scoped.')
   })
 
-  it('materializes explicit task release membership before saved readiness reads', async () => {
+  it('reads explicit task release membership from the durable release envelope', async () => {
     const now = new Date().toISOString()
     await writeSystemTasks({
       version: 1,
       lastUpdated: now,
+      selectedReleaseId: 'headless-mvp',
+      releases: [
+        {
+          id: 'headless-mvp',
+          label: 'Headless MVP',
+          kind: 'release',
+          state: 'active',
+          source: 'release_plan',
+          nodeIds: ['work:current-done'],
+          deferredNodeIds: ['work:later-ready'],
+        },
+      ],
       tasks: [
         {
           id: 'current-done',
           title: 'Finish current release proof',
-          description: 'The inferred selected release work is finished.',
+          description: 'The explicitly selected release work is finished.',
           domain: 'core',
           status: 'done',
           releaseIds: ['headless-mvp'],
@@ -1473,7 +1503,7 @@ describe('POST /api/project/start', () => {
         {
           id: 'later-ready',
           title: 'Start next release feature',
-          description: 'This is outside the inferred selected release.',
+          description: 'This is outside the explicitly selected release.',
           domain: 'core',
           status: 'ready',
           scope: 'later',
@@ -1507,9 +1537,15 @@ describe('POST /api/project/start', () => {
     expect(projectBody.startReadiness).toMatchObject({
       canStart: false,
       code: 'all_terminal',
+      executionScope: {
+        id: 'headless-mvp',
+        label: 'Headless MVP',
+        kind: 'release',
+        taskCount: 1,
+        deferredTaskCount: 1,
+      },
     })
-    expect(projectBody.startReadiness?.message).toContain('headless-mvp is complete')
-    expect(projectBody.startReadiness?.message).toContain('1 ready task remains outside this release')
+    expect(projectBody.startReadiness?.message).toBe('Headless MVP has no runnable work remaining.')
     expect(projectBody.actionModel?.runControl?.startEnabled).toBe(false)
 
     const startRes = await app.fetch(
@@ -1865,7 +1901,7 @@ describe('POST /api/project/start', () => {
     expect(readiness.diagnostics?.proofMissingDoneTasks?.map(task => task.id)).toEqual(['real-proof-gap'])
     expect(readiness.diagnostics?.totals?.proofEvidenceBlockingCount).toBe(1)
 
-    const projectRes = await app.fetch(new Request(scoped('/api/project')))
+    const projectRes = await app.fetch(new Request(scopedDiagnostic('/api/project')))
     expect(projectRes.status).toBe(200)
     const projectBody = await projectRes.json() as {
       startReadiness?: {
@@ -1884,6 +1920,79 @@ describe('POST /api/project/start', () => {
     })
     expect(projectBody.startReadiness?.message).toContain('Prove world-state continuity')
     expect(projectBody.startReadiness?.message).not.toContain('Shape fixture')
+  })
+
+  it('reopens script-only work when review proof exists but executable proof is missing', async () => {
+    const now = new Date().toISOString()
+    await writeSystemTasks({
+      version: 1,
+      lastUpdated: now,
+      selectedReleaseId: 'headless-mvp',
+      releases: [
+        {
+          id: 'headless-mvp',
+          label: 'Headless MVP',
+          kind: 'release',
+          state: 'active',
+          source: 'release_plan',
+          proofStyle: 'script_only',
+          nodeIds: ['work:completed-with-review-only-proof'],
+          deferredNodeIds: [],
+        },
+      ],
+      tasks: [
+        {
+          id: 'completed-with-review-only-proof',
+          title: 'Run the headless synopsis proof',
+          description: 'A review exists, but this script-only release still needs executable proof.',
+          domain: 'core',
+          status: 'done',
+          releaseIds: ['headless-mvp'],
+          proofPaths: [{
+            kind: 'review',
+            source: 'inferred',
+            status: 'verified',
+            expectedEvidence: ['The implementation boundary is coherent.'],
+          }],
+          priority: 'normal',
+          acceptanceCriteria: [],
+          outOfScope: [],
+          dependsOn: [],
+          notes: [],
+          gateResults: [],
+          reviewVerdicts: [],
+          adjudications: [],
+          escalations: [],
+          agentIssues: [],
+          revisionCount: 0,
+          remediationAttempts: 0,
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+    })
+
+    setProvider('anthropic-api', { apiKey: 'sk-ant-test' })
+    updateGlobalConfig({ preferredProvider: 'anthropic-api' })
+    writeProjectConfig(tmpDir, { ...readProjectConfig(tmpDir), preferredProvider: 'anthropic-api' })
+    await applyCanonicalMigrations()
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const projectRes = await app.fetch(new Request(scoped('/api/project')))
+    expect(projectRes.status).toBe(200)
+    const projectBody = await projectRes.json() as {
+      startReadiness?: { canStart?: boolean; code?: string; focusTaskId?: string }
+    }
+    expect(projectBody.startReadiness).toMatchObject({
+      canStart: false,
+      code: 'proof_evidence_missing',
+      focusTaskId: 'completed-with-review-only-proof',
+    })
+
+    const startRes = await app.fetch(new Request(scoped('/api/project/start'), { method: 'POST', body: '{}' }))
+    expect(startRes.status).toBe(200)
+    const tasks = await readTasks(tmpDir)
+    expect(tasks.find(task => task.id === 'completed-with-review-only-proof')).toMatchObject({ status: 'in_progress' })
   })
 
   it('treats archived, cancelled, and pending PR tasks as terminal for Start readiness', async () => {
@@ -1994,9 +2103,7 @@ describe('POST /api/project/start', () => {
       canStart: false,
       code: 'all_terminal',
     })
-    expect(projectBody.startReadiness?.message).toContain('1 pending PR')
-    expect(projectBody.startReadiness?.message).toContain('1 archived')
-    expect(projectBody.startReadiness?.message).toContain('1 cancelled')
+    expect(projectBody.startReadiness?.message).toBe('Current work has no runnable work remaining.')
 
     const startRes = await app.fetch(
       new Request(scoped('/api/project/start'), { method: 'POST', body: '{}' }),
@@ -2156,9 +2263,10 @@ describe('POST /api/project/start', () => {
           },
         ],
     })
-    const { app } = buildServeApp({ projectPath: tmpDir })
+    const { app, refreshProjectProjections } = buildServeApp({ projectPath: tmpDir })
+    await refreshProjectProjections(tmpDir)
 
-    const projectRes = await app.fetch(new Request(scoped('/api/project')))
+    const projectRes = await app.fetch(new Request(scopedDiagnostic('/api/project')))
     const projectBody = (await projectRes.json()) as {
       startReadiness?: { canStart?: boolean; code?: string; actionHref?: string; message?: string }
     }
@@ -2230,7 +2338,7 @@ describe('POST /api/project/start', () => {
     })
     const { app } = buildServeApp({ projectPath: tmpDir })
 
-    const projectRes = await app.fetch(new Request(scoped('/api/project')))
+    const projectRes = await app.fetch(new Request(scopedDiagnostic('/api/project')))
     const projectBody = (await projectRes.json()) as {
       startReadiness?: { canStart?: boolean; code?: string; actionHref?: string; message?: string }
       orientationSpine?: { summary?: { headline?: string; topBlocker?: string; nextAction?: string; includedCount?: number; progress?: { total?: number; done?: number } } }
@@ -2247,7 +2355,7 @@ describe('POST /api/project/start', () => {
       includedCount: 1,
       progress: { total: 1, done: 0 },
     })
-    const overviewProjectRes = await app.fetch(new Request(scoped('/api/project?surface=overview')))
+    const overviewProjectRes = await app.fetch(new Request(scopedDiagnostic('/api/project?surface=overview')))
     const overviewProjectBody = (await overviewProjectRes.json()) as {
       orientationSpine?: { summary?: { nextAction?: string } }
     }
@@ -2262,7 +2370,7 @@ describe('POST /api/project/start', () => {
     expect(startBody.actionHref).toBe('/task/task-import-1')
   })
 
-  it('keeps shaped import drafts from making selected release Start look runnable', async () => {
+  it('lets selected release Start advance an exploring import task before raw drafts', async () => {
     const now = new Date().toISOString()
     await writeSystemTasks({
         version: 1,
@@ -2432,25 +2540,16 @@ describe('POST /api/project/start', () => {
     updateGlobalConfig({ preferredProvider: 'anthropic-api' })
     const { app } = buildServeApp({ projectPath: tmpDir })
 
-    const projectRes = await app.fetch(new Request(scoped('/api/project')))
+    const projectRes = await app.fetch(new Request(scopedDiagnostic('/api/project')))
     const projectBody = (await projectRes.json()) as {
       startReadiness?: { canStart?: boolean; code?: string; actionHref?: string; message?: string }
     }
-    expect(projectBody.startReadiness).toMatchObject({
-      canStart: false,
-      code: 'imported_scope_shaping',
-      actionHref: '/task/task-import-waiting',
-    })
-    expect(projectBody.startReadiness?.message).toContain('Current scoped work still needs source-backed shaping')
-    expect(projectBody.startReadiness?.message).toContain('Build evaluation command fixtures')
+    expect(projectBody.startReadiness).toMatchObject({ canStart: true })
 
     const startRes = await app.fetch(
       new Request(scoped('/api/project/start'), { method: 'POST', body: '{}' }),
     )
-    expect(startRes.status).toBe(400)
-    const startBody = (await startRes.json()) as { code?: string; actionHref?: string }
-    expect(startBody.code).toBe('imported_scope_shaping')
-    expect(startBody.actionHref).toBe('/task/task-import-waiting')
+    expect(startRes.status).toBe(200)
   })
 
   it('blocks Start when ready tasks still need brief cleanup', async () => {
@@ -2483,7 +2582,7 @@ describe('POST /api/project/start', () => {
         ],
       })
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const projectRes = await app.fetch(new Request(scoped('/api/project')))
+    const projectRes = await app.fetch(new Request(scopedDiagnostic('/api/project')))
     const projectBody = (await projectRes.json()) as {
       startReadiness?: { canStart?: boolean; code?: string; actionHref?: string; message?: string }
     }
@@ -2791,7 +2890,7 @@ describe('POST /api/project/start', () => {
     })
 
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const projectRes = await app.fetch(new Request(scoped('/api/project')))
+    const projectRes = await app.fetch(new Request(scopedDiagnostic('/api/project')))
     const projectBody = (await projectRes.json()) as {
       startReadiness?: { canStart?: boolean; code?: string; actionHref?: string; message?: string; focusKind?: string }
     }
@@ -2888,7 +2987,7 @@ describe('POST /api/project/start', () => {
       code: 'owner_input_required',
       actionHref: `/thread?thread=${request.boundedChatSessionId}`,
     })
-    expect(body.error).toContain('Clarify Needs answer first needs your answer')
+    expect(body.error).toContain('An owner decision needs your answer before work can continue')
   })
 
   it('rejects fanout without worktree isolation with a clear error', async () => {
@@ -3339,8 +3438,37 @@ describe('GET /api/stale-server', () => {
 })
 
 describe('GET /api/service', () => {
-  it('serves an explicit summary-unavailable shell until the projection migration runs', async () => {
+  it('isolates an unavailable registered project from the fleet shell', async () => {
+    const brokenProjectPath = await fs.mkdtemp(path.join(tmpDir, 'broken-project-'))
+    await fs.writeFile(path.join(brokenProjectPath, 'guildhall.yaml'), 'id: [not valid\n', 'utf8')
     registerWorkspace({ id: PROJECT_ID, name: 'Settings Test', path: tmpDir, tags: [] })
+    registerWorkspace({ id: 'broken-settings-project', name: 'Broken Settings Project', path: brokenProjectPath, tags: [] })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    try {
+      const res = await app.fetch(new Request('http://localhost/api/service/projects'))
+      expect(res.status).toBe(200)
+      const body = (await res.json()) as { projects?: Array<Record<string, any>> }
+      expect(body.projects).toHaveLength(2)
+      expect(body.projects?.find(item => item.id === PROJECT_ID)).toMatchObject({
+        id: PROJECT_ID,
+        projectStatusLoading: false,
+      })
+      expect(body.projects?.find(item => item.id === 'broken-settings-project')).toMatchObject({
+        id: 'broken-settings-project',
+        projectStatusLoading: false,
+        summaryFreshness: 'missing',
+        projectStatusError: expect.stringContaining('saved fleet summary'),
+      })
+    } finally {
+      unregisterWorkspace(PROJECT_ID)
+      unregisterWorkspace('broken-settings-project')
+    }
+  })
+
+  it('serves the current fleet shell without reconstructing project detail', async () => {
+    registerWorkspace({ id: PROJECT_ID, name: 'Settings Test', path: tmpDir, tags: [] })
+    await writeSystemTasks({ version: 1, lastUpdated: new Date().toISOString(), tasks: [] })
     const { app } = buildServeApp({ projectPath: tmpDir })
 
     const res = await app.fetch(new Request('http://localhost/api/service/projects'))
@@ -3352,16 +3480,17 @@ describe('GET /api/service', () => {
       name: 'Settings Test',
       path: tmpDir,
       projectStatusLoading: false,
-      projectStatusError: expect.stringContaining('project summary'),
+      summaryFreshness: 'current',
     })
     expect(project?.migrationSummary).toBeUndefined()
-    expect(project?.actionModel).toBeUndefined()
-    expect(project?.startReadiness).toBeUndefined()
+    expect(project?.actionModel).toMatchObject({
+      runControl: expect.any(Object),
+    })
+    expect(project?.startReadiness).toBeDefined()
   })
 
   it('serves a current per-project summary without entering full service reconstruction', async () => {
     registerWorkspace({ id: PROJECT_ID, name: 'Settings Test', path: tmpDir, tags: [] })
-    const tasksPath = getProjectSystemStatePath(tmpDir, 'TASKS.json')
     const queue = {
       version: 1,
       lastUpdated: '2026-07-14T12:00:00.000Z',
@@ -3385,12 +3514,8 @@ describe('GET /api/service', () => {
       }],
     }
     await writeSystemTasks(queue)
-    writeProjectSummaryProjectionFromUnknownQueue(tasksPath, {
-      projectId: PROJECT_ID,
-      queue,
-      generatedAt: '2026-07-14T12:00:00.000Z',
-    })
-    const { app } = buildServeApp({ projectPath: tmpDir })
+    const { app, refreshProjectProjections } = buildServeApp({ projectPath: tmpDir })
+    await refreshProjectProjections(tmpDir)
 
     const res = await app.fetch(new Request(scoped('/api/service')))
     expect(res.status).toBe(200)
@@ -3408,7 +3533,7 @@ describe('GET /api/service', () => {
     expect(project?.migrationSummary).toBeUndefined()
   })
 
-  it('includes migration summary counts for registered projects', async () => {
+  it('keeps migration detail on the owning project endpoint instead of fleet cards', async () => {
     registerWorkspace({ id: PROJECT_ID, name: 'Settings Test', path: tmpDir, tags: [] })
     await writeSystemText('PROGRESS.md', '# Progress\n')
     const { app } = buildServeApp({ projectPath: tmpDir })
@@ -3417,12 +3542,17 @@ describe('GET /api/service', () => {
     expect(res.status).toBe(200)
     const body = (await res.json()) as { projects?: Array<Record<string, any>> }
     const project = body.projects?.find(item => item.id === PROJECT_ID)
-    expect(project?.migrationSummary).toMatchObject({
-      pending: expect.any(Number),
-      blocked: expect.any(Number),
-      applied: expect.any(Number),
+    expect(project?.migrationSummary).toBeUndefined()
+
+    const migrations = await app.fetch(new Request(scoped('/api/project/migrations')))
+    expect(migrations.status).toBe(200)
+    const migrationsBody = await migrations.json() as Record<string, any>
+    expect(migrationsBody).toMatchObject({
+      pending: expect.any(Array),
+      blocked: expect.any(Array),
+      applied: expect.any(Array),
     })
-    expect(project?.migrationSummary.pending).toBeGreaterThan(0)
+    expect(migrationsBody.pending.length).toBeGreaterThan(0)
   })
 })
 
@@ -3912,7 +4042,7 @@ describe('Workspace Import review endpoints', () => {
     await applyCanonicalMigrations()
 
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const res = await app.fetch(new Request(scoped('/api/project')))
+    const res = await app.fetch(new Request(scopedDiagnostic('/api/project')))
     const body = await res.json() as {
       startReadiness?: { code?: string; message?: string; focusTaskId?: string }
       orientationSpine?: { summary?: { selectedScopeLabel?: string | null } }
@@ -4046,7 +4176,7 @@ describe('Workspace Import review endpoints', () => {
     await applyCanonicalMigrations()
 
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const res = await app.fetch(new Request(scoped('/api/project')))
+    const res = await app.fetch(new Request(scopedDiagnostic('/api/project')))
     const body = await res.json() as {
       startReadiness?: { code?: string; message?: string; actionHref?: string; focusKind?: string }
       orientationSpine?: { sourceHealth?: { conflicts?: number }; summary?: { topBlocker?: string | null } }
@@ -4189,7 +4319,7 @@ describe('Workspace Import review endpoints', () => {
     })
 
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const res = await app.fetch(new Request(scoped('/api/project')))
+    const res = await app.fetch(new Request(scopedDiagnostic('/api/project')))
     const body = await res.json() as {
       startReadiness?: { code?: string; message?: string; focusKind?: string; focusTaskTitle?: string }
       orientationSpine?: {
@@ -5139,7 +5269,7 @@ describe('Workspace Import review endpoints', () => {
     expect(goalsState.detected).toMatchObject({ taskCount: 1, currentTaskCount: 1 })
   })
 
-  it('blocks all-terminal readiness when the saved import is under-scoped for the current docs', async () => {
+  it('keeps durable all-terminal readiness when fresher docs would require a new import', async () => {
     await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
     await fs.writeFile(
       path.join(tmpDir, 'docs', 'harness', 'implementation-roadmap.md'),
@@ -5194,7 +5324,7 @@ describe('Workspace Import review endpoints', () => {
     )
 
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const res = await app.fetch(new Request(scoped('/api/project')))
+    const res = await app.fetch(new Request(scopedDiagnostic('/api/project')))
     expect(res.status).toBe(200)
     const body = await res.json() as {
       startReadiness?: { canStart?: boolean; code?: string; message?: string; actionHref?: string }
@@ -5202,11 +5332,9 @@ describe('Workspace Import review endpoints', () => {
     }
     expect(body.startReadiness).toMatchObject({
       canStart: false,
-      code: 'workspace_import_refresh_needed',
-      actionHref: '/workspace-import',
+      code: 'all_terminal',
     })
-    expect(body.startReadiness?.message).toContain('under-scoped')
-    expect(body.startReadiness?.message).toContain('Define fixture, expected-record, prototype-run, and evaluation schemas.')
+    expect(body.startReadiness?.message).toBe('All tasks are already finished.')
     expect(body.orientationSpine?.summary).toMatchObject({
       headline: 'Current scope is in progress.',
       topBlocker: null,
@@ -5214,7 +5342,7 @@ describe('Workspace Import review endpoints', () => {
     })
   })
 
-  it('blocks readiness when a saved import spec covers only part of the live detector task set', async () => {
+  it('does not replace durable readiness with a partial live detector scan', async () => {
     await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
     await fs.writeFile(
       path.join(tmpDir, 'docs', 'harness', 'implementation-roadmap.md'),
@@ -5272,18 +5400,16 @@ describe('Workspace Import review endpoints', () => {
     )
 
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const res = await app.fetch(new Request(scoped('/api/project')))
+    const res = await app.fetch(new Request(scopedDiagnostic('/api/project')))
     expect(res.status).toBe(200)
     const body = await res.json() as {
       startReadiness?: { canStart?: boolean; code?: string; message?: string; actionHref?: string }
     }
     expect(body.startReadiness).toMatchObject({
       canStart: false,
-      code: 'workspace_import_refresh_needed',
-      actionHref: '/workspace-import',
+      code: 'all_terminal',
     })
-    expect(body.startReadiness?.message).toContain('under-scoped')
-    expect(body.startReadiness?.message).toContain('Add the first tiny fiction fixture and human-authored expected records.')
+    expect(body.startReadiness?.message).toBe('All tasks are already finished.')
   })
 
   it('allows materialized current-scope work to continue even when the saved import is under-scoped', async () => {
@@ -5454,7 +5580,7 @@ describe('Workspace Import review endpoints', () => {
     )
 
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const res = await app.fetch(new Request(scoped('/api/project')))
+    const res = await app.fetch(new Request(scopedDiagnostic('/api/project')))
     expect(res.status).toBe(200)
     const body = await res.json() as {
       startReadiness?: { canStart?: boolean; code?: string; message?: string; actionHref?: string }
@@ -5468,7 +5594,7 @@ describe('Workspace Import review endpoints', () => {
     expect(body.startReadiness?.message ?? '').not.toContain('under-scoped')
   })
 
-  it('blocks readiness when spec-backed capability docs still have no linked imported work', async () => {
+  it('does not replace durable readiness with unlinked capability docs', async () => {
     await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
     await fs.mkdir(path.join(tmpDir, 'docs', 'specs'), { recursive: true })
     await fs.writeFile(
@@ -5537,18 +5663,16 @@ describe('Workspace Import review endpoints', () => {
     )
 
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const res = await app.fetch(new Request(scoped('/api/project')))
+    const res = await app.fetch(new Request(scopedDiagnostic('/api/project')))
     expect(res.status).toBe(200)
     const body = await res.json() as {
       startReadiness?: { canStart?: boolean; code?: string; message?: string; actionHref?: string }
     }
     expect(body.startReadiness).toMatchObject({
       canStart: false,
-      code: 'workspace_import_refresh_needed',
-      actionHref: '/workspace-import',
+      code: 'all_terminal',
     })
-    expect(body.startReadiness?.message).toContain('structurally incomplete')
-    expect(body.startReadiness?.message).toContain('Spec: World And Object Continuity')
+    expect(body.startReadiness?.message).toBe('All tasks are already finished.')
   })
 
   it('blocks Start when an imported contract task has a hollow worker handoff', async () => {
@@ -5615,7 +5739,7 @@ describe('Workspace Import review endpoints', () => {
     )
 
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const res = await app.fetch(new Request(scoped('/api/project')))
+    const res = await app.fetch(new Request(scopedDiagnostic('/api/project')))
     expect(res.status).toBe(200)
     const body = await res.json() as {
       startReadiness?: { canStart?: boolean; code?: string; message?: string; actionHref?: string; focusKind?: string }
@@ -6151,7 +6275,7 @@ describe('Workspace Import review endpoints', () => {
     expect(body.startReadiness?.message ?? '').not.toContain('World And Object Continuity')
   })
 
-  it('does not let archived stale imports satisfy workspace-import coverage', async () => {
+  it('does not let archived stale imports replace durable all-terminal readiness', async () => {
     await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
     await fs.writeFile(
       path.join(tmpDir, 'docs', 'harness', 'implementation-roadmap.md'),
@@ -6223,18 +6347,16 @@ describe('Workspace Import review endpoints', () => {
     )
 
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const res = await app.fetch(new Request(scoped('/api/project')))
+    const res = await app.fetch(new Request(scopedDiagnostic('/api/project')))
     expect(res.status).toBe(200)
     const body = await res.json() as {
       startReadiness?: { canStart?: boolean; code?: string; message?: string; actionHref?: string }
     }
     expect(body.startReadiness).toMatchObject({
       canStart: false,
-      code: 'workspace_import_refresh_needed',
-      actionHref: '/workspace-import',
+      code: 'all_terminal',
     })
-    expect(body.startReadiness?.message).toContain('under-scoped')
-    expect(body.startReadiness?.message).toContain('Add the first tiny fiction fixture and human-authored expected records.')
+    expect(body.startReadiness?.message).toBe('No actionable tasks remain: 0 done, 0 blocked, 0 shelved, 0 pending PR, 1 archived, 0 cancelled.')
   })
 
   it('returns approved import context from saved workspace goals state', async () => {
@@ -6415,7 +6537,7 @@ describe('Workspace Import review endpoints', () => {
     expect(body.detected?.context).toEqual(body.parsed?.context)
   })
 
-  it('treats legacy saved structural import state as stale and blocks start until the import is refreshed', async () => {
+  it('keeps durable all-terminal readiness when legacy structural import state is stale', async () => {
     await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
     await fs.writeFile(
       path.join(tmpDir, 'docs', 'harness', 'architecture-notes.md'),
@@ -6507,7 +6629,7 @@ describe('Workspace Import review endpoints', () => {
     })
 
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const res = await app.fetch(new Request(scoped('/api/project')))
+    const res = await app.fetch(new Request(scopedDiagnostic('/api/project')))
     expect(res.status).toBe(200)
     const body = await res.json() as {
       startReadiness?: { canStart?: boolean; code?: string; message?: string; actionHref?: string }
@@ -6515,11 +6637,9 @@ describe('Workspace Import review endpoints', () => {
     }
     expect(body.startReadiness).toMatchObject({
       canStart: false,
-      code: 'workspace_import_refresh_needed',
-      actionHref: '/workspace-import',
+      code: 'all_terminal',
     })
-    expect(body.startReadiness?.message).toContain('structural project records')
-    expect(body.startReadiness?.message).toContain('Book brief')
+    expect(body.startReadiness?.message).toBe('All tasks are already finished.')
     expect(body.orientationSpine?.summary).toMatchObject({
       headline: 'Current scope is in progress.',
       topBlocker: null,
@@ -6527,7 +6647,7 @@ describe('Workspace Import review endpoints', () => {
     })
   })
 
-  it('does not let shelved imported tasks satisfy current-scope coverage when docs still mark them current', async () => {
+  it('does not let shelved imported tasks replace durable all-terminal readiness', async () => {
     await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
     await fs.writeFile(
       path.join(tmpDir, 'docs', 'harness', 'implementation-roadmap.md'),
@@ -6606,17 +6726,16 @@ describe('Workspace Import review endpoints', () => {
     )
 
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const res = await app.fetch(new Request(scoped('/api/project')))
+    const res = await app.fetch(new Request(scopedDiagnostic('/api/project')))
     expect(res.status).toBe(200)
     const body = await res.json() as {
       startReadiness?: { canStart?: boolean; code?: string; message?: string; actionHref?: string }
     }
     expect(body.startReadiness).toMatchObject({
       canStart: false,
-      code: 'workspace_import_refresh_needed',
-      actionHref: '/workspace-import',
+      code: 'all_terminal',
     })
-    expect(body.startReadiness?.message).toContain('Add the first tiny fiction fixture and human-authored expected records.')
+    expect(body.startReadiness?.message).toBe('No actionable tasks remain: 0 done, 0 blocked, 1 shelved, 0 pending PR, 0 archived, 0 cancelled.')
   })
 
   it('does not treat current-stage success gates as missing deliverables ahead of real missing deliverables', async () => {
@@ -6812,7 +6931,7 @@ describe('Workspace Import review endpoints', () => {
     expect(body.startReadiness?.message ?? '').not.toContain('Docusaurus docs build cleanly')
   })
 
-  it('blocks start when the saved approved current slice still contains stale imported work that live docs no longer mark current', async () => {
+  it('keeps the durable task blocker when saved current work is stale relative to live docs', async () => {
     await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
     await fs.writeFile(
       path.join(tmpDir, 'docs', 'harness', 'implementation-roadmap.md'),
@@ -6917,18 +7036,19 @@ describe('Workspace Import review endpoints', () => {
     )
 
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const res = await app.fetch(new Request(scoped('/api/project')))
+    const res = await app.fetch(new Request(scopedDiagnostic('/api/project')))
     expect(res.status).toBe(200)
     const body = await res.json() as {
       startReadiness?: { canStart?: boolean; code?: string; message?: string; actionHref?: string }
     }
     expect(body.startReadiness).toMatchObject({
       canStart: false,
-      code: 'workspace_import_refresh_needed',
-      actionHref: '/workspace-import',
+      code: 'no_unattended_progress',
+      actionHref: '/work?task=imported-current',
+      focusTaskId: 'imported-current',
     })
-    expect(body.startReadiness?.message).toContain('live docs no longer do')
-    expect(body.startReadiness?.message).toContain('Implement fixture-and-expected-record schemas (from schema-contract-roadmap)')
+    expect(body.startReadiness?.message).toContain('Define fixture, expected-record, prototype-run, and evaluation schemas.')
+    expect(body.startReadiness?.message).not.toContain('live docs no longer do')
   })
 
   it('does not treat a repaired materialized import title as stale just because saved importer YAML is cropped', async () => {
@@ -7034,10 +7154,11 @@ describe('Workspace Import review endpoints', () => {
     }
     expect(body.startReadiness?.code).not.toBe('workspace_import_refresh_needed')
     expect(body.startReadiness?.message).not.toContain('live docs no longer do')
-    expect(body.startReadiness?.message).not.toContain(croppedTitle)
+    expect(body.startReadiness?.message).toContain(fullTitle)
+    expect(body.startReadiness?.message).not.toBe(`"${croppedTitle}" is ready to run.`)
   })
 
-  it('blocks readiness when saved importer tasks only survive as brief input or structural context in the live docs', async () => {
+  it('keeps durable all-terminal readiness when importer tasks only survive as context in live docs', async () => {
     await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
     await fs.writeFile(
       path.join(tmpDir, 'docs', 'harness', 'implementation-roadmap.md'),
@@ -7151,21 +7272,19 @@ describe('Workspace Import review endpoints', () => {
     )
 
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const res = await app.fetch(new Request(scoped('/api/project')))
+    const res = await app.fetch(new Request(scopedDiagnostic('/api/project')))
     expect(res.status).toBe(200)
     const body = await res.json() as {
       startReadiness?: { canStart?: boolean; code?: string; message?: string; actionHref?: string }
     }
     expect(body.startReadiness).toMatchObject({
       canStart: false,
-      code: 'workspace_import_refresh_needed',
-      actionHref: '/workspace-import',
+      code: 'all_terminal',
     })
-    expect(body.startReadiness?.message).toContain('only as structural context or brief input')
-    expect(body.startReadiness?.message).toContain('Author defines book intent, genre/form expectations, themes, and voice.')
+    expect(body.startReadiness?.message).toBe('No actionable tasks remain: 0 done, 0 blocked, 1 shelved, 0 pending PR, 0 archived, 0 cancelled.')
   })
 
-  it('surfaces workspace-import refresh ahead of draft shaping when current docs outrun the approved slice', async () => {
+  it('keeps durable draft shaping ahead of any live-doc refresh scan', async () => {
     await fs.mkdir(path.join(tmpDir, 'docs', 'harness'), { recursive: true })
     await fs.writeFile(
       path.join(tmpDir, 'docs', 'harness', 'implementation-roadmap.md'),
@@ -7266,18 +7385,18 @@ describe('Workspace Import review endpoints', () => {
     )
 
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const res = await app.fetch(new Request(scoped('/api/project')))
+    const res = await app.fetch(new Request(scopedDiagnostic('/api/project')))
     expect(res.status).toBe(200)
     const body = await res.json() as {
       startReadiness?: { canStart?: boolean; code?: string; message?: string; actionHref?: string }
     }
     expect(body.startReadiness).toMatchObject({
       canStart: false,
-      code: 'workspace_import_refresh_needed',
-      actionHref: '/workspace-import',
+      code: 'imported_scope_shaping',
+      actionHref: '/task/task-import-current',
     })
-    expect(body.startReadiness?.message).toContain('outside the approved current scope')
-    expect(body.startReadiness?.message).not.toContain('still need source-backed shaping')
+    expect(body.startReadiness?.message).toContain('source-backed shaping')
+    expect(body.startReadiness?.message).not.toContain('outside the approved current scope')
   })
 
   it('status does not parse a completed importer task spec as current saved import state', async () => {
@@ -8280,7 +8399,7 @@ describe('GET /api/project — bootstrap status', () => {
     const { app, refreshProjectProjections } = buildServeApp({ projectPath: tmpDir })
     await refreshProjectProjections(tmpDir)
 
-    const res = await app.fetch(new Request(scoped('/api/project')))
+    const res = await app.fetch(new Request(scopedDiagnostic('/api/project')))
     expect(res.status).toBe(200)
     const body = (await res.json()) as {
       startReadiness?: { canStart?: boolean; actionHref?: string; message?: string }
@@ -8325,7 +8444,7 @@ describe('GET /api/project — bootstrap status', () => {
     const { app, refreshProjectProjections } = buildServeApp({ projectPath: tmpDir })
     await refreshProjectProjections(tmpDir)
 
-    const res = await app.fetch(new Request(scoped('/api/project')))
+    const res = await app.fetch(new Request(scopedDiagnostic('/api/project')))
     expect(res.status).toBe(200)
     const body = (await res.json()) as {
       startReadiness?: { canStart?: boolean; actionHref?: string; message?: string }
@@ -8377,7 +8496,7 @@ describe('GET /api/project — bootstrap status', () => {
     updateGlobalConfig({ preferredProvider: 'anthropic-api' })
     const { app } = buildServeApp({ projectPath: tmpDir })
 
-    const res = await app.fetch(new Request(scoped('/api/project')))
+    const res = await app.fetch(new Request(scopedDiagnostic('/api/project')))
     expect(res.status).toBe(200)
     const body = (await res.json()) as {
       startReadiness?: { canStart?: boolean; actionHref?: string; message?: string }
@@ -8439,7 +8558,7 @@ describe('GET /api/project — bootstrap status', () => {
     updateGlobalConfig({ preferredProvider: 'anthropic-api' })
     const { app } = buildServeApp({ projectPath: tmpDir })
 
-    const res = await app.fetch(new Request(scoped('/api/project')))
+    const res = await app.fetch(new Request(scopedDiagnostic('/api/project')))
     expect(res.status).toBe(200)
     const body = (await res.json()) as {
       startReadiness?: {
@@ -8495,7 +8614,7 @@ describe('GET /api/project — bootstrap status', () => {
     await writeSystemTasks({ version: 1, lastUpdated: new Date().toISOString(), tasks: [] })
     const { app } = buildServeApp({ projectPath: tmpDir })
 
-    const res = await app.fetch(new Request(scoped('/api/project')))
+    const res = await app.fetch(new Request(scopedDiagnostic('/api/project')))
     expect(res.status).toBe(200)
     const body = (await res.json()) as {
       bootstrapStatus?: { success?: boolean; steps?: Array<{ command?: string; result?: string }> }
@@ -8569,7 +8688,8 @@ describe('GET /api/project — bootstrap status', () => {
     process.env.GUILDHALL_MEMORY_SEMANTIC_RECALL = '1'
     process.env.GUILDHALL_MEMORY_OBSERVATIONAL = '1'
     await writeSystemTasks({ version: 1, lastUpdated: new Date().toISOString(), tasks: [] })
-    const { app } = buildServeApp({ projectPath: tmpDir })
+    const { app, refreshProjectProjections } = buildServeApp({ projectPath: tmpDir })
+    await refreshProjectProjections(tmpDir)
 
     const projectRes = await app.fetch(new Request(scoped('/api/project')))
     expect(projectRes.status).toBe(200)
@@ -8658,7 +8778,7 @@ describe('GET /api/project — bootstrap status', () => {
 
     await writeSystemTasks({ version: 1, lastUpdated: new Date().toISOString(), tasks: [] })
     const { app } = buildServeApp({ projectPath: tmpDir })
-    const res = await app.fetch(new Request(scoped('/api/project')))
+    const res = await app.fetch(new Request(scopedDiagnostic('/api/project')))
     expect(res.status).toBe(200)
     const body = (await res.json()) as {
       structuralMapReview?: {
@@ -8850,6 +8970,82 @@ describe('GET /api/project — bootstrap status', () => {
     if (!queue) throw new Error('Missing canonical SQLite task queue')
     expect(queue.selectedReleaseId).toBe('release-2')
     expect(queue.releases?.map(release => release.id)).toEqual(['release-1', 'release-2'])
+  })
+
+  it('ships a selected release through the shared readiness boundary', async () => {
+    await writeSystemTasks({
+      version: 1,
+      lastUpdated: '2026-06-01T12:00:00.000Z',
+      selectedReleaseId: 'release-1',
+      releases: [{
+        id: 'release-1',
+        label: 'Headless MVP',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        proofStyle: 'script_only',
+      }],
+      tasks: [{
+        id: 'task-1',
+        title: 'Run headless proof',
+        status: 'done',
+        completedAt: '2026-06-01T12:00:00.000Z',
+        updatedAt: '2026-06-01T12:00:00.000Z',
+        createdAt: '2026-06-01T12:00:00.000Z',
+        releaseIds: ['release-1'],
+        proofPaths: [{ kind: 'command', source: 'documented', command: 'pnpm test' }],
+        gateResults: [{ status: 'passed', command: 'pnpm test', checkedAt: '2026-06-01T12:00:00.000Z' }],
+      }],
+    })
+    await applyCanonicalMigrations()
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const close = await app.fetch(new Request(scoped('/api/project/release/close'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ releaseId: 'release-1' }),
+    }))
+
+    expect(close.status).toBe(200)
+    expect(await close.json()).toMatchObject({ ok: true, release: { id: 'release-1', state: 'shipped' } })
+    const queue = readProjectStateDatabaseQueueDefinition(getProjectSystemStatePath(tmpDir, 'TASKS.json'))
+    expect(queue?.releases?.find(release => release.id === 'release-1')?.state).toBe('shipped')
+
+    const repeat = await app.fetch(new Request(scoped('/api/project/release/close'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ releaseId: 'release-1' }),
+    }))
+    expect(repeat.status).toBe(200)
+    expect(await repeat.json()).toMatchObject({ ok: true, alreadyShipped: true })
+  })
+
+  it('does not ship a release with unfinished work', async () => {
+    await writeSystemTasks({
+      version: 1,
+      lastUpdated: '2026-06-01T12:00:00.000Z',
+      selectedReleaseId: 'release-1',
+      releases: [{ id: 'release-1', label: 'Headless MVP', kind: 'release', state: 'active', source: 'release_plan', proofStyle: 'script_only' }],
+      tasks: [{
+        id: 'task-1',
+        title: 'Run headless proof',
+        status: 'ready',
+        createdAt: '2026-06-01T12:00:00.000Z',
+        updatedAt: '2026-06-01T12:00:00.000Z',
+        releaseIds: ['release-1'],
+      }],
+    })
+    await applyCanonicalMigrations()
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const close = await app.fetch(new Request(scoped('/api/project/release/close'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ releaseId: 'release-1' }),
+    }))
+
+    expect(close.status).toBe(409)
+    expect(await close.json()).toMatchObject({ code: 'not_ready' })
   })
 
   it('serves the scoped local project graph view for the selected project', async () => {

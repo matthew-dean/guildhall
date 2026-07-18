@@ -1,10 +1,18 @@
+import { createHash } from 'node:crypto'
 import { z } from 'zod'
+import fs from 'node:fs/promises'
+import path from 'node:path'
 import type {
   GuildhallPersistence,
   PersistencePlacement,
   PersistedEvent,
   PersistedRecord,
 } from '@guildhall/persistence'
+import {
+  getProjectLocalHistoryDir,
+  getProjectSystemStateDir,
+  registerProjectHistoricalArtifactIfCurrent,
+} from '@guildhall/sessions'
 
 const sharedReviewPlacement: PersistencePlacement = {
   scope: 'shared_project',
@@ -165,6 +173,107 @@ export type EscapedMissRecord = z.infer<typeof EscapedMissRecord>
 
 type InputWithDefaults<T, K extends keyof T> = Omit<T, K> & Partial<Pick<T, K>>
 
+async function registerReviewTransportArtifact(input: {
+  projectRoot: string
+  ref: PersistedRecord['ref'] | PersistedEvent['ref']
+  retentionClass: 'essential' | 'diagnostic'
+  createdAt?: string
+}): Promise<ReturnType<typeof registerProjectHistoricalArtifactIfCurrent>> {
+  const [stat, contents] = await Promise.all([
+    fs.stat(input.ref.path),
+    fs.readFile(input.ref.path),
+  ])
+  const sha256 = createHash('sha256').update(contents).digest('hex')
+  return registerProjectHistoricalArtifactIfCurrent(input.projectRoot, {
+    artifactId: `review-transport:${input.ref.scope}:${input.ref.collection}:${input.ref.id}`,
+    kind: 'review_transport',
+    owner: 'review-audit-store',
+    logicalRef: path.relative(input.projectRoot, input.ref.path).replaceAll(path.sep, '/'),
+    createdAt: input.createdAt ?? stat.birthtime.toISOString(),
+    bytes: stat.size,
+    sha256,
+    retentionClass: input.retentionClass,
+    state: 'active',
+    lastVerifiedAt: new Date().toISOString(),
+    sourceRevision: sha256,
+  })
+}
+
+const REVIEW_TRANSPORT_COLLECTIONS = new Set([
+  'review-plans',
+  'review-plan-events',
+  'reviewer-runs',
+  'frontier-runs',
+])
+
+export interface ReviewTransportBackfillResult {
+  filesSeen: number
+  filesRegistered: number
+  bytesRegistered: number
+}
+
+/**
+ * Register review files written before the historical-artifact boundary.
+ * This is an explicit maintenance pass: it reads only known review
+ * collections, never creates missing directories, and never deletes a file.
+ */
+export async function backfillReviewTransportArtifacts(input: {
+  projectRoot: string
+  dryRun?: boolean
+}): Promise<ReviewTransportBackfillResult> {
+  const roots = [
+    {
+      scope: 'shared_project' as const,
+      retentionClass: 'essential' as const,
+      root: path.join(getProjectSystemStateDir(input.projectRoot), 'persistence'),
+    },
+    {
+      scope: 'local_history' as const,
+      retentionClass: 'diagnostic' as const,
+      root: path.join(getProjectLocalHistoryDir(input.projectRoot), 'persistence'),
+    },
+  ]
+  let filesSeen = 0
+  let filesRegistered = 0
+  let bytesRegistered = 0
+  for (const candidateRoot of roots) {
+    for (const kind of ['records', 'events'] as const) {
+      const directory = path.join(candidateRoot.root, kind)
+      let collections: Array<{ name: string; isDirectory(): boolean }>
+      try {
+        collections = await fs.readdir(directory, { withFileTypes: true })
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue
+        throw error
+      }
+      for (const collectionEntry of collections) {
+        if (!collectionEntry.isDirectory() || !REVIEW_TRANSPORT_COLLECTIONS.has(collectionEntry.name)) continue
+        const collection = collectionEntry.name
+        const collectionDir = path.join(directory, collection)
+        const files = await fs.readdir(collectionDir, { withFileTypes: true })
+        for (const fileEntry of files) {
+          if (!fileEntry.isFile() || !/\.(?:json|jsonl)$/i.test(fileEntry.name)) continue
+          filesSeen += 1
+          const filePath = path.join(collectionDir, fileEntry.name)
+          const id = fileEntry.name.replace(/\.(?:json|jsonl)$/i, '')
+          const stat = await fs.stat(filePath)
+          if (input.dryRun === true) continue
+          const artifact = await registerReviewTransportArtifact({
+            projectRoot: input.projectRoot,
+            ref: { scope: candidateRoot.scope, collection, id, path: filePath },
+            retentionClass: candidateRoot.retentionClass,
+            createdAt: stat.birthtime.toISOString(),
+          })
+          if (!artifact) continue
+          filesRegistered += 1
+          bytesRegistered += stat.size
+        }
+      }
+    }
+  }
+  return { filesSeen, filesRegistered, bytesRegistered }
+}
+
 export interface ReviewAuditStore {
   saveReviewPlan(input: InputWithDefaults<ReviewPlanRecord, 'createdAt' | 'skippedLanes' | 'requiredRecipes' | 'advisoryLenses' | 'deterministicChecks' | 'requiredArtifacts' | 'budget' | 'aggregation' | 'reasons'>): Promise<PersistedRecord<ReviewPlanRecord>>
   appendReviewPlanEvent(input: Omit<ReviewPlanEvent, 'recordedAt'> & { recordedAt?: string }): Promise<PersistedEvent<ReviewPlanEvent>>
@@ -193,7 +302,7 @@ export function createReviewAuditStore(input: {
         ...planInput,
         createdAt: planInput.createdAt ?? nowIso(),
       })
-      return input.persistence.writeRecord({
+      const record = await input.persistence.writeRecord({
         projectRoot: input.projectRoot,
         placement: sharedReviewPlacement,
         collection: 'review-plans',
@@ -205,6 +314,8 @@ export function createReviewAuditStore(input: {
         payload: plan,
         now: input.now,
       })
+      await registerReviewTransportArtifact({ projectRoot: input.projectRoot, ref: record.ref, retentionClass: 'essential' })
+      return record
     },
 
     async appendReviewPlanEvent(eventInput) {
@@ -212,7 +323,7 @@ export function createReviewAuditStore(input: {
         ...eventInput,
         recordedAt: eventInput.recordedAt ?? nowIso(),
       })
-      return input.persistence.appendEvent({
+      const persistedEvent = await input.persistence.appendEvent({
         projectRoot: input.projectRoot,
         placement: sharedReviewPlacement,
         collection: 'review-plan-events',
@@ -224,6 +335,8 @@ export function createReviewAuditStore(input: {
         payload: event,
         now: input.now,
       })
+      await registerReviewTransportArtifact({ projectRoot: input.projectRoot, ref: persistedEvent.ref, retentionClass: 'essential' })
+      return persistedEvent
     },
 
     async saveReviewerRun(runInput) {
@@ -231,7 +344,7 @@ export function createReviewAuditStore(input: {
         ...runInput,
         recordedAt: runInput.recordedAt ?? nowIso(),
       })
-      return input.persistence.appendEvent({
+      const event = await input.persistence.appendEvent({
         projectRoot: input.projectRoot,
         placement: localReviewPlacement,
         collection: 'reviewer-runs',
@@ -243,6 +356,8 @@ export function createReviewAuditStore(input: {
         payload: run,
         now: input.now,
       })
+      await registerReviewTransportArtifact({ projectRoot: input.projectRoot, ref: event.ref, retentionClass: 'diagnostic' })
+      return event
     },
 
     async saveFrontierRun(runInput) {
@@ -250,7 +365,7 @@ export function createReviewAuditStore(input: {
         ...runInput,
         recordedAt: runInput.recordedAt ?? nowIso(),
       })
-      return input.persistence.writeRecord({
+      const record = await input.persistence.writeRecord({
         projectRoot: input.projectRoot,
         placement: localReviewPlacement,
         collection: 'frontier-runs',
@@ -262,6 +377,8 @@ export function createReviewAuditStore(input: {
         payload: run,
         now: input.now,
       })
+      await registerReviewTransportArtifact({ projectRoot: input.projectRoot, ref: record.ref, retentionClass: 'diagnostic' })
+      return record
     },
 
     async linkEscapedMiss(missInput) {
@@ -269,7 +386,7 @@ export function createReviewAuditStore(input: {
         ...missInput,
         recordedAt: missInput.recordedAt ?? nowIso(),
       })
-      return input.persistence.appendEvent({
+      const event = await input.persistence.appendEvent({
         projectRoot: input.projectRoot,
         placement: sharedReviewPlacement,
         collection: 'escaped-misses',
@@ -281,6 +398,8 @@ export function createReviewAuditStore(input: {
         payload: miss,
         now: input.now,
       })
+      await registerReviewTransportArtifact({ projectRoot: input.projectRoot, ref: event.ref, retentionClass: 'diagnostic' })
+      return event
     },
 
     async readTaskReviewAudit(taskId) {

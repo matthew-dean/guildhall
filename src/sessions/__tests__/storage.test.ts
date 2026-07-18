@@ -13,6 +13,8 @@ import {
   loadSessionSnapshot,
   saveSessionSnapshot,
   compactProjectSessionSnapshots,
+  SESSION_RECOVERY_TAIL_MAX_CHARS,
+  sessionPayloadCharacterCount,
 } from '../storage.js'
 
 let baseDir: string
@@ -243,6 +245,46 @@ describe('session storage', () => {
     expect(JSON.parse(readFileSync(join(dir, 'session-old-completed.json'), 'utf8')).system_prompt).toBe('')
     expect(JSON.parse(readFileSync(join(dir, 'session-pending.json'), 'utf8')).messages).toHaveLength(3)
     expect(loadSessionById('/tmp/project', 'old-completed')?.messages).toHaveLength(1)
+  })
+
+  it('bounds the entire pending recovery tail instead of each tool result independently', () => {
+    const messages: ConversationMessage[] = [
+      userMsg('resume the current task'),
+      {
+        role: 'assistant',
+        content: Array.from({ length: 12 }, (_, index) => ({
+          type: 'tool_use' as const,
+          id: `tool-${index}`,
+          name: 'shell',
+          input: { command: 'x'.repeat(2_000) },
+        })),
+      },
+      {
+        role: 'user',
+        content: Array.from({ length: 12 }, (_, index) => ({
+          type: 'tool_result' as const,
+          tool_use_id: `tool-${index}`,
+          content: 'large tool output '.repeat(2_000),
+          is_error: false,
+        })),
+      },
+    ]
+
+    saveSessionSnapshot({
+      cwd: '/tmp/project',
+      model: 'm',
+      systemPrompt: '',
+      messages,
+      usage: { input_tokens: 0, output_tokens: 0 },
+      sessionId: 'bounded-pending-tail',
+    })
+
+    const loaded = loadSessionById('/tmp/project', 'bounded-pending-tail')
+    expect(loaded).not.toBeNull()
+    expect(sessionPayloadCharacterCount(loaded!.messages)).toBeLessThanOrEqual(SESSION_RECOVERY_TAIL_MAX_CHARS)
+    expect(JSON.stringify(loaded!.messages)).not.toContain('large tool output '.repeat(100))
+    expect(JSON.stringify(loaded!.messages)).toContain('tool-0')
+    expect(JSON.stringify(loaded!.messages)).toContain('tool-11')
   })
 
   it('revives malformed snapshots defensively and falls back to latest aliases', () => {

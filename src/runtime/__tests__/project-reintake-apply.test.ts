@@ -100,6 +100,20 @@ const narrativeRoadmap = [
   '11. Prove spatial/geographic continuity review for travel, terrain, walking speed, map consistency, weather, light, and physical plausibility.',
 ].join('\n')
 
+const scopedNarrativeRelease = [
+  '# Narrative Harness release plan',
+  '',
+  '## Current Next Milestone',
+  '',
+  'The next milestone is Stage 1: Headless Drafting And Evaluation MVP.',
+  '',
+  '## Deliverables',
+  '',
+  '| Deliverable | Need | Foundation | Consumer |',
+  '| --- | --- | --- | --- |',
+  '| Character voice and dialogue review | Review character voice and dialogue. | Character specs | Draft review |',
+].join('\n')
+
 const narrativeNearTermProofRoadmap = [
   '# Implementation Roadmap',
   '',
@@ -238,13 +252,22 @@ const authorInvolvementModesSpecWithoutContracts = [
 
 describe('project re-intake apply', () => {
   it('applies reframes in place and appends a re-intake note', async () => {
+    const existingTask = task({
+      id: 'task-039',
+      title: 'Build AlertDialog primitive',
+      description: 'Old',
+      status: 'blocked',
+      taskKind: 'research',
+      sizePlan: { score: 5, recommendation: 'split' },
+      taskReadiness: { recommendation: 'needs_research_spike' },
+    })
     const memoryDir = await makeState([
-      task({ id: 'task-039', title: 'Build AlertDialog primitive', description: 'Old', status: 'blocked' }),
+      existingTask,
     ])
     const draft = planProjectReintake({
       now,
       sources: [{ path: 'looma/docs/component-library-audit.md', content: loomaAudit }],
-      tasks: [task({ id: 'task-039', title: 'Build AlertDialog primitive', description: 'Old', status: 'blocked' })],
+      tasks: [existingTask],
     })
     await writeProjectReintakeDraft(memoryDir, draft)
 
@@ -262,6 +285,9 @@ describe('project re-intake apply', () => {
         userJob: expect.stringContaining('Build AlertDialog'),
       }),
     })
+    expect(reframed).not.toHaveProperty('taskKind')
+    expect(reframed).not.toHaveProperty('sizePlan')
+    expect(reframed).not.toHaveProperty('taskReadiness')
     expect(reframed!.notes.some((note: { content?: string }) => note.content?.includes('Re-intake reframed this task'))).toBe(true)
   })
 
@@ -553,6 +579,46 @@ describe('project re-intake apply', () => {
     })
     expect(JSON.stringify(approvedTask?.productBrief ?? '')).not.toContain('Do not treat this draft as approved')
     expect(approvedTask?.sizePlan?.action).toBe('proceed_with_warning')
+  })
+
+  it('treats an explicit release table as the complete membership boundary', async () => {
+    const memoryDir = await makeState([
+      task({
+        id: 'task-in-scope',
+        title: 'Build Character voice and dialogue review',
+        status: 'spec_review',
+        releaseIds: ['stage-1-headless-drafting-and-evaluation-mvp'],
+      }),
+      task({
+        id: 'task-out-of-scope',
+        title: 'Run unrelated smoke test',
+        status: 'spec_review',
+        releaseIds: ['stage-1-headless-drafting-and-evaluation-mvp'],
+      }),
+    ])
+    const draft = planProjectReintake({
+      now,
+      sources: [{ path: 'docs/harness/headless-mvp-release-plan.md', content: scopedNarrativeRelease }],
+      tasks: await readQueue(memoryDir).then(queue => queue.tasks),
+    })
+    expect(draft.releases?.[0]?.nodeIds).toEqual(['work:task-in-scope'])
+
+    await writeProjectReintakeDraft(memoryDir, draft)
+    const result = await applyProjectReintakeDraft({ memoryDir, now })
+    expect(result.success).toBe(true)
+
+    const queue = await readQueue(memoryDir)
+    expect(queue.tasks.find(candidate => candidate.id === 'task-in-scope')?.releaseIds).toEqual([
+      'stage-1-headless-drafting-and-evaluation-mvp',
+    ])
+    expect(queue.tasks.find(candidate => candidate.id === 'task-out-of-scope')?.releaseIds ?? []).toEqual([])
+    expect((queue as any).releases).toEqual([
+      expect.objectContaining({
+        id: 'stage-1-headless-drafting-and-evaluation-mvp',
+        nodeIds: ['work:task-in-scope'],
+        deferredNodeIds: [],
+      }),
+    ])
   })
 
   it('respects an explicit current release despite broad near-term proof prose', async () => {
@@ -861,8 +927,8 @@ describe('project re-intake apply', () => {
     expect(refreshed?.dependsOn).toEqual([])
     expect(refreshed?.archivedEvidence).toBeUndefined()
     expect(queue.tasks.find(task => task.id === 'stale-child')).toMatchObject({
-      status: 'archived',
-      releaseIds: [],
+      status: 'import_draft',
+      releaseIds: ['stage-1-headless-drafting-and-evaluation-mvp'],
     })
     expect(queue.tasks.find(task => task.id === 'stale-child')?.hierarchy).toBeUndefined()
     expect(deriveWorkExecutionState(queue.tasks as any, 'task-import-9s8tkc')).toMatchObject({

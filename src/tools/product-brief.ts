@@ -11,6 +11,7 @@ import {
   writePromotedTaskDetailMutation,
   writeProjectTaskQueueWithSummary,
 } from '../runtime/project-state-boundary.js'
+import { currentPlanProcessLeakage } from '../runtime/spec-quality.js'
 
 // ---------------------------------------------------------------------------
 // update-product-brief: the Spec Agent's authoring surface for the product
@@ -118,15 +119,35 @@ function fallbackNonGoals(taskTitle: string): string[] {
 }
 
 function normalizeAntiPatternsValue(raw: unknown): string[] | undefined {
+  const normalizeItem = (item: unknown): string[] => {
+    if (typeof item !== 'string') return []
+    const trimmed = item.trim()
+    if (!trimmed) return []
+    if (trimmed.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(trimmed) as unknown
+        if (Array.isArray(parsed)) return parsed.flatMap(normalizeItem)
+      } catch {
+        // Keep malformed user text as one boundary item rather than dropping it.
+      }
+    }
+    return [trimmed]
+  }
   if (Array.isArray(raw)) {
-    const values = raw
-      .filter((item): item is string => typeof item === 'string')
-      .map((item) => item.trim())
-      .filter(Boolean)
+    const values = raw.flatMap(normalizeItem)
     return values.length > 0 ? values : undefined
   }
   if (typeof raw === 'string') {
-    const values = raw
+    const trimmed = raw.trim()
+    if (trimmed.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(trimmed) as unknown
+        if (Array.isArray(parsed)) return normalizeAntiPatternsValue(parsed)
+      } catch {
+        // Fall through to newline parsing for ordinary text beginning with '['.
+      }
+    }
+    const values = trimmed
       .split('\n')
       .map((line) => line.trim())
       .map((line) => line.replace(/^[*-]\s*/, '').trim())
@@ -205,6 +226,20 @@ function inferBriefContentFromAssistantText(
 }
 
 function validateBriefContent(content: ResolvedBriefContent): string | null {
+  const currentPlanFields = [
+    content.userJob,
+    content.whyItMattersNow,
+    content.successMetric,
+    ...content.nonGoals,
+    ...(content.audience ? [content.audience] : []),
+    ...(content.usageContext ? [content.usageContext] : []),
+    ...content.antiPatterns,
+    ...(content.rolloutPlan ? [content.rolloutPlan] : []),
+    ...(content.brandInteractionNotes ? [content.brandInteractionNotes] : []),
+  ]
+  if (currentPlanFields.some((field) => currentPlanProcessLeakage(field))) {
+    return 'Product briefs may only describe the product outcome and boundary. Keep recovery attempts, revision history, and worktree diagnostics in task notes or evidence.'
+  }
   const normalizedUserJob = content.userJob.toLowerCase()
   const normalizedWhy = content.whyItMattersNow.toLowerCase()
   const normalizedSuccessMetric = content.successMetric.toLowerCase()

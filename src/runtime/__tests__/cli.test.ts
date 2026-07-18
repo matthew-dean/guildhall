@@ -14,6 +14,7 @@ import {
   isPidAlive,
   launchRouteForProject,
   parseArgs,
+  parseRunOptions,
   persistServiceRuntimeState,
   probeLiveService,
   readServiceRuntimeState,
@@ -197,6 +198,30 @@ describe('CLI service lifecycle helpers', () => {
     expect(launchRouteForProject(initialized)).toBe('/project')
     const uninitializedId = uninitialized.split('/').pop()?.toLowerCase() ?? 'project'
     expect(launchRouteForProject(uninitialized)).toBe(`/projects/${uninitializedId}/setup`)
+  })
+})
+
+describe('CLI run options', () => {
+  it('forwards a named task into the orchestrator preferred-task scope', () => {
+    expect(parseRunOptions([
+      'narrative-harness',
+      '--task',
+      'task-theme-and-meaning-review',
+      '--domain',
+      'docs',
+      '--max-ticks',
+      '1',
+      '--one-task',
+    ])).toEqual({
+      maxTicks: 1,
+      stopAfterOneTask: true,
+      domainFilter: 'docs',
+      preferredTaskId: 'task-theme-and-meaning-review',
+    })
+  })
+
+  it('documents named-task execution in the shipped help text', () => {
+    expect(renderHelpText()).toContain('--task <id>                  Run one named task and its bounded child closure')
   })
 })
 

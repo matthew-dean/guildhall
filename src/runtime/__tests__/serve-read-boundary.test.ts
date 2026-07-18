@@ -11,6 +11,7 @@ import {
   getProjectStateDir,
   projectStateDatabasePath,
   projectStatePath,
+  promoteProjectStateDatabaseAuthority,
   replaceProjectStateDatabaseAttentionRecords,
   upsertTaskRuntimeState,
   writeProjectStateJsonAsync,
@@ -19,9 +20,11 @@ import {
 import * as sessions from '@guildhall/sessions'
 import { buildServeApp } from '../serve.js'
 import { NodeGitDriver } from '../git-driver.js'
+import { OrchestratorSupervisor } from '../serve-supervisor.js'
 import { writeProjectSummaryProjection } from '../project-summary-projection.js'
 import { inferProjectOrientationSnapshot } from '../project-orientation-snapshot.js'
 import { refreshProjectDeliveryReadProjection } from '../delivery-read-projection.js'
+import * as projectStateBoundary from '../project-state-boundary.js'
 
 /**
  * These are deliberately integration-level write-boundary tests. A GET must
@@ -45,6 +48,7 @@ type ReadRoute = {
 
 let tmpDir: string
 let projectId: string
+let previousDataDir: string | undefined
 
 const readRoutes: ReadRoute[] = [
   {
@@ -89,6 +93,8 @@ const readRoutes: ReadRoute[] = [
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-read-boundary-'))
+  previousDataDir = process.env.GUILDHALL_DATA_DIR
+  process.env.GUILDHALL_DATA_DIR = path.join(tmpDir, 'guildhall-data')
   projectId = bootstrapWorkspace(tmpDir, { name: 'Read Boundary Test' }).id ?? path.basename(tmpDir)
   await seedDurableState()
 })
@@ -96,6 +102,8 @@ beforeEach(async () => {
 afterEach(async () => {
   vi.restoreAllMocks()
   unregisterWorkspace(projectId)
+  if (previousDataDir === undefined) delete process.env.GUILDHALL_DATA_DIR
+  else process.env.GUILDHALL_DATA_DIR = previousDataDir
   await fs.rm(tmpDir, { recursive: true, force: true })
 })
 
@@ -329,6 +337,43 @@ describe('GET route read boundaries', () => {
     expect(inspection).not.toHaveBeenCalled()
   })
 
+  it('fails closed for a promoted project whose saved orientation is missing', async () => {
+    promoteProjectStateDatabaseAuthority(tmpDir)
+    writeProjectSummaryProjection(projectStatePath(tmpDir, 'TASKS.json'), {
+      projectId,
+      queue: {
+        version: 1,
+        lastUpdated: '2026-07-14T00:00:00.000Z',
+        selectedReleaseId: 'release-boundary',
+        releases: [{
+          id: 'release-boundary',
+          label: 'Boundary release',
+          kind: 'release',
+          state: 'active',
+          source: 'owner_approved',
+          nodeIds: ['work:task-boundary'],
+          deferredNodeIds: [],
+        }],
+        tasks: [makeBoundaryTask()],
+      },
+    })
+    const database = new DatabaseSync(projectStateDatabasePath(tmpDir))
+    database.exec('DELETE FROM project_orientation')
+    database.close()
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const response = await app.fetch(new Request(projectUrl('/api/project?surface=work&compact=true')))
+    const body = await response.json() as any
+
+    expect(response.status).toBe(200)
+    expect(body.orientationSpine).toBeNull()
+    expect(body.detailPayload).toMatchObject({
+      unavailable: true,
+      requiresRefresh: true,
+    })
+    expect(body.tasks).toEqual([])
+  })
+
   it('inspects Git only for an explicit Git Story diagnostic read', async () => {
     const inspection = vi.spyOn(NodeGitDriver.prototype, 'statusSummary').mockResolvedValue({
       repository: false,
@@ -351,6 +396,8 @@ describe('GET route read boundaries', () => {
       diagnostic: true,
       freshness: 'live',
       requiresRefresh: false,
+      sourceRevision: expect.any(Number),
+      projectRevision: expect.any(Number),
       generatedAt: expect.any(String),
     })
     expect(inspection).toHaveBeenCalled()
@@ -378,6 +425,8 @@ describe('GET route read boundaries', () => {
       diagnostic: true,
       freshness: 'live',
       requiresRefresh: false,
+      sourceRevision: expect.any(Number),
+      projectRevision: expect.any(Number),
     })
   })
 
@@ -493,6 +542,82 @@ describe('GET route read boundaries', () => {
       nodeIds: ['work:task-boundary'],
       deferredNodeIds: [],
     })
+    expect(body.totals).toMatchObject({
+      tasks: 1,
+      done: 0,
+      unfinishedCount: 1,
+    })
+    expect(body.releaseBlockers).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'workspace-import:ghost' }),
+    ]))
+  })
+
+  it('reads saved Release readiness from SQLite when intake and TASKS.json disagree', async () => {
+    await writeProjectStateJsonAsync(tmpDir, 'workspace-goals.json', {
+      version: 3,
+      recordedAt: '2026-07-14T00:00:00.000Z',
+      goals: [{ id: 'goal-boundary', title: 'Keep read scopes honest' }],
+      releases: [{ id: 'release-boundary', label: 'Boundary release', source: 'owner_approved', state: 'active' }],
+      tasks: [{
+        id: 'workspace-import:intake-only',
+        title: 'Intake-only task must not become current work',
+        scope: 'current',
+        releaseIds: ['release-boundary'],
+      }],
+      milestones: [],
+      approved: {
+        goalCount: 1,
+        taskCount: 1,
+        milestoneCount: 0,
+        currentTaskCount: 1,
+        laterTaskCount: 0,
+        taskIds: ['workspace-import:intake-only'],
+        currentTaskIds: ['workspace-import:intake-only'],
+        laterTaskIds: [],
+      },
+      detected: null,
+    })
+    await fs.writeFile(
+      projectStatePath(tmpDir, 'TASKS.json'),
+      '{ "tasks": [{ "id": "compatibility:invalid" }]',
+      'utf8',
+    )
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const response = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
+    const body = await response.json() as any
+
+    expect(response.status).toBe(200)
+    expect(body).toMatchObject({
+      currentStateAuthority: 'database',
+      release: { id: 'release-boundary', label: 'Boundary release' },
+      scope: {
+        id: 'release-boundary',
+        nodeIds: ['work:task-boundary'],
+        deferredNodeIds: [],
+      },
+      totals: {
+        tasks: 1,
+        unfinishedCount: 1,
+      },
+    })
+    expect(JSON.stringify(body)).not.toContain('workspace-import:intake-only')
+    expect(JSON.stringify(body)).not.toContain('compatibility:invalid')
+  })
+
+  it('keeps fleet attention summary and items on the same saved surface snapshot', async () => {
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const surfaceRead = vi.spyOn(projectStateBoundary, 'readProjectSurfaceStateAtBoundary')
+    const response = await app.fetch(new Request('http://localhost/api/fleet/attention'))
+    const body = await response.json() as any
+
+    expect(response.status).toBe(200)
+    expect(surfaceRead).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+      includeProjection: false,
+      includeAttention: true,
+    }))
+    expect(body.groups).toEqual(expect.any(Array))
+    surfaceRead.mockRestore()
   })
 
   it('uses bounded task point reads for explicit task tabs', async () => {
@@ -533,6 +658,33 @@ describe('GET route read boundaries', () => {
     pointRead.mockRestore()
   })
 
+  it('fails closed instead of mixing Overview rows from different revisions', async () => {
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const points = sessions.readProjectStateDatabaseTaskPointsWithRevision(projectStatePath(tmpDir, 'TASKS.json'), ['task-boundary'], {
+      includeDefinitions: false,
+    })
+    expect(points).not.toBeNull()
+    if (!points) throw new Error('expected seeded task points')
+    const pointRead = vi.spyOn(sessions, 'readProjectStateDatabaseTaskPointsWithRevision')
+      .mockReturnValue({
+        ...points,
+        projectRevision: points.projectRevision + 1,
+      })
+
+    try {
+      const response = await app.fetch(new Request(projectUrl('/api/project?surface=overview&compact=true')))
+      const body = await response.json() as any
+
+      expect(response.status).toBe(503)
+      expect(body).toMatchObject({
+        code: 'project_state_revision_mismatch',
+        requiresRefresh: true,
+      })
+    } finally {
+      pointRead.mockRestore()
+    }
+  })
+
   it('uses the bounded projection for an unqualified project read', async () => {
     const { app } = buildServeApp({ projectPath: tmpDir })
     const response = await app.fetch(new Request(projectUrl('/api/project')))
@@ -558,7 +710,11 @@ describe('GET route read boundaries', () => {
   })
 
   it('keeps explicit project detail bounded without running independent diagnostics', async () => {
-    const { app } = buildServeApp({ projectPath: tmpDir })
+    const { app, refreshProjectProjections } = buildServeApp({ projectPath: tmpDir })
+    await refreshProjectProjections(tmpDir)
+    const memoryHealthDatabase = new DatabaseSync(projectStateDatabasePath(tmpDir))
+    expect(memoryHealthDatabase.prepare('SELECT id FROM memory_health WHERE id = 1').get()).toBeDefined()
+    memoryHealthDatabase.close()
     const response = await app.fetch(new Request(projectUrl('/api/project?detail=true')))
     const body = await response.json() as any
     const timing = response.headers.get('server-timing') ?? ''
@@ -623,7 +779,7 @@ describe('GET route read boundaries', () => {
     expect(body.taskPayload.kind).toBe('selected_scope_cards')
   })
 
-  it('serves the last indexed state immediately when a legacy file changes out of band', async () => {
+  it('serves the database authority when a compatibility file changes out of band', async () => {
     const tasksPath = projectStatePath(tmpDir, 'TASKS.json')
     const changedQueue = {
       version: 1,
@@ -637,7 +793,7 @@ describe('GET route read boundaries', () => {
     const body = await response.json() as any
 
     expect(response.status).toBe(200)
-    expect(body.detailPayload).toMatchObject({ freshness: 'stale' })
+    expect(body.detailPayload).toMatchObject({ freshness: 'current' })
     expect(body.tasks[0]?.title).toBe('A task with a read-time ownership mismatch')
     expect(body.tasks[0]?.title).not.toBe('Legacy file changed outside Guildhall')
   })
@@ -815,6 +971,44 @@ describe('GET route read boundaries', () => {
     expect(body.inFlight).toEqual([expect.objectContaining({ id: 'task-boundary', status: 'in_progress' })])
   })
 
+  it('keeps ordinary activity off retained supervisor history', async () => {
+    const tasksPath = projectStatePath(tmpDir, 'TASKS.json')
+    const database = new DatabaseSync(projectStateDatabasePath(tmpDir))
+    database.prepare("UPDATE project_meta SET project_state_authority = 'database'").run()
+    database.close()
+    await fs.rm(tasksPath)
+
+    const recent = vi.spyOn(OrchestratorSupervisor.prototype, 'recent').mockImplementation(() => {
+      throw new Error('ordinary activity must not load retained event history')
+    })
+
+    try {
+      const { app } = buildServeApp({ projectPath: tmpDir })
+      const response = await app.fetch(new Request(projectUrl('/api/project/activity')))
+      const body = await response.json() as any
+
+      expect(response.status).toBe(200)
+      expect(body.inFlight).toEqual([expect.objectContaining({ id: 'task-boundary', status: 'in_progress' })])
+      expect(recent).not.toHaveBeenCalled()
+    } finally {
+      recent.mockRestore()
+    }
+  })
+
+  it('keeps progress evidence attached to the summary project revision', async () => {
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const response = await app.fetch(new Request(projectUrl('/api/project/progress')))
+    const body = await response.json() as any
+
+    expect(response.status).toBe(200)
+    expect(body).toMatchObject({
+      freshness: 'current',
+      requiresRefresh: false,
+      queueRevision: expect.any(Number),
+      projectRevision: expect.any(Number),
+    })
+  })
+
   it('reads current Inbox from its projection without rediscovering task state', async () => {
     replaceProjectStateDatabaseAttentionRecords(tmpDir, [{
       id: 'attention-boundary',
@@ -861,7 +1055,39 @@ describe('GET route read boundaries', () => {
     expect(aggregateRead).not.toHaveBeenCalled()
   })
 
-  it('keeps the compact spine on the last indexed release state after an out-of-band queue edit', async () => {
+  it('does not let fleet attention bypass a stale saved attention projection', async () => {
+    replaceProjectStateDatabaseAttentionRecords(tmpDir, [{
+      id: 'attention-fleet-boundary',
+      status: 'open',
+      updatedAt: '2026-07-14T00:01:00.000Z',
+      kind: 'project_understanding',
+      severity: 'high',
+      title: 'Saved attention must be fresh',
+      detail: 'A stale projection must not be presented as current.',
+      signals: ['intake.v1'],
+      actionHref: '/workspace-import?mode=reconcile',
+      dismissEndpoint: '/api/project/attention/dismiss?id=attention-fleet-boundary',
+    }])
+    await upsertTaskRuntimeState(tmpDir, 'task-boundary', {
+      taskId: 'task-boundary',
+      status: 'running',
+      updatedAt: '2026-07-14T00:02:00.000Z',
+    })
+    registerWorkspace({ id: projectId, name: 'Read Boundary Test', path: tmpDir, tags: [] })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const response = await app.fetch(new Request(projectUrl('/api/fleet/attention')))
+    const body = await response.json() as any
+
+    expect(response.status).toBe(200)
+    const group = body.groups.find((candidate: any) => candidate.project?.path === tmpDir)
+    expect(group).toEqual(expect.objectContaining({
+      items: [],
+      error: 'Attention projection is not current.',
+    }))
+  })
+
+  it('keeps the compact spine on the database release state after an out-of-band queue edit', async () => {
     const tasksPath = projectStatePath(tmpDir, 'TASKS.json')
     await writeProjectStateJsonAsync(tmpDir, 'TASKS.json', {
       version: 1,
@@ -876,7 +1102,7 @@ describe('GET route read boundaries', () => {
 
     expect(response.status).toBe(200)
     expect(body.summary).toMatchObject({
-      summaryFreshness: 'stale',
+      summaryFreshness: 'current',
       releaseSummary: { release: { id: 'release-boundary', label: 'Boundary release' } },
     })
     expect(body.spine.selectedRelease).toMatchObject({ id: 'release-boundary', label: 'Boundary release' })

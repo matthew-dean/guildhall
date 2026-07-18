@@ -60,6 +60,81 @@ describe('buildProjectScopeProjection', () => {
     expect(selected).toBeNull()
   })
 
+  it('makes script-only proof requirements part of the shared scope projection', () => {
+    const projection = buildProjectScopeProjection({
+      version: 1,
+      lastUpdated: now,
+      selectedReleaseId: 'stage-1',
+      releases: [{
+        id: 'stage-1',
+        label: 'Stage 1',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-complete'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [task({
+        id: 'task-complete',
+        title: 'Completed without executable proof',
+        status: 'done',
+        releaseIds: ['stage-1'],
+      })],
+    })
+
+    expect(projection.selectedScope?.proofStyle).toBe('script_only')
+    expect(projection.rows).toEqual([
+      expect.objectContaining({
+        taskId: 'task-complete',
+        proofBlocked: true,
+        blocksRelease: true,
+      }),
+    ])
+    expect(projection.counts.proofBlocked).toBe(1)
+    expect(projection.release).toMatchObject({ state: 'blocked' })
+    expect(projection.start).toMatchObject({ code: 'proof_evidence_missing', focusTaskId: 'task-complete' })
+  })
+
+  it('lets project Start advance an exploring source-backed shaping task', () => {
+    const projection = buildProjectScopeProjection({
+      version: 1,
+      lastUpdated: now,
+      selectedReleaseId: 'stage-1',
+      releases: [{
+        id: 'stage-1',
+        label: 'Stage 1',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        nodeIds: ['work:task-shaping', 'work:task-proof'],
+        deferredNodeIds: [],
+        proofStyle: 'script_only',
+      }],
+      tasks: [
+        task({
+          id: 'task-proof',
+          title: 'Completed work without proof',
+          status: 'done',
+          releaseIds: ['stage-1'],
+        }),
+        task({
+          id: 'task-shaping',
+          title: 'Shape source-backed work',
+          status: 'exploring',
+          releaseIds: ['stage-1'],
+        }),
+      ],
+    })
+
+    expect(projection.start).toMatchObject({
+      canStart: true,
+      code: 'ready_work',
+      focusTaskId: 'task-shaping',
+      focusKind: 'ready_work',
+    })
+  })
+
   it('derives visible release containers from task membership and selects unfinished scoped work', () => {
     const derived = deriveReleaseContainersFromTaskMembership([
       task({
@@ -264,6 +339,8 @@ describe('buildProjectScopeProjection', () => {
           title: 'Completed release work',
           status: 'done',
           releaseIds: ['stage-1'],
+          proofPaths: [{ kind: 'command', command: 'pnpm test' }],
+          gateResults: [{ status: 'passed', command: 'pnpm test' }],
         }),
         task({
           id: 'blocked-task',
@@ -704,6 +781,8 @@ describe('buildProjectScopeProjection', () => {
         title: 'Done scoped task',
         status: 'done',
         completedAt: now,
+        proofPaths: [{ kind: 'command', command: 'pnpm test' }],
+        gateResults: [{ status: 'passed', command: 'pnpm test' }],
       }),
     ]))
 

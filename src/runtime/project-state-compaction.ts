@@ -1,7 +1,7 @@
 import { appendManagedTextFile, readManagedTextFile, readManagedTextFileSync, writeManagedTextFile } from '@guildhall/persistence'
+import { createHash, randomUUID } from 'node:crypto'
 import fs from 'node:fs/promises'
 import { existsSync } from 'node:fs'
-import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 
@@ -20,6 +20,7 @@ import {
   compactProjectProgressHeartbeats,
   readProjectStateDatabaseCurrentAuthority,
   readProjectStateDatabaseQueueWithRevision,
+  registerProjectHistoricalArtifactIfCurrent,
 } from '@guildhall/sessions'
 import {
   findForbiddenProjectTaskFields,
@@ -33,7 +34,12 @@ import {
 import { compactExploringTranscripts } from '@guildhall/tools'
 import { compactProjectContextDebug } from './context-observability.js'
 import { compactProjectRecentEvents } from './serve-supervisor.js'
-import { compactMaterializedMigrationSnapshot } from './migration-snapshot.js'
+import {
+  archiveLegacyMigrationSnapshotIfCurrent,
+  compactMaterializedMigrationSnapshot,
+  registerMigrationSnapshotArtifactIfCurrent,
+} from './migration-snapshot.js'
+import { backfillReviewTransportArtifacts } from './review-audit-store.js'
 import { compactCodebaseMapHistory } from '@guildhall/corpus-map'
 import { consolidateProjectMemoryEvents } from '@guildhall/memory-core'
 import {
@@ -119,6 +125,17 @@ export interface ProjectStateCompactionResult {
   migrationSnapshotBytesAfter: number
   migrationSnapshotUnknownFiles: number
   migrationSnapshotUnknownBytes: number
+  migrationSnapshotArtifactsRegistered: number
+  migrationSnapshotArtifactBytesRegistered: number
+  migrationSnapshotLegacyFilesArchived: number
+  migrationSnapshotLegacyBytesBefore: number
+  migrationSnapshotLegacyBytesAfter: number
+  reviewTransportFilesSeen: number
+  reviewTransportArtifactsRegistered: number
+  reviewTransportArtifactBytesRegistered: number
+  evacuationFilesSeen: number
+  evacuationArtifactsRegistered: number
+  evacuationArtifactBytesRegistered: number
   bytesBefore: number
   bytesAfter: number
 }
@@ -174,6 +191,59 @@ async function migrationSnapshotCandidates(projectRoot: string): Promise<string[
   return [...new Set(candidates)]
 }
 
+async function backfillEvacuationArtifacts(input: {
+  projectRoot: string
+  dryRun?: boolean
+}): Promise<{
+  filesSeen: number
+  artifactsRegistered: number
+  artifactBytesRegistered: number
+}> {
+  const root = path.join(getProjectLocalHistoryDir(input.projectRoot), 'project-state-evacuation')
+  const files: string[] = []
+  const visit = async (directory: string): Promise<void> => {
+    let entries: Array<{ name: string; isDirectory(): boolean; isFile(): boolean }>
+    try {
+      entries = await fs.readdir(directory, { withFileTypes: true })
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+      throw error
+    }
+    for (const entry of entries) {
+      const target = path.join(directory, entry.name)
+      if (entry.isDirectory()) await visit(target)
+      else if (entry.isFile()) files.push(target)
+    }
+  }
+  await visit(root)
+  let artifactsRegistered = 0
+  let artifactBytesRegistered = 0
+  for (const file of files) {
+    if (input.dryRun === true) continue
+    const contents = await fs.readFile(file)
+    const sha256 = createHash('sha256').update(contents).digest('hex')
+    const logicalRef = path.relative(getProjectLocalHistoryDir(input.projectRoot), file).replaceAll(path.sep, '/')
+    const stat = await fs.stat(file)
+    const artifact = registerProjectHistoricalArtifactIfCurrent(input.projectRoot, {
+      artifactId: `evacuation:${logicalRef}:${sha256}`,
+      kind: 'evacuation_batch',
+      owner: 'project-state-evacuation',
+      logicalRef,
+      createdAt: stat.birthtime.toISOString(),
+      lastVerifiedAt: new Date().toISOString(),
+      bytes: stat.size,
+      sha256,
+      retentionClass: 'archive',
+      state: 'active',
+      sourceRevision: sha256,
+    })
+    if (!artifact) continue
+    artifactsRegistered += 1
+    artifactBytesRegistered += stat.size
+  }
+  return { filesSeen: files.length, artifactsRegistered, artifactBytesRegistered }
+}
+
 async function compactProjectMigrationSnapshots(
   projectRoot: string,
   options: { dryRun?: boolean } = {},
@@ -184,6 +254,11 @@ async function compactProjectMigrationSnapshots(
   bytesAfter: number
   unknownFiles: number
   unknownBytes: number
+  artifactsRegistered: number
+  artifactBytesRegistered: number
+  legacyFilesArchived: number
+  legacyBytesBefore: number
+  legacyBytesAfter: number
 }> {
   const files = await migrationSnapshotCandidates(projectRoot)
   let filesCompacted = 0
@@ -191,17 +266,53 @@ async function compactProjectMigrationSnapshots(
   let bytesAfter = 0
   let unknownFiles = 0
   let unknownBytes = 0
+  let artifactsRegistered = 0
+  let artifactBytesRegistered = 0
+  let legacyFilesArchived = 0
+  let legacyBytesBefore = 0
+  let legacyBytesAfter = 0
   for (const file of files) {
     const result = await compactMaterializedMigrationSnapshot(file, options)
+    const legacyArchive = result.reason === 'missing_manifest'
+      ? await archiveLegacyMigrationSnapshotIfCurrent({ projectRoot, snapshotPath: file, dryRun: options.dryRun })
+      : null
+    const artifact = legacyArchive?.eligible === true
+      ? null
+      : options.dryRun === true
+        ? null
+        : await registerMigrationSnapshotArtifactIfCurrent({ projectRoot, snapshotPath: file })
     bytesBefore += result.bytesBefore
-    bytesAfter += result.bytesAfter
-    if (result.eligible) filesCompacted += 1
+    bytesAfter += legacyArchive?.eligible === true ? legacyArchive.archiveBytes : result.bytesAfter
+    if (artifact) {
+      artifactsRegistered += 1
+      artifactBytesRegistered += artifact.bytes
+    }
+    if (legacyArchive?.eligible === true) {
+      legacyBytesBefore += legacyArchive.sourceBytes
+      legacyBytesAfter += legacyArchive.archiveBytes
+      if (legacyArchive.archived) legacyFilesArchived += 1
+      filesCompacted += 1
+      artifactsRegistered += legacyArchive.archived ? 1 : 0
+      artifactBytesRegistered += legacyArchive.archived ? legacyArchive.archiveBytes : 0
+    } else if (result.eligible) filesCompacted += 1
     else if (result.reason !== 'already_compact') {
       unknownFiles += 1
       unknownBytes += result.bytesBefore
     }
   }
-  return { filesSeen: files.length, filesCompacted, bytesBefore, bytesAfter, unknownFiles, unknownBytes }
+  return {
+    filesSeen: files.length,
+    filesCompacted,
+    bytesBefore,
+    bytesAfter,
+    unknownFiles,
+    unknownBytes,
+    artifactsRegistered,
+    artifactBytesRegistered,
+    legacyFilesArchived,
+    legacyBytesBefore,
+    legacyBytesAfter,
+  }
 }
 
 async function readJsonIfExists(file: string): Promise<unknown | null> {
@@ -393,6 +504,22 @@ async function evacuateProjectLocalState(
       snapshot: { path: destination, bytes: snapshot.bytes, sha256: snapshot.sha256 },
       restore: { status: 'not_verified' },
     })
+    try {
+      registerProjectHistoricalArtifactIfCurrent(projectRoot, {
+        artifactId: `evacuation:${path.relative(getProjectLocalHistoryDir(projectRoot), destination).replaceAll(path.sep, '/')}:${snapshot.sha256}`,
+        kind: 'evacuation_batch',
+        owner: 'project-state-compaction',
+        logicalRef: path.relative(getProjectLocalHistoryDir(projectRoot), destination).replaceAll(path.sep, '/'),
+        bytes: snapshot.bytes,
+        sha256: snapshot.sha256,
+        retentionClass: 'archive',
+        state: 'active',
+        lastVerifiedAt: new Date().toISOString(),
+      })
+    } catch {
+      // Evacuation integrity is enforced by its manifest; registry accounting
+      // must not leave a copied source half-evacuated if SQLite is busy.
+    }
     sourcesToRemove.push(source)
   }
   if (!dryRun && evacuatedEntries.length > 0) {
@@ -806,6 +933,8 @@ export async function compactProjectState(
   const recentEventsCompaction = compactProjectRecentEvents(projectRoot, { dryRun })
   const memoryEventsCompaction = await consolidateProjectMemoryEvents(projectRoot, { dryRun })
   const migrationSnapshotCompaction = await compactProjectMigrationSnapshots(projectRoot, { dryRun })
+  const reviewTransportBackfill = await backfillReviewTransportArtifacts({ projectRoot, dryRun })
+  const evacuationBackfill = await backfillEvacuationArtifacts({ projectRoot, dryRun })
   const archiveEvidenceFilesCompacted = await compactArchiveEvidenceFiles(projectRoot, dryRun)
   const codebaseMapHistoryCompaction = await compactCodebaseMapHistory(projectRoot, { dryRun })
   const heartbeatPath = getProjectProgressHeartbeatsPath(projectRoot)
@@ -898,6 +1027,17 @@ export async function compactProjectState(
       migrationSnapshotBytesAfter: migrationSnapshotCompaction.bytesAfter,
       migrationSnapshotUnknownFiles: migrationSnapshotCompaction.unknownFiles,
       migrationSnapshotUnknownBytes: migrationSnapshotCompaction.unknownBytes,
+      migrationSnapshotArtifactsRegistered: migrationSnapshotCompaction.artifactsRegistered,
+      migrationSnapshotArtifactBytesRegistered: migrationSnapshotCompaction.artifactBytesRegistered,
+      migrationSnapshotLegacyFilesArchived: migrationSnapshotCompaction.legacyFilesArchived,
+      migrationSnapshotLegacyBytesBefore: migrationSnapshotCompaction.legacyBytesBefore,
+      migrationSnapshotLegacyBytesAfter: migrationSnapshotCompaction.legacyBytesAfter,
+      reviewTransportFilesSeen: reviewTransportBackfill.filesSeen,
+      reviewTransportArtifactsRegistered: reviewTransportBackfill.filesRegistered,
+      reviewTransportArtifactBytesRegistered: reviewTransportBackfill.bytesRegistered,
+      evacuationFilesSeen: evacuationBackfill.filesSeen,
+      evacuationArtifactsRegistered: evacuationBackfill.artifactsRegistered,
+      evacuationArtifactBytesRegistered: evacuationBackfill.artifactBytesRegistered,
       bytesBefore,
       bytesAfter,
     }
@@ -980,6 +1120,17 @@ export async function compactProjectState(
     migrationSnapshotBytesAfter: migrationSnapshotCompaction.bytesAfter,
     migrationSnapshotUnknownFiles: migrationSnapshotCompaction.unknownFiles,
     migrationSnapshotUnknownBytes: migrationSnapshotCompaction.unknownBytes,
+    migrationSnapshotArtifactsRegistered: migrationSnapshotCompaction.artifactsRegistered,
+    migrationSnapshotArtifactBytesRegistered: migrationSnapshotCompaction.artifactBytesRegistered,
+    migrationSnapshotLegacyFilesArchived: migrationSnapshotCompaction.legacyFilesArchived,
+    migrationSnapshotLegacyBytesBefore: migrationSnapshotCompaction.legacyBytesBefore,
+    migrationSnapshotLegacyBytesAfter: migrationSnapshotCompaction.legacyBytesAfter,
+    reviewTransportFilesSeen: reviewTransportBackfill.filesSeen,
+    reviewTransportArtifactsRegistered: reviewTransportBackfill.filesRegistered,
+    reviewTransportArtifactBytesRegistered: reviewTransportBackfill.bytesRegistered,
+    evacuationFilesSeen: evacuationBackfill.filesSeen,
+    evacuationArtifactsRegistered: evacuationBackfill.artifactsRegistered,
+    evacuationArtifactBytesRegistered: evacuationBackfill.artifactBytesRegistered,
     bytesBefore,
     bytesAfter,
   }

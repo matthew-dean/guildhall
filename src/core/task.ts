@@ -609,6 +609,10 @@ export const AcceptanceCriteria = z.preprocess(normalizeAcceptanceCriteria, z.ob
   verifiedBy: z.enum(ACCEPTANCE_VERIFIERS),
   source: z.enum(ACCEPTANCE_SOURCES).default('documented'),
   command: z.string().optional(), // for automated criteria
+  // Command-backed proofs default to a zero exit. Negative fixtures must say
+  // explicitly that a non-zero exit is the expected result.
+  expectedExit: z.enum(['zero', 'non_zero']).optional(),
+  expectedOutputIncludes: z.array(z.string()).optional(),
   evidenceHint: z.string().optional(),
   negativeCase: z.string().optional(),
   met: z.boolean().default(false),
@@ -1283,6 +1287,8 @@ export const Task = z.object({
       taskId: z.string(),
       status: z.string(),
       completedAt: z.string().optional(),
+      reopenedAt: z.string().optional(),
+      reopenReason: z.string().optional(),
       summary: z.object({
         journey: z.string(),
         decision: z.string(),

@@ -161,7 +161,7 @@ function boundedRecoveryText(value: string): string {
 }
 
 function compactRecoveryTail(messages: readonly ConversationMessage[]): ConversationMessage[] {
-  return messages.map(message => ({
+  const bounded = messages.map(message => ({
     ...message,
     content: message.content.map(block => {
       if (block.type === 'tool_result') {
@@ -177,6 +177,37 @@ function compactRecoveryTail(messages: readonly ConversationMessage[]): Conversa
             preview: boundedRecoveryText(encoded),
           },
         }
+      }
+      return block
+    }),
+  }))
+
+  if (JSON.stringify(bounded).length <= SESSION_RECOVERY_TAIL_MAX_CHARS) return bounded
+
+  // A pending tail is the only conversation detail allowed to survive a
+  // restart, so its bound is global rather than per tool result. Preserve the
+  // tool ids and names needed to resume, but make the payload itself a small
+  // checkpoint pointer when several tools returned large output together.
+  return bounded.map(message => ({
+    ...message,
+    content: message.content.map(block => {
+      if (block.type === 'tool_result') {
+        return {
+          ...block,
+          content: '[tool output omitted for bounded recovery; use the latest checkpoint and rerun the focused command]',
+        }
+      }
+      if (block.type === 'tool_use') {
+        return {
+          ...block,
+          input: {
+            _guildhallRecoveryInput: 'tool input omitted for bounded recovery; use the latest checkpoint',
+            tool: block.name,
+          },
+        }
+      }
+      if (block.type === 'text') {
+        return { ...block, text: '[conversation detail omitted for bounded recovery; use the latest checkpoint]' }
       }
       return block
     }),

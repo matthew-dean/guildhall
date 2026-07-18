@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs'
 
 import { atomicWriteText } from './atomic.js'
 import { getProjectSystemStatePath } from './local-history.js'
-import { markProjectStateDatabaseStale } from './project-state-database.js'
+import { markProjectStateDatabaseStale, readProjectStateDatabaseCurrentAuthority } from './project-state-database.js'
 import { emitProjectSummaryInvalidation } from './project-summary-invalidation.js'
 
 const PROJECT_SUMMARY_FILE = 'project-summary.json'
@@ -15,6 +15,13 @@ const PROJECT_SUMMARY_FILE = 'project-summary.json'
  */
 export function markProjectSummaryStale(projectRoot: string, reason = 'current-state-write'): void {
   const databaseRevision = markProjectStateDatabaseStale(projectRoot)
+  // Promoted projects have no file-backed summary authority. Keep the
+  // compatibility file untouched so it cannot masquerade as a current read
+  // model while SQLite is refreshing.
+  if (readProjectStateDatabaseCurrentAuthority(projectRoot) === 'database') {
+    emitProjectSummaryInvalidation(projectRoot, reason, databaseRevision === null ? {} : { revision: databaseRevision })
+    return
+  }
   try {
     const file = getProjectSystemStatePath(projectRoot, PROJECT_SUMMARY_FILE)
     if (!existsSync(file)) return

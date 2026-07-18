@@ -58,6 +58,15 @@ describe('taskKindFor', () => {
       spec: '## Design & Copy Decisions\nUse vanilla HTML, CSS, and JS.',
     }))).toBe('implementation')
   })
+  it('does not route ordinary evaluation language into research', () => {
+    const synopsisTask = task({
+      title: 'Build Synopsis generation pipeline',
+      description: 'Generate and evaluate a synopsis from the author brief.',
+      spec: 'Produce one serializable synopsis record and prove the saved result.',
+    })
+    expect(taskKindFor(synopsisTask)).toBe('implementation')
+    expect(assessTaskReadiness(synopsisTask).dimensions.find(dimension => dimension.id === 'uncertainty')?.status).not.toBe('blocked')
+  })
 })
 
 describe('assessTaskReadiness', () => {

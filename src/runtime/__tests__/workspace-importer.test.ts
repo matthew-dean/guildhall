@@ -15,6 +15,7 @@ import {
   createWorkspaceImportTask,
   workspaceNeedsImport,
   materializeWorkspaceImportDraft,
+  materializeParsedWorkspaceImport,
   approveWorkspaceImport,
   canonicalApprovedWorkspaceImport,
   parseWorkspaceImport,
@@ -736,6 +737,55 @@ describe('workspaceNeedsImport', () => {
     )).toBe(false)
   })
 
+  it('turns a bare imported test convention into an explicit proof-command setup step', async () => {
+    const materialized = await materializeWorkspaceImportDraft({
+      memoryDir,
+      projectPath: tmpDir,
+      draft: {
+        goals: [],
+        tasks: [{
+          suggestedId: 'task-context-packet',
+          title: 'Build the bounded context packet builder',
+          description: 'Select useful context and record why it was included.',
+          domain: 'harness',
+          scope: 'current',
+          priority: 'high',
+          references: [],
+          source: 'workspace-importer',
+          confidence: 'high',
+          acceptanceCriteria: [{
+            id: 'deterministic-proof',
+            description: 'The bounded context packet builder has deterministic local proof.',
+            verifiedBy: 'automated',
+            command: 'pnpm test',
+          }],
+          proofPaths: [{
+            kind: 'command',
+            source: 'documented',
+            command: 'pnpm test',
+            expectedEvidence: ['The bounded context packet builder has deterministic local proof.'],
+          }],
+        }],
+        milestones: [],
+        context: [],
+        stats: { inputSignals: 1, drafted: 1, deduped: 0 },
+      } satisfies WorkspaceImportDraft,
+    })
+
+    const task = materialized.tasks[0]
+    expect(task?.proofPaths?.some(path => path.command === 'pnpm test')).toBe(false)
+    expect(task?.proofPaths).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'command',
+        source: 'inferred',
+        launchSteps: [expect.objectContaining({
+          kind: 'blocked_until_setup',
+          setupRequirement: 'No repo-local pnpm script or CLI proof command is named yet.',
+        })],
+      }),
+    ]))
+  })
+
   it('does not attach neighboring unchecked checklist bullets to an explicit command task', async () => {
     await fs.writeFile(
       path.join(tmpDir, 'README.md'),
@@ -1010,6 +1060,43 @@ milestones:
     expect(parsed.milestones).toEqual([
       { title: 'Ship v0.1.0', evidence: 'abc12345' },
     ])
+  })
+
+  it('keeps structured acceptance proof expectations through import materialization', async () => {
+    const parsed = parseWorkspaceImport(`
+\`\`\`yaml
+tasks:
+  - id: t-negative-proof
+    title: Validate missing fixture behavior
+    description: The validator reports missing fixture files.
+    domain: harness
+    priority: high
+    acceptanceCriteria:
+      - id: missing-fixture
+        description: Missing fixture files produce a clear error.
+        scenario: Run the validator with a missing fixture.
+        expectation: The command reports a clear error.
+        verifiedBy: automated
+        command: pnpm exec node scripts/validate-fixture.mjs fixtures/missing
+        expectedExit: non_zero
+        expectedOutputIncludes: [fixture.json not found]
+\`\`\`
+`)
+
+    const materialized = await materializeParsedWorkspaceImport({
+      memoryDir,
+      projectPath: tmpDir,
+      parsed,
+    })
+
+    expect(materialized.tasks[0]?.acceptanceCriteria?.[0]).toMatchObject({
+      id: 'missing-fixture',
+      scenario: 'Run the validator with a missing fixture.',
+      expectation: 'The command reports a clear error.',
+      command: 'pnpm exec node scripts/validate-fixture.mjs fixtures/missing',
+      expectedExit: 'non_zero',
+      expectedOutputIncludes: ['fixture.json not found'],
+    })
   })
 
   it('prefers the durable approved snapshot over a stale importer spec', () => {

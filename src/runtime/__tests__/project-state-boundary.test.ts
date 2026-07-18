@@ -12,6 +12,7 @@ import {
   readProjectStateDatabaseTaskOverlay,
   upsertTaskRuntimeState,
   upsertTaskWorkspaceState,
+  writeProjectStateDatabaseAvailability,
 } from '@guildhall/sessions'
 import {
   promoteProjectStateDatabaseAuthority,
@@ -33,7 +34,11 @@ import {
   readProjectCurrentStateModel,
   readProjectMapStateModel,
   readProjectStateAuthorityAtBoundary,
+  readProjectSurfaceStateAtBoundary,
+  readProjectTaskRecordsAtBoundaryWithRevision,
+  readProjectTaskCurrentStateAtBoundary,
   readProjectTaskDetailState,
+  readProjectTaskDetailStateAtBoundary,
   readProjectTaskQueueForRichMutation,
   sanitizeTaskForProjectWrite,
   sanitizeTaskQueueForProjectWrite,
@@ -45,6 +50,69 @@ import {
 import { readProjectSummaryProjection } from '../project-summary-projection.js'
 
 describe('project-state-boundary', () => {
+  it('fails closed when a current-state database is present but unreadable', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-boundary-corrupt-db-'))
+    const tasksPath = getProjectSystemStatePath(root, 'TASKS.json')
+    const databasePath = projectStateDatabasePath(root)
+
+    try {
+      await fs.mkdir(path.dirname(databasePath), { recursive: true })
+      await fs.writeFile(databasePath, 'not a sqlite database', 'utf8')
+      await fs.writeFile(tasksPath, JSON.stringify({
+        version: 1,
+        lastUpdated: '2026-07-16T00:00:00.000Z',
+        tasks: [{ id: 'compatibility-only', title: 'Must not be reopened', status: 'ready' }],
+        releases: [],
+      }), 'utf8')
+
+      expect(readProjectStateAuthorityAtBoundary(tasksPath)).toMatchObject({
+        authority: 'database',
+        queueRevision: null,
+        projectRevision: 0,
+      })
+      expect(projectTaskStateExistsSync(tasksPath)).toBe(false)
+      expect(() => readProjectTaskQueueForMutationSync(tasksPath)).toThrow()
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps promoted point reads on the durable authority when compatibility data diverges', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-boundary-point-read-'))
+    const tasksPath = getProjectSystemStatePath(root, 'TASKS.json')
+    const queue = {
+      version: 1,
+      lastUpdated: '2026-07-16T00:00:00.000Z',
+      tasks: [{
+        id: 'task-point',
+        title: 'Durable task title',
+        status: 'ready',
+        createdAt: '2026-07-16T00:00:00.000Z',
+        updatedAt: '2026-07-16T00:00:00.000Z',
+      }],
+      releases: [],
+    }
+
+    try {
+      writeProjectTaskQueueWithSummary(tasksPath, queue, { projectRoot: root })
+      promoteProjectStateDatabaseAuthority(root)
+      writeManagedTextFileSync(tasksPath, JSON.stringify({
+        ...queue,
+        tasks: [{ ...queue.tasks[0], title: 'Stale compatibility title' }],
+      }, null, 2))
+
+      const read = readProjectTaskRecordsAtBoundaryWithRevision(tasksPath, ['task-point'])
+      expect(read.records).toEqual([expect.objectContaining({
+        id: 'task-point',
+        title: 'Durable task title',
+      })])
+      expect(read.queueRevision).toEqual(expect.any(Number))
+      expect(read.projectRevision).toEqual(expect.any(Number))
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('returns queue, projection, and authority from one current-state boundary', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-boundary-read-model-'))
     const tasksPath = getProjectSystemStatePath(root, 'TASKS.json')
@@ -74,6 +142,12 @@ describe('project-state-boundary', () => {
     try {
       writeProjectTaskQueueWithSummary(tasksPath, queue, { projectRoot: root })
       promoteProjectStateDatabaseAuthority(root)
+      writeProjectStateDatabaseAvailability(root, {
+        status: 'paused',
+        pausedAt: '2026-07-16T00:01:00.000Z',
+        resumedAt: null,
+        reason: 'test pause',
+      })
 
       const current = readProjectCurrentStateModel(tasksPath)
       expect(current.authority).toBe('database')
@@ -138,6 +212,24 @@ describe('project-state-boundary', () => {
         queue: { selectedReleaseId: 'release-current' },
         task: { id: 'task-current', title: 'Current task' },
         relationships: { taskId: 'task-current', parentId: null, childIds: [] },
+        availability: { status: 'paused', reason: 'test pause' },
+      })
+      expect(readProjectTaskDetailStateAtBoundary(tasksPath, 'task-current')).toMatchObject({
+        authority: 'database',
+        state: {
+          queueRevision: current.queueRevision,
+          projectRevision: current.projectRevision,
+          task: { id: 'task-current' },
+        },
+      })
+      const currentTask = await readProjectTaskCurrentStateAtBoundary(root, 'task-current')
+      expect(currentTask).toMatchObject({
+        authority: 'database',
+        state: {
+          queueRevision: current.queueRevision,
+          projectRevision: current.projectRevision,
+        },
+        task: { id: 'task-current', title: 'Current task' },
       })
       expect(readProjectStateAuthorityAtBoundary(tasksPath)).toMatchObject({
         authority: 'database',
@@ -153,6 +245,24 @@ describe('project-state-boundary', () => {
           total: 1,
           tasks: [{ id: 'task-current', title: 'Current task' }],
         },
+      })
+      const surface = readProjectSurfaceStateAtBoundary(root, {
+        includeThread: true,
+        includeAttention: true,
+        includeAvailability: true,
+        offset: 0,
+        limit: 10,
+      })
+      expect(surface).toMatchObject({
+        authority: 'database',
+        queueRevision: current.queueRevision,
+        projectRevision: current.projectRevision,
+        compact: {
+          queueRevision: current.queueRevision,
+          projectRevision: current.projectRevision,
+          inventory: { total: 1 },
+        },
+        availability: { status: 'paused', reason: 'test pause' },
       })
     } finally {
       await fs.rm(root, { recursive: true, force: true })
@@ -671,6 +781,60 @@ describe('project-state-boundary', () => {
       const untouchedAfter = afterDatabase.prepare('SELECT payload_gzip FROM work_item_detail WHERE task_id = ?').get('task-2') as { payload_gzip: Uint8Array }
       expect(Buffer.from(untouchedAfter.payload_gzip)).toEqual(Buffer.from(untouchedBefore.payload_gzip))
       afterDatabase.close()
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('does not resurrect historical completion when a promoted task is reopened', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-boundary-reopen-completion-'))
+    const tasksPath = getProjectSystemStatePath(root, 'TASKS.json')
+    const completedAt = '2026-07-15T00:00:00.000Z'
+    const queue = {
+      version: 1,
+      lastUpdated: completedAt,
+      tasks: [{
+        id: 'task-reopen',
+        title: 'Reopen me',
+        status: 'exploring',
+        completedAt,
+        doneSummaryBundle: {
+          taskId: 'task-reopen',
+          status: 'reopened',
+          completedAt,
+          reopenedAt: '2026-07-15T00:01:00.000Z',
+          reopenReason: 'Fresh spec pass',
+          summary: { journey: 'old', decision: 'old', evidence: 'old', learningCandidates: [], openResidue: 'old' },
+          retention: { transcriptPrimaryArtifact: false, compactedFullTranscript: false, fullEvidenceAvailable: true },
+          evidenceRefs: [],
+          createdAt: '2026-07-15T00:01:00.000Z',
+          createdBy: 'test',
+        },
+      }],
+    }
+
+    try {
+      writeProjectTaskQueueWithSummary(tasksPath, queue, { projectRoot: root })
+      promoteProjectStateDatabaseAuthority(root)
+
+      const result = writePromotedTaskDetailMutation(tasksPath, 'task-reopen', {
+        projectRoot: root,
+        mutate: task => {
+          task.completedAt = undefined
+          task.updatedAt = '2026-07-15T00:02:00.000Z'
+          return task
+        },
+      })
+
+      expect(result?.task).not.toHaveProperty('completedAt')
+      const point = readProjectStateDatabaseTaskPointWithRevision(tasksPath, 'task-reopen')
+      expect(point?.task.completedAt).toBeNull()
+      expect(point?.task.definition).toMatchObject({
+        doneSummaryBundle: expect.objectContaining({
+          status: 'reopened',
+          reopenReason: 'Fresh spec pass',
+        }),
+      })
     } finally {
       await fs.rm(root, { recursive: true, force: true })
     }

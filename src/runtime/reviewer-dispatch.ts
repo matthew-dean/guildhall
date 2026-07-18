@@ -289,6 +289,7 @@ export function applyDeterministicVerdict(
     ...(input.policyVersion !== undefined ? { policyVersion: input.policyVersion } : {}),
   }
   task.reviewVerdicts.push(record)
+  if (record.verdict === 'approve') recordApprovedReviewProof(task, input.now)
 
   const newStatus: TaskStatus = input.verdict.verdict === 'approve' ? 'gate_check' : 'in_progress'
   task.status = newStatus
@@ -343,20 +344,34 @@ function extractStructuredLlmVerdict(reasoning: string | undefined): ReviewVerdi
   return undefined
 }
 
-function recordApprovedReviewProof(task: Task, reasoning: string | undefined, now: string): void {
-  const text = reasoning?.trim() ?? ''
-  if (!text) return
-  if (!/\bacceptance-criteria-met\s*:\s*yes\b/i.test(text)) return
-  if (!/\bproof path:\*{0,2}\s*yes\b/i.test(text)) return
-
-  const proofPaths = (task as Task & { proofPaths?: Array<Record<string, unknown>> }).proofPaths
+export function recordApprovedReviewProof(
+  task: Task,
+  now: string,
+  recordedBy = 'reviewer-agent',
+): void {
+  const proofPaths = (task as unknown as { proofPaths?: Array<Record<string, unknown>> }).proofPaths
   if (!Array.isArray(proofPaths)) return
 
   for (const [index, proofPath] of proofPaths.entries()) {
     if (proofPath.kind !== 'review') continue
     const proofPathId = stableProofPathId(proofPath, index)
     if (typeof proofPath.id !== 'string' || !proofPath.id.trim()) proofPath.id = proofPathId
-    const expectedEvidence = Array.isArray(proofPath.expectedEvidence) ? proofPath.expectedEvidence : []
+    const rawExpectedEvidence = Array.isArray(proofPath.expectedEvidence) ? proofPath.expectedEvidence : []
+    const expectedEvidence = rawExpectedEvidence.map((rawEvidence, index) => {
+      if (rawEvidence && typeof rawEvidence === 'object' && !Array.isArray(rawEvidence)) {
+        return rawEvidence as Record<string, unknown>
+      }
+      return {
+        id: `${proofPathId}-evidence-${index}`,
+        kind: 'artifact',
+        description: String(rawEvidence),
+        required: true,
+      }
+    })
+    // Imported review paths historically stored bare strings. Canonicalize
+    // them before recording evidence so the persisted contract has stable
+    // evidence IDs that proof-health can match on every later read.
+    proofPath.expectedEvidence = expectedEvidence
     if (expectedEvidence.length === 0) continue
 
     const existingRecords = Array.isArray(proofPath.verificationRecords)
@@ -366,10 +381,7 @@ function recordApprovedReviewProof(task: Task, reasoning: string | undefined, no
       : []
     const currentRecords = [...existingRecords]
 
-    expectedEvidence.forEach((rawEvidence, index) => {
-      const evidence = rawEvidence && typeof rawEvidence === 'object' && !Array.isArray(rawEvidence)
-        ? rawEvidence as Record<string, unknown>
-        : { id: `${proofPathId}-evidence-${index}`, description: String(rawEvidence) }
+    expectedEvidence.forEach((evidence, index) => {
       if (evidence.required === false) return
       const evidenceId = typeof evidence.id === 'string' && evidence.id.trim()
         ? evidence.id.trim()
@@ -385,7 +397,7 @@ function recordApprovedReviewProof(task: Task, reasoning: string | undefined, no
         status: 'passed',
         summary: `Approved review verified: ${description}`,
         recordedAt: now,
-        recordedBy: 'reviewer-agent',
+        recordedBy,
         evidenceRefs: [],
       })
       currentRecords.splice(0, currentRecords.length, ...withoutCurrentRecord)
@@ -480,7 +492,7 @@ export function recordLlmVerdict(input: {
     recordedAt: input.now,
     ...(input.policyVersion !== undefined ? { policyVersion: input.policyVersion } : {}),
   }
-  if (verdict === 'approve') recordApprovedReviewProof(task, reasoning, input.now)
   task.reviewVerdicts.push(record)
+  if (verdict === 'approve') recordApprovedReviewProof(task, input.now)
   return { record, normalizedStatus }
 }

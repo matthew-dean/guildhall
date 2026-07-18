@@ -302,18 +302,6 @@ function installFetchFakesWithPendingProject(projectPayload: ProjectDetail = det
   const pendingProject = deferredResponse()
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input), 'http://localhost')
-    if (url.pathname === '/api/service') {
-      return json({
-        projects: [{
-          id: projectPayload.id,
-          name: projectPayload.name,
-          path: projectPayload.path,
-          summary: projectPayload.summary ?? 'Current project summary loaded.',
-          summaryFreshness: 'current',
-          actionModel: projectPayload.actionModel ?? null,
-        }],
-      })
-    }
     if (url.pathname === '/api/project') return pendingProject.promise
     if (url.pathname === '/api/project/spine') return json({ spine: projectPayload.orientationSpine ?? null })
     if (url.pathname === '/api/project/inbox') return json({ blockers: { bootstrap: false, workspaceImport: false }, items: [] })
@@ -1040,7 +1028,7 @@ describe('ProjectView', () => {
     expect(screen.getByText(/Run finished: 1 done\./i)).toBeInTheDocument()
   })
 
-  it('renders a compact summary while the selected surface detail loads', async () => {
+  it('uses one project request while the selected surface detail loads', async () => {
     const projectPayload = detail({
       startReadiness: { canStart: false, code: 'all_terminal', message: 'Stage 1 is complete.' },
       orientationSpine: {
@@ -1090,10 +1078,9 @@ describe('ProjectView', () => {
 
     render(ProjectView, { initialView: 'overview', initialSub: null, projectId: 'looma-knit' })
 
-    await waitFor(() => expect(screen.getByText(/Current project summary loaded\./)).toBeInTheDocument())
-    expect(overviewFetch).toHaveBeenCalledWith('/api/service?projectId=looma-knit', { cache: 'no-store' })
+    expect(screen.getByText('Loading project...')).toBeInTheDocument()
+    expect(overviewFetch.mock.calls.map(([input]) => String(input)).some(input => input.startsWith('/api/service?projectId='))).toBe(false)
     expect(overviewFetch).not.toHaveBeenCalledWith('/api/project/spine?surface=overview&projectId=looma-knit', { cache: 'no-store' })
-    expect(screen.queryByText('Loading project...')).toBeNull()
     pendingOverview.resolve(json(projectPayload))
     await waitFor(() => expect(screen.getByRole('region', { name: 'Project overview' })).toBeInTheDocument())
 
@@ -1104,8 +1091,8 @@ describe('ProjectView', () => {
 
     render(ProjectView, { initialView: 'map', initialSub: null, projectId: 'looma-knit' })
 
-    await waitFor(() => expect(screen.getByText(/Current project summary loaded\./)).toBeInTheDocument())
-    expect(mapFetch).toHaveBeenCalledWith('/api/service?projectId=looma-knit', { cache: 'no-store' })
+    expect(screen.getByText('Loading project...')).toBeInTheDocument()
+    expect(mapFetch.mock.calls.map(([input]) => String(input)).some(input => input.startsWith('/api/service?projectId='))).toBe(false)
     expect(mapFetch).not.toHaveBeenCalledWith('/api/project/spine?projectId=looma-knit', { cache: 'no-store' })
     pendingMapProject.resolve(json(projectPayload))
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Project map' })).toBeInTheDocument())

@@ -4,7 +4,7 @@ import { readFileSync, existsSync, mkdirSync, statSync, writeFileSync, readdirSy
 import { dirname, join, resolve, basename, relative, isAbsolute, sep as pathSeparator, extname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { homedir } from 'node:os'
-import { execFile, execFileSync } from 'node:child_process'
+import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import type { Context } from 'hono'
@@ -20,44 +20,43 @@ import {
   getProjectRuntimeStatePath,
   getProjectSystemStatePath,
   getProjectTranscriptPath,
-  readProjectStateDatabaseInventory,
-  readProjectStateDatabaseMetadata,
-  readProjectStateDatabaseQueue,
-  readProjectStateDatabaseQueueRevision,
-  readProjectStateDatabaseQueueWithRevision,
-  readProjectStateDatabaseQueueDefinition,
-  readProjectStateDatabaseCurrentAuthority,
-  readProjectStateDatabaseCurrentThread,
-  readProjectStateDatabaseThreadHistorySurfaceState,
-  readProjectStateDatabaseThreadSurfaceState,
-  readProjectStateDatabaseTasks,
-  readProjectStateDatabaseTaskPoint,
-  readProjectStateDatabaseTaskRelationships,
-  readProjectStateDatabaseTaskEvidenceCurrentMany,
-  readProjectStateDatabaseRepository,
   claimProjectStateDatabaseProjectionJobs,
   failProjectStateDatabaseProjectionJob,
   writeProjectStateDatabaseDiagnosticProjection,
   PROJECT_STATE_DATABASE_DIAGNOSTIC_PROJECTION_DOMAIN,
+  writeProjectStateDatabaseMemoryHealth,
   writeProjectStateDatabaseReleaseSelectionMutation,
-  readTaskEvidence,
-  readTaskEvidencePage,
+  replaceProjectStateDatabaseRepositories,
   registerProjectCacheWorkspace,
   emitProjectSummaryInvalidation,
   subscribeProjectSummaryInvalidations,
   upsertTaskRuntimeState,
   type ProjectStateDatabaseScopeRow,
   type ProjectStateDatabaseDiagnosticProjectionSnapshot,
+  type ProjectStateDatabaseTask,
+  type ProjectStateDatabaseRepository,
 } from '@guildhall/sessions'
 import { readTaskRuntimeStore, readTaskWorkspaceStore, writeTaskRuntimeStore } from './task-state-store.js'
 import { classifyCompletionProof, latestRecordedCompletionProofAt, recordedCompletionProofForTask, taskHasRecordedCompletionProof } from './task-completion-proof.js'
-import { normalizeAcceptanceCriteriaForCurrentProof, taskDoneButProofMissing, taskHasNonReviewCommandBackedProof, taskProofIsStale } from './proof-health.js'
+import { normalizeAcceptanceCriteriaForCurrentProof, taskDoneButProofMissing, taskDoneButProofMissingForScope, taskDoneButReviewConflict, taskHasNonReviewCommandBackedProof, taskHasScriptProofPath, taskProofIsStale } from './proof-health.js'
+import { closeReleaseIfReady } from './release-lifecycle.js'
+import { comparableCommand, ensureCommandProofPathsFromAcceptanceCriteria, isConcreteProjectProofCommand } from './proof-paths.js'
 import { normalizeReviewPlanForTask } from './review-planner.js'
 import { taskBlockerSummary } from './task-blocker-summary.js'
-import { buildProjectSummaryProjection, prepareProjectSummaryProjectionFromUnknownQueue, queueForProjectSummaryScope, readApprovedPlan, readProjectSummaryProjection, readProjectSummaryShellProjection, updateProjectSummaryProjection, writeProjectSummaryProjectionFromIndexedState, writeProjectSummaryProjectionFromUnknownQueue, type ProjectSummaryProjection } from './project-summary-projection.js'
+import { applyOwnerInputToStartReadiness, buildProjectSummaryProjection, prepareProjectSummaryProjectionFromUnknownQueue, queueForProjectSummaryScope, readApprovedPlan, updateProjectSummaryProjection, writeProjectSummaryProjectionFromIndexedState, writeProjectSummaryProjectionFromUnknownQueue, type ProjectSummaryProjection } from './project-summary-projection.js'
 import { inferProjectOrientationSnapshot } from './project-orientation-snapshot.js'
 import { refreshCurrentThreadProjection } from './current-thread-refresh.js'
-import { projectTaskRecordFromDatabasePoint, projectTaskStateExistsSync, readProjectCanonicalCurrentState, readProjectCompactStateModel, readProjectCurrentStateModel, readProjectGraphStateModel, readProjectReleaseState, readProjectSavedReleaseState, readProjectStateAuthorityAtBoundary, readProjectSummaryAtBoundary, readProjectTaskDetailState, readProjectTaskQueue, readProjectTaskQueueForRichMutation, readProjectTaskQueueForMutationSync, readProjectTaskQueueSync, readProjectTaskRecordAtBoundary, readProjectTaskRecordsAtBoundary, writePromotedTaskDetailMutation, writeProjectTaskQueueAtCurrentStateBoundary, writeProjectTaskQueueWithSummary, type ProjectCanonicalCurrentState, type ProjectCompactStateReadModel, type ProjectReleaseReadModel, type ProjectSavedReleaseReadModel } from './project-state-boundary.js'
+import { readCurrentThreadTaskIdsAtBoundary, readThreadHistoryReadProjection, readThreadReadProjection, threadReadProjectionFromBoundary } from './thread-read-projection.js'
+import {
+  bootstrapFleetSummaryProjection,
+  fleetSummaryDependsOnDomains,
+  markAllFleetSummariesStaleAtBoundary,
+  markFleetSummaryErrorAtBoundary,
+  markFleetSummaryStaleAtBoundary,
+  publishFleetSummaryProjection,
+  pruneFleetSummaryProjectionAtBoundary,
+} from './fleet-summary-projection.js'
+import { ProjectStateRevisionMismatchError, projectTaskRecordFromDatabasePoint, projectTaskStateExistsSync, readProjectCanonicalCurrentState, readProjectCompactStateModel, readProjectCurrentStateModel, readProjectGraphStateModel, readProjectMemoryHealthSourceAtBoundary, readProjectProgressStateAtBoundary, readProjectProjectionMetadataAtBoundary, readProjectReleaseState, readProjectRepositoryProjectionAtBoundary, readProjectStateAuthorityAtBoundary, readProjectSummaryForProjectAtBoundary, readProjectSummaryShellAtBoundary, readProjectSurfaceStateAtBoundary, readProjectTaskCurrentRecordsAtBoundary, readProjectTaskCurrentStateAtBoundary, readProjectTaskDetailStateAtBoundary, readProjectTaskEvidencePageAtBoundary, readProjectTaskQueue, readProjectTaskQueueAtBoundaryWithRevision, readProjectTaskQueueForRichMutation, readProjectTaskQueueForMutationSync, readProjectTaskQueueSync, readProjectTaskRecordAtBoundary, readProjectTaskRecordsAtBoundary, readProjectTaskRecordsAtBoundaryWithRevision, writePromotedTaskDetailMutation, writeProjectTaskQueueAtCurrentStateBoundary, writeProjectTaskQueueWithSummary, type ProjectCanonicalCurrentState, type ProjectCompactStateReadModel, type ProjectReleaseReadModel, type ProjectSavedReleaseReadModel } from './project-state-boundary.js'
 import { taskTitleOverlap } from './task-title-overlap.js'
 import {
   readWorkspaceConfig,
@@ -134,7 +133,7 @@ import {
   reviewersForTask,
   pickPrimaryEngineer,
 } from '@guildhall/guilds'
-import { OrchestratorSupervisor, readPersistedEventPage } from './serve-supervisor.js'
+import { OrchestratorSupervisor, readPersistedEventPage, recoverOrphanedExecutionProjection } from './serve-supervisor.js'
 import { repairWeakRecoverySpecReviewSeedInQueue } from './orchestrator.js'
 import { resolveFanoutCapacity } from './fanout-dispatcher.js'
 import { applySourceConflictReconciliation } from './source-conflict-reconciliation.js'
@@ -253,6 +252,7 @@ import {
   buildTaskContextPacket,
   deriveQueueCandidates,
   deriveTaskRelationships,
+  emptyProjectDeliveryModel,
   listPrimitivesWithRelations,
   planTaskSplit,
   readProjectDeliveryModel,
@@ -264,11 +264,10 @@ import {
 } from './delivery-spine.js'
 import {
   contextPacketFromDeliveryReadProjection,
-  readProjectDeliveryReadProjection,
-  readProjectDeliveryTaskProjection,
+  readProjectDeliveryLegacyTasks,
+  readProjectDeliveryReadProjectionWithAuthority,
   refreshProjectDeliveryReadProjection,
 } from './delivery-read-projection.js'
-import { readProjectDetailReadProjection } from './project-detail-read-projection.js'
 import {
   applyStructuralMapReviewAction,
   readAcceptedStructuralMap,
@@ -338,6 +337,7 @@ import {
 import { importedTaskNeedsBriefShaping, importedTaskNeedsSourceRecovery, normalizeImportedDraftTask } from './import-drafts.js'
 import { taskShapingBlockers } from '../shared/task-shaping-blockers.js'
 import { buildReleaseCompletionSummary, buildReleaseVerdictSummary } from '../shared/release-readiness.js'
+import { ownerInputObjectiveLabel } from '../shared/owner-input-label.js'
 import { selectedReleaseScopeForQueue, selectedTaskScopeForQueue } from './orchestrator-picker.js'
 import { specReviewRequiresOwnerApproval } from './spec-review-ownership.js'
 import {
@@ -354,11 +354,10 @@ import {
   buildProjectMigrationAdvisories,
   buildProjectUnderstandingAdvisories,
   markAttentionDismissed,
-  readAttentionRecords,
   recordReconciliationResolved,
   type AttentionRecord,
 } from './attention.js'
-import { materializeAttentionProjection, previewAttentionProjection, readSavedAttentionSurface } from './attention-projection.js'
+import { materializeAttentionProjection, previewAttentionProjection, readSavedAttentionSurface, readSavedAttentionSurfaceFromBoundary } from './attention-projection.js'
 import { createProjectProjectionRefreshScheduler, type ProjectProjectionInvalidation, type ProjectProjectionRefreshScheduler } from './project-projection-refresh.js'
 import { createProjectProjectionFreshnessWatcher } from './project-projection-freshness-watcher.js'
 import { projectRuntimeCompatibilityBlocker } from './runtime-compatibility.js'
@@ -382,10 +381,9 @@ import {
   ProjectRuntimeCommandRequest,
   suggestedCapabilityMountForHostPath,
 } from './project-runtime-command.js'
-import { listMemoryRecords } from './memory-store.js'
-import { buildMemoryCoreCandidatePacket, resolveMemoryPaths } from '@guildhall/memory-core'
 import { readProjectRuntimeState } from './project-runtime-store.js'
 import {
+  defaultProjectAvailabilityState,
   pauseProjectAvailability,
   readProjectAvailability,
   resumeProjectAvailability,
@@ -399,7 +397,7 @@ import {
   runRuntimeBackendSetupAction,
   type RuntimeBackendSetupDetector,
 } from './runtime-backend-setup.js'
-import { buildProjectActionModel, type ProjectActionModel } from './project-action-model.js'
+import { applyRunStatusToStartReadiness, buildProjectActionModel, type ProjectActionModel } from './project-action-model.js'
 import { NodeGitDriver } from './git-driver.js'
 import {
   GitStoryClosureState,
@@ -417,6 +415,7 @@ import {
 } from './git-story-policy.js'
 import { taskHasUnansweredVisibleQuestion } from './question-visibility.js'
 import { validateSpecCompletionBoundary } from './spec-quality.js'
+import { hasUsableBlueprint } from './task-plan-recovery.js'
 import { repairCompletionProofCriteriaForProjectWithEvidence } from './stale-blocker-repair.js'
 import {
   buildCoordinatorProjectPathMap,
@@ -424,7 +423,8 @@ import {
 } from './task-project-path.js'
 import { buildEffectiveTask, buildEffectiveTasks, effectiveTaskStatus } from './effective-task.js'
 import { buildDoneTaskSummaryBundle } from './done-task-summary.js'
-import { readContextDebugForTask } from './context-observability.js'
+import { readContextDebugForTasks } from './context-observability.js'
+import { buildProjectMemoryHealthProjection } from './project-memory-health.js'
 import { createReviewAuditStore } from './review-audit-store.js'
 import { userFacingText } from './user-facing-text.js'
 import { FileBackedGuildhallPersistence } from '@guildhall/persistence'
@@ -921,6 +921,24 @@ type NormalizedTaskQueue = {
   lastUpdated?: string
 }
 
+type StartStateSnapshot = {
+  queue?: NormalizedTaskQueue
+  effectiveTasks?: Task[]
+  /** `null` is meaningful: it says this revision has no selected scope. */
+  scope?: ProjectScope | null
+  /** Owner-input state captured in the same current-state summary snapshot. */
+  ownerInput?: ProjectSummaryProjection['ownerInput'] | null
+}
+
+type StartExecutionScopeSummary = {
+  id: string
+  label: string
+  kind: string
+  source?: string
+  taskCount?: number
+  deferredTaskCount?: number
+}
+
 /**
  * The one current-state read boundary for release/detail work. `rawQueue` is
  * the canonical saved definition envelope; `tasks` is its current effective
@@ -941,9 +959,10 @@ async function readTasksFileNormalized(
   tasksPath: string,
   options: { repair?: boolean } = {},
 ): Promise<Array<Record<string, unknown>>> {
-  if (!projectTaskStateExistsSync(tasksPath)) return []
+  const currentState = readProjectCurrentStateModel(tasksPath)
+  if (currentState.authority !== 'database') return []
   const mutationRead = options.repair === true ? readProjectTaskQueueForMutationSync(tasksPath) : null
-  const parsed = (mutationRead?.queue ?? readProjectCurrentStateModel(tasksPath).queue) as {
+  const parsed = (mutationRead?.queue ?? currentState.queue) as {
     tasks?: Array<Record<string, unknown>>
     version?: unknown
     lastUpdated?: unknown
@@ -1039,8 +1058,8 @@ async function readTaskQueueFileNormalized(
   tasksPath: string,
   options: { repair?: boolean } = {},
 ): Promise<NormalizedTaskQueue> {
-  if (!projectTaskStateExistsSync(tasksPath)) return { tasks: [], releases: [] }
   const currentState = readProjectCurrentStateModel(tasksPath)
+  if (currentState.authority !== 'database') return { tasks: [], releases: [] }
   const parsed = currentState.queue as {
     tasks?: Array<Record<string, unknown>>
     releases?: ProjectRelease[]
@@ -1050,12 +1069,11 @@ async function readTaskQueueFileNormalized(
   const tasks = options.repair === true
     ? await readTasksFileNormalized(tasksPath, options)
     : (Array.isArray(parsed.tasks) ? parsed.tasks.map(task => ({ ...task })) : [])
-  const parsedReleases = parsed.releases.map(release => persistableProjectRelease(release as unknown as ProjectRelease))
+  const parsedReleases = (parsed.releases ?? []).map(release => persistableProjectRelease(release as unknown as ProjectRelease))
   const parsedSelectedReleaseId = typeof parsed.selectedReleaseId === 'string' ? parsed.selectedReleaseId : undefined
-  const databaseAuthority = readProjectStateAuthorityAtBoundary(tasksPath).authority === 'database'
   const releases = parsedReleases
   const selectedReleaseId =
-    parsedSelectedReleaseId && (databaseAuthority || releases.some(release => release.id === parsedSelectedReleaseId))
+    parsedSelectedReleaseId && releases.some(release => release.id === parsedSelectedReleaseId)
       ? parsedSelectedReleaseId
       : undefined
   const lastUpdated = typeof parsed.lastUpdated === 'string' ? parsed.lastUpdated : undefined
@@ -1090,7 +1108,7 @@ async function readProjectDeliveryTasks(projectRoot: string): Promise<Array<Reco
     if (!snapshot) throw new Error(`Authoritative delivery projection is unavailable for ${tasksPath}; refresh the project state first.`)
     return snapshot.inventory.tasks.map(projectTaskRecordFromDatabasePoint)
   }
-  return readTasksFileNormalized(tasksPath)
+  return readProjectDeliveryLegacyTasks(projectRoot)
 }
 
 /**
@@ -1104,6 +1122,35 @@ async function readProjectTaskForServe(tasksPath: string, taskId: string): Promi
   if (readProjectStateAuthorityAtBoundary(tasksPath).authority === 'database') return null
   const tasks = await readProjectTasksForServe(tasksPath)
   return tasks.find(task => task.id === taskId) ?? null
+}
+
+interface ProjectTaskEndpointRead {
+  task: Record<string, unknown>
+  authority: 'database' | 'legacy'
+  queueRevision: number | null
+  projectRevision: number | null
+}
+
+/** One task point for bounded task tabs, carrying the source revision. */
+async function readProjectTaskEndpointPoint(
+  projectRoot: string,
+  taskId: string,
+): Promise<ProjectTaskEndpointRead | null> {
+  const tasksPath = projectTasksPath(projectRoot)
+  const detail = readProjectTaskDetailStateAtBoundary(tasksPath, taskId)
+  if (detail?.authority === 'database') {
+    if (!detail.state) return null
+    return {
+      task: projectTaskRecordFromDatabasePoint(detail.state.task),
+      authority: 'database',
+      queueRevision: detail.state.queueRevision,
+      projectRevision: detail.state.projectRevision,
+    }
+  }
+  const task = await readProjectTaskForServe(tasksPath, taskId)
+  return task
+    ? { task, authority: 'legacy', queueRevision: null, projectRevision: null }
+    : null
 }
 
 async function writeTasksFilePreservingQueue(
@@ -1121,7 +1168,7 @@ async function writeTasksFilePreservingQueue(
     parsed = queueRead.queue as typeof parsed
     expectedQueueRevision = queueRead.expectedQueueRevision
   } catch (error) {
-    if (readProjectStateDatabaseQueueRevision(tasksPath) !== null) throw error
+    if (readProjectStateAuthorityAtBoundary(tasksPath).authority === 'database') throw error
     parsed = null
   }
   const rewritten = {
@@ -1155,7 +1202,7 @@ async function writeTaskQueueFilePreservingQueue(
     parsed = queueRead.queue as typeof parsed
     expectedQueueRevision = queueRead.expectedQueueRevision
   } catch (error) {
-    if (readProjectStateDatabaseQueueRevision(tasksPath) !== null) throw error
+    if (readProjectStateAuthorityAtBoundary(tasksPath).authority === 'database') throw error
     parsed = null
   }
   const rewritten = Array.isArray(parsed)
@@ -1180,7 +1227,7 @@ async function writeTaskQueueFilePreservingQueue(
   invalidateTaskQueueReadCaches(tasksPath)
 }
 
-async function writeSelectedReleaseId(
+async function writeProjectReleaseEnvelope(
   tasksPath: string,
   releaseId: string,
   candidateReleases: readonly ProjectRelease[] = [],
@@ -1589,6 +1636,9 @@ async function repairWeakRecoverySpecReviewTask(projectPath: string, requestedTa
   if (readProjectStateAuthorityAtBoundary(tasksPath).authority === 'database') {
     const queueRead = readProjectTaskQueueForMutationSync(tasksPath)
     const queue = TaskQueue.parse(queueRead.queue)
+    const taskIndex = queue.tasks.findIndex(candidate => candidate.id === requestedTaskId)
+    if (taskIndex < 0) return false
+    queue.tasks[taskIndex] = await buildEffectiveTask(projectPath, queue.tasks[taskIndex], { evidence: 'full' })
     const repaired = repairWeakRecoverySpecReviewSeedInQueue(queue, {
       taskId: requestedTaskId,
       now,
@@ -1634,6 +1684,9 @@ async function repairWeakRecoverySpecReviewTask(projectPath: string, requestedTa
     releases: normalized.releases,
     ...(normalized.selectedReleaseId ? { selectedReleaseId: normalized.selectedReleaseId } : {}),
   } as TaskQueue
+  const taskIndex = queue.tasks.findIndex(candidate => candidate.id === requestedTaskId)
+  if (taskIndex < 0) return false
+  queue.tasks[taskIndex] = await buildEffectiveTask(projectPath, queue.tasks[taskIndex], { evidence: 'full' })
   const repaired = repairWeakRecoverySpecReviewSeedInQueue(queue, {
     taskId: requestedTaskId,
     now,
@@ -1670,7 +1723,11 @@ function formatServerTiming(metrics: Array<{ name: string; startedAt: number; en
     const databaseAuthority = readProjectStateAuthorityAtBoundary(tasksPath).authority === 'database'
     try {
       if (!inboxTaskStateOverride && readProjectStateAuthorityAtBoundary(tasksPath).authority === 'database') {
-        const currentQueue = readProjectStateDatabaseQueue(tasksPath)
+        const currentQueue = await readProjectTaskQueue(tasksPath) as {
+          tasks?: unknown[]
+          releases?: unknown[]
+          selectedReleaseId?: string
+        } | null
         if (currentQueue) {
           const currentTasks = input.materializeAttention
             ? await buildEffectiveTasks(input.projectPath, currentQueue.tasks as Task[], { evidence: 'current' })
@@ -1689,8 +1746,8 @@ function formatServerTiming(metrics: Array<{ name: string; startedAt: number; en
         const effectiveTasks = await buildEffectiveTasks(input.projectPath, rawQueue.tasks as Task[])
         inboxTaskStateOverride = {
           ...rawQueue,
-          tasks: effectiveTasks as Task[],
-        }
+          tasks: effectiveTasks as unknown as Task[],
+        } as TaskQueue
       }
     } catch {
       /* fall back to raw inbox state rather than breaking the endpoint */
@@ -1758,28 +1815,56 @@ function formatServerTiming(metrics: Array<{ name: string; startedAt: number; en
   }
   }
 
-function readProjectRepositorySignature(projectRoot: string): string | null {
-    const workspaceConfig = readWorkspaceConfig(projectRoot)
-    const childProjects = workspaceConfig.kind === 'workspace'
-      ? resolveWorkspaceProjectPathsOrDiscover(projectRoot, workspaceConfig)
-      : discoverChildGitProjects(projectRoot)
-    const roots = [...new Set([projectRoot, ...childProjects.map(child => child.path)])]
-    return roots.map(root => {
-      try {
-        const status = execFileSync('git', [
-          'status', '--porcelain=v1', '--branch', '--untracked-files=all',
-        ], {
-          cwd: root,
-          encoding: 'utf8',
-          timeout: 750,
-          maxBuffer: 64 * 1024,
-          stdio: ['ignore', 'pipe', 'ignore'],
-        })
-        return `${root}:${status.slice(0, 64 * 1024)}`
-      } catch {
-        return `${root}:not_git`
-      }
-    }).join('\n')
+/**
+ * Persist root/child repository observations before any derived diagnostic is
+ * published. Git is an external observation, not current project state; the
+ * sessions writer is the only place where it becomes a bounded, revisioned
+ * project projection.
+ */
+async function refreshProjectRepositoryObservation(projectRoot: string): Promise<void> {
+  const workspaceConfig = readWorkspaceConfig(projectRoot)
+  const childProjects = workspaceConfig.kind === 'workspace'
+    ? resolveWorkspaceProjectPathsOrDiscover(projectRoot, workspaceConfig)
+    : discoverChildGitProjects(projectRoot)
+  const roots = childProjects.length > 0
+    ? childProjects.map(child => ({ id: child.id, label: child.label ?? child.id, path: child.path }))
+    : [{ id: 'workspace', label: basename(projectRoot), path: projectRoot }]
+  const driver = new NodeGitDriver()
+  const snapshots = await Promise.all(roots.map(root => inspectGitStory(driver, {
+    repoRoot: root.path,
+    repoId: root.id,
+    repoLabel: root.label,
+    inspectedPath: root.path,
+    inspectPr: false,
+  })))
+  const repositories: ProjectStateDatabaseRepository[] = await Promise.all(snapshots.map(async snapshot => {
+    const head = await execFileP('git', ['rev-parse', 'HEAD'], {
+      cwd: snapshot.repoRoot,
+      timeout: 750,
+      maxBuffer: 4 * 1024,
+    }).then(result => result.stdout.trim() || null).catch(() => null)
+    return {
+      id: `repo:${snapshot.repoId ?? snapshot.repoRoot}`,
+      root: snapshot.repoRoot,
+      ...(snapshot.branch ? { branch: snapshot.branch } : {}),
+      ...(head ? { head } : {}),
+      status: snapshot.state,
+      freshness: 'current',
+      inspectedAt: snapshot.inspectedAt,
+      payload: {
+        state: snapshot.state,
+        ...(snapshot.upstream ? { upstream: snapshot.upstream } : {}),
+        ahead: snapshot.ahead,
+        behind: snapshot.behind,
+        changedCount: snapshot.changedCount,
+        untrackedCount: snapshot.untrackedCount,
+        samplePaths: snapshot.samplePaths.slice(0, 12),
+        reason: snapshot.reason,
+        nextAction: snapshot.nextAction,
+      },
+    }
+  }))
+  replaceProjectStateDatabaseRepositories(projectRoot, repositories)
 }
 
 async function refreshProjectProjections(
@@ -1805,6 +1890,10 @@ async function refreshProjectProjections(
     const threadOnly = domains.size > 0 && [...domains].every(domain => domain === 'thread')
     const attentionOnly = eventDomains.size > 0 && [...eventDomains].every(domain => domain === 'reconciliation')
     const attentionAlreadyProjected = eventDomains.size > 0 && [...eventDomains].every(domain => domain === 'attention')
+    const shouldRefreshRepositories = databaseAuthority && !threadOnly && !attentionOnly && (
+      domains.has('repository') ||
+      domains.has('diagnostics')
+    )
     const failClaimedJobs = (error: unknown): void => {
       const message = error instanceof Error ? error.message : String(error)
       for (const job of claimedJobs) failProjectStateDatabaseProjectionJob(resolved.path, job.id, message)
@@ -1819,13 +1908,15 @@ async function refreshProjectProjections(
         return
       }
       let taskStateOverride: TaskQueue | undefined
+      if (shouldRefreshRepositories) {
+        await refreshProjectRepositoryObservation(resolved.path)
+      }
       if (!attentionOnly) {
-      const metadata = databaseAuthority ? readProjectStateDatabaseMetadata(resolved.path) : null
+      const metadata = databaseAuthority ? readProjectProjectionMetadataAtBoundary(resolved.path) : null
       const compactRefreshDomains = new Set([
-        'queue', 'scope', 'release', 'delivery', 'attention', 'reconciliation', 'thread', 'diagnostics',
+        'queue', 'scope', 'release', 'delivery', 'attention', 'reconciliation', 'thread', 'diagnostics', 'memory',
       ])
       const needsDetailProjection = !databaseAuthority ||
-        domains.size === 0 ||
         domains.has('legacy') ||
         [...domains].some(domain => !compactRefreshDomains.has(domain)) ||
         metadata?.summaryFreshness !== 'current'
@@ -1833,8 +1924,9 @@ async function refreshProjectProjections(
         // Promoted projects already have the facts needed for Summary/Action/
         // Release in indexed rows. Do not reopen rich task detail or expand
         // every task's runtime/evidence overlay just to refresh a card.
-        const queue = readProjectStateDatabaseQueue(tasksPath)
-        const queueRevision = readProjectStateDatabaseQueueRevision(tasksPath)
+        const queueRead = readProjectTaskQueueAtBoundaryWithRevision(tasksPath)
+        const queue = queueRead.definition as { tasks?: unknown[]; lastUpdated?: string; releases?: unknown[]; selectedReleaseId?: string } | null
+        const queueRevision = queueRead.revision
         const indexedProjection = writeProjectSummaryProjectionFromIndexedState(tasksPath, {
           projectId: resolved.id,
           sourceQueueLastUpdated: queue?.lastUpdated ?? null,
@@ -1856,7 +1948,7 @@ async function refreshProjectProjections(
         // Evidence/runtime/legacy invalidations can change scoped readiness
         // and proof blockers. Rebuild those facts in the asynchronous write
         // projector, never in the request that is serving a card.
-        const queueRead = databaseAuthority ? readProjectStateDatabaseQueueWithRevision(tasksPath) : null
+        const queueRead = databaseAuthority ? readProjectTaskQueueAtBoundaryWithRevision(tasksPath) : null
         const queue = queueRead?.definition ?? await readProjectTaskQueue(tasksPath)
         if (queue !== null && queue !== undefined) {
           const parsedQueue = TaskQueue.safeParse(queue)
@@ -1880,6 +1972,32 @@ async function refreshProjectProjections(
         }
       }
       }
+      const shouldRefreshMemoryHealth = databaseAuthority && (
+        domains.size === 0 ||
+        domains.has('memory') ||
+        domains.has('queue') ||
+        domains.has('scope') ||
+        domains.has('release')
+      )
+      if (shouldRefreshMemoryHealth) {
+        // Capture the task ids and revision from the same bounded sessions
+        // snapshot. The projector may inspect raw memory sources, but it may
+        // never pair those results with a queue read from another revision.
+        const memoryRead = readProjectMemoryHealthSourceAtBoundary(tasksPath)
+        const projectRevision = memoryRead?.projectRevision ?? null
+        if (memoryRead?.authority === 'database' && projectRevision !== null) {
+          const health = await buildProjectMemoryHealthProjection(
+            resolved.path,
+            memoryRead.taskIds.map(id => ({ id })),
+          )
+          writeProjectStateDatabaseMemoryHealth(resolved.path, {
+            sourceRevision: projectRevision,
+            freshness: 'current',
+            generatedAt: new Date().toISOString(),
+            payload: health,
+          })
+        }
+      }
       if (databaseAuthority) {
         const deliveryProjectionDomains = new Set([
           'queue', 'scope', 'release', 'delivery', 'evidence', 'task-runtime',
@@ -1898,8 +2016,11 @@ async function refreshProjectProjections(
         PROJECT_STATE_DATABASE_DIAGNOSTIC_PROJECTION_DOMAIN, 'queue', 'scope', 'release', 'task-runtime',
         'workspace', 'evidence', 'repository', 'config', 'legacy',
       ])
+      // Diagnostics are an optional, Git-backed detail projection. A default
+      // startup refresh already builds the compact summary; running the
+      // diagnostic pass here would expand effective tasks and inspect every
+      // repository a second time before the fleet is usable.
       const shouldRefreshDiagnostics = databaseAuthority && (
-        domains.size === 0 ||
         [...domains].some(domain => diagnosticDomains.has(domain))
       )
       // Keep the current Thread projection independent from the attention
@@ -1922,7 +2043,35 @@ async function refreshProjectProjections(
       if (shouldRefreshDiagnostics && options.refreshDiagnostic) {
         await options.refreshDiagnostic(resolved.path)
       }
+      // The machine fleet is a consumer of the same saved project summary,
+      // never a second summarizer. Publish only after the project projections
+      // above have committed so fleet cards point at the completed revision.
+      const fleetAuthority = readProjectStateAuthorityAtBoundary(tasksPath)
+      const fleetSummary = summarizeProjectFromProjection(
+        { id: resolved.id, path: resolved.path },
+        resolved,
+        options.supervisor.get(resolved.id),
+      )
+      publishFleetSummaryProjection({
+        projectId: resolved.id,
+        projectPath: resolved.path,
+        sourceProjectRevision: fleetAuthority.projectRevision,
+        sourceQueueRevision: fleetAuthority.queueRevision,
+        state: 'current',
+        payload: fleetSummary,
+      })
     } catch (error) {
+      try {
+        markFleetSummaryErrorAtBoundary({
+          projectId: resolved.id,
+          projectPath: resolved.path,
+          ...(typeof _event?.revision === 'number' ? { sourceProjectRevision: _event.revision } : {}),
+          error: error instanceof Error ? error.message : String(error),
+        })
+      } catch {
+        // A fleet-index failure must not hide the original project refresh
+        // failure or turn a background repair into a request-time problem.
+      }
       failClaimedJobs(error)
       throw error
     }
@@ -1930,9 +2079,11 @@ async function refreshProjectProjections(
 
 async function activeAttentionHistory(projectPath: string, history: readonly AttentionRecord[]): Promise<AttentionRecord[]> {
   const tasksPath = projectTasksPath(projectPath)
-  const tasks = readProjectStateAuthorityAtBoundary(tasksPath).authority === 'database'
-    ? (readProjectStateDatabaseQueue(tasksPath)?.tasks ?? [])
-    : await readTasksFileNormalized(tasksPath).catch(() => [])
+  const authority = readProjectStateAuthorityAtBoundary(tasksPath).authority
+  const taskQueue = await readProjectTaskQueue(tasksPath).catch(() => null) as { tasks?: Array<Record<string, unknown>> } | null
+  const tasks = authority === 'database'
+    ? taskQueue?.tasks ?? []
+    : taskQueue?.tasks ?? await readTasksFileNormalized(tasksPath).catch(() => [])
   const hiddenTaskIds = new Set(
     tasks
       .filter(task => task.status === 'archived' || task.status === 'cancelled')
@@ -2100,7 +2251,7 @@ function summarizeProjectFromProjection(
 ): ServiceProjectSummary {
   const shell = summarizeProjectShell(project, run)
   const projection = projectionOverride === undefined
-    ? readProjectSummaryShellProjection(projectTasksPath(entry.path))
+    ? readProjectSummaryShellAtBoundary(entry.path).summary
     : projectionOverride
   const summaryFreshness = projection?.freshness ?? 'missing'
   if (!projection || projection.freshness !== 'current') {
@@ -2129,26 +2280,64 @@ function summarizeProjectFromProjection(
     }
   }
 
-  const startReadiness = {
+  const savedStartReadiness = applyOwnerInputToStartReadiness({
     canStart: projection.nextAction.code === 'ready_work' || projection.nextAction.code === 'paused_live_work',
+    label: projection.nextAction.label as ProjectScopeProjection['start']['label'],
     ...(projection.nextAction.code ? { code: projection.nextAction.code } : {}),
     message: projection.nextAction.message,
+    ...(typeof projection.nextAction.count === 'number' ? { count: projection.nextAction.count } : {}),
     actionHref: projection.scope ? `/projects/${encodeURIComponent(project.id)}/work${projection.nextAction.focusTaskId ? `?task=${encodeURIComponent(projection.nextAction.focusTaskId)}` : ''}` : '/work',
     ...(projection.nextAction.focusTaskId ? { focusTaskId: projection.nextAction.focusTaskId } : {}),
     ...(projection.nextAction.focusTaskTitle ? { focusTaskTitle: projection.nextAction.focusTaskTitle } : {}),
-    ...(projection.nextAction.focusKind ? { focusKind: projection.nextAction.focusKind } : {}),
+    ...(projection.nextAction.focusKind ? { focusKind: projection.nextAction.focusKind as ProjectScopeProjection['start']['focusKind'] } : {}),
     executionScope: projection.scope
       ? {
           id: projection.scope.id,
           label: projection.scope.label,
-          kind: projection.scope.kind,
-          source: projection.scope.source,
+          kind: projection.scope.kind as ProjectScope['kind'],
+          source: projection.scope.source as ProjectScope['source'],
           taskCount: projection.scope.included,
           deferredTaskCount: projection.scope.deferred,
         }
       : undefined,
-  }
-  const actionModel = projection.actionModel ?? buildProjectActionModel({
+  }, projection.ownerInput)
+  const startReadiness = applyRunStatusToStartReadiness(
+    savedStartReadiness,
+    run?.status ?? projection.execution?.status,
+  )
+  const actionModel = run
+    ? buildProjectActionModel({
+      startReadiness,
+      ownerInput: projection.ownerInput && projection.ownerInput.openCount > 0
+        ? {
+            active: true,
+            label: 'Answer in Thread',
+            detail: projection.ownerInput.next?.prompt ?? 'Open the thread to answer the current question.',
+            href: projection.ownerInput.next?.href ?? '/thread',
+          }
+        : null,
+      // A live supervisor is the freshest operational observation. After a
+      // restart, the compact execution row is the only durable status; falling
+      // back to "stopped" would make the action model disagree with the saved
+      // project state until another run event arrived.
+      runStatus: run.status,
+      runMode: run.mode,
+      tasks: [
+        ...(projection.nextAction.focusTaskId
+          ? [{
+              taskId: projection.nextAction.focusTaskId,
+              title: projection.nextAction.focusTaskTitle ?? projection.nextAction.focusTaskId,
+              status: projection.nextAction.code === 'ready_work' ? 'ready' : 'blocked',
+            }]
+          : []),
+        ...projection.recentWork,
+      ].filter((task, index, all) => all.findIndex(candidate => candidate.taskId === task.taskId) === index).map(task => ({
+        id: task.taskId,
+        title: task.title,
+        status: task.status,
+      })),
+    })
+    : projection.actionModel ?? buildProjectActionModel({
     startReadiness,
     ownerInput: projection.ownerInput && projection.ownerInput.openCount > 0
       ? {
@@ -2158,7 +2347,12 @@ function summarizeProjectFromProjection(
           href: projection.ownerInput.next?.href ?? '/thread',
         }
       : null,
-    runStatus: run?.status ?? 'stopped',
+    // A live supervisor is the freshest operational observation. After a
+    // restart, the compact execution row is the only durable status; falling
+    // back to "stopped" would make the action model disagree with the saved
+    // project state until another run event arrived.
+    runStatus: run?.status ?? projection.execution?.status ?? 'stopped',
+    runMode: projection.execution?.mode,
     tasks: [
       ...(projection.nextAction.focusTaskId
         ? [{
@@ -2201,9 +2395,110 @@ function summarizeProjectFromProjection(
   }
 }
 
+function unavailableFleetProjectSummary(
+  entry: { id: string; path: string },
+  run?: ReturnType<OrchestratorSupervisor['list']>[number],
+  error?: unknown,
+): ServiceProjectSummary {
+  return {
+    id: entry.id,
+    path: entry.path,
+    name: entry.id,
+    initializationNeeded: false,
+    projectStatusLoading: false,
+    summaryFreshness: 'error',
+    projectStatusError: error instanceof Error && error.message.trim()
+      ? `Could not load this project summary: ${error.message.trim()}`
+      : 'Could not load this project summary. Open the project to inspect it.',
+    ...(run
+      ? {
+          run: {
+            status: run.status,
+            startedAt: run.startedAt,
+            stoppedAt: run.stoppedAt,
+            error: run.error,
+            stopSummary: run.stopSummary,
+            providerStatus: run.providerStatus,
+          },
+        }
+      : {}),
+  }
+}
+
+function readFleetProjectSummaries(
+  entries: Array<{ id: string; path: string; name?: string; tags?: string[]; initializationNeeded?: boolean }>,
+  runsById: Map<string, ReturnType<OrchestratorSupervisor['list']>[number]>,
+): ServiceProjectSummary[] {
+  return entries.map(entry => {
+    try {
+      const resolved = resolveProject(entry.path)
+      const summary = summarizeProjectFromProjection(
+        entry,
+        resolved,
+        runsById.get(entry.id),
+        readProjectSummaryShellAtBoundary(entry.path).summary,
+      )
+      // Registration identifies the card; the project boundary supplies its
+      // current facts. Do not let a rebuildable fleet cache become a second
+      // source for either identity or state.
+      return {
+        ...summary,
+        id: entry.id,
+        path: entry.path,
+        ...(entry.name ? { name: entry.name } : {}),
+        ...(entry.tags ? { tags: entry.tags } : {}),
+        ...(entry.initializationNeeded !== undefined
+          ? { initializationNeeded: entry.initializationNeeded }
+          : {}),
+      }
+    } catch (error) {
+      return unavailableFleetProjectSummary(entry, runsById.get(entry.id), error)
+    }
+  })
+}
+
+function publishFleetSummaryFromSavedState(
+  entry: { id: string; path: string; name?: string; tags?: string[] },
+  run?: ReturnType<OrchestratorSupervisor['list']>[number],
+): void {
+  const resolved = resolveProject(entry.path)
+  if (resolved.initializationNeeded) {
+    publishFleetSummaryProjection({
+      projectId: entry.id,
+      projectPath: entry.path,
+      sourceProjectRevision: null,
+      sourceQueueRevision: null,
+      state: 'unavailable',
+      payload: {
+        id: entry.id,
+        path: entry.path,
+        name: entry.name ?? entry.id,
+        tags: entry.tags ?? [],
+        initializationNeeded: true,
+        projectStatusLoading: false,
+        summaryFreshness: 'missing',
+      },
+      error: 'Project setup is not complete.',
+    })
+    return
+  }
+  const tasksPath = projectTasksPath(entry.path)
+  const authority = readProjectStateAuthorityAtBoundary(tasksPath)
+  const shell = readProjectSummaryShellAtBoundary(entry.path).summary
+  const payload = summarizeProjectFromProjection(entry, resolved, run, shell)
+  publishFleetSummaryProjection({
+    projectId: entry.id,
+    projectPath: entry.path,
+    sourceProjectRevision: authority.projectRevision,
+    sourceQueueRevision: authority.queueRevision,
+    state: shell?.freshness === 'current' ? 'current' : shell ? 'stale' : 'unavailable',
+    payload,
+    ...(shell ? {} : { error: 'The saved project summary is not available yet.' }),
+  })
+}
+
 function workProgressFromProjectSummaryProjection(
   projection: ProjectSummaryProjection,
-  queue?: TaskQueue,
 ): ServiceProjectSummary['workProgress'] {
   const counts = {
     visibleTotal: projection.counts.total,
@@ -2216,13 +2511,13 @@ function workProgressFromProjectSummaryProjection(
     deliveryDone: 0,
     deliveryBlocked: 0,
   }
-  if (!queue && (projection.scope || projection.releaseSummary.scopeMode === 'named_release')) {
-    const selected = projection.releaseSummary.counts
-    return {
-      counts,
+  const selected = projection.releaseSummary.counts
+  return {
+    counts,
+    ...(projection.releaseSummary.scopeMode !== 'unavailable' ? {
       selectedCounts: {
         visibleTotal: selected.total,
-        visibleActive: Math.max(0, selected.total - selected.blocked - selected.done),
+        visibleActive: selected.active,
         visibleBlocked: selected.blocked,
         visibleDone: selected.done,
         visibleShelved: 0,
@@ -2231,41 +2526,7 @@ function workProgressFromProjectSummaryProjection(
         deliveryDone: 0,
         deliveryBlocked: 0,
       },
-      byTaskId: {},
-    }
-  }
-  const scopeQueue = queue ?? null
-  const scopeProjection = scopeQueue ? buildProjectScopeProjection(scopeQueue) : null
-  // The persisted projection stores only a compact scope summary. Use the
-  // queue-backed scope for row-level counts; it retains the task node ids.
-  const selectedScope = scopeProjection?.selectedScope ?? null
-  const selectedRows = selectedScope
-    ? executionScopeRows(scopeProjection?.rows ?? []).filter(row => row.scope === 'included')
-    : []
-  const selectedBlocked = selectedRows.filter(row => row.blocksRelease).length
-  const selectedDone = selectedRows.filter(row => row.status === 'done').length
-  const selectedShelved = selectedRows.filter(row => row.status === 'shelved').length
-  const selectedTotal = selectedRows.length || (
-    selectedScope
-      ? ('included' in selectedScope ? selectedScope.included : selectedScope.nodeIds.length)
-      : 0
-  )
-  const selectedCounts = selectedScope
-    ? {
-        visibleTotal: selectedTotal,
-        visibleActive: Math.max(0, selectedTotal - selectedBlocked - selectedDone - selectedShelved),
-        visibleBlocked: selectedBlocked,
-        visibleDone: selectedDone,
-        visibleShelved: selectedShelved,
-        deliveryTotal: 0,
-        deliveryRequired: 0,
-        deliveryDone: 0,
-        deliveryBlocked: 0,
-      }
-    : undefined
-  return {
-    counts,
-    ...(selectedCounts ? { selectedCounts } : {}),
+    } : {}),
     byTaskId: {},
   }
 }
@@ -2482,7 +2743,7 @@ function summarizeScopedReleaseWork(
   const scopeProjection = options.scopeRows
     ? null
     : buildProjectScopeProjection(
-        { version: 1, lastUpdated: new Date(0).toISOString(), tasks, releases: [] },
+        { tasks, releases: [] },
         { selectedScope: scope as ProjectScope | null | undefined },
       )
   const persistedScopeRows: ProjectScopeRow[] | null = options.scopeRows
@@ -2531,6 +2792,10 @@ function summarizeScopedReleaseWork(
       .filter(child => !['archived', 'cancelled', 'shelved'].includes(String(child.status ?? '')))
       .filter(child => deriveTaskWorkVisibility(child, task).countInProjectTotals)
   }
+  // executionScopeRows is the shared execution boundary. It suppresses
+  // completed internal steps while retaining an active planning child as the
+  // representative unit of work, so Release detail and compact summaries use
+  // the same rows without a second visibility filter here.
   const scopedTasks = executionScopedTasks
   const statusCounts: Record<string, number> = {}
   const openEscalations: Array<{ taskId: string; taskTitle: string; escalationId: string; reason: string; summary: string }> = []
@@ -2709,53 +2974,9 @@ function proofStyleForScope(
     : undefined
 }
 
-function proofPathIsScriptRunnable(proofPath: unknown): boolean {
-  if (typeof proofPath === 'string') return proofPath.trim().length > 0
-  if (!proofPath || typeof proofPath !== 'object' || Array.isArray(proofPath)) return false
-  const record = proofPath as Record<string, unknown>
-  if (typeof record.command === 'string' && record.command.trim().length > 0) return true
-  if (record.kind === 'command' || record.kind === 'script') return true
-  const launchSteps = Array.isArray(record.launchSteps) ? record.launchSteps : []
-  return launchSteps.some((step) =>
-    step &&
-    typeof step === 'object' &&
-    !Array.isArray(step) &&
-    (step as Record<string, unknown>).kind === 'copy_command' &&
-    typeof (step as Record<string, unknown>).command === 'string' &&
-    String((step as Record<string, unknown>).command).trim().length > 0)
-}
-
-function taskHasScriptProofPath(task: { proofPaths?: unknown }): boolean {
-  if (!Array.isArray(task.proofPaths)) return false
-  if (task.proofPaths.some(proofPathIsScriptRunnable)) return true
-  if (!taskHasNonReviewCommandBackedProof(task)) return false
-  if (!taskDoneButProofMissing(task)) {
-    return task.proofPaths.some((proofPath) =>
-      Boolean(proofPath && typeof proofPath === 'object' && !Array.isArray(proofPath)),
-    )
-  }
-  return task.proofPaths.some((proofPath) => {
-    if (!proofPath || typeof proofPath !== 'object' || Array.isArray(proofPath)) return false
-    const record = proofPath as { kind?: unknown; expectedEvidence?: unknown }
-    if (record.kind !== 'review') return false
-    const expectedEvidence = Array.isArray(record.expectedEvidence) ? record.expectedEvidence : []
-    return expectedEvidence.some(item =>
-      typeof item === 'string' &&
-      /\b(?:pnpm|npm|node|script|command|cli|command-line|no-ui|no ui|headless)\b/i.test(item),
-    )
-  })
-}
-
-function scopeRequiresCommandProof(scope: { id?: string | null; label?: string | null; description?: string | null } | null | undefined): boolean {
-  const text = [scope?.id, scope?.label, scope?.description]
-    .filter((value): value is string => typeof value === 'string')
-    .join(' ')
-    .toLowerCase()
-  return /\bscript[-\s]?only\b/.test(text) ||
-    /\bcommand proof\b/.test(text) ||
-    /\bscript proof\b/.test(text) ||
-    /\bcli[-\s]?first\b/.test(text) ||
-    /\bheadless drafting\b/.test(text)
+function gitStoryBlocksUnattendedStart(blocker: { state?: unknown; reason?: unknown }): boolean {
+  if (blocker.state === 'no_upstream') return false
+  return !/has no upstream branch/i.test(typeof blocker.reason === 'string' ? blocker.reason : '')
 }
 
 function buildOrientationSpineWithScopedReleaseTruth(
@@ -2778,16 +2999,12 @@ function buildOrientationSpineWithScopedReleaseTruth(
   const selectedScope = input.scope !== undefined
     ? input.scope as ProjectScope | null
     : input.scopeProjection?.selectedScope ?? selectedProjectScopeForQueue({
-        version: 1,
-        lastUpdated: new Date(0).toISOString(),
         tasks: canonicalTasks,
         releases: releaseProjectionInputs,
         ...(selectedReleaseId ? { selectedReleaseId } : {}),
       })
   const scopeProjection = input.scopeProjection ?? buildProjectScopeProjection(
     {
-      version: 1,
-      lastUpdated: new Date(0).toISOString(),
       tasks: canonicalTasks,
       releases: releaseProjectionInputs,
       ...(selectedReleaseId ? { selectedReleaseId } : {}),
@@ -2796,7 +3013,7 @@ function buildOrientationSpineWithScopedReleaseTruth(
   )
   const releaseTruth = summarizeScopedReleaseWork(canonicalTasks, scopeProjection.selectedScope, {
     proofStyle: proofStyleForScope(releaseProjectionInputs, scopeProjection.selectedScope),
-    commandProofRequired: scopeRequiresCommandProof(scopeProjection.selectedScope),
+    commandProofRequired: proofStyleForScope(releaseProjectionInputs, scopeProjection.selectedScope) === 'script_only',
   })
   const suppliedReleaseBlockers = input.releaseReadiness?.blockers
   const releaseBlockers = suppliedReleaseBlockers ?? releaseTruth.releaseBlockers
@@ -2889,8 +3106,6 @@ function selectedReleaseScopeFromQueueLike(input: {
 }): OrientationScope | null {
   return Array.isArray(input.releases)
     ? selectedReleaseScopeForQueue({
-      version: 1,
-      lastUpdated: new Date(0).toISOString(),
       tasks: input.tasks,
       releases: input.releases,
       ...(input.selectedReleaseId ? { selectedReleaseId: input.selectedReleaseId } : {}),
@@ -3183,60 +3398,6 @@ export function filterEventsForTask<T extends { event?: unknown }>(
   })
 }
 
-function friendlyProjectEventToolName(tool: string): string {
-  switch (tool) {
-    case 'read-file': return 'file read'
-    case 'edit-file': return 'file edit'
-    case 'run-command': return 'command'
-    case 'search-files': return 'file search'
-    case 'list-files': return 'file list'
-    default: return tool.replace(/[-_]/g, ' ')
-  }
-}
-
-function summarizeProjectEvent(ev: Record<string, unknown> | undefined): string {
-  const type = String(ev?.type ?? '')
-  const message = typeof ev?.message === 'string' ? ev.message.trim() : ''
-  if ((type === 'line_complete' || type === 'error') && isProviderCapacityEventMessage(message)) {
-    return providerCapacityEventLabel(message)
-  }
-  const tool = friendlyProjectEventToolName(typeof ev?.tool_name === 'string' ? ev.tool_name : '')
-  if ((type === 'tool_started' || type === 'tool_execution_started') && tool) return `Started ${tool}`
-  if ((type === 'tool_completed' || type === 'tool_execution_completed') && ev?.is_error && tool) return `Failed ${tool}`
-  if ((type === 'tool_completed' || type === 'tool_execution_completed') && tool) return `Finished ${tool}`
-  if (type === 'error') return userFacingText(message, 'Agent error')
-  if (type === 'line_complete') return userFacingText(message, 'Agent update')
-  return type.replace(/_/g, ' ') || 'Agent activity'
-}
-
-function isProviderCapacityEventMessage(value: string): boolean {
-  return /HTTP 429|Too Many Requests|rate limit|engine_overloaded|Model busy, retry later|retryable provider throttle/i.test(value)
-}
-
-function providerCapacityEventLabel(value: string): string {
-  const retry = value.match(/retrying in ([\d.]+)s \(attempt (\d+) of (\d+)\)/i)
-  if (retry) return `Provider busy; retrying in ${retry[1]}s (attempt ${retry[2]} of ${retry[3]}).`
-  if (/retryable provider throttle/i.test(value)) return 'Provider busy; this task can resume later.'
-  if (/Agent .* failed on .*API error/i.test(value)) return 'Provider busy; this agent turn stopped.'
-  if (/API error/i.test(value)) return 'Provider busy; request failed after retries.'
-  return 'Provider busy; retry later.'
-}
-
-function toneForProjectEvent(
-  ev: Record<string, unknown> | undefined,
-): 'neutral' | 'running' | 'ok' | 'warn' | 'danger' {
-  const type = String(ev?.type ?? '')
-  if (type === 'error') {
-    if (isProviderCapacityEventMessage(String(ev?.message ?? ''))) return 'warn'
-    return /empty assistant/i.test(String(ev?.message ?? '')) ? 'warn' : 'danger'
-  }
-  if (type === 'line_complete' && isProviderCapacityEventMessage(String(ev?.message ?? ''))) return 'warn'
-  if (type === 'tool_completed' || type === 'tool_execution_completed') return ev?.is_error ? 'danger' : 'ok'
-  if (type === 'tool_started' || type === 'tool_execution_started') return 'running'
-  if (type === 'line_complete') return 'running'
-  return 'neutral'
-}
-
 function noteMatchesCanonicalAcceptance(
   note: Record<string, unknown>,
   canonicalDescriptions: ReadonlySet<string>,
@@ -3512,7 +3673,7 @@ function readTaskGitStoryProjection(
   taskId: string,
   fallback: unknown,
 ): Record<string, unknown> | undefined {
-  const cached = readProjectStateDatabaseRepository(projectPath, taskGitStoryProjectionId(taskId))
+  const cached = readProjectRepositoryProjectionAtBoundary(projectPath, taskGitStoryProjectionId(taskId))
   if (cached?.freshness === 'current') {
     const snapshot = parseGitStorySnapshot(cached.payload)
     if (snapshot) return snapshot
@@ -3557,7 +3718,9 @@ async function reconciledTaskHeadMergeResult(
   try {
     const status = await driver.statusSummary(input.worktreePath)
     if (!hasOnlyReconciledTaskWorktreeResidue(status)) return undefined
-    const recordedMergeResult = input.task.mergeRecord?.result
+    const recordedMergeResult = isRecord(input.task.mergeRecord) && typeof input.task.mergeRecord.result === 'string'
+      ? input.task.mergeRecord.result
+      : undefined
     if (
       status.untrackedCount > 0 &&
       (recordedMergeResult === 'merged' || recordedMergeResult === 'reconciled')
@@ -3598,7 +3761,7 @@ function taskGitStoryRepoPath(
       ? task.worktreePath.trim()
       : ''
   if (worktreePath && existsSync(worktreePath)) return worktreePath
-  return resolveEffectiveTaskProjectPath(task as Pick<Task, 'projectPath'>, projectPath)
+  return resolveEffectiveTaskProjectPath(task as unknown as Pick<Task, 'domain' | 'projectPath'>, projectPath)
 }
 
 function taskExistingWorktreePath(
@@ -3687,9 +3850,9 @@ async function gitStoryForTask(
     task,
   })
   const existingWorktreePath = taskExistingWorktreePath(task, workspace)
-  const repoRoot = existingWorktreePath ?? childProject?.path ?? resolveEffectiveTaskProjectPath(task as Pick<Task, 'projectPath'>, projectPath)
+  const repoRoot = existingWorktreePath ?? childProject?.path ?? resolveEffectiveTaskProjectPath(task as unknown as Pick<Task, 'domain' | 'projectPath'>, projectPath)
   const effectiveInspectedPath = existingWorktreePath ?? childProject?.path ?? inspectedPath
-  const targetRepoRoot = childProject?.path ?? resolveEffectiveTaskProjectPath(task as Pick<Task, 'projectPath'>, projectPath)
+  const targetRepoRoot = childProject?.path ?? resolveEffectiveTaskProjectPath(task as unknown as Pick<Task, 'domain' | 'projectPath'>, projectPath)
   const mergeRecordResultOverride = await reconciledTaskHeadMergeResult(driver, {
     task,
     worktreePath: existingWorktreePath,
@@ -3927,8 +4090,11 @@ async function enrichTaskForServe(
       ? latestSelfCritiqueNote.content.trim() || null
       : null
   const terminalSummary = buildTerminalSummary(normalized)
-  const workspaceStore = await readTaskWorkspaceStore(projectPath).catch(() => undefined)
-  const workspace = taskId ? workspaceStore?.workspaces[taskId] : undefined
+  // The ordinary task detail read already came from the authoritative current
+  // task projection. Reopening the workspace store here would let decoration
+  // observe a different revision than the task itself. Workspace inspection
+  // stays behind explicit file/diagnostic routes.
+  const workspace = isRecord(normalized.workspace) ? normalized.workspace : undefined
   const gitStory = taskId && shouldAttachTaskGitStory(taskId)
     ? options.includeLiveGitStory === true
       ? await gitStoryForTaskIfUseful(projectPath, normalized, workspace).catch(() => undefined)
@@ -3941,7 +4107,7 @@ async function enrichTaskForServe(
       }).readTaskReviewAudit(taskId).catch(() => null)
     : null
   const normalizedReviewPlan = reviewAudit?.plan
-    ? normalizeReviewPlanForTask({ task: normalized }, reviewAudit.plan.payload).plan
+    ? normalizeReviewPlanForTask({ task: normalized as unknown as Pick<Task, 'id' | 'title' | 'description' | 'priority' | 'status' | 'spec' | 'acceptanceCriteria' | 'notes' | 'outOfScope'> }, reviewAudit.plan.payload).plan
     : null
   const normalizedReviewAudit = reviewAudit && normalizedReviewPlan
     ? {
@@ -3976,7 +4142,7 @@ async function enrichTaskForServe(
       : {}),
   }
   const completionProof = compactTaskCompletionProof(enriched)
-  const proofPaths = compactProofPathsForServe(enriched.proofPaths)
+  const proofPaths = compactProofPathsForServe((enriched as Record<string, unknown>).proofPaths)
   return {
     ...enriched,
     ...(Array.isArray(proofPaths) ? { proofPaths } : {}),
@@ -4382,7 +4548,10 @@ function compactTaskForProjectSummary(task: Record<string, unknown>): Record<str
   return summary
 }
 
-function compactTaskForWorkSurface(task: Record<string, unknown>): Record<string, unknown> {
+function compactTaskForWorkSurface(
+  task: Record<string, unknown>,
+  options: { includeDefinitions?: boolean } = {},
+): Record<string, unknown> {
   const summaryKeys = [
     'id',
     'title',
@@ -4443,6 +4612,7 @@ function compactTaskForWorkSurface(task: Record<string, unknown>): Record<string
     if (typeof firstDescription?.description === 'string' && firstDescription.description.trim()) {
       summary.acceptanceCriteriaFirstDescription = firstDescription.description.trim()
     }
+    if (options.includeDefinitions) summary.acceptanceCriteria = task.acceptanceCriteria
   }
   if (task.workUnitAnalysis && typeof task.workUnitAnalysis === 'object' && !Array.isArray(task.workUnitAnalysis)) {
     const units = (task.workUnitAnalysis as Record<string, unknown>).units
@@ -4596,6 +4766,19 @@ function sourceHealthForCompactOrientationSpine(spine: Record<string, unknown>):
 
 function compactOrientationSpineForWorkSurface(spine: Record<string, unknown>): Record<string, unknown> {
   const sourceHealth = sourceHealthForCompactOrientationSpine(spine)
+  const nodes = compactOrientationNodes(spine.nodes)
+  if (Object.keys(nodes).length === 0 && Array.isArray(spine.scopeRows)) {
+    for (const row of spine.scopeRows) {
+      if (!row || typeof row !== 'object' || Array.isArray(row)) continue
+      const record = row as Record<string, unknown>
+      const taskId = typeof record.taskId === 'string' ? record.taskId.trim() : ''
+      if (!taskId) continue
+      nodes[`work:${taskId}`] = {
+        id: `work:${taskId}`,
+        title: typeof record.title === 'string' ? record.title : taskId,
+      }
+    }
+  }
   return {
     projectId: spine.projectId,
     updatedAt: spine.updatedAt,
@@ -4612,7 +4795,7 @@ function compactOrientationSpineForWorkSurface(spine: Record<string, unknown>): 
     sourceTrail: Array.isArray(spine.sourceTrail) ? spine.sourceTrail.slice(0, 5) : [],
     release: spine.release,
     roots: [],
-    nodes: compactOrientationNodes(spine.nodes),
+    nodes,
   }
 }
 
@@ -4713,9 +4896,10 @@ function compactOrientationMapNode(node: unknown): unknown {
   }
   const progress = compactOrientationMapProgress(raw.progress)
   if (progress) compact.progress = progress
-  const taskId = Array.isArray((raw.refs as Record<string, unknown> | undefined)?.taskIds)
-    ? (raw.refs as Record<string, unknown>).taskIds?.find((value): value is string => typeof value === 'string')
-    : null
+  const taskIds = (raw.refs && typeof raw.refs === 'object' && !Array.isArray(raw.refs) && Array.isArray((raw.refs as Record<string, unknown>).taskIds))
+    ? (raw.refs as Record<string, unknown>).taskIds as unknown[]
+    : []
+  const taskId = taskIds.find((value: unknown): value is string => typeof value === 'string')
   if (taskId) compact.refs = { taskIds: [taskId] }
   const visibilityKind = (raw.visibility as Record<string, unknown> | undefined)?.kind
   if (typeof visibilityKind === 'string') compact.visibility = { kind: visibilityKind }
@@ -4754,21 +4938,22 @@ function buildOverviewOrientationPreviewSpine(input: {
   now?: string
 }): Record<string, unknown> {
   const now = input.now ?? new Date().toISOString()
+  const sourceSpine = input.sourceSpine ?? null
   const queue = {
     version: 1,
     lastUpdated: now,
     tasks: input.rawQueue.tasks as unknown as Task[],
-    releases: input.sourceSpine?.selectedRelease
+    releases: sourceSpine?.selectedRelease
       ? [
-          input.sourceSpine.selectedRelease as ProjectRelease,
-          ...input.rawQueue.releases.filter(release => release.id !== input.sourceSpine?.selectedRelease?.id),
+          sourceSpine.selectedRelease as ProjectRelease,
+          ...input.rawQueue.releases.filter(release => release.id !== sourceSpine.selectedRelease?.id),
         ]
       : input.rawQueue.releases,
-    ...(input.sourceSpine?.scope?.id
-      ? { selectedReleaseId: input.sourceSpine.scope.id }
+    ...(sourceSpine?.scope?.id
+      ? { selectedReleaseId: sourceSpine.scope.id }
       : input.rawQueue.selectedReleaseId ? { selectedReleaseId: input.rawQueue.selectedReleaseId } : {}),
   }
-  const sourceSelectedScope = input.sourceSpine?.selectedTaskScope ?? input.sourceSpine?.scope ?? null
+  const sourceSelectedScope = sourceSpine?.selectedTaskScope ?? sourceSpine?.scope ?? null
   const projection = buildProjectScopeProjection(
     queue,
     sourceSelectedScope ? { selectedScope: sourceSelectedScope as ProjectScope } : {},
@@ -4776,17 +4961,17 @@ function buildOverviewOrientationPreviewSpine(input: {
   const scope = projection.selectedScope
   const scopeRows = executionScopeRows(projection.rows)
   const selectedRelease = scope
-    ? input.sourceSpine?.selectedRelease?.id === scope.id
-      ? input.sourceSpine.selectedRelease
+    ? sourceSpine?.selectedRelease?.id === scope.id
+      ? sourceSpine.selectedRelease
       : input.rawQueue.releases.find(release => release.id === scope.id) ?? null
     : null
-  const sourceScope = scope && input.sourceSpine?.scope?.id === scope.id
-    ? input.sourceSpine.scope
-    : scope && input.sourceSpine?.selectedTaskScope?.id === scope.id
-      ? input.sourceSpine.selectedTaskScope
+  const sourceScope = scope && sourceSpine?.scope?.id === scope.id
+    ? sourceSpine?.scope ?? null
+    : scope && sourceSpine?.selectedTaskScope?.id === scope.id
+      ? sourceSpine?.selectedTaskScope ?? null
       : null
-  const sourceReleaseState = input.sourceSpine?.selectedRelease?.id === scope?.id
-    ? input.sourceSpine.release?.state
+  const sourceReleaseState = sourceSpine !== null && sourceSpine.selectedRelease?.id === scope?.id
+    ? sourceSpine.release?.state
     : undefined
   const release = selectedRelease
     ? {
@@ -4992,7 +5177,6 @@ function releaseReadinessReleaseFromScope(input: {
   rawQueue: { releases: ProjectRelease[]; selectedReleaseId?: string }
   scope: ProjectScope | null
   selectedReleaseId?: string
-  releaseState: 'ready' | 'blocked' | 'active' | 'shaping' | 'unknown'
 }): OrientationRelease | null {
   const scope = input.scope
   const releaseId = scope?.id ?? input.selectedReleaseId
@@ -5006,11 +5190,7 @@ function releaseReadinessReleaseFromScope(input: {
     id: existing.id,
     label: existing.label,
     kind: existing.kind === 'milestone' ? 'milestone' : existing.kind === 'marker' ? 'marker' : 'release',
-    state: input.releaseState === 'ready'
-      ? 'ready'
-      : input.releaseState === 'blocked'
-        ? 'blocked'
-        : existing.state ?? 'active',
+    state: existing.state ?? 'active',
     source: existing.source ?? scope?.source ?? 'inferred',
     description: existing.description ?? null,
     nodeIds: scope?.nodeIds ?? existing.nodeIds ?? [],
@@ -5123,9 +5303,8 @@ function compactReleaseReadinessFromProjection(input: {
   const release = input.rawQueue
     ? releaseReadinessReleaseFromScope({
         rawQueue: input.rawQueue,
-        scope: input.scope,
+        scope: input.scope ?? null,
         selectedReleaseId: input.rawQueue.selectedReleaseId,
-        releaseState: summary?.state ?? 'unknown',
       })
     : summary?.release
       ? { ...summary.release, state: summary.state }
@@ -5138,6 +5317,10 @@ function compactReleaseReadinessFromProjection(input: {
     release,
     scope: input.scope ?? input.projection.scope,
     ready,
+    // Release metrics are an explicit envelope. They are not task statuses:
+    // active, blocked, ownerBlocked, proofBlocked, and deferred may overlap
+    // the partitioned task-state map below.
+    releaseCounts: { ...counts },
     ...(counts.total === 0 ? { notReadyReason: 'No work in the current scope yet.' } : {}),
     completion: buildReleaseCompletionSummary({
       ready,
@@ -5149,13 +5332,7 @@ function compactReleaseReadinessFromProjection(input: {
       },
       releaseBlockers: blockers,
     }),
-    statusCounts: {
-      done: counts.done,
-      ready: counts.ready,
-      active: counts.active,
-      blocked: counts.blocked,
-      deferred: counts.deferred,
-    },
+    statusCounts: summary?.taskStatusCounts ?? {},
     releaseBlockers: blockers,
     totals: {
       tasks: counts.total,
@@ -5340,6 +5517,9 @@ function compactTaskMapIdentity(task: unknown): Record<string, unknown> | undefi
   for (const key of ['id', 'title', 'status', 'workKind', 'releaseIds']) {
     if (raw[key] !== null && raw[key] !== undefined) summary[key] = raw[key]
   }
+  for (const key of ['sourceRefs', 'references']) {
+    if (Array.isArray(raw[key]) && raw[key].length > 0) summary[key] = compactTaskSourceRefsForServe(raw[key])
+  }
   return summary
 }
 
@@ -5514,8 +5694,8 @@ function savedWorkspaceImportDraft(state: SavedWorkspaceGoalsState | null): Work
             id: release.id,
             label: release.label,
             source: release.source ?? source,
-            ...(release.state === 'active' || release.state === 'planned' || release.state === 'done'
-              ? { scope: release.state === 'done' ? 'later' as const : 'current' as const }
+            ...(release.state === 'active' || release.state === 'planned' || release.state === 'shipped'
+              ? { scope: release.state === 'shipped' ? 'later' as const : 'current' as const }
               : {}),
             confidence: 'high' as const,
           })),
@@ -5529,11 +5709,11 @@ function savedWorkspaceImportDraft(state: SavedWorkspaceGoalsState | null): Work
       ...(task.assumptions?.length ? { assumptions: [...task.assumptions] } : {}),
       ...(task.missingInformation?.length ? { missingInformation: [...task.missingInformation] } : {}),
       domain: task.domain,
-      scope: task.scope,
+      scope: task.scope ?? 'current',
       priority: task.priority,
       ...(task.acceptanceCriteria?.length ? { acceptanceCriteria: [...task.acceptanceCriteria] } : {}),
       ...(task.dependsOn?.length ? { dependsOn: [...task.dependsOn] } : {}),
-      ...(task.proofPaths?.length ? { proofPaths: [...task.proofPaths] } : {}),
+      ...(task.proofPaths?.length ? { proofPaths: [...task.proofPaths] as unknown as Array<Record<string, unknown>> } : {}),
       ...(task.releaseIds?.length ? { releaseIds: [...task.releaseIds] } : {}),
       source: task.references?.[0] ?? source,
       ...(referencesFor(task.references) ? { references: referencesFor(task.references) } : {}),
@@ -5556,9 +5736,9 @@ function savedWorkspaceImportDraft(state: SavedWorkspaceGoalsState | null): Work
 
 function savedWorkspaceImportTaskStatus(projectPath: string): string | null {
   const tasksPath = projectTasksPath(projectPath)
-  const databaseTask = readProjectStateDatabaseTaskPoint(tasksPath, WORKSPACE_IMPORT_TASK_ID)
+  const databaseTask = readProjectTaskRecordAtBoundary(tasksPath, WORKSPACE_IMPORT_TASK_ID)
   if (typeof databaseTask?.status === 'string') return databaseTask.status
-  const projection = readProjectSummaryShellProjection(tasksPath)
+  const projection = readProjectSummaryShellAtBoundary(projectPath).summary
   return projection?.recentWork.find(task => task.taskId === WORKSPACE_IMPORT_TASK_ID)?.status ?? null
 }
 
@@ -5597,27 +5777,45 @@ function renderLegacyProjectProgress(raw: string): string {
 function readSavedRuntimeState(projectRoot: string, kind: 'runtime' | 'health') {
   const saved = existsSync(getProjectRuntimeStatePath(projectRoot))
   return readProjectRuntimeState(projectRoot).then(state => {
-    const healthMissing = state.health.checkedAt === null
-    const startedAt = state.lastStartedAt ? Date.parse(state.lastStartedAt) : Number.NaN
-    const checkedAt = state.health.checkedAt ? Date.parse(state.health.checkedAt) : Number.NaN
+    const shell = readProjectSummaryShellAtBoundary(projectRoot)
+    const projectedRuntime = shell.authority === 'database' ? shell.summary?.runtime ?? null : null
+    const databaseAuthoritative = shell.authority === 'database'
+    const effectiveState = projectedRuntime
+      ? {
+          ...state,
+          status: projectedRuntime.status as typeof state.status,
+          lastActivityAt: projectedRuntime.lastActivityAt ?? state.lastActivityAt,
+          health: projectedRuntime.health
+            ? { ...state.health, status: projectedRuntime.health as typeof state.health.status }
+            : state.health,
+        }
+      : state
+    const healthMissing = effectiveState.health.checkedAt === null && !projectedRuntime?.health
+    const startedAt = effectiveState.lastStartedAt ? Date.parse(effectiveState.lastStartedAt) : Number.NaN
+    const checkedAt = effectiveState.health.checkedAt ? Date.parse(effectiveState.health.checkedAt) : Number.NaN
     const healthBehindRuntime = Number.isFinite(startedAt)
       && Number.isFinite(checkedAt)
       && checkedAt < startedAt
-    const stale = saved && state.status === 'running' && (healthMissing || healthBehindRuntime)
+    const stale = (saved || databaseAuthoritative) && effectiveState.status === 'running'
+      && (healthMissing || healthBehindRuntime || (databaseAuthoritative && !projectedRuntime))
     const freshness = !saved
-      ? 'missing'
+      ? projectedRuntime
+        ? 'current'
+        : 'missing'
       : kind === 'health' && healthMissing
         ? 'missing'
         : stale
           ? 'stale'
           : 'current'
     return {
-      state,
+      state: effectiveState,
       read: {
-        source: saved ? 'saved' : 'missing',
+        source: projectedRuntime ? 'database' : saved ? 'saved' : 'missing',
         freshness,
-        reason: !saved
+        reason: !saved && !projectedRuntime
           ? 'runtime_state_missing'
+          : databaseAuthoritative && !projectedRuntime
+            ? 'runtime_projection_missing'
           : kind === 'health' && healthMissing
             ? 'runtime_health_missing'
             : stale
@@ -5639,6 +5837,14 @@ export function buildServeApp(opts: ServeOptions = {}): {
   runtimeSupervisor: ProjectRuntimeSupervisor
   projectPath: string
   refreshProjectProjections: (projectRoot: string, event?: ProjectProjectionInvalidation) => Promise<void>
+  startup: {
+    listenerReadyAt: string | null
+    refreshStartedAt: string | null
+    refreshCompletedAt: string | null
+    projectCount: number
+    refreshedProjectCount: number
+    errorCount: number
+  }
 } {
   const preferredProjectPath = opts.preferredProjectPath ?? opts.projectPath ?? null
   const getRegisteredProjects = () => listWorkspaces()
@@ -5648,6 +5854,14 @@ export function buildServeApp(opts: ServeOptions = {}): {
     ?? getRegisteredProjects()[0]?.path
     ?? process.cwd()
   const projectPath = resolve(fallbackProjectPath)
+  const startup = {
+    listenerReadyAt: null as string | null,
+    refreshStartedAt: null as string | null,
+    refreshCompletedAt: null as string | null,
+    projectCount: 0,
+    refreshedProjectCount: 0,
+    errorCount: 0,
+  }
   let configuredProjectPath = resolve(projectPath)
   const requestProjectPathStore = new AsyncLocalStorage<string>()
   const currentProject = (): ResolvedProject => resolveProject(requestProjectPathStore.getStore() ?? configuredProjectPath)
@@ -5900,61 +6114,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
     return c.json({ version: readRuntimeVersion() })
   })
 
-  async function enrichProjectSummaryFromProjection(
-    entry: { id: string; path: string },
-    project: ResolvedProject,
-    run?: ReturnType<OrchestratorSupervisor['list']>[number],
-  ): Promise<ServiceProjectSummary> {
-    // Fleet detail is still a summary read. Do not turn `detail=true` into a
-    // per-project queue reconstruction; task inventory and rich diagnostics
-    // have their own bounded project endpoints.
-    const tasksPath = projectTasksPath(entry.path)
-    const projection = readProjectSummaryShellProjection(tasksPath)
-    const summary = summarizeProjectFromProjection(entry, project, run, projection)
-    if (project.initializationNeeded) return summary
-
-    const [providerStatus, migrationSummary, availability] = await Promise.all([
-      buildProjectProviderStatusForPath(entry.path, run?.providerStatus),
-      summarizeProjectMigrations(entry.path),
-      readProjectAvailability(entry.path).catch(() => null),
-    ])
-    if (!projection || projection.freshness !== 'current') {
-      const migrationBlocker = migrationSummary.blocked
-        ? await startBlockerForRequiredMigrations(entry.path)
-        : null
-      const startReadiness = migrationBlocker ?? undefined
-      return {
-        ...summary,
-        ...(providerStatus ? { providerStatus } : {}),
-        migrationSummary,
-        ...(availability ? { availability } : {}),
-        projectCheckIn: summarizeProjectCheckIn(getProjectStateDir(entry.path)),
-        ...(startReadiness ? { startReadiness } : {}),
-        ...(startReadiness
-          ? {
-              actionModel: buildProjectActionModel({
-                startReadiness,
-                runStatus: run?.status ?? 'stopped',
-              }),
-            }
-          : {}),
-      }
-    }
-    return {
-      ...summary,
-      ...(providerStatus ? { providerStatus } : {}),
-      migrationSummary,
-      ...(availability ? { availability } : {}),
-      projectCheckIn: summarizeProjectCheckIn(getProjectStateDir(entry.path)),
-    }
-  }
-
   app.get('/api/service/projects', async c => {
     const runsById = new Map(supervisor.list().map(run => [run.workspaceId, run]))
-    const projects = getRegisteredProjects().map((entry) => {
-      const resolved = resolveProject(entry.path)
-      return summarizeProjectFromProjection(entry, resolved, runsById.get(resolved.id))
-    })
+    const projects = readFleetProjectSummaries(getRegisteredProjects(), runsById)
     return c.json({
       pid: process.pid,
       defaultProviderStatus: buildGlobalDefaultProviderStatus(),
@@ -5968,10 +6130,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     const detailRequested = c.req.query('detail') === 'true'
     const registeredProjects = getRegisteredProjects().filter(entry => !requestedProjectId || entry.id === requestedProjectId)
     if (requestedProjectId) {
-      const projects = registeredProjects.map(entry => {
-        const resolved = resolveProject(entry.path)
-        return summarizeProjectFromProjection(entry, resolved, runsById.get(resolved.id))
-      })
+      const projects = readFleetProjectSummaries(registeredProjects, runsById)
       return c.json({
         pid: process.pid,
         partial: true,
@@ -5980,10 +6139,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       })
     }
     if (!detailRequested) {
-      const projects = registeredProjects.map(entry => {
-        const resolved = resolveProject(entry.path)
-        return summarizeProjectFromProjection(entry, resolved, runsById.get(resolved.id))
-      })
+      const projects = readFleetProjectSummaries(registeredProjects, runsById)
       return c.json({
         pid: process.pid,
         partial: true,
@@ -5992,17 +6148,22 @@ export function buildServeApp(opts: ServeOptions = {}): {
       })
     }
 
-    // Explicit detail remains a fleet summary, not a second project read.
-    // Deep task, Thread, Git Story, and release data belong to the selected
-    // project endpoints; rebuilding them for every registered project made
-    // the fleet route slow and made its state disagree with the shell.
-    const detailedProjects = await Promise.all(
-      registeredProjects.map(entry => enrichProjectSummaryFromProjection(
-        entry,
-        resolveProject(entry.path),
-        runsById.get(entry.id),
-      )),
-    )
+    // Fleet detail remains the same bounded machine projection. Deep task,
+    // Thread, Git Story, and release data belong to selected project routes;
+    // they must never be rebuilt for every registered project here.
+    const detailedProjects = await Promise.all(readFleetProjectSummaries(registeredProjects, runsById).map(async summary => {
+      if (summary.initializationNeeded) return summary
+      const entry = registeredProjects.find(candidate => candidate.id === summary.id)
+      if (!entry) return summary
+      const [providerStatus] = await Promise.all([
+        buildProjectProviderStatusForPath(entry.path, runsById.get(entry.id)?.providerStatus),
+      ])
+      return {
+        ...summary,
+        ...(providerStatus ? { providerStatus } : {}),
+        projectCheckIn: summarizeProjectCheckIn(getProjectStateDir(entry.path)),
+      }
+    }))
     return c.json({
       pid: process.pid,
       partial: true,
@@ -6017,27 +6178,59 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/fleet/attention', async c => {
     const registeredProjects = getRegisteredProjects()
     const groups = registeredProjects.map((entry) => {
-      const resolved = resolveProject(entry.path)
-      const projectSummary = summarizeProjectFromProjection(
-        entry,
-        resolved,
-        supervisor.get(resolved.id),
-      )
-      if (resolved.initializationNeeded) {
-        return { project: projectSummary, items: [], error: null, topWaitingThread: null }
-      }
-      const items = readAttentionRecords(entry.path)
-        .filter(record => record.status === 'open')
-        .filter(isAttentionOwnedInboxItem)
-        .filter(item => item.severity !== 'low')
-      return {
-        project: projectSummary,
-        items,
-        error: null,
-        // The fleet surface only renders durable inbox records. Project inbox
-        // reads and startup warmup own projection refresh; Thread is an
-        // explicit project route and is never reconstructed here.
-        topWaitingThread: null,
+      try {
+        const resolved = resolveProject(entry.path)
+        if (resolved.initializationNeeded) {
+          const projectSummary = summarizeProjectFromProjection(entry, resolved, supervisor.get(resolved.id), null)
+          return { project: projectSummary, items: [], error: null, topWaitingThread: null }
+        }
+        const attentionState = readProjectSurfaceStateAtBoundary(entry.path, {
+          // Fleet attention needs the saved summary and attention rows only.
+          // Requesting the compact projection here expands the entire task
+          // inventory merely to render a small fleet card.
+          includeProjection: false,
+          includeAttention: true,
+        })
+        // Fleet attention is one ordinary project surface. Summary and Inbox
+        // must come from the same saved transaction or a concurrent write can
+        // make the fleet card describe a different revision than its items.
+        const summaryProjection = attentionState?.summary ?? (
+          attentionState === null
+            ? readProjectSummaryShellAtBoundary(entry.path).summary
+            : null
+        )
+        const projectSummary = summarizeProjectFromProjection(
+          entry,
+          resolved,
+          supervisor.get(resolved.id),
+          summaryProjection,
+        )
+        const attention = readSavedAttentionSurfaceFromBoundary({
+          initializationNeeded: resolved.initializationNeeded,
+          records: attentionState?.attentionRecords ?? null,
+          watermarkSourceRevision: attentionState?.attentionWatermark?.sourceRevision ?? null,
+          projectRevision: attentionState?.projectRevision ?? null,
+        })
+        const items = attention.items
+          .filter(record => record.status === 'open')
+          .filter(isAttentionOwnedInboxItem)
+          .filter(item => item.severity !== 'low')
+        return {
+          project: projectSummary,
+          items,
+          error: attention.requiresRefresh ? 'Attention projection is not current.' : null,
+          // The fleet surface only renders durable inbox records. Project inbox
+          // reads and startup warmup own projection refresh; Thread is an
+          // explicit project route and is never reconstructed here.
+          topWaitingThread: null,
+        }
+      } catch (error) {
+        return {
+          project: unavailableFleetProjectSummary(entry, undefined, error),
+          items: [],
+          error: error instanceof Error ? error.message : 'Could not read project attention.',
+          topWaitingThread: null,
+        }
       }
     })
     const visibleGroups = groups.filter(group => group.items.length > 0 || group.error || group.topWaitingThread)
@@ -6122,6 +6315,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     currentBuildMtimeMs: number
     stale: boolean
     distPath: string | null
+    startup: typeof startup
     staleProcesses?: GuildhallProcessInfo[]
   } {
     let currentBuildMtimeMs = bootBuildMtimeMs
@@ -6139,6 +6333,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       currentBuildMtimeMs,
       stale: currentBuildMtimeMs > bootBuildMtimeMs,
       distPath: distEntryPath,
+      startup: { ...startup },
     }
   }
 
@@ -6262,166 +6457,48 @@ export function buildServeApp(opts: ServeOptions = {}): {
   // -------------------------------------------------------------------------
   // API: project
   // -------------------------------------------------------------------------
-  async function projectMemoryHealth(projectPath: string, tasks: Array<{ id: string }>): Promise<{
-    total: number
-    active: number
-    proposed: number
-    used: number
-    retired: number
-    project: number
-    userGlobal: number
-    guildhallProduct: number
-    memoryCore: {
-      adapter: 'mastra' | 'deterministic'
-      fallbackUsed: boolean
-      storagePath?: string
-      repoLocalWrites: string[]
-      semanticRecallEnabled: boolean
-      observationalMemoryEnabled: boolean
-      observationalProcessorReady: boolean
-      compactionStatus: 'active' | 'needs_attention'
-      semanticValidity: 'valid' | 'needs_attention'
-      warnings: string[]
-      features: string[]
-    }
-    recentUse: Array<{ taskId: string; included: number; withheld: number; at: string }>
-  }> {
-    const memoryDir = getProjectStateDir(projectPath)
-    const records = await listMemoryRecords({ memoryDir })
-    const count = (predicate: (record: typeof records[number]) => boolean) =>
-      records.filter(predicate).length
-    const recentUse: Array<{ taskId: string; included: number; withheld: number; at: string }> = []
-    for (const task of tasks.slice(0, 12)) {
-      const debug = await readContextDebugForTask(memoryDir, task.id, 1)
-      const latest = debug[0]
-      if (!latest?.memoryPacket || !latest.at) continue
-      recentUse.push({
-        taskId: task.id,
-        included: latest.memoryPacket.includedCount ?? latest.memoryPacket.included.length,
-        withheld: latest.memoryPacket.withheldCount ?? latest.memoryPacket.withheld.length,
-        at: latest.at,
-      })
-    }
-    const projectId = basename(projectPath) || 'project'
-    const memoryCoreScope = { kind: 'project' as const, projectId }
-    const memoryConfig = readProjectConfig(projectPath).memory
-    const memorySubstrate = process.env.GUILDHALL_MEMORY_SUBSTRATE === 'deterministic'
-      ? 'deterministic'
-      : process.env.GUILDHALL_MEMORY_SUBSTRATE === 'mastra'
-        ? 'mastra'
-        : memoryConfig?.substrate ?? 'deterministic'
-    const semanticRecall = process.env.GUILDHALL_MEMORY_SEMANTIC_RECALL === '1'
-      ? true
-      : process.env.GUILDHALL_MEMORY_SEMANTIC_RECALL === '0'
-        ? false
-        : memoryConfig?.semanticRecall ?? false
-    const observationalMemory = process.env.GUILDHALL_MEMORY_OBSERVATIONAL === '1'
-      ? true
-      : process.env.GUILDHALL_MEMORY_OBSERVATIONAL === '0'
-        ? false
-        : memoryConfig?.observationalMemory ?? false
-    const memoryCorePacket = await buildMemoryCoreCandidatePacket({
-      projectRoot: projectPath,
-      scope: memoryCoreScope,
-      purpose: 'handoff',
-      maxBytes: 4096,
-      substrate: memorySubstrate,
-      semanticRecall,
-      observationalMemory,
-    })
-    const memoryWarnings = [...memoryCorePacket.health.warnings]
-    const memoryFeatures = new Set(memoryCorePacket.health.features ?? ['deterministic-events'])
-    const memoryEngineGatePassed = process.env.GUILDHALL_MEMORY_ENGINE_GATE === 'passed' ||
-      process.env.GUILDHALL_MEMORY_ENGINE_GATE === '1'
-    if (semanticRecall && !memoryCorePacket.health.semanticRecallEnabled) {
-      memoryFeatures.add(memoryEngineGatePassed ? 'semantic-recall-vector-unavailable' : 'semantic-recall-gated')
-      if (!memoryEngineGatePassed) {
-        memoryWarnings.push('Semantic recall requested but held behind the memory engine quality gate.')
-      }
-    }
-    if (observationalMemory && !memoryCorePacket.health.observationalMemoryEnabled) {
-      memoryFeatures.add('observational-memory-gated')
-      if (!memoryEngineGatePassed) {
-        memoryWarnings.push('Observational Memory requested but held behind the memory engine quality gate.')
-      }
-    }
-    const memoryCore = {
-      adapter: memoryCorePacket.health.adapter,
-      fallbackUsed: memorySubstrate === 'deterministic' ? false : memoryCorePacket.health.fallbackUsed,
-      storagePath: memoryCorePacket.health.storagePath ?? resolveMemoryPaths({ projectRoot: projectPath, scope: memoryCoreScope }).dbPath,
-      repoLocalWrites: memoryCorePacket.health.repoLocalWrites ?? [],
-      semanticRecallEnabled: memoryCorePacket.health.semanticRecallEnabled ?? false,
-      observationalMemoryEnabled: memoryCorePacket.health.observationalMemoryEnabled ?? false,
-      observationalProcessorReady: memoryCorePacket.health.observationalProcessorReady ?? false,
-      compactionStatus: memoryCorePacket.health.compactionStatus ?? 'needs_attention',
-      semanticValidity: memoryCorePacket.health.semanticValidity ?? 'needs_attention',
-      warnings: memoryWarnings,
-      features: [...memoryFeatures],
-    }
-    return {
-      total: records.length,
-      active: count(record => record.status === 'active'),
-      proposed: count(record => record.status === 'observed' || record.status === 'proposed'),
-      used: count(record => record.status === 'used'),
-      retired: count(record => record.status === 'retired'),
-      project: count(record => record.scope === 'project'),
-      userGlobal: count(record => record.scope === 'user_global'),
-      guildhallProduct: count(record => record.scope === 'guildhall_product'),
-      memoryCore,
-      recentUse: recentUse
-        .sort((left, right) => right.at.localeCompare(left.at))
-        .slice(0, 5),
-    }
-  }
-
   async function buildProjectionSurfaceDetail(input: {
     surface: 'overview' | 'work' | 'map'
     requestedTaskId: string | null
     inventoryOffset?: number
     inventoryLimit?: number
     includeConfig?: boolean
+    includeDetailSections?: boolean
+    surfaceState?: NonNullable<ReturnType<typeof readProjectSurfaceStateAtBoundary>>
   }): Promise<Record<string, unknown>> {
     const tasksPath = projectTasksPath(project.path)
-    const promotedState = projectTaskStateExistsSync(tasksPath)
-    // A stale projection can still provide the last indexed shape. Its
-    // freshness is surfaced below; it must never trigger a fresh aggregate
-    // reconstruction from TASKS.json or the full queue reader.
     const inventoryOffset = Math.max(0, input.inventoryOffset ?? 0)
     const inventoryLimit = input.inventoryLimit && input.inventoryLimit > 0
       ? Math.min(100, input.inventoryLimit)
       : 100
-    const detailReadProjection = promotedState
-      ? readProjectDetailReadProjection(project.path, {
-          offset: inventoryOffset,
-          limit: inventoryLimit,
-          ...(input.requestedTaskId ? { selectedTaskId: input.requestedTaskId } : {}),
-        })
-      : null
-    const compactState: ProjectCompactStateReadModel | null = detailReadProjection && detailReadProjection.authority === 'database' && detailReadProjection.queue && detailReadProjection.inventory
-      ? {
-          queue: detailReadProjection.queue,
-          inventory: detailReadProjection.inventory,
-          selectedTask: detailReadProjection.selectedTask,
-          scope: detailReadProjection.scope,
-          repositories: [],
-          diagnostics: null,
-          summary: detailReadProjection.summary,
-          authority: 'database',
-          queueRevision: detailReadProjection.revisions.queue ?? 0,
-          projectRevision: detailReadProjection.revisions.project ?? 0,
-        }
-      : null
-    const savedProjection = compactState?.summary ?? (promotedState ? null : readProjectSummaryAtBoundary(tasksPath))
+    // Authority and the saved surface arrive from one sessions transaction.
+    // A stale projection can still provide the last indexed shape; it must
+    // never trigger a fresh aggregate reconstruction from TASKS.json.
+    const surfaceState = input.surfaceState ?? readProjectSurfaceStateAtBoundary(project.path, {
+      offset: inventoryOffset,
+      limit: inventoryLimit,
+      ...(input.includeDetailSections ? { includeDefinitions: true } : {}),
+      ...(input.requestedTaskId ? { selectedTaskId: input.requestedTaskId } : {}),
+      // Overview and Map are orientation views. The sessions boundary keeps
+      // that projection opt-in so fleet shells stay small; ask for it here
+      // rather than rebuilding orientation from queue rows in the route.
+      ...(input.surface !== 'work' ? { includeOrientation: true } : {}),
+      includeAvailability: true,
+      ...(input.includeDetailSections ? { includeAttention: true } : {}),
+      ...(input.includeDetailSections ? { includeMemoryHealth: true } : {}),
+    })
+    const promotedState = surfaceState?.authority === 'database'
+    const compactState: ProjectCompactStateReadModel | null = surfaceState?.compact ?? null
+    const savedProjection = compactState?.summary ?? (promotedState ? null : readProjectSummaryForProjectAtBoundary(project.path))
     const compactProjection = savedProjection
     const storedSpine = savedProjection?.orientationSpine ?? null
-    const indexedInventory = compactState?.inventory ?? (!promotedState
-      ? readProjectStateDatabaseInventory(tasksPath, { offset: inventoryOffset, limit: inventoryLimit })
-      : null)
+    const indexedInventory = compactState?.inventory ?? null
     const promotedOrientationMissing = promotedState && !storedSpine
-    // Work is a task projection, not an orientation projection. A missing
-    // spine must not make an otherwise readable work inventory unavailable;
-    // Overview/Map can report their own missing-orientation state.
-    const orientationRequired = input.surface !== 'work'
+    // Every project surface consumes the same saved orientation snapshot. A
+    // promoted project with no spine is a projection-integrity miss, not an
+    // invitation to rebuild a competing spine from a paged inventory. Keep
+    // the route honest and let the asynchronous projector repair it.
+    const orientationRequired = true
     const projectionAvailable = compactProjection && compactProjection.freshness !== 'error' &&
       (!orientationRequired || !promotedOrientationMissing)
     const inventoryRequired = input.surface !== 'overview' || (!promotedState && !storedSpine)
@@ -6448,6 +6525,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         projectRevision: compactState?.projectRevision ?? null,
         selectedTaskId: null,
         tasks: [],
+        orientationSpine: null,
         taskPayload: {
           surface: input.surface,
           kind: input.surface === 'overview'
@@ -6536,21 +6614,51 @@ export function buildServeApp(opts: ServeOptions = {}): {
     const compactReleaseReadiness = compactReleaseReadinessFromProjection({
       projection,
       rawQueue: scopeQueue as never,
-      scope: readinessScope,
+        scope: readinessScope as unknown as ProjectScope | null,
     })
-    const builtOrientationSpine = storedSpine ?? buildOrientationSpineWithScopedReleaseTruth({
-      projectId: project.id,
-      charter: projection.orientation?.charter ?? null,
-      selectedReleaseId: scopeQueue.selectedReleaseId,
-      releases: scopeQueue.releases,
-      tasks,
-      runStatus: run?.status ?? 'stopped',
-      startReadiness: summary.startReadiness,
-      releaseReadiness: orientationReleaseReadinessFromPayload(compactReleaseReadiness),
-      scopeProjection,
-      sourceRefs: projection.orientation?.sourceRefs ?? [],
-    }).orientationSpine
-    const initialOrientationSpine = storedSpine ?? (input.surface === 'overview'
+    // Pre-promotion projects retain a narrow compatibility path until their
+    // first background refresh. Promoted projects must already have the
+    // durable spine; the missing-spine branch above prevents a request-time
+    // rebuild from a paged inventory.
+    const legacyScopeProjection = !promotedState
+      ? buildProjectScopeProjection({
+          version: 1,
+          tasks,
+          releases: scopeQueue.releases,
+          ...(scopeQueue.selectedReleaseId ? { selectedReleaseId: scopeQueue.selectedReleaseId } : {}),
+        } as TaskQueue)
+      : undefined
+    const builtOrientationSpine = storedSpine ?? (!promotedState
+      ? buildOrientationSpineWithScopedReleaseTruth({
+          projectId: project.id,
+          charter: projection.orientation?.charter ?? null,
+          selectedReleaseId: scopeQueue.selectedReleaseId,
+          releases: scopeQueue.releases,
+          tasks,
+          runStatus: run?.status ?? 'stopped',
+          startReadiness: summary.startReadiness,
+          releaseReadiness: orientationReleaseReadinessFromPayload(compactReleaseReadiness),
+          scopeProjection: legacyScopeProjection,
+          sourceRefs: projection.orientation?.sourceRefs ?? [],
+        }).orientationSpine
+      : null)
+    if (!builtOrientationSpine) {
+      return {
+        ...summary,
+        id: project.id,
+        path: project.path,
+        name: project.config?.name ?? project.id,
+        orientationSpine: null,
+        detailPayload: {
+          kind: 'project-summary-projection',
+          freshness: compactProjection.freshness,
+          unavailable: true,
+          requiresRefresh: true,
+          message: 'The saved project orientation is unavailable. Refresh the project summary before loading work.',
+        },
+      }
+    }
+    const initialOrientationSpine = input.surface === 'overview'
       ? buildOverviewOrientationPreviewSpine({
           projectId: project.id,
           rawQueue: {
@@ -6564,31 +6672,32 @@ export function buildServeApp(opts: ServeOptions = {}): {
         })
         : input.surface === 'map'
         ? compactOrientationSpineForMapSurface(builtOrientationSpine as unknown as Record<string, unknown>)
-        : compactOrientationSpineForWorkSurface(builtOrientationSpine as unknown as Record<string, unknown>))
+        : compactOrientationSpineForWorkSurface(builtOrientationSpine as unknown as Record<string, unknown>)
     // A stored orientation snapshot can lag after task decomposition or
     // release selection changes. Its charter and narrative are still useful,
     // but the selected scope is owned by the same compact database snapshot
     // consumed by Release detail. Overlay only that canonical scope here so
     // every ordinary surface answers membership from one relation.
-    const baseOrientationSpine = compactState?.scope
+    const compactScope = compactState?.scope ?? null
+    const baseOrientationSpine = compactScope
       ? {
           ...initialOrientationSpine,
           selectedRelease: initialOrientationSpine.selectedRelease
             ? {
                 ...initialOrientationSpine.selectedRelease,
-                nodeIds: [...compactState.scope.nodeIds],
-                deferredNodeIds: [...compactState.scope.deferredNodeIds],
+                nodeIds: [...compactScope.nodeIds],
+                deferredNodeIds: [...compactScope.deferredNodeIds],
               }
             : initialOrientationSpine.selectedRelease,
-          releases: initialOrientationSpine.releases.map(release => release.id === compactState.scope?.id
+          releases: (Array.isArray(initialOrientationSpine.releases) ? initialOrientationSpine.releases : []).map(release => release.id === compactScope.id
             ? {
                 ...release,
-                nodeIds: [...compactState.scope.nodeIds],
-                deferredNodeIds: [...compactState.scope.deferredNodeIds],
+                nodeIds: [...compactScope.nodeIds],
+                deferredNodeIds: [...compactScope.deferredNodeIds],
               }
             : release),
-          selectedTaskScope: compactState.scope as unknown as OrientationScope,
-          scope: compactState.scope as unknown as OrientationScope,
+          selectedTaskScope: compactScope as unknown as OrientationScope,
+          scope: compactScope as unknown as OrientationScope,
         }
       : initialOrientationSpine
     const overviewTaskIds = input.surface === 'overview'
@@ -6599,9 +6708,23 @@ export function buildServeApp(opts: ServeOptions = {}): {
           selectedTaskId: input.requestedTaskId,
         })
       : null
-    const indexedOverviewTasks = storedSpine && overviewTaskIds
-      ? readProjectStateDatabaseTasks(tasksPath, [...overviewTaskIds])
+    const indexedOverviewTaskRead = storedSpine && overviewTaskIds
+      ? readProjectTaskRecordsAtBoundaryWithRevision(tasksPath, [...overviewTaskIds], {
+          ...(input.includeDetailSections ? { includeDefinitions: true } : {}),
+        })
       : null
+    if (
+      compactState &&
+      indexedOverviewTaskRead &&
+      (indexedOverviewTaskRead.queueRevision !== compactState.queueRevision ||
+        indexedOverviewTaskRead.projectRevision !== compactState.projectRevision)
+    ) {
+      throw new ProjectStateRevisionMismatchError(
+        { queue: compactState.queueRevision, project: compactState.projectRevision },
+        { queue: indexedOverviewTaskRead.queueRevision, project: indexedOverviewTaskRead.projectRevision },
+      )
+    }
+    const indexedOverviewTasks = indexedOverviewTaskRead?.taskPoints ?? null
     const scopedResponseTasks = indexedOverviewTasks ?? (overviewTaskIds && overviewTaskIds.size > 0
       ? tasks.filter(task => overviewTaskIds.has(task.id))
       : tasks)
@@ -6636,6 +6759,30 @@ export function buildServeApp(opts: ServeOptions = {}): {
     const responseTasks = selectedTask && !pagedResponseTasks.some(task => task.id === selectedTask.id)
       ? [...pagedResponseTasks, selectedTask]
       : pagedResponseTasks
+    const detailTaskRead = input.includeDetailSections
+      ? await readProjectTaskCurrentRecordsAtBoundary(
+          project.path,
+          responseTasks.map(task => task.id),
+          { includeDefinitions: true },
+        )
+      : null
+    if (
+      compactState &&
+      detailTaskRead &&
+      (detailTaskRead.queueRevision !== compactState.queueRevision ||
+        detailTaskRead.projectRevision !== compactState.projectRevision)
+    ) {
+      throw new ProjectStateRevisionMismatchError(
+        { queue: compactState.queueRevision, project: compactState.projectRevision },
+        { queue: detailTaskRead.queueRevision, project: detailTaskRead.projectRevision },
+      )
+    }
+    const detailResponseTasks = detailTaskRead
+      ? await Promise.all(detailTaskRead.effectiveRecords.map((effective, index) => {
+          const record = detailTaskRead.records[index] ?? effective
+          return enrichTaskForServe(project.path, record, effective)
+        }))
+      : responseTasks as Array<Record<string, unknown>>
     const scopeRows = responseTasks.flatMap(task => {
       const scopeRow = (task as { scopeRow?: unknown }).scopeRow
       if (!scopeRow || typeof scopeRow !== 'object' || Array.isArray(scopeRow)) return []
@@ -6654,7 +6801,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         blocksStart: row.blocksStart === true,
         blocksRelease: row.blocksRelease === true,
         humanBlocking: row.humanBlocking === true,
-        sourceRefs: [],
+        sourceRefs: Array.isArray(row.sourceRefs) ? row.sourceRefs : [],
       }]
     })
     const surfaceOrientationSpine = input.surface === 'overview'
@@ -6669,9 +6816,33 @@ export function buildServeApp(opts: ServeOptions = {}): {
           scopeRows,
         }
       : surfaceOrientationSpine
-    const taskPayload = responseTasks
-      .map(input.surface === 'map' ? compactTaskMapIdentity : compactTaskForWorkSurface)
+      const detailSurfaceTasks = input.includeDetailSections
+        ? backfillCompactTaskOrientationForServe(
+            detailResponseTasks,
+            orientationSpine as Record<string, unknown>,
+          )
+      : detailResponseTasks
+    const taskPayload = detailSurfaceTasks
+      .map(input.surface === 'map'
+        ? compactTaskMapIdentity
+        : input.surface === 'work'
+          ? task => compactTaskForWorkSurface(task, { includeDefinitions: input.includeDetailSections })
+          : compactTaskForProjectSummary)
       .filter((task): task is Record<string, unknown> => Boolean(task))
+    const detailInbox = input.includeDetailSections
+      ? readSavedAttentionSurfaceFromBoundary({
+          initializationNeeded: project.initializationNeeded,
+          records: surfaceState?.attentionRecords ?? null,
+          watermarkSourceRevision: surfaceState?.attentionWatermark?.sourceRevision ?? null,
+          projectRevision: surfaceState?.projectRevision ?? null,
+        })
+      : null
+    const detailMemoryHealth = input.includeDetailSections
+      ? surfaceState?.memoryHealth?.payload ?? null
+      : null
+    const detailRecentEvents = input.includeDetailSections
+      ? supervisor.recent(project.id, undefined, project.path)
+      : null
     const totalEffectiveCount = responseInventory?.total ?? scopedResponseTasks.length
     const hasMore = responseInventory?.hasMore ?? (responseInventoryLimit !== null && inventoryEnd < totalEffectiveCount)
     return {
@@ -6682,6 +6853,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
       name: project.config?.name ?? project.id,
       tags: project.config?.tags ?? [],
       ...(input.includeConfig ? { config: project.config } : {}),
+      ...(detailInbox ? { inbox: detailInbox } : {}),
+      ...(detailMemoryHealth ? { memoryHealth: detailMemoryHealth } : {}),
+      ...(detailRecentEvents ? { recentEvents: detailRecentEvents } : {}),
       ...(providerStatus ? { providerStatus } : {}),
       coordinatorCount: project.config?.coordinators?.length ?? 0,
       queueRevision: compactState?.queueRevision ?? null,
@@ -6711,27 +6885,29 @@ export function buildServeApp(opts: ServeOptions = {}): {
       startReadiness: summary.startReadiness,
       actionModel: summary.actionModel,
       orientationSpine,
-      detailPayload: {
-        kind: 'project-summary-projection',
-        freshness: projection.freshness,
-        omitted: ['inbox', 'Thread', 'Git Story', 'repository inspection', 'request-time repair', 'task evidence and history'],
-        endpoints: {
-          activity: '/api/project/activity',
-          activityHistory: '/api/project/activity/history',
-          inbox: '/api/project/inbox',
-          thread: '/api/project/thread',
-          releaseReadiness: '/api/project/release-readiness',
-          gitStory: '/api/project/git-story',
-          taskDetail: '/api/project/task/:id',
+      ...(!input.includeDetailSections ? {
+        detailPayload: {
+          kind: 'project-summary-projection',
+          freshness: projection.freshness,
+          omitted: ['inbox', 'Thread', 'Git Story', 'repository inspection', 'request-time repair', 'task evidence and history'],
+          endpoints: {
+            activity: '/api/project/activity',
+            activityHistory: '/api/project/activity/history',
+            inbox: '/api/project/inbox',
+            thread: '/api/project/thread',
+            releaseReadiness: '/api/project/release-readiness',
+            gitStory: '/api/project/git-story',
+            taskDetail: '/api/project/task/:id',
+          },
         },
-      },
+      } : {}),
     }
   }
 
   app.get('/api/project', async c => {
     const timing: Array<{ name: string; startedAt: number; endedAt?: number }> = []
     const startTiming = (name: string) => {
-      const metric = { name, startedAt: Date.now() }
+      const metric: { name: string; startedAt: number; endedAt?: number } = { name, startedAt: Date.now() }
       timing.push(metric)
       return () => { metric.endedAt = Date.now() }
     }
@@ -6743,8 +6919,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const diagnosticRequested = c.req.query('diagnostic') === 'true'
       const surface = requestedSurface === 'overview' || requestedSurface === 'work' || requestedSurface === 'map'
         ? requestedSurface
-        : diagnosticRequested || detailRequested ? 'full' : 'overview'
-      const fullSurface = surface === 'full'
+        : diagnosticRequested ? 'full' : 'overview'
+      const fullSurface = diagnosticRequested
       const overviewSurface = surface === 'overview'
       const workSurface = surface === 'work'
       const mapSurface = surface === 'map'
@@ -6762,11 +6938,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
       // The bounded projection is the default contract. Rich reconstruction is
       // opt-in so a forgotten query parameter cannot turn a dashboard read
       // into a multi-megabyte, repository-scanning request.
-      if ((!diagnosticRequested && !detailRequested) || c.req.query('compact') === 'true') {
+      if (!diagnosticRequested || c.req.query('compact') === 'true') {
         const requestedInventoryLimit = Number.parseInt(c.req.query('inventoryLimit') ?? '', 10)
         const requestedInventoryOffset = Number.parseInt(c.req.query('inventoryOffset') ?? '', 10)
         const payload = await buildProjectionSurfaceDetail({
-          surface: fullSurface ? 'overview' : surface,
+          surface: surface === 'overview' || surface === 'work' || surface === 'map' ? surface : 'overview',
           requestedTaskId: requestedTaskId || null,
           ...(Number.isFinite(requestedInventoryLimit) && requestedInventoryLimit > 0
             ? { inventoryLimit: requestedInventoryLimit }
@@ -6775,6 +6951,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
             ? { inventoryOffset: requestedInventoryOffset }
             : {}),
           ...(detailRequested ? { includeConfig: true } : {}),
+          ...(detailRequested ? { includeDetailSections: true } : {}),
         })
         endSetup()
         endTotal()
@@ -6830,18 +7007,15 @@ export function buildServeApp(opts: ServeOptions = {}): {
             runtimeProvider,
             allowPaidProviderFallback: runtimeProvider.allowPaidProviderFallback,
             queue: rawQueue,
-            effectiveTasks: mapSurface
-              ? await compactSurfaceEffectiveTasksPromise as Task[]
-              : overviewSurface || workSurface
-                ? await compactSurfaceEffectiveTasksPromise as Task[]
-                : undefined,
+            effectiveTasks: currentState.tasks as Task[],
+            scope: currentState.scope ?? null,
             startTiming: name => startTiming(`readiness_${name}`),
           })
         : projectedSummary?.startReadiness ?? null
       const releaseReadiness = fullSurface || overviewSurface || workSurface || mapSurface
         ? await buildProjectReleaseReadinessPayload({
             state: currentState,
-            startReadiness,
+            startReadiness: startReadiness as Awaited<ReturnType<typeof projectStartReadinessForProject>>,
             liveDiagnostics: diagnosticRequested,
           })
         : null
@@ -6875,14 +7049,16 @@ export function buildServeApp(opts: ServeOptions = {}): {
             tasks: rawTasks as Task[],
           })
         : []
-      const deliveryValidation = fullSurface
+      const deliveryValidation = fullSurface && deliveryModel
         ? validateProjectDeliveryModel({
             model: deliveryModel,
             tasks: rawTasks as Task[],
             projectRoot: project.path,
           })
         : null
-      const deliveryPrimitives = fullSurface ? listPrimitivesWithRelations(deliveryModel, rawTasks as Task[]) : null
+      const deliveryPrimitives = fullSurface && deliveryModel
+        ? listPrimitivesWithRelations(deliveryModel, rawTasks as Task[])
+        : null
       // Rich detail may include the saved diagnostic projection, but it must
       // not turn into a repository scan unless the caller explicitly asks for
       // live diagnostics. This keeps the read boundary authoritative and
@@ -6923,17 +7099,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
             })
           : null
       )
-      const [runtime, memoryHealth, availability] = await Promise.all([
+      const [runtime, availability] = await Promise.all([
         mapSurface ? Promise.resolve(null) : readProjectRuntimeState(project.path),
-        fullSurface
-          ? projectMemoryHealth(
-              project.path,
-              tasks
-                .filter((task): task is { id: string } => typeof task.id === 'string'),
-            )
-          : Promise.resolve(null),
         readProjectAvailability(project.path),
       ])
+      const memoryHealth = fullSurface ? currentState.memoryHealth?.payload ?? null : null
       const acceptedStructuralMap = mapSurface ? null : readAcceptedStructuralMap(project.path)
       const structuralMapReview = acceptedStructuralMap ? summarizeStructuralMapForReview(acceptedStructuralMap) : null
       const taskRoutingContexts = mapSurface
@@ -6947,7 +7117,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
                 title: typeof task.title === 'string' ? task.title : task.id,
                 description: typeof task.description === 'string' ? task.description : undefined,
                 spec: typeof task.spec === 'string' ? task.spec : undefined,
-              })),
+              })) as never,
       })
       endAncillary()
       const endThreadInbox = startTiming('thread_inbox')
@@ -6956,11 +7126,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         : readSavedAttentionSurface(project.path, project.initializationNeeded)
       const thread = mapSurface
         ? null
-        : readProjectStateDatabaseCurrentThread<{
-            turns: unknown[]
-            activeTurnId: string | null
-            caughtUp: boolean
-          }>(project.path)?.payload ?? { turns: [], activeTurnId: null, caughtUp: false }
+        : readThreadReadProjection(project.path).payload
       endThreadInbox()
       const endSpine = startTiming('spine')
       const storedOrientationSpine = currentState.summary?.orientationSpine
@@ -7006,14 +7172,22 @@ export function buildServeApp(opts: ServeOptions = {}): {
           )
       endSpine()
       const actionModel = !diagnosticRequested
-        ? projectedSummary?.actionModel ?? currentState.summary?.actionModel ?? null
+          ? run
+            ? buildProjectActionModel({
+                startReadiness,
+                tasks: tasks as never,
+                runStatus: run.status,
+                runMode: run.mode,
+                availability,
+              })
+            : projectedSummary?.actionModel ?? currentState.summary?.actionModel ?? null
         : (() => {
             const actionScope = orientationSpine.selectedTaskScope ?? orientationSpine.scope ?? null
             const actionTasksById = new Map((orientationTasks as unknown as Task[]).map(candidate => [candidate.id, candidate]))
             const scopedActionTaskIds = actionScope
               ? new Set(
                   (orientationTasks as unknown as Task[])
-                    .filter(task => taskEligibleForSelectedScope(task, actionScope, {
+                    .filter(task => taskEligibleForSelectedScope(task, actionScope as unknown as ProjectScope, {
                       tasksById: actionTasksById,
                     }).eligible)
                     .map(task => task.id),
@@ -7026,8 +7200,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
               startReadiness,
               inbox,
               tasks: actionTasks as never,
-              thread,
+              thread: thread as never,
               runStatus: run?.status ?? 'stopped',
+              runMode: run?.mode,
               availability,
             })
           })()
@@ -7059,8 +7234,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
               : 'project_full_inventory',
         count: responseTasks.length,
         totalEffectiveCount: orientationTasks.length,
-        selectedScopeCount: orientationSpine.summary?.includedWorkCount ?? null,
-        selectedScopeAndDeferredCount: orientationSpine.summary?.progress?.total ?? null,
+        selectedScopeCount: (orientationSpine.summary as { includedWorkCount?: number } | undefined)?.includedWorkCount ?? null,
+        selectedScopeAndDeferredCount: (orientationSpine.summary as { progress?: { total?: number } } | undefined)?.progress?.total ?? null,
       }
       const payload = {
         initializationNeeded: false,
@@ -7074,7 +7249,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
         tags: project.config?.tags ?? [],
         config: project.config,
         selectedTaskId,
-        tasks: surfaceTasks.map(mapSurface ? compactTaskIdentity : fullSurface ? compactTaskForProjectSummary : compactTaskForWorkSurface),
+        tasks: (surfaceTasks as Record<string, unknown>[]).map(task =>
+          mapSurface ? compactTaskIdentity(task) : fullSurface ? compactTaskForProjectSummary(task) : compactTaskForWorkSurface(task),
+        ),
         taskPayload,
         workProgress,
         ...(inbox ? { inbox } : {}),
@@ -7127,7 +7304,16 @@ export function buildServeApp(opts: ServeOptions = {}): {
       endTotal()
       c.header('server-timing', formatServerTiming(timing))
       return c.json(payload)
-  } catch (err) {
+    } catch (err) {
+      if (err instanceof ProjectStateRevisionMismatchError) {
+        return c.json({
+          error: err.message,
+          code: err.code,
+          requiresRefresh: true,
+          expectedRevision: err.expected,
+          actualRevision: err.actual,
+        }, 503)
+      }
       endTotal()
       c.header('server-timing', formatServerTiming(timing))
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
@@ -7152,11 +7338,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
       if (compactSurface) {
         const tasksPath = projectTasksPath(project.path)
-        const promotedState = projectTaskStateExistsSync(tasksPath)
-        const compactState = promotedState
-          ? readProjectCompactStateModel(tasksPath, { limit: 1 })
-          : null
-        const savedProjection = compactState?.summary ?? (promotedState ? null : readProjectSummaryAtBoundary(tasksPath))
+        const surfaceState = readProjectSurfaceStateAtBoundary(project.path, { limit: 1 })
+        const promotedState = surfaceState?.authority === 'database'
+        const compactState = surfaceState?.compact ?? null
+        const savedProjection = compactState?.summary ?? (promotedState ? null : readProjectSummaryForProjectAtBoundary(project.path))
         const run = supervisor.get(project.id)
         const summary = summarizeProjectFromProjection(
           { id: project.id, path: project.path },
@@ -7273,7 +7458,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         startReadiness,
         sourceRefs: projectOrientationSourceRefs(project.path),
       })
-      const result = await writeSelectedReleaseId(projectTasksPath(project.path), releaseId, selectableSpine.releases as ProjectRelease[])
+      const result = await writeProjectReleaseEnvelope(projectTasksPath(project.path), releaseId, selectableSpine.releases as ProjectRelease[])
       const rawQueue = await readTaskQueueFileNormalized(projectTasksPath(project.path))
       const tasks = await buildEffectiveTasks(project.path, rawQueue.tasks as Task[])
       const { orientationSpine: spine } = buildOrientationSpineWithScopedReleaseTruth({
@@ -7290,6 +7475,48 @@ export function buildServeApp(opts: ServeOptions = {}): {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       return c.json({ error: message }, /not found|no release|no task queue/i.test(message) ? 404 : 500)
+    }
+  })
+
+  // POST /api/project/release/close — explicitly ship the selected release
+  // after the saved summary proves its bounded work is complete.
+  app.post('/api/project/release/close', async c => {
+    try {
+      if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
+      const body = await c.req.json().catch(() => ({})) as { releaseId?: unknown }
+      const state = await readProjectReleaseState(project.path)
+      const releaseId = typeof body.releaseId === 'string' && body.releaseId.trim()
+        ? body.releaseId.trim()
+        : state.rawQueue.selectedReleaseId
+      if (!releaseId) return c.json({ error: 'releaseId is required.' }, 400)
+      if (state.rawQueue.selectedReleaseId !== releaseId) {
+        return c.json({ error: 'Only the selected release can be shipped. Select it first.' }, 409)
+      }
+      const release = state.rawQueue.releases.find(candidate => candidate.id === releaseId)
+      if (!release) return c.json({ error: 'Release not found in this project.' }, 404)
+      const result = closeReleaseIfReady(
+        release,
+        state.summary?.releaseSummary ?? null,
+        new Date().toISOString(),
+      )
+      if (!result.ok) {
+        return c.json({
+          error: result.message ?? 'Release is not ready to ship.',
+          code: result.code,
+          release: result.release,
+        }, 409)
+      }
+      if (result.code === 'already_shipped') {
+        return c.json({ ok: true, alreadyShipped: true, release: result.release, selectedReleaseId: releaseId })
+      }
+      const nextReleases = state.rawQueue.releases.map(candidate =>
+        candidate.id === releaseId ? result.release : candidate,
+      )
+      const written = await writeProjectReleaseEnvelope(projectTasksPath(project.path), releaseId, nextReleases)
+      return c.json({ ok: true, release: written.release, selectedReleaseId: written.selectedReleaseId })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      return c.json({ error: message }, /not found|no release|not initialized/i.test(message) ? 404 : 500)
     }
   })
 
@@ -8321,11 +8548,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
     allowPaidProviderFallback: boolean
     allowTaskReadinessBlocker?: boolean
     requestedTaskId?: string
-    queue?: Awaited<ReturnType<typeof readTaskQueueFileNormalized>>
-    effectiveTasks?: Task[]
-    scope?: ProjectScope | null
     startTiming?: (name: string) => () => void
-  }): Promise<{
+  } & StartStateSnapshot): Promise<{
     canStart: boolean
     code?: string
     message?: string
@@ -8353,6 +8577,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }))
     const attachExecutionScope = <T extends { canStart: boolean }>(status: T): T & { executionScope?: StartExecutionScopeSummary } =>
       executionScope ? { ...status, executionScope } : status
+    const startStateOptions = {
+      queue: input.queue,
+      effectiveTasks: input.effectiveTasks,
+      scope: input.scope,
+    }
 
     const runtimeBlocker = projectRuntimeCompatibilityBlocker({ projectRoot: input.projectPath })
     if (runtimeBlocker) return attachExecutionScope(runtimeBlocker)
@@ -8360,35 +8589,61 @@ export function buildServeApp(opts: ServeOptions = {}): {
     const requiredMigrationBlocker = await time('migrations', () => startBlockerForRequiredMigrations(input.projectPath))
     if (requiredMigrationBlocker) return attachExecutionScope(requiredMigrationBlocker)
 
-    const ownerInputBlocker = startBlockerForOwnerInput(input.projectPath)
+    const ownerInputBlocker = startBlockerForOwnerInput(input.projectPath, input.ownerInput)
     if (ownerInputBlocker) return attachExecutionScope(ownerInputBlocker)
 
     const terminal = await time('terminal', () => terminalStartState(input.projectPath, input.requestedTaskId, {
       queue: input.queue,
       effectiveTasks: input.effectiveTasks,
+      scope: input.scope,
     }))
     if (terminal?.selectedReleaseTerminal && terminal.code !== 'proof_evidence_missing') {
       return attachExecutionScope(startReadinessForTerminalState(terminal))
     }
-    const hasMaterializedStartWork = await time('materialized', () => hasMaterializedScopedStartWork(input.projectPath, input.requestedTaskId))
-    const workspaceImportCoverageBlocker = hasMaterializedStartWork
+    const hasMaterializedStartWork = await time('materialized', () => hasMaterializedScopedStartWork(
+      input.projectPath,
+      input.requestedTaskId,
+      startStateOptions,
+    ))
+    // A promoted project already has the queue, effective tasks, and selected
+    // scope from one canonical read bundle. The old coverage routine is a
+    // legacy compatibility checker: it rereads workspace-goals, scans docs,
+    // and can materialize an import draft. It is not allowed to participate in
+    // a promoted read or Start decision. Its durable replacement belongs in
+    // the projection refresh that produced this snapshot.
+    const hasCapturedCurrentState = input.queue !== undefined &&
+      input.effectiveTasks !== undefined &&
+      input.scope !== undefined
+    const workspaceImportCoverageBlocker = hasMaterializedStartWork || hasCapturedCurrentState
       ? null
-      : await time('workspace_coverage', () => startBlockerForWorkspaceImportCoverage(input.projectPath))
+      : await time('workspace_coverage', () => startBlockerForWorkspaceImportCoverage(input.projectPath, startStateOptions))
     if (workspaceImportCoverageBlocker) return attachExecutionScope(workspaceImportCoverageBlocker)
 
     if (terminal && terminal.code !== 'proof_evidence_missing') {
       return attachExecutionScope(startReadinessForTerminalState(terminal))
     }
 
-    const orientationShapingBlocker = await time('shape', () => startBlockerForOrientationScopeShaping(input.projectPath, input.requestedTaskId))
+    const orientationShapingBlocker = await time('shape', () => startBlockerForOrientationScopeShaping(
+      input.projectPath,
+      input.requestedTaskId,
+      startStateOptions,
+    ))
     if (input.allowTaskReadinessBlocker !== false) {
-      const selectedReleaseReviewBlocker = await time('release_review', () => startBlockerForSelectedReleaseReview(input.projectPath, input.resolvedConfig))
+      const selectedReleaseReviewBlocker = await time('release_review', () => startBlockerForSelectedReleaseReview(
+        input.projectPath,
+        input.resolvedConfig,
+        startStateOptions,
+      ))
       if (selectedReleaseReviewBlocker) return attachExecutionScope(selectedReleaseReviewBlocker)
     }
 
     if (orientationShapingBlocker) return attachExecutionScope(orientationShapingBlocker)
 
-    const importDraftBlocker = await time('drafts', () => startBlockerForImportDrafts(input.projectPath, input.requestedTaskId))
+    const importDraftBlocker = await time('drafts', () => startBlockerForImportDrafts(
+      input.projectPath,
+      input.requestedTaskId,
+      startStateOptions,
+    ))
     if (importDraftBlocker) return attachExecutionScope(importDraftBlocker)
 
     if (terminal && terminal.code !== 'proof_evidence_missing') {
@@ -8449,7 +8704,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
       return attachExecutionScope(await time('ready_status', () => readyStartStatus(
         input.projectPath,
         input.requestedTaskId,
-        input.resolvedConfig.id ?? basename(input.projectPath),
+        basename(input.projectPath),
+        startStateOptions,
       )))
     }
 
@@ -8458,11 +8714,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
       return attachExecutionScope(await time('ready_status', () => readyStartStatus(
         input.projectPath,
         input.requestedTaskId,
-        input.resolvedConfig.id ?? basename(input.projectPath),
+        basename(input.projectPath),
+        startStateOptions,
       )))
     }
 
-    const loadedModels = await time('llama_models', () => loadedLlamaModelIds(creds.llamaCppUrl).catch(() => []))
+    const llamaCppUrl = creds.llamaCppUrl
+    const loadedModels = await time('llama_models', () => loadedLlamaModelIds(llamaCppUrl).catch(() => []))
     if (loadedModels.length === 0) {
       const paidFallback = input.allowPaidProviderFallback
         ? await time('paid_fallback', () => selectPaidFallbackProvider(creds))
@@ -8480,7 +8738,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
       return attachExecutionScope(await time('ready_status', () => readyStartStatus(
         input.projectPath,
         input.requestedTaskId,
-        input.resolvedConfig.id ?? basename(input.projectPath),
+        basename(input.projectPath),
+        startStateOptions,
       )))
     }
 
@@ -8489,7 +8748,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
       return attachExecutionScope(await time('ready_status', () => readyStartStatus(
         input.projectPath,
         input.requestedTaskId,
-        input.resolvedConfig.id ?? basename(input.projectPath),
+        basename(input.projectPath),
+        startStateOptions,
       )))
     }
 
@@ -8500,7 +8760,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
       return attachExecutionScope(await time('ready_status', () => readyStartStatus(
         input.projectPath,
         input.requestedTaskId,
-        input.resolvedConfig.id ?? basename(input.projectPath),
+        basename(input.projectPath),
+        startStateOptions,
       )))
     }
     return attachExecutionScope({
@@ -8515,7 +8776,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
     })
   }
 
-  async function readyStartStatus(projectPath: string, requestedTaskId: string | undefined, projectId: string): Promise<{
+  async function readyStartStatus(
+    projectPath: string,
+    requestedTaskId: string | undefined,
+    projectId: string,
+    options: StartStateSnapshot = {},
+  ): Promise<{
     canStart: true
     code?: string
     message?: string
@@ -8528,7 +8794,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   }> {
     const activeRun = supervisor.get(projectId)
     if (activeRun?.status === 'running' || activeRun?.status === 'stopping') return { canStart: true }
-    return await startStatusForPausedLiveWork(projectPath, requestedTaskId) ?? { canStart: true }
+    return await startStatusForPausedLiveWork(projectPath, requestedTaskId, options) ?? { canStart: true }
   }
 
   function startReadinessForTerminalState(terminal: Awaited<ReturnType<typeof terminalStartState>> & {}): {
@@ -8555,28 +8821,43 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
   }
 
-  async function hasMaterializedScopedStartWork(projectPath: string, requestedTaskId?: string): Promise<boolean> {
+  async function hasMaterializedScopedStartWork(
+    projectPath: string,
+    requestedTaskId?: string,
+    options: StartStateSnapshot = {},
+  ): Promise<boolean> {
     const tasksPath = projectTasksPath(projectPath)
-    if (!projectTaskStateExistsSync(tasksPath)) return false
-    const queue = await readTaskQueueFileNormalized(tasksPath)
+    const hasSharedState = options.queue !== undefined && options.effectiveTasks !== undefined && options.scope !== undefined
+    const canonicalState = !hasSharedState && readProjectStateAuthorityAtBoundary(tasksPath).authority === 'database'
+      ? await readProjectCanonicalCurrentState(projectPath)
+      : null
+    if (!canonicalState && !projectTaskStateExistsSync(tasksPath)) return false
+    const queue = options.queue ?? canonicalState?.rawQueue ?? await readTaskQueueFileNormalized(tasksPath)
+    const typedTasks = options.effectiveTasks ?? canonicalState?.tasks ?? queue.tasks as Task[]
     const typedQueue = {
-      tasks: queue.tasks as Task[],
+      tasks: typedTasks,
       releases: queue.releases,
       ...(queue.selectedReleaseId ? { selectedReleaseId: queue.selectedReleaseId } : {}),
     }
-    const { orientationSpine } = buildOrientationSpineWithScopedReleaseTruth({
-      projectId: basename(projectPath),
-      charter: inferProjectCharterFromExistingSources(projectPath),
-      selectedReleaseId: queue.selectedReleaseId,
-      releases: queue.releases,
-      tasks: typedQueue.tasks,
-      runStatus: 'stopped',
-      sourceRefs: projectOrientationSourceRefs(projectPath),
-    })
-    const selectedReleaseScope =
-      (orientationSpine.selectedTaskScope as OrientationScope | null | undefined) ??
-      (orientationSpine.scope as OrientationScope | null | undefined) ??
-      selectedReleaseScopeFromQueueLike(typedQueue)
+    const authoritativeScope = options.scope !== undefined ? options.scope : canonicalState?.scope
+    const selectedReleaseScope = authoritativeScope !== undefined
+      ? authoritativeScope
+      : (() => {
+          const { orientationSpine } = buildOrientationSpineWithScopedReleaseTruth({
+            projectId: basename(projectPath),
+            charter: inferProjectCharterFromExistingSources(projectPath),
+            selectedReleaseId: queue.selectedReleaseId,
+            releases: queue.releases,
+            tasks: typedQueue.tasks,
+            runStatus: 'stopped',
+            sourceRefs: projectOrientationSourceRefs(projectPath),
+          })
+          return (
+            (orientationSpine.selectedTaskScope as OrientationScope | null | undefined) ??
+            (orientationSpine.scope as OrientationScope | null | undefined) ??
+            selectedReleaseScopeFromQueueLike(typedQueue)
+          )
+        })()
     const scopedTasks = tasksEligibleForScopeExecution(typedQueue.tasks, selectedReleaseScope)
     if (selectedReleaseScope) {
       return scopedTasks.some(task => {
@@ -8600,7 +8881,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
     })
   }
 
-  async function startStatusForPausedLiveWork(projectPath: string, requestedTaskId?: string): Promise<{
+  async function startStatusForPausedLiveWork(
+    projectPath: string,
+    requestedTaskId?: string,
+    options: StartStateSnapshot = {},
+  ): Promise<{
     canStart: true
     code: 'paused_live_work'
     message: string
@@ -8611,26 +8896,37 @@ export function buildServeApp(opts: ServeOptions = {}): {
     count: number
   } | null> {
     const tasksPath = projectTasksPath(projectPath)
-    if (!projectTaskStateExistsSync(tasksPath)) return null
-    const queue = await readTaskQueueFileNormalized(tasksPath)
+    const hasSharedState = options.queue !== undefined && options.effectiveTasks !== undefined && options.scope !== undefined
+    const canonicalState = !hasSharedState && readProjectStateAuthorityAtBoundary(tasksPath).authority === 'database'
+      ? await readProjectCanonicalCurrentState(projectPath)
+      : null
+    if (!canonicalState && !projectTaskStateExistsSync(tasksPath)) return null
+    const queue = options.queue ?? canonicalState?.rawQueue ?? await readTaskQueueFileNormalized(tasksPath)
+    const typedTasks = options.effectiveTasks ?? canonicalState?.tasks ?? queue.tasks as Task[]
     const typedQueue = {
-      tasks: queue.tasks as Task[],
+      tasks: typedTasks,
       releases: queue.releases,
       ...(queue.selectedReleaseId ? { selectedReleaseId: queue.selectedReleaseId } : {}),
     }
-    const { orientationSpine } = buildOrientationSpineWithScopedReleaseTruth({
-      projectId: basename(projectPath),
-      charter: inferProjectCharterFromExistingSources(projectPath),
-      selectedReleaseId: queue.selectedReleaseId,
-      releases: queue.releases,
-      tasks: typedQueue.tasks,
-      runStatus: 'stopped',
-      sourceRefs: projectOrientationSourceRefs(projectPath),
-    })
-    const selectedReleaseScope =
-      (orientationSpine.selectedTaskScope as OrientationScope | null | undefined) ??
-      (orientationSpine.scope as OrientationScope | null | undefined) ??
-      selectedReleaseScopeFromQueueLike(typedQueue)
+    const authoritativeScope = options.scope !== undefined ? options.scope : canonicalState?.scope
+    const selectedReleaseScope = authoritativeScope !== undefined
+      ? authoritativeScope
+      : (() => {
+          const { orientationSpine } = buildOrientationSpineWithScopedReleaseTruth({
+            projectId: basename(projectPath),
+            charter: inferProjectCharterFromExistingSources(projectPath),
+            selectedReleaseId: queue.selectedReleaseId,
+            releases: queue.releases,
+            tasks: typedQueue.tasks,
+            runStatus: 'stopped',
+            sourceRefs: projectOrientationSourceRefs(projectPath),
+          })
+          return (
+            (orientationSpine.selectedTaskScope as OrientationScope | null | undefined) ??
+            (orientationSpine.scope as OrientationScope | null | undefined) ??
+            selectedReleaseScopeFromQueueLike(typedQueue)
+          )
+        })()
     const scopedTasks = tasksEligibleForScopeExecution(typedQueue.tasks, selectedReleaseScope)
     const pausedTasks = scopedTasks.filter(task => {
       if (!task || typeof task !== 'object') return false
@@ -8683,6 +8979,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       ...(canonicalState ? { queue: canonicalState.rawQueue as Awaited<ReturnType<typeof readTaskQueueFileNormalized>> } : {}),
       ...(canonicalState ? { effectiveTasks: canonicalState.tasks } : {}),
       ...(canonicalState ? { scope: canonicalState.scope } : {}),
+      ...(canonicalState ? { ownerInput: canonicalState.summary?.ownerInput ?? null } : {}),
       ...(opts.allowTaskReadinessBlocker !== undefined
         ? { allowTaskReadinessBlocker: opts.allowTaskReadinessBlocker }
         : {}),
@@ -8701,28 +8998,21 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
   }
 
-  type StartExecutionScopeSummary = {
-    id: string
-    label: string
-    kind: string
-    source?: string
-    taskCount?: number
-    deferredTaskCount?: number
-  }
-
   async function startExecutionScopeSummary(
     projectPath: string,
     requestedTaskId?: string,
-    options: {
-      queue?: Awaited<ReturnType<typeof readTaskQueueFileNormalized>>
-      effectiveTasks?: Task[]
-      scope?: ProjectScope | null
-    } = {},
+    options: StartStateSnapshot = {},
   ): Promise<StartExecutionScopeSummary | undefined> {
     const tasksPath = projectTasksPath(projectPath)
-    const queue = options.queue ?? await readTaskQueueFileNormalized(tasksPath).catch(() => null)
+    const hasSharedState = options.queue !== undefined && options.effectiveTasks !== undefined && options.scope !== undefined
+    const canonicalState = !hasSharedState && readProjectStateAuthorityAtBoundary(tasksPath).authority === 'database'
+      ? await readProjectCanonicalCurrentState(projectPath)
+      : null
+    const queue = options.queue ?? canonicalState?.rawQueue ?? await readTaskQueueFileNormalized(tasksPath).catch(() => null)
     if (requestedTaskId) {
-      const task = queue?.tasks.find(candidate => candidate.id === requestedTaskId)
+      const task = options.effectiveTasks?.find(candidate => candidate.id === requestedTaskId) ??
+        canonicalState?.tasks.find(candidate => candidate.id === requestedTaskId) ??
+        queue?.tasks.find(candidate => candidate.id === requestedTaskId)
       return {
         id: requestedTaskId,
         label: typeof task?.title === 'string' && task.title.trim() ? task.title.trim() : requestedTaskId,
@@ -8732,15 +9022,17 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
     }
     if (!queue) return undefined
-    const typedTasks = options.effectiveTasks ?? queue.tasks as Task[]
-    const workspaceGoalsState = await readWorkspaceGoalsState(getProjectStateDir(projectPath)).catch(() => null)
+    const typedTasks = options.effectiveTasks ?? canonicalState?.tasks ?? queue.tasks as Task[]
+    const workspaceGoalsState = canonicalState
+      ? null
+      : await readWorkspaceGoalsState(getProjectStateDir(projectPath)).catch(() => null)
     const selectedReleaseScope = options.scope !== undefined
       ? options.scope
-      : selectedReleaseScopeFromQueueLike({
-          tasks: typedTasks,
-          releases: queue.releases,
-          ...(queue.selectedReleaseId ? { selectedReleaseId: queue.selectedReleaseId } : {}),
-        })
+      : canonicalState?.scope ?? selectedReleaseScopeFromQueueLike({
+        tasks: typedTasks,
+        releases: queue.releases,
+        ...(queue.selectedReleaseId ? { selectedReleaseId: queue.selectedReleaseId } : {}),
+      })
     const selectedScope = selectedReleaseScope ?? selectedTaskScopeForQueue(
       { tasks: typedTasks },
       workspaceGoalsState?.approved ?? null,
@@ -8780,10 +9072,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
     return ''
   }
 
-	  async function terminalStartState(projectPath: string, requestedTaskId?: string, opts: {
-      queue?: Awaited<ReturnType<typeof readTaskQueueFileNormalized>>
-      effectiveTasks?: Task[]
-    } = {}): Promise<{
+  async function terminalStartState(projectPath: string, requestedTaskId?: string, opts: StartStateSnapshot = {}): Promise<{
 	    canStart: false
 	    code: 'all_terminal' | 'proof_evidence_missing' | 'repository_followup_required' | 'scope_source_conflict'
 	    message: string
@@ -8809,10 +9098,15 @@ export function buildServeApp(opts: ServeOptions = {}): {
         terminal: number
       }
     }
-	  } | null> {
+    } | null> {
     const tasksPath = projectTasksPath(projectPath)
-    if (!projectTaskStateExistsSync(tasksPath)) return null
+    const hasSharedState = opts.queue !== undefined && opts.effectiveTasks !== undefined && opts.scope !== undefined
+    const canonicalState = !hasSharedState && readProjectStateAuthorityAtBoundary(tasksPath).authority === 'database'
+      ? await readProjectCanonicalCurrentState(projectPath)
+      : null
+    if (!canonicalState && !projectTaskStateExistsSync(tasksPath)) return null
     let raw: unknown = opts.queue
+    raw ??= canonicalState?.rawQueue
     if (!raw) {
       try {
         raw = readProjectTaskQueueSync(tasksPath)
@@ -8828,14 +9122,14 @@ export function buildServeApp(opts: ServeOptions = {}): {
     if (tasks.length === 0) return null
 	    if (
 	      requestedTaskId &&
-	      await hasRecoverableBlockedStartTask(projectPath, tasks, requestedTaskId)
+      await hasRecoverableBlockedStartTask(projectPath, tasks, requestedTaskId, opts.effectiveTasks)
 	    ) {
 	      return null
     }
 
     const typedTasks = tasks.filter((task): task is Task => Boolean(task && typeof task === 'object'))
-    const effectiveTasks = opts.effectiveTasks ?? await Promise.all(typedTasks.map(task => buildEffectiveTask(projectPath, task)))
-    const normalizedQueue = opts.queue ?? (!requestedTaskId
+    const effectiveTasks = (opts.effectiveTasks ?? await Promise.all(typedTasks.map(task => buildEffectiveTask(projectPath, task)))) as unknown as Task[]
+    const normalizedQueue = opts.queue ?? canonicalState?.rawQueue ?? (!requestedTaskId
       ? await readTaskQueueFileNormalized(tasksPath).catch(() => null)
       : null)
     const rawReleases = normalizedQueue?.releases ?? (
@@ -8877,16 +9171,22 @@ export function buildServeApp(opts: ServeOptions = {}): {
       orientationScope.id !== 'current-work' &&
       orientationScope.nodeIds.some(nodeId => materializedTaskNodeIds.has(nodeId)),
     )
+    const authoritativeScope = opts.scope !== undefined ? opts.scope : canonicalState?.scope
     const selectedReleaseScope = !requestedTaskId
-      ? (orientationScopeMatchesMaterializedWork ? orientationScope ?? null : null) ?? queueSelectedReleaseScope
+      ? authoritativeScope !== undefined
+        ? authoritativeScope
+        : (orientationScopeMatchesMaterializedWork ? orientationScope : queueSelectedReleaseScope)
       : null
 	    const tasksById = new Map(effectiveTasks.map(task => [task.id, task] as const))
-    const scopedTasks = selectedReleaseScope
+	    const scopedTasks = selectedReleaseScope
       ? tasksEligibleForScopeExecution(effectiveTasks, selectedReleaseScope)
 	        .filter(task => task.id !== META_INTAKE_TASK_ID && task.id !== WORKSPACE_IMPORT_TASK_ID)
 	      : effectiveTasks.filter(task => task.id !== META_INTAKE_TASK_ID && task.id !== WORKSPACE_IMPORT_TASK_ID)
 	    if (selectedReleaseScope && scopedTasks.length === 0) return null
-    let done = 0
+	    const selectedScopeProofStyle = selectedReleaseScope
+	      ? proofStyleForScope(rawReleases ?? [], selectedReleaseScope)
+	      : undefined
+	    let done = 0
     let blocked = 0
     let shelved = 0
     let pendingPr = 0
@@ -8900,7 +9200,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (status === 'done') {
         done += 1
         terminal += 1
-        if (taskDoneButProofMissing(task)) {
+	        if (taskDoneButProofMissingForScope(task, selectedScopeProofStyle)) {
           const id = typeof (task as { id?: unknown }).id === 'string' && (task as { id: string }).id.trim()
             ? (task as { id: string }).id.trim()
             : ''
@@ -8931,14 +9231,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
 
     const detailMessage = `No actionable tasks remain: ${done} done, ${blocked} blocked, ${shelved} shelved, ${pendingPr} pending PR, ${archived} archived, ${cancelled} cancelled.`
     if (selectedReleaseScope && blocked > 0) return null
-    const proofSummaryScope = selectedReleaseScope ?? queueSelectedReleaseScope
-    const selectedScopeProofStyle = proofSummaryScope
-      ? proofStyleForScope(rawReleases ?? [], proofSummaryScope)
-      : undefined
+    const proofSummaryScope = authoritativeScope !== undefined
+      ? authoritativeScope
+      : selectedReleaseScope ?? queueSelectedReleaseScope
     const scopedReleaseSummary = proofSummaryScope
       ? summarizeScopedReleaseWork(effectiveTasks, proofSummaryScope, {
         proofStyle: selectedScopeProofStyle,
-        commandProofRequired: scopeRequiresCommandProof(proofSummaryScope),
+        commandProofRequired: selectedScopeProofStyle === 'script_only',
       })
       : null
     const terminalProofMissingDoneTasks = (scopedReleaseSummary
@@ -9018,7 +9317,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       (scopedReleaseSummary?.gitStoryTasks ?? scopedTasks) as Array<Record<string, unknown>>,
     )
     const startBlockingGitStoryBlockers = queueSelectedReleaseScope && (selectedReleaseScope?.kind === 'release' || selectedReleaseScope?.kind === 'milestone')
-      ? gitStory.blockers.filter(blocker => blocker.state !== 'no_upstream')
+      ? gitStory.blockers.filter(gitStoryBlocksUnattendedStart)
       : []
     if (startBlockingGitStoryBlockers.length > 0) {
       const scopeLabel = selectedReleaseScope?.label ?? 'Current task scope'
@@ -9096,18 +9395,20 @@ export function buildServeApp(opts: ServeOptions = {}): {
 	    }
 	  }
 
-		  async function hasRecoverableBlockedStartTask(
-	    projectPath: string,
-	    tasks: unknown[],
-	    requestedTaskId: string,
-	  ): Promise<boolean> {
+  async function hasRecoverableBlockedStartTask(
+    projectPath: string,
+    tasks: unknown[],
+    requestedTaskId: string,
+    effectiveTasks?: Task[],
+  ): Promise<boolean> {
 	    const rawTask = tasks.find(task =>
 	      Boolean(task && typeof task === 'object' && (task as { id?: unknown }).id === requestedTaskId),
 	    )
 	    if (!rawTask) return false
 	    if (isRecoverableBlockedStartTask(rawTask, requestedTaskId)) return true
 	    try {
-	      const effectiveTask = await buildEffectiveTask(projectPath, rawTask as Task)
+      const effectiveTask = effectiveTasks?.find(task => task.id === requestedTaskId)
+        ?? await buildEffectiveTask(projectPath, rawTask as Task)
 	      return isRecoverableBlockedStartTask(effectiveTask, requestedTaskId)
 	    } catch {
 	      return false
@@ -9160,35 +9461,49 @@ export function buildServeApp(opts: ServeOptions = {}): {
 	    })
 	  }
 
-  async function startBlockerForImportDrafts(projectPath: string, requestedTaskId?: string): Promise<{
+  async function startBlockerForImportDrafts(
+    projectPath: string,
+    requestedTaskId?: string,
+    options: StartStateSnapshot = {},
+  ): Promise<{
     canStart: false
     code: 'import_drafts_waiting' | 'imported_scope_shaping'
     message: string
     actionHref: string
   } | null> {
     const tasksPath = projectTasksPath(projectPath)
-    if (!projectTaskStateExistsSync(tasksPath)) return null
-    const currentState = await readProjectCanonicalCurrentState(projectPath)
-    if (currentState.authority !== 'database') return null
-    const queue = currentState.rawQueue as unknown as NormalizedTaskQueue
-    const effectiveTasks = currentState.tasks as Task[]
-    const { orientationSpine } = buildOrientationSpineWithScopedReleaseTruth({
-      projectId: basename(projectPath),
-      charter: inferProjectCharterFromExistingSources(projectPath),
-      selectedReleaseId: queue.selectedReleaseId,
-      releases: queue.releases,
-      tasks: effectiveTasks,
-      runStatus: 'stopped',
-      sourceRefs: projectOrientationSourceRefs(projectPath),
-    })
-    const selectedReleaseScope =
-      (orientationSpine.selectedTaskScope as OrientationScope | null | undefined) ??
-      (orientationSpine.scope as OrientationScope | null | undefined) ??
-      selectedReleaseScopeFromQueueLike({
-        tasks: effectiveTasks,
-        releases: queue.releases,
-        ...(queue.selectedReleaseId ? { selectedReleaseId: queue.selectedReleaseId } : {}),
-      })
+    const hasSharedState = options.queue !== undefined && options.effectiveTasks !== undefined && options.scope !== undefined
+    const currentState = !hasSharedState && readProjectStateAuthorityAtBoundary(tasksPath).authority === 'database'
+      ? await readProjectCanonicalCurrentState(projectPath)
+      : null
+    if (!currentState && !projectTaskStateExistsSync(tasksPath)) return null
+    if (!currentState && !hasSharedState) return null
+    const queue = options.queue ?? currentState?.rawQueue
+    const effectiveTasks = options.effectiveTasks ?? currentState?.tasks
+    if (!queue || !effectiveTasks) return null
+    const authoritativeScope = options.scope !== undefined ? options.scope : currentState?.scope
+    const orientationSpine = authoritativeScope === undefined
+      ? buildOrientationSpineWithScopedReleaseTruth({
+          projectId: basename(projectPath),
+          charter: inferProjectCharterFromExistingSources(projectPath),
+          selectedReleaseId: queue.selectedReleaseId,
+          releases: queue.releases,
+          tasks: effectiveTasks,
+          runStatus: 'stopped',
+          sourceRefs: projectOrientationSourceRefs(projectPath),
+        }).orientationSpine
+      : null
+    const selectedReleaseScope = authoritativeScope !== undefined
+      ? authoritativeScope
+      : (
+        (orientationSpine?.selectedTaskScope as OrientationScope | null | undefined) ??
+        (orientationSpine?.scope as OrientationScope | null | undefined) ??
+        selectedReleaseScopeFromQueueLike({
+          tasks: effectiveTasks,
+          releases: queue.releases,
+          ...(queue.selectedReleaseId ? { selectedReleaseId: queue.selectedReleaseId } : {}),
+        })
+      )
     const tasksById = new Map(effectiveTasks.map(task => [task.id, task] as const))
     const tasks = tasksEligibleForScopeExecution(effectiveTasks, selectedReleaseScope)
       .filter(task => {
@@ -9205,6 +9520,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
       })
     if (importedShapingTasks.length === 0) return null
     if (requestedTaskId && effectiveTasks.some(task => task.id === requestedTaskId)) return null
+    // An exploring task is already assigned to the source/spec lane. Let the
+    // normal provider preflight and orchestrator picker run it; raw
+    // import_draft records still require an explicit shaping start.
+    if (importedShapingTasks.some(task => task.status === 'exploring')) return null
     const importerTask = effectiveTasks.find(task =>
       task &&
       typeof task === 'object' &&
@@ -9236,7 +9555,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
   }
 
-  async function startBlockerForWorkspaceImportCoverage(projectPath: string): Promise<{
+  async function startBlockerForWorkspaceImportCoverage(
+    projectPath: string,
+    options: StartStateSnapshot = {},
+  ): Promise<{
     canStart: false
     code: 'workspace_import_refresh_needed'
     message: string
@@ -9262,10 +9584,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
 
     const tasksPath = projectTasksPath(projectPath)
-    if (!projectTaskStateExistsSync(tasksPath)) return null
-    const currentState = await readProjectCanonicalCurrentState(projectPath)
-    if (currentState.authority !== 'database') return null
-    const tasks = currentState.tasks as unknown as Array<Record<string, unknown>>
+    const hasSharedState = options.queue !== undefined && options.effectiveTasks !== undefined && options.scope !== undefined
+    const currentState = !hasSharedState && readProjectStateAuthorityAtBoundary(tasksPath).authority === 'database'
+      ? await readProjectCanonicalCurrentState(projectPath)
+      : null
+    if (!currentState && !projectTaskStateExistsSync(tasksPath)) return null
+    if (!currentState && !hasSharedState) return null
+    const tasks = (options.effectiveTasks ?? currentState?.tasks ?? []) as unknown as Array<Record<string, unknown>>
     const importTask = tasks.find(task =>
       task &&
       typeof task === 'object' &&
@@ -9563,206 +9888,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
   }
 
-  async function workspaceImportDraftForOrientation(
+  async function startBlockerForOrientationScopeShaping(
     projectPath: string,
-    _startReadiness: { code?: string } | null | undefined,
-    options: { includeDetectedCandidates?: boolean } = {},
-  ) {
-    try {
-      const draftTaskId = (task: {
-        id?: string
-        suggestedId?: string
-        title: string
-      }, index: number): string => {
-        const explicit = task.id?.trim() || task.suggestedId?.trim()
-        if (explicit) return explicit
-        const slug = task.title
-          .toLowerCase()
-          .replace(/[^a-z0-9]+/g, '-')
-          .replace(/^-+|-+$/g, '')
-        return `draft-${slug || 'task'}-${index + 1}`
-      }
-      const draftTaskRefs = (task: {
-        refs?: string[]
-        references?: string[]
-        source?: string
-      }): string[] => {
-        if (task.refs?.length) return [...task.refs]
-        if (task.references?.length) return task.references.map(ref => `import:${ref}`)
-        return task.source ? [`import:${task.source}`] : ['workspace-import:detected']
-      }
-      const savedWorkspaceGoals = await readWorkspaceGoalsState(getProjectStateDir(projectPath))
-      if (savedWorkspaceGoals && !workspaceGoalsNeedStructuralRefresh(savedWorkspaceGoals) && (
-        savedWorkspaceGoals.tasks.length > 0 ||
-        savedWorkspaceGoals.context.length > 0
-      )) {
-        let detectedReleaseDraft: Awaited<ReturnType<typeof materializeWorkspaceImportDraft>> | null = null
-        try {
-          const inventory = await detectWorkspaceSignals({ projectPath })
-          detectedReleaseDraft = formWorkspaceHypothesis(inventory)
-        } catch {
-          detectedReleaseDraft = null
-        }
-        const releaseIdsByTitle = new Map(
-          (detectedReleaseDraft?.tasks ?? []).map(task => [
-            task.title.trim().toLowerCase(),
-            task.releaseIds ? [...task.releaseIds] : [],
-          ]),
-        )
-        const savedTaskTitles = new Set(savedWorkspaceGoals.tasks.map(task => task.title.trim().toLowerCase()))
-        const detectedOnlyTasks = options.includeDetectedCandidates === false
-          ? []
-          : (detectedReleaseDraft?.tasks ?? [])
-            .filter(task => !savedTaskTitles.has(task.title.trim().toLowerCase()))
-        const releaseById = new Map<string, {
-          id: string
-          label: string
-          source: 'release_plan' | 'spec' | 'owner_approved'
-          state: 'active'
-        }>()
-        for (const release of detectedReleaseDraft?.releases ?? []) {
-          releaseById.set(release.id, {
-            id: release.id,
-            label: release.label,
-            source: release.source === 'release_plan' || release.source === 'spec' || release.source === 'owner_approved'
-              ? release.source
-              : 'release_plan',
-            state: 'active',
-          })
-        }
-        for (const release of savedWorkspaceGoals.releases ?? []) {
-          releaseById.set(release.id, {
-            id: release.id,
-            label: release.label,
-            source: release.source === 'release_plan' || release.source === 'spec' || release.source === 'owner_approved'
-              ? release.source
-              : 'owner_approved',
-            state: 'active',
-          })
-        }
-        for (const releaseId of savedWorkspaceGoals.tasks.flatMap(task => task.releaseIds ?? [])) {
-          if (releaseById.has(releaseId)) continue
-          releaseById.set(releaseId, {
-            id: releaseId,
-            label: releaseLabelFromId(releaseId),
-            source: 'owner_approved',
-            state: 'active',
-          })
-        }
-        const savedOrientationTasks = savedWorkspaceGoals.tasks.map(task => ({
-          id: task.id,
-          title: task.title,
-          description: task.whyThisMayMatter ?? task.description,
-          domain: task.domain,
-          scope: task.scope === 'later' ? 'later' as const : 'current' as const,
-          releaseIds: task.releaseIds?.length
-            ? [...task.releaseIds]
-            : releaseIdsByTitle.get(task.title.trim().toLowerCase()),
-          refs: task.references?.map(ref => `import:${ref}`) ?? ['workspace-import:approved'],
-        }))
-        const detectedOrientationTasks = detectedOnlyTasks.map((task, index) => ({
-          id: `detected-${draftTaskId(task, index)}`,
-          title: task.title,
-          description: task.description,
-          domain: task.domain,
-          scope: task.scope === 'later' ? 'later' as const : 'current' as const,
-          releaseIds: task.releaseIds ? [...task.releaseIds] : undefined,
-          refs: draftTaskRefs(task),
-        }))
-        return {
-          releases: [...releaseById.values()],
-          tasks: [...savedOrientationTasks, ...detectedOrientationTasks],
-          contexts: savedWorkspaceGoals.context
-            .filter(context => context.role === 'capability' || context.role === 'brief_input')
-            .map((context, index) => ({
-              id: `approved-context-${index + 1}`,
-              title: context.label,
-              description: context.excerpt,
-              domain: context.domain,
-              refs: context.references?.map(ref => `import:${ref}`) ?? [`import:${context.source}`],
-              role: context.role,
-              scopeHint: context.scopeHint,
-              releaseIds: context.releaseIds ? [...context.releaseIds] : undefined,
-              linkedTaskHints: context.linkedTaskHints ? [...context.linkedTaskHints] : undefined,
-            })),
-          source: {
-            kind: 'inferred' as const,
-            refs: ['workspace-import:approved'],
-            confidence: 'high' as const,
-            freshness: 'fresh' as const,
-            inferred: false,
-            refreshedAt: savedWorkspaceGoals.recordedAt,
-          },
-        }
-      }
-
-      if (options.includeDetectedCandidates === false) return null
-
-      const inventory = await detectWorkspaceSignals({ projectPath })
-      const draft = formWorkspaceHypothesis(inventory)
-      const structuralContexts = draft.context.filter(context => context.role === 'capability' || context.role === 'brief_input')
-      if (draft.tasks.length === 0 && structuralContexts.length === 0) return null
-      const inferredContextDomain = (context: typeof structuralContexts[number]): string | undefined => {
-        if (context.domain?.trim()) return context.domain.trim()
-        const refs = new Set((context.references ?? []).map(ref => ref.replaceAll('\\', '/')))
-        const domainCounts = new Map<string, number>()
-        for (const task of draft.tasks) {
-          if (!task.domain?.trim()) continue
-          const taskRefs = (task.references ?? []).map(ref => ref.replaceAll('\\', '/'))
-          if (!taskRefs.some(ref => refs.has(ref))) continue
-          domainCounts.set(task.domain, (domainCounts.get(task.domain) ?? 0) + 1)
-        }
-        const winner = [...domainCounts.entries()].sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))[0]?.[0]
-        if (winner) return winner
-        const firstRef = context.references?.[0]?.replaceAll('\\', '/')
-        const docsGroup = firstRef?.match(/(?:^|\/)docs\/([^/]+)\//)?.[1]
-        if (docsGroup && docsGroup !== 'specs') return docsGroup
-        return undefined
-      }
-      return {
-        releases: (draft.releases ?? []).map(release => ({
-          id: release.id,
-          label: release.label,
-          source: release.source === 'release_plan' || release.source === 'spec' || release.source === 'owner_approved'
-            ? release.source
-            : 'release_plan' as const,
-          state: 'active' as const,
-        })),
-        tasks: draft.tasks.map((task, index) => ({
-          id: draftTaskId(task, index),
-          title: task.title,
-          description: task.whyThisMayMatter ?? task.description,
-          domain: task.domain,
-          scope: task.scope,
-          releaseIds: task.releaseIds ? [...task.releaseIds] : undefined,
-          refs: draftTaskRefs(task),
-        })),
-        contexts: structuralContexts.map((context, index) => ({
-          id: `capability-${index + 1}`,
-          title: context.label,
-          description: context.excerpt,
-          domain: inferredContextDomain(context),
-          refs: context.references?.map(ref => `import:${ref}`) ?? [`import:${context.source}`],
-          role: context.role,
-          scopeHint: context.scopeHint,
-          releaseIds: context.releaseIds ? [...context.releaseIds] : undefined,
-          linkedTaskHints: context.linkedTaskHints ? [...context.linkedTaskHints] : undefined,
-        })),
-        source: {
-          kind: 'inferred' as const,
-          refs: ['workspace-import:draft'],
-          confidence: 'medium' as const,
-          freshness: 'fresh' as const,
-          inferred: true,
-          refreshedAt: new Date().toISOString(),
-        },
-      }
-    } catch {
-      return null
-    }
-  }
-
-  async function startBlockerForOrientationScopeShaping(projectPath: string, requestedTaskId?: string): Promise<{
+    requestedTaskId?: string,
+    options: StartStateSnapshot = {},
+  ): Promise<{
     canStart: false
     code: 'no_unattended_progress' | 'scope_source_conflict'
     message: string
@@ -9774,10 +9904,15 @@ export function buildServeApp(opts: ServeOptions = {}): {
   } | null> {
     if (requestedTaskId) return null
     const tasksPath = projectTasksPath(projectPath)
-    if (!projectTaskStateExistsSync(tasksPath)) return null
-    const queue = await readTaskQueueFileNormalized(tasksPath)
-    const effectiveTasks = await Promise.all((queue.tasks as Task[]).map(task => buildEffectiveTask(projectPath, task)))
-    const { orientationSpine } = buildOrientationSpineWithScopedReleaseTruth({
+    const hasSharedState = options.queue !== undefined && options.effectiveTasks !== undefined && options.scope !== undefined
+    const currentState = !hasSharedState && readProjectStateAuthorityAtBoundary(tasksPath).authority === 'database'
+      ? await readProjectCanonicalCurrentState(projectPath)
+      : null
+    if (!currentState && !projectTaskStateExistsSync(tasksPath)) return null
+    const queue = options.queue ?? currentState?.rawQueue ?? await readTaskQueueFileNormalized(tasksPath)
+    const effectiveTasks = (options.effectiveTasks ?? currentState?.tasks ?? await Promise.all((queue.tasks as Task[]).map(task => buildEffectiveTask(projectPath, task)))) as unknown as Task[]
+    const authoritativeScope = options.scope !== undefined ? options.scope : currentState?.scope
+    const orientationSpine = buildOrientationSpineWithScopedReleaseTruth({
       projectId: basename(projectPath),
       charter: inferProjectCharterFromExistingSources(projectPath),
       selectedReleaseId: queue.selectedReleaseId,
@@ -9785,15 +9920,18 @@ export function buildServeApp(opts: ServeOptions = {}): {
       tasks: effectiveTasks,
       runStatus: 'stopped',
       sourceRefs: projectOrientationSourceRefs(projectPath),
-    })
-    const selectedReleaseScope =
-      (orientationSpine.selectedTaskScope as OrientationScope | null | undefined) ??
-      (orientationSpine.scope as OrientationScope | null | undefined) ??
-      selectedReleaseScopeFromQueueLike({
-        tasks: effectiveTasks,
-        releases: queue.releases,
-        ...(queue.selectedReleaseId ? { selectedReleaseId: queue.selectedReleaseId } : {}),
-      })
+    }).orientationSpine
+    const selectedReleaseScope = authoritativeScope !== undefined
+      ? authoritativeScope
+      : (
+        (orientationSpine.selectedTaskScope as OrientationScope | null | undefined) ??
+        (orientationSpine.scope as OrientationScope | null | undefined) ??
+        selectedReleaseScopeFromQueueLike({
+          tasks: effectiveTasks,
+          releases: queue.releases,
+          ...(queue.selectedReleaseId ? { selectedReleaseId: queue.selectedReleaseId } : {}),
+        })
+      )
     if (
       selectedReleaseScope &&
       tasksEligibleForScopeExecution(effectiveTasks, selectedReleaseScope)
@@ -9851,16 +9989,22 @@ export function buildServeApp(opts: ServeOptions = {}): {
     count?: number
   } | null> {
     const tasksPath = projectTasksPath(projectPath)
-    if (!projectTaskStateExistsSync(tasksPath)) return null
-    const queue = options.queue ?? await readTaskQueueFileNormalized(tasksPath)
+    const hasSharedState = options.queue !== undefined && options.effectiveTasks !== undefined && options.scope !== undefined
+    const canonicalState = !hasSharedState && readProjectStateAuthorityAtBoundary(tasksPath).authority === 'database'
+      ? await readProjectCanonicalCurrentState(projectPath)
+      : null
+    if (!canonicalState && !projectTaskStateExistsSync(tasksPath)) return null
+    const queue = options.queue ?? canonicalState?.rawQueue ?? await readTaskQueueFileNormalized(tasksPath)
     const typedQueue = {
-      tasks: options.effectiveTasks ?? queue.tasks as Task[],
+      tasks: options.effectiveTasks ?? canonicalState?.tasks ?? queue.tasks as Task[],
       releases: queue.releases,
       ...(queue.selectedReleaseId ? { selectedReleaseId: queue.selectedReleaseId } : {}),
     }
     const selectedReleaseScope = options.scope !== undefined
       ? options.scope
-      : selectedReleaseScopeFromQueueLike(typedQueue)
+      : canonicalState
+        ? canonicalState.scope
+        : selectedReleaseScopeFromQueueLike(typedQueue)
     const tasksById = new Map(typedQueue.tasks.map(task => [task.id, task]))
     if (selectedReleaseScope) {
       const projection = buildProjectScopeProjection(typedQueue, {
@@ -10075,6 +10219,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   async function startBlockerForSelectedReleaseReview(
     projectPath: string,
     resolvedConfig: ReturnType<typeof resolveConfig>,
+    options: StartStateSnapshot = {},
   ): Promise<{
     canStart: false
     code: 'no_unattended_progress' | 'repository_followup_required'
@@ -10086,43 +10231,52 @@ export function buildServeApp(opts: ServeOptions = {}): {
     count?: number
   } | null> {
     const tasksPath = projectTasksPath(projectPath)
-    if (!projectTaskStateExistsSync(tasksPath)) return null
-    const rawQueue = await readTaskQueueFileNormalized(tasksPath)
+    const hasSharedState = options.queue !== undefined && options.effectiveTasks !== undefined && options.scope !== undefined
+    const canonicalState = !hasSharedState && readProjectStateAuthorityAtBoundary(tasksPath).authority === 'database'
+      ? await readProjectCanonicalCurrentState(projectPath)
+      : null
+    if (!canonicalState && !projectTaskStateExistsSync(tasksPath)) return null
+    const rawQueue = options.queue ?? canonicalState?.rawQueue ?? await readTaskQueueFileNormalized(tasksPath)
     if (rawQueue.tasks.length === 0) return null
     const hasReleaseBoundary =
       Boolean(rawQueue.selectedReleaseId) ||
       (rawQueue.releases?.length ?? 0) > 0 ||
       rawQueue.tasks.some(task => ((task as Task).releaseIds?.length ?? 0) > 0)
     if (!hasReleaseBoundary) return null
-    const tasks = await Promise.all(rawQueue.tasks.map(task => buildEffectiveTask(projectPath, task as Task)))
+    const tasks = (options.effectiveTasks ?? canonicalState?.tasks ?? await Promise.all(rawQueue.tasks.map(task => buildEffectiveTask(projectPath, task as Task)))) as unknown as Task[]
     const { orientationSpine, releaseTruth } = buildOrientationSpineWithScopedReleaseTruth({
-      projectId: resolvedConfig.id ?? basename(projectPath),
-      charter: inferProjectCharterFromExistingSources(projectPath, resolvedConfig),
+      projectId: basename(projectPath),
+      charter: inferProjectCharterFromExistingSources(projectPath, null),
       selectedReleaseId: rawQueue.selectedReleaseId,
       releases: rawQueue.releases,
-      tasks: tasks as Task[],
+      tasks,
       sourceRefs: projectOrientationSourceRefs(projectPath),
     })
-    const selectedReleaseScope =
-      (orientationSpine.selectedTaskScope as OrientationScope | null | undefined) ??
-      (orientationSpine.scope as OrientationScope | null | undefined) ??
-      selectedReleaseScopeFromQueueLike({
-        tasks: tasks as Task[],
-        releases: rawQueue.releases,
-        ...(rawQueue.selectedReleaseId ? { selectedReleaseId: rawQueue.selectedReleaseId } : {}),
-      })
-    const scopedTasks = tasksEligibleForScopeExecution(tasks as Task[], selectedReleaseScope)
+    const selectedReleaseScope = options.scope !== undefined
+      ? options.scope
+      : canonicalState
+        ? canonicalState.scope
+        : (
+          (orientationSpine.selectedTaskScope as OrientationScope | null | undefined) ??
+          (orientationSpine.scope as OrientationScope | null | undefined) ??
+          selectedReleaseScopeFromQueueLike({
+            tasks,
+            releases: rawQueue.releases,
+            ...(rawQueue.selectedReleaseId ? { selectedReleaseId: rawQueue.selectedReleaseId } : {}),
+          })
+        )
+    const scopedTasks = tasksEligibleForScopeExecution(tasks, selectedReleaseScope)
     const gitStory = await buildProjectGitStorySummary(projectPath, releaseTruth.gitStoryTasks)
     const firstBlocked = scopedTasks.find(task => {
       const status = String(task.status ?? '')
-      return status === 'blocked' || deriveWorkExecutionState(tasks as Task[], task.id).summaryState === 'blocked'
+      return status === 'blocked' || deriveWorkExecutionState(tasks, task.id).summaryState === 'blocked'
     })
     if (firstBlocked) {
       const focusTitle = typeof firstBlocked.title === 'string' && firstBlocked.title.trim()
         ? firstBlocked.title.trim()
         : firstBlocked.id
       const matchingRepositoryBlocker = gitStory.blockers.find(blocker =>
-        blocker.taskId === firstBlocked.id,
+        blocker.taskId === firstBlocked.id && gitStoryBlocksUnattendedStart(blocker),
       )
       if (matchingRepositoryBlocker) {
         return {
@@ -10139,7 +10293,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const blockReason = taskBlockerSummary(firstBlocked)
       const blockedCount = scopedTasks.filter(task =>
         String(task.status ?? '') === 'blocked' ||
-        deriveWorkExecutionState(tasks as Task[], task.id).summaryState === 'blocked'
+        deriveWorkExecutionState(tasks, task.id).summaryState === 'blocked'
       ).length
       return {
         canStart: false,
@@ -10235,12 +10389,27 @@ export function buildServeApp(opts: ServeOptions = {}): {
     }
   }
 
-  function startBlockerForOwnerInput(projectPath: string): {
+  function startBlockerForOwnerInput(
+    projectPath: string,
+    ownerInput?: ProjectSummaryProjection['ownerInput'] | null,
+  ): {
     canStart: false
     code: 'owner_input_required'
     message: string
     actionHref: string
   } | null {
+    if (ownerInput !== undefined) {
+      const openCount = ownerInput?.openCount ?? 0
+      if (openCount === 0) return null
+      return {
+        canStart: false,
+        code: 'owner_input_required',
+        message: openCount === 1
+          ? 'An owner decision needs your answer before work can continue'
+          : `${openCount} owner decisions need your answer before work can continue`,
+        actionHref: ownerInput?.next?.href ?? '/thread',
+      }
+    }
     const waiting = listOwnerInputRequestsSync(projectPath)
       .filter(request => request.status === 'waiting_for_owner')
     if (waiting.length === 0) return null
@@ -10254,12 +10423,6 @@ export function buildServeApp(opts: ServeOptions = {}): {
           : `${waiting.length} owner decisions need your answer before work can continue`,
       actionHref: ownerInputActionHref(first),
     }
-  }
-
-  function ownerInputObjectiveLabel(label: string): string {
-    const trimmed = label.trim()
-    if (/^review structural map\b/i.test(trimmed)) return 'Review the project map'
-    return trimmed || 'This decision'
   }
 
   function ownerInputActionHref(request: ReturnType<typeof listOwnerInputRequestsSync>[number]): string {
@@ -10421,6 +10584,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
               queue: canonicalState.rawQueue as Awaited<ReturnType<typeof readTaskQueueFileNormalized>>,
               effectiveTasks: canonicalState.tasks,
               scope: canonicalState.scope,
+              ownerInput: canonicalState.summary?.ownerInput ?? null,
             }
           : {}),
       })
@@ -10464,6 +10628,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
             ? {
                 queue: canonicalState.rawQueue as Awaited<ReturnType<typeof readTaskQueueFileNormalized>>,
                 effectiveTasks: canonicalState.tasks,
+                scope: canonicalState.scope,
               }
             : undefined)
           if (terminal) {
@@ -11634,7 +11799,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       // first-class input. We never synthesize a fake importer spec here.
       try {
         const tasksPath = workspaceImportTasksPath(memoryDir)
-        let raw = (readProjectStateDatabaseCurrentAuthority(project.path) !== null || projectTaskStateExistsSync(tasksPath))
+        let raw = (readProjectStateAuthorityAtBoundary(tasksPath).authority === 'database' || projectTaskStateExistsSync(tasksPath))
           ? await readProjectTaskQueueForRichMutation(project.path) as
               | Array<Record<string, unknown>>
               | { tasks?: Array<Record<string, unknown>> }
@@ -12132,7 +12297,16 @@ export function buildServeApp(opts: ServeOptions = {}): {
       // A missing or stale attention projection is an honest cache miss. Do
       // not rebuild Inbox, expand tasks, scan sources, or repair state from a
       // GET. The projector will populate this read model asynchronously.
-      return c.json(readSavedAttentionSurface(project.path, project.initializationNeeded))
+      const surfaceState = readProjectSurfaceStateAtBoundary(project.path, {
+        includeProjection: false,
+        includeAttention: true,
+      })
+      return c.json(readSavedAttentionSurfaceFromBoundary({
+        initializationNeeded: project.initializationNeeded,
+        records: surfaceState?.attentionRecords ?? null,
+        watermarkSourceRevision: surfaceState?.attentionWatermark?.sourceRevision ?? null,
+        projectRevision: surfaceState?.projectRevision ?? null,
+      }))
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
@@ -12144,29 +12318,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
         return c.json({ turns: [], activeTurnId: null, caughtUp: false })
       }
       const timing: Array<{ name: string; startedAt: number; endedAt?: number }> = [{ name: 'thread-core', startedAt: Date.now() }]
-      const threadSurface = readProjectStateDatabaseThreadSurfaceState<{
-        turns: unknown[]
-        activeTurnId: string | null
-        caughtUp: boolean
-        generatedAt: string
-        sourceRevision: string | number
-      }>(project.path)
-      const storedThread = threadSurface?.thread ?? null
-      const queueRevision = threadSurface?.queueRevision ?? null
-      const projectRevision = threadSurface?.projectRevision ?? null
-      const currentThread = storedThread?.payload ?? {
-        turns: [],
-        activeTurnId: null,
-        caughtUp: false,
-        generatedAt: storedThread?.generatedAt ?? new Date(0).toISOString(),
-        sourceRevision: storedThread?.sourceRevision ?? 'missing',
-      }
-      const currentThreadFreshness = !storedThread
-        ? 'missing'
-        : storedThread.sourceRevision !== String(projectRevision ?? 'missing') ||
-            storedThread.sourceQueueRevision !== queueRevision
-          ? 'stale'
-          : 'current'
+      const surfaceState = readProjectSurfaceStateAtBoundary(project.path, {
+        includeThread: true,
+      })
+      const threadRead = threadReadProjectionFromBoundary(surfaceState?.thread as never)
       // Thread needs navigation context, not the full release gate. The
       // compact project projection owns the same scope and next-action facts
       // used by Overview, Work, and Map; repository, design-system, and Git
@@ -12174,12 +12329,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const compactProject = await buildProjectionSurfaceDetail({
         surface: 'work',
         requestedTaskId: null,
+        ...(surfaceState ? { surfaceState } : {}),
       })
       timing[0]!.endedAt = Date.now()
       c.header('server-timing', formatServerTiming(timing))
       return c.json({
-        ...currentThread,
-        currentThreadFreshness,
+        ...threadRead.payload,
+        currentThreadFreshness: threadRead.currentThreadFreshness,
         historyPayload: {
           kind: 'thread-history',
           href: '/api/project/thread/history',
@@ -12201,34 +12357,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (project.initializationNeeded) return c.json({ turns: [], offset: 0, limit: 0, total: 0, hasMore: false })
       const offset = Math.max(0, Number.parseInt(c.req.query('offset') ?? '0', 10) || 0)
       const limit = Math.min(100, Math.max(1, Number.parseInt(c.req.query('limit') ?? '50', 10) || 50))
-      const { history, surface } = readProjectStateDatabaseThreadHistorySurfaceState(project.path, { offset, limit })
-      if (!history) {
-        return c.json({
-          turns: [],
-          offset,
-          limit,
-          total: 0,
-          hasMore: false,
-          historyFreshness: 'missing',
-          requiresRefresh: true,
-          detailPayload: {
-            kind: 'thread-history-projection',
-            unavailable: true,
-            omitted: 'Historical turns are populated by the asynchronous projection writer.',
-          },
-        })
-      }
-      return c.json({
-        ...history,
-        historyFreshness: history.sourceRevision === String(surface?.projectRevision ?? 'missing') &&
-          history.sourceQueueRevision === surface?.queueRevision
-          ? 'current'
-          : 'stale',
-        ...(history.sourceRevision !== String(surface?.projectRevision ?? 'missing') ||
-          history.sourceQueueRevision !== surface?.queueRevision
-          ? { requiresRefresh: true }
-          : {}),
-      })
+      return c.json(readThreadHistoryReadProjection(project.path, { offset, limit }).body)
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
@@ -12263,11 +12392,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const taskIds = requestedTaskIds.size > 0
         ? requestedTaskIds
         : new Set(
-            (readProjectStateDatabaseCurrentThread<{
-              turns: Array<{ taskId?: string | null }>
-            }>(project.path)?.payload.turns ?? [])
-              .map(turn => ('taskId' in turn ? turn.taskId : null))
-              .filter((id): id is string => Boolean(id)),
+            readCurrentThreadTaskIdsAtBoundary(project.path),
           )
       const tasks = taskIds.size > 0
         ? readProjectTaskRecordsAtBoundary(projectTasksPath(project.path), [...taskIds])
@@ -12371,7 +12496,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project/wizards', c => {
     try {
       if (project.initializationNeeded) return c.json({ wizards: [] })
-      const savedSummary = readProjectSummaryAtBoundary(projectTasksPath(project.path))
+      const savedSummary = readProjectSummaryForProjectAtBoundary(project.path)
       const snap = buildSnapshot({
         projectPath: project.path,
         ...(savedSummary ? { taskCount: savedSummary.counts.total } : {}),
@@ -12575,15 +12700,19 @@ export function buildServeApp(opts: ServeOptions = {}): {
         return c.json(savedProjectGitStorySummary(state))
       }
 
-      const tasks = await readTasksFileNormalized(projectTasksPath(project.path)).catch(() => [])
+      // Even an explicit live diagnostic starts from the same current-state
+      // boundary as Release, Overview, Work, and Map. Git inspection is the
+      // diagnostic overlay; it must not choose a second task authority.
+      const state = await readProjectCanonicalCurrentState(project.path)
+      const tasks = state.tasks
       return c.json({
         ...(await buildProjectGitStorySummary(project.path, tasks as Array<Record<string, unknown>>)),
         source: 'live-git-inspection',
         diagnostic: true,
         freshness: 'live',
         requiresRefresh: false,
-        sourceRevision: null,
-        projectRevision: null,
+        sourceRevision: state.projectRevision,
+        projectRevision: state.projectRevision,
         generatedAt: new Date().toISOString(),
       })
     } catch (err) {
@@ -12601,13 +12730,17 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const tasksPath = projectTasksPath(project.path)
       const run = supervisor.get(project.id)
       const id = c.req.param('id')
-      const databaseAuthority = readProjectStateAuthorityAtBoundary(tasksPath).authority === 'database'
-      const taskDetailState = databaseAuthority ? readProjectTaskDetailState(tasksPath, id) : null
-      const savedProjection = taskDetailState?.summary ?? (databaseAuthority ? null : readProjectSummaryAtBoundary(tasksPath))
+      const taskCurrentBoundary = await readProjectTaskCurrentStateAtBoundary(project.path, id, {
+        includeRelatedTasks: true,
+      })
+      const databaseAuthority = taskCurrentBoundary.authority === 'database'
+      const taskDetailState = taskCurrentBoundary.state
+      const currentTask = taskCurrentBoundary.task
+      const savedProjection = taskDetailState?.summary ?? (databaseAuthority ? null : readProjectSummaryForProjectAtBoundary(project.path))
       const pointTask = taskDetailState?.task ?? null
       const indexedRelations = taskDetailState?.relationships ?? null
       const indexedQueue = taskDetailState?.queue ?? null
-      if (databaseAuthority && !taskDetailState && readProjectStateDatabaseQueueRevision(tasksPath) !== null) {
+      if (databaseAuthority && !taskDetailState) {
         return c.json({ error: 'task not found' }, 404)
       }
       const pointDefinition = pointTask && Object.keys(pointTask.definition).length > 0
@@ -12665,23 +12798,21 @@ export function buildServeApp(opts: ServeOptions = {}): {
       // queue after the boundary has returned.
       const readinessScope = databaseAuthority
         ? (taskDetailState?.scope ?? null)
-        : releaseReadinessScopeFromProjection(buildProjectScopeProjection(scopeQueue), null)
-      const selectedScopeProofStyle = proofStyleForScope(scopeQueue.releases, readinessScope)
-      const commandProofRequired = selectedScopeProofStyle === 'script_only' && scopeRequiresCommandProof(readinessScope)
+        : releaseReadinessScopeFromProjection(buildProjectScopeProjection({
+          tasks: scopeQueue.tasks as unknown as Task[],
+          releases: (scopeQueue.releases ?? []) as unknown as ProjectRelease[],
+          ...(scopeQueue.selectedReleaseId ? { selectedReleaseId: scopeQueue.selectedReleaseId } : {}),
+        }), null)
       const scopedTaskIds = new Set(
         (readinessScope?.nodeIds ?? []).map(nodeId => nodeId.replace(/^work:/, '')),
       )
       const runStatus = run?.status ?? 'stopped'
-      const availability = await readProjectAvailability(project.path)
-      const relatedTaskIds = new Set<string>()
+      const availability = databaseAuthority
+        ? taskDetailState?.availability ?? defaultProjectAvailabilityState()
+        : await readProjectAvailability(project.path)
       const rawTask = task as Record<string, unknown>
-      if (taskDetailState?.relationships) {
-        const relationships = taskDetailState.relationships
-        if (relationships.parentId) relatedTaskIds.add(relationships.parentId)
-        for (const childId of relationships.childIds) relatedTaskIds.add(childId)
-        for (const dependencyId of relationships.dependsOnIds) relatedTaskIds.add(dependencyId)
-        for (const dependentId of relationships.dependentIds) relatedTaskIds.add(dependentId)
-      } else {
+      const relatedTaskIds = new Set<string>()
+      if (!databaseAuthority) {
         const hierarchy = rawTask.hierarchy as { parentId?: unknown; childIds?: unknown } | undefined
         if (typeof hierarchy?.parentId === 'string') relatedTaskIds.add(hierarchy.parentId)
         if (Array.isArray(hierarchy?.childIds)) {
@@ -12699,43 +12830,94 @@ export function buildServeApp(opts: ServeOptions = {}): {
           if (candidateDependsOn.includes(id)) relatedTaskIds.add(candidate.id)
         }
       }
-      const sizePlan = rawTask.sizePlan as { recommendedChildren?: Array<{ createdTaskId?: unknown }> } | undefined
-      for (const child of sizePlan?.recommendedChildren ?? []) {
-        if (typeof child.createdTaskId === 'string') relatedTaskIds.add(child.createdTaskId)
-      }
-      relatedTaskIds.delete(id)
       const relatedTaskRecords = databaseAuthority
-        ? readProjectTaskRecordsAtBoundary(tasksPath, [...relatedTaskIds])
+        ? (taskDetailState?.relatedTasks ?? []).map(projectTaskRecordFromDatabasePoint)
         : [...relatedTaskIds]
             .map(relatedId => tasks.find(candidate => (candidate as { id?: string }).id === relatedId))
             .filter((candidate): candidate is Record<string, unknown> => Boolean(candidate))
       const detailTasks = databaseAuthority
         ? [rawTask, ...relatedTaskRecords]
         : tasks as Array<Record<string, unknown>>
-      const proofMissingTaskIds = new Set<string>()
-      if (commandProofRequired && rawTask.status === 'done' && scopedTaskIds.has(id) && !taskHasScriptProofPath(rawTask)) {
-        proofMissingTaskIds.add(id)
+      const deliveryRead = await readProjectDeliveryReadProjectionWithAuthority(project.path, {
+        queue: false,
+        taskId: id,
+      })
+      if (databaseAuthority && deliveryRead.authority !== 'database') {
+        return c.json({
+          error: 'The delivery read boundary lost the promoted project authority.',
+          requiresRefresh: true,
+        }, 503)
       }
-      const deliveryModel = await readProjectDeliveryModel(project.path)
-      const deliveryRelationships = deriveTaskRelationships({
-        model: deliveryModel,
-        tasks: detailTasks as unknown as Task[],
-        taskId: id,
-      })
-      const deliveryContextPacket = buildTaskContextPacket({
-        model: deliveryModel,
-        tasks: detailTasks as unknown as Task[],
-        taskId: id,
-        relationships: deliveryRelationships,
-      })
+      const savedDeliveryProjection = deliveryRead.projection
+      const savedDeliveryModel = deliveryRead.model ?? emptyProjectDeliveryModel()
+      if (databaseAuthority && taskDetailState && savedDeliveryProjection?.status === 'current' &&
+        savedDeliveryProjection.source.projectRevision !== taskDetailState.projectRevision) {
+        return c.json({
+          error: 'Task and delivery projections were read from different project revisions.',
+          requiresRefresh: true,
+          taskProjectRevision: taskDetailState.projectRevision,
+          deliveryProjectRevision: savedDeliveryProjection.source.projectRevision,
+        }, 409)
+      }
+      const hasDeliveryModel = savedDeliveryModel.primitives.length > 0 ||
+        savedDeliveryModel.validationEvidence.length > 0 ||
+        savedDeliveryModel.rejectedCandidates.length > 0
+      const promotedDeliveryProjection = savedDeliveryProjection?.status === 'current'
+        ? savedDeliveryProjection
+        : null
+      if (databaseAuthority && hasDeliveryModel && !promotedDeliveryProjection) {
+        return c.json({
+          error: 'The saved delivery projection is unavailable or stale.',
+          deliveryProjection: savedDeliveryProjection,
+          requiresRefresh: true,
+        }, 503)
+      }
+      const deliveryModel = savedDeliveryModel
+      const legacyDeliveryRelationships = promotedDeliveryProjection
+        ? null
+        : deriveTaskRelationships({
+            model: deliveryModel,
+            tasks: detailTasks as unknown as Task[],
+            taskId: id,
+          })
+      const deliveryRelationships = promotedDeliveryProjection
+        ? promotedDeliveryProjection.relationships
+        : legacyDeliveryRelationships
+      const deliveryRelationshipsForResponse = promotedDeliveryProjection && deliveryRelationships
+        ? {
+            ...deliveryRelationships,
+            primitiveUse: {
+              ...deliveryRelationships.primitiveUse,
+              blockers: promotedDeliveryProjection.primitives.primitives
+                .filter(primitive => (
+                  promotedDeliveryProjection.relationships?.primitiveUse.direct.includes(primitive.id) ||
+                  promotedDeliveryProjection.relationships?.primitiveUse.ancestors.includes(primitive.id)
+                ))
+                .filter(primitive => primitive.status !== 'ready' && primitive.status !== 'deprecated'),
+            },
+          }
+        : deliveryRelationships
+      const deliveryContextPacket = promotedDeliveryProjection
+        ? contextPacketFromDeliveryReadProjection(promotedDeliveryProjection, project.path)
+        : buildTaskContextPacket({
+            model: deliveryModel,
+            tasks: detailTasks as unknown as Task[],
+            taskId: id,
+            relationships: legacyDeliveryRelationships!,
+          })
       // The drawer is an ordinary current-state read. Historical evidence is
       // behind the explicit history/review/evidence links below.
-      const effectiveTask = await buildEffectiveTask(project.path, rawTask as Task, {
-        evidence: 'current',
-        ...(taskDetailState ? { overlay: taskDetailState.overlay } : {}),
-      })
+      // Promoted task state is assembled by the named current-task boundary.
+      // The legacy branch is the only compatibility path that may still
+      // assemble an effective task in the route.
+      const effectiveTask = databaseAuthority && currentTask
+        ? currentTask as Task
+        : await buildEffectiveTask(project.path, rawTask as Task)
       const enrichedTask = await enrichTaskForServe(project.path, rawTask, effectiveTask)
-      const selectedTask = proofMissingTaskIds.has(String(enrichedTask.id ?? '')) && String(enrichedTask.status ?? '') === 'done'
+      const proofMissingForSelectedScope = scopedTaskIds.has(String(enrichedTask.id ?? '')) &&
+        String(enrichedTask.status ?? '') === 'done' &&
+        taskDoneButProofMissing(enrichedTask)
+      const selectedTask = proofMissingForSelectedScope
         ? { ...enrichedTask, completionProof: releaseProofMissingCompletionProof(enrichedTask) }
         : enrichedTask
       // Selected-scope counts belong to the durable project summary. Reusing
@@ -12756,8 +12938,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
         availability,
         deliverySpine: {
           model: deliveryModel,
-          validation: validateProjectDeliveryModel({ model: deliveryModel, tasks: detailTasks as Task[], projectRoot: project.path }),
-          relationships: deliveryRelationships,
+          validation: promotedDeliveryProjection
+            ? promotedDeliveryProjection.validation
+            : validateProjectDeliveryModel({ model: deliveryModel, tasks: detailTasks as Task[], projectRoot: project.path }),
+          relationships: deliveryRelationshipsForResponse,
           contextPacket: deliveryContextPacket,
         },
         detailPayload: {
@@ -12797,17 +12981,17 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (unsupportedIncludes.length > 0) return c.json({ error: `unsupported include: ${unsupportedIncludes.join(', ')}` }, 400)
       const memoryDir = getProjectStateDir(project.path)
       const payload: Record<string, unknown> = { taskId }
-      if (include.has('context')) payload.contextDebug = await readContextDebugForTask(memoryDir, taskId)
+      if (include.has('context')) {
+        payload.contextDebug = (await readContextDebugForTasks(memoryDir, [taskId])).get(taskId) ?? []
+      }
       if (include.has('transcript')) payload.exploringTranscript = await readExploringTranscript({ memoryDir, taskId })
       if (include.has('events')) {
         payload.recentEvents = filterEventsForTask(supervisor.recent(project.id, undefined, project.path), taskId)
       }
       if (include.has('thread')) {
-        const currentThread = readProjectStateDatabaseCurrentThread<{
-          turns: Array<{ taskId?: string | null }>
-        }>(project.path)
-        payload.threadTurns = (currentThread?.payload.turns ?? [])
-          .filter(turn => turn.taskId === taskId)
+        payload.threadTurns = readThreadReadProjection(project.path).payload.turns
+          .filter(turn => typeof turn === 'object' && turn !== null && !Array.isArray(turn))
+          .filter(turn => (turn as { taskId?: unknown }).taskId === taskId)
       }
       return c.json(payload)
     } catch (err) {
@@ -12818,9 +13002,30 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project/delivery-spine', async c => {
     try {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
-      if (readProjectStateAuthorityAtBoundary(projectTasksPath(project.path)).authority === 'database') {
-        const projection = await readProjectDeliveryReadProjection(project.path, { queue: { limit: 100 } })
+      const deliveryRead = await readProjectDeliveryReadProjectionWithAuthority(project.path, { queue: { limit: 100 } })
+      if (deliveryRead.authority === 'database') {
+        const projection = deliveryRead.projection
+        if (!projection) return c.json({ error: 'The saved delivery projection is unavailable or stale.', requiresRefresh: true }, 503)
         if (projection.status !== 'current') {
+          const model = deliveryRead.model
+          const noDeliveryState = !model || (
+            model.primitives.length === 0 &&
+            model.validationEvidence.length === 0 &&
+            model.rejectedCandidates.length === 0
+          )
+          if (noDeliveryState && projection.status === 'missing' && projection.reason === 'projection_missing') {
+            const emptyModel = emptyProjectDeliveryModel()
+            return c.json({
+              model: emptyModel,
+              validation: validateProjectDeliveryModel({ model: emptyModel, tasks: [], projectRoot: project.path }),
+              primitives: [],
+              queue: { runnable: [], blocked: [], hasMore: false },
+              deliveryProjection: {
+                status: 'empty',
+                freshness: 'missing',
+              },
+            })
+          }
           return c.json({
             error: 'The saved delivery projection is unavailable or stale.',
             deliveryProjection: projection,
@@ -12840,7 +13045,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         })
       }
       const tasks = await readProjectDeliveryTasks(project.path)
-      const model = await readProjectDeliveryModel(project.path)
+      const model = deliveryRead.model ?? emptyProjectDeliveryModel()
       return c.json({
         model,
         validation: validateProjectDeliveryModel({ model, tasks: tasks as Task[], projectRoot: project.path }),
@@ -12855,8 +13060,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project/delivery-spine/queue', async c => {
     try {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
-      if (readProjectStateAuthorityAtBoundary(projectTasksPath(project.path)).authority === 'database') {
-        const projection = await readProjectDeliveryReadProjection(project.path, { queue: { limit: 100 } })
+      const deliveryRead = await readProjectDeliveryReadProjectionWithAuthority(project.path, { queue: { limit: 100 } })
+      if (deliveryRead.authority === 'database') {
+        const projection = deliveryRead.projection
+        if (!projection) return c.json({ error: 'The saved delivery queue projection is unavailable or stale.', requiresRefresh: true }, 503)
         if (projection.status !== 'current') {
           return c.json({
             error: 'The saved delivery queue projection is unavailable or stale.',
@@ -12867,7 +13074,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         return c.json(projection.queue ?? { runnable: [], blocked: [], hasMore: false })
       }
       const tasks = await readProjectDeliveryTasks(project.path)
-      const model = await readProjectDeliveryModel(project.path)
+      const model = deliveryRead.model ?? emptyProjectDeliveryModel()
       return c.json(deriveQueueCandidates({ model, tasks: tasks as Task[] }))
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
@@ -12893,6 +13100,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       })
       await writeProjectDeliveryModel(project.path, applied.model)
       await writeTasksFilePreservingQueue(tasksPath, applied.tasks as unknown as Array<Record<string, unknown>>, project.path)
+      await refreshProjectDeliveryReadProjection(project.path)
       return c.json({ ok: true, applied: applied.applied })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
@@ -12914,6 +13122,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         reason: body.reason?.trim() || 'Rejected from Needs you.',
       })
       await writeProjectDeliveryModel(project.path, rejected)
+      await refreshProjectDeliveryReadProjection(project.path)
       return c.json({ ok: true, rejected: rejected.rejectedCandidates.at(-1) })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
@@ -12935,6 +13144,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       })
       await writeProjectDeliveryModel(project.path, reverted.model)
       await writeTasksFilePreservingQueue(tasksPath, reverted.tasks as unknown as Array<Record<string, unknown>>, project.path)
+      await refreshProjectDeliveryReadProjection(project.path)
       return c.json({ ok: true, warnings: reverted.warnings })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
@@ -12944,8 +13154,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project/task/:id/relationships', async c => {
     try {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
-      if (readProjectStateAuthorityAtBoundary(projectTasksPath(project.path)).authority === 'database') {
-        const projection = await readProjectDeliveryTaskProjection(project.path, c.req.param('id'))
+      const deliveryRead = await readProjectDeliveryReadProjectionWithAuthority(project.path, {
+        queue: false,
+        taskId: c.req.param('id'),
+      })
+      if (deliveryRead.authority === 'database') {
+        const projection = deliveryRead.projection
+        if (!projection) return c.json({ error: 'The saved task relationships projection is unavailable or stale.', requiresRefresh: true }, 503)
         if (projection.status !== 'current') {
           return c.json({
             error: 'The saved task relationships projection is unavailable or stale.',
@@ -12957,7 +13172,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         return c.json(projection.relationships)
       }
       const tasks = await readProjectDeliveryTasks(project.path)
-      const model = await readProjectDeliveryModel(project.path)
+      const model = deliveryRead.model ?? emptyProjectDeliveryModel()
       return c.json(deriveTaskRelationships({ model, tasks: tasks as Task[], taskId: c.req.param('id') }))
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
@@ -12967,8 +13182,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project/task/:id/context-packet', async c => {
     try {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
-      if (readProjectStateAuthorityAtBoundary(projectTasksPath(project.path)).authority === 'database') {
-        const projection = await readProjectDeliveryTaskProjection(project.path, c.req.param('id'))
+      const deliveryRead = await readProjectDeliveryReadProjectionWithAuthority(project.path, {
+        queue: false,
+        taskId: c.req.param('id'),
+      })
+      if (deliveryRead.authority === 'database') {
+        const projection = deliveryRead.projection
+        if (!projection) return c.json({ error: 'The saved task context projection is unavailable or stale.', requiresRefresh: true }, 503)
         if (projection.status !== 'current') {
           return c.json({
             error: 'The saved task context projection is unavailable or stale.',
@@ -12982,7 +13202,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         return c.json(packet)
       }
       const tasks = await readProjectDeliveryTasks(project.path)
-      const model = await readProjectDeliveryModel(project.path)
+      const model = deliveryRead.model ?? emptyProjectDeliveryModel()
       const taskId = c.req.param('id')
       const relationships = deriveTaskRelationships({ model, tasks: tasks as Task[], taskId })
       return c.json(buildTaskContextPacket({
@@ -12999,12 +13219,49 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project/task/:id/evidence', async c => {
     try {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
-      const tasksPath = projectTasksPath(project.path)
       const id = c.req.param('id')
-      const task = await readProjectTaskForServe(tasksPath, id) as Task | null
-      if (!task) return c.json({ error: 'task not found' }, 404)
-      const effective = await buildEffectiveTask(project.path, task, { evidence: 'full' })
-      return c.json({ taskId: id, evidence: effective.evidence })
+      const taskRead = await readProjectTaskEndpointPoint(project.path, id)
+      if (!taskRead) return c.json({ error: 'task not found' }, 404)
+      const requestedLimit = Number.parseInt(c.req.query('limit') ?? '', 10)
+      const limit = Number.isFinite(requestedLimit) && requestedLimit > 0
+        ? Math.min(200, requestedLimit)
+        : 100
+      const requestedCursor = Number.parseInt(c.req.query('cursor') ?? '0', 10)
+      const cursor = Number.isFinite(requestedCursor) && requestedCursor >= 0 ? requestedCursor : 0
+      const page = await readProjectTaskEvidencePageAtBoundary(project.path, id, {
+        cursor,
+        limit,
+        order: 'oldest',
+      })
+      if (
+        taskRead.projectRevision !== null &&
+        page.revision !== undefined &&
+        taskRead.projectRevision !== page.revision
+      ) {
+        return c.json({
+          error: 'Task evidence changed while loading this page.',
+          code: 'project_state_revision_mismatch',
+          requiresRefresh: true,
+          taskProjectRevision: taskRead.projectRevision,
+          evidenceProjectRevision: page.revision,
+        }, 409)
+      }
+      return c.json({
+        taskId: id,
+        evidence: page.events,
+        pagination: {
+          cursor: page.cursor,
+          limit: page.limit,
+          total: page.total,
+          hasMore: page.hasMore,
+          bytes: page.bytes,
+          maxBytes: page.maxBytes,
+          ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}),
+        },
+        ...(page.authority ? { authority: page.authority } : {}),
+        ...(page.projectAuthority ? { projectAuthority: page.projectAuthority } : {}),
+        ...(page.revision !== undefined ? { projectRevision: page.revision } : {}),
+      })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
     }
@@ -13056,10 +13313,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project/task/:id/history', async c => {
     try {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
-      const tasksPath = projectTasksPath(project.path)
       const id = c.req.param('id')
-      const task = await readProjectTaskForServe(tasksPath, id) as Task | null
-      if (!task) return c.json({ error: 'task not found' }, 404)
+      const taskRead = await readProjectTaskEndpointPoint(project.path, id)
+      if (!taskRead) return c.json({ error: 'task not found' }, 404)
+      const task = taskRead.task as Task
       const canonicalDescriptions = new Set(
         Array.isArray(task.acceptanceCriteria)
           ? task.acceptanceCriteria
@@ -13073,7 +13330,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         : 100
       const requestedCursor = Number.parseInt(c.req.query('cursor') ?? '0', 10)
       const cursor = Number.isFinite(requestedCursor) && requestedCursor >= 0 ? requestedCursor : 0
-      const page = await readTaskEvidencePage(project.path, id, {
+      const page = await readProjectTaskEvidencePageAtBoundary(project.path, id, {
         cursor,
         limit,
         order: 'oldest',
@@ -13085,6 +13342,19 @@ export function buildServeApp(opts: ServeOptions = {}): {
           event.kind === 'merge_record'
         ) && (event.kind !== 'note' || noteMatchesCanonicalAcceptance(event.payload, canonicalDescriptions)),
       })
+      if (
+        taskRead.projectRevision !== null &&
+        page.revision !== undefined &&
+        taskRead.projectRevision !== page.revision
+      ) {
+        return c.json({
+          error: 'Task history changed while loading this page.',
+          code: 'project_state_revision_mismatch',
+          requiresRefresh: true,
+          taskProjectRevision: taskRead.projectRevision,
+          historyProjectRevision: page.revision,
+        }, 409)
+      }
       return c.json({
         taskId: id,
         events: page.events,
@@ -13097,6 +13367,9 @@ export function buildServeApp(opts: ServeOptions = {}): {
           maxBytes: page.maxBytes,
           ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}),
         },
+        ...(page.authority ? { authority: page.authority } : {}),
+        ...(page.projectAuthority ? { projectAuthority: page.projectAuthority } : {}),
+        ...(page.revision !== undefined ? { projectRevision: page.revision } : {}),
       })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
@@ -13106,15 +13379,50 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project/task/:id/review', async c => {
     try {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
-      const tasksPath = projectTasksPath(project.path)
       const id = c.req.param('id')
-      const task = await readProjectTaskForServe(tasksPath, id) as Task | null
-      if (!task) return c.json({ error: 'task not found' }, 404)
-      const effective = await buildEffectiveTask(project.path, task, { evidence: 'full' })
+      const taskRead = await readProjectTaskEndpointPoint(project.path, id)
+      if (!taskRead) return c.json({ error: 'task not found' }, 404)
+      const requestedLimit = Number.parseInt(c.req.query('limit') ?? '', 10)
+      const limit = Number.isFinite(requestedLimit) && requestedLimit > 0
+        ? Math.min(100, requestedLimit)
+        : 50
+      const requestedCursor = Number.parseInt(c.req.query('cursor') ?? '0', 10)
+      const cursor = Number.isFinite(requestedCursor) && requestedCursor >= 0 ? requestedCursor : 0
+      const page = await readProjectTaskEvidencePageAtBoundary(project.path, id, {
+        cursor,
+        limit,
+        order: 'oldest',
+        filter: event => event.kind === 'review_verdict' || event.kind === 'adjudication',
+      })
+      if (
+        taskRead.projectRevision !== null &&
+        page.revision !== undefined &&
+        taskRead.projectRevision !== page.revision
+      ) {
+        return c.json({
+          error: 'Task review history changed while loading this page.',
+          code: 'project_state_revision_mismatch',
+          requiresRefresh: true,
+          taskProjectRevision: taskRead.projectRevision,
+          reviewProjectRevision: page.revision,
+        }, 409)
+      }
       return c.json({
         taskId: id,
-        verdicts: effective.evidence.filter(event => event.kind === 'review_verdict'),
-        adjudications: effective.evidence.filter(event => event.kind === 'adjudication'),
+        verdicts: page.events.filter(event => event.kind === 'review_verdict'),
+        adjudications: page.events.filter(event => event.kind === 'adjudication'),
+        pagination: {
+          cursor: page.cursor,
+          limit: page.limit,
+          total: page.total,
+          hasMore: page.hasMore,
+          bytes: page.bytes,
+          maxBytes: page.maxBytes,
+          ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}),
+        },
+        ...(page.authority ? { authority: page.authority } : {}),
+        ...(page.projectAuthority ? { projectAuthority: page.projectAuthority } : {}),
+        ...(page.revision !== undefined ? { projectRevision: page.revision } : {}),
       })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
@@ -13124,12 +13432,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project/task/:id/git-story', async c => {
     try {
       if (project.initializationNeeded) return c.json({ error: 'not initialized' }, 400)
-      const tasksPath = projectTasksPath(project.path)
       const id = c.req.param('id')
-      const task = await readProjectTaskForServe(tasksPath, id)
-      if (!task) return c.json({ error: 'task not found' }, 404)
+      const taskRead = await readProjectTaskEndpointPoint(project.path, id)
+      if (!taskRead) return c.json({ error: 'task not found' }, 404)
       const workspaceStore = await readTaskWorkspaceStore(project.path).catch(() => undefined)
-      const snapshot = await gitStoryForTaskIfUseful(project.path, task, workspaceStore?.workspaces[id])
+      const snapshot = await gitStoryForTaskIfUseful(project.path, taskRead.task, workspaceStore?.workspaces[id])
       return c.json({
         taskId: id,
         gitStory: snapshot,
@@ -13137,6 +13444,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
         diagnostic: true,
         freshness: 'live',
         requiresRefresh: false,
+        sourceRevision: taskRead.projectRevision,
+        projectRevision: taskRead.projectRevision,
       })
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
@@ -13164,6 +13473,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       }
       const memoryDir = getProjectStateDir(project.path)
       const tasksPath = projectTasksPath(project.path)
+      const workspaceStore = await readTaskWorkspaceStore(project.path).catch(() => undefined)
       if (!projectTaskStateExistsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
       const databaseAuthority = readProjectStateAuthorityAtBoundary(tasksPath).authority === 'database'
       const queueRead = readProjectTaskQueueForMutationSync(tasksPath)
@@ -13188,7 +13498,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         const files = Array.isArray(body.files) ? body.files.filter((file): file is string => typeof file === 'string' && isSafeRelativeGitPath(file)) : []
         if (!message) return c.json({ error: 'message is required' }, 400)
         if (files.length === 0) return c.json({ error: 'files are required' }, 400)
-        const cwd = taskGitStoryRepoPath(project.path, task)
+        const cwd = taskGitStoryRepoPath(project.path, task, workspaceStore?.workspaces[id])
         const result = await commitGitStoryFiles({ cwd, files, message })
         if (!result.ok) return c.json({ error: result.detail ?? 'commit failed' }, 500)
         if (databaseAuthority) {
@@ -13225,7 +13535,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (closureAction === 'push') {
         const allowed = policyAllowsGitWrite(project.path, project.config, task, 'push', body)
         if (!allowed.ok) return c.json({ error: allowed.error }, allowed.status as 403 | 409)
-        const cwd = taskGitStoryRepoPath(project.path, task)
+        const cwd = taskGitStoryRepoPath(project.path, task, workspaceStore?.workspaces[id])
         const branch = typeof task.branchName === 'string' && task.branchName.trim()
           ? task.branchName.trim()
           : await new NodeGitDriver().currentBranch(cwd)
@@ -13242,7 +13552,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       if (closureAction === 'open-pr') {
         const allowed = policyAllowsGitWrite(project.path, project.config, task, 'pullRequest', body)
         if (!allowed.ok) return c.json({ error: allowed.error }, allowed.status as 403 | 409)
-        const cwd = taskGitStoryRepoPath(project.path, task)
+        const cwd = taskGitStoryRepoPath(project.path, task, workspaceStore?.workspaces[id])
         const branch = typeof task.branchName === 'string' && task.branchName.trim()
           ? task.branchName.trim()
           : await new NodeGitDriver().currentBranch(cwd)
@@ -13338,24 +13648,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
         return c.json({ error: 'no tasks file' }, 404)
       }
       const id = c.req.param('id')
-      const point = readProjectStateDatabaseTaskPoint(tasksPath, id)
-      if (!point) return c.json({ error: 'task not found' }, 404)
-      const pointTask = {
-        ...point.definition,
-        id: point.id,
-        title: point.title,
-        ...(point.description !== null ? { description: point.description } : {}),
-        ...(point.status !== null ? { status: point.status } : {}),
-        ...(point.domain !== null ? { domain: point.domain } : {}),
-        ...(point.priority !== null ? { priority: point.priority } : {}),
-        ...(point.workKind !== null ? { workKind: point.workKind } : {}),
-        ...(point.hierarchy ? { hierarchy: point.hierarchy } : {}),
-        ...(point.dependsOn.length > 0 ? { dependsOn: point.dependsOn } : {}),
-        ...(point.releaseIds.length > 0 ? { releaseIds: point.releaseIds } : {}),
-      } as Task
-      const taskAuthority = readProjectStateDatabaseCurrentAuthority(project.path)
-      const task = await buildEffectiveTask(project.path, pointTask, {
-        evidence: taskAuthority === 'database' ? 'current' : 'full',
+      const currentTaskRead = await readProjectTaskCurrentStateAtBoundary(project.path, id)
+      const pointTask = currentTaskRead.task ?? readProjectTaskRecordAtBoundary(tasksPath, id)
+      if (!pointTask) return c.json({ error: 'task not found' }, 404)
+      const task = currentTaskRead.task ?? await buildEffectiveTask(project.path, pointTask as Task, {
+        evidence: 'current',
       }) as unknown as Record<string, unknown>
 
       const memDir = getProjectStateDir(project.path)
@@ -13575,6 +13872,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
   //   mark-done          → done   (human confirms the task is already complete; body: {evidence?})
   //   update-brief       → fill missing task-brief fields from human input
   //   add-acceptance     → append a human-written acceptance criterion
+  //   set-acceptance-command → bind one exact executable proof command to a criterion
+  //   set-acceptance-proof-expectation → record expected command exit/output for a criterion
   //   resume             → append a follow-up message to an exploring transcript
   //                        (body: {message?, resolveEscalationId?, resolution?})
   //   enrich-task        → add missing checklist/split structure while preserving useful context
@@ -13598,6 +13897,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
         'mark-done',
         'update-brief',
         'add-acceptance',
+        'set-acceptance-command',
+        'set-acceptance-proof-expectation',
         'resume',
         'reframe-task',
         'enrich-task',
@@ -13797,17 +14098,46 @@ export function buildServeApp(opts: ServeOptions = {}): {
           : { version: parsed.version ?? 1, lastUpdated: parsed.lastUpdated ?? new Date().toISOString(), tasks: parsed.tasks ?? [] }
         let task = queue.tasks.find(t => (t as { id?: string }).id === id) as Record<string, unknown> | undefined
         if (!task) return c.json({ error: 'task not found' }, 404)
-        const effectiveTask = await buildEffectiveTask(project.path, task as Task) as unknown as Task & {
+        // Recovery consumes the same saved release boundary as readiness and
+        // closure. The mutation queue remains the write/CAS source, but it
+        // must not be the place where a release proof contract is inferred.
+        const releaseState = await readProjectReleaseState(project.path)
+        const selectedRelease = releaseState.scope
+          ? releaseState.rawQueue.releases.find(release => release.id === releaseState.scope?.id)
+          : undefined
+        const selectedScope = releaseState.scope
+        const selectedTaskIsEligible = selectedScope
+          ? selectedScope.nodeIds.includes(taskScopeNodeId(String(task.id ?? '')))
+          : false
+        const selectedProofStyle = selectedTaskIsEligible ? selectedRelease?.proofStyle : undefined
+        const currentTaskRead = await readProjectTaskCurrentStateAtBoundary(project.path, id)
+        const effectiveTask = (currentTaskRead.task ?? await buildEffectiveTask(project.path, task as Task, {
+          evidence: 'current',
+        })) as unknown as Task & {
           runtime?: { openEscalationIds?: string[] }
         }
-        const isProofRecovery =
-          (task.status === 'done' && taskDoneButProofMissing(task)) ||
-          taskDoneButProofMissing(effectiveTask)
+        // Canonical task definitions intentionally omit bulky evidence. Use
+        // the effective task for recovery decisions so a settled proof path
+        // from SQLite cannot be mistaken for a missing proof on the compact
+        // queue row.
+        const isProofRecovery = taskDoneButProofMissingForScope(effectiveTask, selectedProofStyle)
+        const isReviewRecovery = taskDoneButReviewConflict(effectiveTask)
         const effectiveStatus = typeof effectiveTask.status === 'string' ? effectiveTask.status : String(task.status ?? '')
-        if ((effectiveStatus === 'done' && !isProofRecovery) || effectiveStatus === 'shelved' || effectiveStatus === 'pending_pr') {
+        if ((effectiveStatus === 'done' && !isProofRecovery && !isReviewRecovery) || effectiveStatus === 'shelved' || effectiveStatus === 'pending_pr') {
           return c.json({ error: `task is ${effectiveStatus}` }, 400)
         }
         const now = new Date().toISOString()
+        const recoveredProofPaths = isProofRecovery && selectedProofStyle === 'script_only'
+          ? ensureCommandProofPathsFromAcceptanceCriteria(effectiveTask, now)
+          : undefined
+        const hasExecutableRecoveredProof = recoveredProofPaths?.some(path => (
+          path &&
+          typeof path === 'object' &&
+          !Array.isArray(path) &&
+          typeof (path as { command?: unknown }).command === 'string' &&
+          isConcreteProjectProofCommand(String((path as { command: string }).command))
+        )) ?? false
+        const proofPathsForRecovery = hasExecutableRecoveredProof ? recoveredProofPaths : undefined
         const instruction = body.instruction?.trim()
         const openEscalations = activeEscalations(effectiveTask)
         const hasRuntimeEscalationIds =
@@ -13846,6 +14176,40 @@ export function buildServeApp(opts: ServeOptions = {}): {
           task = queue.tasks.find(t => (t as { id?: string }).id === id) as Record<string, unknown> | undefined
           if (!task) return c.json({ error: 'task not found after escalation resolution' }, 404)
         }
+        if (effectiveStatus === 'in_progress' && openEscalations.length === 0 && !hasUsableBlueprint(effectiveTask)) {
+          const result = await rerunTaskStage({
+            memoryDir,
+            taskId: id,
+            stage: 'spec',
+            recoveryReason:
+              instruction ||
+              'The task was marked executable without a current implementation blueprint. Guildhall cleared the stale plan before any worker could run.',
+            recoveryKind: 'blueprint',
+          })
+          if (!result.success) return c.json({ error: result.error ?? 'blueprint re-intake failed' }, 400)
+          return c.json({
+            ok: true,
+            status: result.newStatus,
+            nextAction: 'source_backed_spec',
+            reason: 'Guildhall refused to resume work without a current implementation blueprint and reopened source-backed shaping.',
+          })
+        }
+        if (isProofRecovery && selectedProofStyle === 'script_only' && !hasExecutableRecoveredProof) {
+          const result = await rerunTaskStage({
+            memoryDir,
+            taskId: id,
+            stage: 'spec',
+            recoveryReason: instruction || 'No current project-backed executable proof path is recorded for this release task.',
+            recoveryKind: 'proof',
+          })
+          if (!result.success) return c.json({ error: result.error ?? 'proof re-intake failed' }, 400)
+          return c.json({
+            ok: true,
+            status: result.newStatus,
+            nextAction: 'source_backed_spec',
+            reason: 'Guildhall could not recover a concrete project proof command from the saved task. The stale plan was cleared for source-backed shaping.',
+          })
+        }
         const notes = Array.isArray(task.notes) ? [...task.notes as Array<Record<string, unknown>>] : []
         notes.push({
           agentId: 'system:human',
@@ -13854,6 +14218,10 @@ export function buildServeApp(opts: ServeOptions = {}): {
             ? instruction
               ? `Reopen completed task for missing release proof: ${instruction}`
               : 'Reopen completed task for missing release proof.'
+            : isReviewRecovery
+              ? instruction
+                ? `Reopen completed task after reviewer feedback was lost to a provider fallback: ${instruction}`
+                : 'Reopen completed task after reviewer feedback was lost to a provider fallback.'
             : instruction
               ? `Retry partial worker pass: ${instruction}`
               : 'Retry partial worker pass from the current saved worktree state.',
@@ -13862,11 +14230,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
         task.notes = notes
         task.status = 'in_progress'
         task.assignedTo = null
+        if (proofPathsForRecovery) task.proofPaths = proofPathsForRecovery
         delete task.blockReason
         delete task.openEscalations
         task.updatedAt = now
         queue.lastUpdated = now
-        if (shouldClearRuntimeEscalations || isProofRecovery) {
+        if (shouldClearRuntimeEscalations || isProofRecovery || isReviewRecovery) {
           await upsertTaskRuntimeState(project.path, id, {
             assignedTo: null,
             ...(shouldClearRuntimeEscalations ? { openEscalationIds: [] } : {}),
@@ -13887,6 +14256,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
             projectRoot: project.path,
             mutate: current => {
               current.status = task.status
+              if (typeof task.assignedTo === 'string' && task.assignedTo.trim().length > 0) {
+                current.assignedTo = task.assignedTo
+              } else {
+                delete current.assignedTo
+              }
+              if (proofPathsForRecovery) current.proofPaths = proofPathsForRecovery
               delete current.blockReason
               current.updatedAt = now
               return current
@@ -14240,7 +14615,6 @@ export function buildServeApp(opts: ServeOptions = {}): {
               current.acceptanceCriteria = task.acceptanceCriteria
               current.status = 'done'
               delete current.blockReason
-              current.doneSummaryBundle = task.doneSummaryBundle
               current.updatedAt = now
               return current
             },
@@ -14251,6 +14625,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
             action: 'mark-done',
             now,
             note: notes.at(-1) as Record<string, unknown>,
+          })
+          await appendTaskEvidence(project.path, id, {
+            id: `${id}-completion-summary-${now.replace(/[^0-9A-Za-z]/g, '')}`,
+            kind: 'completion_summary',
+            recordedAt: now,
+            payload: task.doneSummaryBundle as Record<string, unknown>,
           })
           for (const escalation of newlyResolvedEscalations) {
             const escalationId = typeof escalation.id === 'string' ? escalation.id : `resolved-${id}`
@@ -14323,6 +14703,281 @@ export function buildServeApp(opts: ServeOptions = {}): {
         queue.lastUpdated = now
         writeProjectTaskQueueWithSummary(tasksPath, queue, { expectedQueueRevision: queueRead.expectedQueueRevision })
         return c.json({ ok: true, count: criteria.length })
+      }
+
+      if (action === 'set-acceptance-command') {
+        const body = await c.req.json().catch(() => ({})) as {
+          criterionId?: string
+          command?: string
+        }
+        const criterionId = typeof body.criterionId === 'string' ? body.criterionId.trim() : ''
+        const command = typeof body.command === 'string' ? body.command.trim() : ''
+        if (!criterionId) return c.json({ error: 'criterionId required' }, 400)
+        if (!command) return c.json({ error: 'command required' }, 400)
+        if (/\r|\n/.test(command)) return c.json({ error: 'command must be a single line' }, 400)
+
+        const tasksPath = projectTasksPath(project.path)
+        if (!projectTaskStateExistsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
+        const databaseAuthority = readProjectStateAuthorityAtBoundary(tasksPath).authority === 'database'
+        const releaseState = await readProjectReleaseState(project.path)
+        const selectedRelease = releaseState.scope
+          ? releaseState.rawQueue.releases.find(release => release.id === releaseState.scope?.id)
+          : undefined
+        const materializesSelectedScriptProof =
+          selectedRelease?.proofStyle === 'script_only' &&
+          releaseState.scope?.nodeIds.includes(taskScopeNodeId(id)) === true
+        const now = new Date().toISOString()
+        let criterionFound = false
+        let changed = false
+        let previousCommand: string | undefined
+        const promoted = writePromotedTaskDetailMutation(tasksPath, id, {
+          projectId: project.id,
+          projectRoot: project.path,
+          mutate: task => {
+            const criteria = Array.isArray(task.acceptanceCriteria)
+              ? [...task.acceptanceCriteria as Array<Record<string, unknown>>]
+              : []
+            const criterion = criteria.find(item => item.id === criterionId)
+            if (!criterion) return task
+            criterionFound = true
+            previousCommand = typeof criterion.command === 'string' ? criterion.command : undefined
+            const alreadyBound = previousCommand === command && criterion.verifiedBy === 'automated'
+            if (!alreadyBound) {
+              criterion.command = command
+              criterion.verifiedBy = 'automated'
+              criterion.source = 'documented'
+              criterion.met = false
+              delete criterion.persistedMet
+              delete criterion.verificationState
+              delete criterion.verificationSource
+              delete criterion.staleReason
+              delete criterion.staleGateId
+              task.acceptanceCriteria = criteria
+              task.updatedAt = now
+              changed = true
+              const commandProofPathId = `${id}-${criterionId}-command-proof`
+              if (Array.isArray(task.proofPaths)) {
+                task.proofPaths = task.proofPaths.filter(path =>
+                  !path || typeof path !== 'object' || (path as Record<string, unknown>).id !== commandProofPathId,
+                )
+              }
+            }
+            if (materializesSelectedScriptProof) {
+              const proofPaths = ensureCommandProofPathsFromAcceptanceCriteria(task as unknown as Task, now)
+              if (proofPaths.length !== (Array.isArray(task.proofPaths) ? task.proofPaths.length : 0)) {
+                task.proofPaths = proofPaths
+                changed = true
+              }
+            }
+            return task
+          },
+        })
+        if (promoted) {
+          if (!criterionFound) return c.json({ error: `acceptance criterion not found: ${criterionId}` }, 404)
+          if (changed) {
+            await appendPromotedHumanTaskNote({
+              taskId: id,
+              action: 'set-acceptance-command',
+              now,
+              note: {
+                agentId: 'system:human',
+                role: 'human',
+                content: `Bound executable proof command to acceptance criterion ${criterionId}. Existing completion evidence must be re-run.`,
+                timestamp: now,
+                criterionId,
+                command,
+                ...(previousCommand ? { previousCommand } : {}),
+              },
+            })
+          }
+          return c.json({ ok: true, changed, criterionId, command })
+        }
+        if (databaseAuthority) return c.json({ error: 'task not found' }, 404)
+
+        const queueRead = readProjectTaskQueueForMutationSync(tasksPath)
+        const parsed = queueRead.queue as
+          | { tasks?: Array<Record<string, unknown>>; version?: number; lastUpdated?: string }
+          | Array<Record<string, unknown>>
+        const queue = Array.isArray(parsed)
+          ? { version: 1, lastUpdated: new Date().toISOString(), tasks: parsed }
+          : { version: parsed.version ?? 1, lastUpdated: parsed.lastUpdated ?? new Date().toISOString(), tasks: parsed.tasks ?? [] }
+        const task = queue.tasks.find(t => (t as { id?: string }).id === id) as Record<string, unknown> | undefined
+        if (!task) return c.json({ error: 'task not found' }, 404)
+        const criteria = Array.isArray(task.acceptanceCriteria)
+          ? [...task.acceptanceCriteria as Array<Record<string, unknown>>]
+          : []
+        const criterion = criteria.find(item => item.id === criterionId)
+        if (!criterion) return c.json({ error: `acceptance criterion not found: ${criterionId}` }, 404)
+        previousCommand = typeof criterion.command === 'string' ? criterion.command : undefined
+        changed = previousCommand !== command || criterion.verifiedBy !== 'automated'
+        if (changed) {
+          criterion.command = command
+          criterion.verifiedBy = 'automated'
+          criterion.source = 'documented'
+          criterion.met = false
+          delete criterion.persistedMet
+          delete criterion.verificationState
+          delete criterion.verificationSource
+          delete criterion.staleReason
+          delete criterion.staleGateId
+          task.acceptanceCriteria = criteria
+          if (materializesSelectedScriptProof) {
+            const commandProofPathId = `${id}-${criterionId}-command-proof`
+            if (Array.isArray(task.proofPaths)) {
+              task.proofPaths = task.proofPaths.filter(path =>
+                !path || typeof path !== 'object' || (path as Record<string, unknown>).id !== commandProofPathId,
+              )
+            }
+            task.proofPaths = ensureCommandProofPathsFromAcceptanceCriteria(task as unknown as Task, now)
+          }
+          task.updatedAt = now
+          queue.lastUpdated = now
+          const notes = Array.isArray(task.notes) ? [...task.notes as Array<Record<string, unknown>>] : []
+          notes.push({
+            agentId: 'system:human',
+            role: 'human',
+            content: `Bound executable proof command to acceptance criterion ${criterionId}. Existing completion evidence must be re-run.`,
+            timestamp: now,
+            criterionId,
+            command,
+            ...(previousCommand ? { previousCommand } : {}),
+          })
+          task.notes = notes
+          writeProjectTaskQueueWithSummary(tasksPath, queue, { expectedQueueRevision: queueRead.expectedQueueRevision })
+        }
+        return c.json({ ok: true, changed, criterionId, command })
+      }
+
+      if (action === 'set-acceptance-proof-expectation') {
+        const body = await c.req.json().catch(() => ({})) as {
+          criterionId?: string
+          expectedExit?: string
+          expectedOutputIncludes?: unknown
+        }
+        const criterionId = typeof body.criterionId === 'string' ? body.criterionId.trim() : ''
+        const expectedExit = body.expectedExit === 'zero' || body.expectedExit === 'non_zero'
+          ? body.expectedExit
+          : ''
+        const expectedOutputIncludes = Array.isArray(body.expectedOutputIncludes)
+          ? body.expectedOutputIncludes
+            .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+            .map(value => value.trim())
+          : undefined
+        if (!criterionId) return c.json({ error: 'criterionId required' }, 400)
+        if (!expectedExit) return c.json({ error: 'expectedExit must be zero or non_zero' }, 400)
+
+        const tasksPath = projectTasksPath(project.path)
+        if (!projectTaskStateExistsSync(tasksPath)) return c.json({ error: 'no tasks file' }, 404)
+        const databaseAuthority = readProjectStateAuthorityAtBoundary(tasksPath).authority === 'database'
+        const now = new Date().toISOString()
+        let criterionFound = false
+        let changed = false
+        let command = ''
+        const applyExpectation = (task: Record<string, unknown>): Record<string, unknown> => {
+          const criteria = Array.isArray(task.acceptanceCriteria)
+            ? [...task.acceptanceCriteria as Array<Record<string, unknown>>]
+            : []
+          const criterion = criteria.find(item => item.id === criterionId)
+          if (!criterion) return task
+          criterionFound = true
+          command = typeof criterion.command === 'string' ? criterion.command.trim() : ''
+          if (!command) return task
+          const previousOutput = Array.isArray(criterion.expectedOutputIncludes)
+            ? criterion.expectedOutputIncludes
+            : undefined
+          changed = criterion.expectedExit !== expectedExit ||
+            JSON.stringify(previousOutput) !== JSON.stringify(expectedOutputIncludes)
+          if (changed) {
+            criterion.expectedExit = expectedExit
+            if (expectedOutputIncludes && expectedOutputIncludes.length > 0) {
+              criterion.expectedOutputIncludes = expectedOutputIncludes
+            } else {
+              delete criterion.expectedOutputIncludes
+            }
+            criterion.met = false
+            delete criterion.persistedMet
+            delete criterion.verificationState
+            delete criterion.verificationSource
+            delete criterion.staleReason
+            delete criterion.staleGateId
+          }
+          task.acceptanceCriteria = criteria
+          const proofPaths = ensureCommandProofPathsFromAcceptanceCriteria(task as unknown as Task, now)
+          const matchingProofPath = proofPaths.find((path) =>
+            comparableCommand(path.command) === comparableCommand(command),
+          )
+          if (matchingProofPath && matchingProofPath.status !== 'verified') {
+            matchingProofPath.status = 'planned'
+            matchingProofPath.verificationRecords = []
+            matchingProofPath.updatedAt = now
+            matchingProofPath.updatedBy = 'acceptance-contract-reset'
+            changed = true
+          }
+          task.proofPaths = proofPaths
+          if (changed) delete task.acceptanceCriteriaProofState
+          if (changed) task.updatedAt = now
+          return task
+        }
+
+        const promoted = writePromotedTaskDetailMutation(tasksPath, id, {
+          projectId: project.id,
+          projectRoot: project.path,
+          mutate: applyExpectation,
+        })
+        if (promoted) {
+          if (!criterionFound) return c.json({ error: `acceptance criterion not found: ${criterionId}` }, 404)
+          if (!command) return c.json({ error: `acceptance criterion ${criterionId} has no executable command` }, 400)
+          if (changed) {
+            await appendPromotedHumanTaskNote({
+              taskId: id,
+              action: 'set-acceptance-proof-expectation',
+              now,
+              note: {
+                agentId: 'system:human',
+                role: 'human',
+                content: `Recorded expected ${expectedExit} exit for acceptance criterion ${criterionId}. Existing proof must be re-run against the updated contract.`,
+                timestamp: now,
+                criterionId,
+                command,
+                expectedExit,
+                ...(expectedOutputIncludes?.length ? { expectedOutputIncludes } : {}),
+              },
+            })
+          }
+          return c.json({ ok: true, changed, criterionId, command, expectedExit, ...(expectedOutputIncludes?.length ? { expectedOutputIncludes } : {}) })
+        }
+        if (databaseAuthority) return c.json({ error: 'task not found' }, 404)
+
+        const queueRead = readProjectTaskQueueForMutationSync(tasksPath)
+        const parsed = queueRead.queue as
+          | { tasks?: Array<Record<string, unknown>>; version?: number; lastUpdated?: string }
+          | Array<Record<string, unknown>>
+        const queue = Array.isArray(parsed)
+          ? { version: 1, lastUpdated: now, tasks: parsed }
+          : { version: parsed.version ?? 1, lastUpdated: parsed.lastUpdated ?? now, tasks: parsed.tasks ?? [] }
+        const task = queue.tasks.find(candidate => candidate.id === id)
+        if (!task) return c.json({ error: 'task not found' }, 404)
+        applyExpectation(task)
+        if (!criterionFound) return c.json({ error: `acceptance criterion not found: ${criterionId}` }, 404)
+        if (!command) return c.json({ error: `acceptance criterion ${criterionId} has no executable command` }, 400)
+        if (changed) {
+          task.notes = [
+            ...(Array.isArray(task.notes) ? task.notes : []),
+            {
+              agentId: 'system:human',
+              role: 'human',
+              content: `Recorded expected ${expectedExit} exit for acceptance criterion ${criterionId}. Existing proof must be re-run against the updated contract.`,
+              timestamp: now,
+              criterionId,
+              command,
+              expectedExit,
+              ...(expectedOutputIncludes?.length ? { expectedOutputIncludes } : {}),
+            },
+          ]
+          queue.lastUpdated = now
+          writeProjectTaskQueueWithSummary(tasksPath, queue, { expectedQueueRevision: queueRead.expectedQueueRevision })
+        }
+        return c.json({ ok: true, changed, criterionId, command, expectedExit, ...(expectedOutputIncludes?.length ? { expectedOutputIncludes } : {}) })
       }
 
       if (action === 'update-brief') {
@@ -14961,13 +15616,13 @@ export function buildServeApp(opts: ServeOptions = {}): {
     try {
       if (project.initializationNeeded) return c.json({ running: false, counts: {}, inFlight: [] })
       const run = supervisor.get(project.id)
-      const tasksPath = projectTasksPath(project.path)
       const empty = { running: run?.status === 'running', counts: {}, inFlight: [] as unknown[] }
-      if (!projectTaskStateExistsSync(tasksPath)) return c.json(empty)
       // Activity is polled from every project surface. Read only the shell
       // summary here: the full orientation tree belongs to Map/Structure,
       // never to a status chip.
-      const projection = readProjectSummaryShellProjection(tasksPath)
+      const shell = readProjectSummaryShellAtBoundary(project.path)
+      if (shell.queueRevision === null) return c.json(empty)
+      const projection = shell.summary
       // This route is polled from every project surface. It must stay a read:
       // stopped-run repair belongs to an explicit write/maintenance boundary,
       // never to a status chip request.
@@ -14975,44 +15630,23 @@ export function buildServeApp(opts: ServeOptions = {}): {
       const counts: Record<string, number> = projection
         ? { ...(projection?.counts.byStatus ?? {}) }
         : {}
-      const recentByTask = new Map<string, { at?: string; label?: string; tone?: 'neutral' | 'running' | 'ok' | 'warn' | 'danger' }>()
-      for (const envelope of supervisor.recent(project.id, undefined, project.path)) {
-        const event = envelope.event as Record<string, unknown> | undefined
-        const taskId = typeof event?.task_id === 'string'
-          ? event.task_id
-          : typeof event?.taskId === 'string'
-            ? event.taskId
-            : null
-        if (!taskId) continue
-        const label = summarizeProjectEvent(event)
-        recentByTask.set(taskId, {
-          ...(envelope.at ? { at: envelope.at } : {}),
-          ...(label ? { label } : {}),
-          tone: toneForProjectEvent(event),
-        })
-      }
       const inFlight: Array<{
         id: string
         title: string
         status: string
         domain: string
         lastActivityAt?: string
-        lastActivityLabel?: string
-        lastActivityTone?: 'neutral' | 'running' | 'ok' | 'warn' | 'danger'
       }> = []
       for (const task of projection?.inFlight ?? []) {
-        const recent = recentByTask.get(task.taskId)
-        const lastActivityAt = recent?.at ?? task.updatedAt
+        const lastActivityAt = task.updatedAt
         inFlight.push({
           id: task.taskId,
           title: task.title,
           status: task.status,
           domain: task.domain,
           ...(lastActivityAt ? { lastActivityAt } : {}),
-          ...(recent?.label ? { lastActivityLabel: recent.label } : {}),
-          ...(recent?.tone ? { lastActivityTone: recent.tone } : {}),
         })
-        }
+      }
       const compactSummary = projectionIsCurrent
         ? summarizeProjectFromProjection({ id: project.id, path: project.path }, project, run, projection)
         : null
@@ -15068,9 +15702,12 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project/progress', async c => {
     try {
       if (project.initializationNeeded) return c.json({ progress: '' })
-      const tasksPath = projectTasksPath(project.path)
-      if (readProjectStateAuthorityAtBoundary(tasksPath).authority === 'database') {
-        const projection = readProjectSummaryShellProjection(tasksPath)
+      const progressState = readProjectProgressStateAtBoundary(project.path)
+      const authority = progressState?.authority ?? readProjectStateAuthorityAtBoundary(
+        getProjectSystemStatePath(project.path, 'TASKS.json'),
+      ).authority
+      if (authority === 'database') {
+        const projection = progressState?.summary
         if (!projection || projection.freshness !== 'current') {
           return c.json({
             progress: '',
@@ -15078,12 +15715,20 @@ export function buildServeApp(opts: ServeOptions = {}): {
             requiresRefresh: true,
           })
         }
+        if (!progressState || progressState.queueRevision === null) {
+          return c.json({ progress: '', freshness: 'missing', requiresRefresh: true })
+        }
         const taskIds = [...new Set([
           ...projection.recentWork.map(task => task.taskId),
           ...projection.inFlight.map(task => task.taskId),
         ])].slice(0, 32)
-        const currentEvidence = readProjectStateDatabaseTaskEvidenceCurrentMany(project.path, taskIds)
-        return c.json({ progress: renderCurrentProjectProgress(taskIds, currentEvidence), freshness: 'current', requiresRefresh: false })
+        return c.json({
+          progress: renderCurrentProjectProgress(taskIds, progressState.currentEvidence),
+          freshness: 'current',
+          requiresRefresh: false,
+          queueRevision: progressState.queueRevision,
+          projectRevision: progressState.projectRevision,
+        })
       }
       const progressPath = getProjectSystemStatePath(project.path, 'PROGRESS.md')
       const raw = readBoundedManagedTextTail(progressPath)
@@ -15512,11 +16157,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
     if (!selectedReleaseId) return null
     const definition = state.rawQueue.releases.find(release => release.id === selectedReleaseId)
     if (!definition) return null
-    const savedRelease = state.summary?.releaseSummary?.release
-    const projectedState = savedRelease?.id === selectedReleaseId ? savedRelease.state : undefined
+    // The queue definition owns release lifecycle state. Readiness is a
+    // separate projection (`releaseReadiness.ready` / `verdict`) and must not
+    // rewrite the release record during a request-time diagnostic read.
     return {
       ...definition,
-      ...(typeof projectedState === 'string' ? { state: projectedState } : {}),
       ...(scope ? {
         nodeIds: [...scope.nodeIds],
         deferredNodeIds: [...scope.deferredNodeIds],
@@ -15575,12 +16220,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
       savedBlockingCount === 0 &&
       savedCounts.unfinished === 0
     const savedStatusCounts = savedReleaseSummary && savedCounts.total > 0
-      ? {
-          done: savedCounts.done,
-          ready: savedCounts.ready,
-          active: savedCounts.active,
-          blocked: savedCounts.blocked,
-        }
+      ? savedReleaseSummary.taskStatusCounts ?? {}
       : {}
     const savedTotals = {
       tasks: savedCounts.total,
@@ -15624,23 +16264,16 @@ export function buildServeApp(opts: ServeOptions = {}): {
     if (input.liveDiagnostics !== true) {
       const diagnostic = state.diagnostics
       const git = diagnostic?.git
-      const readiness = diagnostic?.readiness
       const diagnosticBlockers = git?.blockers ?? []
-      const statusCounts = savedReleaseSummary
-        ? {
-            done: savedCounts.done,
-            ready: savedCounts.ready,
-            active: savedCounts.active,
-            blocked: savedCounts.blocked,
-          }
-        : {}
+      const statusCounts = savedReleaseSummary ? savedStatusCounts : {}
       const diagnosticTotals = {
         tasks: savedCounts.total,
-        blockingCount: Math.max(
-          savedBlockingCount,
-          readiness?.blockerCount ?? 0,
-          savedDiagnosticReleaseBlockers.length,
-        ),
+        // `blockingCount` is the current release-work count, so it must
+        // agree with the saved summary and the compact readiness endpoint.
+        // Repository observations remain visible beside it in their own
+        // `gitStoryBlockingCount`; they are not silently added to the work
+        // count and turned into a second release scope.
+        blockingCount: savedBlockingCount,
         humanBlockingCount: savedCounts.ownerBlocked,
         proofEvidenceBlockingCount: savedCounts.proofBlocked,
         unfinishedCount: savedCounts.unfinished,
@@ -15679,7 +16312,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
           sourceRevision: diagnostic?.sourceRevision ?? null,
           currentStateAuthority: state.authority,
           stateConsistency,
-          ready: readiness?.ready ?? false,
+          ready: diagnostic?.readiness?.ready ?? savedReady,
           statusCounts,
           proofStyle: savedRelease?.proofStyle ?? 'unspecified',
           gitStory: git
@@ -15698,13 +16331,14 @@ export function buildServeApp(opts: ServeOptions = {}): {
     // The saved summary is the current-state answer. The detail route may
     // inspect live proof, Git, and design signals, but those observations are
     // diagnostics and never replace the saved release/scope/count/action.
-    const tasks = 'tasks' in state ? state.tasks as Task[] : []
-    const diagnosticScope = savedScope ?? releaseReadinessDiagnosticScope(state)
+    const diagnosticCurrentState = input.liveDiagnostics ? await readProjectCanonicalCurrentState(projectPath) : null
+    const tasks = diagnosticCurrentState?.tasks ?? []
+    const diagnosticScope = savedScope ?? (diagnosticCurrentState ? releaseReadinessDiagnosticScope(diagnosticCurrentState) : null)
     const releaseTruth = diagnosticScope
       ? summarizeScopedReleaseWork(tasks, diagnosticScope, {
           proofStyle: savedRelease?.proofStyle,
-          commandProofRequired: savedRelease?.proofStyle === 'script_only' && scopeRequiresCommandProof(savedRelease),
-          scopeRows: state.scopeRows,
+          commandProofRequired: savedRelease?.proofStyle === 'script_only',
+          scopeRows: diagnosticCurrentState?.scopeRows ?? [],
         })
       : {
           statusCounts: {},
@@ -15749,6 +16383,8 @@ export function buildServeApp(opts: ServeOptions = {}): {
       savedCounts.total === scopedTasks.length &&
       savedCounts.done === (statusCounts['done'] ?? 0) &&
       savedCounts.unfinished === unfinishedCount &&
+      Object.keys(savedStatusCounts).length === Object.keys(statusCounts).length &&
+      Object.entries(savedStatusCounts).every(([status, count]) => count === (statusCounts[status] ?? 0)) &&
       savedCounts.blocked === releaseBlockers.length &&
       savedTaskBlockerIds.size === dynamicTaskBlockerIds.size &&
       [...savedTaskBlockerIds].every(id => dynamicTaskBlockerIds.has(id))
@@ -15761,7 +16397,11 @@ export function buildServeApp(opts: ServeOptions = {}): {
       : scopedWorkNeedsDesignSystem(scopedTasks, savedRelease)
         ? 'manual'
         : 'script_only'
-    const commandProofRequired = savedRelease && readinessProofStyle === 'script_only' && scopeRequiresCommandProof(savedRelease)
+    // An unspecified release may be described as headless by a source
+    // boundary, but it is not a persisted script-only contract until intake
+    // records that contract. Keep the inferred diagnostic label while making
+    // the blocking rule depend on the durable release field.
+    const commandProofRequired = savedRelease?.proofStyle === 'script_only'
     const routeProofMissingDoneTasks = commandProofRequired
       ? scopedTasks
         .filter(task => String(task.status ?? '') === 'done')
@@ -16014,7 +16654,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
   app.get('/api/project/release-readiness/summary', async c => {
     try {
       if (project.initializationNeeded) return c.json({ initializationNeeded: true })
-      const state = readProjectSavedReleaseState(project.path)
+      const state = await readProjectReleaseState(project.path)
       const projection = state.summary
       if (!projection) {
         return c.json({
@@ -16034,6 +16674,7 @@ export function buildServeApp(opts: ServeOptions = {}): {
         }),
         summaryFreshness: projection.freshness,
         generatedAt: projection.generatedAt,
+        currentStateAuthority: state.authority,
         queueRevision: state.queueRevision,
         projectRevision: state.projectRevision,
         detailEndpoint: '/api/project/release-readiness?detail=true',
@@ -17338,23 +17979,33 @@ export function buildServeApp(opts: ServeOptions = {}): {
     runtimeSupervisor,
     projectPath,
     refreshProjectProjections: refreshProjectProjectionsForApp,
+    startup,
   }
 }
 
 export async function runServe(opts: ServeOptions = {}): Promise<void> {
-  const { app, supervisor, projectPath, refreshProjectProjections } = buildServeApp(opts)
+  const { app, supervisor, projectPath, refreshProjectProjections, startup } = buildServeApp(opts)
   const project = resolveProject(projectPath)
   const cfg = readProjectConfig(projectPath)
   const port = opts.port ?? cfg.servePort
+  const startupFleetProjects = listWorkspaces()
+  try {
+    bootstrapFleetSummaryProjection()
+    pruneFleetSummaryProjectionAtBoundary(startupFleetProjects.map(entry => entry.id))
+  } catch (error) {
+    // A fleet index failure must leave project routes usable. Fleet cards will
+    // report the bounded read error until the next service restart/refresh.
+    console.warn(`[guildhall serve] Fleet summary index unavailable: ${error instanceof Error ? error.message : String(error)}`)
+  }
   let projectionRefreshScheduler: ProjectProjectionRefreshScheduler
   projectionRefreshScheduler = createProjectProjectionRefreshScheduler(async (root, event) => {
-    const before = readProjectStateDatabaseMetadata(root)
+    const before = readProjectProjectionMetadataAtBoundary(root)
     const startingRevision = before?.revision ?? event.revision ?? null
     await refreshProjectProjections(root, event)
     // A second process can commit while this refresh is reading its queue.
     // Re-read the shared watermark and schedule one bounded retry; do not let
     // a stale projection be reported as current after a newer commit.
-    const metadata = readProjectStateDatabaseMetadata(root)
+    const metadata = readProjectProjectionMetadataAtBoundary(root)
     if (metadata && startingRevision !== null && metadata.revision > startingRevision) {
       projectionRefreshScheduler.schedule({
         projectRoot: root,
@@ -17364,16 +18015,29 @@ export async function runServe(opts: ServeOptions = {}): Promise<void> {
     }
   })
   const unsubscribeProjectSummaryInvalidations = subscribeProjectSummaryInvalidations(event => {
+    const projectRoot = resolve(event.projectRoot)
+    const entry = listWorkspaces().find(candidate => resolve(candidate.path) === projectRoot)
+    if (entry && fleetSummaryDependsOnDomains(event.domains)) {
+      try {
+        markFleetSummaryStaleAtBoundary({
+          projectId: entry.id,
+          projectPath: projectRoot,
+          ...(event.revision !== undefined ? { sourceProjectRevision: event.revision } : {}),
+        })
+      } catch {
+        // The scheduler still refreshes the project-local projections; a
+        // transient fleet-index lock must not make a project write fail.
+      }
+    }
     projectionRefreshScheduler.schedule({
-      projectRoot: resolve(event.projectRoot),
+      projectRoot,
       revision: event.revision,
       domains: event.domains,
     })
   })
   const projectionFreshnessWatcher = createProjectProjectionFreshnessWatcher({
     projectRoots: () => listWorkspaces().map(entry => entry.path),
-    readMetadata: projectRoot => readProjectStateDatabaseMetadata(projectRoot),
-    readRepositorySignature: projectRoot => readProjectRepositorySignature(projectRoot),
+    readMetadata: projectRoot => readProjectProjectionMetadataAtBoundary(projectRoot),
     schedule: event => projectionRefreshScheduler.schedule(event),
   }, 5000)
 
@@ -17428,6 +18092,7 @@ export async function runServe(opts: ServeOptions = {}): Promise<void> {
   console.log()
 
   const server = serve({ fetch: app.fetch, port }, info => {
+    startup.listenerReadyAt = new Date().toISOString()
     console.log(`[guildhall serve] ✓ Running at http://localhost:${info.port}`)
     if (opts.serviceStatePath) {
       try {
@@ -17442,16 +18107,72 @@ export async function runServe(opts: ServeOptions = {}): Promise<void> {
         /* non-fatal */
       }
     }
+    // Only the process that successfully owns the listener may invalidate the
+    // fleet read model. A competing launch attempt can reach this function
+    // before failing with EADDRINUSE; letting that loser mark every row stale
+    // makes a healthy service report a false fleet-wide outage.
+    try {
+      markAllFleetSummariesStaleAtBoundary()
+    } catch (error) {
+      console.warn(`[guildhall serve] Could not mark fleet summaries stale at service start: ${error instanceof Error ? error.message : String(error)}`)
+    }
     // Materialize durable attention after the listener is available. This is
     // deliberately outside the request path: fleet reads stay bounded even
     // when several registered projects need their first attention snapshot.
-    projectionFreshnessWatcher.start()
     setTimeout(() => {
-      for (const entry of listWorkspaces()) {
-        void refreshProjectProjections(entry.path).catch(() => {
-          /* a later project read can retry the attention projection */
-        })
-      }
+      void (async () => {
+        const entries = listWorkspaces()
+        startup.projectCount = entries.length
+        startup.refreshStartedAt = new Date().toISOString()
+        // A previous serve process may have died with a durable run marked
+        // running. Recover it before publishing fleet shells so no surface
+        // presents an orphaned run as live.
+        for (const entry of entries) {
+          if (supervisor.get(entry.id)) continue
+          try {
+            recoverOrphanedExecutionProjection(entry.path)
+          } catch (error) {
+            console.warn(`[guildhall serve] Could not recover execution state for ${entry.id}: ${error instanceof Error ? error.message : String(error)}`)
+          }
+        }
+        // Publish every saved shell before doing any rich refresh. A single
+        // slow project must not leave the rest of the fleet in "loading".
+        for (const entry of entries) {
+          try {
+            publishFleetSummaryFromSavedState(entry, supervisor.get(entry.id))
+          } catch (error) {
+            console.warn(`[guildhall serve] Could not hydrate fleet summary for ${entry.id}: ${error instanceof Error ? error.message : String(error)}`)
+          }
+        }
+
+        // Refresh in a small number of workers. Full Promise.all made startup
+        // compete with itself for SQLite locks, filesystem reads, Git, and
+        // memory even though no project depended on another project's refresh.
+        const pending = [...entries]
+        const workerCount = Math.min(2, pending.length)
+        await Promise.all(Array.from({ length: workerCount }, async () => {
+          while (pending.length > 0) {
+            const entry = pending.shift()
+            if (!entry) return
+            try {
+              await refreshProjectProjections(entry.path)
+              startup.refreshedProjectCount += 1
+            } catch (error) {
+              startup.errorCount += 1
+              // The fleet row records the bounded error state; keep the
+              // service alive and make the background failure visible in logs.
+              console.warn(`[guildhall serve] Could not refresh project projection for ${entry.id}: ${error instanceof Error ? error.message : String(error)}`)
+            }
+          }
+        }))
+        startup.refreshCompletedAt = new Date().toISOString()
+
+        // The watcher is for writes made by another process. Establish its
+        // baseline only after this process finishes its own startup refresh,
+        // or it will mistake those writes for external changes on its first
+        // interval and mark every fleet row stale again.
+        projectionFreshnessWatcher.start()
+      })()
     }, 0)
   })
   server.on('error', err => {

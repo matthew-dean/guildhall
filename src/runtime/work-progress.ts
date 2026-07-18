@@ -214,7 +214,12 @@ function deriveWorkVisibility(task: TaskRecord, byId: Map<string, TaskRecord>): 
   }
   const parentId = stringValue(objectValue(task.hierarchy)?.parentId)
   const parent = parentId ? byId.get(parentId) ?? null : null
-  const visibility = deriveTaskWorkVisibility(task, parent)
+  // This module intentionally accepts compact JSON records. The shared
+  // visibility adapter is the one normalization boundary for that shape.
+  const visibility = deriveTaskWorkVisibility(
+    task as unknown as Parameters<typeof deriveTaskWorkVisibility>[0],
+    parent as unknown as Parameters<typeof deriveTaskWorkVisibility>[1],
+  )
   return {
     ...visibility,
     label: stringValue(objectValue(task.workVisibility)?.label),

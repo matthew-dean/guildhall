@@ -76,14 +76,19 @@ export function actionFingerprint(value) {
 }
 
 export function selectedCounts(value) {
-  const counts = value?.workProgress?.selectedCounts ?? {}
+  const counts = value?.workProgress?.selectedCounts
+  if (!counts || typeof counts !== 'object' || Array.isArray(counts)) return null
   return {
-    visibleTotal: counts.visibleTotal ?? 0,
-    visibleActive: counts.visibleActive ?? 0,
-    visibleBlocked: counts.visibleBlocked ?? 0,
-    visibleDone: counts.visibleDone ?? 0,
-    visibleShelved: counts.visibleShelved ?? 0,
+    visibleTotal: counts.visibleTotal ?? null,
+    visibleActive: counts.visibleActive ?? null,
+    visibleBlocked: counts.visibleBlocked ?? null,
+    visibleDone: counts.visibleDone ?? null,
+    visibleShelved: counts.visibleShelved ?? null,
   }
+}
+
+function requiresSelectedCounts(value) {
+  return value?.releaseSummary?.scopeMode === 'named_release'
 }
 
 function sortedMembers(value, field) {
@@ -362,6 +367,13 @@ async function auditProject(projectId, fleetProject) {
     addMismatch(mismatches, projectId, surface, 'startReadiness', startFingerprint(overview.startReadiness), startFingerprint(current.startReadiness))
     addMismatch(mismatches, projectId, surface, 'actionModel', actionFingerprint(overview.actionModel), actionFingerprint(current.actionModel))
     addMismatch(mismatches, projectId, surface, 'selectedCounts', selectedCounts(overview), selectedCounts(current))
+    if (requiresSelectedCounts(overview)) {
+      addMismatch(mismatches, projectId, surface, 'selectedCounts-present', true, selectedCounts(current) !== null)
+    }
+  }
+
+  if (requiresSelectedCounts(overview)) {
+    addMismatch(mismatches, projectId, 'overview', 'selectedCounts-present', true, selectedCounts(overview) !== null)
   }
 
   addMismatch(mismatches, projectId, 'fleet', 'releaseSummary', releaseFingerprint(overview.releaseSummary), releaseFingerprint(fleetProject?.releaseSummary))
@@ -401,17 +413,7 @@ async function auditProject(projectId, fleetProject) {
     scopeMode: releaseSummary.release ? 'named_release' : 'unreleased',
     release: releaseSummary.release,
     state: releaseSummary.release?.state === 'ready' ? 'ready' : compactRelease.state,
-    counts: {
-      total: releaseSummary.totals?.tasks,
-      done: releaseSummary.totals?.done,
-      unfinished: releaseSummary.totals?.unfinishedCount,
-      blocked: releaseSummary.totals?.blockingCount,
-      ownerBlocked: releaseSummary.totals?.humanBlockingCount,
-      proofBlocked: releaseSummary.totals?.proofEvidenceBlockingCount,
-      ready: releaseSummary.statusCounts?.ready,
-      active: releaseSummary.statusCounts?.active,
-      deferred: releaseSummary.statusCounts?.deferred,
-    },
+    counts: releaseSummary.releaseCounts ?? {},
   })
   // Compare normalized task state directly. Rich detail may add repository
   // blockers that are intentionally outside the compact task projection.

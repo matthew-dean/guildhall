@@ -260,8 +260,6 @@ function selectedInboxScope(raw: unknown, tasks: Task[], options: Pick<BuildInbo
   if (options.selectedScope !== undefined) return options.selectedScope
   if (raw && typeof raw === 'object' && Array.isArray((raw as { releases?: unknown }).releases)) {
     const queueScope = selectedReleaseScopeForQueue({
-      version: 1,
-      lastUpdated: new Date(0).toISOString(),
       tasks,
       releases: (raw as { releases: TaskQueue['releases'] }).releases,
       ...(typeof (raw as { selectedReleaseId?: unknown }).selectedReleaseId === 'string'
@@ -331,7 +329,13 @@ function taskForInboxWizard(task: Task): Task {
         }
       : {}),
     ...(typeof current.acceptanceCriteriaCount === 'number'
-      ? { acceptanceCriteria: Array.from({ length: current.acceptanceCriteriaCount }, () => ({})) }
+      ? { acceptanceCriteria: Array.from({ length: current.acceptanceCriteriaCount }, (_, index) => ({
+          id: `indexed-criterion-${index + 1}`,
+          description: 'Indexed acceptance criterion',
+          verifiedBy: 'review' as const,
+          source: 'inferred' as const,
+          met: false,
+        })) }
       : {}),
   }
 }

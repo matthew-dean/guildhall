@@ -1,4 +1,5 @@
 import { taskDisplayLabel } from '../shared/task-display-label.js'
+import { summarizeCurrentProof } from '../shared/current-proof.js'
 import {
   executionScopeRows,
   releaseLabelFromId,
@@ -7,7 +8,7 @@ import {
   type ProjectScope,
   type ProjectScopeProjection,
 } from './project-scope-projection.js'
-import { taskDoneButProofMissing, taskProofIsStale } from './proof-health.js'
+import { taskDoneButProofMissing, taskHasScriptProofPath, taskProofIsStale } from './proof-health.js'
 import { classifyCompletionProof, recordedCompletionProofForTask } from './task-completion-proof.js'
 import { explicitMarkdownSourceRefsFromTask } from './task-source-refs.js'
 import { taskTitleOverlap } from './task-title-overlap.js'
@@ -86,7 +87,7 @@ export interface OrientationProgress {
 }
 
 export interface OrientationSource {
-  kind: 'task' | 'scope' | 'charter' | 'inferred'
+  kind: 'task' | 'scope' | 'charter' | 'inferred' | 'import'
   refs: string[]
   confidence: 'high' | 'medium' | 'low'
   freshness: 'fresh' | 'unknown' | 'stale'
@@ -284,11 +285,12 @@ export function compactProjectOrientationSpineForMap(
 }
 
 function compactOrientationMapNode(node: OrientationNode): OrientationNode {
-  const progress: Record<string, number> = { total: node.progress.total }
+  const total = node.progress.total ?? 0
+  const progress: Partial<OrientationProgress> = { total }
   for (const key of ['specced', 'active', 'proven', 'done', 'blocked', 'deferred'] as const) {
     if (node.progress[key] > 0) progress[key] = node.progress[key]
   }
-  const hasProgress = Object.keys(progress).length > 1 || progress.total > 0
+  const hasProgress = Object.keys(progress).length > 1 || total > 0
   const visibility = node.visibility.kind ? { kind: node.visibility.kind } : undefined
   const taskIds = node.refs.taskIds.slice(0, 1)
   return {
@@ -300,7 +302,7 @@ function compactOrientationMapNode(node: OrientationNode): OrientationNode {
     ...(taskIds.length > 0 ? { refs: { taskIds } } : {}),
     ...(visibility ? { visibility } : {}),
     children: node.children.map(compactOrientationMapNode),
-  } as OrientationNode
+  } as unknown as OrientationNode
 }
 
 function compactOrientationMapScopeRow(row: OrientationScopeRow): OrientationScopeRow {
@@ -345,7 +347,7 @@ export interface OrientationTaskInput {
     notVerified?: string[]
     remainingRisks?: string[]
   } | Record<string, unknown> | null
-  hierarchy?: { parentId?: string; childIds?: string[] }
+  hierarchy?: { parentId?: string; childIds?: string[]; relation?: string }
   dependsOn?: string[]
   releaseIds?: string[]
   workKind?: string
@@ -919,6 +921,7 @@ function proofForTask(
 ): OrientationProofSummary {
   const recorded = recordedCompletionProofForTask(task)
   const classified = classifyCompletionProof(recorded, taskProofIsStale(task))
+  const current = summarizeCurrentProof(task as Record<string, unknown>)
   const handoff = task.completionHandoff && typeof task.completionHandoff === 'object'
     ? task.completionHandoff as {
         verified?: string[]
@@ -926,8 +929,8 @@ function proofForTask(
         remainingRisks?: string[]
       }
     : null
-  const verified = [...classified.current, ...(handoff?.verified ?? [])]
-  const missing = [...(handoff?.notVerified ?? []), ...(handoff?.remainingRisks ?? [])].filter(Boolean)
+  const verified = [...current.verified, ...classified.current, ...(handoff?.verified ?? [])]
+  const missing = [...current.missing, ...(handoff?.notVerified ?? []), ...(handoff?.remainingRisks ?? [])].filter(Boolean)
   const plannedProof = Array.isArray(task.proofPaths) ? task.proofPaths.length : 0
   const base = { expectationCount: plannedProof }
   if (
@@ -966,6 +969,20 @@ function proofForTask(
       ...base,
     }
   }
+  // Historical evidence can remain attached after a current plan is reopened
+  // or cleared. It belongs in the audit trail, but cannot prove a new
+  // non-terminal plan that has not declared what evidence it requires.
+  if (task.status !== 'done' && plannedProof === 0) {
+    return {
+      state: 'needed',
+      // Historical gates and reviews remain available in the evidence/history
+      // surfaces, but they cannot be presented as current proof after the
+      // plan has been reopened or cleared.
+      verified: [],
+      missing: missing.length > 0 ? missing : ['Current proof contract has not been attached yet.'],
+      ...base,
+    }
+  }
   if (plannedProof === 0 && verified.length === 0 && missing.length === 0) {
     return { state: 'needed', verified, missing: ['Verification evidence has not been attached yet.'], ...base }
   }
@@ -987,26 +1004,6 @@ function hasExplicitProofExpectation(task: OrientationTaskInput): boolean {
     ((handoff?.notVerified?.length ?? 0) > 0) ||
     ((handoff?.remainingRisks?.length ?? 0) > 0)
   )
-}
-
-function proofPathIsScriptRunnable(proofPath: unknown): boolean {
-  if (typeof proofPath === 'string') return proofPath.trim().length > 0
-  if (!proofPath || typeof proofPath !== 'object' || Array.isArray(proofPath)) return false
-  const record = proofPath as Record<string, unknown>
-  if (typeof record.command === 'string' && record.command.trim().length > 0) return true
-  if (record.kind === 'command' || record.kind === 'script') return true
-  const launchSteps = Array.isArray(record.launchSteps) ? record.launchSteps : []
-  return launchSteps.some((step) =>
-    step &&
-    typeof step === 'object' &&
-    !Array.isArray(step) &&
-    (step as Record<string, unknown>).kind === 'copy_command' &&
-    typeof (step as Record<string, unknown>).command === 'string' &&
-    String((step as Record<string, unknown>).command).trim().length > 0)
-}
-
-function taskHasScriptProofPath(task: OrientationTaskInput): boolean {
-  return Array.isArray(task.proofPaths) && task.proofPaths.some(proofPathIsScriptRunnable)
 }
 
 function taskIsBlocked(task: OrientationTaskInput): boolean {
@@ -1460,7 +1457,7 @@ function mergeWorkspaceImportContexts(input: {
         summary: context.description ?? context.title,
         maturity,
         progress: emptyProgress(input.scope?.id ?? null),
-        proof: { state: 'none', verified: [], missing: [] },
+        proof: { state: 'none', verified: [], missing: [], expectationCount: 0 },
         ownerAction: null,
         blockers: [],
         refs: {
@@ -1507,7 +1504,7 @@ function mergeWorkspaceImportContexts(input: {
       summary: summarizeCapabilityArea(title, children),
       maturity: 'idea',
       progress: emptyProgress(input.scope?.id ?? null),
-      proof: { state: 'none', verified: [], missing: [] },
+      proof: { state: 'none', verified: [], missing: [], expectationCount: 0 },
       ownerAction: null,
       blockers: [],
         refs: {
@@ -1624,6 +1621,7 @@ function groupFlatRootsByDomain(
             : 'none',
         verified: normalizedChildren.flatMap(child => child.proof.verified),
         missing: normalizedChildren.flatMap(child => child.proof.missing),
+        expectationCount: normalizedChildren.reduce((count, child) => count + child.proof.expectationCount, 0),
       },
       ownerAction: null,
       blockers: normalizedChildren.flatMap(child => child.blockers),
@@ -1726,7 +1724,19 @@ function sourceRefsForTask(task: OrientationTaskInput): string[] {
   const refs = [
     ...(task.references ?? []),
     ...((task.sourceClaims ?? []).flatMap(claim => claim.references ?? [])),
-    ...explicitMarkdownSourceRefsFromTask(task),
+    ...explicitMarkdownSourceRefsFromTask({
+      title: task.title,
+      description: task.description,
+      spec: task.spec,
+      structuredSpec: task.structuredSpec,
+      acceptanceCriteria: task.acceptanceCriteria?.map(criterion => ({
+        description: typeof criterion.description === 'string' ? criterion.description : undefined,
+        text: typeof criterion.text === 'string' ? criterion.text : undefined,
+        command: typeof criterion.command === 'string' ? criterion.command : undefined,
+      })),
+      gateResults: task.gateResults,
+      reviewVerdicts: task.reviewVerdicts,
+    }),
   ]
     .map(ref => typeof ref === 'string' ? ref.trim() : '')
     .filter(Boolean)
@@ -2276,7 +2286,7 @@ function buildSummary(input: {
     input.startReadiness.focusTaskId
     ? input.blockers.find(blocker =>
         blocker.id === input.startReadiness?.focusTaskId ||
-        blocker.id === taskScopeNodeId(input.startReadiness.focusTaskId ?? ''),
+        blocker.id === taskScopeNodeId(input.startReadiness?.focusTaskId ?? ''),
       )?.label ?? input.blockers[0]?.label ?? null
     : null
   const topBlocker = focusedShapingBlocker ?? readinessSummary?.topBlocker ?? input.blockers[0]?.label ?? null
@@ -2396,7 +2406,7 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
     now,
     sourceRefs: input.sourceRefs ?? [],
   })
-  const releases = mergeOrientationReleaseInputs(input.releases, draftAugmentation.releases)
+  const releases = mergeOrientationReleaseInputs(input.releases, draftAugmentation.releases) ?? []
   const selectedReleaseId = selectedReleaseIdForOrientation(input, draftAugmentation.selectedReleaseId, releases)
   const releasesForReadModel = filterDuplicateSelectedStageReleases(releases, selectedReleaseId)
   const selectedRelease = normalizeRelease({
@@ -2463,7 +2473,7 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
   const effectiveExecutionBoundary = selectedReleaseWithFinalScope?.proofStyle && selectedReleaseWithFinalScope.proofStyle !== 'unspecified'
     ? { ...executionBoundary, proofStyle: selectedReleaseWithFinalScope.proofStyle }
     : executionBoundary
-  const proofBlockedTaskIds = releaseReadinessProofBlockedTaskIds(input.releaseReadiness?.blockers)
+  const proofBlockedTaskIds = releaseReadinessProofBlockedTaskIds(input.releaseReadiness?.blockers ?? [])
   const built = buildNodes(tasks, scope, now, effectiveExecutionBoundary.proofStyle, proofBlockedTaskIds)
   const roots = mergeWorkspaceImportContexts({
     roots: built.roots,
@@ -2480,7 +2490,7 @@ export function buildProjectOrientationSpine(input: BuildProjectOrientationSpine
         label: blocker.label,
       }))
     : []
-  const explicitReleaseBlockers = [
+  const explicitReleaseBlockers: Array<{ id?: string; label?: string; title?: string; nextAction?: string }> = [
     ...projectionBlockers,
     ...(startReadiness?.canStart !== true ? authoritativeReleaseBlockers ?? [] : []),
   ]

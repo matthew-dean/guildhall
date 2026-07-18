@@ -24,6 +24,7 @@ import {
 } from '@guildhall/sessions'
 import { activeEscalations, raiseEscalation, readExploringTranscript, writeCheckpoint } from '@guildhall/tools'
 import { buildServeApp, filterEventsForTask } from '../serve.js'
+import { refreshProjectDeliveryReadProjection } from '../delivery-read-projection.js'
 import { OrchestratorSupervisor } from '../serve-supervisor.js'
 import { createReviewAuditStore } from '../review-audit-store.js'
 import { FileBackedGuildhallPersistence } from '@guildhall/persistence'
@@ -124,7 +125,7 @@ function normalizeTaskFixture(task: Record<string, any>, now: string): TaskFixtu
 
   const runtime: Record<string, any> = { ...(task.runtime ?? {}) }
   const workspace: Record<string, any> = { ...(task.workspace ?? {}) }
-  const evidenceKinds = new Set(['event', 'note', 'gate_result', 'review_verdict', 'adjudication', 'escalation', 'agent_issue', 'merge_record', 'git_story'])
+  const evidenceKinds = new Set(['event', 'note', 'gate_result', 'review_verdict', 'adjudication', 'escalation', 'agent_issue', 'merge_record', 'git_story', 'completion_summary'])
   const evidence: Array<Record<string, any>> = (task.evidence ?? [])
     .filter((event: Record<string, any>) => evidenceKinds.has(String(event.kind)))
 
@@ -165,6 +166,11 @@ function normalizeTaskFixture(task: Record<string, any>, now: string): TaskFixtu
     const value = definition.mergeRecord as Record<string, any>
     evidence.push(fixtureEvent(taskId, 'merge_record', value, 0, value.mergedAt ?? now))
     delete definition.mergeRecord
+  }
+  if (hasOwn(definition, 'doneSummaryBundle')) {
+    const value = definition.doneSummaryBundle as Record<string, any>
+    evidence.push(fixtureEvent(taskId, 'completion_summary', value, 0, value.createdAt ?? now))
+    delete definition.doneSummaryBundle
   }
 
   if (Array.isArray(runtime.openEscalationIds) === false && Array.isArray(task.escalations)) {
@@ -588,7 +594,6 @@ describe('GET /api/project/task/:id', () => {
         title: 'Unrelated task',
       },
     ])
-
     const { app } = buildServeApp({ projectPath: tmpDir })
     const res = await app.fetch(new Request(projectUrl('/api/project/task/task-1')))
     expect(res.status).toBe(200)
@@ -642,6 +647,8 @@ describe('GET /api/project/task/:id', () => {
         delivery: { driver: 'knit', provider: 'looma', provesPrimitives: ['menu-item'], proofKind: 'storybook' },
       },
     ])
+    const deliveryRefresh = await refreshProjectDeliveryReadProjection(tmpDir)
+    expect(deliveryRefresh.status).toBe('current')
 
     const { app } = buildServeApp({ projectPath: tmpDir })
     const detailRes = await app.fetch(new Request(projectUrl('/api/project/task/task-component')))
@@ -651,11 +658,11 @@ describe('GET /api/project/task/:id', () => {
     expect(detail.deliverySpine.contextPacket.primitiveContext.direct.map((primitive: any) => primitive.id)).toEqual(['menu-item'])
     expect(detail.deliverySpine.relationships.primitiveUse.blockers.map((primitive: any) => primitive.id)).toEqual(['menu-item'])
 
-    const projectRes = await app.fetch(new Request(projectUrl('/api/project')))
+    const projectRes = await app.fetch(new Request(projectUrl('/api/project/delivery-spine')))
     expect(projectRes.status).toBe(200)
     const project = (await projectRes.json()) as Record<string, any>
-    expect(project.deliverySpine.queue.firstRunnable.task.id).toBe('task-storybook')
-    expect(project.deliverySpine.validation.valid).toBe(true)
+    expect(project.queue.firstRunnable.task.id).toBe('task-storybook')
+    expect(project.validation.valid).toBe(true)
   })
 
   it('does not repair stale worker ownership during a task-detail read', async () => {
@@ -1319,8 +1326,11 @@ describe('GET /api/project/task/:id', () => {
         provingTaskIds: ['task-storybook'],
       }],
     })
+    const deliveryRefresh = await refreshProjectDeliveryReadProjection(tmpDir)
+    expect(deliveryRefresh.status).toBe('current')
 
-    const { app } = buildServeApp({ projectPath: tmpDir })
+    const { app, refreshProjectProjections } = buildServeApp({ projectPath: tmpDir })
+    await refreshProjectProjections(tmpDir)
     const workRes = await app.fetch(new Request(projectUrl('/api/project?surface=work&task=task-storybook')))
     const workBody = (await workRes.json()) as Record<string, any>
     const overviewRes = await app.fetch(new Request(projectUrl('/api/project?surface=overview')))
@@ -1394,18 +1404,18 @@ describe('GET /api/project/task/:id', () => {
     expect(orientationNode?.children).toBeUndefined()
     expect(orientationNode?.refs).toBeUndefined()
     expect(orientationNode?.proof).toBeUndefined()
-    expect(workBody.taskRoutingContexts?.['task-storybook']?.status).toBeTruthy()
-    expect(workBody.taskRoutingContexts?.['task-storybook']?.reasons).toBeUndefined()
-    expect(workBody.taskRoutingContexts?.['task-storybook']?.checks).toBeUndefined()
-    expect(workBody.deliverySpine?.queue?.firstRunnable?.task?.id).toBe('task-storybook')
-    expect(workBody.deliverySpine?.queue?.firstRunnable?.task?.title).toBe('Prove the menu primitive')
-    expect(workBody.deliverySpine?.queue?.firstRunnable?.task?.spec).toBeUndefined()
-    expect(workBody.deliverySpine?.queue?.firstRunnable?.task?.evidence).toBeUndefined()
-    expect(workBody.deliverySpine?.model).toBeUndefined()
-    expect(workBody.deliverySpine?.primitives).toBeUndefined()
+    expect(workBody.taskRoutingContexts).toBeUndefined()
+    const deliveryRes = await app.fetch(new Request(projectUrl('/api/project/delivery-spine')))
+    const deliveryBody = (await deliveryRes.json()) as Record<string, any>
+    expect(deliveryRes.status, deliveryBody.error).toBe(200)
+    expect(deliveryBody.queue?.firstRunnable?.task?.id).toBe('task-storybook')
+    expect(deliveryBody.queue?.firstRunnable?.task?.title).toBe('Prove the menu primitive')
+    expect(deliveryBody.queue?.firstRunnable?.task?.spec).toBeUndefined()
+    expect(deliveryBody.queue?.firstRunnable?.task?.evidence).toBeUndefined()
+    expect(workBody.deliverySpine).toBeUndefined()
     expect(workBody.releaseReadiness?.releaseBlockers).toEqual(expect.any(Array))
     expect(workBody.gitStory).toBeUndefined()
-    expect(workBody.memoryHealth).toBeUndefined()
+    expect(workBody.memoryHealth).toBeTruthy()
 
     const mapRes = await app.fetch(new Request(projectUrl('/api/project?surface=map')))
     const mapBody = (await mapRes.json()) as Record<string, any>
@@ -1458,12 +1468,12 @@ describe('GET /api/project/task/:id', () => {
     expect(body.startReadiness).toMatchObject({
       canStart: false,
       code: 'proof_evidence_missing',
-      actionHref: '/work?task=task-model-proof',
+      actionHref: '/projects/task-endpoints-test/work?task=task-model-proof',
       focusTaskId: 'task-model-proof',
       focusKind: 'proof',
       count: 1,
     })
-    expect(body.startReadiness?.message).toContain('Headless MVP is waiting on proof evidence for "Prove the drafting model".')
+    expect(body.startReadiness?.message).toContain('"Prove the drafting model" is complete but its completion proof is missing or stale.')
   })
 
   it('backfills compact task provenance from selected-scope orientation truth when raw task refs are empty', async () => {
@@ -1798,9 +1808,9 @@ describe('POST /api/project/delivery-spine/contract-results/:id/apply', () => {
     expect(body.applied?.id).toBe(validation.changeSet.id)
     await refreshProjectProjections(tmpDir)
 
-    const projectRes = await app.fetch(new Request(projectUrl('/api/project')))
+    const projectRes = await app.fetch(new Request(projectUrl('/api/project/delivery-spine')))
     const projectBody = (await projectRes.json()) as any
-    expect(projectBody.deliverySpine.model.primitives.map((primitive: any) => primitive.id)).toContain('context-menu')
+    expect(projectBody.model.primitives.map((primitive: any) => primitive.id)).toContain('context-menu')
     const updatedQueue = await readTaskQueue() as { tasks: any[] }
     expect(updatedQueue.tasks.find(task => task.id === 'task-context-menu')?.delivery?.usesPrimitives).toEqual(['context-menu'])
 
@@ -1859,10 +1869,10 @@ describe('POST /api/project/delivery-spine/contract-results/:id/apply', () => {
     expect(body.ok).toBe(true)
     expect(body.rejected?.reason).toBe('Duplicate primitive.')
 
-    const projectRes = await app.fetch(new Request(projectUrl('/api/project')))
+    const projectRes = await app.fetch(new Request(projectUrl('/api/project/delivery-spine')))
     const projectBody = (await projectRes.json()) as any
-    expect(projectBody.deliverySpine.model.primitives.map((primitive: any) => primitive.id)).not.toContain('context-menu')
-    expect(projectBody.deliverySpine.model.rejectedCandidates.at(-1).reason).toBe('Duplicate primitive.')
+    expect(projectBody.model.primitives.map((primitive: any) => primitive.id)).not.toContain('context-menu')
+    expect(projectBody.model.rejectedCandidates.at(-1).reason).toBe('Duplicate primitive.')
   })
 })
 
@@ -1934,6 +1944,35 @@ describe('POST /api/project/task/:id/git-story/:closureAction', () => {
 
     expect(res.status).toBe(403)
     expect(await res.json()).toMatchObject({ error: 'Project policy disables commit.' })
+  })
+
+  it('commits task work in the persisted task worktree instead of the project root', async () => {
+    const taskRepo = path.join(tmpDir, 'task-repo')
+    await fs.mkdir(path.join(taskRepo, 'src'), { recursive: true })
+    execFileSync('git', ['init', '-q'], { cwd: taskRepo })
+    await fs.writeFile(path.join(taskRepo, 'src', 'proof.txt'), 'proof\n', 'utf8')
+    await upsertTaskWorkspaceState(tmpDir, 'task-1', {
+      worktreePath: taskRepo,
+      branchName: 'guildhall/task-task-1',
+      baseBranch: 'main',
+    })
+    await seedTask('task-1', { status: 'done' })
+    await upsertTaskWorkspaceState(tmpDir, 'task-1', {
+      worktreePath: taskRepo,
+      branchName: 'guildhall/task-task-1',
+      baseBranch: 'main',
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+
+    const res = await app.fetch(new Request(projectUrl('/api/project/task/task-1/git-story/commit'), {
+      method: 'POST',
+      body: JSON.stringify({ confirmed: true, message: 'record task proof', files: ['src/proof.txt'] }),
+      headers: { 'content-type': 'application/json' },
+    }))
+
+    expect(res.status).toBe(200)
+    expect(execFileSync('git', ['status', '--short'], { cwd: taskRepo, encoding: 'utf8' })).toBe('')
+    await expect(fs.access(path.join(tmpDir, 'src', 'proof.txt'))).rejects.toThrow()
   })
 
   it('records a local-only git story override with a required reason', async () => {
@@ -2354,7 +2393,70 @@ describe('POST /api/project/task/:id/start', () => {
     expect(task?.notes?.at(-1)?.content).toContain('under-shaped recovery spec')
   })
 
-  it('lets the selected source-recovery shaping task start while project Start remains blocked', async () => {
+  it('does not replace a proof-recovery spec from the raw task projection', async () => {
+    const originalSpec = [
+      '## Summary',
+      'Recover a concrete project-backed proof command.',
+      '',
+      '## Acceptance Criteria',
+      '1. The proof command is recorded against this task.',
+    ].join('\n')
+    await seedTasks([
+      {
+        id: 'task-proof-recovery',
+        title: 'Recover project proof',
+        status: 'spec_review',
+        spec: originalSpec,
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          description: 'The proof command is recorded against this task.',
+          verifiedBy: 'review',
+        }],
+        productBrief: {
+          userJob: 'Recover the missing project proof.',
+          successMetric: 'The proof command is recorded against this task.',
+          antiPatterns: [],
+          authoredBy: 'coordinator-recovery',
+          authoredAt: new Date().toISOString(),
+        },
+        runtime: {
+          proofRecovery: {
+            reopenedAt: new Date().toISOString(),
+            reason: 'The selected release requires script proof, but the current proof command is missing.',
+          },
+        },
+        notes: [{
+          agentId: 'coordinator-recovery',
+          role: 'system',
+          content: 'Guildhall wrote a deterministic recovery spec seed from the current task evidence before redispatching the spec lane.',
+          timestamp: new Date().toISOString(),
+        }],
+      },
+    ])
+    const { supervisor, starts } = createTrackingSupervisor()
+    const { app } = buildServeApp({ projectPath: tmpDir, supervisor })
+    setProvider('anthropic-api', { apiKey: 'sk-ant-test' })
+    updateGlobalConfig({ preferredProvider: 'anthropic-api' })
+
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-proof-recovery/start'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ mode: 'one_task', scope: 'work_item' }),
+      }),
+    )
+
+    expect(res.status).toBe(400)
+    expect((await res.json() as Record<string, unknown>).code).toBe('no_unattended_progress')
+    expect(starts).toHaveLength(0)
+    const queue = await readTaskQueue()
+    const task = queue.tasks.find(candidate => candidate.id === 'task-proof-recovery')
+    expect(task?.spec).toBe(originalSpec)
+    expect(task?.notes?.at(-1)?.content).toContain('deterministic recovery spec seed')
+    expect(task?.notes?.at(-1)?.content).not.toContain('under-shaped recovery spec')
+  })
+
+  it('lets project Start advance the selected source-recovery shaping task', async () => {
     const now = new Date().toISOString()
     await seedTasks([
       {
@@ -2402,35 +2504,16 @@ describe('POST /api/project/task/:id/start', () => {
           body: JSON.stringify({ mode: 'continuous' }),
         }),
       )
-      expect(projectStart.status).toBe(400)
-      await expect(projectStart.json()).resolves.toMatchObject({
-        code: 'imported_scope_shaping',
-        actionHref: '/task/task-source-recovery',
-      })
-
-      const focusedStart = await app.fetch(
-        new Request(projectUrl('/api/project/task/task-source-recovery/start'), {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ mode: 'one_task', scope: 'work_item' }),
-        }),
-      )
-
-      expect(focusedStart.status).toBe(200)
-      const body = (await focusedStart.json()) as Record<string, any>
-      expect(body.scope).toEqual({ type: 'work_item', taskId: 'task-source-recovery' })
+      expect(projectStart.status).toBe(200)
       await vi.waitFor(() => {
-        expect(starts.at(-1)).toMatchObject({
-          preferredTaskId: 'task-source-recovery',
-          stopAfterOneTask: true,
-        })
+        expect(starts.at(-1)).toEqual({})
       })
     } finally {
       await supervisor.stopAll({ reason: 'test-teardown' }).catch(() => {})
     }
   })
 
-  it('lets a specifically requested shaping task start while unrelated import shaping blocks project Start', async () => {
+  it('lets a specifically requested shaping task start inside the selected scope', async () => {
     const now = new Date().toISOString()
     await seedTasks([
       {
@@ -2463,19 +2546,6 @@ describe('POST /api/project/task/:id/start', () => {
     updateGlobalConfig({ preferredProvider: 'anthropic-api' })
 
     try {
-      const projectStart = await app.fetch(
-        new Request(projectUrl('/api/project/start'), {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ mode: 'continuous' }),
-        }),
-      )
-      expect(projectStart.status).toBe(400)
-      await expect(projectStart.json()).resolves.toMatchObject({
-        code: 'imported_scope_shaping',
-        actionHref: '/task/task-source-recovery',
-      })
-
       const focusedStart = await app.fetch(
         new Request(projectUrl('/api/project/task/task-model-proof/start'), {
           method: 'POST',
@@ -2646,6 +2716,72 @@ describe('POST /api/project/task/:id/approve-spec', () => {
     expect(q.tasks[0].notes?.at(-1)?.content).toMatch(/ship it/i)
   })
 
+  it('keeps a script-only release spec and links proof setup when it has no concrete command', async () => {
+    const now = '2026-07-18T04:00:00.000Z'
+    await seedCanonicalQueue({
+      version: 1,
+      lastUpdated: now,
+      selectedReleaseId: 'release-1',
+      releases: [{
+        id: 'release-1',
+        label: 'Headless release',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        proofStyle: 'script_only',
+      }],
+      tasks: [{
+        id: 'task-1',
+        title: 'Build the bounded runner',
+        status: 'spec_review',
+        releaseIds: ['release-1'],
+        createdAt: now,
+        updatedAt: now,
+        spec: [
+          '## Summary',
+          'Build the bounded runner.',
+          '',
+          '## Completion Boundary',
+          '- Product outcome: The bounded runner produces the expected result.',
+          '- What Guildhall can complete in code: Implement the runner.',
+          '- External dependencies: None.',
+          '- Owner-only setup: None.',
+          '- Verification environment: The local project checkout.',
+          '- What counts as done: The bounded runner is proven.',
+          '- What must be split or blocked: Nothing.',
+        ].join('\n'),
+        productBrief: {
+          userJob: 'Run the bounded runner.',
+          successMetric: 'The runner produces the expected result.',
+        },
+        acceptanceCriteria: [{
+          id: 'AC-1',
+          description: 'The bounded runner produces the expected result.',
+          verifiedBy: 'review',
+          met: false,
+        }],
+      }],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-1/approve-spec'), { method: 'POST' }),
+    )
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ ok: true, status: 'ready' })
+    const queue = await readTaskQueue()
+    expect(queue.tasks[0]).toMatchObject({ status: 'ready' })
+    expect(queue.tasks[0]?.spec).toContain('Build the bounded runner.')
+    expect(queue.tasks).toHaveLength(2)
+    expect(queue.tasks[1]).toMatchObject({
+      title: 'Establish concrete proof for Build the bounded runner',
+      status: 'exploring',
+      workKind: 'verification',
+      hierarchy: { parentId: 'task-1' },
+      releaseIds: ['release-1'],
+    })
+    expect(queue.tasks[0]?.notes?.at(-1)?.content).toMatch(/linked verification work/i)
+  })
+
   it('rejects approve-spec when the completion boundary is missing', async () => {
     await seedTask('task-1', {
       status: 'spec_review',
@@ -2721,6 +2857,47 @@ describe('POST /api/project/task/:id/approve-spec', () => {
     expect(res.status).toBe(400)
     const body = (await res.json()) as Record<string, any>
     expect(body.error).toMatch(/external dependencies/i)
+  })
+
+  it('approves a spec when its external provider is already configured and live', async () => {
+    await seedTask('task-1', {
+      status: 'spec_review',
+      productBrief: {
+        userJob: 'I want to verify the configured drafting provider across representative genres.',
+        successMetric: 'The live provider generates a labeled result for every declared genre.',
+      },
+      spec: [
+        '## Summary',
+        '',
+        'Run the bounded multi-genre provider proof.',
+        '',
+        '## Completion Boundary',
+        '- Product outcome: The configured provider generates a labeled result for every declared genre.',
+        '- What Guildhall can complete in code: Add and run the bounded proof script.',
+        '- External dependencies: Configured DeepInfra provider (already set up).',
+        '- Owner-only setup: None.',
+        '- Verification environment: Local development environment with access to the configured DeepInfra provider.',
+        '- What counts as done: The live provider call succeeds for every declared genre.',
+        '- What must be split or blocked: None.',
+        '',
+        '## Acceptance Criteria',
+        '1. The live provider call succeeds for every declared genre.',
+      ].join('\n'),
+      acceptanceCriteria: [
+        {
+          id: 'AC-1',
+          description: 'The live provider call succeeds for every declared genre.',
+          verifiedBy: 'automated',
+          met: false,
+        },
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-1/approve-spec'), { method: 'POST' }),
+    )
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ ok: true, status: 'ready' })
   })
 
   it('rejects approve-spec when the task has no drafted spec yet', async () => {
@@ -2832,6 +3009,53 @@ describe('POST /api/project/task/:id/rerun-stage', () => {
     expect(evidence.findLast(event => String((event.payload as Record<string, unknown>)?.content).match(/fresh spec pass/i))).toBeTruthy()
     expect(staleChild?.hierarchy?.parentId).toBeUndefined()
     expect(activeChild?.hierarchy?.parentId).toBe('task-1')
+  })
+
+  it('supersedes the live completion summary when reopening done work', async () => {
+    await seedTask('task-1', {
+      status: 'done',
+      spec: 'Stale spec',
+      completedAt: '2026-06-01T00:00:00.000Z',
+      doneSummaryBundle: {
+        taskId: 'task-1',
+        status: 'done',
+        completedAt: '2026-06-01T00:00:00.000Z',
+        summary: {
+          journey: 'The old pass completed.',
+          decision: 'The task was marked done.',
+          evidence: 'The old proof passed.',
+          learningCandidates: [],
+          openResidue: 'A fresh pass may still be needed.',
+        },
+        retention: {
+          transcriptPrimaryArtifact: false,
+          compactedFullTranscript: false,
+          fullEvidenceAvailable: true,
+        },
+        evidenceRefs: [],
+        createdAt: '2026-06-01T00:00:00.000Z',
+        createdBy: 'test',
+      },
+      notes: [],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-1/rerun-stage'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ stage: 'spec' }),
+      }),
+    )
+    expect(res.status).toBe(200)
+
+    const raw = await readTaskQueue()
+    expect(raw.tasks[0]?.status).toBe('exploring')
+    expect(raw.tasks[0]?.completedAt).toBeUndefined()
+    expect(raw.tasks[0]?.doneSummaryBundle).toMatchObject({
+      status: 'reopened',
+      reopenReason: expect.stringMatching(/fresh spec pass/i),
+      createdBy: 'rerun-stage',
+    })
   })
 
   it('re-runs review from gate_check without dropping the task out of active work', async () => {
@@ -3342,6 +3566,40 @@ describe('POST /api/project/task/:id/resume', () => {
     expect(transcript).toContain('create the main reviewer file')
   })
 
+  it('reopens in-progress work for blueprint shaping instead of resuming a worker', async () => {
+    await seedTask('task-1', {
+      status: 'in_progress',
+      assignedTo: null,
+      spec: undefined,
+      acceptanceCriteria: [],
+      notes: [],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-1/retry-work'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ instruction: 'Continue from the visible project sources.' }),
+      }),
+    )
+    const body = (await res.json()) as Record<string, any>
+    expect(res.status, JSON.stringify(body)).toBe(200)
+    expect(body).toMatchObject({
+      ok: true,
+      status: 'exploring',
+      nextAction: 'source_backed_spec',
+    })
+    const queue = await readTaskQueue() as { tasks: Array<Record<string, any>> }
+    expect(queue.tasks[0]).toMatchObject({
+      status: 'exploring',
+      assignedTo: null,
+    })
+    expect(queue.tasks[0]?.spec).toBeUndefined()
+    expect(queue.tasks[0]?.acceptanceCriteria).toEqual([])
+    expect(queue.tasks[0]?.notes.some((note: Record<string, any>) =>
+      String(note.content).includes('source-backed implementation contract'))).toBe(true)
+  })
+
   it('reopens blocked work when retry encounters stale missing escalation runtime state', async () => {
     await seedTask('task-1', {
       status: 'blocked',
@@ -3393,8 +3651,14 @@ describe('POST /api/project/task/:id/resume', () => {
       proofPaths: [{
         kind: 'review',
         expectedEvidence: [
-          'DeepInfra drafting telemetry recorded refusal behavior, cost, latency, and voice preservation.',
+          {
+            id: 'provider-proof',
+            kind: 'provider',
+            description: 'DeepInfra drafting telemetry recorded refusal behavior, cost, latency, and voice preservation.',
+            required: true,
+          },
         ],
+        verificationRecords: [],
       }],
       gateResults: [{
         gateId: 'npm-run-build',
@@ -3457,6 +3721,67 @@ describe('POST /api/project/task/:id/resume', () => {
     expect(task?.runtime?.proofRecovery?.reason).toBe('Run the real provider proof and attach the evidence.')
   })
 
+  it('re-intakes completed script-only release work when no executable proof is recorded', async () => {
+    const now = '2026-07-18T04:00:00.000Z'
+    await seedCanonicalQueue({
+      version: 1,
+      lastUpdated: now,
+      selectedReleaseId: 'release-1',
+      releases: [{
+        id: 'release-1',
+        label: 'Headless MVP',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        proofStyle: 'script_only',
+      }],
+      tasks: [{
+        id: 'task-1',
+        title: 'Run headless proof',
+        status: 'done',
+        releaseIds: ['release-1'],
+        completedAt: now,
+        updatedAt: now,
+        createdAt: now,
+        acceptanceCriteria: [{
+          id: 'AC-1',
+          description: 'The implementation is covered by a current project proof.',
+          verifiedBy: 'review',
+          met: true,
+        }],
+        gateResults: [{
+          gateId: 'review-backed-gate',
+          passed: true,
+          output: 'review proof passed',
+          checkedAt: now,
+        }],
+        reviewVerdicts: [{
+          verdict: 'approve',
+          reasoning: 'The implementation is coherent.',
+          recordedAt: now,
+        }],
+      }],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-1/retry-work'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ instruction: 'Attach the executable release proof.' }),
+      }),
+    )
+    const body = (await res.json()) as Record<string, any>
+    expect(res.status, JSON.stringify(body)).toBe(200)
+    expect(body).toMatchObject({ ok: true, status: 'exploring', nextAction: 'source_backed_spec' })
+    const effective = await readEffectiveTask('task-1')
+    expect(effective.status).toBe('exploring')
+    expect(effective.assignedTo).toBeNull()
+    expect(effective.runtime?.proofRecovery?.reason).toBe('Attach the executable release proof.')
+    expect(effective.proofPaths).toBeUndefined()
+    expect(effective.acceptanceCriteria).toEqual([])
+    expect(effective.spec).toBeUndefined()
+  })
+
   it('does not reopen stale raw retries when effective completion proof already settled the task', async () => {
     await seedTask('task-1', {
       status: 'in_progress',
@@ -3465,9 +3790,26 @@ describe('POST /api/project/task/:id/resume', () => {
       notes: [],
       proofPaths: [{
         kind: 'review',
+        status: 'verified',
+        source: 'documented',
         expectedEvidence: [
-          'DeepInfra drafting telemetry recorded refusal behavior, cost, latency, and voice preservation.',
+          {
+            id: 'provider-proof',
+            kind: 'provider',
+            description: 'DeepInfra drafting telemetry recorded refusal behavior, cost, latency, and voice preservation.',
+            required: true,
+          },
         ],
+        verificationRecords: [{
+          id: 'provider-proof-record',
+          evidenceId: 'provider-proof',
+          kind: 'provider',
+          status: 'passed',
+          summary: 'Provider proof was recorded.',
+          recordedAt: '2026-07-06T20:00:00.000Z',
+          recordedBy: 'test',
+          evidenceRefs: [],
+        }],
       }],
       doneSummaryBundle: {
         taskId: 'task-1',
@@ -3911,6 +4253,51 @@ describe('POST /api/project/bounded-chat/:id/answer', () => {
       boundedChatSessionId: session.id,
     })
   })
+
+  it('reopens completed work when a provider fallback erased substantive reviewer feedback', async () => {
+    await seedTask('task-1', {
+      status: 'done',
+      notes: [],
+      reviewVerdicts: [
+        {
+          verdict: 'approve',
+          reviewerPath: 'llm',
+          reason: 'Initial review passed.',
+          recordedAt: '2026-07-18T04:17:58.507Z',
+        },
+        {
+          verdict: 'revise',
+          reviewerPath: 'llm',
+          reason: 'The reviewer found concrete implementation bugs.',
+          reasoning: 'The implementation has a syntax error and emits findings with an empty character.',
+          recordedAt: '2026-07-18T04:20:54.206Z',
+        },
+        {
+          verdict: 'approve',
+          reviewerPath: 'deterministic',
+          reason: 'Deterministic fallback approval.',
+          llmError: 'reviewer-agent timed out after 60000ms of inactivity',
+          recordedAt: '2026-07-18T04:28:59.233Z',
+        },
+      ],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-1/retry-work'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ instruction: 'Fix the concrete reviewer findings and run the focused proof.' }),
+      }),
+    )
+    const body = (await res.json()) as Record<string, any>
+    expect(res.status, JSON.stringify(body)).toBe(200)
+    expect(body).toMatchObject({ ok: true, status: 'in_progress' })
+    const queue = await readTaskQueue()
+    expect(queue.tasks[0]).toMatchObject({ status: 'in_progress', assignedTo: null })
+    const noteText = queue.tasks[0]?.notes.map((note: Record<string, unknown>) => String(note.content ?? '')).join('\n') ?? ''
+    expect(noteText).toContain('reviewer feedback was lost')
+    expect(noteText).toContain('Fix the concrete reviewer findings')
+  })
 })
 
 describe('POST /api/project/task/:id/reframe-task', () => {
@@ -3926,6 +4313,33 @@ describe('POST /api/project/task/:id/reframe-task', () => {
       },
       spec: '## Summary\nOld schematic-style spec.',
       acceptanceCriteria: [{ id: 'AC-8', description: 'Provide authoritative verification evidence.', verifiedBy: 'review' }],
+      taskReadiness: {
+        taskKind: 'research',
+        recommendation: 'ready',
+        summary: 'Stale readiness from the old frame.',
+        dimensions: [],
+        definitionOfDone: { items: [], evidenceRequired: [] },
+        blockerPlans: [],
+        contextBudget: { estimatedTokens: 100, risk: 'low', fitsInOneWorkerBrief: true, reasons: [] },
+        assessedAt: new Date().toISOString(),
+      },
+      workUnitAnalysis: {
+        summary: 'Stale split decision.',
+        units: [],
+        proofOnlyItems: [],
+        createdAt: new Date().toISOString(),
+      },
+      sizePlan: {
+        taskId: 'task-1',
+        score: 1,
+        band: 'tiny',
+        action: 'proceed',
+        factors: [],
+        recommendedChildren: [],
+        reasons: ['Stale sizing decision.'],
+        createdAt: new Date().toISOString(),
+        createdBy: 'test',
+      },
       escalations: [{
         id: 'esc-old',
         taskId: 'task-1',
@@ -3957,6 +4371,9 @@ describe('POST /api/project/task/:id/reframe-task', () => {
     expect(task.productBrief).toBeUndefined()
     expect(task.spec).toBeUndefined()
     expect(task.acceptanceCriteria).toEqual([])
+    expect(task.taskReadiness).toBeUndefined()
+    expect(task.workUnitAnalysis).toBeUndefined()
+    expect(task.sizePlan).toBeUndefined()
     expect(task.escalations[0]?.resolvedAt).toBeTruthy()
     expect(task.notes.some((note: Record<string, unknown>) => /reframe/i.test(String(note.content ?? '')))).toBe(true)
     const transcript = (await readExploringTranscript({ memoryDir, taskId: 'task-1' })).content ?? ''
@@ -4516,6 +4933,152 @@ describe('POST /api/project/task/:id/add-acceptance', () => {
   })
 })
 
+describe('POST /api/project/task/:id/set-acceptance-command', () => {
+  it('binds one exact executable proof command and invalidates stale completion', async () => {
+    await seedTask('task-1', {
+      status: 'done',
+      acceptanceCriteria: [{
+        id: 'AC-1',
+        description: 'The focused test suite passes.',
+        verifiedBy: 'review',
+        source: 'documented',
+        met: true,
+        verificationState: 'verified',
+      }],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-1/set-acceptance-command'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ criterionId: 'AC-1', command: 'pnpm test -- --runInBand' }),
+      }),
+    )
+    const body = (await res.json()) as Record<string, any>
+    expect(res.status, JSON.stringify(body)).toBe(200)
+    expect(body).toMatchObject({ ok: true, changed: true, criterionId: 'AC-1', command: 'pnpm test -- --runInBand' })
+
+    const current = readProjectStateDatabaseTaskPointWithRevision(taskQueuePath(), 'task-1')
+    expect(current?.task.definition.acceptanceCriteria).toMatchObject([{
+      id: 'AC-1',
+      description: 'The focused test suite passes.',
+      verifiedBy: 'automated',
+      source: 'documented',
+      command: 'pnpm test -- --runInBand',
+      met: false,
+    }])
+    const evidence = await readTaskEvidence(tmpDir, 'task-1')
+    expect(evidence.at(-1)?.payload).toMatchObject({
+      criterionId: 'AC-1',
+      command: 'pnpm test -- --runInBand',
+    })
+  })
+
+  it('does not accept multiline commands or an unknown criterion', async () => {
+    await seedTask('task-1', {
+      acceptanceCriteria: [{
+        id: 'AC-1',
+        description: 'The focused test suite passes.',
+        verifiedBy: 'review',
+        source: 'documented',
+        met: false,
+      }],
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const multiline = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-1/set-acceptance-command'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ criterionId: 'AC-1', command: 'pnpm test\npnpm build' }),
+      }),
+    )
+    expect(multiline.status).toBe(400)
+
+    const missing = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-1/set-acceptance-command'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ criterionId: 'AC-404', command: 'pnpm test' }),
+      }),
+    )
+    const body = (await missing.json()) as Record<string, any>
+    expect(missing.status).toBe(404)
+    expect(body.error).toMatch(/criterion not found/i)
+  })
+})
+
+describe('POST /api/project/task/:id/set-acceptance-proof-expectation', () => {
+  it('records an intentional non-zero command result and refreshes its proof path', async () => {
+    await seedTask('task-1', {
+      status: 'in_progress',
+      acceptanceCriteria: [{
+        id: 'AC-negative',
+        description: 'Missing fixture files produce a clear error.',
+        verifiedBy: 'automated',
+        source: 'documented',
+        command: 'pnpm exec node scripts/validate-fixture.mjs fixtures/missing',
+        met: false,
+      }],
+      proofPaths: [{
+        id: 'task-1-AC-negative-command-proof',
+        scope: { type: 'task', id: 'task-1' },
+        title: 'Run AC-negative',
+        summary: 'Missing fixture files produce a clear error.',
+        kind: 'command',
+        command: 'pnpm exec node scripts/validate-fixture.mjs fixtures/missing',
+        source: 'documented',
+        status: 'blocked',
+        launchSteps: [],
+        expectedEvidence: [{
+          id: 'AC-negative',
+          kind: 'automated',
+          description: 'Missing fixture files produce a clear error.',
+          required: true,
+        }],
+        verificationRecords: [],
+        relatedTaskIds: ['task-1'],
+        createdAt: '2026-07-18T00:00:00.000Z',
+        updatedAt: '2026-07-18T00:00:00.000Z',
+        createdBy: 'test',
+      }],
+      acceptanceCriteriaProofState: {
+        state: 'blocked',
+        reason: 'The old expected exit was zero.',
+        gateId: 'AC-negative',
+      },
+    })
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const res = await app.fetch(
+      new Request(projectUrl('/api/project/task/task-1/set-acceptance-proof-expectation'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ criterionId: 'AC-negative', expectedExit: 'non_zero' }),
+      }),
+    )
+    const body = (await res.json()) as Record<string, any>
+    expect(res.status, JSON.stringify(body)).toBe(200)
+    expect(body).toMatchObject({
+      ok: true,
+      changed: true,
+      criterionId: 'AC-negative',
+      expectedExit: 'non_zero',
+    })
+
+    const current = readProjectStateDatabaseTaskPointWithRevision(taskQueuePath(), 'task-1')
+    expect(current?.task.definition.acceptanceCriteria).toMatchObject([{
+      id: 'AC-negative',
+      expectedExit: 'non_zero',
+      met: false,
+    }])
+    expect(current?.task.definition.proofPaths).toMatchObject([{
+      status: 'planned',
+      expectedEvidence: [{ id: 'AC-negative', expectedExit: 'non_zero' }],
+      verificationRecords: [],
+    }])
+    expect(current?.task.definition.acceptanceCriteriaProofState).toBeUndefined()
+  })
+})
+
 describe('POST /api/project/bounded-chat/:id/answer for task owner input', () => {
   it('answers the linked owner-input request without persisting task-local questions', async () => {
     await seedTask('task-1', { status: 'exploring' })
@@ -4869,7 +5432,8 @@ describe('GET /api/project/activity', () => {
     })
 
     registerWorkspace({ id: projectId, name: 'Task Endpoints Test', path: tmpDir, tags: [] })
-    const { app } = buildServeApp({ projectPath: tmpDir })
+    const { app, refreshProjectProjections } = buildServeApp({ projectPath: tmpDir })
+    await refreshProjectProjections(tmpDir)
     const [activityRes, serviceRes] = await Promise.all([
       app.fetch(new Request(projectUrl('/api/project/activity'))),
       app.fetch(new Request(projectUrl('/api/service'))),
@@ -4888,7 +5452,7 @@ describe('GET /api/project/activity', () => {
     expect(activity.topAction).toEqual(projectSummary?.actionModel?.primaryAction)
   })
 
-  it('includes the latest live event metadata for in-flight tasks', async () => {
+  it('keeps live event metadata out of ordinary activity polling', async () => {
     const older = '2026-05-23T18:00:00.000Z'
     const now = '2026-05-23T18:01:00.000Z'
     const queue = {
@@ -4936,10 +5500,10 @@ describe('GET /api/project/activity', () => {
     expect(body.inFlight[0]).toMatchObject({
       id: 't1',
       status: 'in_progress',
-      lastActivityLabel: 'Failed command',
-      lastActivityTone: 'danger',
     })
-    expect(body.inFlight[0].lastActivityAt).toBe(now)
+    expect(body.inFlight[0].lastActivityAt).toBe(older)
+    expect(body.inFlight[0]).not.toHaveProperty('lastActivityLabel')
+    expect(body.inFlight[0]).not.toHaveProperty('lastActivityTone')
   })
 
   it('keeps activity polling read-only for phantom worker claims', async () => {

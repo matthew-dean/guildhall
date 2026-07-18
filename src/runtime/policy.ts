@@ -25,6 +25,7 @@ export const RECOVERY_PLAYBOOK_IDS = [
   'refresh_stale_edit_target',
   'resume_from_checkpoint',
   'retry_current_task_context',
+  'review_partial_diff',
   'rebootstrap_project',
   'package_owned_dirty_work',
   'ask_concrete_human_question',
@@ -129,6 +130,8 @@ export function recoveryAllowedToolsForPlaybook(playbook: RecoveryPlaybookId): s
       return ['read-file', 'edit-file', 'run-shell-command', 'write-checkpoint', 'raise-escalation']
     case 'retry_current_task_context':
       return ['list-files', 'read-file', 'edit-file', 'write-file', 'run-shell-command', 'write-checkpoint', 'log-progress', 'update-task', 'raise-escalation']
+    case 'review_partial_diff':
+      return ['read-file', 'run-shell-command', 'write-checkpoint', 'raise-escalation']
     case 'route_to_review':
     case 'route_to_gate_check':
       return ['write-checkpoint', 'raise-escalation']
@@ -563,6 +566,17 @@ export function resolveRecoveryPlan(input: ResolveRecoveryPlanInput): RecoveryPl
         allowedTools: recoveryAllowedToolsForPlaybook(firstPlaybook),
         maxTurns: 1,
         successSignals: ['review_rerouted'],
+        stopSignals: ['same_playbook_failed'],
+        auditRequired: true,
+      }
+    case 'review_partial_diff':
+      return {
+        playbook: firstPlaybook,
+        reason: 'Review the saved partial diff and verification evidence before resuming implementation.',
+        allowedTools: recoveryAllowedToolsForPlaybook(firstPlaybook),
+        allowedPaths: touchedFiles,
+        maxTurns: 1,
+        successSignals: ['partial_diff_reviewed', 'review_rerouted'],
         stopSignals: ['same_playbook_failed'],
         auditRequired: true,
       }

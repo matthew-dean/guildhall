@@ -9,6 +9,7 @@
   import NoticeBand from '../../../../packages/ui/src/components/NoticeBand.svelte'
   import SectionHeader from '../../../../packages/ui/src/components/SectionHeader.svelte'
   import StatusPill from '../../../../packages/ui/src/components/StatusPill.svelte'
+  import Button from '../../lib/Button.svelte'
   import { nav } from '../../lib/nav.svelte.js'
   import { currentProjectHref, currentTaskHref, projectFetch } from '../../lib/project-routes.js'
   import { releaseVerdictSummary } from '../../lib/release-readiness.js'
@@ -107,6 +108,8 @@
   let spine = $state<ProjectOrientationSpine | null>(null)
   let error = $state<string | null>(null)
   let initNeeded = $state(false)
+  let closeBusy = $state(false)
+  let closeError = $state<string | null>(null)
 
   $effect(() => {
     const endpoint = section === 'criteria'
@@ -195,6 +198,37 @@
 
   function openTask(id: string) {
     if (id) nav(currentTaskHref(id, activeProjectId))
+  }
+
+  async function shipRelease() {
+    const releaseId = data?.release?.id
+    if (!releaseId || closeBusy) return
+    closeBusy = true
+    closeError = null
+    try {
+      const response = await projectFetch('/api/project/release/close', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ releaseId }),
+      }, activeProjectId)
+      const payload = await response.json().catch(() => ({})) as Record<string, unknown>
+      if (!response.ok) throw new Error(typeof payload.error === 'string' ? payload.error : 'Could not ship this release.')
+      if (payload.release && typeof payload.release === 'object' && !Array.isArray(payload.release)) {
+        data = { ...data, release: payload.release as ReleasePayload['release'] }
+      }
+      const [summaryResponse, spineResponse] = await Promise.all([
+        projectFetch('/api/project/release-readiness/summary', { cache: 'no-store' }, activeProjectId),
+        projectFetch('/api/project/spine?compact=true', { cache: 'no-store' }, activeProjectId),
+      ])
+      const summary = await summaryResponse.json().catch(() => null) as Partial<ReleasePayload> | null
+      if (summary && !summary.error) data = { ...data, ...summary }
+      const spinePayload = await spineResponse.json().catch(() => null) as { spine?: ProjectOrientationSpine | null } | null
+      spine = spinePayload?.spine ?? spine
+    } catch (err) {
+      closeError = err instanceof Error ? err.message : String(err)
+    } finally {
+      closeBusy = false
+    }
   }
 
   function isWorkReleaseBlocker(item: ReleaseItem): boolean {
@@ -397,6 +431,8 @@
   const openCheckCount = $derived(Math.max(data?.totals.blockingCount ?? 0, unfinishedCount))
 
   const verdict = $derived(data ? releaseVerdictSummary(data) ?? { label: 'Loading', tone: 'neutral' as const, detail: '', state: 'empty' } : { label: 'Loading', tone: 'neutral' as const, detail: '', state: 'empty' })
+  const releaseShipped = $derived(data?.release?.state === 'shipped')
+  const canShipRelease = $derived(Boolean(data?.release?.id) && !releaseShipped && verdict.state === 'ready')
 
   const sectionCopy = $derived(
     section === 'criteria'
@@ -519,8 +555,21 @@
       {#snippet meta()}
         <StatusPill label={verdict.label} tone={verdict.tone} emphasis="default" />
         <StatusPill label={taskDoneLabel} tone="neutral" />
+        {#if releaseShipped}
+          <StatusPill label="Shipped" tone="ok" />
+        {:else if canShipRelease}
+          <Button variant="primary" size="sm" disabled={closeBusy} onclick={() => void shipRelease()}>
+            {closeBusy ? 'Shipping…' : 'Ship release'}
+          </Button>
+        {/if}
       {/snippet}
     </SectionHeader>
+
+    {#if closeError}
+      <NoticeBand tone="danger" role="alert" label="Release" title="Could not ship release">
+        <p>{closeError}</p>
+      </NoticeBand>
+    {/if}
 
     {#if spine?.summary?.headline}
       <FrameCard

@@ -5,6 +5,7 @@ import path from 'node:path'
 import type { Task } from '@guildhall/core'
 import {
   compactProjectContextDebug,
+  readContextDebugForTasks,
   readContextDebugForTask,
   writeContextDebugRecord,
 } from '../context-observability.js'
@@ -145,6 +146,55 @@ describe('writeContextDebugRecord', () => {
     expect(loaded[0]?.promptPreview).toBe('')
     expect(JSON.stringify(loaded[0])).not.toContain('must not cross the read boundary')
     expect(Buffer.byteLength(JSON.stringify(loaded[0]), 'utf8')).toBeLessThanOrEqual(32 * 1024)
+  })
+
+  it('indexes multiple task histories from one bounded ledger read', async () => {
+    const records: Array<[string, string]> = [
+      ['task-a', 'old a'],
+      ['task-b', 'old b'],
+      ['task-a', 'new a'],
+      ['task-b', 'new b'],
+      ['task-a', 'latest a'],
+    ]
+    for (const [taskId, prompt] of records) {
+      await writeContextDebugRecord({
+        memoryDir,
+        workspacePath: '/repo',
+        task: mkTask({ id: taskId }),
+        ctx: mkContext(),
+        agentName: 'worker-agent',
+        modelId: 'qwen/test',
+        prompt,
+      })
+    }
+
+    const indexed = await readContextDebugForTasks(memoryDir, ['task-a', 'task-b', 'missing'], 2)
+
+    expect(indexed.get('task-a')?.map(record => record.taskId)).toEqual(['task-a', 'task-a'])
+    expect(indexed.get('task-b')?.map(record => record.taskId)).toEqual(['task-b', 'task-b'])
+    expect(indexed.get('missing')).toEqual([])
+    expect(indexed.size).toBe(3)
+    expect(JSON.stringify(indexed)).not.toContain('old a')
+    expect(JSON.stringify(indexed)).not.toContain('old b')
+  })
+
+  it('keeps batch reads within the compact per-task retention limit', async () => {
+    for (let index = 0; index < 8; index += 1) {
+      await writeContextDebugRecord({
+        memoryDir,
+        workspacePath: '/repo',
+        task: mkTask({ id: 'task-bounded' }),
+        ctx: mkContext(),
+        agentName: 'worker-agent',
+        modelId: 'qwen/test',
+        prompt: `prompt-${index}`,
+      })
+    }
+
+    const indexed = await readContextDebugForTasks(memoryDir, ['task-bounded'], 100)
+
+    expect(indexed.get('task-bounded')).toHaveLength(6)
+    expect(indexed.get('task-bounded')?.[0]?.id).toBeTruthy()
   })
 
   it('persists structural omitted-context handles for on-demand retrieval', async () => {

@@ -234,6 +234,26 @@ export function parseArgs(rawArgs: string[]): {
   return { getFlag, positionals }
 }
 
+export interface CliRunOptions {
+  maxTicks: number
+  stopAfterOneTask: boolean
+  domainFilter?: string
+  preferredTaskId?: string
+}
+
+export function parseRunOptions(rawArgs: string[]): CliRunOptions {
+  const { getFlag } = parseArgs(rawArgs)
+  const domain = getFlag('--domain')
+  const task = getFlag('--task')
+  const maxTicks = Number(getFlag('--max-ticks') ?? Infinity)
+  return {
+    maxTicks,
+    stopAfterOneTask: rawArgs.includes('--one-task'),
+    ...(domain ? { domainFilter: domain } : {}),
+    ...(task ? { preferredTaskId: task } : {}),
+  }
+}
+
 export function resolveServiceLifecycleIntent(
   commandName: string,
   rawArgs: string[],
@@ -290,6 +310,7 @@ export function resolveServiceLifecycleIntent(
 //   guildhall list                      — list all registered workspaces
 //   guildhall run [id|path]             — run the coordinator for a workspace
 //     --domain <id>                 — only process tasks for one coordinator domain
+//     --task <id>                   — run one named task and its bounded child closure
 //     --max-ticks <n>               — stop after N ticks (useful for testing)
 //     --one-task                    — stop after one task reaches a handoff point
 //   guildhall task run-once "<prompt>"  — create a request, run it through Guildhall, emit a report
@@ -408,6 +429,7 @@ Usage:
 
   guildhall run [id|path]            Run the coordinator for a workspace
     --domain <id>                Filter to tasks in one coordinator domain
+    --task <id>                  Run one named task and its bounded child closure
     --max-ticks <n>              Stop after N ticks (testing)
     --one-task                   Stop after one task reaches terminal/PR/block
 
@@ -683,9 +705,7 @@ function cmdList() {
 async function cmdRun() {
   const pos = positionals()
   const idOrPath = pos[0]
-  const domain = getFlag('--domain')
-  const maxTicks = Number(getFlag('--max-ticks') ?? Infinity)
-  const oneTask = args.includes('--one-task')
+  const runOptions = parseRunOptions(args)
 
   let workspace
   try {
@@ -725,9 +745,7 @@ async function cmdRun() {
 
   const { runOrchestrator } = await import('./orchestrator.js')
   await runOrchestrator(workspace.config, {
-    ...(domain ? { domainFilter: domain } : {}),
-    maxTicks,
-    ...(oneTask ? { stopAfterOneTask: true } : {}),
+    ...runOptions,
   })
 }
 
@@ -1071,7 +1089,9 @@ async function cmdMemory() {
     console.log(`[guildhall] SQLite database: ${result.databaseBytesBefore} -> ${result.databaseBytesAfter} bytes${result.databaseVacuumed ? ' (vacuumed)' : ''}`)
     console.log(`[guildhall] Recent reconnect events: ${result.recentEventRecordsCompacted} records compacted (${result.recentEventBytesBefore} -> ${result.recentEventBytesAfter} bytes)`)
     console.log(`[guildhall] Memory event index: ${result.memoryEventRecordsSeen} records across ${result.memoryEventFilesSeen} files -> ${result.memoryEventRecordsRetained} records in one project stream (${result.memoryEventBytesBefore} -> ${result.memoryEventBytesAfter} bytes)`)
-    console.log(`[guildhall] Migration snapshots: ${result.migrationSnapshotFilesCompacted}/${result.migrationSnapshotFilesSeen} redundant copies compacted (${result.migrationSnapshotBytesBefore} -> ${result.migrationSnapshotBytesAfter} bytes); ${result.migrationSnapshotUnknownFiles} unverified files (${result.migrationSnapshotUnknownBytes} bytes) left untouched`)
+    console.log(`[guildhall] Migration snapshots: ${result.migrationSnapshotFilesCompacted}/${result.migrationSnapshotFilesSeen} redundant copies compacted (${result.migrationSnapshotBytesBefore} -> ${result.migrationSnapshotBytesAfter} bytes); ${result.migrationSnapshotLegacyFilesArchived} legacy files archived (${result.migrationSnapshotLegacyBytesBefore} -> ${result.migrationSnapshotLegacyBytesAfter} bytes); ${result.migrationSnapshotUnknownFiles} unverified files (${result.migrationSnapshotUnknownBytes} bytes) left untouched; ${result.migrationSnapshotArtifactsRegistered} registry entries backfilled (${result.migrationSnapshotArtifactBytesRegistered} bytes)`)
+    console.log(`[guildhall] Review transport: ${result.reviewTransportArtifactsRegistered}/${result.reviewTransportFilesSeen} registry entries backfilled (${result.reviewTransportArtifactBytesRegistered} bytes)`)
+    console.log(`[guildhall] Evacuation history: ${result.evacuationArtifactsRegistered}/${result.evacuationFilesSeen} registry entries backfilled (${result.evacuationArtifactBytesRegistered} bytes)`)
     console.log(`[guildhall] Shared TASKS/PROGRESS bytes: ${result.bytesBefore} -> ${result.bytesAfter}`)
     if (result.forbiddenTaskFieldFindings.length > 0) {
       console.log('[guildhall] Forbidden field findings:')
@@ -2380,7 +2400,18 @@ const modulePath = fileURLToPath(import.meta.url)
 
 if (invokedPath === modulePath) {
   main().catch(err => {
-    console.error('[guildhall] Fatal error:', err)
+    const detail = err instanceof Error
+      ? err.stack ?? err.message
+      : typeof err === 'string'
+        ? err
+        : (() => {
+            try {
+              return JSON.stringify(err)
+            } catch {
+              return String(err)
+            }
+          })()
+    console.error(`[guildhall] Fatal error: ${detail}`)
     process.exit(1)
   })
 }

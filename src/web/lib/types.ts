@@ -425,6 +425,17 @@ export interface ProjectReleaseReadiness {
     tone?: 'ok' | 'warn' | 'neutral' | string
     detail?: string
   }
+  releaseCounts?: {
+    total?: number
+    done?: number
+    unfinished?: number
+    ready?: number
+    active?: number
+    blocked?: number
+    deferred?: number
+    ownerBlocked?: number
+    proofBlocked?: number
+  }
   statusCounts?: Record<string, number>
   proofMissingDoneTasks?: Array<{ id?: string; title?: string }>
   releaseBlockers?: Array<{ id?: string; title?: string; label?: string; nextAction?: string }>
@@ -464,6 +475,8 @@ export interface ProjectSummaryRelease {
     ownerBlocked?: number
     proofBlocked?: number
   }
+  /** Mutually partitioned task states; readiness dimensions are separate. */
+  taskStatusCounts?: Record<string, number>
   blockers?: Array<{ id?: string; label?: string; owningTaskId?: string }>
   updatedAt?: string
 }

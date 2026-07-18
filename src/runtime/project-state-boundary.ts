@@ -5,13 +5,23 @@ import {
   projectStateDatabaseTaskSummary,
   readProjectStateDatabaseAuthoritySnapshotFromTasksPath,
   type ProjectStateDatabaseDiagnosticProjection,
+  type ProjectStateDatabaseMemoryHealthProjection,
+  type ProjectStateDatabaseAvailability,
   readProjectStateDatabaseCurrentState,
+  readProjectStateDatabaseCurrentTasksWithRevision,
   readProjectStateDatabaseInventory,
+  readProjectStateDatabaseMetadata,
   readProjectStateDatabaseProjectionState,
-  readProjectStateDatabaseSavedReleaseState,
-  readProjectStateDatabaseTaskDetailState,
-  readProjectStateDatabaseTasks,
+  readProjectStateDatabaseReadBundle,
+  readProjectStateDatabaseSurfaceState,
+  readProjectStateDatabaseShellState,
+  readProjectStateDatabaseTaskDetailStateAtBoundary,
+  readProjectStateDatabaseTaskEvidenceCurrentMany,
+  readProjectStateDatabaseTaskEvidenceCurrentManyWithRevision,
+  readTaskEvidencePage as readSessionTaskEvidencePage,
   readProjectStateDatabaseTaskPointWithRevision,
+  readProjectStateDatabaseTaskPointsWithRevision,
+  readProjectStateDatabaseRepository,
   readProjectStateDatabaseQueueDefinition,
   readProjectStateDatabaseQueueRevision,
   readProjectStateDatabaseTaskEvidenceAuthority,
@@ -28,9 +38,13 @@ import {
   type ProjectStateDatabaseRepository,
   type ProjectStateDatabaseScopeRow,
   type ProjectStateDatabaseTask,
+  type ProjectStateDatabaseTaskDetailReadOptions,
   type ProjectStateDatabaseTaskOverlay,
   type ProjectStateDatabaseTaskOverlayStores,
   type ProjectStateDatabaseTaskRelationships,
+  type ProjectStateDatabaseSurfaceReadOptions,
+  type ProjectStateDatabaseSurfaceState,
+  type ProjectStateDatabaseTaskEvidenceCurrentManyRead,
 } from '@guildhall/sessions'
 import type {
   ProjectRelease,
@@ -46,7 +60,7 @@ import {
   type ProjectSummaryProjection,
 } from './project-summary-projection.js'
 import { executionScopeRows, taskScopeNodeId, type ProjectScope } from './project-scope-projection.js'
-import { buildEffectiveTasks } from './effective-task.js'
+import { buildEffectiveTask, buildEffectiveTasks } from './effective-task.js'
 import { appendTaskEvidence, TASK_EVIDENCE_RETENTION } from './task-state-store.js'
 
 export const FORBIDDEN_PROJECT_TASK_FIELDS = [
@@ -60,6 +74,7 @@ export const FORBIDDEN_PROJECT_TASK_FIELDS = [
   'worktreePath',
   'branchName',
   'baseBranch',
+  'doneSummaryBundle',
   'mergeRecord',
   'revisionCount',
   'retryWindow',
@@ -123,6 +138,7 @@ export interface ProjectCurrentStateReadModel {
   scope: ProjectScope | null
   repositories: ProjectStateDatabaseRepository[]
   diagnostics: ProjectStateDatabaseDiagnosticProjection | null
+  memoryHealth: ProjectStateDatabaseMemoryHealthProjection | null
   taskOverlays: ProjectStateDatabaseTaskOverlayStores | null
   summary: ProjectSummaryProjection | null
   authority: 'database' | 'legacy'
@@ -145,6 +161,7 @@ export interface ProjectCanonicalCurrentState {
   scope: ProjectScope | null
   repositories: ProjectStateDatabaseRepository[]
   diagnostics: ProjectStateDatabaseDiagnosticProjection | null
+  memoryHealth: ProjectStateDatabaseMemoryHealthProjection | null
   summary: ProjectSummaryProjection | null
   authority: 'database' | 'legacy'
   queueRevision: number | null
@@ -218,6 +235,7 @@ function projectScopeFromSavedState(input: {
         source: (selectedRelease.source ?? 'inferred') as ProjectScope['source'],
         nodeIds: [...(selectedRelease.nodeIds ?? [])],
         deferredNodeIds: [...(selectedRelease.deferredNodeIds ?? [])],
+        ...(selectedRelease.proofStyle ? { proofStyle: selectedRelease.proofStyle } : {}),
       }
     }
     return {
@@ -231,6 +249,7 @@ function projectScopeFromSavedState(input: {
       deferredNodeIds: executionRows
         .filter(row => row.scope === 'deferred')
         .map(row => taskScopeNodeId(row.taskId)),
+      ...(selectedRelease.proofStyle ? { proofStyle: selectedRelease.proofStyle } : {}),
     }
   }
 
@@ -239,15 +258,16 @@ function projectScopeFromSavedState(input: {
     : []
   return {
     id,
-    label: selectedRelease?.label ?? savedScope?.label ?? id,
-    kind: (selectedRelease?.kind ?? savedScope?.kind ?? 'proposed_feature_set') as ProjectScope['kind'],
-    source: (selectedRelease?.source ?? savedScope?.source ?? 'inferred') as ProjectScope['source'],
+    label: savedScope?.label ?? id,
+    kind: (savedScope?.kind ?? 'proposed_feature_set') as ProjectScope['kind'],
+    source: (savedScope?.source ?? 'inferred') as ProjectScope['source'],
     nodeIds: executionRows
       .filter(row => row.scope === 'included')
       .map(row => taskScopeNodeId(row.taskId)),
     deferredNodeIds: executionRows
       .filter(row => row.scope === 'deferred')
       .map(row => taskScopeNodeId(row.taskId)),
+    ...(savedScope?.proofStyle ? { proofStyle: savedScope.proofStyle } : {}),
   }
 }
 
@@ -271,14 +291,16 @@ async function buildProjectCanonicalCurrentState(
   const tasks = await buildEffectiveTasks(projectRoot, rawQueue.tasks as Task[], {
     evidence: 'current',
     databaseStores: currentState.taskOverlays,
+    authority: currentState.authority,
   })
   return {
     rawQueue,
-    tasks: tasks as Task[],
+    tasks: tasks as unknown as Task[],
     scopeRows: currentState.scopeRows,
     scope: currentState.scope,
     repositories: currentState.repositories,
     diagnostics: currentState.diagnostics,
+    memoryHealth: currentState.memoryHealth,
     summary: currentState.summary,
     authority: currentState.authority,
     queueRevision: currentState.queueRevision,
@@ -330,20 +352,40 @@ export async function readProjectTaskQueueForRichMutation(
  */
 export function readProjectSavedReleaseState(projectRoot: string): ProjectSavedReleaseReadModel {
   const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
-  const saved = readProjectStateDatabaseSavedReleaseState<ProjectSummaryProjection>(tasksPath)
-  const current = saved ?? (() => {
-    const authority = readProjectStateAuthorityAtBoundary(tasksPath)
-    if (authority.authority === 'database') {
-      throw new Error(`Authoritative saved Release projection is unavailable for ${tasksPath}; refresh the project projection first.`)
-    }
-    return readProjectCurrentStateModel(tasksPath)
-  })()
+  // Release is a bounded view of the canonical current-state transaction. It
+  // reads the durable queue definition, saved summary, scope rows, and
+  // diagnostics from one bundle, then narrows that result for the route. It
+  // never starts from an intake snapshot or a projection queue envelope.
+  const bundle = readProjectStateDatabaseReadBundle<ProjectSummaryProjection>(tasksPath, {
+    includeQueueDefinition: true,
+    includeRepositories: true,
+    includeDiagnostics: true,
+  })
+  const current = bundle?.queueDefinition
+    ? {
+        queue: bundle.queueDefinition,
+        scopeRows: bundle.scopeRows,
+        repositories: bundle.repositories,
+        diagnostics: bundle.diagnostics,
+        summary: bundle.summary,
+        authority: bundle.authority,
+        queueRevision: bundle.queueRevision,
+        projectRevision: bundle.projectRevision,
+      }
+    : (() => {
+        if (bundle?.authority === 'database') {
+          throw new Error(`Authoritative saved Release projection is unavailable for ${tasksPath}; refresh the project projection first.`)
+        }
+        return readProjectCurrentStateModel(tasksPath)
+      })()
   const queue = current.queue as Partial<ProjectStateDatabaseQueueDefinition>
   const releases = Array.isArray(queue.releases)
     ? queue.releases.map(release => persistableRelease(release as unknown as ProjectRelease))
     : []
   const summary = current.summary
-    ? { ...current.summary.payload, freshness: current.summary.freshness }
+    ? 'payload' in current.summary
+      ? { ...current.summary.payload, freshness: current.summary.freshness }
+      : current.summary
     : null
   const scope = projectScopeFromSavedState({
     releases,
@@ -388,6 +430,76 @@ export function readProjectSummaryAtBoundary(tasksPath: string): ProjectSummaryP
   return readProjectSummaryProjection(tasksPath)
 }
 
+export interface ProjectSummaryShellReadModel {
+  summary: ProjectSummaryProjection | null
+  authority: 'database' | 'legacy'
+  queueRevision: number | null
+  projectRevision: number | null
+}
+
+/**
+ * Read only the saved project shell through the sessions boundary. Fleet and
+ * status-chip callers must use this instead of opening the summary file or a
+ * compact inventory reader themselves. The file reader is an explicit
+ * pre-promotion compatibility path; promoted projects fail closed when their
+ * saved shell is missing.
+ */
+export function readProjectSummaryShellAtBoundary(projectRoot: string): ProjectSummaryShellReadModel {
+  const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+  const saved = readProjectStateDatabaseShellState<ProjectSummaryProjection>(tasksPath, {
+    includeOrientation: false,
+    includeApprovedPlan: false,
+  })
+  if (saved) {
+    return {
+      summary: saved.summary
+        ? {
+            ...saved.summary.payload,
+            orientationSpine: null,
+            freshness: saved.summary.freshness,
+          }
+        : null,
+      authority: saved.authority,
+      queueRevision: saved.queueRevision,
+      projectRevision: saved.projectRevision,
+    }
+  }
+  const authority = readProjectStateAuthorityAtBoundary(tasksPath)
+  if (authority.authority === 'database') {
+    return {
+      summary: null,
+      authority: 'database',
+      queueRevision: authority.queueRevision,
+      projectRevision: authority.projectRevision,
+    }
+  }
+  return {
+    summary: readProjectSummaryProjection(tasksPath),
+    authority: 'legacy',
+    queueRevision: null,
+    projectRevision: null,
+  }
+}
+
+/** Read the full saved summary for a project without selecting a task source. */
+export function readProjectSummaryForProjectAtBoundary(projectRoot: string): ProjectSummaryProjection | null {
+  const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+  const saved = readProjectStateDatabaseShellState<ProjectSummaryProjection>(tasksPath, {
+    includeOrientation: true,
+    includeApprovedPlan: true,
+  })
+  if (saved) {
+    return saved.summary
+      ? {
+          ...saved.summary.payload,
+          freshness: saved.summary.freshness,
+      }
+      : null
+  }
+  if (readProjectStateAuthorityAtBoundary(tasksPath).authority === 'database') return null
+  return readProjectSummaryProjection(tasksPath)
+}
+
 export interface ProjectCompactStateReadModel {
   queue: ProjectStateDatabaseQueue
   inventory: ProjectStateDatabaseInventory
@@ -403,20 +515,9 @@ export interface ProjectCompactStateReadModel {
   projectRevision: number
 }
 
-/**
- * One explicit snapshot for the full project map. The map is a detail view,
- * so it may request the bounded task definitions needed to render node
- * maturity, but it still reads queue, inventory, summary, and revisions from
- * one SQLite transaction. It must not assemble those pieces from legacy
- * files or independent route-level readers.
- */
-export interface ProjectMapStateReadModel extends ProjectCompactStateReadModel {}
-
-export function readProjectMapStateModel(tasksPath: string): ProjectMapStateReadModel | null {
-  const current = readProjectStateDatabaseProjectionState<ProjectSummaryProjection>(tasksPath, {
-    includeDefinitions: true,
-  })
-  if (!current) return null
+function compactStateFromDatabaseProjection(
+  current: NonNullable<ReturnType<typeof readProjectStateDatabaseProjectionState<ProjectSummaryProjection>>>,
+): ProjectCompactStateReadModel {
   const summary = current.summary
     ? { ...current.summary.payload, freshness: current.summary.freshness }
     : null
@@ -442,6 +543,23 @@ export function readProjectMapStateModel(tasksPath: string): ProjectMapStateRead
 }
 
 /**
+ * One explicit snapshot for the full project map. The map is a detail view,
+ * so it may request the bounded task definitions needed to render node
+ * maturity, but it still reads queue, inventory, summary, and revisions from
+ * one SQLite transaction. It must not assemble those pieces from legacy
+ * files or independent route-level readers.
+ */
+export interface ProjectMapStateReadModel extends ProjectCompactStateReadModel {}
+
+export function readProjectMapStateModel(tasksPath: string): ProjectMapStateReadModel | null {
+  const current = readProjectStateDatabaseProjectionState<ProjectSummaryProjection>(tasksPath, {
+    includeDefinitions: true,
+  })
+  if (!current) return null
+  return compactStateFromDatabaseProjection(current)
+}
+
+/**
  * Compact project surfaces share one bounded SQLite snapshot. This is a
  * deliberate boundary: callers do not assemble a summary, release envelope,
  * and inventory page from separate reads that can observe different state.
@@ -452,25 +570,91 @@ export function readProjectCompactStateModel(
 ): ProjectCompactStateReadModel | null {
   const current = readProjectStateDatabaseProjectionState<ProjectSummaryProjection>(tasksPath, options)
   if (!current) return null
-  const summary = current.summary
-    ? { ...current.summary.payload, freshness: current.summary.freshness }
-    : null
+  return compactStateFromDatabaseProjection(current)
+}
+
+export interface ProjectCompactStateBoundaryReadModel {
+  authority: 'database' | 'legacy'
+  state: ProjectCompactStateReadModel | null
+  queueRevision: number | null
+  projectRevision: number | null
+}
+
+/**
+ * Read compact project detail and authority from one sessions transaction.
+ * Callers that need to distinguish a missing promoted projection from an
+ * unpromoted project must use this result instead of probing authority and
+ * then opening a second compact read.
+ */
+export function readProjectCompactStateAtBoundary(
+  tasksPath: string,
+  options: ProjectStateDatabaseProjectionReadOptions = {},
+): ProjectCompactStateBoundaryReadModel {
+  const bundle = readProjectStateDatabaseReadBundle<ProjectSummaryProjection>(tasksPath, {
+    ...options,
+    includeProjection: true,
+    includeRepositories: true,
+    includeDiagnostics: true,
+  })
+  if (bundle?.projection) {
+    return {
+      authority: bundle.authority,
+      state: compactStateFromDatabaseProjection(bundle.projection),
+      queueRevision: bundle.queueRevision,
+      projectRevision: bundle.projectRevision,
+    }
+  }
+  const authority = readProjectStateAuthorityAtBoundary(tasksPath)
   return {
-    queue: current.queue as ProjectStateDatabaseQueue,
-    inventory: current.inventory,
-    scope: projectScopeFromSavedState({
-      releases: Array.isArray(current.queue.releases)
-        ? current.queue.releases.map(release => persistableRelease(release as unknown as ProjectRelease))
-        : [],
-      selectedReleaseId: typeof current.queue.selectedReleaseId === 'string' ? current.queue.selectedReleaseId : undefined,
-      summary,
-      scopeRows: current.scopeRows,
-    }),
-    repositories: current.repositories,
-    selectedTask: current.selectedTask,
-    diagnostics: current.diagnostics,
-    summary,
-    authority: 'database',
+    authority: authority.authority,
+    state: null,
+    queueRevision: authority.queueRevision,
+    projectRevision: authority.projectRevision,
+  }
+}
+
+/**
+ * Shared ordinary project surface boundary. This is the only route-facing
+ * adapter that joins compact work, Thread, Inbox, and availability. Each
+ * optional field is still bounded, but all included fields are revision-joined
+ * by the sessions transaction instead of being reopened independently.
+ */
+export interface ProjectSurfaceStateReadModel {
+  authority: 'database' | 'legacy'
+  compact: ProjectCompactStateReadModel | null
+  summary: ProjectSummaryProjection | null
+  thread: ProjectStateDatabaseSurfaceState['thread']
+  attentionRecords: ProjectStateDatabaseSurfaceState['attentionRecords']
+  attentionWatermark: ProjectStateDatabaseSurfaceState['attentionWatermark']
+  memoryHealth: ProjectStateDatabaseSurfaceState['memoryHealth']
+  availability: ProjectStateDatabaseSurfaceState['availability']
+  queueRevision: number | null
+  projectRevision: number | null
+}
+
+export function readProjectSurfaceStateAtBoundary(
+  projectRoot: string,
+  options: ProjectStateDatabaseSurfaceReadOptions = {},
+): ProjectSurfaceStateReadModel | null {
+  const current = readProjectStateDatabaseSurfaceState<ProjectSummaryProjection>(
+    getProjectSystemStatePath(projectRoot, 'TASKS.json'),
+    options,
+  )
+  if (!current) return null
+  return {
+    authority: current.authority,
+    compact: current.projection ? compactStateFromDatabaseProjection(current.projection) : null,
+    summary: current.summary
+      ? {
+          ...current.summary.payload,
+          freshness: current.summary.freshness,
+        }
+      : null,
+    thread: current.thread,
+    attentionRecords: current.attentionRecords,
+    attentionWatermark: current.attentionWatermark,
+    memoryHealth: current.memoryHealth,
+    availability: current.availability,
     queueRevision: current.queueRevision,
     projectRevision: current.projectRevision,
   }
@@ -493,7 +677,10 @@ export interface ProjectTaskDetailReadModel {
   /** Mutable task state captured by the same SQLite detail snapshot. */
   overlay: ProjectStateDatabaseTaskOverlay | null
   relationships: ProjectStateDatabaseTaskRelationships
+  /** Related task points captured by the same SQLite detail snapshot. */
+  relatedTasks: ProjectStateDatabaseTask[]
   scopeRows: ProjectStateDatabaseScopeRow[]
+  availability: ProjectStateDatabaseAvailability | null
   /** Selected execution scope from this same task-detail snapshot. */
   scope: ProjectScope | null
   summary: ProjectSummaryProjection | null
@@ -511,29 +698,100 @@ export function readProjectTaskDetailState(
   tasksPath: string,
   taskId: string,
 ): ProjectTaskDetailReadModel | null {
-  const current = readProjectStateDatabaseTaskDetailState<ProjectSummaryProjection>(tasksPath, taskId)
-  if (!current) return null
-  const summary = current.summary
-    ? { ...current.summary.payload, freshness: current.summary.freshness }
+  return readProjectTaskDetailStateAtBoundary(tasksPath, taskId)?.state ?? null
+}
+
+export interface ProjectTaskDetailBoundaryReadModel {
+  authority: 'database' | 'legacy'
+  state: ProjectTaskDetailReadModel | null
+}
+
+export interface ProjectTaskCurrentBoundaryReadModel {
+  authority: 'database' | 'legacy'
+  state: ProjectTaskDetailReadModel | null
+  /** The current task after the same snapshot's normalized overlays are applied. */
+  task: Record<string, unknown> | null
+}
+
+/**
+ * Read task detail and choose the source in one sessions snapshot. A route
+ * should use this when it needs to distinguish “task not found” from “legacy
+ * project” without reopening the authority marker.
+ */
+export function readProjectTaskDetailStateAtBoundary(
+  tasksPath: string,
+  taskId: string,
+  options: ProjectStateDatabaseTaskDetailReadOptions = {},
+): ProjectTaskDetailBoundaryReadModel | null {
+  const current = readProjectStateDatabaseTaskDetailStateAtBoundary<ProjectSummaryProjection>(tasksPath, taskId, options)
+  if (!current) return { authority: 'legacy', state: null }
+  if (current.authority !== 'database' || !current.state) {
+    return { authority: current.authority, state: null }
+  }
+  const state = current.state
+  const summary = state.summary
+    ? { ...state.summary.payload, freshness: state.summary.freshness }
     : null
   return {
-    queue: current.queue as ProjectStateDatabaseQueue,
-    task: current.task,
-    overlay: current.overlay,
-    relationships: current.relationships,
-    scopeRows: current.scopeRows,
-    scope: projectScopeFromSavedState({
-      releases: Array.isArray(current.queue.releases)
-        ? current.queue.releases.map(release => persistableRelease(release as unknown as ProjectRelease))
-        : [],
-      selectedReleaseId: typeof current.queue.selectedReleaseId === 'string' ? current.queue.selectedReleaseId : undefined,
-      summary,
-      scopeRows: current.scopeRows,
-    }),
-    summary,
     authority: 'database',
-    queueRevision: current.queueRevision,
-    projectRevision: current.projectRevision,
+    state: {
+      queue: state.queue as ProjectStateDatabaseQueue,
+      task: state.task,
+      overlay: state.overlay,
+      relationships: state.relationships,
+      relatedTasks: state.relatedTasks,
+      scopeRows: state.scopeRows,
+      availability: state.availability,
+      scope: projectScopeFromSavedState({
+        releases: Array.isArray(state.queue.releases)
+          ? state.queue.releases.map(release => persistableRelease(release as unknown as ProjectRelease))
+          : [],
+        selectedReleaseId: typeof state.queue.selectedReleaseId === 'string' ? state.queue.selectedReleaseId : undefined,
+        summary,
+        scopeRows: state.scopeRows,
+      }),
+      summary,
+      authority: 'database',
+      queueRevision: state.queueRevision,
+      projectRevision: state.projectRevision,
+    },
+  }
+}
+
+/**
+ * Read one current task through the same boundary used by task detail. The
+ * route gets the point and its effective overlay as one value; it must not
+ * reopen runtime/workspace/evidence stores and rebuild a competing task.
+ * Legacy projects retain their explicit compatibility path, but promoted
+ * projects have exactly one current-task assembly point.
+ */
+export async function readProjectTaskCurrentStateAtBoundary(
+  projectRoot: string,
+  taskId: string,
+  options: ProjectStateDatabaseTaskDetailReadOptions = {},
+): Promise<ProjectTaskCurrentBoundaryReadModel> {
+  const detail = readProjectTaskDetailStateAtBoundary(
+    getProjectSystemStatePath(projectRoot, 'TASKS.json'),
+    taskId,
+    options,
+  )
+  if (detail?.authority !== 'database' || !detail.state) {
+    return {
+      authority: detail?.authority ?? 'legacy',
+      state: null,
+      task: null,
+    }
+  }
+  const point = projectTaskRecordFromDatabasePoint(detail.state.task)
+  const task = await buildEffectiveTask(projectRoot, point as Task, {
+    evidence: 'current',
+    overlay: detail.state.overlay,
+    authority: 'database',
+  })
+  return {
+    authority: 'database',
+    state: detail.state,
+    task: task as Record<string, unknown>,
   }
 }
 
@@ -568,7 +826,133 @@ export function projectTaskRecordFromDatabasePoint(task: ProjectStateDatabaseTas
 /** Read one task definition without opening the aggregate current queue. */
 export function readProjectTaskRecordAtBoundary(tasksPath: string, taskId: string): Record<string, unknown> | null {
   const point = readProjectStateDatabaseTaskPointWithRevision(tasksPath, taskId)
-  return point ? projectTaskRecordFromDatabasePoint(point.task) : null
+  if (point?.projectAuthority === 'database') return projectTaskRecordFromDatabasePoint(point.task)
+  if (!point) return null
+  // A database can be populated before promotion. It is migration/bootstrap
+  // material, not a second current-state authority, so runtime reads stay on
+  // the compatibility queue until the explicit promotion boundary flips.
+  const queue = readProjectTaskQueueSync(tasksPath) as { tasks?: unknown[] }
+  return (Array.isArray(queue.tasks) ? queue.tasks : [])
+    .find((task): task is Record<string, unknown> => (
+      typeof task === 'object' && task !== null && !Array.isArray(task) &&
+      (task as { id?: unknown }).id === taskId
+    )) ?? null
+}
+
+/**
+ * Read current evidence through the project boundary. Progress and other
+ * saved surfaces consume this compact evidence projection; they do not open
+ * the task-event store or choose a second evidence source themselves.
+ */
+export function readProjectCurrentTaskEvidenceAtBoundary(
+  projectRoot: string,
+  taskIds: readonly string[],
+): ReturnType<typeof readProjectStateDatabaseTaskEvidenceCurrentMany> {
+  return readProjectStateDatabaseTaskEvidenceCurrentMany(projectRoot, [...new Set(taskIds)].slice(0, 100))
+}
+
+export function readProjectCurrentTaskEvidenceWithRevisionAtBoundary(
+  projectRoot: string,
+  taskIds: readonly string[],
+): ProjectStateDatabaseTaskEvidenceCurrentManyRead | null {
+  return readProjectStateDatabaseTaskEvidenceCurrentManyWithRevision(projectRoot, [...new Set(taskIds)].slice(0, 100))
+}
+
+/**
+ * Progress is a compact view over the same summary/evidence snapshot. The
+ * sessions reader derives its bounded evidence IDs from that summary inside
+ * one transaction, so Progress no longer reads a shell and then reopens the
+ * database for evidence.
+ */
+export function readProjectProgressStateAtBoundary(projectRoot: string): {
+  summary: ProjectSummaryProjection | null
+  currentEvidence: Map<string, import('@guildhall/sessions').ProjectStateDatabaseTaskEvidenceCurrent>
+  authority: 'database' | 'legacy'
+  queueRevision: number | null
+  projectRevision: number | null
+} | null {
+  const bundle = readProjectStateDatabaseReadBundle<ProjectSummaryProjection>(
+    getProjectSystemStatePath(projectRoot, 'TASKS.json'),
+    {
+      includeOrientation: false,
+      includeApprovedPlan: false,
+      includeCurrentEvidence: true,
+    },
+  )
+  if (!bundle) return null
+  return {
+    summary: bundle.summary
+      ? { ...bundle.summary.payload, freshness: bundle.summary.freshness }
+      : null,
+    currentEvidence: bundle.currentEvidence ?? new Map(),
+    authority: bundle.authority,
+    queueRevision: bundle.queueRevision,
+    projectRevision: bundle.projectRevision,
+  }
+}
+
+/** Read bounded evidence history through the named task-detail boundary. */
+export function readProjectTaskEvidencePageAtBoundary(
+  projectRoot: string,
+  taskId: string,
+  options?: Parameters<typeof readSessionTaskEvidencePage>[2],
+): ReturnType<typeof readSessionTaskEvidencePage> {
+  return readSessionTaskEvidencePage(projectRoot, taskId, options)
+}
+
+/** Read one saved repository projection without inspecting the checkout. */
+export function readProjectRepositoryProjectionAtBoundary(
+  projectRoot: string,
+  projectionId: string,
+): ReturnType<typeof readProjectStateDatabaseRepository> {
+  return readProjectStateDatabaseRepository(projectRoot, projectionId)
+}
+
+export function readProjectProjectionMetadataAtBoundary(projectRoot: string) {
+  return readProjectStateDatabaseMetadata(projectRoot)
+}
+
+export interface ProjectMemoryHealthSourceReadModel {
+  authority: 'database' | 'legacy'
+  queueRevision: number | null
+  projectRevision: number | null
+  taskIds: string[]
+}
+
+/**
+ * Read only the bounded source facts needed by the asynchronous memory
+ * projector. This keeps its revision and task-id selection on the same
+ * sessions snapshot as every other promoted project read.
+ */
+export function readProjectMemoryHealthSourceAtBoundary(
+  tasksPath: string,
+): ProjectMemoryHealthSourceReadModel | null {
+  const bundle = readProjectStateDatabaseReadBundle(tasksPath, {
+    includeProjection: true,
+    limit: 12,
+  })
+  if (!bundle?.projection) return null
+  return {
+    authority: bundle.authority,
+    queueRevision: bundle.queueRevision,
+    projectRevision: bundle.projectRevision,
+    taskIds: bundle.projection.inventory.tasks
+      .map(task => task.id)
+      .filter((taskId): taskId is string => typeof taskId === 'string' && taskId.trim().length > 0),
+  }
+}
+
+export function readProjectTaskQueueAtBoundaryWithRevision(tasksPath: string): {
+  definition: unknown
+  revision: number | null
+  projectRevision: number | null
+} {
+  const current = readProjectTaskQueueForMutationSync(tasksPath)
+  return {
+    definition: current.queue,
+    revision: current.expectedQueueRevision,
+    projectRevision: current.expectedProjectRevision,
+  }
 }
 
 /** Read an explicit task set without scanning the aggregate queue. */
@@ -576,21 +960,145 @@ export function readProjectTaskRecordsAtBoundary(
   tasksPath: string,
   taskIds: readonly string[],
 ): Array<Record<string, unknown>> {
-  const ids = [...new Set(taskIds.filter(id => id.trim().length > 0))].slice(0, 100)
-  if (ids.length === 0) return []
-  if (readProjectStateAuthorityAtBoundary(tasksPath).authority === 'database') {
-    const points = readProjectStateDatabaseTasks(tasksPath, ids, { includeDefinitions: true })
-    return (points ?? []).map(projectTaskRecordFromDatabasePoint)
+  return readProjectTaskRecordsAtBoundaryWithRevision(tasksPath, taskIds, { includeDefinitions: true }).records
+}
+
+export interface ProjectTaskRecordsAtBoundaryRead {
+  records: Array<Record<string, unknown>>
+  /** Database points are retained for callers that need typed indexed rows. */
+  taskPoints?: ProjectStateDatabaseTask[]
+  queueRevision: number | null
+  projectRevision: number | null
+}
+
+export interface ProjectTaskCurrentRecordsAtBoundaryRead extends ProjectTaskRecordsAtBoundaryRead {
+  authority: 'database' | 'legacy'
+  /** The same bounded task records after normalized current overlays apply. */
+  effectiveRecords: Array<Record<string, unknown>>
+}
+
+export class ProjectStateRevisionMismatchError extends Error {
+  readonly code = 'project_state_revision_mismatch'
+
+  constructor(
+    readonly expected: { queue: number; project: number },
+    readonly actual: { queue: number | null; project: number | null },
+  ) {
+    super('Project state changed while loading this surface. Retry the read against one current snapshot.')
+    this.name = 'ProjectStateRevisionMismatchError'
   }
+}
+
+/**
+ * Read explicit task points and retain the revisions that contained them.
+ * A caller that already read a compact snapshot can compare these revisions
+ * before combining the points with that snapshot. This keeps a route from
+ * accidentally producing a response assembled across two project states.
+ */
+export function readProjectTaskRecordsAtBoundaryWithRevision(
+  tasksPath: string,
+  taskIds: readonly string[],
+  options: { includeDefinitions?: boolean } = {},
+): ProjectTaskRecordsAtBoundaryRead {
+  const ids = [...new Set(taskIds.filter(id => id.trim().length > 0))].slice(0, 100)
+  if (ids.length === 0) {
+    const authority = readProjectStateAuthorityAtBoundary(tasksPath)
+    return {
+      records: [],
+      queueRevision: authority.queueRevision,
+      projectRevision: authority.projectRevision,
+    }
+  }
+  const points = readProjectStateDatabaseTaskPointsWithRevision(tasksPath, ids, {
+    includeDefinitions: options.includeDefinitions === true,
+  })
+  if (points?.projectAuthority === 'database') {
+    return {
+      records: points.tasks.map(projectTaskRecordFromDatabasePoint),
+      taskPoints: points.tasks,
+      queueRevision: points.queueRevision,
+      projectRevision: points.projectRevision,
+    }
+  }
+  if (!points && readProjectStateAuthorityAtBoundary(tasksPath).authority === 'database') {
+    throw new Error(`Authoritative current task state is unavailable for ${tasksPath}`)
+  }
+  // A database file may exist before promotion. Preserve the explicit
+  // compatibility branch, but do not let its authority decision leak into a
+  // promoted point read: the point reader already captured that decision.
   const queue = readProjectTaskQueueSync(tasksPath) as { tasks?: unknown[] }
   const wanted = new Set(ids)
-  return (Array.isArray(queue.tasks) ? queue.tasks : [])
-    .filter((task): task is Record<string, unknown> => (
-      typeof task === 'object' && task !== null && !Array.isArray(task) &&
-      typeof (task as { id?: unknown }).id === 'string' &&
-      wanted.has((task as { id: string }).id)
-    ))
-    .map(task => ({ ...task }))
+  return {
+    records: (Array.isArray(queue.tasks) ? queue.tasks : [])
+      .filter((task): task is Record<string, unknown> => (
+        typeof task === 'object' && task !== null && !Array.isArray(task) &&
+        typeof (task as { id?: unknown }).id === 'string' &&
+        wanted.has((task as { id: string }).id)
+      ))
+      .map(task => ({ ...task })),
+    queueRevision: null,
+    projectRevision: null,
+  }
+}
+
+/**
+ * Read and normalize an explicit task set through one current-state
+ * boundary. Promoted projects get task points, overlays, and revisions from
+ * one SQLite transaction. Legacy projects use the explicit compatibility
+ * adapter and never masquerade as promoted state.
+ */
+export async function readProjectTaskCurrentRecordsAtBoundary(
+  projectRoot: string,
+  taskIds: readonly string[],
+  options: { includeDefinitions?: boolean } = {},
+): Promise<ProjectTaskCurrentRecordsAtBoundaryRead> {
+  const ids = [...new Set(taskIds.filter(id => id.trim().length > 0))].slice(0, 100)
+  const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+  const current = readProjectStateDatabaseCurrentTasksWithRevision(tasksPath, ids, {
+    includeDefinitions: options.includeDefinitions === true,
+  })
+  if (current) {
+    const records = current.tasks.map(projectTaskRecordFromDatabasePoint)
+    const runtime = [] as ProjectStateDatabaseTaskOverlayStores['runtime']
+    const workspace = [] as ProjectStateDatabaseTaskOverlayStores['workspace']
+    const evidenceCurrent = new Map<string, NonNullable<ProjectStateDatabaseTaskOverlay['evidenceCurrent']>>()
+    for (const task of current.tasks) {
+      const overlay = current.overlays.get(task.id)
+      if (!overlay) throw new Error(`Normalized current task state is unavailable for promoted task ${task.id}`)
+      if (overlay.runtime) runtime.push(overlay.runtime)
+      if (overlay.workspace) workspace.push(overlay.workspace)
+      if (overlay.evidenceCurrent) evidenceCurrent.set(task.id, overlay.evidenceCurrent)
+    }
+    const effective = await buildEffectiveTasks(projectRoot, records as Task[], {
+      evidence: 'current',
+      databaseStores: { runtime, workspace, evidenceCurrent },
+      authority: 'database',
+    })
+    return {
+      records,
+      taskPoints: current.tasks,
+      effectiveRecords: effective as Array<Record<string, unknown>>,
+      authority: 'database',
+      queueRevision: current.queueRevision,
+      projectRevision: current.projectRevision,
+    }
+  }
+  if (readProjectStateAuthorityAtBoundary(tasksPath).authority === 'database') {
+    throw new Error(`Authoritative current task state is unavailable for ${tasksPath}`)
+  }
+  const legacy = readProjectTaskRecordsAtBoundaryWithRevision(tasksPath, ids, {
+    includeDefinitions: options.includeDefinitions === true,
+  })
+  const effective = await buildEffectiveTasks(projectRoot, legacy.records as Task[], {
+    evidence: 'current',
+    databaseStores: null,
+    authority: 'legacy',
+  })
+  return {
+    ...legacy,
+    effectiveRecords: effective as Array<Record<string, unknown>>,
+    authority: 'legacy',
+  }
 }
 
 export function readProjectCurrentStateModel(tasksPath: string): ProjectCurrentStateReadModel {
@@ -604,6 +1112,7 @@ export function readProjectCurrentStateModel(tasksPath: string): ProjectCurrentS
         scope: null,
         repositories: [],
         diagnostics: null,
+        memoryHealth: null,
         taskOverlays: null,
         summary: readProjectSummaryProjection(tasksPath),
         authority: 'legacy',
@@ -631,6 +1140,7 @@ export function readProjectCurrentStateModel(tasksPath: string): ProjectCurrentS
     }),
     repositories: current.repositories,
     diagnostics: current.diagnostics,
+    memoryHealth: current.memoryHealth,
     taskOverlays: current.taskOverlays,
     summary,
     authority: 'database',
@@ -807,7 +1317,9 @@ function writeTargetedTaskMutationIfSafe(
 
   const current = readProjectTaskQueueSyncWithRevision(tasksPath)
   const expectedQueueRevision = options.expectedQueueRevision ?? current.revision
-  if (!Number.isInteger(expectedQueueRevision) || expectedQueueRevision < 0) return false
+  if (typeof expectedQueueRevision !== 'number' || !Number.isInteger(expectedQueueRevision) || expectedQueueRevision < 0) return false
+  const expectedProjectRevision = current.projectRevision
+  if (typeof expectedProjectRevision !== 'number' || !Number.isInteger(expectedProjectRevision) || expectedProjectRevision < 0) return false
   const currentQueue = readProjectStateDatabaseQueueDefinition(tasksPath) ?? current.queue
   const currentTasks = taskRecordById(currentQueue)
   const nextTasks = taskRecordById(queue)
@@ -845,7 +1357,7 @@ function writeTargetedTaskMutationIfSafe(
     task: nextTask,
     summary: prepared.projection as unknown as Record<string, unknown>,
     expectedQueueRevision,
-    expectedProjectRevision: current.projectRevision,
+    expectedProjectRevision,
     lastUpdated,
     scopeRow,
     evidence: options.taskEvidence,
@@ -911,7 +1423,12 @@ export function writePromotedTaskDetailMutation(
       ? nextTask.releaseIds.filter((value): value is string => typeof value === 'string')
       : point.task.releaseIds,
     updatedAt: typeof nextTask.updatedAt === 'string' ? nextTask.updatedAt : point.task.updatedAt,
-    completedAt: typeof nextTask.completedAt === 'string' ? nextTask.completedAt : point.task.completedAt,
+    // An explicit `undefined` is a deletion, not permission to resurrect the
+    // old indexed value. Historical completion belongs in evidence; the
+    // current index must reflect the mutation exactly.
+    completedAt: Object.prototype.hasOwnProperty.call(nextTask, 'completedAt')
+      ? (typeof nextTask.completedAt === 'string' ? nextTask.completedAt : undefined)
+      : point.task.completedAt,
     scopeRow: nextScopeRow,
   }
   const generatedAt = typeof nextTask.updatedAt === 'string' ? nextTask.updatedAt : new Date().toISOString()
@@ -952,7 +1469,9 @@ function writeTargetedReleaseSelectionIfSafe(
 
   const current = readProjectTaskQueueSyncWithRevision(tasksPath)
   const expectedQueueRevision = options.expectedQueueRevision ?? current.revision
-  if (!Number.isInteger(expectedQueueRevision) || expectedQueueRevision < 0) return false
+  if (typeof expectedQueueRevision !== 'number' || !Number.isInteger(expectedQueueRevision) || expectedQueueRevision < 0) return false
+  const expectedProjectRevision = current.projectRevision
+  if (typeof expectedProjectRevision !== 'number' || !Number.isInteger(expectedProjectRevision) || expectedProjectRevision < 0) return false
   const currentQueue = readProjectStateDatabaseQueueDefinition(tasksPath) ?? current.queue
   const currentTasks = taskRecordById(currentQueue)
   const nextTasks = taskRecordById(queue)
@@ -975,7 +1494,7 @@ function writeTargetedReleaseSelectionIfSafe(
     summary: prepared.projection as unknown as Record<string, unknown>,
     scopeRows: prepared.scopeRows,
     expectedQueueRevision,
-    expectedProjectRevision: current.projectRevision,
+    expectedProjectRevision,
     lastUpdated: typeof queue.lastUpdated === 'string' ? queue.lastUpdated : null,
   })
   return true
@@ -1002,7 +1521,9 @@ function writeTargetedTaskBatchMutationIfSafe(
   if (readProjectStateAuthorityAtBoundary(tasksPath).authority !== 'database') return false
   const current = readProjectTaskQueueSyncWithRevision(tasksPath)
   const expectedQueueRevision = options.expectedQueueRevision ?? current.revision
-  if (!Number.isInteger(expectedQueueRevision) || expectedQueueRevision < 0) return false
+  if (typeof expectedQueueRevision !== 'number' || !Number.isInteger(expectedQueueRevision) || expectedQueueRevision < 0) return false
+  const expectedProjectRevision = current.projectRevision
+  if (typeof expectedProjectRevision !== 'number' || !Number.isInteger(expectedProjectRevision) || expectedProjectRevision < 0) return false
   const currentQueue = readProjectStateDatabaseQueueDefinition(tasksPath) ?? current.queue
   const currentTasks = taskRecordById(currentQueue)
   const nextTasks = taskRecordById(queue)
@@ -1059,7 +1580,7 @@ function writeTargetedTaskBatchMutationIfSafe(
     ...(options.taskEvidence ? { evidence: options.taskEvidence } : {}),
     summary: prepared.projection as unknown as Record<string, unknown>,
     expectedQueueRevision,
-    expectedProjectRevision: current.projectRevision,
+    expectedProjectRevision,
     lastUpdated: isRecord(queue) && typeof queue.lastUpdated === 'string' ? queue.lastUpdated : null,
   })
   return true
@@ -1221,6 +1742,7 @@ const PROMOTED_EVIDENCE_FIELDS: Readonly<Record<string, TaskEvidenceKind>> = {
   escalations: 'escalation',
   agentIssues: 'agent_issue',
   mergeRecord: 'merge_record',
+  doneSummaryBundle: 'completion_summary',
 }
 
 /**

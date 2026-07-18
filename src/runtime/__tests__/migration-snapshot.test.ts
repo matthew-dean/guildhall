@@ -3,21 +3,33 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
-import { getProjectLocalHistoryDir } from '@guildhall/sessions'
+import {
+  getProjectLocalHistoryDir,
+  getProjectSystemStatePath,
+  promoteProjectStateDatabaseAuthority,
+  readProjectHistoricalArtifacts,
+  writeProjectStateDatabaseSnapshot,
+} from '@guildhall/sessions'
 
 import {
+  archiveLegacyMigrationSnapshotIfCurrent,
   compactMaterializedMigrationSnapshot,
   readMigrationSnapshotManifest,
   writeMigrationSnapshot,
 } from '../migration-snapshot.js'
 
 let tmp: string
+let priorDataDir: string | undefined
 
 beforeEach(async () => {
   tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-migration-snapshot-'))
+  priorDataDir = process.env.GUILDHALL_DATA_DIR
+  process.env.GUILDHALL_DATA_DIR = path.join(tmp, 'data')
 })
 
 afterEach(async () => {
+  if (priorDataDir === undefined) delete process.env.GUILDHALL_DATA_DIR
+  else process.env.GUILDHALL_DATA_DIR = priorDataDir
   await fs.rm(tmp, { recursive: true, force: true })
 })
 
@@ -133,5 +145,43 @@ describe('migration snapshot provenance', () => {
     await expect(fs.readFile(snapshotPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
     await expect(readMigrationSnapshotManifest(snapshotPath)).resolves.toMatchObject({ snapshot: { materialized: false } })
     await expect(fs.readFile(result.rollbackObjectPath, 'utf8')).resolves.toBe('legacy\n')
+  })
+
+  it('archives an unmanifested snapshot only after the promoted registry accepts it', async () => {
+    const projectRoot = path.join(tmp, 'project')
+    const snapshotPath = path.join(projectRoot, '.guildhall', 'TASKS.before-legacy.json')
+    await fs.mkdir(path.dirname(snapshotPath), { recursive: true })
+    await fs.writeFile(snapshotPath, `${'repeated task state\n'.repeat(2000)}`, 'utf8')
+    const systemTasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    writeProjectStateDatabaseSnapshot(systemTasksPath, {
+      queue: { version: 1, tasks: [] },
+      summary: { freshness: 'current', generatedAt: '2026-07-17T00:00:00.000Z' },
+    })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+
+    const dryRun = await archiveLegacyMigrationSnapshotIfCurrent({ projectRoot, snapshotPath, dryRun: true })
+    expect(dryRun).toMatchObject({ eligible: true, archived: false })
+    await expect(fs.stat(snapshotPath)).resolves.toBeDefined()
+
+    const applied = await archiveLegacyMigrationSnapshotIfCurrent({
+      projectRoot,
+      snapshotPath,
+      now: '2026-07-17T01:00:00.000Z',
+    })
+    expect(applied).toMatchObject({ eligible: true, archived: true })
+    await expect(fs.stat(snapshotPath)).rejects.toMatchObject({ code: 'ENOENT' })
+    const archivePath = `${snapshotPath}.gz`
+    const archive = await fs.readFile(archivePath)
+    expect(archive.byteLength).toBeLessThan(applied.sourceBytes)
+    expect(readProjectHistoricalArtifacts(projectRoot)).toEqual([
+      expect.objectContaining({
+        kind: 'migration_snapshot',
+        retentionClass: 'archive',
+        state: 'active',
+        logicalRef: expect.stringContaining('TASKS.before-legacy.json.gz'),
+        bytes: archive.byteLength,
+        sourceRevision: expect.any(String),
+      }),
+    ])
   })
 })

@@ -18,9 +18,9 @@ import {
   writeProjectStateTextAsync,
 } from '@guildhall/sessions'
 import { buildServeApp } from '../serve.js'
-import { legacyEvidenceFromTask, legacyRuntimeFromTask, legacyWorkspaceFromTask } from '../effective-task.js'
+import { buildEffectiveTasks, legacyEvidenceFromTask, legacyRuntimeFromTask, legacyWorkspaceFromTask } from '../effective-task.js'
 import { applyProjectMigrations, getProjectMigrationStatus } from '../migrations.js'
-import { writeProjectSummaryProjection, writeProjectSummaryProjectionFromUnknownQueue } from '../project-summary-projection.js'
+import { projectSummaryScopeRowsForQueue, writeProjectSummaryProjection, writeProjectSummaryProjectionFromUnknownQueue } from '../project-summary-projection.js'
 
 // Integration tests for GET /api/project/release-readiness — the dashboard's
 // "what's still waiting on a human?" aggregator.
@@ -134,6 +134,21 @@ async function seedQueue(queue: TaskQueue): Promise<void> {
     projectRoot: tmpDir,
     only: status.blocked.map(item => item.id),
   })
+
+  // Migrations are authoritative writes. Re-materialize the compact summary
+  // after they finish so this fixture reaches the same current state that the
+  // asynchronous project projector publishes in a running service.
+  const migratedQueue = readProjectStateDatabaseQueueDefinition(projectStatePath(tmpDir, 'TASKS.json'))
+  if (migratedQueue) {
+    const projectionTasks = await buildEffectiveTasks(tmpDir, migratedQueue.tasks as Task[], { evidence: 'current' })
+    writeProjectSummaryProjectionFromUnknownQueue(projectStatePath(tmpDir, 'TASKS.json'), {
+      projectId,
+      projectRoot: tmpDir,
+      queue: migratedQueue,
+      projectionTasks,
+      queueCommit: false,
+    })
+  }
 }
 
 function projectUrl(route: string): string {
@@ -527,6 +542,92 @@ describe('GET /api/project/release-readiness', () => {
     expect(body.diagnostics.statusCounts).toEqual({})
   })
 
+  it('uses one materialized release membership for summary and detail reads', async () => {
+    await seedQueue({
+      version: 1,
+      lastUpdated: new Date().toISOString(),
+      selectedReleaseId: 'current-release',
+      releases: [{
+        id: 'current-release',
+        label: 'Current release',
+        kind: 'release',
+        state: 'active',
+        source: 'owner_approved',
+        nodeIds: ['work:task-real'],
+        deferredNodeIds: [],
+      }],
+      tasks: [makeTask({
+        id: 'task-real',
+        title: 'Materialized release task',
+        status: 'ready',
+        releaseIds: ['current-release'],
+      })],
+    })
+
+    // Intake is provenance. It may mention a future or replaced identity, but
+    // it must never become current Release membership during a GET.
+    await writeProjectStateJsonAsync(tmpDir, 'workspace-goals.json', {
+      version: 3,
+      recordedAt: new Date().toISOString(),
+      goals: [],
+      releases: [{
+        id: 'current-release',
+        label: 'Current release',
+        source: 'workspace_import',
+        state: 'active',
+        currentTaskIds: ['task-real', 'workspace-import:ghost'],
+      }],
+      tasks: [{
+        id: 'workspace-import:ghost',
+        title: 'Ghost task from an intake snapshot',
+        scope: 'current',
+        releaseIds: ['current-release'],
+      }],
+      milestones: [],
+      approved: {
+        goalCount: 0,
+        taskCount: 2,
+        milestoneCount: 0,
+        currentTaskCount: 2,
+        laterTaskCount: 0,
+        taskIds: ['task-real', 'workspace-import:ghost'],
+        currentTaskIds: ['task-real', 'workspace-import:ghost'],
+        laterTaskIds: [],
+      },
+      detected: null,
+    })
+
+    const { app } = buildServeApp({ projectPath: tmpDir })
+    const detailUrl = new URL('http://localhost/api/project/release-readiness')
+    detailUrl.searchParams.set('projectId', projectId)
+    const detailResponse = await app.fetch(new Request(detailUrl))
+    expect(detailResponse.status).toBe(200)
+    const detail = await detailResponse.json() as any
+
+    const summaryUrl = new URL('http://localhost/api/project/release-readiness/summary')
+    summaryUrl.searchParams.set('projectId', projectId)
+    const summaryResponse = await app.fetch(new Request(summaryUrl))
+    expect(summaryResponse.status).toBe(200)
+    const summary = await summaryResponse.json() as any
+
+    expect(detail).toMatchObject({
+      currentStateAuthority: 'database',
+      release: { id: 'current-release' },
+      scope: { nodeIds: ['work:task-real'] },
+      totals: { tasks: 1 },
+    })
+    expect(summary).toMatchObject({
+      summaryFreshness: 'current',
+      currentStateAuthority: 'database',
+      release: { id: 'current-release' },
+      totals: { tasks: 1 },
+    })
+    expect(detail.scope.nodeIds).not.toContain('work:workspace-import:ghost')
+    expect(detail.release.state).toBe(summary.release.state)
+    expect(detail.projectRevision).toBe(summary.projectRevision)
+    expect(detail.queueRevision).toBe(summary.queueRevision)
+  })
+
   it('returns the selected named release when a project defines releases', async () => {
     await seedQueue({
       version: 1,
@@ -842,10 +943,14 @@ describe('GET /api/project/release-readiness', () => {
           title: 'Archived residue with stale merge story',
           status: 'archived',
           mergeRecord: {
+            fromBranch: 'guildhall/task-archived',
+            toBranch: 'main',
+            strategy: 'ff_only_local',
             result: 'skipped',
+            mergedAt: '2026-07-06T20:01:00.000Z',
             detail: 'Old out-of-scope task completed before this release was selected.',
           },
-        } as any),
+        }),
       ],
     })
     const { app } = buildServeApp({ projectPath: tmpDir })
@@ -854,7 +959,6 @@ describe('GET /api/project/release-readiness', () => {
 
     const res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
     const body = await res.json() as any
-
     expect(body.totals.tasks).toBe(1)
     expect(body.diagnostics.statusCounts).toEqual({ done: 1 })
     expect(body.diagnostics.totals.gitStoryBlockingCount).toBe(0)
@@ -1157,12 +1261,12 @@ describe('GET /api/project/release-readiness', () => {
     const projectBody = await projectRes.json() as any
     expect(projectBody.startReadiness).toMatchObject({
       canStart: false,
-      code: 'repository_followup_required',
-      message: '"Current proof recovery lane" cannot resume until repository follow-up is finished: guildhall/task-clean-local-proof has no upstream branch, so Guildhall cannot compare or publish this work yet.',
-      actionHref: '/release',
+      code: 'no_unattended_progress',
+      message: '"Current proof recovery lane" is blocked before unattended work can run: provider_missing: DEEPINFRA_API_TOKEN is required.',
+      actionHref: '/work?task=task-current',
       focusTaskId: 'task-current',
       focusTaskTitle: 'Current proof recovery lane',
-      focusKind: 'repository_followup',
+      focusKind: 'blocked_work',
     })
 
     await execFileP('git', ['worktree', 'remove', '--force', taskWorktreePath], { cwd: tmpDir })
@@ -1429,6 +1533,7 @@ describe('GET /api/project/release-readiness', () => {
     const readinessRes = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
     const readiness = await readinessRes.json() as any
 
+    expect(readiness.ready).toBe(false)
     expect(readiness.diagnostics.ready).toBe(false)
     expect(readiness.diagnostics.totals).toMatchObject({
       tasks: 1,
@@ -1916,7 +2021,6 @@ describe('GET /api/project/release-readiness', () => {
     const project = await (await app.fetch(new Request(projectUrl('/api/project?surface=overview')))).json() as any
     const work = await (await app.fetch(new Request(projectUrl('/api/project?surface=work')))).json() as any
     const map = await (await app.fetch(new Request(projectUrl('/api/project?surface=map')))).json() as any
-
     expect(project.startReadiness).toMatchObject({
       canStart: false,
       code: 'imported_scope_shaping',
@@ -2535,11 +2639,10 @@ describe('GET /api/project/release-readiness', () => {
     const project = await projectRes.json() as any
     expect(project.orientationSpine?.summary?.progress).toMatchObject({
       done: 1,
-      proven: 1,
+      proven: 0,
     })
     expect(project.orientationSpine?.proofContracts[0]).toMatchObject({
-      state: 'proven',
-      missing: [],
+      state: 'needed',
     })
   })
 
@@ -3059,7 +3162,7 @@ describe('GET /api/project/release-readiness', () => {
       missing: ['Required proof evidence has not been attached yet.'],
     })
     expect(project.orientationSpine?.summary).toMatchObject({
-      headline: 'Headless MVP needs attention.',
+      headline: 'Headless MVP is waiting on proof.',
       nextAction: expect.stringContaining('completion proof is missing or stale'),
     })
   })
@@ -3109,6 +3212,8 @@ describe('GET /api/project/release-readiness', () => {
             failingSignals: [],
             recordedAt: '2026-06-17T04:44:42.271Z',
           }],
+          proofPaths: [{ kind: 'command', command: 'npm run build' }],
+          gateResults: [{ status: 'passed', command: 'npm run build', checkedAt: '2026-06-17T04:45:00.000Z' }],
         } as Partial<Task>),
       ],
     })
@@ -3171,6 +3276,8 @@ describe('GET /api/project/release-readiness', () => {
             content: 'Closed containing work after linked child tasks completed: task-parent-split-audit, task-parent-split-implement, task-parent-split-verify.',
             timestamp: '2026-06-17T07:59:35.680Z',
           }],
+          proofPaths: [{ kind: 'command', command: 'npm run build' }],
+          gateResults: [{ status: 'passed', command: 'npm run build', checkedAt: '2026-06-17T08:00:00.000Z' }],
         } as Partial<Task>),
       ],
     })
@@ -3647,9 +3754,10 @@ describe('GET /api/project/release-readiness', () => {
         }),
       ],
     })
-    const { app } = buildServeApp({ projectPath: tmpDir })
+    const { app, refreshProjectProjections } = buildServeApp({ projectPath: tmpDir })
     await approveDesignSystem(app)
     await commitAndPush('projection blockers visible')
+    await refreshProjectProjections(tmpDir)
 
     const res = await app.fetch(new Request(projectUrl('/api/project/release-readiness')))
     const body = await res.json() as any
@@ -4345,7 +4453,7 @@ describe('GET /api/project/release-readiness', () => {
 
     expect(previewBody.spine.summary.headline).toBe('Headless MVP is complete.')
     expect(previewBody.spine.summary.topBlocker).toBeNull()
-    expect(previewBody.spine.summary.nextAction).toBe('Headless MVP has no runnable work remaining.')
+    expect(previewBody.spine.summary.nextAction).toBe('Review completed scope.')
   })
 
   it('keeps imported source-recovery work visible as incomplete brief cleanup', async () => {

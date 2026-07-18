@@ -46,6 +46,8 @@ export const ExpectedEvidence = z.object({
   description: z.string(),
   required: z.boolean().default(true),
   sourceRef: z.string().optional(),
+  expectedExit: z.enum(['zero', 'non_zero']).optional(),
+  expectedOutputIncludes: z.array(z.string()).optional(),
 })
 export type ExpectedEvidence = z.infer<typeof ExpectedEvidence>
 

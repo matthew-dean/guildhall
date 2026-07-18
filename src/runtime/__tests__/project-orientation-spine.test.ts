@@ -1808,6 +1808,44 @@ describe('buildProjectOrientationSpine', () => {
     expect(spine.proofContracts[0]?.verified).not.toContain('Review approved: llm')
   })
 
+  it('does not let historical evidence prove a non-terminal task with no current proof contract', () => {
+    const spine = buildProjectOrientationSpine({
+      projectId: 'narrative-harness',
+      now: '2026-07-18T12:00:00.000Z',
+      scope: {
+        id: 'stage-1-headless-mvp',
+        label: 'Stage 1 Headless MVP',
+        kind: 'release',
+        source: 'release_plan',
+        nodeIds: ['work:synopsis-expansion'],
+        deferredNodeIds: [],
+      },
+      tasks: [{
+        id: 'synopsis-expansion',
+        title: 'Expand synopsis into story records',
+        status: 'spec_review',
+        gateResults: [{
+          gateId: 'pnpm-test',
+          type: 'hard',
+          passed: true,
+          checkedAt: '2026-07-10T12:00:00.000Z',
+        }],
+        reviewVerdicts: [{
+          verdict: 'approve',
+          reviewerPath: 'llm',
+          recordedAt: '2026-07-10T12:00:00.000Z',
+        }],
+        proofPaths: [],
+      }],
+    })
+
+    expect(spine.proofContracts[0]).toMatchObject({
+      state: 'needed',
+      missing: ['Current proof contract has not been attached yet.'],
+    })
+    expect(spine.proofContracts[0]?.verified).toEqual([])
+  })
+
   it('does not treat imported proof-path status as completed proof evidence', () => {
     const spine = buildProjectOrientationSpine({
       projectId: 'narrative-harness',

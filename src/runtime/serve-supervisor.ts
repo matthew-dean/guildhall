@@ -19,7 +19,7 @@ import type { ResolvedConfig } from '@guildhall/config'
 import { emitProjectSummaryInvalidation, getProjectRecentEventsPath, getProjectStateDir, getProjectSystemStatePath } from '@guildhall/sessions'
 import { runOrchestrator } from './orchestrator.js'
 import type { OrchestratorRunResult } from './orchestrator.js'
-import { updateProjectSummaryProjection } from './project-summary-projection.js'
+import { readProjectSummaryProjection, updateProjectSummaryProjection } from './project-summary-projection.js'
 import { subscribeProviderClientHealth, type ProviderClientHealthSnapshot } from './provider-client-pool.js'
 import {
   ProcessRegistry,
@@ -187,6 +187,9 @@ const PERSISTED_EVENT_PAGE_LIMIT = 100
 const PERSISTED_EVENT_INDEX_VERSION = 1
 const PERSISTED_EVENT_INDEX_CHUNK_BYTES = 64 * 1024
 const PERSISTED_EVENT_INDEX_MAX_LINE_BYTES = PERSISTED_EVENT_BYTE_LIMIT
+// A worker turn must eventually hand control back to the orchestrator even
+// when it keeps emitting tool events without changing durable task state.
+const DEFAULT_WORKER_TURN_WALL_CLOCK_TIMEOUT_MS = 2 * 60 * 1000
 
 type RunOrchestratorFn = typeof runOrchestrator
 type ResolveConfigFn = (opts: { workspacePath: string }) => ResolvedConfig
@@ -563,12 +566,45 @@ function updateExecutionProjection(run: Pick<WorkspaceRun, 'workspacePath' | 'st
       status: run.status,
       mode: run.mode,
       startedAt: run.startedAt,
-      ...(run.stoppedAt ? { stoppedAt: run.stoppedAt } : {}),
-      ...(run.stopRequestedAt ? { stopRequestedAt: run.stopRequestedAt } : {}),
-      ...(run.error ? { error: run.error } : {}),
+      stoppedAt: run.stoppedAt ?? null,
+      stopRequestedAt: run.stopRequestedAt ?? null,
+      error: run.error ?? null,
       updatedAt,
     },
   })
+}
+
+/**
+ * A supervisor is intentionally in-memory, so a process crash can leave a
+ * durable execution row claiming that a run is still live. Recover that state
+ * at the explicit service-start boundary, before fleet shells are published.
+ * Ordinary summary reads remain read-only and no compatibility file is
+ * rewritten.
+ */
+export function recoverOrphanedExecutionProjection(
+  workspacePath: string,
+  now = new Date().toISOString(),
+): boolean {
+  const tasksPath = getProjectSystemStatePath(workspacePath, 'TASKS.json')
+  const projection = readProjectSummaryProjection(tasksPath)
+  if (!projection) return false
+  const execution = projection.execution
+  if (!execution || (execution.status !== 'running' && execution.status !== 'stopping')) return false
+  const message = execution.status === 'stopping'
+    ? 'Guildhall recovered an interrupted stop from a previous service process.'
+    : 'Guildhall recovered an interrupted run from a previous service process.'
+  updateProjectSummaryProjection(tasksPath, {
+    execution: {
+      status: 'error',
+      ...(execution.mode ? { mode: execution.mode } : {}),
+      ...(execution.startedAt ? { startedAt: execution.startedAt } : {}),
+      ...(execution.stopRequestedAt ? { stopRequestedAt: execution.stopRequestedAt } : {}),
+      stoppedAt: now,
+      error: message,
+      updatedAt: now,
+    },
+  })
+  return true
 }
 
 export class OrchestratorSupervisor {
@@ -728,6 +764,9 @@ export class OrchestratorSupervisor {
           stopSignal,
           abortSignal: abortController.signal,
           tickDelayMs: 2000,
+          agentGenerateWallClockTimeoutMs: {
+            worker: DEFAULT_WORKER_TURN_WALL_CLOCK_TIMEOUT_MS,
+          },
           ...(opts.providerOverride ? { providerOverride: opts.providerOverride } : {}),
           ...(opts.modelAssignmentOverride ? { modelAssignmentOverride: opts.modelAssignmentOverride } : {}),
           ...(opts.stopAfterOneTask ? { stopAfterOneTask: true } : {}),

@@ -293,7 +293,27 @@ export async function persistLearningCandidates(input: {
 
   return buildLearningSnapshot({
     memoryDir: input.memoryDir,
-    review: { areaGroups: [], sourceGroups: [], totalTaskCandidates: 0, totalMilestones: 0, totalGoals: 0 },
+    review: {
+      summary: {
+        currentMilestoneLabel: null,
+        releaseScopeLabel: null,
+        headline: '',
+        currentScope: '',
+        deferredScope: null,
+        structuralScope: null,
+        briefInputCount: 0,
+        briefRecordCount: 0,
+        capabilityCount: 0,
+        capabilityRecordCount: 0,
+      },
+      areaGroups: [],
+      sourceGroups: [],
+      totalTaskCandidates: 0,
+      totalCurrentTaskCandidates: 0,
+      totalLaterTaskCandidates: 0,
+      totalMilestones: 0,
+      totalGoals: 0,
+    },
     draft: { goals: [], milestones: [], context: [], stats: { inputSignals: 0, drafted: 0, deduped: 0 }, tasks: [] },
   })
 }

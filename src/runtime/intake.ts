@@ -13,12 +13,15 @@ import {
 } from '@guildhall/sessions'
 import {
   appendExploringTranscript,
+  replaceExploringTranscript,
   isMaterializableSplitAction,
   materializeSplitChildren,
   resolveEscalation,
   resolveSupersededEscalations,
   settleAlreadyRepresentedSplitRecommendations,
   settleMaterializedSplitReadiness,
+  materializeProofSetupTask,
+  isProofSetupTask,
 } from '@guildhall/tools'
 import {
   continueImportedSourceRecovery,
@@ -41,9 +44,12 @@ import {
 import { taskShapingBlockers } from '../shared/task-shaping-blockers.js'
 import { applyTaskShaping } from './task-decomposition.js'
 import { transitionTaskStatus } from './task-transition.js'
-import { createOwnerInputRequest } from './owner-input-store.js'
+import { cancelOwnerInputRequestsForTask, createOwnerInputRequest } from './owner-input-store.js'
 import { buildSurfaceReviewPacketsForStructuredSpec } from './contract-surfaces.js'
 import { buildEffectiveTask } from './effective-task.js'
+import { assessTaskReadiness, hasExplicitNoSplitBoundary } from './task-readiness.js'
+import { isConcreteProjectProofCommand, replaceGenericProjectProofPathsWithSetup } from './proof-paths.js'
+import { resetCurrentPlanForProofRecovery } from './task-plan-recovery.js'
 import {
   sanitizeTaskQueueForProjectWrite,
   readProjectStateAuthorityAtBoundary,
@@ -187,6 +193,8 @@ export async function createExploringTask(input: IntakeInput): Promise<IntakeRes
     description: input.ask,
     domain: input.domain,
     projectPath: input.projectPath,
+    references: [],
+    sourceClaims: [],
     status: 'exploring',
     priority: 'normal',
     dependsOn: [],
@@ -423,6 +431,57 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
     }
   }
 
+  const selectedRelease = (task.releaseIds ?? [])
+    .map(releaseId => queue.releases?.find(release => release.id === releaseId))
+    .find(release => release?.id === queue.selectedReleaseId)
+  const requiresScriptProof = selectedRelease?.proofStyle === 'script_only' && !isProofSetupTask(task)
+  let proofSetupTaskId: string | null = null
+  const hasConcreteScriptProof = (task.proofPaths ?? []).some(path => (
+    path &&
+    typeof path === 'object' &&
+    !Array.isArray(path) &&
+    typeof (path as { command?: unknown }).command === 'string' &&
+    isConcreteProjectProofCommand(String((path as { command: string }).command))
+  )) || task.acceptanceCriteria.some(criterion => (
+    typeof criterion.command === 'string' &&
+    isConcreteProjectProofCommand(criterion.command)
+  ))
+  if (requiresScriptProof && !hasConcreteScriptProof) {
+    const now = new Date().toISOString()
+    const projectRoot = inferProjectRootFromMemoryDir(input.memoryDir)
+    const proofSetup = materializeProofSetupTask(queue, task, now)
+    proofSetupTaskId = proofSetup.childTaskId
+    task.proofPaths = replaceGenericProjectProofPathsWithSetup(task)
+    task.acceptanceCriteria = task.acceptanceCriteria.map((criterion) => {
+      if (
+        typeof criterion.command !== 'string' ||
+        isConcreteProjectProofCommand(criterion.command)
+      ) return criterion
+      const { command: _command, ...withoutCommand } = criterion
+      return {
+        ...withoutCommand,
+        met: false,
+        source: 'inferred' as const,
+        verificationState: 'stale' as const,
+        verificationSource: 'proof-recovery',
+        staleReason: 'The saved workspace convention was not a task-specific proof command; linked proof-setup work must establish the current command.',
+      }
+    })
+    task.notes.push({
+      agentId: 'proof-recovery',
+      role: 'coordinator',
+      content: `Kept the approved product/spec boundary and linked verification work ${proofSetup.childTaskId} because the selected script-only release needs a concrete project proof command.`,
+      timestamp: now,
+    })
+    queue.lastUpdated = now
+    await writeQueue(input.memoryDir, queue)
+    await upsertTaskRuntimeState(projectRoot, task.id, {
+      assignedTo: null,
+      proofRecovery: undefined,
+      updatedAt: now,
+    })
+  }
+
   const now = new Date().toISOString()
   const surfaceReviewPackets = buildSurfaceReviewPacketsForStructuredSpec({
     structuredSpec: task.structuredSpec,
@@ -478,6 +537,10 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
           reasons: task.decomposition.reasons.filter(reason => reason.code !== 'too_broad'),
         }
       }
+      // Sizing and readiness are one state transition. Reassess after settling
+      // the explicit bounded-work decision so the release summary cannot say
+      // "ready" while task detail still says "requires child work".
+      task.taskReadiness = assessTaskReadiness(task, { now })
     }
     transitionTaskStatus({
       task,
@@ -550,6 +613,11 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
   }
 
   await writeQueue(input.memoryDir, queue)
+  await upsertTaskRuntimeState(inferProjectRootFromMemoryDir(input.memoryDir), task.id, {
+    assignedTo: null,
+    proofRecovery: undefined,
+    updatedAt: now,
+  })
 
   await appendExploringTranscript({
     memoryDir: input.memoryDir,
@@ -557,6 +625,8 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
     role: 'system',
     content: input.approvalNote
       ? `Spec approved by human. Note: ${input.approvalNote}`
+      : proofSetupTaskId
+        ? `Spec approved. Guildhall kept the product boundary and created linked verification work ${proofSetupTaskId} to establish the selected release's concrete proof command.`
       : splitMaterialized
         ? 'Spec approved. Guildhall created the nested work and kept this item as the containing work.'
         : representedParentSplit
@@ -594,20 +664,8 @@ function backfillAcceptanceCriteriaFromSpec(task: Task): void {
 }
 
 function shouldKeepFixedSpecRunnable(task: Task): boolean {
-  const text = [
-    task.title,
-    task.description,
-    task.spec,
-    task.productBrief?.userJob,
-    task.productBrief?.successMetric,
-  ].filter(Boolean).join('\n')
-  if (!/\bcompletion boundary\b/i.test(text)) return false
-  const splitBoundary = task.spec?.match(/what must be split or blocked\s*:\s*([^\n]+)/i)?.[1] ?? ''
-  if (!/^(none|nothing|not required|nothing to split)/i.test(splitBoundary.trim())) return false
-  return (
-    /\bPantry Pulse\b/i.test(text) ||
-    task.productBrief?.authoredBy === 'project-reintake'
-  )
+  if (!hasExplicitNoSplitBoundary(task.spec)) return false
+  return task.acceptanceCriteria.length > 0
 }
 
 function isBoundedChildContractWorkWithoutMaterializedChildren(task: Task): boolean {
@@ -747,6 +805,8 @@ export async function createBugReportTask(input: BugReportInput): Promise<BugRep
     description,
     domain: input.domain,
     projectPath: input.projectPath,
+    references: [],
+    sourceClaims: [],
     status: 'proposed',
     priority: input.priority ?? 'high',
     dependsOn: [],
@@ -798,6 +858,10 @@ export interface RerunTaskStageInput {
   memoryDir: string
   taskId: string
   stage: 'spec' | 'review' | 'gate'
+  /** Reopen a stale current plan for a source-backed spec re-intake. */
+  recoveryReason?: string
+  /** Only proof recovery writes the proof-specific runtime marker. */
+  recoveryKind?: 'proof' | 'blueprint'
 }
 
 export interface RerunTaskStageResult {
@@ -982,6 +1046,12 @@ export async function reframeTask(input: ReframeTaskInput): Promise<ReframeTaskR
   ].join('\n')
 
   const notes = Array.isArray(task.notes) ? [...task.notes] : []
+  await cancelOwnerInputRequestsForTask({
+    projectRoot,
+    taskId: task.id,
+    now,
+    ...(reason ? { reason } : {}),
+  })
   if (task.status === 'in_progress' || task.status === 'review' || task.status === 'gate_check') {
     notes.push({
       agentId: 'system',
@@ -1018,15 +1088,31 @@ export async function reframeTask(input: ReframeTaskInput): Promise<ReframeTaskR
   task.productBrief = undefined
   task.spec = undefined
   task.acceptanceCriteria = []
+  task.openQuestions = []
+  // Reframing is a new planning pass. Do not let readiness, sizing, review,
+  // or decomposition decisions from the discarded frame make the fresh
+  // exploring task look runnable before the spec lane has rebuilt it.
+  task.structuredSpec = undefined
+  task.contractSurfaceReviewPackets = undefined
+  task.acceptanceCriteriaProofState = undefined
+  task.taskReadiness = undefined
+  task.reviewRisk = undefined
+  task.definitionOfDone = undefined
+  task.blockerPlans = undefined
+  task.contextBudget = undefined
+  task.decomposition = undefined
+  task.coordinatorReflections = undefined
+  task.workUnitAnalysis = undefined
+  task.sizePlan = undefined
+  task.taskKind = undefined
   task.notes = notes
   task.updatedAt = now
   queue.lastUpdated = now
 
-  await upsertTaskRuntimeState(projectRoot, task.id, {
-    assignedTo: 'spec-agent',
-    updatedAt: now,
-  })
-  await appendExploringTranscript({
+  const proofRecoveryReason = reason && /(?:script proof|proof command|project-backed|release proof)/i.test(reason)
+    ? reason
+    : undefined
+  await replaceExploringTranscript({
     memoryDir: input.memoryDir,
     taskId: task.id,
     role: 'user',
@@ -1041,6 +1127,22 @@ export async function reframeTask(input: ReframeTaskInput): Promise<ReframeTaskR
     timestamp: now,
   })
   await writeQueue(input.memoryDir, queue)
+
+  // The promoted queue writer rebuilds runtime overlays from the task it
+  // receives. Attach the recovery contract after the final definition write
+  // so this reframe cannot immediately erase its own proof marker.
+  await upsertTaskRuntimeState(projectRoot, task.id, {
+    assignedTo: 'spec-agent',
+    ...(proofRecoveryReason
+      ? {
+          proofRecovery: {
+            reopenedAt: now,
+            reason: proofRecoveryReason,
+          },
+        }
+      : {}),
+    updatedAt: now,
+  })
 
   return { success: true, newStatus: 'exploring' }
 }
@@ -1254,6 +1356,7 @@ export async function rerunTaskStage(
   input: RerunTaskStageInput,
 ): Promise<RerunTaskStageResult> {
   const queue = await readQueue(input.memoryDir)
+  const projectRoot = inferProjectRootFromMemoryDir(input.memoryDir)
   const task = queue.tasks.find((t) => t.id === input.taskId)
   if (!task) return { success: false, error: `Task ${input.taskId} not found` }
   if (task.status === 'shelved' || task.status === 'blocked') {
@@ -1272,8 +1375,36 @@ export async function rerunTaskStage(
         error: 'Reserved setup tasks have their own rerun controls.',
       }
     }
+    // A completion summary is historical evidence, not a second authority for
+    // the task's current lifecycle. Record that the summary was superseded so
+    // the coordinator cannot re-close this task before the fresh spec pass.
+    if (task.doneSummaryBundle?.status === 'done') {
+      task.doneSummaryBundle = {
+        ...task.doneSummaryBundle,
+        status: 'reopened',
+        reopenedAt: now,
+        reopenReason: 'A fresh spec pass was requested from current project reality.',
+        createdAt: now,
+        createdBy: 'rerun-stage',
+      }
+    }
+    // A fresh spec pass always starts a new current lifecycle. Clear any
+    // stale terminal index value even when an earlier reopen already changed
+    // the summary to `reopened`; the old completion remains in evidence.
+    task.completedAt = undefined
     task.status = 'exploring'
     task.assignedTo = null
+    if (input.recoveryReason) {
+      // A stale current plan is a shaping boundary, not a worker retry.
+      // Remove the old executable contract so the spec lane must re-intake a
+      // real proof path from current project evidence.
+      resetCurrentPlanForProofRecovery(task, {
+        reason: input.recoveryReason,
+        now,
+        agentId: 'system',
+        role: 'system',
+      })
+    }
     detachStaleShelvedReverseChildren(queue, task, now)
     task.updatedAt = now
     queue.lastUpdated = now
@@ -1291,6 +1422,16 @@ export async function rerunTaskStage(
       content:
         'Human requested a fresh spec pass. Re-read the task, update the brief/spec from current project reality, and ask only the minimum clarifying questions needed.',
     })
+    if (input.recoveryReason && (input.recoveryKind ?? 'proof') === 'proof') {
+      await upsertTaskRuntimeState(projectRoot, task.id, {
+        assignedTo: null,
+        proofRecovery: {
+          reopenedAt: now,
+          reason: input.recoveryReason,
+        },
+        updatedAt: now,
+      })
+    }
     return { success: true, newStatus: 'exploring' }
   }
 

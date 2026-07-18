@@ -28,7 +28,14 @@ import {
   migrateProjectStateDatabaseQueueDetail,
   migrateProjectStateDatabaseWorkItemDetails,
   migrateProjectStateDatabaseReleaseMembership,
+  retireProjectStateDatabaseReleaseMembershipMirrors,
   migrateProjectStateDatabaseCompactReadModels,
+  repairProjectStateDatabaseStoredRequestTitles,
+  readProjectStateDatabaseStoredRequestTitleRepairStatus,
+  readProjectStateDatabaseCompactReadModelStatus,
+  readProjectStateDatabaseCurrentProofReadModelStatus,
+  readProjectStateDatabaseReleaseMembershipStatus,
+  readProjectStateDatabaseThreadHistoryStorePresent,
   clearProjectStateDatabaseQueueDetail,
   ensureProjectStateDatabaseCurrentThreadStore,
   ensureProjectStateDatabaseThreadHistoryStore,
@@ -38,8 +45,11 @@ import {
   compactProjectStateDatabaseEvidence,
   vacuumProjectStateDatabase,
   readProjectStateDatabaseTaskEvidenceAuthority,
+  readProjectStateDatabaseTaskOverlayStores,
+  replaceProjectStateDatabaseTaskRuntimes,
 } from '@guildhall/sessions'
 import type { ProjectStateDatabaseScopeRow } from '@guildhall/sessions'
+import { Task as TaskSchema, TaskRuntimeState } from '@guildhall/core'
 import { installAgentBridgeInstructions } from './agent-bridge-install.js'
 import { migrateLegacyMemoryToLocalHistory } from './memory-migration.js'
 import { compactProjectState } from './project-state-compaction.js'
@@ -52,10 +62,12 @@ import {
   backfillTaskStateDatabaseOverlays,
   migrateDatabaseTaskEvidenceHistoryToCompressed,
   migrateLegacyTaskEvidenceHistoryToDatabase,
+  appendTaskEvidence,
   runtimeStatePath,
   taskWorkspaceStatePath,
 } from '../sessions/task-state-store.js'
 import { repairOwnerInputState } from './owner-input-state-repair.js'
+import { listOwnerInputRequestsSync, refreshOwnerInputProjection } from './owner-input-store.js'
 import { recordGuildhallRuntimeWrite } from './runtime-compatibility.js'
 import { readProjectRuntimeState } from './project-runtime-store.js'
 import {
@@ -79,6 +91,9 @@ import {
 import { writeProjectTaskQueueWithSummary } from './project-state-boundary.js'
 import { deliveryReadProjectionSchemaPresent, ensureDeliveryReadProjectionSchema } from './delivery-read-projection.js'
 import { effectiveTaskTitle } from '../shared/task-display-label.js'
+import { isConcreteProjectProofCommand, replaceGenericProjectProofPathsWithSetup } from './proof-paths.js'
+import { currentPlanProcessLeakage, stripCurrentPlanProcessLeakage } from './spec-quality.js'
+import { resetCurrentPlanForProofRecovery } from './task-plan-recovery.js'
 import type { Task } from '@guildhall/core'
 import {
   inspectEmptyMastraDatabase,
@@ -179,13 +194,208 @@ const EFFECTIVE_STATE_REALIGNMENT_MIGRATION_ID = '0.13.0/project-summary-effecti
 const CURRENT_STATUS_PROJECTION_MIGRATION_ID = '0.13.1/project-current-status-projection'
 const RELEASE_MEMBERSHIP_MIGRATION_ID = '0.13.1/release-membership'
 const COMPACT_READ_MODEL_MIGRATION_ID = '0.13.2/compact-task-read-models'
+const CURRENT_PROOF_READ_MODEL_MIGRATION_ID = '0.13.9/current-proof-read-model'
+const IMPORTED_SCRIPT_PROOF_CONTRACT_MIGRATION_ID = '0.13.10/imported-script-proof-contracts'
+const CURRENT_PLAN_RECOVERY_BOUNDARY_MIGRATION_ID = '0.13.11/current-plan-recovery-boundary'
+const MALFORMED_TASK_RUNTIME_OVERLAY_MIGRATION_ID = '0.13.12/repair-malformed-task-runtime-overlays'
 const DELIVERY_READ_PROJECTION_MIGRATION_ID = '0.13.3/delivery-read-projection'
+const STORED_REQUEST_TITLE_INTEGRITY_MIGRATION_ID = '0.13.4/stored-request-title-integrity'
+const OWNER_INPUT_CURRENT_AUTHORITY_MIGRATION_ID = '0.13.5/owner-input-current-authority'
+const RELEASE_MEMBERSHIP_CURRENT_AUTHORITY_MIGRATION_ID = '0.13.6/release-membership-current-authority'
 const THREAD_HISTORY_PROJECTION_MIGRATION_ID = '0.12.47/project-thread-history-read-model'
+const COMPLETION_SUMMARY_EVIDENCE_MIGRATION_ID = '0.13.8/task-completion-summary-evidence'
 
 interface FinalProjectStateMigrationResult {
   removedPaths: string[]
   queueTaskCount: number
   summaryFreshness: string
+}
+
+function taskIsImportedSourceWork(task: Task): boolean {
+  const createdBy = task.requestIntake?.createdBy
+  return task.importedDraft === true ||
+    createdBy === 'workspace-importer' ||
+    createdBy === 'project-reintake' ||
+    (task.sourceClaims?.length ?? 0) > 0 ||
+    (task.references ?? []).some(reference => /(^|\/)docs\//i.test(reference.replaceAll('\\', '/')))
+}
+
+function taskNeedsImportedScriptProofRepair(task: Task): boolean {
+  if (!taskIsImportedSourceWork(task)) return false
+  const genericPath = (task.proofPaths ?? []).some(path =>
+    path &&
+    typeof path === 'object' &&
+    !Array.isArray(path) &&
+    path.kind === 'command' &&
+    typeof path.command === 'string' &&
+    !isConcreteProjectProofCommand(path.command),
+  )
+  const genericCriterion = (task.acceptanceCriteria ?? []).some(criterion =>
+    typeof criterion.command === 'string' &&
+    !isConcreteProjectProofCommand(criterion.command),
+  )
+  return genericPath || genericCriterion
+}
+
+function malformedTaskRuntimeOverlayIds(projectRoot: string): string[] {
+  if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') return []
+  const stores = readProjectStateDatabaseTaskOverlayStores(projectRoot)
+  if (!stores) return []
+  return stores.runtime
+    .filter(row => !TaskRuntimeState.safeParse(row.payload).success)
+    .map(row => row.taskId)
+}
+
+function repairTaskRuntimeOverlay(
+  taskId: string,
+  updatedAt: string | undefined,
+  payload: unknown,
+): { taskId: string; updatedAt: string; payload: unknown } {
+  const parsed = TaskRuntimeState.safeParse(payload)
+  if (parsed.success) {
+    return { taskId, updatedAt: updatedAt ?? parsed.data.updatedAt, payload: parsed.data }
+  }
+
+  // An older supervisor wrote retryWindow without its required base revision.
+  // That fragment is not trustworthy current state, but the rest of the runtime
+  // overlay is. Remove only that fragment and keep the durable task evidence.
+  if (typeof payload !== 'object' || payload === null || Array.isArray(payload) || !('retryWindow' in payload)) {
+    throw new Error(`Cannot repair task runtime overlay ${taskId}: ${parsed.error.message}`)
+  }
+  const candidate = { ...(payload as Record<string, unknown>) }
+  delete candidate.retryWindow
+  candidate.taskId = taskId
+  candidate.updatedAt = candidate.updatedAt ?? updatedAt ?? new Date().toISOString()
+  const repaired = TaskRuntimeState.safeParse(candidate)
+  if (!repaired.success) {
+    throw new Error(`Cannot repair task runtime overlay ${taskId} after removing retryWindow: ${repaired.error.message}`)
+  }
+  return {
+    taskId,
+    updatedAt: repaired.data.updatedAt,
+    payload: repaired.data,
+  }
+}
+
+function repairImportedScriptProofContract(task: Task): boolean {
+  let changed = false
+  const nextProofPaths = replaceGenericProjectProofPathsWithSetup(task)
+  if (JSON.stringify(nextProofPaths) !== JSON.stringify(task.proofPaths ?? [])) {
+    task.proofPaths = nextProofPaths
+    changed = true
+  }
+  const nextCriteria = (task.acceptanceCriteria ?? []).map(criterion => {
+    if (
+      typeof criterion.command !== 'string' ||
+      isConcreteProjectProofCommand(criterion.command)
+    ) return criterion
+    const { command: _command, ...withoutCommand } = criterion as Task['acceptanceCriteria'][number] & { command?: string }
+    changed = true
+    return {
+      ...withoutCommand,
+      met: false,
+      verifiedBy: 'review' as const,
+      source: 'inferred' as const,
+      verificationState: 'stale' as const,
+      staleReason: 'The imported workspace convention was not a task-specific proof command; current proof setup is required.',
+    }
+  })
+  if (JSON.stringify(nextCriteria) !== JSON.stringify(task.acceptanceCriteria ?? [])) {
+    task.acceptanceCriteria = nextCriteria
+    changed = true
+  }
+  return changed
+}
+
+function taskHasCurrentPlanProcessLeakage(task: Task): boolean {
+  const brief = task.productBrief
+  return [
+    task.spec ?? '',
+    ...(task.acceptanceCriteria ?? []).map((criterion) => criterion.description),
+    brief?.userJob ?? '',
+    brief?.whyItMattersNow ?? '',
+    brief?.successMetric ?? '',
+    ...(brief?.nonGoals ?? []),
+    ...(brief?.antiPatterns ?? []),
+  ].some((value) => currentPlanProcessLeakage(value) !== null)
+}
+
+function cleanCurrentPlanBrief(task: Task): boolean {
+  const brief = task.productBrief
+  if (!brief) return false
+  let changed = false
+  const cleanScalar = (value: string | undefined): string | undefined => {
+    if (!value) return value
+    const cleaned = stripCurrentPlanProcessLeakage(value)
+    if (cleaned !== value) changed = true
+    return cleaned || undefined
+  }
+  const cleanList = (values: string[] | undefined): string[] | undefined => {
+    if (!values) return values
+    const cleaned = values.filter((value) => currentPlanProcessLeakage(value) === null)
+    if (cleaned.length !== values.length) changed = true
+    return cleaned.length > 0 ? cleaned : undefined
+  }
+  const nextBrief = {
+    ...brief,
+    userJob: cleanScalar(brief.userJob),
+    whyItMattersNow: cleanScalar(brief.whyItMattersNow),
+    successMetric: cleanScalar(brief.successMetric),
+    nonGoals: cleanList(brief.nonGoals),
+    antiPatterns: cleanList(brief.antiPatterns),
+    audience: cleanScalar(brief.audience),
+    usageContext: cleanScalar(brief.usageContext),
+    rolloutPlan: cleanScalar(brief.rolloutPlan),
+    brandInteractionNotes: cleanScalar(brief.brandInteractionNotes),
+  }
+  if (!nextBrief.userJob || !nextBrief.successMetric) {
+    delete task.productBrief
+  } else {
+    task.productBrief = nextBrief
+  }
+  return changed || !task.productBrief
+}
+
+function repairCurrentPlanRecoveryBoundary(task: Task, now: string): boolean {
+  if (!taskHasCurrentPlanProcessLeakage(task)) return false
+  if (currentPlanProcessLeakage(task.spec ?? '') !== null && task.status !== 'done') {
+    task.notes ??= []
+    resetCurrentPlanForProofRecovery(task, {
+      reason: 'The saved current plan contained internal recovery/process history; historical evidence remains in task history while Guildhall re-intakes a clean product boundary.',
+      now,
+      agentId: 'migration:0.13.11/current-plan-recovery-boundary',
+      role: 'plan-boundary-recovery',
+    })
+    task.status = 'exploring'
+    task.assignedTo = undefined
+    task.blockReason = undefined
+    task.updatedAt = now
+    return true
+  }
+  const beforeSpec = task.spec
+  if (beforeSpec) task.spec = stripCurrentPlanProcessLeakage(beforeSpec)
+  const existingCriteria = task.acceptanceCriteria ?? []
+  const criteria = existingCriteria.filter((criterion) => currentPlanProcessLeakage(criterion.description) === null)
+  const criteriaChanged = criteria.length !== existingCriteria.length
+  task.acceptanceCriteria = criteria
+  const briefChanged = cleanCurrentPlanBrief(task)
+  if (task.spec !== beforeSpec || criteriaChanged || briefChanged) {
+    task.updatedAt = now
+    return true
+  }
+  return false
+}
+
+function importedScriptProofRepairTaskIds(projectRoot: string): string[] {
+  const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+  const queue = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
+  if (!queue) return []
+  const selectedRelease = queue.releases?.find(release => release.id === queue.selectedReleaseId)
+  if (selectedRelease?.proofStyle !== 'script_only') return []
+  return queue.tasks
+    .filter(task => task.releaseIds?.includes(selectedRelease.id))
+    .filter(taskNeedsImportedScriptProofRepair)
+    .map(task => task.id)
 }
 
 function legacyCurrentStateFiles(projectRoot: string, tasksPath: string): string[] {
@@ -218,7 +428,7 @@ async function removeLegacyCurrentStateFiles(projectRoot: string): Promise<strin
 
 function scopeRowsForEffectiveTasks(
   queue: NonNullable<ReturnType<typeof readProjectStateDatabaseQueueWithRevision>>['definition'],
-  tasks: Task[],
+  tasks: readonly unknown[],
 ): ProjectStateDatabaseScopeRow[] {
   const projection = buildProjectScopeProjection({
     ...queue,
@@ -270,12 +480,12 @@ async function realignPromotedSummaryWithEffectiveState(projectRoot: string): Pr
     throw new Error('The promoted SQLite task index does not match its detail queue; effective-state summary realignment cannot proceed.')
   }
   const effectiveById = new Map(effectiveTasks.map(task => [task.id, task]))
-  const taskOverrides = inventory.tasks.map(task => {
+  const taskOverrides: typeof inventory.tasks = inventory.tasks.map(task => {
     const effective = effectiveById.get(task.id)
     if (!effective) throw new Error(`The promoted SQLite task index is missing effective task ${task.id}.`)
     return {
       ...task,
-      title: effective.title,
+      title: typeof effective.title === 'string' ? effective.title : task.title,
       status: typeof effective.status === 'string' ? effective.status : task.status,
       updatedAt: typeof effective.updatedAt === 'string' ? effective.updatedAt : task.updatedAt,
       completedAt: typeof effective.completedAt === 'string' ? effective.completedAt : task.completedAt,
@@ -2122,8 +2332,8 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
       const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
       const projection = readProjectSummaryProjectionForMigration(tasksPath)
       return {
-        needed: projection?.version !== PROJECT_SUMMARY_PROJECTION_VERSION || !projection?.actionModel,
-        affectedPaths: projection?.version !== PROJECT_SUMMARY_PROJECTION_VERSION || !projection?.actionModel
+        needed: !projection?.actionModel,
+        affectedPaths: !projection?.actionModel
           ? [projectStateDatabasePath(projectRoot)]
           : [],
       }
@@ -2148,6 +2358,41 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
       }
       return {
         summary: `Persisted the canonical action model beside the ${projection.counts.total}-task project summary.`,
+        affectedPaths: [projectStateDatabasePath(projectRoot)],
+      }
+    },
+  },
+  {
+    id: '0.12.25/project-summary-task-status-counts',
+    title: 'Persist partitioned task status counts for release detail',
+    introducedIn: '0.12.25',
+    scope: 'project',
+    safety: 'automatic',
+    summary: 'Adds the mutually partitioned task-status distribution to the compact release summary so detail reads do not mistake overlapping blocker dimensions for task states.',
+    async detect(projectRoot) {
+      if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') {
+        return { needed: false, affectedPaths: [] }
+      }
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const projection = readProjectSummaryProjectionForMigration(tasksPath)
+      const taskStatusCounts = projection?.releaseSummary?.taskStatusCounts
+      const present = Boolean(taskStatusCounts && typeof taskStatusCounts === 'object' && !Array.isArray(taskStatusCounts))
+      const needed = projection?.version !== PROJECT_SUMMARY_PROJECTION_VERSION || !present
+      return {
+        needed,
+        affectedPaths: needed ? [projectStateDatabasePath(projectRoot)] : [],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const projection = writeProjectSummaryProjectionFromIndexedState(tasksPath, {
+        projectId: path.basename(projectRoot),
+      })
+      if (!projection?.releaseSummary?.taskStatusCounts || projection.version !== PROJECT_SUMMARY_PROJECTION_VERSION) {
+        throw new Error('The partitioned task-status release summary could not be persisted.')
+      }
+      return {
+        summary: `Persisted task-status counts for the ${projection.counts.total}-task project summary without changing task or release records.`,
         affectedPaths: [projectStateDatabasePath(projectRoot)],
       }
     },
@@ -2474,15 +2719,14 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
     scope: 'project',
     safety: 'automatic',
     requirement: 'required',
-    summary: 'Creates the bounded historical Thread projection tables; the next asynchronous refresh populates them without rebuilding history in a GET.',
+    summary: 'Creates bounded historical Thread state projection tables so the owner can page saved history while the next asynchronous refresh populates them without rebuilding history in a GET.',
     async detect(projectRoot) {
       const metadata = readProjectStateDatabaseMetadata(projectRoot)
       if (metadata === null) return { needed: false, affectedPaths: [] }
-      const ledger = await readProjectMigrationLedger(projectRoot)
-      const applied = ledger.records.some(record => record.id === THREAD_HISTORY_PROJECTION_MIGRATION_ID && record.status === 'applied')
+      const present = readProjectStateDatabaseThreadHistoryStorePresent(projectRoot)
       return {
-        needed: !applied,
-        affectedPaths: !applied ? [projectStateDatabasePath(projectRoot)] : [],
+        needed: !present,
+        affectedPaths: !present ? [projectStateDatabasePath(projectRoot)] : [],
       }
     },
     async apply(projectRoot) {
@@ -2608,6 +2852,67 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
       return {
         summary: 'Open Settings to run runtime health checks and accept runtime-backed mode.',
         affectedPaths: ['host-owned runtime state'],
+      }
+    },
+  },
+  {
+    id: COMPLETION_SUMMARY_EVIDENCE_MIGRATION_ID,
+    title: 'Move durable completion summaries into current evidence',
+    introducedIn: '0.13.8',
+    scope: 'project',
+    safety: 'automatic',
+    summary: 'Preserves bounded completion summaries through the evidence owner so promoted current-state reads do not lose completion proof when task definitions are compacted.',
+    async detect(projectRoot) {
+      const metadata = readProjectStateDatabaseMetadata(projectRoot)
+      if (metadata === null || readProjectStateDatabaseAuthority(projectRoot) !== 'database') {
+        return { needed: false, affectedPaths: [] }
+      }
+      const ledger = await readProjectMigrationLedger(projectRoot)
+      const applied = ledger.records.some(record => record.id === COMPLETION_SUMMARY_EVIDENCE_MIGRATION_ID && record.status === 'applied')
+      return {
+        needed: !applied,
+        affectedPaths: !applied
+          ? [projectStateDatabasePath(projectRoot), getProjectSystemStatePath(projectRoot, 'TASKS.json')]
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      let raw: unknown
+      try {
+        raw = JSON.parse(readManagedTextFileSync(tasksPath, 'utf8'))
+      } catch {
+        return {
+          summary: 'No compatibility queue was available; no completion summaries needed migration.',
+          affectedPaths: [projectStateDatabasePath(projectRoot)],
+        }
+      }
+      const tasks = Array.isArray(raw)
+        ? raw
+        : raw && typeof raw === 'object' && Array.isArray((raw as { tasks?: unknown }).tasks)
+          ? (raw as { tasks: unknown[] }).tasks
+          : []
+      let migrated = 0
+      for (const candidate of tasks) {
+        if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) continue
+        const task = candidate as Record<string, unknown>
+        if (typeof task.id !== 'string') continue
+        const parsed = TaskSchema.shape.doneSummaryBundle.safeParse(task.doneSummaryBundle)
+        if (!parsed.success || !parsed.data) continue
+        const completion = parsed.data
+        await appendTaskEvidence(projectRoot, task.id, {
+          id: `${task.id}-completion-summary-${completion.createdAt.replace(/[^0-9A-Za-z]/g, '')}`,
+          kind: 'completion_summary',
+          recordedAt: completion.createdAt,
+          payload: completion,
+        })
+        migrated += 1
+      }
+      return {
+        summary: migrated > 0
+          ? `Moved ${migrated} bounded completion summar${migrated === 1 ? 'y' : 'ies'} into current task evidence.`
+          : 'No compatibility task carried a bounded completion summary that needed migration.',
+        affectedPaths: [projectStateDatabasePath(projectRoot)],
       }
     },
   },
@@ -2741,11 +3046,10 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
     summary: 'Moves release-to-task membership into one normalized relation so release, task, scope, and summary reads cannot disagree about which work belongs to a release.',
     async detect(projectRoot) {
       if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') return { needed: false, affectedPaths: [] }
-      const ledger = await readProjectMigrationLedger(projectRoot)
-      const applied = ledger.records.some(record => record.id === RELEASE_MEMBERSHIP_MIGRATION_ID && record.status === 'applied')
+      const status = readProjectStateDatabaseReleaseMembershipStatus(projectRoot)
       return {
-        needed: !applied,
-        affectedPaths: !applied ? [projectStateDatabasePath(projectRoot), 'normalized release membership relation'] : [],
+        needed: !status.complete,
+        affectedPaths: !status.complete ? [projectStateDatabasePath(projectRoot), 'normalized release membership relation'] : [],
       }
     },
     async apply(projectRoot) {
@@ -2763,14 +3067,13 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
     scope: 'project',
     safety: 'automatic',
     requirement: 'required',
-    summary: 'Backfills graph and list-facing task summaries from the authoritative per-task detail index so ordinary reads never open rich task definitions to discover compact facts.',
+    summary: 'Backfills graph and list-facing task state summaries from the authoritative per-task detail index so the owner sees compact facts without ordinary reads opening rich task definitions.',
     async detect(projectRoot) {
       if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') return { needed: false, affectedPaths: [] }
-      const ledger = await readProjectMigrationLedger(projectRoot)
-      const applied = ledger.records.some(record => record.id === COMPACT_READ_MODEL_MIGRATION_ID && record.status === 'applied')
+      const status = readProjectStateDatabaseCompactReadModelStatus(projectRoot)
       return {
-        needed: !applied,
-        affectedPaths: !applied ? [projectStateDatabasePath(projectRoot), 'indexed task read models'] : [],
+        needed: !status.complete,
+        affectedPaths: !status.complete ? [projectStateDatabasePath(projectRoot), 'indexed task read models'] : [],
       }
     },
     async apply(projectRoot) {
@@ -2778,6 +3081,177 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
       return {
         summary: `Materialized compact summaries for ${result.taskCount} task${result.taskCount === 1 ? '' : 's'}${result.packetTaskCount > 0 ? `, including ${result.packetTaskCount} task${result.packetTaskCount === 1 ? '' : 's'} with contract-review packets` : ''}.`,
         affectedPaths: [projectStateDatabasePath(projectRoot)],
+      }
+    },
+  },
+  {
+    id: CURRENT_PROOF_READ_MODEL_MIGRATION_ID,
+    title: 'Refresh the indexed current-proof summary',
+    introducedIn: '0.13.9',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    recheckAfterApply: true,
+    summary: 'Adds the bounded current-proof answer to existing task read models so reopened work cannot inherit historical proof as if it were current evidence.',
+    async detect(projectRoot) {
+      if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') return { needed: false, affectedPaths: [] }
+      const status = readProjectStateDatabaseCurrentProofReadModelStatus(projectRoot)
+      return {
+        needed: status.schemaPresent && !status.complete,
+        affectedPaths: status.schemaPresent && !status.complete
+          ? [projectStateDatabasePath(projectRoot), 'indexed current-proof summaries']
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const result = migrateProjectStateDatabaseCompactReadModels(projectRoot)
+      return {
+        summary: result.migrated
+          ? `Refreshed bounded current-proof summaries for ${result.taskCount} task${result.taskCount === 1 ? '' : 's'}.`
+          : 'Indexed current-proof summaries were already current.',
+        affectedPaths: [projectStateDatabasePath(projectRoot)],
+      }
+    },
+  },
+  {
+    id: IMPORTED_SCRIPT_PROOF_CONTRACT_MIGRATION_ID,
+    title: 'Normalize imported script-proof contracts',
+    introducedIn: '0.13.10',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    recheckAfterApply: true,
+    summary: 'Replaces bare workspace test conventions on imported tasks in a selected script-only release with explicit proof-setup work so generic commands cannot masquerade as task proof.',
+    async detect(projectRoot) {
+      if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') return { needed: false, affectedPaths: [] }
+      const taskIds = importedScriptProofRepairTaskIds(projectRoot)
+      return {
+        needed: taskIds.length > 0,
+        affectedPaths: taskIds.length > 0
+          ? [projectStateDatabasePath(projectRoot), `imported task proof contracts (${taskIds.length})`]
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const queue = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
+      if (!queue) {
+        return {
+          summary: 'Skipped imported proof-contract normalization because the authoritative task detail store is unavailable.',
+          affectedPaths: [],
+        }
+      }
+      const selectedRelease = queue.releases?.find(release => release.id === queue.selectedReleaseId)
+      if (selectedRelease?.proofStyle !== 'script_only') {
+        return {
+          summary: 'Skipped imported proof-contract normalization because the selected scope is not script-only.',
+          affectedPaths: [],
+        }
+      }
+      let changed = 0
+      for (const task of queue.tasks) {
+        if (!task.releaseIds?.includes(selectedRelease.id) || !taskNeedsImportedScriptProofRepair(task)) continue
+        if (repairImportedScriptProofContract(task)) changed += 1
+      }
+      if (changed > 0) {
+        queue.lastUpdated = new Date().toISOString()
+        writeProjectTaskQueueWithSummary(tasksPath, queue, {
+          projectId: path.basename(projectRoot),
+          projectRoot,
+          compactCompatibility: true,
+        })
+      }
+      return {
+        summary: changed > 0
+          ? `Normalized generic proof contracts for ${changed} imported task${changed === 1 ? '' : 's'}; each now exposes bounded proof setup instead of a bare workspace test command.`
+          : 'Imported script-proof contracts were already normalized.',
+        affectedPaths: changed > 0 ? [projectStateDatabasePath(projectRoot)] : [],
+      }
+    },
+  },
+  {
+    id: CURRENT_PLAN_RECOVERY_BOUNDARY_MIGRATION_ID,
+    title: 'Separate recovery history from current task plans',
+    introducedIn: '0.13.11',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Removes internal recovery, revision, and worktree diagnostics from current briefs/specs while preserving the evidence in task history; active polluted plans return to clean shaping.',
+    async detect(projectRoot) {
+      if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') return { needed: false, affectedPaths: [] }
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const queue = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
+      const taskIds = queue?.tasks.filter(taskHasCurrentPlanProcessLeakage).map(task => task.id) ?? []
+      return {
+        needed: taskIds.length > 0,
+        affectedPaths: taskIds.length > 0
+          ? [projectStateDatabasePath(projectRoot), `current plans with recovery leakage (${taskIds.length})`]
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const tasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+      const queue = readProjectStateDatabaseQueueDefinitionForMigration(tasksPath)
+      if (!queue) {
+        return {
+          summary: 'Skipped current-plan cleanup because the authoritative task detail store is unavailable.',
+          affectedPaths: [],
+        }
+      }
+      const now = new Date().toISOString()
+      let changed = 0
+      for (const task of queue.tasks) {
+        if (repairCurrentPlanRecoveryBoundary(task, now)) changed += 1
+      }
+      if (changed > 0) {
+        queue.lastUpdated = now
+        writeProjectTaskQueueWithSummary(tasksPath, queue, {
+          projectId: path.basename(projectRoot),
+          projectRoot,
+          compactCompatibility: true,
+        })
+      }
+      return {
+        summary: changed > 0
+          ? `Separated recovery/process history from ${changed} current task plan${changed === 1 ? '' : 's'}; active polluted plans are ready for clean shaping.`
+          : 'Current task plans already keep recovery/process history out of the product boundary.',
+        affectedPaths: changed > 0 ? [projectStateDatabasePath(projectRoot)] : [],
+      }
+    },
+  },
+  {
+    id: MALFORMED_TASK_RUNTIME_OVERLAY_MIGRATION_ID,
+    title: 'Repair malformed task runtime overlays',
+    introducedIn: '0.13.12',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Repairs invalid persisted retry-window fragments at the runtime-state boundary so coordinators can read one canonical task state without dropping task evidence or masking unrelated corruption.',
+    async detect(projectRoot) {
+      const taskIds = malformedTaskRuntimeOverlayIds(projectRoot)
+      return {
+        needed: taskIds.length > 0,
+        affectedPaths: taskIds.length > 0
+          ? [projectStateDatabasePath(projectRoot), `malformed task runtime overlays (${taskIds.length})`]
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const stores = readProjectStateDatabaseTaskOverlayStores(projectRoot)
+      if (!stores) {
+        return {
+          summary: 'Skipped runtime-overlay repair because the authoritative task overlay store is unavailable.',
+          affectedPaths: [],
+        }
+      }
+      const repaired = stores.runtime.map(row => repairTaskRuntimeOverlay(row.taskId, row.updatedAt, row.payload))
+      const changed = repaired.filter((row, index) => JSON.stringify(row.payload) !== JSON.stringify(stores.runtime[index]?.payload)).length
+      replaceProjectStateDatabaseTaskRuntimes(projectRoot, repaired)
+      return {
+        summary: changed > 0
+          ? `Repaired ${changed} malformed task runtime overlay${changed === 1 ? '' : 's'}; invalid retry-window fragments were removed while task evidence was preserved.`
+          : 'Task runtime overlays already match the canonical runtime-state schema.',
+        affectedPaths: changed > 0 ? [projectStateDatabasePath(projectRoot)] : [],
       }
     },
   },
@@ -2791,15 +3265,13 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
     summary: 'Creates the revisioned delivery read-model tables so ordinary queue and relationship reads have one saved authority instead of rebuilding delivery state in a GET.',
     async detect(projectRoot) {
       if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') return { needed: false, affectedPaths: [] }
-      const ledger = await readProjectMigrationLedger(projectRoot)
-      const applied = ledger.records.some(record => record.id === DELIVERY_READ_PROJECTION_MIGRATION_ID && record.status === 'applied')
       const present = deliveryReadProjectionSchemaPresent(projectRoot)
       return {
-        // The projector may have created the tables before the migration
-        // runner observed them. The ledger still needs to record the schema
-        // transition; apply is intentionally idempotent in that case.
-        needed: !applied,
-        affectedPaths: !applied
+        // The projector may create the tables before the migration runner
+        // observes them. Physical schema is the authority for this shape
+        // migration; a missing ledger row is reconciled, not blocking.
+        needed: !present,
+        affectedPaths: !present
           ? [projectStateDatabasePath(projectRoot), present ? 'delivery read projection migration ledger' : 'delivery read projection tables']
           : [],
       }
@@ -2809,6 +3281,97 @@ const BUILT_IN_PROJECT_MIGRATIONS: ProjectMigrationDefinition[] = [
       if (!created) throw new Error('The current project-state database is unavailable for delivery projection migration.')
       return {
         summary: 'Created the delivery read projection schema; the asynchronous projector will populate its revisioned rows.',
+        affectedPaths: [projectStateDatabasePath(projectRoot)],
+      }
+    },
+  },
+  {
+    id: STORED_REQUEST_TITLE_INTEGRITY_MIGRATION_ID,
+    title: 'Repair provably cropped stored request titles',
+    introducedIn: '0.13.4',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Repairs persisted request titles that end in an ellipsis only when their complete first line is still present in the raw request; ambiguous records remain visible for review.',
+    async detect(projectRoot) {
+      if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') return { needed: false, affectedPaths: [] }
+      const status = readProjectStateDatabaseStoredRequestTitleRepairStatus(projectRoot)
+      return {
+        needed: status.needed,
+        affectedPaths: status.needed
+          ? [projectStateDatabasePath(projectRoot), 'task request titles']
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const result = repairProjectStateDatabaseStoredRequestTitles(projectRoot)
+      return {
+        summary: result.repairedCount > 0
+          ? `Repaired ${result.repairedCount} stored request title${result.repairedCount === 1 ? '' : 's'} without changing task titles or raw request text${result.ambiguousCount > 0 ? `; ${result.ambiguousCount} ambiguous record${result.ambiguousCount === 1 ? '' : 's'} remain` : ''}.`
+          : `No provably cropped request titles were repaired${result.ambiguousCount > 0 ? `; ${result.ambiguousCount} ambiguous record${result.ambiguousCount === 1 ? '' : 's'} remain` : ''}.`,
+        affectedPaths: result.repairedCount > 0 ? [projectStateDatabasePath(projectRoot)] : [],
+      }
+    },
+  },
+  {
+    id: OWNER_INPUT_CURRENT_AUTHORITY_MIGRATION_ID,
+    title: 'Promote the normalized owner-input queue to current authority',
+    introducedIn: '0.13.5',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Materializes open owner-input request files into the normalized current queue and removes their duplicate summary copy after the queue publishes its authority watermark.',
+    async detect(projectRoot) {
+      if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') return { needed: false, affectedPaths: [] }
+      const ledger = await readProjectMigrationLedger(projectRoot)
+      const applied = ledger.records.some(record => record.id === OWNER_INPUT_CURRENT_AUTHORITY_MIGRATION_ID && record.status === 'applied')
+      return {
+        needed: !applied,
+        affectedPaths: !applied
+          ? [projectStateDatabasePath(projectRoot), 'owner-input request files']
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const requests = listOwnerInputRequestsSync(projectRoot)
+        .filter(request => request.status === 'waiting_for_owner' || request.status === 'coordinator_review')
+      const updatedAt = requests.reduce(
+        (latest, request) => request.updatedAt > latest ? request.updatedAt : latest,
+        new Date().toISOString(),
+      )
+      refreshOwnerInputProjection(projectRoot, updatedAt)
+      return {
+        summary: `Published ${requests.length} open owner-input request${requests.length === 1 ? '' : 's'} as the normalized current queue; the summary duplicate was removed without deleting request history.`,
+        affectedPaths: [projectStateDatabasePath(projectRoot)],
+      }
+    },
+  },
+  {
+    id: RELEASE_MEMBERSHIP_CURRENT_AUTHORITY_MIGRATION_ID,
+    title: 'Retire release membership mirrors',
+    introducedIn: '0.13.6',
+    scope: 'project',
+    safety: 'automatic',
+    requirement: 'required',
+    summary: 'Removes old task and scope membership arrays after the normalized release relation has published its authority watermark.',
+    async detect(projectRoot) {
+      if (readProjectStateDatabaseAuthority(projectRoot) !== 'database') return { needed: false, affectedPaths: [] }
+      const ledger = await readProjectMigrationLedger(projectRoot)
+      const applied = ledger.records.some(record => record.id === RELEASE_MEMBERSHIP_CURRENT_AUTHORITY_MIGRATION_ID && record.status === 'applied')
+      return {
+        needed: !applied,
+        affectedPaths: !applied
+          ? [projectStateDatabasePath(projectRoot), 'normalized release membership relation']
+          : [],
+      }
+    },
+    async apply(projectRoot) {
+      const result = retireProjectStateDatabaseReleaseMembershipMirrors(projectRoot)
+      const mirrorCount = result.taskMirrorCount + result.scopeMirrorCount
+      return {
+        summary: mirrorCount > 0
+          ? `Retired ${mirrorCount} duplicate release membership mirror${mirrorCount === 1 ? '' : 's'}; the normalized relation is now the only current authority.`
+          : 'Published the normalized release membership relation as the only current authority; no duplicate mirrors remained.',
         affectedPaths: [projectStateDatabasePath(projectRoot)],
       }
     },
@@ -2873,12 +3436,20 @@ const BUILT_IN_PROJECT_MIGRATION_IDEMPOTENCE_TESTS: Record<string, string> = {
   [THREAD_HISTORY_PROJECTION_MIGRATION_ID]: 'migrations.test.ts: creates the paged Thread history store without reconstructing history',
   '0.12.41/task-evidence-history-authority': 'migrations.test.ts: imports bounded legacy task evidence into SQLite and removes files only after retention-aware verification',
   '0.12.42/task-evidence-history-compression': 'migrations.test.ts: moves SQLite history into compressed ledgers before emptying the aggregate database',
+  [COMPLETION_SUMMARY_EVIDENCE_MIGRATION_ID]: 'workspace-importer.test.ts: preserves a durable completion timestamp after promoted task-definition compaction',
   [LEGACY_LIVE_STATE_CLEANUP_MIGRATION_ID]: 'migrations.test.ts: removes legacy live-state files even when the SQLite cutover was already recorded',
   [EFFECTIVE_STATE_REALIGNMENT_MIGRATION_ID]: 'migrations.test.ts: realigns promoted summary and scope from current evidence without reading compatibility files',
   [CURRENT_STATUS_PROJECTION_MIGRATION_ID]: 'migrations.test.ts: materializes the shared current task status rule into indexed rows',
   [RELEASE_MEMBERSHIP_MIGRATION_ID]: 'migrations.test.ts: normalizes release membership into one relation',
   [COMPACT_READ_MODEL_MIGRATION_ID]: 'migrations.test.ts: backfills compact graph read models from per-task detail without making ordinary reads hydrate definitions',
+  [CURRENT_PROOF_READ_MODEL_MIGRATION_ID]: 'migrations.test.ts: refreshes the bounded current-proof summary after an older compact row was already marked migrated',
+  [IMPORTED_SCRIPT_PROOF_CONTRACT_MIGRATION_ID]: 'migrations.test.ts: converts imported bare test conventions into explicit proof setup in a script-only release',
+  [CURRENT_PLAN_RECOVERY_BOUNDARY_MIGRATION_ID]: 'migrations.test.ts: separates recovery/process history from current task plans and reopens polluted active plans for clean shaping',
+  [MALFORMED_TASK_RUNTIME_OVERLAY_MIGRATION_ID]: 'migrations.test.ts: repairs an invalid retry-window fragment and leaves a second application unchanged',
   [DELIVERY_READ_PROJECTION_MIGRATION_ID]: 'migrations.test.ts: creates the revisioned delivery read projection schema before the async projector populates it',
+  [STORED_REQUEST_TITLE_INTEGRITY_MIGRATION_ID]: 'migrations.test.ts: repairs only provably cropped request titles and leaves ambiguous records unchanged',
+  [OWNER_INPUT_CURRENT_AUTHORITY_MIGRATION_ID]: 'migrations.test.ts: promotes the normalized owner-input queue and removes its duplicate summary copy',
+  [RELEASE_MEMBERSHIP_CURRENT_AUTHORITY_MIGRATION_ID]: 'migrations.test.ts: retires release membership JSON mirrors after the normalized relation cutover',
   '0.11.0/project-summary-projection': 'migrations.test.ts: project summary backfill is idempotent and preserves task history',
   '0.11.1/project-summary-projection-v2': 'migrations.test.ts: project summary shape refresh is idempotent and preserves task history',
   '0.11.2/project-summary-projection-setup-state': 'migrations.test.ts: project summary setup-state refresh is idempotent and preserves task history',

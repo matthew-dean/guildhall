@@ -1,11 +1,13 @@
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { describe, expect, it, vi } from 'vitest'
 import { bootstrapWorkspace } from '@guildhall/config'
 import {
   appendTaskEvidence,
   getProjectSystemStatePath,
+  projectStateDatabasePath,
   promoteProjectStateDatabaseAuthority,
 } from '@guildhall/sessions'
 import * as sessions from '@guildhall/sessions'
@@ -80,6 +82,9 @@ describe('GET /api/project/progress', () => {
           tasks: [{ id: 'task-promoted', title: 'Promoted task', status: 'ready' }],
         },
       })
+      const database = new DatabaseSync(projectStateDatabasePath(root))
+      database.exec('DROP TABLE task_evidence_history;')
+      database.close()
 
       const progress = await readProgress(root, workspace.id ?? 'progress-promoted-test')
 
@@ -119,6 +124,41 @@ describe('GET /api/project/progress', () => {
       expect(queueRead).not.toHaveBeenCalled()
     } finally {
       vi.restoreAllMocks()
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('does not reopen legacy progress when promoted current state is damaged', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'guildhall-serve-progress-damaged-db-'))
+    try {
+      const workspace = bootstrapWorkspace(root, { name: 'Progress Damaged Database Test' })
+      const tasksPath = getProjectSystemStatePath(root, 'TASKS.json')
+      writeProjectTaskQueueWithSummary(tasksPath, {
+        version: 1,
+        lastUpdated: '2026-07-15T00:00:00.000Z',
+        releases: [],
+        tasks: [{ id: 'task-damaged-progress', title: 'Durable task', status: 'ready' }],
+      }, { projectRoot: root })
+      promoteProjectStateDatabaseAuthority(root)
+      await fs.writeFile(
+        getProjectSystemStatePath(root, 'PROGRESS.md'),
+        '# Legacy progress\n\nThis must never be shown as current.\n',
+        'utf8',
+      )
+      const database = new DatabaseSync(projectStateDatabasePath(root))
+      database.exec('DROP TABLE queue_state')
+      database.close()
+
+      const { app } = buildServeApp({ projectPath: root })
+      const response = await app.fetch(new Request(
+        `http://localhost/api/project/progress?projectId=${encodeURIComponent(workspace.id ?? 'progress-damaged-db')}`,
+      ))
+      expect(response.status).toBe(200)
+      const body = await response.json() as Record<string, unknown>
+      expect(body).toMatchObject({ progress: '', requiresRefresh: true })
+      expect(body.freshness).not.toBe('current')
+      expect(JSON.stringify(body)).not.toContain('This must never be shown as current.')
+    } finally {
       await fs.rm(root, { recursive: true, force: true })
     }
   })

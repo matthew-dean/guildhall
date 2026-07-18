@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it } from 'vitest'
 import { TaskQueue } from '@guildhall/core'
-import { getProjectSystemStatePath, markProjectSummaryStale, promoteProjectStateDatabaseAuthority, projectStateDatabaseCompressedDetailPathFromTasksPath, projectStateDatabasePath, readProjectStateDatabaseQueue, readProjectStateDatabaseQueueDefinition, readProjectStateDatabaseQueueRevision, readProjectStateDatabaseInventory } from '@guildhall/sessions'
+import { getProjectSystemStatePath, markProjectSummaryStale, promoteProjectStateDatabaseAuthority, projectStateDatabaseCompressedDetailPathFromTasksPath, projectStateDatabasePath, readProjectStateDatabaseQueue, readProjectStateDatabaseQueueDefinition, readProjectStateDatabaseQueueRevision, readProjectStateDatabaseInventory, readProjectStateDatabaseSummary, writeProjectStateDatabaseSummarySnapshot } from '@guildhall/sessions'
 
 import {
   buildProjectSummaryProjection,
@@ -14,11 +14,12 @@ import {
   queueForProjectSummaryScope,
   readProjectSummaryProjection,
   readProjectSummaryProjectionForMigration,
+  readProjectSummaryShellProjection,
   updateProjectSummaryProjection,
   writeProjectSummaryProjectionFromIndexedState,
   writeProjectSummaryProjectionFromUnknownQueue,
 } from '../project-summary-projection.js'
-import { writeProjectTaskQueue } from '../project-state-boundary.js'
+import { writePromotedTaskDetailMutation, writeProjectTaskQueue } from '../project-state-boundary.js'
 
 const now = '2026-07-14T12:00:00.000Z'
 
@@ -67,6 +68,14 @@ describe('project-summary-projection', () => {
     temp = undefined
   })
 
+  it('keeps an unreadable saved shell local to the affected project', async () => {
+    temp = await mkdtemp(join(tmpdir(), 'guildhall-summary-shell-error-'))
+    await mkdir(dirname(projectStateDatabasePath(temp)), { recursive: true })
+    await writeFile(projectStateDatabasePath(temp), 'not a sqlite database')
+
+    expect(readProjectSummaryShellProjection(getProjectSystemStatePath(temp, 'TASKS.json'))).toBeNull()
+  })
+
   it('projects scope, counts, and next action without effective-task expansion', () => {
     const projection = buildProjectSummaryProjection({
       projectId: 'narrative-harness',
@@ -97,6 +106,7 @@ describe('project-summary-projection', () => {
         scopeMode: 'unreleased',
         release: null,
         counts: { total: 3, done: 1, unfinished: 2, blocked: 1 },
+        taskStatusCounts: { ready: 1, done: 1, blocked: 1 },
       },
       nextAction: {
         label: 'Start',
@@ -120,6 +130,13 @@ describe('project-summary-projection', () => {
       task('task-done', 'done', {
         releaseIds: ['release-current'],
         completedAt: now,
+        acceptanceCriteria: [{
+          id: 'ac-done',
+          description: 'The completion proof exists.',
+          verifiedBy: 'automated',
+          source: 'documented',
+          met: false,
+        }],
       }),
       task('task-later', 'ready', {
         releaseIds: ['release-later'],
@@ -175,6 +192,86 @@ describe('project-summary-projection', () => {
     expect(indexed?.releaseSummary).toEqual(full.releaseSummary)
     expect(indexed?.nextAction).toEqual(full.nextAction)
     expect(readProjectStateDatabaseInventory(tasksPath, { includeDefinitions: false })?.tasks.every(task => Object.keys(task.definition).length === 0)).toBe(true)
+  })
+
+  it('refreshes a reopened task proof contract from the bounded indexed summary', async () => {
+    temp = await mkdtemp(join(tmpdir(), 'guildhall-summary-current-proof-'))
+    const tasksPath = getProjectSystemStatePath(temp, 'TASKS.json')
+    const taskQueue = queue([
+      task('reopened-task', 'done', {
+        releaseIds: ['release-current'],
+        completedAt: now,
+        proofPaths: [{ kind: 'command', command: 'pnpm prove:reopened-task' }],
+        latestReviewerSummary: '**Verdict:** Approved\nThe proof runs `pnpm prove:reopened-task`.',
+      }),
+    ], {
+      selectedReleaseId: 'release-current',
+      releases: [{
+        id: 'release-current',
+        label: 'Current release',
+        kind: 'release',
+        state: 'active',
+        source: 'release_plan',
+        proofStyle: 'script_only',
+        nodeIds: ['work:reopened-task'],
+        deferredNodeIds: [],
+      }],
+    })
+    writeProjectTaskQueue(tasksPath, taskQueue, { projectId: 'proof-refresh', projectRoot: temp })
+    promoteProjectStateDatabaseAuthority(temp)
+
+    // Seed the old rich projection to reproduce a saved proof contract that
+    // predates the task being reopened.
+    const historicalProjection = buildProjectSummaryProjection({
+      projectId: 'proof-refresh',
+      projectRoot: temp,
+      queue: taskQueue,
+      generatedAt: now,
+    })
+    const staleOrientation = historicalProjection.orientationSpine
+      ? {
+          ...historicalProjection.orientationSpine,
+          proofContracts: historicalProjection.orientationSpine.proofContracts.map(contract => ({
+            ...contract,
+            state: 'proven' as const,
+            verified: ['Gate passed: pnpm-prove-reopened-task'],
+            missing: [],
+          })),
+        }
+      : null
+    expect(staleOrientation?.proofContracts[0]?.state).toBe('proven')
+    writeProjectStateDatabaseSummarySnapshot(tasksPath, {
+      summary: { ...historicalProjection, orientationSpine: staleOrientation },
+    })
+    expect(readProjectStateDatabaseSummary(tasksPath)?.payload.orientationSpine?.proofContracts[0]?.state).toBe('proven')
+
+    const committed = writePromotedTaskDetailMutation(tasksPath, 'reopened-task', {
+      projectId: 'proof-refresh',
+      projectRoot: temp,
+      mutate: current => ({
+        ...current,
+        status: 'spec_review',
+        completedAt: undefined,
+        proofPaths: [],
+      }),
+    })
+    expect(committed).not.toBeNull()
+
+    expect(readProjectSummaryProjection(tasksPath)?.orientationSpine?.proofContracts[0]).toMatchObject({
+      state: 'needed',
+      verified: [],
+      missing: ['Current proof contract has not been attached yet.'],
+    })
+
+    const refreshed = buildProjectSummaryProjectionFromIndexedState(tasksPath, {
+      projectId: 'proof-refresh',
+      generatedAt: now,
+      sourceQueueLastUpdated: now,
+    })
+    expect(refreshed?.orientationSpine?.proofContracts[0]).toMatchObject({
+      state: 'needed',
+      missing: ['Current proof contract has not been attached yet.'],
+    })
   })
 
   it('does not let an imported plan reshape current scope after promotion', async () => {
@@ -783,7 +880,7 @@ describe('project-summary-projection', () => {
     })
   })
 
-  it('marks the projection stale when approved planning changes out of band', async () => {
+  it('keeps the promoted projection current when compatibility planning changes out of band', async () => {
     temp = await mkdtemp(join(tmpdir(), 'guildhall-approved-plan-stale-'))
     const tasksPath = getProjectSystemStatePath(temp, 'TASKS.json')
     const goalsPath = join(dirname(tasksPath), 'workspace-goals.json')
@@ -796,7 +893,10 @@ describe('project-summary-projection', () => {
     })
     await utimes(goalsPath, new Date(Date.now() + 5000), new Date(Date.now() + 5000))
 
-    expect(readProjectSummaryProjection(tasksPath)).toMatchObject({ freshness: 'stale' })
+    // Once the normalized queue exists, workspace-goals.json is provenance,
+    // not a second current-state authority. The saved projection stays
+    // current until a Guildhall write marks its database revision stale.
+    expect(readProjectSummaryProjection(tasksPath)).toMatchObject({ freshness: 'current' })
   })
 
   it('updates the projection at the task write boundary', async () => {

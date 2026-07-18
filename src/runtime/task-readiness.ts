@@ -281,21 +281,45 @@ export function hasImportedExecutionBlueprint(task: Task): boolean {
   if (!/What counts as done:/i.test(spec)) return false
   if (!/Owner-only setup:\s*None/i.test(spec)) return false
   return (task.acceptanceCriteria ?? []).some(ac => Boolean(ac.verifiedBy)) &&
-    (task.proofPaths ?? []).some(path => path.source === 'inferred' && (path.expectedEvidence?.length ?? 0) > 0)
+    (task.proofPaths ?? []).some(path => {
+      const expectedEvidence = path && typeof path === 'object' && !Array.isArray(path)
+        ? (path as { expectedEvidence?: unknown }).expectedEvidence
+        : undefined
+      return path.source === 'inferred' && Array.isArray(expectedEvidence) && expectedEvidence.length > 0
+    })
 }
 
 function mixesResearchAndImplementation(task: Task): boolean {
   if (hasSettledFixedSpecBoundary(task)) return false
   const text = taskText(task)
-  return /\b(research|investigate|compare|evaluate)\b/i.test(text) &&
+  // Evaluation is often the proof/output of an implementation (for example,
+  // generate and evaluate a synopsis). Only explicit discovery language should
+  // create a research/implementation split signal.
+  return /\b(research|investigate|compare)\b/i.test(text) &&
     /\b(implement|build|wire|add|change|migrate)\b/i.test(text)
 }
 
 export function hasSettledFixedSpecBoundary(task: Task): boolean {
   if (task.sizePlan?.action !== 'proceed_with_warning') return false
   if ((task.sizePlan.recommendedChildren?.length ?? 0) > 0) return false
-  const splitBoundary = task.spec?.match(/what must be split or blocked\s*:\s*([^\n]+)/i)?.[1] ?? ''
-  return /^(none|nothing|not required|nothing to split)/i.test(splitBoundary.trim())
+  return hasExplicitNoSplitBoundary(task.spec)
+}
+
+/**
+ * A completion boundary may name downstream work that belongs elsewhere
+ * without making the current task a split parent. Keep this interpretation
+ * content-neutral so project names and intake origins do not control readiness.
+ */
+export function hasExplicitNoSplitBoundary(spec: string | undefined): boolean {
+  const splitBoundary = spec?.match(/what must be split or blocked\s*:\s*([^\n]+)/i)?.[1] ?? ''
+  const normalizedBoundary = splitBoundary.trim()
+  if (!normalizedBoundary) return false
+  const explicitlyNoSplit = /^(none|nothing|not required|nothing to split)/i.test(normalizedBoundary)
+  const downstreamWorkSeparated =
+    /\bseparate tasks?\b/i.test(normalizedBoundary) &&
+    /\b(?:none|nothing)\b[\s\S]*\b(?:block\w*|split\w*|absorb\w*)\b/i.test(normalizedBoundary)
+  if (!explicitlyNoSplit && !downstreamWorkSeparated) return false
+  return !(/\b(?:must|needs? to|required to|requires?)\s+split\b|\bsplit required\b|\bblocked before execution\b/i.test(normalizedBoundary))
 }
 
 function uncertaintyWarning(text: string, kind: TaskKind): boolean {

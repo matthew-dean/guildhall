@@ -9,6 +9,7 @@ import {
   getProjectStateDir,
   getProjectSystemStatePath,
   getProjectTaskLocalHistoryDir,
+  readProjectHistoricalArtifacts,
   promoteProjectStateDatabaseAuthority,
   readProjectStateDatabaseQueueDefinition,
   writeProjectStateDatabaseSnapshot,
@@ -105,6 +106,43 @@ describe('compactProjectState', () => {
     ]))
     const taskEntry = evacuationManifest.batches[0]!.entries.find(entry => entry.snapshot.path.endsWith('/TASKS.json'))!
     await expect(verifySnapshotEntry(taskEntry)).resolves.toBe(true)
+  })
+
+  it('backfills existing evacuation history only after database authority exists', async () => {
+    await fs.writeFile(path.join(projectRoot, 'guildhall.yaml'), [
+      'name: Boundary Test',
+      'id: boundary-test',
+      'storage:',
+      '  repoState: off',
+      '',
+    ].join('\n'), 'utf8')
+    const systemTasksPath = getProjectSystemStatePath(projectRoot, 'TASKS.json')
+    await fs.mkdir(path.dirname(systemTasksPath), { recursive: true })
+    writeProjectStateDatabaseSnapshot(systemTasksPath, {
+      queue: { version: 1, tasks: [] },
+      summary: { generatedAt: '2026-07-15T00:00:00.000Z', freshness: 'current' },
+    })
+    promoteProjectStateDatabaseAuthority(projectRoot)
+    const evacuationPath = path.join(
+      getProjectLocalHistoryDir(projectRoot),
+      'project-state-evacuation',
+      'TASKS.json',
+    )
+    await fs.mkdir(path.dirname(evacuationPath), { recursive: true })
+    await fs.writeFile(evacuationPath, '{"tasks":[]}\n', 'utf8')
+
+    const result = await compactProjectState({ projectRoot, dryRun: false })
+
+    expect(result.evacuationFilesSeen).toBeGreaterThanOrEqual(1)
+    expect(result.evacuationArtifactsRegistered).toBeGreaterThanOrEqual(1)
+    expect(readProjectHistoricalArtifacts(projectRoot)).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'evacuation_batch',
+        logicalRef: 'project-state-evacuation/TASKS.json',
+        retentionClass: 'archive',
+        state: 'active',
+      }),
+    ]))
   })
 
   it('keeps earlier evacuation material immutable while the compatibility view advances', async () => {

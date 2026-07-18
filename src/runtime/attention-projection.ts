@@ -39,17 +39,22 @@ export interface AttentionSurfaceReadModel {
  * present old attention as current.
  */
 export function readCurrentAttentionProjection(projectRoot: string): AttentionProjectionResult | null {
-  const metadata = readProjectStateDatabaseMetadata(projectRoot)
-  const watermark = readProjectStateDatabaseProjectionWatermark(projectRoot, 'attention')
-  if (!metadata || metadata.revision !== watermark?.sourceRevision) return null
-  const records = readProjectStateDatabaseAttentionRecords<AttentionRecord>(projectRoot)
-  if (records === null) return null
-  const history = records
-    .map(record => record.payload)
-    .filter(record => typeof record?.id === 'string')
-  return {
-    openItems: history.filter(record => record.status === 'open'),
-    history,
+  try {
+    const metadata = readProjectStateDatabaseMetadata(projectRoot)
+    const watermark = readProjectStateDatabaseProjectionWatermark(projectRoot, 'attention')
+    if (!metadata || metadata.revision !== watermark?.sourceRevision) return null
+    const records = readProjectStateDatabaseAttentionRecords<AttentionRecord>(projectRoot)
+    if (records === null) return null
+    const history = records
+      .map(record => record.payload)
+      .filter(record => typeof record?.id === 'string')
+    return {
+      openItems: history.filter(record => record.status === 'open'),
+      history,
+    }
+  } catch {
+    // A corrupt or locked project has a missing saved attention projection.
+    return null
   }
 }
 
@@ -80,6 +85,53 @@ export function readSavedAttentionSurface(
   return {
     items,
     history: current.history.filter(isAttentionOwnedInboxItem),
+    blockers: buildInboxBlockers(items),
+    freshness: 'current',
+  }
+}
+
+/**
+ * Format attention already captured by the shared project surface boundary.
+ * Callers that already have a revision-joined snapshot must not reopen SQLite
+ * just to format the Inbox cards.
+ */
+export function readSavedAttentionSurfaceFromBoundary(input: {
+  initializationNeeded: boolean
+  records: readonly { payload: unknown }[] | null
+  watermarkSourceRevision: number | null
+  projectRevision: number | null
+}): AttentionSurfaceReadModel {
+  if (input.initializationNeeded) {
+    return {
+      items: [],
+      history: [],
+      blockers: { bootstrap: false, workspaceImport: false },
+      freshness: 'current',
+    }
+  }
+  if (
+    input.records === null ||
+    input.watermarkSourceRevision === null ||
+    input.projectRevision === null ||
+    input.watermarkSourceRevision !== input.projectRevision
+  ) {
+    return {
+      items: [],
+      history: [],
+      blockers: { bootstrap: false, workspaceImport: false },
+      freshness: 'missing',
+      requiresRefresh: true,
+    }
+  }
+  const history = input.records
+    .map(record => record.payload)
+    .filter((record): record is AttentionRecord => Boolean(record && typeof record === 'object' && !Array.isArray(record) && typeof (record as { id?: unknown }).id === 'string'))
+  const items = history
+    .filter(record => record.status === 'open')
+    .filter(isAttentionOwnedInboxItem)
+  return {
+    items,
+    history: history.filter(isAttentionOwnedInboxItem),
     blockers: buildInboxBlockers(items),
     freshness: 'current',
   }

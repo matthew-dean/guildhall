@@ -158,6 +158,31 @@ describe('evidence-to-work-graph intake', () => {
     expect(alertDialog?.dependsOn).toEqual([])
   })
 
+  it('never creates a self-dependency when foundation wording matches the current task', () => {
+    const plan = planEvidenceWorkGraph({
+      sources: [{
+        path: 'docs/harness/synopsis-expansion.md',
+        content: [
+          '# Story records',
+          '',
+          '| Deliverable | Need | Foundation | Consumer |',
+          '| --- | --- | --- | --- |',
+          '| Synopsis expansion into story records | missing | Synopsis expansion into story records | headless runner |',
+        ].join('\n'),
+      }],
+      existingTasks: [{
+        id: 'task-synopsis-expansion',
+        title: 'Expand synopsis into story records',
+        description: 'Synopsis expansion into story records.',
+        status: 'import_draft',
+      }],
+    })
+
+    const task = plan.tasks.find(candidate => candidate.id === 'task-synopsis-expansion')
+    expect(task?.dependsOn).toEqual([])
+    expect(task?.relatedTasks).toEqual([])
+  })
+
   it('splits reusable deliverables from consuming-product integration work', () => {
     const plan = planEvidenceWorkGraph({
       sources: [{ path: 'looma/docs/component-library-audit.md', content: loomaComponentEvidence }],

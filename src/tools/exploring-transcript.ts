@@ -3,6 +3,7 @@ import {
   atomicWriteText,
   getProjectTranscriptPath,
   inferProjectRootFromMemoryDir,
+  registerProjectHistoricalArtifactIfCurrent,
 } from '@guildhall/sessions'
 import { z } from 'zod'
 import { createHash } from 'node:crypto'
@@ -224,6 +225,27 @@ function renderEssentialHistory(
   ].join('\n')
 }
 
+function registerEssentialHistoryArtifact(
+  projectRoot: string,
+  filePath: string,
+  taskId: string,
+  rendered: string,
+): void {
+  // Legacy projects keep their existing history path until promotion. Do not
+  // allocate a SQLite authority merely because a transcript was written.
+  registerProjectHistoricalArtifactIfCurrent(projectRoot, {
+    artifactId: `essential-history:${taskId}`,
+    kind: 'essential_history',
+    owner: 'exploring-transcript',
+    logicalRef: path.relative(projectRoot, filePath).replaceAll(path.sep, '/'),
+    bytes: Buffer.byteLength(rendered, 'utf8'),
+    sha256: createHash('sha256').update(rendered, 'utf8').digest('hex'),
+    retentionClass: 'essential',
+    state: 'active',
+    lastVerifiedAt: new Date().toISOString(),
+  })
+}
+
 export async function appendExploringTranscript(
   input: AppendExploringTranscriptOptions,
 ): Promise<AppendExploringTranscriptResult> {
@@ -264,7 +286,9 @@ export async function appendExploringTranscript(
     }
     const compacted = summary?.trim() || compactWithoutModel(priorHistory, role, content)
     const created = !existing
-    atomicWriteText(filePath, renderEssentialHistory(input.taskId, compacted, role, content))
+    const rendered = renderEssentialHistory(input.taskId, compacted, role, content)
+    atomicWriteText(filePath, rendered)
+    registerEssentialHistoryArtifact(inferProjectRootFromMemoryDir(input.memoryDir), filePath, input.taskId, rendered)
     return { success: true, path: filePath, created }
   } catch (err) {
     return { success: false, error: String(err) }
@@ -284,7 +308,9 @@ export async function replaceExploringTranscript(
     const role = input.role ?? 'system'
     await fs.mkdir(path.dirname(filePath), { recursive: true })
     const summary = compactWithoutModel('', role, content)
-    atomicWriteText(filePath, renderEssentialHistory(input.taskId, summary, role, content))
+    const rendered = renderEssentialHistory(input.taskId, summary, role, content)
+    atomicWriteText(filePath, rendered)
+    registerEssentialHistoryArtifact(inferProjectRootFromMemoryDir(input.memoryDir), filePath, input.taskId, rendered)
     return { success: true, path: filePath, created: true }
   } catch (err) {
     return { success: false, error: String(err) }
@@ -369,6 +395,7 @@ export async function compactExploringTranscripts(input: {
     const isEssential = existing.trimStart().startsWith('# Essential exploring history:')
     if (isEssential && existing.length <= ESSENTIAL_HISTORY_MAX_CHARS + 256) {
       bytesAfter += Buffer.byteLength(existing, 'utf8')
+      if (!input.dryRun) registerEssentialHistoryArtifact(input.projectRoot, filePath, taskId, existing)
       continue
     }
     const source = boundedSource(body)
@@ -382,6 +409,7 @@ export async function compactExploringTranscripts(input: {
       source,
     )
     if (!input.dryRun) await fs.writeFile(filePath, compacted, 'utf-8')
+    if (!input.dryRun) registerEssentialHistoryArtifact(input.projectRoot, filePath, taskId, compacted)
     bytesAfter += Buffer.byteLength(compacted, 'utf8')
     filesCompacted += 1
   }

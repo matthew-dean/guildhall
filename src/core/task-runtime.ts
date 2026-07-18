@@ -41,6 +41,29 @@ export const TaskRuntimeState = z.object({
 })
 export type TaskRuntimeState = z.infer<typeof TaskRuntimeState>
 
+/**
+ * Validate one runtime-only field before it crosses from a rich task object
+ * into the normalized runtime overlay. Rich task objects can be assembled by
+ * older agents or compatibility readers; the overlay schema is the authority
+ * for what may become current state.
+ */
+export function parseTaskRuntimeField<K extends keyof TaskRuntimeState>(
+  taskId: string,
+  current: TaskRuntimeState | undefined,
+  patch: Partial<TaskRuntimeState>,
+  field: K,
+  value: unknown,
+): { accepted: true; value: TaskRuntimeState[K] } | { accepted: false } {
+  const parsed = TaskRuntimeState.safeParse({
+    taskId,
+    ...(current ?? {}),
+    ...patch,
+    [field]: value,
+  })
+  if (!parsed.success) return { accepted: false }
+  return { accepted: true, value: parsed.data[field] }
+}
+
 export const TaskRuntimeStateStore = z.object({
   version: z.number().int().positive().default(1),
   lastUpdated: z.string(),
@@ -75,6 +98,7 @@ export const TaskEvidenceKind = z.enum([
   'escalation',
   'agent_issue',
   'merge_record',
+  'completion_summary',
   'git_story',
 ])
 export type TaskEvidenceKind = z.infer<typeof TaskEvidenceKind>
