@@ -167,6 +167,57 @@ describe('run automation policy', () => {
     })
   })
 
+  it('does not repair an imported brief with an unsupported executable success metric', async () => {
+    const memoryDir = await makeMemoryDir()
+    await writeQueue(memoryDir, {
+      version: 1,
+      lastUpdated: '2026-05-29T10:00:00.000Z',
+      tasks: [task({
+        id: 'task-imported-proof',
+        status: 'spec_review',
+        spec: [
+          '## Completion Boundary',
+          '- Product outcome: Evaluate the documented drafting boundary.',
+          '- What Guildhall can complete in code: Shape a source-backed proof plan.',
+          '- External dependencies: None.',
+          '- Owner-only setup: None.',
+          '- Verification environment: Local project evidence.',
+          '- What counts as done: scripts/invented-proof.mjs runs successfully.',
+          '- What must be split or blocked: Nothing.',
+          '',
+          '## Acceptance Criteria',
+          '1. The documented drafting boundary is shaped for proof.',
+        ].join('\n'),
+        acceptanceCriteria: [{
+          id: 'ac-1',
+          description: 'The documented drafting boundary is shaped for proof.',
+          verifiedBy: 'review',
+          met: false,
+        }],
+        sourceClaims: [{
+          source: 'workspace-importer',
+          title: 'Evaluate the documented drafting boundary',
+          evidence: 'Evaluate the documented drafting boundary.',
+          references: ['docs/harness/headless-mvp-release-plan.md'],
+          confidence: 'high',
+        }],
+        requestIntake: {
+          createdBy: 'workspace-importer',
+          evidenceRefs: ['import:docs/harness/headless-mvp-release-plan.md'],
+        },
+      })],
+    })
+
+    const result = await applyRunAutomationPolicy({
+      memoryDir,
+      policy: 'fully_automated',
+      rootTaskId: 'task-imported-proof',
+    })
+
+    expect(result.resolutions).not.toContainEqual(expect.objectContaining({ kind: 'repair_product_brief' }))
+    expect((await readQueue(memoryDir)).tasks[0]!.productBrief).toBeUndefined()
+  })
+
   it('fully automated runs replace placeholder New request product briefs from the spec', async () => {
     const memoryDir = await makeMemoryDir()
     await writeQueue(memoryDir, {

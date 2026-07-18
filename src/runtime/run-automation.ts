@@ -1,6 +1,6 @@
 import path from 'node:path'
 
-import { TaskQueue, TERMINAL_TASK_STATUSES, type AgentQuestion, type TaskStatus } from '@guildhall/core'
+import { TaskQueue, TERMINAL_TASK_STATUSES, type AgentQuestion, type Task, type TaskStatus } from '@guildhall/core'
 import {
   appendTaskEvidence,
   getProjectSystemStatePathFromMemoryDir,
@@ -19,6 +19,7 @@ import {
   extractAcceptanceCriteriaFromSpec,
   productBriefFromSpecCompletionBoundary,
   specSectionBody,
+  validateProductBriefGrounding,
   validateSpecCompletionBoundary,
 } from './spec-quality.js'
 import { workSubtreeIds } from './work-hierarchy.js'
@@ -182,7 +183,7 @@ async function repairScopedSpecApprovalInputs(input: {
     if (hasUsableBrief) continue
     const brief = inferProductBriefForAutomation(task, input.ownerIntent)
     if (!brief) continue
-    task.productBrief = {
+    const candidateBrief = {
       userJob: brief.userJob,
       successMetric: brief.successMetric,
       antiPatterns: brief.antiPatterns,
@@ -190,6 +191,8 @@ async function repairScopedSpecApprovalInputs(input: {
       authoredBy: input.actor ?? 'run-automation',
       authoredAt: now,
     }
+    if (!validateProductBriefGrounding(task, candidateBrief).ok) continue
+    task.productBrief = candidateBrief
     const note = {
       agentId: input.actor ?? 'run-automation',
       role: 'automation',
@@ -654,6 +657,15 @@ async function repairPromotedScopedSpecApprovalInputs(input: {
     if (hasUsableBrief) continue
     const brief = inferProductBriefForAutomation(task as TaskQueue['tasks'][number], input.ownerIntent)
     if (!brief) continue
+    const candidateBrief = {
+      userJob: brief.userJob,
+      successMetric: brief.successMetric,
+      antiPatterns: brief.antiPatterns,
+      ...(brief.rolloutPlan ? { rolloutPlan: brief.rolloutPlan } : {}),
+      authoredBy: input.actor ?? 'run-automation',
+      authoredAt: now,
+    }
+    if (!validateProductBriefGrounding(task as Task, candidateBrief).ok) continue
     const note = {
       agentId: input.actor ?? 'run-automation',
       role: 'automation',
@@ -668,14 +680,7 @@ async function repairPromotedScopedSpecApprovalInputs(input: {
       projectRoot,
       mutate: current => ({
         ...current,
-        productBrief: {
-          userJob: brief.userJob,
-          successMetric: brief.successMetric,
-          antiPatterns: brief.antiPatterns,
-          ...(brief.rolloutPlan ? { rolloutPlan: brief.rolloutPlan } : {}),
-          authoredBy: input.actor ?? 'run-automation',
-          authoredAt: now,
-        },
+        productBrief: candidateBrief,
         updatedAt: now,
       }),
     })
@@ -708,6 +713,12 @@ async function approvePromotedSpec(
     : extractAcceptanceCriteriaFromSpec(task.spec)
   const productBrief = task.productBrief ?? productBriefFromSpecCompletionBoundary(task.spec) ?? undefined
   const candidate = { ...task, acceptanceCriteria, productBrief }
+  if (candidate.productBrief) {
+    const grounding = validateProductBriefGrounding(candidate as Task, candidate.productBrief)
+    if (!grounding.ok) {
+      return { success: false, error: `Product brief is not grounded in the visible task/source context: ${grounding.errors.join(' ')}` }
+    }
+  }
   const quality = validateSpecCompletionBoundary(candidate)
   if (!quality.ok) return { success: false, error: `Spec is not ready for approval: ${quality.errors.join(' ')}` }
   const projectRoot = inferProjectRootFromMemoryDir(memoryDir)

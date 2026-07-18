@@ -167,7 +167,7 @@ import {
   type RuntimeIsolationConfig,
 } from './slot-allocator.js'
 import { refreshCodebaseMap } from '@guildhall/corpus-map'
-import { currentPlanProcessLeakage, validateSpecCompletionBoundary } from './spec-quality.js'
+import { currentPlanProcessLeakage, validateProductBriefGrounding, validateSpecCompletionBoundary } from './spec-quality.js'
 import {
   NodeGitDriver,
   type GitDriver,
@@ -548,6 +548,7 @@ export function repairWeakRecoverySpecReviewSeedInQueue(
     : queue.tasks.find((candidate) => shouldRepairWeakRecoverySpecReviewSeed(candidate, queue))
   if (!liveTask || !shouldRepairWeakRecoverySpecReviewSeed(liveTask, queue)) return null
   const seed = buildRecoverySpecSeedForTask(liveTask, queue, input.now)
+  if (!seed.productBrief || !validateProductBriefGrounding(liveTask, seed.productBrief).ok) return null
 
   liveTask.spec = seed.spec
   liveTask.acceptanceCriteria = seed.acceptanceCriteria
@@ -12402,6 +12403,7 @@ export class Orchestrator {
     const now = this.now()
     const beforeStatus = liveTask.status
     const seed = buildSourceRecoveryResearchSpecSeed(liveTask, now)
+    if (!seed.productBrief || !validateProductBriefGrounding(liveTask, seed.productBrief).ok) return null
     liveTask.spec = seed.spec
     liveTask.acceptanceCriteria = seed.acceptanceCriteria
     liveTask.productBrief = seed.productBrief
@@ -12644,6 +12646,7 @@ export class Orchestrator {
     const seed = buildRecoverySpecSeedForTask(liveTask, queue, now)
     const parentId = liveTask.hierarchy?.parentId ?? liveTask.delivery?.supports?.[0]
     const parentTask = parentId ? queue.tasks.find((candidate) => candidate.id === parentId) : undefined
+    if (!seed.productBrief || !validateProductBriefGrounding(liveTask, seed.productBrief).ok) return null
     liveTask.spec = seed.spec
     liveTask.acceptanceCriteria = seed.acceptanceCriteria
     liveTask.productBrief = seed.productBrief
@@ -13470,16 +13473,19 @@ export class Orchestrator {
       const inferredBrief = inferFallbackBriefFromPlaintext(text, task.title)
       if (inferredBrief) {
         const now = this.now()
-        task.productBrief = {
+        const candidateBrief = {
           userJob: inferredBrief.userJob,
           successMetric: inferredBrief.successMetric,
           antiPatterns: inferredBrief.antiPatterns,
           authoredBy: 'spec-agent',
           authoredAt: now,
         }
-        task.updatedAt = now
-        queue.lastUpdated = now
-        fallbackBriefAuthored = true
+        if (validateProductBriefGrounding(task, candidateBrief).ok) {
+          task.productBrief = candidateBrief
+          task.updatedAt = now
+          queue.lastUpdated = now
+          fallbackBriefAuthored = true
+        }
       }
     }
 

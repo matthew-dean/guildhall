@@ -47310,3 +47310,58 @@ User job:
   `productBrief:null`, with the visible source claim and reference preserved.
 - This is a successful honesty proof, not an MVP-completion proof: the task
   still needs a source-grounded brief/spec and a real provider-backed proof.
+
+## 2026-07-18 system-generated imported briefs share the grounding boundary
+
+User job:
+
+> A fully automated run, recovery pass, or spec approval must not bypass the
+> same visible-source rule used by the agent tool. If the source packet does
+> not contain a command, path, model family, or artifact name, Guildhall must
+> leave that planning field unmaterialized and return to source-backed shaping.
+
+### Contract Touch Decision
+
+- Work id: `codex:imported-brief-writers-2026-07-18`.
+- Touched contracts: system-generated ProductBrief writes in spec approval,
+  run automation, recovery seeding, and plaintext fallback handling.
+- Considered but not touched: importer-derived briefs that are built directly
+  from the documents Guildhall has already parsed; that is a source-reading
+  boundary, not an agent-repair boundary. Also untouched: ProductBrief schema,
+  source-claim schema, task status, release membership, and provider config.
+- Required follow-up: audit any newly added planning writer against the shared
+  validator before it can persist imported/re-intaken brief state.
+- Proof required: automation regression for an imported invented command,
+  existing product-brief/spec grounding tests, and installed Narrative Harness
+  re-intake proof.
+- Apply/revert: keep the validator and every guarded writer together; reverting
+  one writer would reopen a duplicate write authority.
+
+### Schema Migration Decision
+
+- Persisted schema touched: no new fields and no reader compatibility added.
+- Scope/change class: imported planning write-boundary validation.
+- Existing data impact: existing unsupported briefs remain historical data until
+  an explicit cleanup pass; new system-generated writes fail closed.
+- Migration id: none.
+- Compatibility reader: none.
+- Fixtures/tests: `spec-quality.test.ts`, `product-brief.test.ts`, and
+  `run-automation.test.ts`.
+- Owner-facing plan text: unsupported detail remains a shaping boundary; the
+  automation policy does not manufacture an owner checkpoint for it.
+- Rollback/revert: revert the shared guard and writer call sites together.
+
+### Installed proof for this writer pass
+
+- Fresh installed artifact: `/api/stale-server` returned `stale:false` after
+  build/install/restart. Startup reported seven projects, zero refreshes, and
+  zero errors in roughly 76 ms.
+- Narrative Harness re-intake of
+  `task-broad-genre-drafting-model-proof` returned `{"ok":true,"status":"exploring"}`.
+  A one-tick run attempted the spec lane; task detail still showed
+  `spec:null` and `productBrief:null`, while preserving the visible source
+  claim and reference. No invented executable success metric was persisted.
+- This confirms the installed agent path and the system write guard agree on
+  the same honest outcome. It does not prove that the Narrative Harness MVP
+  release is complete; this task still needs a source-grounded plan and real
+  provider-backed proof.

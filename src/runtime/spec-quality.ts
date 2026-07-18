@@ -98,11 +98,12 @@ function validateImportedPlanningText(
   text: string,
   label: 'Spec' | 'Product brief',
   includeProductBriefInContext: boolean,
+  requireSourceEvidence = false,
 ): SpecGroundingResult {
   if (!text) return { ok: true, errors: [] }
   const imported = (task.sourceClaims?.length ?? 0) > 0 ||
-    task.requestIntake?.createdBy === 'workspace-importer' ||
-    task.requestIntake?.evidenceRefs?.some(ref => /^import:/.test(ref)) === true
+    task.requestIntake?.evidenceRefs?.some(ref => /^import:/.test(ref)) === true ||
+    (!requireSourceEvidence && task.requestIntake?.createdBy === 'workspace-importer')
   if (!imported) return { ok: true, errors: [] }
   const context = groundingContext(task, includeProductBriefInContext)
   const errors: string[] = []
@@ -135,7 +136,7 @@ export function validateProductBriefGrounding(
   task: GroundingTask,
   productBrief: NonNullable<Task['productBrief']>,
 ): SpecGroundingResult {
-  return validateImportedPlanningText(task, JSON.stringify(productBrief), 'Product brief', false)
+  return validateImportedPlanningText(task, JSON.stringify(productBrief), 'Product brief', false, true)
 }
 
 export function stripCurrentPlanProcessLeakage(text: string): string {

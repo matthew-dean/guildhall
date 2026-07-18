@@ -39,6 +39,7 @@ import { routeRequest, type RouteRequestResult, type RoutedAction } from './requ
 import {
   extractAcceptanceCriteriaFromSpec,
   productBriefFromSpecCompletionBoundary,
+  validateProductBriefGrounding,
   validateSpecCompletionBoundary,
 } from './spec-quality.js'
 import { taskShapingBlockers } from '../shared/task-shaping-blockers.js'
@@ -417,10 +418,18 @@ export async function approveSpec(input: ApproveSpecInput): Promise<ApproveSpecR
   if (!task.productBrief?.userJob?.trim() || !task.productBrief?.successMetric?.trim()) {
     const derivedBrief = productBriefFromSpecCompletionBoundary(task.spec)
     if (derivedBrief) {
-      task.productBrief = {
+      const candidateBrief = {
         ...derivedBrief,
         authoredAt: new Date().toISOString(),
       }
+      const grounding = validateProductBriefGrounding(task, candidateBrief)
+      if (!grounding.ok) {
+        return {
+          success: false,
+          error: `Product brief is not grounded in the visible task/source context: ${grounding.errors.join(' ')}`,
+        }
+      }
+      task.productBrief = candidateBrief
     }
   }
   const specQuality = validateSpecCompletionBoundary(task)
