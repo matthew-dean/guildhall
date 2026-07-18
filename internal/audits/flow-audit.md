@@ -40,9 +40,9 @@ User job:
   the existing distinction between a candidate that Guildhall can shape and a
   plan item that needs an owner decision.
 - Focused proof: project-scope, indexed-summary, and release-readiness suites
-  pass with 131 tests. The broader orientation suite retains 6 failures that
-  also fail on the pre-change baseline; they concern older proof/fixture
-  expectations and are not attributed to this change.
+  pass with 134 tests. The broader orientation suite currently retains 7
+  failures around older proof/fixture expectations; those are kept as an
+  explicit follow-up and are not included in the release-readiness claim.
 - Installed proof after rebuilding and restarting Guildhall: `/api/stale-server`
   reports `stale:false`; all 7 registered projects refreshed through the
   bounded projector with 0 errors in about 0.43 seconds. Narrative Harness
